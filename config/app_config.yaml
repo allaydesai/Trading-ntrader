@@ -1,0 +1,110 @@
+# Main Application Configuration for Algorithmic Trading Platform
+# This file contains all application-wide settings
+
+# Application Information
+app:
+  name: "Nautilus Trading Platform"
+  version: "1.0.0"
+  environment: "development"  # development, testing, production
+  debug: true
+
+# Database Configuration
+database:
+  path: "data/trading_platform.db"
+  echo: false  # Set to true for SQL query logging
+  pool_size: 10
+  max_overflow: 20
+
+# Logging Configuration
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  log_dir: "data/logs"
+  max_file_size_mb: 10
+  backup_count: 5
+  log_to_console: true
+  log_to_file: true
+
+# Interactive Brokers Configuration
+interactive_brokers:
+  host: "127.0.0.1"
+  port: 7497  # TWS: 7496, IB Gateway: 4001 (live), 4002 (paper)
+  client_id: 1
+  account_id: ""  # Will be set based on connection
+  connection_timeout: 30
+  request_timeout: 10
+  max_requests_per_second: 45  # IB rate limit is 50/second
+  paper_trading: true  # Set to false for live trading
+
+# Market Data Configuration
+market_data:
+  primary_source: "interactive_brokers"
+  subscription_timeout: 30
+  heartbeat_interval: 30
+  max_bars_per_request: 5000
+  supported_timeframes:
+    - "1min"
+    - "5min"
+    - "15min"
+    - "30min"
+    - "1hour"
+    - "1day"
+
+# Strategy Configuration
+strategies:
+  base_capital: 100000.0  # Base capital for position sizing
+  max_portfolio_risk: 0.02  # Maximum 2% portfolio risk per trade
+  max_positions: 10  # Maximum number of concurrent positions
+  default_timeframe: "1hour"
+  
+# Backtesting Configuration
+backtesting:
+  initial_capital: 100000.0
+  commission_rate: 0.005  # 0.5% commission per trade
+  slippage_bps: 1  # 1 basis point slippage
+  start_date: "2020-01-01"
+  end_date: "2023-12-31"
+  benchmark: "SPY"  # Benchmark for performance comparison
+
+# Live Trading Configuration
+live_trading:
+  auto_start: false
+  position_size_method: "percent_risk"  # fixed, percent_risk, kelly
+  default_position_size: 0.01  # 1% of portfolio per trade
+  max_daily_loss: 0.05  # Stop trading if daily loss exceeds 5%
+  max_weekly_loss: 0.10  # Stop trading if weekly loss exceeds 10%
+  order_timeout: 300  # Order timeout in seconds
+  
+# Web UI Configuration
+web_ui:
+  host: "127.0.0.1"
+  port: 8050
+  debug: true
+  auto_reload: true
+  theme: "light"  # light, dark
+  refresh_interval: 5  # Dashboard refresh interval in seconds
+
+# Risk Management
+risk_management:
+  max_leverage: 1.0  # No leverage by default
+  stop_loss_percent: 0.02  # 2% stop loss
+  take_profit_percent: 0.04  # 4% take profit
+  position_timeout_hours: 72  # Close positions after 72 hours if no action
+  
+# Notification Settings (for future implementation)
+notifications:
+  enabled: false
+  email:
+    enabled: false
+    smtp_server: ""
+    smtp_port: 587
+    username: ""
+    password: ""
+    recipients: []
+  
+# Performance Metrics
+performance:
+  benchmark_symbols: ["SPY", "QQQ", "TLT"]
+  risk_free_rate: 0.02  # 2% annual risk-free rate
+  calculate_rolling_metrics: true
+  rolling_window_days: 252  # 1 year of trading days 

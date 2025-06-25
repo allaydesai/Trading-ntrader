@@ -49,7 +49,7 @@
 - [ ] 1.0 Project Setup and Core Infrastructure
   - [x] 1.1 Initialize project structure (directories like `src`, `tests`, `config`, `data`).
   - [x] 1.2 Set up virtual environment and install base dependencies (Python, Nautilus Trader, Pydantic).
-  - [ ] 1.3 Implement configuration management (`src/core/config_loader.py`, `config/app_config.yaml`).
+  - [x] 1.3 Implement configuration management (`src/core/config_loader.py`, `config/app_config.yaml`).
   - [ ] 1.4 Implement logging setup (`src/core/logging_setup.py`).
   - [ ] 1.5 Develop SQLite database interface (`src/core/db_manager.py`) for storing strategy params, backtest results, trade logs.
     - [ ] 1.5.1 Define database schema (tables for strategies, parameters, backtest summaries, trades).
