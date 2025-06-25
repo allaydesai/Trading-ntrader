@@ -1,14 +1,19 @@
-vc=14.42
-setuptools=75.8.0
-vs2015_runtime=14.42.34433
-sqlite=3.45.3
-xz=5.6.4
-openssl=3.0.15
-zlib=1.2.13
-ca-certificates=2024.12.31
-wheel=0.45.1
-expat=2.6.4
-pip=25.0
-libffi=3.4.4
-bzip2=1.0.8
-tk=8.6.14
+# Core dependencies for Algorithmic Trading Platform
+nautilus_trader>=1.200.0
+pydantic>=2.0.0
+pandas>=2.0.0
+numpy>=1.24.0
+sqlalchemy>=2.0.0
+pyyaml>=6.0
+python-dotenv>=1.0.0
+
+# Web UI dependencies (will be added in later tasks)
+# flask>=2.3.0
+# dash>=2.14.0
+
+# Interactive Brokers API dependencies  
+# ib-insync>=0.9.86
+
+# Testing dependencies
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
