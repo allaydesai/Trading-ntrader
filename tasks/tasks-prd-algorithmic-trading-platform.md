@@ -52,7 +52,7 @@
   - [x] 1.3 Implement configuration management (`src/core/config_loader.py`, `config/app_config.yaml`).
   - [x] 1.4 Implement logging setup (`src/core/logging_setup.py`).
   - [ ] 1.5 Develop SQLite database interface (`src/core/db_manager.py`) for storing strategy params, backtest results, trade logs.
-    - [ ] 1.5.1 Define database schema (tables for strategies, parameters, backtest summaries, trades).
+    - [x] 1.5.1 Define database schema (tables for strategies, parameters, backtest summaries, trades).
     - [ ] 1.5.2 Implement functions for CRUD operations on the database tables.
   - [ ] 1.6 Implement Interactive Brokers (IB) connection module (`src/core/ib_connector.py`) leveraging Nautilus Trader capabilities.
     - [ ] 1.6.1 Handle IB connection, disconnection, and reconnection logic.
