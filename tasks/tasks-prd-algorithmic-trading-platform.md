@@ -3,7 +3,7 @@
 - `src/core/` - Directory for core infrastructure components (e.g., Nautilus setup, IB connection, DB interface).
   - `src/core/config_loader.py` - Handles loading application and strategy configurations.
   - `src/core/db_manager.py` - Manages SQLite database connections and operations.
-  - `src/core/logging_setup.py` - Configures application-wide logging.
+  - `src/core/logging_setup.py` - Configures application-wide logging with console and file handlers, rotation, and component-specific logging.
   - `src/core/ib_connector.py` - Manages connection and interaction with Interactive Brokers API via Nautilus Trader.
 - `src/strategies/` - Directory for strategy definitions and management.
   - `src/strategies/base_strategy.py` - Abstract base class for trading strategies.
@@ -50,7 +50,7 @@
   - [x] 1.1 Initialize project structure (directories like `src`, `tests`, `config`, `data`).
   - [x] 1.2 Set up virtual environment and install base dependencies (Python, Nautilus Trader, Pydantic).
   - [x] 1.3 Implement configuration management (`src/core/config_loader.py`, `config/app_config.yaml`).
-  - [ ] 1.4 Implement logging setup (`src/core/logging_setup.py`).
+  - [x] 1.4 Implement logging setup (`src/core/logging_setup.py`).
   - [ ] 1.5 Develop SQLite database interface (`src/core/db_manager.py`) for storing strategy params, backtest results, trade logs.
     - [ ] 1.5.1 Define database schema (tables for strategies, parameters, backtest summaries, trades).
     - [ ] 1.5.2 Implement functions for CRUD operations on the database tables.
