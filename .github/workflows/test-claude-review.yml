@@ -45,17 +45,16 @@ jobs:
             exit 1
           else
             echo "✅ ANTHROPIC_API_KEY is configured"
-            # Test a simple API call (without actually making it to avoid rate limits)
-            python -c "
-import requests
+            # Test API key format
+            python -c '
 import os
-api_key = os.getenv('ANTHROPIC_API_KEY')
-if api_key and api_key.startswith('sk-ant-'):
-    print('✅ API key format looks correct')
+api_key = os.getenv("ANTHROPIC_API_KEY")
+if api_key and api_key.startswith("sk-ant-"):
+    print("✅ API key format looks correct")
 else:
-    print('⚠️  API key format may be incorrect')
-    print('Expected format: sk-ant-...')
-"
+    print("⚠️  API key format may be incorrect")
+    print("Expected format: sk-ant-...")
+'
           fi
 
       - name: Post test comment
