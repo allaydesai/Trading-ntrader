@@ -221,8 +221,10 @@ Please check the repository settings and GitHub Action configuration.
         try:
             print(f"🔍 Starting Claude review for PR #{self.pr_number}")
             print(f"📁 Changed files: {', '.join(self.changed_files)}")
-            print(f"🔧 Environment check:")
-            print(f"  - ANTHROPIC_API_KEY: {'✓ Set' if self.anthropic_api_key else '✗ Missing'}")
+            print("🔧 Environment check:")
+            print(
+                f"  - ANTHROPIC_API_KEY: {'✓ Set' if self.anthropic_api_key else '✗ Missing'}"
+            )
             print(f"  - GITHUB_TOKEN: {'✓ Set' if self.github_token else '✗ Missing'}")
             print(f"  - PR_NUMBER: {self.pr_number}")
             print(f"  - REPO: {self.repo_owner}/{self.repo_name}")
@@ -230,7 +232,9 @@ Please check the repository settings and GitHub Action configuration.
             # Early exit if API key is missing
             if not self.anthropic_api_key:
                 print("❌ ANTHROPIC_API_KEY is required but not set")
-                self.post_error_comment("ANTHROPIC_API_KEY secret is not configured in repository settings")
+                self.post_error_comment(
+                    "ANTHROPIC_API_KEY secret is not configured in repository settings"
+                )
                 return
 
             # Get PR diff
