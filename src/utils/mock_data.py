@@ -96,7 +96,8 @@ def generate_mock_bars(
         volume = 1000000 + (500000 * abs(math.sin(cycle_position * 1.3)))
 
         # Create bar type using string format
-        bar_type = BarType.from_str(f"{instrument_id}-15-MINUTE-BID-EXTERNAL")
+        # Use MID-EXTERNAL to match DataClient required aggregation source in backtests
+        bar_type = BarType.from_str(f"{instrument_id}-15-MINUTE-MID-EXTERNAL")
 
         # Create the bar
         bar = Bar(

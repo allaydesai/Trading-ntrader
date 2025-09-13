@@ -4,6 +4,7 @@ from decimal import Decimal
 from typing import Dict, Any, List
 
 from nautilus_trader.backtest.engine import BacktestEngine, BacktestEngineConfig
+from nautilus_trader.backtest.models import FillModel
 from nautilus_trader.model.currencies import USD
 from nautilus_trader.model.data import Bar, BarType
 from nautilus_trader.model.enums import AccountType, OmsType
@@ -106,6 +107,12 @@ class MinimalBacktestRunner:
         # Initialize engine
         self.engine = BacktestEngine(config=config)
 
+        # Create fill model for realistic execution simulation
+        fill_model = FillModel(
+            prob_fill_on_limit=1.0,  # Always fill limit orders when price touches
+            prob_slippage=0.0,       # No slippage for initial testing
+        )
+
         # Add venue
         venue = Venue("SIM")
         self.engine.add_venue(
@@ -113,13 +120,15 @@ class MinimalBacktestRunner:
             oms_type=OmsType.HEDGING,
             account_type=AccountType.MARGIN,
             starting_balances=[Money(self.settings.default_balance, USD)],
+            fill_model=fill_model,
         )
 
         # Add instrument
         self.engine.add_instrument(instrument)
 
         # Generate mock data
-        bar_type_str = f"{instrument_id}-15-MINUTE-BID-EXTERNAL"
+        # Must match the bar type created in generate_mock_bars
+        bar_type_str = f"{instrument_id}-15-MINUTE-MID-EXTERNAL"
         bar_type = BarType.from_str(bar_type_str)
         bars = generate_mock_bars(instrument_id, num_bars=num_bars)
 
@@ -180,7 +189,8 @@ class MinimalBacktestRunner:
         largest_loss = 0.0
 
         for position in closed_positions:
-            pnl = position.unrealized_pnl(position.last_px).as_double()
+            # Use realized PnL for closed positions
+            pnl = position.realized_pnl.as_double() if hasattr(position, "realized_pnl") else 0.0
             if pnl > 0:
                 winning_trades += 1
                 largest_win = max(largest_win, pnl)
