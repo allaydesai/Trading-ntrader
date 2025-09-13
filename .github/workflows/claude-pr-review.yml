@@ -11,7 +11,7 @@ jobs:
   claude-review:
     name: Claude Code Review
     runs-on: ubuntu-latest
-    if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-claude-review') }}
+    if: ${{ github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'skip-claude-review') }}
 
     permissions:
       contents: read

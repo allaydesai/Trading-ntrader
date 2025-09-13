@@ -190,11 +190,48 @@ Keep the review professional, constructive, and actionable.
 
         print("✅ Claude review posted successfully!")
 
+    def post_error_comment(self, error_message: str) -> None:
+        """Post an error comment to the PR."""
+        try:
+            headers = {
+                "Authorization": f"token {self.github_token}",
+                "Accept": "application/vnd.github.v3+json",
+            }
+
+            error_comment = f"""## 🤖 Claude AI Review Error
+
+{error_message}
+
+Please check the repository settings and GitHub Action configuration.
+"""
+            payload = {"body": error_comment}
+            url = f"{self.github_api_base}/issues/{self.pr_number}/comments"
+            response = requests.post(url, headers=headers, json=payload)
+
+            if response.status_code == 201:
+                print("✅ Error comment posted successfully")
+            else:
+                print(f"❌ Failed to post error comment: {response.status_code}")
+
+        except Exception as e:
+            print(f"❌ Failed to post error comment: {e}")
+
     def run_review(self) -> None:
         """Run the complete review process."""
         try:
             print(f"🔍 Starting Claude review for PR #{self.pr_number}")
             print(f"📁 Changed files: {', '.join(self.changed_files)}")
+            print(f"🔧 Environment check:")
+            print(f"  - ANTHROPIC_API_KEY: {'✓ Set' if self.anthropic_api_key else '✗ Missing'}")
+            print(f"  - GITHUB_TOKEN: {'✓ Set' if self.github_token else '✗ Missing'}")
+            print(f"  - PR_NUMBER: {self.pr_number}")
+            print(f"  - REPO: {self.repo_owner}/{self.repo_name}")
+
+            # Early exit if API key is missing
+            if not self.anthropic_api_key:
+                print("❌ ANTHROPIC_API_KEY is required but not set")
+                self.post_error_comment("ANTHROPIC_API_KEY secret is not configured in repository settings")
+                return
 
             # Get PR diff
             print("📥 Fetching PR diff...")
