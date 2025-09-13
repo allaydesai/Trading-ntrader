@@ -4,6 +4,37 @@
 
 This project follows strict Python Backend Development principles as defined in `.specify/memory/constitution.md`.
 
+## 🔄 Current Project: Nautilus Trader Backtesting System
+
+### Project Overview
+Building a production-grade algorithmic trading backtesting system using Nautilus Trader framework with Interactive Brokers data integration.
+
+### Tech Stack
+- **Core Framework**: Nautilus Trader (event-driven backtesting engine)
+- **Data Source**: Interactive Brokers TWS/Gateway via nautilus_trader[ib]
+- **API**: FastAPI with async/await patterns
+- **Database**: PostgreSQL with TimescaleDB for time-series data
+- **Cache**: Redis for performance optimization
+- **Testing**: pytest with 80% minimum coverage (TDD mandatory)
+
+### Key Components
+- IBKR data adapter with rate limiting (50 req/sec)
+- Trading strategies: SMA crossover, mean reversion, momentum
+- Performance analytics with Sharpe ratio, drawdown, win rate
+- Report generation: HTML with charts, CSV, JSON formats
+- CSV data import as fallback when IBKR unavailable
+
+### Recent Changes (2025-01-13)
+- Created feature specification for backtesting system
+- Designed data model with 8 core entities
+- Generated OpenAPI contracts for REST API
+- Planned TDD approach with failing tests first
+
+### Active Development
+- Branch: `001-docs-prd-md`
+- Phase: Design & Architecture (Phase 1)
+- Next: Generate tasks.md for implementation
+
 ## Core Development Philosophy
 
 ### KISS (Keep It Simple, Stupid)

@@ -1,0 +1,671 @@
+openapi: 3.0.3
+info:
+  title: Nautilus Trader Backtesting API
+  description: REST API for managing backtesting operations with Nautilus Trader and IBKR integration
+  version: 1.0.0
+  contact:
+    name: Trading System Support
+    email: support@trading-system.local
+
+servers:
+  - url: http://localhost:8000/api/v1
+    description: Local development server
+  - url: http://localhost:8000/api/v1
+    description: Docker container
+
+tags:
+  - name: strategies
+    description: Trading strategy management
+  - name: backtests
+    description: Backtest execution and monitoring
+  - name: data
+    description: Market data management
+  - name: reports
+    description: Performance reports and analytics
+
+paths:
+  /strategies:
+    get:
+      tags: [strategies]
+      summary: List all trading strategies
+      operationId: list_strategies
+      parameters:
+        - name: strategy_type
+          in: query
+          schema:
+            type: string
+            enum: [SMA_CROSSOVER, MEAN_REVERSION, MOMENTUM]
+        - name: is_active
+          in: query
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: List of strategies
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Strategy'
+    
+    post:
+      tags: [strategies]
+      summary: Create a new trading strategy
+      operationId: create_strategy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StrategyCreate'
+      responses:
+        '201':
+          description: Strategy created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Strategy'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /strategies/{strategy_id}:
+    get:
+      tags: [strategies]
+      summary: Get strategy details
+      operationId: get_strategy
+      parameters:
+        - $ref: '#/components/parameters/StrategyId'
+      responses:
+        '200':
+          description: Strategy details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Strategy'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /backtests:
+    get:
+      tags: [backtests]
+      summary: List backtest runs
+      operationId: list_backtests
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [PENDING, RUNNING, COMPLETED, FAILED]
+        - name: strategy_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: List of backtests
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/BacktestSummary'
+    
+    post:
+      tags: [backtests]
+      summary: Start a new backtest
+      operationId: create_backtest
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BacktestConfig'
+      responses:
+        '202':
+          description: Backtest started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BacktestStatus'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          description: Another backtest is already running
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /backtests/{backtest_id}:
+    get:
+      tags: [backtests]
+      summary: Get backtest status and results
+      operationId: get_backtest
+      parameters:
+        - $ref: '#/components/parameters/BacktestId'
+      responses:
+        '200':
+          description: Backtest details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BacktestResult'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    
+    delete:
+      tags: [backtests]
+      summary: Cancel a running backtest
+      operationId: cancel_backtest
+      parameters:
+        - $ref: '#/components/parameters/BacktestId'
+      responses:
+        '204':
+          description: Backtest cancelled
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Cannot cancel completed backtest
+
+  /backtests/{backtest_id}/trades:
+    get:
+      tags: [backtests]
+      summary: Get trades from a backtest
+      operationId: get_backtest_trades
+      parameters:
+        - $ref: '#/components/parameters/BacktestId'
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+            maximum: 1000
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: List of trades
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  trades:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Trade'
+                  total:
+                    type: integer
+                  limit:
+                    type: integer
+                  offset:
+                    type: integer
+
+  /backtests/{backtest_id}/report:
+    post:
+      tags: [reports]
+      summary: Generate performance report
+      operationId: generate_report
+      parameters:
+        - $ref: '#/components/parameters/BacktestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [format]
+              properties:
+                format:
+                  type: string
+                  enum: [HTML, CSV, JSON]
+                  description: Report format
+      responses:
+        '202':
+          description: Report generation started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  report_id:
+                    type: string
+                    format: uuid
+                  status:
+                    type: string
+                    enum: [GENERATING]
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /reports/{report_id}:
+    get:
+      tags: [reports]
+      summary: Download generated report
+      operationId: download_report
+      parameters:
+        - name: report_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Report file
+          content:
+            text/html:
+              schema:
+                type: string
+                format: binary
+            text/csv:
+              schema:
+                type: string
+                format: binary
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PerformanceMetrics'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /data/instruments:
+    get:
+      tags: [data]
+      summary: List available instruments
+      operationId: list_instruments
+      parameters:
+        - name: asset_class
+          in: query
+          schema:
+            type: string
+            enum: [EQUITY, ETF, FX, FUTURE, OPTION]
+        - name: exchange
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of instruments
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Instrument'
+
+  /data/import:
+    post:
+      tags: [data]
+      summary: Import market data from CSV
+      operationId: import_data
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, instrument_id, timeframe]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: CSV file with OHLCV data
+                instrument_id:
+                  type: string
+                  description: Instrument identifier
+                timeframe:
+                  type: string
+                  enum: [1MIN, 5MIN, 1HOUR, DAILY]
+      responses:
+        '202':
+          description: Import started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  import_id:
+                    type: string
+                    format: uuid
+                  status:
+                    type: string
+                  rows_processed:
+                    type: integer
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /data/ibkr/connect:
+    post:
+      tags: [data]
+      summary: Connect to IBKR TWS/Gateway
+      operationId: connect_ibkr
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [host, port]
+              properties:
+                host:
+                  type: string
+                  default: "127.0.0.1"
+                port:
+                  type: integer
+                  default: 7497
+                  description: 7497 for paper, 7496 for live
+                client_id:
+                  type: integer
+                  default: 1
+      responses:
+        '200':
+          description: Connection established
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  connected:
+                    type: boolean
+                  account_id:
+                    type: string
+                  server_version:
+                    type: integer
+        '503':
+          description: Connection failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+components:
+  parameters:
+    StrategyId:
+      name: strategy_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    
+    BacktestId:
+      name: backtest_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  schemas:
+    Strategy:
+      type: object
+      required: [id, name, strategy_type, parameters, created_at, is_active]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        strategy_type:
+          type: string
+          enum: [SMA_CROSSOVER, MEAN_REVERSION, MOMENTUM]
+        parameters:
+          type: object
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        is_active:
+          type: boolean
+
+    StrategyCreate:
+      type: object
+      required: [name, strategy_type, parameters]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        strategy_type:
+          type: string
+          enum: [SMA_CROSSOVER, MEAN_REVERSION, MOMENTUM]
+        parameters:
+          type: object
+          additionalProperties: true
+
+    BacktestConfig:
+      type: object
+      required: [strategy_id, instrument_ids, start_date, end_date]
+      properties:
+        strategy_id:
+          type: string
+          format: uuid
+        instrument_ids:
+          type: array
+          items:
+            type: string
+          minItems: 1
+          maxItems: 10
+        start_date:
+          type: string
+          format: date
+          description: Min 2019-01-01
+        end_date:
+          type: string
+          format: date
+          description: Max 2024-12-31
+        initial_capital:
+          type: number
+          default: 100000
+          minimum: 1000
+        position_size_pct:
+          type: number
+          default: 1.0
+          minimum: 0.1
+          maximum: 10.0
+        data_source:
+          type: string
+          enum: [IBKR, CSV_FILE]
+          default: IBKR
+        benchmark_symbol:
+          type: string
+          default: SPY
+
+    BacktestStatus:
+      type: object
+      required: [id, status, progress_pct]
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [PENDING, RUNNING, COMPLETED, FAILED]
+        progress_pct:
+          type: number
+          minimum: 0
+          maximum: 100
+        estimated_completion:
+          type: string
+          format: date-time
+        error_message:
+          type: string
+
+    BacktestSummary:
+      type: object
+      required: [id, strategy_id, status, started_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        strategy_id:
+          type: string
+          format: uuid
+        strategy_name:
+          type: string
+        status:
+          type: string
+          enum: [PENDING, RUNNING, COMPLETED, FAILED]
+        started_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+        total_return:
+          type: number
+        sharpe_ratio:
+          type: number
+
+    BacktestResult:
+      allOf:
+        - $ref: '#/components/schemas/BacktestSummary'
+        - type: object
+          properties:
+            configuration:
+              $ref: '#/components/schemas/BacktestConfig'
+            metrics:
+              $ref: '#/components/schemas/PerformanceMetrics'
+            trades_count:
+              type: integer
+            winning_trades:
+              type: integer
+            losing_trades:
+              type: integer
+
+    PerformanceMetrics:
+      type: object
+      properties:
+        returns:
+          type: object
+          properties:
+            total_return:
+              type: number
+            cagr:
+              type: number
+            annualized_return:
+              type: number
+        risk:
+          type: object
+          properties:
+            max_drawdown:
+              type: number
+            sharpe_ratio:
+              type: number
+            sortino_ratio:
+              type: number
+            volatility:
+              type: number
+        trading:
+          type: object
+          properties:
+            win_rate:
+              type: number
+            avg_win:
+              type: number
+            avg_loss:
+              type: number
+            profit_factor:
+              type: number
+            expectancy:
+              type: number
+        benchmark:
+          type: object
+          properties:
+            benchmark_return:
+              type: number
+            alpha:
+              type: number
+            beta:
+              type: number
+
+    Trade:
+      type: object
+      required: [id, instrument_id, entry_time, entry_price, quantity, side]
+      properties:
+        id:
+          type: string
+          format: uuid
+        instrument_id:
+          type: string
+        entry_time:
+          type: string
+          format: date-time
+        entry_price:
+          type: number
+        exit_time:
+          type: string
+          format: date-time
+        exit_price:
+          type: number
+        quantity:
+          type: integer
+        side:
+          type: string
+          enum: [LONG, SHORT]
+        commission:
+          type: number
+        slippage:
+          type: number
+        pnl:
+          type: number
+        pnl_pct:
+          type: number
+
+    Instrument:
+      type: object
+      required: [id, symbol, exchange, asset_class, currency]
+      properties:
+        id:
+          type: string
+        symbol:
+          type: string
+        exchange:
+          type: string
+        asset_class:
+          type: string
+          enum: [EQUITY, ETF, FX, FUTURE, OPTION]
+        currency:
+          type: string
+        tick_size:
+          type: number
+        lot_size:
+          type: integer
+        margin_requirement:
+          type: number
+
+    Error:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
