@@ -5,7 +5,6 @@ from decimal import Decimal
 import click
 from rich.console import Console
 
-from src.config import get_settings
 from src.core.backtest_runner import MinimalBacktestRunner
 
 console = Console()
@@ -16,33 +15,19 @@ console = Console()
     "--strategy",
     default="sma",
     type=click.Choice(["sma"]),
-    help="Trading strategy to use (default: sma)"
+    help="Trading strategy to use (default: sma)",
 )
 @click.option(
     "--data",
     default="mock",
     type=click.Choice(["mock"]),
-    help="Data source to use (default: mock)"
+    help="Data source to use (default: mock)",
 )
+@click.option("--fast-period", type=int, help="Fast SMA period (default: from config)")
+@click.option("--slow-period", type=int, help="Slow SMA period (default: from config)")
+@click.option("--trade-size", type=str, help="Trade size (default: from config)")
 @click.option(
-    "--fast-period",
-    type=int,
-    help="Fast SMA period (default: from config)"
-)
-@click.option(
-    "--slow-period",
-    type=int,
-    help="Slow SMA period (default: from config)"
-)
-@click.option(
-    "--trade-size",
-    type=str,
-    help="Trade size (default: from config)"
-)
-@click.option(
-    "--bars",
-    type=int,
-    help="Number of data bars to generate (default: from config)"
+    "--bars", type=int, help="Number of data bars to generate (default: from config)"
 )
 def run_simple(
     strategy: str,
@@ -50,7 +35,7 @@ def run_simple(
     fast_period: int,
     slow_period: int,
     trade_size: str,
-    bars: int
+    bars: int,
 ) -> None:
     """Run a simple backtest with mock data.
 
@@ -74,13 +59,15 @@ def run_simple(
             fast_period=fast_period,
             slow_period=slow_period,
             trade_size=trade_size_decimal,
-            num_bars=bars
+            num_bars=bars,
         )
 
         # Display results
         console.print("[green]✓ Backtest completed successfully![/green]")
         console.print("\n[bold]Results Summary:[/bold]")
-        console.print(f"Total Return: [{'green' if result.total_return >= 0 else 'red'}]{result.total_return:,.2f}[/{'green' if result.total_return >= 0 else 'red'}]")
+        console.print(
+            f"Total Return: [{'green' if result.total_return >= 0 else 'red'}]{result.total_return:,.2f}[/{'green' if result.total_return >= 0 else 'red'}]"
+        )
         console.print(f"Total Trades: {result.total_trades}")
         console.print(f"Win Rate: {result.win_rate:.1f}%")
 
@@ -92,7 +79,9 @@ def run_simple(
             if result.largest_loss < 0:
                 console.print(f"Largest Loss: [red]{result.largest_loss:,.2f}[/red]")
 
-        console.print(f"Final Balance: [{'green' if result.final_balance >= 0 else 'red'}]{result.final_balance:,.2f}[/{'green' if result.final_balance >= 0 else 'red'}]")
+        console.print(
+            f"Final Balance: [{'green' if result.final_balance >= 0 else 'red'}]{result.final_balance:,.2f}[/{'green' if result.final_balance >= 0 else 'red'}]"
+        )
 
         # Show performance message
         if result.total_return > 0:

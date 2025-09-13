@@ -4,7 +4,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
 
 def test_can_run_simple_sma_backtest():
@@ -18,10 +17,20 @@ def test_can_run_simple_sma_backtest():
     ntrader_script = project_root / "ntrader.py"
 
     # Run the command
-    result = subprocess.run([
-        sys.executable, str(ntrader_script),
-        "run-simple", "--strategy", "sma", "--data", "mock"
-    ], capture_output=True, text=True, cwd=project_root)
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(ntrader_script),
+            "run-simple",
+            "--strategy",
+            "sma",
+            "--data",
+            "mock",
+        ],
+        capture_output=True,
+        text=True,
+        cwd=project_root,
+    )
 
     # Should exit successfully
     assert result.returncode == 0, f"Command failed with output: {result.stderr}"

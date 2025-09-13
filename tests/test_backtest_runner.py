@@ -2,7 +2,6 @@
 
 from decimal import Decimal
 
-import pytest
 
 from src.core.backtest_runner import MinimalBacktestRunner, BacktestResult
 
@@ -10,10 +9,7 @@ from src.core.backtest_runner import MinimalBacktestRunner, BacktestResult
 def test_backtest_result_creation():
     """Test BacktestResult creation and properties."""
     result = BacktestResult(
-        total_return=1000.0,
-        total_trades=10,
-        winning_trades=6,
-        losing_trades=4
+        total_return=1000.0, total_trades=10, winning_trades=6, losing_trades=4
     )
 
     assert result.total_return == 1000.0
@@ -45,10 +41,7 @@ def test_run_sma_backtest():
 
     # Run a small backtest
     result = runner.run_sma_backtest(
-        fast_period=5,
-        slow_period=10,
-        trade_size=Decimal("100000"),
-        num_bars=100
+        fast_period=5, slow_period=10, trade_size=Decimal("100000"), num_bars=100
     )
 
     # Basic checks

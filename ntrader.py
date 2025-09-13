@@ -8,7 +8,7 @@ from pathlib import Path
 src_path = Path(__file__).parent / "src"
 sys.path.insert(0, str(src_path))
 
-from src.cli.main import cli
+from src.cli.main import cli  # noqa: E402
 
 if __name__ == "__main__":
     cli()

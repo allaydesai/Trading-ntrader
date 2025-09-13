@@ -1,9 +1,11 @@
 """Tests for mock data generator."""
 
-import pytest
-from datetime import datetime, timedelta
 
-from src.utils.mock_data import generate_mock_bars, generate_mock_dataframe, create_test_instrument
+from src.utils.mock_data import (
+    generate_mock_bars,
+    generate_mock_dataframe,
+    create_test_instrument,
+)
 
 
 def test_create_test_instrument():
@@ -21,17 +23,17 @@ def test_generate_mock_dataframe():
 
     # Check basic structure
     assert len(df) == 100
-    assert list(df.columns) == ['timestamp', 'open', 'high', 'low', 'close', 'volume']
+    assert list(df.columns) == ["timestamp", "open", "high", "low", "close", "volume"]
 
     # Check OHLC relationships
     for _, row in df.iterrows():
-        assert row['high'] >= max(row['open'], row['close'])
-        assert row['low'] <= min(row['open'], row['close'])
-        assert row['volume'] > 0
+        assert row["high"] >= max(row["open"], row["close"])
+        assert row["low"] <= min(row["open"], row["close"])
+        assert row["volume"] > 0
 
     # Check price progression
-    assert df['close'].iloc[0] > 0
-    assert df['close'].iloc[-1] > 0
+    assert df["close"].iloc[0] > 0
+    assert df["close"].iloc[-1] > 0
 
 
 def test_generate_mock_bars():
@@ -57,8 +59,8 @@ def test_mock_data_predictable_pattern():
     df = generate_mock_dataframe(num_bars=200)
 
     # Calculate simple 10 and 20 period SMAs
-    df['sma_10'] = df['close'].rolling(window=10).mean()
-    df['sma_20'] = df['close'].rolling(window=20).mean()
+    df["sma_10"] = df["close"].rolling(window=10).mean()
+    df["sma_20"] = df["close"].rolling(window=20).mean()
 
     # Remove NaN values
     df_clean = df.dropna()
@@ -66,8 +68,8 @@ def test_mock_data_predictable_pattern():
     # Should have crossovers due to sine wave pattern
     crossovers = 0
     for i in range(1, len(df_clean)):
-        prev_diff = df_clean['sma_10'].iloc[i-1] - df_clean['sma_20'].iloc[i-1]
-        curr_diff = df_clean['sma_10'].iloc[i] - df_clean['sma_20'].iloc[i]
+        prev_diff = df_clean["sma_10"].iloc[i - 1] - df_clean["sma_20"].iloc[i - 1]
+        curr_diff = df_clean["sma_10"].iloc[i] - df_clean["sma_20"].iloc[i]
 
         # Detect crossover (sign change)
         if prev_diff * curr_diff < 0:

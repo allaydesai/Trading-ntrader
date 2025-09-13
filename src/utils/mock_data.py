@@ -2,10 +2,8 @@
 
 import math
 from datetime import datetime, timedelta
-from decimal import Decimal
 from typing import List
 
-import numpy as np
 import pandas as pd
 from nautilus_trader.model.data import Bar, BarType
 from nautilus_trader.model.identifiers import InstrumentId
@@ -21,7 +19,7 @@ def generate_mock_bars(
     start_price: float = 1.1000,
     volatility: float = 0.002,
     trend_strength: float = 0.0001,
-    start_time: datetime = None
+    start_time: datetime = None,
 ) -> List[Bar]:
     """
     Generate synthetic bar data with predictable patterns.
@@ -75,8 +73,12 @@ def generate_mock_bars(
         close_price = base_price + sine_component
 
         # Add some intrabar variation
-        high_variation = abs(math.sin(cycle_position + 0.5) * volatility * 0.5 * start_price)
-        low_variation = abs(math.sin(cycle_position - 0.5) * volatility * 0.5 * start_price)
+        high_variation = abs(
+            math.sin(cycle_position + 0.5) * volatility * 0.5 * start_price
+        )
+        low_variation = abs(
+            math.sin(cycle_position - 0.5) * volatility * 0.5 * start_price
+        )
 
         high_price = close_price + high_variation
         low_price = close_price - low_variation
@@ -122,7 +124,7 @@ def generate_mock_dataframe(
     start_price: float = 1.1000,
     volatility: float = 0.002,
     trend_strength: float = 0.0001,
-    start_time: datetime = None
+    start_time: datetime = None,
 ) -> pd.DataFrame:
     """
     Generate synthetic OHLCV data as a pandas DataFrame.
@@ -165,8 +167,12 @@ def generate_mock_dataframe(
 
         close_price = base_price + sine_component
 
-        high_variation = abs(math.sin(cycle_position + 0.5) * volatility * 0.5 * start_price)
-        low_variation = abs(math.sin(cycle_position - 0.5) * volatility * 0.5 * start_price)
+        high_variation = abs(
+            math.sin(cycle_position + 0.5) * volatility * 0.5 * start_price
+        )
+        low_variation = abs(
+            math.sin(cycle_position - 0.5) * volatility * 0.5 * start_price
+        )
 
         high_price = close_price + high_variation
         low_price = close_price - low_variation
@@ -182,14 +188,16 @@ def generate_mock_dataframe(
 
         volume = 1000000 + (500000 * abs(math.sin(cycle_position * 1.3)))
 
-        data.append({
-            'timestamp': current_time,
-            'open': round(open_price, 5),
-            'high': round(high_price, 5),
-            'low': round(low_price, 5),
-            'close': round(close_price, 5),
-            'volume': int(volume)
-        })
+        data.append(
+            {
+                "timestamp": current_time,
+                "open": round(open_price, 5),
+                "high": round(high_price, 5),
+                "low": round(low_price, 5),
+                "close": round(close_price, 5),
+                "volume": int(volume),
+            }
+        )
 
         current_time += timedelta(minutes=15)
 

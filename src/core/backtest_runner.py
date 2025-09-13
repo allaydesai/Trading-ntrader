@@ -1,12 +1,12 @@
 """Minimal backtest engine wrapper for Nautilus Trader."""
 
 from decimal import Decimal
-from typing import Dict, Any, List
+from typing import Dict, Any
 
 from nautilus_trader.backtest.engine import BacktestEngine, BacktestEngineConfig
 from nautilus_trader.backtest.models import FillModel
 from nautilus_trader.model.currencies import USD
-from nautilus_trader.model.data import Bar, BarType
+from nautilus_trader.model.data import BarType
 from nautilus_trader.model.enums import AccountType, OmsType
 from nautilus_trader.model.identifiers import TraderId, Venue
 from nautilus_trader.model.objects import Money
@@ -27,7 +27,7 @@ class BacktestResult:
         losing_trades: int = 0,
         largest_win: float = 0.0,
         largest_loss: float = 0.0,
-        final_balance: float = 0.0
+        final_balance: float = 0.0,
     ):
         """Initialize backtest results."""
         self.total_return = total_return
@@ -47,8 +47,10 @@ class BacktestResult:
 
     def __str__(self) -> str:
         """String representation of results."""
-        return (f"BacktestResult(total_return={self.total_return:.2f}, "
-                f"total_trades={self.total_trades}, win_rate={self.win_rate:.1f}%)")
+        return (
+            f"BacktestResult(total_return={self.total_return:.2f}, "
+            f"total_trades={self.total_trades}, win_rate={self.win_rate:.1f}%)"
+        )
 
 
 class MinimalBacktestRunner:
@@ -65,7 +67,7 @@ class MinimalBacktestRunner:
         fast_period: int = None,
         slow_period: int = None,
         trade_size: Decimal = None,
-        num_bars: int = None
+        num_bars: int = None,
     ) -> BacktestResult:
         """
         Run a simple SMA crossover backtest with mock data.
@@ -110,7 +112,7 @@ class MinimalBacktestRunner:
         # Create fill model for realistic execution simulation
         fill_model = FillModel(
             prob_fill_on_limit=1.0,  # Always fill limit orders when price touches
-            prob_slippage=0.0,       # No slippage for initial testing
+            prob_slippage=0.0,  # No slippage for initial testing
         )
 
         # Add venue
@@ -129,7 +131,8 @@ class MinimalBacktestRunner:
         # Generate mock data
         # Must match the bar type created in generate_mock_bars
         bar_type_str = f"{instrument_id}-15-MINUTE-MID-EXTERNAL"
-        bar_type = BarType.from_str(bar_type_str)
+        # Create bar type for strategy configuration
+        BarType.from_str(bar_type_str)  # Validate format
         bars = generate_mock_bars(instrument_id, num_bars=num_bars)
 
         # Add bars to engine
@@ -190,7 +193,11 @@ class MinimalBacktestRunner:
 
         for position in closed_positions:
             # Use realized PnL for closed positions
-            pnl = position.realized_pnl.as_double() if hasattr(position, "realized_pnl") else 0.0
+            pnl = (
+                position.realized_pnl.as_double()
+                if hasattr(position, "realized_pnl")
+                else 0.0
+            )
             if pnl > 0:
                 winning_trades += 1
                 largest_win = max(largest_win, pnl)
@@ -220,8 +227,7 @@ class MinimalBacktestRunner:
         if not self.engine or not self._results:
             return {}
 
-        venue = Venue("SIM")
-        account = self.engine.cache.account_for_venue(venue)
+        # Future: Could get account for detailed analysis via Venue("SIM")
 
         return {
             "basic_metrics": {

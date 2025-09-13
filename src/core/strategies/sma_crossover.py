@@ -42,12 +42,10 @@ class SMACrossover(Strategy):
 
         # Initialize indicators
         self.fast_sma = SimpleMovingAverage(
-            period=config.fast_period,
-            price_type=PriceType.LAST
+            period=config.fast_period, price_type=PriceType.LAST
         )
         self.slow_sma = SimpleMovingAverage(
-            period=config.slow_period,
-            price_type=PriceType.LAST
+            period=config.slow_period, price_type=PriceType.LAST
         )
 
         # Track previous SMA values for crossover detection
@@ -100,7 +98,7 @@ class SMACrossover(Strategy):
     def on_event(self, event: Event) -> None:
         """Handle events."""
         # Track position changes
-        if hasattr(event, 'position_id'):
+        if hasattr(event, "position_id"):
             self.position = self.cache.position(event.position_id)
 
     def _check_for_signals(self, fast_value: float, slow_value: float) -> None:
@@ -115,13 +113,11 @@ class SMACrossover(Strategy):
             Current slow SMA value.
         """
         # Detect bullish crossover (fast SMA crosses above slow SMA)
-        if (self._prev_fast_sma <= self._prev_slow_sma and
-            fast_value > slow_value):
+        if self._prev_fast_sma <= self._prev_slow_sma and fast_value > slow_value:
             self._generate_buy_signal()
 
         # Detect bearish crossover (fast SMA crosses below slow SMA)
-        elif (self._prev_fast_sma >= self._prev_slow_sma and
-              fast_value < slow_value):
+        elif self._prev_fast_sma >= self._prev_slow_sma and fast_value < slow_value:
             self._generate_sell_signal()
 
     def _generate_buy_signal(self) -> None:

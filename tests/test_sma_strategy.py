@@ -2,8 +2,6 @@
 
 from decimal import Decimal
 
-import pytest
-from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.test_kit.providers import TestInstrumentProvider
 
 from src.core.strategies.sma_crossover import SMACrossover, SMAConfig
