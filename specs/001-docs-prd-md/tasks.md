@@ -15,8 +15,72 @@ This document contains ordered implementation tasks for building the Nautilus Tr
 
 ---
 
+## Implementation Guide
+
+### Quick Navigation Map
+
+**Essential Reference Files**:
+- `data-model.md` → Core entity definitions (8 entities, lines 9-283)
+- `contracts/openapi.yaml` → API schemas and endpoints
+- `cli-commands.md` → CLI interface specifications
+- `research.md` → Technology decisions and rationale
+- `quickstart.md` → Usage examples and validation scenarios
+
+### Entity-to-Task Mapping
+
+| Data Model Entity | Primary Implementation Tasks | Reference Lines |
+|------------------|----------------------------|-----------------|
+| TradingStrategy | T006, T025, T029 | data-model.md:9-28 |
+| Instrument | T057 | data-model.md:30-47 |
+| MarketData | T015, T055 | data-model.md:48-69 |
+| BacktestConfiguration | T031, T032 | data-model.md:70-89 |
+| Trade | T039 | data-model.md:90-116 |
+| Portfolio | T040 | data-model.md:117-136 |
+| BacktestResult | T033, T034 | data-model.md:137-188 |
+| PerformanceReport | T041, T043, T056 | data-model.md:189-204 |
+
+### API-to-Task Mapping
+
+| API Endpoint Group | Implementation Tasks | OpenAPI Lines |
+|-------------------|---------------------|---------------|
+| /strategies | T006, T025, T330-T331 | 27-87 |
+| /backtests | T032, T033, T341 | 89-171 |
+| /data | T018, T019, T048, T051-T052 | 275-383 |
+| /reports | T041, T042, T056 | 209-273 |
+
+### CLI-to-Task Mapping
+
+| CLI Command Group | Implementation Tasks | CLI-Commands Lines |
+|-------------------|---------------------|-------------------|
+| strategy commands | T330-T331 | 24-44 |
+| backtest commands | T341-T342 | 46-74 |
+| data commands | T019, T051-T052 | 76-108 |
+| report commands | T042, T044 | 110-130 |
+
+### Key Integration Points
+
+1. **Nautilus Trader Integration** (Tasks T007, T009, T048)
+   - Reference: research.md:7-16 (framework decision)
+   - Core implementation: T009 (backtest runner)
+
+2. **Database Layer** (Tasks T014-T016, T055)
+   - TimescaleDB setup: T055
+   - Migration strategy: data-model.md:277-283
+
+3. **IBKR Integration** (Tasks T046-T052)
+   - Connection: research.md:22-36
+   - Rate limiting: 50 req/sec (research.md:28)
+
+---
+
 ## Milestone 1: Basic CLI with Simple Backtest (T001-T012)
 **Goal**: Run a basic SMA backtest from CLI with mock data
+
+**Key References for Milestone 1**:
+- Strategy model: data-model.md:9-28 (TradingStrategy entity) → T006
+- Mock data generation: T008 (no external reference needed)
+- CLI structure: cli-commands.md:12-21 (overview) → T004, T010
+- Expected output: quickstart.md:98-116 (scenario 1 results) → T011
 
 ### T001: Initialize Python Project Structure
 **File**: Project root structure  
@@ -80,10 +144,12 @@ def test_can_run_simple_sma_backtest():
 ### T006: Create SMA Strategy Model [P]
 **File**: `src/models/strategy.py`  
 **Dependencies**: T002  
+**Reference**: data-model.md:9-28 (TradingStrategy entity)  
+**API Contract**: contracts/openapi.yaml:404-443 (Strategy schemas)  
 ```python
-# Pydantic model for SMA strategy
-# Parameters: fast_period, slow_period
-# Validation rules
+# Pydantic model for SMA strategy (follow data-model.md:11-18 field structure)
+# Parameters: fast_period, slow_period (per data-model.md:15)
+# Validation rules (per data-model.md:20-23)
 ```
 
 ### T007: Implement Basic SMA Strategy
@@ -155,6 +221,12 @@ def test_cli_runs_simple_backtest():
 ## Milestone 2: CSV Data Import & Real Backtest (T013-T024)
 **Goal**: Import CSV data and run real backtests
 
+**Key References for Milestone 2**:
+- MarketData model: data-model.md:48-69 → T015
+- Database migrations: data-model.md:277-283 → T016
+- CSV import CLI: cli-commands.md:90-95 → T019
+- Sample data format: quickstart.md:122-147 (scenario 2) → T023
+
 ### T013: Add Database Dependencies
 **File**: `pyproject.toml`  
 **Dependencies**: Milestone 1  
@@ -175,10 +247,12 @@ uv add --dev pytest-asyncio
 ### T015: Create Market Data Model
 **File**: `src/models/market_data.py`  
 **Dependencies**: T014  
+**Reference**: data-model.md:48-69 (MarketData entity specification)  
+**API Contract**: contracts/openapi.yaml:275-299 (data endpoints)  
 ```python
-# Pydantic model for OHLCV
+# Pydantic model for OHLCV (follow data-model.md:49-68 field definitions)
 # SQLAlchemy model (simple table, no TimescaleDB yet)
-# Validation rules
+# Validation rules (per data-model.md:60-64)
 ```
 
 ### T016: Setup Database Migrations
@@ -214,6 +288,8 @@ def test_can_import_csv_file():
 ### T019: Add Data Import Command
 **File**: `src/cli/commands/data.py`  
 **Dependencies**: T004, T018  
+**CLI Reference**: cli-commands.md:76-108 (Data Commands section)  
+**API Contract**: contracts/openapi.yaml:300-340 (data/import endpoint)  
 ```python
 @click.group()
 def data():
@@ -221,7 +297,7 @@ def data():
 
 @data.command()
 def import_csv(file):
-    """Import CSV market data"""
+    """Import CSV market data (per cli-commands.md:90-95)"""
     # Load file
     # Parse and validate
     # Store to database
@@ -372,10 +448,12 @@ def run_config(config_file):
 ### T033: Create BacktestResult Model
 **File**: `src/models/backtest_result.py`  
 **Dependencies**: T032  
+**Reference**: data-model.md:137-188 (BacktestResult entity)  
+**API Contract**: contracts/openapi.yaml:529-590 (BacktestResult/PerformanceMetrics schemas)  
 ```python
-# Pydantic model for results
+# Pydantic model for results (follow data-model.md:140-149 field structure)
 # SQLAlchemy model for persistence
-# Performance metrics structure
+# Performance metrics structure (per data-model.md:151-178 JSON format)
 ```
 
 ### T034: Add Results Persistence
@@ -438,10 +516,12 @@ def test_max_drawdown_calculation():
 ### T039: Add Trade Model
 **File**: `src/models/trade.py`  
 **Dependencies**: T038  
+**Reference**: data-model.md:90-116 (Trade entity)  
+**API Contract**: contracts/openapi.yaml:591-623 (Trade schema)  
 ```python
-# Pydantic model for trades
+# Pydantic model for trades (follow data-model.md:92-105 field structure)
 # SQLAlchemy model
-# PnL calculations
+# PnL calculations (per data-model.md:107-111 validation rules)
 ```
 
 ### T040: Create Portfolio Tracker
@@ -513,6 +593,13 @@ def test_metrics_and_reports():
 ## Milestone 5: IBKR Integration (T046-T054)
 **Goal**: Connect to Interactive Brokers for real market data
 
+**Key References for Milestone 5**:
+- IBKR research: research.md:22-36 (integration decision) → T048
+- Rate limiting: research.md:28 (50 req/sec limit) → T048
+- IBKR CLI commands: cli-commands.md:78-83, cli-commands.md:310-328 → T051, T052
+- Docker setup: quickstart.md:215-224 → T053
+- Connection API: contracts/openapi.yaml:341-383 → T048
+
 ### T046: Add IBKR Dependencies
 **File**: `pyproject.toml`  
 **Dependencies**: Milestone 4  
@@ -534,10 +621,12 @@ def test_rate_limiting():
 ### T048: Implement IBKR Client
 **File**: `src/services/ibkr_client.py`  
 **Dependencies**: T047  
+**Research Reference**: research.md:22-36 (IBKR Integration decision)  
+**API Contract**: contracts/openapi.yaml:341-383 (data/ibkr/connect endpoint)  
 ```python
-# Nautilus IBKR adapter
+# Nautilus IBKR adapter (per research.md:24-31 rationale)
 # Connection management
-# Rate limiting
+# Rate limiting (per research.md:28 - 50 req/sec limit)
 # Make tests pass
 ```
 
@@ -758,12 +847,13 @@ def test_complete_workflow():
 ### T070: Final Validation
 **File**: `tests/test_production.py`  
 **Dependencies**: T069  
+**Validation Reference**: quickstart.md:257-325 (Test scenarios 1-3)  
 ```python
 def test_production_ready():
     """Validate production requirements"""
     # 80% test coverage
-    # Performance benchmarks
-    # All scenarios pass
+    # Performance benchmarks (per quickstart.md:363-374)
+    # All scenarios pass (quickstart.md:62-96, 118-147, 149-209, 211-255)
 ```
 
 **MILESTONE 7 COMPLETE**: Production-ready system
@@ -920,4 +1010,27 @@ ntrader health-check
 
 ---
 
-*Generated from specifications in `/specs/001-docs-prd-md/`*
+## Cross-Reference Validation ✓
+
+**All Major Tasks Now Include**:
+- ✅ **File references**: Specific implementation file paths
+- ✅ **Dependency mapping**: Clear task prerequisites  
+- ✅ **Data model references**: Links to entity specifications (data-model.md:line-numbers)
+- ✅ **API contract references**: Links to OpenAPI schemas (contracts/openapi.yaml:line-numbers)
+- ✅ **CLI command references**: Links to command specifications (cli-commands.md:line-numbers)
+- ✅ **Research references**: Links to technology decisions (research.md:line-numbers)
+
+**Implementation Ready**:
+- ✅ Each milestone has clear navigation guide
+- ✅ Entity-to-task mapping complete
+- ✅ API-to-task mapping complete  
+- ✅ CLI-to-task mapping complete
+- ✅ Key integration points identified
+- ✅ Validation scenarios linked to quickstart.md
+
+**Next Step**: Begin implementation with **Milestone 1 (T001-T012)** - all references are in place.
+
+---
+
+*Generated from specifications in `/specs/001-docs-prd-md/`*  
+*Cross-references added 2025-01-13*
