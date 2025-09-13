@@ -2,6 +2,7 @@
 
 from decimal import Decimal
 
+import pytest
 
 from src.core.backtest_runner import MinimalBacktestRunner, BacktestResult
 
@@ -35,6 +36,8 @@ def test_minimal_backtest_runner_initialization():
     assert runner.settings is not None
 
 
+@pytest.mark.trading
+@pytest.mark.slow
 def test_run_sma_backtest():
     """Test running an SMA backtest with mock data."""
     runner = MinimalBacktestRunner()

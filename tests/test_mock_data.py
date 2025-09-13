@@ -1,5 +1,6 @@
 """Tests for mock data generator."""
 
+import pytest
 
 from src.utils.mock_data import (
     generate_mock_bars,
@@ -54,6 +55,7 @@ def test_generate_mock_bars():
         assert bar.volume.as_double() > 0
 
 
+@pytest.mark.trading
 def test_mock_data_predictable_pattern():
     """Test that mock data has predictable patterns for SMA crossovers."""
     df = generate_mock_dataframe(num_bars=200)

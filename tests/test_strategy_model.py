@@ -1,7 +1,8 @@
 """Tests for strategy models."""
 
-import pytest
 from decimal import Decimal
+
+import pytest
 
 from src.models.strategy import (
     TradingStrategy,

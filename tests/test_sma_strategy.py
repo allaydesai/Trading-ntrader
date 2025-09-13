@@ -2,6 +2,7 @@
 
 from decimal import Decimal
 
+import pytest
 from nautilus_trader.test_kit.providers import TestInstrumentProvider
 
 from src.core.strategies.sma_crossover import SMACrossover, SMAConfig
@@ -25,6 +26,7 @@ def test_sma_config_creation():
     assert config.trade_size == Decimal("1_000_000")
 
 
+@pytest.mark.trading
 def test_sma_strategy_initialization():
     """Test SMA strategy initialization."""
     instrument = TestInstrumentProvider.default_fx_ccy("EUR/USD")

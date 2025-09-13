@@ -4,8 +4,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 
 
+@pytest.mark.integration
+@pytest.mark.trading
 def test_can_run_simple_sma_backtest():
     """End-to-end test - MUST FAIL INITIALLY.
 
