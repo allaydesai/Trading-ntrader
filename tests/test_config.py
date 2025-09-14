@@ -5,7 +5,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from pydantic import ValidationError
 
 from src.config import Settings, get_settings
 
@@ -40,7 +39,7 @@ def test_settings_custom_values():
         "trade_size": "250000",
         "data_directory": "custom_data",
         "mock_data_bars": 2000,
-        "log_level": "DEBUG"
+        "log_level": "DEBUG",
     }
 
     settings = Settings(**custom_values)
@@ -61,17 +60,13 @@ def test_settings_custom_values():
 def test_settings_decimal_validation():
     """Test Settings decimal field validation."""
     # Valid decimal values
-    settings = Settings(
-        default_balance="1000.50",
-        trade_size="500000.25"
-    )
+    settings = Settings(default_balance="1000.50", trade_size="500000.25")
     assert settings.default_balance == Decimal("1000.50")
     assert settings.trade_size == Decimal("500000.25")
 
     # Test with Decimal objects
     settings = Settings(
-        default_balance=Decimal("2000.75"),
-        trade_size=Decimal("750000.10")
+        default_balance=Decimal("2000.75"), trade_size=Decimal("750000.10")
     )
     assert settings.default_balance == Decimal("2000.75")
     assert settings.trade_size == Decimal("750000.10")
@@ -91,20 +86,14 @@ def test_settings_path_validation():
 
 def test_settings_integer_validation():
     """Test Settings integer field validation."""
-    settings = Settings(
-        fast_ema_period=25,
-        slow_ema_period=50,
-        mock_data_bars=5000
-    )
+    settings = Settings(fast_ema_period=25, slow_ema_period=50, mock_data_bars=5000)
     assert settings.fast_ema_period == 25
     assert settings.slow_ema_period == 50
     assert settings.mock_data_bars == 5000
 
     # Test with string integers
     settings = Settings(
-        fast_ema_period="30",
-        slow_ema_period="60",
-        mock_data_bars="3000"
+        fast_ema_period="30", slow_ema_period="60", mock_data_bars="3000"
     )
     assert settings.fast_ema_period == 30
     assert settings.slow_ema_period == 60
@@ -163,7 +152,7 @@ def test_settings_environment_variables():
         "DEBUG": "true",
         "DEFAULT_BALANCE": "750000",
         "FAST_EMA_PERIOD": "8",
-        "LOG_LEVEL": "WARNING"
+        "LOG_LEVEL": "WARNING",
     }
 
     with patch.dict("os.environ", env_vars, clear=False):
@@ -180,8 +169,8 @@ def test_settings_case_insensitive_env():
     """Test Settings case insensitive environment variables."""
     env_vars = {
         "app_name": "LowerCaseTrader",  # lowercase
-        "APP_VERSION": "2.0.0",         # uppercase
-        "Default_Currency": "GBP",      # mixed case
+        "APP_VERSION": "2.0.0",  # uppercase
+        "Default_Currency": "GBP",  # mixed case
     }
 
     with patch.dict("os.environ", env_vars, clear=False):
@@ -226,7 +215,9 @@ def test_settings_field_descriptions():
     assert fields["slow_ema_period"].description == "Slow EMA period for strategies"
     assert fields["trade_size"].description == "Default trade size"
     assert fields["data_directory"].description == "Directory for data files"
-    assert fields["mock_data_bars"].description == "Number of mock data bars to generate"
+    assert (
+        fields["mock_data_bars"].description == "Number of mock data bars to generate"
+    )
     assert fields["log_level"].description == "Logging level"
 
 
@@ -236,7 +227,7 @@ def test_settings_serialization():
         app_name="TestTrader",
         debug=True,
         default_balance=Decimal("123456.78"),
-        data_directory=Path("test/data")
+        data_directory=Path("test/data"),
     )
 
     # Serialize to dict

@@ -44,7 +44,9 @@ def test_sma_parameters_edge_cases():
     assert params.slow_period == 2
 
     # Test maximum valid values
-    params = SMAParameters(fast_period=199, slow_period=200, trade_size=Decimal("999999999"))
+    params = SMAParameters(
+        fast_period=199, slow_period=200, trade_size=Decimal("999999999")
+    )
     assert params.fast_period == 199
     assert params.slow_period == 200
 
@@ -53,7 +55,9 @@ def test_sma_parameters_edge_cases():
         SMAParameters(fast_period=0, slow_period=20)
 
     # Test equal periods
-    with pytest.raises(ValueError, match="Slow period must be greater than fast period"):
+    with pytest.raises(
+        ValueError, match="Slow period must be greater than fast period"
+    ):
         SMAParameters(fast_period=20, slow_period=20)
 
     # Test out of range periods

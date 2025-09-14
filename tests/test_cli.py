@@ -3,7 +3,6 @@
 from unittest.mock import Mock, patch
 
 import click
-import pytest
 from click.testing import CliRunner
 
 from src.cli.main import cli
@@ -82,6 +81,7 @@ def test_cli_settings_import():
         # Reload the module to apply the patch
         import importlib
         from src.cli import main
+
         importlib.reload(main)
 
         assert main.settings is not None

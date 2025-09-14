@@ -4,7 +4,6 @@ from decimal import Decimal
 from unittest.mock import Mock, patch
 
 import pytest
-from click.exceptions import ClickException
 from click.testing import CliRunner
 
 from src.cli.commands.run import run_simple
@@ -67,12 +66,19 @@ def test_run_simple_command_with_custom_parameters():
         mock_runner.run_sma_backtest.return_value = mock_result
         mock_runner_class.return_value = mock_runner
 
-        result = runner.invoke(run_simple, [
-            "--fast-period", "5",
-            "--slow-period", "15",
-            "--trade-size", "500000",
-            "--bars", "500"
-        ])
+        result = runner.invoke(
+            run_simple,
+            [
+                "--fast-period",
+                "5",
+                "--slow-period",
+                "15",
+                "--trade-size",
+                "500000",
+                "--bars",
+                "500",
+            ],
+        )
 
         assert result.exit_code == 0
         mock_runner.run_sma_backtest.assert_called_once_with(
@@ -247,9 +253,10 @@ def test_run_simple_rich_console_output():
     """Test that run_simple uses Rich console for formatted output."""
     runner = CliRunner()
 
-    with patch("src.cli.commands.run.MinimalBacktestRunner") as mock_runner_class, \
-         patch("src.cli.commands.run.console") as mock_console:
-
+    with (
+        patch("src.cli.commands.run.MinimalBacktestRunner") as mock_runner_class,
+        patch("src.cli.commands.run.console") as mock_console,
+    ):
         mock_runner = Mock()
         mock_result = Mock()
         mock_result.total_return = 1000.0
@@ -271,12 +278,15 @@ def test_run_simple_rich_console_output():
         assert mock_console.print.call_count >= 5
 
 
-@pytest.mark.parametrize("fast_period,slow_period,expected_calls", [
-    (None, None, 1),
-    (10, None, 1),
-    (None, 20, 1),
-    (10, 20, 1),
-])
+@pytest.mark.parametrize(
+    "fast_period,slow_period,expected_calls",
+    [
+        (None, None, 1),
+        (10, None, 1),
+        (None, 20, 1),
+        (10, 20, 1),
+    ],
+)
 def test_run_simple_parameter_combinations(fast_period, slow_period, expected_calls):
     """Test various parameter combinations for run_simple command."""
     runner = CliRunner()

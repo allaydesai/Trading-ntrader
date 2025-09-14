@@ -4,10 +4,6 @@ from decimal import Decimal
 from unittest.mock import Mock, patch
 
 import pytest
-from nautilus_trader.model.data import Bar
-from nautilus_trader.model.enums import BarAggregation, PriceType
-from nautilus_trader.model.identifiers import InstrumentId, Symbol, Venue
-from nautilus_trader.model.objects import Price, Quantity
 from nautilus_trader.test_kit.providers import TestInstrumentProvider
 from nautilus_trader.test_kit.stubs.data import TestDataStubs
 
@@ -66,7 +62,7 @@ def test_strategy_on_start_subscribes_to_bars():
     strategy = SMACrossover(config=config)
 
     # Mock the subscribe_bars method
-    with patch.object(strategy, 'subscribe_bars') as mock_subscribe:
+    with patch.object(strategy, "subscribe_bars") as mock_subscribe:
         strategy.on_start()
         mock_subscribe.assert_called_once()
 
@@ -83,9 +79,10 @@ def test_strategy_on_stop_closes_positions_and_unsubscribes():
     strategy = SMACrossover(config=config)
 
     # Mock the methods
-    with patch.object(strategy, 'close_all_positions') as mock_close, \
-         patch.object(strategy, 'unsubscribe_bars') as mock_unsubscribe:
-
+    with (
+        patch.object(strategy, "close_all_positions") as mock_close,
+        patch.object(strategy, "unsubscribe_bars") as mock_unsubscribe,
+    ):
         strategy.on_stop()
 
         mock_close.assert_called_once_with(instrument.id)
@@ -109,7 +106,7 @@ def test_on_bar_updates_indicators_when_not_initialized():
     bar = TestDataStubs.bar_5decimal()
 
     # Mock _check_for_signals to ensure it's not called
-    with patch.object(strategy, '_check_for_signals') as mock_check:
+    with patch.object(strategy, "_check_for_signals") as mock_check:
         strategy.on_bar(bar)
 
         # Should not check for signals when indicators aren't initialized
@@ -141,7 +138,7 @@ def test_on_bar_checks_signals_when_indicators_initialized():
     strategy.on_bar(bar2)  # Both indicators should be initialized now
 
     # Mock _check_for_signals
-    with patch.object(strategy, '_check_for_signals') as mock_check:
+    with patch.object(strategy, "_check_for_signals") as mock_check:
         bar3 = TestDataStubs.bar_5decimal()
         strategy.on_bar(bar3)
 
@@ -164,9 +161,10 @@ def test_check_for_signals_bullish_crossover():
     strategy._prev_fast_sma = 1.0950  # Previously below slow
     strategy._prev_slow_sma = 1.0960
 
-    with patch.object(strategy, '_generate_buy_signal') as mock_buy, \
-         patch.object(strategy, '_generate_sell_signal') as mock_sell:
-
+    with (
+        patch.object(strategy, "_generate_buy_signal") as mock_buy,
+        patch.object(strategy, "_generate_sell_signal") as mock_sell,
+    ):
         # Current: fast above slow (crossover)
         strategy._check_for_signals(1.0965, 1.0958)
 
@@ -189,9 +187,10 @@ def test_check_for_signals_bearish_crossover():
     strategy._prev_fast_sma = 1.0970  # Previously above slow
     strategy._prev_slow_sma = 1.0960
 
-    with patch.object(strategy, '_generate_buy_signal') as mock_buy, \
-         patch.object(strategy, '_generate_sell_signal') as mock_sell:
-
+    with (
+        patch.object(strategy, "_generate_buy_signal") as mock_buy,
+        patch.object(strategy, "_generate_sell_signal") as mock_sell,
+    ):
         # Current: fast below slow (crossover)
         strategy._check_for_signals(1.0955, 1.0962)
 
@@ -214,9 +213,10 @@ def test_check_for_signals_no_crossover():
     strategy._prev_fast_sma = 1.0970
     strategy._prev_slow_sma = 1.0960
 
-    with patch.object(strategy, '_generate_buy_signal') as mock_buy, \
-         patch.object(strategy, '_generate_sell_signal') as mock_sell:
-
+    with (
+        patch.object(strategy, "_generate_buy_signal") as mock_buy,
+        patch.object(strategy, "_generate_sell_signal") as mock_sell,
+    ):
         # Current: fast still above slow (no crossover)
         strategy._check_for_signals(1.0975, 1.0965)
 
