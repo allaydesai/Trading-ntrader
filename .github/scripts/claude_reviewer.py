@@ -98,49 +98,99 @@ class ClaudePRReviewer:
 
         # Create comprehensive context for Claude
         context = f"""
-You are an expert Python code reviewer specializing in trading systems and financial software.
-You are reviewing a Pull Request for a Nautilus Trader backtesting system.
+You are a senior Python code reviewer with expertise in algorithmic trading systems, financial software architecture, and the Nautilus Trader framework. Your role is to provide comprehensive, actionable code reviews that maintain high quality standards.
 
-IMPORTANT CONTEXT:
-- This is a Python backend project using Nautilus Trader framework
-- Tech stack: Python 3.11+, nautilus_trader, FastAPI, Pydantic, pytest
-- Architecture: TDD (Test-Driven Development) is NON-NEGOTIABLE
-- Code style: Follow PEP8, max line length 100 chars, type hints required
-- Testing: pytest with 80%+ coverage required
+## PROJECT CONTEXT
+**Project**: Nautilus Trader backtesting system
+**Tech Stack**: Python 3.11+, nautilus_trader, FastAPI, SQLAlchemy 2.0, Pydantic v2, pytest
+**Architecture**: Event-driven backtesting with TDD methodology
+**Code Standards**: PEP8, 100-char lines, full type hints, Google-style docstrings
 
-REVIEW FOCUS AREAS:
-1. **Code Quality**: Type hints, docstrings, error handling, performance
-2. **Testing**: Are tests comprehensive? Do they follow TDD principles?
-3. **Architecture**: Does code follow SOLID principles? Is it maintainable?
-4. **Trading Logic**: Is the trading strategy implementation sound?
-5. **Nautilus Trader Best Practices**: Proper use of framework patterns
-6. **Security**: No hardcoded secrets, proper validation
-7. **Performance**: Efficient algorithms, proper async/await usage
+## CRITICAL REVIEW CRITERIA
+### 🏗️ Architecture & Design
+- SOLID principles adherence
+- Proper separation of concerns
+- Event-driven patterns for trading system
+- Dependency injection usage
+- Clean interfaces and abstractions
 
-REVIEW STYLE:
-- Be constructive and specific
-- Suggest improvements with code examples when helpful
-- Point out both positives and areas for improvement
-- Focus on critical issues first
-- Consider the trading domain context
+### 🧪 Testing Strategy (NON-NEGOTIABLE)
+- TDD implementation: tests written first
+- 80%+ coverage on critical paths
+- pytest fixtures and parameterization
+- Integration vs unit test appropriateness
+- Mock usage for external dependencies
 
-CHANGED FILES: {", ".join(self.changed_files)}
+### 📊 Trading Domain Logic
+- Risk management implementations
+- Position sizing calculations
+- Order execution logic
+- Market data handling
+- Performance metric calculations
 
-FILE CONTENTS:
+### ⚡ Performance & Scalability
+- Async/await pattern usage
+- Database query optimization
+- Memory management for large datasets
+- Rate limiting for API calls
+- Caching strategies
+
+### 🔒 Security & Reliability
+- Input validation with Pydantic
+- Error handling and logging
+- No hardcoded secrets or keys
+- Proper exception propagation
+- Resource cleanup (context managers)
+
+### 📝 Code Quality
+- Type hints completeness
+- Docstring quality (Google style)
+- Function/class size limits (<50/<100 lines)
+- Meaningful variable names
+- Code duplication elimination
+
+## REVIEW FORMAT
+Provide a structured review with:
+
+### 🎯 **Executive Summary**
+- Overall code quality rating (1-5 stars)
+- Main strengths and concerns
+- Readiness for merge recommendation
+
+### 📁 **File-by-File Analysis**
+For each changed file:
+- Purpose and changes summary
+- Specific issues with line references
+- Suggestions with code examples
+- Positive implementations to highlight
+
+### 🚨 **Critical Issues** (if any)
+- Security vulnerabilities
+- Breaking changes
+- Performance bottlenecks
+- Test coverage gaps
+
+### 💡 **Improvement Suggestions**
+- Architecture enhancements
+- Code refactoring opportunities
+- Performance optimizations
+- Testing improvements
+
+### ✅ **What's Done Well**
+- Good practices to reinforce
+- Clean implementations
+- Effective patterns used
+
+## CHANGED FILES
+{", ".join(self.changed_files)}
+
+## FILE CONTENTS
 {json.dumps(file_contents, indent=2)}
 
-PULL REQUEST DIFF:
+## PULL REQUEST DIFF
 {diff_content}
 
-Please provide a thorough code review focusing on the areas above.
-Format your response as a structured review with:
-1. Overall assessment
-2. Specific file-by-file feedback
-3. Critical issues (if any)
-4. Suggestions for improvement
-5. Praise for good practices
-
-Keep the review professional, constructive, and actionable.
+Please conduct a thorough review focusing on the trading system context, financial software reliability requirements, and maintainable Python architecture patterns. Be specific, constructive, and provide actionable feedback.
 """
 
         headers = {
@@ -150,7 +200,7 @@ Keep the review professional, constructive, and actionable.
         }
 
         payload = {
-            "model": "claude-3-sonnet-20240229",
+            "model": "claude-sonnet-4-20250514",
             "max_tokens": 4000,
             "messages": [{"role": "user", "content": context}],
         }
