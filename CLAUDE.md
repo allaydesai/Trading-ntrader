@@ -668,3 +668,4 @@ rg --files -g "*.py"
 ---
 *This document is a living guide. Update it as the project evolves and new patterns emerge.*
 *Generated from Python Backend Development Constitution v1.0.1*
+- Always use context7 mcp for library documentation which contains examples on how best to use the library.

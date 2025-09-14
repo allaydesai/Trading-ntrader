@@ -1,0 +1,1 @@
+"""Trading strategies for NTrader."""
