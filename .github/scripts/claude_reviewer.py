@@ -11,13 +11,14 @@ import sys
 import json
 import time
 import requests
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 from dataclasses import dataclass
 from enum import Enum
 
 
 class ReviewSeverity(Enum):
     """Severity levels for review comments."""
+
     INFO = "info"
     WARNING = "warning"
     ERROR = "error"
@@ -27,6 +28,7 @@ class ReviewSeverity(Enum):
 @dataclass
 class ReviewComment:
     """Represents a code review comment."""
+
     path: str
     line: int
     body: str
@@ -64,9 +66,9 @@ class ClaudePRReviewer:
             "BASE_SHA": self.base_sha,
             "HEAD_SHA": self.head_sha,
         }
-        
+
         missing_vars = [var for var, value in required_vars.items() if not value]
-        
+
         if missing_vars:
             print(f"❌ Missing required environment variables: {missing_vars}")
             for var, value in required_vars.items():
@@ -139,37 +141,37 @@ class ClaudePRReviewer:
             "config": [],
             "docs": [],
         }
-        
+
         for file_path in self.changed_files:
             if "test" in file_path or "tests" in file_path:
                 categories["tests"].append(file_path)
-            elif file_path.endswith('.py'):
+            elif file_path.endswith(".py"):
                 categories["implementation"].append(file_path)
             elif any(cfg in file_path for cfg in [".yaml", ".yml", ".env", "config"]):
                 categories["config"].append(file_path)
             elif any(doc in file_path for doc in [".md", "docs", "README"]):
                 categories["docs"].append(file_path)
-                
+
         return {k: v for k, v in categories.items() if v}
 
     def _build_concise_prompt(
-        self, 
-        diff_content: str, 
+        self,
+        diff_content: str,
         pr_info: Dict[str, str],
-        file_categories: Dict[str, List[str]]
+        file_categories: Dict[str, List[str]],
     ) -> str:
         """Build a more concise review prompt to avoid timeouts."""
-        
+
         # Truncate diff if too large (keep first and last parts)
         max_diff_size = 30000  # ~30KB
         if len(diff_content) > max_diff_size:
             half_size = max_diff_size // 2
             diff_content = (
-                diff_content[:half_size] + 
-                "\n\n... [DIFF TRUNCATED - LARGE PR] ...\n\n" + 
-                diff_content[-half_size:]
+                diff_content[:half_size]
+                + "\n\n... [DIFF TRUNCATED - LARGE PR] ...\n\n"
+                + diff_content[-half_size:]
             )
-        
+
         return f"""You are reviewing a PR for a Nautilus Trader Backtesting System (Python 3.11+, TDD mandatory).
 
 # CRITICAL REQUIREMENTS
@@ -199,9 +201,9 @@ class ClaudePRReviewer:
 - No hardcoded secrets
 
 # PR INFO
-Title: {pr_info['title']}
-Author: {pr_info['user']}
-Branch: {pr_info['head_branch']} → {pr_info['base_branch']}
+Title: {pr_info["title"]}
+Author: {pr_info["user"]}
+Branch: {pr_info["head_branch"]} → {pr_info["base_branch"]}
 
 # FILES CHANGED
 {json.dumps(file_categories, indent=2)}
@@ -221,20 +223,15 @@ Provide actionable feedback with specific line numbers.
 Be concise but thorough."""
 
     def analyze_with_claude_with_retry(
-        self, 
-        diff_content: str, 
-        pr_info: Dict[str, str],
-        max_retries: int = 3
+        self, diff_content: str, pr_info: Dict[str, str], max_retries: int = 3
     ) -> str:
         """Send the diff to Claude with retry logic."""
-        
+
         file_categories = self._categorize_files()
-        
+
         # Use concise prompt to reduce tokens and processing time
-        context = self._build_concise_prompt(
-            diff_content, pr_info, file_categories
-        )
-        
+        context = self._build_concise_prompt(diff_content, pr_info, file_categories)
+
         headers = {
             "Content-Type": "application/json",
             "X-API-Key": self.anthropic_api_key,
@@ -250,16 +247,18 @@ Be concise but thorough."""
         # Retry logic with exponential backoff
         for attempt in range(max_retries):
             try:
-                print(f"  📡 Sending request to Claude (attempt {attempt + 1}/{max_retries})...")
-                
+                print(
+                    f"  📡 Sending request to Claude (attempt {attempt + 1}/{max_retries})..."
+                )
+
                 # Increased timeout: 120 seconds base + 60 seconds per retry
                 timeout = 120 + (attempt * 60)
-                
+
                 response = requests.post(
-                    "https://api.anthropic.com/v1/messages", 
-                    headers=headers, 
+                    "https://api.anthropic.com/v1/messages",
+                    headers=headers,
                     json=payload,
-                    timeout=timeout
+                    timeout=timeout,
                 )
 
                 if response.status_code == 200:
@@ -274,7 +273,7 @@ Be concise but thorough."""
                     raise Exception(
                         f"Claude API error: {response.status_code} - {response.text}"
                     )
-                    
+
             except requests.exceptions.Timeout:
                 if attempt < max_retries - 1:
                     wait_time = 10 * (attempt + 1)
@@ -363,7 +362,7 @@ Check GitHub Action logs for details.
         try:
             print(f"🔍 Starting Claude review for PR #{self.pr_number}")
             print(f"📁 Changed files: {len(self.changed_files)} files")
-            
+
             # Validate environment
             if not self.anthropic_api_key:
                 print("❌ ANTHROPIC_API_KEY is required but not set")
@@ -377,17 +376,19 @@ Check GitHub Action logs for details.
             pr_info = self.get_pr_info()
 
             # Skip draft PRs unless labeled
-            if pr_info.get("draft", False) and "review-draft" not in pr_info.get("labels", []):
+            if pr_info.get("draft", False) and "review-draft" not in pr_info.get(
+                "labels", []
+            ):
                 print("⏭️  Skipping draft PR")
                 return
 
             # Get PR diff
             print("📥 Fetching PR diff...")
             diff_content = self.get_pr_diff()
-            
+
             diff_size = len(diff_content)
             print(f"📊 Diff size: {diff_size:,} characters")
-            
+
             # Warn if very large
             if diff_size > 50000:
                 print("⚠️  Large PR detected - review may be limited")
@@ -410,7 +411,7 @@ Check GitHub Action logs for details.
                 "- Adding 'skip-review' label for this PR"
             )
             sys.exit(1)
-            
+
         except Exception as e:
             print(f"❌ Error: {e}")
             self.post_error_comment(f"Error: {str(e)[:200]}")
@@ -420,8 +421,8 @@ Check GitHub Action logs for details.
 def main():
     """Main entry point."""
     print("🚀 Claude PR Reviewer v2.1.0")
-    print(f"🏗️  Nautilus Trader Backtesting System")
-    
+    print("🏗️  Nautilus Trader Backtesting System")
+
     try:
         reviewer = ClaudePRReviewer()
         reviewer.run_review()
