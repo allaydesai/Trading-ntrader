@@ -59,6 +59,30 @@ class ClaudePRReviewer:
             f"https://api.github.com/repos/{self.repo_owner}/{self.repo_name}"
         )
 
+    def get_pr_info(self) -> Dict[str, str]:
+        """Fetch PR title, description, and metadata."""
+        headers = {
+            "Authorization": f"token {self.github_token}",
+            "Accept": "application/vnd.github.v3+json",
+        }
+
+        url = f"{self.github_api_base}/pulls/{self.pr_number}"
+        response = requests.get(url, headers=headers)
+
+        if response.status_code != 200:
+            raise Exception(
+                f"Failed to fetch PR info: {response.status_code} - {response.text}"
+            )
+
+        pr_data = response.json()
+        return {
+            "title": pr_data.get("title", ""),
+            "body": pr_data.get("body", "") or "No description provided",
+            "user": pr_data.get("user", {}).get("login", "unknown"),
+            "base_branch": pr_data.get("base", {}).get("ref", "main"),
+            "head_branch": pr_data.get("head", {}).get("ref", "feature"),
+        }
+
     def get_pr_diff(self) -> str:
         """Fetch the complete diff for the PR."""
         headers = {
@@ -92,7 +116,7 @@ class ClaudePRReviewer:
             return f"Could not fetch file content: {response.status_code}"
 
     def analyze_with_claude(
-        self, diff_content: str, file_contents: Dict[str, str]
+        self, diff_content: str, file_contents: Dict[str, str], pr_info: Dict[str, str]
     ) -> str:
         """Send the diff to Claude for analysis."""
 
@@ -123,6 +147,12 @@ REVIEW STYLE:
 - Point out both positives and areas for improvement
 - Focus on critical issues first
 - Consider the trading domain context
+
+PULL REQUEST DETAILS:
+- Title: {pr_info['title']}
+- Author: {pr_info['user']}
+- Branch: {pr_info['head_branch']} → {pr_info['base_branch']}
+- Description: {pr_info['body']}
 
 CHANGED FILES: {", ".join(self.changed_files)}
 
@@ -241,6 +271,10 @@ Please check the repository settings and GitHub Action configuration.
                 )
                 return
 
+            # Get PR information
+            print("📋 Fetching PR details...")
+            pr_info = self.get_pr_info()
+
             # Get PR diff
             print("📥 Fetching PR diff...")
             diff_content = self.get_pr_diff()
@@ -260,7 +294,8 @@ Please check the repository settings and GitHub Action configuration.
 
             # Analyze with Claude
             print("🧠 Analyzing with Claude...")
-            review = self.analyze_with_claude(diff_content, file_contents)
+            print(f"📝 PR Title: {pr_info['title']}")
+            review = self.analyze_with_claude(diff_content, file_contents, pr_info)
 
             # Post review
             print("💬 Posting review comment...")
