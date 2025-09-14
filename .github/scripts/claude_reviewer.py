@@ -49,6 +49,10 @@ class ClaudePRReviewer:
         ]
         missing_vars = [var for var in required_vars if not os.getenv(var)]
         if missing_vars:
+            print(f"❌ Missing required environment variables: {missing_vars}")
+            for var in required_vars:
+                value = os.getenv(var)
+                print(f"  {var}: {'✓ Set' if value else '✗ Missing'}")
             raise ValueError(f"Missing required environment variables: {missing_vars}")
 
         self.github_api_base = (
