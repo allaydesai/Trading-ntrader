@@ -5,6 +5,8 @@ from rich.console import Console
 
 from src.config import get_settings
 from src.cli.commands.run import run_simple
+from src.cli.commands.data import data
+from src.cli.commands.backtest import backtest
 
 console = Console()
 settings = get_settings()
@@ -22,8 +24,10 @@ def cli(ctx: click.Context) -> None:
     ctx.ensure_object(dict)
 
 
-# Register the run_simple command
+# Register commands
 cli.add_command(run_simple)
+cli.add_command(data)
+cli.add_command(backtest)
 
 
 if __name__ == "__main__":
