@@ -1,7 +1,7 @@
 """Minimal backtest engine wrapper for Nautilus Trader."""
 
 from decimal import Decimal
-from typing import Dict, Any, Literal
+from typing import Dict, Any, Optional, Literal
 from datetime import datetime
 
 from nautilus_trader.backtest.engine import BacktestEngine, BacktestEngineConfig
@@ -73,10 +73,10 @@ class MinimalBacktestRunner:
 
     def run_sma_backtest(
         self,
-        fast_period: int = None,
-        slow_period: int = None,
-        trade_size: Decimal = None,
-        num_bars: int = None,
+        fast_period: Optional[int] = None,
+        slow_period: Optional[int] = None,
+        trade_size: Optional[Decimal] = None,
+        num_bars: Optional[int] = None,
     ) -> BacktestResult:
         """
         Run a simple SMA crossover backtest with mock data.
@@ -172,9 +172,9 @@ class MinimalBacktestRunner:
         symbol: str,
         start: datetime,
         end: datetime,
-        fast_period: int = None,
-        slow_period: int = None,
-        trade_size: Decimal = None,
+        fast_period: Optional[int] = None,
+        slow_period: Optional[int] = None,
+        trade_size: Optional[Decimal] = None,
     ) -> BacktestResult:
         """
         Run backtest using real data from database.

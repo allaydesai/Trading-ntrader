@@ -13,8 +13,9 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 from sqlalchemy.ext.declarative import declarative_base
+from typing import Any
 
-Base = declarative_base()
+Base: Any = declarative_base()
 
 
 class MarketDataBase(BaseModel):

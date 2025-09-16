@@ -1,7 +1,7 @@
 """Database session management."""
 
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Generator
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -60,7 +60,7 @@ if settings.database_url:
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
-def get_db() -> Session:
+def get_db() -> Generator[Session, None, None]:
     """Get sync database session."""
     if not SessionLocal:
         raise RuntimeError("Database not configured")
