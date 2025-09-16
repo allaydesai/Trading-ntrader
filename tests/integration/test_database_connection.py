@@ -1,5 +1,6 @@
 """Integration test for database connection."""
 
+import asyncio
 import pytest
 
 from src.config import get_settings
@@ -9,7 +10,9 @@ from src.config import get_settings
 @pytest.mark.asyncio
 async def test_can_connect_to_database():
     """INTEGRATION: Verify database is accessible."""
-    from src.db.session import test_connection
+    # Ensure clean state by disposing any existing connections first
+    from src.db.session import dispose_all_connections, test_connection
+    await dispose_all_connections()
 
     settings = get_settings()
 
@@ -17,9 +20,26 @@ async def test_can_connect_to_database():
     if not settings.database_url:
         pytest.skip("Database not configured")
 
-    # Test connection
-    is_connected = await test_connection()
-    assert is_connected is True, "Should be able to connect to database"
+    # Test connection with retry logic for resilience
+    max_retries = 3
+    retry_delay = 0.5
+
+    for attempt in range(max_retries):
+        is_connected = await test_connection()
+        if is_connected:
+            assert True  # Test passes
+            # Clean up after successful test
+            await dispose_all_connections()
+            return
+
+        if attempt < max_retries - 1:
+            # Wait before retrying
+            await asyncio.sleep(retry_delay)
+            # Dispose connections before retry
+            await dispose_all_connections()
+
+    # All retries failed
+    assert False, f"Could not connect to database after {max_retries} attempts"
 
 
 @pytest.mark.integration

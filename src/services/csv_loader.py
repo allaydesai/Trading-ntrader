@@ -11,6 +11,7 @@ from src.models.market_data import MarketDataCreate
 from src.db.session import get_session
 from src.models.market_data import market_data_table
 from sqlalchemy import insert
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 
 class CSVLoader:
@@ -91,8 +92,10 @@ class CSVLoader:
         records = []
         for _, row in df.iterrows():
             try:
-                # Parse timestamp
+                # Parse timestamp and make timezone-aware (UTC)
                 timestamp = pd.to_datetime(row['timestamp'])
+                if timestamp.tz is None:
+                    timestamp = timestamp.tz_localize('UTC')
 
                 record = MarketDataCreate(
                     symbol=symbol,
@@ -120,14 +123,33 @@ class CSVLoader:
             Dictionary with insert statistics
         """
         if self.session:
-            session = self.session
-            should_close = False
-        else:
-            session = get_session()
-            should_close = True
+            # Use provided session
+            db_session = self.session
+            # Convert records to dictionaries for SQLAlchemy
+            data_dicts = []
+            for record in records:
+                record_dict = record.model_dump()
+                # Add created_at timestamp
+                record_dict['created_at'] = datetime.utcnow()
+                data_dicts.append(record_dict)
 
-        try:
-            async with session as db_session:
+            # Use PostgreSQL INSERT ... ON CONFLICT DO NOTHING for duplicate handling
+            stmt = pg_insert(market_data_table).values(data_dicts)
+            stmt = stmt.on_conflict_do_nothing(constraint='uq_symbol_timestamp')
+
+            result = await db_session.execute(stmt)
+            inserted_count = result.rowcount if result.rowcount else 0
+            skipped_count = len(data_dicts) - inserted_count
+
+            await db_session.commit()
+
+            return {
+                "inserted": inserted_count,
+                "skipped": skipped_count
+            }
+        else:
+            # Use get_session context manager
+            async with get_session() as db_session:
                 # Convert records to dictionaries for SQLAlchemy
                 data_dicts = []
                 for record in records:
@@ -136,20 +158,13 @@ class CSVLoader:
                     record_dict['created_at'] = datetime.utcnow()
                     data_dicts.append(record_dict)
 
-                # Try bulk insert with conflict handling
-                # For now, we'll do a simple insert - duplicate handling will be improved later
-                inserted_count = 0
-                skipped_count = 0
+                # Use PostgreSQL INSERT ... ON CONFLICT DO NOTHING for duplicate handling
+                stmt = pg_insert(market_data_table).values(data_dicts)
+                stmt = stmt.on_conflict_do_nothing(constraint='uq_symbol_timestamp')
 
-                for data in data_dicts:
-                    try:
-                        stmt = insert(market_data_table).values(**data)
-                        await db_session.execute(stmt)
-                        inserted_count += 1
-                    except Exception:
-                        # Skip duplicates for now
-                        skipped_count += 1
-                        continue
+                result = await db_session.execute(stmt)
+                inserted_count = result.rowcount if result.rowcount else 0
+                skipped_count = len(data_dicts) - inserted_count
 
                 await db_session.commit()
 
@@ -157,11 +172,3 @@ class CSVLoader:
                     "inserted": inserted_count,
                     "skipped": skipped_count
                 }
-
-        except Exception as e:
-            if hasattr(session, 'rollback'):
-                await session.rollback()
-            raise e
-        finally:
-            if should_close and hasattr(session, 'close'):
-                await session.close()

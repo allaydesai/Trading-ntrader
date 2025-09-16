@@ -2,12 +2,12 @@
 
 import tempfile
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 
 from src.config import get_settings
-from src.db.session import test_connection
+from src.db import session as db_session
 
 
 @pytest.mark.integration
@@ -29,8 +29,15 @@ async def test_complete_csv_to_backtest_workflow():
         pytest.skip("Database not configured")
 
     # Skip if database not accessible
-    if not await test_connection():
+    if not await db_session.test_connection():
         pytest.skip("Database not accessible")
+
+    # Clean up any existing AAPL data first
+    from src.db.session import get_session
+    from sqlalchemy import text
+    async with get_session() as cleanup_session:
+        await cleanup_session.execute(text("DELETE FROM market_data WHERE symbol = 'AAPL'"))
+        await cleanup_session.commit()
 
     # Create sample CSV data
     csv_content = """timestamp,open,high,low,close,volume
@@ -68,19 +75,19 @@ async def test_complete_csv_to_backtest_workflow():
 
         data_service = DataService()
 
-        # Check data availability
+        # Check data availability - use exact data range
         validation = await data_service.validate_data_availability(
             "AAPL",
-            datetime(2024, 1, 2, 9, 30),
-            datetime(2024, 1, 2, 9, 39)
+            datetime(2024, 1, 2, 9, 30, tzinfo=timezone.utc),  # Exact start
+            datetime(2024, 1, 2, 9, 39, tzinfo=timezone.utc)   # Exact end
         )
         assert validation["valid"] is True
 
         # Retrieve market data
         market_data = await data_service.get_market_data(
             "AAPL",
-            datetime(2024, 1, 2, 9, 30),
-            datetime(2024, 1, 2, 9, 39)
+            datetime(2024, 1, 2, 9, 30, tzinfo=timezone.utc),
+            datetime(2024, 1, 2, 9, 39, tzinfo=timezone.utc)
         )
         assert len(market_data) == 10
         assert market_data[0]["symbol"] == "AAPL"
@@ -93,8 +100,8 @@ async def test_complete_csv_to_backtest_workflow():
 
         backtest_result = await runner.run_backtest_with_database(
             symbol="AAPL",
-            start=datetime(2024, 1, 2, 9, 30),
-            end=datetime(2024, 1, 2, 9, 39),
+            start=datetime(2024, 1, 2, 9, 30, tzinfo=timezone.utc),
+            end=datetime(2024, 1, 2, 9, 39, tzinfo=timezone.utc),
             fast_period=3,  # Short periods for small dataset
             slow_period=5
         )
@@ -144,6 +151,11 @@ async def test_complete_csv_to_backtest_workflow():
         # Clean up temp file
         csv_file.unlink()
 
+        # Clean up test data
+        async with get_session() as cleanup_session:
+            await cleanup_session.execute(text("DELETE FROM market_data WHERE symbol = 'AAPL'"))
+            await cleanup_session.commit()
+
 
 @pytest.mark.integration
 def test_original_functionality_preserved():
@@ -179,7 +191,7 @@ async def test_data_service_functionality():
     INTEGRATION: Test data service capabilities in isolation.
     """
     # Skip if database not accessible
-    if not await test_connection():
+    if not await db_session.test_connection():
         pytest.skip("Database not accessible")
 
     from src.services.data_service import DataService

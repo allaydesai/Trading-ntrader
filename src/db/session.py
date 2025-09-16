@@ -21,10 +21,31 @@ SessionLocal = None
 async_engine = None
 AsyncSessionLocal = None
 
-if settings.database_url:
-    # Convert to async URL if needed
-    async_url = settings.database_url.replace("postgresql://", "postgresql+asyncpg://")
+def get_async_engine():
+    """Get or create async engine."""
+    global async_engine
+    if async_engine is None and settings.database_url:
+        async_url = settings.database_url.replace("postgresql://", "postgresql+asyncpg://")
+        async_engine = create_async_engine(
+            async_url,
+            pool_size=settings.database_pool_size,
+            max_overflow=settings.database_max_overflow,
+            pool_timeout=settings.database_pool_timeout,
+        )
+    return async_engine
 
+def get_async_session_maker():
+    """Get async session maker."""
+    global AsyncSessionLocal
+    if AsyncSessionLocal is None:
+        engine = get_async_engine()
+        if engine:
+            AsyncSessionLocal = async_sessionmaker(
+                engine, class_=AsyncSession, expire_on_commit=False
+            )
+    return AsyncSessionLocal
+
+if settings.database_url:
     # Create sync engine
     engine = create_engine(
         settings.database_url,
@@ -33,17 +54,6 @@ if settings.database_url:
         pool_timeout=settings.database_pool_timeout,
     )
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-    # Create async engine
-    async_engine = create_async_engine(
-        async_url,
-        pool_size=settings.database_pool_size,
-        max_overflow=settings.database_max_overflow,
-        pool_timeout=settings.database_pool_timeout,
-    )
-    AsyncSessionLocal = async_sessionmaker(
-        async_engine, class_=AsyncSession, expire_on_commit=False
-    )
 
 
 def get_db() -> Session:
@@ -60,9 +70,10 @@ def get_db() -> Session:
 @asynccontextmanager
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
     """Get async database session."""
-    if not AsyncSessionLocal:
+    session_maker = get_async_session_maker()
+    if not session_maker:
         raise RuntimeError("Database not configured")
-    async with AsyncSessionLocal() as session:
+    async with session_maker() as session:
         yield session
 
 
@@ -72,10 +83,27 @@ async def test_connection() -> bool:
         return False
 
     try:
-        if async_engine:
-            async with async_engine.connect() as conn:
+        engine = get_async_engine()
+        if engine:
+            # Create a fresh connection and immediately close it
+            # This avoids connection pool issues in tests
+            conn = await engine.connect()
+            try:
                 await conn.execute(text("SELECT 1"))
-            return True
+                return True
+            finally:
+                await conn.close()
         return False
-    except Exception:
+    except Exception as e:
+        import logging
+        logging.error(f"Database connection test failed: {e}")
         return False
+
+
+async def dispose_all_connections():
+    """Dispose all database connections."""
+    global async_engine, AsyncSessionLocal
+    if async_engine:
+        await async_engine.dispose()
+        async_engine = None
+        AsyncSessionLocal = None

@@ -10,8 +10,9 @@ from src.config import Settings, get_settings
 
 
 def test_settings_default_values():
-    """Test Settings model with default values."""
-    settings = Settings()
+    """Test Settings model with default values (bypassing environment)."""
+    # Create settings without environment file loading
+    settings = Settings(_env_file=None)
 
     assert settings.app_name == "NTrader"
     assert settings.app_version == "0.1.0"

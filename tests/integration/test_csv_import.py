@@ -23,6 +23,13 @@ async def test_csv_import_stores_to_database():
     if not await test_connection():
         pytest.skip("Database not accessible")
 
+    # Clean up any existing TEST data first
+    from src.db.session import get_session
+    from sqlalchemy import text
+    async with get_session() as cleanup_session:
+        await cleanup_session.execute(text("DELETE FROM market_data WHERE symbol = 'TEST'"))
+        await cleanup_session.commit()
+
     # Create temporary CSV file
     csv_content = """timestamp,open,high,low,close,volume
 2024-01-01 09:30:00,100.50,101.00,100.25,100.75,10000
@@ -48,8 +55,13 @@ async def test_csv_import_stores_to_database():
             assert result["duplicates_skipped"] == 0
 
     finally:
-        # Clean up
+        # Clean up CSV file
         csv_file.unlink()
+
+        # Clean up test data
+        async with get_session() as cleanup_session:
+            await cleanup_session.execute(text("DELETE FROM market_data WHERE symbol = 'TEST'"))
+            await cleanup_session.commit()
 
 
 @pytest.mark.integration

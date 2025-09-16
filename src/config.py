@@ -45,7 +45,7 @@ class Settings(BaseSettings):
 
     # Database settings
     database_url: Optional[str] = Field(
-        default="postgresql://ntrader:ntrader@localhost:5432/ntrader_dev",
+        default="postgresql://ntrader:ntrader_dev_2025@localhost:5432/trading_ntrader",
         description="PostgreSQL database URL",
     )
     database_pool_size: int = Field(
