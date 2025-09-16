@@ -1,8 +1,7 @@
 """Database session management."""
 
-import asyncio
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -21,11 +20,14 @@ SessionLocal = None
 async_engine = None
 AsyncSessionLocal = None
 
+
 def get_async_engine():
     """Get or create async engine."""
     global async_engine
     if async_engine is None and settings.database_url:
-        async_url = settings.database_url.replace("postgresql://", "postgresql+asyncpg://")
+        async_url = settings.database_url.replace(
+            "postgresql://", "postgresql+asyncpg://"
+        )
         async_engine = create_async_engine(
             async_url,
             pool_size=settings.database_pool_size,
@@ -33,6 +35,7 @@ def get_async_engine():
             pool_timeout=settings.database_pool_timeout,
         )
     return async_engine
+
 
 def get_async_session_maker():
     """Get async session maker."""
@@ -44,6 +47,7 @@ def get_async_session_maker():
                 engine, class_=AsyncSession, expire_on_commit=False
             )
     return AsyncSessionLocal
+
 
 if settings.database_url:
     # Create sync engine
@@ -96,6 +100,7 @@ async def test_connection() -> bool:
         return False
     except Exception as e:
         import logging
+
         logging.error(f"Database connection test failed: {e}")
         return False
 

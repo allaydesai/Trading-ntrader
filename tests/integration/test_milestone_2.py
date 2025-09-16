@@ -35,8 +35,11 @@ async def test_complete_csv_to_backtest_workflow():
     # Clean up any existing AAPL data first
     from src.db.session import get_session
     from sqlalchemy import text
+
     async with get_session() as cleanup_session:
-        await cleanup_session.execute(text("DELETE FROM market_data WHERE symbol = 'AAPL'"))
+        await cleanup_session.execute(
+            text("DELETE FROM market_data WHERE symbol = 'AAPL'")
+        )
         await cleanup_session.commit()
 
     # Create sample CSV data
@@ -52,7 +55,7 @@ async def test_complete_csv_to_backtest_workflow():
 2024-01-02 09:38:00,187.60,188.10,187.40,187.85,1298600
 2024-01-02 09:39:00,187.85,188.25,187.65,188.00,986400"""
 
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
         f.write(csv_content)
         csv_file = Path(f.name)
 
@@ -79,7 +82,7 @@ async def test_complete_csv_to_backtest_workflow():
         validation = await data_service.validate_data_availability(
             "AAPL",
             datetime(2024, 1, 2, 9, 30, tzinfo=timezone.utc),  # Exact start
-            datetime(2024, 1, 2, 9, 39, tzinfo=timezone.utc)   # Exact end
+            datetime(2024, 1, 2, 9, 39, tzinfo=timezone.utc),  # Exact end
         )
         assert validation["valid"] is True
 
@@ -87,7 +90,7 @@ async def test_complete_csv_to_backtest_workflow():
         market_data = await data_service.get_market_data(
             "AAPL",
             datetime(2024, 1, 2, 9, 30, tzinfo=timezone.utc),
-            datetime(2024, 1, 2, 9, 39, tzinfo=timezone.utc)
+            datetime(2024, 1, 2, 9, 39, tzinfo=timezone.utc),
         )
         assert len(market_data) == 10
         assert market_data[0]["symbol"] == "AAPL"
@@ -96,29 +99,29 @@ async def test_complete_csv_to_backtest_workflow():
         # Step 3: Run backtest with imported data
         from src.core.backtest_runner import MinimalBacktestRunner
 
-        runner = MinimalBacktestRunner(data_source='database')
+        runner = MinimalBacktestRunner(data_source="database")
 
         backtest_result = await runner.run_backtest_with_database(
             symbol="AAPL",
             start=datetime(2024, 1, 2, 9, 30, tzinfo=timezone.utc),
             end=datetime(2024, 1, 2, 9, 39, tzinfo=timezone.utc),
             fast_period=3,  # Short periods for small dataset
-            slow_period=5
+            slow_period=5,
         )
 
         # Verify backtest executed successfully
         assert backtest_result is not None
-        assert hasattr(backtest_result, 'total_return')
-        assert hasattr(backtest_result, 'total_trades')
-        assert hasattr(backtest_result, 'final_balance')
+        assert hasattr(backtest_result, "total_return")
+        assert hasattr(backtest_result, "total_trades")
+        assert hasattr(backtest_result, "final_balance")
 
         # Step 4: Verify both modes work (mock vs database)
         # Test mock mode still works
-        mock_runner = MinimalBacktestRunner(data_source='mock')
+        mock_runner = MinimalBacktestRunner(data_source="mock")
         mock_result = mock_runner.run_sma_backtest()
 
         assert mock_result is not None
-        assert hasattr(mock_result, 'total_return')
+        assert hasattr(mock_result, "total_return")
 
         # Results should potentially differ (different data sources)
         # This validates that we're actually using different data
@@ -128,19 +131,19 @@ async def test_complete_csv_to_backtest_workflow():
         from src.cli.main import cli
 
         # Verify data command group exists
-        data_group = cli.get_command(None, 'data')
+        data_group = cli.get_command(None, "data")
         assert data_group is not None
 
         # Verify import-csv command exists
-        import_cmd = data_group.get_command(None, 'import-csv')
+        import_cmd = data_group.get_command(None, "import-csv")
         assert import_cmd is not None
 
         # Verify backtest command group exists
-        backtest_group = cli.get_command(None, 'backtest')
+        backtest_group = cli.get_command(None, "backtest")
         assert backtest_group is not None
 
         # Verify backtest run command exists
-        run_cmd = backtest_group.get_command(None, 'run')
+        run_cmd = backtest_group.get_command(None, "run")
         assert run_cmd is not None
 
         # Step 6: Clean up
@@ -153,7 +156,9 @@ async def test_complete_csv_to_backtest_workflow():
 
         # Clean up test data
         async with get_session() as cleanup_session:
-            await cleanup_session.execute(text("DELETE FROM market_data WHERE symbol = 'AAPL'"))
+            await cleanup_session.execute(
+                text("DELETE FROM market_data WHERE symbol = 'AAPL'")
+            )
             await cleanup_session.commit()
 
 
@@ -172,13 +177,13 @@ def test_original_functionality_preserved():
     result = runner.run_sma_backtest()
 
     assert result is not None
-    assert hasattr(result, 'total_return')
-    assert hasattr(result, 'total_trades')
-    assert hasattr(result, 'win_rate')
-    assert hasattr(result, 'final_balance')
+    assert hasattr(result, "total_return")
+    assert hasattr(result, "total_trades")
+    assert hasattr(result, "win_rate")
+    assert hasattr(result, "final_balance")
 
     # Test run-simple command still exists
-    run_simple_cmd = cli.get_command(None, 'run-simple')
+    run_simple_cmd = cli.get_command(None, "run-simple")
     assert run_simple_cmd is not None
 
     runner.dispose()
@@ -208,9 +213,7 @@ async def test_data_service_functionality():
 
     # Test validation for non-existent data
     validation = await data_service.validate_data_availability(
-        "NONEXISTENT",
-        datetime(2024, 1, 1),
-        datetime(2024, 1, 2)
+        "NONEXISTENT", datetime(2024, 1, 1), datetime(2024, 1, 2)
     )
     assert validation["valid"] is False
     assert "reason" in validation
@@ -226,16 +229,16 @@ def test_configuration_backwards_compatibility():
     settings = get_settings()
 
     # Verify all original settings still exist
-    assert hasattr(settings, 'app_name')
-    assert hasattr(settings, 'app_version')
-    assert hasattr(settings, 'fast_ema_period')
-    assert hasattr(settings, 'slow_ema_period')
-    assert hasattr(settings, 'trade_size')
-    assert hasattr(settings, 'default_balance')
+    assert hasattr(settings, "app_name")
+    assert hasattr(settings, "app_version")
+    assert hasattr(settings, "fast_ema_period")
+    assert hasattr(settings, "slow_ema_period")
+    assert hasattr(settings, "trade_size")
+    assert hasattr(settings, "default_balance")
 
     # Verify new database settings exist
-    assert hasattr(settings, 'database_url')
-    assert hasattr(settings, 'is_database_available')
+    assert hasattr(settings, "database_url")
+    assert hasattr(settings, "is_database_available")
 
     # Test database availability check
     is_available = settings.is_database_available

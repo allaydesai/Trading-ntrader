@@ -12,6 +12,7 @@ async def test_can_connect_to_database():
     """INTEGRATION: Verify database is accessible."""
     # Ensure clean state by disposing any existing connections first
     from src.db.session import dispose_all_connections, test_connection
+
     await dispose_all_connections()
 
     settings = get_settings()

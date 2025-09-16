@@ -11,14 +11,14 @@ import sys
 import json
 import time
 import requests
-import re
-from typing import Dict, List, Optional, Tuple, Set
+from typing import Dict, List, Optional
 from dataclasses import dataclass
 from enum import Enum
 
 
 class ReviewSeverity(Enum):
     """Severity levels for review comments."""
+
     INFO = "info"
     WARNING = "warning"
     ERROR = "error"
@@ -28,6 +28,7 @@ class ReviewSeverity(Enum):
 @dataclass
 class ReviewComment:
     """Represents a code review comment."""
+
     path: str
     line: int
     body: str
@@ -65,9 +66,9 @@ class ClaudePRReviewer:
             "BASE_SHA": self.base_sha,
             "HEAD_SHA": self.head_sha,
         }
-        
+
         missing_vars = [var for var, value in required_vars.items() if not value]
-        
+
         if missing_vars:
             print(f"❌ Missing required environment variables: {missing_vars}")
             for var, value in required_vars.items():
@@ -125,14 +126,43 @@ class ClaudePRReviewer:
         }
 
         url = f"{self.github_api_base}/contents/{file_path}?ref={sha}"
-        
+
         try:
             response = requests.get(url, headers=headers, timeout=10)
             if response.status_code == 200:
                 return response.text
-        except:
+        except Exception:
             pass
         return None
+
+    def get_claude_context(self) -> str:
+        """Fetch CLAUDE.md for project-specific context."""
+        try:
+            # Try primary location
+            content = self.get_file_content("CLAUDE.md", self.head_sha)
+            if not content:
+                # Try alternate locations
+                content = self.get_file_content(".github/CLAUDE.md", self.head_sha)
+            if not content:
+                content = self.get_file_content("docs/CLAUDE.md", self.head_sha)
+            if not content:
+                content = self.get_file_content(".agent/CLAUDE.md", self.head_sha)
+
+            if content:
+                # Truncate if too large (keep most important parts)
+                if len(content) > 15000:
+                    lines = content.split("\n")
+                    # Keep first 100 lines and last 50 lines
+                    content = (
+                        "\n".join(lines[:100])
+                        + "\n\n... [CLAUDE.md truncated] ...\n\n"
+                        + "\n".join(lines[-50:])
+                    )
+                return content
+            return ""
+        except Exception as e:
+            print(f"  ⚠️ Could not fetch CLAUDE.md: {e}")
+            return ""
 
     def _categorize_files(self) -> Dict[str, List[str]]:
         """Categorize changed files by type."""
@@ -146,9 +176,9 @@ class ClaudePRReviewer:
             "database": [],
             "config": [],
             "docs": [],
-            "other": []
+            "other": [],
         }
-        
+
         for file_path in self.changed_files:
             if "test" in file_path or "tests" in file_path:
                 categories["tests"].append(file_path)
@@ -162,43 +192,47 @@ class ClaudePRReviewer:
                 categories["models"].append(file_path)
             elif "services" in file_path or "service" in file_path:
                 categories["services"].append(file_path)
-            elif "db" in file_path or "database" in file_path or "migrations" in file_path:
+            elif (
+                "db" in file_path
+                or "database" in file_path
+                or "migrations" in file_path
+            ):
                 categories["database"].append(file_path)
             elif any(cfg in file_path for cfg in [".yaml", ".yml", ".env", "config"]):
                 categories["config"].append(file_path)
             elif any(doc in file_path for doc in [".md", "docs", "README"]):
                 categories["docs"].append(file_path)
-            elif file_path.endswith('.py'):
+            elif file_path.endswith(".py"):
                 categories["other"].append(file_path)
-                
+
         return {k: v for k, v in categories.items() if v}
 
     def _get_priority_files(self, file_categories: Dict[str, List[str]]) -> List[str]:
         """Identify priority files that need full content review."""
         priority_files = []
-        
+
         # Priority order: tests > strategies > models > services > cli
         priority_categories = ["tests", "strategies", "models", "services", "cli"]
-        
+
         for category in priority_categories:
             if category in file_categories:
                 priority_files.extend(file_categories[category])
-        
+
         # Limit to reasonable number but include all critical files
         return priority_files[:20]  # Increased from 10 to 20
 
     def _fetch_file_contents(self, priority_files: List[str]) -> Dict[str, str]:
         """Fetch full content for priority files."""
         file_contents = {}
-        
+
         for file_path in priority_files:
             # Skip non-Python files
-            if not file_path.endswith('.py'):
+            if not file_path.endswith(".py"):
                 continue
-                
+
             print(f"  📄 Fetching: {file_path}")
             content = self.get_file_content(file_path, self.head_sha)
-            
+
             if content:
                 # Include full content for smaller files, truncate large ones
                 if len(content) < 10000:  # ~10KB files get full content
@@ -208,44 +242,45 @@ class ClaudePRReviewer:
                     file_contents[file_path] = self._extract_file_structure(content)
             else:
                 file_contents[file_path] = "# File content unavailable"
-        
+
         return file_contents
 
     def _extract_file_structure(self, content: str) -> str:
         """Extract important structure from large files."""
-        lines = content.split('\n')
+        lines = content.split("\n")
         extracted = []
-        
+
         # Include imports
         for line in lines[:50]:
-            if line.startswith('import ') or line.startswith('from '):
+            if line.startswith("import ") or line.startswith("from "):
                 extracted.append(line)
-            elif line.startswith('class ') or line.startswith('def '):
+            elif line.startswith("class ") or line.startswith("def "):
                 extracted.append(line)
-        
+
         # Include class and function definitions
         for i, line in enumerate(lines):
-            if line.startswith('class '):
+            if line.startswith("class "):
                 # Include class definition and docstring
-                extracted.extend(lines[i:min(i+10, len(lines))])
-            elif line.startswith('def ') and not line.startswith('def _'):
+                extracted.extend(lines[i : min(i + 10, len(lines))])
+            elif line.startswith("def ") and not line.startswith("def _"):
                 # Include public function signatures
-                extracted.extend(lines[i:min(i+5, len(lines))])
-        
+                extracted.extend(lines[i : min(i + 5, len(lines))])
+
         if len(extracted) > 100:
             extracted = extracted[:100] + ["# ... (truncated for length)"]
-        
-        return '\n'.join(extracted)
+
+        return "\n".join(extracted)
 
     def _build_comprehensive_prompt(
-        self, 
-        diff_content: str, 
+        self,
+        diff_content: str,
         file_contents: Dict[str, str],
         pr_info: Dict[str, str],
-        file_categories: Dict[str, List[str]]
+        file_categories: Dict[str, List[str]],
+        claude_context: str = "",
     ) -> str:
         """Build a comprehensive review prompt with full context."""
-        
+
         # Only truncate if absolutely massive
         max_diff_size = 80000  # 80KB - much larger than before
         truncated = False
@@ -253,12 +288,12 @@ class ClaudePRReviewer:
             # Keep most of the diff
             keep_size = max_diff_size - 5000
             diff_content = (
-                diff_content[:keep_size] + 
-                "\n\n... [VERY LARGE DIFF - FINAL PORTION TRUNCATED] ...\n\n" + 
-                diff_content[-5000:]
+                diff_content[:keep_size]
+                + "\n\n... [VERY LARGE DIFF - FINAL PORTION TRUNCATED] ...\n\n"
+                + diff_content[-5000:]
             )
             truncated = True
-        
+
         return f"""You are an expert code reviewer for the Nautilus Trader Backtesting System, a production-grade algorithmic trading platform.
 
 # PROJECT CONTEXT
@@ -280,6 +315,7 @@ class ClaudePRReviewer:
 - **Package Manager**: UV exclusively (never edit pyproject.toml directly)
 - **Code Quality**: ruff for formatting/linting, mypy for type checking
 - **Logging**: structlog with correlation IDs
+- **Search Tool**: rg (ripgrep) - never use grep/find
 
 ## Project Structure
 ```
@@ -305,6 +341,9 @@ configs/              # Example YAML configurations
 scripts/              # Automation and setup
 ```
 
+# PROJECT-SPECIFIC GUIDELINES (FROM CLAUDE.md)
+{claude_context if claude_context else "# CLAUDE.md not found - using standard conventions"}
+
 # CONSTITUTIONAL REQUIREMENTS (NON-NEGOTIABLE)
 
 ## 1. Test-Driven Development (CRITICAL)
@@ -315,6 +354,7 @@ scripts/              # Automation and setup
 - **Test naming**: test_<module>.py, test_<function>_<scenario>_<expected_result>
 - **Use pytest fixtures for shared setup**
 - **One test per test function**
+- **FORBIDDEN**: Implementation before test, skipping RED phase
 
 ## 2. Code Structure Limits  
 - **Files: Maximum 500 lines** (split into modules if approaching)
@@ -330,7 +370,14 @@ scripts/              # Automation and setup
 - **Complex logic needs inline comments with "# Reason:" prefix**
 - **Mypy validation must pass with strict mode**
 
-## 4. Error Handling & Logging
+## 4. Package Management
+- **Use UV commands exclusively**: uv add, uv remove, uv sync
+- **Never modify pyproject.toml directly**
+- **Pin production dependencies to specific versions**
+- **Separate dev/test/prod dependencies**
+- **Dependencies must be actively maintained (commits within 6 months)**
+
+## 5. Error Handling & Logging
 - **Custom exception classes for domain errors**
 - **Never bare except: clauses**  
 - **Structured logging with structlog**
@@ -414,11 +461,11 @@ ntrader
 ```
 
 # PR INFORMATION
-- **Title**: {pr_info['title']}
-- **Author**: {pr_info['user']}  
-- **Branch**: {pr_info['head_branch']} → {pr_info['base_branch']}
-- **Draft**: {pr_info.get('draft', False)}
-- **Description**: {pr_info['body']}
+- **Title**: {pr_info["title"]}
+- **Author**: {pr_info["user"]}  
+- **Branch**: {pr_info["head_branch"]} → {pr_info["base_branch"]}
+- **Draft**: {pr_info.get("draft", False)}
+- **Description**: {pr_info["body"]}
 
 # FILES CHANGED BY CATEGORY
 {json.dumps(file_categories, indent=2)}
@@ -426,7 +473,7 @@ ntrader
 # FILE CONTENTS (Priority Files with Full/Structured Content)
 {json.dumps(file_contents, indent=2) if file_contents else "No priority files fetched"}
 
-# COMPLETE DIFF {'[TRUNCATED]' if truncated else '[FULL]'}
+# COMPLETE DIFF {"[TRUNCATED]" if truncated else "[FULL]"}
 ```diff
 {diff_content}
 ```
@@ -465,6 +512,7 @@ Please provide a comprehensive code review following this structure:
 - Logging with proper context
 - Security (no hardcoded secrets, SQL injection prevention)
 - Performance considerations
+- Use of rg instead of grep/find
 
 ## 5. Nautilus Trader Integration
 - Correct use of framework patterns
@@ -489,22 +537,24 @@ Please provide a comprehensive code review following this structure:
 - [List with specific line numbers]
 
 Provide specific code examples for improvements where helpful.
-Focus on correctness, maintainability, and adherence to the project's standards."""
+Focus on correctness, maintainability, and adherence to the project's standards.
+Pay special attention to project-specific guidelines from CLAUDE.md if present."""
 
     def analyze_with_claude_with_retry(
-        self, 
+        self,
         diff_content: str,
         file_contents: Dict[str, str],
         pr_info: Dict[str, str],
         file_categories: Dict[str, List[str]],
-        max_retries: int = 3
+        claude_context: str = "",
+        max_retries: int = 3,
     ) -> str:
         """Send comprehensive context to Claude with intelligent retry."""
-        
+
         context = self._build_comprehensive_prompt(
-            diff_content, file_contents, pr_info, file_categories
+            diff_content, file_contents, pr_info, file_categories, claude_context
         )
-        
+
         headers = {
             "Content-Type": "application/json",
             "X-API-Key": self.anthropic_api_key,
@@ -520,16 +570,18 @@ Focus on correctness, maintainability, and adherence to the project's standards.
         # Retry logic with progressive timeout
         for attempt in range(max_retries):
             try:
-                print(f"  📡 Sending to Claude (attempt {attempt + 1}/{max_retries})...")
-                
+                print(
+                    f"  📡 Sending to Claude (attempt {attempt + 1}/{max_retries})..."
+                )
+
                 # Progressive timeout: 180s, 240s, 300s
                 timeout = 180 + (attempt * 60)
-                
+
                 response = requests.post(
-                    "https://api.anthropic.com/v1/messages", 
-                    headers=headers, 
+                    "https://api.anthropic.com/v1/messages",
+                    headers=headers,
                     json=payload,
-                    timeout=timeout
+                    timeout=timeout,
                 )
 
                 if response.status_code == 200:
@@ -541,24 +593,28 @@ Focus on correctness, maintainability, and adherence to the project's standards.
                     time.sleep(wait_time)
                     continue
                 else:
-                    error_msg = f"API error {response.status_code}: {response.text[:200]}"
+                    error_msg = (
+                        f"API error {response.status_code}: {response.text[:200]}"
+                    )
                     if attempt < max_retries - 1:
                         print(f"  ⚠️  {error_msg}, retrying...")
                         time.sleep(10)
                         continue
                     else:
                         raise Exception(error_msg)
-                    
+
             except requests.exceptions.Timeout:
                 if attempt < max_retries - 1:
-                    print(f"  ⏱️  Timeout at {timeout}s, retrying with longer timeout...")
+                    print(
+                        f"  ⏱️  Timeout at {timeout}s, retrying with longer timeout..."
+                    )
                     time.sleep(10)
                     continue
                 else:
                     raise
             except Exception as e:
                 if attempt < max_retries - 1 and "connection" in str(e).lower():
-                    print(f"  🔄 Connection issue, retrying...")
+                    print("  🔄 Connection issue, retrying...")
                     time.sleep(15)
                     continue
                 else:
@@ -583,13 +639,14 @@ Focus on correctness, maintainability, and adherence to the project's standards.
 - Focus: TDD Compliance, Trading Logic, Type Safety
 - Project: Nautilus Trader Backtesting System
 - Phase: CLI Implementation (Phase 1)
+- Guidelines: CLAUDE.md {"✓" if self.claude_context_loaded else "✗"}
 
 *This is an automated review. For questions, check the GitHub Action logs.*
 """
 
         payload = {"body": formatted_review}
         url = f"{self.github_api_base}/issues/{self.pr_number}/comments"
-        
+
         response = requests.post(url, headers=headers, json=payload, timeout=30)
 
         if response.status_code != 201:
@@ -622,9 +679,9 @@ For assistance, check the GitHub Action logs or contact maintainers.
 """
             payload = {"body": error_comment}
             url = f"{self.github_api_base}/issues/{self.pr_number}/comments"
-            
+
             response = requests.post(url, headers=headers, json=payload, timeout=30)
-            
+
             if response.status_code == 201:
                 print("✅ Error comment posted")
             else:
@@ -637,11 +694,14 @@ For assistance, check the GitHub Action logs or contact maintainers.
         """Run the complete review process."""
         try:
             print("=" * 60)
-            print(f"🔍 Claude PR Reviewer v3.0.0")
-            print(f"📦 Project: Nautilus Trader Backtesting System")
+            print("🔍 Claude PR Reviewer v3.1.0")
+            print("📦 Project: Nautilus Trader Backtesting System")
             print(f"🔢 PR #{self.pr_number}")
             print("=" * 60)
-            
+
+            # Track if CLAUDE.md was loaded
+            self.claude_context_loaded = False
+
             # Validate environment
             if not self.anthropic_api_key:
                 print("❌ ANTHROPIC_API_KEY is missing")
@@ -671,7 +731,7 @@ For assistance, check the GitHub Action logs or contact maintainers.
             diff_content = self.get_pr_diff()
             diff_size = len(diff_content)
             print(f"   Size: {diff_size:,} characters")
-            
+
             if diff_size > 100000:
                 print("   ⚠️  Large diff detected - review may take longer")
 
@@ -680,7 +740,7 @@ For assistance, check the GitHub Action logs or contact maintainers.
             file_categories = self._categorize_files()
             total_files = sum(len(files) for files in file_categories.values())
             print(f"   Total files: {total_files}")
-            
+
             for category, files in file_categories.items():
                 if files:
                     print(f"   {category}: {len(files)} files")
@@ -693,16 +753,25 @@ For assistance, check the GitHub Action logs or contact maintainers.
             print("\n📑 Fetching priority file contents...")
             priority_files = self._get_priority_files(file_categories)
             print(f"   Priority files identified: {len(priority_files)}")
-            
+
             file_contents = self._fetch_file_contents(priority_files)
             print(f"   Successfully fetched: {len(file_contents)} files")
+
+            # Fetch CLAUDE.md for project context
+            print("\n📚 Fetching project guidelines...")
+            claude_context = self.get_claude_context()
+            if claude_context:
+                print("   ✓ CLAUDE.md found and loaded")
+                self.claude_context_loaded = True
+            else:
+                print("   ⚠️ CLAUDE.md not found - using default context")
 
             # Analyze with Claude
             print("\n🧠 Sending to Claude for analysis...")
             print("   This may take 1-3 minutes for comprehensive review...")
-            
+
             review = self.analyze_with_claude_with_retry(
-                diff_content, file_contents, pr_info, file_categories
+                diff_content, file_contents, pr_info, file_categories, claude_context
             )
 
             # Post review
@@ -723,12 +792,13 @@ For assistance, check the GitHub Action logs or contact maintainers.
                 "3. Request manual review from team members"
             )
             sys.exit(1)
-            
+
         except Exception as e:
             print(f"\n❌ Error during review: {e}")
             import traceback
+
             traceback.print_exc()
-            
+
             error_summary = str(e)[:300]
             self.post_error_comment(
                 f"An error occurred during review:\n\n```\n{error_summary}\n```"

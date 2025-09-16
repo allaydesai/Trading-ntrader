@@ -1,7 +1,6 @@
 """Data management commands."""
 
 import asyncio
-import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -24,22 +23,23 @@ def data():
 
 @data.command("import-csv")
 @click.option(
-    "--file", "-f",
+    "--file",
+    "-f",
     type=click.Path(exists=True, path_type=Path),
     required=True,
-    help="Path to CSV file to import"
+    help="Path to CSV file to import",
 )
-@click.option(
-    "--symbol", "-s",
-    required=True,
-    help="Trading symbol (e.g., AAPL)"
-)
+@click.option("--symbol", "-s", required=True, help="Trading symbol (e.g., AAPL)")
 def import_csv(file: Path, symbol: str):
     """Import CSV market data to database."""
+
     async def import_csv_async():
         # Check database connection first
         if not await test_connection():
-            console.print("❌ Database not accessible. Please check your database configuration.", style="red")
+            console.print(
+                "❌ Database not accessible. Please check your database configuration.",
+                style="red",
+            )
             return False
 
         # Show progress while importing
@@ -58,10 +58,16 @@ def import_csv(file: Path, symbol: str):
                 progress.update(task, completed=True)
 
                 # Display results
-                console.print(f"✅ Successfully imported {result['records_inserted']} records", style="green")
+                console.print(
+                    f"✅ Successfully imported {result['records_inserted']} records",
+                    style="green",
+                )
 
-                if result['duplicates_skipped'] > 0:
-                    console.print(f"⚠️  Skipped {result['duplicates_skipped']} duplicate records", style="yellow")
+                if result["duplicates_skipped"] > 0:
+                    console.print(
+                        f"⚠️  Skipped {result['duplicates_skipped']} duplicate records",
+                        style="yellow",
+                    )
 
                 # Show summary table
                 table = Table(title="Import Summary")
@@ -69,10 +75,10 @@ def import_csv(file: Path, symbol: str):
                 table.add_column("Value", style="green")
 
                 table.add_row("File", str(file))
-                table.add_row("Symbol", result['symbol'])
-                table.add_row("Records Processed", str(result['records_processed']))
-                table.add_row("Records Inserted", str(result['records_inserted']))
-                table.add_row("Duplicates Skipped", str(result['duplicates_skipped']))
+                table.add_row("Symbol", result["symbol"])
+                table.add_row("Records Processed", str(result["records_processed"]))
+                table.add_row("Records Inserted", str(result["records_inserted"]))
+                table.add_row("Duplicates Skipped", str(result["duplicates_skipped"]))
 
                 console.print(table)
                 return True
@@ -98,10 +104,7 @@ def import_csv(file: Path, symbol: str):
 
 
 @data.command("list")
-@click.option(
-    "--symbol", "-s",
-    help="Filter by trading symbol"
-)
+@click.option("--symbol", "-s", help="Filter by trading symbol")
 def list_data(symbol: Optional[str]):
     """List available market data."""
     # This will be implemented later when we have the data service

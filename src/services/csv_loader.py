@@ -1,6 +1,5 @@
 """CSV data loading service."""
 
-import tempfile
 from pathlib import Path
 from typing import Dict, Any, List
 from decimal import Decimal
@@ -10,14 +9,13 @@ from datetime import datetime
 from src.models.market_data import MarketDataCreate
 from src.db.session import get_session
 from src.models.market_data import market_data_table
-from sqlalchemy import insert
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 
 class CSVLoader:
     """Service for loading and validating CSV market data."""
 
-    REQUIRED_COLUMNS = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
+    REQUIRED_COLUMNS = ["timestamp", "open", "high", "low", "close", "volume"]
 
     def __init__(self, session=None):
         """Initialize CSV loader with optional database session."""
@@ -58,7 +56,7 @@ class CSVLoader:
             "symbol": symbol,
             "records_processed": len(records),
             "records_inserted": result["inserted"],
-            "duplicates_skipped": result["skipped"]
+            "duplicates_skipped": result["skipped"],
         }
 
     def _validate_columns(self, df: pd.DataFrame) -> None:
@@ -75,7 +73,9 @@ class CSVLoader:
         if missing:
             raise ValueError(f"Missing required columns: {missing}")
 
-    def _transform_to_records(self, df: pd.DataFrame, symbol: str) -> List[MarketDataCreate]:
+    def _transform_to_records(
+        self, df: pd.DataFrame, symbol: str
+    ) -> List[MarketDataCreate]:
         """
         Transform DataFrame to Pydantic models.
 
@@ -93,18 +93,18 @@ class CSVLoader:
         for _, row in df.iterrows():
             try:
                 # Parse timestamp and make timezone-aware (UTC)
-                timestamp = pd.to_datetime(row['timestamp'])
+                timestamp = pd.to_datetime(row["timestamp"])
                 if timestamp.tz is None:
-                    timestamp = timestamp.tz_localize('UTC')
+                    timestamp = timestamp.tz_localize("UTC")
 
                 record = MarketDataCreate(
                     symbol=symbol,
                     timestamp=timestamp,
-                    open=Decimal(str(row['open'])),
-                    high=Decimal(str(row['high'])),
-                    low=Decimal(str(row['low'])),
-                    close=Decimal(str(row['close'])),
-                    volume=int(row['volume'])
+                    open=Decimal(str(row["open"])),
+                    high=Decimal(str(row["high"])),
+                    low=Decimal(str(row["low"])),
+                    close=Decimal(str(row["close"])),
+                    volume=int(row["volume"]),
                 )
                 records.append(record)
             except (ValueError, TypeError) as e:
@@ -112,7 +112,9 @@ class CSVLoader:
 
         return records
 
-    async def _bulk_insert_records(self, records: List[MarketDataCreate]) -> Dict[str, int]:
+    async def _bulk_insert_records(
+        self, records: List[MarketDataCreate]
+    ) -> Dict[str, int]:
         """
         Bulk insert records to database with duplicate handling.
 
@@ -130,12 +132,12 @@ class CSVLoader:
             for record in records:
                 record_dict = record.model_dump()
                 # Add created_at timestamp
-                record_dict['created_at'] = datetime.utcnow()
+                record_dict["created_at"] = datetime.utcnow()
                 data_dicts.append(record_dict)
 
             # Use PostgreSQL INSERT ... ON CONFLICT DO NOTHING for duplicate handling
             stmt = pg_insert(market_data_table).values(data_dicts)
-            stmt = stmt.on_conflict_do_nothing(constraint='uq_symbol_timestamp')
+            stmt = stmt.on_conflict_do_nothing(constraint="uq_symbol_timestamp")
 
             result = await db_session.execute(stmt)
             inserted_count = result.rowcount if result.rowcount else 0
@@ -143,10 +145,7 @@ class CSVLoader:
 
             await db_session.commit()
 
-            return {
-                "inserted": inserted_count,
-                "skipped": skipped_count
-            }
+            return {"inserted": inserted_count, "skipped": skipped_count}
         else:
             # Use get_session context manager
             async with get_session() as db_session:
@@ -155,12 +154,12 @@ class CSVLoader:
                 for record in records:
                     record_dict = record.model_dump()
                     # Add created_at timestamp
-                    record_dict['created_at'] = datetime.utcnow()
+                    record_dict["created_at"] = datetime.utcnow()
                     data_dicts.append(record_dict)
 
                 # Use PostgreSQL INSERT ... ON CONFLICT DO NOTHING for duplicate handling
                 stmt = pg_insert(market_data_table).values(data_dicts)
-                stmt = stmt.on_conflict_do_nothing(constraint='uq_symbol_timestamp')
+                stmt = stmt.on_conflict_do_nothing(constraint="uq_symbol_timestamp")
 
                 result = await db_session.execute(stmt)
                 inserted_count = result.rowcount if result.rowcount else 0
@@ -168,7 +167,4 @@ class CSVLoader:
 
                 await db_session.commit()
 
-                return {
-                    "inserted": inserted_count,
-                    "skipped": skipped_count
-                }
+                return {"inserted": inserted_count, "skipped": skipped_count}

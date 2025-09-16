@@ -2,7 +2,6 @@
 
 from datetime import datetime
 from typing import List, Optional, Dict, Any
-from decimal import Decimal
 
 import pandas as pd
 from sqlalchemy import text
@@ -20,10 +19,7 @@ class DataService:
         self.settings = get_settings()
 
     async def get_market_data(
-        self,
-        symbol: str,
-        start: datetime,
-        end: datetime
+        self, symbol: str, start: datetime, end: datetime
     ) -> List[Dict[str, Any]]:
         """
         Fetch market data from database for the given parameters.
@@ -57,26 +53,29 @@ class DataService:
             """)
 
             result = await session.execute(
-                query,
-                {"symbol": symbol.upper(), "start": start, "end": end}
+                query, {"symbol": symbol.upper(), "start": start, "end": end}
             )
             rows = result.fetchall()
 
         if not rows:
-            raise ValueError(f"No market data found for {symbol} between {start} and {end}")
+            raise ValueError(
+                f"No market data found for {symbol} between {start} and {end}"
+            )
 
         # Convert to list of dictionaries
         data = []
         for row in rows:
-            data.append({
-                'symbol': row.symbol,
-                'timestamp': row.timestamp,
-                'open': float(row.open),
-                'high': float(row.high),
-                'low': float(row.low),
-                'close': float(row.close),
-                'volume': int(row.volume)
-            })
+            data.append(
+                {
+                    "symbol": row.symbol,
+                    "timestamp": row.timestamp,
+                    "open": float(row.open),
+                    "high": float(row.high),
+                    "low": float(row.low),
+                    "close": float(row.close),
+                    "volume": int(row.volume),
+                }
+            )
 
         # Cache results
         self._cache[cache_key] = data
@@ -84,10 +83,7 @@ class DataService:
         return data
 
     async def get_data_as_dataframe(
-        self,
-        symbol: str,
-        start: datetime,
-        end: datetime
+        self, symbol: str, start: datetime, end: datetime
     ) -> pd.DataFrame:
         """
         Get market data as pandas DataFrame.
@@ -106,12 +102,14 @@ class DataService:
             return pd.DataFrame()
 
         df = pd.DataFrame(data)
-        df['timestamp'] = pd.to_datetime(df['timestamp'])
-        df.set_index('timestamp', inplace=True)
+        df["timestamp"] = pd.to_datetime(df["timestamp"])
+        df.set_index("timestamp", inplace=True)
 
         return df
 
-    def convert_to_nautilus_format(self, data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def convert_to_nautilus_format(
+        self, data: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
         """
         Convert market data to format suitable for Nautilus Trader.
 
@@ -130,15 +128,15 @@ class DataService:
         for record in data:
             # Convert to Nautilus Bar format (simplified)
             nautilus_record = {
-                'instrument_id': f"{record['symbol']}.SIM",
-                'bar_type': f"{record['symbol']}.SIM-1-MINUTE-MID-EXTERNAL",
-                'ts_event': int(record['timestamp'].timestamp() * 1_000_000_000),
-                'ts_init': int(record['timestamp'].timestamp() * 1_000_000_000),
-                'open': int(record['open'] * 100000),  # Nautilus uses price precision
-                'high': int(record['high'] * 100000),
-                'low': int(record['low'] * 100000),
-                'close': int(record['close'] * 100000),
-                'volume': int(record['volume'])
+                "instrument_id": f"{record['symbol']}.SIM",
+                "bar_type": f"{record['symbol']}.SIM-1-MINUTE-MID-EXTERNAL",
+                "ts_event": int(record["timestamp"].timestamp() * 1_000_000_000),
+                "ts_init": int(record["timestamp"].timestamp() * 1_000_000_000),
+                "open": int(record["open"] * 100000),  # Nautilus uses price precision
+                "high": int(record["high"] * 100000),
+                "low": int(record["low"] * 100000),
+                "close": int(record["close"] * 100000),
+                "volume": int(record["volume"]),
             }
             nautilus_data.append(nautilus_record)
 
@@ -178,10 +176,7 @@ class DataService:
             row = result.fetchone()
 
         if row and row.start_date and row.end_date:
-            return {
-                'start': row.start_date,
-                'end': row.end_date
-            }
+            return {"start": row.start_date, "end": row.end_date}
 
         return None
 
@@ -190,10 +185,7 @@ class DataService:
         self._cache.clear()
 
     async def validate_data_availability(
-        self,
-        symbol: str,
-        start: datetime,
-        end: datetime
+        self, symbol: str, start: datetime, end: datetime
     ) -> Dict[str, Any]:
         """
         Validate if data is available for the given parameters.
@@ -211,33 +203,30 @@ class DataService:
 
             if not data_range:
                 return {
-                    'valid': False,
-                    'reason': f"No data available for symbol {symbol}",
-                    'available_symbols': await self.get_available_symbols()
+                    "valid": False,
+                    "reason": f"No data available for symbol {symbol}",
+                    "available_symbols": await self.get_available_symbols(),
                 }
 
-            if start < data_range['start']:
+            if start < data_range["start"]:
                 return {
-                    'valid': False,
-                    'reason': f"Start date {start} is before available data start {data_range['start']}",
-                    'available_range': data_range
+                    "valid": False,
+                    "reason": f"Start date {start} is before available data start {data_range['start']}",
+                    "available_range": data_range,
                 }
 
-            if end > data_range['end']:
+            if end > data_range["end"]:
                 return {
-                    'valid': False,
-                    'reason': f"End date {end} is after available data end {data_range['end']}",
-                    'available_range': data_range
+                    "valid": False,
+                    "reason": f"End date {end} is after available data end {data_range['end']}",
+                    "available_range": data_range,
                 }
 
-            return {
-                'valid': True,
-                'available_range': data_range
-            }
+            return {"valid": True, "available_range": data_range}
 
         except Exception as e:
             return {
-                'valid': False,
-                'reason': f"Error validating data availability: {e}",
-                'available_symbols': []
+                "valid": False,
+                "reason": f"Error validating data availability: {e}",
+                "available_symbols": [],
             }

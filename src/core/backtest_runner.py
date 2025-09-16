@@ -1,7 +1,7 @@
 """Minimal backtest engine wrapper for Nautilus Trader."""
 
 from decimal import Decimal
-from typing import Dict, Any, Optional, Literal
+from typing import Dict, Any, Literal
 from datetime import datetime
 
 from nautilus_trader.backtest.engine import BacktestEngine, BacktestEngineConfig
@@ -58,7 +58,7 @@ class BacktestResult:
 class MinimalBacktestRunner:
     """Minimal backtest runner using Nautilus Trader."""
 
-    def __init__(self, data_source: Literal['mock', 'database'] = 'mock'):
+    def __init__(self, data_source: Literal["mock", "database"] = "mock"):
         """
         Initialize the backtest runner.
 
@@ -67,7 +67,7 @@ class MinimalBacktestRunner:
         """
         self.settings = get_settings()
         self.data_source = data_source
-        self.data_service = DataService() if data_source == 'database' else None
+        self.data_service = DataService() if data_source == "database" else None
         self.engine: BacktestEngine | None = None
         self._results: BacktestResult | None = None
 
@@ -194,7 +194,7 @@ class MinimalBacktestRunner:
             ValueError: If data source is not 'database' or no data available
             ConnectionError: If database is not accessible
         """
-        if self.data_source != 'database':
+        if self.data_source != "database":
             raise ValueError("Data source must be 'database' for this method")
 
         if not self.data_service:
@@ -209,15 +209,19 @@ class MinimalBacktestRunner:
             trade_size = self.settings.trade_size
 
         # Validate data availability
-        validation = await self.data_service.validate_data_availability(symbol, start, end)
-        if not validation['valid']:
+        validation = await self.data_service.validate_data_availability(
+            symbol, start, end
+        )
+        if not validation["valid"]:
             raise ValueError(f"Data validation failed: {validation['reason']}")
 
         # Fetch data from database
         market_data = await self.data_service.get_market_data(symbol, start, end)
 
         if not market_data:
-            raise ValueError(f"No market data found for {symbol} between {start} and {end}")
+            raise ValueError(
+                f"No market data found for {symbol} between {start} and {end}"
+            )
 
         # Create test instrument for the symbol
         # Note: In full implementation, this would use real instrument specifications
