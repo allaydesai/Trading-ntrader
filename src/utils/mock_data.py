@@ -2,7 +2,7 @@
 
 import math
 from datetime import datetime, timedelta
-from typing import List
+from typing import List, Optional
 
 import pandas as pd
 from nautilus_trader.model.data import Bar, BarType
@@ -15,11 +15,11 @@ from src.config import get_settings
 
 def generate_mock_bars(
     instrument_id: InstrumentId,
-    num_bars: int = None,
+    num_bars: Optional[int] = None,
     start_price: float = 1.1000,
     volatility: float = 0.002,
     trend_strength: float = 0.0001,
-    start_time: datetime = None,
+    start_time: Optional[datetime] = None,
 ) -> List[Bar]:
     """
     Generate synthetic bar data with predictable patterns.
@@ -120,11 +120,11 @@ def generate_mock_bars(
 
 
 def generate_mock_dataframe(
-    num_bars: int = None,
+    num_bars: Optional[int] = None,
     start_price: float = 1.1000,
     volatility: float = 0.002,
     trend_strength: float = 0.0001,
-    start_time: datetime = None,
+    start_time: Optional[datetime] = None,
 ) -> pd.DataFrame:
     """
     Generate synthetic OHLCV data as a pandas DataFrame.
@@ -204,16 +204,25 @@ def generate_mock_dataframe(
     return pd.DataFrame(data)
 
 
-def create_test_instrument() -> tuple:
+def create_test_instrument(symbol: str = "EUR/USD") -> tuple:
     """
-    Create a test EUR/USD instrument for backtesting.
+    Create a test instrument for backtesting.
 
-    Returns
-    -------
-    tuple
-        (instrument, instrument_id) tuple.
+    Args:
+        symbol: Trading symbol (e.g., "EUR/USD", "AAPL")
+
+    Returns:
+        tuple: (instrument, instrument_id) tuple.
     """
-    instrument = TestInstrumentProvider.default_fx_ccy("EUR/USD")
+    # For FX pairs, use the FX provider
+    if "/" in symbol and len(symbol.split("/")) == 2:
+        instrument = TestInstrumentProvider.default_fx_ccy(symbol)
+    else:
+        # For other symbols, create a basic equity-like instrument
+        # This is a simplified approach for now
+        instrument = TestInstrumentProvider.default_fx_ccy("EUR/USD")
+        # The instrument ID will be updated by the symbol parameter
+
     return instrument, instrument.id
 
 

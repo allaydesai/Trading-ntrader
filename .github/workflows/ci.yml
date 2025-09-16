@@ -45,7 +45,7 @@ jobs:
         run: |
           uv run pytest --collect-only tests/
 
-      - name: Run unit tests
+      - name: Run tests (including integration tests that skip when DB unavailable)
         run: |
           uv run pytest tests/ -v \
             --cov=src \
@@ -54,7 +54,7 @@ jobs:
             --cov-report=html \
             --cov-fail-under=70 \
             --tb=short \
-            --maxfail=5
+            --maxfail=10
 
       - name: Upload coverage to Codecov
         if: matrix.python-version == '3.11'
@@ -178,6 +178,7 @@ jobs:
         with:
           name: coverage-report
           path: coverage/
+        continue-on-error: true
 
       - name: Test Results Summary
         run: |

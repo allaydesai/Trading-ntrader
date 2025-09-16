@@ -35,6 +35,88 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 uv sync
 ```
 
+3. Set up environment variables:
+```bash
+# Copy the example environment file
+cp .env.example .env
+
+# Edit .env with your specific configuration
+```
+
+### Database Setup
+
+This project uses PostgreSQL with TimescaleDB for time-series data storage. Follow these steps to set up the database:
+
+#### Prerequisites
+
+- Docker and Docker Desktop
+- PostgreSQL client tools
+
+#### Setup Steps
+
+1. **Pull PostgreSQL Docker image**:
+```bash
+docker pull postgres:17
+```
+
+2. **Create a volume for data persistence**:
+```bash
+docker volume create pgdata
+```
+
+3. **Run PostgreSQL container**:
+```bash
+docker run -d --name pgdb \
+  -e POSTGRES_USER=ntrader \
+  -e POSTGRES_PASSWORD=ntrader_dev_2025 \
+  -e POSTGRES_DB=trading_ntrader \
+  -p 5432:5432 \
+  -v pgdata:/var/lib/postgresql/data \
+  postgres:17
+```
+
+4. **Install PostgreSQL client** (if not already installed):
+```bash
+# Ubuntu/WSL2
+sudo apt update && sudo apt install -y postgresql-client
+
+# macOS
+brew install postgresql
+```
+
+5. **Verify database connection**:
+```bash
+# Test connection
+PGPASSWORD=ntrader_dev_2025 psql -h localhost -U ntrader -d trading_ntrader -c "SELECT version();"
+```
+
+#### Database Configuration
+
+The database connection is configured through environment variables in your `.env` file:
+
+```env
+DATABASE_URL=postgresql://ntrader:ntrader_dev_2025@localhost:5432/trading_ntrader
+DATABASE_POOL_SIZE=10
+DATABASE_MAX_OVERFLOW=20
+DATABASE_POOL_TIMEOUT=30
+```
+
+#### Container Management
+
+```bash
+# Start the database
+docker start pgdb
+
+# Stop the database
+docker stop pgdb
+
+# View logs
+docker logs pgdb
+
+# Remove container (data persists in volume)
+docker rm pgdb
+```
+
 ### Usage
 
 #### Basic SMA Backtest

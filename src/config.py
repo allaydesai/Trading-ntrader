@@ -2,6 +2,7 @@
 
 from decimal import Decimal
 from pathlib import Path
+from typing import Optional
 
 from pydantic import Field
 from pydantic_settings import BaseSettings
@@ -42,8 +43,28 @@ class Settings(BaseSettings):
         default=1000, description="Number of mock data bars to generate"
     )
 
+    # Database settings
+    database_url: Optional[str] = Field(
+        default="postgresql://ntrader:ntrader_dev_2025@localhost:5432/trading_ntrader",
+        description="PostgreSQL database URL",
+    )
+    database_pool_size: int = Field(
+        default=10, description="Database connection pool size"
+    )
+    database_max_overflow: int = Field(
+        default=20, description="Maximum overflow connections"
+    )
+    database_pool_timeout: int = Field(
+        default=30, description="Pool connection timeout in seconds"
+    )
+
     # Logging settings
     log_level: str = Field(default="INFO", description="Logging level")
+
+    @property
+    def is_database_available(self) -> bool:
+        """Check if database is configured."""
+        return bool(self.database_url)
 
     model_config = {
         "env_file": ".env",
