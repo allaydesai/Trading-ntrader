@@ -40,7 +40,9 @@ async def test_can_connect_to_database():
             await dispose_all_connections()
 
     # All retries failed - skip test instead of failing in CI environments
-    pytest.skip(f"Database not accessible after {max_retries} attempts (likely running in CI without database)")
+    pytest.skip(
+        f"Database not accessible after {max_retries} attempts (likely running in CI without database)"
+    )
 
 
 @pytest.mark.integration
