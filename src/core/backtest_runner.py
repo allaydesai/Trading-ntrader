@@ -236,24 +236,17 @@ class MinimalBacktestRunner:
 
             # Create using TestInstrumentProvider but override with correct symbol and SIM venue
             from nautilus_trader.test_kit.providers import TestInstrumentProvider
-            from nautilus_trader.model.identifiers import InstrumentId, Symbol, Venue
 
             try:
-                # Try to create an equity instrument
-                base_instrument = TestInstrumentProvider.equity(symbol=clean_symbol)
-                # Extract the relevant properties and create with SIM venue
-                instrument_id = InstrumentId(Symbol(clean_symbol), Venue("SIM"))
-
                 # Use TestInstrumentProvider to create a properly configured equity with SIM venue
                 # This is a simpler approach that maintains all the correct instrument properties
                 instrument = TestInstrumentProvider.equity(
                     symbol=clean_symbol,
-                    venue="SIM"  # venue parameter expects string, not Venue object
+                    venue="SIM",  # venue parameter expects string, not Venue object
                 )
             except Exception:
                 # Fallback: create a generic instrument but with the correct symbol
                 # Use FX template but override the symbol to maintain compatibility
-                instrument_id = InstrumentId(Symbol(clean_symbol), Venue("SIM"))
                 base_fx = TestInstrumentProvider.default_fx_ccy("EUR/USD")
                 # For fallback, we'll use the FX instrument but it will work for backtesting
                 instrument = base_fx
