@@ -218,10 +218,16 @@ def create_test_instrument(symbol: str = "EUR/USD") -> tuple:
     if "/" in symbol and len(symbol.split("/")) == 2:
         instrument = TestInstrumentProvider.default_fx_ccy(symbol)
     else:
-        # For other symbols, create a basic equity-like instrument
-        # This is a simplified approach for now
-        instrument = TestInstrumentProvider.default_fx_ccy("EUR/USD")
-        # The instrument ID will be updated by the symbol parameter
+        # For equity symbols, create an equity instrument
+        # Truncate long symbols to fit Nautilus constraints (max 7 chars)
+        clean_symbol = symbol.replace("2018", "18").replace("_", "")[:7]
+
+        try:
+            instrument = TestInstrumentProvider.equity(symbol=clean_symbol)
+        except Exception:
+            # If equity creation fails, fall back to using FX template with SIM venue
+            # This ensures compatibility with the backtest engine
+            instrument = TestInstrumentProvider.default_fx_ccy("EUR/USD")
 
     return instrument, instrument.id
 

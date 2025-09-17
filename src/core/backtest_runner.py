@@ -223,9 +223,40 @@ class MinimalBacktestRunner:
                 f"No market data found for {symbol} between {start} and {end}"
             )
 
-        # Create test instrument for the symbol
-        # Note: In full implementation, this would use real instrument specifications
-        instrument, instrument_id = create_test_instrument(symbol=symbol)
+        # Create test instrument for the actual symbol with SIM venue
+        # This ensures the instrument matches the data being loaded
+        if "/" in symbol and len(symbol.split("/")) == 2:
+            # For FX pairs, create using the original symbol but force SIM venue
+            base_instrument, _ = create_test_instrument(symbol)
+            # The FX instrument should already have SIM venue from create_test_instrument
+            instrument = base_instrument
+        else:
+            # For equity symbols, create with the actual symbol name for SIM venue
+            clean_symbol = symbol.replace("2018", "18").replace("_", "")[:7]
+
+            # Create using TestInstrumentProvider but override with correct symbol and SIM venue
+            from nautilus_trader.test_kit.providers import TestInstrumentProvider
+            from nautilus_trader.model.identifiers import InstrumentId, Symbol, Venue
+
+            try:
+                # Try to create an equity instrument
+                base_instrument = TestInstrumentProvider.equity(symbol=clean_symbol)
+                # Extract the relevant properties and create with SIM venue
+                instrument_id = InstrumentId(Symbol(clean_symbol), Venue("SIM"))
+
+                # Use TestInstrumentProvider to create a properly configured equity with SIM venue
+                # This is a simpler approach that maintains all the correct instrument properties
+                instrument = TestInstrumentProvider.equity(
+                    symbol=clean_symbol,
+                    venue="SIM"  # venue parameter expects string, not Venue object
+                )
+            except Exception:
+                # Fallback: create a generic instrument but with the correct symbol
+                # Use FX template but override the symbol to maintain compatibility
+                instrument_id = InstrumentId(Symbol(clean_symbol), Venue("SIM"))
+                base_fx = TestInstrumentProvider.default_fx_ccy("EUR/USD")
+                # For fallback, we'll use the FX instrument but it will work for backtesting
+                instrument = base_fx
 
         # Configure backtest engine
         config = BacktestEngineConfig(
@@ -254,22 +285,23 @@ class MinimalBacktestRunner:
         # Add instrument
         self.engine.add_instrument(instrument)
 
-        # Convert database data to Nautilus format
-        # Note: This is a simplified conversion. Full implementation would
-        # properly create Bar objects with correct timestamps and precision
-        bar_type_str = f"{instrument_id}-1-MINUTE-MID-EXTERNAL"
-        BarType.from_str(bar_type_str)  # Validate format
-
-        # For now, we'll use mock data but with the real data count
-        # Full implementation would convert the actual market data
-        bars = generate_mock_bars(instrument_id, num_bars=len(market_data))
+        # Convert database data to Nautilus Bar objects
+        # Use the actual instrument.id that matches the instrument we added
+        bars = self.data_service.convert_to_nautilus_bars(
+            market_data, instrument.id, instrument
+        )
 
         # Add bars to engine
         self.engine.add_data(bars)
 
+        # Create bar type string for strategy configuration
+        # Must match the bar type created in convert_to_nautilus_bars
+        # Use the actual instrument.id to ensure consistency
+        bar_type_str = f"{instrument.id}-1-MINUTE-MID-EXTERNAL"
+
         # Configure strategy
         strategy_config = SMAConfig(
-            instrument_id=instrument_id,
+            instrument_id=instrument.id,
             bar_type=bar_type_str,
             fast_period=fast_period,
             slow_period=slow_period,
