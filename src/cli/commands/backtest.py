@@ -1,7 +1,7 @@
 """Backtest commands for running strategies with real data."""
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 
 import click
@@ -72,6 +72,13 @@ def run_backtest(
     """Run backtest with real market data from database."""
 
     async def run_backtest_async():
+        # Ensure start and end dates are timezone-aware (UTC) for database comparison
+        nonlocal start, end
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=timezone.utc)
+        if end.tzinfo is None:
+            end = end.replace(tzinfo=timezone.utc)
+
         console.print(
             f"🚀 Running {strategy.upper()} backtest for {symbol.upper()}",
             style="cyan bold",
@@ -97,32 +104,36 @@ def run_backtest(
             return False
 
         try:
-            # Validate data availability first
+            # Get adjusted date range if needed
             data_service = DataService()
+
+            # Validate data availability first (this handles all validation scenarios)
             validation = await data_service.validate_data_availability(
                 symbol.upper(), start, end
             )
 
             if not validation["valid"]:
-                console.print(
-                    f"❌ Data validation failed: {validation['reason']}", style="red"
-                )
+                console.print("❌ Data validation failed", style="red")
+                console.print(f"   {validation['reason']}")
 
-                if "available_symbols" in validation:
-                    available = validation["available_symbols"]
-                    if available:
-                        console.print(
-                            f"   Available symbols: {', '.join(available[:10])}"
-                        )
-                        if len(available) > 10:
-                            console.print(f"   ... and {len(available) - 10} more")
-                    else:
-                        console.print(
-                            "   No data available in database. Try importing some CSV data first:"
-                        )
-                        console.print(
-                            "   ntrader data import-csv --file sample.csv --symbol AAPL"
-                        )
+                if (
+                    "available_symbols" in validation
+                    and validation["available_symbols"]
+                ):
+                    symbols = validation["available_symbols"]
+                    console.print(f"   Available symbols: {', '.join(symbols[:10])}")
+                    if len(symbols) > 10:
+                        console.print(f"   ... and {len(symbols) - 10} more")
+                elif (
+                    "available_symbols" in validation
+                    and not validation["available_symbols"]
+                ):
+                    console.print(
+                        "   No data available in database. Try importing some CSV data first:"
+                    )
+                    console.print(
+                        "   ntrader data import-csv --file data/sample_AAPL.csv --symbol AAPL"
+                    )
 
                 if "available_range" in validation:
                     range_info = validation["available_range"]
@@ -132,12 +143,49 @@ def run_backtest(
 
                 return False
 
+            # Get adjusted date range (handles date-only inputs intelligently)
+            adjusted_range = await data_service.get_adjusted_date_range(
+                symbol.upper(), start, end
+            )
+
+            if not adjusted_range:
+                console.print(
+                    f"❌ No data available for {symbol.upper()} in the specified date range",
+                    style="red",
+                )
+                # Show available range
+                data_range = await data_service.get_data_range(symbol.upper())
+                if data_range:
+                    console.print(
+                        f"   Available range: {data_range['start']} to {data_range['end']}"
+                    )
+                return False
+
+            # Check if dates were adjusted
+            dates_adjusted = (adjusted_range["start"] != start) or (
+                adjusted_range["end"] != end
+            )
+
+            # Use adjusted dates for validation and backtest
+            adjusted_start = adjusted_range["start"]
+            adjusted_end = adjusted_range["end"]
+
             # Show data info
             console.print("✅ Data validation passed", style="green")
-            range_info = validation["available_range"]
-            console.print(
-                f"   Available data range: {range_info['start']} to {range_info['end']}"
-            )
+
+            # If dates were adjusted, show both original request and actual range
+            if dates_adjusted:
+                console.print(
+                    f"   Requested period: {start.strftime('%Y-%m-%d %H:%M:%S')} to {end.strftime('%Y-%m-%d %H:%M:%S')}"
+                )
+                console.print(
+                    f"   Adjusted to actual data: {adjusted_start.strftime('%Y-%m-%d %H:%M:%S')} to {adjusted_end.strftime('%Y-%m-%d %H:%M:%S')}",
+                    style="yellow",
+                )
+            else:
+                console.print(
+                    f"   Using exact period: {adjusted_start.strftime('%Y-%m-%d %H:%M:%S')} to {adjusted_end.strftime('%Y-%m-%d %H:%M:%S')}"
+                )
             console.print()
 
             # Run backtest with progress indicator
@@ -151,11 +199,11 @@ def run_backtest(
                 # Initialize backtest runner with database data source
                 runner = MinimalBacktestRunner(data_source="database")
 
-                # Run the backtest
+                # Run the backtest with adjusted dates
                 result = await runner.run_backtest_with_database(
                     symbol=symbol.upper(),
-                    start=start,
-                    end=end,
+                    start=adjusted_start,
+                    end=adjusted_end,
                     fast_period=fast_period,
                     slow_period=slow_period,
                     trade_size=Decimal(str(trade_size)),

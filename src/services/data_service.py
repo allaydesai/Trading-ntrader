@@ -1,6 +1,6 @@
 """Data service for fetching and converting market data."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any
 
 import pandas as pd
@@ -107,6 +107,130 @@ class DataService:
 
         return df
 
+    def convert_to_nautilus_bars(
+        self, data: List[Dict[str, Any]], instrument_id, instrument=None
+    ) -> List:
+        """
+        Convert market data to Nautilus Trader Bar objects.
+
+        Args:
+            data: List of market data dictionaries
+            instrument_id: Nautilus InstrumentId object
+            instrument: Optional Nautilus Instrument object for proper conversion
+
+        Returns:
+            List of Nautilus Bar objects
+
+        Raises:
+            ValueError: If data conversion fails
+            ImportError: If required modules are not available
+        """
+        if not data:
+            return []
+
+        try:
+            # Import the data wrangler
+            from src.utils.data_wrangler import MarketDataWrangler
+
+            # If instrument is not provided, create a basic one
+            if instrument is None:
+                from src.utils.mock_data import create_test_instrument
+
+                # Extract symbol from instrument_id
+                symbol = str(instrument_id).split(".")[0]
+                instrument, _ = create_test_instrument(symbol)
+
+            # Create wrangler and process data
+            wrangler = MarketDataWrangler(instrument)
+            bars = wrangler.process(data)
+
+            if not bars:
+                raise ValueError("No bars were created from the provided data")
+
+            # Successfully converted data to bars
+            return bars
+
+        except ImportError as e:
+            print(f"Failed to import data wrangler: {e}")
+            # Fallback to original implementation
+            return self._convert_to_nautilus_bars_fallback(data, instrument_id)
+
+        except Exception as e:
+            print(f"Error converting data to Nautilus bars: {e}")
+            # Fallback to original implementation
+            return self._convert_to_nautilus_bars_fallback(data, instrument_id)
+
+    def _convert_to_nautilus_bars_fallback(
+        self, data: List[Dict[str, Any]], instrument_id
+    ) -> List:
+        """
+        Fallback method for converting market data to Nautilus Trader Bar objects.
+
+        Args:
+            data: List of market data dictionaries
+            instrument_id: Nautilus InstrumentId object
+
+        Returns:
+            List of Nautilus Bar objects
+        """
+        from nautilus_trader.model.data import Bar, BarType, BarSpecification
+        from nautilus_trader.model.enums import (
+            BarAggregation,
+            PriceType,
+            AggregationSource,
+        )
+        from nautilus_trader.model.objects import Price, Quantity
+
+        bars = []
+
+        # Create bar type specification for 1-minute bars
+        bar_spec = BarSpecification(
+            step=1,
+            aggregation=BarAggregation.MINUTE,
+            price_type=PriceType.MID,
+        )
+        bar_type = BarType(
+            instrument_id=instrument_id,
+            bar_spec=bar_spec,
+            aggregation_source=AggregationSource.EXTERNAL,
+        )
+
+        for record in data:
+            try:
+                # Convert timestamp to nanoseconds since Unix epoch
+                ts_event = int(record["timestamp"].timestamp() * 1_000_000_000)
+                ts_init = ts_event
+
+                # Create price objects (Nautilus uses 5 decimal places precision for most instruments)
+                open_price = Price.from_str(f"{record['open']:.5f}")
+                high_price = Price.from_str(f"{record['high']:.5f}")
+                low_price = Price.from_str(f"{record['low']:.5f}")
+                close_price = Price.from_str(f"{record['close']:.5f}")
+
+                # Create volume quantity
+                volume = Quantity.from_int(int(record["volume"]))
+
+                # Create Bar object
+                bar = Bar(
+                    bar_type=bar_type,
+                    open=open_price,
+                    high=high_price,
+                    low=low_price,
+                    close=close_price,
+                    volume=volume,
+                    ts_event=ts_event,
+                    ts_init=ts_init,
+                )
+
+                bars.append(bar)
+
+            except Exception as e:
+                print(f"Failed to create bar for record {record}: {e}")
+                continue
+
+        # Return the created bars
+        return bars
+
     def convert_to_nautilus_format(
         self, data: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
@@ -184,6 +308,92 @@ class DataService:
         """Clear the data cache."""
         self._cache.clear()
 
+    async def get_adjusted_date_range(
+        self, symbol: str, start: datetime, end: datetime
+    ) -> Optional[Dict[str, datetime]]:
+        """
+        Get adjusted date range that fits within available data.
+
+        If the input dates are date-only (time is midnight), adjust them to
+        the actual available data boundaries for those dates.
+
+        Args:
+            symbol: Trading symbol
+            start: Start datetime (may be adjusted)
+            end: End datetime (may be adjusted)
+
+        Returns:
+            Dictionary with adjusted 'start' and 'end' datetimes, or None if no data
+        """
+        # Ensure dates are timezone-aware (UTC)
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=timezone.utc)
+        if end.tzinfo is None:
+            end = end.replace(tzinfo=timezone.utc)
+
+        # Get the actual data range for this symbol
+        data_range = await self.get_data_range(symbol)
+        if not data_range:
+            return None
+
+        # Check if input times appear to be date-only (midnight)
+        start_is_midnight = start.time().hour == 0 and start.time().minute == 0
+        end_is_midnight = end.time().hour == 0 and end.time().minute == 0
+
+        adjusted_start = start
+        adjusted_end = end
+
+        # If start is midnight, find the first available data point on or after that date
+        if start_is_midnight:
+            # Query for the earliest timestamp on the start date
+            async with get_session() as session:
+                query = text("""
+                    SELECT MIN(timestamp) as first_timestamp
+                    FROM market_data
+                    WHERE symbol = :symbol
+                    AND DATE(timestamp) = DATE(:target_date)
+                """)
+                result = await session.execute(
+                    query, {"symbol": symbol.upper(), "target_date": start}
+                )
+                row = result.fetchone()
+
+                if row and row.first_timestamp:
+                    adjusted_start = row.first_timestamp
+                else:
+                    # No data on exact date, use overall data start if it's later
+                    if data_range["start"] > start:
+                        adjusted_start = data_range["start"]
+
+        # If end is midnight, find the last available data point on or before that date
+        if end_is_midnight:
+            # For midnight end times, we want to include the entire day
+            # So we look for the last data point on that date
+            async with get_session() as session:
+                query = text("""
+                    SELECT MAX(timestamp) as last_timestamp
+                    FROM market_data
+                    WHERE symbol = :symbol
+                    AND DATE(timestamp) = DATE(:target_date)
+                """)
+                result = await session.execute(
+                    query, {"symbol": symbol.upper(), "target_date": end}
+                )
+                row = result.fetchone()
+
+                if row and row.last_timestamp:
+                    adjusted_end = row.last_timestamp
+                else:
+                    # No data on exact date
+                    # If requested end is before available data, use adjusted start
+                    if end < data_range["start"]:
+                        adjusted_end = adjusted_start
+                    # Otherwise use overall data end if it's earlier
+                    elif data_range["end"] < end:
+                        adjusted_end = data_range["end"]
+
+        return {"start": adjusted_start, "end": adjusted_end}
+
     async def validate_data_availability(
         self, symbol: str, start: datetime, end: datetime
     ) -> Dict[str, Any]:
@@ -198,6 +408,12 @@ class DataService:
         Returns:
             Dictionary with validation results
         """
+        # Ensure start and end dates are timezone-aware (UTC) for consistent comparison
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=timezone.utc)
+        if end.tzinfo is None:
+            end = end.replace(tzinfo=timezone.utc)
+
         try:
             data_range = await self.get_data_range(symbol)
 

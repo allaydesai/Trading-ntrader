@@ -13,7 +13,7 @@ from nautilus_trader.trading.strategy import Strategy
 from nautilus_trader.trading.strategy import StrategyConfig
 
 
-class SMAConfig(StrategyConfig, frozen=True):
+class SMAConfig(StrategyConfig):
     """Configuration for SMA crossover strategy."""
 
     instrument_id: InstrumentId
@@ -49,8 +49,8 @@ class SMACrossover(Strategy):
         )
 
         # Track previous SMA values for crossover detection
-        self._prev_fast_sma = None
-        self._prev_slow_sma = None
+        self._prev_fast_sma: float | None = None
+        self._prev_slow_sma: float | None = None
 
         # Current position tracking
         self.position: Position | None = None
@@ -112,13 +112,15 @@ class SMACrossover(Strategy):
         slow_value : float
             Current slow SMA value.
         """
-        # Detect bullish crossover (fast SMA crosses above slow SMA)
-        if self._prev_fast_sma <= self._prev_slow_sma and fast_value > slow_value:
-            self._generate_buy_signal()
+        # Only check for crossovers if we have previous values
+        if self._prev_fast_sma is not None and self._prev_slow_sma is not None:
+            # Detect bullish crossover (fast SMA crosses above slow SMA)
+            if self._prev_fast_sma <= self._prev_slow_sma and fast_value > slow_value:
+                self._generate_buy_signal()
 
-        # Detect bearish crossover (fast SMA crosses below slow SMA)
-        elif self._prev_fast_sma >= self._prev_slow_sma and fast_value < slow_value:
-            self._generate_sell_signal()
+            # Detect bearish crossover (fast SMA crosses below slow SMA)
+            elif self._prev_fast_sma >= self._prev_slow_sma and fast_value < slow_value:
+                self._generate_sell_signal()
 
     def _generate_buy_signal(self) -> None:
         """Generate a buy signal."""

@@ -1,6 +1,6 @@
 """Tests for data service."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import pandas as pd
@@ -300,13 +300,18 @@ class TestDataService:
     @pytest.mark.asyncio
     async def test_validate_data_availability_start_too_early(self):
         """Test validate_data_availability when start date is too early."""
+        from datetime import timezone
+
         service = DataService()
 
-        mock_range = {"start": datetime(2024, 1, 15), "end": datetime(2024, 1, 31)}
+        mock_range = {
+            "start": datetime(2024, 1, 15, tzinfo=timezone.utc),
+            "end": datetime(2024, 1, 31, tzinfo=timezone.utc),
+        }
 
         with patch.object(service, "get_data_range", return_value=mock_range):
-            start = datetime(2024, 1, 1)  # Too early
-            end = datetime(2024, 1, 31)
+            start = datetime(2024, 1, 1, tzinfo=timezone.utc)  # Too early
+            end = datetime(2024, 1, 31, tzinfo=timezone.utc)
 
             result = await service.validate_data_availability("AAPL", start, end)
 
@@ -318,13 +323,18 @@ class TestDataService:
     @pytest.mark.asyncio
     async def test_validate_data_availability_end_too_late(self):
         """Test validate_data_availability when end date is too late."""
+        from datetime import timezone
+
         service = DataService()
 
-        mock_range = {"start": datetime(2024, 1, 1), "end": datetime(2024, 1, 15)}
+        mock_range = {
+            "start": datetime(2024, 1, 1, tzinfo=timezone.utc),
+            "end": datetime(2024, 1, 15, tzinfo=timezone.utc),
+        }
 
         with patch.object(service, "get_data_range", return_value=mock_range):
-            start = datetime(2024, 1, 1)
-            end = datetime(2024, 1, 31)  # Too late
+            start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+            end = datetime(2024, 1, 31, tzinfo=timezone.utc)  # Too late
 
             result = await service.validate_data_availability("AAPL", start, end)
 
@@ -336,13 +346,18 @@ class TestDataService:
     @pytest.mark.asyncio
     async def test_validate_data_availability_valid(self):
         """Test validate_data_availability with valid parameters."""
+        from datetime import timezone
+
         service = DataService()
 
-        mock_range = {"start": datetime(2024, 1, 1), "end": datetime(2024, 1, 31)}
+        mock_range = {
+            "start": datetime(2024, 1, 1, tzinfo=timezone.utc),
+            "end": datetime(2024, 1, 31, tzinfo=timezone.utc),
+        }
 
         with patch.object(service, "get_data_range", return_value=mock_range):
-            start = datetime(2024, 1, 10)
-            end = datetime(2024, 1, 20)
+            start = datetime(2024, 1, 10, tzinfo=timezone.utc)
+            end = datetime(2024, 1, 20, tzinfo=timezone.utc)
 
             result = await service.validate_data_availability("AAPL", start, end)
 
@@ -365,3 +380,310 @@ class TestDataService:
             assert result["valid"] is False
             assert "Error validating data availability" in result["reason"]
             assert result["available_symbols"] == []
+
+    @pytest.mark.asyncio
+    async def test_convert_to_nautilus_bars_empty_data(self):
+        """Test convert_to_nautilus_bars with empty data."""
+        service = DataService()
+        from nautilus_trader.model.identifiers import InstrumentId
+
+        instrument_id = InstrumentId.from_str("AAPL.SIM")
+        result = service.convert_to_nautilus_bars([], instrument_id)
+
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_convert_to_nautilus_bars_with_instrument(self):
+        """Test convert_to_nautilus_bars with provided instrument."""
+        service = DataService()
+        from src.utils.mock_data import create_test_instrument
+
+        instrument, instrument_id = create_test_instrument("AAPL")
+
+        data = [
+            {
+                "timestamp": datetime(2024, 1, 1, 9, 30),
+                "open": 100.50,
+                "high": 101.00,
+                "low": 100.25,
+                "close": 100.75,
+                "volume": 10000,
+            }
+        ]
+
+        bars = service.convert_to_nautilus_bars(data, instrument_id, instrument)
+
+        assert isinstance(bars, list)
+        assert len(bars) == 1
+
+        # Verify it's a proper Nautilus Bar object
+        from nautilus_trader.model.data import Bar
+
+        assert isinstance(bars[0], Bar)
+
+    @pytest.mark.asyncio
+    async def test_convert_to_nautilus_bars_without_instrument(self):
+        """Test convert_to_nautilus_bars without provided instrument."""
+        service = DataService()
+        from nautilus_trader.model.identifiers import InstrumentId
+
+        instrument_id = InstrumentId.from_str("AAPL.SIM")
+
+        data = [
+            {
+                "timestamp": datetime(2024, 1, 1, 9, 30),
+                "open": 100.50,
+                "high": 101.00,
+                "low": 100.25,
+                "close": 100.75,
+                "volume": 10000,
+            }
+        ]
+
+        bars = service.convert_to_nautilus_bars(data, instrument_id)
+
+        assert isinstance(bars, list)
+        assert len(bars) == 1
+
+    @pytest.mark.asyncio
+    @patch("src.services.data_service.print")
+    async def test_convert_to_nautilus_bars_import_error(self, mock_print):
+        """Test convert_to_nautilus_bars with import error fallback."""
+        service = DataService()
+        from nautilus_trader.model.identifiers import InstrumentId
+
+        instrument_id = InstrumentId.from_str("AAPL.SIM")
+
+        data = [
+            {
+                "timestamp": datetime(2024, 1, 1, 9, 30),
+                "open": 100.50,
+                "high": 101.00,
+                "low": 100.25,
+                "close": 100.75,
+                "volume": 10000,
+            }
+        ]
+
+        # Mock import error
+        with patch(
+            "src.utils.data_wrangler.MarketDataWrangler",
+            side_effect=ImportError("Module not found"),
+        ):
+            bars = service.convert_to_nautilus_bars(data, instrument_id)
+
+            # Should fall back to original implementation
+            assert isinstance(bars, list)
+            mock_print.assert_called_with(
+                "Failed to import data wrangler: Module not found"
+            )
+
+    @pytest.mark.asyncio
+    @patch("src.services.data_service.print")
+    async def test_convert_to_nautilus_bars_processing_error(self, mock_print):
+        """Test convert_to_nautilus_bars with processing error fallback."""
+        service = DataService()
+        from nautilus_trader.model.identifiers import InstrumentId
+
+        instrument_id = InstrumentId.from_str("AAPL.SIM")
+
+        data = [
+            {
+                "timestamp": datetime(2024, 1, 1, 9, 30),
+                "open": 100.50,
+                "high": 101.00,
+                "low": 100.25,
+                "close": 100.75,
+                "volume": 10000,
+            }
+        ]
+
+        # Mock processing error
+        with patch("src.utils.data_wrangler.MarketDataWrangler") as mock_wrangler_class:
+            mock_wrangler = MagicMock()
+            mock_wrangler.process.side_effect = ValueError("Processing failed")
+            mock_wrangler_class.return_value = mock_wrangler
+
+            bars = service.convert_to_nautilus_bars(data, instrument_id)
+
+            # Should fall back to original implementation
+            assert isinstance(bars, list)
+            mock_print.assert_called_with(
+                "Error converting data to Nautilus bars: Processing failed"
+            )
+
+    @pytest.mark.asyncio
+    @patch("src.services.data_service.print")
+    async def test_convert_to_nautilus_bars_no_bars_created(self, mock_print):
+        """Test convert_to_nautilus_bars when no bars are created."""
+        service = DataService()
+        from nautilus_trader.model.identifiers import InstrumentId
+
+        instrument_id = InstrumentId.from_str("AAPL.SIM")
+
+        data = [
+            {
+                "timestamp": datetime(2024, 1, 1, 9, 30),
+                "open": 100.50,
+                "high": 101.00,
+                "low": 100.25,
+                "close": 100.75,
+                "volume": 10000,
+            }
+        ]
+
+        # Mock wrangler to return empty bars (which raises ValueError, then falls back)
+        with patch("src.utils.data_wrangler.MarketDataWrangler") as mock_wrangler_class:
+            mock_wrangler = MagicMock()
+            mock_wrangler.process.return_value = []
+            mock_wrangler_class.return_value = mock_wrangler
+
+            # Should fall back to original implementation and print error
+            bars = service.convert_to_nautilus_bars(data, instrument_id)
+
+            assert isinstance(bars, list)  # Falls back to original implementation
+            mock_print.assert_called_with(
+                "Error converting data to Nautilus bars: No bars were created from the provided data"
+            )
+
+    @pytest.mark.asyncio
+    async def test_get_adjusted_date_range_no_data(self):
+        """Test get_adjusted_date_range when no data exists."""
+        service = DataService()
+
+        with patch.object(service, "get_data_range", return_value=None):
+            start = datetime(2024, 1, 1)
+            end = datetime(2024, 1, 31)
+
+            result = await service.get_adjusted_date_range("AAPL", start, end)
+
+            assert result is None
+
+    @pytest.mark.asyncio
+    @patch("src.services.data_service.get_session")
+    async def test_get_adjusted_date_range_midnight_dates(self, mock_get_session):
+        """Test get_adjusted_date_range with midnight dates."""
+        service = DataService()
+
+        # Mock data range
+        mock_data_range = {
+            "start": datetime(2024, 1, 1, 9, 30),
+            "end": datetime(2024, 1, 31, 16, 0),
+        }
+
+        # Mock session for specific timestamp queries
+        mock_session = AsyncMock()
+        mock_get_session.return_value.__aenter__.return_value = mock_session
+
+        # Mock first timestamp query result
+        mock_result_first = MagicMock()
+        mock_result_first.fetchone.return_value = MagicMock(
+            first_timestamp=datetime(2024, 1, 1, 9, 30)
+        )
+
+        # Mock last timestamp query result
+        mock_result_last = MagicMock()
+        mock_result_last.fetchone.return_value = MagicMock(
+            last_timestamp=datetime(2024, 1, 31, 16, 0)
+        )
+
+        mock_session.execute.side_effect = [mock_result_first, mock_result_last]
+
+        with patch.object(service, "get_data_range", return_value=mock_data_range):
+            # Test with midnight dates (should be adjusted)
+            start = datetime(2024, 1, 1, 0, 0)  # Midnight
+            end = datetime(2024, 1, 31, 0, 0)  # Midnight
+
+            result = await service.get_adjusted_date_range("AAPL", start, end)
+
+            assert result is not None
+            assert result["start"] == datetime(2024, 1, 1, 9, 30)
+            assert result["end"] == datetime(2024, 1, 31, 16, 0)
+
+    @pytest.mark.asyncio
+    @patch("src.services.data_service.get_session")
+    async def test_get_adjusted_date_range_no_data_on_date(self, mock_get_session):
+        """Test get_adjusted_date_range when no data exists on specific dates."""
+        service = DataService()
+
+        # Mock data range
+        mock_data_range = {
+            "start": datetime(2024, 1, 2, 9, 30, tzinfo=timezone.utc),
+            "end": datetime(2024, 1, 30, 16, 0, tzinfo=timezone.utc),
+        }
+
+        # Mock session for specific timestamp queries
+        mock_session = AsyncMock()
+        mock_get_session.return_value.__aenter__.return_value = mock_session
+
+        # Mock no data on start date
+        mock_result_start = MagicMock()
+        mock_result_start.fetchone.return_value = MagicMock(first_timestamp=None)
+
+        # Mock no data on end date
+        mock_result_end = MagicMock()
+        mock_result_end.fetchone.return_value = MagicMock(last_timestamp=None)
+
+        mock_session.execute.side_effect = [mock_result_start, mock_result_end]
+
+        with patch.object(service, "get_data_range", return_value=mock_data_range):
+            # Test with midnight dates where no data exists on exact dates
+            start = datetime(2024, 1, 1, 0, 0)  # Before data start
+            end = datetime(2024, 1, 31, 0, 0)  # After data end
+
+            result = await service.get_adjusted_date_range("AAPL", start, end)
+
+            assert result is not None
+            assert result["start"] == datetime(
+                2024, 1, 2, 9, 30, tzinfo=timezone.utc
+            )  # Uses overall data start
+            assert result["end"] == datetime(
+                2024, 1, 30, 16, 0, tzinfo=timezone.utc
+            )  # Uses overall data end
+
+    @pytest.mark.asyncio
+    async def test_get_adjusted_date_range_non_midnight_dates(self):
+        """Test get_adjusted_date_range with non-midnight dates."""
+        service = DataService()
+
+        # Mock data range
+        mock_data_range = {
+            "start": datetime(2024, 1, 1, 9, 30),
+            "end": datetime(2024, 1, 31, 16, 0),
+        }
+
+        with patch.object(service, "get_data_range", return_value=mock_data_range):
+            # Test with non-midnight dates (should not be adjusted)
+            start = datetime(2024, 1, 5, 10, 30)
+            end = datetime(2024, 1, 25, 15, 30)
+
+            result = await service.get_adjusted_date_range("AAPL", start, end)
+
+            assert result is not None
+            # Dates should have timezone info added but times remain the same
+            assert result["start"].replace(tzinfo=None) == start
+            assert result["end"].replace(tzinfo=None) == end
+
+    @pytest.mark.asyncio
+    async def test_get_adjusted_date_range_timezone_handling(self):
+        """Test get_adjusted_date_range timezone handling."""
+        service = DataService()
+        from datetime import timezone
+
+        # Mock data range
+        mock_data_range = {
+            "start": datetime(2024, 1, 1, 9, 30, tzinfo=timezone.utc),
+            "end": datetime(2024, 1, 31, 16, 0, tzinfo=timezone.utc),
+        }
+
+        with patch.object(service, "get_data_range", return_value=mock_data_range):
+            # Test with naive datetime (should be converted to UTC)
+            start = datetime(2024, 1, 5, 10, 30)  # Naive datetime
+            end = datetime(2024, 1, 25, 15, 30)  # Naive datetime
+
+            result = await service.get_adjusted_date_range("AAPL", start, end)
+
+            assert result is not None
+            # Should have timezone info added
+            assert result["start"].tzinfo == timezone.utc
+            assert result["end"].tzinfo == timezone.utc
