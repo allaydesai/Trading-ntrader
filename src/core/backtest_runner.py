@@ -284,6 +284,9 @@ class MinimalBacktestRunner:
             market_data, instrument.id, instrument
         )
 
+        if not bars:
+            raise ValueError("No bars were created from the data")
+
         # Add bars to engine
         self.engine.add_data(bars)
 

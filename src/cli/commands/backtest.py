@@ -107,25 +107,40 @@ def run_backtest(
             # Get adjusted date range if needed
             data_service = DataService()
 
-            # First check if symbol exists
-            available_symbols = await data_service.get_available_symbols()
-            if symbol.upper() not in available_symbols:
-                console.print(
-                    f"❌ No data available for symbol {symbol.upper()}", style="red"
-                )
-                if available_symbols:
-                    console.print(
-                        f"   Available symbols: {', '.join(available_symbols[:10])}"
-                    )
-                    if len(available_symbols) > 10:
-                        console.print(f"   ... and {len(available_symbols) - 10} more")
-                else:
+            # Validate data availability first (this handles all validation scenarios)
+            validation = await data_service.validate_data_availability(
+                symbol.upper(), start, end
+            )
+
+            if not validation["valid"]:
+                console.print("❌ Data validation failed", style="red")
+                console.print(f"   {validation['reason']}")
+
+                if (
+                    "available_symbols" in validation
+                    and validation["available_symbols"]
+                ):
+                    symbols = validation["available_symbols"]
+                    console.print(f"   Available symbols: {', '.join(symbols[:10])}")
+                    if len(symbols) > 10:
+                        console.print(f"   ... and {len(symbols) - 10} more")
+                elif (
+                    "available_symbols" in validation
+                    and not validation["available_symbols"]
+                ):
                     console.print(
                         "   No data available in database. Try importing some CSV data first:"
                     )
                     console.print(
                         "   ntrader data import-csv --file data/sample_AAPL.csv --symbol AAPL"
                     )
+
+                if "available_range" in validation:
+                    range_info = validation["available_range"]
+                    console.print(
+                        f"   Available range: {range_info['start']} to {range_info['end']}"
+                    )
+
                 return False
 
             # Get adjusted date range (handles date-only inputs intelligently)
@@ -154,24 +169,6 @@ def run_backtest(
             # Use adjusted dates for validation and backtest
             adjusted_start = adjusted_range["start"]
             adjusted_end = adjusted_range["end"]
-
-            # Validate adjusted dates are within available data
-            validation = await data_service.validate_data_availability(
-                symbol.upper(), adjusted_start, adjusted_end
-            )
-
-            if not validation["valid"]:
-                console.print(
-                    f"❌ Data validation failed: {validation['reason']}", style="red"
-                )
-
-                if "available_range" in validation:
-                    range_info = validation["available_range"]
-                    console.print(
-                        f"   Available range: {range_info['start']} to {range_info['end']}"
-                    )
-
-                return False
 
             # Show data info
             console.print("✅ Data validation passed", style="green")

@@ -2,7 +2,7 @@
 
 import pytest
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from src.services.data_service import DataService
 
 
@@ -51,12 +51,9 @@ class TestDateRangeAdjustment:
 
         mock_session.execute = mock_execute
 
-        # Mock get_session context manager
-        from src.db import session
+        # Use patch to mock get_session
+        with patch("src.services.data_service.get_session") as mock_get_session_func:
 
-        original_get_session = session.get_session
-
-        def mock_get_session():
             class MockContext:
                 async def __aenter__(self):
                     return mock_session
@@ -64,11 +61,8 @@ class TestDateRangeAdjustment:
                 async def __aexit__(self, *args):
                     pass
 
-            return MockContext()
+            mock_get_session_func.return_value = MockContext()
 
-        session.get_session = mock_get_session
-
-        try:
             # Test with midnight times
             start = datetime(2024, 1, 2, 0, 0, 0, tzinfo=timezone.utc)
             end = datetime(2024, 1, 2, 0, 0, 0, tzinfo=timezone.utc)
@@ -80,8 +74,6 @@ class TestDateRangeAdjustment:
                 2024, 1, 2, 9, 30, 0, tzinfo=timezone.utc
             )
             assert result["end"] == datetime(2024, 1, 2, 10, 20, 0, tzinfo=timezone.utc)
-        finally:
-            session.get_session = original_get_session
 
     @pytest.mark.asyncio
     async def test_get_adjusted_date_range_with_specific_times(self):
