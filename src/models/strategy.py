@@ -51,6 +51,75 @@ class SMAParameters(BaseModel):
         return v
 
 
+class MeanReversionParameters(BaseModel):
+    """Parameters specific to mean reversion strategy."""
+
+    lookback_period: int = Field(
+        default=20, ge=5, le=100, description="Lookback period for moving average"
+    )
+    num_std_dev: float = Field(
+        default=2.0,
+        ge=0.5,
+        le=4.0,
+        description="Number of standard deviations for bands",
+    )
+    trade_size: Decimal = Field(
+        default=Decimal("1000000"), gt=0, description="Size of each trade"
+    )
+
+    @field_validator("lookback_period")
+    @classmethod
+    def validate_lookback_period(cls, v: int) -> int:
+        """Validate lookback period is reasonable."""
+        if v <= 0:
+            raise ValueError("Lookback period must be positive")
+        return v
+
+    @field_validator("num_std_dev")
+    @classmethod
+    def validate_std_dev(cls, v: float) -> float:
+        """Validate standard deviation multiplier is reasonable."""
+        if v <= 0:
+            raise ValueError("Standard deviation multiplier must be positive")
+        return v
+
+
+class MomentumParameters(BaseModel):
+    """Parameters specific to momentum strategy."""
+
+    rsi_period: int = Field(
+        default=14, ge=5, le=50, description="RSI calculation period"
+    )
+    oversold_threshold: float = Field(
+        default=30.0, ge=10.0, le=40.0, description="RSI oversold threshold"
+    )
+    overbought_threshold: float = Field(
+        default=70.0, ge=60.0, le=90.0, description="RSI overbought threshold"
+    )
+    trade_size: Decimal = Field(
+        default=Decimal("1000000"), gt=0, description="Size of each trade"
+    )
+
+    @field_validator("oversold_threshold", "overbought_threshold")
+    @classmethod
+    def validate_thresholds(cls, v: float) -> float:
+        """Validate RSI thresholds are in valid range."""
+        if not (0 <= v <= 100):
+            raise ValueError("RSI thresholds must be between 0 and 100")
+        return v
+
+    @field_validator("overbought_threshold")
+    @classmethod
+    def validate_threshold_relationship(cls, v: float, info) -> float:
+        """Validate overbought threshold is greater than oversold threshold."""
+        oversold = info.data.get("oversold_threshold")
+        if oversold is not None and v <= oversold:
+            raise ValueError(
+                "Overbought threshold must be greater than oversold threshold"
+            )
+        return v
+
+
 class TradingStrategy(BaseModel):
     """Trading strategy entity with configuration and metadata."""
 
@@ -84,6 +153,20 @@ class TradingStrategy(BaseModel):
                 SMAParameters.model_validate(v)
             except Exception as e:
                 raise ValueError(f"Invalid SMA parameters: {e}")
+
+        elif strategy_type == StrategyType.MEAN_REVERSION:
+            # Validate Mean Reversion parameters
+            try:
+                MeanReversionParameters.model_validate(v)
+            except Exception as e:
+                raise ValueError(f"Invalid Mean Reversion parameters: {e}")
+
+        elif strategy_type == StrategyType.MOMENTUM:
+            # Validate Momentum parameters
+            try:
+                MomentumParameters.model_validate(v)
+            except Exception as e:
+                raise ValueError(f"Invalid Momentum parameters: {e}")
 
         return v
 

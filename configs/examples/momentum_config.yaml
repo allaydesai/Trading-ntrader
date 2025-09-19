@@ -1,0 +1,9 @@
+strategy_path: "src.core.strategies.momentum:MomentumStrategy"
+config_path: "src.core.strategies.momentum:MomentumConfig"
+config:
+  instrument_id: "AAPL.NASDAQ"
+  bar_type: "AAPL.NASDAQ-1-MINUTE-LAST-INTERNAL"
+  rsi_period: 14
+  oversold_threshold: 30.0
+  overbought_threshold: 70.0
+  trade_size: 1000000

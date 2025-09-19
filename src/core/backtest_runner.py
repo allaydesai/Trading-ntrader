@@ -13,7 +13,9 @@ from nautilus_trader.model.identifiers import TraderId, Venue
 from nautilus_trader.model.objects import Money
 
 from src.core.strategies.sma_crossover import SMACrossover, SMAConfig
+from src.core.strategy_factory import StrategyFactory
 from src.utils.mock_data import create_test_instrument, generate_mock_bars
+from src.utils.config_loader import ConfigLoader, StrategyConfigWrapper
 from src.services.data_service import DataService
 from src.config import get_settings
 
@@ -403,6 +405,122 @@ class MinimalBacktestRunner:
             "positions": len(self.engine.cache.positions_closed()),
             "orders": len(self.engine.cache.orders()),
         }
+
+    def run_from_config_file(self, config_file_path: str) -> BacktestResult:
+        """
+        Run backtest from YAML configuration file.
+
+        Args:
+            config_file_path: Path to YAML configuration file
+
+        Returns:
+            BacktestResult: Results of the backtest
+
+        Raises:
+            FileNotFoundError: If config file doesn't exist
+            ValueError: If configuration is invalid
+        """
+        # Load configuration from file
+        config_obj = ConfigLoader.load_from_file(config_file_path)
+        return self.run_from_config_object(config_obj)
+
+    def run_from_config_object(
+        self, config_obj: StrategyConfigWrapper
+    ) -> BacktestResult:
+        """
+        Run backtest from loaded configuration object.
+
+        Args:
+            config_obj: Loaded strategy configuration wrapper
+
+        Returns:
+            BacktestResult: Results of the backtest
+
+        Raises:
+            ValueError: If strategy cannot be created or configuration is invalid
+        """
+        # Create strategy class from config
+        strategy_class = StrategyFactory.create_strategy_class(config_obj.strategy_path)
+
+        # Create test instrument
+        instrument, instrument_id = create_test_instrument()
+
+        # Configure backtest engine
+        config = BacktestEngineConfig(
+            trader_id=TraderId("BACKTESTER-001"),
+        )
+
+        # Initialize engine
+        self.engine = BacktestEngine(config=config)
+
+        # Create fill model for realistic execution simulation
+        fill_model = FillModel(
+            prob_fill_on_limit=1.0,  # Always fill limit orders when price touches
+            prob_slippage=0.0,  # No slippage for initial testing
+        )
+
+        # Add venue
+        venue = Venue("SIM")
+        self.engine.add_venue(
+            venue=venue,
+            oms_type=OmsType.HEDGING,
+            account_type=AccountType.MARGIN,
+            starting_balances=[Money(self.settings.default_balance, USD)],
+            fill_model=fill_model,
+        )
+
+        # Add instrument
+        self.engine.add_instrument(instrument)
+
+        # Generate mock data
+        # Must match the bar type created in generate_mock_bars
+        bar_type_str = f"{instrument_id}-15-MINUTE-MID-EXTERNAL"
+        # Create bar type for strategy configuration
+        BarType.from_str(bar_type_str)  # Validate format
+        bars = generate_mock_bars(instrument_id, num_bars=self.settings.mock_data_bars)
+
+        # Add bars to engine
+        self.engine.add_data(bars)
+
+        # Use the StrategyFactory to create the strategy with proper config
+        # Create config parameters dictionary with mock data values
+        config_params = {
+            "instrument_id": instrument_id,
+            "bar_type": bar_type_str,
+        }
+
+        # Copy specific strategy parameters from the loaded config
+        if hasattr(config_obj.config, 'fast_period'):
+            config_params['fast_period'] = config_obj.config.fast_period
+        if hasattr(config_obj.config, 'slow_period'):
+            config_params['slow_period'] = config_obj.config.slow_period
+        if hasattr(config_obj.config, 'lookback_period'):
+            config_params['lookback_period'] = config_obj.config.lookback_period
+        if hasattr(config_obj.config, 'num_std_dev'):
+            config_params['num_std_dev'] = config_obj.config.num_std_dev
+        if hasattr(config_obj.config, 'rsi_period'):
+            config_params['rsi_period'] = config_obj.config.rsi_period
+        if hasattr(config_obj.config, 'oversold_threshold'):
+            config_params['oversold_threshold'] = config_obj.config.oversold_threshold
+        if hasattr(config_obj.config, 'overbought_threshold'):
+            config_params['overbought_threshold'] = config_obj.config.overbought_threshold
+        if hasattr(config_obj.config, 'trade_size'):
+            config_params['trade_size'] = config_obj.config.trade_size
+
+        # Create strategy using factory method
+        strategy = StrategyFactory.create_strategy_from_config(
+            strategy_path=config_obj.strategy_path,
+            config_path=config_obj.config_path,
+            config_params=config_params
+        )
+        self.engine.add_strategy(strategy=strategy)
+
+        # Run the backtest
+        self.engine.run()
+
+        # Extract and return results
+        self._results = self._extract_results()
+        return self._results
 
     def reset(self) -> None:
         """Reset the engine for a new backtest."""
