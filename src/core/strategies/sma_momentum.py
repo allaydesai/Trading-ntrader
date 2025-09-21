@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import deque
 from decimal import Decimal
+from typing import Optional
 
 import pandas as pd
 from nautilus_trader.config import StrategyConfig
@@ -12,7 +13,7 @@ from nautilus_trader.model.enums import OrderSide
 from nautilus_trader.trading.strategy import Strategy
 
 
-class SMAMomentumConfig(StrategyConfig):
+class SMAMomentumConfig(StrategyConfig):  # type: ignore[misc]
     """Configuration for SMA Momentum strategy."""
 
     # Required
@@ -44,12 +45,12 @@ class SMAMomentum(Strategy):
         self.instrument_id = self.config.instrument_id
         self.bar_type = self.config.bar_type
 
-        self._fast = deque(maxlen=self.config.fast_period)
-        self._slow = deque(maxlen=self.config.slow_period)
+        self._fast: deque[float] = deque(maxlen=self.config.fast_period)
+        self._slow: deque[float] = deque(maxlen=self.config.slow_period)
         self._fast_sum = 0.0
         self._slow_sum = 0.0
-        self._prev_fast = None
-        self._prev_slow = None
+        self._prev_fast: Optional[float] = None
+        self._prev_slow: Optional[float] = None
 
     def on_start(self) -> None:
         """Actions to be performed on strategy start."""

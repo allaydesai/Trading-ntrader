@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import deque
 from decimal import Decimal
+from typing import Optional
 
 import pandas as pd
 from nautilus_trader.config import StrategyConfig
@@ -12,7 +13,7 @@ from nautilus_trader.model.enums import OrderSide
 from nautilus_trader.trading.strategy import Strategy
 
 
-class RSIMeanRevConfig(StrategyConfig):
+class RSIMeanRevConfig(StrategyConfig):  # type: ignore[misc]
     """Configuration for RSI Mean Reversion strategy."""
 
     # Required
@@ -45,14 +46,14 @@ class RSIMeanRev(Strategy):
         self.bar_type = self.config.bar_type
 
         # Internal state
-        self._closes = deque(
+        self._closes: deque[float] = deque(
             maxlen=max(self.config.sma_trend_period, self.config.rsi_period) + 5
         )
         self._cooldown_left = 0
 
         # Wilder RSI incremental state
         self._rsi_ready = False
-        self._prev_close = None
+        self._prev_close: Optional[float] = None
         self._avg_gain = 0.0
         self._avg_loss = 0.0
 

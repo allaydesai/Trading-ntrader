@@ -59,9 +59,9 @@ class TestMomentumStrategy:
             reason="Momentum strategy not implemented yet",
         )
 
-        from src.core.strategies.momentum import MomentumStrategy, MomentumConfig
+        from src.core.strategies.sma_momentum import SMAMomentum, SMAMomentumConfig
 
-        config = MomentumConfig(
+        config = SMAMomentumConfig(
             instrument_id=InstrumentId.from_str("AAPL.NASDAQ"),
             bar_type="AAPL.NASDAQ-1-MINUTE-LAST-INTERNAL",
             rsi_period=14,
@@ -70,7 +70,7 @@ class TestMomentumStrategy:
             trade_size=Decimal("1000000"),
         )
 
-        strategy = MomentumStrategy(config)
+        strategy = SMAMomentum(config)
         assert strategy.config.rsi_period == 14
         assert strategy.config.oversold_threshold == 30.0
         assert strategy.config.overbought_threshold == 70.0
@@ -83,9 +83,9 @@ class TestMomentumStrategy:
             reason="Momentum strategy not implemented yet",
         )
 
-        from src.core.strategies.momentum import MomentumStrategy, MomentumConfig
+        from src.core.strategies.sma_momentum import SMAMomentum, SMAMomentumConfig
 
-        config = MomentumConfig(
+        config = SMAMomentumConfig(
             instrument_id=InstrumentId.from_str("AAPL.NASDAQ"),
             bar_type="AAPL.NASDAQ-1-MINUTE-LAST-INTERNAL",
             rsi_period=10,
@@ -94,7 +94,7 @@ class TestMomentumStrategy:
             trade_size=Decimal("500000"),
         )
 
-        strategy = MomentumStrategy(config)
+        strategy = SMAMomentum(config)
 
         # Should initialize with RSI indicator
         assert hasattr(strategy, "rsi")
@@ -112,13 +112,13 @@ class TestMomentumStrategy:
             reason="Momentum strategy not implemented yet",
         )
 
-        from src.core.strategies.momentum import MomentumStrategy, MomentumConfig
+        from src.core.strategies.sma_momentum import SMAMomentum, SMAMomentumConfig
         from src.utils.mock_data import generate_mock_bars, create_test_instrument
 
         # Create test instrument
         instrument, instrument_id = create_test_instrument("EUR/USD")
 
-        config = MomentumConfig(
+        config = SMAMomentumConfig(
             instrument_id=instrument_id,
             bar_type=f"{instrument_id}-15-MINUTE-MID-EXTERNAL",
             rsi_period=10,  # Shorter period for testing
@@ -127,7 +127,7 @@ class TestMomentumStrategy:
             trade_size=Decimal("1000000"),
         )
 
-        strategy = MomentumStrategy(config)
+        strategy = SMAMomentum(config)
 
         # Generate mock bars (don't call on_start as it requires registration)
         mock_bars = generate_mock_bars(instrument_id, num_bars=20)
@@ -154,13 +154,13 @@ class TestMomentumStrategy:
             reason="Momentum strategy not implemented yet",
         )
 
-        from src.core.strategies.momentum import MomentumStrategy, MomentumConfig
+        from src.core.strategies.sma_momentum import SMAMomentum, SMAMomentumConfig
         from src.utils.mock_data import create_test_instrument
 
         # Create test instrument
         instrument, instrument_id = create_test_instrument("EUR/USD")
 
-        config = MomentumConfig(
+        config = SMAMomentumConfig(
             instrument_id=instrument_id,
             bar_type=f"{instrument_id}-15-MINUTE-MID-EXTERNAL",
             rsi_period=5,  # Short period for testing
@@ -169,7 +169,7 @@ class TestMomentumStrategy:
             trade_size=Decimal("1000000"),
         )
 
-        strategy = MomentumStrategy(config)
+        strategy = SMAMomentum(config)
 
         # Track signal generation without actually creating orders
         buy_signals = []
@@ -234,13 +234,13 @@ class TestMomentumStrategy:
             reason="Momentum strategy not implemented yet",
         )
 
-        from src.core.strategies.momentum import MomentumStrategy, MomentumConfig
+        from src.core.strategies.sma_momentum import SMAMomentum, SMAMomentumConfig
         from src.utils.mock_data import create_test_instrument
 
         # Create test instrument
         instrument, instrument_id = create_test_instrument("EUR/USD")
 
-        config = MomentumConfig(
+        config = SMAMomentumConfig(
             instrument_id=instrument_id,
             bar_type=f"{instrument_id}-15-MINUTE-MID-EXTERNAL",
             rsi_period=14,
@@ -249,7 +249,7 @@ class TestMomentumStrategy:
             trade_size=Decimal("1000000"),
         )
 
-        strategy = MomentumStrategy(config)
+        strategy = SMAMomentum(config)
 
         # Mock signal generation to focus on RSI calculation
         strategy._generate_buy_signal = lambda: None

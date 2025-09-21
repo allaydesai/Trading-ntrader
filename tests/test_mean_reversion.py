@@ -45,12 +45,12 @@ class TestMeanReversionStrategy:
             reason="Mean reversion strategy not implemented yet",
         )
 
-        from src.core.strategies.mean_reversion import (
-            MeanReversionStrategy,
-            MeanReversionConfig,
+        from src.core.strategies.rsi_mean_reversion import (
+            RSIMeanRev,
+            RSIMeanRevConfig,
         )
 
-        config = MeanReversionConfig(
+        config = RSIMeanRevConfig(
             instrument_id=InstrumentId.from_str("AAPL.NASDAQ"),
             bar_type="AAPL.NASDAQ-1-MINUTE-LAST-INTERNAL",
             lookback_period=20,
@@ -58,7 +58,7 @@ class TestMeanReversionStrategy:
             trade_size=Decimal("1000000"),
         )
 
-        strategy = MeanReversionStrategy(config)
+        strategy = RSIMeanRev(config)
         assert strategy.config.lookback_period == 20
         assert strategy.config.num_std_dev == 2.0
         assert strategy.config.trade_size == Decimal("1000000")
@@ -70,12 +70,12 @@ class TestMeanReversionStrategy:
             reason="Mean reversion strategy not implemented yet",
         )
 
-        from src.core.strategies.mean_reversion import (
-            MeanReversionStrategy,
-            MeanReversionConfig,
+        from src.core.strategies.rsi_mean_reversion import (
+            RSIMeanRev,
+            RSIMeanRevConfig,
         )
 
-        config = MeanReversionConfig(
+        config = RSIMeanRevConfig(
             instrument_id=InstrumentId.from_str("AAPL.NASDAQ"),
             bar_type="AAPL.NASDAQ-1-MINUTE-LAST-INTERNAL",
             lookback_period=10,
@@ -83,7 +83,7 @@ class TestMeanReversionStrategy:
             trade_size=Decimal("500000"),
         )
 
-        strategy = MeanReversionStrategy(config)
+        strategy = RSIMeanRev(config)
 
         # Should initialize with SMA indicator
         assert hasattr(strategy, "sma")
@@ -101,16 +101,16 @@ class TestMeanReversionStrategy:
             reason="Mean reversion strategy not implemented yet",
         )
 
-        from src.core.strategies.mean_reversion import (
-            MeanReversionStrategy,
-            MeanReversionConfig,
+        from src.core.strategies.rsi_mean_reversion import (
+            RSIMeanRev,
+            RSIMeanRevConfig,
         )
         from src.utils.mock_data import generate_mock_bars, create_test_instrument
 
         # Create test instrument
         instrument, instrument_id = create_test_instrument("EUR/USD")
 
-        config = MeanReversionConfig(
+        config = RSIMeanRevConfig(
             instrument_id=instrument_id,
             bar_type=f"{instrument_id}-15-MINUTE-MID-EXTERNAL",
             lookback_period=10,  # Shorter period for testing
@@ -118,7 +118,7 @@ class TestMeanReversionStrategy:
             trade_size=Decimal("1000000"),
         )
 
-        strategy = MeanReversionStrategy(config)
+        strategy = RSIMeanRev(config)
 
         # Generate mock bars (don't call on_start as it requires registration)
         mock_bars = generate_mock_bars(instrument_id, num_bars=15)
@@ -147,16 +147,16 @@ class TestMeanReversionStrategy:
             reason="Mean reversion strategy not implemented yet",
         )
 
-        from src.core.strategies.mean_reversion import (
-            MeanReversionStrategy,
-            MeanReversionConfig,
+        from src.core.strategies.rsi_mean_reversion import (
+            RSIMeanRev,
+            RSIMeanRevConfig,
         )
         from src.utils.mock_data import create_test_instrument
 
         # Create test instrument
         instrument, instrument_id = create_test_instrument("EUR/USD")
 
-        config = MeanReversionConfig(
+        config = RSIMeanRevConfig(
             instrument_id=instrument_id,
             bar_type=f"{instrument_id}-15-MINUTE-MID-EXTERNAL",
             lookback_period=5,  # Short period for testing
@@ -164,7 +164,7 @@ class TestMeanReversionStrategy:
             trade_size=Decimal("1000000"),
         )
 
-        strategy = MeanReversionStrategy(config)
+        strategy = RSIMeanRev(config)
 
         # Track signal generation without actually creating orders
         buy_signals = []

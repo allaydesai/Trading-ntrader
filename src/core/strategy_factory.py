@@ -238,7 +238,7 @@ class StrategyFactory:
 
         try:
             # Validate parameters
-            param_class.model_validate(config_params)
+            param_class(**config_params)
             return True
         except ValidationError as e:
             # Re-raise the original ValidationError with additional context
