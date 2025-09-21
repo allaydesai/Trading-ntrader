@@ -7,6 +7,7 @@ from src.config import get_settings
 from src.cli.commands.run import run_simple
 from src.cli.commands.data import data
 from src.cli.commands.backtest import backtest
+from src.cli.commands.strategy import strategy
 
 console = Console()
 settings = get_settings()
@@ -28,6 +29,7 @@ def cli(ctx: click.Context) -> None:
 cli.add_command(run_simple)
 cli.add_command(data)
 cli.add_command(backtest)
+cli.add_command(strategy)
 
 
 if __name__ == "__main__":

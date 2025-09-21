@@ -51,11 +51,15 @@ class TestBacktestCommands:
                 "end": datetime(2024, 12, 31),
             },
         }
+        mock_data_service.get_adjusted_date_range.return_value = {
+            "start": datetime(2024, 1, 1),
+            "end": datetime(2024, 1, 31),
+        }
         mock_data_service_class.return_value = mock_data_service
 
         # Mock backtest runner
         mock_runner = MagicMock()
-        mock_runner.run_backtest_with_database = AsyncMock(
+        mock_runner.run_backtest_with_strategy_type = AsyncMock(
             return_value=MockBacktestResult()
         )
         mock_runner_class.return_value = mock_runner
@@ -80,7 +84,7 @@ class TestBacktestCommands:
         )
 
         assert result.exit_code == 0
-        assert "Running SMA backtest for AAPL" in result.output
+        assert "Running SMA_CROSSOVER backtest for AAPL" in result.output
         assert "Data validation passed" in result.output
         assert "Backtest Results" in result.output
         assert "$1500.00" in result.output  # Total return
@@ -88,7 +92,7 @@ class TestBacktestCommands:
 
         # Verify methods were called
         mock_data_service.validate_data_availability.assert_called_once()
-        mock_runner.run_backtest_with_database.assert_called_once()
+        mock_runner.run_backtest_with_strategy_type.assert_called_once()
         mock_runner.dispose.assert_called_once()
 
     @patch("src.cli.commands.backtest.test_connection")
@@ -208,6 +212,10 @@ class TestBacktestCommands:
                 "end": datetime(2024, 12, 31),
             },
         }
+        mock_data_service.get_adjusted_date_range.return_value = {
+            "start": datetime(2024, 1, 1),
+            "end": datetime(2024, 1, 31),
+        }
         mock_data_service_class.return_value = mock_data_service
 
         # Mock losing backtest result
@@ -216,7 +224,9 @@ class TestBacktestCommands:
         mock_result.final_balance = Decimal("9500.00")
 
         mock_runner = MagicMock()
-        mock_runner.run_backtest_with_database = AsyncMock(return_value=mock_result)
+        mock_runner.run_backtest_with_strategy_type = AsyncMock(
+            return_value=mock_result
+        )
         mock_runner_class.return_value = mock_runner
 
         runner = CliRunner()
@@ -246,6 +256,10 @@ class TestBacktestCommands:
                 "end": datetime(2024, 12, 31),
             },
         }
+        mock_data_service.get_adjusted_date_range.return_value = {
+            "start": datetime(2024, 1, 1),
+            "end": datetime(2024, 1, 31),
+        }
         mock_data_service_class.return_value = mock_data_service
 
         # Mock break-even result
@@ -253,7 +267,9 @@ class TestBacktestCommands:
         mock_result.total_return = Decimal("0.00")
 
         mock_runner = MagicMock()
-        mock_runner.run_backtest_with_database = AsyncMock(return_value=mock_result)
+        mock_runner.run_backtest_with_strategy_type = AsyncMock(
+            return_value=mock_result
+        )
         mock_runner_class.return_value = mock_runner
 
         runner = CliRunner()
@@ -283,11 +299,15 @@ class TestBacktestCommands:
                 "end": datetime(2024, 12, 31),
             },
         }
+        mock_data_service.get_adjusted_date_range.return_value = {
+            "start": datetime(2024, 1, 1),
+            "end": datetime(2024, 1, 31),
+        }
         mock_data_service_class.return_value = mock_data_service
 
         # Mock runner to raise ValueError
         mock_runner = MagicMock()
-        mock_runner.run_backtest_with_database = AsyncMock(
+        mock_runner.run_backtest_with_strategy_type = AsyncMock(
             side_effect=ValueError("Invalid parameters")
         )
         mock_runner_class.return_value = mock_runner
@@ -299,7 +319,7 @@ class TestBacktestCommands:
         )
 
         assert result.exit_code == 1
-        assert "Backtest failed: Invalid parameters" in result.output
+        assert "❌ Backtest failed: Invalid parameters" in result.output
 
     @patch("src.cli.commands.backtest.test_connection")
     @patch("src.cli.commands.backtest.DataService")
@@ -319,11 +339,15 @@ class TestBacktestCommands:
                 "end": datetime(2024, 12, 31),
             },
         }
+        mock_data_service.get_adjusted_date_range.return_value = {
+            "start": datetime(2024, 1, 1),
+            "end": datetime(2024, 1, 31),
+        }
         mock_data_service_class.return_value = mock_data_service
 
         # Mock runner to raise unexpected error
         mock_runner = MagicMock()
-        mock_runner.run_backtest_with_database = AsyncMock(
+        mock_runner.run_backtest_with_strategy_type = AsyncMock(
             side_effect=Exception("Database connection lost")
         )
         mock_runner_class.return_value = mock_runner
@@ -335,7 +359,7 @@ class TestBacktestCommands:
         )
 
         assert result.exit_code == 1
-        assert "Unexpected error: Database connection lost" in result.output
+        assert "❌ Unexpected error: Database connection lost" in result.output
 
     def test_run_backtest_required_parameters(self):
         """Test that run command requires symbol, start, and end parameters."""
@@ -380,11 +404,15 @@ class TestBacktestCommands:
                             "end": datetime(2024, 12, 31),
                         },
                     }
+                    mock_data_service.get_adjusted_date_range.return_value = {
+                        "start": datetime(2024, 1, 1),
+                        "end": datetime(2024, 1, 31),
+                    }
                     mock_data_service_class.return_value = mock_data_service
 
                     # Mock runner
                     mock_runner = MagicMock()
-                    mock_runner.run_backtest_with_database = AsyncMock(
+                    mock_runner.run_backtest_with_strategy_type = AsyncMock(
                         return_value=MockBacktestResult()
                     )
                     mock_runner_class.return_value = mock_runner
@@ -405,7 +433,7 @@ class TestBacktestCommands:
                     assert result.exit_code == 0
 
                     # Check that default values were used
-                    call_args = mock_runner.run_backtest_with_database.call_args
+                    call_args = mock_runner.run_backtest_with_strategy_type.call_args
                     assert call_args.kwargs["fast_period"] == 10  # default
                     assert call_args.kwargs["slow_period"] == 20  # default
                     assert call_args.kwargs["trade_size"] == Decimal(

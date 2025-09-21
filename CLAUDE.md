@@ -670,3 +670,4 @@ rg --files -g "*.py"
 *Generated from Python Backend Development Constitution v1.0.1*
 - Always use context7 mcp for library documentation which contains examples on how best to use the library.
 - run formatting and linting check before every commit.
+- when testing the application follow instructions from README. keep it upto date if any of the instructions change, validate before making changes.

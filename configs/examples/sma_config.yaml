@@ -1,0 +1,8 @@
+strategy_path: "src.core.strategies.sma_crossover:SMACrossover"
+config_path: "src.core.strategies.sma_crossover:SMAConfig"
+config:
+  instrument_id: "AAPL.NASDAQ"
+  bar_type: "AAPL.NASDAQ-1-MINUTE-LAST-INTERNAL"
+  fast_period: 10
+  slow_period: 20
+  trade_size: 1000000

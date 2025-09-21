@@ -13,7 +13,9 @@ from nautilus_trader.model.identifiers import TraderId, Venue
 from nautilus_trader.model.objects import Money
 
 from src.core.strategies.sma_crossover import SMACrossover, SMAConfig
+from src.core.strategy_factory import StrategyFactory
 from src.utils.mock_data import create_test_instrument, generate_mock_bars
+from src.utils.config_loader import ConfigLoader, StrategyConfigWrapper
 from src.services.data_service import DataService
 from src.config import get_settings
 
@@ -120,8 +122,9 @@ class MinimalBacktestRunner:
 
         # Create fill model for realistic execution simulation
         fill_model = FillModel(
-            prob_fill_on_limit=1.0,  # Always fill limit orders when price touches
-            prob_slippage=0.0,  # No slippage for initial testing
+            prob_fill_on_limit=0.95,  # 95% fill probability on limit orders
+            prob_fill_on_stop=0.95,  # 95% fill probability on stop orders
+            prob_slippage=0.01,  # 1% slippage probability
         )
 
         # Add venue
@@ -150,7 +153,7 @@ class MinimalBacktestRunner:
         # Configure strategy
         strategy_config = SMAConfig(
             instrument_id=instrument_id,
-            bar_type=bar_type_str,
+            bar_type=BarType.from_str(bar_type_str),
             fast_period=fast_period,
             slow_period=slow_period,
             trade_size=trade_size,
@@ -261,8 +264,9 @@ class MinimalBacktestRunner:
 
         # Create fill model for realistic execution simulation
         fill_model = FillModel(
-            prob_fill_on_limit=1.0,
-            prob_slippage=0.1,  # Add some slippage for realism
+            prob_fill_on_limit=0.95,  # 95% fill probability on limit orders
+            prob_fill_on_stop=0.95,  # 95% fill probability on stop orders
+            prob_slippage=0.01,  # 1% slippage probability
         )
 
         # Add venue
@@ -298,7 +302,7 @@ class MinimalBacktestRunner:
         # Configure strategy
         strategy_config = SMAConfig(
             instrument_id=instrument.id,
-            bar_type=bar_type_str,
+            bar_type=BarType.from_str(bar_type_str),
             fast_period=fast_period,
             slow_period=slow_period,
             trade_size=trade_size,
@@ -404,11 +408,325 @@ class MinimalBacktestRunner:
             "orders": len(self.engine.cache.orders()),
         }
 
+    def run_from_config_file(self, config_file_path: str) -> BacktestResult:
+        """
+        Run backtest from YAML configuration file.
+
+        Args:
+            config_file_path: Path to YAML configuration file
+
+        Returns:
+            BacktestResult: Results of the backtest
+
+        Raises:
+            FileNotFoundError: If config file doesn't exist
+            ValueError: If configuration is invalid
+        """
+        # Load configuration from file
+        config_obj = ConfigLoader.load_from_file(config_file_path)
+        return self.run_from_config_object(config_obj)
+
+    def run_from_config_object(
+        self, config_obj: StrategyConfigWrapper
+    ) -> BacktestResult:
+        """
+        Run backtest from loaded configuration object.
+
+        Args:
+            config_obj: Loaded strategy configuration wrapper
+
+        Returns:
+            BacktestResult: Results of the backtest
+
+        Raises:
+            ValueError: If strategy cannot be created or configuration is invalid
+        """
+        # Create test instrument
+        instrument, instrument_id = create_test_instrument()
+
+        # Configure backtest engine
+        config = BacktestEngineConfig(
+            trader_id=TraderId("BACKTESTER-001"),
+        )
+
+        # Initialize engine
+        self.engine = BacktestEngine(config=config)
+
+        # Create fill model for realistic execution simulation
+        fill_model = FillModel(
+            prob_fill_on_limit=0.95,  # 95% fill probability on limit orders
+            prob_fill_on_stop=0.95,  # 95% fill probability on stop orders
+            prob_slippage=0.01,  # 1% slippage probability
+        )
+
+        # Add venue
+        venue = Venue("SIM")
+        self.engine.add_venue(
+            venue=venue,
+            oms_type=OmsType.HEDGING,
+            account_type=AccountType.MARGIN,
+            starting_balances=[Money(self.settings.default_balance, USD)],
+            fill_model=fill_model,
+        )
+
+        # Add instrument
+        self.engine.add_instrument(instrument)
+
+        # Generate mock data
+        # Must match the bar type created in generate_mock_bars
+        bar_type_str = f"{instrument_id}-15-MINUTE-MID-EXTERNAL"
+        # Create bar type for strategy configuration
+        BarType.from_str(bar_type_str)  # Validate format
+        bars = generate_mock_bars(instrument_id, num_bars=self.settings.mock_data_bars)
+
+        # Add bars to engine
+        self.engine.add_data(bars)
+
+        # Use the StrategyFactory to create the strategy with proper config
+        # Create config parameters dictionary with mock data values
+        config_params = {
+            "instrument_id": instrument_id,
+            "bar_type": BarType.from_str(bar_type_str),
+        }
+
+        # Copy specific strategy parameters from the loaded config
+        if hasattr(config_obj.config, "fast_period"):
+            config_params["fast_period"] = config_obj.config.fast_period
+        if hasattr(config_obj.config, "slow_period"):
+            config_params["slow_period"] = config_obj.config.slow_period
+        if hasattr(config_obj.config, "lookback_period"):
+            config_params["lookback_period"] = config_obj.config.lookback_period
+        if hasattr(config_obj.config, "num_std_dev"):
+            config_params["num_std_dev"] = config_obj.config.num_std_dev
+        if hasattr(config_obj.config, "rsi_period"):
+            config_params["rsi_period"] = config_obj.config.rsi_period
+        if hasattr(config_obj.config, "oversold_threshold"):
+            config_params["oversold_threshold"] = config_obj.config.oversold_threshold
+        if hasattr(config_obj.config, "overbought_threshold"):
+            config_params["overbought_threshold"] = (
+                config_obj.config.overbought_threshold
+            )
+        if hasattr(config_obj.config, "trade_size"):
+            config_params["trade_size"] = config_obj.config.trade_size
+
+        # RSI Mean Reversion specific parameters
+        if hasattr(config_obj.config, "order_id_tag"):
+            config_params["order_id_tag"] = config_obj.config.order_id_tag
+        if hasattr(config_obj.config, "rsi_buy_threshold"):
+            config_params["rsi_buy_threshold"] = config_obj.config.rsi_buy_threshold
+        if hasattr(config_obj.config, "exit_rsi"):
+            config_params["exit_rsi"] = config_obj.config.exit_rsi
+        if hasattr(config_obj.config, "sma_trend_period"):
+            config_params["sma_trend_period"] = config_obj.config.sma_trend_period
+        if hasattr(config_obj.config, "warmup_days"):
+            config_params["warmup_days"] = config_obj.config.warmup_days
+        if hasattr(config_obj.config, "cooldown_bars"):
+            config_params["cooldown_bars"] = config_obj.config.cooldown_bars
+
+        # SMA Momentum specific parameters
+        if hasattr(config_obj.config, "allow_short"):
+            config_params["allow_short"] = config_obj.config.allow_short
+
+        # Create strategy using factory method
+        strategy = StrategyFactory.create_strategy_from_config(
+            strategy_path=config_obj.strategy_path,
+            config_path=config_obj.config_path,
+            config_params=config_params,
+        )
+        self.engine.add_strategy(strategy=strategy)
+
+        # Run the backtest
+        self.engine.run()
+
+        # Extract and return results
+        self._results = self._extract_results()
+        return self._results
+
     def reset(self) -> None:
         """Reset the engine for a new backtest."""
         if self.engine:
             self.engine.reset()
         self._results = None
+
+    async def run_backtest_with_strategy_type(
+        self,
+        strategy_type: str,
+        symbol: str,
+        start: datetime,
+        end: datetime,
+        **strategy_params,
+    ) -> BacktestResult:
+        """
+        Run backtest with specific strategy type using database data.
+
+        Args:
+            strategy_type: Type of strategy ("sma_crossover", "mean_reversion", "momentum", or "sma")
+            symbol: Trading symbol
+            start: Start datetime
+            end: End datetime
+            **strategy_params: Strategy-specific parameters
+
+        Returns:
+            BacktestResult: Results of the backtest
+
+        Raises:
+            ValueError: If strategy type is not supported or data is invalid
+        """
+        from src.models.strategy import StrategyType
+        from src.core.strategy_factory import StrategyLoader
+
+        # Handle "sma" alias for backward compatibility
+        if strategy_type == "sma":
+            strategy_type = "sma_crossover"
+
+        # Validate strategy type
+        try:
+            strategy_enum = StrategyType(strategy_type)
+        except ValueError:
+            raise ValueError(f"Unsupported strategy type: {strategy_type}")
+
+        if self.data_source != "database":
+            raise ValueError("This method requires 'database' data source")
+
+        if not self.data_service:
+            raise ValueError("Data service not initialized")
+
+        # Validate data availability
+        validation = await self.data_service.validate_data_availability(
+            symbol, start, end
+        )
+        if not validation["valid"]:
+            raise ValueError(f"Data validation failed: {validation['reason']}")
+
+        # Fetch data from database
+        market_data = await self.data_service.get_market_data(symbol, start, end)
+
+        if not market_data:
+            raise ValueError(
+                f"No market data found for {symbol} between {start} and {end}"
+            )
+
+        # Create test instrument for the actual symbol with SIM venue
+        if "/" in symbol and len(symbol.split("/")) == 2:
+            # For FX pairs
+            base_instrument, _ = create_test_instrument(symbol)
+            instrument = base_instrument
+        else:
+            # For equity symbols
+            clean_symbol = symbol.replace("2018", "18").replace("_", "")[:7]
+
+            from nautilus_trader.test_kit.providers import TestInstrumentProvider
+
+            try:
+                instrument = TestInstrumentProvider.equity(
+                    symbol=clean_symbol,
+                    venue="SIM",
+                )
+            except Exception:
+                # Fallback
+                base_fx = TestInstrumentProvider.default_fx_ccy("EUR/USD")
+                instrument = base_fx
+
+        # Configure backtest engine
+        config = BacktestEngineConfig(
+            trader_id=TraderId("BACKTESTER-001"),
+        )
+
+        # Initialize engine
+        self.engine = BacktestEngine(config=config)
+
+        # Create fill model for realistic execution simulation
+        fill_model = FillModel(
+            prob_fill_on_limit=0.95,  # 95% fill probability on limit orders
+            prob_fill_on_stop=0.95,  # 95% fill probability on stop orders
+            prob_slippage=0.01,  # 1% slippage probability
+        )
+
+        # Add venue
+        venue = Venue("SIM")
+        self.engine.add_venue(
+            venue=venue,
+            oms_type=OmsType.HEDGING,
+            account_type=AccountType.MARGIN,
+            starting_balances=[Money(self.settings.default_balance, USD)],
+            fill_model=fill_model,
+        )
+
+        # Add instrument
+        self.engine.add_instrument(instrument)
+
+        # Convert database data to Nautilus Bar objects
+        bars = self.data_service.convert_to_nautilus_bars(
+            market_data, instrument.id, instrument
+        )
+
+        if not bars:
+            raise ValueError("No bars were created from the data")
+
+        # Add bars to engine
+        self.engine.add_data(bars)
+
+        # Create bar type string
+        bar_type_str = f"{instrument.id}-1-MINUTE-MID-EXTERNAL"
+
+        # Prepare strategy configuration parameters
+        from nautilus_trader.model.data import BarType
+
+        config_params = {
+            "instrument_id": instrument.id,
+            "bar_type": BarType.from_str(bar_type_str),
+        }
+
+        # Add strategy-specific parameters based on type
+        if strategy_enum == StrategyType.SMA_CROSSOVER:
+            config_params.update(
+                {
+                    "fast_period": strategy_params.get("fast_period", 10),
+                    "slow_period": strategy_params.get("slow_period", 20),
+                    "trade_size": Decimal(
+                        str(strategy_params.get("trade_size", 1000000))
+                    ),
+                }
+            )
+        elif strategy_enum == StrategyType.MEAN_REVERSION:
+            config_params.update(
+                {
+                    "trade_size": Decimal(
+                        str(strategy_params.get("trade_size", 1000000))
+                    ),
+                    "order_id_tag": strategy_params.get("order_id_tag", "001"),
+                    "rsi_period": strategy_params.get("rsi_period", 2),
+                    "rsi_buy_threshold": strategy_params.get("rsi_buy_threshold", 10.0),
+                    "exit_rsi": strategy_params.get("exit_rsi", 50.0),
+                    "sma_trend_period": strategy_params.get("sma_trend_period", 200),
+                    "warmup_days": strategy_params.get("warmup_days", 400),
+                    "cooldown_bars": strategy_params.get("cooldown_bars", 0),
+                }
+            )
+        elif strategy_enum == StrategyType.MOMENTUM:
+            config_params.update(
+                {
+                    "trade_size": Decimal(
+                        str(strategy_params.get("trade_size", 1000000))
+                    ),
+                    "order_id_tag": strategy_params.get("order_id_tag", "002"),
+                    "fast_period": strategy_params.get("fast_period", 20),
+                    "slow_period": strategy_params.get("slow_period", 50),
+                    "warmup_days": strategy_params.get("warmup_days", 1),
+                    "allow_short": strategy_params.get("allow_short", False),
+                }
+            )
+
+        # Create strategy using StrategyLoader
+        strategy = StrategyLoader.create_strategy(strategy_enum, config_params)
+        self.engine.add_strategy(strategy=strategy)
+
+        # Run the backtest
+        self.engine.run()
+
+        # Extract and return results
+        self._results = self._extract_results()
+        return self._results
 
     def dispose(self) -> None:
         """Dispose of the engine resources."""
