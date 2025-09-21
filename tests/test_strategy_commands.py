@@ -132,7 +132,8 @@ class TestStrategyCommands:
                 == "src.core.strategies.sma_momentum:SMAMomentum"
             )
             assert (
-                config["config_path"] == "src.core.strategies.sma_momentum:SMAMomentumConfig"
+                config["config_path"]
+                == "src.core.strategies.sma_momentum:SMAMomentumConfig"
             )
             assert "fast_period" in config["config"]
             assert "slow_period" in config["config"]

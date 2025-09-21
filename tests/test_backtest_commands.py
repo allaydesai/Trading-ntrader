@@ -224,7 +224,9 @@ class TestBacktestCommands:
         mock_result.final_balance = Decimal("9500.00")
 
         mock_runner = MagicMock()
-        mock_runner.run_backtest_with_strategy_type = AsyncMock(return_value=mock_result)
+        mock_runner.run_backtest_with_strategy_type = AsyncMock(
+            return_value=mock_result
+        )
         mock_runner_class.return_value = mock_runner
 
         runner = CliRunner()
@@ -265,7 +267,9 @@ class TestBacktestCommands:
         mock_result.total_return = Decimal("0.00")
 
         mock_runner = MagicMock()
-        mock_runner.run_backtest_with_strategy_type = AsyncMock(return_value=mock_result)
+        mock_runner.run_backtest_with_strategy_type = AsyncMock(
+            return_value=mock_result
+        )
         mock_runner_class.return_value = mock_runner
 
         runner = CliRunner()

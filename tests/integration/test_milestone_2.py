@@ -210,6 +210,7 @@ async def test_data_service_functionality():
         if attempt < max_retries - 1:
             # Wait before retrying and dispose connections
             import asyncio
+
             await asyncio.sleep(retry_delay)
             await db_session.dispose_all_connections()
     else:

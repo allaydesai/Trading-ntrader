@@ -110,10 +110,13 @@ class TestConfigLoader:
         assert (
             config_obj.strategy_path == "src.core.strategies.sma_momentum:SMAMomentum"
         )
-        assert config_obj.config_path == "src.core.strategies.sma_momentum:SMAMomentumConfig"
+        assert (
+            config_obj.config_path
+            == "src.core.strategies.sma_momentum:SMAMomentumConfig"
+        )
         assert config_obj.config.fast_period == 20
         assert config_obj.config.slow_period == 50
-        assert config_obj.config.allow_short == False
+        assert not config_obj.config.allow_short
 
     @pytest.mark.integration
     @pytest.mark.parametrize(
