@@ -99,14 +99,14 @@ class TestStrategyCommands:
 
             assert (
                 config["strategy_path"]
-                == "src.core.strategies.mean_reversion:MeanReversionStrategy"
+                == "src.core.strategies.rsi_mean_reversion:RSIMeanRev"
             )
             assert (
                 config["config_path"]
-                == "src.core.strategies.mean_reversion:MeanReversionConfig"
+                == "src.core.strategies.rsi_mean_reversion:RSIMeanRevConfig"
             )
-            assert "lookback_period" in config["config"]
-            assert "num_std_dev" in config["config"]
+            assert "rsi_period" in config["config"]
+            assert "rsi_buy_threshold" in config["config"]
 
     @pytest.mark.integration
     def test_strategy_create_command_momentum(self):
@@ -129,14 +129,14 @@ class TestStrategyCommands:
 
             assert (
                 config["strategy_path"]
-                == "src.core.strategies.momentum:MomentumStrategy"
+                == "src.core.strategies.sma_momentum:SMAMomentum"
             )
             assert (
-                config["config_path"] == "src.core.strategies.momentum:MomentumConfig"
+                config["config_path"] == "src.core.strategies.sma_momentum:SMAMomentumConfig"
             )
-            assert "rsi_period" in config["config"]
-            assert "oversold_threshold" in config["config"]
-            assert "overbought_threshold" in config["config"]
+            assert "fast_period" in config["config"]
+            assert "slow_period" in config["config"]
+            assert "allow_short" in config["config"]
 
     def test_strategy_create_command_invalid_type(self):
         """Test strategy create with invalid strategy type."""

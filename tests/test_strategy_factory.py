@@ -77,39 +77,46 @@ class TestStrategyFactory:
     def test_create_strategy_from_config_mean_reversion(self):
         """Test creating Mean Reversion strategy from configuration."""
         strategy = StrategyFactory.create_strategy_from_config(
-            strategy_path="src.core.strategies.mean_reversion:MeanReversionStrategy",
-            config_path="src.core.strategies.mean_reversion:MeanReversionConfig",
+            strategy_path="src.core.strategies.rsi_mean_reversion:RSIMeanRev",
+            config_path="src.core.strategies.rsi_mean_reversion:RSIMeanRevConfig",
             config_params={
                 "instrument_id": InstrumentId.from_str("EUR/USD.SIM"),
                 "bar_type": "EUR/USD.SIM-15-MINUTE-MID-EXTERNAL",
-                "lookback_period": 20,
-                "num_std_dev": 2.0,
                 "trade_size": Decimal("1000000"),
+                "order_id_tag": "001",
+                "rsi_period": 2,
+                "rsi_buy_threshold": 10.0,
+                "exit_rsi": 50.0,
+                "sma_trend_period": 200,
+                "warmup_days": 400,
+                "cooldown_bars": 0,
             },
         )
 
         assert strategy is not None
         assert isinstance(strategy, Strategy)
-        assert strategy.__class__.__name__ == "MeanReversionStrategy"
+        assert strategy.__class__.__name__ == "RSIMeanRev"
 
     def test_create_strategy_from_config_momentum(self):
         """Test creating Momentum strategy from configuration."""
         strategy = StrategyFactory.create_strategy_from_config(
-            strategy_path="src.core.strategies.momentum:MomentumStrategy",
-            config_path="src.core.strategies.momentum:MomentumConfig",
+            strategy_path="src.core.strategies.sma_momentum:SMAMomentum",
+            config_path="src.core.strategies.sma_momentum:SMAMomentumConfig",
             config_params={
                 "instrument_id": InstrumentId.from_str("EUR/USD.SIM"),
                 "bar_type": "EUR/USD.SIM-15-MINUTE-MID-EXTERNAL",
-                "rsi_period": 14,
-                "oversold_threshold": 30.0,
-                "overbought_threshold": 70.0,
                 "trade_size": Decimal("1000000"),
+                "order_id_tag": "002",
+                "fast_period": 20,
+                "slow_period": 50,
+                "warmup_days": 1,
+                "allow_short": False,
             },
         )
 
         assert strategy is not None
         assert isinstance(strategy, Strategy)
-        assert strategy.__class__.__name__ == "MomentumStrategy"
+        assert strategy.__class__.__name__ == "SMAMomentum"
 
     def test_create_strategy_from_config_invalid_params(self):
         """Test creating strategy with invalid configuration parameters."""
@@ -223,15 +230,20 @@ class TestStrategyLoader:
             {
                 "instrument_id": InstrumentId.from_str("EUR/USD.SIM"),
                 "bar_type": "EUR/USD.SIM-15-MINUTE-MID-EXTERNAL",
-                "lookback_period": 20,
-                "num_std_dev": 2.0,
                 "trade_size": Decimal("1000000"),
+                "order_id_tag": "001",
+                "rsi_period": 2,
+                "rsi_buy_threshold": 10.0,
+                "exit_rsi": 50.0,
+                "sma_trend_period": 200,
+                "warmup_days": 400,
+                "cooldown_bars": 0,
             },
         )
 
         assert strategy is not None
         assert isinstance(strategy, Strategy)
-        assert strategy.__class__.__name__ == "MeanReversionStrategy"
+        assert strategy.__class__.__name__ == "RSIMeanRev"
 
     def test_create_strategy_momentum(self):
         """Test creating Momentum strategy using loader."""
@@ -240,16 +252,18 @@ class TestStrategyLoader:
             {
                 "instrument_id": InstrumentId.from_str("EUR/USD.SIM"),
                 "bar_type": "EUR/USD.SIM-15-MINUTE-MID-EXTERNAL",
-                "rsi_period": 14,
-                "oversold_threshold": 30.0,
-                "overbought_threshold": 70.0,
                 "trade_size": Decimal("1000000"),
+                "order_id_tag": "002",
+                "fast_period": 20,
+                "slow_period": 50,
+                "warmup_days": 1,
+                "allow_short": False,
             },
         )
 
         assert strategy is not None
         assert isinstance(strategy, Strategy)
-        assert strategy.__class__.__name__ == "MomentumStrategy"
+        assert strategy.__class__.__name__ == "SMAMomentum"
 
     def test_create_strategy_unsupported_type(self):
         """Test creating strategy with unsupported type."""

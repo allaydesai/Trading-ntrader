@@ -195,9 +195,26 @@ async def test_data_service_functionality():
     """
     INTEGRATION: Test data service capabilities in isolation.
     """
-    # Skip if database not accessible
-    if not await db_session.test_connection():
-        pytest.skip("Database not accessible")
+    # Ensure clean state by disposing any existing connections first
+    await db_session.dispose_all_connections()
+
+    # Skip if database not accessible with retry logic for resilience
+    max_retries = 3
+    retry_delay = 0.5
+
+    for attempt in range(max_retries):
+        is_connected = await db_session.test_connection()
+        if is_connected:
+            break
+
+        if attempt < max_retries - 1:
+            # Wait before retrying and dispose connections
+            import asyncio
+            await asyncio.sleep(retry_delay)
+            await db_session.dispose_all_connections()
+    else:
+        # All retries failed
+        pytest.skip("Database not accessible after retries")
 
     from src.services.data_service import DataService
 
@@ -217,6 +234,9 @@ async def test_data_service_functionality():
     )
     assert validation["valid"] is False
     assert "reason" in validation
+
+    # Clean up connections after successful test
+    await db_session.dispose_all_connections()
 
 
 @pytest.mark.integration

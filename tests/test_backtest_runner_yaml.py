@@ -35,14 +35,19 @@ def yaml_config_file(tmp_path):
 def mean_reversion_yaml_config_file(tmp_path):
     """Create a temporary Mean Reversion YAML config file for testing."""
     config_content = """
-    strategy_path: "src.core.strategies.mean_reversion:MeanReversionStrategy"
-    config_path: "src.core.strategies.mean_reversion:MeanReversionConfig"
+    strategy_path: "src.core.strategies.rsi_mean_reversion:RSIMeanRev"
+    config_path: "src.core.strategies.rsi_mean_reversion:RSIMeanRevConfig"
     config:
       instrument_id: "AAPL.NASDAQ"
       bar_type: "AAPL.NASDAQ-1-MINUTE-LAST-INTERNAL"
-      lookback_period: 20
-      num_std_dev: 2.0
       trade_size: 1000000
+      order_id_tag: "001"
+      rsi_period: 2
+      rsi_buy_threshold: 10.0
+      exit_rsi: 50.0
+      sma_trend_period: 200
+      warmup_days: 400
+      cooldown_bars: 0
     """
 
     config_file = tmp_path / "mr_config.yaml"
@@ -132,29 +137,36 @@ class TestBacktestRunnerYAML:
             pytest.param(
                 "mean_reversion",
                 """
-            strategy_path: "src.core.strategies.mean_reversion:MeanReversionStrategy"
-            config_path: "src.core.strategies.mean_reversion:MeanReversionConfig"
+            strategy_path: "src.core.strategies.rsi_mean_reversion:RSIMeanRev"
+            config_path: "src.core.strategies.rsi_mean_reversion:RSIMeanRevConfig"
             config:
               instrument_id: "AAPL.NASDAQ"
               bar_type: "AAPL.NASDAQ-1-MINUTE-LAST-INTERNAL"
-              lookback_period: 20
-              num_std_dev: 2.0
               trade_size: 1000000
+              order_id_tag: "001"
+              rsi_period: 2
+              rsi_buy_threshold: 10.0
+              exit_rsi: 50.0
+              sma_trend_period: 200
+              warmup_days: 400
+              cooldown_bars: 0
             """,
                 id="mean_reversion_strategy",
             ),
             pytest.param(
                 "momentum",
                 """
-            strategy_path: "src.core.strategies.momentum:MomentumStrategy"
-            config_path: "src.core.strategies.momentum:MomentumConfig"
+            strategy_path: "src.core.strategies.sma_momentum:SMAMomentum"
+            config_path: "src.core.strategies.sma_momentum:SMAMomentumConfig"
             config:
               instrument_id: "AAPL.NASDAQ"
               bar_type: "AAPL.NASDAQ-1-MINUTE-LAST-INTERNAL"
-              rsi_period: 14
-              oversold_threshold: 30.0
-              overbought_threshold: 70.0
               trade_size: 1000000
+              order_id_tag: "002"
+              fast_period: 20
+              slow_period: 50
+              warmup_days: 1
+              allow_short: false
             """,
                 id="momentum_strategy",
             ),

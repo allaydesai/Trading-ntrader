@@ -153,7 +153,7 @@ class MinimalBacktestRunner:
         # Configure strategy
         strategy_config = SMAConfig(
             instrument_id=instrument_id,
-            bar_type=bar_type_str,
+            bar_type=BarType.from_str(bar_type_str),
             fast_period=fast_period,
             slow_period=slow_period,
             trade_size=trade_size,
@@ -302,7 +302,7 @@ class MinimalBacktestRunner:
         # Configure strategy
         strategy_config = SMAConfig(
             instrument_id=instrument.id,
-            bar_type=bar_type_str,
+            bar_type=BarType.from_str(bar_type_str),
             fast_period=fast_period,
             slow_period=slow_period,
             trade_size=trade_size,
@@ -486,7 +486,7 @@ class MinimalBacktestRunner:
         # Create config parameters dictionary with mock data values
         config_params = {
             "instrument_id": instrument_id,
-            "bar_type": bar_type_str,
+            "bar_type": BarType.from_str(bar_type_str),
         }
 
         # Copy specific strategy parameters from the loaded config
@@ -508,6 +508,24 @@ class MinimalBacktestRunner:
             )
         if hasattr(config_obj.config, "trade_size"):
             config_params["trade_size"] = config_obj.config.trade_size
+
+        # RSI Mean Reversion specific parameters
+        if hasattr(config_obj.config, "order_id_tag"):
+            config_params["order_id_tag"] = config_obj.config.order_id_tag
+        if hasattr(config_obj.config, "rsi_buy_threshold"):
+            config_params["rsi_buy_threshold"] = config_obj.config.rsi_buy_threshold
+        if hasattr(config_obj.config, "exit_rsi"):
+            config_params["exit_rsi"] = config_obj.config.exit_rsi
+        if hasattr(config_obj.config, "sma_trend_period"):
+            config_params["sma_trend_period"] = config_obj.config.sma_trend_period
+        if hasattr(config_obj.config, "warmup_days"):
+            config_params["warmup_days"] = config_obj.config.warmup_days
+        if hasattr(config_obj.config, "cooldown_bars"):
+            config_params["cooldown_bars"] = config_obj.config.cooldown_bars
+
+        # SMA Momentum specific parameters
+        if hasattr(config_obj.config, "allow_short"):
+            config_params["allow_short"] = config_obj.config.allow_short
 
         # Create strategy using factory method
         strategy = StrategyFactory.create_strategy_from_config(

@@ -31,14 +31,19 @@ def sma_yaml_config():
 def mean_reversion_yaml_config():
     """Fixture providing valid Mean Reversion strategy YAML configuration."""
     return """
-    strategy_path: "src.core.strategies.mean_reversion:MeanReversionStrategy"
-    config_path: "src.core.strategies.mean_reversion:MeanReversionConfig"
+    strategy_path: "src.core.strategies.rsi_mean_reversion:RSIMeanRev"
+    config_path: "src.core.strategies.rsi_mean_reversion:RSIMeanRevConfig"
     config:
       instrument_id: "AAPL.NASDAQ"
       bar_type: "AAPL.NASDAQ-1-MINUTE-LAST-INTERNAL"
-      lookback_period: 20
-      num_std_dev: 2.0
       trade_size: 1000000
+      order_id_tag: "001"
+      rsi_period: 2
+      rsi_buy_threshold: 10.0
+      exit_rsi: 50.0
+      sma_trend_period: 200
+      warmup_days: 400
+      cooldown_bars: 0
     """
 
 
@@ -46,15 +51,17 @@ def mean_reversion_yaml_config():
 def momentum_yaml_config():
     """Fixture providing valid Momentum strategy YAML configuration."""
     return """
-    strategy_path: "src.core.strategies.momentum:MomentumStrategy"
-    config_path: "src.core.strategies.momentum:MomentumConfig"
+    strategy_path: "src.core.strategies.sma_momentum:SMAMomentum"
+    config_path: "src.core.strategies.sma_momentum:SMAMomentumConfig"
     config:
       instrument_id: "AAPL.NASDAQ"
       bar_type: "AAPL.NASDAQ-1-MINUTE-LAST-INTERNAL"
-      rsi_period: 14
-      oversold_threshold: 30.0
-      overbought_threshold: 70.0
       trade_size: 1000000
+      order_id_tag: "002"
+      fast_period: 20
+      slow_period: 50
+      warmup_days: 1
+      allow_short: false
     """
 
 
@@ -85,14 +92,14 @@ class TestConfigLoader:
 
         assert (
             config_obj.strategy_path
-            == "src.core.strategies.mean_reversion:MeanReversionStrategy"
+            == "src.core.strategies.rsi_mean_reversion:RSIMeanRev"
         )
         assert (
             config_obj.config_path
-            == "src.core.strategies.mean_reversion:MeanReversionConfig"
+            == "src.core.strategies.rsi_mean_reversion:RSIMeanRevConfig"
         )
-        assert config_obj.config.lookback_period == 20
-        assert config_obj.config.num_std_dev == 2.0
+        assert config_obj.config.rsi_period == 2
+        assert config_obj.config.rsi_buy_threshold == 10.0
         assert config_obj.config.trade_size == Decimal("1000000")
 
     @pytest.mark.integration
@@ -101,12 +108,12 @@ class TestConfigLoader:
         config_obj = ConfigLoader.load_from_yaml(momentum_yaml_config)
 
         assert (
-            config_obj.strategy_path == "src.core.strategies.momentum:MomentumStrategy"
+            config_obj.strategy_path == "src.core.strategies.sma_momentum:SMAMomentum"
         )
-        assert config_obj.config_path == "src.core.strategies.momentum:MomentumConfig"
-        assert config_obj.config.rsi_period == 14
-        assert config_obj.config.oversold_threshold == 30.0
-        assert config_obj.config.overbought_threshold == 70.0
+        assert config_obj.config_path == "src.core.strategies.sma_momentum:SMAMomentumConfig"
+        assert config_obj.config.fast_period == 20
+        assert config_obj.config.slow_period == 50
+        assert config_obj.config.allow_short == False
 
     @pytest.mark.integration
     @pytest.mark.parametrize(
@@ -115,9 +122,9 @@ class TestConfigLoader:
             ("sma_yaml_config", "src.core.strategies.sma_crossover:SMACrossover"),
             (
                 "mean_reversion_yaml_config",
-                "src.core.strategies.mean_reversion:MeanReversionStrategy",
+                "src.core.strategies.rsi_mean_reversion:RSIMeanRev",
             ),
-            ("momentum_yaml_config", "src.core.strategies.momentum:MomentumStrategy"),
+            ("momentum_yaml_config", "src.core.strategies.sma_momentum:SMAMomentum"),
         ],
     )
     def test_load_all_strategy_types_from_yaml(
@@ -199,14 +206,19 @@ class TestConfigLoader:
     def mean_reversion_yaml_data(self):
         """Fixture providing parsed YAML data for mean reversion strategy."""
         return {
-            "strategy_path": "src.core.strategies.mean_reversion:MeanReversionStrategy",
-            "config_path": "src.core.strategies.mean_reversion:MeanReversionConfig",
+            "strategy_path": "src.core.strategies.rsi_mean_reversion:RSIMeanRev",
+            "config_path": "src.core.strategies.rsi_mean_reversion:RSIMeanRevConfig",
             "config": {
                 "instrument_id": "AAPL.NASDAQ",
                 "bar_type": "AAPL.NASDAQ-1-MINUTE-LAST-INTERNAL",
-                "lookback_period": 20,
-                "num_std_dev": 2.0,
                 "trade_size": 1000000,
+                "order_id_tag": "001",
+                "rsi_period": 2,
+                "rsi_buy_threshold": 10.0,
+                "exit_rsi": 50.0,
+                "sma_trend_period": 200,
+                "warmup_days": 400,
+                "cooldown_bars": 0,
             },
         }
 
@@ -216,9 +228,9 @@ class TestConfigLoader:
 
         assert (
             config_obj.strategy_path
-            == "src.core.strategies.mean_reversion:MeanReversionStrategy"
+            == "src.core.strategies.rsi_mean_reversion:RSIMeanRev"
         )
-        assert config_obj.config.lookback_period == 20
+        assert config_obj.config.rsi_period == 2
 
     @pytest.mark.parametrize(
         "yaml_data,should_pass",
