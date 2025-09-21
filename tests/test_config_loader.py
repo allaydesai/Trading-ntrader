@@ -7,12 +7,9 @@ for loading YAML strategy configurations.
 
 import pytest
 import yaml
-from pathlib import Path
 from decimal import Decimal
-from nautilus_trader.model.identifiers import InstrumentId
 
 from src.utils.config_loader import ConfigLoader
-from src.models.strategy import StrategyType
 
 
 @pytest.fixture

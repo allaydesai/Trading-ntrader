@@ -41,23 +41,29 @@ def list():
 
     # Show usage example
     console.print("💡 Usage Examples", style="green bold")
-    console.print("   Create config template: ntrader strategy create --type sma_crossover --output my_config.yaml")
+    console.print(
+        "   Create config template: ntrader strategy create --type sma_crossover --output my_config.yaml"
+    )
     console.print("   Validate config:        ntrader strategy validate my_config.yaml")
-    console.print("   Run backtest:           ntrader backtest run-config my_config.yaml")
+    console.print(
+        "   Run backtest:           ntrader backtest run-config my_config.yaml"
+    )
 
 
 @strategy.command()
 @click.option(
-    '--type', 'strategy_type',
+    "--type",
+    "strategy_type",
     required=True,
-    type=click.Choice(['sma_crossover', 'mean_reversion', 'momentum']),
-    help='Strategy type to create template for'
+    type=click.Choice(["sma_crossover", "mean_reversion", "momentum"]),
+    help="Strategy type to create template for",
 )
 @click.option(
-    '--output', 'output_file',
+    "--output",
+    "output_file",
     required=True,
     type=click.Path(),
-    help='Output file path for the YAML template'
+    help="Output file path for the YAML template",
 )
 def create(strategy_type: str, output_file: str):
     """Create strategy config template."""
@@ -68,12 +74,14 @@ def create(strategy_type: str, output_file: str):
         template = StrategyLoader.create_template(strategy_type)
 
         # Write YAML template to file
-        with open(output_file, 'w') as f:
+        with open(output_file, "w") as f:
             yaml.dump(template, f, default_flow_style=False, indent=2)
 
         console.print(f"✅ Created {output_file}", style="green bold")
         console.print(f"   Strategy: {strategy_type}")
-        console.print(f"   Template includes default parameters for {template['config']['instrument_id']}")
+        console.print(
+            f"   Template includes default parameters for {template['config']['instrument_id']}"
+        )
         console.print()
         console.print("💡 Next steps:")
         console.print(f"   1. Edit {output_file} to customize parameters")
@@ -89,7 +97,7 @@ def create(strategy_type: str, output_file: str):
 
 
 @strategy.command()
-@click.argument('config_file', type=click.Path())
+@click.argument("config_file", type=click.Path())
 def validate(config_file: str):
     """Validate strategy config file."""
     try:
@@ -106,7 +114,9 @@ def validate(config_file: str):
         # Show key configuration parameters
         config_dict = {}
         for attr_name in dir(config_obj.config):
-            if not attr_name.startswith("_") and not callable(getattr(config_obj.config, attr_name)):
+            if not attr_name.startswith("_") and not callable(
+                getattr(config_obj.config, attr_name)
+            ):
                 try:
                     config_dict[attr_name] = getattr(config_obj.config, attr_name)
                 except AttributeError:

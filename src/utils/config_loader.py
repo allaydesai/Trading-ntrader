@@ -128,6 +128,12 @@ class ConfigLoader:
                 config_params["instrument_id"]
             )
 
+        # Handle bar_type string conversion to BarType
+        if "bar_type" in config_params and isinstance(config_params["bar_type"], str):
+            from nautilus_trader.model.data import BarType
+
+            config_params["bar_type"] = BarType.from_str(config_params["bar_type"])
+
         # Handle trade_size conversion to Decimal
         if "trade_size" in config_params:
             from decimal import Decimal

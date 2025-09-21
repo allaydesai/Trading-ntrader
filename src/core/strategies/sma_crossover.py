@@ -17,7 +17,7 @@ class SMAConfig(StrategyConfig):
     """Configuration for SMA crossover strategy."""
 
     instrument_id: InstrumentId
-    bar_type: str
+    bar_type: BarType
     fast_period: int = 10
     slow_period: int = 20
     trade_size: Decimal = Decimal("1_000_000")
@@ -57,14 +57,12 @@ class SMACrossover(Strategy):
 
     def on_start(self) -> None:
         """Actions to be performed on strategy start."""
-        bar_type = BarType.from_str(self.bar_type)
-        self.subscribe_bars(bar_type)
+        self.subscribe_bars(self.bar_type)
 
     def on_stop(self) -> None:
         """Actions to be performed on strategy stop."""
         self.close_all_positions(self.instrument_id)
-        bar_type = BarType.from_str(self.bar_type)
-        self.unsubscribe_bars(bar_type)
+        self.unsubscribe_bars(self.bar_type)
 
     def on_bar(self, bar: Bar) -> None:
         """

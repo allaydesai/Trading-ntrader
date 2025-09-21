@@ -4,7 +4,7 @@ import importlib
 from typing import Any, Dict, Type
 
 from nautilus_trader.trading.strategy import Strategy, StrategyConfig
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 
 from src.models.strategy import StrategyType
 
@@ -180,8 +180,12 @@ class StrategyFactory:
             "meanreversion": StrategyType.MEAN_REVERSION,
             "mean_reversion": StrategyType.MEAN_REVERSION,
             "meanreversionstrategy": StrategyType.MEAN_REVERSION,
+            "rsimeanrev": StrategyType.MEAN_REVERSION,
+            "rsi_mean_reversion": StrategyType.MEAN_REVERSION,
             "momentum": StrategyType.MOMENTUM,
             "momentumstrategy": StrategyType.MOMENTUM,
+            "smamomentum": StrategyType.MOMENTUM,
+            "sma_momentum": StrategyType.MOMENTUM,
         }
 
         for key, strategy_type in strategy_mappings.items():
@@ -251,12 +255,12 @@ class StrategyLoader:
             "config_path": "src.core.strategies.sma_crossover:SMAConfig",
         },
         StrategyType.MEAN_REVERSION: {
-            "strategy_path": "src.core.strategies.mean_reversion:MeanReversionStrategy",
-            "config_path": "src.core.strategies.mean_reversion:MeanReversionConfig",
+            "strategy_path": "src.core.strategies.rsi_mean_reversion:RSIMeanRev",
+            "config_path": "src.core.strategies.rsi_mean_reversion:RSIMeanRevConfig",
         },
         StrategyType.MOMENTUM: {
-            "strategy_path": "src.core.strategies.momentum:MomentumStrategy",
-            "config_path": "src.core.strategies.momentum:MomentumConfig",
+            "strategy_path": "src.core.strategies.sma_momentum:SMAMomentum",
+            "config_path": "src.core.strategies.sma_momentum:SMAMomentumConfig",
         },
     }
 
@@ -338,8 +342,8 @@ class StrategyLoader:
         """
         descriptions = {
             StrategyType.SMA_CROSSOVER: "Simple Moving Average Crossover Strategy",
-            StrategyType.MEAN_REVERSION: "Mean Reversion Strategy using Bollinger Bands",
-            StrategyType.MOMENTUM: "Momentum Strategy using RSI indicators",
+            StrategyType.MEAN_REVERSION: "RSI Mean Reversion Strategy with Trend Filter",
+            StrategyType.MOMENTUM: "SMA Momentum Strategy (Golden/Death Cross)",
         }
 
         return {
@@ -393,17 +397,24 @@ class StrategyLoader:
             StrategyType.MEAN_REVERSION: {
                 "instrument_id": "AAPL.NASDAQ",
                 "bar_type": "AAPL.NASDAQ-1-MINUTE-LAST-INTERNAL",
-                "lookback_period": 20,
-                "num_std_dev": 2.0,
                 "trade_size": 1000000,
+                "order_id_tag": "001",
+                "rsi_period": 2,
+                "rsi_buy_threshold": 10.0,
+                "exit_rsi": 50.0,
+                "sma_trend_period": 200,
+                "warmup_days": 400,
+                "cooldown_bars": 0,
             },
             StrategyType.MOMENTUM: {
                 "instrument_id": "AAPL.NASDAQ",
                 "bar_type": "AAPL.NASDAQ-1-MINUTE-LAST-INTERNAL",
-                "rsi_period": 14,
-                "oversold_threshold": 30.0,
-                "overbought_threshold": 70.0,
                 "trade_size": 1000000,
+                "order_id_tag": "002",
+                "fast_period": 20,
+                "slow_period": 50,
+                "warmup_days": 1,
+                "allow_short": False,
             },
         }
 

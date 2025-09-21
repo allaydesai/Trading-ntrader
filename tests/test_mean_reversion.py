@@ -2,11 +2,8 @@
 
 import pytest
 from decimal import Decimal
-from unittest.mock import Mock
 
 from nautilus_trader.model.identifiers import InstrumentId
-from nautilus_trader.model.data import Bar, BarType
-from nautilus_trader.model.enums import PriceType
 
 from src.models.strategy import MeanReversionParameters
 
@@ -127,8 +124,6 @@ class TestMeanReversionStrategy:
         mock_bars = generate_mock_bars(instrument_id, num_bars=15)
 
         # Process bars and skip order generation by temporarily setting order_factory to None
-        original_generate_buy = strategy._generate_buy_signal
-        original_generate_sell = strategy._generate_sell_signal
 
         # Replace signal generation with mock functions to avoid order_factory issues
         strategy._generate_buy_signal = lambda: None

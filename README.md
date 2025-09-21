@@ -4,15 +4,48 @@ A production-grade algorithmic trading backtesting system built with the Nautilu
 
 ## Features
 
-- 🚀 **SMA Crossover Strategy**: Built-in Simple Moving Average crossover strategy
+- 🚀 **Multiple Trading Strategies**: Three built-in strategies with dynamic configuration
+  - **SMA Crossover**: Simple Moving Average crossover strategy
+  - **RSI Mean Reversion**: RSI-based mean reversion with trend filter
+  - **SMA Momentum**: Moving average momentum strategy (golden/death cross)
+- 📊 **Strategy Management**: CLI commands for strategy discovery, configuration, and validation
+- 📋 **YAML Configuration**: Flexible strategy configuration via YAML files
 - 📊 **Mock Data Generation**: Synthetic data with predictable patterns for testing
 - 📈 **CSV Data Import**: Import real market data from CSV files with validation
 - 🗄️ **Database Storage**: PostgreSQL with optimized time-series storage
 - 🖥️ **CLI Interface**: Easy-to-use command line interface with data management
 - 📈 **Performance Metrics**: Win rate, total return, trade statistics
 - ⚡ **Fast Execution**: Built on Nautilus Trader's high-performance engine
-- 🧪 **Test Coverage**: Comprehensive test suite with 69+ tests
+- 🧪 **Test Coverage**: Comprehensive test suite with 298+ tests
 - 🔄 **Real Data Backtesting**: Run backtests on imported historical data
+
+## Current Status & Capabilities
+
+### ✅ What Works (Milestone 3 Complete)
+- **Strategy Management**: Discover, create, and validate strategy configurations
+- **Multiple Strategy Types**: SMA Crossover, RSI Mean Reversion, SMA Momentum
+- **Database Backtesting**: All three strategies work with imported CSV data
+- **YAML Configuration**: Create and validate strategy configs via CLI
+- **Mock Data Testing**: Test strategies with synthetic data using YAML configs
+
+### 🚧 Current Limitations
+- **YAML + Database Integration**: `run-config` command supports mock data only
+- **Historical Data Source**: CSV import required; no live data feeds yet
+- **Strategy Parameters**: Limited to predefined parameters per strategy type
+
+### 📋 Command Quick Reference
+```bash
+# Strategy management
+uv run python -m src.cli.main strategy list                    # ✅ List available strategies
+uv run python -m src.cli.main strategy create --type <type>    # ✅ Create config template
+uv run python -m src.cli.main strategy validate <config>       # ✅ Validate config
+
+# Database backtesting (recommended)
+uv run python -m src.cli.main backtest run --strategy <type>   # ✅ All strategies supported
+
+# Mock data testing
+uv run python -m src.cli.main backtest run-config <config>     # ✅ YAML configs supported
+```
 
 ## Quick Start
 
@@ -90,13 +123,24 @@ You should see AAPL listed in the available symbols.
 ```bash
 # Run SMA crossover strategy on the imported data (with specific times)
 uv run python -m src.cli.main backtest run \
-  --strategy sma \
+  --strategy sma_crossover \
   --symbol AAPL \
   --start "2024-01-02 09:30:00" \
   --end "2024-01-02 10:20:00" \
   --fast-period 5 \
   --slow-period 10
 ```
+
+Alternative: Use the new YAML configuration approach (mock data only):
+```bash
+# Create a strategy config template
+uv run python -m src.cli.main strategy create --type sma_crossover --output my_strategy.yaml
+
+# Run backtest with config file (uses mock data for testing)
+uv run python -m src.cli.main backtest run-config my_strategy.yaml
+```
+
+**Note**: YAML-based backtesting currently supports mock data only. For database backtests, use the `backtest run` command with strategy parameters.
 
 Expected output:
 ```
@@ -262,6 +306,112 @@ timestamp,open,high,low,close,volume
 
 ### Usage
 
+#### Strategy Management (New in Milestone 3)
+
+The system now supports multiple trading strategies with flexible configuration management:
+
+##### Available Strategies
+
+1. **SMA Crossover** (`sma_crossover`): Classic moving average crossover strategy
+2. **RSI Mean Reversion** (`mean_reversion`): RSI-based mean reversion with trend filter
+3. **SMA Momentum** (`momentum`): Moving average momentum strategy with golden/death cross
+
+##### Strategy Discovery
+
+List all available strategies:
+```bash
+uv run python -m src.cli.main strategy list
+```
+
+Output shows strategy types, descriptions, and implementations:
+```
+📊 Available Strategies
+
+                          Supported Trading Strategies
+┏━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━┓
+┃ Strategy Type  ┃ Description                                ┃ Implementation ┃
+┡━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━┩
+│ sma_crossover  │ Simple Moving Average Crossover Strategy   │ SMACrossover   │
+│ mean_reversion │ RSI Mean Reversion Strategy with Trend     │ RSIMeanRev     │
+│                │ Filter                                     │                │
+│ momentum       │ SMA Momentum Strategy (Golden/Death Cross) │ SMAMomentum    │
+└────────────────┴────────────────────────────────────────────┴────────────────┘
+```
+
+##### Configuration Management
+
+Create configuration templates for any strategy:
+```bash
+# Create RSI mean reversion config
+uv run python -m src.cli.main strategy create --type mean_reversion --output my_mr_config.yaml
+
+# Create SMA momentum config
+uv run python -m src.cli.main strategy create --type momentum --output my_momentum_config.yaml
+
+# Create SMA crossover config
+uv run python -m src.cli.main strategy create --type sma_crossover --output my_sma_config.yaml
+```
+
+Each template includes strategy-specific parameters with sensible defaults.
+
+##### Configuration Validation
+
+Validate your strategy configurations before running backtests:
+```bash
+uv run python -m src.cli.main strategy validate my_mr_config.yaml
+```
+
+Example validation output:
+```
+🔍 Validating my_mr_config.yaml...
+✅ Config valid
+   Strategy: RSIMeanRev
+   Config class: RSIMeanRevConfig
+
+📋 Configuration Parameters:
+   rsi_period: 2
+   rsi_buy_threshold: 10.0
+   exit_rsi: 50.0
+   sma_trend_period: 200
+   trade_size: 1000000
+   [... other parameters]
+```
+
+##### Running Backtests with YAML Configs
+
+Use your validated configurations in backtests (mock data only):
+```bash
+# Run backtest with YAML config (uses mock data)
+uv run python -m src.cli.main backtest run-config my_mr_config.yaml
+
+# For database backtests, use the legacy command:
+uv run python -m src.cli.main backtest run \
+  --strategy mean_reversion \
+  --symbol AAPL \
+  --start 2024-01-02 \
+  --end 2024-01-02
+```
+
+**Current Limitation**: The `run-config` command currently supports mock data only. Database integration with YAML configs is planned for a future release.
+
+##### Strategy Parameter Examples
+
+**RSI Mean Reversion Parameters:**
+- `rsi_period`: RSI calculation period (default: 2)
+- `rsi_buy_threshold`: Buy when RSI below this level (default: 10.0)
+- `exit_rsi`: Exit when RSI above this level (default: 50.0)
+- `sma_trend_period`: Trend filter SMA period (default: 200)
+- `cooldown_bars`: Optional cooldown after exit (default: 0)
+
+**SMA Momentum Parameters:**
+- `fast_period`: Fast moving average period (default: 50)
+- `slow_period`: Slow moving average period (default: 200)
+- `allow_short`: Enable short selling on death cross (default: false)
+
+**SMA Crossover Parameters:**
+- `fast_period`: Fast moving average period (default: 10)
+- `slow_period`: Slow moving average period (default: 20)
+
 #### CSV Data Import
 
 Import historical market data from CSV files:
@@ -290,7 +440,7 @@ uv run python -m src.cli.main backtest list
 ```
 
 This shows:
-- Available trading strategies (currently SMA crossover)
+- Available trading strategies (SMA Crossover, RSI Mean Reversion, SMA Momentum)
 - All symbols with imported data
 - Date ranges for each symbol
 
@@ -304,12 +454,26 @@ uv run python -m src.cli.main run-simple
 
 ##### Real Data Backtest
 
-Run backtests on imported historical data:
+Run backtests on imported historical data with different strategies:
 
 ```bash
-# Run backtest with real data (using sample data range)
+# Run SMA crossover backtest
 uv run python -m src.cli.main backtest run \
-  --strategy sma \
+  --strategy sma_crossover \
+  --symbol AAPL \
+  --start 2024-01-02 \
+  --end 2024-01-02
+
+# Run RSI mean reversion backtest
+uv run python -m src.cli.main backtest run \
+  --strategy mean_reversion \
+  --symbol AAPL \
+  --start 2024-01-02 \
+  --end 2024-01-02
+
+# Run SMA momentum backtest
+uv run python -m src.cli.main backtest run \
+  --strategy momentum \
   --symbol AAPL \
   --start 2024-01-02 \
   --end 2024-01-02
@@ -335,17 +499,26 @@ uv run python -m src.cli.main run-simple \
 - `data import-csv --file <path> --symbol <symbol>`: Import CSV market data
 - `data list --symbol <symbol>`: List available data for a symbol
 
+##### Strategy Management Commands
+- `strategy list`: List all available trading strategies
+- `strategy create --type <strategy> --output <file>`: Create strategy config template
+- `strategy validate <config-file>`: Validate strategy configuration file
+
 ##### Backtest Commands
 - `backtest list`: List available strategies and imported data
 - `run-simple`: Run simple backtest with mock data
-- `backtest run`: Run backtest with real data
-  - `--strategy`: Trading strategy to use (default: `sma`)
+- `backtest run`: Run backtest with real data (legacy command-line config)
+  - `--strategy`: Trading strategy to use (`sma_crossover`, `mean_reversion`, `momentum`)
   - `--symbol`: Trading symbol (required for real data)
   - `--start`: Start date for backtest (YYYY-MM-DD)
   - `--end`: End date for backtest (YYYY-MM-DD)
   - `--fast-period`: Fast SMA period (default: 10)
   - `--slow-period`: Slow SMA period (default: 20)
   - `--trade-size`: Trade size in base currency (default: 1,000,000)
+- `backtest run-config <config-file>`: Run backtest with YAML configuration
+  - `--symbol`: Trading symbol (required)
+  - `--start`: Start date for backtest (YYYY-MM-DD)
+  - `--end`: End date for backtest (YYYY-MM-DD)
 
 ### Example Output
 
@@ -422,9 +595,9 @@ This section provides detailed, step-by-step guides for common tasks.
 
 **Expected result**: Successful backtest with results table showing trade statistics.
 
-### Journey 2: Testing Different Strategies and Timeframes
+### Journey 2: Testing Multiple Strategies with YAML Configuration
 
-**Goal**: Compare different SMA configurations on longer datasets
+**Goal**: Compare different trading strategies using the new configuration management system
 
 **Prerequisites**: Journey 1 completed successfully
 
@@ -434,23 +607,53 @@ This section provides detailed, step-by-step guides for common tasks.
    uv run python -m src.cli.main data import-csv --file data/AAPL_test_2018.csv --symbol AAPL2018
    ```
 
-2. **Test fast SMA strategy** (quick signals):
+2. **Discover available strategies**:
    ```bash
-   uv run python -m src.cli.main backtest run \
-     --symbol AAPL2018 --start 2018-02-05 --end 2018-02-08 \
-     --fast-period 3 --slow-period 7
+   uv run python -m src.cli.main strategy list
    ```
 
-3. **Test slow SMA strategy** (trend following):
+3. **Create configuration files for different strategies**:
    ```bash
-   uv run python -m src.cli.main backtest run \
-     --symbol AAPL2018 --start 2018-02-05 --end 2018-02-08 \
-     --fast-period 15 --slow-period 30
+   # Create SMA crossover config (fast signals)
+   uv run python -m src.cli.main strategy create --type sma_crossover --output sma_fast.yaml
+
+   # Create RSI mean reversion config
+   uv run python -m src.cli.main strategy create --type mean_reversion --output mean_rev.yaml
+
+   # Create SMA momentum config
+   uv run python -m src.cli.main strategy create --type momentum --output momentum.yaml
    ```
 
-4. **Compare results**: Note differences in trade frequency, win rate, and total return.
+4. **Validate all configurations**:
+   ```bash
+   uv run python -m src.cli.main strategy validate sma_fast.yaml
+   uv run python -m src.cli.main strategy validate mean_rev.yaml
+   uv run python -m src.cli.main strategy validate momentum.yaml
+   ```
 
-**Learning outcome**: Understanding how SMA periods affect trading behavior and profitability.
+5. **Run backtests with different strategies**:
+   ```bash
+   # Test strategies with mock data (YAML configs)
+   uv run python -m src.cli.main backtest run-config sma_fast.yaml
+   uv run python -m src.cli.main backtest run-config mean_rev.yaml
+   uv run python -m src.cli.main backtest run-config momentum.yaml
+
+   # Or test with real database data (legacy command)
+   uv run python -m src.cli.main backtest run --strategy sma_crossover \
+     --symbol AAPL2018 --start 2018-02-05 --end 2018-02-08
+   uv run python -m src.cli.main backtest run --strategy mean_reversion \
+     --symbol AAPL2018 --start 2018-02-05 --end 2018-02-08
+   uv run python -m src.cli.main backtest run --strategy momentum \
+     --symbol AAPL2018 --start 2018-02-05 --end 2018-02-08
+   ```
+
+6. **Compare results**: Note differences in:
+   - Trade frequency and timing
+   - Win rate and average trade size
+   - Total return and drawdown patterns
+   - Strategy-specific behavior (mean reversion vs momentum)
+
+**Learning outcome**: Understanding how different trading approaches (crossover, mean reversion, momentum) perform on the same dataset and market conditions.
 
 ### Journey 3: Custom Data Import and Analysis
 
@@ -824,17 +1027,25 @@ If you encounter issues not covered here:
 ## Roadmap
 
 ### Completed ✅
-- [x] CSV data import functionality
-- [x] PostgreSQL database integration
-- [x] Data validation and deduplication
-- [x] CLI data management commands
-- [x] Real data backtesting
+- [x] **Milestone 1**: Basic SMA crossover strategy and mock data testing
+- [x] **Milestone 2**: CSV data import functionality and database integration
+  - [x] PostgreSQL database integration
+  - [x] Data validation and deduplication
+  - [x] CLI data management commands
+  - [x] Real data backtesting
+- [x] **Milestone 3**: Multi-strategy system with configuration management
+  - [x] RSI Mean Reversion strategy implementation
+  - [x] SMA Momentum strategy implementation
+  - [x] Strategy factory for dynamic loading
+  - [x] YAML configuration support
+  - [x] Strategy management CLI commands
+  - [x] Strategy discovery and validation
 
 ### In Progress 🚧
 - [ ] Complete data list command implementation (currently shows "coming soon")
 - [ ] Interactive Brokers data integration
-- [ ] Additional trading strategies (Mean Reversion, Momentum)
 - [ ] Enhanced performance analytics and reporting
+- [ ] Results persistence and comparison features
 
 ### Planned 📋
 - [ ] TimescaleDB optimization for large datasets

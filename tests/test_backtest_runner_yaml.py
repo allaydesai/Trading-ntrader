@@ -6,9 +6,7 @@ for running backtests from YAML configuration files.
 """
 
 import pytest
-from pathlib import Path
 from decimal import Decimal
-from datetime import datetime
 
 from src.core.backtest_runner import MinimalBacktestRunner
 from src.utils.config_loader import ConfigLoader

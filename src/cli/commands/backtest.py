@@ -2,7 +2,6 @@
 
 import asyncio
 from datetime import datetime, timezone
-from decimal import Decimal
 
 import click
 from rich.console import Console
@@ -26,9 +25,9 @@ def backtest():
 @click.option(
     "--strategy",
     "-s",
-    default="sma",
-    type=click.Choice(["sma"]),
-    help="Strategy to run (currently only SMA available)",
+    default="sma_crossover",
+    type=click.Choice(["sma", "sma_crossover", "mean_reversion", "momentum"]),
+    help="Strategy to run (sma is alias for sma_crossover)",
 )
 @click.option(
     "--symbol", "-sym", required=True, help="Trading symbol (e.g., AAPL, EUR/USD)"
@@ -79,16 +78,27 @@ def run_backtest(
         if end.tzinfo is None:
             end = end.replace(tzinfo=timezone.utc)
 
+        # Handle strategy alias
+        display_strategy = strategy
+        if strategy == "sma":
+            display_strategy = "SMA_CROSSOVER"
+
         console.print(
-            f"🚀 Running {strategy.upper()} backtest for {symbol.upper()}",
+            f"🚀 Running {display_strategy.upper()} backtest for {symbol.upper()}",
             style="cyan bold",
         )
         console.print(
             f"   Period: {start.strftime('%Y-%m-%d')} to {end.strftime('%Y-%m-%d')}"
         )
-        console.print(
-            f"   Strategy: Fast SMA({fast_period}) vs Slow SMA({slow_period})"
-        )
+
+        # Display strategy-specific parameters
+        if strategy in ["sma", "sma_crossover"]:
+            console.print(
+                f"   Strategy: Fast SMA({fast_period}) vs Slow SMA({slow_period})"
+            )
+        else:
+            console.print(f"   Strategy: {display_strategy.replace('_', ' ').title()}")
+
         console.print(f"   Trade Size: {trade_size:,}")
         console.print()
 
@@ -199,14 +209,27 @@ def run_backtest(
                 # Initialize backtest runner with database data source
                 runner = MinimalBacktestRunner(data_source="database")
 
-                # Run the backtest with adjusted dates
-                result = await runner.run_backtest_with_database(
+                # Prepare strategy parameters
+                strategy_params = {
+                    "trade_size": trade_size,
+                }
+
+                # Add strategy-specific parameters
+                if strategy in ["sma", "sma_crossover"]:
+                    strategy_params.update(
+                        {
+                            "fast_period": fast_period,
+                            "slow_period": slow_period,
+                        }
+                    )
+
+                # Run the backtest with adjusted dates using new dynamic method
+                result = await runner.run_backtest_with_strategy_type(
+                    strategy_type=strategy,
                     symbol=symbol.upper(),
                     start=adjusted_start,
                     end=adjusted_end,
-                    fast_period=fast_period,
-                    slow_period=slow_period,
-                    trade_size=Decimal(str(trade_size)),
+                    **strategy_params,
                 )
 
                 progress.update(task, completed=True)
@@ -216,11 +239,19 @@ def run_backtest(
             console.print()
 
             # Create results table
-            table = Table(title=f"{symbol.upper()} SMA Crossover Strategy Results")
+            table = Table(
+                title=f"{symbol.upper()} {display_strategy.replace('_', ' ').title()} Strategy Results"
+            )
             table.add_column("Metric", style="cyan", no_wrap=True)
             table.add_column("Value", style="green")
 
-            table.add_row("Strategy", f"SMA({fast_period}/{slow_period})")
+            # Add strategy-specific description
+            if strategy in ["sma", "sma_crossover"]:
+                strategy_description = f"SMA({fast_period}/{slow_period})"
+            else:
+                strategy_description = display_strategy.replace("_", " ").title()
+
+            table.add_row("Strategy", strategy_description)
             table.add_row("Symbol", symbol.upper())
             table.add_row(
                 "Period", f"{start.strftime('%Y-%m-%d')} to {end.strftime('%Y-%m-%d')}"
@@ -263,6 +294,156 @@ def run_backtest(
         raise click.ClickException("Backtest failed")
 
 
+@backtest.command("run-config")
+@click.argument("config_file", type=click.Path(exists=True, dir_okay=False))
+@click.option(
+    "--symbol", "-sym", help="Trading symbol (overrides config if using database data)"
+)
+@click.option(
+    "--start",
+    "-st",
+    type=click.DateTime(formats=["%Y-%m-%d", "%Y-%m-%d %H:%M:%S"]),
+    help="Start date for database data (overrides mock data)",
+)
+@click.option(
+    "--end",
+    "-e",
+    type=click.DateTime(formats=["%Y-%m-%d", "%Y-%m-%d %H:%M:%S"]),
+    help="End date for database data (overrides mock data)",
+)
+@click.option(
+    "--data-source",
+    "-ds",
+    default="mock",
+    type=click.Choice(["mock", "database"]),
+    help="Data source to use (default: mock)",
+)
+def run_config_backtest(
+    config_file: str,
+    symbol: str | None,
+    start: datetime | None,
+    end: datetime | None,
+    data_source: str,
+):
+    """Run backtest using YAML configuration file."""
+
+    async def run_config_backtest_async():
+        nonlocal start, end
+        console.print(
+            f"🚀 Running backtest from config: {config_file}", style="cyan bold"
+        )
+        console.print(f"   Data source: {data_source}")
+
+        if data_source == "database":
+            if not symbol or not start or not end:
+                console.print(
+                    "❌ Database data source requires --symbol, --start, and --end",
+                    style="red",
+                )
+                return False
+
+            # Ensure start and end dates are timezone-aware (UTC) for database comparison
+            if start.tzinfo is None:
+                start = start.replace(tzinfo=timezone.utc)
+            if end.tzinfo is None:
+                end = end.replace(tzinfo=timezone.utc)
+
+            console.print(f"   Symbol: {symbol.upper()}")
+            console.print(
+                f"   Period: {start.strftime('%Y-%m-%d %H:%M:%S')} to {end.strftime('%Y-%m-%d %H:%M:%S')}"
+            )
+
+            # Check database connection
+            if not await test_connection():
+                console.print(
+                    "❌ Database not accessible. Please check your database configuration.",
+                    style="red",
+                )
+                return False
+        else:
+            console.print("   Using mock data for testing")
+
+        console.print()
+
+        try:
+            # Initialize backtest runner with specified data source
+            runner = MinimalBacktestRunner(data_source=data_source)
+
+            if data_source == "mock":
+                # Run with mock data using config file
+                with Progress(
+                    SpinnerColumn(),
+                    TextColumn("[progress.description]{task.description}"),
+                    transient=True,
+                ) as progress:
+                    task = progress.add_task(
+                        "Running backtest with config...", total=None
+                    )
+                    result = runner.run_from_config_file(config_file)
+                    progress.update(task, completed=True)
+            else:
+                # Run with database data - need to extend the runner for this
+                console.print(
+                    "❌ Database data source with config files not yet implemented",
+                    style="red",
+                )
+                console.print(
+                    "   Use: backtest run --strategy <type> --symbol <symbol> for database backtests"
+                )
+                return False
+
+            # Display results
+            console.print("🎯 Backtest Results", style="cyan bold")
+            console.print()
+
+            # Create results table
+            table = Table(title="Strategy Configuration Backtest Results")
+            table.add_column("Metric", style="cyan", no_wrap=True)
+            table.add_column("Value", style="green")
+
+            table.add_row("Configuration File", config_file)
+            table.add_row("Data Source", data_source.title())
+            table.add_row("Total Return", f"${result.total_return:.2f}")
+            table.add_row("Total Trades", str(result.total_trades))
+            table.add_row("Winning Trades", str(result.winning_trades))
+            table.add_row("Losing Trades", str(result.losing_trades))
+            table.add_row("Win Rate", f"{result.win_rate:.1f}%")
+            table.add_row("Largest Win", f"${result.largest_win:.2f}")
+            table.add_row("Largest Loss", f"${result.largest_loss:.2f}")
+            table.add_row("Final Balance", f"${result.final_balance:.2f}")
+
+            console.print(table)
+            console.print()
+
+            # Performance summary
+            if result.total_return > 0:
+                console.print("📈 Strategy was profitable!", style="green bold")
+            elif result.total_return < 0:
+                console.print("📉 Strategy lost money", style="red bold")
+            else:
+                console.print("➡️  Strategy broke even", style="yellow bold")
+
+            # Clean up
+            runner.dispose()
+            return True
+
+        except FileNotFoundError as e:
+            console.print(f"❌ Configuration file not found: {e}", style="red")
+            return False
+        except ValueError as e:
+            console.print(f"❌ Configuration error: {e}", style="red")
+            return False
+        except Exception as e:
+            console.print(f"❌ Unexpected error: {e}", style="red")
+            return False
+
+    # Run async function
+    result = asyncio.run(run_config_backtest_async())
+
+    if not result:
+        raise click.ClickException("Backtest failed")
+
+
 @backtest.command("list")
 def list_backtests():
     """List available strategies and data."""
@@ -276,7 +457,24 @@ def list_backtests():
     strategy_table.add_column("Parameters", style="yellow")
 
     strategy_table.add_row(
-        "sma", "Simple Moving Average Crossover", "fast_period, slow_period, trade_size"
+        "sma_crossover",
+        "Simple Moving Average Crossover",
+        "fast_period, slow_period, trade_size",
+    )
+    strategy_table.add_row(
+        "mean_reversion",
+        "RSI Mean Reversion with Trend Filter",
+        "trade_size, rsi_period, rsi_buy_threshold",
+    )
+    strategy_table.add_row(
+        "momentum",
+        "SMA Momentum Strategy (Golden/Death Cross)",
+        "trade_size, fast_period, slow_period",
+    )
+    strategy_table.add_row(
+        "sma",
+        "Alias for sma_crossover (backward compatibility)",
+        "fast_period, slow_period, trade_size",
     )
 
     console.print(strategy_table)
