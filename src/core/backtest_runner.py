@@ -122,8 +122,9 @@ class MinimalBacktestRunner:
 
         # Create fill model for realistic execution simulation
         fill_model = FillModel(
-            prob_fill_on_limit=1.0,  # Always fill limit orders when price touches
-            prob_slippage=0.0,  # No slippage for initial testing
+            prob_fill_on_limit=0.95,     # 95% fill probability on limit orders
+            prob_fill_on_stop=0.95,      # 95% fill probability on stop orders
+            prob_slippage=0.01,          # 1% slippage probability
         )
 
         # Add venue
@@ -263,8 +264,9 @@ class MinimalBacktestRunner:
 
         # Create fill model for realistic execution simulation
         fill_model = FillModel(
-            prob_fill_on_limit=1.0,
-            prob_slippage=0.1,  # Add some slippage for realism
+            prob_fill_on_limit=0.95,     # 95% fill probability on limit orders
+            prob_fill_on_stop=0.95,      # 95% fill probability on stop orders
+            prob_slippage=0.01,          # 1% slippage probability
         )
 
         # Add venue
@@ -452,8 +454,9 @@ class MinimalBacktestRunner:
 
         # Create fill model for realistic execution simulation
         fill_model = FillModel(
-            prob_fill_on_limit=1.0,  # Always fill limit orders when price touches
-            prob_slippage=0.0,  # No slippage for initial testing
+            prob_fill_on_limit=0.95,     # 95% fill probability on limit orders
+            prob_fill_on_stop=0.95,      # 95% fill probability on stop orders
+            prob_slippage=0.01,          # 1% slippage probability
         )
 
         # Add venue
@@ -614,10 +617,11 @@ class MinimalBacktestRunner:
         # Initialize engine
         self.engine = BacktestEngine(config=config)
 
-        # Create fill model
+        # Create fill model for realistic execution simulation
         fill_model = FillModel(
-            prob_fill_on_limit=1.0,
-            prob_slippage=0.1,
+            prob_fill_on_limit=0.95,     # 95% fill probability on limit orders
+            prob_fill_on_stop=0.95,      # 95% fill probability on stop orders
+            prob_slippage=0.01,          # 1% slippage probability
         )
 
         # Add venue
