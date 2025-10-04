@@ -14,19 +14,33 @@ A production-grade algorithmic trading backtesting system built with the Nautilu
 - 📈 **CSV Data Import**: Import real market data from CSV files with validation
 - 🗄️ **Database Storage**: PostgreSQL with optimized time-series storage
 - 🖥️ **CLI Interface**: Easy-to-use command line interface with data management
-- 📈 **Performance Metrics**: Win rate, total return, trade statistics
+- 📊 **Performance Analytics**: Comprehensive metrics using Nautilus Trader analytics framework
+  - **Risk Metrics**: Sharpe Ratio, Sortino Ratio, Calmar Ratio, Maximum Drawdown
+  - **Trade Statistics**: Win rate, profit factor, expectancy, average win/loss
+  - **Portfolio Tracking**: Real-time PnL, position monitoring, equity curves
+- 📋 **Report Generation**: Multi-format report export with rich visualizations
+  - **Text Reports**: Rich-formatted console output with tables and charts
+  - **CSV Export**: Precision-preserved data export for spreadsheet analysis
+  - **JSON Export**: Structured data for programmatic analysis
 - ⚡ **Fast Execution**: Built on Nautilus Trader's high-performance engine
-- 🧪 **Test Coverage**: Comprehensive test suite with 298+ tests
-- 🔄 **Real Data Backtesting**: Run backtests on imported historical data
+- 🧪 **Test Coverage**: Comprehensive test suite with 106+ Milestone 4 tests
+- 🔄 **Real Data Backtesting**: Run backtests on imported historical data with full analytics
 
 ## Current Status & Capabilities
 
-### ✅ What Works (Milestone 3 Complete)
+### ✅ What Works (Milestone 4 Complete)
 - **Strategy Management**: Discover, create, and validate strategy configurations
 - **Multiple Strategy Types**: SMA Crossover, RSI Mean Reversion, SMA Momentum
 - **Database Backtesting**: All three strategies work with imported CSV data
 - **YAML Configuration**: Create and validate strategy configs via CLI
 - **Mock Data Testing**: Test strategies with synthetic data using YAML configs
+- **Performance Analytics**: Comprehensive metrics with Nautilus Trader integration
+  - Sharpe, Sortino, Calmar ratios
+  - Maximum drawdown with recovery tracking
+  - Win rate, profit factor, expectancy
+  - Portfolio tracking and equity curves
+- **Report Generation**: Multi-format exports (text, CSV, JSON)
+- **Results Persistence**: Save and retrieve backtest results with full analytics
 
 ### 🚧 Current Limitations
 - **YAML + Database Integration**: `run-config` command supports mock data only
@@ -45,6 +59,12 @@ uv run python -m src.cli.main backtest run --strategy <type>   # ✅ All strateg
 
 # Mock data testing
 uv run python -m src.cli.main backtest run-config <config>     # ✅ YAML configs supported
+
+# Performance reports (New in Milestone 4)
+uv run python -m src.cli report summary <result-id>            # ✅ Quick performance summary
+uv run python -m src.cli report generate --result-id <id>      # ✅ Generate text report
+uv run python -m src.cli report generate --result-id <id> --format csv  # ✅ Export to CSV
+uv run python -m src.cli report list                           # ✅ List saved results
 ```
 
 ## Quick Start
@@ -493,6 +513,73 @@ uv run python -m src.cli.main run-simple \
   --bars 200
 ```
 
+#### Performance Reports & Analytics (New in Milestone 4)
+
+After running a backtest, you can generate comprehensive performance reports with detailed analytics.
+
+##### List Saved Backtest Results
+
+```bash
+# List all saved backtest results
+uv run python -m src.cli report list
+
+# Limit results shown
+uv run python -m src.cli report list --limit 5
+```
+
+##### Quick Performance Summary
+
+Get a quick overview of backtest performance:
+
+```bash
+uv run python -m src.cli report summary <result-id>
+```
+
+Example output:
+```
+📊 Performance Summary for result-abc123
+
+┏━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━┓
+┃ Metric            ┃ Value      ┃
+┡━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━┩
+│ Total Return      │ 15.3%      │
+│ Sharpe Ratio      │ 1.42       │
+│ Sortino Ratio     │ 1.68       │
+│ Max Drawdown      │ -8.7%      │
+│ Win Rate          │ 58.3%      │
+│ Profit Factor     │ 1.85       │
+└───────────────────┴────────────┘
+```
+
+##### Generate Detailed Reports
+
+Generate comprehensive reports in multiple formats:
+
+```bash
+# Text report with rich formatting (default)
+uv run python -m src.cli report generate --result-id <id>
+
+# Text report saved to file
+uv run python -m src.cli report generate --result-id <id> --format text -o report.txt
+
+# CSV export for spreadsheet analysis
+uv run python -m src.cli report generate --result-id <id> --format csv -o results.csv
+
+# JSON export for programmatic analysis
+uv run python -m src.cli report generate --result-id <id> --format json -o results.json
+
+# Export all formats at once
+uv run python -m src.cli report export-all <result-id> -o reports/
+```
+
+**Report Contents:**
+- **Summary Panel**: Key performance metrics at a glance
+- **Returns Analysis**: Total return, CAGR, annual return, volatility
+- **Risk Metrics**: Sharpe, Sortino, Calmar ratios, maximum drawdown
+- **Trading Statistics**: Win rate, profit factor, expectancy, avg win/loss
+- **Trade Details**: Complete trade history with entry/exit prices and PnL
+- **Portfolio Analytics**: Position tracking, equity curve, exposure analysis
+
 #### Command Options
 
 ##### Data Commands
@@ -519,6 +606,17 @@ uv run python -m src.cli.main run-simple \
   - `--symbol`: Trading symbol (required)
   - `--start`: Start date for backtest (YYYY-MM-DD)
   - `--end`: End date for backtest (YYYY-MM-DD)
+
+##### Report Commands (New in Milestone 4)
+- `report list`: List all saved backtest results
+  - `--limit`: Maximum number of results to show
+- `report summary <result-id>`: Display quick performance summary
+- `report generate`: Generate comprehensive performance report
+  - `--result-id`: ID of the backtest result
+  - `--format`: Output format (`text`, `csv`, `json`)
+  - `-o, --output`: Output file path
+- `report export-all <result-id>`: Export all report formats
+  - `-o, --output`: Output directory for exports
 
 ### Example Output
 
@@ -761,6 +859,108 @@ This section provides detailed, step-by-step guides for common tasks.
    ```
 
 **Expected result**: Understanding system performance characteristics and resource usage.
+
+### Journey 6: Comprehensive Performance Analysis and Reporting (New in Milestone 4)
+
+**Goal**: Run backtests with full performance analytics and generate detailed reports
+
+**Prerequisites**: Journey 1 completed successfully, sample data imported
+
+**Steps**:
+1. **Run backtest with results persistence**:
+   ```bash
+   # Run backtest - results are automatically saved
+   uv run python -m src.cli.main backtest run \
+     --strategy mean_reversion \
+     --symbol AAPL2018 \
+     --start 2018-02-05 \
+     --end 2018-02-08
+
+   # Note the result ID from the output
+   ```
+
+2. **List saved results**:
+   ```bash
+   # View all saved backtest results
+   uv run python -m src.cli report list
+
+   # View recent 5 results
+   uv run python -m src.cli report list --limit 5
+   ```
+
+3. **Get quick performance summary**:
+   ```bash
+   # Replace <result-id> with actual ID from step 1
+   uv run python -m src.cli report summary <result-id>
+   ```
+
+   This displays:
+   - Total return and CAGR
+   - Risk-adjusted metrics (Sharpe, Sortino, Calmar ratios)
+   - Maximum drawdown
+   - Win rate and profit factor
+
+4. **Generate detailed text report**:
+   ```bash
+   # View comprehensive report in terminal
+   uv run python -m src.cli report generate --result-id <result-id> --format text
+
+   # Save to file for later review
+   uv run python -m src.cli report generate --result-id <result-id> --format text -o my_report.txt
+   ```
+
+5. **Export data for further analysis**:
+   ```bash
+   # Export to CSV for spreadsheet analysis
+   uv run python -m src.cli report generate --result-id <result-id> --format csv -o results.csv
+
+   # Export to JSON for programmatic analysis
+   uv run python -m src.cli report generate --result-id <result-id> --format json -o results.json
+
+   # Export all formats at once
+   mkdir reports
+   uv run python -m src.cli report export-all <result-id> -o reports/
+   ```
+
+6. **Compare multiple strategies**:
+   ```bash
+   # Run different strategies on same data
+   uv run python -m src.cli.main backtest run --strategy sma_crossover \
+     --symbol AAPL2018 --start 2018-02-05 --end 2018-02-08
+
+   uv run python -m src.cli.main backtest run --strategy mean_reversion \
+     --symbol AAPL2018 --start 2018-02-05 --end 2018-02-08
+
+   uv run python -m src.cli.main backtest run --strategy momentum \
+     --symbol AAPL2018 --start 2018-02-05 --end 2018-02-08
+
+   # List all results
+   uv run python -m src.cli report list
+
+   # Compare summaries
+   uv run python -m src.cli report summary <result-id-1>
+   uv run python -m src.cli report summary <result-id-2>
+   uv run python -m src.cli report summary <result-id-3>
+   ```
+
+7. **Analyze performance metrics**:
+   - Review Sharpe Ratio (risk-adjusted returns) - higher is better
+   - Check Maximum Drawdown - lower absolute value is better
+   - Evaluate Win Rate vs Profit Factor
+   - Examine trade distribution (wins vs losses)
+   - Study equity curve patterns
+
+**Learning outcome**:
+- Understanding comprehensive performance metrics
+- Comparing strategies using standardized analytics
+- Identifying optimal strategy parameters
+- Exporting data for deeper analysis in spreadsheets or custom tools
+
+**Expected results**:
+- Rich-formatted performance reports with detailed analytics
+- Multi-format exports for various use cases
+- Clear comparison of strategy performance
+- Data-driven insights for strategy optimization
 
 ### Troubleshooting Your Journey
 
@@ -1040,15 +1240,27 @@ If you encounter issues not covered here:
   - [x] YAML configuration support
   - [x] Strategy management CLI commands
   - [x] Strategy discovery and validation
+- [x] **Milestone 4**: Performance Metrics & Basic Reports
+  - [x] Performance metrics engine with Nautilus Trader analytics
+  - [x] Custom statistics (MaxDrawdown, CalmarRatio, WinRate, Expectancy)
+  - [x] Enhanced trade tracking with Nautilus Position integration
+  - [x] Portfolio analytics service with real-time metrics
+  - [x] Text report generation with Rich formatting
+  - [x] CSV/JSON export system with precision preservation
+  - [x] CLI report commands (summary, generate, list, export-all)
+  - [x] Results persistence and retrieval system
+  - [x] Comprehensive test suite (106 tests passing)
 
 ### In Progress 🚧
 - [ ] Complete data list command implementation (currently shows "coming soon")
 - [ ] Interactive Brokers data integration
-- [ ] Enhanced performance analytics and reporting
-- [ ] Results persistence and comparison features
+- [ ] Advanced visualization and charting
 
 ### Planned 📋
 - [ ] TimescaleDB optimization for large datasets
 - [ ] Web-based dashboard
 - [ ] Real-time data streaming
 - [ ] Advanced risk management features
+- [ ] Portfolio optimization tools
+- [ ] Walk-forward analysis
+- [ ] Monte Carlo simulation

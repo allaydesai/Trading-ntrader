@@ -21,28 +21,28 @@ class TestTextReportGenerator:
     def sample_metrics(self):
         """Provide sample performance metrics for testing."""
         return {
-            'sharpe_ratio': 1.42,
-            'sortino_ratio': 1.68,
-            'total_return': 0.153,
-            'cagr': 0.125,
-            'annualized_return': 0.125,
-            'volatility': 0.18,
-            'max_drawdown': -0.087,
-            'max_drawdown_date': datetime(2024, 6, 15, tzinfo=timezone.utc),
-            'recovery_date': datetime(2024, 8, 10, tzinfo=timezone.utc),
-            'recovery_days': 56,
-            'calmar_ratio': 1.44,
-            'profit_factor': 1.8,
-            'win_rate': 0.583,
-            'total_trades': 45,
-            'winning_trades': 26,
-            'losing_trades': 19,
-            'avg_win': 1250.50,
-            'avg_loss': -850.25,
-            'largest_win': 3500.00,
-            'largest_loss': -2100.00,
-            'total_pnl': 15300.00,
-            'calculation_timestamp': datetime.now(timezone.utc)
+            "sharpe_ratio": 1.42,
+            "sortino_ratio": 1.68,
+            "total_return": 0.153,
+            "cagr": 0.125,
+            "annualized_return": 0.125,
+            "volatility": 0.18,
+            "max_drawdown": -0.087,
+            "max_drawdown_date": datetime(2024, 6, 15, tzinfo=timezone.utc),
+            "recovery_date": datetime(2024, 8, 10, tzinfo=timezone.utc),
+            "recovery_days": 56,
+            "calmar_ratio": 1.44,
+            "profit_factor": 1.8,
+            "win_rate": 0.583,
+            "total_trades": 45,
+            "winning_trades": 26,
+            "losing_trades": 19,
+            "avg_win": 1250.50,
+            "avg_loss": -850.25,
+            "largest_win": 3500.00,
+            "largest_loss": -2100.00,
+            "total_pnl": 15300.00,
+            "calculation_timestamp": datetime.now(timezone.utc),
         }
 
     @pytest.fixture
@@ -50,35 +50,35 @@ class TestTextReportGenerator:
         """Provide sample trade data for testing."""
         return [
             {
-                'entry_time': datetime(2024, 1, 15, 9, 30, tzinfo=timezone.utc),
-                'exit_time': datetime(2024, 1, 15, 11, 45, tzinfo=timezone.utc),
-                'symbol': 'AAPL',
-                'side': 'LONG',
-                'quantity': 100,
-                'entry_price': Decimal('150.25'),
-                'exit_price': Decimal('152.80'),
-                'pnl': Decimal('255.00'),
-                'commission': Decimal('2.00'),
-                'strategy_name': 'sma_crossover'
+                "entry_time": datetime(2024, 1, 15, 9, 30, tzinfo=timezone.utc),
+                "exit_time": datetime(2024, 1, 15, 11, 45, tzinfo=timezone.utc),
+                "symbol": "AAPL",
+                "side": "LONG",
+                "quantity": 100,
+                "entry_price": Decimal("150.25"),
+                "exit_price": Decimal("152.80"),
+                "pnl": Decimal("255.00"),
+                "commission": Decimal("2.00"),
+                "strategy_name": "sma_crossover",
             },
             {
-                'entry_time': datetime(2024, 1, 16, 10, 15, tzinfo=timezone.utc),
-                'exit_time': datetime(2024, 1, 16, 14, 30, tzinfo=timezone.utc),
-                'symbol': 'MSFT',
-                'side': 'SHORT',
-                'quantity': 50,
-                'entry_price': Decimal('310.50'),
-                'exit_price': Decimal('308.75'),
-                'pnl': Decimal('87.50'),
-                'commission': Decimal('1.50'),
-                'strategy_name': 'mean_reversion'
-            }
+                "entry_time": datetime(2024, 1, 16, 10, 15, tzinfo=timezone.utc),
+                "exit_time": datetime(2024, 1, 16, 14, 30, tzinfo=timezone.utc),
+                "symbol": "MSFT",
+                "side": "SHORT",
+                "quantity": 50,
+                "entry_price": Decimal("310.50"),
+                "exit_price": Decimal("308.75"),
+                "pnl": Decimal("87.50"),
+                "commission": Decimal("1.50"),
+                "strategy_name": "mean_reversion",
+            },
         ]
 
     def test_generator_initialization(self, generator):
         """Test that TextReportGenerator initializes correctly."""
         assert generator is not None
-        assert hasattr(generator, 'console')
+        assert hasattr(generator, "console")
         assert generator.console is not None
 
     def test_generate_performance_report_structure(self, generator, sample_metrics):
@@ -100,7 +100,7 @@ class TestTextReportGenerator:
 
         # Check for formatted metrics
         assert "15.30%" in report  # Total return formatted as percentage
-        assert "1.42" in report    # Sharpe ratio
+        assert "1.42" in report  # Sharpe ratio
         assert "-8.70%" in report  # Max drawdown formatted as percentage
         assert "58.30%" in report  # Win rate formatted as percentage
 
@@ -136,9 +136,9 @@ class TestTextReportGenerator:
         assert "Winning Trades" in report
         assert "Win Rate" in report
         assert "Profit Factor" in report
-        assert "45" in report     # Total trades
-        assert "26" in report     # Winning trades
-        assert "1.80" in report   # Profit factor
+        assert "45" in report  # Total trades
+        assert "26" in report  # Winning trades
+        assert "1.80" in report  # Profit factor
 
     def test_trade_history_report(self, generator, sample_trades):
         """Test trade history report generation."""
@@ -158,7 +158,7 @@ class TestTextReportGenerator:
     def test_equity_curve_text_representation(self, generator):
         """Test equity curve text representation."""
         # Create sample equity curve data
-        dates = pd.date_range('2024-01-01', periods=10, freq='D')
+        dates = pd.date_range("2024-01-01", periods=10, freq="D")
         equity_values = [100000 + i * 500 for i in range(10)]
         equity_curve = pd.Series(equity_values, index=dates)
 
@@ -169,17 +169,17 @@ class TestTextReportGenerator:
         assert "100,000" in report  # Starting value
         assert "104,500" in report  # Final value
 
-    def test_comprehensive_report_generation(self, generator, sample_metrics, sample_trades):
+    def test_comprehensive_report_generation(
+        self, generator, sample_metrics, sample_trades
+    ):
         """Test comprehensive report with all sections."""
         equity_curve = pd.Series(
             [100000, 102000, 101500, 103000, 104500],
-            index=pd.date_range('2024-01-01', periods=5, freq='D')
+            index=pd.date_range("2024-01-01", periods=5, freq="D"),
         )
 
         report = generator.generate_comprehensive_report(
-            metrics=sample_metrics,
-            trades=sample_trades,
-            equity_curve=equity_curve
+            metrics=sample_metrics, trades=sample_trades, equity_curve=equity_curve
         )
 
         assert isinstance(report, str)
@@ -209,31 +209,36 @@ class TestTextReportGenerator:
         assert isinstance(equity_report, str)
 
         # Should contain appropriate messages for empty data
-        assert "No performance data available" in performance_report or "N/A" in performance_report
+        assert (
+            "No performance data available" in performance_report
+            or "N/A" in performance_report
+        )
 
     def test_formatting_with_none_values(self, generator):
         """Test formatting when metrics contain None values."""
         metrics_with_nones = {
-            'sharpe_ratio': None,
-            'total_return': 0.15,
-            'max_drawdown': None,
-            'win_rate': 0.58,
-            'recovery_date': None
+            "sharpe_ratio": None,
+            "total_return": 0.15,
+            "max_drawdown": None,
+            "win_rate": 0.58,
+            "recovery_date": None,
         }
 
         report = generator.generate_performance_report(metrics_with_nones)
 
         assert isinstance(report, str)
-        assert "N/A" in report or "None" in report  # Should handle None values gracefully
+        assert (
+            "N/A" in report or "None" in report
+        )  # Should handle None values gracefully
 
     def test_decimal_precision_formatting(self, generator, sample_trades):
         """Test that Decimal values are formatted correctly."""
         report = generator.generate_trade_history_report(sample_trades)
 
         # Should preserve decimal precision in display
-        assert "150.25" in report   # Entry price
-        assert "152.80" in report   # Exit price
-        assert "255.00" in report   # PnL
+        assert "150.25" in report  # Entry price
+        assert "152.80" in report  # Exit price
+        assert "255.00" in report  # PnL
         # Commission is not displayed in table, but Decimal formatting is preserved in price fields
 
     def test_datetime_formatting(self, generator, sample_trades):
@@ -247,18 +252,18 @@ class TestTextReportGenerator:
     def test_performance_attribution_report(self, generator):
         """Test performance attribution by strategy."""
         strategy_performance = {
-            'sma_crossover': {
-                'total_pnl': 8500.00,
-                'trades': 25,
-                'win_rate': 0.60,
-                'sharpe_ratio': 1.35
+            "sma_crossover": {
+                "total_pnl": 8500.00,
+                "trades": 25,
+                "win_rate": 0.60,
+                "sharpe_ratio": 1.35,
             },
-            'mean_reversion': {
-                'total_pnl': 6800.00,
-                'trades': 20,
-                'win_rate': 0.55,
-                'sharpe_ratio': 1.48
-            }
+            "mean_reversion": {
+                "total_pnl": 6800.00,
+                "trades": 20,
+                "win_rate": 0.55,
+                "sharpe_ratio": 1.48,
+            },
         }
 
         report = generator.generate_strategy_attribution_report(strategy_performance)
@@ -270,7 +275,7 @@ class TestTextReportGenerator:
         assert "8,500.00" in report
         assert "6,800.00" in report
 
-    @patch('src.services.reports.text_report.Console')
+    @patch("src.services.reports.text_report.Console")
     def test_console_capture_mechanism(self, mock_console_class, generator):
         """Test that console capture works correctly."""
         mock_console = MagicMock()
@@ -282,7 +287,7 @@ class TestTextReportGenerator:
         # Reinitialize with mocked console
         generator = TextReportGenerator()
 
-        result = generator.generate_performance_report({})
+        generator.generate_performance_report({})
 
         # Should call console capture
         mock_console.capture.assert_called()
@@ -293,10 +298,10 @@ class TestTextReportGenerator:
 
         # Check for Rich panel and table markers (these appear in captured output)
         # The exact format depends on Rich version, but should contain structured content
-        assert len(report.split('\n')) > 10  # Should be multi-line formatted
+        assert len(report.split("\n")) > 10  # Should be multi-line formatted
 
         # Should contain box drawing characters or structured layout
-        lines = report.split('\n')
+        lines = report.split("\n")
         structured_lines = [line for line in lines if line.strip()]
         assert len(structured_lines) > 5  # Should have multiple formatted sections
 
@@ -305,8 +310,7 @@ class TestTextReportGenerator:
         output_file = tmp_path / "test_report.txt"
 
         success = generator.export_performance_report(
-            metrics=sample_metrics,
-            output_path=str(output_file)
+            metrics=sample_metrics, output_path=str(output_file)
         )
 
         assert success is True

@@ -8,7 +8,7 @@ from rich.table import Table
 from src.core.strategy_factory import StrategyLoader
 from src.utils.config_loader import ConfigLoader
 
-console = Console()
+console = Console(width=200)
 
 
 @click.group()

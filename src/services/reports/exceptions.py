@@ -36,10 +36,7 @@ class FileWriteError(ExportError):
         """
         self.filepath = filepath
         self.reason = reason
-        super().__init__(
-            f"Failed to write to file: {filepath}",
-            details=reason
-        )
+        super().__init__(f"Failed to write to file: {filepath}", details=reason)
 
 
 class InvalidDataError(ExportError):
@@ -58,7 +55,7 @@ class InvalidDataError(ExportError):
         self.expected_type = expected_type
         super().__init__(
             f"Invalid data in field '{field_name}'",
-            details=f"Expected {expected_type}, got '{value}'"
+            details=f"Expected {expected_type}, got '{value}'",
         )
 
 
@@ -89,7 +86,7 @@ class UnsupportedFormatError(ExportError):
         self.supported_formats = supported_formats
         super().__init__(
             f"Unsupported export format: {format_name}",
-            details=f"Supported formats: {', '.join(supported_formats)}"
+            details=f"Supported formats: {', '.join(supported_formats)}",
         )
 
 
@@ -105,10 +102,7 @@ class SerializationError(ExportError):
         """
         self.data_type = data_type
         self.reason = reason
-        super().__init__(
-            f"Failed to serialize {data_type}",
-            details=reason
-        )
+        super().__init__(f"Failed to serialize {data_type}", details=reason)
 
 
 class DirectoryError(ExportError):
@@ -126,8 +120,7 @@ class DirectoryError(ExportError):
         self.operation = operation
         self.reason = reason
         super().__init__(
-            f"Directory {operation} failed: {directory_path}",
-            details=reason
+            f"Directory {operation} failed: {directory_path}", details=reason
         )
 
 
@@ -143,9 +136,7 @@ class PermissionError(ExportError):
         """
         self.path = path
         self.required_permission = required_permission
-        super().__init__(
-            f"Permission denied: {required_permission} access to {path}"
-        )
+        super().__init__(f"Permission denied: {required_permission} access to {path}")
 
 
 class ValidationError(ExportError):
@@ -164,7 +155,4 @@ class ValidationError(ExportError):
         if len(errors) > 3:
             error_summary += f" (and {len(errors) - 3} more)"
 
-        super().__init__(
-            f"{validation_type} validation failed",
-            details=error_summary
-        )
+        super().__init__(f"{validation_type} validation failed", details=error_summary)

@@ -8,8 +8,9 @@ from pathlib import Path
 
 from src.services.reports.validators import DataValidator, FileValidator, TradeValidator
 from src.services.reports.exceptions import (
-    InvalidDataError, EmptyDataError, DirectoryError,
-    PermissionError as ExportPermissionError, ValidationError
+    InvalidDataError,
+    EmptyDataError,
+    ValidationError,
 )
 from src.models.trade import TradeModel
 
@@ -184,7 +185,7 @@ class TestTradeValidator:
             exit_price=Decimal("155.00"),
             side="LONG",
             entry_time=datetime(2024, 1, 1),
-            exit_time=datetime(2024, 1, 1)
+            exit_time=datetime(2024, 1, 1),
         )
 
         errors = TradeValidator.validate_trade_model(trade)
@@ -192,6 +193,7 @@ class TestTradeValidator:
 
     def test_validate_trade_model_missing_fields(self):
         """Test trade model validation with missing required fields."""
+
         # Create a mock object that mimics a trade with missing fields
         class MockTrade:
             def __init__(self):
@@ -209,6 +211,7 @@ class TestTradeValidator:
 
     def test_validate_trade_model_invalid_prices(self):
         """Test trade model validation with invalid prices."""
+
         # Create a mock object that bypasses Pydantic validation
         class MockTrade:
             def __init__(self):
@@ -226,6 +229,7 @@ class TestTradeValidator:
 
     def test_validate_trade_model_invalid_side(self):
         """Test trade model validation with invalid side."""
+
         # Create a mock object that bypasses Pydantic validation
         class MockTrade:
             def __init__(self):
@@ -250,7 +254,7 @@ class TestTradeValidator:
                 quantity=Decimal("100"),
                 entry_price=Decimal("150.00"),
                 side="LONG",
-                entry_time=datetime(2024, 1, 1)
+                entry_time=datetime(2024, 1, 1),
             ),
             TradeModel(
                 position_id="POS-002",
@@ -258,8 +262,8 @@ class TestTradeValidator:
                 quantity=Decimal("50"),
                 entry_price=Decimal("2800.00"),
                 side="LONG",
-                entry_time=datetime(2024, 1, 2)
-            )
+                entry_time=datetime(2024, 1, 2),
+            ),
         ]
 
         # Should not raise exception
@@ -277,6 +281,7 @@ class TestTradeValidator:
 
     def test_validate_trade_list_with_invalid_trades(self):
         """Test trade list validation fails with invalid trades."""
+
         # Create a mock object that bypasses Pydantic validation
         class MockTrade:
             def __init__(self, position_id, entry_price, side):
@@ -294,9 +299,9 @@ class TestTradeValidator:
                 quantity=Decimal("100"),
                 entry_price=Decimal("150.00"),
                 side="LONG",
-                entry_time=datetime(2024, 1, 1)
+                entry_time=datetime(2024, 1, 1),
             ),
-            MockTrade("POS-002", Decimal("-2800.00"), "INVALID")  # Invalid trade
+            MockTrade("POS-002", Decimal("-2800.00"), "INVALID"),  # Invalid trade
         ]
 
         with pytest.raises(ValidationError) as exc_info:

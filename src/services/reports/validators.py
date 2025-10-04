@@ -4,14 +4,14 @@ import os
 from decimal import Decimal, InvalidOperation
 from datetime import datetime
 from pathlib import Path
-from typing import Any, List, Dict, Optional, Union
+from typing import Any, List, Optional, Union
 
 from .exceptions import (
     InvalidDataError,
     EmptyDataError,
     DirectoryError,
     PermissionError as ExportPermissionError,
-    ValidationError
+    ValidationError,
 )
 
 
@@ -32,7 +32,7 @@ class DataValidator:
         if data is None:
             raise EmptyDataError(data_type)
 
-        if hasattr(data, '__len__') and len(data) == 0:
+        if hasattr(data, "__len__") and len(data) == 0:
             raise EmptyDataError(data_type)
 
     @staticmethod
@@ -82,14 +82,16 @@ class DataValidator:
         # Try to parse string datetime
         if isinstance(value, str):
             try:
-                return datetime.fromisoformat(value.replace('Z', '+00:00'))
+                return datetime.fromisoformat(value.replace("Z", "+00:00"))
             except ValueError as e:
                 raise InvalidDataError(field_name, str(value), "datetime") from e
 
         raise InvalidDataError(field_name, str(value), "datetime")
 
     @staticmethod
-    def validate_string(value: Any, field_name: str, max_length: Optional[int] = None) -> str:
+    def validate_string(
+        value: Any, field_name: str, max_length: Optional[int] = None
+    ) -> str:
         """Validate string value.
 
         Args:
@@ -116,14 +118,18 @@ class DataValidator:
             raise InvalidDataError(
                 field_name,
                 f"String too long ({len(value)} chars)",
-                f"string (max {max_length} chars)"
+                f"string (max {max_length} chars)",
             )
 
         return value
 
     @staticmethod
-    def validate_numeric(value: Any, field_name: str, min_value: Optional[float] = None,
-                        max_value: Optional[float] = None) -> Union[int, float]:
+    def validate_numeric(
+        value: Any,
+        field_name: str,
+        min_value: Optional[float] = None,
+        max_value: Optional[float] = None,
+    ) -> Union[int, float]:
         """Validate numeric value.
 
         Args:
@@ -151,16 +157,12 @@ class DataValidator:
 
             if min_value is not None and numeric_value < min_value:
                 raise InvalidDataError(
-                    field_name,
-                    str(value),
-                    f"numeric value >= {min_value}"
+                    field_name, str(value), f"numeric value >= {min_value}"
                 )
 
             if max_value is not None and numeric_value > max_value:
                 raise InvalidDataError(
-                    field_name,
-                    str(value),
-                    f"numeric value <= {max_value}"
+                    field_name, str(value), f"numeric value <= {max_value}"
                 )
 
             return numeric_value
@@ -227,7 +229,7 @@ class FileValidator:
                 raise InvalidDataError(
                     "filename",
                     filename,
-                    f"filename without characters: {invalid_chars}"
+                    f"filename without characters: {invalid_chars}",
                 )
 
         # Check filename length (just the name part, not the full path)
@@ -255,9 +257,7 @@ class FileValidator:
 
         if extension not in [ext.lower() for ext in allowed_extensions]:
             raise InvalidDataError(
-                "file_extension",
-                extension,
-                f"one of: {', '.join(allowed_extensions)}"
+                "file_extension", extension, f"one of: {', '.join(allowed_extensions)}"
             )
 
         return filename
@@ -279,58 +279,69 @@ class TradeValidator:
         errors = []
 
         # Required fields validation
-        required_fields = ['position_id', 'instrument_id', 'entry_price', 'quantity', 'side']
+        required_fields = [
+            "position_id",
+            "instrument_id",
+            "entry_price",
+            "quantity",
+            "side",
+        ]
         for field in required_fields:
             if not hasattr(trade, field) or getattr(trade, field) is None:
                 errors.append(f"Missing required field: {field}")
 
         # Validate specific field types and values
         try:
-            if hasattr(trade, 'entry_price') and trade.entry_price is not None:
-                DataValidator.validate_decimal(trade.entry_price, 'entry_price')
+            if hasattr(trade, "entry_price") and trade.entry_price is not None:
+                DataValidator.validate_decimal(trade.entry_price, "entry_price")
                 if trade.entry_price <= 0:
                     errors.append("Entry price must be positive")
         except InvalidDataError as e:
             errors.append(str(e))
 
         try:
-            if hasattr(trade, 'exit_price') and trade.exit_price is not None:
-                DataValidator.validate_decimal(trade.exit_price, 'exit_price')
+            if hasattr(trade, "exit_price") and trade.exit_price is not None:
+                DataValidator.validate_decimal(trade.exit_price, "exit_price")
                 if trade.exit_price <= 0:
                     errors.append("Exit price must be positive")
         except InvalidDataError as e:
             errors.append(str(e))
 
         try:
-            if hasattr(trade, 'quantity') and trade.quantity is not None:
-                DataValidator.validate_decimal(trade.quantity, 'quantity')
+            if hasattr(trade, "quantity") and trade.quantity is not None:
+                DataValidator.validate_decimal(trade.quantity, "quantity")
                 if trade.quantity <= 0:
                     errors.append("Quantity must be positive")
         except InvalidDataError as e:
             errors.append(str(e))
 
         # Validate side
-        if hasattr(trade, 'side') and trade.side:
-            valid_sides = ['LONG', 'SHORT', 'BUY', 'SELL']
+        if hasattr(trade, "side") and trade.side:
+            valid_sides = ["LONG", "SHORT", "BUY", "SELL"]
             if trade.side.upper() not in valid_sides:
-                errors.append(f"Invalid side: {trade.side}. Must be one of: {valid_sides}")
+                errors.append(
+                    f"Invalid side: {trade.side}. Must be one of: {valid_sides}"
+                )
 
         # Validate timestamps
         try:
-            if hasattr(trade, 'entry_time') and trade.entry_time:
-                DataValidator.validate_datetime(trade.entry_time, 'entry_time')
+            if hasattr(trade, "entry_time") and trade.entry_time:
+                DataValidator.validate_datetime(trade.entry_time, "entry_time")
         except InvalidDataError as e:
             errors.append(str(e))
 
         try:
-            if hasattr(trade, 'exit_time') and trade.exit_time:
-                DataValidator.validate_datetime(trade.exit_time, 'exit_time')
+            if hasattr(trade, "exit_time") and trade.exit_time:
+                DataValidator.validate_datetime(trade.exit_time, "exit_time")
         except InvalidDataError as e:
             errors.append(str(e))
 
         # Validate instrument_id format
-        if hasattr(trade, 'instrument_id') and trade.instrument_id:
-            if not isinstance(trade.instrument_id, str) or len(trade.instrument_id.strip()) == 0:
+        if hasattr(trade, "instrument_id") and trade.instrument_id:
+            if (
+                not isinstance(trade.instrument_id, str)
+                or len(trade.instrument_id.strip()) == 0
+            ):
                 errors.append("Instrument ID must be a non-empty string")
 
         return errors

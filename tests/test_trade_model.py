@@ -3,7 +3,7 @@
 import pytest
 from decimal import Decimal
 from datetime import datetime, timedelta
-from unittest.mock import Mock, MagicMock
+from unittest.mock import Mock
 
 from src.models.trade import TradeModel
 
@@ -19,7 +19,7 @@ class TestTradeModel:
             entry_time=datetime(2024, 1, 15, 10, 30),
             entry_price=Decimal("150.50"),
             quantity=Decimal("100"),
-            side="LONG"
+            side="LONG",
         )
 
         assert trade.position_id == "test-123"
@@ -42,7 +42,7 @@ class TestTradeModel:
                 entry_time=datetime.now(),
                 entry_price=Decimal("-100"),
                 quantity=Decimal("100"),
-                side="LONG"
+                side="LONG",
             )
 
         # Test invalid quantity (must be non-negative)
@@ -53,7 +53,7 @@ class TestTradeModel:
                 entry_time=datetime.now(),
                 entry_price=Decimal("100"),
                 quantity=Decimal("-100"),
-                side="LONG"
+                side="LONG",
             )
 
     def test_pnl_calculation_long_position(self):
@@ -64,7 +64,7 @@ class TestTradeModel:
             entry_time=datetime.now(),
             entry_price=Decimal("100.00"),
             quantity=Decimal("100"),
-            side="LONG"
+            side="LONG",
         )
 
         # Close the trade at a profit
@@ -92,7 +92,7 @@ class TestTradeModel:
             entry_time=datetime.now(),
             entry_price=Decimal("100.00"),
             quantity=Decimal("100"),
-            side="SHORT"
+            side="SHORT",
         )
 
         # Close the trade at a profit (price went down)
@@ -118,7 +118,7 @@ class TestTradeModel:
             quantity=Decimal("100"),
             side="LONG",
             commission=Decimal("10.00"),
-            slippage=Decimal("5.00")
+            slippage=Decimal("5.00"),
         )
 
         trade.update_exit_data(exit_price=Decimal("110.00"))
@@ -144,7 +144,7 @@ class TestTradeModel:
             quantity=Decimal("100"),
             side="LONG",
             exit_time=exit_time,
-            exit_price=Decimal("105.00")
+            exit_price=Decimal("105.00"),
         )
 
         # Test duration calculations
@@ -161,22 +161,22 @@ class TestTradeModel:
             quantity=Decimal("100"),
             side="LONG",
             strategy_name="test_strategy",
-            commission=Decimal("5.00")
+            commission=Decimal("5.00"),
         )
 
         trade.update_exit_data(exit_price=Decimal("105.00"))
 
         trade_dict = trade.to_dict()
 
-        assert trade_dict['position_id'] == "dict-test"
-        assert trade_dict['instrument_id'] == "AAPL"
-        assert trade_dict['strategy_name'] == "test_strategy"
-        assert trade_dict['side'] == "LONG"
-        assert trade_dict['entry_price'] == "100.00"
-        assert trade_dict['exit_price'] == "105.00"
-        assert trade_dict['quantity'] == "100"
-        assert trade_dict['commission'] == "5.00"
-        assert trade_dict['is_winning_trade'] is True
+        assert trade_dict["position_id"] == "dict-test"
+        assert trade_dict["instrument_id"] == "AAPL"
+        assert trade_dict["strategy_name"] == "test_strategy"
+        assert trade_dict["side"] == "LONG"
+        assert trade_dict["entry_price"] == "100.00"
+        assert trade_dict["exit_price"] == "105.00"
+        assert trade_dict["quantity"] == "100"
+        assert trade_dict["commission"] == "5.00"
+        assert trade_dict["is_winning_trade"] is True
 
     def test_string_representations(self):
         """Test string and repr methods."""
@@ -186,7 +186,7 @@ class TestTradeModel:
             entry_time=datetime.now(),
             entry_price=Decimal("100.00"),
             quantity=Decimal("100"),
-            side="LONG"
+            side="LONG",
         )
 
         # Test open trade string
@@ -227,7 +227,9 @@ class TestNautilusPositionIntegration:
 
         # Financial data
         position.commission = 5.50
-        position.realized_pnl = 525.0 - 5.50 if is_closed else None  # 525 gross - commission
+        position.realized_pnl = (
+            525.0 - 5.50 if is_closed else None
+        )  # 525 gross - commission
 
         return position
 
@@ -327,7 +329,7 @@ class TestTradeModelIntegration:
             entry_time=datetime(2024, 1, 15, 10, 30),
             entry_price=Decimal("100.00"),
             quantity=Decimal("100"),
-            side="LONG"
+            side="LONG",
         )
 
         # Should be able to serialize to JSON
@@ -352,12 +354,16 @@ class TestTradeModelIntegration:
                 entry_price=Decimal(f"{100 + i}.00"),
                 quantity=Decimal("100"),
                 side="LONG" if i % 2 == 0 else "SHORT",
-                strategy_name="test_strategy"
+                strategy_name="test_strategy",
             )
 
             # Close some trades
             if i < 3:
-                exit_price = Decimal(f"{105 + i}.00") if trade.side == "LONG" else Decimal(f"{95 + i}.00")
+                exit_price = (
+                    Decimal(f"{105 + i}.00")
+                    if trade.side == "LONG"
+                    else Decimal(f"{95 + i}.00")
+                )
                 trade.update_exit_data(exit_price)
 
             trades.append(trade)
@@ -384,7 +390,7 @@ class TestTradeModelIntegration:
             entry_time=datetime.now(),
             entry_price=Decimal("100.00"),
             quantity=Decimal("100"),
-            side="LONG"
+            side="LONG",
         )
 
         initial_updated_at = trade.updated_at

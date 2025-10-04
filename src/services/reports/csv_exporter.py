@@ -2,14 +2,14 @@
 
 import csv
 import pandas as pd
-from typing import Dict, Any, List, Optional, Union, Generator
+from typing import Dict, Any, List, Optional, Generator
 from decimal import Decimal
 from datetime import datetime
 import os
 from pathlib import Path
 
 from .exceptions import FileWriteError, InvalidDataError, EmptyDataError
-from .validators import DataValidator, FileValidator, TradeValidator
+from .validators import FileValidator
 
 
 class CSVExporter:
@@ -18,9 +18,9 @@ class CSVExporter:
     def __init__(
         self,
         decimal_places: int = 5,
-        delimiter: str = ',',
+        delimiter: str = ",",
         quote_char: str = '"',
-        date_format: str = '%Y-%m-%d %H:%M:%S%z'
+        date_format: str = "%Y-%m-%d %H:%M:%S%z",
     ):
         """
         Initialize CSV exporter with configuration options.
@@ -41,7 +41,7 @@ class CSVExporter:
         metrics: Dict[str, Any],
         filename: str,
         delimiter: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """
         Export performance metrics to CSV file.
@@ -62,30 +62,40 @@ class CSVExporter:
         """
         # Validate inputs
         FileValidator.validate_filename(filename)
-        FileValidator.validate_file_extension(filename, ['.csv'])
+        FileValidator.validate_file_extension(filename, [".csv"])
         if metrics is None:
             raise EmptyDataError("metrics")
 
         try:
             if not metrics:
                 # Create empty CSV with headers for empty metrics
-                df = pd.DataFrame(columns=['metric', 'value'])
+                df = pd.DataFrame(columns=["metric", "value"])
             else:
                 # Convert metrics to DataFrame
                 data = []
                 for key, value in metrics.items():
                     processed_value = self._process_value(value)
-                    data.append({'metric': key, 'value': processed_value})
+                    data.append({"metric": key, "value": processed_value})
 
                 df = pd.DataFrame(data)
 
             # Add metadata if provided
             if metadata:
                 for key, value in metadata.items():
-                    df = pd.concat([
-                        df,
-                        pd.DataFrame([{'metric': f'_metadata_{key}', 'value': self._process_value(value)}])
-                    ], ignore_index=True)
+                    df = pd.concat(
+                        [
+                            df,
+                            pd.DataFrame(
+                                [
+                                    {
+                                        "metric": f"_metadata_{key}",
+                                        "value": self._process_value(value),
+                                    }
+                                ]
+                            ),
+                        ],
+                        ignore_index=True,
+                    )
 
             # Export to CSV
             delimiter_to_use = delimiter or self.delimiter
@@ -94,7 +104,7 @@ class CSVExporter:
                 index=False,
                 sep=delimiter_to_use,
                 quoting=csv.QUOTE_NONNUMERIC,
-                quotechar=self.quote_char
+                quotechar=self.quote_char,
             )
 
             return True
@@ -110,7 +120,7 @@ class CSVExporter:
         self,
         trades: List[Dict[str, Any]],
         filename: str,
-        delimiter: Optional[str] = None
+        delimiter: Optional[str] = None,
     ) -> bool:
         """
         Export trade data to CSV file.
@@ -126,11 +136,22 @@ class CSVExporter:
         try:
             if not trades:
                 # Create empty DataFrame with expected columns
-                df = pd.DataFrame(columns=[
-                    'id', 'entry_time', 'exit_time', 'symbol', 'side',
-                    'quantity', 'entry_price', 'exit_price', 'pnl',
-                    'commission', 'slippage', 'strategy_name'
-                ])
+                df = pd.DataFrame(
+                    columns=[
+                        "id",
+                        "entry_time",
+                        "exit_time",
+                        "symbol",
+                        "side",
+                        "quantity",
+                        "entry_price",
+                        "exit_price",
+                        "pnl",
+                        "commission",
+                        "slippage",
+                        "strategy_name",
+                    ]
+                )
             else:
                 # Process trade data
                 processed_trades = []
@@ -149,7 +170,7 @@ class CSVExporter:
                 index=False,
                 sep=delimiter_to_use,
                 quoting=csv.QUOTE_NONNUMERIC,
-                quotechar=self.quote_char
+                quotechar=self.quote_char,
             )
 
             return True
@@ -162,7 +183,7 @@ class CSVExporter:
         self,
         trade_chunks: Generator[List[Dict[str, Any]], None, None],
         filename: str,
-        chunk_size: int = 1000
+        chunk_size: int = 1000,
     ) -> bool:
         """
         Export large trade datasets in chunks for memory efficiency.
@@ -193,7 +214,7 @@ class CSVExporter:
                 df = pd.DataFrame(processed_trades)
 
                 # Write to file (append after first chunk)
-                mode = 'w' if first_chunk else 'a'
+                mode = "w" if first_chunk else "a"
                 header = first_chunk
 
                 df.to_csv(
@@ -203,7 +224,7 @@ class CSVExporter:
                     index=False,
                     sep=self.delimiter,
                     quoting=csv.QUOTE_NONNUMERIC,
-                    quotechar=self.quote_char
+                    quotechar=self.quote_char,
                 )
 
                 first_chunk = False
@@ -214,11 +235,7 @@ class CSVExporter:
             print(f"Error exporting trades in chunks: {e}")
             return False
 
-    def export_equity_curve(
-        self,
-        equity_curve: pd.Series,
-        filename: str
-    ) -> bool:
+    def export_equity_curve(self, equity_curve: pd.Series, filename: str) -> bool:
         """
         Export equity curve data to CSV.
 
@@ -232,20 +249,24 @@ class CSVExporter:
         try:
             if equity_curve.empty:
                 # Create empty DataFrame
-                df = pd.DataFrame(columns=['timestamp', 'equity'])
+                df = pd.DataFrame(columns=["timestamp", "equity"])
             else:
                 # Convert to DataFrame with processed values
-                df = pd.DataFrame({
-                    'timestamp': equity_curve.index,
-                    'equity': [self._process_value(val) for val in equity_curve.values]
-                })
+                df = pd.DataFrame(
+                    {
+                        "timestamp": equity_curve.index,
+                        "equity": [
+                            self._process_value(val) for val in equity_curve.values
+                        ],
+                    }
+                )
 
             df.to_csv(
                 filename,
                 index=False,
                 sep=self.delimiter,
                 quoting=csv.QUOTE_NONNUMERIC,
-                quotechar=self.quote_char
+                quotechar=self.quote_char,
             )
 
             return True
@@ -255,10 +276,7 @@ class CSVExporter:
             return False
 
     def export_dataframe(
-        self,
-        dataframe: pd.DataFrame,
-        filename: str,
-        preserve_index: bool = True
+        self, dataframe: pd.DataFrame, filename: str, preserve_index: bool = True
     ) -> bool:
         """
         Export arbitrary DataFrame to CSV with value processing.
@@ -292,7 +310,7 @@ class CSVExporter:
                 index=preserve_index,
                 sep=self.delimiter,
                 quoting=csv.QUOTE_NONNUMERIC,
-                quotechar=self.quote_char
+                quotechar=self.quote_char,
             )
 
             return True
@@ -306,7 +324,7 @@ class CSVExporter:
         metrics: Dict[str, Any],
         trades: List[Dict[str, Any]],
         equity_curve: pd.Series,
-        base_filename: str
+        base_filename: str,
     ) -> Dict[str, bool]:
         """
         Export complete performance data as multiple CSV files.
@@ -327,15 +345,15 @@ class CSVExporter:
 
         # Export metrics
         metrics_file = base_dir / f"{base_name}_metrics.csv"
-        results['metrics'] = self.export_metrics(metrics, str(metrics_file))
+        results["metrics"] = self.export_metrics(metrics, str(metrics_file))
 
         # Export trades
         trades_file = base_dir / f"{base_name}_trades.csv"
-        results['trades'] = self.export_trades(trades, str(trades_file))
+        results["trades"] = self.export_trades(trades, str(trades_file))
 
         # Export equity curve
         equity_file = base_dir / f"{base_name}_equity.csv"
-        results['equity'] = self.export_equity_curve(equity_curve, str(equity_file))
+        results["equity"] = self.export_equity_curve(equity_curve, str(equity_file))
 
         return results
 
@@ -350,7 +368,7 @@ class CSVExporter:
             String representation suitable for CSV
         """
         if value is None:
-            return ''
+            return ""
 
         if isinstance(value, Decimal):
             # Preserve exact decimal representation including trailing zeros
@@ -367,7 +385,7 @@ class CSVExporter:
         if isinstance(value, (int, float)):
             # Handle numeric values
             if pd.isna(value) or value != value:  # Check for NaN
-                return ''
+                return ""
             if isinstance(value, float):
                 # Format float with specified precision
                 return f"{value:.{self.decimal_places}f}"
@@ -376,15 +394,15 @@ class CSVExporter:
         if isinstance(value, str):
             return value
 
-        if hasattr(value, '__str__'):
+        if hasattr(value, "__str__"):
             # For any other object with string representation
             try:
                 return str(value)
             except Exception:
-                return ''
+                return ""
 
         # Fallback for unknown types
-        return ''
+        return ""
 
     def validate_file_path(self, filename: str) -> bool:
         """
@@ -425,7 +443,7 @@ class CSVExporter:
         try:
             file_path = Path(filename)
             if not file_path.exists():
-                return {'exists': False}
+                return {"exists": False}
 
             stat = file_path.stat()
 
@@ -435,7 +453,7 @@ class CSVExporter:
                 columns = list(df.columns)
 
                 # Get row count
-                with open(filename, 'r') as f:
+                with open(filename, "r") as f:
                     row_count = sum(1 for line in f) - 1  # Subtract header
 
             except Exception:
@@ -443,13 +461,13 @@ class CSVExporter:
                 row_count = 0
 
             return {
-                'exists': True,
-                'size_bytes': stat.st_size,
-                'size_mb': round(stat.st_size / (1024 * 1024), 2),
-                'modified_time': datetime.fromtimestamp(stat.st_mtime),
-                'columns': columns,
-                'row_count': row_count
+                "exists": True,
+                "size_bytes": stat.st_size,
+                "size_mb": round(stat.st_size / (1024 * 1024), 2),
+                "modified_time": datetime.fromtimestamp(stat.st_mtime),
+                "columns": columns,
+                "row_count": row_count,
             }
 
         except Exception as e:
-            return {'exists': False, 'error': str(e)}
+            return {"exists": False, "error": str(e)}
