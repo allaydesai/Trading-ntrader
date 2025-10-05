@@ -1,7 +1,8 @@
 """Data service for fetching and converting market data."""
 
 from datetime import datetime, timezone
-from typing import List, Optional, Dict, Any
+from decimal import Decimal
+from typing import List, Optional, Dict, Any, Literal
 
 import pandas as pd
 from sqlalchemy import text
@@ -13,16 +14,25 @@ from src.config import get_settings
 class DataService:
     """Service for fetching and converting market data."""
 
-    def __init__(self):
-        """Initialize data service with caching."""
+    def __init__(self, source: Literal["database", "csv", "ibkr"] = "database"):
+        """
+        Initialize data service with caching.
+
+        Args:
+            source: Data source type ("database", "csv", "ibkr")
+                   - "database": Use existing database (default, backward compatible)
+                   - "csv": Alias for "database" (M2 CSV import workflow)
+                   - "ibkr": Fetch data from Interactive Brokers
+        """
         self._cache: Dict[str, Any] = {}
         self.settings = get_settings()
+        self.source = source
 
     async def get_market_data(
         self, symbol: str, start: datetime, end: datetime
     ) -> List[Dict[str, Any]]:
         """
-        Fetch market data from database for the given parameters.
+        Fetch market data from configured source.
 
         Args:
             symbol: Trading symbol (e.g., AAPL)
@@ -37,10 +47,39 @@ class DataService:
             ValueError: If no data found for parameters
         """
         # Check cache first
-        cache_key = f"{symbol}_{start}_{end}"
+        cache_key = f"{self.source}_{symbol}_{start}_{end}"
         if cache_key in self._cache:
             return self._cache[cache_key]
 
+        # Route to appropriate data source
+        if self.source == "ibkr":
+            data = await self._fetch_from_ibkr(symbol, start, end)
+        else:
+            # Use database (default, "csv" alias, backward compatible)
+            data = await self._fetch_from_database(symbol, start, end)
+
+        # Cache results
+        self._cache[cache_key] = data
+
+        return data
+
+    async def _fetch_from_database(
+        self, symbol: str, start: datetime, end: datetime
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch market data from database (original M2 implementation).
+
+        Args:
+            symbol: Trading symbol
+            start: Start datetime
+            end: End datetime
+
+        Returns:
+            List of market data records
+
+        Raises:
+            ValueError: If no data found
+        """
         # Query database
         async with get_session() as session:
             query = text("""
@@ -76,9 +115,6 @@ class DataService:
                     "volume": int(row.volume),
                 }
             )
-
-        # Cache results
-        self._cache[cache_key] = data
 
         return data
 
@@ -446,3 +482,87 @@ class DataService:
                 "reason": f"Error validating data availability: {e}",
                 "available_symbols": [],
             }
+
+    async def _fetch_from_ibkr(
+        self, symbol: str, start: datetime, end: datetime
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch data from IBKR and return as database-compatible records.
+
+        Args:
+            symbol: Trading symbol
+            start: Start datetime
+            end: End datetime
+
+        Returns:
+            List of market data dictionaries compatible with database schema
+        """
+        from src.services.ibkr_client import IBKRHistoricalClient
+        from src.services.data_fetcher import HistoricalDataFetcher
+        from nautilus_trader.adapters.interactive_brokers.common import IBContract
+
+        # Connect to IBKR
+        client = IBKRHistoricalClient(
+            host=self.settings.ibkr.ibkr_host,
+            port=self.settings.ibkr.ibkr_port,
+            client_id=self.settings.ibkr.ibkr_client_id,
+        )
+
+        try:
+            await client.connect(timeout=self.settings.ibkr.ibkr_connection_timeout)
+
+            # Create fetcher
+            fetcher = HistoricalDataFetcher(client)
+
+            # Create contract for the symbol
+            contract = IBContract(
+                secType="STK",
+                symbol=symbol,
+                exchange="SMART",
+                primaryExchange="NASDAQ",  # Will be determined by IB
+            )
+
+            # Fetch bars
+            bars = await fetcher.fetch_bars(
+                contracts=[contract],
+                bar_specifications=["1-DAY-LAST"],
+                start_date=start,
+                end_date=end,
+            )
+
+            # Convert bars to database records
+            records = []
+            for bar in bars:
+                record = self._bar_to_db_record(bar, symbol)
+                records.append(record)
+
+            return records
+
+        finally:
+            await client.disconnect()
+
+    def _bar_to_db_record(self, bar, symbol: str) -> Dict[str, Any]:
+        """
+        Convert Nautilus Bar to database record format.
+
+        Args:
+            bar: Nautilus Bar object
+            symbol: Trading symbol
+
+        Returns:
+            Dictionary with database schema fields
+        """
+        # Convert nanosecond timestamp to datetime
+        timestamp = datetime.fromtimestamp(
+            bar.ts_event / 1_000_000_000, tz=timezone.utc
+        )
+
+        return {
+            "symbol": symbol,
+            "timestamp": timestamp,
+            "open": Decimal(str(bar.open.as_double())),
+            "high": Decimal(str(bar.high.as_double())),
+            "low": Decimal(str(bar.low.as_double())),
+            "close": Decimal(str(bar.close.as_double())),
+            "volume": int(bar.volume.as_double()),
+        }

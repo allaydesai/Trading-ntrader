@@ -2,10 +2,60 @@
 
 from decimal import Decimal
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import Field
 from pydantic_settings import BaseSettings
+
+
+class IBKRSettings(BaseSettings):
+    """Interactive Brokers configuration settings."""
+
+    # Connection settings
+    ibkr_host: str = Field(
+        default="127.0.0.1", description="IB Gateway/TWS host address"
+    )
+    ibkr_port: int = Field(default=7497, description="Connection port (7497=TWS paper)")
+    ibkr_client_id: int = Field(default=1, description="Unique client identifier")
+
+    # Gateway mode
+    ibkr_trading_mode: Literal["paper", "live"] = Field(
+        default="paper", description="Trading mode (paper or live)"
+    )
+    ibkr_read_only: bool = Field(
+        default=True, description="True = data only, False = allow trading"
+    )
+
+    # Credentials (from environment)
+    tws_username: str = Field(default="", description="IBKR username")
+    tws_password: str = Field(default="", description="IBKR password")
+    tws_account: str = Field(default="", description="IBKR account ID")
+
+    # Timeouts
+    ibkr_connection_timeout: int = Field(
+        default=300, description="Connection timeout in seconds (5 minutes)"
+    )
+    ibkr_request_timeout: int = Field(
+        default=60, description="Request timeout in seconds (1 minute)"
+    )
+
+    # Rate limiting
+    ibkr_rate_limit: int = Field(
+        default=45, description="Requests per second (90% of 50 limit)"
+    )
+
+    # Data settings
+    ibkr_use_rth: bool = Field(default=True, description="Regular Trading Hours only")
+    ibkr_market_data_type: str = Field(
+        default="DELAYED_FROZEN", description="Market data type for paper trading"
+    )
+
+    model_config = {
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "case_sensitive": False,
+        "extra": "ignore",
+    }
 
 
 class Settings(BaseSettings):
@@ -61,6 +111,11 @@ class Settings(BaseSettings):
     # Logging settings
     log_level: str = Field(default="INFO", description="Logging level")
 
+    # IBKR settings
+    ibkr: IBKRSettings = Field(
+        default_factory=IBKRSettings, description="Interactive Brokers settings"
+    )
+
     @property
     def is_database_available(self) -> bool:
         """Check if database is configured."""
@@ -70,6 +125,7 @@ class Settings(BaseSettings):
         "env_file": ".env",
         "env_file_encoding": "utf-8",
         "case_sensitive": False,
+        "extra": "ignore",
     }
 
 
