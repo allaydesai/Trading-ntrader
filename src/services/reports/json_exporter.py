@@ -124,7 +124,7 @@ class JSONExporter:
                 )
         except OSError as e:
             raise FileWriteError(str(filepath), f"OS error: {str(e)}") from e
-        except json.JSONEncoder as e:
+        except (TypeError, ValueError) as e:
             raise SerializationError(
                 "trades", f"JSON serialization failed: {str(e)}"
             ) from e

@@ -4,7 +4,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Literal, Optional
 
-from ibapi.common import MarketDataTypeEnum
+from ibapi.common import MarketDataTypeEnum  # type: ignore
 from pydantic import Field
 from pydantic_settings import BaseSettings
 

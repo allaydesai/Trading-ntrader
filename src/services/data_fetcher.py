@@ -132,7 +132,7 @@ class HistoricalDataFetcher:
 
         # Request ticks using Nautilus client
         ticks = await self.client.client.request_ticks(
-            tick_types=tick_types,
+            tick_type=tick_types,  # type: ignore[arg-type]
             start_date_time=start_date,
             end_date_time=end_date,
             tz_name=timezone,

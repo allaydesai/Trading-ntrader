@@ -37,7 +37,7 @@ class MaxDrawdown(PortfolioStatistic):
             }
 
         # Calculate cumulative returns and running maximum
-        cumulative = (1 + returns).cumprod()
+        cumulative: pd.Series = (1 + returns).cumprod()  # type: ignore[assignment]
         running_max = cumulative.expanding().max()
         drawdown = (cumulative - running_max) / running_max
 
@@ -92,10 +92,10 @@ class CalmarRatio(PortfolioStatistic):
             return 0.0
 
         # Calculate annualized return
-        total_return = (1 + returns).prod() - 1
+        total_return = (1 + returns).prod() - 1  # type: ignore[operator]
         periods_per_year = 252  # Assume daily data
         if len(returns) > 0:
-            annual_return = (1 + total_return) ** (periods_per_year / len(returns)) - 1
+            annual_return = (1 + total_return) ** (periods_per_year / len(returns)) - 1  # type: ignore[operator]
         else:
             annual_return = 0.0
 
@@ -127,7 +127,7 @@ class CalmarRatio(PortfolioStatistic):
 
         # Calculate max drawdown
         max_dd_calc = MaxDrawdown()
-        max_dd = abs(max_dd_calc.calculate_from_realized_pnls(realized_pnls))
+        max_dd = abs(max_dd_calc.calculate_from_realized_pnls(realized_pnls) or 0.0)  # type: ignore[arg-type]
 
         return float(annual_return / max_dd) if max_dd > 0 else 0.0
 
@@ -272,7 +272,7 @@ class PerformanceCalculator:
                     "max_drawdown": max_dd_result["max_drawdown"],
                     "max_drawdown_date": max_dd_result["max_drawdown_date"],
                     "calmar_ratio": calmar_ratio,
-                    "total_return": float((1 + returns).prod() - 1),
+                    "total_return": float((1 + returns).prod() - 1),  # type: ignore[operator,arg-type]
                 }
             )
 

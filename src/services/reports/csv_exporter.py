@@ -217,7 +217,7 @@ class CSVExporter:
                 mode = "w" if first_chunk else "a"
                 header = first_chunk
 
-                df.to_csv(
+                df.to_csv(  # type: ignore[call-overload]
                     filename,
                     mode=mode,
                     header=header,

@@ -5,7 +5,7 @@ from collections import deque
 from datetime import datetime, timedelta
 from typing import Dict
 
-from ibapi.common import MarketDataTypeEnum
+from ibapi.common import MarketDataTypeEnum  # type: ignore
 from nautilus_trader.adapters.interactive_brokers.historical.client import (
     HistoricInteractiveBrokersClient,
 )
@@ -30,7 +30,7 @@ class RateLimiter:
         """
         self.requests_per_second = requests_per_second
         self.window = timedelta(seconds=1)
-        self.requests = deque()
+        self.requests: deque[datetime] = deque()
 
     async def acquire(self):
         """

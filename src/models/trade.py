@@ -117,6 +117,8 @@ class TradeModel(BaseModel):
             commission=commission,
             realized_pnl=realized_pnl,
             strategy_name=strategy_name,
+            pnl_pct=None,
+            notes=None,
         )
 
     def calculate_pnl_percentage(self) -> Optional[Decimal]:

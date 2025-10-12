@@ -36,7 +36,7 @@ class DataValidator:
             raise EmptyDataError(data_type)
 
     @staticmethod
-    def validate_decimal(value: Any, field_name: str) -> Decimal:
+    def validate_decimal(value: Any, field_name: str) -> Optional[Decimal]:
         """Validate and convert value to Decimal.
 
         Args:
@@ -60,7 +60,7 @@ class DataValidator:
             raise InvalidDataError(field_name, str(value), "Decimal") from e
 
     @staticmethod
-    def validate_datetime(value: Any, field_name: str) -> datetime:
+    def validate_datetime(value: Any, field_name: str) -> Optional[datetime]:
         """Validate datetime value.
 
         Args:
@@ -91,7 +91,7 @@ class DataValidator:
     @staticmethod
     def validate_string(
         value: Any, field_name: str, max_length: Optional[int] = None
-    ) -> str:
+    ) -> Optional[str]:
         """Validate string value.
 
         Args:
@@ -129,7 +129,7 @@ class DataValidator:
         field_name: str,
         min_value: Optional[float] = None,
         max_value: Optional[float] = None,
-    ) -> Union[int, float]:
+    ) -> Optional[Union[int, float]]:
         """Validate numeric value.
 
         Args:

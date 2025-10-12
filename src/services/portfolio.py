@@ -269,7 +269,7 @@ class PortfolioService:
 
             # Group by instrument
             by_instrument = {}
-            by_side = {"LONG": [], "SHORT": []}
+            by_side: Dict[str, List[float]] = {"LONG": [], "SHORT": []}
 
             for position in closed_positions:
                 if (
@@ -364,7 +364,7 @@ class PortfolioService:
             all_positions = (self.cache.positions_open() or []) + (
                 self.cache.positions_closed() or []
             )
-            counts = {}
+            counts: Dict[str, int] = {}
 
             for position in all_positions:
                 if hasattr(position, "instrument_id"):
@@ -499,6 +499,6 @@ class PortfolioService:
                 )
 
         # Sort by absolute PnL
-        position_data.sort(key=lambda x: abs(x["realized_pnl"]), reverse=True)
+        position_data.sort(key=lambda x: abs(float(x["realized_pnl"])), reverse=True)  # type: ignore[arg-type]
 
         return position_data[:limit]
