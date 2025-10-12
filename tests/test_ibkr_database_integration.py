@@ -43,10 +43,10 @@ class TestIBKRDatabaseIntegration:
         ):
             service = DataService(source="ibkr")
 
-            # Mock IBKR fetch
+            # Mock IBKR fetch through the provider
             mock_bars = []
             with patch.object(
-                service, "_fetch_from_ibkr", new_callable=AsyncMock
+                service.ibkr_provider, "fetch_historical_data", new_callable=AsyncMock
             ) as mock_fetch:
                 mock_fetch.return_value = mock_bars
 
@@ -62,9 +62,9 @@ class TestIBKRDatabaseIntegration:
     @pytest.mark.asyncio
     async def test_ibkr_bars_convert_to_database_format(self):
         """INTEGRATION: Nautilus Bar objects convert to database format."""
-        from src.services.data_service import DataService
+        from src.services.ibkr_data_provider import IBKRDataProvider
 
-        service = DataService(source="ibkr")
+        provider = IBKRDataProvider()
 
         # Mock Nautilus Bar object
         mock_bar = Mock()
@@ -76,7 +76,7 @@ class TestIBKRDatabaseIntegration:
         mock_bar.ts_event = 1704067200000000000  # 2024-01-01 00:00:00 UTC
 
         # Convert to database record
-        db_record = service._bar_to_db_record(mock_bar, symbol="AAPL")
+        db_record = provider._bar_to_db_record(mock_bar, symbol="AAPL")
 
         assert db_record["symbol"] == "AAPL"
         assert db_record["open"] == Decimal("150.50")
@@ -93,9 +93,9 @@ class TestIBKRDatabaseIntegration:
 
         service = DataService(source="database")
 
-        # Mock the _fetch_from_database method directly to avoid DB connection
+        # Mock the db_repo method directly to avoid DB connection
         with patch.object(
-            service, "_fetch_from_database", new_callable=AsyncMock
+            service.db_repo, "fetch_market_data", new_callable=AsyncMock
         ) as mock_db:
             mock_db.side_effect = ValueError("No market data found")
 

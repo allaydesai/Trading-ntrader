@@ -62,10 +62,12 @@ async def test_complete_ibkr_to_database_workflow():
             assert bars[0] == mock_bar
 
         # Test DataService integration with IBKR source
-        data_service = DataService(source="ibkr")
+        from src.services.ibkr_data_provider import IBKRDataProvider
+
+        provider = IBKRDataProvider()
 
         # Convert bar to database record
-        db_record = data_service._bar_to_db_record(mock_bar, symbol="AAPL")
+        db_record = provider._bar_to_db_record(mock_bar, symbol="AAPL")
 
         # Verify conversion
         assert db_record["symbol"] == "AAPL"
@@ -95,30 +97,38 @@ async def test_multi_source_data_service_integration():
     service_ibkr = DataService(source="ibkr")
     assert service_ibkr.source == "ibkr"
 
-    # Verify each service routes correctly
-    with patch.object(service_db, "_fetch_from_database", new_callable=AsyncMock):
-        with patch.object(service_db, "_fetch_from_ibkr", new_callable=AsyncMock):
-            # Database source should call _fetch_from_database
-            service_db._fetch_from_database.return_value = []
+    # Verify each service routes correctly by mocking the repository/provider
+    with patch.object(
+        service_db.db_repo, "fetch_market_data", new_callable=AsyncMock
+    ) as mock_db:
+        with patch.object(
+            service_db.ibkr_provider, "fetch_historical_data", new_callable=AsyncMock
+        ) as mock_ibkr:
+            # Database source should call db_repo
+            mock_db.return_value = []
             await service_db.get_market_data(
                 symbol="AAPL",
                 start=datetime.datetime(2024, 1, 1),
                 end=datetime.datetime(2024, 1, 31),
             )
-            service_db._fetch_from_database.assert_called_once()
-            service_db._fetch_from_ibkr.assert_not_called()
+            mock_db.assert_called_once()
+            mock_ibkr.assert_not_called()
 
-    with patch.object(service_ibkr, "_fetch_from_database", new_callable=AsyncMock):
-        with patch.object(service_ibkr, "_fetch_from_ibkr", new_callable=AsyncMock):
-            # IBKR source should call _fetch_from_ibkr
-            service_ibkr._fetch_from_ibkr.return_value = []
+    with patch.object(
+        service_ibkr.db_repo, "fetch_market_data", new_callable=AsyncMock
+    ) as mock_db:
+        with patch.object(
+            service_ibkr.ibkr_provider, "fetch_historical_data", new_callable=AsyncMock
+        ) as mock_ibkr:
+            # IBKR source should call ibkr_provider
+            mock_ibkr.return_value = []
             await service_ibkr.get_market_data(
                 symbol="AAPL",
                 start=datetime.datetime(2024, 1, 1),
                 end=datetime.datetime(2024, 1, 31),
             )
-            service_ibkr._fetch_from_ibkr.assert_called_once()
-            service_ibkr._fetch_from_database.assert_not_called()
+            mock_ibkr.assert_called_once()
+            mock_db.assert_not_called()
 
 
 @pytest.mark.integration
@@ -211,7 +221,7 @@ async def test_backward_compatibility_with_milestone_2():
 
     # Mock database fetch to test backward compatibility
     with patch.object(
-        service, "_fetch_from_database", new_callable=AsyncMock
+        service.db_repo, "fetch_market_data", new_callable=AsyncMock
     ) as mock_db:
         mock_db.return_value = [
             {
