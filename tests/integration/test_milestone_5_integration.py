@@ -18,7 +18,6 @@ async def test_complete_ibkr_to_database_workflow():
     """INTEGRATION: Complete workflow from IBKR fetch to database storage."""
     from src.services.ibkr_client import IBKRHistoricalClient
     from src.services.data_fetcher import HistoricalDataFetcher
-    from src.services.data_service import DataService
     from nautilus_trader.adapters.interactive_brokers.common import IBContract
     from nautilus_trader.adapters.interactive_brokers.historical.client import (
         HistoricInteractiveBrokersClient,

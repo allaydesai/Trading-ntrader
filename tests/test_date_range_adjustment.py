@@ -2,7 +2,7 @@
 
 import pytest
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 from src.services.data_service import DataService
 
 
@@ -163,5 +163,7 @@ class TestDateRangeAdjustment:
 
             assert result is not None
             # Should handle timezone-naive dates and preserve the times
-            assert result["start"] == datetime(2024, 1, 2, 10, 0, 0, tzinfo=timezone.utc)
+            assert result["start"] == datetime(
+                2024, 1, 2, 10, 0, 0, tzinfo=timezone.utc
+            )
             assert result["end"] == datetime(2024, 1, 2, 15, 0, 0, tzinfo=timezone.utc)
