@@ -129,16 +129,12 @@ class ResultsStore:
             limit: Optional limit on number of results to return
 
         Returns:
-            List of result metadata dictionaries
+            List of result metadata dictionaries, sorted by timestamp (most recent first)
         """
         results = []
 
         # Get all JSON files in storage directory
-        json_files = sorted(
-            self.storage_dir.glob("*.json"),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,  # Most recent first
-        )
+        json_files = list(self.storage_dir.glob("*.json"))
 
         for file_path in json_files:
             if file_path.name == ".gitignore":
@@ -168,12 +164,19 @@ class ResultsStore:
                     }
                 )
 
-                if limit and len(results) >= limit:
-                    break
-
             except Exception:
                 # Skip corrupted files
                 continue
+
+        # Sort by timestamp from metadata (most recent first)
+        # Handle potential None timestamps by treating them as very old dates
+        results.sort(
+            key=lambda r: r.get("timestamp") or "1970-01-01 00:00:00", reverse=True
+        )
+
+        # Apply limit after sorting
+        if limit:
+            results = results[:limit]
 
         return results
 
