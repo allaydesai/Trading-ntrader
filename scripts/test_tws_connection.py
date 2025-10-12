@@ -1,7 +1,7 @@
 """Simple TWS connection diagnostic script."""
 
 import socket
-import sys
+
 
 def test_socket_connection(host="127.0.0.1", port=7497):
     """Test basic socket connection to TWS."""
@@ -36,6 +36,7 @@ def test_socket_connection(host="127.0.0.1", port=7497):
         print(f"❌ Connection failed: {e}")
         return False
 
+
 def main():
     """Run diagnostics."""
     print("=" * 60)
@@ -62,6 +63,7 @@ def main():
         print("  3. Restart TWS completely")
 
     print("=" * 60)
+
 
 if __name__ == "__main__":
     main()

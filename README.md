@@ -196,14 +196,15 @@ Expected output:
 
 ### Database Setup
 
-This project uses PostgreSQL with TimescaleDB for time-series data storage. Follow these steps to set up the database:
+This project uses PostgreSQL with TimescaleDB for time-series data storage. You can set up the database using either Docker (recommended for beginners) or a local PostgreSQL installation.
 
-#### Prerequisites
+#### Option 1: Docker Setup (Recommended)
 
+**Prerequisites:**
 - Docker and Docker Desktop
 - PostgreSQL client tools
 
-#### Setup Steps
+**Setup Steps:**
 
 1. **Pull PostgreSQL Docker image**:
 ```bash
@@ -226,33 +227,13 @@ docker run -d --name pgdb \
   postgres:17
 ```
 
-4. **Install PostgreSQL client** (if not already installed):
-```bash
-# Ubuntu/WSL2
-sudo apt update && sudo apt install -y postgresql-client
-
-# macOS
-brew install postgresql
-```
-
-5. **Verify database connection**:
+4. **Verify database connection**:
 ```bash
 # Test connection
 PGPASSWORD=ntrader_dev_2025 psql -h localhost -U ntrader -d trading_ntrader -c "SELECT version();"
 ```
 
-#### Database Configuration
-
-The database connection is configured through environment variables in your `.env` file:
-
-```env
-DATABASE_URL=postgresql://ntrader:ntrader_dev_2025@localhost:5432/trading_ntrader
-DATABASE_POOL_SIZE=10
-DATABASE_MAX_OVERFLOW=20
-DATABASE_POOL_TIMEOUT=30
-```
-
-#### Container Management
+**Container Management:**
 
 ```bash
 # Start the database
@@ -266,6 +247,80 @@ docker logs pgdb
 
 # Remove container (data persists in volume)
 docker rm pgdb
+```
+
+**Data Storage Location:**
+- Docker volume: `pgdata` (managed by Docker)
+- Physical location (Linux): `/var/lib/docker/volumes/pgdata/_data`
+- Physical location (macOS): `~/Library/Containers/com.docker.docker/Data/vms/0/`
+- To inspect volume: `docker volume inspect pgdata`
+
+#### Option 2: Local PostgreSQL Installation
+
+**Prerequisites:**
+- PostgreSQL 17+ installed locally
+
+**macOS Setup:**
+
+1. **Install PostgreSQL via Homebrew**:
+```bash
+brew install postgresql@17
+brew services start postgresql@17
+```
+
+2. **Create database and user**:
+```bash
+# Connect as postgres superuser
+psql postgres
+
+# In psql prompt:
+CREATE USER ntrader WITH PASSWORD 'ntrader_dev_2025';
+CREATE DATABASE trading_ntrader OWNER ntrader;
+GRANT ALL PRIVILEGES ON DATABASE trading_ntrader TO ntrader;
+\q
+```
+
+3. **Verify connection**:
+```bash
+PGPASSWORD=ntrader_dev_2025 psql -h localhost -U ntrader -d trading_ntrader -c "SELECT version();"
+```
+
+**Data Storage Location (macOS Homebrew):**
+- Data directory: `/opt/homebrew/var/postgresql@17/`
+- Contains all database files, WAL logs, and configuration
+- Check database size: `du -sh /opt/homebrew/var/postgresql@17/`
+- Check specific database: `PGPASSWORD=ntrader_dev_2025 psql -h localhost -U ntrader -d trading_ntrader -c "SELECT pg_size_pretty(pg_database_size('trading_ntrader'));"`
+
+**Ubuntu/Debian Setup:**
+
+1. **Install PostgreSQL**:
+```bash
+sudo apt update
+sudo apt install postgresql-17 postgresql-contrib
+```
+
+2. **Create database and user**:
+```bash
+sudo -u postgres psql
+CREATE USER ntrader WITH PASSWORD 'ntrader_dev_2025';
+CREATE DATABASE trading_ntrader OWNER ntrader;
+GRANT ALL PRIVILEGES ON DATABASE trading_ntrader TO ntrader;
+\q
+```
+
+**Data Storage Location (Ubuntu/Debian):**
+- Data directory: `/var/lib/postgresql/17/main/`
+- Check size: `sudo du -sh /var/lib/postgresql/17/main/`
+
+#### Database Configuration
+
+The database connection is configured through environment variables in your `.env` file:
+
+```env
+DATABASE_URL=postgresql://ntrader:ntrader_dev_2025@localhost:5432/trading_ntrader
+DATABASE_POOL_SIZE=10
+DATABASE_MAX_OVERFLOW=20
+DATABASE_POOL_TIMEOUT=30
 ```
 
 ## Sample Data

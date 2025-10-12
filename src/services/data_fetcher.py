@@ -88,8 +88,9 @@ class HistoricalDataFetcher:
         )
 
         # Save to catalog for later database import
+        # skip_disjoint_check=True allows writing overlapping data intervals
         if bars:
-            self.catalog.write_data(bars)
+            self.catalog.write_data(bars, skip_disjoint_check=True)
 
         return bars
 
@@ -141,8 +142,9 @@ class HistoricalDataFetcher:
         )
 
         # Save to catalog
+        # skip_disjoint_check=True allows writing overlapping data intervals
         if ticks:
-            self.catalog.write_data(ticks)
+            self.catalog.write_data(ticks, skip_disjoint_check=True)
 
         return ticks
 
@@ -169,7 +171,8 @@ class HistoricalDataFetcher:
         instruments = await self.client.client.request_instruments(contracts=contracts)
 
         # Save instrument definitions
+        # skip_disjoint_check=True allows writing overlapping data intervals
         if instruments:
-            self.catalog.write_data(instruments)
+            self.catalog.write_data(instruments, skip_disjoint_check=True)
 
         return instruments

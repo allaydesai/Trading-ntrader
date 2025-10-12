@@ -506,6 +506,7 @@ class DataService:
             host=self.settings.ibkr.ibkr_host,
             port=self.settings.ibkr.ibkr_port,
             client_id=self.settings.ibkr.ibkr_client_id,
+            market_data_type=self.settings.ibkr.get_market_data_type_enum(),
         )
 
         try:

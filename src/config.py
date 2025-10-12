@@ -4,6 +4,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Literal, Optional
 
+from ibapi.common import MarketDataTypeEnum
 from pydantic import Field
 from pydantic_settings import BaseSettings
 
@@ -49,6 +50,27 @@ class IBKRSettings(BaseSettings):
     ibkr_market_data_type: str = Field(
         default="DELAYED_FROZEN", description="Market data type for paper trading"
     )
+
+    def get_market_data_type_enum(self) -> MarketDataTypeEnum:
+        """
+        Convert market data type string to MarketDataTypeEnum.
+
+        Returns:
+            MarketDataTypeEnum corresponding to the configured string
+
+        Note:
+            Valid values: REALTIME, FROZEN, DELAYED, DELAYED_FROZEN
+            Defaults to DELAYED_FROZEN for paper trading
+        """
+        market_data_map = {
+            "REALTIME": MarketDataTypeEnum.REALTIME,
+            "FROZEN": MarketDataTypeEnum.FROZEN,
+            "DELAYED": MarketDataTypeEnum.DELAYED,
+            "DELAYED_FROZEN": MarketDataTypeEnum.DELAYED_FROZEN,
+        }
+        return market_data_map.get(
+            self.ibkr_market_data_type.upper(), MarketDataTypeEnum.DELAYED_FROZEN
+        )
 
     model_config = {
         "env_file": ".env",

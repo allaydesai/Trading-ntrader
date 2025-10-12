@@ -123,25 +123,30 @@ def list_data(symbol: Optional[str]):
 @data.command("connect")
 @click.option(
     "--host",
-    default="127.0.0.1",
-    help="IBKR Gateway/TWS host address",
+    default=None,
+    help="IBKR Gateway/TWS host address (defaults to settings)",
 )
 @click.option(
     "--port",
     type=int,
-    default=7497,
-    help="IBKR Gateway/TWS port (7497=TWS paper, 7496=TWS live)",
+    default=None,
+    help="IBKR Gateway/TWS port (defaults to settings)",
 )
 @click.option(
     "--client-id",
     type=int,
-    default=1,
-    help="Client ID for connection",
+    default=None,
+    help="Client ID for connection (defaults to settings)",
 )
-def connect(host: str, port: int, client_id: int):
+def connect(host: Optional[str], port: Optional[int], client_id: Optional[int]):
     """Test connection to Interactive Brokers Gateway/TWS."""
 
     async def connect_async():
+        # Use settings or command line overrides
+        host_addr = host or settings.ibkr.ibkr_host
+        port_num = port or settings.ibkr.ibkr_port
+        client_id_num = client_id or settings.ibkr.ibkr_client_id
+
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -151,10 +156,17 @@ def connect(host: str, port: int, client_id: int):
 
             try:
                 # Create client
-                client = IBKRHistoricalClient(host=host, port=port, client_id=client_id)
+                client = IBKRHistoricalClient(
+                    host=host_addr,
+                    port=port_num,
+                    client_id=client_id_num,
+                    market_data_type=settings.ibkr.get_market_data_type_enum(),
+                )
 
                 # Attempt connection
-                connection_info = await client.connect(timeout=30)
+                connection_info = await client.connect(
+                    timeout=settings.ibkr.ibkr_connection_timeout
+                )
 
                 progress.update(task, completed=True)
 
@@ -168,8 +180,9 @@ def connect(host: str, port: int, client_id: int):
                 table.add_column("Property", style="cyan")
                 table.add_column("Value", style="green")
 
-                table.add_row("Host", host)
-                table.add_row("Port", str(port))
+                table.add_row("Host", host_addr)
+                table.add_row("Port", str(port_num))
+                table.add_row("Client ID", str(client_id_num))
                 table.add_row("Account ID", connection_info.get("account_id", "N/A"))
                 table.add_row(
                     "Server Version", str(connection_info.get("server_version", "N/A"))
@@ -288,8 +301,13 @@ def fetch(
 
         try:
             # Create client and connect
-            client = IBKRHistoricalClient(host=host_addr, port=port_num, client_id=1)
-            await client.connect(timeout=30)
+            client = IBKRHistoricalClient(
+                host=host_addr,
+                port=port_num,
+                client_id=settings.ibkr.ibkr_client_id,
+                market_data_type=settings.ibkr.get_market_data_type_enum(),
+            )
+            await client.connect(timeout=settings.ibkr.ibkr_connection_timeout)
 
             # Create fetcher
             fetcher = HistoricalDataFetcher(client)

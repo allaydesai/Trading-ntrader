@@ -1,6 +1,7 @@
 """Tests for IBKR configuration settings."""
 
 import pytest
+from ibapi.common import MarketDataTypeEnum
 from src.config import get_settings
 
 
@@ -63,3 +64,28 @@ class TestIBKRConfiguration:
 
         assert settings.ibkr.ibkr_use_rth is True  # Regular Trading Hours
         assert settings.ibkr.ibkr_market_data_type == "DELAYED_FROZEN"
+
+    def test_market_data_type_enum_conversion(self):
+        """Test market data type string to enum conversion."""
+        settings = get_settings()
+
+        # Test default value
+        enum_value = settings.ibkr.get_market_data_type_enum()
+        assert enum_value == MarketDataTypeEnum.DELAYED_FROZEN
+
+    def test_market_data_type_enum_all_values(self, monkeypatch):
+        """Test all market data type enum conversions."""
+        from src.config import IBKRSettings
+
+        test_cases = {
+            "REALTIME": MarketDataTypeEnum.REALTIME,
+            "FROZEN": MarketDataTypeEnum.FROZEN,
+            "DELAYED": MarketDataTypeEnum.DELAYED,
+            "DELAYED_FROZEN": MarketDataTypeEnum.DELAYED_FROZEN,
+            "realtime": MarketDataTypeEnum.REALTIME,  # Test case insensitivity
+            "invalid": MarketDataTypeEnum.DELAYED_FROZEN,  # Test default fallback
+        }
+
+        for string_value, expected_enum in test_cases.items():
+            settings = IBKRSettings(ibkr_market_data_type=string_value)
+            assert settings.get_market_data_type_enum() == expected_enum
