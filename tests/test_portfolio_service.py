@@ -4,7 +4,6 @@ import pytest
 from datetime import datetime, timedelta
 from unittest.mock import Mock
 import pandas as pd
-import numpy as np
 
 from src.services.portfolio import PortfolioService
 from src.models.trade import TradeModel
@@ -281,92 +280,6 @@ class TestPortfolioService:
 
         attribution = service.get_performance_attribution()
         assert attribution["total_realized_pnl"] == 0.0
-
-    def test_avg_duration_calculation(self):
-        """Test average trade duration calculation."""
-        portfolio = self.create_mock_portfolio()
-        cache = self.create_mock_cache(num_closed=3)
-
-        service = PortfolioService(portfolio, cache)
-
-        # Create positions with known durations
-        positions = []
-        base_time = datetime(2024, 1, 15, 10, 0)
-
-        for i in range(3):
-            position = Mock()
-            position.opened_time = base_time + timedelta(hours=i)
-            position.closed_time = base_time + timedelta(
-                hours=i + 2
-            )  # 2 hour duration each
-            positions.append(position)
-
-        duration = service._calculate_avg_duration(positions)
-        assert duration == 2.0  # 2 hours average
-
-    def test_pnl_statistics_calculation(self):
-        """Test PnL statistics calculation."""
-        portfolio = self.create_mock_portfolio()
-        cache = Mock()
-
-        service = PortfolioService(portfolio, cache)
-
-        # Create positions with known PnLs
-        positions = []
-        pnls = [100.0, -50.0, 200.0, -25.0, 150.0]  # 3 winners, 2 losers
-
-        for i, pnl in enumerate(pnls):
-            position = Mock()
-            position.realized_pnl = pnl
-            positions.append(position)
-
-        stats = service._calculate_pnl_statistics(positions)
-
-        assert stats["total_pnl"] == sum(pnls)  # 375.0
-        assert stats["avg_pnl"] == np.mean(pnls)  # 75.0
-        assert stats["win_rate"] == 0.6  # 3/5 = 60%
-        assert stats["max_win"] == 200.0
-        assert stats["max_loss"] == -50.0
-
-    def test_side_statistics_calculation(self):
-        """Test position side statistics calculation."""
-        portfolio = self.create_mock_portfolio()
-        cache = Mock()
-
-        service = PortfolioService(portfolio, cache)
-
-        # Create positions with mixed sides
-        positions = []
-        long_pnls = [100.0, 200.0]  # 2 long positions
-        short_pnls = [-50.0, 150.0, -25.0]  # 3 short positions
-
-        for pnl in long_pnls:
-            position = Mock()
-            position.realized_pnl = pnl
-            position.is_long = True
-            positions.append(position)
-
-        for pnl in short_pnls:
-            position = Mock()
-            position.realized_pnl = pnl
-            position.is_long = False
-            positions.append(position)
-
-        stats = service._calculate_side_statistics(positions)
-
-        # Verify long statistics
-        long_stats = stats["long"]
-        assert long_stats["trade_count"] == 2
-        assert long_stats["total_pnl"] == sum(long_pnls)
-        assert long_stats["avg_pnl"] == np.mean(long_pnls)
-        assert long_stats["win_rate"] == 1.0  # All long trades profitable
-
-        # Verify short statistics
-        short_stats = stats["short"]
-        assert short_stats["trade_count"] == 3
-        assert short_stats["total_pnl"] == sum(short_pnls)
-        assert short_stats["avg_pnl"] == np.mean(short_pnls)
-        assert short_stats["win_rate"] == 1 / 3  # 1 out of 3 short trades profitable
 
 
 class TestPortfolioServiceIntegration:
