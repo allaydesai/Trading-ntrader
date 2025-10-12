@@ -107,6 +107,18 @@ class Settings(BaseSettings):
         default=Decimal("1000000"), description="Default trade size"
     )
 
+    # Commission settings (IBKR US Equities Tiered)
+    commission_per_share: Decimal = Field(
+        default=Decimal("0.005"), description="Commission per share"
+    )
+    commission_min_per_order: Decimal = Field(
+        default=Decimal("1.00"), description="Minimum commission per order"
+    )
+    commission_max_rate: Decimal = Field(
+        default=Decimal("0.005"),
+        description="Maximum commission as % of order value (0.005 = 0.5%)",
+    )
+
     # Data settings
     data_directory: Path = Field(
         default=Path("data"), description="Directory for data files"

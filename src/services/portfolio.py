@@ -3,13 +3,12 @@
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 import pandas as pd
-import numpy as np
 
 from nautilus_trader.portfolio.portfolio import Portfolio
 from nautilus_trader.cache.cache import Cache
-from nautilus_trader.model.position import Position
 
 from src.models.trade import TradeModel
+from src.services.portfolio_analytics import PortfolioAnalytics
 
 
 class PortfolioService:
@@ -30,6 +29,7 @@ class PortfolioService:
         """
         self.portfolio = portfolio
         self.cache = cache
+        self.analytics = PortfolioAnalytics()
 
     def get_current_state(self) -> Dict[str, Any]:
         """
@@ -98,9 +98,6 @@ class PortfolioService:
         """
         try:
             # Get position snapshots from cache
-            # Note: In a real implementation, this would use Nautilus position snapshots
-            # For now, we'll create a basic structure from closed positions
-
             closed_positions = self.cache.positions_closed()
             if not closed_positions:
                 return pd.DataFrame(
@@ -184,14 +181,14 @@ class PortfolioService:
                 if hasattr(position, "instrument_id"):
                     instruments_traded.add(str(position.instrument_id))
 
-            # Trade duration analysis
-            avg_duration = self._calculate_avg_duration(closed_positions)
-
-            # PnL analysis
-            pnl_stats = self._calculate_pnl_statistics(closed_positions)
-
-            # Side analysis
-            side_stats = self._calculate_side_statistics(closed_positions)
+            # Delegate analytics calculations to analytics module
+            avg_duration = self.analytics.calculate_avg_duration(closed_positions)
+            pnl_stats = self.analytics.calculate_pnl_statistics(closed_positions)
+            side_stats = self.analytics.calculate_side_statistics(closed_positions)
+            position_sizes = self.analytics.calculate_position_size_stats(
+                closed_positions
+            )
+            largest_positions = self.analytics.get_largest_positions(closed_positions)
 
             return {
                 "open_positions": len(open_positions),
@@ -200,10 +197,10 @@ class PortfolioService:
                 "instruments_traded": len(instruments_traded),
                 "instruments_list": list(instruments_traded),
                 "avg_trade_duration_hours": avg_duration,
-                "position_sizes": self._calculate_position_size_stats(closed_positions),
+                "position_sizes": position_sizes,
                 "pnl_statistics": pnl_stats,
                 "side_statistics": side_stats,
-                "largest_positions": self._get_largest_positions(closed_positions),
+                "largest_positions": largest_positions,
             }
 
         except Exception as e:
@@ -266,77 +263,7 @@ class PortfolioService:
         """
         try:
             closed_positions = self.cache.positions_closed() or []
-
-            # Group by instrument
-            by_instrument = {}
-            by_side: Dict[str, List[float]] = {"LONG": [], "SHORT": []}
-
-            for position in closed_positions:
-                if (
-                    not hasattr(position, "realized_pnl")
-                    or position.realized_pnl is None
-                ):
-                    continue
-
-                instrument = (
-                    str(position.instrument_id)
-                    if hasattr(position, "instrument_id")
-                    else "UNKNOWN"
-                )
-                pnl = float(position.realized_pnl)
-
-                if instrument not in by_instrument:
-                    by_instrument[instrument] = {
-                        "total_pnl": 0.0,
-                        "trade_count": 0,
-                        "winning_trades": 0,
-                        "avg_pnl": 0.0,
-                    }
-
-                by_instrument[instrument]["total_pnl"] += pnl
-                by_instrument[instrument]["trade_count"] += 1
-                if pnl > 0:
-                    by_instrument[instrument]["winning_trades"] += 1
-
-                # Side analysis
-                side = (
-                    "LONG"
-                    if hasattr(position, "is_long") and position.is_long
-                    else "SHORT"
-                )
-                by_side[side].append(pnl)
-
-            # Calculate averages
-            for instrument_data in by_instrument.values():
-                if instrument_data["trade_count"] > 0:
-                    instrument_data["avg_pnl"] = (
-                        instrument_data["total_pnl"] / instrument_data["trade_count"]
-                    )
-                    instrument_data["win_rate"] = (
-                        instrument_data["winning_trades"]
-                        / instrument_data["trade_count"]
-                    )
-
-            # Side statistics
-            side_stats = {}
-            for side, pnls in by_side.items():
-                if pnls:
-                    side_stats[side] = {
-                        "total_pnl": sum(pnls),
-                        "trade_count": len(pnls),
-                        "avg_pnl": np.mean(pnls),
-                        "win_rate": len([p for p in pnls if p > 0]) / len(pnls),
-                    }
-
-            return {
-                "by_instrument": by_instrument,
-                "by_side": side_stats,
-                "total_realized_pnl": sum(
-                    float(p.realized_pnl)
-                    for p in closed_positions
-                    if hasattr(p, "realized_pnl") and p.realized_pnl is not None
-                ),
-            }
+            return self.analytics.calculate_performance_attribution(closed_positions)
 
         except Exception as e:
             return {
@@ -374,131 +301,3 @@ class PortfolioService:
             return counts
         except Exception:
             return {}
-
-    def _calculate_avg_duration(self, positions: List[Position]) -> Optional[float]:
-        """Calculate average trade duration in hours."""
-        if not positions:
-            return None
-
-        durations = []
-        for position in positions:
-            if (
-                hasattr(position, "closed_time")
-                and position.closed_time
-                and hasattr(position, "opened_time")
-                and position.opened_time
-            ):
-                duration = (
-                    position.closed_time - position.opened_time
-                ).total_seconds() / 3600
-                durations.append(duration)
-
-        return sum(durations) / len(durations) if durations else None
-
-    def _calculate_pnl_statistics(self, positions: List[Position]) -> Dict[str, Any]:
-        """Calculate PnL statistics from positions."""
-        if not positions:
-            return {"total_pnl": 0.0, "avg_pnl": 0.0, "win_rate": 0.0}
-
-        pnls = []
-        for position in positions:
-            if hasattr(position, "realized_pnl") and position.realized_pnl is not None:
-                pnls.append(float(position.realized_pnl))
-
-        if not pnls:
-            return {"total_pnl": 0.0, "avg_pnl": 0.0, "win_rate": 0.0}
-
-        winning_trades = [p for p in pnls if p > 0]
-
-        return {
-            "total_pnl": sum(pnls),
-            "avg_pnl": np.mean(pnls),
-            "win_rate": len(winning_trades) / len(pnls),
-            "max_win": max(pnls) if pnls else 0.0,
-            "max_loss": min(pnls) if pnls else 0.0,
-            "std_pnl": np.std(pnls) if len(pnls) > 1 else 0.0,
-        }
-
-    def _calculate_side_statistics(self, positions: List[Position]) -> Dict[str, Any]:
-        """Calculate statistics by position side (LONG/SHORT)."""
-        long_pnls = []
-        short_pnls = []
-
-        for position in positions:
-            if hasattr(position, "realized_pnl") and position.realized_pnl is not None:
-                pnl = float(position.realized_pnl)
-                if hasattr(position, "is_long") and position.is_long:
-                    long_pnls.append(pnl)
-                else:
-                    short_pnls.append(pnl)
-
-        return {
-            "long": {
-                "trade_count": len(long_pnls),
-                "total_pnl": sum(long_pnls) if long_pnls else 0.0,
-                "avg_pnl": np.mean(long_pnls) if long_pnls else 0.0,
-                "win_rate": len([p for p in long_pnls if p > 0]) / len(long_pnls)
-                if long_pnls
-                else 0.0,
-            },
-            "short": {
-                "trade_count": len(short_pnls),
-                "total_pnl": sum(short_pnls) if short_pnls else 0.0,
-                "avg_pnl": np.mean(short_pnls) if short_pnls else 0.0,
-                "win_rate": len([p for p in short_pnls if p > 0]) / len(short_pnls)
-                if short_pnls
-                else 0.0,
-            },
-        }
-
-    def _calculate_position_size_stats(
-        self, positions: List[Position]
-    ) -> Dict[str, Any]:
-        """Calculate position size statistics."""
-        if not positions:
-            return {"avg_size": 0.0, "max_size": 0.0, "min_size": 0.0}
-
-        sizes = []
-        for position in positions:
-            if hasattr(position, "quantity") and position.quantity is not None:
-                sizes.append(abs(float(position.quantity)))
-
-        if not sizes:
-            return {"avg_size": 0.0, "max_size": 0.0, "min_size": 0.0}
-
-        return {
-            "avg_size": np.mean(sizes),
-            "max_size": max(sizes),
-            "min_size": min(sizes),
-            "std_size": np.std(sizes) if len(sizes) > 1 else 0.0,
-        }
-
-    def _get_largest_positions(
-        self, positions: List[Position], limit: int = 5
-    ) -> List[Dict[str, Any]]:
-        """Get the largest positions by absolute PnL."""
-        if not positions:
-            return []
-
-        position_data = []
-        for position in positions:
-            if hasattr(position, "realized_pnl") and position.realized_pnl is not None:
-                position_data.append(
-                    {
-                        "instrument_id": str(position.instrument_id)
-                        if hasattr(position, "instrument_id")
-                        else "UNKNOWN",
-                        "realized_pnl": float(position.realized_pnl),
-                        "quantity": float(position.quantity)
-                        if hasattr(position, "quantity")
-                        else 0.0,
-                        "side": "LONG"
-                        if hasattr(position, "is_long") and position.is_long
-                        else "SHORT",
-                    }
-                )
-
-        # Sort by absolute PnL
-        position_data.sort(key=lambda x: abs(float(x["realized_pnl"])), reverse=True)  # type: ignore[arg-type]
-
-        return position_data[:limit]

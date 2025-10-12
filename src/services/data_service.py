@@ -1,14 +1,14 @@
 """Data service for fetching and converting market data."""
 
-from datetime import datetime, timezone
-from decimal import Decimal
+from datetime import datetime
 from typing import List, Optional, Dict, Any, Literal
 
 import pandas as pd
-from sqlalchemy import text
 
-from src.db.session import get_session
 from src.config import get_settings
+from src.services.database_repository import DatabaseRepository
+from src.services.nautilus_converter import NautilusConverter
+from src.services.ibkr_data_provider import IBKRDataProvider
 
 
 class DataService:
@@ -27,6 +27,11 @@ class DataService:
         self._cache: Dict[str, Any] = {}
         self.settings = get_settings()
         self.source = source
+
+        # Initialize dependencies
+        self.db_repo = DatabaseRepository()
+        self.converter = NautilusConverter()
+        self.ibkr_provider = IBKRDataProvider()
 
     async def get_market_data(
         self, symbol: str, start: datetime, end: datetime
@@ -53,68 +58,13 @@ class DataService:
 
         # Route to appropriate data source
         if self.source == "ibkr":
-            data = await self._fetch_from_ibkr(symbol, start, end)
+            data = await self.ibkr_provider.fetch_historical_data(symbol, start, end)
         else:
             # Use database (default, "csv" alias, backward compatible)
-            data = await self._fetch_from_database(symbol, start, end)
+            data = await self.db_repo.fetch_market_data(symbol, start, end)
 
         # Cache results
         self._cache[cache_key] = data
-
-        return data
-
-    async def _fetch_from_database(
-        self, symbol: str, start: datetime, end: datetime
-    ) -> List[Dict[str, Any]]:
-        """
-        Fetch market data from database (original M2 implementation).
-
-        Args:
-            symbol: Trading symbol
-            start: Start datetime
-            end: End datetime
-
-        Returns:
-            List of market data records
-
-        Raises:
-            ValueError: If no data found
-        """
-        # Query database
-        async with get_session() as session:
-            query = text("""
-                SELECT symbol, timestamp, open, high, low, close, volume
-                FROM market_data
-                WHERE symbol = :symbol
-                AND timestamp >= :start
-                AND timestamp <= :end
-                ORDER BY timestamp ASC
-            """)
-
-            result = await session.execute(
-                query, {"symbol": symbol.upper(), "start": start, "end": end}
-            )
-            rows = result.fetchall()
-
-        if not rows:
-            raise ValueError(
-                f"No market data found for {symbol} between {start} and {end}"
-            )
-
-        # Convert to list of dictionaries
-        data = []
-        for row in rows:
-            data.append(
-                {
-                    "symbol": row.symbol,
-                    "timestamp": row.timestamp,
-                    "open": float(row.open),
-                    "high": float(row.high),
-                    "low": float(row.low),
-                    "close": float(row.close),
-                    "volume": int(row.volume),
-                }
-            )
 
         return data
 
@@ -161,111 +111,7 @@ class DataService:
             ValueError: If data conversion fails
             ImportError: If required modules are not available
         """
-        if not data:
-            return []
-
-        try:
-            # Import the data wrangler
-            from src.utils.data_wrangler import MarketDataWrangler
-
-            # If instrument is not provided, create a basic one
-            if instrument is None:
-                from src.utils.mock_data import create_test_instrument
-
-                # Extract symbol from instrument_id
-                symbol = str(instrument_id).split(".")[0]
-                instrument, _ = create_test_instrument(symbol)
-
-            # Create wrangler and process data
-            wrangler = MarketDataWrangler(instrument)
-            bars = wrangler.process(data)
-
-            if not bars:
-                raise ValueError("No bars were created from the provided data")
-
-            # Successfully converted data to bars
-            return bars
-
-        except ImportError as e:
-            print(f"Failed to import data wrangler: {e}")
-            # Fallback to original implementation
-            return self._convert_to_nautilus_bars_fallback(data, instrument_id)
-
-        except Exception as e:
-            print(f"Error converting data to Nautilus bars: {e}")
-            # Fallback to original implementation
-            return self._convert_to_nautilus_bars_fallback(data, instrument_id)
-
-    def _convert_to_nautilus_bars_fallback(
-        self, data: List[Dict[str, Any]], instrument_id
-    ) -> List:
-        """
-        Fallback method for converting market data to Nautilus Trader Bar objects.
-
-        Args:
-            data: List of market data dictionaries
-            instrument_id: Nautilus InstrumentId object
-
-        Returns:
-            List of Nautilus Bar objects
-        """
-        from nautilus_trader.model.data import Bar, BarType, BarSpecification
-        from nautilus_trader.model.enums import (
-            BarAggregation,
-            PriceType,
-            AggregationSource,
-        )
-        from nautilus_trader.model.objects import Price, Quantity
-
-        bars = []
-
-        # Create bar type specification for 1-minute bars
-        bar_spec = BarSpecification(
-            step=1,
-            aggregation=BarAggregation.MINUTE,
-            price_type=PriceType.MID,
-        )
-        bar_type = BarType(
-            instrument_id=instrument_id,
-            bar_spec=bar_spec,
-            aggregation_source=AggregationSource.EXTERNAL,
-        )
-
-        for record in data:
-            try:
-                # Convert timestamp to nanoseconds since Unix epoch
-                ts_event = int(record["timestamp"].timestamp() * 1_000_000_000)
-                ts_init = ts_event
-
-                # Create price objects (Nautilus uses 5 decimal places precision for most instruments)
-                open_price = Price.from_str(f"{record['open']:.5f}")
-                high_price = Price.from_str(f"{record['high']:.5f}")
-                low_price = Price.from_str(f"{record['low']:.5f}")
-                close_price = Price.from_str(f"{record['close']:.5f}")
-
-                # Create volume quantity
-                volume = Quantity.from_int(int(record["volume"]))
-
-                # Create Bar object
-                bar = Bar(
-                    bar_type=bar_type,
-                    open=open_price,
-                    high=high_price,
-                    low=low_price,
-                    close=close_price,
-                    volume=volume,
-                    ts_event=ts_event,
-                    ts_init=ts_init,
-                )
-
-                bars.append(bar)
-
-            except Exception as e:
-                print(f"Failed to create bar for record {record}: {e}")
-                continue
-
-        # Return the created bars
-        return bars
+        return self.converter.convert_to_nautilus_bars(data, instrument_id, instrument)
 
     def convert_to_nautilus_format(
         self, data: List[Dict[str, Any]]
@@ -283,24 +129,7 @@ class DataService:
             This is a placeholder implementation. Full Nautilus integration
             will be implemented when we have the backtest runner integration.
         """
-        nautilus_data = []
-
-        for record in data:
-            # Convert to Nautilus Bar format (simplified)
-            nautilus_record = {
-                "instrument_id": f"{record['symbol']}.SIM",
-                "bar_type": f"{record['symbol']}.SIM-1-MINUTE-MID-EXTERNAL",
-                "ts_event": int(record["timestamp"].timestamp() * 1_000_000_000),
-                "ts_init": int(record["timestamp"].timestamp() * 1_000_000_000),
-                "open": int(record["open"] * 100000),  # Nautilus uses price precision
-                "high": int(record["high"] * 100000),
-                "low": int(record["low"] * 100000),
-                "close": int(record["close"] * 100000),
-                "volume": int(record["volume"]),
-            }
-            nautilus_data.append(nautilus_record)
-
-        return nautilus_data
+        return self.converter.convert_to_nautilus_format(data)
 
     async def get_available_symbols(self) -> List[str]:
         """
@@ -309,12 +138,7 @@ class DataService:
         Returns:
             List of unique symbols
         """
-        async with get_session() as session:
-            query = text("SELECT DISTINCT symbol FROM market_data ORDER BY symbol")
-            result = await session.execute(query)
-            rows = result.fetchall()
-
-        return [row.symbol for row in rows]
+        return await self.db_repo.get_available_symbols()
 
     async def get_data_range(self, symbol: str) -> Optional[Dict[str, datetime]]:
         """
@@ -326,19 +150,7 @@ class DataService:
         Returns:
             Dictionary with 'start' and 'end' datetime, or None if no data
         """
-        async with get_session() as session:
-            query = text("""
-                SELECT MIN(timestamp) as start_date, MAX(timestamp) as end_date
-                FROM market_data
-                WHERE symbol = :symbol
-            """)
-            result = await session.execute(query, {"symbol": symbol.upper()})
-            row = result.fetchone()
-
-        if row and row.start_date and row.end_date:
-            return {"start": row.start_date, "end": row.end_date}
-
-        return None
+        return await self.db_repo.get_data_range(symbol)
 
     def clear_cache(self) -> None:
         """Clear the data cache."""
@@ -361,74 +173,7 @@ class DataService:
         Returns:
             Dictionary with adjusted 'start' and 'end' datetimes, or None if no data
         """
-        # Ensure dates are timezone-aware (UTC)
-        if start.tzinfo is None:
-            start = start.replace(tzinfo=timezone.utc)
-        if end.tzinfo is None:
-            end = end.replace(tzinfo=timezone.utc)
-
-        # Get the actual data range for this symbol
-        data_range = await self.get_data_range(symbol)
-        if not data_range:
-            return None
-
-        # Check if input times appear to be date-only (midnight)
-        start_is_midnight = start.time().hour == 0 and start.time().minute == 0
-        end_is_midnight = end.time().hour == 0 and end.time().minute == 0
-
-        adjusted_start = start
-        adjusted_end = end
-
-        # If start is midnight, find the first available data point on or after that date
-        if start_is_midnight:
-            # Query for the earliest timestamp on the start date
-            async with get_session() as session:
-                query = text("""
-                    SELECT MIN(timestamp) as first_timestamp
-                    FROM market_data
-                    WHERE symbol = :symbol
-                    AND DATE(timestamp) = DATE(:target_date)
-                """)
-                result = await session.execute(
-                    query, {"symbol": symbol.upper(), "target_date": start}
-                )
-                row = result.fetchone()
-
-                if row and row.first_timestamp:
-                    adjusted_start = row.first_timestamp
-                else:
-                    # No data on exact date, use overall data start if it's later
-                    if data_range["start"] > start:
-                        adjusted_start = data_range["start"]
-
-        # If end is midnight, find the last available data point on or before that date
-        if end_is_midnight:
-            # For midnight end times, we want to include the entire day
-            # So we look for the last data point on that date
-            async with get_session() as session:
-                query = text("""
-                    SELECT MAX(timestamp) as last_timestamp
-                    FROM market_data
-                    WHERE symbol = :symbol
-                    AND DATE(timestamp) = DATE(:target_date)
-                """)
-                result = await session.execute(
-                    query, {"symbol": symbol.upper(), "target_date": end}
-                )
-                row = result.fetchone()
-
-                if row and row.last_timestamp:
-                    adjusted_end = row.last_timestamp
-                else:
-                    # No data on exact date
-                    # If requested end is before available data, use adjusted start
-                    if end < data_range["start"]:
-                        adjusted_end = adjusted_start
-                    # Otherwise use overall data end if it's earlier
-                    elif data_range["end"] < end:
-                        adjusted_end = data_range["end"]
-
-        return {"start": adjusted_start, "end": adjusted_end}
+        return await self.db_repo.get_adjusted_date_range(symbol, start, end)
 
     async def validate_data_availability(
         self, symbol: str, start: datetime, end: datetime
@@ -444,126 +189,4 @@ class DataService:
         Returns:
             Dictionary with validation results
         """
-        # Ensure start and end dates are timezone-aware (UTC) for consistent comparison
-        if start.tzinfo is None:
-            start = start.replace(tzinfo=timezone.utc)
-        if end.tzinfo is None:
-            end = end.replace(tzinfo=timezone.utc)
-
-        try:
-            data_range = await self.get_data_range(symbol)
-
-            if not data_range:
-                return {
-                    "valid": False,
-                    "reason": f"No data available for symbol {symbol}",
-                    "available_symbols": await self.get_available_symbols(),
-                }
-
-            if start < data_range["start"]:
-                return {
-                    "valid": False,
-                    "reason": f"Start date {start} is before available data start {data_range['start']}",
-                    "available_range": data_range,
-                }
-
-            if end > data_range["end"]:
-                return {
-                    "valid": False,
-                    "reason": f"End date {end} is after available data end {data_range['end']}",
-                    "available_range": data_range,
-                }
-
-            return {"valid": True, "available_range": data_range}
-
-        except Exception as e:
-            return {
-                "valid": False,
-                "reason": f"Error validating data availability: {e}",
-                "available_symbols": [],
-            }
-
-    async def _fetch_from_ibkr(
-        self, symbol: str, start: datetime, end: datetime
-    ) -> List[Dict[str, Any]]:
-        """
-        Fetch data from IBKR and return as database-compatible records.
-
-        Args:
-            symbol: Trading symbol
-            start: Start datetime
-            end: End datetime
-
-        Returns:
-            List of market data dictionaries compatible with database schema
-        """
-        from src.services.ibkr_client import IBKRHistoricalClient
-        from src.services.data_fetcher import HistoricalDataFetcher
-        from nautilus_trader.adapters.interactive_brokers.common import IBContract
-
-        # Connect to IBKR
-        client = IBKRHistoricalClient(
-            host=self.settings.ibkr.ibkr_host,
-            port=self.settings.ibkr.ibkr_port,
-            client_id=self.settings.ibkr.ibkr_client_id,
-            market_data_type=self.settings.ibkr.get_market_data_type_enum(),
-        )
-
-        try:
-            await client.connect(timeout=self.settings.ibkr.ibkr_connection_timeout)
-
-            # Create fetcher
-            fetcher = HistoricalDataFetcher(client)
-
-            # Create contract for the symbol
-            contract = IBContract(
-                secType="STK",
-                symbol=symbol,
-                exchange="SMART",
-                primaryExchange="NASDAQ",  # Will be determined by IB
-            )
-
-            # Fetch bars
-            bars = await fetcher.fetch_bars(
-                contracts=[contract],
-                bar_specifications=["1-DAY-LAST"],
-                start_date=start,
-                end_date=end,
-            )
-
-            # Convert bars to database records
-            records = []
-            for bar in bars:
-                record = self._bar_to_db_record(bar, symbol)
-                records.append(record)
-
-            return records
-
-        finally:
-            await client.disconnect()
-
-    def _bar_to_db_record(self, bar, symbol: str) -> Dict[str, Any]:
-        """
-        Convert Nautilus Bar to database record format.
-
-        Args:
-            bar: Nautilus Bar object
-            symbol: Trading symbol
-
-        Returns:
-            Dictionary with database schema fields
-        """
-        # Convert nanosecond timestamp to datetime
-        timestamp = datetime.fromtimestamp(
-            bar.ts_event / 1_000_000_000, tz=timezone.utc
-        )
-
-        return {
-            "symbol": symbol,
-            "timestamp": timestamp,
-            "open": Decimal(str(bar.open.as_double())),
-            "high": Decimal(str(bar.high.as_double())),
-            "low": Decimal(str(bar.low.as_double())),
-            "close": Decimal(str(bar.close.as_double())),
-            "volume": int(bar.volume.as_double()),
-        }
+        return await self.db_repo.validate_data_availability(symbol, start, end)

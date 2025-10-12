@@ -14,6 +14,7 @@ from nautilus_trader.model.objects import Money
 
 from src.core.strategies.sma_crossover import SMACrossover, SMAConfig
 from src.core.strategy_factory import StrategyFactory
+from src.core.fee_models import IBKRCommissionModel
 from src.utils.mock_data import create_test_instrument, generate_mock_bars
 from src.utils.config_loader import ConfigLoader, StrategyConfigWrapper
 from src.services.data_service import DataService
@@ -127,6 +128,13 @@ class MinimalBacktestRunner:
             prob_slippage=0.01,  # 1% slippage probability
         )
 
+        # Create commission model
+        fee_model = IBKRCommissionModel(
+            commission_per_share=self.settings.commission_per_share,
+            min_per_order=self.settings.commission_min_per_order,
+            max_rate=self.settings.commission_max_rate,
+        )
+
         # Add venue
         venue = Venue("SIM")
         self.engine.add_venue(
@@ -135,6 +143,7 @@ class MinimalBacktestRunner:
             account_type=AccountType.MARGIN,
             starting_balances=[Money(self.settings.default_balance, USD)],
             fill_model=fill_model,
+            fee_model=fee_model,
         )
 
         # Add instrument
@@ -269,6 +278,13 @@ class MinimalBacktestRunner:
             prob_slippage=0.01,  # 1% slippage probability
         )
 
+        # Create commission model
+        fee_model = IBKRCommissionModel(
+            commission_per_share=self.settings.commission_per_share,
+            min_per_order=self.settings.commission_min_per_order,
+            max_rate=self.settings.commission_max_rate,
+        )
+
         # Add venue
         venue = Venue("SIM")
         self.engine.add_venue(
@@ -277,6 +293,7 @@ class MinimalBacktestRunner:
             account_type=AccountType.MARGIN,
             starting_balances=[Money(self.settings.default_balance, USD)],
             fill_model=fill_model,
+            fee_model=fee_model,
         )
 
         # Add instrument
@@ -459,6 +476,13 @@ class MinimalBacktestRunner:
             prob_slippage=0.01,  # 1% slippage probability
         )
 
+        # Create commission model
+        fee_model = IBKRCommissionModel(
+            commission_per_share=self.settings.commission_per_share,
+            min_per_order=self.settings.commission_min_per_order,
+            max_rate=self.settings.commission_max_rate,
+        )
+
         # Add venue
         venue = Venue("SIM")
         self.engine.add_venue(
@@ -467,6 +491,7 @@ class MinimalBacktestRunner:
             account_type=AccountType.MARGIN,
             starting_balances=[Money(self.settings.default_balance, USD)],
             fill_model=fill_model,
+            fee_model=fee_model,
         )
 
         # Add instrument
@@ -642,6 +667,13 @@ class MinimalBacktestRunner:
             prob_slippage=0.01,  # 1% slippage probability
         )
 
+        # Create commission model
+        fee_model = IBKRCommissionModel(
+            commission_per_share=self.settings.commission_per_share,
+            min_per_order=self.settings.commission_min_per_order,
+            max_rate=self.settings.commission_max_rate,
+        )
+
         # Add venue
         venue = Venue("SIM")
         self.engine.add_venue(
@@ -650,6 +682,7 @@ class MinimalBacktestRunner:
             account_type=AccountType.MARGIN,
             starting_balances=[Money(self.settings.default_balance, USD)],
             fill_model=fill_model,
+            fee_model=fee_model,
         )
 
         # Add instrument

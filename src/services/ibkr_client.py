@@ -2,7 +2,7 @@
 
 import asyncio
 from collections import deque
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict
 
 from ibapi.common import MarketDataTypeEnum  # type: ignore
@@ -31,27 +31,32 @@ class RateLimiter:
         self.requests_per_second = requests_per_second
         self.window = timedelta(seconds=1)
         self.requests: deque[datetime] = deque()
+        self._lock = asyncio.Lock()
 
     async def acquire(self):
         """
         Wait until a request slot is available.
 
-        Implements sliding window rate limiting.
+        Implements sliding window rate limiting with thread-safe operations.
+        Uses asyncio.Lock to prevent race conditions in concurrent scenarios.
         """
-        now = datetime.now()
+        async with self._lock:
+            now = datetime.now(timezone.utc)
 
-        # Remove expired requests outside the current window
-        while self.requests and self.requests[0] < now - self.window:
-            self.requests.popleft()
+            # Remove expired requests outside the current window
+            while self.requests and self.requests[0] < now - self.window:
+                self.requests.popleft()
 
-        # If at limit, wait until oldest request expires
-        if len(self.requests) >= self.requests_per_second:
-            sleep_time = (self.requests[0] + self.window - now).total_seconds()
-            if sleep_time > 0:
-                await asyncio.sleep(sleep_time)
+            # If at limit, wait until oldest request expires
+            if len(self.requests) >= self.requests_per_second:
+                sleep_time = (self.requests[0] + self.window - now).total_seconds()
+                if sleep_time > 0:
+                    await asyncio.sleep(sleep_time)
+                    # Re-acquire time after sleep
+                    now = datetime.now(timezone.utc)
 
-        # Record this request
-        self.requests.append(datetime.now())
+            # Record this request
+            self.requests.append(now)
 
 
 class IBKRHistoricalClient:
@@ -115,7 +120,9 @@ class IBKRHistoricalClient:
                 "connected": True,
                 "account_id": getattr(self.client, "account_id", "N/A"),
                 "server_version": getattr(self.client, "server_version", "N/A"),
-                "connection_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "connection_time": datetime.now(timezone.utc).strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                ),
             }
 
             return info
