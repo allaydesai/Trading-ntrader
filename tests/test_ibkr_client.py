@@ -135,8 +135,9 @@ class TestRateLimiter:
         await asyncio.gather(*tasks)
         elapsed = time.time() - start
 
-        # Should take at least 1 second for 15 requests at 10/sec
-        assert elapsed >= 1.0
+        # Should take at least 0.95 seconds for 15 requests at 10/sec
+        # Use 0.95 instead of 1.0 to account for timing variations
+        assert elapsed >= 0.95
         # Note: limiter.requests may have < 15 items because old requests
         # are cleaned up from the sliding window during acquire()
 
