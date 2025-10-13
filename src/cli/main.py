@@ -8,6 +8,7 @@ from src.cli.commands.run import run_simple
 from src.cli.commands.data import data
 from src.cli.commands.backtest import backtest
 from src.cli.commands.strategy import strategy
+from src.cli.commands.report import report
 
 console = Console()
 settings = get_settings()
@@ -30,6 +31,7 @@ cli.add_command(run_simple)
 cli.add_command(data)
 cli.add_command(backtest)
 cli.add_command(strategy)
+cli.add_command(report)
 
 
 if __name__ == "__main__":

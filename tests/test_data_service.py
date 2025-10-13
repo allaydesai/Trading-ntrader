@@ -18,7 +18,7 @@ class TestDataService:
         assert service.settings is not None
 
     @pytest.mark.asyncio
-    @patch("src.services.data_service.get_session")
+    @patch("src.services.database_repository.get_session")
     async def test_get_market_data_success(self, mock_get_session):
         """Test get_market_data with successful database query."""
         # Mock session and query result
@@ -71,7 +71,7 @@ class TestDataService:
         assert "AAPL" in str(call_args)
 
     @pytest.mark.asyncio
-    @patch("src.services.data_service.get_session")
+    @patch("src.services.database_repository.get_session")
     async def test_get_market_data_no_data(self, mock_get_session):
         """Test get_market_data with no data found."""
         # Mock session with empty result
@@ -90,7 +90,7 @@ class TestDataService:
             await service.get_market_data("NONEXISTENT", start, end)
 
     @pytest.mark.asyncio
-    @patch("src.services.data_service.get_session")
+    @patch("src.services.database_repository.get_session")
     async def test_get_market_data_caching(self, mock_get_session):
         """Test get_market_data caching functionality."""
         # Mock session and query result
@@ -206,7 +206,7 @@ class TestDataService:
         assert "ts_init" in record
 
     @pytest.mark.asyncio
-    @patch("src.services.data_service.get_session")
+    @patch("src.services.database_repository.get_session")
     async def test_get_available_symbols(self, mock_get_session):
         """Test get_available_symbols."""
         # Mock session and query result
@@ -229,7 +229,7 @@ class TestDataService:
         mock_session.execute.assert_called_once()
 
     @pytest.mark.asyncio
-    @patch("src.services.data_service.get_session")
+    @patch("src.services.database_repository.get_session")
     async def test_get_data_range_success(self, mock_get_session):
         """Test get_data_range with data."""
         # Mock session and query result
@@ -252,7 +252,7 @@ class TestDataService:
         assert result["end"] == datetime(2024, 1, 31)
 
     @pytest.mark.asyncio
-    @patch("src.services.data_service.get_session")
+    @patch("src.services.database_repository.get_session")
     async def test_get_data_range_no_data(self, mock_get_session):
         """Test get_data_range with no data."""
         # Mock session with no result
@@ -284,9 +284,9 @@ class TestDataService:
         """Test validate_data_availability when no data exists."""
         service = DataService()
 
-        with patch.object(service, "get_data_range", return_value=None):
+        with patch.object(service.db_repo, "get_data_range", return_value=None):
             with patch.object(
-                service, "get_available_symbols", return_value=["GOOGL", "MSFT"]
+                service.db_repo, "get_available_symbols", return_value=["GOOGL", "MSFT"]
             ):
                 start = datetime(2024, 1, 1)
                 end = datetime(2024, 1, 31)
@@ -309,7 +309,7 @@ class TestDataService:
             "end": datetime(2024, 1, 31, tzinfo=timezone.utc),
         }
 
-        with patch.object(service, "get_data_range", return_value=mock_range):
+        with patch.object(service.db_repo, "get_data_range", return_value=mock_range):
             start = datetime(2024, 1, 1, tzinfo=timezone.utc)  # Too early
             end = datetime(2024, 1, 31, tzinfo=timezone.utc)
 
@@ -332,7 +332,7 @@ class TestDataService:
             "end": datetime(2024, 1, 15, tzinfo=timezone.utc),
         }
 
-        with patch.object(service, "get_data_range", return_value=mock_range):
+        with patch.object(service.db_repo, "get_data_range", return_value=mock_range):
             start = datetime(2024, 1, 1, tzinfo=timezone.utc)
             end = datetime(2024, 1, 31, tzinfo=timezone.utc)  # Too late
 
@@ -355,7 +355,7 @@ class TestDataService:
             "end": datetime(2024, 1, 31, tzinfo=timezone.utc),
         }
 
-        with patch.object(service, "get_data_range", return_value=mock_range):
+        with patch.object(service.db_repo, "get_data_range", return_value=mock_range):
             start = datetime(2024, 1, 10, tzinfo=timezone.utc)
             end = datetime(2024, 1, 20, tzinfo=timezone.utc)
 
@@ -370,7 +370,7 @@ class TestDataService:
         service = DataService()
 
         with patch.object(
-            service, "get_data_range", side_effect=Exception("Database error")
+            service.db_repo, "get_data_range", side_effect=Exception("Database error")
         ):
             start = datetime(2024, 1, 1)
             end = datetime(2024, 1, 31)
@@ -446,8 +446,7 @@ class TestDataService:
         assert len(bars) == 1
 
     @pytest.mark.asyncio
-    @patch("src.services.data_service.print")
-    async def test_convert_to_nautilus_bars_import_error(self, mock_print):
+    async def test_convert_to_nautilus_bars_import_error(self):
         """Test convert_to_nautilus_bars with import error fallback."""
         service = DataService()
         from nautilus_trader.model.identifiers import InstrumentId
@@ -465,22 +464,15 @@ class TestDataService:
             }
         ]
 
-        # Mock import error
-        with patch(
-            "src.utils.data_wrangler.MarketDataWrangler",
-            side_effect=ImportError("Module not found"),
-        ):
-            bars = service.convert_to_nautilus_bars(data, instrument_id)
+        # Test the fallback method directly
+        bars = service.converter._convert_to_nautilus_bars_fallback(data, instrument_id)
 
-            # Should fall back to original implementation
-            assert isinstance(bars, list)
-            mock_print.assert_called_with(
-                "Failed to import data wrangler: Module not found"
-            )
+        # Should use fallback implementation and create bars
+        assert isinstance(bars, list)
+        assert len(bars) == 1
 
     @pytest.mark.asyncio
-    @patch("src.services.data_service.print")
-    async def test_convert_to_nautilus_bars_processing_error(self, mock_print):
+    async def test_convert_to_nautilus_bars_processing_error(self):
         """Test convert_to_nautilus_bars with processing error fallback."""
         service = DataService()
         from nautilus_trader.model.identifiers import InstrumentId
@@ -498,7 +490,7 @@ class TestDataService:
             }
         ]
 
-        # Mock processing error
+        # Mock processing error to trigger fallback
         with patch("src.utils.data_wrangler.MarketDataWrangler") as mock_wrangler_class:
             mock_wrangler = MagicMock()
             mock_wrangler.process.side_effect = ValueError("Processing failed")
@@ -506,15 +498,12 @@ class TestDataService:
 
             bars = service.convert_to_nautilus_bars(data, instrument_id)
 
-            # Should fall back to original implementation
+            # Should fall back to original implementation and still create bars
             assert isinstance(bars, list)
-            mock_print.assert_called_with(
-                "Error converting data to Nautilus bars: Processing failed"
-            )
+            assert len(bars) == 1  # Fallback creates bars successfully
 
     @pytest.mark.asyncio
-    @patch("src.services.data_service.print")
-    async def test_convert_to_nautilus_bars_no_bars_created(self, mock_print):
+    async def test_convert_to_nautilus_bars_no_bars_created(self):
         """Test convert_to_nautilus_bars when no bars are created."""
         service = DataService()
         from nautilus_trader.model.identifiers import InstrumentId
@@ -538,20 +527,18 @@ class TestDataService:
             mock_wrangler.process.return_value = []
             mock_wrangler_class.return_value = mock_wrangler
 
-            # Should fall back to original implementation and print error
             bars = service.convert_to_nautilus_bars(data, instrument_id)
 
-            assert isinstance(bars, list)  # Falls back to original implementation
-            mock_print.assert_called_with(
-                "Error converting data to Nautilus bars: No bars were created from the provided data"
-            )
+            # Should fall back to original implementation and create bars
+            assert isinstance(bars, list)
+            assert len(bars) == 1  # Fallback creates bars successfully
 
     @pytest.mark.asyncio
     async def test_get_adjusted_date_range_no_data(self):
         """Test get_adjusted_date_range when no data exists."""
         service = DataService()
 
-        with patch.object(service, "get_data_range", return_value=None):
+        with patch.object(service.db_repo, "get_data_range", return_value=None):
             start = datetime(2024, 1, 1)
             end = datetime(2024, 1, 31)
 
@@ -560,7 +547,7 @@ class TestDataService:
             assert result is None
 
     @pytest.mark.asyncio
-    @patch("src.services.data_service.get_session")
+    @patch("src.services.database_repository.get_session")
     async def test_get_adjusted_date_range_midnight_dates(self, mock_get_session):
         """Test get_adjusted_date_range with midnight dates."""
         service = DataService()
@@ -589,7 +576,9 @@ class TestDataService:
 
         mock_session.execute.side_effect = [mock_result_first, mock_result_last]
 
-        with patch.object(service, "get_data_range", return_value=mock_data_range):
+        with patch.object(
+            service.db_repo, "get_data_range", return_value=mock_data_range
+        ):
             # Test with midnight dates (should be adjusted)
             start = datetime(2024, 1, 1, 0, 0)  # Midnight
             end = datetime(2024, 1, 31, 0, 0)  # Midnight
@@ -601,7 +590,7 @@ class TestDataService:
             assert result["end"] == datetime(2024, 1, 31, 16, 0)
 
     @pytest.mark.asyncio
-    @patch("src.services.data_service.get_session")
+    @patch("src.services.database_repository.get_session")
     async def test_get_adjusted_date_range_no_data_on_date(self, mock_get_session):
         """Test get_adjusted_date_range when no data exists on specific dates."""
         service = DataService()
@@ -626,7 +615,9 @@ class TestDataService:
 
         mock_session.execute.side_effect = [mock_result_start, mock_result_end]
 
-        with patch.object(service, "get_data_range", return_value=mock_data_range):
+        with patch.object(
+            service.db_repo, "get_data_range", return_value=mock_data_range
+        ):
             # Test with midnight dates where no data exists on exact dates
             start = datetime(2024, 1, 1, 0, 0)  # Before data start
             end = datetime(2024, 1, 31, 0, 0)  # After data end
@@ -652,7 +643,9 @@ class TestDataService:
             "end": datetime(2024, 1, 31, 16, 0),
         }
 
-        with patch.object(service, "get_data_range", return_value=mock_data_range):
+        with patch.object(
+            service.db_repo, "get_data_range", return_value=mock_data_range
+        ):
             # Test with non-midnight dates (should not be adjusted)
             start = datetime(2024, 1, 5, 10, 30)
             end = datetime(2024, 1, 25, 15, 30)
@@ -676,7 +669,9 @@ class TestDataService:
             "end": datetime(2024, 1, 31, 16, 0, tzinfo=timezone.utc),
         }
 
-        with patch.object(service, "get_data_range", return_value=mock_data_range):
+        with patch.object(
+            service.db_repo, "get_data_range", return_value=mock_data_range
+        ):
             # Test with naive datetime (should be converted to UTC)
             start = datetime(2024, 1, 5, 10, 30)  # Naive datetime
             end = datetime(2024, 1, 25, 15, 30)  # Naive datetime

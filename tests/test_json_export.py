@@ -26,7 +26,7 @@ def sample_trades():
             exit_time=datetime(2024, 1, 1, 16, 0),
             realized_pnl=Decimal("500.00"),
             commission=Decimal("2.00"),
-            strategy_name="test_strategy"
+            strategy_name="test_strategy",
         ),
         TradeModel(
             position_id="POS-002",
@@ -39,8 +39,8 @@ def sample_trades():
             exit_time=datetime(2024, 1, 2, 15, 30),
             realized_pnl=Decimal("-2500.00"),
             commission=Decimal("5.00"),
-            strategy_name="test_strategy"
-        )
+            strategy_name="test_strategy",
+        ),
     ]
 
 
@@ -81,9 +81,7 @@ def test_serialize_value_nested_dict():
     data = {
         "price": Decimal("100.50"),
         "timestamp": datetime(2024, 1, 1),
-        "nested": {
-            "value": Decimal("50.25")
-        }
+        "nested": {"value": Decimal("50.25")},
     }
     result = exporter._serialize_value(data)
     assert result["price"] == 100.50
@@ -100,7 +98,7 @@ def test_export_trades_default_filename(json_exporter, sample_trades):
     assert "trades_export_" in filepath.name
 
     # Verify file content
-    with open(filepath, 'r') as f:
+    with open(filepath, "r") as f:
         data = json.load(f)
 
     assert "export_metadata" in data
@@ -123,7 +121,7 @@ def test_export_trades_content_validation(json_exporter, sample_trades):
     """Test that exported trade content matches expected format."""
     filepath = json_exporter.export_trades(sample_trades)
 
-    with open(filepath, 'r') as f:
+    with open(filepath, "r") as f:
         data = json.load(f)
 
     trade_data = data["trades"][0]
@@ -147,7 +145,7 @@ def test_export_performance_report(json_exporter):
         "total_profit": Decimal("10000.00"),
         "max_drawdown": Decimal("1500.00"),
         "sharpe_ratio": 1.5,
-        "win_rate": 0.6
+        "win_rate": 0.6,
     }
 
     filepath = json_exporter.export_performance_report(report_data)
@@ -155,7 +153,7 @@ def test_export_performance_report(json_exporter):
     assert filepath.exists()
     assert "performance_report_" in filepath.name
 
-    with open(filepath, 'r') as f:
+    with open(filepath, "r") as f:
         data = json.load(f)
 
     assert data["export_metadata"]["report_type"] == "performance"
@@ -174,10 +172,10 @@ def test_export_portfolio_summary(json_exporter):
                 "symbol": "AAPL",
                 "quantity": 100,
                 "current_price": Decimal("150.00"),
-                "market_value": Decimal("15000.00")
+                "market_value": Decimal("15000.00"),
             }
         ],
-        "daily_pnl": Decimal("250.00")
+        "daily_pnl": Decimal("250.00"),
     }
 
     filepath = json_exporter.export_portfolio_summary(portfolio_data)
@@ -185,7 +183,7 @@ def test_export_portfolio_summary(json_exporter):
     assert filepath.exists()
     assert "portfolio_summary_" in filepath.name
 
-    with open(filepath, 'r') as f:
+    with open(filepath, "r") as f:
         data = json.load(f)
 
     assert data["export_metadata"]["report_type"] == "portfolio_summary"
@@ -217,7 +215,7 @@ def test_export_empty_trades_list(json_exporter):
     """Test exporting empty trades list."""
     filepath = json_exporter.export_trades([])
 
-    with open(filepath, 'r') as f:
+    with open(filepath, "r") as f:
         data = json.load(f)
 
     assert data["export_metadata"]["total_trades"] == 0
@@ -229,7 +227,7 @@ def test_json_file_formatting(json_exporter, sample_trades):
     filepath = json_exporter.export_trades(sample_trades)
 
     # Read raw content to check formatting
-    with open(filepath, 'r') as f:
+    with open(filepath, "r") as f:
         content = f.read()
 
     # Should be indented (not minified)
@@ -250,14 +248,14 @@ def test_unicode_handling(json_exporter):
             entry_time=datetime(2024, 1, 1),
             exit_time=datetime(2024, 1, 1),
             realized_pnl=Decimal("500.00"),
-            commission=Decimal("2.00")
+            commission=Decimal("2.00"),
         )
     ]
 
     # Export and verify unicode is preserved
     filepath = json_exporter.export_trades(trades)
 
-    with open(filepath, 'r', encoding='utf-8') as f:
+    with open(filepath, "r", encoding="utf-8") as f:
         data = json.load(f)
 
     # Verify the file was created and can be read

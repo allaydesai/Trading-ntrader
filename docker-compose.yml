@@ -1,0 +1,126 @@
+version: '3.8'
+
+services:
+  # PostgreSQL with TimescaleDB extension for time-series data
+  postgres:
+    image: timescale/timescaledb:latest-pg16
+    container_name: ntrader-postgres
+    environment:
+      POSTGRES_DB: ${DATABASE_NAME:-ntrader_dev}
+      POSTGRES_USER: ${DATABASE_USER:-ntrader}
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-ntrader}
+      POSTGRES_HOST_AUTH_METHOD: md5
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/init_db.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DATABASE_USER:-ntrader}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ntrader-network
+
+  # Redis for caching and session management
+  redis:
+    image: redis:7-alpine
+    container_name: ntrader-redis
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ntrader-network
+
+  # Interactive Brokers Gateway (Paper Trading)
+  ib-gateway:
+    image: ghcr.io/gnzsnz/ib-gateway:stable
+    container_name: ntrader-ib-gateway
+    environment:
+      TWS_USERID: ${TWS_USERNAME}
+      TWS_PASSWORD: ${TWS_PASSWORD}
+      TRADING_MODE: ${TRADING_MODE:-paper}
+      READ_ONLY_API: "yes"
+      VNC_SERVER_PASSWORD: ${VNC_PASSWORD:-password}
+    ports:
+      - "4002:4002"  # Gateway API port (paper trading)
+      - "5900:5900"  # VNC port for GUI access
+    volumes:
+      - ib_gateway_settings:/root/Jts
+    healthcheck:
+      test: ["CMD-SHELL", "netstat -an | grep 4002 | grep LISTEN"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - ntrader-network
+
+  # NTrader Application
+  ntrader-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ntrader-app
+    environment:
+      # Database configuration
+      DATABASE_URL: postgresql://${DATABASE_USER:-ntrader}:${DATABASE_PASSWORD:-ntrader}@postgres:5432/${DATABASE_NAME:-ntrader_dev}
+      DATABASE_POOL_SIZE: ${DATABASE_POOL_SIZE:-10}
+      DATABASE_MAX_OVERFLOW: ${DATABASE_MAX_OVERFLOW:-20}
+
+      # Redis configuration
+      REDIS_URL: redis://redis:6379
+
+      # IBKR configuration
+      IBKR_HOST: ib-gateway
+      IBKR_PORT: 4002
+      IBKR_CLIENT_ID: ${IBKR_CLIENT_ID:-1}
+      IBKR_TRADING_MODE: ${TRADING_MODE:-paper}
+      TWS_USERNAME: ${TWS_USERNAME}
+      TWS_PASSWORD: ${TWS_PASSWORD}
+      TWS_ACCOUNT: ${TWS_ACCOUNT}
+
+      # Application settings
+      DEBUG: ${DEBUG:-false}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ib-gateway:
+        condition: service_healthy
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    networks:
+      - ntrader-network
+    command: >
+      sh -c "
+        echo 'Waiting for services to be ready...' &&
+        sleep 10 &&
+        echo 'Running database migrations...' &&
+        uv run alembic upgrade head &&
+        echo 'Starting NTrader application...' &&
+        uv run python -m src.cli.main --help
+      "
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  ib_gateway_settings:
+    driver: local
+
+networks:
+  ntrader-network:
+    driver: bridge

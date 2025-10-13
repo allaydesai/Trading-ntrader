@@ -7,8 +7,12 @@ from pathlib import Path
 from typing import List, Dict, Any, Union
 
 from ...models.trade import TradeModel
-from .exceptions import FileWriteError, InvalidDataError, EmptyDataError, SerializationError
-from .validators import DataValidator, FileValidator, TradeValidator
+from .exceptions import (
+    FileWriteError,
+    EmptyDataError,
+    SerializationError,
+)
+from .validators import FileValidator, TradeValidator
 
 
 class JSONExporter:
@@ -38,7 +42,7 @@ class JSONExporter:
             return float(value)
         elif isinstance(value, datetime):
             return value.isoformat()
-        elif hasattr(value, '__dict__'):
+        elif hasattr(value, "__dict__"):
             # Convert objects to dictionaries
             return {k: self._serialize_value(v) for k, v in value.__dict__.items()}
         elif isinstance(value, (list, tuple)):
@@ -75,7 +79,7 @@ class JSONExporter:
 
         # Validate filename
         FileValidator.validate_filename(filename)
-        FileValidator.validate_file_extension(filename, ['.json'])
+        FileValidator.validate_file_extension(filename, [".json"])
 
         filepath = self.output_dir / filename
 
@@ -83,47 +87,55 @@ class JSONExporter:
         trades_data = []
         for trade in trades:
             trade_dict = {
-                'position_id': trade.position_id,
-                'instrument_id': trade.instrument_id,
-                'side': trade.side,
-                'quantity': self._serialize_value(trade.quantity),
-                'entry_price': self._serialize_value(trade.entry_price),
-                'exit_price': self._serialize_value(trade.exit_price),
-                'entry_time': self._serialize_value(trade.entry_time),
-                'exit_time': self._serialize_value(trade.exit_time),
-                'realized_pnl': self._serialize_value(trade.realized_pnl),
-                'pnl_pct': self._serialize_value(trade.pnl_pct),
-                'commission': self._serialize_value(trade.commission),
-                'slippage': self._serialize_value(trade.slippage),
-                'strategy_name': trade.strategy_name,
-                'notes': trade.notes,
-                'duration_hours': trade.duration_hours,
-                'is_winning_trade': trade.is_winning_trade
+                "position_id": trade.position_id,
+                "instrument_id": trade.instrument_id,
+                "side": trade.side,
+                "quantity": self._serialize_value(trade.quantity),
+                "entry_price": self._serialize_value(trade.entry_price),
+                "exit_price": self._serialize_value(trade.exit_price),
+                "entry_time": self._serialize_value(trade.entry_time),
+                "exit_time": self._serialize_value(trade.exit_time),
+                "realized_pnl": self._serialize_value(trade.realized_pnl),
+                "pnl_pct": self._serialize_value(trade.pnl_pct),
+                "commission": self._serialize_value(trade.commission),
+                "slippage": self._serialize_value(trade.slippage),
+                "strategy_name": trade.strategy_name,
+                "notes": trade.notes,
+                "duration_hours": trade.duration_hours,
+                "is_winning_trade": trade.is_winning_trade,
             }
             trades_data.append(trade_dict)
 
         # Write to JSON file with proper formatting
         try:
-            with open(filepath, 'w', encoding='utf-8') as f:
-                json.dump({
-                    'export_metadata': {
-                        'export_time': datetime.now().isoformat(),
-                        'total_trades': len(trades),
-                        'format_version': '1.0'
+            with open(filepath, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "export_metadata": {
+                            "export_time": datetime.now().isoformat(),
+                            "total_trades": len(trades),
+                            "format_version": "1.0",
+                        },
+                        "trades": trades_data,
                     },
-                    'trades': trades_data
-                }, f, indent=2, ensure_ascii=False)
+                    f,
+                    indent=2,
+                    ensure_ascii=False,
+                )
         except OSError as e:
             raise FileWriteError(str(filepath), f"OS error: {str(e)}") from e
-        except json.JSONEncoder as e:
-            raise SerializationError("trades", f"JSON serialization failed: {str(e)}") from e
+        except (TypeError, ValueError) as e:
+            raise SerializationError(
+                "trades", f"JSON serialization failed: {str(e)}"
+            ) from e
         except Exception as e:
             raise FileWriteError(str(filepath), f"Unexpected error: {str(e)}") from e
 
         return filepath
 
-    def export_performance_report(self, report_data: Dict[str, Any],
-                                filename: str = None) -> Path:
+    def export_performance_report(
+        self, report_data: Dict[str, Any], filename: str = None
+    ) -> Path:
         """Export performance report to JSON file.
 
         Args:
@@ -141,22 +153,23 @@ class JSONExporter:
 
         # Serialize the report data
         serialized_data = {
-            'export_metadata': {
-                'export_time': datetime.now().isoformat(),
-                'report_type': 'performance',
-                'format_version': '1.0'
+            "export_metadata": {
+                "export_time": datetime.now().isoformat(),
+                "report_type": "performance",
+                "format_version": "1.0",
             },
-            'performance_data': self._serialize_value(report_data)
+            "performance_data": self._serialize_value(report_data),
         }
 
         # Write to JSON file with proper formatting
-        with open(filepath, 'w', encoding='utf-8') as f:
+        with open(filepath, "w", encoding="utf-8") as f:
             json.dump(serialized_data, f, indent=2, ensure_ascii=False)
 
         return filepath
 
-    def export_portfolio_summary(self, portfolio_data: Dict[str, Any],
-                                filename: str = None) -> Path:
+    def export_portfolio_summary(
+        self, portfolio_data: Dict[str, Any], filename: str = None
+    ) -> Path:
         """Export portfolio summary to JSON file.
 
         Args:
@@ -174,16 +187,16 @@ class JSONExporter:
 
         # Serialize the portfolio data
         serialized_data = {
-            'export_metadata': {
-                'export_time': datetime.now().isoformat(),
-                'report_type': 'portfolio_summary',
-                'format_version': '1.0'
+            "export_metadata": {
+                "export_time": datetime.now().isoformat(),
+                "report_type": "portfolio_summary",
+                "format_version": "1.0",
             },
-            'portfolio_data': self._serialize_value(portfolio_data)
+            "portfolio_data": self._serialize_value(portfolio_data),
         }
 
         # Write to JSON file with proper formatting
-        with open(filepath, 'w', encoding='utf-8') as f:
+        with open(filepath, "w", encoding="utf-8") as f:
             json.dump(serialized_data, f, indent=2, ensure_ascii=False)
 
         return filepath
@@ -205,5 +218,5 @@ class JSONExporter:
         if not filepath.exists():
             raise FileNotFoundError(f"JSON file not found: {filepath}")
 
-        with open(filepath, 'r', encoding='utf-8') as f:
+        with open(filepath, "r", encoding="utf-8") as f:
             return json.load(f)

@@ -12,25 +12,46 @@ A production-grade algorithmic trading backtesting system built with the Nautilu
 - 📋 **YAML Configuration**: Flexible strategy configuration via YAML files
 - 📊 **Mock Data Generation**: Synthetic data with predictable patterns for testing
 - 📈 **CSV Data Import**: Import real market data from CSV files with validation
+- 📡 **Interactive Brokers Integration**: ✨ NEW - Fetch real market data from IBKR TWS/Gateway
 - 🗄️ **Database Storage**: PostgreSQL with optimized time-series storage
 - 🖥️ **CLI Interface**: Easy-to-use command line interface with data management
-- 📈 **Performance Metrics**: Win rate, total return, trade statistics
+- 📊 **Performance Analytics**: Comprehensive metrics using Nautilus Trader analytics framework
+  - **Risk Metrics**: Sharpe Ratio, Sortino Ratio, Calmar Ratio, Maximum Drawdown
+  - **Trade Statistics**: Win rate, profit factor, expectancy, average win/loss
+  - **Portfolio Tracking**: Real-time PnL, position monitoring, equity curves
+- 📋 **Report Generation**: Multi-format report export with rich visualizations
+  - **Text Reports**: Rich-formatted console output with tables and charts
+  - **CSV Export**: Precision-preserved data export for spreadsheet analysis
+  - **JSON Export**: Structured data for programmatic analysis
 - ⚡ **Fast Execution**: Built on Nautilus Trader's high-performance engine
-- 🧪 **Test Coverage**: Comprehensive test suite with 298+ tests
-- 🔄 **Real Data Backtesting**: Run backtests on imported historical data
+- 🧪 **Test Coverage**: Comprehensive test suite with 144+ tests (Milestones 1-5)
+- 🔄 **Real Data Backtesting**: Run backtests on imported historical data with full analytics
+- 📡 **Interactive Brokers Integration**: Fetch real market data from IBKR TWS/Gateway
 
 ## Current Status & Capabilities
 
-### ✅ What Works (Milestone 3 Complete)
+### ✅ What Works (Milestone 5 Complete)
 - **Strategy Management**: Discover, create, and validate strategy configurations
 - **Multiple Strategy Types**: SMA Crossover, RSI Mean Reversion, SMA Momentum
 - **Database Backtesting**: All three strategies work with imported CSV data
 - **YAML Configuration**: Create and validate strategy configs via CLI
 - **Mock Data Testing**: Test strategies with synthetic data using YAML configs
+- **Performance Analytics**: Comprehensive metrics with Nautilus Trader integration
+  - Sharpe, Sortino, Calmar ratios
+  - Maximum drawdown with recovery tracking
+  - Win rate, profit factor, expectancy
+  - Portfolio tracking and equity curves
+- **Report Generation**: Multi-format exports (text, CSV, JSON)
+- **Results Persistence**: Save and retrieve backtest results with full analytics
+- **Interactive Brokers Integration**: ✨ NEW in Milestone 5
+  - Fetch historical data directly from IBKR TWS/Gateway
+  - Support for multiple instruments and timeframes
+  - Built-in rate limiting (45 req/sec) to prevent API throttling
+  - Data stored in Parquet format via Nautilus catalog
+  - Delayed/frozen market data for paper trading accounts
 
 ### 🚧 Current Limitations
 - **YAML + Database Integration**: `run-config` command supports mock data only
-- **Historical Data Source**: CSV import required; no live data feeds yet
 - **Strategy Parameters**: Limited to predefined parameters per strategy type
 
 ### 📋 Command Quick Reference
@@ -40,11 +61,21 @@ uv run python -m src.cli.main strategy list                    # ✅ List availa
 uv run python -m src.cli.main strategy create --type <type>    # ✅ Create config template
 uv run python -m src.cli.main strategy validate <config>       # ✅ Validate config
 
+# IBKR data fetching (New in Milestone 5)
+uv run python -m src.cli.main data connect                     # ✅ Test IBKR connection
+uv run python -m src.cli.main data fetch --instruments AAPL    # ✅ Fetch historical data
+
 # Database backtesting (recommended)
 uv run python -m src.cli.main backtest run --strategy <type>   # ✅ All strategies supported
 
 # Mock data testing
 uv run python -m src.cli.main backtest run-config <config>     # ✅ YAML configs supported
+
+# Performance reports (New in Milestone 4)
+uv run python -m src.cli report summary <result-id>            # ✅ Quick performance summary
+uv run python -m src.cli report generate --result-id <id>      # ✅ Generate text report
+uv run python -m src.cli report generate --result-id <id> --format csv  # ✅ Export to CSV
+uv run python -m src.cli report list                           # ✅ List saved results
 ```
 
 ## Quick Start
@@ -53,6 +84,9 @@ uv run python -m src.cli.main backtest run-config <config>     # ✅ YAML config
 
 - Python 3.11+
 - UV package manager
+- Docker (for PostgreSQL database)
+- **Optional**: Interactive Brokers TWS/Gateway (for live data fetching)
+  - See [IBKR Setup Guide](docs/IBKR_SETUP.md) for detailed instructions
 
 ### Installation
 
@@ -162,14 +196,15 @@ Expected output:
 
 ### Database Setup
 
-This project uses PostgreSQL with TimescaleDB for time-series data storage. Follow these steps to set up the database:
+This project uses PostgreSQL with TimescaleDB for time-series data storage. You can set up the database using either Docker (recommended for beginners) or a local PostgreSQL installation.
 
-#### Prerequisites
+#### Option 1: Docker Setup (Recommended)
 
+**Prerequisites:**
 - Docker and Docker Desktop
 - PostgreSQL client tools
 
-#### Setup Steps
+**Setup Steps:**
 
 1. **Pull PostgreSQL Docker image**:
 ```bash
@@ -192,33 +227,13 @@ docker run -d --name pgdb \
   postgres:17
 ```
 
-4. **Install PostgreSQL client** (if not already installed):
-```bash
-# Ubuntu/WSL2
-sudo apt update && sudo apt install -y postgresql-client
-
-# macOS
-brew install postgresql
-```
-
-5. **Verify database connection**:
+4. **Verify database connection**:
 ```bash
 # Test connection
 PGPASSWORD=ntrader_dev_2025 psql -h localhost -U ntrader -d trading_ntrader -c "SELECT version();"
 ```
 
-#### Database Configuration
-
-The database connection is configured through environment variables in your `.env` file:
-
-```env
-DATABASE_URL=postgresql://ntrader:ntrader_dev_2025@localhost:5432/trading_ntrader
-DATABASE_POOL_SIZE=10
-DATABASE_MAX_OVERFLOW=20
-DATABASE_POOL_TIMEOUT=30
-```
-
-#### Container Management
+**Container Management:**
 
 ```bash
 # Start the database
@@ -232,6 +247,80 @@ docker logs pgdb
 
 # Remove container (data persists in volume)
 docker rm pgdb
+```
+
+**Data Storage Location:**
+- Docker volume: `pgdata` (managed by Docker)
+- Physical location (Linux): `/var/lib/docker/volumes/pgdata/_data`
+- Physical location (macOS): `~/Library/Containers/com.docker.docker/Data/vms/0/`
+- To inspect volume: `docker volume inspect pgdata`
+
+#### Option 2: Local PostgreSQL Installation
+
+**Prerequisites:**
+- PostgreSQL 17+ installed locally
+
+**macOS Setup:**
+
+1. **Install PostgreSQL via Homebrew**:
+```bash
+brew install postgresql@17
+brew services start postgresql@17
+```
+
+2. **Create database and user**:
+```bash
+# Connect as postgres superuser
+psql postgres
+
+# In psql prompt:
+CREATE USER ntrader WITH PASSWORD 'ntrader_dev_2025';
+CREATE DATABASE trading_ntrader OWNER ntrader;
+GRANT ALL PRIVILEGES ON DATABASE trading_ntrader TO ntrader;
+\q
+```
+
+3. **Verify connection**:
+```bash
+PGPASSWORD=ntrader_dev_2025 psql -h localhost -U ntrader -d trading_ntrader -c "SELECT version();"
+```
+
+**Data Storage Location (macOS Homebrew):**
+- Data directory: `/opt/homebrew/var/postgresql@17/`
+- Contains all database files, WAL logs, and configuration
+- Check database size: `du -sh /opt/homebrew/var/postgresql@17/`
+- Check specific database: `PGPASSWORD=ntrader_dev_2025 psql -h localhost -U ntrader -d trading_ntrader -c "SELECT pg_size_pretty(pg_database_size('trading_ntrader'));"`
+
+**Ubuntu/Debian Setup:**
+
+1. **Install PostgreSQL**:
+```bash
+sudo apt update
+sudo apt install postgresql-17 postgresql-contrib
+```
+
+2. **Create database and user**:
+```bash
+sudo -u postgres psql
+CREATE USER ntrader WITH PASSWORD 'ntrader_dev_2025';
+CREATE DATABASE trading_ntrader OWNER ntrader;
+GRANT ALL PRIVILEGES ON DATABASE trading_ntrader TO ntrader;
+\q
+```
+
+**Data Storage Location (Ubuntu/Debian):**
+- Data directory: `/var/lib/postgresql/17/main/`
+- Check size: `sudo du -sh /var/lib/postgresql/17/main/`
+
+#### Database Configuration
+
+The database connection is configured through environment variables in your `.env` file:
+
+```env
+DATABASE_URL=postgresql://ntrader:ntrader_dev_2025@localhost:5432/trading_ntrader
+DATABASE_POOL_SIZE=10
+DATABASE_MAX_OVERFLOW=20
+DATABASE_POOL_TIMEOUT=30
 ```
 
 ## Sample Data
@@ -493,11 +582,87 @@ uv run python -m src.cli.main run-simple \
   --bars 200
 ```
 
+#### Performance Reports & Analytics (New in Milestone 4)
+
+After running a backtest, you can generate comprehensive performance reports with detailed analytics.
+
+##### List Saved Backtest Results
+
+```bash
+# List all saved backtest results
+uv run python -m src.cli report list
+
+# Limit results shown
+uv run python -m src.cli report list --limit 5
+```
+
+##### Quick Performance Summary
+
+Get a quick overview of backtest performance:
+
+```bash
+uv run python -m src.cli report summary <result-id>
+```
+
+Example output:
+```
+📊 Performance Summary for result-abc123
+
+┏━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━┓
+┃ Metric            ┃ Value      ┃
+┡━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━┩
+│ Total Return      │ 15.3%      │
+│ Sharpe Ratio      │ 1.42       │
+│ Sortino Ratio     │ 1.68       │
+│ Max Drawdown      │ -8.7%      │
+│ Win Rate          │ 58.3%      │
+│ Profit Factor     │ 1.85       │
+└───────────────────┴────────────┘
+```
+
+##### Generate Detailed Reports
+
+Generate comprehensive reports in multiple formats:
+
+```bash
+# Text report with rich formatting (default)
+uv run python -m src.cli report generate --result-id <id>
+
+# Text report saved to file
+uv run python -m src.cli report generate --result-id <id> --format text -o report.txt
+
+# CSV export for spreadsheet analysis
+uv run python -m src.cli report generate --result-id <id> --format csv -o results.csv
+
+# JSON export for programmatic analysis
+uv run python -m src.cli report generate --result-id <id> --format json -o results.json
+
+# Export all formats at once
+uv run python -m src.cli report export-all <result-id> -o reports/
+```
+
+**Report Contents:**
+- **Summary Panel**: Key performance metrics at a glance
+- **Returns Analysis**: Total return, CAGR, annual return, volatility
+- **Risk Metrics**: Sharpe, Sortino, Calmar ratios, maximum drawdown
+- **Trading Statistics**: Win rate, profit factor, expectancy, avg win/loss
+- **Trade Details**: Complete trade history with entry/exit prices and PnL
+- **Portfolio Analytics**: Position tracking, equity curve, exposure analysis
+
 #### Command Options
 
 ##### Data Commands
 - `data import-csv --file <path> --symbol <symbol>`: Import CSV market data
 - `data list --symbol <symbol>`: List available data for a symbol
+- **IBKR Data Commands** (New in Milestone 5):
+  - `data connect`: Test connection to Interactive Brokers TWS/Gateway
+    - `--host`: IBKR host address (default: 127.0.0.1)
+    - `--port`: IBKR port (default: 7497 for paper trading)
+  - `data fetch`: Fetch historical data from IBKR
+    - `--instruments`: Comma-separated list of instruments (e.g., AAPL,MSFT)
+    - `--start`: Start date (YYYY-MM-DD)
+    - `--end`: End date (YYYY-MM-DD)
+    - `--timeframe`: Bar timeframe (DAILY, 1-HOUR, 5-MINUTE, 1-MINUTE)
 
 ##### Strategy Management Commands
 - `strategy list`: List all available trading strategies
@@ -519,6 +684,17 @@ uv run python -m src.cli.main run-simple \
   - `--symbol`: Trading symbol (required)
   - `--start`: Start date for backtest (YYYY-MM-DD)
   - `--end`: End date for backtest (YYYY-MM-DD)
+
+##### Report Commands (New in Milestone 4)
+- `report list`: List all saved backtest results
+  - `--limit`: Maximum number of results to show
+- `report summary <result-id>`: Display quick performance summary
+- `report generate`: Generate comprehensive performance report
+  - `--result-id`: ID of the backtest result
+  - `--format`: Output format (`text`, `csv`, `json`)
+  - `-o, --output`: Output file path
+- `report export-all <result-id>`: Export all report formats
+  - `-o, --output`: Output directory for exports
 
 ### Example Output
 
@@ -762,6 +938,262 @@ This section provides detailed, step-by-step guides for common tasks.
 
 **Expected result**: Understanding system performance characteristics and resource usage.
 
+### Journey 6: Comprehensive Performance Analysis and Reporting (New in Milestone 4)
+
+**Goal**: Run backtests with full performance analytics and generate detailed reports
+
+**Prerequisites**: Journey 1 completed successfully, sample data imported
+
+**Steps**:
+1. **Run backtest with results persistence**:
+   ```bash
+   # Run backtest - results are automatically saved
+   uv run python -m src.cli.main backtest run \
+     --strategy mean_reversion \
+     --symbol AAPL2018 \
+     --start 2018-02-05 \
+     --end 2018-02-08
+
+   # Note the result ID from the output
+   ```
+
+2. **List saved results**:
+   ```bash
+   # View all saved backtest results
+   uv run python -m src.cli report list
+
+   # View recent 5 results
+   uv run python -m src.cli report list --limit 5
+   ```
+
+3. **Get quick performance summary**:
+   ```bash
+   # Replace <result-id> with actual ID from step 1
+   uv run python -m src.cli report summary <result-id>
+   ```
+
+   This displays:
+   - Total return and CAGR
+   - Risk-adjusted metrics (Sharpe, Sortino, Calmar ratios)
+   - Maximum drawdown
+   - Win rate and profit factor
+
+4. **Generate detailed text report**:
+   ```bash
+   # View comprehensive report in terminal
+   uv run python -m src.cli report generate --result-id <result-id> --format text
+
+   # Save to file for later review
+   uv run python -m src.cli report generate --result-id <result-id> --format text -o my_report.txt
+   ```
+
+5. **Export data for further analysis**:
+   ```bash
+   # Export to CSV for spreadsheet analysis
+   uv run python -m src.cli report generate --result-id <result-id> --format csv -o results.csv
+
+   # Export to JSON for programmatic analysis
+   uv run python -m src.cli report generate --result-id <result-id> --format json -o results.json
+
+   # Export all formats at once
+   mkdir reports
+   uv run python -m src.cli report export-all <result-id> -o reports/
+   ```
+
+6. **Compare multiple strategies**:
+   ```bash
+   # Run different strategies on same data
+   uv run python -m src.cli.main backtest run --strategy sma_crossover \
+     --symbol AAPL2018 --start 2018-02-05 --end 2018-02-08
+
+   uv run python -m src.cli.main backtest run --strategy mean_reversion \
+     --symbol AAPL2018 --start 2018-02-05 --end 2018-02-08
+
+   uv run python -m src.cli.main backtest run --strategy momentum \
+     --symbol AAPL2018 --start 2018-02-05 --end 2018-02-08
+
+   # List all results
+   uv run python -m src.cli report list
+
+   # Compare summaries
+   uv run python -m src.cli report summary <result-id-1>
+   uv run python -m src.cli report summary <result-id-2>
+   uv run python -m src.cli report summary <result-id-3>
+   ```
+
+7. **Analyze performance metrics**:
+   - Review Sharpe Ratio (risk-adjusted returns) - higher is better
+   - Check Maximum Drawdown - lower absolute value is better
+   - Evaluate Win Rate vs Profit Factor
+   - Examine trade distribution (wins vs losses)
+   - Study equity curve patterns
+
+**Learning outcome**:
+- Understanding comprehensive performance metrics
+- Comparing strategies using standardized analytics
+- Identifying optimal strategy parameters
+- Exporting data for deeper analysis in spreadsheets or custom tools
+
+**Expected results**:
+- Rich-formatted performance reports with detailed analytics
+- Multi-format exports for various use cases
+- Clear comparison of strategy performance
+- Data-driven insights for strategy optimization
+
+### Journey 7: Interactive Brokers Data Integration (New in Milestone 5)
+
+**Goal**: Fetch real market data from Interactive Brokers TWS/Gateway and use it for backtesting
+
+**Prerequisites**:
+- TWS or IB Gateway installed and running
+- Paper trading account (DU prefix) recommended
+- Valid IBKR credentials in `.env` file
+
+**Steps**:
+1. **Set up IBKR connection** (first-time setup):
+   ```bash
+   # Follow the comprehensive setup guide
+   cat docs/IBKR_SETUP.md
+
+   # Quick setup checklist:
+   # 1. Enable API in TWS: File → Global Configuration → API → Settings
+   # 2. Check "Enable ActiveX and Socket Clients"
+   # 3. Set Socket port to 7497 (paper trading)
+   # 4. Restart TWS completely
+   ```
+
+2. **Configure environment variables**:
+   ```bash
+   # Verify your .env file has IBKR settings
+   cat .env | grep IBKR
+
+   # Required settings:
+   # IBKR_HOST=127.0.0.1
+   # IBKR_PORT=7497
+   # IBKR_CLIENT_ID=10
+   # TWS_USERNAME=your_username
+   # TWS_PASSWORD=your_password
+   # TWS_ACCOUNT=DU1234567
+   ```
+
+3. **Test IBKR connection**:
+   ```bash
+   # Verify connection to TWS
+   uv run python -m src.cli.main data connect
+   ```
+
+   Expected output:
+   ```
+   ✅ Successfully connected to Interactive Brokers
+
+   Connection Details
+   ┏━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━┓
+   ┃ Property       ┃ Value                   ┃
+   ┡━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━┩
+   │ Host           │ 127.0.0.1               │
+   │ Port           │ 7497                    │
+   │ Account ID     │ DU1234567               │
+   │ Server Version │ 176                     │
+   └────────────────┴─────────────────────────┘
+   ```
+
+4. **Fetch historical data for single instrument**:
+   ```bash
+   # Fetch AAPL daily data for January 2024
+   uv run python -m src.cli.main data fetch \
+     --instruments AAPL \
+     --start 2024-01-01 \
+     --end 2024-01-31 \
+     --timeframe DAILY
+   ```
+
+   Expected output:
+   ```
+   ✅ AAPL: 21 bars fetched
+
+   ✅ Successfully fetched 21 bars for 1 instruments
+
+   Fetch Summary
+   ┏━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+   ┃ Property     ┃ Value                       ┃
+   ┡━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+   │ Instruments  │ AAPL                        │
+   │ Start Date   │ 2024-01-01                  │
+   │ End Date     │ 2024-01-31                  │
+   │ Timeframe    │ DAILY                       │
+   │ Total Bars   │ 21                          │
+   │ Data Location│ ./data/catalog              │
+   └──────────────┴─────────────────────────────┘
+   ```
+
+5. **Fetch data for multiple instruments**:
+   ```bash
+   # Fetch data for portfolio of stocks
+   uv run python -m src.cli.main data fetch \
+     --instruments AAPL,MSFT,GOOGL \
+     --start 2024-02-01 \
+     --end 2024-02-29 \
+     --timeframe DAILY
+   ```
+
+6. **Try different timeframes**:
+   ```bash
+   # Intraday 1-minute bars
+   uv run python -m src.cli.main data fetch \
+     --instruments AAPL \
+     --start 2024-01-02 \
+     --end 2024-01-02 \
+     --timeframe 1-MINUTE
+
+   # Hourly bars
+   uv run python -m src.cli.main data fetch \
+     --instruments MSFT \
+     --start 2024-01-01 \
+     --end 2024-01-05 \
+     --timeframe 1-HOUR
+   ```
+
+7. **Verify data storage**:
+   ```bash
+   # Check Parquet files created
+   ls -lh ./data/catalog/data/bar/
+
+   # Files are named: {instrument}-{timeframe}-{venue}.parquet
+   # Example: AAPL-1-DAY-IDEALPRO.parquet
+   ```
+
+8. **Use IBKR data for backtesting** (future integration):
+   ```bash
+   # Note: Integration with backtest engine coming in future milestone
+   # For now, data is stored in Nautilus catalog format
+   # Can be loaded with Nautilus BacktestEngine directly
+   ```
+
+**Key Features**:
+- **Rate Limiting**: Automatic throttling at 45 req/sec (90% of IBKR limit)
+- **Multiple Instruments**: Fetch multiple symbols in one command
+- **Timeframe Support**: DAILY, 1-HOUR, 5-MINUTE, 1-MINUTE
+- **Parquet Storage**: Efficient columnar storage via Nautilus catalog
+- **Market Data Types**: DELAYED_FROZEN for paper accounts, REAL_TIME with subscription
+
+**Troubleshooting**:
+- **Connection refused**: Check TWS is running and API is enabled
+- **Client ID conflict**: Change `IBKR_CLIENT_ID` in `.env` to different number
+- **No data returned**: Paper accounts get delayed/frozen data by default
+- **Rate limiting errors**: System auto-throttles, but reduce concurrent requests
+
+**Learning outcome**:
+- Understanding IBKR API integration and connection management
+- Fetching real market data for backtesting
+- Working with Nautilus Trader data catalog
+- Managing rate limits and API restrictions
+
+**Expected results**:
+- Successfully connected to IBKR TWS/Gateway
+- Historical data fetched and stored in Parquet format
+- Ready to integrate with backtest engine (future milestone)
+- Understanding of IBKR data types and limitations
+
 ### Troubleshooting Your Journey
 
 If any journey step fails:
@@ -780,7 +1212,7 @@ If any journey step fails:
 src/
 ├── cli/                 # Command line interface
 │   ├── main.py         # Main CLI entry point
-│   └── commands/       # CLI commands (data, backtest)
+│   └── commands/       # CLI commands (data, backtest, report)
 ├── core/               # Core business logic
 │   ├── strategies/     # Trading strategies
 │   └── backtest_runner.py  # Backtest engine wrapper
@@ -788,7 +1220,10 @@ src/
 │   └── market_data.py  # Market data models with validation
 ├── services/           # Business services
 │   ├── csv_loader.py   # CSV import service
-│   └── data_service.py # Data fetching and conversion
+│   ├── data_service.py # Data fetching and conversion
+│   ├── ibkr_client.py  # IBKR client wrapper (Milestone 5)
+│   ├── data_fetcher.py # Historical data fetcher (Milestone 5)
+│   └── analytics/      # Performance analytics services
 ├── db/                 # Database layer
 │   ├── models.py       # SQLAlchemy ORM models
 │   ├── session.py      # Database session management
@@ -797,6 +1232,10 @@ src/
 └── config.py           # Configuration management
 
 tests/                  # Test files mirror src structure
+docs/                   # Documentation (IBKR_SETUP.md, etc.)
+data/
+├── catalog/            # Nautilus Parquet data catalog (IBKR data)
+└── *.csv              # Sample CSV files
 ```
 
 ### Running Tests
@@ -1011,6 +1450,47 @@ split -l 10000 large_file.csv smaller_chunk_
 
 5. **For your own data**: Always import first, then check `backtest list` to see the actual date range before running backtests.
 
+#### 10. IBKR Connection Issues (New in Milestone 5)
+
+**Error**: Connection refused or timeout when connecting to TWS/Gateway
+
+**Solutions**:
+```bash
+# 1. Verify TWS is running
+ps aux | grep -i tws
+
+# 2. Check TWS API settings
+# Go to: File → Global Configuration → API → Settings
+# Ensure "Enable ActiveX and Socket Clients" is checked
+# Verify port is 7497 (paper trading) or 7496 (live)
+
+# 3. Test basic socket connection
+uv run python scripts/test_tws_connection.py
+
+# 4. Restart TWS completely after changing settings
+# Settings don't take effect until restart
+
+# 5. Check firewall isn't blocking localhost connections
+```
+
+**Error**: Client ID already in use (Error 326)
+
+**Solutions**:
+```bash
+# Change client ID in .env file
+# Edit IBKR_CLIENT_ID to a different number (1-999)
+# Then retry connection
+```
+
+**Error**: No market data permissions
+
+**Solutions**:
+- Paper accounts get DELAYED_FROZEN data by default
+- For real-time data, subscribe in IBKR Account Management
+- Verify `.env` has correct market data type setting
+
+**For detailed IBKR troubleshooting**, see [docs/IBKR_SETUP.md](docs/IBKR_SETUP.md)
+
 ### Getting Help
 
 If you encounter issues not covered here:
@@ -1040,15 +1520,37 @@ If you encounter issues not covered here:
   - [x] YAML configuration support
   - [x] Strategy management CLI commands
   - [x] Strategy discovery and validation
+- [x] **Milestone 4**: Performance Metrics & Basic Reports
+  - [x] Performance metrics engine with Nautilus Trader analytics
+  - [x] Custom statistics (MaxDrawdown, CalmarRatio, WinRate, Expectancy)
+  - [x] Enhanced trade tracking with Nautilus Position integration
+  - [x] Portfolio analytics service with real-time metrics
+  - [x] Text report generation with Rich formatting
+  - [x] CSV/JSON export system with precision preservation
+  - [x] CLI report commands (summary, generate, list, export-all)
+  - [x] Results persistence and retrieval system
+  - [x] Comprehensive test suite (106 tests passing)
+- [x] **Milestone 5**: Interactive Brokers Integration
+  - [x] IBKR client wrapper with Nautilus HistoricInteractiveBrokersClient
+  - [x] Connection management and health checks
+  - [x] Rate limiting (45 req/sec with sliding window algorithm)
+  - [x] Historical data fetching (bars, instruments, ticks)
+  - [x] Multi-instrument support with progress tracking
+  - [x] CLI commands (data connect, data fetch)
+  - [x] Parquet catalog integration for data storage
+  - [x] Comprehensive IBKR setup documentation
+  - [x] Full test suite (38 IBKR-specific tests passing)
 
 ### In Progress 🚧
 - [ ] Complete data list command implementation (currently shows "coming soon")
-- [ ] Interactive Brokers data integration
-- [ ] Enhanced performance analytics and reporting
-- [ ] Results persistence and comparison features
+- [ ] IBKR data integration with backtest engine
+- [ ] Advanced visualization and charting
 
 ### Planned 📋
 - [ ] TimescaleDB optimization for large datasets
 - [ ] Web-based dashboard
 - [ ] Real-time data streaming
 - [ ] Advanced risk management features
+- [ ] Portfolio optimization tools
+- [ ] Walk-forward analysis
+- [ ] Monte Carlo simulation

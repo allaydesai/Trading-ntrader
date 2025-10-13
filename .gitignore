@@ -169,3 +169,9 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# macOS files
+.DS_Store
+
+# Data catalog - generated files
+data/catalog/

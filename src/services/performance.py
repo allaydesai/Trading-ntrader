@@ -1,8 +1,6 @@
 """Performance calculation service using Nautilus Trader analytics framework."""
 
 from typing import Dict, Any, Optional, List
-from decimal import Decimal
-from datetime import datetime
 import pandas as pd
 import numpy as np
 
@@ -15,7 +13,6 @@ from nautilus_trader.analysis.statistics.returns_avg_win import ReturnsAverageWi
 from nautilus_trader.analysis.statistics.returns_avg_loss import ReturnsAverageLoss
 from nautilus_trader.analysis.statistic import PortfolioStatistic
 from nautilus_trader.portfolio.portfolio import Portfolio
-from nautilus_trader.cache.cache import Cache
 
 
 class MaxDrawdown(PortfolioStatistic):
@@ -33,14 +30,14 @@ class MaxDrawdown(PortfolioStatistic):
         """
         if returns.empty:
             return {
-                'max_drawdown': 0.0,
-                'max_drawdown_date': None,
-                'recovery_date': None,
-                'recovery_days': None
+                "max_drawdown": 0.0,
+                "max_drawdown_date": None,
+                "recovery_date": None,
+                "recovery_days": None,
             }
 
         # Calculate cumulative returns and running maximum
-        cumulative = (1 + returns).cumprod()
+        cumulative: pd.Series = (1 + returns).cumprod()  # type: ignore[assignment]
         running_max = cumulative.expanding().max()
         drawdown = (cumulative - running_max) / running_max
 
@@ -59,10 +56,10 @@ class MaxDrawdown(PortfolioStatistic):
                 recovery_days = (recovery_date - max_dd_date).days
 
         return {
-            'max_drawdown': float(max_dd),
-            'max_drawdown_date': max_dd_date,
-            'recovery_date': recovery_date,
-            'recovery_days': recovery_days
+            "max_drawdown": float(max_dd),
+            "max_drawdown_date": max_dd_date,
+            "recovery_date": recovery_date,
+            "recovery_days": recovery_days,
         }
 
     def calculate_from_realized_pnls(self, realized_pnls: pd.Series) -> Optional[float]:
@@ -95,17 +92,17 @@ class CalmarRatio(PortfolioStatistic):
             return 0.0
 
         # Calculate annualized return
-        total_return = (1 + returns).prod() - 1
+        total_return = (1 + returns).prod() - 1  # type: ignore[operator]
         periods_per_year = 252  # Assume daily data
         if len(returns) > 0:
-            annual_return = (1 + total_return) ** (periods_per_year / len(returns)) - 1
+            annual_return = (1 + total_return) ** (periods_per_year / len(returns)) - 1  # type: ignore[operator]
         else:
             annual_return = 0.0
 
         # Calculate max drawdown
         max_dd_calc = MaxDrawdown()
         max_dd_result = max_dd_calc.calculate_from_returns(returns)
-        max_dd = abs(max_dd_result['max_drawdown'])
+        max_dd = abs(max_dd_result["max_drawdown"])
 
         # Return Calmar ratio
         return float(annual_return / max_dd) if max_dd > 0 else 0.0
@@ -130,7 +127,7 @@ class CalmarRatio(PortfolioStatistic):
 
         # Calculate max drawdown
         max_dd_calc = MaxDrawdown()
-        max_dd = abs(max_dd_calc.calculate_from_realized_pnls(realized_pnls))
+        max_dd = abs(max_dd_calc.calculate_from_realized_pnls(realized_pnls) or 0.0)  # type: ignore[arg-type]
 
         return float(annual_return / max_dd) if max_dd > 0 else 0.0
 
@@ -200,19 +197,14 @@ class PerformanceCalculator:
             ProfitFactor(),
             ReturnsVolatility(),
             ReturnsAverageWin(),
-            ReturnsAverageLoss()
+            ReturnsAverageLoss(),
         ]
 
         for stat in built_in_stats:
             self.analyzer.register_statistic(stat)
 
         # Custom statistics (work with both returns and realized PnLs)
-        custom_stats = [
-            MaxDrawdown(),
-            CalmarRatio(),
-            WinRate(),
-            Expectancy()
-        ]
+        custom_stats = [MaxDrawdown(), CalmarRatio(), WinRate(), Expectancy()]
 
         for stat in custom_stats:
             self.analyzer.register_statistic(stat)
@@ -234,9 +226,9 @@ class PerformanceCalculator:
         # Full Nautilus integration will be enhanced when we have actual backtest data
         return {
             **portfolio_metrics,
-            'calculation_timestamp': pd.Timestamp.now(),
-            'analyzer_ready': True,
-            'statistics_registered': len(self.analyzer._statistics)
+            "calculation_timestamp": pd.Timestamp.now(),
+            "analyzer_ready": True,
+            "statistics_registered": len(self.analyzer._statistics),
         }
 
     def calculate_metrics_from_data(self, data: Dict[str, Any]) -> Dict[str, Any]:
@@ -252,8 +244,8 @@ class PerformanceCalculator:
         metrics = {}
 
         # Extract returns series if available
-        if 'return_series' in data and isinstance(data['return_series'], pd.Series):
-            returns = data['return_series']
+        if "return_series" in data and isinstance(data["return_series"], pd.Series):
+            returns = data["return_series"]
 
             # Calculate metrics using our custom statistics
             max_dd_calc = MaxDrawdown()
@@ -272,43 +264,59 @@ class PerformanceCalculator:
             volatility_calc = ReturnsVolatility()
             volatility = volatility_calc.calculate_from_returns(returns)
 
-            metrics.update({
-                'sharpe_ratio': sharpe_ratio,
-                'sortino_ratio': sortino_ratio,
-                'volatility': volatility,
-                'max_drawdown': max_dd_result['max_drawdown'],
-                'max_drawdown_date': max_dd_result['max_drawdown_date'],
-                'calmar_ratio': calmar_ratio,
-                'total_return': float((1 + returns).prod() - 1)
-            })
+            metrics.update(
+                {
+                    "sharpe_ratio": sharpe_ratio,
+                    "sortino_ratio": sortino_ratio,
+                    "volatility": volatility,
+                    "max_drawdown": max_dd_result["max_drawdown"],
+                    "max_drawdown_date": max_dd_result["max_drawdown_date"],
+                    "calmar_ratio": calmar_ratio,
+                    "total_return": float((1 + returns).prod() - 1),  # type: ignore[operator,arg-type]
+                }
+            )
 
         # Add basic portfolio data
-        for key in ['total_pnl', 'realized_pnl', 'unrealized_pnl']:
+        for key in ["total_pnl", "realized_pnl", "unrealized_pnl"]:
             if key in data:
                 metrics[key] = data[key]
 
         # Calculate additional derived metrics
-        if 'trades' in data:
-            trades = data['trades']
+        if "trades" in data:
+            trades = data["trades"]
             if trades:
-                winning_trades = [t for t in trades if t.get('pnl', 0) > 0]
-                losing_trades = [t for t in trades if t.get('pnl', 0) <= 0]
+                winning_trades = [t for t in trades if t.get("pnl", 0) > 0]
+                losing_trades = [t for t in trades if t.get("pnl", 0) <= 0]
 
-                metrics.update({
-                    'total_trades': len(trades),
-                    'winning_trades': len(winning_trades),
-                    'losing_trades': len(losing_trades),
-                    'win_rate': len(winning_trades) / len(trades) if trades else 0.0,
-                    'avg_win': np.mean([t['pnl'] for t in winning_trades]) if winning_trades else 0.0,
-                    'avg_loss': np.mean([t['pnl'] for t in losing_trades]) if losing_trades else 0.0,
-                    'largest_win': max([t['pnl'] for t in winning_trades]) if winning_trades else 0.0,
-                    'largest_loss': min([t['pnl'] for t in losing_trades]) if losing_trades else 0.0
-                })
+                metrics.update(
+                    {
+                        "total_trades": len(trades),
+                        "winning_trades": len(winning_trades),
+                        "losing_trades": len(losing_trades),
+                        "win_rate": len(winning_trades) / len(trades)
+                        if trades
+                        else 0.0,
+                        "avg_win": np.mean([t["pnl"] for t in winning_trades])
+                        if winning_trades
+                        else 0.0,
+                        "avg_loss": np.mean([t["pnl"] for t in losing_trades])
+                        if losing_trades
+                        else 0.0,
+                        "largest_win": max([t["pnl"] for t in winning_trades])
+                        if winning_trades
+                        else 0.0,
+                        "largest_loss": min([t["pnl"] for t in losing_trades])
+                        if losing_trades
+                        else 0.0,
+                    }
+                )
 
-        metrics['calculation_timestamp'] = pd.Timestamp.now()
+        metrics["calculation_timestamp"] = pd.Timestamp.now()
         return metrics
 
-    def calculate_metrics_from_backtest_result(self, backtest_result: Any) -> Dict[str, Any]:
+    def calculate_metrics_from_backtest_result(
+        self, backtest_result: Any
+    ) -> Dict[str, Any]:
         """
         Calculate metrics from a backtest result.
 
@@ -321,32 +329,38 @@ class PerformanceCalculator:
         # This will be implemented when we integrate with actual backtest results
         # For now, return a placeholder structure
         return {
-            'total_return': 0.0,
-            'sharpe_ratio': 0.0,
-            'max_drawdown': 0.0,
-            'win_rate': 0.0,
-            'total_trades': 0,
-            'calculation_timestamp': pd.Timestamp.now(),
-            'status': 'placeholder_implementation'
+            "total_return": 0.0,
+            "sharpe_ratio": 0.0,
+            "max_drawdown": 0.0,
+            "win_rate": 0.0,
+            "total_trades": 0,
+            "calculation_timestamp": pd.Timestamp.now(),
+            "status": "placeholder_implementation",
         }
 
     def _calculate_portfolio_metrics(self, portfolio: Portfolio) -> Dict[str, Any]:
         """Calculate basic metrics from Nautilus Portfolio."""
         try:
             return {
-                'total_pnl': float(portfolio.total_pnl()),
-                'unrealized_pnl': sum(portfolio.unrealized_pnls().values()) if portfolio.unrealized_pnls() else 0.0,
-                'realized_pnl': sum(portfolio.realized_pnls().values()) if portfolio.realized_pnls() else 0.0,
-                'net_exposure': sum(portfolio.net_exposures().values()) if portfolio.net_exposures() else 0.0
+                "total_pnl": float(portfolio.total_pnl()),
+                "unrealized_pnl": sum(portfolio.unrealized_pnls().values())
+                if portfolio.unrealized_pnls()
+                else 0.0,
+                "realized_pnl": sum(portfolio.realized_pnls().values())
+                if portfolio.realized_pnls()
+                else 0.0,
+                "net_exposure": sum(portfolio.net_exposures().values())
+                if portfolio.net_exposures()
+                else 0.0,
             }
         except Exception as e:
             # Return safe defaults if portfolio access fails
             return {
-                'total_pnl': 0.0,
-                'unrealized_pnl': 0.0,
-                'realized_pnl': 0.0,
-                'net_exposure': 0.0,
-                'error': str(e)
+                "total_pnl": 0.0,
+                "unrealized_pnl": 0.0,
+                "realized_pnl": 0.0,
+                "net_exposure": 0.0,
+                "error": str(e),
             }
 
     def get_registered_statistics(self) -> List[str]:
@@ -373,9 +387,9 @@ class PerformanceCalculator:
         calmar_ratio = calmar.calculate_from_returns(returns)
 
         return {
-            'max_drawdown': max_dd_result['max_drawdown'],
-            'max_drawdown_date': max_dd_result['max_drawdown_date'],
-            'recovery_date': max_dd_result['recovery_date'],
-            'recovery_days': max_dd_result['recovery_days'],
-            'calmar_ratio': calmar_ratio
+            "max_drawdown": max_dd_result["max_drawdown"],
+            "max_drawdown_date": max_dd_result["max_drawdown_date"],
+            "recovery_date": max_dd_result["recovery_date"],
+            "recovery_days": max_dd_result["recovery_days"],
+            "calmar_ratio": calmar_ratio,
         }

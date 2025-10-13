@@ -5,7 +5,6 @@ from datetime import datetime
 from typing import Optional, Any, Dict
 from pydantic import BaseModel, Field
 from nautilus_trader.model.position import Position
-from nautilus_trader.model.identifiers import PositionId
 
 
 class TradeModel(BaseModel):
@@ -22,34 +21,43 @@ class TradeModel(BaseModel):
     entry_time: datetime = Field(..., description="Position entry timestamp")
     entry_price: Decimal = Field(..., ge=0, description="Entry execution price")
     exit_time: Optional[datetime] = Field(None, description="Position exit timestamp")
-    exit_price: Optional[Decimal] = Field(None, ge=0, description="Exit execution price")
+    exit_price: Optional[Decimal] = Field(
+        None, ge=0, description="Exit execution price"
+    )
     quantity: Decimal = Field(..., ge=0, description="Position size")
     side: str = Field(..., description="Position side (LONG/SHORT)")
 
     # PnL and costs
-    commission: Decimal = Field(default=Decimal('0'), ge=0, description="Total commission")
-    slippage: Decimal = Field(default=Decimal('0'), description="Slippage cost")
+    commission: Decimal = Field(
+        default=Decimal("0"), ge=0, description="Total commission"
+    )
+    slippage: Decimal = Field(default=Decimal("0"), description="Slippage cost")
     realized_pnl: Optional[Decimal] = Field(None, description="Realized PnL")
     pnl_pct: Optional[Decimal] = Field(None, description="Percentage return")
 
     # Additional tracking fields
-    strategy_name: Optional[str] = Field(None, description="Strategy that created trade")
+    strategy_name: Optional[str] = Field(
+        None, description="Strategy that created trade"
+    )
     notes: Optional[str] = Field(None, description="Trade notes")
 
     # Metadata
-    created_at: datetime = Field(default_factory=datetime.now, description="Record creation time")
-    updated_at: datetime = Field(default_factory=datetime.now, description="Record update time")
+    created_at: datetime = Field(
+        default_factory=datetime.now, description="Record creation time"
+    )
+    updated_at: datetime = Field(
+        default_factory=datetime.now, description="Record update time"
+    )
 
     model_config = {
-        "json_encoders": {
-            Decimal: str,
-            datetime: lambda v: v.isoformat()
-        },
-        "use_enum_values": True
+        "json_encoders": {Decimal: str, datetime: lambda v: v.isoformat()},
+        "use_enum_values": True,
     }
 
     @classmethod
-    def from_nautilus_position(cls, position: Position, strategy_name: Optional[str] = None) -> 'TradeModel':
+    def from_nautilus_position(
+        cls, position: Position, strategy_name: Optional[str] = None
+    ) -> "TradeModel":
         """
         Create TradeModel from Nautilus Position.
 
@@ -62,25 +70,37 @@ class TradeModel(BaseModel):
         """
         # Extract basic position data
         position_id = str(position.id) if position.id else "unknown"
-        instrument_id = str(position.instrument_id) if position.instrument_id else "unknown"
+        instrument_id = (
+            str(position.instrument_id) if position.instrument_id else "unknown"
+        )
 
         # Handle timestamps - Nautilus uses nanosecond precision
         entry_time = position.opened_time if position.opened_time else datetime.now()
-        exit_time = position.closed_time if position.is_closed and position.closed_time else None
+        exit_time = (
+            position.closed_time
+            if position.is_closed and position.closed_time
+            else None
+        )
 
         # Extract prices and quantities
-        entry_price = Decimal(str(position.avg_px_open)) if position.avg_px_open else Decimal('0')
+        entry_price = (
+            Decimal(str(position.avg_px_open)) if position.avg_px_open else Decimal("0")
+        )
         exit_price = None
         if position.is_closed and position.avg_px_close:
             exit_price = Decimal(str(position.avg_px_close))
 
-        quantity = Decimal(str(abs(position.quantity))) if position.quantity else Decimal('0')
+        quantity = (
+            Decimal(str(abs(position.quantity))) if position.quantity else Decimal("0")
+        )
 
         # Determine side
         side = "LONG" if position.is_long else "SHORT"
 
         # Extract financial data
-        commission = Decimal(str(position.commission)) if position.commission else Decimal('0')
+        commission = (
+            Decimal(str(position.commission)) if position.commission else Decimal("0")
+        )
         realized_pnl = None
         if position.is_closed and position.realized_pnl is not None:
             realized_pnl = Decimal(str(position.realized_pnl))
@@ -96,7 +116,9 @@ class TradeModel(BaseModel):
             side=side,
             commission=commission,
             realized_pnl=realized_pnl,
-            strategy_name=strategy_name
+            strategy_name=strategy_name,
+            pnl_pct=None,
+            notes=None,
         )
 
     def calculate_pnl_percentage(self) -> Optional[Decimal]:
@@ -149,7 +171,9 @@ class TradeModel(BaseModel):
 
         return Decimal(str(net_pnl))
 
-    def update_exit_data(self, exit_price: Decimal, exit_time: Optional[datetime] = None):
+    def update_exit_data(
+        self, exit_price: Decimal, exit_time: Optional[datetime] = None
+    ):
         """
         Update trade with exit information.
 
@@ -198,22 +222,22 @@ class TradeModel(BaseModel):
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for export."""
         return {
-            'position_id': self.position_id,
-            'instrument_id': self.instrument_id,
-            'strategy_name': self.strategy_name,
-            'side': self.side,
-            'entry_time': self.entry_time.isoformat(),
-            'entry_price': str(self.entry_price),
-            'exit_time': self.exit_time.isoformat() if self.exit_time else None,
-            'exit_price': str(self.exit_price) if self.exit_price else None,
-            'quantity': str(self.quantity),
-            'commission': str(self.commission),
-            'slippage': str(self.slippage),
-            'realized_pnl': str(self.realized_pnl) if self.realized_pnl else None,
-            'pnl_pct': str(self.pnl_pct) if self.pnl_pct else None,
-            'duration_hours': self.duration_hours,
-            'is_winning_trade': self.is_winning_trade,
-            'notes': self.notes
+            "position_id": self.position_id,
+            "instrument_id": self.instrument_id,
+            "strategy_name": self.strategy_name,
+            "side": self.side,
+            "entry_time": self.entry_time.isoformat(),
+            "entry_price": str(self.entry_price),
+            "exit_time": self.exit_time.isoformat() if self.exit_time else None,
+            "exit_price": str(self.exit_price) if self.exit_price else None,
+            "quantity": str(self.quantity),
+            "commission": str(self.commission),
+            "slippage": str(self.slippage),
+            "realized_pnl": str(self.realized_pnl) if self.realized_pnl else None,
+            "pnl_pct": str(self.pnl_pct) if self.pnl_pct else None,
+            "duration_hours": self.duration_hours,
+            "is_winning_trade": self.is_winning_trade,
+            "notes": self.notes,
         }
 
     def __str__(self) -> str:

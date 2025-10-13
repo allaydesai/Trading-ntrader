@@ -74,7 +74,7 @@ class TextReportGenerator:
         self,
         metrics: Dict[str, Any],
         trades: List[Dict[str, Any]],
-        equity_curve: pd.Series
+        equity_curve: pd.Series,
     ) -> str:
         """
         Generate comprehensive report with all sections.
@@ -114,11 +114,15 @@ class TextReportGenerator:
             self._render_trade_history_table(recent_trades)
 
             if len(trades) > 20:
-                self.console.print(f"\n[italic]Showing most recent 20 trades out of {len(trades)} total[/italic]")
+                self.console.print(
+                    f"\n[italic]Showing most recent 20 trades out of {len(trades)} total[/italic]"
+                )
 
         return capture.get()
 
-    def generate_strategy_attribution_report(self, strategy_performance: Dict[str, Dict]) -> str:
+    def generate_strategy_attribution_report(
+        self, strategy_performance: Dict[str, Dict]
+    ) -> str:
         """
         Generate strategy performance attribution report.
 
@@ -138,7 +142,7 @@ class TextReportGenerator:
         metrics: Dict[str, Any],
         output_path: str,
         trades: Optional[List[Dict[str, Any]]] = None,
-        equity_curve: Optional[pd.Series] = None
+        equity_curve: Optional[pd.Series] = None,
     ) -> bool:
         """
         Export performance report to file.
@@ -154,11 +158,13 @@ class TextReportGenerator:
         """
         try:
             if trades is not None and equity_curve is not None:
-                content = self.generate_comprehensive_report(metrics, trades, equity_curve)
+                content = self.generate_comprehensive_report(
+                    metrics, trades, equity_curve
+                )
             else:
                 content = self.generate_performance_report(metrics)
 
-            with open(output_path, 'w', encoding='utf-8') as f:
+            with open(output_path, "w", encoding="utf-8") as f:
                 f.write(content)
 
             return True
@@ -171,10 +177,10 @@ class TextReportGenerator:
         if not metrics:
             summary_text = "No performance data available"
         else:
-            total_return = self._format_percentage(metrics.get('total_return', 0))
-            sharpe_ratio = self._format_number(metrics.get('sharpe_ratio', 0))
-            max_drawdown = self._format_percentage(metrics.get('max_drawdown', 0))
-            win_rate = self._format_percentage(metrics.get('win_rate', 0))
+            total_return = self._format_percentage(metrics.get("total_return", 0))
+            sharpe_ratio = self._format_number(metrics.get("sharpe_ratio", 0))
+            max_drawdown = self._format_percentage(metrics.get("max_drawdown", 0))
+            win_rate = self._format_percentage(metrics.get("win_rate", 0))
 
             summary_text = f"""
         Total Return: {total_return}
@@ -187,7 +193,7 @@ class TextReportGenerator:
             summary_text.strip(),
             title="📊 Performance Summary",
             border_style="blue",
-            padding=(1, 2)
+            padding=(1, 2),
         )
         self.console.print(panel)
 
@@ -198,10 +204,13 @@ class TextReportGenerator:
         table.add_column("Value", style="green")
 
         returns_metrics = [
-            ("Total Return", self._format_percentage(metrics.get('total_return', 0))),
-            ("CAGR", self._format_percentage(metrics.get('cagr', 0))),
-            ("Annual Return", self._format_percentage(metrics.get('annualized_return', 0))),
-            ("Volatility", self._format_percentage(metrics.get('volatility', 0))),
+            ("Total Return", self._format_percentage(metrics.get("total_return", 0))),
+            ("CAGR", self._format_percentage(metrics.get("cagr", 0))),
+            (
+                "Annual Return",
+                self._format_percentage(metrics.get("annualized_return", 0)),
+            ),
+            ("Volatility", self._format_percentage(metrics.get("volatility", 0))),
         ]
 
         for metric, value in returns_metrics:
@@ -216,18 +225,20 @@ class TextReportGenerator:
         table.add_column("Value", style="yellow")
 
         risk_metrics = [
-            ("Sharpe Ratio", self._format_number(metrics.get('sharpe_ratio', 0))),
-            ("Sortino Ratio", self._format_number(metrics.get('sortino_ratio', 0))),
-            ("Max Drawdown", self._format_percentage(metrics.get('max_drawdown', 0))),
-            ("Calmar Ratio", self._format_number(metrics.get('calmar_ratio', 0))),
+            ("Sharpe Ratio", self._format_number(metrics.get("sharpe_ratio", 0))),
+            ("Sortino Ratio", self._format_number(metrics.get("sortino_ratio", 0))),
+            ("Max Drawdown", self._format_percentage(metrics.get("max_drawdown", 0))),
+            ("Calmar Ratio", self._format_number(metrics.get("calmar_ratio", 0))),
         ]
 
         # Add drawdown recovery info if available
-        if metrics.get('max_drawdown_date'):
-            risk_metrics.append(("Max DD Date", self._format_date(metrics.get('max_drawdown_date'))))
+        if metrics.get("max_drawdown_date"):
+            risk_metrics.append(
+                ("Max DD Date", self._format_date(metrics.get("max_drawdown_date")))
+            )
 
-        if metrics.get('recovery_days'):
-            risk_metrics.append(("Recovery Days", str(metrics.get('recovery_days'))))
+        if metrics.get("recovery_days"):
+            risk_metrics.append(("Recovery Days", str(metrics.get("recovery_days"))))
 
         for metric, value in risk_metrics:
             table.add_row(metric, value)
@@ -241,15 +252,15 @@ class TextReportGenerator:
         table.add_column("Value", style="magenta")
 
         trading_metrics = [
-            ("Total Trades", str(metrics.get('total_trades', 0))),
-            ("Winning Trades", str(metrics.get('winning_trades', 0))),
-            ("Losing Trades", str(metrics.get('losing_trades', 0))),
-            ("Win Rate", self._format_percentage(metrics.get('win_rate', 0))),
-            ("Profit Factor", self._format_number(metrics.get('profit_factor', 0))),
-            ("Avg Win", self._format_currency(metrics.get('avg_win', 0))),
-            ("Avg Loss", self._format_currency(metrics.get('avg_loss', 0))),
-            ("Largest Win", self._format_currency(metrics.get('largest_win', 0))),
-            ("Largest Loss", self._format_currency(metrics.get('largest_loss', 0))),
+            ("Total Trades", str(metrics.get("total_trades", 0))),
+            ("Winning Trades", str(metrics.get("winning_trades", 0))),
+            ("Losing Trades", str(metrics.get("losing_trades", 0))),
+            ("Win Rate", self._format_percentage(metrics.get("win_rate", 0))),
+            ("Profit Factor", self._format_number(metrics.get("profit_factor", 0))),
+            ("Avg Win", self._format_currency(metrics.get("avg_win", 0))),
+            ("Avg Loss", self._format_currency(metrics.get("avg_loss", 0))),
+            ("Largest Win", self._format_currency(metrics.get("largest_win", 0))),
+            ("Largest Loss", self._format_currency(metrics.get("largest_loss", 0))),
         ]
 
         for metric, value in trading_metrics:
@@ -260,7 +271,9 @@ class TextReportGenerator:
     def _render_trade_history_table(self, trades: List[Dict[str, Any]]) -> None:
         """Render trade history table."""
         if not trades:
-            self.console.print(Panel("No trade data available", title="📋 Trade History"))
+            self.console.print(
+                Panel("No trade data available", title="📋 Trade History")
+            )
             return
 
         table = Table(title="📋 Trade History", style="white")
@@ -274,30 +287,41 @@ class TextReportGenerator:
         table.add_column("Strategy", style="cyan", no_wrap=True)
 
         for trade in trades:
-            entry_date = self._format_date(trade.get('entry_time'))
-            symbol = str(trade.get('symbol', 'N/A'))
-            side = str(trade.get('side', 'N/A'))
-            quantity = str(trade.get('quantity', 0))
-            entry_price = self._format_decimal(trade.get('entry_price'))
-            exit_price = self._format_decimal(trade.get('exit_price', 'N/A'))
-            pnl = self._format_currency(trade.get('pnl', 0))
-            strategy = str(trade.get('strategy_name', 'N/A'))
+            entry_date = self._format_date(trade.get("entry_time"))
+            symbol = str(trade.get("symbol", "N/A"))
+            side = str(trade.get("side", "N/A"))
+            quantity = str(trade.get("quantity", 0))
+            entry_price = self._format_decimal(trade.get("entry_price"))
+            exit_price = self._format_decimal(trade.get("exit_price", "N/A"))
+            pnl = self._format_currency(trade.get("pnl", 0))
+            strategy = str(trade.get("strategy_name", "N/A"))
 
             # Color code PnL
-            pnl_value = trade.get('pnl', 0)
+            pnl_value = trade.get("pnl", 0)
             if isinstance(pnl_value, (int, float, Decimal)) and pnl_value > 0:
                 pnl = f"[green]{pnl}[/green]"
             elif isinstance(pnl_value, (int, float, Decimal)) and pnl_value < 0:
                 pnl = f"[red]{pnl}[/red]"
 
-            table.add_row(entry_date, symbol, side, quantity, entry_price, exit_price, pnl, strategy)
+            table.add_row(
+                entry_date,
+                symbol,
+                side,
+                quantity,
+                entry_price,
+                exit_price,
+                pnl,
+                strategy,
+            )
 
         self.console.print(table)
 
     def _render_equity_curve_summary(self, equity_curve: pd.Series) -> None:
         """Render equity curve summary."""
         if equity_curve.empty:
-            self.console.print(Panel("No equity curve data available", title="📈 Equity Curve"))
+            self.console.print(
+                Panel("No equity curve data available", title="📈 Equity Curve")
+            )
             return
 
         starting_value = equity_curve.iloc[0]
@@ -318,16 +342,18 @@ class TextReportGenerator:
         """
 
         panel = Panel(
-            summary_text.strip(),
-            title="📈 Equity Curve Summary",
-            border_style="green"
+            summary_text.strip(), title="📈 Equity Curve Summary", border_style="green"
         )
         self.console.print(panel)
 
-    def _render_strategy_attribution_table(self, strategy_performance: Dict[str, Dict]) -> None:
+    def _render_strategy_attribution_table(
+        self, strategy_performance: Dict[str, Dict]
+    ) -> None:
         """Render strategy performance attribution table."""
         if not strategy_performance:
-            self.console.print(Panel("No strategy data available", title="🎯 Strategy Performance"))
+            self.console.print(
+                Panel("No strategy data available", title="🎯 Strategy Performance")
+            )
             return
 
         table = Table(title="🎯 Strategy Performance Attribution", style="blue")
@@ -338,10 +364,10 @@ class TextReportGenerator:
         table.add_column("Sharpe", style="blue", justify="right")
 
         for strategy_name, performance in strategy_performance.items():
-            pnl = self._format_currency(performance.get('total_pnl', 0))
-            trades = str(performance.get('trades', 0))
-            win_rate = self._format_percentage(performance.get('win_rate', 0))
-            sharpe = self._format_number(performance.get('sharpe_ratio', 0))
+            pnl = self._format_currency(performance.get("total_pnl", 0))
+            trades = str(performance.get("trades", 0))
+            win_rate = self._format_percentage(performance.get("win_rate", 0))
+            sharpe = self._format_number(performance.get("sharpe_ratio", 0))
 
             table.add_row(strategy_name, pnl, trades, win_rate, sharpe)
 
@@ -376,7 +402,7 @@ class TextReportGenerator:
 
     def _format_decimal(self, value: Any) -> str:
         """Format Decimal or numeric value."""
-        if value is None or value == 'N/A':
+        if value is None or value == "N/A":
             return "N/A"
         try:
             if isinstance(value, Decimal):
@@ -392,7 +418,7 @@ class TextReportGenerator:
         try:
             if isinstance(value, datetime):
                 return value.strftime("%Y-%m-%d")
-            elif hasattr(value, 'strftime'):  # pandas Timestamp
+            elif hasattr(value, "strftime"):  # pandas Timestamp
                 return value.strftime("%Y-%m-%d")
             return str(value)
         except (ValueError, TypeError, AttributeError):
