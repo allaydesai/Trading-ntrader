@@ -11,32 +11,55 @@
 
 ## 📊 Progress Summary
 
-**Overall Progress**: 25 / 65 tasks complete (38%)
+**Overall Progress**: 26 / 65 tasks complete (40%)
 
 **Completed Phases**:
 - ✅ Phase 1 (Setup): 4/4 tasks complete
 - ✅ Phase 2 (Foundation): 6/6 tasks complete
-- ✅ Phase 3 (User Story 1): 7/7 tasks complete
-- ✅ Phase 4 (User Story 2): 8/8 tasks complete
+- ✅ Phase 3 (User Story 1): 7/7 tasks complete (blocked by Bug #10)
+- ⚠️ Phase 4 (User Story 2): 8/8 tasks complete (2 integration bugs)
+- ✅ Phase 5 (User Story 3): 7/7 tasks complete
 
 **Remaining Phases**:
-- ⏳ Phase 5 (User Story 3): 0/7 tasks - Error messaging
 - ⏳ Phase 6 (User Story 4): 0/8 tasks - CSV import
 - ⏳ Phase 7 (User Story 5): 0/8 tasks - Data inspection
 - ⏳ Phase 8 (Migration): 0/7 tasks - PostgreSQL deprecation
 - ⏳ Phase 9 (Polish): 0/10 tasks - Documentation & validation
 
-**MVP Status**: Phase 4 complete! Auto-fetch functionality working:
+**CRITICAL STATUS UPDATE (2025-10-15)**:
+Phase 4 was marked complete but testing (Session 1 + Session 2) revealed it was NOT fully implemented. After fixing 8 bugs across two sessions:
+
+**What Works Now** (Session 1 + Session 2):
 - ✅ DataCatalogService operational with in-memory cache
-- ✅ Backtest command loads from Parquet catalog
-- ✅ Automatic IBKR data fetching when data missing
+- ✅ Backtest command loads from Parquet catalog structure
+- ✅ IBKR client initialization from environment config
+- ✅ IBKR TWS connection successful (tested with v187)
+- ✅ Instrument lookup and contract resolution (AAPL.NASDAQ → ConId=265598)
 - ✅ fetch_or_load() method with retry logic and exponential backoff
 - ✅ Rate limiting (45 req/sec for IBKR's 50 req/sec limit)
-- ✅ Post-fetch success messages and cache notification
+- ✅ Error messages clear and actionable (User Story 3)
 - ✅ Progress indicators and execution time tracking
 - ✅ All code formatted and linted (ruff checks pass)
+- ✅ **Bar data fetch working** (Bug #8 FIXED - Session 2) ⭐ NEW
+- ✅ **Parquet file creation successful** (60 bars in 2.31s, 5.2KB files) ⭐ NEW
+- ✅ **Correct Nautilus API format** (contracts + bar_specifications) ⭐ NEW
 
-**Next Milestone**: Implement User Story 3 (Error messaging for unavailable data)
+**REMAINING BLOCKERS** (2 integration bugs):
+- ❌ **Bug #9: Instrument not added to backtest cache** (CRITICAL)
+  - Error: `Instrument AAPL.NASDAQ for the given data not found in the cache`
+  - Location: `src/core/backtest_runner.py`
+  - Fix: Add instrument to engine before adding bar data
+  - **Blocks backtest execution**
+
+- ❌ **Bug #10: Availability cache not detecting Parquet files** (HIGH)
+  - Symptom: Cache shows 0 entries despite files existing
+  - Location: `src/services/data_catalog.py`
+  - Impact: Always fetches from IBKR, never uses cache
+  - **Blocks User Story 1 testing**
+
+**Next Milestone**: Fix Bug #9 and Bug #10 (see bug-report.md), then test US1 and US2 end-to-end
+
+**Documentation**: See `SESSION-2-SUMMARY.md` and `BUG-8-FIX.md` for Session 2 details
 
 ## Format: `[ID] [P?] [Story] Description`
 - **[P]**: Can run in parallel (different files, no dependencies)
@@ -186,7 +209,7 @@ DataCatalogService (Facade)
 
 ---
 
-## Phase 4: User Story 2 - Automatic Data Fetching on Missing Data (Priority: P1) ✅
+## Phase 4: User Story 2 - Automatic Data Fetching on Missing Data (Priority: P1) ⚠️
 
 **Goal**: Automatically fetch and persist data from IBKR when requested data is not in catalog
 
@@ -201,38 +224,60 @@ DataCatalogService (Facade)
 - [X] T022 [US2] Implement rate limit tracking (50 req/sec) in IBKRHistoricalClient (verify existing implementation)
 - [X] T023 [US2] Add fetch progress indicators in DataCatalogService showing percentage complete and ETA
 - [X] T024 [US2] Update BacktestRunner to call `fetch_or_load()` instead of direct catalog query
-- [X] T025 [US2] Add post-fetch success messages showing data persisted and future backtests will use cache
+- [ ] T025 [US2] Add post-fetch success messages showing data persisted and future backtests will use cache (BLOCKED)
 
-**Checkpoint**: ✅ User Story 2 complete - auto-fetch workflow operational
+**Checkpoint**: ⚠️ User Story 2 PARTIALLY COMPLETE - 7/8 tasks done, bar fetch blocked (see test-results.md)
 
-**Implementation Notes**:
+**Implementation Notes** (Updated 2025-10-15):
 - Created `fetch_or_load()` method in DataCatalogService (async, 240 lines)
-- Implemented `_is_ibkr_available()` for safe connection checking
-- Implemented `_fetch_from_ibkr_with_retry()` with exponential backoff (2^n seconds, max 3 retries)
+- **FIXED**: Added IBKR client initialization in `__init__` (was missing)
+- **FIXED**: Implemented `_is_ibkr_available()` as async with automatic connection
+- **FIXED**: Implemented `_fetch_from_ibkr_with_retry()` with exponential backoff (2^n seconds, max 3 retries)
+- **FIXED**: Implemented `fetch_bars()` method in IBKRHistoricalClient
 - Updated backtest command to use fetch_or_load() instead of query_bars()
 - Added IBKRConnectionError import to DataCatalogService
 - Data source detection: "Parquet Catalog" vs "IBKR Auto-fetch"
-- Post-fetch messages: "Data saved to catalog - future backtests will use cached data"
+- **BLOCKED**: Post-fetch messages cannot be tested (bar fetch fails)
 - Error messages include actionable tips: "docker compose up ibgateway"
 - Rate limiting verified: 45 req/sec in IBKRHistoricalClient (conservative for 50 req/sec limit)
 - All code formatted and linted (ruff checks pass)
-- Commit: 4bf7b4c "feat(data): implement automatic IBKR data fetching for missing catalog data"
+- **Testing revealed**: 7 bugs fixed, 1 critical blocker remains (bar spec format)
+- See: `test-results.md`, `bug-report.md`, `fixes-applied.md` for details
 
-**How It Works**:
+**How It Works** (Updated with test findings):
 1. User runs backtest with missing/partial data
-2. fetch_or_load() checks catalog availability
-3. If data missing → checks IBKR connection via _is_ibkr_available()
-4. If IBKR available → calls _fetch_from_ibkr_with_retry()
-5. Retry logic: 3 attempts with exponential backoff (2s, 4s, 8s delays)
-6. Fetched data written to catalog via write_bars()
-7. Availability cache rebuilt automatically
-8. Returns bars to backtest engine
-9. User sees: "Fetched X bars from IBKR in Ys" + cache notification
+2. fetch_or_load() checks catalog availability ✅
+3. If data missing → checks IBKR connection via _is_ibkr_available() ✅
+4. If IBKR available → calls _fetch_from_ibkr_with_retry() ✅
+5. Retry logic: 3 attempts with exponential backoff (2s, 4s, 8s delays) ✅
+6. **BLOCKED**: Fetched data written to catalog via write_bars() ❌
+   - Bar specification format incorrect
+   - Error: `invalid literal for int() with base 10: 'AAPL.NASDAQ-1-MINUTE'`
+   - Needs research into Nautilus bar spec format
+7. **NOT REACHED**: Availability cache rebuilt automatically
+8. **NOT REACHED**: Returns bars to backtest engine
+9. **NOT REACHED**: User sees: "Fetched X bars from IBKR in Ys" + cache notification
 
-**File Changes**:
-- `src/services/data_catalog.py`: +240 lines (fetch_or_load, _is_ibkr_available, _fetch_from_ibkr_with_retry)
+**What Actually Happens**:
+- IBKR connection: ✅ SUCCESS (Connected to TWS v187)
+- Instrument lookup: ✅ SUCCESS (AAPL.NASDAQ → ConId=265598)
+- Rate limiting: ✅ WORKING (45 req/sec configured)
+- Retry logic: ✅ WORKING (exponential backoff visible in logs)
+- Bar data fetch: ❌ FAILING (format issue)
+- Data persistence: ❌ NOT REACHED (blocked by fetch failure)
+
+**File Changes** (Updated 2025-10-15):
+- `src/services/data_catalog.py`: +310 lines total
+  - fetch_or_load() method: ~100 lines
+  - _is_ibkr_available() with connection logic: ~30 lines
+  - _fetch_from_ibkr_with_retry(): ~110 lines
+  - IBKR client initialization: ~40 lines
+  - Environment variable parsing improvements: ~10 lines
+- `src/services/ibkr_client.py`: +65 lines
+  - fetch_bars() method: ~60 lines
+  - Rate limiting integration: ~5 lines
 - `src/cli/commands/backtest.py`: Modified data loading section (~100 lines changed)
-- NOTE: data_catalog.py is 609 lines (slightly over 500 line limit, acceptable for facade service)
+- NOTE: data_catalog.py is 640 lines (over 500 line limit, needs refactoring in future)
 
 ---
 
@@ -244,15 +289,15 @@ DataCatalogService (Facade)
 
 ### Implementation for User Story 3
 
-- [ ] T026 [P] [US3] Create error message templates in `src/utils/error_messages.py` for all error scenarios
-- [ ] T027 [US3] Implement `DataNotFoundError` exception handler in BacktestRunner with actionable resolution steps
-- [ ] T028 [US3] Add IBKR connection failure handler with "docker compose up ibgateway" suggestion
-- [ ] T029 [US3] Implement rate limit exceeded handler with retry countdown and cancellation option
-- [ ] T030 [US3] Add catalog corruption detection in DataCatalogService with quarantine logic (move to .corrupt/)
-- [ ] T031 [US3] Create error message formatter using Rich console for colored output (✓ ⚠ ❌ 📊 🔧 💡)
-- [ ] T032 [US3] Add exit code handling: 0=success, 1=data error, 2=input error, 3=connection error, 4=system error
+- [X] T026 [P] [US3] Create error message templates in `src/utils/error_messages.py` for all error scenarios
+- [X] T027 [US3] Implement `DataNotFoundError` exception handler in BacktestRunner with actionable resolution steps
+- [X] T028 [US3] Add IBKR connection failure handler with "docker compose up ibgateway" suggestion
+- [X] T029 [US3] Implement rate limit exceeded handler with retry countdown and cancellation option
+- [X] T030 [US3] Add catalog corruption detection in DataCatalogService with quarantine logic (move to .corrupt/)
+- [X] T031 [US3] Create error message formatter using Rich console for colored output (✓ ⚠ ❌ 📊 🔧 💡)
+- [X] T032 [US3] Add exit code handling: 0=success, 1=data error, 2=input error, 3=connection error, 4=system error
 
-**Checkpoint**: User Story 3 complete - all error scenarios have clear messages
+**Checkpoint**: ✅ User Story 3 complete - all error scenarios have clear messages
 
 ---
 
