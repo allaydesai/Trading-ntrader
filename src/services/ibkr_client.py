@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict
 
 from ibapi.common import MarketDataTypeEnum  # type: ignore
+from nautilus_trader.adapters.interactive_brokers.common import IBContract
 from nautilus_trader.adapters.interactive_brokers.historical.client import (
     HistoricInteractiveBrokersClient,
 )
@@ -135,6 +136,77 @@ class IBKRHistoricalClient:
             # HistoricInteractiveBrokersClient doesn't have a disconnect method
             # Connection is managed by the context/lifecycle
             self._connected = False
+
+    async def fetch_bars(
+        self,
+        instrument_id: str,
+        start: datetime,
+        end: datetime,
+        bar_type_spec: str = "1-MINUTE-LAST",
+    ):
+        """
+        Fetch historical bars from IBKR.
+
+        Args:
+            instrument_id: Instrument ID (e.g., "AAPL.NASDAQ")
+            start: Start datetime (UTC)
+            end: End datetime (UTC)
+            bar_type_spec: Bar type specification (e.g., "1-MINUTE-LAST")
+
+        Returns:
+            List of Bar objects
+
+        Raises:
+            Exception: If fetch fails
+        """
+        # Reason: Apply rate limiting before request
+        await self.rate_limiter.acquire()
+
+        # Reason: Parse instrument_id to get symbol and venue
+        # Expected format: "SYMBOL.VENUE" (e.g., "AAPL.NASDAQ")
+        parts = instrument_id.split(".")
+        if len(parts) != 2:
+            raise ValueError(f"Invalid instrument_id format: {instrument_id}")
+
+        symbol, venue = parts
+
+        # Reason: Validate bar type spec format
+        # Expected format: "{period}-{aggregation}-{price_type}"
+        # Example: "1-MINUTE-LAST"
+        bar_parts = bar_type_spec.split("-")
+        if len(bar_parts) < 2:
+            raise ValueError(f"Invalid bar_type_spec format: {bar_type_spec}")
+
+        # Reason: Create IBContract for the instrument
+        # Nautilus IBKR adapter requires contracts parameter, not instrument_ids
+        # Use SMART routing for automatic best execution
+        contract = IBContract(
+            secType="STK",  # Stock security type
+            symbol=symbol,
+            exchange="SMART",  # Smart routing
+            primaryExchange=venue,
+            currency="USD",
+        )
+
+        # Reason: Strip timezone info since we're specifying tz_name parameter
+        # Nautilus expects naive datetimes when tz_name is provided
+        start_naive = start.replace(tzinfo=None) if start.tzinfo else start
+        end_naive = end.replace(tzinfo=None) if end.tzinfo else end
+
+        # Reason: Request bars from IBKR via Nautilus client
+        # bar_specifications should be simple format strings like "1-MINUTE-LAST"
+        # NOT full bar type strings with instrument IDs
+        bars = await self.client.request_bars(
+            bar_specifications=[bar_type_spec],  # Just "1-MINUTE-LAST"
+            start_date_time=start_naive,
+            end_date_time=end_naive,
+            tz_name="UTC",
+            contracts=[contract],  # Pass IBContract objects
+            use_rth=True,  # Regular Trading Hours only
+            timeout=120,  # 2 minute timeout
+        )
+
+        return bars
 
     @property
     def is_connected(self) -> bool:
