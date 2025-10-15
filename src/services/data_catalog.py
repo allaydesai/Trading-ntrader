@@ -7,7 +7,7 @@ data queries, and write operations with structured logging.
 """
 
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List
 
@@ -22,6 +22,7 @@ from src.services.exceptions import (
     DataNotFoundError,
     IBKRConnectionError,
 )
+from src.services.ibkr_client import IBKRHistoricalClient
 
 logger = structlog.get_logger(__name__)
 
@@ -39,7 +40,11 @@ class DataCatalogService:
         availability_cache: In-memory cache of catalog availability
     """
 
-    def __init__(self, catalog_path: str | Path | None = None) -> None:
+    def __init__(
+        self,
+        catalog_path: str | Path | None = None,
+        ibkr_client: IBKRHistoricalClient | None = None,
+    ) -> None:
         """
         Initialize DataCatalogService.
 
@@ -47,6 +52,8 @@ class DataCatalogService:
             catalog_path: Path to catalog root. If None, uses
                          environment variable NAUTILUS_PATH or
                          defaults to "./data/catalog"
+            ibkr_client: Optional IBKR client for data fetching. If None,
+                        creates default client with env settings.
 
         Example:
             >>> service = DataCatalogService()
@@ -63,6 +70,33 @@ class DataCatalogService:
         # Reason: In-memory cache for fast availability checks
         self.availability_cache: Dict[str, CatalogAvailability] = {}
 
+        # Reason: Initialize IBKR client for auto-fetch functionality
+        if ibkr_client is not None:
+            self.ibkr_client = ibkr_client
+        else:
+            # Reason: Create default IBKR client with env settings
+            # Strip whitespace and handle inline comments
+            ibkr_host = os.environ.get("IBKR_HOST", "127.0.0.1").split("#")[0].strip()
+            ibkr_port_str = os.environ.get("IBKR_PORT", "7497").split("#")[0].strip()
+            ibkr_client_id_str = (
+                os.environ.get("IBKR_CLIENT_ID", "10").split("#")[0].strip()
+            )
+
+            ibkr_port = int(ibkr_port_str)
+            ibkr_client_id = int(ibkr_client_id_str)
+
+            self.ibkr_client = IBKRHistoricalClient(
+                host=ibkr_host,
+                port=ibkr_port,
+                client_id=ibkr_client_id,
+            )
+            logger.info(
+                "ibkr_client_initialized",
+                host=ibkr_host,
+                port=ibkr_port,
+                client_id=ibkr_client_id,
+            )
+
         logger.info(
             "data_catalog_initialized",
             catalog_path=str(self.catalog_path),
@@ -75,98 +109,218 @@ class DataCatalogService:
         """
         Rebuild the in-memory availability cache by scanning catalog.
 
-        This method scans the catalog directory structure to build
+        This method scans the Nautilus Parquet catalog directory structure to build
         metadata about available instruments, bar types, and date ranges.
         Called automatically on service initialization.
+
+        Nautilus catalog structure:
+        {catalog_path}/data/bar/{instrument_id}-{bar_type_spec}-EXTERNAL/TIMESTAMP_TIMESTAMP.parquet
         """
         logger.info("rebuilding_availability_cache")
 
         # Reason: Clear existing cache before rebuild
         self.availability_cache.clear()
 
-        # Reason: Scan catalog directory structure
-        # Expected structure: {instrument_id}/{bar_type_spec}/YYYY-MM-DD.parquet
-        if not self.catalog_path.exists():
+        # Reason: Nautilus stores bar data in catalog_path/data/bar/
+        bar_data_path = self.catalog_path / "data" / "bar"
+        if not bar_data_path.exists():
             logger.warning(
-                "catalog_path_not_found",
-                path=str(self.catalog_path),
+                "bar_data_path_not_found",
+                path=str(bar_data_path),
             )
             return
 
-        # Reason: Iterate through instrument directories
-        for instrument_dir in self.catalog_path.iterdir():
-            if not instrument_dir.is_dir():
+        # Reason: Iterate through bar type directories
+        # Directory format: {instrument_id}-{bar_type_spec}-EXTERNAL
+        for bar_type_dir in bar_data_path.iterdir():
+            if not bar_type_dir.is_dir():
                 continue
 
-            instrument_id = instrument_dir.name
+            # Reason: Parse directory name to extract instrument_id and bar_type_spec
+            # Example: "AAPL.NASDAQ-1-MINUTE-LAST-EXTERNAL"
+            dir_name = bar_type_dir.name
+            if not dir_name.endswith("-EXTERNAL"):
+                logger.debug("skipping_non_external_dir", dir_name=dir_name)
+                continue
 
-            # Reason: Iterate through bar type directories
-            for bar_type_dir in instrument_dir.iterdir():
-                if not bar_type_dir.is_dir():
-                    continue
+            # Reason: Remove "-EXTERNAL" suffix
+            name_without_external = dir_name[:-9]  # Remove "-EXTERNAL"
 
-                bar_type_spec = bar_type_dir.name
-
-                # Reason: Find all Parquet files and determine date range
-                parquet_files = list(bar_type_dir.glob("*.parquet"))
-                if not parquet_files:
-                    continue
-
-                # Reason: Extract dates from filenames (YYYY-MM-DD.parquet)
-                dates = []
-                total_rows = 0
-
-                for file in parquet_files:
-                    try:
-                        # Reason: Parse date from filename
-                        date_str = file.stem  # Remove .parquet extension
-                        file_date = datetime.strptime(date_str, "%Y-%m-%d")
-                        dates.append(file_date)
-
-                        # Reason: Estimate row count from file size
-                        # Typical 1-minute bar file: ~390 rows, ~50KB
-                        file_size = file.stat().st_size
-                        estimated_rows = file_size // 128  # ~128 bytes/row
-                        total_rows += estimated_rows
-
-                    except (ValueError, OSError) as e:
-                        logger.warning(
-                            "failed_to_parse_catalog_file",
-                            file=str(file),
-                            error=str(e),
-                        )
-                        continue
-
-                if not dates:
-                    continue
-
-                # Reason: Create availability metadata
-                cache_key = f"{instrument_id}_{bar_type_spec}"
-                availability = CatalogAvailability(
-                    instrument_id=instrument_id,
-                    bar_type_spec=bar_type_spec,
-                    start_date=min(dates),
-                    end_date=max(dates),
-                    file_count=len(parquet_files),
-                    total_rows=total_rows,
-                    last_updated=datetime.now(),
+            # Reason: Split into instrument_id and bar_type_spec
+            # Format: {instrument_id}-{bar_type_spec}
+            # instrument_id contains ".", bar_type_spec contains hyphens
+            # Example: "AAPL.NASDAQ-1-MINUTE-LAST" -> "AAPL.NASDAQ" + "1-MINUTE-LAST"
+            parts = name_without_external.split("-")
+            if len(parts) < 4:  # Need at least SYMBOL.VENUE-N-PERIOD-PRICE
+                logger.warning(
+                    "invalid_bar_type_dir_format",
+                    dir_name=dir_name,
                 )
+                continue
 
-                self.availability_cache[cache_key] = availability
+            # Reason: Find the split point between instrument_id and bar_type_spec
+            # instrument_id is everything up to the first part that looks like a number
+            split_idx = 0
+            for i, part in enumerate(parts):
+                if part.isdigit() or (i > 0 and "." in parts[i - 1]):
+                    # Found the bar type spec start (number like "1" in "1-MINUTE-LAST")
+                    split_idx = i
+                    break
 
-                logger.debug(
-                    "availability_cached",
-                    instrument_id=instrument_id,
-                    bar_type_spec=bar_type_spec,
-                    start_date=availability.start_date.isoformat(),
-                    end_date=availability.end_date.isoformat(),
-                    file_count=availability.file_count,
+            if split_idx == 0:
+                logger.warning(
+                    "could_not_parse_bar_type_dir",
+                    dir_name=dir_name,
                 )
+                continue
+
+            instrument_id = "-".join(parts[:split_idx])
+            bar_type_spec = "-".join(parts[split_idx:])
+
+            # Reason: Find all Parquet files
+            parquet_files = list(bar_type_dir.glob("*.parquet"))
+            if not parquet_files:
+                continue
+
+            # Reason: Extract timestamps from filenames
+            # Format: YYYY-MM-DDTHH-MM-SS-NNNNNNNNNZ_YYYY-MM-DDTHH-MM-SS-NNNNNNNNNZ.parquet
+            start_timestamps = []
+            end_timestamps = []
+            total_rows = 0
+
+            for file in parquet_files:
+                try:
+                    # Reason: Parse timestamp range from filename
+                    filename = file.stem  # Remove .parquet extension
+                    start_str, end_str = filename.split("_")
+
+                    # Reason: Parse ISO8601-like timestamp from Nautilus format
+                    # Convert "2023-12-29T20-01-00-000000000Z" to datetime
+                    # Remove nanoseconds and Z suffix
+                    start_clean = start_str.replace("-000000000Z", "")
+                    end_clean = end_str.replace("-000000000Z", "")
+
+                    # Replace hyphens in time part with colons
+                    # Format is "YYYY-MM-DDTHH-MM-SS"
+                    # We need to keep first two hyphens (date), replace next two (time)
+                    parts_start = start_clean.split("T")
+                    if len(parts_start) == 2:
+                        date_part = parts_start[0]
+                        time_part = parts_start[1].replace("-", ":")
+                        start_datetime = datetime.strptime(
+                            f"{date_part}T{time_part}", "%Y-%m-%dT%H:%M:%S"
+                        ).replace(tzinfo=timezone.utc)
+                    else:
+                        # Fallback to date only
+                        start_datetime = datetime.strptime(
+                            parts_start[0], "%Y-%m-%d"
+                        ).replace(tzinfo=timezone.utc)
+
+                    parts_end = end_clean.split("T")
+                    if len(parts_end) == 2:
+                        date_part = parts_end[0]
+                        time_part = parts_end[1].replace("-", ":")
+                        end_datetime = datetime.strptime(
+                            f"{date_part}T{time_part}", "%Y-%m-%dT%H:%M:%S"
+                        ).replace(tzinfo=timezone.utc)
+                    else:
+                        # Fallback to date only
+                        end_datetime = datetime.strptime(
+                            parts_end[0], "%Y-%m-%d"
+                        ).replace(tzinfo=timezone.utc)
+
+                    start_timestamps.append(start_datetime)
+                    end_timestamps.append(end_datetime)
+
+                    # Reason: Estimate row count from file size
+                    file_size = file.stat().st_size
+                    estimated_rows = file_size // 128  # ~128 bytes/row
+                    total_rows += estimated_rows
+
+                except (ValueError, OSError) as e:
+                    logger.warning(
+                        "failed_to_parse_catalog_file",
+                        file=str(file),
+                        error=str(e),
+                    )
+                    continue
+
+            if not start_timestamps or not end_timestamps:
+                continue
+
+            # Reason: Create availability metadata with full timestamp range
+            cache_key = f"{instrument_id}_{bar_type_spec}"
+            availability = CatalogAvailability(
+                instrument_id=instrument_id,
+                bar_type_spec=bar_type_spec,
+                start_date=min(start_timestamps),
+                end_date=max(end_timestamps),
+                file_count=len(parquet_files),
+                total_rows=total_rows,
+                last_updated=datetime.now(),
+            )
+
+            self.availability_cache[cache_key] = availability
+
+            logger.debug(
+                "availability_cached",
+                instrument_id=instrument_id,
+                bar_type_spec=bar_type_spec,
+                start_date=availability.start_date.isoformat(),
+                end_date=availability.end_date.isoformat(),
+                file_count=availability.file_count,
+            )
 
         logger.info(
             "availability_cache_rebuilt",
             total_entries=len(self.availability_cache),
         )
+
+    def _quarantine_corrupted_file(self, file_path: Path) -> None:
+        """
+        Move corrupted Parquet file to quarantine directory.
+
+        Args:
+            file_path: Path to corrupted Parquet file
+
+        Raises:
+            CatalogError: If quarantine operation fails
+
+        Example:
+            >>> service = DataCatalogService()
+            >>> corrupted = Path("data/catalog/AAPL.NASDAQ/1-MIN/2024-01-01.parquet")
+            >>> service._quarantine_corrupted_file(corrupted)
+        """
+        # Reason: Create .corrupt directory if it doesn't exist
+        quarantine_dir = self.catalog_path / ".corrupt"
+        quarantine_dir.mkdir(exist_ok=True)
+
+        try:
+            # Reason: Preserve directory structure in quarantine
+            relative_path = file_path.relative_to(self.catalog_path)
+            quarantine_path = quarantine_dir / relative_path
+            quarantine_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Reason: Move file to quarantine (not copy, to avoid data duplication)
+            import shutil
+
+            shutil.move(str(file_path), str(quarantine_path))
+
+            logger.warning(
+                "file_quarantined",
+                original_path=str(file_path),
+                quarantine_path=str(quarantine_path),
+            )
+
+        except Exception as e:
+            logger.error(
+                "quarantine_failed",
+                file_path=str(file_path),
+                error=str(e),
+            )
+            raise CatalogError(
+                f"Failed to quarantine corrupted file {file_path}: {e}"
+            ) from e
 
     def get_availability(
         self, instrument_id: str, bar_type_spec: str
@@ -295,6 +449,23 @@ class DataCatalogService:
                     instrument_id=instrument_id,
                     error=str(e),
                 )
+
+                # Reason: Attempt to quarantine corrupted files
+                instrument_dir = self.catalog_path / instrument_id
+                if instrument_dir.exists():
+                    bar_type_dir = instrument_dir / bar_type_spec.replace("-", "_")
+                    if bar_type_dir.exists():
+                        # Reason: Find and quarantine corrupted Parquet files
+                        for file in bar_type_dir.glob("*.parquet"):
+                            try:
+                                self._quarantine_corrupted_file(file)
+                            except CatalogError as qe:
+                                logger.error(
+                                    "quarantine_error_continuing",
+                                    file=str(file),
+                                    error=str(qe),
+                                )
+
                 file_path = f"{self.catalog_path}/{instrument_id}"
                 raise CatalogCorruptionError(file_path, e) from e
 
@@ -305,6 +476,47 @@ class DataCatalogService:
                 error=str(e),
             )
             raise CatalogError(f"Query failed: {e}") from e
+
+    def load_instrument(self, instrument_id: str) -> object | None:
+        """
+        Load instrument definition from the Parquet catalog.
+
+        Args:
+            instrument_id: Instrument identifier (e.g., "AAPL.NASDAQ")
+
+        Returns:
+            Nautilus Instrument object if found, None otherwise
+
+        Example:
+            >>> service = DataCatalogService()
+            >>> instrument = service.load_instrument("AAPL.NASDAQ")
+        """
+        try:
+            # Reason: Query all instruments from catalog
+            instruments = self.catalog.instruments()
+
+            # Reason: Find the matching instrument by ID
+            for instrument in instruments:
+                if str(instrument.id) == instrument_id:
+                    logger.info(
+                        "instrument_loaded_from_catalog",
+                        instrument_id=instrument_id,
+                    )
+                    return instrument
+
+            logger.debug(
+                "instrument_not_found_in_catalog",
+                instrument_id=instrument_id,
+            )
+            return None
+
+        except Exception as e:
+            logger.warning(
+                "failed_to_load_instrument",
+                instrument_id=instrument_id,
+                error=str(e),
+            )
+            return None
 
     def write_bars(
         self,
@@ -369,16 +581,18 @@ class DataCatalogService:
             )
             raise CatalogError(f"Write failed: {e}") from e
 
-    def _is_ibkr_available(self) -> bool:
+    async def _is_ibkr_available(self) -> bool:
         """
         Check if IBKR connection is available for data fetching.
+
+        Attempts to connect if not already connected.
 
         Returns:
             True if IBKR client is connected and ready, False otherwise
 
         Example:
             >>> service = DataCatalogService()
-            >>> if service._is_ibkr_available():
+            >>> if await service._is_ibkr_available():
             ...     print("Can fetch from IBKR")
         """
         # Reason: Check if IBKR client has been initialized
@@ -386,10 +600,15 @@ class DataCatalogService:
             logger.debug("ibkr_client_not_initialized")
             return False
 
-        # Reason: Check if IBKR client is connected
-        if not hasattr(self.ibkr_client, "is_connected"):
-            logger.debug("ibkr_client_missing_is_connected_property")
-            return False
+        # Reason: Check if IBKR client is connected, connect if needed
+        if not self.ibkr_client.is_connected:
+            logger.info("ibkr_not_connected_attempting_connection")
+            try:
+                await self.ibkr_client.connect(timeout=10)
+                logger.info("ibkr_connection_successful")
+            except Exception as e:
+                logger.error("ibkr_connection_failed", error=str(e))
+                return False
 
         is_connected = self.ibkr_client.is_connected
         logger.debug("ibkr_availability_check", is_connected=is_connected)
@@ -475,7 +694,7 @@ class DataCatalogService:
         )
 
         # Reason: Check if IBKR is available
-        if not self._is_ibkr_available():
+        if not await self._is_ibkr_available():
             logger.error(
                 "ibkr_unavailable_cannot_fetch",
                 instrument_id=instrument_id,

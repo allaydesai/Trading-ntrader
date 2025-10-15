@@ -1,6 +1,7 @@
 """Backtest commands for running strategies with real data."""
 
 import asyncio
+import sys
 import time
 from datetime import datetime, timezone
 
@@ -11,9 +12,24 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from src.core.backtest_runner import MinimalBacktestRunner
 from src.services.data_catalog import DataCatalogService
-from src.services.exceptions import DataNotFoundError
+from src.services.exceptions import (
+    CatalogCorruptionError,
+    CatalogError,
+    DataNotFoundError,
+    IBKRConnectionError,
+    RateLimitExceededError,
+)
+from src.utils.error_formatter import ErrorFormatter
+from src.utils.error_messages import (
+    CATALOG_CORRUPTION_DETECTED,
+    DATA_NOT_FOUND_NO_IBKR,
+    IBKR_CONNECTION_FAILED,
+    RATE_LIMIT_EXCEEDED,
+    format_error_with_context,
+)
 
 console = Console()
+error_formatter = ErrorFormatter(console)
 
 
 @click.group()
@@ -190,6 +206,10 @@ def run_backtest(
                         correlation_id=f"backtest-{symbol}-{start.strftime('%Y%m%d')}",
                     )
                     data_load_time = time.time() - data_load_start
+
+                    # Reason: Load instrument from catalog after bars are loaded/fetched
+                    instrument = catalog_service.load_instrument(instrument_id)
+
                     progress.update(task, completed=True)
 
                     # Reason: Show data load/fetch performance with source indication
@@ -209,22 +229,66 @@ def run_backtest(
                             style="green",
                         )
                         console.print()
-                except DataNotFoundError as e:
+                except DataNotFoundError:
                     progress.update(task, completed=True)
-                    console.print(f"❌ {str(e)}", style="red")
                     console.print()
-                    console.print("💡 Tips:")
-                    console.print(
-                        "   1. Check IBKR connection: docker compose up ibgateway"
+                    error_msg = format_error_with_context(
+                        DATA_NOT_FOUND_NO_IBKR,
+                        instrument=instrument_id,
+                        start_date=adjusted_start.strftime("%Y-%m-%d"),
+                        end_date=adjusted_end.strftime("%Y-%m-%d"),
                     )
-                    console.print(
-                        "   2. Import CSV data: ntrader data import-csv --file data.csv --symbol AAPL"
+                    error_formatter.format_error(error_msg)
+                    sys.exit(error_formatter.get_exit_code(error_msg))
+
+                except IBKRConnectionError as e:
+                    progress.update(task, completed=True)
+                    console.print()
+                    error_msg = format_error_with_context(
+                        IBKR_CONNECTION_FAILED,
+                        connection_details=str(e),
                     )
-                    return False
+                    error_formatter.format_error(error_msg)
+                    sys.exit(error_formatter.get_exit_code(error_msg))
+
+                except RateLimitExceededError as e:
+                    progress.update(task, completed=True)
+                    console.print()
+                    error_msg = format_error_with_context(
+                        RATE_LIMIT_EXCEEDED,
+                        retry_after=str(e.retry_after),
+                        request_count=str(e.request_count or "unknown"),
+                    )
+                    error_formatter.format_error(error_msg)
+                    sys.exit(error_formatter.get_exit_code(error_msg))
+
+                except CatalogCorruptionError as e:
+                    progress.update(task, completed=True)
+                    console.print()
+                    error_msg = format_error_with_context(
+                        CATALOG_CORRUPTION_DETECTED,
+                        file_path=str(e),
+                    )
+                    error_formatter.format_error(error_msg)
+                    sys.exit(error_formatter.get_exit_code(error_msg))
+
+                except CatalogError as e:
+                    progress.update(task, completed=True)
+                    console.print()
+                    error_formatter.print_warning(
+                        f"Catalog error: {str(e)}",
+                        "Check logs for more details",
+                    )
+                    sys.exit(4)
+
                 except Exception as e:
                     progress.update(task, completed=True)
-                    console.print(f"❌ Error: {str(e)}", style="red")
-                    return False
+                    console.print()
+                    error_formatter.print_warning(
+                        f"Unexpected error: {str(e)}",
+                        "Check logs for stack trace",
+                    )
+                    sys.exit(4)
 
             # Reason: Run backtest with catalog data
             with Progress(
@@ -252,14 +316,14 @@ def run_backtest(
                         }
                     )
 
-                # Reason: Run the backtest with catalog bars
-                # TODO: Update runner to accept pre-loaded bars from catalog
+                # Reason: Run the backtest with catalog bars and instrument
                 result = await runner.run_backtest_with_catalog_data(
                     bars=bars,
                     strategy_type=strategy,
                     symbol=symbol.upper(),
                     start=adjusted_start,
                     end=adjusted_end,
+                    instrument=instrument,
                     **strategy_params,
                 )
 

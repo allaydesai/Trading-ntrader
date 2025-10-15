@@ -6,7 +6,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict
 
 from ibapi.common import MarketDataTypeEnum  # type: ignore
-from nautilus_trader.adapters.interactive_brokers.common import IBContract
 from nautilus_trader.adapters.interactive_brokers.historical.client import (
     HistoricInteractiveBrokersClient,
 )
@@ -177,17 +176,6 @@ class IBKRHistoricalClient:
         if len(bar_parts) < 2:
             raise ValueError(f"Invalid bar_type_spec format: {bar_type_spec}")
 
-        # Reason: Create IBContract for the instrument
-        # Nautilus IBKR adapter requires contracts parameter, not instrument_ids
-        # Use SMART routing for automatic best execution
-        contract = IBContract(
-            secType="STK",  # Stock security type
-            symbol=symbol,
-            exchange="SMART",  # Smart routing
-            primaryExchange=venue,
-            currency="USD",
-        )
-
         # Reason: Strip timezone info since we're specifying tz_name parameter
         # Nautilus expects naive datetimes when tz_name is provided
         start_naive = start.replace(tzinfo=None) if start.tzinfo else start
@@ -195,13 +183,13 @@ class IBKRHistoricalClient:
 
         # Reason: Request bars from IBKR via Nautilus client
         # bar_specifications should be simple format strings like "1-MINUTE-LAST"
-        # NOT full bar type strings with instrument IDs
+        # Use instrument_ids instead of contracts to avoid parsing issues
         bars = await self.client.request_bars(
             bar_specifications=[bar_type_spec],  # Just "1-MINUTE-LAST"
-            start_date_time=start_naive,
-            end_date_time=end_naive,
+            end_date_time=end_naive,  # Required parameter (comes before start!)
             tz_name="UTC",
-            contracts=[contract],  # Pass IBContract objects
+            start_date_time=start_naive,  # Optional start time
+            instrument_ids=[instrument_id],  # Use instrument_ids instead of contracts
             use_rth=True,  # Regular Trading Hours only
             timeout=120,  # 2 minute timeout
         )
