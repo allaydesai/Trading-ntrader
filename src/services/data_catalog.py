@@ -7,6 +7,7 @@ data queries, and write operations with structured logging.
 """
 
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List
@@ -195,10 +196,10 @@ class DataCatalogService:
                     start_str, end_str = filename.split("_")
 
                     # Reason: Parse ISO8601-like timestamp from Nautilus format
-                    # Convert "2023-12-29T20-01-00-000000000Z" to datetime
-                    # Remove nanoseconds and Z suffix
-                    start_clean = start_str.replace("-000000000Z", "")
-                    end_clean = end_str.replace("-000000000Z", "")
+                    # Convert "2023-12-29T20-01-00-000000000Z" or "2023-12-29T23-59-59-999999999Z" to datetime
+                    # Remove nanoseconds (any 9-digit number) and Z suffix using regex
+                    start_clean = re.sub(r"-\d{9}Z$", "", start_str)
+                    end_clean = re.sub(r"-\d{9}Z$", "", end_str)
 
                     # Replace hyphens in time part with colons
                     # Format is "YYYY-MM-DDTHH-MM-SS"
