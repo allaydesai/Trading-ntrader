@@ -807,7 +807,15 @@ class MinimalBacktestRunner:
 
         # Reason: Use provided instrument or create test instrument as fallback
         if instrument is None:
-            # Reason: Create test instrument for the symbol with SIM venue
+            # Try to extract venue from first bar if available
+            venue_str = "SIM"  # Default fallback
+            if bars and hasattr(bars[0], "bar_type"):
+                try:
+                    venue_str = str(bars[0].bar_type.instrument_id.venue)
+                except (AttributeError, IndexError):
+                    pass  # Keep SIM as fallback
+
+            # Reason: Create test instrument for the symbol with matching venue
             if "/" in symbol and len(symbol.split("/")) == 2:
                 # For FX pairs
                 base_instrument, _ = create_test_instrument(symbol)
@@ -821,7 +829,7 @@ class MinimalBacktestRunner:
                 try:
                     instrument = TestInstrumentProvider.equity(
                         symbol=clean_symbol,
-                        venue="SIM",
+                        venue=venue_str,  # Use extracted venue
                     )
                 except Exception:
                     # Fallback
@@ -850,8 +858,24 @@ class MinimalBacktestRunner:
             max_rate=self.settings.commission_max_rate,
         )
 
-        # Reason: Add venue
-        venue = Venue("SIM")
+        # Reason: Add venue with dynamic detection
+        # Instruments from IBKR will have their actual venue (e.g., NASDAQ)
+        # Test instruments will use SIM venue
+        # Dynamic venue detection based on instrument or bars
+        if instrument and hasattr(instrument, "id") and hasattr(instrument.id, "venue"):
+            # Use venue from the actual instrument (e.g., NASDAQ from IBKR)
+            venue = instrument.id.venue
+        elif (
+            bars
+            and hasattr(bars[0], "bar_type")
+            and hasattr(bars[0].bar_type.instrument_id, "venue")
+        ):
+            # Fallback: Extract venue from bar data if instrument is missing
+            venue = bars[0].bar_type.instrument_id.venue
+        else:
+            # Final fallback: Use SIM for test scenarios
+            venue = Venue("SIM")
+
         self.engine.add_venue(
             venue=venue,
             oms_type=OmsType.HEDGING,
@@ -861,7 +885,7 @@ class MinimalBacktestRunner:
             fee_model=fee_model,
         )
 
-        # Reason: Add instrument
+        # Reason: Add instrument (currency is handled by venue setup)
         self.engine.add_instrument(instrument)
 
         # Reason: Add pre-loaded bars to engine

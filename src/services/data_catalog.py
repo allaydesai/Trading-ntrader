@@ -518,6 +518,74 @@ class DataCatalogService:
             )
             return None
 
+    async def fetch_instrument_from_ibkr(self, instrument_id: str) -> object | None:
+        """
+        Fetch instrument definition from IBKR and save to catalog.
+
+        This is a one-time operation to backfill instruments for existing catalog data.
+
+        Args:
+            instrument_id: Instrument identifier (e.g., "AAPL.NASDAQ")
+
+        Returns:
+            Nautilus Instrument object if found, None otherwise
+
+        Raises:
+            IBKRConnectionError: If IBKR is not available
+        """
+        # Reason: Check if IBKR is available
+        if not await self._is_ibkr_available():
+            raise IBKRConnectionError(
+                "IBKR connection not available. Cannot fetch instrument."
+            )
+
+        try:
+            # Reason: Request instrument from IBKR
+            logger.info(
+                "fetching_instrument_from_ibkr",
+                instrument_id=instrument_id,
+            )
+
+            # Reason: Create InstrumentId object from string
+            from nautilus_trader.model.identifiers import InstrumentId
+
+            nautilus_instrument_id = InstrumentId.from_str(instrument_id)
+
+            instruments = await self.ibkr_client.client.request_instruments(
+                instrument_ids=[nautilus_instrument_id],
+            )
+
+            if not instruments:
+                logger.warning(
+                    "instrument_not_found_in_ibkr",
+                    instrument_id=instrument_id,
+                )
+                return None
+
+            instrument = instruments[0]
+
+            # Reason: Save instrument to catalog for future use
+            logger.info(
+                "persisting_instrument_to_catalog",
+                instrument_id=instrument_id,
+            )
+            self.catalog.write_data([instrument])
+
+            logger.info(
+                "instrument_fetch_successful",
+                instrument_id=instrument_id,
+            )
+
+            return instrument
+
+        except Exception as e:
+            logger.error(
+                "instrument_fetch_failed",
+                instrument_id=instrument_id,
+                error=str(e),
+            )
+            raise
+
     def write_bars(
         self,
         bars: List[Bar],
@@ -705,8 +773,8 @@ class DataCatalogService:
                 "Ensure IBKR Gateway is running with 'docker compose up ibgateway'."
             )
 
-        # Reason: Fetch data from IBKR with retry logic
-        bars = await self._fetch_from_ibkr_with_retry(
+        # Reason: Fetch data and instrument from IBKR with retry logic
+        bars, instrument = await self._fetch_from_ibkr_with_retry(
             instrument_id=instrument_id,
             start=start,
             end=end,
@@ -715,7 +783,22 @@ class DataCatalogService:
             correlation_id=correlation_id,
         )
 
-        # Reason: Write fetched data to catalog for future use
+        # Reason: Write fetched instrument to catalog first (required for bars)
+        if instrument is not None:
+            logger.info(
+                "persisting_instrument_to_catalog",
+                instrument_id=instrument_id,
+                correlation_id=correlation_id,
+            )
+            self.catalog.write_data([instrument])
+        else:
+            logger.warning(
+                "instrument_not_available_skipping_persistence",
+                instrument_id=instrument_id,
+                correlation_id=correlation_id,
+            )
+
+        # Reason: Write fetched bars to catalog for future use
         logger.info(
             "persisting_fetched_data_to_catalog",
             instrument_id=instrument_id,
@@ -742,20 +825,21 @@ class DataCatalogService:
         bar_type_spec: str,
         max_retries: int,
         correlation_id: str | None,
-    ) -> List[Bar]:
+    ) -> tuple[List[Bar], object | None]:
         """
-        Fetch data from IBKR with exponential backoff retry logic.
+        Fetch data and instrument from IBKR with exponential backoff retry logic.
 
         Args:
             instrument_id: Instrument identifier
             start: Start datetime (UTC)
-            end: End datetime (UTC)
+            end: datetime (UTC)
             bar_type_spec: Bar type specification
             max_retries: Maximum retry attempts
             correlation_id: Optional correlation ID for logging
 
         Returns:
-            List of Bar objects
+            Tuple of (bars, instrument) where bars is a list of Bar objects
+            and instrument is the Nautilus Instrument object (or None if unavailable)
 
         Raises:
             DataNotFoundError: If all retry attempts fail
@@ -774,9 +858,9 @@ class DataCatalogService:
                     correlation_id=correlation_id,
                 )
 
-                # Reason: Call IBKR client to fetch historical bars
-                # NOTE: This assumes ibkr_client has a fetch_bars method
-                bars = await self.ibkr_client.fetch_bars(
+                # Reason: Call IBKR client to fetch historical bars and instrument
+                # fetch_bars now returns (bars, instrument) tuple
+                bars, instrument = await self.ibkr_client.fetch_bars(
                     instrument_id=instrument_id,
                     start=start,
                     end=end,
@@ -791,7 +875,7 @@ class DataCatalogService:
                     correlation_id=correlation_id,
                 )
 
-                return bars
+                return bars, instrument
 
             except Exception as e:
                 last_error = e

@@ -210,6 +210,32 @@ def run_backtest(
                     # Reason: Load instrument from catalog after bars are loaded/fetched
                     instrument = catalog_service.load_instrument(instrument_id)
 
+                    # Reason: If instrument not in catalog, fetch it from IBKR (one-time operation)
+                    if instrument is None:
+                        console.print(
+                            f"⚠️  Instrument {instrument_id} not in catalog, fetching from IBKR...",
+                            style="yellow",
+                        )
+                        try:
+                            instrument = (
+                                await catalog_service.fetch_instrument_from_ibkr(
+                                    instrument_id
+                                )
+                            )
+                            console.print(
+                                "✅ Instrument fetched and saved to catalog",
+                                style="green",
+                            )
+                        except Exception as e:
+                            console.print(
+                                f"❌ Failed to fetch instrument from IBKR: {e}",
+                                style="red",
+                            )
+                            console.print(
+                                "   Using fallback test instrument",
+                                style="yellow",
+                            )
+
                     progress.update(task, completed=True)
 
                     # Reason: Show data load/fetch performance with source indication

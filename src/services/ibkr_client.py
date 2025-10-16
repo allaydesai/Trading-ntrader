@@ -144,7 +144,7 @@ class IBKRHistoricalClient:
         bar_type_spec: str = "1-MINUTE-LAST",
     ):
         """
-        Fetch historical bars from IBKR.
+        Fetch historical bars and instrument from IBKR.
 
         Args:
             instrument_id: Instrument ID (e.g., "AAPL.NASDAQ")
@@ -153,7 +153,8 @@ class IBKRHistoricalClient:
             bar_type_spec: Bar type specification (e.g., "1-MINUTE-LAST")
 
         Returns:
-            List of Bar objects
+            Tuple of (bars, instrument) where bars is a list of Bar objects
+            and instrument is the Instrument object
 
         Raises:
             Exception: If fetch fails
@@ -194,7 +195,16 @@ class IBKRHistoricalClient:
             timeout=120,  # 2 minute timeout
         )
 
-        return bars
+        # Reason: Also fetch instrument definition for persistence
+        # This allows us to save the instrument to the catalog
+        instruments = await self.client.request_instruments(
+            instrument_ids=[instrument_id],
+        )
+
+        # Reason: Return both bars and instrument (first from the list)
+        instrument = instruments[0] if instruments else None
+
+        return bars, instrument
 
     @property
     def is_connected(self) -> bool:
