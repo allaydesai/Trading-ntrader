@@ -911,3 +911,106 @@ class DataCatalogService:
         )
 
         raise DataNotFoundError(instrument_id, start, end)
+
+    def scan_catalog(self) -> Dict[str, List[CatalogAvailability]]:
+        """
+        Scan catalog and return all available instruments with metadata.
+
+        Returns:
+            Dictionary mapping instrument_id to list of CatalogAvailability objects
+            (one per bar type)
+
+        Example:
+            >>> service = DataCatalogService()
+            >>> catalog_data = service.scan_catalog()
+            >>> for instrument_id, availabilities in catalog_data.items():
+            ...     print(f"{instrument_id}: {len(availabilities)} bar types")
+        """
+        logger.info("scanning_catalog", catalog_path=str(self.catalog_path))
+
+        # Reason: Group by instrument_id
+        result: Dict[str, List[CatalogAvailability]] = {}
+
+        for key, availability in self.availability_cache.items():
+            instrument_id = availability.instrument_id
+            if instrument_id not in result:
+                result[instrument_id] = []
+            result[instrument_id].append(availability)
+
+        logger.info(
+            "catalog_scan_complete",
+            instrument_count=len(result),
+            total_entries=len(self.availability_cache),
+        )
+
+        return result
+
+    def detect_gaps(
+        self,
+        instrument_id: str,
+        bar_type_spec: str,
+        start_date: datetime,
+        end_date: datetime,
+    ) -> List[Dict[str, datetime]]:
+        """
+        Detect gaps in available data for given date range.
+
+        Args:
+            instrument_id: Instrument to check
+            bar_type_spec: Bar type specification
+            start_date: Start of requested range
+            end_date: End of requested range
+
+        Returns:
+            List of gap dictionaries with 'start' and 'end' keys
+
+        Example:
+            >>> gaps = service.detect_gaps(
+            ...     "AAPL.NASDAQ", "1-MINUTE-LAST",
+            ...     datetime(2024, 1, 1), datetime(2024, 1, 31)
+            ... )
+            >>> for gap in gaps:
+            ...     print(f"Gap: {gap['start']} to {gap['end']}")
+        """
+        # Reason: Ensure dates are timezone-aware for comparison
+        import pytz
+
+        if start_date.tzinfo is None:
+            start_date = start_date.replace(tzinfo=pytz.UTC)
+        if end_date.tzinfo is None:
+            end_date = end_date.replace(tzinfo=pytz.UTC)
+
+        availability = self.get_availability(instrument_id, bar_type_spec)
+
+        if not availability:
+            # Reason: No data available = entire range is a gap
+            return [{"start": start_date, "end": end_date}]
+
+        gaps = []
+
+        # Reason: Gap at the beginning
+        if availability.start_date > start_date:
+            gaps.append(
+                {
+                    "start": start_date,
+                    "end": min(availability.start_date, end_date),
+                }
+            )
+
+        # Reason: Gap at the end
+        if availability.end_date < end_date:
+            gaps.append(
+                {
+                    "start": max(availability.end_date, start_date),
+                    "end": end_date,
+                }
+            )
+
+        logger.debug(
+            "gap_detection_complete",
+            instrument_id=instrument_id,
+            bar_type_spec=bar_type_spec,
+            gap_count=len(gaps),
+        )
+
+        return gaps
