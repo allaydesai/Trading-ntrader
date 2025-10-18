@@ -76,6 +76,16 @@ def backtest():
     type=int,
     help="Trade size in base currency units (default: 1,000,000)",
 )
+@click.option(
+    "--timeframe",
+    "-t",
+    default=None,
+    type=click.Choice(
+        ["1-MINUTE", "5-MINUTE", "15-MINUTE", "1-HOUR", "4-HOUR", "1-DAY", "1-WEEK"],
+        case_sensitive=False,
+    ),
+    help="Bar timeframe (auto-detected from date format if not specified)",
+)
 def run_backtest(
     strategy: str,
     symbol: str,
@@ -84,6 +94,7 @@ def run_backtest(
     fast_period: int,
     slow_period: int,
     trade_size: int,
+    timeframe: str | None,
 ):
     """Run backtest with real market data from database."""
 
@@ -130,7 +141,22 @@ def run_backtest(
             # For now, assume NASDAQ venue for US equities
             # TODO: Make venue configurable or derive from symbol
             instrument_id = f"{symbol.upper()}.NASDAQ"
-            bar_type_spec = "1-MINUTE-LAST"
+
+            # Reason: Determine bar type from explicit timeframe or auto-detect from date format
+            if timeframe:
+                # Use explicit timeframe if provided
+                bar_type_spec = f"{timeframe}-LAST"
+            else:
+                # Auto-detect: Date-only (YYYY-MM-DD) → 1-DAY, Date-time → 1-MINUTE
+                # Click parses date-only as midnight UTC (00:00:00)
+                if (
+                    start.time().hour == 0
+                    and start.time().minute == 0
+                    and start.time().second == 0
+                ):
+                    bar_type_spec = "1-DAY-LAST"
+                else:
+                    bar_type_spec = "1-MINUTE-LAST"
 
             # Reason: Check catalog availability and fetch from IBKR if needed
             with Progress(
