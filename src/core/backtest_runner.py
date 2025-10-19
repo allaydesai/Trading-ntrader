@@ -898,6 +898,10 @@ class MinimalBacktestRunner:
         # Reason: Prepare strategy configuration parameters
         from nautilus_trader.model.data import BarType
 
+        # Reason: Ensure instrument is set (guaranteed by this point)
+        assert instrument is not None, "Instrument must be set by this point"
+        assert hasattr(instrument, "id"), "Instrument must have id attribute"
+
         config_params = {
             "instrument_id": instrument.id,
             "bar_type": BarType.from_str(bar_type_str),

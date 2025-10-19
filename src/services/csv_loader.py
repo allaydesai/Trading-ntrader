@@ -231,8 +231,8 @@ class CSVLoader:
         # Reason: CSV data is external, append -EXTERNAL aggregation source
         bar_type = BarType.from_str(f"{instrument_id_str}-{bar_type_spec}-EXTERNAL")
 
-        for idx, row in df.iterrows():
-            row_num = idx + 2  # +2 because: 0-indexed + 1 header row
+        for row_idx, (_idx, row) in enumerate(df.iterrows()):
+            row_num = row_idx + 2  # +2 because: 0-indexed + 1 header row
 
             try:
                 # Reason: Validate and parse timestamp
@@ -371,11 +371,16 @@ class CSVLoader:
 
             # Reason: Determine price precision (number of decimal places)
             # Use max precision from all price fields
+            # Handle special Decimal exponent values (n, N, F for NaN, Infinity)
+            def get_precision(decimal_val: Decimal) -> int:
+                exp = decimal_val.as_tuple().exponent
+                return abs(exp) if isinstance(exp, int) else 0
+
             precisions = [
-                abs(open_val.as_tuple().exponent),
-                abs(high_val.as_tuple().exponent),
-                abs(low_val.as_tuple().exponent),
-                abs(close_val.as_tuple().exponent),
+                get_precision(open_val),
+                get_precision(high_val),
+                get_precision(low_val),
+                get_precision(close_val),
             ]
             price_precision = max(precisions)
 

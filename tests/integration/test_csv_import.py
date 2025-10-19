@@ -7,7 +7,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 
-
 @pytest.mark.integration
 @pytest.mark.asyncio
 @patch("src.services.data_catalog.IBKRHistoricalClient")

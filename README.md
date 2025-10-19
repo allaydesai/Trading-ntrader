@@ -11,10 +11,13 @@ A production-grade algorithmic trading backtesting system built with the Nautilu
 - 📊 **Strategy Management**: CLI commands for strategy discovery, configuration, and validation
 - 📋 **YAML Configuration**: Flexible strategy configuration via YAML files
 - 📊 **Mock Data Generation**: Synthetic data with predictable patterns for testing
-- 📈 **CSV Data Import**: Import real market data from CSV files with validation
-- 📡 **Interactive Brokers Integration**: ✨ NEW - Fetch real market data from IBKR TWS/Gateway
-- 🗄️ **Database Storage**: PostgreSQL with optimized time-series storage
-- 🖥️ **CLI Interface**: Easy-to-use command line interface with data management
+- 📈 **CSV Data Import**: Import real market data from CSV files directly to Parquet catalog
+- 📡 **Interactive Brokers Integration**: ✨ Fetch real market data from IBKR TWS/Gateway
+- 🗄️ **Parquet Data Catalog**: ✨ **NEW** - Fast, efficient columnar storage with Nautilus native format
+  - **No Database Required**: Direct Parquet file storage eliminates PostgreSQL dependency
+  - **Auto-Fetch**: Automatically fetches missing data from IBKR when needed
+  - **Data Inspection**: Built-in commands to check availability and detect gaps
+- 🖥️ **CLI Interface**: Easy-to-use command line interface with comprehensive data management
 - 📊 **Performance Analytics**: Comprehensive metrics using Nautilus Trader analytics framework
   - **Risk Metrics**: Sharpe Ratio, Sortino Ratio, Calmar Ratio, Maximum Drawdown
   - **Trade Statistics**: Win rate, profit factor, expectancy, average win/loss
@@ -24,16 +27,15 @@ A production-grade algorithmic trading backtesting system built with the Nautilu
   - **CSV Export**: Precision-preserved data export for spreadsheet analysis
   - **JSON Export**: Structured data for programmatic analysis
 - ⚡ **Fast Execution**: Built on Nautilus Trader's high-performance engine
-- 🧪 **Test Coverage**: Comprehensive test suite with 144+ tests (Milestones 1-5)
-- 🔄 **Real Data Backtesting**: Run backtests on imported historical data with full analytics
-- 📡 **Interactive Brokers Integration**: Fetch real market data from IBKR TWS/Gateway
+- 🧪 **Test Coverage**: Comprehensive test suite with 589+ passing tests
+- 🔄 **Real Data Backtesting**: Run backtests on Parquet-stored historical data with full analytics
 
 ## Current Status & Capabilities
 
-### ✅ What Works (Milestone 5 Complete)
+### ✅ What Works (Parquet Migration Complete)
 - **Strategy Management**: Discover, create, and validate strategy configurations
 - **Multiple Strategy Types**: SMA Crossover, RSI Mean Reversion, SMA Momentum
-- **Database Backtesting**: All three strategies work with imported CSV data
+- **Parquet Catalog Backtesting**: All strategies work with Parquet-stored data
 - **YAML Configuration**: Create and validate strategy configs via CLI
 - **Mock Data Testing**: Test strategies with synthetic data using YAML configs
 - **Performance Analytics**: Comprehensive metrics with Nautilus Trader integration
@@ -43,16 +45,16 @@ A production-grade algorithmic trading backtesting system built with the Nautilu
   - Portfolio tracking and equity curves
 - **Report Generation**: Multi-format exports (text, CSV, JSON)
 - **Results Persistence**: Save and retrieve backtest results with full analytics
-- **Interactive Brokers Integration**: ✨ NEW in Milestone 5
+- **Parquet Data Catalog**: ✨ **NEW** - Simplified data storage architecture
+  - CSV imports directly to Parquet (no database required)
+  - Auto-fetch missing data from IBKR automatically
+  - Data inspection commands (list, check, gap detection)
+  - Fast columnar storage optimized for analytics
+- **Interactive Brokers Integration**:
   - Fetch historical data directly from IBKR TWS/Gateway
   - Support for multiple instruments and timeframes
   - Built-in rate limiting (45 req/sec) to prevent API throttling
-  - Data stored in Parquet format via Nautilus catalog
-  - Delayed/frozen market data for paper trading accounts
-
-### 🚧 Current Limitations
-- **YAML + Database Integration**: `run-config` command supports mock data only
-- **Strategy Parameters**: Limited to predefined parameters per strategy type
+  - Automatic catalog updates with fetched data
 
 ### 📋 Command Quick Reference
 ```bash
@@ -61,17 +63,19 @@ uv run python -m src.cli.main strategy list                    # ✅ List availa
 uv run python -m src.cli.main strategy create --type <type>    # ✅ Create config template
 uv run python -m src.cli.main strategy validate <config>       # ✅ Validate config
 
-# IBKR data fetching (New in Milestone 5)
-uv run python -m src.cli.main data connect                     # ✅ Test IBKR connection
-uv run python -m src.cli.main data fetch --instruments AAPL    # ✅ Fetch historical data
+# Data management (Parquet catalog)
+uv run python -m src.cli.main data import --csv <file> --symbol <SYM> --venue <VENUE>  # ✅ Import CSV to Parquet
+uv run python -m src.cli.main data list                        # ✅ List all catalog contents
+uv run python -m src.cli.main data check --symbol <SYM>        # ✅ Check data availability
+uv run python -m src.cli.main data check --symbol <SYM> --start <date> --end <date>  # ✅ Detect gaps
 
-# Database backtesting (recommended)
+# Backtesting (auto-fetches missing data if IBKR connected)
 uv run python -m src.cli.main backtest run --strategy <type>   # ✅ All strategies supported
 
 # Mock data testing
 uv run python -m src.cli.main backtest run-config <config>     # ✅ YAML configs supported
 
-# Performance reports (New in Milestone 4)
+# Performance reports
 uv run python -m src.cli report summary <result-id>            # ✅ Quick performance summary
 uv run python -m src.cli report generate --result-id <id>      # ✅ Generate text report
 uv run python -m src.cli report generate --result-id <id> --format csv  # ✅ Export to CSV
@@ -84,7 +88,6 @@ uv run python -m src.cli report list                           # ✅ List saved 
 
 - Python 3.11+
 - UV package manager
-- Docker (for PostgreSQL database)
 - **Optional**: Interactive Brokers TWS/Gateway (for live data fetching)
   - See [IBKR Setup Guide](docs/IBKR_SETUP.md) for detailed instructions
 
@@ -105,18 +108,18 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 uv sync
 ```
 
-3. Set up environment variables:
+3. Set up environment variables (Optional - only needed for IBKR):
 ```bash
 # Copy the example environment file
 cp .env.example .env
 
-# Edit .env with your specific configuration
+# Edit .env with your IBKR connection settings if needed
 ```
 
-4. Run database migrations:
+4. Create Parquet catalog directory:
 ```bash
-# Initialize the database schema
-uv run alembic upgrade head
+# The catalog directory will be created automatically, but you can create it manually:
+mkdir -p ./data/catalog
 ```
 
 ## Quick Start Guide
@@ -125,10 +128,14 @@ uv run alembic upgrade head
 
 Follow this guide to run your first successful backtest using the included sample data:
 
-#### Step 1: Import Sample Data
+#### Step 1: Import Sample Data to Parquet Catalog
 ```bash
-# Import the included AAPL sample data (covers Jan 2, 2024, 50 minutes of 1-min bars)
-uv run python -m src.cli.main data import-csv --file data/sample_AAPL.csv --symbol AAPL
+# Import the included AAPL sample data directly to Parquet catalog
+uv run python -m src.cli.main data import \
+  --csv data/sample_AAPL.csv \
+  --symbol AAPL \
+  --venue NASDAQ \
+  --bar-type 1-MINUTE-LAST
 ```
 
 Expected output:
@@ -138,20 +145,20 @@ Expected output:
 ┃ Metric              ┃ Value                                                 ┃
 ┡━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
 │ File                │ data/sample_AAPL.csv                                 │
-│ Symbol              │ AAPL                                                  │
-│ Records Processed   │ 50                                                    │
-│ Records Inserted    │ 50                                                    │
-│ Duplicates Skipped  │ 0                                                     │
+│ Instrument ID       │ AAPL.NASDAQ                                          │
+│ Bars Written        │ 50                                                    │
+│ Date Range          │ 2024-01-02 09:30 to 2024-01-02 10:20                │
+│ File Size           │ 3.2 KB                                               │
 └─────────────────────┴───────────────────────────────────────────────────────┘
 ```
 
-#### Step 2: Verify Data Import
+#### Step 2: Verify Data in Catalog
 ```bash
-# List available strategies and data
-uv run python -m src.cli.main backtest list
+# List all data in the Parquet catalog
+uv run python -m src.cli.main data list
 ```
 
-You should see AAPL listed in the available symbols.
+You should see AAPL.NASDAQ listed with date ranges and bar counts.
 
 #### Step 3: Run Your First Backtest
 ```bash
@@ -190,138 +197,64 @@ Expected output:
 [Results table with trade statistics]
 ```
 
-**Note**: If you use just dates (e.g., `--start 2024-01-02`) you'll get a helpful error showing the exact available time range. Use `backtest list` to see all available data ranges.
+**Note**: The backtest will automatically fetch missing data from IBKR if connected, otherwise it uses only catalog data.
 
-🎉 **Congratulations!** You've successfully run your first backtest with real market data.
+🎉 **Congratulations!** You've successfully run your first backtest with Parquet-stored data!
 
-### Database Setup
+### Data Management with Parquet Catalog
 
-This project uses PostgreSQL with TimescaleDB for time-series data storage. You can set up the database using either Docker (recommended for beginners) or a local PostgreSQL installation.
+The system uses a Parquet-based data catalog for fast, efficient market data storage. No database setup required!
 
-#### Option 1: Docker Setup (Recommended)
+#### Catalog Structure
 
-**Prerequisites:**
-- Docker and Docker Desktop
-- PostgreSQL client tools
+Data is organized in a hierarchical structure optimized for time-series analytics:
 
-**Setup Steps:**
+```
+./data/catalog/
+├── AAPL.NASDAQ-1-MINUTE-LAST-EXTERNAL/
+│   ├── 2024-01-02.parquet
+│   ├── 2024-01-03.parquet
+│   └── ...
+├── NVDA.NASDAQ-1-MINUTE-LAST-EXTERNAL/
+│   ├── 2024-06-03.parquet
+│   └── ...
+└── [INSTRUMENT_ID]-[BAR_TYPE]/
+    └── YYYY-MM-DD.parquet
+```
 
-1. **Pull PostgreSQL Docker image**:
+#### Data Inspection Commands
+
+**List all catalog contents:**
 ```bash
-docker pull postgres:17
+uv run python -m src.cli.main data list
+
+# Example output:
+┏━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┓
+┃ Instrument   ┃ Bar Type         ┃ Start Date  ┃ End Date    ┃ Bars   ┃
+┡━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━┩
+│ AAPL.NASDAQ  │ 1-MINUTE-LAST    │ 2024-01-02  │ 2024-01-05  │  1,200 │
+│ NVDA.NASDAQ  │ 1-MINUTE-LAST    │ 2024-06-03  │ 2024-06-03  │     10 │
+└──────────────┴──────────────────┴─────────────┴─────────────┴────────┘
 ```
 
-2. **Create a volume for data persistence**:
+**Check data for specific symbol:**
 ```bash
-docker volume create pgdata
+uv run python -m src.cli.main data check --symbol AAPL
+
+# With date range and gap detection:
+uv run python -m src.cli.main data check \
+  --symbol AAPL \
+  --start 2024-01-01 \
+  --end 2024-01-10
 ```
 
-3. **Run PostgreSQL container**:
-```bash
-docker run -d --name pgdb \
-  -e POSTGRES_USER=ntrader \
-  -e POSTGRES_PASSWORD=ntrader_dev_2025 \
-  -e POSTGRES_DB=trading_ntrader \
-  -p 5432:5432 \
-  -v pgdata:/var/lib/postgresql/data \
-  postgres:17
-```
+#### Benefits of Parquet Catalog
 
-4. **Verify database connection**:
-```bash
-# Test connection
-PGPASSWORD=ntrader_dev_2025 psql -h localhost -U ntrader -d trading_ntrader -c "SELECT version();"
-```
-
-**Container Management:**
-
-```bash
-# Start the database
-docker start pgdb
-
-# Stop the database
-docker stop pgdb
-
-# View logs
-docker logs pgdb
-
-# Remove container (data persists in volume)
-docker rm pgdb
-```
-
-**Data Storage Location:**
-- Docker volume: `pgdata` (managed by Docker)
-- Physical location (Linux): `/var/lib/docker/volumes/pgdata/_data`
-- Physical location (macOS): `~/Library/Containers/com.docker.docker/Data/vms/0/`
-- To inspect volume: `docker volume inspect pgdata`
-
-#### Option 2: Local PostgreSQL Installation
-
-**Prerequisites:**
-- PostgreSQL 17+ installed locally
-
-**macOS Setup:**
-
-1. **Install PostgreSQL via Homebrew**:
-```bash
-brew install postgresql@17
-brew services start postgresql@17
-```
-
-2. **Create database and user**:
-```bash
-# Connect as postgres superuser
-psql postgres
-
-# In psql prompt:
-CREATE USER ntrader WITH PASSWORD 'ntrader_dev_2025';
-CREATE DATABASE trading_ntrader OWNER ntrader;
-GRANT ALL PRIVILEGES ON DATABASE trading_ntrader TO ntrader;
-\q
-```
-
-3. **Verify connection**:
-```bash
-PGPASSWORD=ntrader_dev_2025 psql -h localhost -U ntrader -d trading_ntrader -c "SELECT version();"
-```
-
-**Data Storage Location (macOS Homebrew):**
-- Data directory: `/opt/homebrew/var/postgresql@17/`
-- Contains all database files, WAL logs, and configuration
-- Check database size: `du -sh /opt/homebrew/var/postgresql@17/`
-- Check specific database: `PGPASSWORD=ntrader_dev_2025 psql -h localhost -U ntrader -d trading_ntrader -c "SELECT pg_size_pretty(pg_database_size('trading_ntrader'));"`
-
-**Ubuntu/Debian Setup:**
-
-1. **Install PostgreSQL**:
-```bash
-sudo apt update
-sudo apt install postgresql-17 postgresql-contrib
-```
-
-2. **Create database and user**:
-```bash
-sudo -u postgres psql
-CREATE USER ntrader WITH PASSWORD 'ntrader_dev_2025';
-CREATE DATABASE trading_ntrader OWNER ntrader;
-GRANT ALL PRIVILEGES ON DATABASE trading_ntrader TO ntrader;
-\q
-```
-
-**Data Storage Location (Ubuntu/Debian):**
-- Data directory: `/var/lib/postgresql/17/main/`
-- Check size: `sudo du -sh /var/lib/postgresql/17/main/`
-
-#### Database Configuration
-
-The database connection is configured through environment variables in your `.env` file:
-
-```env
-DATABASE_URL=postgresql://ntrader:ntrader_dev_2025@localhost:5432/trading_ntrader
-DATABASE_POOL_SIZE=10
-DATABASE_MAX_OVERFLOW=20
-DATABASE_POOL_TIMEOUT=30
-```
+- **No Database Required**: Simple file-based storage
+- **Fast Analytics**: Columnar format optimized for time-series queries
+- **Auto-Fetch**: Missing data automatically fetched from IBKR when available
+- **Portable**: Easy to backup, share, or migrate data
+- **Nautilus Native**: Data stored in Nautilus Trader's native format for zero-copy access
 
 ## Sample Data
 
@@ -338,10 +271,20 @@ The project includes several sample CSV files in the `data/` directory for testi
 
 ```bash
 # Import this file with:
-uv run python -m src.cli.main data import-csv --file data/sample_AAPL.csv --symbol AAPL
+uv run python -m src.cli.main data import \
+  --csv data/sample_AAPL.csv \
+  --symbol AAPL \
+  --venue NASDAQ \
+  --bar-type 1-MINUTE-LAST
 
 # Then run backtest with:
-uv run python -m src.cli.main backtest run --symbol AAPL --start 2024-01-02 --end 2024-01-02
+uv run python -m src.cli.main backtest run \
+  --symbol AAPL \
+  --start "2024-01-02 09:30:00" \
+  --end "2024-01-02 10:20:00" \
+  --strategy sma_crossover \
+  --fast-period 5 \
+  --slow-period 10
 ```
 
 #### 2. AAPL_test_2018.csv
