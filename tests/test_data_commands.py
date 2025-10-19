@@ -2,10 +2,11 @@
 
 import tempfile
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import MagicMock, patch
 from click.testing import CliRunner
+from datetime import datetime, timezone
 
-from src.cli.commands.data import data, import_csv, list_data
+from src.cli.commands.data import data
 
 
 class TestDataCommands:
@@ -18,21 +19,27 @@ class TestDataCommands:
         assert result.exit_code == 0
         assert "Data management commands" in result.output
 
-    @patch("src.cli.commands.data.test_connection")
-    @patch("src.cli.commands.data.CSVLoader")
-    def test_import_csv_success(self, mock_csv_loader, mock_test_connection):
+    @patch("src.services.csv_loader.CSVLoader")
+    def test_import_csv_success(self, mock_csv_loader):
         """Test successful CSV import."""
         # Setup mocks
-        mock_test_connection.return_value = True
+        mock_loader_instance = MagicMock()
 
-        mock_loader_instance = AsyncMock()
-        mock_loader_instance.load_file.return_value = {
-            "file": "/tmp/test.csv",
-            "symbol": "AAPL",
-            "records_processed": 100,
-            "records_inserted": 95,
-            "duplicates_skipped": 5,
-        }
+        # Make load_file async
+        async def mock_load_file(*args, **kwargs):
+            return {
+                "file": "/tmp/test.csv",
+                "instrument_id": "AAPL.NASDAQ",
+                "bar_type_spec": "1-MINUTE-LAST",
+                "rows_processed": 100,
+                "bars_written": 95,
+                "conflicts_skipped": 5,
+                "validation_errors": [],
+                "date_range": "2024-01-01 09:30 to 2024-01-01 16:00",
+                "file_size_kb": 3.5,
+            }
+
+        mock_loader_instance.load_file = mock_load_file
         mock_csv_loader.return_value = mock_loader_instance
 
         # Create temporary CSV file
@@ -44,38 +51,20 @@ class TestDataCommands:
         try:
             runner = CliRunner()
             result = runner.invoke(
-                import_csv, ["--file", str(csv_file), "--symbol", "AAPL"]
+                data,
+                [
+                    "import",
+                    "--csv",
+                    str(csv_file),
+                    "--symbol",
+                    "AAPL",
+                    "--venue",
+                    "NASDAQ",
+                ],
             )
 
             assert result.exit_code == 0
-            assert "Successfully imported 95 records" in result.output
-            assert "Skipped 5 duplicate records" in result.output
-
-            # Verify CSV loader was called correctly
-            mock_csv_loader.assert_called_once()
-            mock_loader_instance.load_file.assert_called_once_with(csv_file, "AAPL")
-
-        finally:
-            # Clean up temp file
-            csv_file.unlink(missing_ok=True)
-
-    @patch("src.cli.commands.data.test_connection")
-    def test_import_csv_database_not_accessible(self, mock_test_connection):
-        """Test CSV import when database is not accessible."""
-        mock_test_connection.return_value = False
-
-        # Create temporary CSV file
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
-            csv_file = Path(f.name)
-
-        try:
-            runner = CliRunner()
-            result = runner.invoke(
-                import_csv, ["--file", str(csv_file), "--symbol", "AAPL"]
-            )
-
-            assert result.exit_code == 1
-            assert "Database not accessible" in result.output
+            assert "Successfully imported 95 bars" in result.output
 
         finally:
             # Clean up temp file
@@ -85,22 +74,30 @@ class TestDataCommands:
         """Test CSV import with non-existent file."""
         runner = CliRunner()
         result = runner.invoke(
-            import_csv, ["--file", "/non/existent/file.csv", "--symbol", "AAPL"]
+            data,
+            [
+                "import",
+                "--csv",
+                "/non/existent/file.csv",
+                "--symbol",
+                "AAPL",
+                "--venue",
+                "NASDAQ",
+            ],
         )
 
         assert result.exit_code == 2  # Click validation error
         assert "does not exist" in result.output
 
-    @patch("src.cli.commands.data.test_connection")
-    @patch("src.cli.commands.data.CSVLoader")
-    def test_import_csv_file_not_found_runtime(
-        self, mock_csv_loader, mock_test_connection
-    ):
+    @patch("src.services.csv_loader.CSVLoader")
+    def test_import_csv_file_not_found_runtime(self, mock_csv_loader):
         """Test CSV import with file not found during runtime."""
-        mock_test_connection.return_value = True
+        mock_loader_instance = MagicMock()
 
-        mock_loader_instance = AsyncMock()
-        mock_loader_instance.load_file.side_effect = FileNotFoundError("File not found")
+        async def mock_load_file(*args, **kwargs):
+            raise FileNotFoundError("File not found")
+
+        mock_loader_instance.load_file = mock_load_file
         mock_csv_loader.return_value = mock_loader_instance
 
         # Create temporary file that exists for Click validation
@@ -110,26 +107,36 @@ class TestDataCommands:
         try:
             runner = CliRunner()
             result = runner.invoke(
-                import_csv, ["--file", str(csv_file), "--symbol", "AAPL"]
+                data,
+                [
+                    "import",
+                    "--csv",
+                    str(csv_file),
+                    "--symbol",
+                    "AAPL",
+                    "--venue",
+                    "NASDAQ",
+                ],
             )
 
-            assert result.exit_code == 1
+            assert result.exit_code != 0
             assert "File not found" in result.output
 
         finally:
             # Clean up temp file
             csv_file.unlink(missing_ok=True)
 
-    @patch("src.cli.commands.data.test_connection")
-    @patch("src.cli.commands.data.CSVLoader")
-    def test_import_csv_invalid_format(self, mock_csv_loader, mock_test_connection):
+    @patch("src.services.csv_loader.CSVLoader")
+    def test_import_csv_invalid_format(self, mock_csv_loader):
         """Test CSV import with invalid CSV format."""
-        mock_test_connection.return_value = True
+        from src.services.csv_loader import ValidationError
 
-        mock_loader_instance = AsyncMock()
-        mock_loader_instance.load_file.side_effect = ValueError(
-            "Missing required columns"
-        )
+        mock_loader_instance = MagicMock()
+
+        async def mock_load_file(*args, **kwargs):
+            raise ValidationError(0, "Missing required columns")
+
+        mock_loader_instance.load_file = mock_load_file
         mock_csv_loader.return_value = mock_loader_instance
 
         # Create temporary CSV file
@@ -140,59 +147,34 @@ class TestDataCommands:
         try:
             runner = CliRunner()
             result = runner.invoke(
-                import_csv, ["--file", str(csv_file), "--symbol", "AAPL"]
+                data,
+                [
+                    "import",
+                    "--csv",
+                    str(csv_file),
+                    "--symbol",
+                    "AAPL",
+                    "--venue",
+                    "NASDAQ",
+                ],
             )
 
-            assert result.exit_code == 1
-            assert "Invalid CSV format" in result.output
-
-        finally:
-            # Clean up temp file
-            csv_file.unlink(missing_ok=True)
-
-    @patch("src.cli.commands.data.test_connection")
-    @patch("src.cli.commands.data.CSVLoader")
-    def test_import_csv_general_exception(self, mock_csv_loader, mock_test_connection):
-        """Test CSV import with general exception."""
-        mock_test_connection.return_value = True
-
-        mock_loader_instance = AsyncMock()
-        mock_loader_instance.load_file.side_effect = Exception(
-            "Database connection failed"
-        )
-        mock_csv_loader.return_value = mock_loader_instance
-
-        # Create temporary CSV file
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
-            csv_file = Path(f.name)
-
-        try:
-            runner = CliRunner()
-            result = runner.invoke(
-                import_csv, ["--file", str(csv_file), "--symbol", "AAPL"]
-            )
-
-            assert result.exit_code == 1
+            assert result.exit_code != 0
             assert "Import failed" in result.output
 
         finally:
             # Clean up temp file
             csv_file.unlink(missing_ok=True)
 
-    @patch("src.cli.commands.data.test_connection")
-    @patch("src.cli.commands.data.CSVLoader")
-    def test_import_csv_no_duplicates(self, mock_csv_loader, mock_test_connection):
-        """Test CSV import with no duplicates."""
-        mock_test_connection.return_value = True
+    @patch("src.services.csv_loader.CSVLoader")
+    def test_import_csv_general_exception(self, mock_csv_loader):
+        """Test CSV import with general exception."""
+        mock_loader_instance = MagicMock()
 
-        mock_loader_instance = AsyncMock()
-        mock_loader_instance.load_file.return_value = {
-            "file": "/tmp/test.csv",
-            "symbol": "AAPL",
-            "records_processed": 100,
-            "records_inserted": 100,
-            "duplicates_skipped": 0,
-        }
+        async def mock_load_file(*args, **kwargs):
+            raise Exception("Unexpected error")
+
+        mock_loader_instance.load_file = mock_load_file
         mock_csv_loader.return_value = mock_loader_instance
 
         # Create temporary CSV file
@@ -202,24 +184,80 @@ class TestDataCommands:
         try:
             runner = CliRunner()
             result = runner.invoke(
-                import_csv, ["--file", str(csv_file), "--symbol", "AAPL"]
+                data,
+                [
+                    "import",
+                    "--csv",
+                    str(csv_file),
+                    "--symbol",
+                    "AAPL",
+                    "--venue",
+                    "NASDAQ",
+                ],
+            )
+
+            assert result.exit_code != 0
+            assert "Import failed" in result.output
+
+        finally:
+            # Clean up temp file
+            csv_file.unlink(missing_ok=True)
+
+    @patch("src.services.csv_loader.CSVLoader")
+    def test_import_csv_no_conflicts(self, mock_csv_loader):
+        """Test CSV import with no conflicts."""
+        mock_loader_instance = MagicMock()
+
+        async def mock_load_file(*args, **kwargs):
+            return {
+                "file": "/tmp/test.csv",
+                "instrument_id": "AAPL.NASDAQ",
+                "bar_type_spec": "1-MINUTE-LAST",
+                "rows_processed": 100,
+                "bars_written": 100,
+                "conflicts_skipped": 0,
+                "validation_errors": [],
+                "date_range": "2024-01-01 09:30 to 2024-01-01 16:00",
+                "file_size_kb": 3.5,
+            }
+
+        mock_loader_instance.load_file = mock_load_file
+        mock_csv_loader.return_value = mock_loader_instance
+
+        # Create temporary CSV file
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
+            csv_file = Path(f.name)
+
+        try:
+            runner = CliRunner()
+            result = runner.invoke(
+                data,
+                [
+                    "import",
+                    "--csv",
+                    str(csv_file),
+                    "--symbol",
+                    "AAPL",
+                    "--venue",
+                    "NASDAQ",
+                ],
             )
 
             assert result.exit_code == 0
-            assert "Successfully imported 100 records" in result.output
-            # The table will show duplicates skipped but no warning message should appear
-            assert "Skipped 0 duplicate records" not in result.output
+            assert "Successfully imported 100 bars" in result.output
 
         finally:
             # Clean up temp file
             csv_file.unlink(missing_ok=True)
 
     def test_import_csv_required_parameters(self):
-        """Test that import-csv requires file and symbol parameters."""
+        """Test that import requires csv and symbol parameters."""
         runner = CliRunner()
 
-        # Test missing file parameter
-        result = runner.invoke(import_csv, ["--symbol", "AAPL"])
+        # Test missing csv parameter
+        result = runner.invoke(
+            data, ["import", "--symbol", "AAPL", "--venue", "NASDAQ"]
+        )
         assert result.exit_code == 2
         assert "Missing option" in result.output
 
@@ -228,7 +266,9 @@ class TestDataCommands:
             csv_file = Path(f.name)
 
         try:
-            result = runner.invoke(import_csv, ["--file", str(csv_file)])
+            result = runner.invoke(
+                data, ["import", "--csv", str(csv_file), "--venue", "NASDAQ"]
+            )
             assert result.exit_code == 2
             assert "Missing option" in result.output
         finally:
@@ -237,73 +277,154 @@ class TestDataCommands:
     def test_list_data_command_exists(self):
         """Test that list command exists."""
         runner = CliRunner()
-        result = runner.invoke(list_data, ["--help"])
+        result = runner.invoke(data, ["list", "--help"])
         assert result.exit_code == 0
-        assert "List available market data" in result.output
+        assert "all available market data" in result.output.lower()
 
-    def test_list_data_without_symbol(self):
+    @patch("src.services.data_catalog.DataCatalogService")
+    def test_list_data_without_symbol(self, mock_catalog_service_class):
         """Test list data command without symbol filter."""
+        # Mock empty catalog
+        mock_catalog_service = MagicMock()
+        mock_catalog_service.scan_catalog.return_value = {}
+        mock_catalog_service_class.return_value = mock_catalog_service
+
         runner = CliRunner()
-        result = runner.invoke(list_data)
+        result = runner.invoke(data, ["list"])
 
         assert result.exit_code == 0
-        assert "Data listing feature coming soon" in result.output
+        assert "No data found in catalog" in result.output
 
-    def test_list_data_with_symbol(self):
+    @patch("src.services.data_catalog.DataCatalogService")
+    def test_list_data_with_symbol(self, mock_catalog_service_class):
         """Test list data command with symbol filter."""
+        # Mock catalog with data
+        mock_catalog_service = MagicMock()
+        mock_avail = MagicMock()
+        mock_avail.bar_type_spec = "1-MINUTE-LAST"
+        mock_avail.start_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        mock_avail.end_date = datetime(2024, 1, 31, tzinfo=timezone.utc)
+        mock_avail.file_count = 5
+        mock_avail.total_rows = 1000
+
+        mock_catalog_service.scan_catalog.return_value = {"AAPL.NASDAQ": [mock_avail]}
+        mock_catalog_service_class.return_value = mock_catalog_service
+
         runner = CliRunner()
-        result = runner.invoke(list_data, ["--symbol", "AAPL"])
+        result = runner.invoke(data, ["list", "--symbol", "AAPL"])
 
         assert result.exit_code == 0
-        assert "Data listing feature coming soon" in result.output
-        assert "Filtering by symbol: AAPL" in result.output
+        # Should show data for AAPL
+        assert "AAPL" in result.output
 
-    def test_list_data_symbol_case_handling(self):
+    @patch("src.services.data_catalog.DataCatalogService")
+    def test_list_data_symbol_case_handling(self, mock_catalog_service_class):
         """Test that list data converts symbol to uppercase."""
+        # Mock catalog with data
+        mock_catalog_service = MagicMock()
+        mock_avail = MagicMock()
+        mock_avail.bar_type_spec = "1-MINUTE-LAST"
+        mock_avail.start_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        mock_avail.end_date = datetime(2024, 1, 31, tzinfo=timezone.utc)
+        mock_avail.file_count = 5
+        mock_avail.total_rows = 1000
+
+        mock_catalog_service.scan_catalog.return_value = {"AAPL.NASDAQ": [mock_avail]}
+        mock_catalog_service_class.return_value = mock_catalog_service
+
         runner = CliRunner()
-        result = runner.invoke(list_data, ["--symbol", "aapl"])
+        result = runner.invoke(data, ["list", "--symbol", "aapl"])
 
         assert result.exit_code == 0
-        assert "Filtering by symbol: AAPL" in result.output
+        # Should filter by uppercase AAPL
+        assert "AAPL" in result.output
 
-    def test_import_csv_symbol_case_handling(self):
-        """Test that import-csv converts symbol to uppercase."""
-        with patch("src.cli.commands.data.test_connection", return_value=True):
-            with patch("src.cli.commands.data.CSVLoader") as mock_csv_loader:
-                mock_loader_instance = AsyncMock()
-                mock_loader_instance.load_file.return_value = {
-                    "file": "/tmp/test.csv",
-                    "symbol": "AAPL",
-                    "records_processed": 1,
-                    "records_inserted": 1,
-                    "duplicates_skipped": 0,
-                }
-                mock_csv_loader.return_value = mock_loader_instance
+    @patch("src.services.csv_loader.CSVLoader")
+    def test_import_csv_symbol_case_handling(self, mock_csv_loader):
+        """Test that import converts symbol to uppercase."""
+        mock_loader_instance = MagicMock()
 
-                # Create temporary CSV file
-                with tempfile.NamedTemporaryFile(
-                    mode="w", suffix=".csv", delete=False
-                ) as f:
-                    csv_file = Path(f.name)
+        async def mock_load_file(file_path, symbol, venue, bar_type_spec):
+            # Verify symbol was uppercased
+            assert symbol == "AAPL"
+            assert venue == "NASDAQ"
+            return {
+                "file": str(file_path),
+                "instrument_id": f"{symbol}.{venue}",
+                "bar_type_spec": bar_type_spec,
+                "rows_processed": 1,
+                "bars_written": 1,
+                "conflicts_skipped": 0,
+                "validation_errors": [],
+                "date_range": "2024-01-01 09:30 to 2024-01-01 16:00",
+                "file_size_kb": 0.5,
+            }
 
-                try:
-                    runner = CliRunner()
-                    result = runner.invoke(
-                        import_csv,
-                        [
-                            "--file",
-                            str(csv_file),
-                            "--symbol",
-                            "aapl",  # lowercase
-                        ],
-                    )
+        mock_loader_instance.load_file = mock_load_file
+        mock_csv_loader.return_value = mock_loader_instance
 
-                    assert result.exit_code == 0
-                    # Verify the loader was called with uppercase symbol
-                    mock_loader_instance.load_file.assert_called_once_with(
-                        csv_file, "AAPL"
-                    )
+        # Create temporary CSV file
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
+            csv_file = Path(f.name)
 
-                finally:
-                    # Clean up temp file
-                    csv_file.unlink(missing_ok=True)
+        try:
+            runner = CliRunner()
+            result = runner.invoke(
+                data,
+                [
+                    "import",
+                    "--csv",
+                    str(csv_file),
+                    "--symbol",
+                    "aapl",  # lowercase
+                    "--venue",
+                    "nasdaq",  # lowercase
+                ],
+            )
+
+            assert result.exit_code == 0
+
+        finally:
+            # Clean up temp file
+            csv_file.unlink(missing_ok=True)
+
+    @patch("src.services.data_catalog.DataCatalogService")
+    def test_check_data_command_exists(self, mock_catalog_service_class):
+        """Test that check command exists."""
+        runner = CliRunner()
+        result = runner.invoke(data, ["check", "--help"])
+        assert result.exit_code == 0
+        assert "Check data availability" in result.output
+
+    @patch("src.services.data_catalog.DataCatalogService")
+    def test_check_data_no_data_found(self, mock_catalog_service_class):
+        """Test check command when no data found."""
+        mock_catalog_service = MagicMock()
+        mock_catalog_service.get_availability.return_value = None
+        mock_catalog_service_class.return_value = mock_catalog_service
+
+        runner = CliRunner()
+        result = runner.invoke(data, ["check", "--symbol", "AAPL", "--venue", "NASDAQ"])
+
+        assert result.exit_code == 0
+        assert "No data found" in result.output
+
+    @patch("src.services.data_catalog.DataCatalogService")
+    def test_check_data_with_data(self, mock_catalog_service_class):
+        """Test check command when data exists."""
+        mock_catalog_service = MagicMock()
+        mock_avail = MagicMock()
+        mock_avail.start_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        mock_avail.end_date = datetime(2024, 1, 31, tzinfo=timezone.utc)
+        mock_avail.file_count = 5
+        mock_avail.total_rows = 1000
+        mock_avail.last_updated = datetime(2024, 2, 1, tzinfo=timezone.utc)
+
+        mock_catalog_service.get_availability.return_value = mock_avail
+        mock_catalog_service_class.return_value = mock_catalog_service
+
+        runner = CliRunner()
+        result = runner.invoke(data, ["check", "--symbol", "AAPL", "--venue", "NASDAQ"])
+
+        assert result.exit_code == 0
+        assert "Data Available" in result.output

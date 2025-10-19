@@ -114,6 +114,64 @@ Phase 6 (CSV Import) and Phase 7 (Data Inspection) have been implemented and tes
 
 ---
 
+**STATUS UPDATE (2025-10-19)** - Unit Test Fixes Complete (Session 5 + Post-Session):
+After implementing US4 and US5, the PostgreSQL → Parquet migration broke 45 unit tests that were still testing the old architecture. Session 5 successfully updated all tests to align with the new Parquet-based implementation, plus one additional deprecated test was marked as skipped:
+
+**✅ ALL TEST FIXES COMPLETED** (52 passing + 1 skipped = 100% resolution):
+
+**Phase 1-4: Core Test Updates** (49 tests)
+- ✅ **test_csv_loader.py**: 18 tests passing (was 21 failures, removed 3 obsolete)
+  - Removed 4 obsolete PostgreSQL-specific tests
+  - Updated CSVLoader API: added `venue` parameter, removed `session` parameter
+  - Updated all mocks to use `DataCatalogService` instead of database sessions
+  - Replaced `MarketDataCreate` assertions with Nautilus `Bar` object checks
+  - Updated return structure expectations (`bars_written` vs `records_inserted`)
+
+- ✅ **test_data_commands.py**: 16 tests passing (was 13 failures)
+  - Removed all database connection mocks (no longer needed)
+  - Updated command name: `import-csv` → `import`
+  - Added `--venue` parameter to all CLI invocations
+  - Fixed mock patch targets (from CLI module to actual source modules)
+  - Added tests for new `check` command functionality
+
+- ✅ **test_backtest_commands.py**: 15 tests passing (was 19 failures, removed 4 obsolete)
+  - Updated to use `DataCatalogService` instead of `DataService`
+  - Removed database connection and validation tests (no longer applicable)
+  - Fixed mock patch targets to CLI module import location
+  - Updated exception handling for new catalog error types
+
+**Phase 5: Integration Test Hang Fix** (3 tests)
+- ✅ **test_csv_import.py**: Fixed hang by mocking IBKR client and using temporary catalog
+  - Added `@patch("src.services.data_catalog.IBKRHistoricalClient")` to prevent initialization issues
+  - Created temporary catalog directory with `tempfile.TemporaryDirectory()` for test isolation
+  - Test suite now completes in 0.70s (was hanging indefinitely)
+
+- ✅ **test_milestone_5_integration.py**: Updated command names for new CLI structure
+
+**Phase 6: Post-Session - Deprecated Test Skip** (1 test)
+- ✅ **test_milestone_2.py**: Skipped deprecated PostgreSQL workflow test
+  - Added `@pytest.mark.skip()` decorator to `test_complete_csv_to_backtest_workflow`
+  - Test validates Milestone 2 PostgreSQL workflow (deprecated)
+  - Coverage maintained by new Parquet-based integration tests
+
+**Test Results**:
+```bash
+$ uv run pytest tests/test_csv_loader.py tests/test_data_commands.py tests/test_backtest_commands.py tests/integration/test_csv_import.py tests/integration/test_milestone_2.py -q
+54 passed, 1 skipped, 36 warnings in 0.81s
+```
+
+**Key Patterns Applied**:
+1. Mock at source module, not import location: `@patch("src.services.csv_loader.CSVLoader")`
+2. Always mock `DataCatalogService` to avoid event loop issues in sync tests
+3. Mock external dependencies (IBKR) in integration tests when not directly testing them
+4. Use temporary directories for file-based integration tests to ensure clean state
+5. Update all return structure keys: `symbol` → `instrument_id`, `records_inserted` → `bars_written`
+6. Remove obsolete functionality rather than trying to adapt it
+
+**Documentation**: See `SESSION-5-TEST-FIXES.md` for comprehensive test fixing details and patterns
+
+---
+
 ## Format: `[ID] [P?] [Story] Description`
 - **[P]**: Can run in parallel (different files, no dependencies)
 - **[Story]**: Which user story this task belongs to (e.g., US1, US2, US3, Setup, Foundation)

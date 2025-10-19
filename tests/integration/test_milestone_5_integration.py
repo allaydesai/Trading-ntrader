@@ -280,9 +280,10 @@ def test_cli_commands_registered():
     assert "connect" in commands
     assert "fetch" in commands
 
-    # Verify existing commands still exist (backward compatibility)
-    assert "import-csv" in commands
+    # Verify existing commands still exist
+    assert "import" in commands  # Renamed from 'import-csv'
     assert "list" in commands
+    assert "check" in commands  # Data inspection command
 
 
 @pytest.mark.integration

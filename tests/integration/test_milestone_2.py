@@ -10,6 +10,9 @@ from src.config import get_settings
 from src.db import session as db_session
 
 
+@pytest.mark.skip(
+    reason="Milestone 2 PostgreSQL workflow deprecated - replaced by Parquet-based workflow"
+)
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_complete_csv_to_backtest_workflow():
@@ -21,6 +24,12 @@ async def test_complete_csv_to_backtest_workflow():
     2. Database storage
     3. Data retrieval
     4. Backtest execution with real data
+
+    NOTE: This test is deprecated as it tests the PostgreSQL-based workflow.
+    The new Parquet-based workflow is tested by:
+    - test_csv_import_stores_to_database (CSV → Parquet)
+    - Backtest command tests (Parquet → Backtest)
+    - test_milestone_5_integration.py (new CLI commands)
     """
     settings = get_settings()
 
