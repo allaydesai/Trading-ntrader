@@ -50,4 +50,5 @@ markers = [
     "trading: marks tests as trading-related (deselect with '-m \"not trading\"')",
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "integration: marks tests as integration tests",
+    "nautilus: marks tests as nautilus framework-specific",
 ]

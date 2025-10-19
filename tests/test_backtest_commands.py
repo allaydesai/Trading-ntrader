@@ -5,7 +5,12 @@ from unittest.mock import patch, MagicMock
 from decimal import Decimal
 from click.testing import CliRunner
 
-from src.cli.commands.backtest import backtest, run_backtest, list_backtests
+from src.cli.commands.backtest import (
+    backtest,
+    run_backtest,
+    list_backtests,
+    run_config_backtest,
+)
 
 
 class MockBacktestResult:
@@ -481,3 +486,129 @@ class TestBacktestCommands:
             "Could not fetch data info" in result.output
             or "error" in result.output.lower()
         )
+
+
+class TestRunConfigBacktest:
+    """Test cases for run-config backtest command."""
+
+    @patch("src.cli.commands.backtest.MinimalBacktestRunner")
+    def test_run_config_success_mock_data(self, mock_runner_class):
+        """Test successful run-config with mock data source."""
+        # Create a temporary config file
+        runner = CliRunner()
+
+        with runner.isolated_filesystem():
+            # Create a simple config file
+            with open("test_config.yaml", "w") as f:
+                f.write("""
+strategy:
+  type: sma_crossover
+  fast_period: 5
+  slow_period: 10
+trading:
+  trade_size: 100000
+""")
+
+            # Mock backtest runner
+            mock_runner = MagicMock()
+            mock_runner.run_from_config_file.return_value = MockBacktestResult()
+            mock_runner.dispose = MagicMock()
+            mock_runner_class.return_value = mock_runner
+
+            result = runner.invoke(
+                run_config_backtest,
+                ["test_config.yaml", "--data-source", "mock"],
+            )
+
+            assert result.exit_code == 0
+            assert "Running backtest from config: test_config.yaml" in result.output
+            assert "Using mock data for testing" in result.output
+            assert "Backtest Results" in result.output
+            assert "$1500.00" in result.output  # Total return from MockBacktestResult
+            assert "Strategy was profitable!" in result.output
+
+            # Verify runner was initialized and disposed
+            mock_runner_class.assert_called_once_with(data_source="mock")
+            mock_runner.run_from_config_file.assert_called_once_with("test_config.yaml")
+            mock_runner.dispose.assert_called_once()
+
+    def test_run_config_database_source_deprecated(self):
+        """Test run-config with database source shows deprecation warning."""
+        runner = CliRunner()
+
+        with runner.isolated_filesystem():
+            # Create a simple config file
+            with open("test_config.yaml", "w") as f:
+                f.write("""
+strategy:
+  type: sma_crossover
+  fast_period: 5
+  slow_period: 10
+""")
+
+            result = runner.invoke(
+                run_config_backtest,
+                [
+                    "test_config.yaml",
+                    "--data-source",
+                    "database",
+                    "--symbol",
+                    "AAPL",
+                    "--start",
+                    "2024-01-01",
+                    "--end",
+                    "2024-01-31",
+                ],
+            )
+
+            # Should show deprecation warning
+            assert (
+                "Database data source deprecated" in result.output
+                or "not yet implemented" in result.output
+            )
+
+    def test_run_config_file_not_found(self):
+        """Test run-config with non-existent config file."""
+        runner = CliRunner()
+
+        result = runner.invoke(
+            run_config_backtest,
+            ["nonexistent_config.yaml", "--data-source", "mock"],
+        )
+
+        # Should fail with file not found error
+        assert result.exit_code != 0
+        assert (
+            "does not exist" in result.output.lower()
+            or "not found" in result.output.lower()
+        )
+
+    @patch("src.cli.commands.backtest.MinimalBacktestRunner")
+    def test_run_config_validation_error(self, mock_runner_class):
+        """Test run-config with invalid YAML configuration."""
+        runner = CliRunner()
+
+        with runner.isolated_filesystem():
+            # Create an invalid config file
+            with open("invalid_config.yaml", "w") as f:
+                f.write("""
+invalid: yaml: structure:
+  - this is wrong
+""")
+
+            # Mock runner to raise ValueError
+            mock_runner = MagicMock()
+            mock_runner.run_from_config_file.side_effect = ValueError(
+                "Invalid configuration"
+            )
+            mock_runner.dispose = MagicMock()
+            mock_runner_class.return_value = mock_runner
+
+            result = runner.invoke(
+                run_config_backtest,
+                ["invalid_config.yaml", "--data-source", "mock"],
+            )
+
+            # Should fail with configuration error
+            assert result.exit_code != 0
+            assert "error" in result.output.lower() or "failed" in result.output.lower()

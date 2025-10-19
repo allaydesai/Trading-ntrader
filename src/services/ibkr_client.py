@@ -55,6 +55,11 @@ class RateLimiter:
                     # Re-acquire time after sleep
                     now = datetime.now(timezone.utc)
 
+                    # CRITICAL: Re-clean expired requests after sleeping
+                    # This prevents race conditions where we exceed the limit
+                    while self.requests and self.requests[0] < now - self.window:
+                        self.requests.popleft()
+
             # Record this request
             self.requests.append(now)
 
