@@ -175,3 +175,4 @@ cython_debug/
 
 # Data catalog - generated files
 data/catalog/
+data/catalog/.corrupt/

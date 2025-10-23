@@ -1,6 +1,8 @@
 """Backtest commands for running strategies with real data."""
 
 import asyncio
+import sys
+import time
 from datetime import datetime, timezone
 
 import click
@@ -9,10 +11,25 @@ from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from src.core.backtest_runner import MinimalBacktestRunner
-from src.services.data_service import DataService
-from src.db.session import test_connection
+from src.services.data_catalog import DataCatalogService
+from src.services.exceptions import (
+    CatalogCorruptionError,
+    CatalogError,
+    DataNotFoundError,
+    IBKRConnectionError,
+    RateLimitExceededError,
+)
+from src.utils.error_formatter import ErrorFormatter
+from src.utils.error_messages import (
+    CATALOG_CORRUPTION_DETECTED,
+    DATA_NOT_FOUND_NO_IBKR,
+    IBKR_CONNECTION_FAILED,
+    RATE_LIMIT_EXCEEDED,
+    format_error_with_context,
+)
 
 console = Console()
+error_formatter = ErrorFormatter(console)
 
 
 @click.group()
@@ -59,6 +76,16 @@ def backtest():
     type=int,
     help="Trade size in base currency units (default: 1,000,000)",
 )
+@click.option(
+    "--timeframe",
+    "-t",
+    default=None,
+    type=click.Choice(
+        ["1-MINUTE", "5-MINUTE", "15-MINUTE", "1-HOUR", "4-HOUR", "1-DAY", "1-WEEK"],
+        case_sensitive=False,
+    ),
+    help="Bar timeframe (auto-detected from date format if not specified)",
+)
 def run_backtest(
     strategy: str,
     symbol: str,
@@ -67,11 +94,15 @@ def run_backtest(
     fast_period: int,
     slow_period: int,
     trade_size: int,
+    timeframe: str | None,
 ):
     """Run backtest with real market data from database."""
 
     async def run_backtest_async():
-        # Ensure start and end dates are timezone-aware (UTC) for database comparison
+        # Reason: Track execution time for performance reporting
+        execution_start_time = time.time()
+
+        # Ensure start and end dates are timezone-aware (UTC) for catalog comparison
         nonlocal start, end
         if start.tzinfo is None:
             start = start.replace(tzinfo=timezone.utc)
@@ -102,103 +133,216 @@ def run_backtest(
         console.print(f"   Trade Size: {trade_size:,}")
         console.print()
 
-        # Check database connection
-        if not await test_connection():
-            console.print(
-                "❌ Database not accessible. Please check your database configuration.",
-                style="red",
-            )
-            console.print(
-                "   Make sure PostgreSQL is running and DATABASE_URL is configured."
-            )
-            return False
-
         try:
-            # Get adjusted date range if needed
-            data_service = DataService()
+            # Reason: Initialize catalog service for data access
+            catalog_service = DataCatalogService()
 
-            # Validate data availability first (this handles all validation scenarios)
-            validation = await data_service.validate_data_availability(
-                symbol.upper(), start, end
-            )
+            # Reason: Convert symbol to instrument_id format (e.g., "AAPL" -> "AAPL.NASDAQ")
+            # For now, assume NASDAQ venue for US equities
+            # TODO: Make venue configurable or derive from symbol
+            instrument_id = f"{symbol.upper()}.NASDAQ"
 
-            if not validation["valid"]:
-                console.print("❌ Data validation failed", style="red")
-                console.print(f"   {validation['reason']}")
-
+            # Reason: Determine bar type from explicit timeframe or auto-detect from date format
+            if timeframe:
+                # Use explicit timeframe if provided
+                bar_type_spec = f"{timeframe}-LAST"
+            else:
+                # Auto-detect: Date-only (YYYY-MM-DD) → 1-DAY, Date-time → 1-MINUTE
+                # Click parses date-only as midnight UTC (00:00:00)
                 if (
-                    "available_symbols" in validation
-                    and validation["available_symbols"]
+                    start.time().hour == 0
+                    and start.time().minute == 0
+                    and start.time().second == 0
                 ):
-                    symbols = validation["available_symbols"]
-                    console.print(f"   Available symbols: {', '.join(symbols[:10])}")
-                    if len(symbols) > 10:
-                        console.print(f"   ... and {len(symbols) - 10} more")
-                elif (
-                    "available_symbols" in validation
-                    and not validation["available_symbols"]
-                ):
-                    console.print(
-                        "   No data available in database. Try importing some CSV data first:"
-                    )
-                    console.print(
-                        "   ntrader data import-csv --file data/sample_AAPL.csv --symbol AAPL"
-                    )
+                    bar_type_spec = "1-DAY-LAST"
+                else:
+                    bar_type_spec = "1-MINUTE-LAST"
 
-                if "available_range" in validation:
-                    range_info = validation["available_range"]
-                    console.print(
-                        f"   Available range: {range_info['start']} to {range_info['end']}"
-                    )
-
-                return False
-
-            # Get adjusted date range (handles date-only inputs intelligently)
-            adjusted_range = await data_service.get_adjusted_date_range(
-                symbol.upper(), start, end
-            )
-
-            if not adjusted_range:
-                console.print(
-                    f"❌ No data available for {symbol.upper()} in the specified date range",
-                    style="red",
+            # Reason: Check catalog availability and fetch from IBKR if needed
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                transient=True,
+            ) as progress:
+                task = progress.add_task("Checking data availability...", total=None)
+                availability = catalog_service.get_availability(
+                    instrument_id, bar_type_spec
                 )
-                # Show available range
-                data_range = await data_service.get_data_range(symbol.upper())
-                if data_range:
-                    console.print(
-                        f"   Available range: {data_range['start']} to {data_range['end']}"
-                    )
-                return False
+                progress.update(task, completed=True)
 
-            # Check if dates were adjusted
-            dates_adjusted = (adjusted_range["start"] != start) or (
-                adjusted_range["end"] != end
-            )
+            # Reason: Determine data source and adjust dates if needed
+            adjusted_start = start
+            adjusted_end = end
+            data_source = "Parquet Catalog"
 
-            # Use adjusted dates for validation and backtest
-            adjusted_start = adjusted_range["start"]
-            adjusted_end = adjusted_range["end"]
-
-            # Show data info
-            console.print("✅ Data validation passed", style="green")
-
-            # If dates were adjusted, show both original request and actual range
-            if dates_adjusted:
+            if not availability:
                 console.print(
-                    f"   Requested period: {start.strftime('%Y-%m-%d %H:%M:%S')} to {end.strftime('%Y-%m-%d %H:%M:%S')}"
-                )
-                console.print(
-                    f"   Adjusted to actual data: {adjusted_start.strftime('%Y-%m-%d %H:%M:%S')} to {adjusted_end.strftime('%Y-%m-%d %H:%M:%S')}",
+                    f"⚠️  No data in catalog for {symbol.upper()}",
                     style="yellow",
                 )
-            else:
+                console.print(f"   Instrument: {instrument_id}")
+                console.print(f"   Bar type: {bar_type_spec}")
+                console.print()
+                console.print("   Will attempt to fetch from IBKR...", style="yellow")
+                console.print()
+                data_source = "IBKR Auto-fetch"
+            elif not availability.covers_range(start, end):
                 console.print(
-                    f"   Using exact period: {adjusted_start.strftime('%Y-%m-%d %H:%M:%S')} to {adjusted_end.strftime('%Y-%m-%d %H:%M:%S')}"
+                    "⚠️  Requested date range partially available in catalog",
+                    style="yellow",
                 )
-            console.print()
+                console.print(
+                    f"   Requested: {start.strftime('%Y-%m-%d')} to {end.strftime('%Y-%m-%d')}"
+                )
+                console.print(
+                    f"   Available: {availability.start_date.strftime('%Y-%m-%d')} to {availability.end_date.strftime('%Y-%m-%d')}"
+                )
+                console.print()
+                console.print(
+                    "   Will attempt to fetch missing data from IBKR...", style="yellow"
+                )
+                console.print()
+                data_source = "IBKR Auto-fetch"
+            else:
+                console.print("✅ Data available in catalog", style="green")
+                console.print(
+                    f"   Period: {adjusted_start.strftime('%Y-%m-%d')} to {adjusted_end.strftime('%Y-%m-%d')}"
+                )
+                console.print(
+                    f"   Files: {availability.file_count} | Rows: ~{availability.total_rows:,}"
+                )
+                console.print()
 
-            # Run backtest with progress indicator
+            # Reason: Load data from catalog or fetch from IBKR with progress indicator
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                transient=True,
+            ) as progress:
+                task = progress.add_task("Loading/fetching data...", total=None)
+
+                data_load_start = time.time()
+                try:
+                    # Reason: Use fetch_or_load() to automatically fetch from IBKR if needed
+                    bars = await catalog_service.fetch_or_load(
+                        instrument_id=instrument_id,
+                        start=adjusted_start,
+                        end=adjusted_end,
+                        bar_type_spec=bar_type_spec,
+                        correlation_id=f"backtest-{symbol}-{start.strftime('%Y%m%d')}",
+                    )
+                    data_load_time = time.time() - data_load_start
+
+                    # Reason: Load instrument from catalog after bars are loaded/fetched
+                    instrument = catalog_service.load_instrument(instrument_id)
+
+                    # Reason: If instrument not in catalog, fetch it from IBKR (one-time operation)
+                    if instrument is None:
+                        console.print(
+                            f"⚠️  Instrument {instrument_id} not in catalog, fetching from IBKR...",
+                            style="yellow",
+                        )
+                        try:
+                            instrument = (
+                                await catalog_service.fetch_instrument_from_ibkr(
+                                    instrument_id
+                                )
+                            )
+                            console.print(
+                                "✅ Instrument fetched and saved to catalog",
+                                style="green",
+                            )
+                        except Exception as e:
+                            console.print(
+                                f"❌ Failed to fetch instrument from IBKR: {e}",
+                                style="red",
+                            )
+                            console.print(
+                                "   Using fallback test instrument",
+                                style="yellow",
+                            )
+
+                    progress.update(task, completed=True)
+
+                    # Reason: Show data load/fetch performance with source indication
+                    if data_source == "IBKR Auto-fetch":
+                        console.print(
+                            f"✅ Fetched {len(bars):,} bars from IBKR in {data_load_time:.2f}s",
+                            style="green bold",
+                        )
+                        console.print(
+                            "   💾 Data saved to catalog - future backtests will use cached data",
+                            style="cyan",
+                        )
+                        console.print()
+                    else:
+                        console.print(
+                            f"✅ Loaded {len(bars):,} bars from catalog in {data_load_time:.2f}s",
+                            style="green",
+                        )
+                        console.print()
+                except DataNotFoundError:
+                    progress.update(task, completed=True)
+                    console.print()
+                    error_msg = format_error_with_context(
+                        DATA_NOT_FOUND_NO_IBKR,
+                        instrument=instrument_id,
+                        start_date=adjusted_start.strftime("%Y-%m-%d"),
+                        end_date=adjusted_end.strftime("%Y-%m-%d"),
+                    )
+                    error_formatter.format_error(error_msg)
+                    sys.exit(error_formatter.get_exit_code(error_msg))
+
+                except IBKRConnectionError as e:
+                    progress.update(task, completed=True)
+                    console.print()
+                    error_msg = format_error_with_context(
+                        IBKR_CONNECTION_FAILED,
+                        connection_details=str(e),
+                    )
+                    error_formatter.format_error(error_msg)
+                    sys.exit(error_formatter.get_exit_code(error_msg))
+
+                except RateLimitExceededError as e:
+                    progress.update(task, completed=True)
+                    console.print()
+                    error_msg = format_error_with_context(
+                        RATE_LIMIT_EXCEEDED,
+                        retry_after=str(e.retry_after),
+                        request_count=str(e.request_count or "unknown"),
+                    )
+                    error_formatter.format_error(error_msg)
+                    sys.exit(error_formatter.get_exit_code(error_msg))
+
+                except CatalogCorruptionError as e:
+                    progress.update(task, completed=True)
+                    console.print()
+                    error_msg = format_error_with_context(
+                        CATALOG_CORRUPTION_DETECTED,
+                        file_path=str(e),
+                    )
+                    error_formatter.format_error(error_msg)
+                    sys.exit(error_formatter.get_exit_code(error_msg))
+
+                except CatalogError as e:
+                    progress.update(task, completed=True)
+                    console.print()
+                    error_formatter.print_warning(
+                        f"Catalog error: {str(e)}",
+                        "Check logs for more details",
+                    )
+                    sys.exit(4)
+
+                except Exception as e:
+                    progress.update(task, completed=True)
+                    console.print()
+                    error_formatter.print_warning(
+                        f"Unexpected error: {str(e)}",
+                        "Check logs for stack trace",
+                    )
+                    sys.exit(4)
+
+            # Reason: Run backtest with catalog data
             with Progress(
                 SpinnerColumn(),
                 TextColumn("[progress.description]{task.description}"),
@@ -206,8 +350,9 @@ def run_backtest(
             ) as progress:
                 task = progress.add_task("Running backtest...", total=None)
 
-                # Initialize backtest runner with database data source
-                runner = MinimalBacktestRunner(data_source="database")
+                # Reason: Initialize backtest runner with catalog data
+                # Note: Using "catalog" data source (will need to update runner)
+                runner = MinimalBacktestRunner(data_source="catalog")
 
                 # Prepare strategy parameters
                 strategy_params = {
@@ -223,12 +368,14 @@ def run_backtest(
                         }
                     )
 
-                # Run the backtest with adjusted dates using new dynamic method
-                result = await runner.run_backtest_with_strategy_type(
+                # Reason: Run the backtest with catalog bars and instrument
+                result = await runner.run_backtest_with_catalog_data(
+                    bars=bars,
                     strategy_type=strategy,
                     symbol=symbol.upper(),
                     start=adjusted_start,
                     end=adjusted_end,
+                    instrument=instrument,
                     **strategy_params,
                 )
 
@@ -251,11 +398,15 @@ def run_backtest(
             else:
                 strategy_description = display_strategy.replace("_", " ").title()
 
+            # Reason: Calculate total execution time
+            total_execution_time = time.time() - execution_start_time
+
             table.add_row("Strategy", strategy_description)
             table.add_row("Symbol", symbol.upper())
             table.add_row(
                 "Period", f"{start.strftime('%Y-%m-%d')} to {end.strftime('%Y-%m-%d')}"
             )
+            table.add_row("Data Source", "Parquet Catalog")
             table.add_row("Total Return", f"${result.total_return:.2f}")
             table.add_row("Total Trades", str(result.total_trades))
             table.add_row("Winning Trades", str(result.winning_trades))
@@ -264,6 +415,7 @@ def run_backtest(
             table.add_row("Largest Win", f"${result.largest_win:.2f}")
             table.add_row("Largest Loss", f"${result.largest_loss:.2f}")
             table.add_row("Final Balance", f"${result.final_balance:.2f}")
+            table.add_row("Execution Time", f"{total_execution_time:.2f}s")
 
             console.print(table)
             console.print()
@@ -353,13 +505,11 @@ def run_config_backtest(
                 f"   Period: {start.strftime('%Y-%m-%d %H:%M:%S')} to {end.strftime('%Y-%m-%d %H:%M:%S')}"
             )
 
-            # Check database connection
-            if not await test_connection():
-                console.print(
-                    "❌ Database not accessible. Please check your database configuration.",
-                    style="red",
-                )
-                return False
+            # Note: Database connection check removed - using catalog for new implementation
+            console.print(
+                "⚠️  Database data source deprecated - use 'mock' or upgrade to catalog",
+                style="yellow",
+            )
         else:
             console.print("   Using mock data for testing")
 
@@ -482,32 +632,30 @@ def list_backtests():
 
     # Data info
     async def show_data_info():
-        if await test_connection():
-            try:
-                data_service = DataService()
-                symbols = await data_service.get_available_symbols()
+        try:
+            catalog_service = DataCatalogService()
+            # Reason: Scan catalog for available data
+            console.print("📈 Available Data from Catalog", style="cyan bold")
+            console.print(f"   Catalog: {catalog_service.catalog_path}", style="dim")
+            console.print(f"   Instruments: {len(catalog_service.availability_cache)}")
 
-                if symbols:
-                    console.print("📈 Available Data", style="cyan bold")
-                    console.print(f"   Symbols: {', '.join(symbols[:10])}")
-                    if len(symbols) > 10:
-                        console.print(f"   ... and {len(symbols) - 10} more")
-
-                    # Show sample data range
-                    sample_symbol = symbols[0]
-                    range_info = await data_service.get_data_range(sample_symbol)
-                    if range_info:
-                        console.print(
-                            f"   Sample range ({sample_symbol}): {range_info['start']} to {range_info['end']}"
-                        )
-                else:
-                    console.print("⚠️  No market data available", style="yellow")
+            if catalog_service.availability_cache:
+                # Show first few instruments
+                items = list(catalog_service.availability_cache.items())[:5]
+                for key, avail in items:
                     console.print(
-                        "   Import some data first: ntrader data import-csv --file sample.csv --symbol AAPL"
+                        f"   • {avail.instrument_id} ({avail.bar_type_spec}): "
+                        f"{avail.start_date.strftime('%Y-%m-%d')} to {avail.end_date.strftime('%Y-%m-%d')}"
                     )
-            except Exception as e:
-                console.print(f"⚠️  Could not fetch data info: {e}", style="yellow")
-        else:
-            console.print("⚠️  Database not accessible", style="yellow")
+                if len(catalog_service.availability_cache) > 5:
+                    remaining = len(catalog_service.availability_cache) - 5
+                    console.print(f"   ... and {remaining} more")
+            else:
+                console.print("⚠️  No market data in catalog", style="yellow")
+                console.print(
+                    "   Import data: ntrader data import-csv --file sample.csv --symbol AAPL"
+                )
+        except Exception as e:
+            console.print(f"⚠️  Could not fetch data info: {e}", style="yellow")
 
     asyncio.run(show_data_info())

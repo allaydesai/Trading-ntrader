@@ -55,6 +55,11 @@ class RateLimiter:
                     # Re-acquire time after sleep
                     now = datetime.now(timezone.utc)
 
+                    # CRITICAL: Re-clean expired requests after sleeping
+                    # This prevents race conditions where we exceed the limit
+                    while self.requests and self.requests[0] < now - self.window:
+                        self.requests.popleft()
+
             # Record this request
             self.requests.append(now)
 
@@ -135,6 +140,76 @@ class IBKRHistoricalClient:
             # HistoricInteractiveBrokersClient doesn't have a disconnect method
             # Connection is managed by the context/lifecycle
             self._connected = False
+
+    async def fetch_bars(
+        self,
+        instrument_id: str,
+        start: datetime,
+        end: datetime,
+        bar_type_spec: str = "1-MINUTE-LAST",
+    ):
+        """
+        Fetch historical bars and instrument from IBKR.
+
+        Args:
+            instrument_id: Instrument ID (e.g., "AAPL.NASDAQ")
+            start: Start datetime (UTC)
+            end: End datetime (UTC)
+            bar_type_spec: Bar type specification (e.g., "1-MINUTE-LAST")
+
+        Returns:
+            Tuple of (bars, instrument) where bars is a list of Bar objects
+            and instrument is the Instrument object
+
+        Raises:
+            Exception: If fetch fails
+        """
+        # Reason: Apply rate limiting before request
+        await self.rate_limiter.acquire()
+
+        # Reason: Parse instrument_id to get symbol and venue
+        # Expected format: "SYMBOL.VENUE" (e.g., "AAPL.NASDAQ")
+        parts = instrument_id.split(".")
+        if len(parts) != 2:
+            raise ValueError(f"Invalid instrument_id format: {instrument_id}")
+
+        symbol, venue = parts
+
+        # Reason: Validate bar type spec format
+        # Expected format: "{period}-{aggregation}-{price_type}"
+        # Example: "1-MINUTE-LAST"
+        bar_parts = bar_type_spec.split("-")
+        if len(bar_parts) < 2:
+            raise ValueError(f"Invalid bar_type_spec format: {bar_type_spec}")
+
+        # Reason: Strip timezone info since we're specifying tz_name parameter
+        # Nautilus expects naive datetimes when tz_name is provided
+        start_naive = start.replace(tzinfo=None) if start.tzinfo else start
+        end_naive = end.replace(tzinfo=None) if end.tzinfo else end
+
+        # Reason: Request bars from IBKR via Nautilus client
+        # bar_specifications should be simple format strings like "1-MINUTE-LAST"
+        # Use instrument_ids instead of contracts to avoid parsing issues
+        bars = await self.client.request_bars(
+            bar_specifications=[bar_type_spec],  # Just "1-MINUTE-LAST"
+            end_date_time=end_naive,  # Required parameter (comes before start!)
+            tz_name="UTC",
+            start_date_time=start_naive,  # Optional start time
+            instrument_ids=[instrument_id],  # Use instrument_ids instead of contracts
+            use_rth=True,  # Regular Trading Hours only
+            timeout=120,  # 2 minute timeout
+        )
+
+        # Reason: Also fetch instrument definition for persistence
+        # This allows us to save the instrument to the catalog
+        instruments = await self.client.request_instruments(
+            instrument_ids=[instrument_id],
+        )
+
+        # Reason: Return both bars and instrument (first from the list)
+        instrument = instruments[0] if instruments else None
+
+        return bars, instrument
 
     @property
     def is_connected(self) -> bool:

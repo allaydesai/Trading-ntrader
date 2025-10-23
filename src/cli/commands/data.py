@@ -10,8 +10,6 @@ from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
-from src.services.csv_loader import CSVLoader
-from src.db.session import test_connection
 from src.services.ibkr_client import IBKRHistoricalClient
 from src.services.data_fetcher import HistoricalDataFetcher
 from src.config import get_settings
@@ -27,83 +25,139 @@ def data():
     pass
 
 
-@data.command("import-csv")
+@data.command("import")
 @click.option(
-    "--file",
-    "-f",
+    "--csv",
     type=click.Path(exists=True, path_type=Path),
     required=True,
     help="Path to CSV file to import",
 )
 @click.option("--symbol", "-s", required=True, help="Trading symbol (e.g., AAPL)")
-def import_csv(file: Path, symbol: str):
-    """Import CSV market data to database."""
+@click.option(
+    "--venue",
+    "-v",
+    default="NASDAQ",
+    help="Venue/exchange (default: NASDAQ)",
+)
+@click.option(
+    "--bar-type",
+    "-b",
+    default="1-MINUTE-LAST",
+    help="Bar type specification (default: 1-MINUTE-LAST)",
+)
+@click.option(
+    "--conflict-mode",
+    type=click.Choice(["skip", "overwrite", "merge"], case_sensitive=False),
+    default="skip",
+    help="Conflict resolution: skip (default), overwrite, or merge",
+)
+def import_data(
+    csv: Path,
+    symbol: str,
+    venue: str,
+    bar_type: str,
+    conflict_mode: str,
+):
+    """Import CSV market data directly to Parquet catalog."""
 
-    async def import_csv_async():
-        # Check database connection first
-        if not await test_connection():
-            console.print(
-                "❌ Database not accessible. Please check your database configuration.",
-                style="red",
-            )
-            return False
-
+    async def import_async():
         # Show progress while importing
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
             transient=True,
         ) as progress:
-            task = progress.add_task(f"Importing {file.name}...", total=None)
+            task = progress.add_task(f"Importing {csv.name}...", total=None)
 
             try:
-                # Load CSV file
-                loader = CSVLoader()
-                result = await loader.load_file(file, symbol.upper())
+                # Load CSV file using new Parquet-based loader
+                from src.services.csv_loader import CSVLoader
+
+                loader = CSVLoader(conflict_mode=conflict_mode.lower())
+                result = await loader.load_file(
+                    csv, symbol.upper(), venue.upper(), bar_type.upper()
+                )
 
                 progress.update(task, completed=True)
 
                 # Display results
-                console.print(
-                    f"✅ Successfully imported {result['records_inserted']} records",
-                    style="green",
-                )
-
-                if result["duplicates_skipped"] > 0:
+                if result["bars_written"] > 0:
                     console.print(
-                        f"⚠️  Skipped {result['duplicates_skipped']} duplicate records",
+                        f"✅ Successfully imported {result['bars_written']} bars",
+                        style="green bold",
+                    )
+                else:
+                    console.print(
+                        "⚠️  No bars written",
                         style="yellow",
                     )
 
+                if result["conflicts_skipped"] > 0:
+                    console.print(
+                        f"⚠️  Skipped {result['conflicts_skipped']} bars (conflict mode: {conflict_mode})",
+                        style="yellow",
+                    )
+
+                if result["validation_errors"]:
+                    console.print(
+                        f"\n⚠️  {len(result['validation_errors'])} validation errors:",
+                        style="yellow bold",
+                    )
+                    # Show first 5 errors
+                    for error in result["validation_errors"][:5]:
+                        console.print(f"   • {error}", style="yellow")
+                    if len(result["validation_errors"]) > 5:
+                        console.print(
+                            f"   • ... and {len(result['validation_errors']) - 5} more errors",
+                            style="yellow dim",
+                        )
+
                 # Show summary table
-                table = Table(title="Import Summary")
-                table.add_column("Metric", style="cyan")
+                table = Table(title="CSV Import Summary")
+                table.add_column("Property", style="cyan")
                 table.add_column("Value", style="green")
 
-                table.add_row("File", str(file))
-                table.add_row("Symbol", result["symbol"])
-                table.add_row("Records Processed", str(result["records_processed"]))
-                table.add_row("Records Inserted", str(result["records_inserted"]))
-                table.add_row("Duplicates Skipped", str(result["duplicates_skipped"]))
+                table.add_row("File", str(csv))
+                table.add_row("Instrument ID", result["instrument_id"])
+                table.add_row("Bar Type", result["bar_type_spec"])
+                table.add_row("Rows Processed", str(result["rows_processed"]))
+                table.add_row("Bars Written", str(result["bars_written"]))
+                table.add_row("Conflicts Skipped", str(result["conflicts_skipped"]))
+                table.add_row(
+                    "Validation Errors", str(len(result["validation_errors"]))
+                )
+                table.add_row("Date Range", result["date_range"])
+                table.add_row("File Size", f"{result['file_size_kb']:.2f} KB")
 
                 console.print(table)
-                return True
+
+                # Show tips
+                if result["bars_written"] > 0:
+                    console.print(
+                        f"\n💡 Data available for backtests with symbol: {symbol.upper()}",
+                        style="cyan",
+                    )
+                    console.print(
+                        f"   Run: ntrader backtest run --symbol {symbol.upper()} --start YYYY-MM-DD --end YYYY-MM-DD",
+                        style="cyan dim",
+                    )
+
+                return result["bars_written"] > 0
 
             except FileNotFoundError:
                 progress.update(task, completed=True)
-                console.print(f"❌ File not found: {file}", style="red")
-                return False
-            except ValueError as e:
-                progress.update(task, completed=True)
-                console.print(f"❌ Invalid CSV format: {e}", style="red")
+                console.print(f"❌ File not found: {csv}", style="red")
                 return False
             except Exception as e:
                 progress.update(task, completed=True)
                 console.print(f"❌ Import failed: {e}", style="red")
+                import traceback
+
+                console.print(traceback.format_exc(), style="red dim")
                 return False
 
     # Run async function
-    result = asyncio.run(import_csv_async())
+    result = asyncio.run(import_async())
 
     if not result:
         raise click.ClickException("Import failed")
@@ -111,13 +165,272 @@ def import_csv(file: Path, symbol: str):
 
 @data.command("list")
 @click.option("--symbol", "-s", help="Filter by trading symbol")
-def list_data(symbol: Optional[str]):
-    """List available market data."""
-    # This will be implemented later when we have the data service
-    console.print("📊 Data listing feature coming soon...", style="yellow")
+@click.option(
+    "--format",
+    "-f",
+    type=click.Choice(["table", "json", "csv"], case_sensitive=False),
+    default="table",
+    help="Output format (default: table)",
+)
+def list_data(symbol: Optional[str], format: str):
+    """List all available market data in catalog."""
+    from src.services.data_catalog import DataCatalogService
+    import json
 
-    if symbol:
-        console.print(f"   Filtering by symbol: {symbol.upper()}")
+    try:
+        catalog_service = DataCatalogService()
+        catalog_data = catalog_service.scan_catalog()
+
+        if not catalog_data:
+            console.print(
+                "📊 No data found in catalog",
+                style="yellow",
+            )
+            console.print(
+                "\n💡 Import data with: ntrader data import --csv FILE --symbol SYMBOL",
+                style="cyan dim",
+            )
+            return
+
+        # Filter by symbol if specified
+        if symbol:
+            symbol_upper = symbol.upper()
+            catalog_data = {
+                inst_id: avail
+                for inst_id, avail in catalog_data.items()
+                if symbol_upper in inst_id.upper()
+            }
+
+            if not catalog_data:
+                console.print(
+                    f"📊 No data found for symbol: {symbol_upper}",
+                    style="yellow",
+                )
+                return
+
+        # Output in requested format
+        if format.lower() == "json":
+            # JSON output
+            output = []
+            for instrument_id, availabilities in catalog_data.items():
+                for avail in availabilities:
+                    output.append(
+                        {
+                            "instrument_id": instrument_id,
+                            "bar_type": avail.bar_type_spec,
+                            "start_date": avail.start_date.isoformat(),
+                            "end_date": avail.end_date.isoformat(),
+                            "file_count": avail.file_count,
+                            "total_rows": avail.total_rows,
+                        }
+                    )
+            console.print(json.dumps(output, indent=2))
+
+        elif format.lower() == "csv":
+            # CSV output
+            import csv
+            import sys
+
+            writer = csv.writer(sys.stdout)
+            writer.writerow(
+                [
+                    "Instrument ID",
+                    "Bar Type",
+                    "Start Date",
+                    "End Date",
+                    "Files",
+                    "Rows",
+                ]
+            )
+            for instrument_id, availabilities in catalog_data.items():
+                for avail in availabilities:
+                    writer.writerow(
+                        [
+                            instrument_id,
+                            avail.bar_type_spec,
+                            avail.start_date.strftime("%Y-%m-%d"),
+                            avail.end_date.strftime("%Y-%m-%d"),
+                            avail.file_count,
+                            avail.total_rows,
+                        ]
+                    )
+
+        else:
+            # Table output (default)
+            table = Table(
+                title=f"Catalog Contents: {catalog_service.catalog_path}",
+                show_lines=True,
+            )
+            table.add_column("Instrument", style="cyan", no_wrap=True)
+            table.add_column("Bar Type", style="magenta")
+            table.add_column("Date Range", style="green")
+            table.add_column("Files", justify="right", style="blue")
+            table.add_column("Rows", justify="right", style="yellow")
+
+            total_files = 0
+            total_rows = 0
+
+            for instrument_id, availabilities in sorted(catalog_data.items()):
+                for avail in sorted(availabilities, key=lambda x: x.bar_type_spec):
+                    date_range = (
+                        f"{avail.start_date.strftime('%Y-%m-%d')}\n"
+                        f"to {avail.end_date.strftime('%Y-%m-%d')}"
+                    )
+                    table.add_row(
+                        instrument_id,
+                        avail.bar_type_spec,
+                        date_range,
+                        str(avail.file_count),
+                        f"{avail.total_rows:,}",
+                    )
+                    total_files += avail.file_count
+                    total_rows += avail.total_rows
+
+            console.print(table)
+
+            # Summary
+            console.print(
+                f"\n📊 Total: {len(catalog_data)} instruments, "
+                f"{total_files} files, ~{total_rows:,} bars",
+                style="cyan bold",
+            )
+
+            # Tips
+            console.print(
+                "\n💡 Check specific symbol: ntrader data check --symbol AAPL",
+                style="cyan dim",
+            )
+
+    except Exception as e:
+        console.print(f"❌ Failed to list catalog: {e}", style="red")
+        raise click.ClickException("List failed")
+
+
+@data.command("check")
+@click.option("--symbol", "-s", required=True, help="Trading symbol to check")
+@click.option(
+    "--venue", "-v", default="NASDAQ", help="Venue/exchange (default: NASDAQ)"
+)
+@click.option(
+    "--bar-type",
+    "-b",
+    default="1-MINUTE-LAST",
+    help="Bar type to check (default: 1-MINUTE-LAST)",
+)
+@click.option(
+    "--start",
+    type=click.DateTime(formats=["%Y-%m-%d"]),
+    help="Check for gaps from this date (optional)",
+)
+@click.option(
+    "--end",
+    type=click.DateTime(formats=["%Y-%m-%d"]),
+    help="Check for gaps until this date (optional)",
+)
+def check_data(
+    symbol: str,
+    venue: str,
+    bar_type: str,
+    start: Optional[datetime],
+    end: Optional[datetime],
+):
+    """Check data availability and detect gaps for specific instrument."""
+    from src.services.data_catalog import DataCatalogService
+
+    try:
+        catalog_service = DataCatalogService()
+        instrument_id = f"{symbol.upper()}.{venue.upper()}"
+        bar_type_spec = bar_type.upper()
+
+        availability = catalog_service.get_availability(instrument_id, bar_type_spec)
+
+        if not availability:
+            console.print(
+                f"❌ No data found for {instrument_id} ({bar_type_spec})",
+                style="red bold",
+            )
+            console.print(
+                "\n🔧 Fetch data with:",
+                style="cyan",
+            )
+            console.print(
+                f"   ntrader backtest run --symbol {symbol.upper()} --start YYYY-MM-DD --end YYYY-MM-DD",
+                style="cyan dim",
+            )
+            console.print(
+                "\nOr import CSV:",
+                style="cyan",
+            )
+            console.print(
+                f"   ntrader data import --csv FILE --symbol {symbol.upper()} --venue {venue.upper()}",
+                style="cyan dim",
+            )
+            return
+
+        # Display availability
+        console.print(
+            f"\n✅ Data Available: {instrument_id}",
+            style="green bold",
+        )
+
+        table = Table(title=f"Availability: {bar_type_spec}", show_header=False)
+        table.add_column("Property", style="cyan")
+        table.add_column("Value", style="green")
+
+        table.add_row("Start Date", availability.start_date.strftime("%Y-%m-%d"))
+        table.add_row("End Date", availability.end_date.strftime("%Y-%m-%d"))
+        table.add_row("File Count", f"{availability.file_count} files")
+        table.add_row("Total Rows", f"~{availability.total_rows:,} bars")
+        table.add_row(
+            "Last Updated",
+            availability.last_updated.strftime("%Y-%m-%d %H:%M UTC"),
+        )
+
+        console.print(table)
+
+        # Gap detection if date range specified
+        if start and end:
+            gaps = catalog_service.detect_gaps(instrument_id, bar_type_spec, start, end)
+
+            if gaps:
+                console.print(
+                    f"\n⚠️  {len(gaps)} gap(s) detected in requested range:",
+                    style="yellow bold",
+                )
+                for i, gap in enumerate(gaps, 1):
+                    console.print(
+                        f"   {i}. {gap['start'].strftime('%Y-%m-%d')} to {gap['end'].strftime('%Y-%m-%d')}",
+                        style="yellow",
+                    )
+
+                # Tips
+                console.print(
+                    "\n💡 Fill gaps by running:",
+                    style="cyan",
+                )
+                console.print(
+                    f"   ntrader backtest run --symbol {symbol.upper()} "
+                    f"--start {start.strftime('%Y-%m-%d')} "
+                    f"--end {end.strftime('%Y-%m-%d')}",
+                    style="cyan dim",
+                )
+                console.print(
+                    "\n   (Auto-fetch will download missing data from IBKR)",
+                    style="cyan dim",
+                )
+            else:
+                console.print(
+                    f"\n✅ No gaps detected in requested range "
+                    f"({start.strftime('%Y-%m-%d')} to {end.strftime('%Y-%m-%d')})",
+                    style="green",
+                )
+
+    except Exception as e:
+        console.print(f"❌ Failed to check data: {e}", style="red")
+        import traceback
+
+        console.print(traceback.format_exc(), style="red dim")
+        raise click.ClickException("Check failed")
 
 
 @data.command("connect")

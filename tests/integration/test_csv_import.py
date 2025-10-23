@@ -2,37 +2,18 @@
 
 import tempfile
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
-
-from src.config import get_settings
 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_csv_import_stores_to_database():
-    """INTEGRATION: CSV → Database flow - MUST FAIL INITIALLY."""
-    settings = get_settings()
-
-    # Skip if database not configured
-    if not settings.database_url:
-        pytest.skip("Database not configured")
-
-    # Skip if database not accessible
-    from src.db.session import test_connection
-
-    if not await test_connection():
-        pytest.skip("Database not accessible")
-
-    # Clean up any existing TEST data first
-    from src.db.session import get_session
-    from sqlalchemy import text
-
-    async with get_session() as cleanup_session:
-        await cleanup_session.execute(
-            text("DELETE FROM market_data WHERE symbol = 'TEST'")
-        )
-        await cleanup_session.commit()
+@patch("src.services.data_catalog.IBKRHistoricalClient")
+async def test_csv_import_stores_to_database(mock_ibkr_client_class):
+    """INTEGRATION: CSV → Parquet catalog flow."""
+    # Mock IBKR client to prevent connection attempts
+    mock_ibkr_client_class.return_value = MagicMock()
 
     # Create temporary CSV file
     csv_content = """timestamp,open,high,low,close,volume
@@ -44,42 +25,38 @@ async def test_csv_import_stores_to_database():
         f.write(csv_content)
         csv_file = Path(f.name)
 
-    try:
-        # This should fail - we haven't implemented CSV import yet
-        from src.services.csv_loader import CSVLoader
-        from src.db.session import get_session
+    # Create temporary catalog directory for clean test state
+    with tempfile.TemporaryDirectory() as temp_catalog_dir:
+        try:
+            # Import CSV to Parquet catalog
+            from src.services.csv_loader import CSVLoader
+            from src.services.data_catalog import DataCatalogService
 
-        async with get_session() as session:
-            loader = CSVLoader(session)
-            result = await loader.load_file(csv_file, "TEST")
+            # Create catalog service with temporary directory
+            catalog_service = DataCatalogService(catalog_path=temp_catalog_dir)
+            loader = CSVLoader(catalog_service=catalog_service)
+            result = await loader.load_file(csv_file, "TEST", "NASDAQ", "1-MINUTE-LAST")
 
             # Verify data was stored
-            assert result["records_inserted"] == 3
-            assert result["symbol"] == "TEST"
-            assert result["duplicates_skipped"] == 0
+            assert result["bars_written"] == 3
+            assert result["instrument_id"] == "TEST.NASDAQ"
+            assert result["conflicts_skipped"] == 0
 
-    finally:
-        # Clean up CSV file
-        csv_file.unlink()
-
-        # Clean up test data
-        async with get_session() as cleanup_session:
-            await cleanup_session.execute(
-                text("DELETE FROM market_data WHERE symbol = 'TEST'")
-            )
-            await cleanup_session.commit()
+        finally:
+            # Clean up CSV file
+            csv_file.unlink()
 
 
 @pytest.mark.integration
 def test_csv_import_command_exists():
-    """INTEGRATION: Verify CSV import command is available - MUST FAIL INITIALLY."""
+    """INTEGRATION: Verify CSV import command is available."""
     from src.cli.main import cli
 
-    # Check that 'data import-csv' command exists
+    # Check that 'data' command group exists
     result = cli.get_command(None, "data")
     assert result is not None, "Data command group should exist"
 
-    # This will fail initially - we haven't added the command yet
+    # Check that 'import' command exists (renamed from 'import-csv')
     data_cmd = result
-    import_cmd = data_cmd.get_command(None, "import-csv")
-    assert import_cmd is not None, "import-csv command should exist"
+    import_cmd = data_cmd.get_command(None, "import")
+    assert import_cmd is not None, "import command should exist"

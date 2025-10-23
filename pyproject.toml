@@ -19,6 +19,7 @@ dependencies = [
     "pyyaml>=6.0.2",
     "rich>=14.1.0",
     "sqlalchemy>=2.0.43",
+    "structlog>=25.4.0",
 ]
 
 [dependency-groups]
@@ -49,4 +50,5 @@ markers = [
     "trading: marks tests as trading-related (deselect with '-m \"not trading\"')",
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "integration: marks tests as integration tests",
+    "nautilus: marks tests as nautilus framework-specific",
 ]
