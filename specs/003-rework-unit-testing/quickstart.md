@@ -284,33 +284,61 @@ uv run pytest tests/unit -v
 
 ### GitHub Actions Example
 
-```yaml
-# .github/workflows/test.yml
-name: Tests
+The project uses a multi-job CI/CD workflow with separate test jobs for fast feedback:
 
-on: [push, pull_request]
+```yaml
+# .github/workflows/ci.yml (simplified example)
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
 
 jobs:
-  test:
+  unit-tests:
+    name: Unit Tests (Fast)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Install UV
         run: curl -LsSf https://astral.sh/uv/install.sh | sh
-
       - name: Install dependencies
-        run: uv sync
-
+        run: uv sync --dev
       - name: Run unit tests
-        run: uv run pytest tests/unit -v -n auto
+        run: uv run pytest tests/unit -v -n auto --cov=src
 
+  component-tests:
+    name: Component Tests (Test Doubles)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install UV
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+      - name: Install dependencies
+        run: uv sync --dev
       - name: Run component tests
-        run: uv run pytest tests/component -v -n auto
+        run: uv run pytest tests/component -v -n auto --cov=src
 
-      - name: Run integration tests
-        run: uv run pytest tests/integration -v -n auto --forked
+  integration-tests:
+    name: Integration Tests (Real Nautilus)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install UV
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+      - name: Install dependencies
+        run: uv sync --dev
+      - name: Run integration tests (subprocess isolated)
+        run: uv run pytest tests/integration -v -n auto --forked --cov=src
 ```
+
+**Key Features**:
+- **Parallel jobs**: Unit, component, and integration tests run concurrently
+- **Fast feedback**: Unit tests complete in <5s, providing rapid feedback
+- **Subprocess isolation**: Integration tests use `--forked` to prevent C extension crashes
+- **Coverage tracking**: Each job reports coverage separately
 
 ---
 
