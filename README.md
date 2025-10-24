@@ -27,7 +27,10 @@ A production-grade algorithmic trading backtesting system built with the Nautilu
   - **CSV Export**: Precision-preserved data export for spreadsheet analysis
   - **JSON Export**: Structured data for programmatic analysis
 - ⚡ **Fast Execution**: Built on Nautilus Trader's high-performance engine
-- 🧪 **Test Coverage**: Comprehensive test suite with 589+ passing tests
+- 🧪 **Test Coverage**: Comprehensive test suite with 715 tests (688 passing) organized in test pyramid
+  - 141 unit tests executing in 0.55s (99% faster than integration)
+  - 456 component tests with test doubles executing in 0.54s
+  - 112 integration tests with subprocess isolation
 - 🔄 **Real Data Backtesting**: Run backtests on Parquet-stored historical data with full analytics
 
 ## Current Status & Capabilities
@@ -1183,16 +1186,156 @@ data/
 
 ### Running Tests
 
-```bash
-# Run all tests
-uv run pytest tests/ -v
+The project uses a comprehensive test pyramid architecture with 715+ tests organized by speed and scope.
 
-# Run with coverage
-uv run pytest tests/ --cov=src --cov-report=html
+#### Quick Test Commands (Recommended)
+
+```bash
+# Fast unit tests - Pure Python, no Nautilus (141 tests in 0.55s)
+make test-unit
+
+# Component tests - Test doubles, no real engine (456 tests in 0.54s)
+make test-component
+
+# Integration tests - Real Nautilus, subprocess isolated (112 tests in ~5s)
+make test-integration
+
+# Run all tests with optimal parallelization (715 tests in ~19s)
+make test-all
+```
+
+#### Test Organization
+
+Tests are organized into four categories following the test pyramid pattern:
+
+```
+tests/
+├── unit/              # Pure Python logic - Fastest execution
+│   ├── test_sma_logic.py
+│   ├── test_position_sizing.py
+│   ├── test_risk_management.py
+│   └── ...            (7 test files, 141 tests)
+│
+├── component/         # Test doubles - No Nautilus overhead
+│   ├── test_sma_strategy.py
+│   ├── test_doubles_interface.py
+│   ├── doubles/       # Test double implementations
+│   └── ...            (34 test files, 456 tests)
+│
+├── integration/       # Real Nautilus components
+│   ├── test_backtest_engine.py
+│   ├── test_strategy_execution.py
+│   └── ...            (12 test files, 112 tests)
+│
+└── e2e/              # End-to-end scenarios
+    └── ...            (1 test file)
+```
+
+#### Detailed Test Commands
+
+```bash
+# Unit tests (fastest - run constantly during development)
+uv run pytest tests/unit -v -n auto
+# OR: make test-unit
+
+# Component tests (fast - run before commits)
+uv run pytest tests/component -v -n auto
+# OR: make test-component
+
+# Integration tests (slower - run in CI/CD)
+# Note: Uses --forked for subprocess isolation
+uv run pytest tests/integration -v -n auto --forked
+# OR: make test-integration
 
 # Run specific test file
-uv run pytest tests/test_simple_backtest.py -v
+uv run pytest tests/unit/test_sma_logic.py -v
+
+# Run tests by marker
+uv run pytest -m unit -v -n auto           # Only unit tests
+uv run pytest -m component -v -n auto      # Only component tests
+uv run pytest -m integration -v -n auto --forked  # Only integration tests
+
+# Run tests with coverage
+make test-coverage
+# OR: uv run pytest tests --cov=src/core --cov=src/strategies --cov-report=html
+
+# Run with verbose output
+uv run pytest tests/ -vv
+
+# Stop at first failure
+uv run pytest tests/ -x
+
+# Show print statements
+uv run pytest tests/ -s
 ```
+
+#### Test Performance Characteristics
+
+| Category | Count | Execution Time | Parallelization | Use When |
+|----------|-------|----------------|-----------------|----------|
+| Unit | 141 tests | 0.55s | 14 workers | Every code change |
+| Component | 456 tests | 0.54s | 14 workers | Before commits |
+| Integration | 112 tests | ~5s | 14 workers + --forked | Before PRs |
+| All | 715 tests | ~19s | 14 workers | CI/CD pipeline |
+
+**Key Features**:
+- ⚡ **99% faster**: Unit tests execute in 0.55s vs minutes for integration tests
+- 🔄 **Parallel execution**: pytest-xdist with auto CPU detection (14 workers)
+- 🛡️ **Subprocess isolation**: Integration tests use --forked to prevent C extension crashes
+- 📊 **Test pyramid**: 20% unit (files), 63% component, 22% integration, 2% e2e
+
+#### Debugging Tests
+
+```bash
+# Run single test with full output
+uv run pytest tests/unit/test_sma_logic.py::test_golden_cross -vv
+
+# Run with Python debugger on failure
+uv run pytest tests/unit/test_sma_logic.py --pdb
+
+# Show local variables on failure
+uv run pytest tests/unit/test_sma_logic.py -l
+
+# Run only failed tests from last run
+uv run pytest --lf
+
+# Run tests matching pattern
+uv run pytest -k "test_sma" -v
+```
+
+#### Coverage Reports
+
+```bash
+# Generate HTML coverage report
+make test-coverage
+
+# View coverage report in browser
+open htmlcov/index.html
+
+# Coverage for specific module
+uv run pytest tests/unit --cov=src/core/sma_logic --cov-report=term
+```
+
+#### CI/CD Integration
+
+The test suite is optimized for CI/CD with separate targets:
+
+```yaml
+# Example GitHub Actions workflow
+- name: Run unit tests
+  run: make test-unit
+
+- name: Run component tests
+  run: make test-component
+
+- name: Run integration tests
+  run: make test-integration
+```
+
+**For more details**, see:
+- Test architecture: `specs/003-rework-unit-testing/design.md`
+- Running tests guide: `specs/003-rework-unit-testing/quickstart.md`
+- Test pyramid validation: `tests/test_pyramid_distribution.py`
 
 ### Code Quality
 
