@@ -8,7 +8,7 @@ from nautilus_trader.portfolio.portfolio import Portfolio
 from nautilus_trader.cache.cache import Cache
 
 from src.models.trade import TradeModel
-from src.services.portfolio_analytics import PortfolioAnalytics
+from src.core.analytics import PortfolioAnalytics
 
 
 class PortfolioService:
