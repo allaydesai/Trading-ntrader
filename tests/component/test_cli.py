@@ -1,6 +1,5 @@
 """Tests for CLI main module."""
 
-import importlib
 import pytest
 from unittest.mock import Mock, patch
 
@@ -82,6 +81,8 @@ def test_cli_with_invalid_command():
 @pytest.mark.component
 def test_cli_settings_import():
     """Test that settings are imported and accessible."""
+    import importlib
+
     with patch("src.cli.main.get_settings") as mock_get_settings:
         mock_settings = Mock()
         mock_settings.app_version = "test-version"
@@ -89,7 +90,6 @@ def test_cli_settings_import():
         mock_get_settings.return_value = mock_settings
 
         # Reload the module to apply the patch
-        import importlib
         from src.cli import main
 
         importlib.reload(main)
