@@ -53,6 +53,9 @@ class TestTradingEngine:
         """
         self.submitted_orders: List[TestOrder] = []
         self.positions: Dict[str, Decimal] = {}
+        self.initial_balance = (
+            initial_balance  # Store initial balance for test validation
+        )
         self.balance = initial_balance
         self.event_log: List[str] = []
         self.max_position_size = max_position_size
