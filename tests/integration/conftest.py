@@ -60,7 +60,11 @@ def integration_cleanup():
     gc.collect()  # Second pass ensures cyclic references are broken
 
 
-def setup_backtest_venue(engine: BacktestEngine, venue_name: str = "BINANCE", starting_balances: list[str] = None):
+def setup_backtest_venue(
+    engine: BacktestEngine,
+    venue_name: str = "BINANCE",
+    starting_balances: list[str] = None,
+):
     """Helper to set up a venue in the backtest engine.
 
     Args:

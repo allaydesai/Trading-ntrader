@@ -137,7 +137,9 @@ class TestTradingEngine:
         """
         return self.positions.get(symbol, Decimal("0"))
 
-    def get_position_details(self, symbol: str, current_price: Decimal) -> Optional[TestPosition]:
+    def get_position_details(
+        self, symbol: str, current_price: Decimal
+    ) -> Optional[TestPosition]:
         """
         Get detailed position information.
 
@@ -172,7 +174,9 @@ class TestTradingEngine:
                 total_quantity += order.quantity * multiplier
                 total_value += order.quantity * fill_price * multiplier
 
-        entry_price = abs(total_value / total_quantity) if total_quantity != 0 else current_price
+        entry_price = (
+            abs(total_value / total_quantity) if total_quantity != 0 else current_price
+        )
 
         return TestPosition(
             symbol=symbol,

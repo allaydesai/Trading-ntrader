@@ -214,7 +214,11 @@ class TestSMAStrategyWithTestDoubles:
         assert any("BTCUSDT" in event for event in engine.event_log)
         assert any("ETHUSDT" in event for event in engine.event_log)
         # Check for ORDER_SUBMITTED prefix in events
-        submitted_count = sum(1 for event in engine.event_log if event.startswith("ORDER_SUBMITTED"))
-        filled_count = sum(1 for event in engine.event_log if event.startswith("ORDER_FILLED"))
+        submitted_count = sum(
+            1 for event in engine.event_log if event.startswith("ORDER_SUBMITTED")
+        )
+        filled_count = sum(
+            1 for event in engine.event_log if event.startswith("ORDER_FILLED")
+        )
         assert submitted_count >= 2
         assert filled_count >= 2

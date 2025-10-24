@@ -34,12 +34,16 @@ class TestSMATradingLogicInitialization:
 
     def test_fast_greater_than_slow_raises_error(self):
         """Test that fast >= slow periods raise ValueError."""
-        with pytest.raises(ValueError, match="Fast period must be less than slow period"):
+        with pytest.raises(
+            ValueError, match="Fast period must be less than slow period"
+        ):
             SMATradingLogic(fast_period=20, slow_period=10)
 
     def test_equal_periods_raise_error(self):
         """Test that equal periods raise ValueError."""
-        with pytest.raises(ValueError, match="Fast period must be less than slow period"):
+        with pytest.raises(
+            ValueError, match="Fast period must be less than slow period"
+        ):
             SMATradingLogic(fast_period=10, slow_period=10)
 
 

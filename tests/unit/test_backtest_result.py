@@ -45,9 +45,7 @@ def test_backtest_result_default_values():
 def test_backtest_result_win_rate_calculation():
     """Test win rate calculation with various scenarios."""
     # 100% win rate
-    result_all_wins = BacktestResult(
-        total_trades=5, winning_trades=5, losing_trades=0
-    )
+    result_all_wins = BacktestResult(total_trades=5, winning_trades=5, losing_trades=0)
     assert result_all_wins.win_rate == 100.0
 
     # 0% win rate

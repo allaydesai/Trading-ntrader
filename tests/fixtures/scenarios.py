@@ -9,7 +9,6 @@ Reference: design.md Section 3.1 - Integration Testing with Market Scenarios
 
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import List
 
 
 @dataclass(frozen=True)

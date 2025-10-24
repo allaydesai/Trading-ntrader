@@ -3,7 +3,7 @@
 import pytest
 from decimal import Decimal
 
-from src.core.position_sizing import PositionSizingLogic, SizingMethod
+from src.core.position_sizing import PositionSizingLogic
 
 
 @pytest.mark.unit

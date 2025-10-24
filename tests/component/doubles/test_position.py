@@ -51,7 +51,9 @@ class TestPosition:
             raise ValueError(f"Entry price must be positive, got {self.entry_price}")
 
         if self.current_price <= 0:
-            raise ValueError(f"Current price must be positive, got {self.current_price}")
+            raise ValueError(
+                f"Current price must be positive, got {self.current_price}"
+            )
 
         # Calculate unrealized PnL
         if self.unrealized_pnl is None:

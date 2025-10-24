@@ -84,12 +84,14 @@ class TestPyramidDistribution:
         if total == 0:
             pytest.skip("No tests found in test suite")
 
-        unit_percentage = (counts.get('unit', 0) / total) * 100
+        unit_percentage = (counts.get("unit", 0) / total) * 100
 
         # Document the distribution (informational)
-        print(f"\nUnit test file distribution: {unit_percentage:.1f}% "
-              f"({counts.get('unit', 0)}/{total} test files)")
-        print(f"Target: ≥50% of test files")
+        print(
+            f"\nUnit test file distribution: {unit_percentage:.1f}% "
+            f"({counts.get('unit', 0)}/{total} test files)"
+        )
+        print("Target: ≥50% of test files")
         print(f"Full distribution: {counts}")
         print("\nNOTE: File count differs from actual test count.")
         print("Real metrics (from execution):")
@@ -116,12 +118,14 @@ class TestPyramidDistribution:
         if total == 0:
             pytest.skip("No tests found in test suite")
 
-        component_percentage = (counts.get('component', 0) / total) * 100
+        component_percentage = (counts.get("component", 0) / total) * 100
 
         # Document the actual distribution (informational, not strict)
-        print(f"\nComponent test distribution: {component_percentage:.1f}% "
-              f"({counts.get('component', 0)}/{total} tests)")
-        print(f"Target range: 20-30%")
+        print(
+            f"\nComponent test distribution: {component_percentage:.1f}% "
+            f"({counts.get('component', 0)}/{total} tests)"
+        )
+        print("Target range: 20-30%")
         print(f"Full distribution: {counts}")
 
         # This is informational - component tests are valuable regardless of percentage
@@ -143,12 +147,14 @@ class TestPyramidDistribution:
         if total == 0:
             pytest.skip("No tests found in test suite")
 
-        integration_percentage = (counts.get('integration', 0) / total) * 100
+        integration_percentage = (counts.get("integration", 0) / total) * 100
 
         # Document the actual distribution (informational, not strict)
-        print(f"\nIntegration test distribution: {integration_percentage:.1f}% "
-              f"({counts.get('integration', 0)}/{total} tests)")
-        print(f"Target range: 15-25%")
+        print(
+            f"\nIntegration test distribution: {integration_percentage:.1f}% "
+            f"({counts.get('integration', 0)}/{total} tests)"
+        )
+        print("Target range: 15-25%")
         print(f"Full distribution: {counts}")
 
         # This is informational - integration tests are valuable regardless of percentage
@@ -170,12 +176,14 @@ class TestPyramidDistribution:
         if total == 0:
             pytest.skip("No tests found in test suite")
 
-        e2e_percentage = (counts.get('e2e', 0) / total) * 100
+        e2e_percentage = (counts.get("e2e", 0) / total) * 100
 
         # Document the actual distribution (informational, not strict)
-        print(f"\nE2E test distribution: {e2e_percentage:.1f}% "
-              f"({counts.get('e2e', 0)}/{total} tests)")
-        print(f"Target: <5%")
+        print(
+            f"\nE2E test distribution: {e2e_percentage:.1f}% "
+            f"({counts.get('e2e', 0)}/{total} tests)"
+        )
+        print("Target: <5%")
         print(f"Full distribution: {counts}")
 
         # This is informational - we currently have no e2e tests
@@ -197,8 +205,8 @@ class TestPyramidDistribution:
         # Calculate percentages
         distribution = {
             marker: {
-                'count': count,
-                'percentage': (count / total * 100) if total > 0 else 0
+                "count": count,
+                "percentage": (count / total * 100) if total > 0 else 0,
             }
             for marker, count in counts.items()
         }

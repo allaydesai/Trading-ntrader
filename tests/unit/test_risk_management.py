@@ -32,12 +32,16 @@ class TestRiskManagementInitialization:
 
     def test_invalid_position_risk_raises_error(self):
         """Test that invalid position risk raises ValueError."""
-        with pytest.raises(ValueError, match="Max position risk must be between 0 and 1"):
+        with pytest.raises(
+            ValueError, match="Max position risk must be between 0 and 1"
+        ):
             RiskManagementLogic(max_position_risk=Decimal("1.5"))
 
     def test_invalid_portfolio_risk_raises_error(self):
         """Test that invalid portfolio risk raises ValueError."""
-        with pytest.raises(ValueError, match="Max portfolio risk must be between 0 and 1"):
+        with pytest.raises(
+            ValueError, match="Max portfolio risk must be between 0 and 1"
+        ):
             RiskManagementLogic(max_portfolio_risk=Decimal("0"))
 
     def test_invalid_max_positions_raises_error(self):
