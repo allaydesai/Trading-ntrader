@@ -1,12 +1,12 @@
-import pytest
-
 """Tests for data CLI commands."""
 
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+import pytest
 from click.testing import CliRunner
-from datetime import datetime, timezone
 
 from src.cli.commands.data import data
 

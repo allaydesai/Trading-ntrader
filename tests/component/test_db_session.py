@@ -17,6 +17,21 @@ from src.db.session import (
 class TestDatabaseSession:
     """Test cases for database session management."""
 
+    @pytest.fixture(autouse=True)
+    def cleanup_session_state(self):
+        """Clean up global session state after each test to prevent pollution."""
+        import src.db.session
+
+        # Store original state
+        original_async_engine = src.db.session.async_engine
+        original_async_session_local = src.db.session.AsyncSessionLocal
+
+        yield  # Test runs here
+
+        # Restore original state after test
+        src.db.session.async_engine = original_async_engine
+        src.db.session.AsyncSessionLocal = original_async_session_local
+
     @patch("src.db.session.settings")
     @pytest.mark.component
     def test_get_async_engine_first_call(self, mock_settings):

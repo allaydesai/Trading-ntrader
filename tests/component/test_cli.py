@@ -1,7 +1,7 @@
-import pytest
-
 """Tests for CLI main module."""
 
+import importlib
+import pytest
 from unittest.mock import Mock, patch
 
 import click

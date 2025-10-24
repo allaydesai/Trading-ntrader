@@ -1,10 +1,10 @@
-import pytest
-
 """Tests for backtest CLI commands."""
 
-from datetime import datetime, timezone
-from unittest.mock import patch, MagicMock
+import pytest
 from decimal import Decimal
+from datetime import datetime, timezone
+from unittest.mock import MagicMock, patch
+
 from click.testing import CliRunner
 
 from src.cli.commands.backtest import (

@@ -20,7 +20,10 @@ class TestRiskChecksWithTestDoubles:
 
     def test_risk_check_allows_safe_position_size(self):
         """Test that risk check allows position sizes within risk limits."""
+        # Set up test state with engine and risk manager
         engine = TestTradingEngine(initial_balance=Decimal("10000"))
+        assert engine.initial_balance == Decimal("10000"), "Engine initialized with correct balance"
+
         risk_manager = RiskManagementLogic(
             max_position_risk=Decimal("0.02"), max_portfolio_risk=Decimal("0.10")
         )
@@ -57,10 +60,15 @@ class TestRiskChecksWithTestDoubles:
 
     def test_risk_check_validates_before_order_submission(self):
         """Test risk validation before submitting orders to engine."""
+        # Set up test state with engine and risk manager
         engine = TestTradingEngine(
             initial_balance=Decimal("10000"), max_position_size=Decimal("1.0")
         )
+        assert engine.initial_balance == Decimal("10000"), "Engine initialized with correct balance"
+        assert engine.max_position_size == Decimal("1.0"), "Engine initialized with correct position limit"
+
         risk_manager = RiskManagementLogic(max_position_risk=Decimal("0.02"))
+        assert risk_manager.max_position_risk == Decimal("0.02"), "Risk manager initialized with correct limit"
 
         # Order that would exceed risk limits
         large_order = TestOrder("BTCUSDT", "BUY", Decimal("2.0"))

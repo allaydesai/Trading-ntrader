@@ -17,37 +17,61 @@ help:
 
 test-unit:
 	@echo "🧪 Running unit tests (pure Python, no Nautilus)..."
-	uv run pytest tests/unit -v -n auto
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+	@uv run pytest tests/unit -v -n auto --tb=short
+	@echo ""
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 	@echo "✅ Unit tests complete"
+	@echo ""
 
 test-component:
 	@echo "🧪 Running component tests (test doubles)..."
-	uv run pytest tests/component -v -n auto
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+	@uv run pytest tests/component -v -n auto --tb=short
+	@echo ""
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 	@echo "✅ Component tests complete"
+	@echo ""
 
 test-integration:
 	@echo "🧪 Running integration tests (subprocess isolated)..."
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 	# --forked flag: Each test runs in isolated subprocess
 	# WHY: Prevents C extension crashes (Nautilus) from cascading to other tests
 	# WHEN: Required for integration tests with real Nautilus components
 	# Reference: design.md Section 2.1 - Test Isolation Strategy
-	uv run pytest tests/integration -v -n auto --forked
+	@uv run pytest tests/integration -v -n auto --forked --tb=short
+	@echo ""
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 	@echo "✅ Integration tests complete"
+	@echo ""
 
 test-e2e:
 	@echo "🧪 Running end-to-end tests (sequential)..."
-	uv run pytest tests/e2e -v
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+	@uv run pytest tests/e2e -v --tb=short
+	@echo ""
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 	@echo "✅ E2E tests complete"
+	@echo ""
 
 test-all:
 	@echo "🧪 Running all tests..."
-	uv run pytest tests -v -n auto
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+	@uv run pytest tests -v -n auto --tb=short
+	@echo ""
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 	@echo "✅ All tests complete"
+	@echo ""
 
 test-coverage:
 	@echo "📊 Running tests with coverage..."
-	uv run pytest tests --cov=src/core --cov=src/strategies --cov-report=html --cov-report=term
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+	@uv run pytest tests --cov=src/core --cov=src/strategies --cov-report=html --cov-report=term -v --tb=short
+	@echo ""
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 	@echo "📊 Coverage report: htmlcov/index.html"
+	@echo ""
 
 format:
 	@echo "🎨 Formatting code..."
