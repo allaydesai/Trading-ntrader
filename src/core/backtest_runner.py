@@ -58,6 +58,7 @@ class MinimalBacktestRunner:
         end_date: datetime,
         execution_duration_seconds: Decimal,
         strategy_config: Dict[str, Any],
+        reproduced_from_run_id: Optional[UUID] = None,
     ) -> Optional[UUID]:
         """
         Persist backtest results to database.
@@ -71,6 +72,7 @@ class MinimalBacktestRunner:
             end_date: Backtest period end
             execution_duration_seconds: Time taken to execute
             strategy_config: Strategy configuration parameters
+            reproduced_from_run_id: Optional UUID of original backtest if reproduction
 
         Returns:
             UUID of created backtest run, or None if persistence fails
@@ -102,6 +104,7 @@ class MinimalBacktestRunner:
                     execution_duration_seconds=execution_duration_seconds,
                     config_snapshot=config_snapshot,
                     backtest_result=result,
+                    reproduced_from_run_id=reproduced_from_run_id,
                 )
 
                 # Commit the transaction
@@ -916,8 +919,9 @@ class MinimalBacktestRunner:
         start: datetime,
         end: datetime,
         instrument: object | None = None,
+        reproduced_from_run_id: Optional[UUID] = None,
         **strategy_params,
-    ) -> BacktestResult:
+    ) -> tuple[BacktestResult, Optional[UUID]]:
         """
         Run backtest with pre-loaded bars from Parquet catalog.
 
@@ -928,6 +932,7 @@ class MinimalBacktestRunner:
             start: Start datetime (for display purposes)
             end: End datetime (for display purposes)
             instrument: Optional Nautilus Instrument object (if None, creates test instrument)
+            reproduced_from_run_id: Optional UUID of original backtest if reproduction
             **strategy_params: Strategy-specific parameters
 
         Returns:
@@ -1165,6 +1170,7 @@ class MinimalBacktestRunner:
                 end_date=end_tz,
                 execution_duration_seconds=execution_duration,
                 strategy_config=strategy_config_dict,
+                reproduced_from_run_id=reproduced_from_run_id,
             )
 
             if run_id:
@@ -1175,7 +1181,8 @@ class MinimalBacktestRunner:
                     symbol=symbol,
                 )
 
-            return self._results
+            # Return both results and run_id for caller
+            return self._results, run_id
 
         except Exception as e:
             # Calculate execution duration at failure point

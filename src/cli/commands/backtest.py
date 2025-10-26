@@ -29,6 +29,7 @@ from src.utils.error_messages import (
 )
 from src.cli.commands.show import show_backtest_details
 from src.cli.commands.compare import compare_backtests
+from src.cli.commands.reproduce import reproduce_backtest
 
 console = Console()
 error_formatter = ErrorFormatter(console)
@@ -663,6 +664,7 @@ def list_backtests():
     asyncio.run(show_data_info())
 
 
-# Add show and compare commands to backtest group
+# Add show, compare, and reproduce commands to backtest group
 backtest.add_command(show_backtest_details)
 backtest.add_command(compare_backtests)
+backtest.add_command(reproduce_backtest)
