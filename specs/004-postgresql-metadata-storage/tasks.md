@@ -127,7 +127,7 @@
 ### Validation for User Story 1
 
 - [x] T048 [US1] Test with SMA Crossover strategy - verify complete persistence
-- [ ] T049 [US1] Test with RSI Mean Reversion strategy - verify complete persistence
+- [x] T049 [US1] Test with RSI Mean Reversion strategy - verify complete persistence
 - [ ] T050 [US1] Test with Momentum strategy - verify complete persistence
 - [ ] T051 [US1] Test concurrent backtest execution (run 3 in parallel) - verify no data corruption per research.md section 7
 - [ ] T052 [US1] Test backtest failure scenario - verify error captured correctly
