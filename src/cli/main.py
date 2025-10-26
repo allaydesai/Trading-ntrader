@@ -9,6 +9,7 @@ from src.cli.commands.data import data
 from src.cli.commands.backtest import backtest
 from src.cli.commands.strategy import strategy
 from src.cli.commands.report import report
+from src.cli.commands.history import list_backtest_history
 
 console = Console()
 settings = get_settings()
@@ -32,6 +33,7 @@ cli.add_command(data)
 cli.add_command(backtest)
 cli.add_command(strategy)
 cli.add_command(report)
+cli.add_command(list_backtest_history)
 
 
 if __name__ == "__main__":

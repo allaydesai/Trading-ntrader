@@ -214,3 +214,107 @@ class TestBacktestRepositoryRetrieve:
         # Should be ordered by created_at DESC
         for i in range(len(recent) - 1):
             assert recent[i].created_at >= recent[i + 1].created_at
+
+    @pytest.mark.asyncio
+    async def test_find_recent_with_cursor_pagination(self, repository, async_session):
+        """
+        Test cursor-based pagination for find_recent().
+
+        Tests that cursor pagination correctly fetches the next page of results
+        without duplicates or gaps.
+        """
+        # Create 50 backtest runs with slight time delays to ensure ordering
+        import asyncio
+        created_runs = []
+
+        for i in range(50):
+            run = await repository.create_backtest_run(
+                run_id=uuid4(),
+                strategy_name=f"Strategy {i}",
+                strategy_type="test",
+                instrument_symbol="TEST",
+                start_date=datetime(2023, 1, 1, tzinfo=timezone.utc),
+                end_date=datetime(2023, 12, 31, tzinfo=timezone.utc),
+                initial_capital=Decimal("100000.00"),
+                data_source="Mock",
+                execution_status="success",
+                execution_duration_seconds=Decimal("10.0"),
+                config_snapshot={
+                    "strategy_path": "test",
+                    "config_path": "test",
+                    "version": "1.0",
+                    "config": {},
+                },
+            )
+            created_runs.append(run)
+            # Small delay to ensure different created_at timestamps
+            await asyncio.sleep(0.001)
+
+        await async_session.commit()
+
+        # Get first page (20 results)
+        page1 = await repository.find_recent(limit=20)
+        assert len(page1) == 20
+
+        # Get second page using cursor from last item of page1
+        cursor = (page1[-1].created_at, page1[-1].id)
+        page2 = await repository.find_recent(limit=20, cursor=cursor)
+
+        assert len(page2) == 20
+
+        # Verify no duplicates between pages
+        page1_ids = {run.id for run in page1}
+        page2_ids = {run.id for run in page2}
+        assert page1_ids.isdisjoint(page2_ids)
+
+        # Verify ordering is maintained
+        assert page1[0].created_at >= page1[-1].created_at
+        assert page2[0].created_at >= page2[-1].created_at
+        assert page1[-1].created_at >= page2[0].created_at
+
+    @pytest.mark.asyncio
+    async def test_find_by_strategy_filters_correctly(self, repository, async_session):
+        """
+        Test that find_by_strategy() returns only matching strategy backtests.
+
+        Given: Backtests for multiple strategies
+        When: Querying by specific strategy name
+        Then: Only backtests for that strategy are returned
+        """
+        # Create backtests for different strategies
+        strategies = ["SMA Crossover", "RSI Mean Reversion", "Momentum"]
+
+        for strategy in strategies:
+            for i in range(5):
+                await repository.create_backtest_run(
+                    run_id=uuid4(),
+                    strategy_name=strategy,
+                    strategy_type="test",
+                    instrument_symbol="TEST",
+                    start_date=datetime(2023, 1, 1, tzinfo=timezone.utc),
+                    end_date=datetime(2023, 12, 31, tzinfo=timezone.utc),
+                    initial_capital=Decimal("100000.00"),
+                    data_source="Mock",
+                    execution_status="success",
+                    execution_duration_seconds=Decimal("10.0"),
+                    config_snapshot={
+                        "strategy_path": "test",
+                        "config_path": "test",
+                        "version": "1.0",
+                        "config": {},
+                    },
+                )
+
+        await async_session.commit()
+
+        # Query for "SMA Crossover" only
+        sma_backtests = await repository.find_by_strategy("SMA Crossover")
+
+        assert len(sma_backtests) == 5
+        assert all(bt.strategy_name == "SMA Crossover" for bt in sma_backtests)
+
+        # Query for "RSI Mean Reversion"
+        rsi_backtests = await repository.find_by_strategy("RSI Mean Reversion")
+
+        assert len(rsi_backtests) == 5
+        assert all(bt.strategy_name == "RSI Mean Reversion" for bt in rsi_backtests)

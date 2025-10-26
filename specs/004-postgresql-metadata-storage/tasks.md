@@ -149,46 +149,46 @@
 
 ### Tests for User Story 2 (TDD)
 
-- [ ] T054 [P] [US2] TDD: Write failing integration test for `history` CLI command in `tests/integration/test_cli_history.py` - should list 20 recent backtests
-- [ ] T055 [P] [US2] TDD: Write failing integration test for filtering by strategy in `tests/integration/test_cli_history.py`
-- [ ] T056 [P] [US2] TDD: Write failing integration test for custom limit parameter in `tests/integration/test_cli_history.py`
-- [ ] T057 [P] [US2] TDD: Write failing unit test for BacktestRepository.find_recent() with cursor pagination in `tests/unit/db/test_backtest_repository.py`
-- [ ] T058 [P] [US2] TDD: Write failing unit test for BacktestRepository.find_by_strategy() in `tests/unit/db/test_backtest_repository.py`
-- [ ] T059 [P] [US2] TDD: Write failing unit test for BacktestQueryService.list_recent_backtests() in `tests/unit/services/test_backtest_query.py`
+- [x] T054 [P] [US2] TDD: Write failing integration test for `history` CLI command in `tests/integration/db/test_cli_history.py` - should list 20 recent backtests
+- [x] T055 [P] [US2] TDD: Write failing integration test for filtering by strategy in `tests/integration/db/test_cli_history.py`
+- [x] T056 [P] [US2] TDD: Write failing integration test for custom limit parameter in `tests/integration/db/test_cli_history.py`
+- [x] T057 [P] [US2] TDD: Write failing unit test for BacktestRepository.find_recent() with cursor pagination in `tests/unit/db/test_backtest_repository.py`
+- [x] T058 [P] [US2] TDD: Write failing unit test for BacktestRepository.find_by_strategy() in `tests/unit/db/test_backtest_repository.py`
+- [x] T059 [P] [US2] TDD: Write failing unit test for BacktestQueryService.list_recent_backtests() in `tests/unit/services/test_backtest_query.py`
 
 ### Query Service Implementation for User Story 2
 
-- [ ] T060 [US2] Create BacktestQueryService class in `src/services/backtest_query.py` with repository dependency injection
-- [ ] T061 [US2] Implement BacktestQueryService.list_recent_backtests() method per design.md lines 897-916 - enforces max limit of 1000
-- [ ] T062 [US2] Implement BacktestQueryService.list_by_strategy() method per design.md lines 918-946 - filters by strategy name
+- [x] T060 [US2] Create BacktestQueryService class in `src/services/backtest_query.py` with repository dependency injection
+- [x] T061 [US2] Implement BacktestQueryService.list_recent_backtests() method per design.md lines 897-916 - enforces max limit of 1000
+- [x] T062 [US2] Implement BacktestQueryService.list_by_strategy() method per design.md lines 918-946 - filters by strategy name
 
 ### Repository Query Methods for User Story 2
 
-- [ ] T063 [US2] Implement BacktestRepository.find_recent() with cursor pagination per design.md lines 446-476 and research.md section 6
-- [ ] T064 [US2] Implement BacktestRepository.find_by_strategy() with cursor pagination per design.md lines 478-517
-- [ ] T065 [US2] Use selectinload() for eager loading of metrics relationship to avoid N+1 queries per design.md line 461
-- [ ] T066 [US2] Implement cursor pagination with tuple_ comparison per research.md section 6 (lines 563-577)
+- [x] T063 [US2] Implement BacktestRepository.find_recent() with cursor pagination per design.md lines 446-476 and research.md section 6
+- [x] T064 [US2] Implement BacktestRepository.find_by_strategy() with cursor pagination per design.md lines 478-517
+- [x] T065 [US2] Use selectinload() for eager loading of metrics relationship to avoid N+1 queries per design.md line 461
+- [x] T066 [US2] Implement cursor pagination with tuple_ comparison per research.md section 6 (lines 563-577)
 
 ### CLI Command Implementation for User Story 2
 
-- [ ] T067 [US2] Create history.py CLI command in `src/cli/commands/history.py` with Click decorators
-- [ ] T068 [US2] Add command options: --limit (default 20), --strategy (filter), --instrument (filter) per design.md lines 1002-1009
-- [ ] T069 [US2] Implement async query execution using asyncio.run() per design.md lines 1032-1055
-- [ ] T070 [US2] Format results using Rich Table with columns: Run ID, Date, Strategy, Symbol, Return, Sharpe, Status per design.md lines 1061-1089
-- [ ] T071 [US2] Add Rich progress spinner during query execution per research.md section 5 (lines 418-434)
-- [ ] T072 [US2] Handle empty results with user-friendly message per design.md lines 1056-1058
-- [ ] T073 [US2] Add proper error handling with Rich console output per design.md lines 1094-1096
-- [ ] T074 [US2] Register history command in main CLI app in `src/cli/main.py`
+- [x] T067 [US2] Create history.py CLI command in `src/cli/commands/history.py` with Click decorators
+- [x] T068 [US2] Add command options: --limit (default 20), --strategy (filter), --instrument (filter) per design.md lines 1002-1009
+- [x] T069 [US2] Implement async query execution using asyncio.run() per design.md lines 1032-1055
+- [x] T070 [US2] Format results using Rich Table with columns: Run ID, Date, Strategy, Symbol, Return, Sharpe, Status per design.md lines 1061-1089
+- [x] T071 [US2] Add Rich progress spinner during query execution per research.md section 5 (lines 418-434)
+- [x] T072 [US2] Handle empty results with user-friendly message per design.md lines 1056-1058
+- [x] T073 [US2] Add proper error handling with Rich console output per design.md lines 1094-1096
+- [x] T074 [US2] Register history command in main CLI app in `src/cli/main.py`
 
 ### Validation for User Story 2
 
-- [ ] T075 [US2] Test listing with no filters - should show 20 most recent
-- [ ] T076 [US2] Test filtering by strategy name - should show only matching strategy
-- [ ] T077 [US2] Test custom limit parameter (--limit 50)
-- [ ] T078 [US2] Test with empty database - should show friendly message
-- [ ] T079 [US2] Verify all tests from T054-T059 now PASS
+- [x] T075 [US2] Test listing with no filters - should show 20 most recent
+- [x] T076 [US2] Test filtering by strategy name - should show only matching strategy
+- [x] T077 [US2] Test custom limit parameter (--limit 50)
+- [x] T078 [US2] Test with empty database - should show friendly message
+- [x] T079 [US2] Verify all tests from T054-T059 now PASS
 
-**Checkpoint**: User Story 2 complete - can now view backtest history via CLI
+**Checkpoint**: ✅ User Story 2 complete - can now view backtest history via CLI. All 12 tests passing (7 unit tests + 2 repository tests + 3 integration tests). BacktestQueryService implemented with limit enforcement and cursor pagination. History CLI command registered with Rich table formatting and progress spinner.
 
 ---
 
