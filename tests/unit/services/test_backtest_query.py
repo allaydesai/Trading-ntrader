@@ -171,3 +171,91 @@ class TestBacktestQueryService:
 
         # Verify None returned
         assert result is None
+
+    @pytest.mark.asyncio
+    async def test_compare_backtests_validates_minimum_count(
+        self, service, mock_repository
+    ):
+        """
+        Test that compare_backtests rejects fewer than 2 backtests.
+
+        Given: User provides only 1 run ID
+        When: Service validates the request
+        Then: ValueError is raised with clear message
+        """
+        # Single run ID (below minimum)
+        run_ids = [uuid4()]
+
+        # Should raise ValueError
+        with pytest.raises(ValueError) as exc_info:
+            await service.compare_backtests(run_ids)
+
+        assert "at least 2 backtests" in str(exc_info.value).lower()
+
+    @pytest.mark.asyncio
+    async def test_compare_backtests_validates_maximum_count(
+        self, service, mock_repository
+    ):
+        """
+        Test that compare_backtests rejects more than 10 backtests.
+
+        Given: User provides 11 run IDs
+        When: Service validates the request
+        Then: ValueError is raised with clear message
+        """
+        # 11 run IDs (above maximum)
+        run_ids = [uuid4() for _ in range(11)]
+
+        # Should raise ValueError
+        with pytest.raises(ValueError) as exc_info:
+            await service.compare_backtests(run_ids)
+
+        assert "more than 10 backtests" in str(exc_info.value).lower()
+
+    @pytest.mark.asyncio
+    async def test_compare_backtests_accepts_valid_range(
+        self, service, mock_repository
+    ):
+        """
+        Test that compare_backtests accepts valid range (2-10).
+
+        Given: User provides 3 run IDs
+        When: Service processes the request
+        Then: Repository is called with the run IDs
+        """
+        # 3 run IDs (valid range)
+        run_ids = [uuid4() for _ in range(3)]
+
+        # Setup mock
+        mock_repository.find_by_run_ids.return_value = []
+
+        # Call service
+        await service.compare_backtests(run_ids)
+
+        # Verify repository was called
+        mock_repository.find_by_run_ids.assert_called_once_with(run_ids)
+
+    @pytest.mark.asyncio
+    async def test_compare_backtests_returns_repository_results(
+        self, service, mock_repository
+    ):
+        """
+        Test that compare_backtests returns repository results unchanged.
+
+        Given: Repository returns list of backtests
+        When: Service processes the request
+        Then: Same list is returned to caller
+        """
+        # Create mock backtests
+        run_ids = [uuid4() for _ in range(3)]
+        mock_backtests = [MagicMock(spec=BacktestRun, run_id=rid) for rid in run_ids]
+
+        # Setup mock
+        mock_repository.find_by_run_ids.return_value = mock_backtests
+
+        # Call service
+        result = await service.compare_backtests(run_ids)
+
+        # Verify result
+        assert result == mock_backtests
+        assert len(result) == 3

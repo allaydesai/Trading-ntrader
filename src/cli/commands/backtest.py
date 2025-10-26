@@ -27,6 +27,8 @@ from src.utils.error_messages import (
     RATE_LIMIT_EXCEEDED,
     format_error_with_context,
 )
+from src.cli.commands.show import show_backtest_details
+from src.cli.commands.compare import compare_backtests
 
 console = Console()
 error_formatter = ErrorFormatter(console)
@@ -659,3 +661,8 @@ def list_backtests():
             console.print(f"⚠️  Could not fetch data info: {e}", style="yellow")
 
     asyncio.run(show_data_info())
+
+
+# Add show and compare commands to backtest group
+backtest.add_command(show_backtest_details)
+backtest.add_command(compare_backtests)

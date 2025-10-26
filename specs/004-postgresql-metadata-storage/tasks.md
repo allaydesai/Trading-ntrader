@@ -204,42 +204,42 @@
 
 ### Tests for User Story 3 (TDD)
 
-- [ ] T080 [P] [US3] TDD: Write failing integration test for `show` CLI command in `tests/integration/test_cli_show.py` - should display full backtest details
-- [ ] T081 [P] [US3] TDD: Write failing integration test for failed backtest retrieval in `tests/integration/test_cli_show.py` - should show error message
-- [ ] T082 [P] [US3] TDD: Write failing unit test for BacktestRepository.find_by_run_id() in `tests/unit/db/test_backtest_repository.py`
-- [ ] T083 [P] [US3] TDD: Write failing unit test for BacktestQueryService.get_backtest_by_id() in `tests/unit/services/test_backtest_query.py`
+- [x] T080 [P] [US3] TDD: Write failing integration test for `show` CLI command in `tests/integration/db/test_cli_show.py` - should display full backtest details
+- [x] T081 [P] [US3] TDD: Write failing integration test for failed backtest retrieval in `tests/integration/db/test_cli_show.py` - should show error message
+- [x] T082 [P] [US3] TDD: Write failing unit test for BacktestRepository.find_by_run_id() in `tests/unit/db/test_backtest_repository.py`
+- [x] T083 [P] [US3] TDD: Write failing unit test for BacktestQueryService.get_backtest_by_id() in `tests/unit/services/test_backtest_query.py`
 
 ### Repository Query Method for User Story 3
 
-- [ ] T084 [US3] Implement BacktestRepository.find_by_run_id() method per design.md lines 427-444 - query by UUID with eager load
-- [ ] T085 [US3] Use selectinload() for metrics relationship per design.md line 439
+- [x] T084 [US3] Implement BacktestRepository.find_by_run_id() method per design.md lines 427-444 - query by UUID with eager load
+- [x] T085 [US3] Use selectinload() for metrics relationship per design.md line 439
 
 ### Service Method for User Story 3
 
-- [ ] T086 [US3] Implement BacktestQueryService.get_backtest_by_id() method per design.md lines 884-895 - returns Optional[BacktestRun]
+- [x] T086 [US3] Implement BacktestQueryService.get_backtest_by_id() method per design.md lines 884-895 - returns Optional[BacktestRun]
 
 ### CLI Command Implementation for User Story 3
 
-- [ ] T087 [US3] Create show.py CLI command in `src/cli/commands/show.py` with Click decorators
-- [ ] T088 [US3] Add run_id argument (UUID) as required parameter
-- [ ] T089 [US3] Implement async query execution using asyncio.run()
-- [ ] T090 [US3] Format output using Rich panels/trees for structured display of all fields
-- [ ] T091 [US3] Display configuration snapshot (JSONB) in readable format with syntax highlighting
-- [ ] T092 [US3] Display all performance metrics with proper formatting (percentages, decimals)
-- [ ] T093 [US3] Show execution metadata (duration, status, timestamps)
-- [ ] T094 [US3] Handle "not found" case with clear error message
-- [ ] T095 [US3] Handle failed backtests - display error_message prominently
-- [ ] T096 [US3] Register show command in main CLI app in `src/cli/main.py`
+- [x] T087 [US3] Create show.py CLI command in `src/cli/commands/show.py` with Click decorators
+- [x] T088 [US3] Add run_id argument (UUID) as required parameter
+- [x] T089 [US3] Implement async query execution using asyncio.run()
+- [x] T090 [US3] Format output using Rich panels/trees for structured display of all fields
+- [x] T091 [US3] Display configuration snapshot (JSONB) in readable format with syntax highlighting
+- [x] T092 [US3] Display all performance metrics with proper formatting (percentages, decimals)
+- [x] T093 [US3] Show execution metadata (duration, status, timestamps)
+- [x] T094 [US3] Handle "not found" case with clear error message
+- [x] T095 [US3] Handle failed backtests - display error_message prominently
+- [x] T096 [US3] Register show command in main CLI app in `src/cli/main.py`
 
 ### Validation for User Story 3
 
-- [ ] T097 [US3] Test retrieving successful backtest - verify all fields displayed
-- [ ] T098 [US3] Test retrieving failed backtest - verify error message shown
-- [ ] T099 [US3] Test with invalid UUID - verify error handling
-- [ ] T100 [US3] Test with non-existent UUID - verify "not found" message
-- [ ] T101 [US3] Verify all tests from T080-T083 now PASS
+- [x] T097 [US3] Test retrieving successful backtest - verify all fields displayed
+- [x] T098 [US3] Test retrieving failed backtest - verify error message shown
+- [x] T099 [US3] Test with invalid UUID - verify error handling
+- [x] T100 [US3] Test with non-existent UUID - verify "not found" message
+- [x] T101 [US3] Verify all tests from T080-T083 now PASS
 
-**Checkpoint**: User Story 3 complete - can now view complete details of any backtest
+**Checkpoint**: ✅ User Story 3 complete - can now view complete details of any backtest. All 4 integration tests passing. Database migration inconsistency resolved - all tables exist (backtest_runs, performance_metrics). Event loop isolation fixed in tests using dispose_all_connections().
 
 ---
 
@@ -255,42 +255,42 @@
 
 ### Tests for User Story 4 (TDD)
 
-- [ ] T102 [P] [US4] TDD: Write failing integration test for `compare` CLI command in `tests/integration/test_cli_compare.py` - should display side-by-side comparison
-- [ ] T103 [P] [US4] TDD: Write failing integration test for comparing 2 backtests (minimum) in `tests/integration/test_cli_compare.py`
-- [ ] T104 [P] [US4] TDD: Write failing integration test for comparing 10 backtests (maximum) in `tests/integration/test_cli_compare.py`
-- [ ] T105 [P] [US4] TDD: Write failing unit test for BacktestRepository.find_by_run_ids() in `tests/unit/db/test_backtest_repository.py`
-- [ ] T106 [P] [US4] TDD: Write failing unit test for BacktestQueryService.compare_backtests() validation in `tests/unit/services/test_backtest_query.py`
+- [x] T102 [P] [US4] TDD: Write failing integration test for `compare` CLI command in `tests/integration/test_cli_compare.py` - should display side-by-side comparison
+- [x] T103 [P] [US4] TDD: Write failing integration test for comparing 2 backtests (minimum) in `tests/integration/test_cli_compare.py`
+- [x] T104 [P] [US4] TDD: Write failing integration test for comparing 10 backtests (maximum) in `tests/integration/test_cli_compare.py`
+- [x] T105 [P] [US4] TDD: Write failing unit test for BacktestRepository.find_by_run_ids() in `tests/unit/db/test_backtest_repository.py`
+- [x] T106 [P] [US4] TDD: Write failing unit test for BacktestQueryService.compare_backtests() validation in `tests/unit/services/test_backtest_query.py`
 
 ### Repository Query Method for User Story 4
 
-- [ ] T107 [US4] Implement BacktestRepository.find_by_run_ids() method per design.md lines 519-537 - accepts List[UUID], returns ordered results
+- [x] T107 [US4] Implement BacktestRepository.find_by_run_ids() method per design.md lines 519-537 - accepts List[UUID], returns ordered results
 
 ### Service Method for User Story 4
 
-- [ ] T108 [US4] Implement BacktestQueryService.compare_backtests() method per design.md lines 948-969 - validates 2-10 IDs, returns List[BacktestRun]
+- [x] T108 [US4] Implement BacktestQueryService.compare_backtests() method per design.md lines 948-969 - validates 2-10 IDs, returns List[BacktestRun]
 
 ### CLI Command Implementation for User Story 4
 
-- [ ] T109 [US4] Create compare.py CLI command in `src/cli/commands/compare.py` per design.md lines 1101-1204
-- [ ] T110 [US4] Add run_ids argument accepting 2-10 UUIDs per design.md line 1127
-- [ ] T111 [US4] Validate UUID count (2-10) with clear error messages per design.md lines 1133-1138
-- [ ] T112 [US4] Parse string UUIDs to UUID objects with error handling per design.md lines 1141-1145
-- [ ] T113 [US4] Create Rich comparison table with one column per backtest per design.md lines 1159-1168
-- [ ] T114 [US4] Add rows for key metrics: Strategy, Symbol, Date, Total Return, Sharpe Ratio, Max Drawdown, Win Rate, Total Trades per design.md lines 1171-1185
-- [ ] T115 [US4] Highlight best performer by Sharpe ratio at bottom per design.md lines 1190-1201
-- [ ] T116 [US4] Handle case where some UUIDs don't exist - show partial results with warning
-- [ ] T117 [US4] Register compare command in main CLI app in `src/cli/main.py`
+- [x] T109 [US4] Create compare.py CLI command in `src/cli/commands/compare.py` per design.md lines 1101-1204
+- [x] T110 [US4] Add run_ids argument accepting 2-10 UUIDs per design.md line 1127
+- [x] T111 [US4] Validate UUID count (2-10) with clear error messages per design.md lines 1133-1138
+- [x] T112 [US4] Parse string UUIDs to UUID objects with error handling per design.md lines 1141-1145
+- [x] T113 [US4] Create Rich comparison table with one column per backtest per design.md lines 1159-1168
+- [x] T114 [US4] Add rows for key metrics: Strategy, Symbol, Date, Total Return, Sharpe Ratio, Max Drawdown, Win Rate, Total Trades per design.md lines 1171-1185
+- [x] T115 [US4] Highlight best performer by Sharpe ratio at bottom per design.md lines 1190-1201
+- [x] T116 [US4] Handle case where some UUIDs don't exist - show partial results with warning
+- [x] T117 [US4] Register compare command in main CLI app in `src/cli/main.py`
 
 ### Validation for User Story 4
 
-- [ ] T118 [US4] Test comparing 2 backtests - verify side-by-side display
-- [ ] T119 [US4] Test comparing 10 backtests (maximum) - verify all shown
-- [ ] T120 [US4] Test comparing 1 backtest (< minimum) - verify error message
-- [ ] T121 [US4] Test comparing 11 backtests (> maximum) - verify error message
-- [ ] T122 [US4] Test comparing across different strategies - verify works correctly
-- [ ] T123 [US4] Verify all tests from T102-T106 now PASS
+- [x] T118 [US4] Test comparing 2 backtests - verify side-by-side display
+- [x] T119 [US4] Test comparing 10 backtests (maximum) - verify all shown
+- [x] T120 [US4] Test comparing 1 backtest (< minimum) - verify error message
+- [x] T121 [US4] Test comparing 11 backtests (> maximum) - verify error message
+- [x] T122 [US4] Test comparing across different strategies - verify works correctly
+- [x] T123 [US4] Verify all tests from T102-T106 now PASS
 
-**Checkpoint**: User Story 4 complete - can now compare multiple backtests side-by-side
+**Checkpoint**: ✅ User Story 4 complete - can now compare multiple backtests side-by-side. All 8 tests passing (3 integration + 5 unit tests). CLI command registered and functional.
 
 ---
 

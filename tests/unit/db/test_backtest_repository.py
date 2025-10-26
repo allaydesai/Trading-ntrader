@@ -225,6 +225,7 @@ class TestBacktestRepositoryRetrieve:
         """
         # Create 50 backtest runs with slight time delays to ensure ordering
         import asyncio
+
         created_runs = []
 
         for i in range(50):
@@ -318,3 +319,67 @@ class TestBacktestRepositoryRetrieve:
 
         assert len(rsi_backtests) == 5
         assert all(bt.strategy_name == "RSI Mean Reversion" for bt in rsi_backtests)
+
+    @pytest.mark.asyncio
+    async def test_find_by_run_ids(self, repository, async_session):
+        """
+        Test finding multiple backtests by their run IDs.
+
+        Given: Database with multiple backtest runs
+        When: Querying with a list of specific run IDs
+        Then: Returns only the backtests matching those IDs
+        """
+        # Create 5 backtest runs and track their run_ids
+        run_ids = []
+
+        for i in range(5):
+            run_id = uuid4()
+            run_ids.append(run_id)
+
+            backtest_run = await repository.create_backtest_run(
+                run_id=run_id,
+                strategy_name=f"Strategy {i}",
+                strategy_type="test",
+                instrument_symbol="TEST",
+                start_date=datetime(2023, 1, 1, tzinfo=timezone.utc),
+                end_date=datetime(2023, 12, 31, tzinfo=timezone.utc),
+                initial_capital=Decimal("100000.00"),
+                data_source="Mock",
+                execution_status="success",
+                execution_duration_seconds=Decimal("10.0"),
+                config_snapshot={
+                    "strategy_path": "test",
+                    "config_path": "test",
+                    "version": "1.0",
+                    "config": {},
+                },
+            )
+
+            # Add metrics
+            await repository.create_performance_metrics(
+                backtest_run_id=backtest_run.id,
+                total_return=Decimal(str(0.1 + i * 0.05)),
+                final_balance=Decimal(str(110000 + i * 5000)),
+                sharpe_ratio=Decimal(str(1.0 + i * 0.2)),
+                total_trades=10,
+                winning_trades=6,
+                losing_trades=4,
+            )
+
+        await async_session.commit()
+
+        # Query for first 3 run IDs
+        selected_ids = run_ids[:3]
+        found_backtests = await repository.find_by_run_ids(selected_ids)
+
+        # Assertions
+        assert len(found_backtests) == 3
+        found_run_ids = {bt.run_id for bt in found_backtests}
+        assert found_run_ids == set(selected_ids)
+
+        # Verify metrics are loaded
+        assert all(bt.metrics is not None for bt in found_backtests)
+
+        # Verify results are ordered by created_at DESC
+        for i in range(len(found_backtests) - 1):
+            assert found_backtests[i].created_at >= found_backtests[i + 1].created_at
