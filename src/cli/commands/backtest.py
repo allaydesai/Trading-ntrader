@@ -74,7 +74,7 @@ def backtest():
     "-ts",
     default=1000000,
     type=int,
-    help="Trade size in base currency units (default: 1,000,000)",
+    help="Trade size in SHARES (default: 1,000,000 shares). Note: 1M shares @ $180 = $180M notional",
 )
 @click.option(
     "--timeframe",

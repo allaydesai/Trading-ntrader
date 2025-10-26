@@ -625,7 +625,7 @@ uv run python -m src.cli report export-all <result-id> -o reports/
   - `--end`: End date for backtest (YYYY-MM-DD)
   - `--fast-period`: Fast SMA period (default: 10)
   - `--slow-period`: Slow SMA period (default: 20)
-  - `--trade-size`: Trade size in base currency (default: 1,000,000)
+  - `--trade-size`: Trade size in SHARES (default: 1,000,000 shares = very large position!)
 - `backtest run-config <config-file>`: Run backtest with YAML configuration
   - `--symbol`: Trading symbol (required)
   - `--start`: Start date for backtest (YYYY-MM-DD)
