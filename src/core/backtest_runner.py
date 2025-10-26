@@ -46,6 +46,7 @@ class MinimalBacktestRunner:
         self.data_service = DataService() if data_source == "database" else None
         self.engine: BacktestEngine | None = None
         self._results: BacktestResult | None = None
+        self._venue: Venue | None = None  # Track venue used in backtest
 
     async def _persist_backtest_results(
         self,
@@ -267,6 +268,7 @@ class MinimalBacktestRunner:
 
         # Add venue
         venue = Venue("SIM")
+        self._venue = venue  # Store for result extraction
         self.engine.add_venue(
             venue=venue,
             oms_type=OmsType.HEDGING,
@@ -417,6 +419,7 @@ class MinimalBacktestRunner:
 
         # Add venue
         venue = Venue("SIM")
+        self._venue = venue  # Store for result extraction
         self.engine.add_venue(
             venue=venue,
             oms_type=OmsType.HEDGING,
@@ -478,8 +481,8 @@ class MinimalBacktestRunner:
         if not self.engine:
             return BacktestResult()
 
-        # Get account for analysis
-        venue = Venue("SIM")
+        # Get account for analysis using the venue that was used in the backtest
+        venue = self._venue if self._venue else Venue("SIM")
         account = self.engine.cache.account_for_venue(venue)
 
         if not account:
@@ -491,8 +494,18 @@ class MinimalBacktestRunner:
         total_return = final_balance - starting_balance
 
         # Get trade statistics
+        # Note: For backtests, we primarily care about closed positions (completed trades)
+        # Open positions at backtest end indicate the strategy didn't close them
         closed_positions = self.engine.cache.positions_closed()
+        open_positions = self.engine.cache.positions_open()
+
+        # Total trades = closed positions (actual executed and completed trades)
         total_trades = len(closed_positions)
+
+        # If there are only open positions and no closed ones, count open positions
+        # This handles strategies that hold positions through the entire backtest
+        if total_trades == 0 and len(open_positions) > 0:
+            total_trades = len(open_positions)
 
         winning_trades = 0
         losing_trades = 0
@@ -503,13 +516,14 @@ class MinimalBacktestRunner:
             # Use realized PnL for closed positions
             pnl = (
                 position.realized_pnl.as_double()
-                if hasattr(position, "realized_pnl")
+                if hasattr(position, "realized_pnl") and position.realized_pnl
                 else 0.0
             )
+
             if pnl > 0:
                 winning_trades += 1
                 largest_win = max(largest_win, pnl)
-            else:
+            elif pnl < 0:
                 losing_trades += 1
                 largest_loss = min(largest_loss, pnl)
 
@@ -615,6 +629,7 @@ class MinimalBacktestRunner:
 
         # Add venue
         venue = Venue("SIM")
+        self._venue = venue  # Store for result extraction
         self.engine.add_venue(
             venue=venue,
             oms_type=OmsType.HEDGING,
@@ -702,6 +717,7 @@ class MinimalBacktestRunner:
         if self.engine:
             self.engine.reset()
         self._results = None
+        self._venue = None
 
     async def run_backtest_with_strategy_type(
         self,
@@ -806,6 +822,7 @@ class MinimalBacktestRunner:
 
         # Add venue
         venue = Venue("SIM")
+        self._venue = venue  # Store for result extraction
         self.engine.add_venue(
             venue=venue,
             oms_type=OmsType.HEDGING,
@@ -1008,6 +1025,9 @@ class MinimalBacktestRunner:
         else:
             # Final fallback: Use SIM for test scenarios
             venue = Venue("SIM")
+
+        # Store venue for result extraction
+        self._venue = venue
 
         self.engine.add_venue(
             venue=venue,
