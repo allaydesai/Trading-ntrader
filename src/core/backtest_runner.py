@@ -103,6 +103,9 @@ class MinimalBacktestRunner:
                     backtest_result=result,
                 )
 
+                # Commit the transaction
+                await session.commit()
+
             logger.info(
                 "Backtest results persisted",
                 run_id=str(run_id),
@@ -177,6 +180,9 @@ class MinimalBacktestRunner:
                     config_snapshot=config_snapshot,
                     error_message=error_message,
                 )
+
+                # Commit the transaction
+                await session.commit()
 
             logger.info(
                 "Failed backtest persisted",

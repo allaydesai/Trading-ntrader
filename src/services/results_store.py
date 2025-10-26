@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
-from src.models.backtest_result import EnhancedBacktestResult
+from src.models.backtest_result import BacktestResult
 
 
 class ResultsStoreError(Exception):
@@ -62,12 +62,12 @@ class ResultsStore:
         """
         return self.storage_dir / f"{result_id}.json"
 
-    def save(self, result: EnhancedBacktestResult) -> str:
+    def save(self, result: BacktestResult) -> str:
         """
         Save backtest result to storage.
 
         Args:
-            result: EnhancedBacktestResult to save
+            result: BacktestResult to save
 
         Returns:
             Result ID
@@ -91,7 +91,7 @@ class ResultsStore:
         except Exception as e:
             raise ResultsStoreError(f"Failed to save result: {e}") from e
 
-    def get(self, result_id: str) -> EnhancedBacktestResult:
+    def get(self, result_id: str) -> BacktestResult:
         """
         Load backtest result from storage.
 
@@ -99,7 +99,7 @@ class ResultsStore:
             result_id: Unique backtest result ID
 
         Returns:
-            EnhancedBacktestResult instance
+            BacktestResult instance
 
         Raises:
             ResultNotFoundError: If result ID not found
@@ -114,7 +114,7 @@ class ResultsStore:
             with open(file_path, "r", encoding="utf-8") as f:
                 result_data = json.load(f)
 
-            return EnhancedBacktestResult.from_dict(result_data)
+            return BacktestResult(**result_data)
 
         except json.JSONDecodeError as e:
             raise ResultsStoreError(f"Failed to parse result file: {e}") from e
@@ -302,12 +302,12 @@ class ResultsStore:
         all_results = self.list()
         return [r for r in all_results if r["symbol"].lower() == symbol.lower()]
 
-    def get_latest(self) -> Optional[EnhancedBacktestResult]:
+    def get_latest(self) -> Optional[BacktestResult]:
         """
         Get the most recently created result.
 
         Returns:
-            Latest EnhancedBacktestResult or None if no results exist
+            Latest BacktestResult or None if no results exist
         """
         results = self.list(limit=1)
         if not results:
