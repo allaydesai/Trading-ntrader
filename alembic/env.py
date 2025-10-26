@@ -1,13 +1,13 @@
 from logging.config import fileConfig
 
-from sqlalchemy import engine_from_config
-from sqlalchemy import pool
+from sqlalchemy import engine_from_config, pool, MetaData
 
 from alembic import context
 
 # Import our models and config
 from src.config import get_settings
-from src.models.market_data import Base
+from src.models.market_data import Base as MarketDataBase
+from src.db.base import Base as BacktestBase
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -25,7 +25,12 @@ if config.config_file_name is not None:
 
 # add your model's MetaData object here
 # for 'autogenerate' support
-target_metadata = Base.metadata
+# Combine metadata from both Base classes
+
+target_metadata = MetaData()
+for base in [MarketDataBase, BacktestBase]:
+    for table in base.metadata.tables.values():
+        table.to_metadata(target_metadata)
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:

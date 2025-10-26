@@ -1,8 +1,12 @@
 """Minimal backtest engine wrapper for Nautilus Trader."""
 
+import time
 from decimal import Decimal
 from typing import Dict, Any, Optional, Literal
-from datetime import datetime
+from datetime import datetime, timezone
+from uuid import uuid4, UUID
+
+import structlog
 
 from nautilus_trader.backtest.engine import BacktestEngine, BacktestEngineConfig
 from nautilus_trader.backtest.models import FillModel
@@ -19,43 +23,12 @@ from src.utils.mock_data import create_test_instrument, generate_mock_bars
 from src.utils.config_loader import ConfigLoader, StrategyConfigWrapper
 from src.services.data_service import DataService
 from src.config import get_settings
+from src.db.session import get_session
+from src.db.repositories.backtest_repository import BacktestRepository
+from src.services.backtest_persistence import BacktestPersistenceService
+from src.models.backtest_result import BacktestResult
 
-
-class BacktestResult:
-    """Simple container for backtest results."""
-
-    def __init__(
-        self,
-        total_return: float = 0.0,
-        total_trades: int = 0,
-        winning_trades: int = 0,
-        losing_trades: int = 0,
-        largest_win: float = 0.0,
-        largest_loss: float = 0.0,
-        final_balance: float = 0.0,
-    ):
-        """Initialize backtest results."""
-        self.total_return = total_return
-        self.total_trades = total_trades
-        self.winning_trades = winning_trades
-        self.losing_trades = losing_trades
-        self.largest_win = largest_win
-        self.largest_loss = largest_loss
-        self.final_balance = final_balance
-
-    @property
-    def win_rate(self) -> float:
-        """Calculate win rate percentage."""
-        if self.total_trades == 0:
-            return 0.0
-        return (self.winning_trades / self.total_trades) * 100
-
-    def __str__(self) -> str:
-        """String representation of results."""
-        return (
-            f"BacktestResult(total_return={self.total_return:.2f}, "
-            f"total_trades={self.total_trades}, win_rate={self.win_rate:.1f}%)"
-        )
+logger = structlog.get_logger(__name__)
 
 
 class MinimalBacktestRunner:
@@ -73,6 +46,157 @@ class MinimalBacktestRunner:
         self.data_service = DataService() if data_source == "database" else None
         self.engine: BacktestEngine | None = None
         self._results: BacktestResult | None = None
+
+    async def _persist_backtest_results(
+        self,
+        result: BacktestResult,
+        strategy_name: str,
+        strategy_type: str,
+        instrument_symbol: str,
+        start_date: datetime,
+        end_date: datetime,
+        execution_duration_seconds: Decimal,
+        strategy_config: Dict[str, Any],
+    ) -> Optional[UUID]:
+        """
+        Persist backtest results to database.
+
+        Args:
+            result: Backtest execution results
+            strategy_name: Human-readable strategy name
+            strategy_type: Strategy category
+            instrument_symbol: Trading symbol
+            start_date: Backtest period start
+            end_date: Backtest period end
+            execution_duration_seconds: Time taken to execute
+            strategy_config: Strategy configuration parameters
+
+        Returns:
+            UUID of created backtest run, or None if persistence fails
+        """
+        try:
+            run_id = uuid4()
+
+            # Build config snapshot for JSONB storage
+            config_snapshot = {
+                "strategy_path": f"src.core.strategies.{strategy_type}",
+                "config_path": "runtime_config",
+                "version": "1.0",
+                "config": strategy_config,
+            }
+
+            async with get_session() as session:
+                repository = BacktestRepository(session)
+                service = BacktestPersistenceService(repository)
+
+                await service.save_backtest_results(
+                    run_id=run_id,
+                    strategy_name=strategy_name,
+                    strategy_type=strategy_type,
+                    instrument_symbol=instrument_symbol,
+                    start_date=start_date,
+                    end_date=end_date,
+                    initial_capital=Decimal(str(self.settings.default_balance)),
+                    data_source=self.data_source,
+                    execution_duration_seconds=execution_duration_seconds,
+                    config_snapshot=config_snapshot,
+                    backtest_result=result,
+                )
+
+            logger.info(
+                "Backtest results persisted",
+                run_id=str(run_id),
+                strategy=strategy_name,
+                symbol=instrument_symbol,
+            )
+
+            return run_id
+
+        except Exception as e:
+            # Log but don't fail the backtest if persistence fails
+            logger.warning(
+                "Failed to persist backtest results",
+                error=str(e),
+                strategy=strategy_name,
+                symbol=instrument_symbol,
+            )
+            return None
+
+    async def _persist_failed_backtest(
+        self,
+        error_message: str,
+        strategy_name: str,
+        strategy_type: str,
+        instrument_symbol: str,
+        start_date: datetime,
+        end_date: datetime,
+        execution_duration_seconds: Decimal,
+        strategy_config: Dict[str, Any],
+    ) -> Optional[UUID]:
+        """
+        Persist failed backtest execution to database.
+
+        Args:
+            error_message: Error description
+            strategy_name: Human-readable strategy name
+            strategy_type: Strategy category
+            instrument_symbol: Trading symbol
+            start_date: Backtest period start
+            end_date: Backtest period end
+            execution_duration_seconds: Time taken before failure
+            strategy_config: Strategy configuration parameters
+
+        Returns:
+            UUID of created backtest run, or None if persistence fails
+        """
+        try:
+            run_id = uuid4()
+
+            # Build config snapshot for JSONB storage
+            config_snapshot = {
+                "strategy_path": f"src.core.strategies.{strategy_type}",
+                "config_path": "runtime_config",
+                "version": "1.0",
+                "config": strategy_config,
+            }
+
+            async with get_session() as session:
+                repository = BacktestRepository(session)
+                service = BacktestPersistenceService(repository)
+
+                await service.save_failed_backtest(
+                    run_id=run_id,
+                    strategy_name=strategy_name,
+                    strategy_type=strategy_type,
+                    instrument_symbol=instrument_symbol,
+                    start_date=start_date,
+                    end_date=end_date,
+                    initial_capital=Decimal(str(self.settings.default_balance)),
+                    data_source=self.data_source,
+                    execution_duration_seconds=execution_duration_seconds,
+                    config_snapshot=config_snapshot,
+                    error_message=error_message,
+                )
+
+            logger.info(
+                "Failed backtest persisted",
+                run_id=str(run_id),
+                strategy=strategy_name,
+                symbol=instrument_symbol,
+                error=error_message,
+            )
+
+            return run_id
+
+        except Exception as e:
+            # Log but don't fail further if persistence fails
+            logger.warning(
+                "Failed to persist failed backtest",
+                error=str(e),
+                strategy=strategy_name,
+                symbol=instrument_symbol,
+            )
+            return None
 
     def run_sma_backtest(
         self,
@@ -792,6 +916,9 @@ class MinimalBacktestRunner:
         from src.models.strategy import StrategyType
         from src.core.strategy_factory import StrategyLoader
 
+        # Track execution time for persistence
+        execution_start_time = time.time()
+
         # Reason: Handle "sma" alias for backward compatibility
         if strategy_type == "sma":
             strategy_type = "sma_crossover"
@@ -951,12 +1078,109 @@ class MinimalBacktestRunner:
         strategy = StrategyLoader.create_strategy(strategy_enum, config_params)
         self.engine.add_strategy(strategy=strategy)
 
-        # Reason: Run the backtest
-        self.engine.run()
+        try:
+            # Reason: Run the backtest
+            self.engine.run()
 
-        # Reason: Extract and return results
-        self._results = self._extract_results()
-        return self._results
+            # Reason: Extract and return results
+            self._results = self._extract_results()
+
+            # Persist results to database
+            execution_duration = Decimal(str(time.time() - execution_start_time))
+
+            # Ensure start and end are timezone-aware
+            start_tz = start if start.tzinfo else start.replace(tzinfo=timezone.utc)
+            end_tz = end if end.tzinfo else end.replace(tzinfo=timezone.utc)
+
+            # Determine strategy name from type
+            strategy_display_name = strategy_type.replace("_", " ").title()
+
+            # Build strategy config for persistence
+            strategy_config_dict = {
+                "trade_size": str(strategy_params.get("trade_size", 1000000)),
+            }
+
+            # Add strategy-specific parameters
+            if strategy_enum == StrategyType.SMA_CROSSOVER:
+                strategy_config_dict.update(
+                    {
+                        "fast_period": strategy_params.get("fast_period", 10),
+                        "slow_period": strategy_params.get("slow_period", 20),
+                    }
+                )
+            elif strategy_enum == StrategyType.MEAN_REVERSION:
+                strategy_config_dict.update(
+                    {
+                        "rsi_period": strategy_params.get("rsi_period", 2),
+                        "rsi_buy_threshold": strategy_params.get(
+                            "rsi_buy_threshold", 10.0
+                        ),
+                        "exit_rsi": strategy_params.get("exit_rsi", 50.0),
+                        "sma_trend_period": strategy_params.get(
+                            "sma_trend_period", 200
+                        ),
+                    }
+                )
+            elif strategy_enum == StrategyType.MOMENTUM:
+                strategy_config_dict.update(
+                    {
+                        "fast_period": strategy_params.get("fast_period", 20),
+                        "slow_period": strategy_params.get("slow_period", 50),
+                        "allow_short": strategy_params.get("allow_short", False),
+                    }
+                )
+
+            run_id = await self._persist_backtest_results(
+                result=self._results,
+                strategy_name=strategy_display_name,
+                strategy_type=strategy_type,
+                instrument_symbol=symbol,
+                start_date=start_tz,
+                end_date=end_tz,
+                execution_duration_seconds=execution_duration,
+                strategy_config=strategy_config_dict,
+            )
+
+            if run_id:
+                logger.info(
+                    "Backtest completed and persisted",
+                    run_id=str(run_id),
+                    strategy=strategy_display_name,
+                    symbol=symbol,
+                )
+
+            return self._results
+
+        except Exception as e:
+            # Calculate execution duration at failure point
+            execution_duration = Decimal(str(time.time() - execution_start_time))
+
+            # Ensure start and end are timezone-aware
+            start_tz = start if start.tzinfo else start.replace(tzinfo=timezone.utc)
+            end_tz = end if end.tzinfo else end.replace(tzinfo=timezone.utc)
+
+            # Determine strategy name from type
+            strategy_display_name = strategy_type.replace("_", " ").title()
+
+            # Build strategy config for persistence
+            strategy_config_dict = {
+                "trade_size": str(strategy_params.get("trade_size", 1000000)),
+            }
+
+            # Persist failed backtest
+            await self._persist_failed_backtest(
+                error_message=str(e),
+                strategy_name=strategy_display_name,
+                strategy_type=strategy_type,
+                instrument_symbol=symbol,
+                start_date=start_tz,
+                end_date=end_tz,
+                execution_duration_seconds=execution_duration,
+                strategy_config=strategy_config_dict,
+            )
+
+            # Re-raise the exception
+            raise
 
     def dispose(self) -> None:
         """Dispose of the engine resources."""

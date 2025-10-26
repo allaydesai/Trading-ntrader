@@ -672,3 +672,10 @@ rg --files -g "*.py"
 - run formatting and linting check before every commit.
 - when testing the application follow instructions from README. keep it upto date if any of the instructions change, validate before making changes.
 - Always use env variables for IBKR API connectivity settings, do not override it unless explicitly mentioned. When developing make sure within code we are always using the env variables for IBKR connection establishment as opposed to hardcoded values or other sources.
+
+## Active Technologies
+- Python 3.11+ + SQLAlchemy 2.0 (async), Alembic, Pydantic 2.5+, asyncpg, PostgreSQL 16+ (004-postgresql-metadata-storage)
+- PostgreSQL 16+ with async connection pooling (004-postgresql-metadata-storage)
+
+## Recent Changes
+- 004-postgresql-metadata-storage: Added Python 3.11+ + SQLAlchemy 2.0 (async), Alembic, Pydantic 2.5+, asyncpg, PostgreSQL 16+

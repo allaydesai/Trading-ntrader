@@ -33,6 +33,8 @@ def get_async_engine():
             pool_size=settings.database_pool_size,
             max_overflow=settings.database_max_overflow,
             pool_timeout=settings.database_pool_timeout,
+            pool_pre_ping=True,  # Verify connection health before use
+            pool_recycle=3600,  # Recycle connections after 1 hour
         )
     return async_engine
 
@@ -56,6 +58,8 @@ if settings.database_url:
         pool_size=settings.database_pool_size,
         max_overflow=settings.database_max_overflow,
         pool_timeout=settings.database_pool_timeout,
+        pool_pre_ping=True,  # Verify connection health before use
+        pool_recycle=3600,  # Recycle connections after 1 hour
     )
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
