@@ -166,3 +166,186 @@ async def test_history_command_custom_limit(db_session):
     # Assertions - should return all 30 since limit is 50
     assert len(backtests) == 30
     assert all("Test Strategy" in bt.strategy_name for bt in backtests)
+
+
+@pytest.mark.asyncio
+async def test_history_command_sorts_by_sharpe_ratio(db_session):
+    """
+    Test that history service can sort backtests by Sharpe ratio descending.
+
+    Given: Database with backtests having different Sharpe ratios
+    When: Service queries for top performers by Sharpe ratio
+    Then: Returns backtests sorted by Sharpe ratio in descending order
+    """
+    repository = BacktestRepository(db_session)
+
+    # Create backtests with varying Sharpe ratios
+    sharpe_ratios = [
+        Decimal("2.5"),
+        Decimal("1.8"),
+        Decimal("3.2"),
+        Decimal("0.5"),
+        Decimal("1.2"),
+    ]
+
+    for i, sharpe in enumerate(sharpe_ratios):
+        run_id = uuid4()
+
+        backtest_run = await repository.create_backtest_run(
+            run_id=run_id,
+            strategy_name=f"Strategy {i}",
+            strategy_type="test",
+            instrument_symbol="AAPL",
+            start_date=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            end_date=datetime(2023, 12, 31, tzinfo=timezone.utc),
+            initial_capital=Decimal("100000.00"),
+            data_source="Mock",
+            execution_status="success",
+            execution_duration_seconds=Decimal("10.5"),
+            config_snapshot={"version": "1.0", "config": {}},
+        )
+
+        await repository.create_performance_metrics(
+            backtest_run_id=backtest_run.id,
+            total_return=Decimal("0.15"),
+            final_balance=Decimal("115000.00"),
+            sharpe_ratio=sharpe,
+            total_trades=10,
+            winning_trades=6,
+            losing_trades=4,
+        )
+
+    await db_session.commit()
+
+    # Test service with sorting by Sharpe ratio
+    service = BacktestQueryService(repository)
+    backtests = await service.find_top_performers(metric="sharpe_ratio", limit=5)
+
+    # Assertions
+    assert len(backtests) == 5
+
+    # Verify descending order by Sharpe ratio
+    sharpe_values = [bt.metrics.sharpe_ratio for bt in backtests]
+    assert sharpe_values == sorted(sharpe_values, reverse=True)
+
+    # Verify highest Sharpe is first
+    assert backtests[0].metrics.sharpe_ratio == Decimal("3.2")
+    assert backtests[-1].metrics.sharpe_ratio == Decimal("0.5")
+
+
+@pytest.mark.asyncio
+async def test_history_command_sorts_by_total_return(db_session):
+    """
+    Test that history service can sort backtests by total return descending.
+
+    Given: Database with backtests having different total returns
+    When: Service queries for top performers by total return
+    Then: Returns backtests sorted by total return in descending order
+    """
+    repository = BacktestRepository(db_session)
+
+    # Create backtests with varying total returns
+    total_returns = [
+        Decimal("0.25"),
+        Decimal("0.15"),
+        Decimal("0.35"),
+        Decimal("0.05"),
+        Decimal("0.20"),
+    ]
+
+    for i, total_return in enumerate(total_returns):
+        run_id = uuid4()
+
+        backtest_run = await repository.create_backtest_run(
+            run_id=run_id,
+            strategy_name=f"Strategy {i}",
+            strategy_type="test",
+            instrument_symbol="AAPL",
+            start_date=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            end_date=datetime(2023, 12, 31, tzinfo=timezone.utc),
+            initial_capital=Decimal("100000.00"),
+            data_source="Mock",
+            execution_status="success",
+            execution_duration_seconds=Decimal("10.5"),
+            config_snapshot={"version": "1.0", "config": {}},
+        )
+
+        await repository.create_performance_metrics(
+            backtest_run_id=backtest_run.id,
+            total_return=total_return,
+            final_balance=Decimal("115000.00"),
+            sharpe_ratio=Decimal("1.5"),
+            total_trades=10,
+            winning_trades=6,
+            losing_trades=4,
+        )
+
+    await db_session.commit()
+
+    # Test service with sorting by total return
+    service = BacktestQueryService(repository)
+    backtests = await service.find_top_performers(metric="total_return", limit=5)
+
+    # Assertions
+    assert len(backtests) == 5
+
+    # Verify descending order by total return
+    return_values = [bt.metrics.total_return for bt in backtests]
+    assert return_values == sorted(return_values, reverse=True)
+
+    # Verify highest return is first
+    assert backtests[0].metrics.total_return == Decimal("0.35")
+    assert backtests[-1].metrics.total_return == Decimal("0.05")
+
+
+@pytest.mark.asyncio
+async def test_history_command_excludes_null_sharpe_ratios(db_session):
+    """
+    Test that top performers query excludes backtests with NULL Sharpe ratios.
+
+    Given: Database with some backtests having NULL Sharpe ratios
+    When: Service queries for top performers by Sharpe ratio
+    Then: Returns only backtests with non-NULL Sharpe ratios
+    """
+    repository = BacktestRepository(db_session)
+
+    # Create backtests - some with NULL Sharpe ratios
+    for i in range(5):
+        run_id = uuid4()
+
+        backtest_run = await repository.create_backtest_run(
+            run_id=run_id,
+            strategy_name=f"Strategy {i}",
+            strategy_type="test",
+            instrument_symbol="AAPL",
+            start_date=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            end_date=datetime(2023, 12, 31, tzinfo=timezone.utc),
+            initial_capital=Decimal("100000.00"),
+            data_source="Mock",
+            execution_status="success",
+            execution_duration_seconds=Decimal("10.5"),
+            config_snapshot={"version": "1.0", "config": {}},
+        )
+
+        # Only give 3 backtests a Sharpe ratio
+        sharpe_ratio = Decimal(str(2.0 - i * 0.5)) if i < 3 else None
+
+        await repository.create_performance_metrics(
+            backtest_run_id=backtest_run.id,
+            total_return=Decimal("0.15"),
+            final_balance=Decimal("115000.00"),
+            sharpe_ratio=sharpe_ratio,
+            total_trades=10,
+            winning_trades=6,
+            losing_trades=4,
+        )
+
+    await db_session.commit()
+
+    # Test service - should only return 3 backtests
+    service = BacktestQueryService(repository)
+    backtests = await service.find_top_performers(metric="sharpe_ratio", limit=10)
+
+    # Assertions
+    assert len(backtests) == 3
+    assert all(bt.metrics.sharpe_ratio is not None for bt in backtests)

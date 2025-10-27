@@ -35,27 +35,43 @@ console = Console()
     default=None,
     help="Filter by execution status",
 )
+@click.option(
+    "--sort",
+    type=click.Choice(["date", "return", "sharpe"], case_sensitive=False),
+    default="date",
+    help="Sort by: date (default), return, or sharpe",
+)
 def list_backtest_history(
-    limit: int, strategy: str | None, instrument: str | None, status: str | None
+    limit: int,
+    strategy: str | None,
+    instrument: str | None,
+    status: str | None,
+    sort: str,
 ):
     """
     List recent backtest executions with performance metrics.
 
     Displays a formatted table of backtest runs with key metrics including
-    total return, Sharpe ratio, and execution status. Results are ordered
-    by execution date (most recent first).
+    total return, Sharpe ratio, and execution status. Results can be sorted
+    by date (default), total return, or Sharpe ratio.
 
     Examples:
-        ntrader history                    # Show 20 most recent backtests
-        ntrader history --limit 50         # Show 50 most recent
+        ntrader history                           # Show 20 most recent backtests
+        ntrader history --limit 50                # Show 50 most recent
         ntrader history --strategy "SMA Crossover"  # Filter by strategy
-        ntrader history --status success   # Show only successful backtests
+        ntrader history --status success          # Show only successful backtests
+        ntrader history --sort sharpe             # Sort by Sharpe ratio (best first)
+        ntrader history --sort return --limit 10  # Top 10 by return
     """
-    asyncio.run(_list_history_async(limit, strategy, instrument, status))
+    asyncio.run(_list_history_async(limit, strategy, instrument, status, sort))
 
 
 async def _list_history_async(
-    limit: int, strategy: str | None, instrument: str | None, status: str | None
+    limit: int,
+    strategy: str | None,
+    instrument: str | None,
+    status: str | None,
+    sort: str,
 ):
     """
     Async implementation of history listing.
@@ -65,6 +81,7 @@ async def _list_history_async(
         strategy: Optional strategy name filter
         instrument: Optional instrument symbol filter
         status: Optional execution status filter
+        sort: Sort order (date, return, sharpe)
     """
     try:
         async with get_session() as session:
@@ -79,13 +96,33 @@ async def _list_history_async(
             ) as progress:
                 task = progress.add_task("Loading backtest history...", total=None)
 
-                # Query based on filters
-                if strategy:
-                    backtests = await service.list_by_strategy(
-                        strategy_name=strategy, limit=limit
+                # Query based on sort option
+                if sort == "sharpe":
+                    backtests = await service.find_top_performers(
+                        metric="sharpe_ratio", limit=limit
                     )
-                else:
-                    backtests = await service.list_recent_backtests(limit=limit)
+                    # Apply strategy filter if provided
+                    if strategy:
+                        backtests = [
+                            bt for bt in backtests if bt.strategy_name == strategy
+                        ]
+                elif sort == "return":
+                    backtests = await service.find_top_performers(
+                        metric="total_return", limit=limit
+                    )
+                    # Apply strategy filter if provided
+                    if strategy:
+                        backtests = [
+                            bt for bt in backtests if bt.strategy_name == strategy
+                        ]
+                else:  # sort == "date" (default)
+                    # Query based on filters
+                    if strategy:
+                        backtests = await service.list_by_strategy(
+                            strategy_name=strategy, limit=limit
+                        )
+                    else:
+                        backtests = await service.list_recent_backtests(limit=limit)
 
                 # Apply additional filters (instrument, status) in memory
                 if instrument:
@@ -105,21 +142,38 @@ async def _list_history_async(
             console.print("📭 No backtests found", style="yellow")
             return
 
-        # Format results in Rich table
+        # Format results in Rich table with sort indicator
+        sort_indicator = {
+            "date": "📅 ↓",
+            "return": "💰 ↓",
+            "sharpe": "📈 ↓",
+        }
+        sort_label = sort_indicator.get(sort, "")
+
         table = Table(
-            title=f"📋 Backtest History ({len(backtests)} results)",
+            title=f"📋 Backtest History ({len(backtests)} results) {sort_label}",
             show_header=True,
             header_style="bold cyan",
             show_lines=True,
         )
 
-        # Add columns
+        # Add columns with highlighting for sorted column
         table.add_column("Run ID", style="cyan", max_width=12, no_wrap=True)
-        table.add_column("Date", style="white", no_wrap=True)
+
+        # Highlight sorted column
+        date_style = "bold yellow" if sort == "date" else "white"
+        return_style_base = "bold yellow" if sort == "return" else "green"
+        sharpe_style_base = "bold yellow" if sort == "sharpe" else "white"
+
+        table.add_column("Date", style=date_style, no_wrap=True)
         table.add_column("Strategy", style="magenta")
         table.add_column("Symbol", style="blue", no_wrap=True)
-        table.add_column("Return", style="green", justify="right", no_wrap=True)
-        table.add_column("Sharpe", justify="right", no_wrap=True)
+        table.add_column(
+            "Return", style=return_style_base, justify="right", no_wrap=True
+        )
+        table.add_column(
+            "Sharpe", style=sharpe_style_base, justify="right", no_wrap=True
+        )
         table.add_column("Status", justify="center", no_wrap=True)
 
         # Add rows

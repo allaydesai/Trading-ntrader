@@ -13,7 +13,7 @@ from uuid import UUID
 from sqlalchemy import and_, func, select, tuple_
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import joinedload, selectinload
 
 from src.db.exceptions import DatabaseConnectionError, DuplicateRecordError
 from src.db.models.backtest import BacktestRun, PerformanceMetrics
@@ -312,23 +312,78 @@ class BacktestRepository:
         """
         Find top performing backtests by Sharpe ratio.
 
+        Returns backtests ordered by Sharpe ratio in descending order,
+        excluding any backtests with NULL Sharpe ratios.
+
         Args:
-            limit: Maximum records
+            limit: Maximum records to return
 
         Returns:
-            List of BacktestRun instances ordered by Sharpe ratio DESC
+            List of BacktestRun instances with metrics loaded, ordered by Sharpe ratio DESC
+
+        Example:
+            >>> repository = BacktestRepository(session)
+            >>> top_3 = await repository.find_top_performers_by_sharpe(limit=3)
+            >>> top_3[0].metrics.sharpe_ratio  # Highest Sharpe ratio
         """
         stmt = (
             select(BacktestRun)
-            .join(PerformanceMetrics)
-            .options(selectinload(BacktestRun.metrics))
+            .join(
+                PerformanceMetrics, BacktestRun.id == PerformanceMetrics.backtest_run_id
+            )
+            .options(joinedload(BacktestRun.metrics))
             .where(PerformanceMetrics.sharpe_ratio.isnot(None))
             .order_by(PerformanceMetrics.sharpe_ratio.desc())
             .limit(limit)
         )
 
         result = await self.session.execute(stmt)
-        return list(result.scalars().all())
+        backtests = list(result.scalars().unique().all())
+
+        # Ensure metrics are loaded for each backtest
+        for backtest in backtests:
+            await self.session.refresh(backtest, ["metrics"])
+
+        return backtests
+
+    async def find_top_performers_by_return(
+        self,
+        limit: int = 20,
+    ) -> List[BacktestRun]:
+        """
+        Find top performing backtests by total return.
+
+        Returns backtests ordered by total return in descending order.
+
+        Args:
+            limit: Maximum records to return
+
+        Returns:
+            List of BacktestRun instances with metrics loaded, ordered by total return DESC
+
+        Example:
+            >>> repository = BacktestRepository(session)
+            >>> top_3 = await repository.find_top_performers_by_return(limit=3)
+            >>> top_3[0].metrics.total_return  # Highest total return
+        """
+        stmt = (
+            select(BacktestRun)
+            .join(
+                PerformanceMetrics, BacktestRun.id == PerformanceMetrics.backtest_run_id
+            )
+            .options(joinedload(BacktestRun.metrics))
+            .order_by(PerformanceMetrics.total_return.desc())
+            .limit(limit)
+        )
+
+        result = await self.session.execute(stmt)
+        backtests = list(result.scalars().unique().all())
+
+        # Ensure metrics are loaded for each backtest
+        for backtest in backtests:
+            await self.session.refresh(backtest, ["metrics"])
+
+        return backtests
 
     async def count_by_strategy(self, strategy_name: str) -> int:
         """

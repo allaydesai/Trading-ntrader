@@ -383,3 +383,171 @@ class TestBacktestRepositoryRetrieve:
         # Verify results are ordered by created_at DESC
         for i in range(len(found_backtests) - 1):
             assert found_backtests[i].created_at >= found_backtests[i + 1].created_at
+
+    @pytest.mark.asyncio
+    async def test_find_top_performers_by_sharpe(self, repository, async_session):
+        """
+        Test finding top performing backtests sorted by Sharpe ratio.
+
+        Given: Database with backtests having different Sharpe ratios
+        When: Querying for top performers by Sharpe ratio
+        Then: Returns backtests sorted by Sharpe ratio DESC
+        """
+        # Create backtests with varying Sharpe ratios
+        sharpe_ratios = [
+            Decimal("2.5"),
+            Decimal("1.8"),
+            Decimal("3.2"),
+            Decimal("0.5"),
+            Decimal("1.2"),
+        ]
+
+        for i, sharpe in enumerate(sharpe_ratios):
+            backtest_run = await repository.create_backtest_run(
+                run_id=uuid4(),
+                strategy_name=f"Strategy {i}",
+                strategy_type="test",
+                instrument_symbol="AAPL",
+                start_date=datetime(2023, 1, 1, tzinfo=timezone.utc),
+                end_date=datetime(2023, 12, 31, tzinfo=timezone.utc),
+                initial_capital=Decimal("100000.00"),
+                data_source="Mock",
+                execution_status="success",
+                execution_duration_seconds=Decimal("10.5"),
+                config_snapshot={
+                    "strategy_path": "test",
+                    "config_path": "test",
+                    "version": "1.0",
+                    "config": {},
+                },
+            )
+
+            await repository.create_performance_metrics(
+                backtest_run_id=backtest_run.id,
+                total_return=Decimal("0.15"),
+                final_balance=Decimal("115000.00"),
+                sharpe_ratio=sharpe,
+                total_trades=10,
+                winning_trades=6,
+                losing_trades=4,
+            )
+
+        await async_session.commit()
+
+        # Query for top performers
+        top_performers = await repository.find_top_performers_by_sharpe(limit=5)
+
+        # Assertions
+        assert len(top_performers) == 5
+
+        # Verify descending order by Sharpe ratio
+        sharpe_values = [bt.metrics.sharpe_ratio for bt in top_performers]
+        assert sharpe_values == sorted(sharpe_values, reverse=True)
+
+        # Verify highest Sharpe is first
+        assert top_performers[0].metrics.sharpe_ratio == Decimal("3.2")
+        assert top_performers[-1].metrics.sharpe_ratio == Decimal("0.5")
+
+    @pytest.mark.asyncio
+    async def test_find_top_performers_excludes_null_sharpe(
+        self, repository, async_session
+    ):
+        """
+        Test that find_top_performers_by_sharpe() excludes NULL Sharpe ratios.
+
+        Given: Database with some backtests having NULL Sharpe ratios
+        When: Querying for top performers
+        Then: Returns only backtests with non-NULL Sharpe ratios
+        """
+        # Create 5 backtests, only 3 with Sharpe ratios
+        for i in range(5):
+            backtest_run = await repository.create_backtest_run(
+                run_id=uuid4(),
+                strategy_name=f"Strategy {i}",
+                strategy_type="test",
+                instrument_symbol="AAPL",
+                start_date=datetime(2023, 1, 1, tzinfo=timezone.utc),
+                end_date=datetime(2023, 12, 31, tzinfo=timezone.utc),
+                initial_capital=Decimal("100000.00"),
+                data_source="Mock",
+                execution_status="success",
+                execution_duration_seconds=Decimal("10.5"),
+                config_snapshot={
+                    "strategy_path": "test",
+                    "config_path": "test",
+                    "version": "1.0",
+                    "config": {},
+                },
+            )
+
+            # Only give 3 backtests a Sharpe ratio
+            sharpe_ratio = Decimal(str(2.0 - i * 0.5)) if i < 3 else None
+
+            await repository.create_performance_metrics(
+                backtest_run_id=backtest_run.id,
+                total_return=Decimal("0.15"),
+                final_balance=Decimal("115000.00"),
+                sharpe_ratio=sharpe_ratio,
+                total_trades=10,
+                winning_trades=6,
+                losing_trades=4,
+            )
+
+        await async_session.commit()
+
+        # Query for top performers - should only return 3
+        top_performers = await repository.find_top_performers_by_sharpe(limit=10)
+
+        # Assertions
+        assert len(top_performers) == 3
+        assert all(bt.metrics.sharpe_ratio is not None for bt in top_performers)
+
+    @pytest.mark.asyncio
+    async def test_find_top_performers_respects_limit(self, repository, async_session):
+        """
+        Test that find_top_performers_by_sharpe() respects the limit parameter.
+
+        Given: Database with 10 backtests
+        When: Querying with limit=3
+        Then: Returns exactly 3 top performers
+        """
+        # Create 10 backtests with different Sharpe ratios
+        for i in range(10):
+            backtest_run = await repository.create_backtest_run(
+                run_id=uuid4(),
+                strategy_name=f"Strategy {i}",
+                strategy_type="test",
+                instrument_symbol="AAPL",
+                start_date=datetime(2023, 1, 1, tzinfo=timezone.utc),
+                end_date=datetime(2023, 12, 31, tzinfo=timezone.utc),
+                initial_capital=Decimal("100000.00"),
+                data_source="Mock",
+                execution_status="success",
+                execution_duration_seconds=Decimal("10.5"),
+                config_snapshot={
+                    "strategy_path": "test",
+                    "config_path": "test",
+                    "version": "1.0",
+                    "config": {},
+                },
+            )
+
+            await repository.create_performance_metrics(
+                backtest_run_id=backtest_run.id,
+                total_return=Decimal("0.15"),
+                final_balance=Decimal("115000.00"),
+                sharpe_ratio=Decimal(str(1.0 + i * 0.3)),
+                total_trades=10,
+                winning_trades=6,
+                losing_trades=4,
+            )
+
+        await async_session.commit()
+
+        # Query with limit=3
+        top_3 = await repository.find_top_performers_by_sharpe(limit=3)
+
+        # Assertions
+        assert len(top_3) == 3
+        # Verify we got the top 3 by checking first has highest Sharpe
+        assert top_3[0].metrics.sharpe_ratio == Decimal("3.7")  # 1.0 + 9 * 0.3

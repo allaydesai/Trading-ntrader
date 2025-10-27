@@ -155,27 +155,39 @@ class BacktestQueryService:
         """
         Find top performing backtests by metric.
 
-        Currently supports sorting by Sharpe ratio. Additional metrics
-        can be added as needed.
+        Supports sorting by multiple performance metrics including Sharpe ratio
+        and total return.
 
         Args:
-            metric: Metric to sort by (currently only "sharpe_ratio")
-            limit: Maximum records
+            metric: Metric to sort by ("sharpe_ratio", "total_return")
+            limit: Maximum records (default 20, max 1000)
 
         Returns:
-            List of top performing BacktestRun instances
+            List of top performing BacktestRun instances ordered by metric DESC
 
         Raises:
             ValueError: If unsupported metric specified
 
         Example:
-            >>> top = await service.find_top_performers(limit=10)
+            >>> # Find top 10 by Sharpe ratio
+            >>> top = await service.find_top_performers(metric="sharpe_ratio", limit=10)
             >>> best = top[0]
             >>> print(f"Best: {best.strategy_name} (Sharpe: {best.metrics.sharpe_ratio})")
+            >>>
+            >>> # Find top 5 by total return
+            >>> top_returns = await service.find_top_performers(metric="total_return", limit=5)
+            >>> print(f"Best return: {top_returns[0].metrics.total_return:.2%}")
         """
+        # Enforce maximum limit
+        limit = min(limit, 1000)
+
         logger.debug("Finding top performers", metric=metric, limit=limit)
 
         if metric == "sharpe_ratio":
             return await self.repository.find_top_performers_by_sharpe(limit)
+        elif metric == "total_return":
+            return await self.repository.find_top_performers_by_return(limit)
         else:
-            raise ValueError(f"Unsupported metric: {metric}")
+            raise ValueError(
+                f"Unsupported metric: {metric}. Supported: sharpe_ratio, total_return"
+            )
