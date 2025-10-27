@@ -551,3 +551,97 @@ class TestBacktestRepositoryRetrieve:
         assert len(top_3) == 3
         # Verify we got the top 3 by checking first has highest Sharpe
         assert top_3[0].metrics.sharpe_ratio == Decimal("3.7")  # 1.0 + 9 * 0.3
+
+    @pytest.mark.asyncio
+    async def test_count_by_strategy(self, repository, async_session):
+        """
+        Test that count_by_strategy() returns correct count for a strategy.
+
+        Given: Database with multiple backtests for different strategies
+        When: Counting backtests for a specific strategy
+        Then: Returns accurate count of backtests for that strategy only
+        """
+        # Create backtests for multiple strategies
+        strategies = {
+            "SMA Crossover": 12,
+            "RSI Mean Reversion": 8,
+            "Momentum": 5,
+        }
+
+        for strategy_name, count in strategies.items():
+            for i in range(count):
+                backtest_run = await repository.create_backtest_run(
+                    run_id=uuid4(),
+                    strategy_name=strategy_name,
+                    strategy_type="test",
+                    instrument_symbol="AAPL",
+                    start_date=datetime(2023, 1, 1, tzinfo=timezone.utc),
+                    end_date=datetime(2023, 12, 31, tzinfo=timezone.utc),
+                    initial_capital=Decimal("100000.00"),
+                    data_source="Mock",
+                    execution_status="success",
+                    execution_duration_seconds=Decimal("10.5"),
+                    config_snapshot={
+                        "strategy_path": "test",
+                        "config_path": "test",
+                        "version": "1.0",
+                        "config": {},
+                    },
+                )
+
+                await repository.create_performance_metrics(
+                    backtest_run_id=backtest_run.id,
+                    total_return=Decimal("0.15"),
+                    final_balance=Decimal("115000.00"),
+                    sharpe_ratio=Decimal("1.5"),
+                    total_trades=10,
+                    winning_trades=6,
+                    losing_trades=4,
+                )
+
+        await async_session.commit()
+
+        # Test count for each strategy
+        sma_count = await repository.count_by_strategy("SMA Crossover")
+        assert sma_count == 12
+
+        rsi_count = await repository.count_by_strategy("RSI Mean Reversion")
+        assert rsi_count == 8
+
+        momentum_count = await repository.count_by_strategy("Momentum")
+        assert momentum_count == 5
+
+    @pytest.mark.asyncio
+    async def test_count_by_strategy_nonexistent(self, repository, async_session):
+        """
+        Test that count_by_strategy() returns 0 for a non-existent strategy.
+
+        Given: Database with some backtests
+        When: Counting backtests for a strategy that doesn't exist
+        Then: Returns 0
+        """
+        # Create one backtest
+        await repository.create_backtest_run(
+            run_id=uuid4(),
+            strategy_name="Existing Strategy",
+            strategy_type="test",
+            instrument_symbol="AAPL",
+            start_date=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            end_date=datetime(2023, 12, 31, tzinfo=timezone.utc),
+            initial_capital=Decimal("100000.00"),
+            data_source="Mock",
+            execution_status="success",
+            execution_duration_seconds=Decimal("10.5"),
+            config_snapshot={
+                "strategy_path": "test",
+                "config_path": "test",
+                "version": "1.0",
+                "config": {},
+            },
+        )
+
+        await async_session.commit()
+
+        # Test count for non-existent strategy
+        count = await repository.count_by_strategy("Non-Existent Strategy")
+        assert count == 0

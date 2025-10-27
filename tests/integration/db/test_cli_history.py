@@ -349,3 +349,77 @@ async def test_history_command_excludes_null_sharpe_ratios(db_session):
     # Assertions
     assert len(backtests) == 3
     assert all(bt.metrics.sharpe_ratio is not None for bt in backtests)
+
+
+@pytest.mark.asyncio
+async def test_strategy_history_chronological_order(db_session):
+    """
+    Test that strategy history shows backtests in chronological order (most recent first).
+
+    Given: Database with 15+ backtest runs for the same strategy at different times
+    When: Service queries for strategy history
+    Then: Returns backtests ordered by creation date descending (newest first)
+    """
+    import asyncio
+
+    repository = BacktestRepository(db_session)
+
+    # Create 18 backtest runs for the same strategy at different times
+    strategy_name = "SMA Crossover"
+    created_runs = []
+
+    for i in range(18):
+        run_id = uuid4()
+
+        backtest_run = await repository.create_backtest_run(
+            run_id=run_id,
+            strategy_name=strategy_name,
+            strategy_type="trend_following",
+            instrument_symbol="AAPL",
+            start_date=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            end_date=datetime(2023, 12, 31, tzinfo=timezone.utc),
+            initial_capital=Decimal("100000.00"),
+            data_source="Mock",
+            execution_status="success",
+            execution_duration_seconds=Decimal("10.5"),
+            config_snapshot={
+                "version": "1.0",
+                "config": {
+                    "fast_period": 10 + i,  # Vary parameter
+                    "slow_period": 20 + i,
+                },
+            },
+        )
+
+        await repository.create_performance_metrics(
+            backtest_run_id=backtest_run.id,
+            total_return=Decimal(str(0.10 + i * 0.01)),  # Vary return
+            final_balance=Decimal("115000.00"),
+            sharpe_ratio=Decimal(str(1.5 + i * 0.1)),  # Vary Sharpe
+            total_trades=10,
+            winning_trades=6,
+            losing_trades=4,
+        )
+
+        created_runs.append(backtest_run)
+
+        # Small delay to ensure different created_at timestamps
+        await asyncio.sleep(0.001)
+
+    await db_session.commit()
+
+    # Test service with strategy filter
+    service = BacktestQueryService(repository)
+    backtests = await service.list_by_strategy(strategy_name, limit=20)
+
+    # Assertions
+    assert len(backtests) == 18
+    assert all(bt.strategy_name == strategy_name for bt in backtests)
+
+    # Verify chronological order (newest first)
+    created_at_values = [bt.created_at for bt in backtests]
+    assert created_at_values == sorted(created_at_values, reverse=True)
+
+    # Verify the most recent backtest is first
+    assert backtests[0].config_snapshot["config"]["fast_period"] == 27  # Last created (i=17)
+    assert backtests[-1].config_snapshot["config"]["fast_period"] == 10  # First created (i=0)

@@ -405,27 +405,27 @@
 
 ### Tests for User Story 7 (TDD)
 
-- [ ] T158 [P] [US7] TDD: Write failing integration test for strategy history in `tests/integration/test_cli_history.py` - should filter by strategy and show chronologically
-- [ ] T159 [P] [US7] TDD: Write failing unit test for BacktestRepository.count_by_strategy() in `tests/unit/db/test_backtest_repository.py`
+- [x] T158 [P] [US7] TDD: Write failing integration test for strategy history in `tests/integration/test_cli_history.py` - should filter by strategy and show chronologically
+- [x] T159 [P] [US7] TDD: Write failing unit test for BacktestRepository.count_by_strategy() in `tests/unit/db/test_backtest_repository.py`
 
 ### Repository Query Methods for User Story 7
 
-- [ ] T160 [US7] Implement BacktestRepository.count_by_strategy() per design.md lines 564-582 - returns total count for pagination info
+- [x] T160 [US7] Implement BacktestRepository.count_by_strategy() per design.md lines 564-582 - returns total count for pagination info
 
 ### CLI Extension for User Story 7
 
-- [ ] T161 [US7] Enhance history.py --strategy filter to show total count and pagination info
-- [ ] T162 [US7] Add --strategy-summary flag to show statistics across all runs (avg return, best Sharpe, etc.)
-- [ ] T163 [US7] Display parameter variations across runs for same strategy (extract from config_snapshot)
+- [x] T161 [US7] Enhance history.py --strategy filter to show total count and pagination info
+- [x] T162 [US7] Add --strategy-summary flag to show statistics across all runs (avg return, best Sharpe, etc.)
+- [x] T163 [US7] Display parameter variations across runs for same strategy (extract from config_snapshot)
 
 ### Validation for User Story 7
 
-- [ ] T164 [US7] Test viewing history for strategy with 15+ runs - verify chronological order
-- [ ] T165 [US7] Test strategy summary statistics - verify calculations correct
-- [ ] T166 [US7] Test with strategy name that has no runs - verify friendly message
-- [ ] T167 [US7] Verify all tests from T158-T159 now PASS
+- [x] T164 [US7] Test viewing history for strategy with 15+ runs - verify chronological order
+- [x] T165 [US7] Test strategy summary statistics - verify calculations correct
+- [x] T166 [US7] Test with strategy name that has no runs - verify friendly message
+- [x] T167 [US7] Verify all tests from T158-T159 now PASS
 
-**Checkpoint**: User Story 7 complete - can now view strategy performance over time
+**Checkpoint**: ✅ User Story 7 complete - can now view strategy performance over time with total count display, aggregate statistics summary, and parameter variation tracking
 
 ---
 

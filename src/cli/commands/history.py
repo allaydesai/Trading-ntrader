@@ -41,12 +41,26 @@ console = Console()
     default="date",
     help="Sort by: date (default), return, or sharpe",
 )
+@click.option(
+    "--strategy-summary",
+    is_flag=True,
+    default=False,
+    help="Show aggregate statistics for the strategy (requires --strategy)",
+)
+@click.option(
+    "--show-params",
+    is_flag=True,
+    default=False,
+    help="Display parameter variations across runs",
+)
 def list_backtest_history(
     limit: int,
     strategy: str | None,
     instrument: str | None,
     status: str | None,
     sort: str,
+    strategy_summary: bool,
+    show_params: bool,
 ):
     """
     List recent backtest executions with performance metrics.
@@ -63,7 +77,11 @@ def list_backtest_history(
         ntrader history --sort sharpe             # Sort by Sharpe ratio (best first)
         ntrader history --sort return --limit 10  # Top 10 by return
     """
-    asyncio.run(_list_history_async(limit, strategy, instrument, status, sort))
+    asyncio.run(
+        _list_history_async(
+            limit, strategy, instrument, status, sort, strategy_summary, show_params
+        )
+    )
 
 
 async def _list_history_async(
@@ -72,6 +90,8 @@ async def _list_history_async(
     instrument: str | None,
     status: str | None,
     sort: str,
+    strategy_summary: bool,
+    show_params: bool,
 ):
     """
     Async implementation of history listing.
@@ -135,11 +155,28 @@ async def _list_history_async(
                         bt for bt in backtests if bt.execution_status == status
                     ]
 
+                # Get total count if filtering by strategy (T161)
+                total_count = None
+                if strategy and sort == "date":
+                    total_count = await repository.count_by_strategy(strategy)
+
                 progress.update(task, completed=True)
 
         # Handle empty results
         if not backtests:
             console.print("📭 No backtests found", style="yellow")
+            return
+
+        # Display strategy summary if requested (T162)
+        if strategy_summary:
+            if not strategy:
+                console.print(
+                    "❌ Error: --strategy-summary requires --strategy flag",
+                    style="red",
+                )
+                return
+
+            _display_strategy_summary(backtests, strategy)
             return
 
         # Format results in Rich table with sort indicator
@@ -150,8 +187,14 @@ async def _list_history_async(
         }
         sort_label = sort_indicator.get(sort, "")
 
+        # Build table title with count info (T161)
+        if total_count is not None:
+            title = f"📋 Backtest History for '{strategy}' (showing {len(backtests)} of {total_count} total) {sort_label}"
+        else:
+            title = f"📋 Backtest History ({len(backtests)} results) {sort_label}"
+
         table = Table(
-            title=f"📋 Backtest History ({len(backtests)} results) {sort_label}",
+            title=title,
             show_header=True,
             header_style="bold cyan",
             show_lines=True,
@@ -175,6 +218,10 @@ async def _list_history_async(
             "Sharpe", style=sharpe_style_base, justify="right", no_wrap=True
         )
         table.add_column("Status", justify="center", no_wrap=True)
+
+        # Add parameters column if requested (T163)
+        if show_params:
+            table.add_column("Parameters", style="dim", max_width=30)
 
         # Add rows
         for bt in backtests:
@@ -207,7 +254,8 @@ async def _list_history_async(
             else:
                 return_style = "dim"
 
-            table.add_row(
+            # Extract parameters if requested (T163)
+            row_data = [
                 f"[dim]{str(bt.run_id)[:8]}...[/dim]",
                 bt.created_at.strftime("%Y-%m-%d %H:%M"),
                 bt.strategy_name,
@@ -215,7 +263,13 @@ async def _list_history_async(
                 f"[{return_style}]{return_display}[/{return_style}]",
                 sharpe_display,
                 f"[{status_style}]{status_display}[/{status_style}]",
-            )
+            ]
+
+            if show_params:
+                params = _extract_parameters(bt.config_snapshot)
+                row_data.append(params)
+
+            table.add_row(*row_data)
 
         console.print(table)
 
@@ -236,3 +290,132 @@ async def _list_history_async(
             "💡 Check database is running and credentials are correct", style="dim"
         )
         raise
+
+
+def _display_strategy_summary(backtests: list, strategy_name: str):
+    """
+    Display aggregate statistics for a strategy (T162).
+
+    Args:
+        backtests: List of BacktestRun instances
+        strategy_name: Name of the strategy being summarized
+    """
+    from rich.panel import Panel
+    from rich.text import Text
+
+    # Filter out failed backtests for statistics
+    successful_backtests = [bt for bt in backtests if bt.metrics is not None]
+
+    if not successful_backtests:
+        console.print(
+            f"📊 No successful backtests found for strategy '{strategy_name}'",
+            style="yellow",
+        )
+        return
+
+    # Calculate aggregate statistics
+    total_runs = len(backtests)
+    successful_runs = len(successful_backtests)
+    failed_runs = total_runs - successful_runs
+
+    # Extract metrics
+    returns = [float(bt.metrics.total_return) for bt in successful_backtests]
+    sharpes = [
+        float(bt.metrics.sharpe_ratio)
+        for bt in successful_backtests
+        if bt.metrics.sharpe_ratio is not None
+    ]
+    max_drawdowns = [
+        float(bt.metrics.max_drawdown)
+        for bt in successful_backtests
+        if bt.metrics.max_drawdown is not None
+    ]
+    win_rates = [
+        float(bt.metrics.win_rate)
+        for bt in successful_backtests
+        if bt.metrics.win_rate is not None
+    ]
+
+    # Calculate aggregates
+    avg_return = sum(returns) / len(returns) if returns else 0
+    best_return = max(returns) if returns else 0
+    worst_return = min(returns) if returns else 0
+
+    avg_sharpe = sum(sharpes) / len(sharpes) if sharpes else 0
+    best_sharpe = max(sharpes) if sharpes else 0
+
+    avg_drawdown = sum(max_drawdowns) / len(max_drawdowns) if max_drawdowns else 0
+    worst_drawdown = min(max_drawdowns) if max_drawdowns else 0
+
+    avg_win_rate = sum(win_rates) / len(win_rates) if win_rates else 0
+
+    # Build summary panel
+    summary_text = Text()
+    summary_text.append(f"Strategy: {strategy_name}\n\n", style="bold cyan")
+
+    summary_text.append("📊 Execution Summary\n", style="bold white")
+    summary_text.append(f"  Total Runs: {total_runs}\n", style="white")
+    summary_text.append(f"  Successful: {successful_runs} ✅\n", style="green")
+    summary_text.append(f"  Failed: {failed_runs} ❌\n\n", style="red")
+
+    summary_text.append("💰 Return Statistics\n", style="bold white")
+    summary_text.append(f"  Average Return: {avg_return:.2%}\n", style="white")
+    summary_text.append(f"  Best Return: {best_return:.2%}\n", style="green")
+    summary_text.append(f"  Worst Return: {worst_return:.2%}\n\n", style="red")
+
+    summary_text.append("📈 Risk-Adjusted Performance\n", style="bold white")
+    summary_text.append(f"  Average Sharpe Ratio: {avg_sharpe:.2f}\n", style="white")
+    summary_text.append(f"  Best Sharpe Ratio: {best_sharpe:.2f}\n\n", style="green")
+
+    summary_text.append("📉 Risk Metrics\n", style="bold white")
+    summary_text.append(f"  Average Max Drawdown: {avg_drawdown:.2%}\n", style="white")
+    summary_text.append(f"  Worst Max Drawdown: {worst_drawdown:.2%}\n\n", style="red")
+
+    summary_text.append("🎯 Trading Performance\n", style="bold white")
+    summary_text.append(f"  Average Win Rate: {avg_win_rate:.1%}\n", style="white")
+
+    panel = Panel(
+        summary_text,
+        title=f"[bold cyan]Strategy Summary: {strategy_name}[/bold cyan]",
+        border_style="cyan",
+        padding=(1, 2),
+    )
+
+    console.print(panel)
+
+
+def _extract_parameters(config_snapshot: dict) -> str:
+    """
+    Extract and format parameters from config snapshot (T163).
+
+    Args:
+        config_snapshot: JSONB config snapshot from database
+
+    Returns:
+        Formatted string of key parameters
+    """
+    try:
+        config = config_snapshot.get("config", {})
+
+        if not config:
+            return "N/A"
+
+        # Extract key parameters (limit to most important ones)
+        params = []
+        for key, value in list(config.items())[:3]:  # Show max 3 params
+            # Format parameter name and value
+            if isinstance(value, (int, float)):
+                params.append(f"{key}={value}")
+            elif isinstance(value, str):
+                # Truncate long strings
+                value_str = value[:10] + "..." if len(value) > 10 else value
+                params.append(f"{key}={value_str}")
+            else:
+                params.append(f"{key}={str(value)[:10]}")
+
+        if len(config) > 3:
+            params.append("...")
+
+        return ", ".join(params)
+    except Exception:
+        return "N/A"
