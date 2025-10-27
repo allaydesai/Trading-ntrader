@@ -104,7 +104,8 @@ class Settings(BaseSettings):
         default=20, description="Slow EMA period for strategies"
     )
     trade_size: Decimal = Field(
-        default=Decimal("1000000"), description="Default trade size in SHARES (not USD notional)"
+        default=Decimal("1000000"),
+        description="Default trade size in SHARES (not USD notional)",
     )
 
     # Commission settings (IBKR US Equities Tiered)

@@ -1,4 +1,5 @@
 """Check the saved backtest data in database."""
+
 import asyncio
 import json
 from sqlalchemy import text

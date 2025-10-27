@@ -57,9 +57,9 @@ def test_show_displays_successful_backtest_details():
                     "config": {
                         "fast_period": 10,
                         "slow_period": 50,
-                        "risk_percent": 2.0
-                    }
-                }
+                        "risk_percent": 2.0,
+                    },
+                },
             )
 
             # Add performance metrics
@@ -81,7 +81,7 @@ def test_show_displays_successful_backtest_details():
                 profit_factor=Decimal("2.15"),
                 expectancy=Decimal("145.60"),
                 avg_win=Decimal("520.35"),
-                avg_loss=Decimal("-285.20")
+                avg_loss=Decimal("-285.20"),
             )
 
             await session.commit()
@@ -93,6 +93,7 @@ def test_show_displays_successful_backtest_details():
 
     # Dispose connections to avoid event loop conflicts
     from src.db.session import dispose_all_connections
+
     asyncio.run(dispose_all_connections())
 
     # Act: Run the show command
@@ -167,9 +168,9 @@ def test_show_displays_failed_backtest_with_error():
                     "config": {
                         "rsi_period": 14,
                         "oversold_threshold": 30,
-                        "overbought_threshold": 70
-                    }
-                }
+                        "overbought_threshold": 70,
+                    },
+                },
             )
 
             await session.commit()
@@ -181,6 +182,7 @@ def test_show_displays_failed_backtest_with_error():
 
     # Dispose connections to avoid event loop conflicts
     from src.db.session import dispose_all_connections
+
     asyncio.run(dispose_all_connections())
 
     # Act: Run the show command
@@ -231,7 +233,10 @@ def test_show_handles_not_found_uuid():
 
     # Assert: Verify not found handling
     # Command should handle this gracefully
-    assert "not found" in result.output.lower() or "does not exist" in result.output.lower()
+    assert (
+        "not found" in result.output.lower()
+        or "does not exist" in result.output.lower()
+    )
     assert str(non_existent_id) in result.output
 
 

@@ -1,4 +1,5 @@
 """Check database tables and schema."""
+
 import asyncio
 from sqlalchemy import text
 from src.db.session import get_session
@@ -61,9 +62,7 @@ async def check_tables():
         # Check if old market_data table exists
         if any("market_data" in str(t[0]) for t in tables):
             print("\n⚠️  Old market_data table found - may need cleanup")
-            result = await session.execute(
-                text("SELECT COUNT(*) FROM market_data")
-            )
+            result = await session.execute(text("SELECT COUNT(*) FROM market_data"))
             count = result.scalar()
             print(f"   Rows in market_data: {count}")
 

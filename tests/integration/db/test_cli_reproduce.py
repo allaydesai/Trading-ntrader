@@ -58,9 +58,9 @@ def test_reproduce_creates_new_run_with_same_config():
                     "config": {
                         "fast_period": 10,
                         "slow_period": 50,
-                        "trade_size": 1000
-                    }
-                }
+                        "trade_size": 1000,
+                    },
+                },
             )
 
             await session.commit()
@@ -72,6 +72,7 @@ def test_reproduce_creates_new_run_with_same_config():
 
     # Dispose connections to avoid event loop conflicts
     from src.db.session import dispose_all_connections
+
     asyncio.run(dispose_all_connections())
 
     # Act: Run reproduce command
@@ -83,7 +84,10 @@ def test_reproduce_creates_new_run_with_same_config():
     # But it should successfully retrieve and display the original config
     assert "SMA Crossover" in result.output or "sma_crossover" in result.output
     assert "AAPL" in result.output
-    assert original_run_id_str[:12] in result.output or original_run_id_str[:8] in result.output
+    assert (
+        original_run_id_str[:12] in result.output
+        or original_run_id_str[:8] in result.output
+    )
 
 
 @pytest.mark.integration
@@ -126,9 +130,9 @@ def test_reproduce_sets_reproduced_from_run_id():
                     "config": {
                         "lookback_period": 20,
                         "entry_threshold": 2.0,
-                        "exit_threshold": 0.5
-                    }
-                }
+                        "exit_threshold": 0.5,
+                    },
+                },
             )
 
             await session.commit()
@@ -139,6 +143,7 @@ def test_reproduce_sets_reproduced_from_run_id():
 
     # Dispose connections
     from src.db.session import dispose_all_connections
+
     asyncio.run(dispose_all_connections())
 
     # Act: Run reproduce command
@@ -148,7 +153,10 @@ def test_reproduce_sets_reproduced_from_run_id():
     # Assert: Command should retrieve and display original config
     assert "Mean Reversion" in result.output or "mean_reversion" in result.output
     assert "TSLA" in result.output
-    assert original_run_id_str[:12] in result.output or original_run_id_str[:8] in result.output
+    assert (
+        original_run_id_str[:12] in result.output
+        or original_run_id_str[:8] in result.output
+    )
 
 
 @pytest.mark.integration
@@ -240,11 +248,8 @@ def test_reproduce_displays_original_configuration():
                     "strategy_path": "src.core.strategies.momentum",
                     "config_path": "runtime_config",
                     "version": "1.0",
-                    "config": {
-                        "momentum_period": 14,
-                        "entry_threshold": 0.05
-                    }
-                }
+                    "config": {"momentum_period": 14, "entry_threshold": 0.05},
+                },
             )
 
             await session.commit()
@@ -255,6 +260,7 @@ def test_reproduce_displays_original_configuration():
 
     # Dispose connections
     from src.db.session import dispose_all_connections
+
     asyncio.run(dispose_all_connections())
 
     # Act: Run reproduce command
@@ -262,6 +268,9 @@ def test_reproduce_displays_original_configuration():
     result = runner.invoke(reproduce_backtest, [original_run_id_str])
 
     # Assert: Should display original configuration
-    assert original_run_id_str[:12] in result.output or original_run_id_str[:8] in result.output
+    assert (
+        original_run_id_str[:12] in result.output
+        or original_run_id_str[:8] in result.output
+    )
     assert "Momentum" in result.output or "momentum" in result.output
     assert "GOOGL" in result.output

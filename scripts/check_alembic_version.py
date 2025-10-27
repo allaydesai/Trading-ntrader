@@ -1,4 +1,5 @@
 """Check what migration version is in the database."""
+
 import asyncio
 from sqlalchemy import text
 from src.db.session import get_session
