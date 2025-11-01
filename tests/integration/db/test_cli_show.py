@@ -6,14 +6,12 @@ backtest details by run_id.
 """
 
 import pytest
-from uuid import UUID, uuid4
+from uuid import uuid4
 from decimal import Decimal
 from datetime import datetime, timezone
 from click.testing import CliRunner
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.cli.commands.show import show_backtest_details as show
-from src.db.models.backtest import BacktestRun, PerformanceMetrics
 from src.db.session import get_session
 
 
@@ -29,7 +27,6 @@ def test_show_displays_successful_backtest_details():
     - Execution metadata shown (status, duration, timestamps)
     """
     import asyncio
-    from src.db.session import get_session
     from src.db.repositories.backtest_repository import BacktestRepository
 
     async def setup_test_data():
@@ -136,7 +133,7 @@ def test_show_displays_failed_backtest_with_error():
     - Basic metadata still shown
     """
     import asyncio
-    from src.db.session import get_session, dispose_all_connections
+    from src.db.session import dispose_all_connections
     from src.db.repositories.backtest_repository import BacktestRepository
 
     # Dispose any existing connections from previous tests

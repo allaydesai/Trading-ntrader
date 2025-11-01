@@ -6,11 +6,6 @@ from unittest.mock import patch, MagicMock
 from decimal import Decimal
 from datetime import datetime
 
-# Skip entire module until report commands are updated to use new BacktestRun model
-pytestmark = pytest.mark.skip(
-    reason="Report commands need to be updated to use BacktestRun model from database"
-)
-
 from src.cli.commands.report import (
     report,
     summary,
@@ -19,40 +14,43 @@ from src.cli.commands.report import (
     export_all,
 )
 
+# Skip entire module until report commands are updated to use new BacktestRun model
+pytestmark = pytest.mark.skip(
+    reason="Report commands need to be updated to use BacktestRun model from database"
+)
+
 
 @pytest.fixture
 def mock_result():
-    """Create a mock EnhancedBacktestResult for testing."""
-    metadata = BacktestMetadata(
-        backtest_id="test-123-456",
-        timestamp=datetime(2024, 1, 15, 10, 30),
-        strategy_name="SMA Crossover",
-        strategy_type="sma",
-        symbol="AAPL",
-        start_date=datetime(2024, 1, 1),
-        end_date=datetime(2024, 1, 31),
-        parameters={"fast_period": 10, "slow_period": 20},
-    )
-
-    return EnhancedBacktestResult(
-        metadata=metadata,
-        total_return=Decimal("1500.00"),
-        total_trades=25,
-        winning_trades=15,
-        losing_trades=10,
-        largest_win=Decimal("350.00"),
-        largest_loss=Decimal("-120.00"),
-        final_balance=Decimal("11500.00"),
-        sharpe_ratio=1.42,
-        sortino_ratio=1.68,
-        max_drawdown=-0.087,
-        calmar_ratio=1.76,
-        volatility=0.15,
-        profit_factor=1.85,
-        realized_pnl=Decimal("1500.00"),
-        unrealized_pnl=Decimal("0.00"),
-        total_pnl=Decimal("1500.00"),
-    )
+    """Create a mock result for testing."""
+    # TODO: Update to use BacktestRun model from database
+    # These old models (BacktestMetadata, EnhancedBacktestResult) no longer exist
+    result = MagicMock()
+    result.result_id = "test-123-456"
+    result.timestamp = datetime(2024, 1, 15, 10, 30)
+    result.strategy_name = "SMA Crossover"
+    result.strategy_type = "sma"
+    result.symbol = "AAPL"
+    result.start_date = datetime(2024, 1, 1)
+    result.end_date = datetime(2024, 1, 31)
+    result.parameters = {"fast_period": 10, "slow_period": 20}
+    result.total_return = Decimal("1500.00")
+    result.total_trades = 25
+    result.winning_trades = 15
+    result.losing_trades = 10
+    result.largest_win = Decimal("350.00")
+    result.largest_loss = Decimal("-120.00")
+    result.final_balance = Decimal("11500.00")
+    result.sharpe_ratio = 1.42
+    result.sortino_ratio = 1.68
+    result.max_drawdown = -0.087
+    result.calmar_ratio = 1.76
+    result.volatility = 0.15
+    result.profit_factor = 1.85
+    result.realized_pnl = Decimal("1500.00")
+    result.unrealized_pnl = Decimal("0.00")
+    result.total_pnl = Decimal("1500.00")
+    return result
 
 
 class TestReportCommandGroup:

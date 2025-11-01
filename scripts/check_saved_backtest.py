@@ -77,7 +77,7 @@ async def check_saved_data():
         if row:
             print(f"\nRun ID: {row[0]}")
             print(f"Strategy: {row[1]}")
-            print(f"Config Snapshot:")
+            print("Config Snapshot:")
             print(json.dumps(row[2], indent=2))
 
 

@@ -129,6 +129,8 @@ class DataCatalogService:
                 client_id=ibkr_client_id,
             )
 
+        # At this point, _ibkr_client is guaranteed to be non-None
+        assert self._ibkr_client is not None
         return self._ibkr_client
 
     def _rebuild_availability_cache(self) -> None:

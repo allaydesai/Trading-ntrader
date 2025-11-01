@@ -6,14 +6,12 @@ with their exact same configuration.
 """
 
 import pytest
-from uuid import UUID, uuid4
+from uuid import uuid4
 from decimal import Decimal
 from datetime import datetime, timezone
 from click.testing import CliRunner
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.cli.commands.reproduce import reproduce_backtest
-from src.db.models.backtest import BacktestRun, PerformanceMetrics
 from src.db.session import get_session
 
 
@@ -40,7 +38,7 @@ def test_reproduce_creates_new_run_with_same_config():
         async with get_session() as session:
             repository = BacktestRepository(session)
 
-            original_backtest = await repository.create_backtest_run(
+            await repository.create_backtest_run(
                 run_id=original_run_id,
                 strategy_name="SMA Crossover",
                 strategy_type="sma_crossover",

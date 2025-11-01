@@ -3,8 +3,6 @@
 import asyncio
 import sys
 import time
-from datetime import datetime, timezone
-from decimal import Decimal
 from uuid import UUID
 
 import click
@@ -16,7 +14,6 @@ from src.db.session import get_session
 from src.db.repositories.backtest_repository import BacktestRepository
 from src.services.backtest_query import BacktestQueryService
 from src.core.backtest_runner import MinimalBacktestRunner
-from src.db.exceptions import RecordNotFoundError
 from src.services.exceptions import DataNotFoundError
 
 console = Console()
@@ -118,7 +115,6 @@ async def _reproduce_backtest_async(run_id_str: str):
 
         try:
             from src.services.data_catalog import DataCatalogService
-            from nautilus_trader.core.datetime import dt_to_unix_nanos
 
             catalog_service = DataCatalogService()
 

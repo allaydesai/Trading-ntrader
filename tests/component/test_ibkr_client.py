@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from ibapi.common import MarketDataTypeEnum
+from ibapi.common import MarketDataTypeEnum  # type: ignore[import-untyped]
 
 
 class TestRateLimiter:

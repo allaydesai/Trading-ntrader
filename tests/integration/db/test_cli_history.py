@@ -421,5 +421,9 @@ async def test_strategy_history_chronological_order(db_session):
     assert created_at_values == sorted(created_at_values, reverse=True)
 
     # Verify the most recent backtest is first
-    assert backtests[0].config_snapshot["config"]["fast_period"] == 27  # Last created (i=17)
-    assert backtests[-1].config_snapshot["config"]["fast_period"] == 10  # First created (i=0)
+    assert (
+        backtests[0].config_snapshot["config"]["fast_period"] == 27
+    )  # Last created (i=17)
+    assert (
+        backtests[-1].config_snapshot["config"]["fast_period"] == 10
+    )  # First created (i=0)
