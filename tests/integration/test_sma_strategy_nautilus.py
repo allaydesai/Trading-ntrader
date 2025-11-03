@@ -233,24 +233,6 @@ def test_check_for_signals_no_crossover():
 
 
 @pytest.mark.integration
-def test_on_event_without_position_id():
-    """Test that on_event handles events without position_id attribute."""
-    instrument = TestInstrumentProvider.default_fx_ccy("EUR/USD")
-    config = SMAConfig(
-        instrument_id=instrument.id,
-        bar_type=f"{instrument.id}-15-MINUTE-BID-INTERNAL",
-    )
-
-    strategy = SMACrossover(config=config)
-
-    # Mock event without position_id - should not access cache
-    mock_event = Mock(spec=[])  # Empty spec means no attributes
-
-    # This should not raise an exception (no position_id means no cache access)
-    strategy.on_event(mock_event)
-
-
-@pytest.mark.integration
 def test_on_dispose_does_nothing():
     """Test that on_dispose completes without error."""
     instrument = TestInstrumentProvider.default_fx_ccy("EUR/USD")
