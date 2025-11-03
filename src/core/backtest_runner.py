@@ -213,6 +213,8 @@ class MinimalBacktestRunner:
         fast_period: Optional[int] = None,
         slow_period: Optional[int] = None,
         trade_size: Optional[Decimal] = None,
+        portfolio_value: Optional[Decimal] = None,
+        position_size_pct: Optional[Decimal] = None,
         num_bars: Optional[int] = None,
     ) -> BacktestResult:
         """
@@ -225,7 +227,11 @@ class MinimalBacktestRunner:
         slow_period : int, optional
             Slow SMA period. Defaults to config value.
         trade_size : Decimal, optional
-            Trade size. Defaults to config value.
+            Trade size (deprecated - use position_size_pct instead).
+        portfolio_value : Decimal, optional
+            Starting portfolio value for position sizing. Defaults to config value.
+        position_size_pct : Decimal, optional
+            Position size as % of portfolio. Defaults to config value.
         num_bars : int, optional
             Number of mock data bars. Defaults to config value.
 
@@ -239,8 +245,10 @@ class MinimalBacktestRunner:
             fast_period = self.settings.fast_ema_period
         if slow_period is None:
             slow_period = self.settings.slow_ema_period
-        if trade_size is None:
-            trade_size = self.settings.trade_size
+        if portfolio_value is None:
+            portfolio_value = self.settings.portfolio_value
+        if position_size_pct is None:
+            position_size_pct = self.settings.position_size_pct
         if num_bars is None:
             num_bars = self.settings.mock_data_bars
 
@@ -300,7 +308,8 @@ class MinimalBacktestRunner:
             bar_type=BarType.from_str(bar_type_str),
             fast_period=fast_period,
             slow_period=slow_period,
-            trade_size=trade_size,
+            portfolio_value=portfolio_value,
+            position_size_pct=position_size_pct,
         )
 
         # Create and add strategy
@@ -322,6 +331,8 @@ class MinimalBacktestRunner:
         fast_period: Optional[int] = None,
         slow_period: Optional[int] = None,
         trade_size: Optional[Decimal] = None,
+        portfolio_value: Optional[Decimal] = None,
+        position_size_pct: Optional[Decimal] = None,
     ) -> BacktestResult:
         """
         Run backtest using real data from database.
@@ -332,7 +343,9 @@ class MinimalBacktestRunner:
             end: End datetime for backtest
             fast_period: Fast SMA period
             slow_period: Slow SMA period
-            trade_size: Trade size
+            trade_size: Trade size (deprecated - use position_size_pct)
+            portfolio_value: Starting portfolio value for position sizing
+            position_size_pct: Position size as % of portfolio
 
         Returns:
             BacktestResult: Results of the backtest
@@ -352,8 +365,10 @@ class MinimalBacktestRunner:
             fast_period = self.settings.fast_ema_period
         if slow_period is None:
             slow_period = self.settings.slow_ema_period
-        if trade_size is None:
-            trade_size = self.settings.trade_size
+        if portfolio_value is None:
+            portfolio_value = self.settings.portfolio_value
+        if position_size_pct is None:
+            position_size_pct = self.settings.position_size_pct
 
         # Validate data availability
         validation = await self.data_service.validate_data_availability(
@@ -458,7 +473,8 @@ class MinimalBacktestRunner:
             bar_type=BarType.from_str(bar_type_str),
             fast_period=fast_period,
             slow_period=slow_period,
-            trade_size=trade_size,
+            portfolio_value=portfolio_value,
+            position_size_pct=position_size_pct,
         )
 
         # Create and add strategy
@@ -866,8 +882,19 @@ class MinimalBacktestRunner:
                 {
                     "fast_period": strategy_params.get("fast_period", 10),
                     "slow_period": strategy_params.get("slow_period", 20),
-                    "trade_size": Decimal(
-                        str(strategy_params.get("trade_size", 1000000))
+                    "portfolio_value": Decimal(
+                        str(
+                            strategy_params.get(
+                                "portfolio_value", self.settings.portfolio_value
+                            )
+                        )
+                    ),
+                    "position_size_pct": Decimal(
+                        str(
+                            strategy_params.get(
+                                "position_size_pct", self.settings.position_size_pct
+                            )
+                        )
                     ),
                 }
             )
@@ -1071,8 +1098,19 @@ class MinimalBacktestRunner:
                 {
                     "fast_period": strategy_params.get("fast_period", 10),
                     "slow_period": strategy_params.get("slow_period", 20),
-                    "trade_size": Decimal(
-                        str(strategy_params.get("trade_size", 1000000))
+                    "portfolio_value": Decimal(
+                        str(
+                            strategy_params.get(
+                                "portfolio_value", self.settings.portfolio_value
+                            )
+                        )
+                    ),
+                    "position_size_pct": Decimal(
+                        str(
+                            strategy_params.get(
+                                "position_size_pct", self.settings.position_size_pct
+                            )
+                        )
                     ),
                 }
             )
@@ -1128,7 +1166,16 @@ class MinimalBacktestRunner:
 
             # Build strategy config for persistence
             strategy_config_dict = {
-                "trade_size": str(strategy_params.get("trade_size", 1000000)),
+                "portfolio_value": str(
+                    strategy_params.get(
+                        "portfolio_value", self.settings.portfolio_value
+                    )
+                ),
+                "position_size_pct": str(
+                    strategy_params.get(
+                        "position_size_pct", self.settings.position_size_pct
+                    )
+                ),
             }
 
             # Add strategy-specific parameters

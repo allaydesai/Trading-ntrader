@@ -13,17 +13,21 @@ from pathlib import Path
 from typing import Dict, List
 
 import structlog
+from dotenv import load_dotenv
 from nautilus_trader.model.data import Bar
 from nautilus_trader.persistence.catalog import ParquetDataCatalog
 
-from src.models.catalog_metadata import CatalogAvailability
-from src.services.exceptions import (
+# Load environment variables from .env file
+load_dotenv()
+
+from src.models.catalog_metadata import CatalogAvailability  # noqa: E402
+from src.services.exceptions import (  # noqa: E402
     CatalogCorruptionError,
     CatalogError,
     DataNotFoundError,
     IBKRConnectionError,
 )
-from src.services.ibkr_client import IBKRHistoricalClient
+from src.services.ibkr_client import IBKRHistoricalClient  # noqa: E402
 
 logger = structlog.get_logger(__name__)
 
@@ -100,8 +104,10 @@ class DataCatalogService:
         Note:
             Connection settings are read from environment variables:
             - IBKR_HOST (default: 127.0.0.1)
-            - IBKR_PORT (default: 7497)
+            - IBKR_PORT (default: 7497, but typically set to 4002 for Gateway paper)
             - IBKR_CLIENT_ID (default: 10)
+
+            The .env file should be loaded before this service is initialized.
         """
         if not self._ibkr_client_initialized:
             # Reason: Create IBKR client with env settings on first access

@@ -5,7 +5,6 @@ Provides visual comparison of key performance metrics across 2-10
 backtests to help identify the best performing strategies and parameters.
 """
 
-import asyncio
 from typing import List
 from uuid import UUID
 
@@ -14,9 +13,8 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
-from src.db.repositories.backtest_repository import BacktestRepository
-from src.db.session import get_session
-from src.services.backtest_query import BacktestQueryService
+from src.db.repositories.backtest_repository_sync import SyncBacktestRepository
+from src.db.session_sync import get_sync_session
 
 console = Console()
 
@@ -44,12 +42,12 @@ def compare_backtests(run_ids: tuple[str]):
         - Trading statistics (Win Rate, Total Trades)
         - Best performer by Sharpe ratio
     """
-    asyncio.run(_compare_backtests_async(run_ids))
+    _compare_backtests_sync(run_ids)
 
 
-async def _compare_backtests_async(run_ids_str: tuple[str]):
+def _compare_backtests_sync(run_ids_str: tuple[str]):
     """
-    Async implementation of backtest comparison.
+    Synchronous implementation of backtest comparison.
 
     Args:
         run_ids_str: Tuple of string UUIDs to compare
@@ -100,12 +98,11 @@ async def _compare_backtests_async(run_ids_str: tuple[str]):
             return
 
         # Query database
-        async with get_session() as session:
-            repository = BacktestRepository(session)
-            service = BacktestQueryService(repository)
+        with get_sync_session() as session:
+            repository = SyncBacktestRepository(session)
 
-            # This will validate count range (2-10) internally
-            backtests = await service.compare_backtests(run_ids)
+            # Find backtests by IDs
+            backtests = repository.find_by_run_ids(run_ids)
 
             # Check if any backtests were found
             if not backtests:

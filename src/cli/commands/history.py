@@ -5,15 +5,13 @@ Provides user-friendly interface for querying and displaying
 past backtest executions with performance metrics.
 """
 
-import asyncio
 import click
 from rich.console import Console
 from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
-from src.db.session import get_session
-from src.db.repositories.backtest_repository import BacktestRepository
-from src.services.backtest_query import BacktestQueryService
+from src.db.session_sync import get_sync_session
+from src.db.repositories.backtest_repository_sync import SyncBacktestRepository
 
 console = Console()
 
@@ -77,14 +75,12 @@ def list_backtest_history(
         ntrader history --sort sharpe             # Sort by Sharpe ratio (best first)
         ntrader history --sort return --limit 10  # Top 10 by return
     """
-    asyncio.run(
-        _list_history_async(
-            limit, strategy, instrument, status, sort, strategy_summary, show_params
-        )
+    _list_history_sync(
+        limit, strategy, instrument, status, sort, strategy_summary, show_params
     )
 
 
-async def _list_history_async(
+def _list_history_sync(
     limit: int,
     strategy: str | None,
     instrument: str | None,
@@ -94,7 +90,7 @@ async def _list_history_async(
     show_params: bool,
 ):
     """
-    Async implementation of history listing.
+    Synchronous implementation of history listing.
 
     Args:
         limit: Maximum number of results
@@ -104,9 +100,8 @@ async def _list_history_async(
         sort: Sort order (date, return, sharpe)
     """
     try:
-        async with get_session() as session:
-            repository = BacktestRepository(session)
-            service = BacktestQueryService(repository)
+        with get_sync_session() as session:
+            repository = SyncBacktestRepository(session)
 
             # Show progress spinner during query
             with Progress(
@@ -116,20 +111,19 @@ async def _list_history_async(
             ) as progress:
                 task = progress.add_task("Loading backtest history...", total=None)
 
+                # Enforce maximum limit
+                limit = min(limit, 1000)
+
                 # Query based on sort option
                 if sort == "sharpe":
-                    backtests = await service.find_top_performers(
-                        metric="sharpe_ratio", limit=limit
-                    )
+                    backtests = repository.find_top_performers_by_sharpe(limit=limit)
                     # Apply strategy filter if provided
                     if strategy:
                         backtests = [
                             bt for bt in backtests if bt.strategy_name == strategy
                         ]
                 elif sort == "return":
-                    backtests = await service.find_top_performers(
-                        metric="total_return", limit=limit
-                    )
+                    backtests = repository.find_top_performers_by_return(limit=limit)
                     # Apply strategy filter if provided
                     if strategy:
                         backtests = [
@@ -138,11 +132,11 @@ async def _list_history_async(
                 else:  # sort == "date" (default)
                     # Query based on filters
                     if strategy:
-                        backtests = await service.list_by_strategy(
+                        backtests = repository.find_by_strategy(
                             strategy_name=strategy, limit=limit
                         )
                     else:
-                        backtests = await service.list_recent_backtests(limit=limit)
+                        backtests = repository.find_recent(limit=limit)
 
                 # Apply additional filters (instrument, status) in memory
                 if instrument:
@@ -158,7 +152,7 @@ async def _list_history_async(
                 # Get total count if filtering by strategy (T161)
                 total_count = None
                 if strategy and sort == "date":
-                    total_count = await repository.count_by_strategy(strategy)
+                    total_count = repository.count_by_strategy(strategy)
 
                 progress.update(task, completed=True)
 

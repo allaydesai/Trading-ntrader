@@ -5,7 +5,6 @@ Provides detailed view of a single backtest execution including
 all metadata, configuration snapshot, and performance metrics.
 """
 
-import asyncio
 import json
 from uuid import UUID
 
@@ -16,9 +15,8 @@ from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 
-from src.db.repositories.backtest_repository import BacktestRepository
-from src.db.session import get_session
-from src.services.backtest_query import BacktestQueryService
+from src.db.repositories.backtest_repository_sync import SyncBacktestRepository
+from src.db.session_sync import get_sync_session
 
 console = Console()
 
@@ -39,26 +37,13 @@ def show_backtest_details(run_id: str):
         ntrader backtest show a1b2c3d4-e5f6-7890-abcd-ef1234567890
         ntrader backtest show <run_id>
     """
-    asyncio.run(_show_backtest_async(run_id))
-
-
-async def _show_backtest_async(run_id_str: str):
-    """
-    Async implementation of backtest details display.
-
-    Args:
-        run_id_str: String representation of the backtest UUID
-
-    Raises:
-        ValueError: If run_id is not a valid UUID
-    """
     try:
         # Validate and parse UUID
         try:
-            run_id = UUID(run_id_str)
+            run_id_uuid = UUID(run_id)
         except ValueError:
             console.print(
-                f"[red]Error:[/red] Invalid UUID format: {run_id_str}",
+                f"[red]Error:[/red] Invalid UUID format: {run_id}",
                 style="bold red",
             )
             console.print(
@@ -67,12 +52,10 @@ async def _show_backtest_async(run_id_str: str):
             )
             return
 
-        # Query database
-        async with get_session() as session:
-            repository = BacktestRepository(session)
-            service = BacktestQueryService(repository)
-
-            backtest = await service.get_backtest_by_id(run_id)
+        # Query database synchronously
+        with get_sync_session() as session:
+            repository = SyncBacktestRepository(session)
+            backtest = repository.find_by_run_id(run_id_uuid)
 
             if backtest is None:
                 console.print(

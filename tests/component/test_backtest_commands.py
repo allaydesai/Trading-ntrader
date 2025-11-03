@@ -70,7 +70,7 @@ class TestBacktestCommands:
         mock_runner = MagicMock()
 
         async def mock_run_backtest(*args, **kwargs):
-            return MockBacktestResult()
+            return MockBacktestResult(), None  # Returns (result, run_id)
 
         mock_runner.run_backtest_with_catalog_data = mock_run_backtest
         mock_runner.dispose = MagicMock()

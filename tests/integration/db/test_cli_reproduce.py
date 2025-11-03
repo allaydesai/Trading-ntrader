@@ -6,17 +6,19 @@ with their exact same configuration.
 """
 
 import pytest
+import asyncio
 from uuid import uuid4
 from decimal import Decimal
 from datetime import datetime, timezone
 from click.testing import CliRunner
+from unittest.mock import patch
 
 from src.cli.commands.reproduce import reproduce_backtest
-from src.db.session import get_session
+from src.db.repositories.backtest_repository import BacktestRepository
 
 
 @pytest.mark.integration
-def test_reproduce_creates_new_run_with_same_config():
+def test_reproduce_creates_new_run_with_same_config(test_db_schema):
     """
     Test that 'reproduce' command can be invoked and loads original config.
 
@@ -28,14 +30,12 @@ def test_reproduce_creates_new_run_with_same_config():
     Note: This test does NOT execute the actual backtest (would require catalog data).
     It verifies the CLI interface and config loading works correctly.
     """
-    import asyncio
-    from src.db.repositories.backtest_repository import BacktestRepository
+    schema_name, get_test_session = test_db_schema
 
+    # Setup test data
     async def setup_test_data():
-        # Arrange: Create an original successful backtest
         original_run_id = uuid4()
-
-        async with get_session() as session:
+        async with get_test_session() as session:
             repository = BacktestRepository(session)
 
             await repository.create_backtest_run(
@@ -62,20 +62,16 @@ def test_reproduce_creates_new_run_with_same_config():
             )
 
             await session.commit()
+        return original_run_id
 
-        return str(original_run_id)
+    original_run_id = asyncio.run(setup_test_data())
 
-    # Setup test data
-    original_run_id_str = asyncio.run(setup_test_data())
-
-    # Dispose connections to avoid event loop conflicts
-    from src.db.session import dispose_all_connections
-
-    asyncio.run(dispose_all_connections())
-
-    # Act: Run reproduce command
-    runner = CliRunner()
-    result = runner.invoke(reproduce_backtest, [original_run_id_str])
+    # Mock get_session to use test schema
+    with patch(
+        "src.cli.commands.reproduce.get_session", side_effect=lambda: get_test_session()
+    ):
+        runner = CliRunner()
+        result = runner.invoke(reproduce_backtest, [str(original_run_id)])
 
     # Assert: Command should load original config and attempt reproduction
     # It will fail at data loading stage (no catalog data), which is expected
@@ -83,13 +79,13 @@ def test_reproduce_creates_new_run_with_same_config():
     assert "SMA Crossover" in result.output or "sma_crossover" in result.output
     assert "AAPL" in result.output
     assert (
-        original_run_id_str[:12] in result.output
-        or original_run_id_str[:8] in result.output
+        str(original_run_id)[:12] in result.output
+        or str(original_run_id)[:8] in result.output
     )
 
 
 @pytest.mark.integration
-def test_reproduce_sets_reproduced_from_run_id():
+def test_reproduce_sets_reproduced_from_run_id(test_db_schema):
     """
     Test that 'reproduce' command loads and displays original backtest configuration.
 
@@ -100,14 +96,12 @@ def test_reproduce_sets_reproduced_from_run_id():
 
     Note: This test verifies config retrieval, not actual reproduction execution.
     """
-    import asyncio
-    from src.db.repositories.backtest_repository import BacktestRepository
+    schema_name, get_test_session = test_db_schema
 
+    # Setup test data
     async def setup_test_data():
-        # Arrange: Create an original backtest
         original_run_id = uuid4()
-
-        async with get_session() as session:
+        async with get_test_session() as session:
             repository = BacktestRepository(session)
 
             await repository.create_backtest_run(
@@ -134,31 +128,28 @@ def test_reproduce_sets_reproduced_from_run_id():
             )
 
             await session.commit()
+        return original_run_id
 
-        return str(original_run_id)
+    original_run_id = asyncio.run(setup_test_data())
 
-    original_run_id_str = asyncio.run(setup_test_data())
-
-    # Dispose connections
-    from src.db.session import dispose_all_connections
-
-    asyncio.run(dispose_all_connections())
-
-    # Act: Run reproduce command
-    runner = CliRunner()
-    result = runner.invoke(reproduce_backtest, [original_run_id_str])
+    # Mock get_session to use test schema
+    with patch(
+        "src.cli.commands.reproduce.get_session", side_effect=lambda: get_test_session()
+    ):
+        runner = CliRunner()
+        result = runner.invoke(reproduce_backtest, [str(original_run_id)])
 
     # Assert: Command should retrieve and display original config
     assert "Mean Reversion" in result.output or "mean_reversion" in result.output
     assert "TSLA" in result.output
     assert (
-        original_run_id_str[:12] in result.output
-        or original_run_id_str[:8] in result.output
+        str(original_run_id)[:12] in result.output
+        or str(original_run_id)[:8] in result.output
     )
 
 
 @pytest.mark.integration
-def test_reproduce_handles_nonexistent_run_id():
+def test_reproduce_handles_nonexistent_run_id(test_db_schema):
     """
     Test that 'reproduce' command shows clear error for non-existent run_id.
 
@@ -167,12 +158,15 @@ def test_reproduce_handles_nonexistent_run_id():
     - Exit code indicates failure
     - Error message is user-friendly and actionable
     """
-    # Arrange: Use a random UUID that doesn't exist
+    schema_name, get_test_session = test_db_schema
     nonexistent_run_id = str(uuid4())
 
-    # Act: Try to reproduce non-existent backtest
-    runner = CliRunner()
-    result = runner.invoke(reproduce_backtest, [nonexistent_run_id])
+    # Mock get_session to use test schema
+    with patch(
+        "src.cli.commands.reproduce.get_session", side_effect=lambda: get_test_session()
+    ):
+        runner = CliRunner()
+        result = runner.invoke(reproduce_backtest, [nonexistent_run_id])
 
     # Assert: Should show clear error message
     # This should eventually pass once command is implemented
@@ -187,7 +181,7 @@ def test_reproduce_handles_nonexistent_run_id():
 
 
 @pytest.mark.integration
-def test_reproduce_handles_invalid_uuid_format():
+def test_reproduce_handles_invalid_uuid_format(test_db_schema):
     """
     Test that 'reproduce' command validates UUID format.
 
@@ -196,12 +190,15 @@ def test_reproduce_handles_invalid_uuid_format():
     - Clear error message shown
     - Suggests correct UUID format
     """
-    # Arrange: Use invalid UUID format
+    schema_name, get_test_session = test_db_schema
     invalid_uuid = "not-a-valid-uuid"
 
-    # Act: Try to reproduce with invalid UUID
-    runner = CliRunner()
-    result = runner.invoke(reproduce_backtest, [invalid_uuid])
+    # Mock get_session to use test schema
+    with patch(
+        "src.cli.commands.reproduce.get_session", side_effect=lambda: get_test_session()
+    ):
+        runner = CliRunner()
+        result = runner.invoke(reproduce_backtest, [invalid_uuid])
 
     # Assert: Should show UUID validation error
     # Once implemented:
@@ -213,7 +210,7 @@ def test_reproduce_handles_invalid_uuid_format():
 
 
 @pytest.mark.integration
-def test_reproduce_displays_original_configuration():
+def test_reproduce_displays_original_configuration(test_db_schema):
     """
     Test that 'reproduce' command displays original backtest configuration.
 
@@ -222,13 +219,12 @@ def test_reproduce_displays_original_configuration():
     - Strategy name and type displayed
     - Configuration parameters shown
     """
-    import asyncio
-    from src.db.repositories.backtest_repository import BacktestRepository
+    schema_name, get_test_session = test_db_schema
 
+    # Setup test data
     async def setup_test_data():
         original_run_id = uuid4()
-
-        async with get_session() as session:
+        async with get_test_session() as session:
             repository = BacktestRepository(session)
 
             await repository.create_backtest_run(
@@ -251,24 +247,21 @@ def test_reproduce_displays_original_configuration():
             )
 
             await session.commit()
+        return original_run_id
 
-        return str(original_run_id)
+    original_run_id = asyncio.run(setup_test_data())
 
-    original_run_id_str = asyncio.run(setup_test_data())
-
-    # Dispose connections
-    from src.db.session import dispose_all_connections
-
-    asyncio.run(dispose_all_connections())
-
-    # Act: Run reproduce command
-    runner = CliRunner()
-    result = runner.invoke(reproduce_backtest, [original_run_id_str])
+    # Mock get_session to use test schema
+    with patch(
+        "src.cli.commands.reproduce.get_session", side_effect=lambda: get_test_session()
+    ):
+        runner = CliRunner()
+        result = runner.invoke(reproduce_backtest, [str(original_run_id)])
 
     # Assert: Should display original configuration
     assert (
-        original_run_id_str[:12] in result.output
-        or original_run_id_str[:8] in result.output
+        str(original_run_id)[:12] in result.output
+        or str(original_run_id)[:8] in result.output
     )
     assert "Momentum" in result.output or "momentum" in result.output
     assert "GOOGL" in result.output

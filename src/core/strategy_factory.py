@@ -392,7 +392,8 @@ class StrategyLoader:
                 "bar_type": "AAPL.NASDAQ-1-MINUTE-LAST-INTERNAL",
                 "fast_period": 10,
                 "slow_period": 20,
-                "trade_size": 1000000,
+                "portfolio_value": 1000000,
+                "position_size_pct": 10.0,
             },
             StrategyType.MEAN_REVERSION: {
                 "instrument_id": "AAPL.NASDAQ",

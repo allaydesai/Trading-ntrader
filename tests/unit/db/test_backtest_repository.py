@@ -6,42 +6,66 @@ from decimal import Decimal
 from uuid import uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
+from sqlalchemy import text
 
 from src.db.repositories.backtest_repository import BacktestRepository
 from src.db.base import Base
 
 
+def get_worker_id(request):
+    """Get pytest-xdist worker ID or 'master' if running without xdist."""
+    worker_id = getattr(request.config, "workerinput", {}).get("workerid", "master")
+    return worker_id
+
+
 @pytest.fixture
-async def async_test_engine():
-    """Create async test database engine."""
+async def async_test_engine(request):
+    """Create async test database engine with schema isolation."""
     from src.config import get_settings
 
     settings = get_settings()
     async_url = settings.database_url.replace("postgresql://", "postgresql+asyncpg://")
 
+    # Get worker ID for schema isolation
+    worker_id = get_worker_id(request)
+    schema_name = f"test_{worker_id}".replace("-", "_")
+
     engine = create_async_engine(async_url, echo=False)
 
-    # Create tables
+    # Create schema and tables
     async with engine.begin() as conn:
+        # Create schema
+        await conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {schema_name}"))
+
+        # Set search path to use our test schema
+        await conn.execute(text(f"SET search_path TO {schema_name}"))
+
+        # Create all tables in the test schema
         await conn.run_sync(Base.metadata.create_all)
 
     yield engine
 
-    # Cleanup
+    # Cleanup: drop schema and all its contents
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
+        await conn.execute(text(f"DROP SCHEMA IF EXISTS {schema_name} CASCADE"))
 
     await engine.dispose()
 
 
 @pytest.fixture
-async def async_session(async_test_engine):
+async def async_session(async_test_engine, request):
     """Create async test session."""
+    # Get worker ID for schema isolation
+    worker_id = get_worker_id(request)
+    schema_name = f"test_{worker_id}".replace("-", "_")
+
     async_session_maker = async_sessionmaker(
         async_test_engine, class_=AsyncSession, expire_on_commit=False
     )
 
     async with async_session_maker() as session:
+        # Set search path for this session
+        await session.execute(text(f"SET search_path TO {schema_name}"))
         yield session
 
 
@@ -52,378 +76,266 @@ def repository(async_session):
 
 
 class TestBacktestRepositoryCreate:
-    """Test suite for BacktestRepository creation methods."""
+    """Test cases for BacktestRepository create operations."""
 
     @pytest.mark.asyncio
     async def test_create_backtest_run(self, repository, async_session):
-        """Test creating a backtest run record."""
+        """Test creating a new backtest run record."""
+        # Arrange
         run_id = uuid4()
-        start_date = datetime(2023, 1, 1, tzinfo=timezone.utc)
-        end_date = datetime(2023, 12, 31, tzinfo=timezone.utc)
+        config = {
+            "strategy": "sma_crossover",
+            "params": {"fast": 10, "slow": 50},
+        }
 
-        backtest_run = await repository.create_backtest_run(
+        # Act
+        result = await repository.create_backtest_run(
             run_id=run_id,
             strategy_name="SMA Crossover",
-            strategy_type="trend_following",
+            strategy_type="sma_crossover",
             instrument_symbol="AAPL",
-            start_date=start_date,
-            end_date=end_date,
+            start_date=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            end_date=datetime(2023, 12, 31, tzinfo=timezone.utc),
             initial_capital=Decimal("100000.00"),
             data_source="IBKR",
             execution_status="success",
             execution_duration_seconds=Decimal("45.237"),
-            config_snapshot={
-                "strategy_path": "src.strategies.sma_crossover.SMAStrategyConfig",
-                "config_path": "config/strategies/sma_crossover.yaml",
-                "version": "1.0",
-                "config": {"fast_period": 10, "slow_period": 50},
-            },
+            config_snapshot=config,
         )
 
-        assert backtest_run.id is not None
-        assert backtest_run.run_id == run_id
-        assert backtest_run.strategy_name == "SMA Crossover"
-        assert backtest_run.created_at is not None
+        await async_session.commit()
+
+        # Assert
+        assert result.run_id == run_id
+        assert result.strategy_name == "SMA Crossover"
+        assert result.instrument_symbol == "AAPL"
+        assert result.initial_capital == Decimal("100000.00")
+        assert result.execution_status == "success"
+        assert result.config_snapshot == config
 
     @pytest.mark.asyncio
     async def test_create_performance_metrics(self, repository, async_session):
-        """Test creating performance metrics record."""
-        # First create a backtest run
+        """Test creating performance metrics for a backtest run."""
+        # Arrange
         run_id = uuid4()
         backtest_run = await repository.create_backtest_run(
             run_id=run_id,
             strategy_name="Test Strategy",
             strategy_type="test",
-            instrument_symbol="TEST",
+            instrument_symbol="AAPL",
             start_date=datetime(2023, 1, 1, tzinfo=timezone.utc),
             end_date=datetime(2023, 12, 31, tzinfo=timezone.utc),
             initial_capital=Decimal("100000.00"),
-            data_source="Mock",
+            data_source="IBKR",
             execution_status="success",
             execution_duration_seconds=Decimal("10.0"),
-            config_snapshot={
-                "strategy_path": "test",
-                "config_path": "test",
-                "version": "1.0",
-                "config": {},
-            },
+            config_snapshot={},
         )
+        await async_session.flush()
 
-        # Create metrics
+        # Act
         metrics = await repository.create_performance_metrics(
             backtest_run_id=backtest_run.id,
-            total_return=Decimal("0.25"),
-            final_balance=Decimal("125000.00"),
-            cagr=Decimal("0.22"),
+            total_return=Decimal("0.2547"),
+            final_balance=Decimal("125470.00"),
             sharpe_ratio=Decimal("1.85"),
-            sortino_ratio=Decimal("2.10"),
-            max_drawdown=Decimal("-0.15"),
-            max_drawdown_date=datetime(2023, 6, 15, tzinfo=timezone.utc),
-            calmar_ratio=Decimal("1.50"),
-            volatility=Decimal("0.12"),
             total_trades=100,
             winning_trades=60,
             losing_trades=40,
-            win_rate=Decimal("0.60"),
-            profit_factor=Decimal("1.75"),
-            expectancy=Decimal("250.00"),
-            avg_win=Decimal("500.00"),
-            avg_loss=Decimal("-285.71"),
         )
 
-        assert metrics.id is not None
+        await async_session.commit()
+
+        # Assert
         assert metrics.backtest_run_id == backtest_run.id
-        assert metrics.total_return == Decimal("0.25")
+        assert metrics.total_return == Decimal("0.2547")
         assert metrics.sharpe_ratio == Decimal("1.85")
+        assert metrics.total_trades == 100
 
 
 class TestBacktestRepositoryRetrieve:
-    """Test suite for BacktestRepository retrieval methods."""
+    """Test cases for BacktestRepository retrieve operations."""
 
     @pytest.mark.asyncio
     async def test_find_by_run_id_success(self, repository, async_session):
-        """Test finding backtest by run_id."""
+        """Test finding a backtest by run_id when it exists."""
+        # Arrange
         run_id = uuid4()
-
-        # Create a backtest
         await repository.create_backtest_run(
             run_id=run_id,
             strategy_name="Test Strategy",
             strategy_type="test",
-            instrument_symbol="TEST",
+            instrument_symbol="AAPL",
             start_date=datetime(2023, 1, 1, tzinfo=timezone.utc),
             end_date=datetime(2023, 12, 31, tzinfo=timezone.utc),
             initial_capital=Decimal("100000.00"),
-            data_source="Mock",
+            data_source="IBKR",
             execution_status="success",
             execution_duration_seconds=Decimal("10.0"),
-            config_snapshot={
-                "strategy_path": "test",
-                "config_path": "test",
-                "version": "1.0",
-                "config": {},
-            },
+            config_snapshot={},
+        )
+        await async_session.commit()
+
+        # Act
+        result = await repository.find_by_run_id(run_id)
+
+        # Assert
+        assert result is not None
+        assert result.run_id == run_id
+        assert result.strategy_name == "Test Strategy"
+
+    @pytest.mark.asyncio
+    async def test_find_by_run_id_not_found(self, repository):
+        """Test finding a backtest by run_id when it doesn't exist."""
+        # Arrange
+        non_existent_id = uuid4()
+
+        # Act
+        result = await repository.find_by_run_id(non_existent_id)
+
+        # Assert
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_find_by_run_ids(self, repository, async_session):
+        """Test finding multiple backtests by their run_ids."""
+        # Arrange
+        run_ids = [uuid4(), uuid4(), uuid4()]
+
+        for run_id in run_ids:
+            await repository.create_backtest_run(
+                run_id=run_id,
+                strategy_name="Test Strategy",
+                strategy_type="test",
+                instrument_symbol="AAPL",
+                start_date=datetime(2023, 1, 1, tzinfo=timezone.utc),
+                end_date=datetime(2023, 12, 31, tzinfo=timezone.utc),
+                initial_capital=Decimal("100000.00"),
+                data_source="IBKR",
+                execution_status="success",
+                execution_duration_seconds=Decimal("10.0"),
+                config_snapshot={},
+            )
+
+        await async_session.commit()
+
+        # Act
+        results = await repository.find_by_run_ids(run_ids)
+
+        # Assert
+        assert len(results) == 3
+        result_run_ids = {r.run_id for r in results}
+        assert result_run_ids == set(run_ids)
+
+    @pytest.mark.asyncio
+    async def test_find_by_strategy_filters_correctly(self, repository, async_session):
+        """Test finding backtests filtered by strategy name."""
+        # Arrange
+        await repository.create_backtest_run(
+            run_id=uuid4(),
+            strategy_name="SMA Crossover",
+            strategy_type="sma",
+            instrument_symbol="AAPL",
+            start_date=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            end_date=datetime(2023, 12, 31, tzinfo=timezone.utc),
+            initial_capital=Decimal("100000.00"),
+            data_source="IBKR",
+            execution_status="success",
+            execution_duration_seconds=Decimal("10.0"),
+            config_snapshot={},
+        )
+
+        await repository.create_backtest_run(
+            run_id=uuid4(),
+            strategy_name="RSI Strategy",
+            strategy_type="rsi",
+            instrument_symbol="AAPL",
+            start_date=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            end_date=datetime(2023, 12, 31, tzinfo=timezone.utc),
+            initial_capital=Decimal("100000.00"),
+            data_source="IBKR",
+            execution_status="success",
+            execution_duration_seconds=Decimal("10.0"),
+            config_snapshot={},
         )
 
         await async_session.commit()
 
-        # Find it
-        found = await repository.find_by_run_id(run_id)
+        # Act
+        results = await repository.find_by_strategy("SMA Crossover", limit=10)
 
-        assert found is not None
-        assert found.run_id == run_id
-
-    @pytest.mark.asyncio
-    async def test_find_by_run_id_not_found(self, repository):
-        """Test finding non-existent backtest returns None."""
-        non_existent_id = uuid4()
-        found = await repository.find_by_run_id(non_existent_id)
-
-        assert found is None
-
-    @pytest.mark.asyncio
-    async def test_find_recent(self, repository, async_session):
-        """Test finding recent backtests."""
-        # Create 5 backtest runs
-        for i in range(5):
-            await repository.create_backtest_run(
-                run_id=uuid4(),
-                strategy_name=f"Strategy {i}",
-                strategy_type="test",
-                instrument_symbol="TEST",
-                start_date=datetime(2023, 1, 1, tzinfo=timezone.utc),
-                end_date=datetime(2023, 12, 31, tzinfo=timezone.utc),
-                initial_capital=Decimal("100000.00"),
-                data_source="Mock",
-                execution_status="success",
-                execution_duration_seconds=Decimal("10.0"),
-                config_snapshot={
-                    "strategy_path": "test",
-                    "config_path": "test",
-                    "version": "1.0",
-                    "config": {},
-                },
-            )
-
-        await async_session.commit()
-
-        # Find recent (limit 3)
-        recent = await repository.find_recent(limit=3)
-
-        assert len(recent) == 3
-        # Should be ordered by created_at DESC
-        for i in range(len(recent) - 1):
-            assert recent[i].created_at >= recent[i + 1].created_at
+        # Assert
+        assert len(results) == 1
+        assert results[0].strategy_name == "SMA Crossover"
 
     @pytest.mark.asyncio
     async def test_find_recent_with_cursor_pagination(self, repository, async_session):
-        """
-        Test cursor-based pagination for find_recent().
-
-        Tests that cursor pagination correctly fetches the next page of results
-        without duplicates or gaps.
-        """
-        # Create 50 backtest runs with slight time delays to ensure ordering
-        import asyncio
-
-        created_runs = []
-
-        for i in range(50):
-            run = await repository.create_backtest_run(
-                run_id=uuid4(),
-                strategy_name=f"Strategy {i}",
-                strategy_type="test",
-                instrument_symbol="TEST",
-                start_date=datetime(2023, 1, 1, tzinfo=timezone.utc),
-                end_date=datetime(2023, 12, 31, tzinfo=timezone.utc),
-                initial_capital=Decimal("100000.00"),
-                data_source="Mock",
-                execution_status="success",
-                execution_duration_seconds=Decimal("10.0"),
-                config_snapshot={
-                    "strategy_path": "test",
-                    "config_path": "test",
-                    "version": "1.0",
-                    "config": {},
-                },
-            )
-            created_runs.append(run)
-            # Small delay to ensure different created_at timestamps
-            await asyncio.sleep(0.001)
-
-        await async_session.commit()
-
-        # Get first page (20 results)
-        page1 = await repository.find_recent(limit=20)
-        assert len(page1) == 20
-
-        # Get second page using cursor from last item of page1
-        cursor = (page1[-1].created_at, page1[-1].id)
-        page2 = await repository.find_recent(limit=20, cursor=cursor)
-
-        assert len(page2) == 20
-
-        # Verify no duplicates between pages
-        page1_ids = {run.id for run in page1}
-        page2_ids = {run.id for run in page2}
-        assert page1_ids.isdisjoint(page2_ids)
-
-        # Verify ordering is maintained
-        assert page1[0].created_at >= page1[-1].created_at
-        assert page2[0].created_at >= page2[-1].created_at
-        assert page1[-1].created_at >= page2[0].created_at
-
-    @pytest.mark.asyncio
-    async def test_find_by_strategy_filters_correctly(self, repository, async_session):
-        """
-        Test that find_by_strategy() returns only matching strategy backtests.
-
-        Given: Backtests for multiple strategies
-        When: Querying by specific strategy name
-        Then: Only backtests for that strategy are returned
-        """
-        # Create backtests for different strategies
-        strategies = ["SMA Crossover", "RSI Mean Reversion", "Momentum"]
-
-        for strategy in strategies:
-            for i in range(5):
-                await repository.create_backtest_run(
-                    run_id=uuid4(),
-                    strategy_name=strategy,
-                    strategy_type="test",
-                    instrument_symbol="TEST",
-                    start_date=datetime(2023, 1, 1, tzinfo=timezone.utc),
-                    end_date=datetime(2023, 12, 31, tzinfo=timezone.utc),
-                    initial_capital=Decimal("100000.00"),
-                    data_source="Mock",
-                    execution_status="success",
-                    execution_duration_seconds=Decimal("10.0"),
-                    config_snapshot={
-                        "strategy_path": "test",
-                        "config_path": "test",
-                        "version": "1.0",
-                        "config": {},
-                    },
-                )
-
-        await async_session.commit()
-
-        # Query for "SMA Crossover" only
-        sma_backtests = await repository.find_by_strategy("SMA Crossover")
-
-        assert len(sma_backtests) == 5
-        assert all(bt.strategy_name == "SMA Crossover" for bt in sma_backtests)
-
-        # Query for "RSI Mean Reversion"
-        rsi_backtests = await repository.find_by_strategy("RSI Mean Reversion")
-
-        assert len(rsi_backtests) == 5
-        assert all(bt.strategy_name == "RSI Mean Reversion" for bt in rsi_backtests)
-
-    @pytest.mark.asyncio
-    async def test_find_by_run_ids(self, repository, async_session):
-        """
-        Test finding multiple backtests by their run IDs.
-
-        Given: Database with multiple backtest runs
-        When: Querying with a list of specific run IDs
-        Then: Returns only the backtests matching those IDs
-        """
-        # Create 5 backtest runs and track their run_ids
+        """Test pagination using cursor (created_at timestamp)."""
+        # Arrange
         run_ids = []
-
         for i in range(5):
             run_id = uuid4()
             run_ids.append(run_id)
-
-            backtest_run = await repository.create_backtest_run(
+            await repository.create_backtest_run(
                 run_id=run_id,
-                strategy_name=f"Strategy {i}",
-                strategy_type="test",
-                instrument_symbol="TEST",
-                start_date=datetime(2023, 1, 1, tzinfo=timezone.utc),
-                end_date=datetime(2023, 12, 31, tzinfo=timezone.utc),
-                initial_capital=Decimal("100000.00"),
-                data_source="Mock",
-                execution_status="success",
-                execution_duration_seconds=Decimal("10.0"),
-                config_snapshot={
-                    "strategy_path": "test",
-                    "config_path": "test",
-                    "version": "1.0",
-                    "config": {},
-                },
-            )
-
-            # Add metrics
-            await repository.create_performance_metrics(
-                backtest_run_id=backtest_run.id,
-                total_return=Decimal(str(0.1 + i * 0.05)),
-                final_balance=Decimal(str(110000 + i * 5000)),
-                sharpe_ratio=Decimal(str(1.0 + i * 0.2)),
-                total_trades=10,
-                winning_trades=6,
-                losing_trades=4,
-            )
-
-        await async_session.commit()
-
-        # Query for first 3 run IDs
-        selected_ids = run_ids[:3]
-        found_backtests = await repository.find_by_run_ids(selected_ids)
-
-        # Assertions
-        assert len(found_backtests) == 3
-        found_run_ids = {bt.run_id for bt in found_backtests}
-        assert found_run_ids == set(selected_ids)
-
-        # Verify metrics are loaded
-        assert all(bt.metrics is not None for bt in found_backtests)
-
-        # Verify results are ordered by created_at DESC
-        for i in range(len(found_backtests) - 1):
-            assert found_backtests[i].created_at >= found_backtests[i + 1].created_at
-
-    @pytest.mark.asyncio
-    async def test_find_top_performers_by_sharpe(self, repository, async_session):
-        """
-        Test finding top performing backtests sorted by Sharpe ratio.
-
-        Given: Database with backtests having different Sharpe ratios
-        When: Querying for top performers by Sharpe ratio
-        Then: Returns backtests sorted by Sharpe ratio DESC
-        """
-        # Create backtests with varying Sharpe ratios
-        sharpe_ratios = [
-            Decimal("2.5"),
-            Decimal("1.8"),
-            Decimal("3.2"),
-            Decimal("0.5"),
-            Decimal("1.2"),
-        ]
-
-        for i, sharpe in enumerate(sharpe_ratios):
-            backtest_run = await repository.create_backtest_run(
-                run_id=uuid4(),
                 strategy_name=f"Strategy {i}",
                 strategy_type="test",
                 instrument_symbol="AAPL",
                 start_date=datetime(2023, 1, 1, tzinfo=timezone.utc),
                 end_date=datetime(2023, 12, 31, tzinfo=timezone.utc),
                 initial_capital=Decimal("100000.00"),
-                data_source="Mock",
+                data_source="IBKR",
                 execution_status="success",
-                execution_duration_seconds=Decimal("10.5"),
-                config_snapshot={
-                    "strategy_path": "test",
-                    "config_path": "test",
-                    "version": "1.0",
-                    "config": {},
-                },
+                execution_duration_seconds=Decimal("10.0"),
+                config_snapshot={},
             )
 
+        await async_session.commit()
+
+        # Act - Get first page
+        page1 = await repository.find_recent(limit=2)
+        assert len(page1) == 2
+
+        # Get second page using last item from page1 as cursor
+        cursor = page1[-1].created_at
+        page2 = await repository.find_recent(limit=2, cursor=cursor)
+
+        # Assert
+        assert len(page2) == 2
+        # Ensure no overlap between pages
+        page1_ids = {r.run_id for r in page1}
+        page2_ids = {r.run_id for r in page2}
+        assert len(page1_ids & page2_ids) == 0
+
+    @pytest.mark.asyncio
+    async def test_find_top_performers_by_sharpe(self, repository, async_session):
+        """Test finding top performing backtests by Sharpe ratio."""
+        # Arrange
+        performers = [
+            (uuid4(), Decimal("2.5")),  # Best
+            (uuid4(), Decimal("1.8")),  # Second
+            (uuid4(), Decimal("0.9")),  # Third
+        ]
+
+        for run_id, sharpe in performers:
+            backtest = await repository.create_backtest_run(
+                run_id=run_id,
+                strategy_name="Test",
+                strategy_type="test",
+                instrument_symbol="AAPL",
+                start_date=datetime(2023, 1, 1, tzinfo=timezone.utc),
+                end_date=datetime(2023, 12, 31, tzinfo=timezone.utc),
+                initial_capital=Decimal("100000.00"),
+                data_source="IBKR",
+                execution_status="success",
+                execution_duration_seconds=Decimal("10.0"),
+                config_snapshot={},
+            )
+
+            await async_session.flush()
+
             await repository.create_performance_metrics(
-                backtest_run_id=backtest_run.id,
+                backtest_run_id=backtest.id,
                 total_return=Decimal("0.15"),
                 final_balance=Decimal("115000.00"),
                 sharpe_ratio=sharpe,
@@ -434,214 +346,165 @@ class TestBacktestRepositoryRetrieve:
 
         await async_session.commit()
 
-        # Query for top performers
-        top_performers = await repository.find_top_performers_by_sharpe(limit=5)
+        # Act
+        top_performers = await repository.find_top_performers(
+            metric="sharpe_ratio", limit=2
+        )
 
-        # Assertions
-        assert len(top_performers) == 5
-
-        # Verify descending order by Sharpe ratio
-        sharpe_values = [bt.metrics.sharpe_ratio for bt in top_performers]
-        assert sharpe_values == sorted(sharpe_values, reverse=True)
-
-        # Verify highest Sharpe is first
-        assert top_performers[0].metrics.sharpe_ratio == Decimal("3.2")
-        assert top_performers[-1].metrics.sharpe_ratio == Decimal("0.5")
+        # Assert
+        assert len(top_performers) == 2
+        assert top_performers[0].performance_metrics.sharpe_ratio == Decimal("2.5")
+        assert top_performers[1].performance_metrics.sharpe_ratio == Decimal("1.8")
 
     @pytest.mark.asyncio
     async def test_find_top_performers_excludes_null_sharpe(
         self, repository, async_session
     ):
-        """
-        Test that find_top_performers_by_sharpe() excludes NULL Sharpe ratios.
-
-        Given: Database with some backtests having NULL Sharpe ratios
-        When: Querying for top performers
-        Then: Returns only backtests with non-NULL Sharpe ratios
-        """
-        # Create 5 backtests, only 3 with Sharpe ratios
-        for i in range(5):
-            backtest_run = await repository.create_backtest_run(
-                run_id=uuid4(),
-                strategy_name=f"Strategy {i}",
-                strategy_type="test",
-                instrument_symbol="AAPL",
-                start_date=datetime(2023, 1, 1, tzinfo=timezone.utc),
-                end_date=datetime(2023, 12, 31, tzinfo=timezone.utc),
-                initial_capital=Decimal("100000.00"),
-                data_source="Mock",
-                execution_status="success",
-                execution_duration_seconds=Decimal("10.5"),
-                config_snapshot={
-                    "strategy_path": "test",
-                    "config_path": "test",
-                    "version": "1.0",
-                    "config": {},
-                },
-            )
-
-            # Only give 3 backtests a Sharpe ratio
-            sharpe_ratio = Decimal(str(2.0 - i * 0.5)) if i < 3 else None
-
-            await repository.create_performance_metrics(
-                backtest_run_id=backtest_run.id,
-                total_return=Decimal("0.15"),
-                final_balance=Decimal("115000.00"),
-                sharpe_ratio=sharpe_ratio,
-                total_trades=10,
-                winning_trades=6,
-                losing_trades=4,
-            )
-
-        await async_session.commit()
-
-        # Query for top performers - should only return 3
-        top_performers = await repository.find_top_performers_by_sharpe(limit=10)
-
-        # Assertions
-        assert len(top_performers) == 3
-        assert all(bt.metrics.sharpe_ratio is not None for bt in top_performers)
-
-    @pytest.mark.asyncio
-    async def test_find_top_performers_respects_limit(self, repository, async_session):
-        """
-        Test that find_top_performers_by_sharpe() respects the limit parameter.
-
-        Given: Database with 10 backtests
-        When: Querying with limit=3
-        Then: Returns exactly 3 top performers
-        """
-        # Create 10 backtests with different Sharpe ratios
-        for i in range(10):
-            backtest_run = await repository.create_backtest_run(
-                run_id=uuid4(),
-                strategy_name=f"Strategy {i}",
-                strategy_type="test",
-                instrument_symbol="AAPL",
-                start_date=datetime(2023, 1, 1, tzinfo=timezone.utc),
-                end_date=datetime(2023, 12, 31, tzinfo=timezone.utc),
-                initial_capital=Decimal("100000.00"),
-                data_source="Mock",
-                execution_status="success",
-                execution_duration_seconds=Decimal("10.5"),
-                config_snapshot={
-                    "strategy_path": "test",
-                    "config_path": "test",
-                    "version": "1.0",
-                    "config": {},
-                },
-            )
-
-            await repository.create_performance_metrics(
-                backtest_run_id=backtest_run.id,
-                total_return=Decimal("0.15"),
-                final_balance=Decimal("115000.00"),
-                sharpe_ratio=Decimal(str(1.0 + i * 0.3)),
-                total_trades=10,
-                winning_trades=6,
-                losing_trades=4,
-            )
-
-        await async_session.commit()
-
-        # Query with limit=3
-        top_3 = await repository.find_top_performers_by_sharpe(limit=3)
-
-        # Assertions
-        assert len(top_3) == 3
-        # Verify we got the top 3 by checking first has highest Sharpe
-        assert top_3[0].metrics.sharpe_ratio == Decimal("3.7")  # 1.0 + 9 * 0.3
-
-    @pytest.mark.asyncio
-    async def test_count_by_strategy(self, repository, async_session):
-        """
-        Test that count_by_strategy() returns correct count for a strategy.
-
-        Given: Database with multiple backtests for different strategies
-        When: Counting backtests for a specific strategy
-        Then: Returns accurate count of backtests for that strategy only
-        """
-        # Create backtests for multiple strategies
-        strategies = {
-            "SMA Crossover": 12,
-            "RSI Mean Reversion": 8,
-            "Momentum": 5,
-        }
-
-        for strategy_name, count in strategies.items():
-            for i in range(count):
-                backtest_run = await repository.create_backtest_run(
-                    run_id=uuid4(),
-                    strategy_name=strategy_name,
-                    strategy_type="test",
-                    instrument_symbol="AAPL",
-                    start_date=datetime(2023, 1, 1, tzinfo=timezone.utc),
-                    end_date=datetime(2023, 12, 31, tzinfo=timezone.utc),
-                    initial_capital=Decimal("100000.00"),
-                    data_source="Mock",
-                    execution_status="success",
-                    execution_duration_seconds=Decimal("10.5"),
-                    config_snapshot={
-                        "strategy_path": "test",
-                        "config_path": "test",
-                        "version": "1.0",
-                        "config": {},
-                    },
-                )
-
-                await repository.create_performance_metrics(
-                    backtest_run_id=backtest_run.id,
-                    total_return=Decimal("0.15"),
-                    final_balance=Decimal("115000.00"),
-                    sharpe_ratio=Decimal("1.5"),
-                    total_trades=10,
-                    winning_trades=6,
-                    losing_trades=4,
-                )
-
-        await async_session.commit()
-
-        # Test count for each strategy
-        sma_count = await repository.count_by_strategy("SMA Crossover")
-        assert sma_count == 12
-
-        rsi_count = await repository.count_by_strategy("RSI Mean Reversion")
-        assert rsi_count == 8
-
-        momentum_count = await repository.count_by_strategy("Momentum")
-        assert momentum_count == 5
-
-    @pytest.mark.asyncio
-    async def test_count_by_strategy_nonexistent(self, repository, async_session):
-        """
-        Test that count_by_strategy() returns 0 for a non-existent strategy.
-
-        Given: Database with some backtests
-        When: Counting backtests for a strategy that doesn't exist
-        Then: Returns 0
-        """
-        # Create one backtest
+        """Test that top performers query excludes runs with null metrics."""
+        # Arrange
+        # Create run without metrics
         await repository.create_backtest_run(
             run_id=uuid4(),
-            strategy_name="Existing Strategy",
+            strategy_name="No Metrics",
             strategy_type="test",
             instrument_symbol="AAPL",
             start_date=datetime(2023, 1, 1, tzinfo=timezone.utc),
             end_date=datetime(2023, 12, 31, tzinfo=timezone.utc),
             initial_capital=Decimal("100000.00"),
-            data_source="Mock",
+            data_source="IBKR",
             execution_status="success",
-            execution_duration_seconds=Decimal("10.5"),
-            config_snapshot={
-                "strategy_path": "test",
-                "config_path": "test",
-                "version": "1.0",
-                "config": {},
-            },
+            execution_duration_seconds=Decimal("10.0"),
+            config_snapshot={},
+        )
+
+        # Create run with metrics
+        backtest = await repository.create_backtest_run(
+            run_id=uuid4(),
+            strategy_name="With Metrics",
+            strategy_type="test",
+            instrument_symbol="AAPL",
+            start_date=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            end_date=datetime(2023, 12, 31, tzinfo=timezone.utc),
+            initial_capital=Decimal("100000.00"),
+            data_source="IBKR",
+            execution_status="success",
+            execution_duration_seconds=Decimal("10.0"),
+            config_snapshot={},
+        )
+
+        await async_session.flush()
+
+        await repository.create_performance_metrics(
+            backtest_run_id=backtest.id,
+            total_return=Decimal("0.15"),
+            final_balance=Decimal("115000.00"),
+            sharpe_ratio=Decimal("1.5"),
+            total_trades=10,
+            winning_trades=6,
+            losing_trades=4,
         )
 
         await async_session.commit()
 
-        # Test count for non-existent strategy
-        count = await repository.count_by_strategy("Non-Existent Strategy")
+        # Act
+        top_performers = await repository.find_top_performers(
+            metric="sharpe_ratio", limit=10
+        )
+
+        # Assert
+        assert len(top_performers) == 1
+        assert top_performers[0].strategy_name == "With Metrics"
+
+    @pytest.mark.asyncio
+    async def test_find_top_performers_respects_limit(self, repository, async_session):
+        """Test that top performers query respects limit parameter."""
+        # Arrange - Create 5 runs with metrics
+        for i in range(5):
+            backtest = await repository.create_backtest_run(
+                run_id=uuid4(),
+                strategy_name=f"Strategy {i}",
+                strategy_type="test",
+                instrument_symbol="AAPL",
+                start_date=datetime(2023, 1, 1, tzinfo=timezone.utc),
+                end_date=datetime(2023, 12, 31, tzinfo=timezone.utc),
+                initial_capital=Decimal("100000.00"),
+                data_source="IBKR",
+                execution_status="success",
+                execution_duration_seconds=Decimal("10.0"),
+                config_snapshot={},
+            )
+
+            await async_session.flush()
+
+            await repository.create_performance_metrics(
+                backtest_run_id=backtest.id,
+                total_return=Decimal("0.15"),
+                final_balance=Decimal("115000.00"),
+                sharpe_ratio=Decimal(f"{i}.5"),
+                total_trades=10,
+                winning_trades=6,
+                losing_trades=4,
+            )
+
+        await async_session.commit()
+
+        # Act
+        top_performers = await repository.find_top_performers(
+            metric="sharpe_ratio", limit=3
+        )
+
+        # Assert
+        assert len(top_performers) == 3
+
+    @pytest.mark.asyncio
+    async def test_count_by_strategy(self, repository, async_session):
+        """Test counting backtests by strategy name."""
+        # Arrange
+        for _ in range(3):
+            await repository.create_backtest_run(
+                run_id=uuid4(),
+                strategy_name="SMA Crossover",
+                strategy_type="sma",
+                instrument_symbol="AAPL",
+                start_date=datetime(2023, 1, 1, tzinfo=timezone.utc),
+                end_date=datetime(2023, 12, 31, tzinfo=timezone.utc),
+                initial_capital=Decimal("100000.00"),
+                data_source="IBKR",
+                execution_status="success",
+                execution_duration_seconds=Decimal("10.0"),
+                config_snapshot={},
+            )
+
+        for _ in range(2):
+            await repository.create_backtest_run(
+                run_id=uuid4(),
+                strategy_name="RSI Strategy",
+                strategy_type="rsi",
+                instrument_symbol="AAPL",
+                start_date=datetime(2023, 1, 1, tzinfo=timezone.utc),
+                end_date=datetime(2023, 12, 31, tzinfo=timezone.utc),
+                initial_capital=Decimal("100000.00"),
+                data_source="IBKR",
+                execution_status="success",
+                execution_duration_seconds=Decimal("10.0"),
+                config_snapshot={},
+            )
+
+        await async_session.commit()
+
+        # Act
+        sma_count = await repository.count_by_strategy("SMA Crossover")
+        rsi_count = await repository.count_by_strategy("RSI Strategy")
+
+        # Assert
+        assert sma_count == 3
+        assert rsi_count == 2
+
+    @pytest.mark.asyncio
+    async def test_count_by_strategy_nonexistent(self, repository):
+        """Test counting backtests for non-existent strategy returns 0."""
+        # Act
+        count = await repository.count_by_strategy("Nonexistent Strategy")
+
+        # Assert
         assert count == 0

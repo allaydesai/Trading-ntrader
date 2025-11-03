@@ -10,9 +10,8 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
-from src.db.session import get_session
-from src.db.repositories.backtest_repository import BacktestRepository
-from src.services.backtest_query import BacktestQueryService
+from src.db.session_sync import get_sync_session
+from src.db.repositories.backtest_repository_sync import SyncBacktestRepository
 from src.core.backtest_runner import MinimalBacktestRunner
 from src.services.exceptions import DataNotFoundError
 
@@ -58,16 +57,14 @@ async def _reproduce_backtest_async(run_id_str: str):
             )
             sys.exit(1)
 
-        # Step 2: Retrieve original backtest
+        # Step 2: Retrieve original backtest (synchronously)
         console.print(
             f"[cyan]🔍 Retrieving original backtest...[/cyan] [dim]{str(original_run_id)[:8]}...[/dim]"
         )
 
-        async with get_session() as session:
-            repository = BacktestRepository(session)
-            query_service = BacktestQueryService(repository)
-
-            original_backtest = await query_service.get_backtest_by_id(original_run_id)
+        with get_sync_session() as session:
+            repository = SyncBacktestRepository(session)
+            original_backtest = repository.find_by_run_id(original_run_id)
 
         # Step 3: Handle not found
         if original_backtest is None:

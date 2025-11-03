@@ -372,7 +372,8 @@ def run_backtest(
                     )
 
                 # Reason: Run the backtest with catalog bars and instrument
-                result = await runner.run_backtest_with_catalog_data(
+                # Returns tuple: (BacktestResult, Optional[UUID])
+                result, run_id = await runner.run_backtest_with_catalog_data(
                     bars=bars,
                     strategy_type=strategy,
                     symbol=symbol.upper(),
