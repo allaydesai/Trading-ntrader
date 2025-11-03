@@ -6,9 +6,31 @@ from contextlib import asynccontextmanager
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.exc import OperationalError
 
 from src.config import get_settings
 from src.db.base import Base
+
+
+def is_postgres_available():
+    """Check if PostgreSQL is available for testing."""
+    try:
+        settings = get_settings()
+        sync_url = settings.database_url
+        engine = create_engine(sync_url, echo=False)
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        engine.dispose()
+        return True
+    except (OperationalError, Exception):
+        return False
+
+
+# Skip all database tests if PostgreSQL is not available
+pytestmark = pytest.mark.skipif(
+    not is_postgres_available(),
+    reason="PostgreSQL is not available (not running or connection refused)",
+)
 
 
 def get_worker_id(request):
