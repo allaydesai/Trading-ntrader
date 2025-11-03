@@ -353,8 +353,8 @@ class TestBacktestRepositoryRetrieve:
 
         # Assert
         assert len(top_performers) == 2
-        assert top_performers[0].performance_metrics.sharpe_ratio == Decimal("2.5")
-        assert top_performers[1].performance_metrics.sharpe_ratio == Decimal("1.8")
+        assert top_performers[0].metrics.sharpe_ratio == Decimal("2.5")
+        assert top_performers[1].metrics.sharpe_ratio == Decimal("1.8")
 
     @pytest.mark.asyncio
     async def test_find_top_performers_excludes_null_sharpe(

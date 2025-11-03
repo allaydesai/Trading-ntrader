@@ -7,7 +7,7 @@ metrics, implementing async database operations with SQLAlchemy.
 
 from datetime import datetime
 from decimal import Decimal
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 from uuid import UUID
 
 from sqlalchemy import and_, func, select, tuple_
@@ -217,7 +217,7 @@ class BacktestRepository:
     async def find_recent(
         self,
         limit: int = 20,
-        cursor: Optional[Tuple[datetime, int]] = None,
+        cursor: Optional[Union[datetime, Tuple[datetime, int]]] = None,
     ) -> List[BacktestRun]:
         """
         Find recent backtests with cursor pagination.
@@ -226,7 +226,7 @@ class BacktestRepository:
 
         Args:
             limit: Maximum number of records to return
-            cursor: Pagination cursor (created_at, id) from last record
+            cursor: Pagination cursor - either datetime (created_at) or tuple (created_at, id)
 
         Returns:
             List of BacktestRun instances with metrics loaded
@@ -234,10 +234,15 @@ class BacktestRepository:
         stmt = select(BacktestRun).options(selectinload(BacktestRun.metrics))
 
         if cursor:
-            created_at, id = cursor
-            stmt = stmt.where(
-                tuple_(BacktestRun.created_at, BacktestRun.id) < (created_at, id)
-            )
+            # Handle both datetime and tuple cursor formats
+            if isinstance(cursor, tuple):
+                created_at, id = cursor
+                stmt = stmt.where(
+                    tuple_(BacktestRun.created_at, BacktestRun.id) < (created_at, id)
+                )
+            else:
+                # If cursor is just datetime, filter by created_at only
+                stmt = stmt.where(BacktestRun.created_at < cursor)
 
         stmt = stmt.order_by(
             BacktestRun.created_at.desc(), BacktestRun.id.desc()
@@ -304,6 +309,65 @@ class BacktestRepository:
 
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
+
+    async def find_top_performers(
+        self,
+        metric: str = "sharpe_ratio",
+        limit: int = 20,
+    ) -> List[BacktestRun]:
+        """
+        Find top performing backtests by specified metric.
+
+        Generic method that delegates to specific metric methods.
+
+        Args:
+            metric: Metric to sort by ('sharpe_ratio', 'total_return', 'sortino_ratio')
+            limit: Maximum records to return
+
+        Returns:
+            List of BacktestRun instances with metrics loaded, ordered by metric DESC
+
+        Raises:
+            ValueError: If metric is not supported
+
+        Example:
+            >>> repository = BacktestRepository(session)
+            >>> top_3 = await repository.find_top_performers(metric="sharpe_ratio", limit=3)
+        """
+        metric_column_map = {
+            "sharpe_ratio": PerformanceMetrics.sharpe_ratio,
+            "total_return": PerformanceMetrics.total_return,
+            "sortino_ratio": PerformanceMetrics.sortino_ratio,
+            "max_drawdown": PerformanceMetrics.max_drawdown,
+        }
+
+        if metric not in metric_column_map:
+            raise ValueError(
+                f"Unsupported metric: {metric}. "
+                f"Supported metrics: {list(metric_column_map.keys())}"
+            )
+
+        metric_column = metric_column_map[metric]
+
+        stmt = (
+            select(BacktestRun)
+            .join(
+                PerformanceMetrics, BacktestRun.id == PerformanceMetrics.backtest_run_id
+            )
+            .options(joinedload(BacktestRun.metrics))
+            .where(metric_column.isnot(None))
+            .order_by(metric_column.desc())
+            .limit(limit)
+        )
+
+        result = await self.session.execute(stmt)
+        backtests = list(result.scalars().unique().all())
+
+        # Ensure metrics are loaded for each backtest
+        for backtest in backtests:
+            await self.session.refresh(backtest, ["metrics"])
+
+        return backtests
 
     async def find_top_performers_by_sharpe(
         self,

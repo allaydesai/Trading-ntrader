@@ -8,9 +8,9 @@ For async operations (future API endpoints), use src.db.session instead.
 """
 
 from contextlib import contextmanager
-from typing import Generator, Optional
+from typing import Generator
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from src.config import get_settings
@@ -121,9 +121,7 @@ def get_sync_session() -> Generator[Session, None, None]:
     session_maker = get_sync_session_maker()
 
     if session_maker is None:
-        raise RuntimeError(
-            "Database not configured. Check DATABASE_URL in .env file"
-        )
+        raise RuntimeError("Database not configured. Check DATABASE_URL in .env file")
 
     session = session_maker()
     try:

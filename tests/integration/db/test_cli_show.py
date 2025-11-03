@@ -11,7 +11,6 @@ from uuid import uuid4
 from decimal import Decimal
 from datetime import datetime, timezone
 from click.testing import CliRunner
-from sqlalchemy import text
 from unittest.mock import patch
 
 from src.cli.commands.show import show_backtest_details as show
@@ -56,7 +55,7 @@ def test_show_displays_successful_backtest_details(sync_db_session):
         },
     )
 
-    metrics = repository.create_performance_metrics(
+    repository.create_performance_metrics(
         backtest_run_id=backtest.id,
         total_return=Decimal("0.2547"),
         final_balance=Decimal("125470.00"),
