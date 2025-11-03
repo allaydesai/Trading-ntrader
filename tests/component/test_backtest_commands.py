@@ -412,7 +412,11 @@ class TestBacktestCommands:
         # Check that default values were used
         assert mock_run_backtest.last_kwargs["fast_period"] == 10  # default
         assert mock_run_backtest.last_kwargs["slow_period"] == 20  # default
-        assert mock_run_backtest.last_kwargs["trade_size"] == 1000000  # default
+        # SMA uses portfolio_value and position_size_pct, not trade_size
+        assert mock_run_backtest.last_kwargs["portfolio_value"] == Decimal(
+            "10000000"
+        )  # trade_size * 10
+        assert mock_run_backtest.last_kwargs["position_size_pct"] == Decimal("10.0")
 
     @pytest.mark.component
     def test_list_backtests_command_exists(self):

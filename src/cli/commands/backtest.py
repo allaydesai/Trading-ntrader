@@ -4,6 +4,7 @@ import asyncio
 import sys
 import time
 from datetime import datetime, timezone
+from decimal import Decimal
 
 import click
 from rich.console import Console
@@ -358,18 +359,23 @@ def run_backtest(
                 runner = MinimalBacktestRunner(data_source="catalog")
 
                 # Prepare strategy parameters
-                strategy_params = {
-                    "trade_size": trade_size,
-                }
-
-                # Add strategy-specific parameters
+                # Note: SMA uses percentage-based sizing, others use trade_size
                 if strategy in ["sma", "sma_crossover"]:
-                    strategy_params.update(
-                        {
-                            "fast_period": fast_period,
-                            "slow_period": slow_period,
-                        }
-                    )
+                    # SMA uses portfolio_value and position_size_pct
+                    # Convert trade_size to portfolio_value (assume 10% position size)
+                    strategy_params = {
+                        "portfolio_value": Decimal(
+                            str(trade_size * 10)
+                        ),  # 10x for 10% sizing
+                        "position_size_pct": Decimal("10.0"),
+                        "fast_period": fast_period,
+                        "slow_period": slow_period,
+                    }
+                else:
+                    # Other strategies use trade_size
+                    strategy_params = {
+                        "trade_size": trade_size,
+                    }
 
                 # Reason: Run the backtest with catalog bars and instrument
                 # Returns tuple: (BacktestResult, Optional[UUID])
