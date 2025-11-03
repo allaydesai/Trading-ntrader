@@ -71,7 +71,9 @@ class TestStrategyCommands:
             assert "config" in config
             assert "fast_period" in config["config"]
             assert "slow_period" in config["config"]
-            assert "trade_size" in config["config"]
+            # SMA uses percentage-based sizing
+            assert "portfolio_value" in config["config"]
+            assert "position_size_pct" in config["config"]
 
     @pytest.mark.integration
     @pytest.mark.component

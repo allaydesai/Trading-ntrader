@@ -19,13 +19,15 @@ def test_sma_config_creation():
         bar_type=f"{instrument.id}-15-MINUTE-BID-INTERNAL",
         fast_period=10,
         slow_period=20,
-        trade_size=Decimal("1_000_000"),
+        portfolio_value=Decimal("1_000_000"),
+        position_size_pct=Decimal("10.0"),
     )
 
     assert config.instrument_id == instrument.id
     assert config.fast_period == 10
     assert config.slow_period == 20
-    assert config.trade_size == Decimal("1_000_000")
+    assert config.portfolio_value == Decimal("1_000_000")
+    assert config.position_size_pct == Decimal("10.0")
 
 
 @pytest.mark.integration
@@ -38,7 +40,8 @@ def test_sma_strategy_initialization():
         bar_type=f"{instrument.id}-15-MINUTE-BID-INTERNAL",
         fast_period=10,
         slow_period=20,
-        trade_size=Decimal("1_000_000"),
+        portfolio_value=Decimal("1_000_000"),
+        position_size_pct=Decimal("10.0"),
     )
 
     strategy = SMACrossover(config=config)

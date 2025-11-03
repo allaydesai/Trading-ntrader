@@ -23,7 +23,8 @@ def yaml_config_file(tmp_path):
       bar_type: "AAPL.NASDAQ-1-MINUTE-LAST-INTERNAL"
       fast_period: 10
       slow_period: 20
-      trade_size: 1000000
+      portfolio_value: 1000000
+      position_size_pct: 10.0
     """
 
     config_file = tmp_path / "test_config.yaml"
@@ -104,7 +105,8 @@ class TestBacktestRunnerYAML:
           bar_type: "AAPL.NASDAQ-1-MINUTE-LAST-INTERNAL"
           fast_period: 10
           slow_period: 20
-          trade_size: 1000000
+          portfolio_value: 1000000
+          position_size_pct: 10.0
         """
 
         config_obj = ConfigLoader.load_from_yaml(yaml_content)
@@ -130,7 +132,8 @@ class TestBacktestRunnerYAML:
               bar_type: "AAPL.NASDAQ-1-MINUTE-LAST-INTERNAL"
               fast_period: 10
               slow_period: 20
-              trade_size: 1000000
+              portfolio_value: 1000000
+              position_size_pct: 10.0
             """,
                 id="sma_strategy",
             ),
@@ -198,7 +201,8 @@ class TestBacktestRunnerYAML:
           bar_type: "AAPL.NASDAQ-1-MINUTE-LAST-INTERNAL"
           fast_period: 10
           slow_period: 20
-          trade_size: 1000000
+          portfolio_value: 1000000
+          position_size_pct: 10.0
         """
 
         config_obj = ConfigLoader.load_from_yaml(yaml_content)
@@ -211,7 +215,9 @@ class TestBacktestRunnerYAML:
         # Verify config has necessary trading parameters
         assert hasattr(config_obj.config, "instrument_id")
         assert hasattr(config_obj.config, "bar_type")
-        assert hasattr(config_obj.config, "trade_size")
+        # SMA uses percentage-based sizing instead of trade_size
+        assert hasattr(config_obj.config, "portfolio_value")
+        assert hasattr(config_obj.config, "position_size_pct")
 
     def test_integration_with_existing_run_sma_backtest(self, yaml_config_file):
         """Test that YAML config produces similar results to existing SMA method."""

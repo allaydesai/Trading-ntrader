@@ -63,7 +63,7 @@ async def db_session(request):
 
     # Cleanup: drop schema and tables
     async with engine.begin() as conn:
-        await conn.execute(text(f"DROP SCHEMA IF NOT EXISTS {schema_name} CASCADE"))
+        await conn.execute(text(f"DROP SCHEMA IF EXISTS {schema_name} CASCADE"))
 
     await engine.dispose()
 

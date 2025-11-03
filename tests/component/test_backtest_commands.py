@@ -191,7 +191,7 @@ class TestBacktestCommands:
         mock_runner = MagicMock()
 
         async def mock_run_backtest(*args, **kwargs):
-            return mock_result
+            return (mock_result, None)
 
         mock_runner.run_backtest_with_catalog_data = mock_run_backtest
         mock_runner.dispose = MagicMock()
@@ -238,7 +238,7 @@ class TestBacktestCommands:
         mock_runner = MagicMock()
 
         async def mock_run_backtest(*args, **kwargs):
-            return mock_result
+            return (mock_result, None)
 
         mock_runner.run_backtest_with_catalog_data = mock_run_backtest
         mock_runner.dispose = MagicMock()
@@ -388,7 +388,7 @@ class TestBacktestCommands:
         async def mock_run_backtest(*args, **kwargs):
             # Capture kwargs to verify defaults
             mock_run_backtest.last_kwargs = kwargs
-            return MockBacktestResult()
+            return (MockBacktestResult(), None)
 
         mock_runner.run_backtest_with_catalog_data = mock_run_backtest
         mock_runner.dispose = MagicMock()

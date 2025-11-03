@@ -23,7 +23,8 @@ def sma_yaml_config():
       bar_type: "AAPL.NASDAQ-1-MINUTE-LAST-INTERNAL"
       fast_period: 10
       slow_period: 20
-      trade_size: 1000000
+      portfolio_value: 1000000
+      position_size_pct: 10.0
     """
 
 
@@ -81,7 +82,8 @@ class TestConfigLoader:
         assert config_obj.config_path == "src.core.strategies.sma_crossover:SMAConfig"
         assert config_obj.config.fast_period == 10
         assert config_obj.config.slow_period == 20
-        assert config_obj.config.trade_size == Decimal("1000000")
+        assert config_obj.config.portfolio_value == Decimal("1000000")
+        assert config_obj.config.position_size_pct == Decimal("10.0")
         assert str(config_obj.config.instrument_id) == "AAPL.NASDAQ"
 
     @pytest.mark.integration
@@ -142,7 +144,12 @@ class TestConfigLoader:
         config_obj = ConfigLoader.load_from_yaml(yaml_config)
 
         assert config_obj.strategy_path == expected_strategy_path
-        assert config_obj.config.trade_size == Decimal("1000000")
+        # SMAConfig uses portfolio_value/position_size_pct, others use trade_size
+        if "sma_crossover" in expected_strategy_path:
+            assert config_obj.config.portfolio_value == Decimal("1000000")
+            assert config_obj.config.position_size_pct == Decimal("10.0")
+        else:
+            assert config_obj.config.trade_size == Decimal("1000000")
         assert str(config_obj.config.instrument_id) == "AAPL.NASDAQ"
 
     @pytest.mark.component
@@ -310,4 +317,6 @@ class TestConfigLoader:
         # Verify config is properly typed and accessible
         assert isinstance(config_obj.config.fast_period, int)
         assert isinstance(config_obj.config.slow_period, int)
-        assert isinstance(config_obj.config.trade_size, Decimal)
+        # portfolio_value and position_size_pct can be int or Decimal from YAML
+        assert config_obj.config.portfolio_value == 1000000
+        assert config_obj.config.position_size_pct == 10.0

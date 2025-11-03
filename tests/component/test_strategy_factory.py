@@ -73,7 +73,8 @@ class TestStrategyFactory:
                 "bar_type": "EUR/USD.SIM-15-MINUTE-MID-EXTERNAL",
                 "fast_period": 10,
                 "slow_period": 20,
-                "trade_size": Decimal("1000000"),
+                "portfolio_value": Decimal("1000000"),
+                "position_size_pct": Decimal("10.0"),
             },
         )
 
@@ -139,7 +140,8 @@ class TestStrategyFactory:
                     "bar_type": "EUR/USD.SIM-15-MINUTE-MID-EXTERNAL",
                     "fast_period": -10,  # Invalid
                     "slow_period": 20,
-                    "trade_size": Decimal("1000000"),
+                    "portfolio_value": Decimal("1000000"),
+                    "position_size_pct": Decimal("10.0"),
                 },
             )
 
@@ -234,7 +236,8 @@ class TestStrategyLoader:
                 "bar_type": "EUR/USD.SIM-15-MINUTE-MID-EXTERNAL",
                 "fast_period": 10,
                 "slow_period": 20,
-                "trade_size": Decimal("1000000"),
+                "portfolio_value": Decimal("1000000"),
+                "position_size_pct": Decimal("10.0"),
             },
         )
 
