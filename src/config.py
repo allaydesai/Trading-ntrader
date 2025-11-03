@@ -113,7 +113,7 @@ class Settings(BaseSettings):
     )
     trade_size: Decimal = Field(
         default=Decimal("1000000"),
-        description="Default trade size in SHARES (deprecated - use position_size_pct instead)",
+        description="Default trade size in SHARES (not USD notional)",
     )
 
     # Commission settings (IBKR US Equities Tiered)
