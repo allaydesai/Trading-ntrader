@@ -1,7 +1,7 @@
 """Tests for SMA crossover strategy."""
 
 from decimal import Decimal
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import pytest
 from nautilus_trader.test_kit.providers import TestInstrumentProvider
