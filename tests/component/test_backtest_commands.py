@@ -70,7 +70,7 @@ class TestBacktestCommands:
         mock_runner = MagicMock()
 
         async def mock_run_backtest(*args, **kwargs):
-            return MockBacktestResult()
+            return MockBacktestResult(), None  # Returns (result, run_id)
 
         mock_runner.run_backtest_with_catalog_data = mock_run_backtest
         mock_runner.dispose = MagicMock()
@@ -191,7 +191,7 @@ class TestBacktestCommands:
         mock_runner = MagicMock()
 
         async def mock_run_backtest(*args, **kwargs):
-            return mock_result
+            return (mock_result, None)
 
         mock_runner.run_backtest_with_catalog_data = mock_run_backtest
         mock_runner.dispose = MagicMock()
@@ -238,7 +238,7 @@ class TestBacktestCommands:
         mock_runner = MagicMock()
 
         async def mock_run_backtest(*args, **kwargs):
-            return mock_result
+            return (mock_result, None)
 
         mock_runner.run_backtest_with_catalog_data = mock_run_backtest
         mock_runner.dispose = MagicMock()
@@ -388,7 +388,7 @@ class TestBacktestCommands:
         async def mock_run_backtest(*args, **kwargs):
             # Capture kwargs to verify defaults
             mock_run_backtest.last_kwargs = kwargs
-            return MockBacktestResult()
+            return (MockBacktestResult(), None)
 
         mock_runner.run_backtest_with_catalog_data = mock_run_backtest
         mock_runner.dispose = MagicMock()
@@ -412,7 +412,11 @@ class TestBacktestCommands:
         # Check that default values were used
         assert mock_run_backtest.last_kwargs["fast_period"] == 10  # default
         assert mock_run_backtest.last_kwargs["slow_period"] == 20  # default
-        assert mock_run_backtest.last_kwargs["trade_size"] == 1000000  # default
+        # SMA uses portfolio_value and position_size_pct, not trade_size
+        assert mock_run_backtest.last_kwargs["portfolio_value"] == Decimal(
+            "10000000"
+        )  # trade_size * 10
+        assert mock_run_backtest.last_kwargs["position_size_pct"] == Decimal("10.0")
 
     @pytest.mark.component
     def test_list_backtests_command_exists(self):

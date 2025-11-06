@@ -13,7 +13,7 @@ A production-grade algorithmic trading backtesting system built with the Nautilu
 - 📊 **Mock Data Generation**: Synthetic data with predictable patterns for testing
 - 📈 **CSV Data Import**: Import real market data from CSV files directly to Parquet catalog
 - 📡 **Interactive Brokers Integration**: ✨ Fetch real market data from IBKR TWS/Gateway
-- 🗄️ **Parquet Data Catalog**: ✨ **NEW** - Fast, efficient columnar storage with Nautilus native format
+- 🗄️ **Parquet Data Catalog**: ✨ Fast, efficient columnar storage with Nautilus native format
   - **No Database Required**: Direct Parquet file storage eliminates PostgreSQL dependency
   - **Auto-Fetch**: Automatically fetches missing data from IBKR when needed
   - **Data Inspection**: Built-in commands to check availability and detect gaps
@@ -26,6 +26,13 @@ A production-grade algorithmic trading backtesting system built with the Nautilu
   - **Text Reports**: Rich-formatted console output with tables and charts
   - **CSV Export**: Precision-preserved data export for spreadsheet analysis
   - **JSON Export**: Structured data for programmatic analysis
+- 💾 **PostgreSQL Metadata Storage**: ✨ **NEW** - Persistent backtest result storage and retrieval
+  - **Automatic Persistence**: All backtests automatically saved to database
+  - **History Management**: View, filter, and sort past backtests
+  - **Detailed Inspection**: Complete backtest details with configuration snapshots
+  - **Comparison Tools**: Side-by-side comparison of multiple backtests
+  - **Reproducibility**: Re-run previous backtests with exact same configuration
+  - **Performance Tracking**: Track strategy performance over time
 - ⚡ **Fast Execution**: Built on Nautilus Trader's high-performance engine
 - 🧪 **Test Coverage**: Comprehensive test suite with 715 tests (688 passing) organized in test pyramid
   - 141 unit tests executing in 0.55s (99% faster than integration)
@@ -48,7 +55,7 @@ A production-grade algorithmic trading backtesting system built with the Nautilu
   - Portfolio tracking and equity curves
 - **Report Generation**: Multi-format exports (text, CSV, JSON)
 - **Results Persistence**: Save and retrieve backtest results with full analytics
-- **Parquet Data Catalog**: ✨ **NEW** - Simplified data storage architecture
+- **Parquet Data Catalog**: ✨ Simplified data storage architecture
   - CSV imports directly to Parquet (no database required)
   - Auto-fetch missing data from IBKR automatically
   - Data inspection commands (list, check, gap detection)
@@ -58,6 +65,14 @@ A production-grade algorithmic trading backtesting system built with the Nautilu
   - Support for multiple instruments and timeframes
   - Built-in rate limiting (45 req/sec) to prevent API throttling
   - Automatic catalog updates with fetched data
+- **PostgreSQL Metadata Storage**: ✨ **NEW** - Complete backtest history management
+  - All backtests automatically saved with full metadata
+  - View backtest history with filtering by strategy, instrument, status
+  - Sort by date, total return, or Sharpe ratio
+  - Show complete backtest details with configuration snapshots
+  - Compare multiple backtests side-by-side (2-10 runs)
+  - Reproduce previous backtests with exact same configuration
+  - Track strategy performance over time with aggregate statistics
 
 ### 📋 Command Quick Reference
 ```bash
@@ -77,6 +92,16 @@ uv run python -m src.cli.main backtest run --strategy <type>   # ✅ All strateg
 
 # Mock data testing
 uv run python -m src.cli.main backtest run-config <config>     # ✅ YAML configs supported
+
+# Backtest history management (NEW - PostgreSQL)
+uv run python -m src.cli.main backtest history                 # ✅ View backtest history
+uv run python -m src.cli.main backtest history --limit 50      # ✅ Show more results
+uv run python -m src.cli.main backtest history --strategy "SMA Crossover"  # ✅ Filter by strategy
+uv run python -m src.cli.main backtest history --sort sharpe   # ✅ Sort by Sharpe ratio (best first)
+uv run python -m src.cli.main backtest history --sort return   # ✅ Sort by total return
+uv run python -m src.cli.main backtest show <run-id>           # ✅ View complete backtest details
+uv run python -m src.cli.main backtest compare <id1> <id2>     # ✅ Compare 2-10 backtests side-by-side
+uv run python -m src.cli.main backtest reproduce <run-id>      # ✅ Re-run previous backtest
 
 # Performance reports
 uv run python -m src.cli report summary <result-id>            # ✅ Quick performance summary
@@ -595,6 +620,121 @@ uv run python -m src.cli report export-all <result-id> -o reports/
 - **Trade Details**: Complete trade history with entry/exit prices and PnL
 - **Portfolio Analytics**: Position tracking, equity curve, exposure analysis
 
+#### Backtest History Management (New in Milestone 6 - PostgreSQL)
+
+After running backtests, you can view, compare, and reproduce your results using the new PostgreSQL-backed history management system.
+
+##### View Backtest History
+
+List all your past backtests with filtering and sorting options:
+
+```bash
+# View 20 most recent backtests (default)
+uv run python -m src.cli.main backtest history
+
+# Show more results
+uv run python -m src.cli.main backtest history --limit 50
+
+# Filter by strategy
+uv run python -m src.cli.main backtest history --strategy "SMA Crossover"
+
+# Filter by instrument
+uv run python -m src.cli.main backtest history --instrument AAPL
+
+# Filter by status (success or failed)
+uv run python -m src.cli.main backtest history --status success
+
+# Sort by total return (best first)
+uv run python -m src.cli.main backtest history --sort return
+
+# Sort by Sharpe ratio (best first)
+uv run python -m src.cli.main backtest history --sort sharpe
+
+# View strategy performance summary
+uv run python -m src.cli.main backtest history --strategy "SMA Crossover" --strategy-summary
+
+# Show parameter variations across runs
+uv run python -m src.cli.main backtest history --show-params
+```
+
+Example output:
+```
+📋 Backtest History (20 results) 📅 ↓
+┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━┳━━━━━━━━┳━━━━━━━━┓
+┃ Run ID     ┃ Date            ┃ Strategy       ┃ Symbol ┃ Return  ┃ Sharpe ┃ Status ┃
+┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━╇━━━━━━━━╇━━━━━━━━┩
+│ a1b2c3d4...│ 2024-01-27 14:30│ SMA Crossover  │ AAPL   │ +12.5%  │ 1.82   │ ✅     │
+│ e5f6g7h8...│ 2024-01-27 12:15│ Mean Reversion │ NVDA   │ +8.3%   │ 1.45   │ ✅     │
+│ i9j0k1l2...│ 2024-01-26 16:45│ SMA Momentum   │ MSFT   │ -2.1%   │ 0.65   │ ✅     │
+└────────────┴─────────────────┴────────────────┴────────┴─────────┴────────┴────────┘
+```
+
+##### View Complete Backtest Details
+
+Show all details of a specific backtest including configuration snapshot and performance metrics:
+
+```bash
+# Replace <run-id> with actual UUID from history
+uv run python -m src.cli.main backtest show a1b2c3d4-e5f6-7890-abcd-ef1234567890
+```
+
+This displays:
+- Execution metadata (run ID, strategy, dates, duration)
+- Complete configuration snapshot (all parameters as JSON)
+- Performance metrics (returns, risk metrics, trading statistics)
+- Error details (if backtest failed)
+
+##### Compare Multiple Backtests
+
+Compare 2-10 backtests side-by-side to identify the best performing configuration:
+
+```bash
+# Compare 2 backtests
+uv run python -m src.cli.main backtest compare <uuid1> <uuid2>
+
+# Compare 3 backtests
+uv run python -m src.cli.main backtest compare <uuid1> <uuid2> <uuid3>
+```
+
+Example output:
+```
+Backtest Comparison (3 runs)
+┏━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━┓
+┃ Metric             ┃ a1b2c3d4...    ┃ e5f6g7h8...    ┃ i9j0k1l2...    ┃
+┡━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━┩
+│ Strategy           │ SMA Crossover  │ Mean Reversion │ SMA Momentum   │
+│ Symbol             │ AAPL           │ AAPL           │ AAPL           │
+│ Total Return       │ +12.5%         │ +8.3%          │ -2.1%          │
+│ Sharpe Ratio       │ 1.82           │ 1.45           │ 0.65           │
+│ Max Drawdown       │ -5.2%          │ -3.8%          │ -8.1%          │
+│ Win Rate           │ 58.3%          │ 62.5%          │ 45.0%          │
+└────────────────────┴────────────────┴────────────────┴────────────────┘
+
+Best Performer by Sharpe Ratio: a1b2c3d4... (Sharpe: 1.82) - SMA Crossover on AAPL
+```
+
+##### Reproduce Previous Backtests
+
+Re-run a previous backtest with its exact same configuration:
+
+```bash
+# Reproduce a backtest by its UUID
+uv run python -m src.cli.main backtest reproduce a1b2c3d4-e5f6-7890-abcd-ef1234567890
+```
+
+This command:
+- Retrieves the original configuration snapshot
+- Loads the same data from the catalog
+- Executes a new backtest with identical parameters
+- Creates a new record linked to the original via `reproduced_from_run_id`
+- Compares results with the original run
+
+**Use Cases**:
+- Validate reproducibility after code changes
+- Re-run with updated market data
+- Test strategy stability over time
+- Debug unexpected behavior
+
 #### Command Options
 
 ##### Data Commands
@@ -625,11 +765,24 @@ uv run python -m src.cli report export-all <result-id> -o reports/
   - `--end`: End date for backtest (YYYY-MM-DD)
   - `--fast-period`: Fast SMA period (default: 10)
   - `--slow-period`: Slow SMA period (default: 20)
-  - `--trade-size`: Trade size in base currency (default: 1,000,000)
+  - `--trade-size`: Trade size in SHARES (default: 1,000,000 shares = very large position!)
 - `backtest run-config <config-file>`: Run backtest with YAML configuration
   - `--symbol`: Trading symbol (required)
   - `--start`: Start date for backtest (YYYY-MM-DD)
   - `--end`: End date for backtest (YYYY-MM-DD)
+
+##### Backtest History Commands (New in Milestone 6)
+- `backtest history`: List recent backtest executions with metrics
+  - `--limit`: Number of results to display (default: 20, max: 1000)
+  - `--strategy`: Filter by strategy name
+  - `--instrument`: Filter by instrument symbol
+  - `--status`: Filter by execution status (success/failed)
+  - `--sort`: Sort by date (default), return, or sharpe
+  - `--strategy-summary`: Show aggregate statistics for a strategy
+  - `--show-params`: Display parameter variations across runs
+- `backtest show <run-id>`: Display complete details of a specific backtest
+- `backtest compare <uuid1> <uuid2> [uuid3...]`: Compare 2-10 backtests side-by-side
+- `backtest reproduce <run-id>`: Re-run previous backtest with exact same configuration
 
 ##### Report Commands (New in Milestone 4)
 - `report list`: List all saved backtest results
@@ -986,7 +1139,130 @@ This section provides detailed, step-by-step guides for common tasks.
 - Clear comparison of strategy performance
 - Data-driven insights for strategy optimization
 
-### Journey 7: Interactive Brokers Data Integration (New in Milestone 5)
+### Journey 7: Backtest History Management and Strategy Optimization (New in Milestone 6)
+
+**Goal**: Use PostgreSQL metadata storage to track, compare, and optimize your trading strategies over time
+
+**Prerequisites**: Journey 1 completed, some backtests already run
+
+**Steps**:
+
+1. **Run multiple backtests with different parameters**:
+   ```bash
+   # Test SMA Crossover with different period combinations
+   uv run python -m src.cli.main backtest run \
+     --strategy sma_crossover --symbol AAPL \
+     --start 2024-01-02 --end 2024-01-02 \
+     --fast-period 5 --slow-period 10
+
+   uv run python -m src.cli.main backtest run \
+     --strategy sma_crossover --symbol AAPL \
+     --start 2024-01-02 --end 2024-01-02 \
+     --fast-period 10 --slow-period 20
+
+   uv run python -m src.cli.main backtest run \
+     --strategy sma_crossover --symbol AAPL \
+     --start 2024-01-02 --end 2024-01-02 \
+     --fast-period 20 --slow-period 50
+
+   # All backtests are automatically saved to PostgreSQL!
+   ```
+
+2. **View your backtest history**:
+   ```bash
+   # See all your recent backtests
+   uv run python -m src.cli.main backtest history
+
+   # Find the best performers by Sharpe ratio
+   uv run python -m src.cli.main backtest history --sort sharpe --limit 10
+
+   # Find the most profitable runs
+   uv run python -m src.cli.main backtest history --sort return --limit 10
+
+   # Filter to see only SMA Crossover backtests
+   uv run python -m src.cli.main backtest history --strategy "SMA Crossover"
+   ```
+
+3. **Inspect detailed results**:
+   ```bash
+   # Copy a run_id from the history output (first 8 characters shown)
+   # Use the full UUID to view complete details
+   uv run python -m src.cli.main backtest show a1b2c3d4-e5f6-7890-abcd-ef1234567890
+   ```
+
+   This shows:
+   - Exact strategy parameters used
+   - Performance metrics (Sharpe, returns, drawdown)
+   - Trading statistics (win rate, total trades)
+   - Configuration snapshot (can reproduce later)
+
+4. **Compare your top performers**:
+   ```bash
+   # Compare the 3 best runs to understand what worked
+   uv run python -m src.cli.main backtest compare <uuid1> <uuid2> <uuid3>
+   ```
+
+   Look for patterns:
+   - Which parameter combinations perform best?
+   - How do returns compare to Sharpe ratios?
+   - What's the trade-off between return and drawdown?
+
+5. **Reproduce a winning configuration**:
+   ```bash
+   # Found a configuration you like? Reproduce it with current data
+   uv run python -m src.cli.main backtest reproduce <winning-run-uuid>
+   ```
+
+   This creates a new backtest with:
+   - Exact same strategy parameters
+   - Same instrument and date range
+   - Link to original run for comparison
+   - Fresh execution with current catalog data
+
+6. **Track strategy performance over time**:
+   ```bash
+   # View strategy summary with aggregate statistics
+   uv run python -m src.cli.main backtest history \
+     --strategy "SMA Crossover" \
+     --strategy-summary
+   ```
+
+   This shows:
+   - Average return across all runs
+   - Best and worst returns
+   - Average Sharpe ratio
+   - Success/failure rate
+   - Average win rate and drawdown
+
+7. **Identify parameter patterns**:
+   ```bash
+   # View parameter variations to spot trends
+   uv run python -m src.cli.main backtest history \
+     --strategy "SMA Crossover" \
+     --show-params \
+     --sort sharpe
+   ```
+
+   This helps you understand:
+   - Which parameter ranges work best
+   - How parameter changes affect performance
+   - Stability across different configurations
+
+**Learning Outcome**:
+- Systematic approach to strategy optimization
+- Understanding parameter sensitivity
+- Building a library of tested configurations
+- Data-driven strategy selection based on metrics
+- Reproducible research with configuration snapshots
+
+**Expected Results**:
+- Complete history of all backtests in PostgreSQL
+- Easy comparison of different strategies and parameters
+- Ability to reproduce any previous test
+- Clear understanding of what works and what doesn't
+- Confidence in strategy selection based on historical testing
+
+### Journey 8: Interactive Brokers Data Integration (New in Milestone 5)
 
 **Goal**: Fetch real market data from Interactive Brokers TWS/Gateway and use it for backtesting
 
@@ -1626,6 +1902,18 @@ If you encounter issues not covered here:
   - [x] Parquet catalog integration for data storage
   - [x] Comprehensive IBKR setup documentation
   - [x] Full test suite (38 IBKR-specific tests passing)
+- [x] **Milestone 6**: PostgreSQL Metadata Storage (Feature Spec 004)
+  - [x] Automatic backtest persistence with full metadata
+  - [x] Database schema with backtest_runs and performance_metrics tables
+  - [x] Backtest history command with filtering and sorting
+  - [x] Complete backtest details view with configuration snapshots
+  - [x] Side-by-side comparison of 2-10 backtests
+  - [x] Backtest reproduction with exact configuration
+  - [x] Strategy performance tracking over time
+  - [x] Query service with optimized performance (<100ms lookups)
+  - [x] Configuration snapshot storage as JSONB
+  - [x] Integration with existing backtest runner
+  - [x] Rich CLI output with tables and formatting
 
 ### In Progress 🚧
 - [ ] Complete data list command implementation (currently shows "coming soon")

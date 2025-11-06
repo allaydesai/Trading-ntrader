@@ -73,7 +73,8 @@ class TestStrategyFactory:
                 "bar_type": "EUR/USD.SIM-15-MINUTE-MID-EXTERNAL",
                 "fast_period": 10,
                 "slow_period": 20,
-                "trade_size": Decimal("1000000"),
+                "portfolio_value": Decimal("1000000"),
+                "position_size_pct": Decimal("10.0"),
             },
         )
 
@@ -139,7 +140,8 @@ class TestStrategyFactory:
                     "bar_type": "EUR/USD.SIM-15-MINUTE-MID-EXTERNAL",
                     "fast_period": -10,  # Invalid
                     "slow_period": 20,
-                    "trade_size": Decimal("1000000"),
+                    "portfolio_value": Decimal("1000000"),
+                    "position_size_pct": Decimal("10.0"),
                 },
             )
 
@@ -180,7 +182,12 @@ class TestStrategyFactory:
         """Test validating valid SMA configuration."""
         result = StrategyFactory.validate_strategy_config(
             StrategyType.SMA_CROSSOVER,
-            {"fast_period": 10, "slow_period": 20, "trade_size": "1000000"},
+            {
+                "fast_period": 10,
+                "slow_period": 20,
+                "portfolio_value": "1000000",
+                "position_size_pct": "10.0",
+            },
         )
         assert result is True
 
@@ -193,7 +200,8 @@ class TestStrategyFactory:
                 {
                     "fast_period": -10,  # Invalid
                     "slow_period": 20,
-                    "trade_size": "1000000",
+                    "portfolio_value": "1000000",
+                    "position_size_pct": "10.0",
                 },
             )
 
@@ -234,7 +242,8 @@ class TestStrategyLoader:
                 "bar_type": "EUR/USD.SIM-15-MINUTE-MID-EXTERNAL",
                 "fast_period": 10,
                 "slow_period": 20,
-                "trade_size": Decimal("1000000"),
+                "portfolio_value": Decimal("1000000"),
+                "position_size_pct": Decimal("10.0"),
             },
         )
 

@@ -103,8 +103,17 @@ class Settings(BaseSettings):
     slow_ema_period: int = Field(
         default=20, description="Slow EMA period for strategies"
     )
+    portfolio_value: Decimal = Field(
+        default=Decimal("1000000"),
+        description="Starting portfolio value in USD for position sizing calculations",
+    )
+    position_size_pct: Decimal = Field(
+        default=Decimal("10.0"),
+        description="Position size as percentage of portfolio (e.g., 10.0 = 10%)",
+    )
     trade_size: Decimal = Field(
-        default=Decimal("1000000"), description="Default trade size"
+        default=Decimal("1000000"),
+        description="Default trade size in SHARES (not USD notional)",
     )
 
     # Commission settings (IBKR US Equities Tiered)

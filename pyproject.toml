@@ -54,3 +54,20 @@ markers = [
     "integration: marks tests as integration tests",
     "nautilus: marks tests as nautilus framework-specific",
 ]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+exclude = [
+    "^tests_archive/",
+    "^scripts/",
+]
+
+[[tool.mypy.overrides]]
+module = [
+    "ibapi",
+    "ibapi.*",
+]
+ignore_missing_imports = true

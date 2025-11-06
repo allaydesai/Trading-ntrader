@@ -227,7 +227,10 @@ def test_settings_field_descriptions():
     assert fields["default_balance"].description == "Default starting balance"
     assert fields["fast_ema_period"].description == "Fast EMA period for strategies"
     assert fields["slow_ema_period"].description == "Slow EMA period for strategies"
-    assert fields["trade_size"].description == "Default trade size"
+    assert (
+        fields["trade_size"].description
+        == "Default trade size in SHARES (not USD notional)"
+    )
     assert fields["data_directory"].description == "Directory for data files"
     assert (
         fields["mock_data_bars"].description == "Number of mock data bars to generate"

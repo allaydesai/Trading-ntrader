@@ -13,17 +13,21 @@ from pathlib import Path
 from typing import Dict, List
 
 import structlog
+from dotenv import load_dotenv
 from nautilus_trader.model.data import Bar
 from nautilus_trader.persistence.catalog import ParquetDataCatalog
 
-from src.models.catalog_metadata import CatalogAvailability
-from src.services.exceptions import (
+# Load environment variables from .env file
+load_dotenv()
+
+from src.models.catalog_metadata import CatalogAvailability  # noqa: E402
+from src.services.exceptions import (  # noqa: E402
     CatalogCorruptionError,
     CatalogError,
     DataNotFoundError,
     IBKRConnectionError,
 )
-from src.services.ibkr_client import IBKRHistoricalClient
+from src.services.ibkr_client import IBKRHistoricalClient  # noqa: E402
 
 logger = structlog.get_logger(__name__)
 
@@ -54,7 +58,8 @@ class DataCatalogService:
                          environment variable NAUTILUS_PATH or
                          defaults to "./data/catalog"
             ibkr_client: Optional IBKR client for data fetching. If None,
-                        creates default client with env settings.
+                        creates client lazily when first needed (avoids
+                        unnecessary connection attempts during backtests).
 
         Example:
             >>> service = DataCatalogService()
@@ -71,11 +76,41 @@ class DataCatalogService:
         # Reason: In-memory cache for fast availability checks
         self.availability_cache: Dict[str, CatalogAvailability] = {}
 
-        # Reason: Initialize IBKR client for auto-fetch functionality
-        if ibkr_client is not None:
-            self.ibkr_client = ibkr_client
-        else:
-            # Reason: Create default IBKR client with env settings
+        # Reason: Store provided IBKR client or None for lazy initialization
+        # This avoids creating connections during backtests when data is already in catalog
+        self._ibkr_client = ibkr_client
+        self._ibkr_client_initialized = ibkr_client is not None
+
+        logger.info(
+            "data_catalog_initialized",
+            catalog_path=str(self.catalog_path),
+        )
+
+        # Reason: Build availability cache on startup
+        self._rebuild_availability_cache()
+
+    @property
+    def ibkr_client(self) -> IBKRHistoricalClient:
+        """
+        Lazy-initialized IBKR client property.
+
+        Creates the IBKR client on first access using environment variables.
+        This avoids unnecessary connection attempts during backtests when
+        data is already available in the catalog.
+
+        Returns:
+            IBKRHistoricalClient instance
+
+        Note:
+            Connection settings are read from environment variables:
+            - IBKR_HOST (default: 127.0.0.1)
+            - IBKR_PORT (default: 7497, but typically set to 4002 for Gateway paper)
+            - IBKR_CLIENT_ID (default: 10)
+
+            The .env file should be loaded before this service is initialized.
+        """
+        if not self._ibkr_client_initialized:
+            # Reason: Create IBKR client with env settings on first access
             # Strip whitespace and handle inline comments
             ibkr_host = os.environ.get("IBKR_HOST", "127.0.0.1").split("#")[0].strip()
             ibkr_port_str = os.environ.get("IBKR_PORT", "7497").split("#")[0].strip()
@@ -86,25 +121,23 @@ class DataCatalogService:
             ibkr_port = int(ibkr_port_str)
             ibkr_client_id = int(ibkr_client_id_str)
 
-            self.ibkr_client = IBKRHistoricalClient(
+            self._ibkr_client = IBKRHistoricalClient(
                 host=ibkr_host,
                 port=ibkr_port,
                 client_id=ibkr_client_id,
             )
+            self._ibkr_client_initialized = True
+
             logger.info(
-                "ibkr_client_initialized",
+                "ibkr_client_lazy_initialized",
                 host=ibkr_host,
                 port=ibkr_port,
                 client_id=ibkr_client_id,
             )
 
-        logger.info(
-            "data_catalog_initialized",
-            catalog_path=str(self.catalog_path),
-        )
-
-        # Reason: Build availability cache on startup
-        self._rebuild_availability_cache()
+        # At this point, _ibkr_client is guaranteed to be non-None
+        assert self._ibkr_client is not None
+        return self._ibkr_client
 
     def _rebuild_availability_cache(self) -> None:
         """

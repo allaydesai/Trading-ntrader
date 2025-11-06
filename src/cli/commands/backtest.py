@@ -4,6 +4,7 @@ import asyncio
 import sys
 import time
 from datetime import datetime, timezone
+from decimal import Decimal
 
 import click
 from rich.console import Console
@@ -27,6 +28,9 @@ from src.utils.error_messages import (
     RATE_LIMIT_EXCEEDED,
     format_error_with_context,
 )
+from src.cli.commands.show import show_backtest_details
+from src.cli.commands.compare import compare_backtests
+from src.cli.commands.reproduce import reproduce_backtest
 
 console = Console()
 error_formatter = ErrorFormatter(console)
@@ -74,7 +78,7 @@ def backtest():
     "-ts",
     default=1000000,
     type=int,
-    help="Trade size in base currency units (default: 1,000,000)",
+    help="Trade size in SHARES (default: 1,000,000 shares). Note: 1M shares @ $180 = $180M notional",
 )
 @click.option(
     "--timeframe",
@@ -355,21 +359,27 @@ def run_backtest(
                 runner = MinimalBacktestRunner(data_source="catalog")
 
                 # Prepare strategy parameters
-                strategy_params = {
-                    "trade_size": trade_size,
-                }
-
-                # Add strategy-specific parameters
+                # Note: SMA uses percentage-based sizing, others use trade_size
                 if strategy in ["sma", "sma_crossover"]:
-                    strategy_params.update(
-                        {
-                            "fast_period": fast_period,
-                            "slow_period": slow_period,
-                        }
-                    )
+                    # SMA uses portfolio_value and position_size_pct
+                    # Convert trade_size to portfolio_value (assume 10% position size)
+                    strategy_params = {
+                        "portfolio_value": Decimal(
+                            str(trade_size * 10)
+                        ),  # 10x for 10% sizing
+                        "position_size_pct": Decimal("10.0"),
+                        "fast_period": fast_period,
+                        "slow_period": slow_period,
+                    }
+                else:
+                    # Other strategies use trade_size
+                    strategy_params = {
+                        "trade_size": trade_size,
+                    }
 
                 # Reason: Run the backtest with catalog bars and instrument
-                result = await runner.run_backtest_with_catalog_data(
+                # Returns tuple: (BacktestResult, Optional[UUID])
+                result, run_id = await runner.run_backtest_with_catalog_data(
                     bars=bars,
                     strategy_type=strategy,
                     symbol=symbol.upper(),
@@ -659,3 +669,9 @@ def list_backtests():
             console.print(f"⚠️  Could not fetch data info: {e}", style="yellow")
 
     asyncio.run(show_data_info())
+
+
+# Add show, compare, and reproduce commands to backtest group
+backtest.add_command(show_backtest_details)
+backtest.add_command(compare_backtests)
+backtest.add_command(reproduce_backtest)

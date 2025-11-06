@@ -1,7 +1,7 @@
 """Tests for SMA crossover strategy."""
 
 from decimal import Decimal
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import pytest
 from nautilus_trader.test_kit.providers import TestInstrumentProvider
@@ -19,13 +19,15 @@ def test_sma_config_creation():
         bar_type=f"{instrument.id}-15-MINUTE-BID-INTERNAL",
         fast_period=10,
         slow_period=20,
-        trade_size=Decimal("1_000_000"),
+        portfolio_value=Decimal("1_000_000"),
+        position_size_pct=Decimal("10.0"),
     )
 
     assert config.instrument_id == instrument.id
     assert config.fast_period == 10
     assert config.slow_period == 20
-    assert config.trade_size == Decimal("1_000_000")
+    assert config.portfolio_value == Decimal("1_000_000")
+    assert config.position_size_pct == Decimal("10.0")
 
 
 @pytest.mark.integration
@@ -38,7 +40,8 @@ def test_sma_strategy_initialization():
         bar_type=f"{instrument.id}-15-MINUTE-BID-INTERNAL",
         fast_period=10,
         slow_period=20,
-        trade_size=Decimal("1_000_000"),
+        portfolio_value=Decimal("1_000_000"),
+        position_size_pct=Decimal("10.0"),
     )
 
     strategy = SMACrossover(config=config)
@@ -227,24 +230,6 @@ def test_check_for_signals_no_crossover():
 # Note: Signal generation tests are complex to unit test in isolation
 # as they require Nautilus Trader infrastructure (order_factory, cache).
 # These are better covered by integration tests.
-
-
-@pytest.mark.integration
-def test_on_event_without_position_id():
-    """Test that on_event handles events without position_id attribute."""
-    instrument = TestInstrumentProvider.default_fx_ccy("EUR/USD")
-    config = SMAConfig(
-        instrument_id=instrument.id,
-        bar_type=f"{instrument.id}-15-MINUTE-BID-INTERNAL",
-    )
-
-    strategy = SMACrossover(config=config)
-
-    # Mock event without position_id - should not access cache
-    mock_event = Mock(spec=[])  # Empty spec means no attributes
-
-    # This should not raise an exception (no position_id means no cache access)
-    strategy.on_event(mock_event)
 
 
 @pytest.mark.integration

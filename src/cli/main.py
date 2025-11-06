@@ -1,14 +1,19 @@
 """Main CLI application for NTrader."""
 
 import click
+from dotenv import load_dotenv
 from rich.console import Console
 
-from src.config import get_settings
-from src.cli.commands.run import run_simple
-from src.cli.commands.data import data
-from src.cli.commands.backtest import backtest
-from src.cli.commands.strategy import strategy
-from src.cli.commands.report import report
+# Load environment variables from .env file before any other imports
+load_dotenv()
+
+from src.config import get_settings  # noqa: E402
+from src.cli.commands.run import run_simple  # noqa: E402
+from src.cli.commands.data import data  # noqa: E402
+from src.cli.commands.backtest import backtest  # noqa: E402
+from src.cli.commands.strategy import strategy  # noqa: E402
+from src.cli.commands.report import report  # noqa: E402
+from src.cli.commands.history import list_backtest_history  # noqa: E402
 
 console = Console()
 settings = get_settings()
@@ -32,6 +37,7 @@ cli.add_command(data)
 cli.add_command(backtest)
 cli.add_command(strategy)
 cli.add_command(report)
+cli.add_command(list_backtest_history)
 
 
 if __name__ == "__main__":
