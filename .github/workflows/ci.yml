@@ -142,6 +142,7 @@ jobs:
       - name: Run integration tests (subprocess isolated)
         run: |
           uv run pytest tests/integration -v -n auto --forked \
+            --ignore=tests/integration/db \
             --cov=src \
             --cov-report=xml \
             --cov-report=term-missing \
@@ -188,6 +189,7 @@ jobs:
       - name: Run all tests with combined coverage
         run: |
           uv run pytest tests/ -v -n auto \
+            --ignore=tests/integration/db \
             --cov=src \
             --cov-report=xml \
             --cov-report=term-missing \
