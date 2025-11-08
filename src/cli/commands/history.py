@@ -195,7 +195,7 @@ def _list_history_sync(
         )
 
         # Add columns with highlighting for sorted column
-        table.add_column("Run ID", style="cyan", max_width=12, no_wrap=True)
+        table.add_column("Run ID", style="cyan", no_wrap=True)
 
         # Highlight sorted column
         date_style = "bold yellow" if sort == "date" else "white"
@@ -250,7 +250,7 @@ def _list_history_sync(
 
             # Extract parameters if requested (T163)
             row_data = [
-                f"[dim]{str(bt.run_id)[:8]}...[/dim]",
+                str(bt.run_id),
                 bt.created_at.strftime("%Y-%m-%d %H:%M"),
                 bt.strategy_name,
                 bt.instrument_symbol,

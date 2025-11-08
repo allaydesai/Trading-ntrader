@@ -1,4 +1,4 @@
-"""Report generation and viewing CLI commands."""
+"""Report generation and viewing CLI commands using PostgreSQL storage."""
 
 import click
 from rich.console import Console
@@ -6,11 +6,8 @@ from rich.table import Table
 from rich.panel import Panel
 from pathlib import Path
 
-from src.services.results_store import (
-    ResultsStore,
-    ResultNotFoundError,
-    ResultsStoreError,
-)
+from src.db.session_sync import get_sync_session
+from src.db.repositories.backtest_repository_sync import SyncBacktestRepository
 from src.services.reports.text_report import TextReportGenerator
 from src.services.reports.csv_exporter import CSVExporter
 
@@ -29,26 +26,27 @@ def summary(result_id: str):
     """
     Display quick performance summary for a backtest result.
 
-    RESULT_ID: Unique identifier of the backtest result
+    RESULT_ID: UUID of the backtest run (from 'backtest history')
     """
     try:
-        # Load result from store
-        store = ResultsStore()
-        result = store.get(result_id)
+        # Load result from PostgreSQL
+        with get_sync_session() as session:
+            repository = SyncBacktestRepository(session)
+            backtest = repository.find_by_run_id(result_id)
 
-        # Display summary using Rich formatting
-        _display_summary_panel(result)
+            if not backtest:
+                console.print(f"❌ Result not found: {result_id}", style="red bold")
+                console.print("\n💡 Use 'backtest history' to see available results")
+                return
 
-        # Display key metrics table
-        _display_metrics_table(result)
+            # Display summary using Rich formatting
+            _display_summary_panel(backtest)
 
-    except ResultNotFoundError:
-        console.print(f"❌ Result not found: {result_id}", style="red bold")
-        console.print("\n💡 Use 'report list' to see available results")
-    except ResultsStoreError as e:
-        console.print(f"❌ Error loading result: {e}", style="red bold")
+            # Display key metrics table
+            _display_metrics_table(backtest)
+
     except Exception as e:
-        console.print(f"❌ Unexpected error: {e}", style="red bold")
+        console.print(f"❌ Error loading result: {e}", style="red bold")
 
 
 @report.command()
@@ -70,26 +68,31 @@ def generate(result_id: str, output_format: str, output: str):
     Supports text (Rich formatted), CSV, and JSON output formats.
     """
     try:
-        # Load result from store
-        store = ResultsStore()
-        result = store.get(result_id)
+        # Load result from PostgreSQL
+        with get_sync_session() as session:
+            repository = SyncBacktestRepository(session)
+            backtest = repository.find_by_run_id(result_id)
 
-        console.print(
-            f"📊 Generating {output_format.upper()} report for {result_id[:8]}..."
-        )
+            if not backtest:
+                console.print(f"❌ Result not found: {result_id}", style="red bold")
+                console.print("\n💡 Use 'backtest history' to see available results")
+                return
 
-        if output_format == "text":
-            _generate_text_report(result, output)
-        elif output_format == "csv":
-            _generate_csv_report(result, output or f"report_{result_id}.csv")
-        elif output_format == "json":
-            _generate_json_report(result, output or f"report_{result_id}.json")
+            console.print(
+                f"📊 Generating {output_format.upper()} report for {str(backtest.run_id)[:8]}..."
+            )
 
-    except ResultNotFoundError:
-        console.print(f"❌ Result not found: {result_id}", style="red bold")
-        console.print("\n💡 Use 'report list' to see available results")
-    except ResultsStoreError as e:
-        console.print(f"❌ Error loading result: {e}", style="red bold")
+            if output_format == "text":
+                _generate_text_report(backtest, output)
+            elif output_format == "csv":
+                _generate_csv_report(
+                    backtest, output or f"report_{backtest.run_id}.csv"
+                )
+            elif output_format == "json":
+                _generate_json_report(
+                    backtest, output or f"report_{backtest.run_id}.json"
+                )
+
     except Exception as e:
         console.print(f"❌ Error generating report: {e}", style="red bold")
 
@@ -100,43 +103,41 @@ def generate(result_id: str, output_format: str, output: str):
 @click.option("--symbol", help="Filter by trading symbol")
 def list(limit: int, strategy: str, symbol: str):
     """
-    List all available backtest results.
+    List all available backtest results from PostgreSQL.
 
     Results are displayed in a formatted table with key metrics.
     """
     try:
-        store = ResultsStore()
+        with get_sync_session() as session:
+            repository = SyncBacktestRepository(session)
 
-        # Get results with optional filtering
-        if strategy:
-            results = store.find_by_strategy(strategy)
-        elif symbol:
-            results = store.find_by_symbol(symbol)
-        else:
-            results = store.list(limit=limit)
+            # Get results with optional filtering
+            if strategy:
+                backtests = repository.find_by_strategy(strategy, limit=limit)
+            elif symbol:
+                backtests = repository.find_by_instrument(symbol, limit=limit)
+            else:
+                backtests = repository.find_recent(limit=limit)
 
-        if not results:
-            console.print("📭 No backtest results found", style="yellow")
-            console.print("\n💡 Run a backtest to create results:")
+            if not backtests:
+                console.print("📭 No backtest results found", style="yellow")
+                console.print("\n💡 Run a backtest to create results:")
+                console.print(
+                    "   uv run python -m src.cli backtest run --strategy sma_crossover --symbol AAPL ..."
+                )
+                return
+
+            # Display results table
+            _display_results_table(backtests)
+
+            # Show storage info
+            total_count = repository.count_all()
             console.print(
-                "   uv run python -m src.cli backtest run --strategy sma --symbol AAPL ..."
+                f"\n💾 Storage: {total_count} total backtests in PostgreSQL database"
             )
-            return
 
-        # Display results table
-        _display_results_table(results)
-
-        # Show storage info
-        info = store.get_storage_info()
-        console.print(
-            f"\n💾 Storage: {info['result_count']} results, "
-            f"{info['total_size_mb']}MB in {info['storage_dir']}"
-        )
-
-    except ResultsStoreError as e:
-        console.print(f"❌ Error listing results: {e}", style="red bold")
     except Exception as e:
-        console.print(f"❌ Unexpected error: {e}", style="red bold")
+        console.print(f"❌ Error listing results: {e}", style="red bold")
 
 
 @report.command("export-all")
@@ -154,42 +155,46 @@ def export_all(result_id: str, output_dir: str):
 
     Creates text, CSV, and JSON reports in the specified directory.
 
-    RESULT_ID: Unique identifier of the backtest result
+    RESULT_ID: UUID of the backtest run
     """
     try:
-        # Load result from store
-        store = ResultsStore()
-        result = store.get(result_id)
+        # Load result from PostgreSQL
+        with get_sync_session() as session:
+            repository = SyncBacktestRepository(session)
+            backtest = repository.find_by_run_id(result_id)
 
-        # Create output directory
-        output_path = Path(output_dir)
-        output_path.mkdir(parents=True, exist_ok=True)
+            if not backtest:
+                console.print(f"❌ Result not found: {result_id}", style="red bold")
+                console.print("\n💡 Use 'backtest history' to see available results")
+                return
 
-        console.print(f"📦 Exporting all formats for {result_id[:8]} to {output_dir}/")
+            # Create output directory
+            output_path = Path(output_dir)
+            output_path.mkdir(parents=True, exist_ok=True)
 
-        # Export text report
-        text_file = output_path / f"{result_id}_report.txt"
-        _generate_text_report(result, str(text_file))
+            console.print(
+                f"📦 Exporting all formats for {str(backtest.run_id)[:8]} to {output_dir}/"
+            )
 
-        # Export CSV
-        csv_file = output_path / f"{result_id}_report.csv"
-        _generate_csv_report(result, str(csv_file))
+            # Export text report
+            text_file = output_path / f"{backtest.run_id}_report.txt"
+            _generate_text_report(backtest, str(text_file))
 
-        # Export JSON
-        json_file = output_path / f"{result_id}_report.json"
-        _generate_json_report(result, str(json_file))
+            # Export CSV
+            csv_file = output_path / f"{backtest.run_id}_report.csv"
+            _generate_csv_report(backtest, str(csv_file))
 
-        # Display summary of exported files
-        console.print("\n✅ Export complete!", style="green bold")
-        console.print("\nExported files:")
-        console.print(f"  📄 Text:  {text_file.name}")
-        console.print(f"  📊 CSV:   {csv_file.name}")
-        console.print(f"  📋 JSON:  {json_file.name}")
+            # Export JSON
+            json_file = output_path / f"{backtest.run_id}_report.json"
+            _generate_json_report(backtest, str(json_file))
 
-    except ResultNotFoundError:
-        console.print(f"❌ Result not found: {result_id}", style="red bold")
-    except ResultsStoreError as e:
-        console.print(f"❌ Error loading result: {e}", style="red bold")
+            # Display summary of exported files
+            console.print("\n✅ Export complete!", style="green bold")
+            console.print("\nExported files:")
+            console.print(f"  📄 Text:  {text_file.name}")
+            console.print(f"  📊 CSV:   {csv_file.name}")
+            console.print(f"  📋 JSON:  {json_file.name}")
+
     except Exception as e:
         console.print(f"❌ Error exporting: {e}", style="red bold")
 
@@ -197,22 +202,42 @@ def export_all(result_id: str, output_dir: str):
 # Helper functions
 
 
-def _display_summary_panel(result):
+def _display_summary_panel(backtest):
     """Display summary panel with key metrics."""
-    summary = result.get_summary_dict()
+    metrics = backtest.metrics
+
+    # Format dates
+    start = backtest.start_date.strftime("%Y-%m-%d")
+    end = backtest.end_date.strftime("%Y-%m-%d")
+
+    # Format metrics (handle None values)
+    total_return = f"{float(metrics.total_return):.2%}" if metrics else "N/A"
+    sharpe = (
+        f"{float(metrics.sharpe_ratio):.2f}"
+        if metrics and metrics.sharpe_ratio
+        else "N/A"
+    )
+    max_dd = (
+        f"{float(metrics.max_drawdown):.2%}"
+        if metrics and metrics.max_drawdown
+        else "N/A"
+    )
+    win_rate = (
+        f"{float(metrics.win_rate):.2%}" if metrics and metrics.win_rate else "N/A"
+    )
 
     summary_text = f"""
-    [bold cyan]Backtest ID:[/] {summary["backtest_id"][:12]}...
-    [bold cyan]Strategy:[/] {summary["strategy"]}
-    [bold cyan]Symbol:[/] {summary["symbol"]}
-    [bold cyan]Period:[/] {summary["period"]}
+    [bold cyan]Backtest ID:[/] {str(backtest.run_id)[:12]}...
+    [bold cyan]Strategy:[/] {backtest.strategy_name}
+    [bold cyan]Symbol:[/] {backtest.instrument_symbol}
+    [bold cyan]Period:[/] {start} to {end}
 
-    [bold green]Total Return:[/] ${summary["total_return"]}
-    [bold]Final Balance:[/] ${summary["final_balance"]}
-    [bold]Total Trades:[/] {summary["total_trades"]}
-    [bold]Win Rate:[/] {summary["win_rate"]}
-    [bold]Sharpe Ratio:[/] {summary["sharpe_ratio"] or "N/A"}
-    [bold]Max Drawdown:[/] {_format_percentage(summary["max_drawdown"])}
+    [bold green]Total Return:[/] {total_return}
+    [bold]Final Balance:[/] ${float(metrics.final_balance):,.2f}
+    [bold]Total Trades:[/] {metrics.total_trades if metrics else 0}
+    [bold]Win Rate:[/] {win_rate}
+    [bold]Sharpe Ratio:[/] {sharpe}
+    [bold]Max Drawdown:[/] {max_dd}
     """
 
     panel = Panel(
@@ -224,32 +249,42 @@ def _display_summary_panel(result):
     console.print(panel)
 
 
-def _display_metrics_table(result):
+def _display_metrics_table(backtest):
     """Display detailed metrics table."""
+    metrics = backtest.metrics
+
+    if not metrics:
+        console.print("⚠️  No metrics available for this backtest", style="yellow")
+        return
+
     table = Table(title="Performance Metrics", style="cyan")
     table.add_column("Metric", style="white", no_wrap=True)
     table.add_column("Value", style="green")
 
-    metrics = [
-        ("Sharpe Ratio", _format_number(result.sharpe_ratio)),
-        ("Sortino Ratio", _format_number(result.sortino_ratio)),
-        ("Calmar Ratio", _format_number(result.calmar_ratio)),
-        ("Profit Factor", _format_number(result.profit_factor)),
-        ("Volatility", _format_percentage(result.volatility)),
-        ("Total Return", f"${result.total_return}"),
-        ("Winning Trades", str(result.winning_trades)),
-        ("Losing Trades", str(result.losing_trades)),
-        ("Avg Win", f"${result.avg_win}" if result.avg_win else "N/A"),
-        ("Avg Loss", f"${result.avg_loss}" if result.avg_loss else "N/A"),
+    metrics_data = [
+        ("Sharpe Ratio", _format_number(metrics.sharpe_ratio)),
+        ("Sortino Ratio", _format_number(metrics.sortino_ratio)),
+        ("Calmar Ratio", _format_number(metrics.calmar_ratio)),
+        ("Profit Factor", _format_number(metrics.profit_factor)),
+        ("Volatility", _format_percentage(metrics.volatility)),
+        ("Total Return", _format_percentage(metrics.total_return)),
+        ("CAGR", _format_percentage(metrics.cagr)),
+        ("Winning Trades", str(metrics.winning_trades)),
+        ("Losing Trades", str(metrics.losing_trades)),
+        ("Avg Win", f"${float(metrics.avg_win):,.2f}" if metrics.avg_win else "N/A"),
+        (
+            "Avg Loss",
+            f"${float(metrics.avg_loss):,.2f}" if metrics.avg_loss else "N/A",
+        ),
     ]
 
-    for metric, value in metrics:
+    for metric, value in metrics_data:
         table.add_row(metric, value)
 
     console.print(table)
 
 
-def _display_results_table(results):
+def _display_results_table(backtests):
     """Display table of backtest results."""
     table = Table(
         title="📋 Backtest Results", show_header=True, header_style="bold cyan"
@@ -263,48 +298,72 @@ def _display_results_table(results):
     table.add_column("Win Rate", justify="right")
     table.add_column("Sharpe", justify="right")
 
-    for result in results:
+    for bt in backtests:
+        metrics = bt.metrics
+
+        # Format values
+        total_return = f"{float(metrics.total_return):.2%}" if metrics else "N/A"
+        win_rate = (
+            f"{float(metrics.win_rate):.2%}" if metrics and metrics.win_rate else "N/A"
+        )
+        sharpe = (
+            f"{float(metrics.sharpe_ratio):.2f}"
+            if metrics and metrics.sharpe_ratio
+            else "N/A"
+        )
+        total_trades = str(metrics.total_trades) if metrics else "0"
+
         table.add_row(
-            result["result_id"][:12],
-            _format_timestamp(result["timestamp"]),
-            result["strategy"],
-            result["symbol"],
-            result["total_return"],
-            str(result["total_trades"]),
-            _format_percentage(result["win_rate"]),
-            _format_number(result["sharpe_ratio"]),
+            str(bt.run_id)[:12],
+            bt.created_at.strftime("%Y-%m-%d %H:%M"),
+            bt.strategy_name,
+            bt.instrument_symbol,
+            total_return,
+            total_trades,
+            win_rate,
+            sharpe,
         )
 
     console.print(table)
 
 
-def _generate_text_report(result, output_path=None):
+def _generate_text_report(backtest, output_path=None):
     """Generate text report using TextReportGenerator."""
+    metrics = backtest.metrics
+
+    if not metrics:
+        console.print("⚠️  Cannot generate report: No metrics available", style="yellow")
+        return
+
     generator = TextReportGenerator()
 
     # Prepare metrics dictionary
-    metrics = {
-        "total_return": float(result.total_return) / 100.0,  # Convert to decimal
-        "sharpe_ratio": result.sharpe_ratio,
-        "sortino_ratio": result.sortino_ratio,
-        "max_drawdown": result.max_drawdown,
-        "calmar_ratio": result.calmar_ratio,
-        "volatility": result.volatility,
-        "profit_factor": result.profit_factor,
-        "win_rate": result.win_rate / 100.0,  # Convert to decimal
-        "total_trades": result.total_trades,
-        "winning_trades": result.winning_trades,
-        "losing_trades": result.losing_trades,
-        "avg_win": float(result.avg_win) if result.avg_win else 0.0,
-        "avg_loss": float(result.avg_loss) if result.avg_loss else 0.0,
-        "largest_win": float(result.largest_win),
-        "largest_loss": float(result.largest_loss),
-        "final_balance": float(result.final_balance),
-        "expectancy": result.expectancy,
+    metrics_dict = {
+        "total_return": float(metrics.total_return),
+        "sharpe_ratio": float(metrics.sharpe_ratio) if metrics.sharpe_ratio else None,
+        "sortino_ratio": (
+            float(metrics.sortino_ratio) if metrics.sortino_ratio else None
+        ),
+        "max_drawdown": float(metrics.max_drawdown) if metrics.max_drawdown else None,
+        "calmar_ratio": float(metrics.calmar_ratio) if metrics.calmar_ratio else None,
+        "volatility": float(metrics.volatility) if metrics.volatility else None,
+        "profit_factor": (
+            float(metrics.profit_factor) if metrics.profit_factor else None
+        ),
+        "win_rate": float(metrics.win_rate) if metrics.win_rate else None,
+        "total_trades": metrics.total_trades,
+        "winning_trades": metrics.winning_trades,
+        "losing_trades": metrics.losing_trades,
+        "avg_win": float(metrics.avg_win) if metrics.avg_win else 0.0,
+        "avg_loss": float(metrics.avg_loss) if metrics.avg_loss else 0.0,
+        "largest_win": 0.0,  # Not currently stored in DB
+        "largest_loss": 0.0,  # Not currently stored in DB
+        "final_balance": float(metrics.final_balance),
+        "expectancy": float(metrics.expectancy) if metrics.expectancy else None,
     }
 
     # Generate report
-    report_content = generator.generate_performance_report(metrics)
+    report_content = generator.generate_performance_report(metrics_dict)
 
     if output_path:
         # Save to file
@@ -316,13 +375,45 @@ def _generate_text_report(result, output_path=None):
         console.print(report_content)
 
 
-def _generate_csv_report(result, output_path):
+def _generate_csv_report(backtest, output_path):
     """Generate CSV report using CSVExporter."""
+    metrics = backtest.metrics
+
+    if not metrics:
+        console.print("⚠️  Cannot generate CSV: No metrics available", style="yellow")
+        return
+
     exporter = CSVExporter()
 
-    # Export metrics
-    metrics = result.to_dict()["summary"]
-    success = exporter.export_metrics(metrics, output_path)
+    # Build metrics dictionary for CSV export
+    metrics_dict = {
+        "backtest_id": str(backtest.run_id),
+        "strategy": backtest.strategy_name,
+        "symbol": backtest.instrument_symbol,
+        "start_date": backtest.start_date.isoformat(),
+        "end_date": backtest.end_date.isoformat(),
+        "total_return": float(metrics.total_return),
+        "final_balance": float(metrics.final_balance),
+        "sharpe_ratio": float(metrics.sharpe_ratio) if metrics.sharpe_ratio else None,
+        "sortino_ratio": (
+            float(metrics.sortino_ratio) if metrics.sortino_ratio else None
+        ),
+        "calmar_ratio": float(metrics.calmar_ratio) if metrics.calmar_ratio else None,
+        "max_drawdown": float(metrics.max_drawdown) if metrics.max_drawdown else None,
+        "volatility": float(metrics.volatility) if metrics.volatility else None,
+        "total_trades": metrics.total_trades,
+        "winning_trades": metrics.winning_trades,
+        "losing_trades": metrics.losing_trades,
+        "win_rate": float(metrics.win_rate) if metrics.win_rate else None,
+        "profit_factor": (
+            float(metrics.profit_factor) if metrics.profit_factor else None
+        ),
+        "expectancy": float(metrics.expectancy) if metrics.expectancy else None,
+        "avg_win": float(metrics.avg_win) if metrics.avg_win else None,
+        "avg_loss": float(metrics.avg_loss) if metrics.avg_loss else None,
+    }
+
+    success = exporter.export_metrics(metrics_dict, output_path)
 
     if success:
         console.print(f"✅ CSV report exported to {output_path}", style="green")
@@ -330,8 +421,8 @@ def _generate_csv_report(result, output_path):
         console.print("❌ Failed to export CSV report", style="red")
 
 
-def _generate_json_report(result, output_path):
-    """Generate JSON report using JSONExporter."""
+def _generate_json_report(backtest, output_path):
+    """Generate JSON report."""
     import json
     from decimal import Decimal
     from datetime import datetime
@@ -344,8 +435,46 @@ def _generate_json_report(result, output_path):
             return obj.isoformat()
         raise TypeError(f"Type {type(obj)} not serializable")
 
-    # Get full result dictionary
-    result_data = result.to_dict()
+    metrics = backtest.metrics
+
+    # Build complete result dictionary
+    result_data = {
+        "backtest_id": str(backtest.run_id),
+        "strategy": backtest.strategy_name,
+        "strategy_type": backtest.strategy_type,
+        "symbol": backtest.instrument_symbol,
+        "start_date": backtest.start_date,
+        "end_date": backtest.end_date,
+        "initial_capital": backtest.initial_capital,
+        "data_source": backtest.data_source,
+        "execution_status": backtest.execution_status,
+        "execution_duration_seconds": backtest.execution_duration_seconds,
+        "config_snapshot": backtest.config_snapshot,
+        "created_at": backtest.created_at,
+        "metrics": (
+            {
+                "total_return": metrics.total_return,
+                "final_balance": metrics.final_balance,
+                "cagr": metrics.cagr,
+                "sharpe_ratio": metrics.sharpe_ratio,
+                "sortino_ratio": metrics.sortino_ratio,
+                "max_drawdown": metrics.max_drawdown,
+                "max_drawdown_date": metrics.max_drawdown_date,
+                "calmar_ratio": metrics.calmar_ratio,
+                "volatility": metrics.volatility,
+                "total_trades": metrics.total_trades,
+                "winning_trades": metrics.winning_trades,
+                "losing_trades": metrics.losing_trades,
+                "win_rate": metrics.win_rate,
+                "profit_factor": metrics.profit_factor,
+                "expectancy": metrics.expectancy,
+                "avg_win": metrics.avg_win,
+                "avg_loss": metrics.avg_loss,
+            }
+            if metrics
+            else None
+        ),
+    }
 
     # Write to JSON file
     with open(output_path, "w", encoding="utf-8") as f:
@@ -375,19 +504,3 @@ def _format_percentage(value) -> str:
         return f"{float(value):.2%}"
     except (ValueError, TypeError):
         return "N/A"
-
-
-def _format_timestamp(value) -> str:
-    """Format timestamp."""
-    if not value:
-        return "N/A"
-    try:
-        from datetime import datetime
-
-        if isinstance(value, str):
-            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        else:
-            dt = value
-        return dt.strftime("%Y-%m-%d %H:%M")
-    except Exception:
-        return str(value)[:16]
