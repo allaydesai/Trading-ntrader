@@ -136,6 +136,18 @@ class BacktestRepository:
         expectancy: Optional[Decimal] = None,
         avg_win: Optional[Decimal] = None,
         avg_loss: Optional[Decimal] = None,
+        # Additional returns-based metrics (from get_performance_stats_returns)
+        risk_return_ratio: Optional[Decimal] = None,
+        avg_return: Optional[Decimal] = None,
+        avg_win_return: Optional[Decimal] = None,
+        avg_loss_return: Optional[Decimal] = None,
+        # Additional PnL-based metrics (from get_performance_stats_pnls)
+        total_pnl: Optional[Decimal] = None,
+        total_pnl_percentage: Optional[Decimal] = None,
+        max_winner: Optional[Decimal] = None,
+        max_loser: Optional[Decimal] = None,
+        min_winner: Optional[Decimal] = None,
+        min_loser: Optional[Decimal] = None,
     ) -> PerformanceMetrics:
         """
         Create performance metrics for a backtest run.
@@ -185,6 +197,18 @@ class BacktestRepository:
             expectancy=expectancy,
             avg_win=avg_win,
             avg_loss=avg_loss,
+            # Additional returns-based metrics
+            risk_return_ratio=risk_return_ratio,
+            avg_return=avg_return,
+            avg_win_return=avg_win_return,
+            avg_loss_return=avg_loss_return,
+            # Additional PnL-based metrics
+            total_pnl=total_pnl,
+            total_pnl_percentage=total_pnl_percentage,
+            max_winner=max_winner,
+            max_loser=max_loser,
+            min_winner=min_winner,
+            min_loser=min_loser,
         )
 
         self.session.add(metrics)

@@ -126,6 +126,12 @@ class SyncBacktestRepository:
         max_drawdown_date: Optional[datetime] = None,
         calmar_ratio: Optional[Decimal] = None,
         volatility: Optional[Decimal] = None,
+        # Additional returns-based metrics
+        risk_return_ratio: Optional[Decimal] = None,
+        avg_return: Optional[Decimal] = None,
+        avg_win_return: Optional[Decimal] = None,
+        avg_loss_return: Optional[Decimal] = None,
+        # Trading metrics
         total_trades: int = 0,
         winning_trades: int = 0,
         losing_trades: int = 0,
@@ -134,6 +140,13 @@ class SyncBacktestRepository:
         expectancy: Optional[Decimal] = None,
         avg_win: Optional[Decimal] = None,
         avg_loss: Optional[Decimal] = None,
+        # Additional PnL-based metrics
+        total_pnl: Optional[Decimal] = None,
+        total_pnl_percentage: Optional[Decimal] = None,
+        max_winner: Optional[Decimal] = None,
+        max_loser: Optional[Decimal] = None,
+        min_winner: Optional[Decimal] = None,
+        min_loser: Optional[Decimal] = None,
     ) -> PerformanceMetrics:
         """
         Create performance metrics for a backtest run.
@@ -175,6 +188,12 @@ class SyncBacktestRepository:
             max_drawdown_date=max_drawdown_date,
             calmar_ratio=calmar_ratio,
             volatility=volatility,
+            # Additional returns-based metrics
+            risk_return_ratio=risk_return_ratio,
+            avg_return=avg_return,
+            avg_win_return=avg_win_return,
+            avg_loss_return=avg_loss_return,
+            # Trading metrics
             total_trades=total_trades,
             winning_trades=winning_trades,
             losing_trades=losing_trades,
@@ -183,6 +202,13 @@ class SyncBacktestRepository:
             expectancy=expectancy,
             avg_win=avg_win,
             avg_loss=avg_loss,
+            # Additional PnL-based metrics
+            total_pnl=total_pnl,
+            total_pnl_percentage=total_pnl_percentage,
+            max_winner=max_winner,
+            max_loser=max_loser,
+            min_winner=min_winner,
+            min_loser=min_loser,
         )
 
         self.session.add(metrics)
@@ -399,3 +425,38 @@ class SyncBacktestRepository:
 
         result = self.session.execute(stmt)
         return result.scalar_one()
+
+    def count_all(self) -> int:
+        """
+        Count all backtests in the database.
+
+        Returns:
+            Total count of all backtests
+        """
+        stmt = select(func.count(BacktestRun.id))
+        result = self.session.execute(stmt)
+        return result.scalar_one()
+
+    def find_by_instrument(
+        self, instrument_symbol: str, limit: int = 20
+    ) -> List[BacktestRun]:
+        """
+        Find backtests by instrument symbol.
+
+        Args:
+            instrument_symbol: Trading symbol to filter by
+            limit: Maximum records to return
+
+        Returns:
+            List of BacktestRun instances matching the symbol
+        """
+        stmt = (
+            select(BacktestRun)
+            .options(selectinload(BacktestRun.metrics))
+            .where(BacktestRun.instrument_symbol == instrument_symbol)
+            .order_by(BacktestRun.created_at.desc(), BacktestRun.id.desc())
+            .limit(limit)
+        )
+
+        result = self.session.execute(stmt)
+        return list(result.scalars().all())

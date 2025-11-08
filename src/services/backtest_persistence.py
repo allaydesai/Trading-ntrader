@@ -220,17 +220,17 @@ class BacktestPersistenceService:
         """
         Extract metrics from backtest result and validate values.
 
-        Extracts basic metrics from BacktestResult and validates that
-        numeric values are not NaN or Infinity.
+        Extracts comprehensive metrics from BacktestResult including all Nautilus Trader
+        analytics and validates that numeric values are not NaN or Infinity.
 
         Args:
-            backtest_result: Backtest execution results
+            backtest_result: Backtest execution results with full Nautilus metrics
 
         Returns:
             Dictionary of validated metrics ready for database insertion
 
         Raises:
-            ValidationError: If any metric is NaN or Infinity
+            ValidationError: If any required metric is NaN or Infinity
         """
         # Validate required metrics
         total_return = self._validate_metric(
@@ -245,29 +245,79 @@ class BacktestPersistenceService:
             backtest_result.winning_trades, backtest_result.total_trades
         )
 
-        # For MVP, advanced metrics (CAGR, Sharpe, Sortino, etc.) are not
-        # available in simple BacktestResult, so we set them to None
-        # These will be calculated in future enhancements when using
-        # EnhancedBacktestResult
-
+        # Extract and validate all available Nautilus Trader metrics
+        # These are now calculated and available in BacktestResult
         return {
+            # Required metrics
             "total_return": total_return,
             "final_balance": final_balance,
-            "cagr": None,  # Not available in simple BacktestResult
-            "sharpe_ratio": None,  # Not available in simple BacktestResult
-            "sortino_ratio": None,  # Not available in simple BacktestResult
-            "max_drawdown": None,  # Not available in simple BacktestResult
-            "max_drawdown_date": None,  # Not available in simple BacktestResult
-            "calmar_ratio": None,  # Not available in simple BacktestResult
-            "volatility": None,  # Not available in simple BacktestResult
             "total_trades": backtest_result.total_trades,
             "winning_trades": backtest_result.winning_trades,
             "losing_trades": backtest_result.losing_trades,
             "win_rate": win_rate,
-            "profit_factor": None,  # Not available in simple BacktestResult
-            "expectancy": None,  # Not available in simple BacktestResult
-            "avg_win": self._calculate_avg_win(backtest_result),
-            "avg_loss": self._calculate_avg_loss(backtest_result),
+            # Risk metrics (some require custom calculation)
+            "cagr": self._validate_optional_metric(backtest_result.cagr, "cagr"),
+            "sharpe_ratio": self._validate_optional_metric(
+                backtest_result.sharpe_ratio, "sharpe_ratio"
+            ),
+            "sortino_ratio": self._validate_optional_metric(
+                backtest_result.sortino_ratio, "sortino_ratio"
+            ),
+            "max_drawdown": self._validate_optional_metric(
+                backtest_result.max_drawdown, "max_drawdown"
+            ),
+            "max_drawdown_date": None,  # Not tracking date currently
+            "calmar_ratio": self._validate_optional_metric(
+                backtest_result.calmar_ratio, "calmar_ratio"
+            ),
+            "volatility": self._validate_optional_metric(
+                backtest_result.volatility, "volatility"
+            ),
+            # Returns-based metrics (from get_performance_stats_returns)
+            "risk_return_ratio": self._validate_optional_metric(
+                backtest_result.risk_return_ratio, "risk_return_ratio"
+            ),
+            "avg_return": self._validate_optional_metric(
+                backtest_result.avg_return, "avg_return"
+            ),
+            "avg_win_return": self._validate_optional_metric(
+                backtest_result.avg_win_return, "avg_win_return"
+            ),
+            "avg_loss_return": self._validate_optional_metric(
+                backtest_result.avg_loss_return, "avg_loss_return"
+            ),
+            # Trading performance metrics (from get_performance_stats_pnls)
+            "profit_factor": self._validate_optional_metric(
+                backtest_result.profit_factor, "profit_factor"
+            ),
+            "expectancy": self._validate_optional_metric(
+                backtest_result.expectancy, "expectancy"
+            ),
+            "avg_win": self._validate_optional_metric(
+                backtest_result.avg_win, "avg_win"
+            ),
+            "avg_loss": self._validate_optional_metric(
+                backtest_result.avg_loss, "avg_loss"
+            ),
+            # Additional PnL-based metrics (from get_performance_stats_pnls)
+            "total_pnl": self._validate_optional_metric(
+                backtest_result.total_pnl, "total_pnl"
+            ),
+            "total_pnl_percentage": self._validate_optional_metric(
+                backtest_result.total_pnl_percentage, "total_pnl_percentage"
+            ),
+            "max_winner": self._validate_optional_metric(
+                backtest_result.max_winner, "max_winner"
+            ),
+            "max_loser": self._validate_optional_metric(
+                backtest_result.max_loser, "max_loser"
+            ),
+            "min_winner": self._validate_optional_metric(
+                backtest_result.min_winner, "min_winner"
+            ),
+            "min_loser": self._validate_optional_metric(
+                backtest_result.min_loser, "min_loser"
+            ),
         }
 
     def _validate_metric(self, value: float, field_name: str) -> Decimal:
@@ -326,37 +376,3 @@ class BacktestPersistenceService:
         if total_trades == 0:
             return None
         return Decimal(str(winning_trades / total_trades))
-
-    def _calculate_avg_win(self, backtest_result: BacktestResult) -> Optional[Decimal]:
-        """
-        Calculate average winning trade amount.
-
-        Args:
-            backtest_result: Backtest results
-
-        Returns:
-            Average win amount, or None if no winning trades or data unavailable
-        """
-        if backtest_result.winning_trades == 0:
-            return None
-
-        # Simple BacktestResult has largest_win but not sum of wins
-        # Return None for MVP - will be calculated when using EnhancedBacktestResult
-        return None
-
-    def _calculate_avg_loss(self, backtest_result: BacktestResult) -> Optional[Decimal]:
-        """
-        Calculate average losing trade amount.
-
-        Args:
-            backtest_result: Backtest results
-
-        Returns:
-            Average loss amount, or None if no losing trades or data unavailable
-        """
-        if backtest_result.losing_trades == 0:
-            return None
-
-        # Simple BacktestResult has largest_loss but not sum of losses
-        # Return None for MVP - will be calculated when using EnhancedBacktestResult
-        return None

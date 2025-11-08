@@ -226,6 +226,18 @@ class PerformanceMetrics(Base, TimestampMixin):
     )
     volatility: Mapped[Optional[Decimal]] = mapped_column(Numeric(15, 6), nullable=True)
 
+    # Additional returns-based metrics (from get_performance_stats_returns)
+    risk_return_ratio: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(15, 6), nullable=True
+    )
+    avg_return: Mapped[Optional[Decimal]] = mapped_column(Numeric(15, 6), nullable=True)
+    avg_win_return: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(15, 6), nullable=True
+    )
+    avg_loss_return: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(15, 6), nullable=True
+    )
+
     # Trading metrics
     total_trades: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     winning_trades: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -237,6 +249,16 @@ class PerformanceMetrics(Base, TimestampMixin):
     expectancy: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2), nullable=True)
     avg_win: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2), nullable=True)
     avg_loss: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2), nullable=True)
+
+    # Additional PnL-based metrics (from get_performance_stats_pnls)
+    total_pnl: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2), nullable=True)
+    total_pnl_percentage: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(15, 6), nullable=True
+    )
+    max_winner: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2), nullable=True)
+    max_loser: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2), nullable=True)
+    min_winner: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2), nullable=True)
+    min_loser: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2), nullable=True)
 
     # Relationships
     backtest_run: Mapped[BacktestRun] = relationship(

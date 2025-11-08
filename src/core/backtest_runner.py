@@ -47,6 +47,8 @@ class MinimalBacktestRunner:
         self.engine: BacktestEngine | None = None
         self._results: BacktestResult | None = None
         self._venue: Venue | None = None  # Track venue used in backtest
+        self._backtest_start_date: datetime | None = None  # Track backtest date range
+        self._backtest_end_date: datetime | None = None
 
     async def _persist_backtest_results(
         self,
@@ -316,6 +318,10 @@ class MinimalBacktestRunner:
         strategy = SMACrossover(config=strategy_config)
         self.engine.add_strategy(strategy=strategy)
 
+        # Store backtest date range (not available for mock data, skip CAGR)
+        self._backtest_start_date = None
+        self._backtest_end_date = None
+
         # Run the backtest
         self.engine.run()
 
@@ -481,6 +487,10 @@ class MinimalBacktestRunner:
         strategy = SMACrossover(config=strategy_config)
         self.engine.add_strategy(strategy=strategy)
 
+        # Store backtest date range for CAGR calculation
+        self._backtest_start_date = start
+        self._backtest_end_date = end
+
         # Run the backtest
         self.engine.run()
 
@@ -490,12 +500,12 @@ class MinimalBacktestRunner:
 
     def _extract_results(self) -> BacktestResult:
         """
-        Extract results from the backtest engine.
+        Extract comprehensive results from Nautilus Trader's PortfolioAnalyzer.
 
         Returns
         -------
         BacktestResult
-            Extracted results.
+            Extracted results with all available Nautilus Trader metrics.
         """
         if not self.engine:
             return BacktestResult()
@@ -512,9 +522,7 @@ class MinimalBacktestRunner:
         final_balance = float(account.balance_total(USD).as_double())
         total_return = final_balance - starting_balance
 
-        # Get trade statistics
-        # Note: For backtests, we primarily care about closed positions (completed trades)
-        # Open positions at backtest end indicate the strategy didn't close them
+        # Get trade statistics from closed positions
         closed_positions = self.engine.cache.positions_closed()
         open_positions = self.engine.cache.positions_open()
 
@@ -546,7 +554,80 @@ class MinimalBacktestRunner:
                 losing_trades += 1
                 largest_loss = min(largest_loss, pnl)
 
+        # Extract advanced metrics from Nautilus Trader's PortfolioAnalyzer
+        analyzer = self.engine.portfolio.analyzer
+
+        # Get comprehensive statistics from Nautilus Trader
+        try:
+            stats_returns = analyzer.get_performance_stats_returns()
+            stats_pnls = analyzer.get_performance_stats_pnls(currency=USD)
+        except Exception as e:
+            logger.warning(f"Could not extract advanced metrics: {e}")
+            stats_returns = {}
+            stats_pnls = {}
+
+        # Helper function to safely extract metric
+        def safe_float(value) -> float | None:
+            if (
+                value is None
+                or value == ""
+                or (isinstance(value, float) and value != value)
+            ):
+                return None  # None, empty string, or NaN
+            try:
+                result = float(value)
+                # Filter out NaN and Inf values
+                if result != result or abs(result) == float("inf"):
+                    return None
+                return result
+            except (ValueError, TypeError):
+                return None
+
+        # Extract return-based metrics (from get_performance_stats_returns)
+        sharpe_ratio = safe_float(stats_returns.get("Sharpe Ratio (252 days)"))
+        sortino_ratio = safe_float(stats_returns.get("Sortino Ratio (252 days)"))
+        volatility = safe_float(stats_returns.get("Returns Volatility (252 days)"))
+        profit_factor = safe_float(stats_returns.get("Profit Factor"))
+        risk_return_ratio = safe_float(stats_returns.get("Risk Return Ratio"))
+        avg_return = safe_float(stats_returns.get("Average (Return)"))
+        avg_win_return = safe_float(stats_returns.get("Average Win (Return)"))
+        avg_loss_return = safe_float(stats_returns.get("Average Loss (Return)"))
+
+        # Extract PnL-based metrics (from get_performance_stats_pnls)
+        total_pnl = safe_float(stats_pnls.get("PnL (total)"))
+        total_pnl_percentage = safe_float(stats_pnls.get("PnL% (total)"))
+        expectancy = safe_float(stats_pnls.get("Expectancy"))
+        avg_win = safe_float(stats_pnls.get("Avg Winner"))
+        avg_loss = safe_float(stats_pnls.get("Avg Loser"))
+        max_winner = safe_float(stats_pnls.get("Max Winner"))
+        max_loser = safe_float(stats_pnls.get("Max Loser"))
+        min_winner = safe_float(stats_pnls.get("Min Winner"))
+        min_loser = safe_float(stats_pnls.get("Min Loser"))
+
+        # Calculate custom metrics not provided by Nautilus Trader
+        # These require access to the full equity curve and time series data
+        max_drawdown = self._calculate_max_drawdown(analyzer, account)
+
+        # Calculate CAGR using stored backtest dates or attempt to extract from data
+        cagr = None
+        if self._backtest_start_date and self._backtest_end_date:
+            cagr = self._calculate_cagr(
+                starting_balance,
+                final_balance,
+                self._backtest_start_date,
+                self._backtest_end_date,
+            )
+        else:
+            logger.debug("Backtest date range not available, skipping CAGR calculation")
+
+        calmar_ratio = self._calculate_calmar_ratio(cagr, max_drawdown)
+        max_drawdown_duration = None  # Not tracking duration currently
+
+        # Total commissions/fees tracking
+        total_fees = None  # Not directly available in current Nautilus output
+
         return BacktestResult(
+            # Basic metrics
             total_return=total_return,
             total_trades=total_trades,
             winning_trades=winning_trades,
@@ -554,6 +635,33 @@ class MinimalBacktestRunner:
             largest_win=largest_win,
             largest_loss=largest_loss,
             final_balance=final_balance,
+            # Returns-based metrics (from get_performance_stats_returns)
+            sharpe_ratio=sharpe_ratio,
+            sortino_ratio=sortino_ratio,
+            volatility=volatility,
+            profit_factor=profit_factor,
+            risk_return_ratio=risk_return_ratio,
+            avg_return=avg_return,
+            avg_win_return=avg_win_return,
+            avg_loss_return=avg_loss_return,
+            # PnL-based metrics (from get_performance_stats_pnls)
+            total_pnl=total_pnl,
+            total_pnl_percentage=total_pnl_percentage,
+            expectancy=expectancy,
+            avg_win=avg_win,
+            avg_loss=avg_loss,
+            max_winner=max_winner,
+            max_loser=max_loser,
+            min_winner=min_winner,
+            min_loser=min_loser,
+            # Custom calculated metrics (not available from Nautilus)
+            max_drawdown=max_drawdown,
+            max_drawdown_duration_days=max_drawdown_duration,
+            cagr=cagr,
+            calmar_ratio=calmar_ratio,
+            # Cost metrics
+            total_fees=total_fees,
+            total_commissions=total_fees,  # Same as total_fees
         )
 
     def get_detailed_results(self) -> Dict[str, Any]:
@@ -605,6 +713,137 @@ class MinimalBacktestRunner:
         # Load configuration from file
         config_obj = ConfigLoader.load_from_file(config_file_path)
         return self.run_from_config_object(config_obj)
+
+    def _calculate_max_drawdown(self, analyzer, account) -> float | None:
+        """
+        Calculate maximum drawdown from account equity history.
+
+        Maximum drawdown is the largest peak-to-trough decline in portfolio value.
+        Formula: MDD = (Trough Value - Peak Value) / Peak Value
+
+        Args:
+            analyzer: Nautilus Trader PortfolioAnalyzer
+            account: Account object with balance history
+
+        Returns:
+            Maximum drawdown as negative decimal (e.g., -0.15 for 15% drawdown)
+            or None if calculation fails
+        """
+        try:
+            # Try to get returns series from analyzer
+            returns = analyzer.returns()
+
+            if returns is None or len(returns) == 0:
+                logger.debug("No returns data available for max drawdown calculation")
+                return None
+
+            # Calculate cumulative returns to build equity curve
+            cumulative_returns = (1 + returns).cumprod()
+
+            # Track running maximum (peak) and calculate drawdowns
+            running_max = cumulative_returns.expanding().max()
+            drawdowns = (cumulative_returns - running_max) / running_max
+
+            # Maximum drawdown is the minimum value (most negative)
+            max_drawdown = float(drawdowns.min())
+
+            logger.debug(f"Calculated max drawdown: {max_drawdown:.4f}")
+            return max_drawdown if max_drawdown < 0 else 0.0
+
+        except Exception as e:
+            logger.warning(f"Could not calculate max drawdown: {e}")
+            return None
+
+    def _calculate_cagr(
+        self, starting_balance: float, final_balance: float, start_date, end_date
+    ) -> float | None:
+        """
+        Calculate Compound Annual Growth Rate (CAGR).
+
+        Formula: CAGR = (Ending Value / Beginning Value) ^ (1 / Years) - 1
+
+        Args:
+            starting_balance: Initial portfolio value
+            final_balance: Final portfolio value
+            start_date: Backtest start date
+            end_date: Backtest end date
+
+        Returns:
+            CAGR as decimal (e.g., 0.25 for 25% annual return)
+            or None if calculation fails
+        """
+        try:
+            # Validate inputs
+            if starting_balance <= 0:
+                logger.warning("Starting balance must be positive for CAGR calculation")
+                return None
+
+            if final_balance <= 0:
+                logger.warning(
+                    "Final balance is non-positive, CAGR calculation skipped"
+                )
+                return None
+
+            # Calculate years (use fractional years for accuracy)
+            days = (end_date - start_date).days
+            if days <= 0:
+                logger.warning(
+                    "Backtest duration must be positive for CAGR calculation"
+                )
+                return None
+
+            years = days / 365.25  # Account for leap years
+
+            # Calculate CAGR
+            cagr = (final_balance / starting_balance) ** (1 / years) - 1
+
+            logger.debug(
+                f"Calculated CAGR: {cagr:.4f} "
+                f"({starting_balance:.2f} -> {final_balance:.2f} over {years:.2f} years)"
+            )
+            return float(cagr)
+
+        except Exception as e:
+            logger.warning(f"Could not calculate CAGR: {e}")
+            return None
+
+    def _calculate_calmar_ratio(
+        self, cagr: float | None, max_drawdown: float | None
+    ) -> float | None:
+        """
+        Calculate Calmar Ratio (return per unit of downside risk).
+
+        Formula: Calmar Ratio = CAGR / abs(Maximum Drawdown)
+
+        Args:
+            cagr: Compound annual growth rate as decimal
+            max_drawdown: Maximum drawdown as negative decimal
+
+        Returns:
+            Calmar ratio (e.g., 2.0 means 2% return per 1% drawdown)
+            or None if calculation fails
+        """
+        try:
+            # Both metrics must be available
+            if cagr is None or max_drawdown is None:
+                return None
+
+            # Avoid division by zero
+            if max_drawdown == 0:
+                logger.debug("Max drawdown is zero, Calmar ratio undefined")
+                return None
+
+            # Calculate Calmar ratio
+            calmar = cagr / abs(max_drawdown)
+
+            logger.debug(
+                f"Calculated Calmar ratio: {calmar:.2f} (CAGR: {cagr:.4f}, MDD: {max_drawdown:.4f})"
+            )
+            return float(calmar)
+
+        except Exception as e:
+            logger.warning(f"Could not calculate Calmar ratio: {e}")
+            return None
 
     def run_from_config_object(
         self, config_obj: StrategyConfigWrapper
@@ -724,6 +963,10 @@ class MinimalBacktestRunner:
         )
         self.engine.add_strategy(strategy=strategy)
 
+        # Store backtest date range (not available from config, skip CAGR)
+        self._backtest_start_date = None
+        self._backtest_end_date = None
+
         # Run the backtest
         self.engine.run()
 
@@ -737,6 +980,8 @@ class MinimalBacktestRunner:
             self.engine.reset()
         self._results = None
         self._venue = None
+        self._backtest_start_date = None
+        self._backtest_end_date = None
 
     async def run_backtest_with_strategy_type(
         self,
@@ -930,6 +1175,10 @@ class MinimalBacktestRunner:
         # Create strategy using StrategyLoader
         strategy = StrategyLoader.create_strategy(strategy_enum, config_params)
         self.engine.add_strategy(strategy=strategy)
+
+        # Store backtest date range for CAGR calculation
+        self._backtest_start_date = start
+        self._backtest_end_date = end
 
         # Run the backtest
         self.engine.run()
@@ -1148,6 +1397,10 @@ class MinimalBacktestRunner:
         self.engine.add_strategy(strategy=strategy)
 
         try:
+            # Store backtest date range for CAGR calculation
+            self._backtest_start_date = start
+            self._backtest_end_date = end
+
             # Reason: Run the backtest
             self.engine.run()
 
