@@ -41,27 +41,23 @@ class RateLimiter:
         Uses asyncio.Lock to prevent race conditions in concurrent scenarios.
         """
         async with self._lock:
-            now = datetime.now(timezone.utc)
+            while True:
+                now = datetime.now(timezone.utc)
 
-            # Remove expired requests outside the current window
-            while self.requests and self.requests[0] < now - self.window:
-                self.requests.popleft()
+                # Remove expired requests outside the current window
+                while self.requests and self.requests[0] < now - self.window:
+                    self.requests.popleft()
 
-            # If at limit, wait until oldest request expires
-            if len(self.requests) >= self.requests_per_second:
+                # If we have capacity, record this request and return
+                if len(self.requests) < self.requests_per_second:
+                    self.requests.append(now)
+                    return
+
+                # At limit, wait until oldest request expires
                 sleep_time = (self.requests[0] + self.window - now).total_seconds()
                 if sleep_time > 0:
                     await asyncio.sleep(sleep_time)
-                    # Re-acquire time after sleep
-                    now = datetime.now(timezone.utc)
-
-                    # CRITICAL: Re-clean expired requests after sleeping
-                    # This prevents race conditions where we exceed the limit
-                    while self.requests and self.requests[0] < now - self.window:
-                        self.requests.popleft()
-
-            # Record this request
-            self.requests.append(now)
+                # Loop back to re-check after sleeping
 
 
 class IBKRHistoricalClient:
