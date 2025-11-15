@@ -1,0 +1,31 @@
+<!-- Navigation Bar -->
+<nav class="bg-slate-900 border-b border-slate-700">
+    <div class="max-w-7xl mx-auto px-4">
+        <div class="flex items-center justify-between h-16">
+            <!-- Logo/Brand -->
+            <div class="flex items-center">
+                <span class="text-xl font-bold text-slate-100">NTrader</span>
+            </div>
+
+            <!-- Navigation Links -->
+            <div class="flex space-x-4">
+                <a href="/"
+                   class="px-3 py-2 rounded-md text-sm font-medium {% if nav_state.active_page == 'dashboard' %}bg-slate-800 text-white{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %} transition-colors">
+                    Dashboard
+                </a>
+                <a href="/backtests"
+                   class="px-3 py-2 rounded-md text-sm font-medium {% if nav_state.active_page == 'backtests' %}bg-slate-800 text-white{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %} transition-colors">
+                    Backtests
+                </a>
+                <a href="/data"
+                   class="px-3 py-2 rounded-md text-sm font-medium {% if nav_state.active_page == 'data' %}bg-slate-800 text-white{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %} transition-colors">
+                    Data
+                </a>
+                <a href="/docs"
+                   class="px-3 py-2 rounded-md text-sm font-medium {% if nav_state.active_page == 'docs' %}bg-slate-800 text-white{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %} transition-colors">
+                    Docs
+                </a>
+            </div>
+        </div>
+    </div>
+</nav>

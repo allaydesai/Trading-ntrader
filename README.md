@@ -33,6 +33,11 @@ A production-grade algorithmic trading backtesting system built with the Nautilu
   - **Comparison Tools**: Side-by-side comparison of multiple backtests
   - **Reproducibility**: Re-run previous backtests with exact same configuration
   - **Performance Tracking**: Track strategy performance over time
+- 🌐 **Web UI**: ✨ **NEW** - Browser-based dashboard for backtest results
+  - **Dashboard**: Overview with key metrics (total backtests, best Sharpe, worst drawdown)
+  - **Backtest List**: Paginated table with color-coded returns and HTMX pagination
+  - **Dark Theme**: Modern dark UI with high-contrast text for professional appearance
+  - **Navigation**: Persistent nav bar with active page highlighting
 - ⚡ **Fast Execution**: Built on Nautilus Trader's high-performance engine
 - 🧪 **Test Coverage**: Comprehensive test suite with 715 tests (688 passing) organized in test pyramid
   - 141 unit tests executing in 0.55s (99% faster than integration)
@@ -108,6 +113,48 @@ uv run python -m src.cli report summary <result-id>            # ✅ Quick perfo
 uv run python -m src.cli report generate --result-id <id>      # ✅ Generate text report
 uv run python -m src.cli report generate --result-id <id> --format csv  # ✅ Export to CSV
 uv run python -m src.cli report list                           # ✅ List saved results
+
+# Web UI (NEW)
+uvicorn src.api.web:app --reload                                 # ✅ Start web server
+# Open http://127.0.0.1:8000 in browser for dashboard
+```
+
+## Web UI
+
+**NEW** - The NTrader Web UI provides a browser-based interface for viewing backtest results.
+
+### Starting the Web Server
+
+```bash
+# Start the web server with auto-reload (development mode)
+uvicorn src.api.web:app --reload --host 127.0.0.1 --port 8000
+
+# Open in browser
+open http://127.0.0.1:8000
+```
+
+### Available Pages
+
+- **Dashboard** (`/`): Overview with total backtests, best Sharpe ratio, worst drawdown, and recent activity
+- **Backtest List** (`/backtests`): Paginated table of all backtest runs with key metrics and status
+  - Sortable columns: Run ID, Strategy, Symbol, Date Range, Return, Sharpe, Max DD, Status, Created
+  - Color-coded returns (green for positive, red for negative)
+  - HTMX-powered pagination (no page reload)
+
+### Features
+
+- **Dark Theme**: Modern slate-950 background with high-contrast text (WCAG AA compliant)
+- **Responsive Navigation**: Persistent nav bar with active page highlighting
+- **Empty State Handling**: Helpful messages when no backtests exist
+- **Server-Side Rendering**: Fast load times with Jinja2 templates
+- **HTMX Integration**: Dynamic updates without full page reloads
+
+### Requirements
+
+The Web UI requires the database to be configured. Set `DATABASE_URL` in your `.env` file:
+
+```bash
+DATABASE_URL=postgresql://user:password@localhost:5432/ntrader
 ```
 
 ## Quick Start
