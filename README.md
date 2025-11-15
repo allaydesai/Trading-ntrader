@@ -1967,9 +1967,23 @@ If you encounter issues not covered here:
 - [ ] IBKR data integration with backtest engine
 - [ ] Advanced visualization and charting
 
+### Completed Recently ✅
+- [x] **Milestone 7**: Web UI Foundation (Feature Spec 005)
+  - [x] Dashboard with summary statistics (total backtests, best Sharpe, worst drawdown)
+  - [x] Recent activity list showing 5 most recent backtests
+  - [x] Backtest list page with paginated table (20 per page)
+  - [x] HTMX-powered pagination without full page reloads
+  - [x] Dark theme with proper color coding (green=positive, red=negative)
+  - [x] Persistent navigation with active page highlighting
+  - [x] Breadcrumb navigation for nested pages
+  - [x] Empty state handling with helpful messages
+  - [x] FastAPI + Jinja2 + HTMX + Tailwind CSS architecture
+  - [x] Comprehensive test suite (87% coverage, 27 tests passing)
+  - [x] Playwright-verified UI functionality
+
 ### Planned 📋
 - [ ] TimescaleDB optimization for large datasets
-- [ ] Web-based dashboard
+- [ ] Web UI Phase 2: Backtest detail view with charts
 - [ ] Real-time data streaming
 - [ ] Advanced risk management features
 - [ ] Portfolio optimization tools
