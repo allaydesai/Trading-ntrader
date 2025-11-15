@@ -1,0 +1,443 @@
+openapi: 3.1.0
+info:
+  title: NTrader Web UI Routes
+  description: |
+    Server-rendered HTML routes for NTrader Web UI Foundation.
+    These endpoints return HTML content (not JSON) for browser consumption.
+  version: 0.1.0
+  contact:
+    name: NTrader Development Team
+
+servers:
+  - url: http://localhost:8000
+    description: Local development server
+
+tags:
+  - name: dashboard
+    description: Dashboard and home page routes
+  - name: backtests
+    description: Backtest list and detail routes
+  - name: fragments
+    description: HTMX partial HTML responses
+
+paths:
+  /:
+    get:
+      operationId: getDashboard
+      summary: Dashboard Home Page
+      description: |
+        Renders the main dashboard with summary statistics, recent backtests,
+        and quick action buttons. This is the entry point for the web UI.
+      tags:
+        - dashboard
+      responses:
+        '200':
+          description: HTML dashboard page
+          content:
+            text/html:
+              schema:
+                type: string
+              example: |
+                <!DOCTYPE html>
+                <html>
+                <head><title>NTrader Dashboard</title></head>
+                <body>
+                  <nav>...</nav>
+                  <main>
+                    <h1>Dashboard</h1>
+                    <div class="stats">
+                      <div>Total Backtests: 42</div>
+                      <div>Best Sharpe: 2.15</div>
+                      <div>Worst Drawdown: -25%</div>
+                    </div>
+                    <div class="recent">
+                      <h2>Recent Activity</h2>
+                      <table>...</table>
+                    </div>
+                    <div class="actions">
+                      <a href="/backtests">View All Backtests</a>
+                      <a href="/data">Check Data Coverage</a>
+                    </div>
+                  </main>
+                  <footer>...</footer>
+                </body>
+                </html>
+        '500':
+          description: Database connection error
+          content:
+            text/html:
+              schema:
+                type: string
+              example: |
+                <div class="error">
+                  Database connection unavailable. Check connection settings.
+                </div>
+
+  /backtests:
+    get:
+      operationId: getBacktestList
+      summary: Backtest History List
+      description: |
+        Renders paginated table of all backtest runs with key metrics.
+        Supports sorting and filtering via query parameters.
+        Returns full HTML page or HTMX fragment based on request headers.
+      tags:
+        - backtests
+      parameters:
+        - name: page
+          in: query
+          description: Page number (1-indexed)
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: page_size
+          in: query
+          description: Results per page
+          schema:
+            type: integer
+            enum: [10, 20, 50]
+            default: 20
+        - name: sort
+          in: query
+          description: Sort field
+          schema:
+            type: string
+            enum: [created_at, sharpe_ratio, total_return]
+            default: created_at
+        - name: order
+          in: query
+          description: Sort direction
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+      responses:
+        '200':
+          description: HTML backtest list page
+          content:
+            text/html:
+              schema:
+                type: string
+              example: |
+                <!DOCTYPE html>
+                <html>
+                <head><title>Backtest History - NTrader</title></head>
+                <body>
+                  <nav>...</nav>
+                  <main>
+                    <h1>Backtest History</h1>
+                    <div id="backtest-list">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Run ID</th>
+                            <th>Strategy</th>
+                            <th>Symbol</th>
+                            <th>Date Range</th>
+                            <th>Return</th>
+                            <th>Sharpe</th>
+                            <th>Max DD</th>
+                            <th>Status</th>
+                            <th>Time</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr hx-get="/backtests/12345678">...</tr>
+                        </tbody>
+                      </table>
+                      <div class="pagination">
+                        Page 1 of 5
+                        <button hx-get="/backtests/fragment?page=2">Next</button>
+                      </div>
+                    </div>
+                  </main>
+                  <footer>...</footer>
+                </body>
+                </html>
+        '500':
+          description: Server error
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /backtests/fragment:
+    get:
+      operationId: getBacktestListFragment
+      summary: HTMX Partial - Backtest Table
+      description: |
+        Returns only the table and pagination controls for HTMX partial updates.
+        Used for pagination without full page reload.
+      tags:
+        - fragments
+      parameters:
+        - name: page
+          in: query
+          description: Page number (1-indexed)
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: page_size
+          in: query
+          description: Results per page
+          schema:
+            type: integer
+            enum: [10, 20, 50]
+            default: 20
+        - name: sort
+          in: query
+          description: Sort field
+          schema:
+            type: string
+            enum: [created_at, sharpe_ratio, total_return]
+            default: created_at
+        - name: order
+          in: query
+          description: Sort direction
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+      responses:
+        '200':
+          description: HTML fragment for table content
+          content:
+            text/html:
+              schema:
+                type: string
+              example: |
+                <table>
+                  <thead>...</thead>
+                  <tbody>
+                    <tr>
+                      <td>12345678</td>
+                      <td>SMA Crossover</td>
+                      <td>AAPL</td>
+                      <td>2024-01-01 to 2024-12-31</td>
+                      <td class="text-green-500">+15.25%</td>
+                      <td>1.85</td>
+                      <td class="text-red-500">-12.30%</td>
+                      <td>success</td>
+                      <td>2024-11-15 10:30:00</td>
+                    </tr>
+                  </tbody>
+                </table>
+                <div class="pagination">
+                  Page 2 of 5
+                  <button hx-get="/backtests/fragment?page=1">Previous</button>
+                  <button hx-get="/backtests/fragment?page=3">Next</button>
+                </div>
+
+  /backtests/{run_id}:
+    get:
+      operationId: getBacktestDetail
+      summary: Backtest Detail Page (Future)
+      description: |
+        Renders detailed view of a single backtest run.
+        Placeholder for Phase 2 implementation.
+      tags:
+        - backtests
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          description: UUID of the backtest run
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: HTML backtest detail page
+          content:
+            text/html:
+              schema:
+                type: string
+        '404':
+          description: Backtest not found
+          content:
+            text/html:
+              schema:
+                type: string
+              example: |
+                <div class="error">
+                  Backtest not found. It may have been deleted.
+                </div>
+
+components:
+  schemas:
+    # These schemas represent the data passed to templates
+    # Not directly exposed as JSON responses, but useful for documentation
+
+    DashboardContext:
+      type: object
+      properties:
+        stats:
+          $ref: '#/components/schemas/DashboardSummary'
+        nav:
+          $ref: '#/components/schemas/NavigationState'
+      required:
+        - stats
+        - nav
+
+    DashboardSummary:
+      type: object
+      properties:
+        total_backtests:
+          type: integer
+          minimum: 0
+          description: Total number of backtest runs
+        best_sharpe_ratio:
+          type: number
+          nullable: true
+          description: Highest Sharpe ratio achieved
+        best_sharpe_strategy:
+          type: string
+          nullable: true
+          description: Strategy with best Sharpe
+        worst_max_drawdown:
+          type: number
+          nullable: true
+          description: Worst maximum drawdown (negative)
+        worst_drawdown_strategy:
+          type: string
+          nullable: true
+          description: Strategy with worst drawdown
+        recent_backtests:
+          type: array
+          items:
+            $ref: '#/components/schemas/RecentBacktestItem'
+          maxItems: 5
+      required:
+        - total_backtests
+        - recent_backtests
+
+    RecentBacktestItem:
+      type: object
+      properties:
+        run_id:
+          type: string
+          format: uuid
+        run_id_short:
+          type: string
+          maxLength: 8
+        strategy_name:
+          type: string
+        instrument_symbol:
+          type: string
+        execution_status:
+          type: string
+          enum: [success, failed]
+        created_at:
+          type: string
+          format: date-time
+        total_return:
+          type: number
+          nullable: true
+      required:
+        - run_id
+        - run_id_short
+        - strategy_name
+        - instrument_symbol
+        - execution_status
+        - created_at
+
+    BacktestListItem:
+      type: object
+      properties:
+        run_id:
+          type: string
+          format: uuid
+        run_id_short:
+          type: string
+          maxLength: 8
+        strategy_name:
+          type: string
+          maxLength: 50
+        instrument_symbol:
+          type: string
+        date_range:
+          type: string
+          description: "Format: YYYY-MM-DD to YYYY-MM-DD"
+        total_return:
+          type: number
+          nullable: true
+        sharpe_ratio:
+          type: number
+          nullable: true
+        max_drawdown:
+          type: number
+          nullable: true
+        execution_status:
+          type: string
+          enum: [success, failed]
+        created_at:
+          type: string
+          format: date-time
+      required:
+        - run_id
+        - run_id_short
+        - strategy_name
+        - instrument_symbol
+        - date_range
+        - execution_status
+        - created_at
+
+    NavigationState:
+      type: object
+      properties:
+        active_page:
+          type: string
+          enum: [dashboard, backtests, data, docs]
+        breadcrumbs:
+          type: array
+          items:
+            $ref: '#/components/schemas/BreadcrumbItem'
+        app_version:
+          type: string
+      required:
+        - active_page
+        - breadcrumbs
+        - app_version
+
+    BreadcrumbItem:
+      type: object
+      properties:
+        label:
+          type: string
+        url:
+          type: string
+          nullable: true
+        is_current:
+          type: boolean
+      required:
+        - label
+        - is_current
+
+    PaginationInfo:
+      type: object
+      properties:
+        page:
+          type: integer
+          minimum: 1
+        page_size:
+          type: integer
+          enum: [10, 20, 50]
+        total_count:
+          type: integer
+          minimum: 0
+        total_pages:
+          type: integer
+          minimum: 1
+        has_next:
+          type: boolean
+        has_previous:
+          type: boolean
+      required:
+        - page
+        - page_size
+        - total_count
+        - total_pages
+        - has_next
+        - has_previous

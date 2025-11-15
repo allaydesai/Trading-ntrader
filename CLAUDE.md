@@ -676,6 +676,8 @@ rg --files -g "*.py"
 ## Active Technologies
 - Python 3.11+ + SQLAlchemy 2.0 (async), Alembic, Pydantic 2.5+, asyncpg, PostgreSQL 16+ (004-postgresql-metadata-storage)
 - PostgreSQL 16+ with async connection pooling (004-postgresql-metadata-storage)
+- Python 3.11+ + FastAPI, Jinja2, HTMX, Tailwind CSS (005-webui-foundation)
+- PostgreSQL (existing backtest metadata via SQLAlchemy 2.0 async) (005-webui-foundation)
 
 ## Recent Changes
 - 004-postgresql-metadata-storage: Added Python 3.11+ + SQLAlchemy 2.0 (async), Alembic, Pydantic 2.5+, asyncpg, PostgreSQL 16+
