@@ -67,13 +67,13 @@ class BacktestListItem(BaseModel):
     execution_status: str = Field(..., description="success or failed")
     created_at: datetime = Field(..., description="Execution timestamp")
 
-    @computed_field
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def run_id_short(self) -> str:
         """First 8 characters of UUID for display."""
         return str(self.run_id)[:8]
 
-    @computed_field
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def return_percentage(self) -> float:
         """
@@ -101,7 +101,7 @@ class BacktestListItem(BaseModel):
         # Calculate percentage return
         return float((self.total_return / starting_balance) * 100)
 
-    @computed_field
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def is_positive_return(self) -> bool:
         """Whether the total return is positive."""
@@ -109,7 +109,7 @@ class BacktestListItem(BaseModel):
             return False
         return self.total_return > 0
 
-    @computed_field
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def status_color(self) -> str:
         """Color indicator for status."""
@@ -147,7 +147,7 @@ class BacktestListPage(BaseModel):
     page_size: int = Field(20, description="Results per page")
     total_count: int = Field(0, ge=0, description="Total backtests in system")
 
-    @computed_field
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def total_pages(self) -> int:
         """Total number of pages."""
@@ -155,13 +155,13 @@ class BacktestListPage(BaseModel):
             return 1
         return max(1, ceil(self.total_count / self.page_size))
 
-    @computed_field
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def has_next(self) -> bool:
         """Whether there is a next page."""
         return self.page < self.total_pages
 
-    @computed_field
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def has_previous(self) -> bool:
         """Whether there is a previous page."""

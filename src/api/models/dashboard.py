@@ -49,7 +49,7 @@ class RecentBacktestItem(BaseModel):
         None, description="Return percentage (if success)"
     )
 
-    @computed_field
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def run_id_short(self) -> str:
         """First 8 characters of UUID for display."""
@@ -83,16 +83,16 @@ class DashboardSummary(BaseModel):
         default=0, ge=0, description="Count of all backtest runs"
     )
     best_sharpe_ratio: Optional[Decimal] = Field(
-        None, description="Highest Sharpe ratio achieved"
+        default=None, description="Highest Sharpe ratio achieved"
     )
     best_sharpe_strategy: Optional[str] = Field(
-        None, description="Strategy name with best Sharpe"
+        default=None, description="Strategy name with best Sharpe"
     )
     worst_max_drawdown: Optional[Decimal] = Field(
-        None, description="Worst (most negative) drawdown"
+        default=None, description="Worst (most negative) drawdown"
     )
     worst_drawdown_strategy: Optional[str] = Field(
-        None, description="Strategy with worst drawdown"
+        default=None, description="Strategy with worst drawdown"
     )
     recent_backtests: list[RecentBacktestItem] = Field(
         default_factory=list, description="Last 5 executed backtests"
