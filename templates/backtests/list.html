@@ -89,6 +89,31 @@
                     </datalist>
                 </div>
 
+                <!-- Status Filter -->
+                <div class="min-w-32">
+                    <label for="status-filter" class="block text-sm font-medium text-slate-300 mb-1">
+                        Status
+                    </label>
+                    <select
+                        id="status-filter"
+                        name="status"
+                        hx-get="/backtests/fragment"
+                        hx-target="#backtest-table"
+                        hx-swap="innerHTML"
+                        hx-include="#filter-form"
+                        hx-push-url="true"
+                        class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    >
+                        <option value="">All</option>
+                        <option value="success" {% if list_page.filter_state.status and list_page.filter_state.status.value == "success" %}selected{% endif %}>
+                            Success
+                        </option>
+                        <option value="failed" {% if list_page.filter_state.status and list_page.filter_state.status.value == "failed" %}selected{% endif %}>
+                            Failed
+                        </option>
+                    </select>
+                </div>
+
                 <!-- Hidden fields to preserve sort and pagination state -->
                 <input type="hidden" name="sort" value="{{ list_page.filter_state.sort.value }}">
                 <input type="hidden" name="order" value="{{ list_page.filter_state.order.value }}">

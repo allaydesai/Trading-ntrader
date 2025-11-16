@@ -213,11 +213,11 @@
 
 ### Implementation for User Story 6
 
-- [ ] T083 [US6] Add hx-push-url="true" to filter form in templates/backtests/list.html
-- [ ] T084 [US6] Add hx-push-url="true" to sort headers in templates/backtests/list_fragment.html
-- [ ] T085 [US6] Add hx-push-url="true" to pagination controls in templates/backtests/list_fragment.html
-- [ ] T086 [US6] Ensure /backtests page restores FilterState from URL params in src/api/ui/backtests.py
-- [ ] T087 [US6] Handle invalid URL parameters gracefully (ignore invalid, apply valid) in src/api/ui/backtests.py
+- [X] T083 [US6] Add hx-push-url="true" to filter form in templates/backtests/list.html
+- [X] T084 [US6] Add hx-push-url="true" to sort headers in templates/backtests/list_fragment.html
+- [X] T085 [US6] Add hx-push-url="true" to pagination controls in templates/backtests/list_fragment.html
+- [X] T086 [US6] Ensure /backtests page restores FilterState from URL params in src/api/ui/backtests.py
+- [X] T087 [US6] Handle invalid URL parameters gracefully (ignore invalid, apply valid) in src/api/ui/backtests.py
 
 **Checkpoint**: User Story 6 complete - URL persistence works independently
 
@@ -237,10 +237,10 @@
 
 ### Implementation for User Story 7
 
-- [ ] T091 [US7] Add status filter to get_filtered_backtests() WHERE clause in src/db/repositories/backtest_repository.py
-- [ ] T092 [US7] Update /backtests endpoint to accept status parameter in src/api/ui/backtests.py
-- [ ] T093 [US7] Update /backtests/fragment endpoint to accept status parameter in src/api/ui/backtests.py
-- [ ] T094 [US7] Add status dropdown to filter form in templates/backtests/list.html
+- [X] T091 [US7] Add status filter to get_filtered_backtests() WHERE clause in src/db/repositories/backtest_repository.py
+- [X] T092 [US7] Update /backtests endpoint to accept status parameter in src/api/ui/backtests.py
+- [X] T093 [US7] Update /backtests/fragment endpoint to accept status parameter in src/api/ui/backtests.py
+- [X] T094 [US7] Add status dropdown to filter form in templates/backtests/list.html
 
 **Checkpoint**: User Story 7 complete - Status filtering works independently
 
