@@ -76,13 +76,13 @@
 
 ### Implementation for User Story 1
 
-- [ ] T026 [US1] Add strategy filter to get_filtered_backtests() WHERE clause in src/db/repositories/backtest_repository.py
-- [ ] T027 [US1] Update /backtests endpoint to accept strategy query parameter in src/api/ui/backtests.py
-- [ ] T028 [US1] Update /backtests/fragment endpoint to accept strategy query parameter in src/api/ui/backtests.py
-- [ ] T029 [US1] Add strategy dropdown to filter form in templates/backtests/list.html
-- [ ] T030 [US1] Pass available_strategies to template context in src/api/ui/backtests.py
-- [ ] T031 [US1] Add Clear Filters button functionality in templates/backtests/list.html
-- [ ] T032 [US1] Add empty results message when no backtests match filters in templates/backtests/list_fragment.html
+- [X] T026 [US1] Add strategy filter to get_filtered_backtests() WHERE clause in src/db/repositories/backtest_repository.py
+- [X] T027 [US1] Update /backtests endpoint to accept strategy query parameter in src/api/ui/backtests.py
+- [X] T028 [US1] Update /backtests/fragment endpoint to accept strategy query parameter in src/api/ui/backtests.py
+- [X] T029 [US1] Add strategy dropdown to filter form in templates/backtests/list.html
+- [X] T030 [US1] Pass available_strategies to template context in src/api/ui/backtests.py
+- [X] T031 [US1] Add Clear Filters button functionality in templates/backtests/list.html
+- [X] T032 [US1] Add empty results message when no backtests match filters in templates/backtests/list_fragment.html
 
 **Checkpoint**: User Story 1 complete - Strategy filtering works independently
 
