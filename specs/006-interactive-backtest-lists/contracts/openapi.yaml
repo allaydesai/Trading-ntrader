@@ -1,0 +1,437 @@
+openapi: 3.1.0
+info:
+  title: NTrader Interactive Backtest Lists API
+  version: 1.0.0
+  description: |
+    API contracts for Interactive Backtest Lists feature (Phase 2).
+    Extends existing backtest list endpoints with filtering, sorting, and URL state persistence.
+
+servers:
+  - url: http://localhost:8000
+    description: Local development server
+
+paths:
+  /backtests:
+    get:
+      summary: Render filtered backtest list page
+      description: |
+        Server-rendered HTML page with filter controls and table.
+        Restores filter state from URL query parameters.
+      operationId: getBacktestListPage
+      tags:
+        - UI
+      parameters:
+        - $ref: '#/components/parameters/StrategyFilter'
+        - $ref: '#/components/parameters/InstrumentFilter'
+        - $ref: '#/components/parameters/DateFromFilter'
+        - $ref: '#/components/parameters/DateToFilter'
+        - $ref: '#/components/parameters/StatusFilter'
+        - $ref: '#/components/parameters/SortColumn'
+        - $ref: '#/components/parameters/SortOrder'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Full HTML page with backtest list
+          content:
+            text/html:
+              schema:
+                type: string
+              example: |
+                <!DOCTYPE html>
+                <html>
+                  <head><title>Backtests - NTrader</title></head>
+                  <body>
+                    <!-- Filter controls, table, pagination -->
+                  </body>
+                </html>
+        '422':
+          description: Validation error (e.g., invalid date range)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+
+  /backtests/fragment:
+    get:
+      summary: Render filtered backtest table fragment (HTMX)
+      description: |
+        Returns only the table HTML for HTMX partial updates.
+        Used when filters, sorting, or pagination changes.
+      operationId: getBacktestListFragment
+      tags:
+        - UI
+        - HTMX
+      parameters:
+        - $ref: '#/components/parameters/StrategyFilter'
+        - $ref: '#/components/parameters/InstrumentFilter'
+        - $ref: '#/components/parameters/DateFromFilter'
+        - $ref: '#/components/parameters/DateToFilter'
+        - $ref: '#/components/parameters/StatusFilter'
+        - $ref: '#/components/parameters/SortColumn'
+        - $ref: '#/components/parameters/SortOrder'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: HTML fragment with table and pagination controls
+          content:
+            text/html:
+              schema:
+                type: string
+              example: |
+                <div class="bg-slate-900 rounded-lg">
+                  <table><!-- Filtered and sorted table rows --></table>
+                  <!-- Pagination controls -->
+                </div>
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+
+  /backtests/instruments:
+    get:
+      summary: Get instrument symbol suggestions for autocomplete
+      description: |
+        Returns datalist options matching the search query.
+        Used for instrument filter autocomplete.
+      operationId: getInstrumentSuggestions
+      tags:
+        - UI
+        - HTMX
+      parameters:
+        - name: q
+          in: query
+          description: Search query for instrument symbol
+          required: false
+          schema:
+            type: string
+            maxLength: 50
+          example: "AAP"
+      responses:
+        '200':
+          description: HTML datalist options for matching instruments
+          content:
+            text/html:
+              schema:
+                type: string
+              example: |
+                <option value="AAPL">AAPL</option>
+                <option value="AAPD">AAPD</option>
+                <option value="AAPU">AAPU</option>
+
+  /backtests/strategies:
+    get:
+      summary: Get distinct strategy names
+      description: |
+        Returns list of all distinct strategy names in the database.
+        Used to populate strategy filter dropdown.
+      operationId: getStrategyList
+      tags:
+        - API
+      responses:
+        '200':
+          description: List of strategy names
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: string
+              example:
+                - "SMA Crossover"
+                - "Mean Reversion"
+                - "Momentum Strategy"
+
+components:
+  parameters:
+    StrategyFilter:
+      name: strategy
+      in: query
+      description: Filter by exact strategy name
+      required: false
+      schema:
+        type: string
+        maxLength: 255
+      example: "SMA Crossover"
+
+    InstrumentFilter:
+      name: instrument
+      in: query
+      description: Filter by instrument symbol (partial match, case-insensitive)
+      required: false
+      schema:
+        type: string
+        maxLength: 50
+      example: "AAPL"
+
+    DateFromFilter:
+      name: date_from
+      in: query
+      description: Filter backtests created on or after this date (ISO format)
+      required: false
+      schema:
+        type: string
+        format: date
+      example: "2024-01-01"
+
+    DateToFilter:
+      name: date_to
+      in: query
+      description: Filter backtests created on or before this date (ISO format)
+      required: false
+      schema:
+        type: string
+        format: date
+      example: "2024-12-31"
+
+    StatusFilter:
+      name: status
+      in: query
+      description: Filter by execution status
+      required: false
+      schema:
+        type: string
+        enum:
+          - success
+          - failed
+      example: "success"
+
+    SortColumn:
+      name: sort
+      in: query
+      description: Column to sort results by
+      required: false
+      schema:
+        type: string
+        enum:
+          - created_at
+          - strategy_name
+          - instrument_symbol
+          - total_return
+          - sharpe_ratio
+          - max_drawdown
+          - execution_status
+        default: created_at
+      example: "sharpe_ratio"
+
+    SortOrder:
+      name: order
+      in: query
+      description: Sort direction
+      required: false
+      schema:
+        type: string
+        enum:
+          - asc
+          - desc
+        default: desc
+      example: "desc"
+
+    Page:
+      name: page
+      in: query
+      description: Page number (1-indexed)
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+      example: 1
+
+    PageSize:
+      name: page_size
+      in: query
+      description: Number of results per page
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+      example: 20
+
+  schemas:
+    FilterState:
+      type: object
+      description: Complete filter, sort, and pagination state
+      properties:
+        strategy:
+          type: string
+          nullable: true
+          maxLength: 255
+          description: Filter by strategy name
+        instrument:
+          type: string
+          nullable: true
+          maxLength: 50
+          description: Filter by instrument symbol
+        date_from:
+          type: string
+          format: date
+          nullable: true
+          description: Minimum creation date
+        date_to:
+          type: string
+          format: date
+          nullable: true
+          description: Maximum creation date
+        status:
+          type: string
+          enum: [success, failed]
+          nullable: true
+          description: Filter by execution status
+        sort:
+          type: string
+          enum:
+            - created_at
+            - strategy_name
+            - instrument_symbol
+            - total_return
+            - sharpe_ratio
+            - max_drawdown
+            - execution_status
+          default: created_at
+          description: Sort column
+        order:
+          type: string
+          enum: [asc, desc]
+          default: desc
+          description: Sort direction
+        page:
+          type: integer
+          minimum: 1
+          default: 1
+          description: Current page
+        page_size:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 20
+          description: Results per page
+
+    BacktestListItem:
+      type: object
+      description: Single backtest row in the list
+      required:
+        - run_id
+        - strategy_name
+        - instrument_symbol
+        - date_range
+        - execution_status
+        - created_at
+      properties:
+        run_id:
+          type: string
+          format: uuid
+          description: Business identifier
+        run_id_short:
+          type: string
+          description: First 8 characters for display
+        strategy_name:
+          type: string
+          description: Strategy name (truncated to 50 chars)
+        instrument_symbol:
+          type: string
+          description: Trading symbol
+        date_range:
+          type: string
+          description: "YYYY-MM-DD to YYYY-MM-DD"
+        total_return:
+          type: number
+          nullable: true
+          description: Absolute return in dollars
+        return_percentage:
+          type: number
+          description: Return as percentage
+        sharpe_ratio:
+          type: number
+          nullable: true
+          description: Risk-adjusted return
+        max_drawdown:
+          type: number
+          nullable: true
+          description: Peak-to-trough decline
+        execution_status:
+          type: string
+          enum: [success, failed]
+        created_at:
+          type: string
+          format: date-time
+
+    FilteredBacktestListPage:
+      type: object
+      description: Paginated response with filter context
+      required:
+        - backtests
+        - page
+        - page_size
+        - total_count
+        - filter_state
+        - available_strategies
+        - available_instruments
+      properties:
+        backtests:
+          type: array
+          items:
+            $ref: '#/components/schemas/BacktestListItem'
+        page:
+          type: integer
+          minimum: 1
+        page_size:
+          type: integer
+        total_count:
+          type: integer
+          minimum: 0
+        total_pages:
+          type: integer
+          minimum: 1
+        has_next:
+          type: boolean
+        has_previous:
+          type: boolean
+        filter_state:
+          $ref: '#/components/schemas/FilterState'
+        available_strategies:
+          type: array
+          items:
+            type: string
+        available_instruments:
+          type: array
+          items:
+            type: string
+
+    ValidationError:
+      type: object
+      description: Pydantic validation error response
+      properties:
+        detail:
+          type: array
+          items:
+            type: object
+            properties:
+              loc:
+                type: array
+                items:
+                  oneOf:
+                    - type: string
+                    - type: integer
+              msg:
+                type: string
+              type:
+                type: string
+      example:
+        detail:
+          - loc: ["query", "date_to"]
+            msg: "End date must be on or after start date"
+            type: "value_error"
+
+tags:
+  - name: UI
+    description: Server-rendered HTML pages
+  - name: HTMX
+    description: HTMX partial update endpoints
+  - name: API
+    description: JSON API endpoints
