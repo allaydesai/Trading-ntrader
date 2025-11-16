@@ -149,9 +149,9 @@ async def backtest_list_fragment(
     service: BacktestService,
     strategy: Optional[str] = Query(None, max_length=255),
     instrument: Optional[str] = Query(None, max_length=50),
-    date_from: Optional[date] = Query(None),
-    date_to: Optional[date] = Query(None),
-    status: Optional[ExecutionStatus] = Query(None),
+    date_from: Optional[str] = Query(None),
+    date_to: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
     sort: SortColumn = Query(SortColumn.CREATED_AT),
     order: SortOrder = Query(SortOrder.DESC),
     page: int = Query(1, ge=1),
@@ -182,13 +182,40 @@ async def backtest_list_fragment(
         >>> # GET /backtests/fragment?strategy=SMA%20Crossover
         >>> # Used by HTMX hx-get for partial updates
     """
+    # Convert empty strings to None for optional parameters
+    strategy = strategy if strategy else None
+    instrument = instrument if instrument else None
+
+    # Parse date strings to date objects
+    parsed_date_from = None
+    if date_from:
+        try:
+            parsed_date_from = date.fromisoformat(date_from)
+        except ValueError:
+            pass
+
+    parsed_date_to = None
+    if date_to:
+        try:
+            parsed_date_to = date.fromisoformat(date_to)
+        except ValueError:
+            pass
+
+    # Parse status enum
+    parsed_status = None
+    if status:
+        try:
+            parsed_status = ExecutionStatus(status)
+        except ValueError:
+            pass
+
     logger.info(
         "Backtest list fragment requested",
         strategy=strategy,
         instrument=instrument,
-        date_from=date_from.isoformat() if date_from else None,
-        date_to=date_to.isoformat() if date_to else None,
-        status=status.value if status else None,
+        date_from=parsed_date_from.isoformat() if parsed_date_from else None,
+        date_to=parsed_date_to.isoformat() if parsed_date_to else None,
+        status=parsed_status.value if parsed_status else None,
         sort=sort.value,
         order=order.value,
         page=page,
@@ -198,9 +225,9 @@ async def backtest_list_fragment(
     filter_state = FilterState(
         strategy=strategy,
         instrument=instrument,
-        date_from=date_from,
-        date_to=date_to,
-        status=status,
+        date_from=parsed_date_from,
+        date_to=parsed_date_to,
+        status=parsed_status,
         sort=sort,
         order=order,
         page=page,
