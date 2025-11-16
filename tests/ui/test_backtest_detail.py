@@ -6,6 +6,7 @@ configuration snapshot, and action buttons (export, delete, re-run).
 """
 
 import pytest
+from collections.abc import Generator
 from uuid import uuid4
 from decimal import Decimal
 from datetime import datetime, timezone
@@ -29,7 +30,9 @@ def mock_service():
 
 
 @pytest.fixture
-def client_with_mock(mock_service) -> tuple[TestClient, AsyncMock]:
+def client_with_mock(
+    mock_service,
+) -> Generator[tuple[TestClient, AsyncMock], None, None]:
     """Get test client with mocked service, returns both client and service."""
 
     def override_service():
@@ -57,9 +60,8 @@ def sample_backtest_with_metrics() -> BacktestRun:
         execution_duration_seconds=Decimal("45.5"),
         config_snapshot={"fast_period": 10, "slow_period": 20},
     )
-    # Set timestamps via attribute assignment (mixin handles these)
+    # Set timestamp via attribute assignment (mixin handles this)
     run.created_at = datetime.now(timezone.utc)
-    run.updated_at = datetime.now(timezone.utc)
 
     metrics = PerformanceMetrics(
         id=1,
@@ -82,9 +84,8 @@ def sample_backtest_with_metrics() -> BacktestRun:
         avg_win=Decimal("500.00"),
         avg_loss=Decimal("-250.00"),
     )
-    # Set timestamps via attribute assignment (mixin handles these)
+    # Set timestamp via attribute assignment (mixin handles this)
     metrics.created_at = datetime.now(timezone.utc)
-    metrics.updated_at = datetime.now(timezone.utc)
 
     run.metrics = metrics
     return run

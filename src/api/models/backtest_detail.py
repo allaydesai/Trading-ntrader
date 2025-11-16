@@ -255,14 +255,14 @@ class BacktestDetailView(BaseModel):
     execution_status: str = Field(..., description="success or failed")
     execution_time: datetime = Field(..., description="When executed")
     execution_duration: Decimal = Field(..., description="Duration in seconds")
-    error_message: Optional[str] = Field(None, description="Error if failed")
+    error_message: Optional[str] = Field(default=None, description="Error if failed")
 
     metrics_panel: Optional[MetricsPanel] = Field(
-        None, description="Performance metrics (None if failed)"
+        default=None, description="Performance metrics (None if failed)"
     )
     configuration: ConfigurationSnapshot = Field(..., description="Backtest parameters")
     trading_summary: Optional[TradingSummary] = Field(
-        None, description="Trade statistics (None if failed)"
+        default=None, description="Trade statistics (None if failed)"
     )
 
     breadcrumbs: list[dict[str, str | None]] = Field(

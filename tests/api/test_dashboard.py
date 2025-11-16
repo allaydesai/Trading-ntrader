@@ -4,6 +4,7 @@ Tests for dashboard route and functionality.
 Tests dashboard statistics display, empty state handling, and template rendering.
 """
 
+from collections.abc import Generator
 from datetime import datetime, timezone
 from decimal import Decimal
 from unittest.mock import AsyncMock
@@ -59,7 +60,9 @@ def mock_service_with_data() -> BacktestQueryService:
 
 
 @pytest.fixture
-def client_with_empty_db(mock_empty_service: BacktestQueryService) -> TestClient:
+def client_with_empty_db(
+    mock_empty_service: BacktestQueryService,
+) -> Generator[TestClient, None, None]:
     """Client with empty database."""
 
     def override_service():
@@ -72,7 +75,9 @@ def client_with_empty_db(mock_empty_service: BacktestQueryService) -> TestClient
 
 
 @pytest.fixture
-def client_with_backtests(mock_service_with_data: BacktestQueryService) -> TestClient:
+def client_with_backtests(
+    mock_service_with_data: BacktestQueryService,
+) -> Generator[TestClient, None, None]:
     """Client with database containing backtests."""
 
     def override_service():

@@ -64,24 +64,26 @@ class FilterState(BaseModel):
     """
 
     strategy: Optional[str] = Field(
-        None, max_length=255, description="Filter by strategy name"
+        default=None, max_length=255, description="Filter by strategy name"
     )
     instrument: Optional[str] = Field(
-        None, max_length=50, description="Filter by instrument symbol"
+        default=None, max_length=50, description="Filter by instrument symbol"
     )
     date_from: Optional[date] = Field(
-        None, description="Filter backtests created on or after"
+        default=None, description="Filter backtests created on or after"
     )
     date_to: Optional[date] = Field(
-        None, description="Filter backtests created on or before"
+        default=None, description="Filter backtests created on or before"
     )
     status: Optional[ExecutionStatus] = Field(
-        None, description="Filter by execution status"
+        default=None, description="Filter by execution status"
     )
-    sort: SortColumn = Field(SortColumn.CREATED_AT, description="Column to sort by")
-    order: SortOrder = Field(SortOrder.DESC, description="Sort direction")
-    page: int = Field(1, ge=1, description="Current page number")
-    page_size: int = Field(20, ge=1, le=100, description="Results per page")
+    sort: SortColumn = Field(
+        default=SortColumn.CREATED_AT, description="Column to sort by"
+    )
+    order: SortOrder = Field(default=SortOrder.DESC, description="Sort direction")
+    page: int = Field(default=1, ge=1, description="Current page number")
+    page_size: int = Field(default=20, ge=1, le=100, description="Results per page")
 
     @model_validator(mode="after")
     def validate_date_range(self) -> "FilterState":

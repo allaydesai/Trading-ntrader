@@ -295,9 +295,8 @@ class TestMappingFunctions:
             avg_win=Decimal("500.00"),
             avg_loss=Decimal("-250.00"),
         )
-        # Set timestamps via attribute assignment (mixin handles these)
+        # Set timestamp via attribute assignment (mixin handles this)
         metrics.created_at = datetime.now(timezone.utc)
-        metrics.updated_at = datetime.now(timezone.utc)
         return metrics
 
     @pytest.fixture
@@ -317,9 +316,8 @@ class TestMappingFunctions:
             execution_duration_seconds=Decimal("45.5"),
             config_snapshot={"fast_period": 10, "slow_period": 20},
         )
-        # Set timestamps via attribute assignment (mixin handles these)
+        # Set timestamp via attribute assignment (mixin handles this)
         run.created_at = datetime.now(timezone.utc)
-        run.updated_at = datetime.now(timezone.utc)
         run.metrics = sample_metrics
         return run
 
