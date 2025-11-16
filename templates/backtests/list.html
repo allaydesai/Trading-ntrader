@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+
+{% block title %}Backtests - NTrader{% endblock %}
+
+{% block nav %}
+{% include "partials/nav.html" %}
+{% endblock %}
+
+{% block breadcrumbs %}
+{% include "partials/breadcrumbs.html" %}
+{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex justify-between items-center">
+        <h1 class="text-2xl font-semibold">Backtest History</h1>
+        {% if list_page.total_count > 0 %}
+        <span class="text-slate-400">
+            {{ list_page.total_count }} total backtests
+        </span>
+        {% endif %}
+    </div>
+
+    {% if empty_state %}
+    <!-- Empty State -->
+    <div class="bg-slate-900 rounded-lg p-8 text-center">
+        <h2 class="text-xl font-medium text-slate-200 mb-2">{{ empty_state.title }}</h2>
+        <p class="text-slate-400 mb-4">{{ empty_state.description }}</p>
+        {% if empty_state.action_text %}
+        <p class="text-slate-300 mb-2">{{ empty_state.action_text }}:</p>
+        <code class="bg-slate-800 px-3 py-2 rounded text-green-400 font-mono text-sm">
+            {{ empty_state.action_command }}
+        </code>
+        {% endif %}
+    </div>
+    {% else %}
+    <!-- Backtest Table -->
+    <div id="backtest-table">
+        {% include "backtests/list_fragment.html" %}
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block footer %}
+{% include "partials/footer.html" %}
+{% endblock %}

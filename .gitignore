@@ -176,3 +176,6 @@ cython_debug/
 # Data catalog - generated files
 data/catalog/
 data/catalog/.corrupt/
+
+# Playwright MCP test artifacts
+.playwright-mcp/

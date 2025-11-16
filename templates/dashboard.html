@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - NTrader{% endblock %}
+
+{% block nav %}
+{% include "partials/nav.html" %}
+{% endblock %}
+
+{% block breadcrumbs %}
+{% include "partials/breadcrumbs.html" %}
+{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <h1 class="text-2xl font-semibold">Dashboard</h1>
+
+    {% if empty_state %}
+    <!-- Empty State -->
+    <div class="bg-slate-900 rounded-lg p-8 text-center">
+        <h2 class="text-xl font-medium text-slate-200 mb-2">{{ empty_state.title }}</h2>
+        <p class="text-slate-400 mb-4">{{ empty_state.description }}</p>
+        {% if empty_state.action_text %}
+        <p class="text-slate-300 mb-2">{{ empty_state.action_text }}:</p>
+        <code class="bg-slate-800 px-3 py-2 rounded text-green-400 font-mono text-sm">
+            {{ empty_state.action_command }}
+        </code>
+        {% endif %}
+    </div>
+    {% else %}
+    <!-- Summary Statistics Cards -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <!-- Total Backtests -->
+        <div class="bg-slate-900 rounded-lg p-6 border border-slate-700">
+            <h3 class="text-sm font-medium text-slate-400 uppercase tracking-wider">Total Backtests</h3>
+            <p class="text-3xl font-bold text-slate-100 mt-2" id="total-backtests">{{ stats.total_backtests }}</p>
+        </div>
+
+        <!-- Best Sharpe Ratio -->
+        <div class="bg-slate-900 rounded-lg p-6 border border-slate-700">
+            <h3 class="text-sm font-medium text-slate-400 uppercase tracking-wider">Best Sharpe Ratio</h3>
+            {% if stats.best_sharpe_ratio %}
+            <p class="text-3xl font-bold text-green-500 mt-2" id="best-sharpe">
+                {{ "%.2f"|format(stats.best_sharpe_ratio) }}
+            </p>
+            <p class="text-sm text-slate-400 mt-1" id="best-sharpe-strategy">
+                {{ stats.best_sharpe_strategy }}
+            </p>
+            {% else %}
+            <p class="text-3xl font-bold text-slate-500 mt-2">N/A</p>
+            <p class="text-sm text-slate-500 mt-1">No successful backtests</p>
+            {% endif %}
+        </div>
+
+        <!-- Worst Max Drawdown -->
+        <div class="bg-slate-900 rounded-lg p-6 border border-slate-700">
+            <h3 class="text-sm font-medium text-slate-400 uppercase tracking-wider">Worst Max Drawdown</h3>
+            {% if stats.worst_max_drawdown %}
+            <p class="text-3xl font-bold text-red-500 mt-2" id="worst-drawdown">
+                {{ "%.2f%%"|format(stats.worst_max_drawdown * 100) }}
+            </p>
+            <p class="text-sm text-slate-400 mt-1" id="worst-drawdown-strategy">
+                {{ stats.worst_drawdown_strategy }}
+            </p>
+            {% else %}
+            <p class="text-3xl font-bold text-slate-500 mt-2">N/A</p>
+            <p class="text-sm text-slate-500 mt-1">No successful backtests</p>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Recent Activity -->
+    <div class="bg-slate-900 rounded-lg p-6 border border-slate-700">
+        <h3 class="text-lg font-medium text-slate-200 mb-4">Recent Activity</h3>
+
+        {% if stats.recent_backtests %}
+        <div class="space-y-3">
+            {% for item in stats.recent_backtests %}
+            <div class="flex items-center justify-between py-2 border-b border-slate-800 last:border-0">
+                <div class="flex items-center space-x-3">
+                    <span class="font-mono text-sm text-slate-400">{{ item.run_id_short }}</span>
+                    <span class="font-medium text-slate-200" title="{{ item.strategy_name }}">
+                        {% if item.strategy_name|length > 50 %}{{ item.strategy_name[:47] }}...{% else %}{{ item.strategy_name }}{% endif %}
+                    </span>
+                    <span class="text-slate-400">{{ item.instrument_symbol }}</span>
+                </div>
+                <div class="flex items-center space-x-4">
+                    {% if item.execution_status == "success" %}
+                    <span class="px-2 py-1 text-xs font-medium rounded bg-green-900 text-green-300">
+                        success
+                    </span>
+                    {% if item.total_return is not none %}
+                    <span class="{% if item.total_return >= 0 %}text-green-500{% else %}text-red-500{% endif %} font-medium">
+                        {{ "%.2f%%"|format(item.total_return * 100) }}
+                    </span>
+                    {% endif %}
+                    {% else %}
+                    <span class="px-2 py-1 text-xs font-medium rounded bg-red-900 text-red-300">
+                        failed
+                    </span>
+                    {% endif %}
+                    <span class="text-sm text-slate-500">
+                        {{ item.created_at.strftime("%Y-%m-%d %H:%M") }}
+                    </span>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="text-slate-400">No recent activity</p>
+        {% endif %}
+    </div>
+
+    <!-- Quick Actions -->
+    <div class="bg-slate-900 rounded-lg p-6 border border-slate-700">
+        <h3 class="text-lg font-medium text-slate-200 mb-4">Quick Actions</h3>
+        <div class="flex flex-wrap gap-3">
+            <a href="/backtests" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-md transition-colors">
+                View All Backtests
+            </a>
+            <a href="/docs" class="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-md transition-colors">
+                Documentation
+            </a>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block footer %}
+{% include "partials/footer.html" %}
+{% endblock %}
