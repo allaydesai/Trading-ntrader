@@ -131,15 +131,15 @@
 
 ### Implementation for User Story 3
 
-- [ ] T049 [US3] Add offset/limit pagination to get_filtered_backtests() in src/db/repositories/backtest_repository.py
-- [ ] T050 [US3] Return total_count for pagination metadata in src/db/repositories/backtest_repository.py
-- [ ] T051 [US3] Update /backtests endpoint to accept page and page_size in src/api/ui/backtests.py
-- [ ] T052 [US3] Update /backtests/fragment endpoint to accept page and page_size in src/api/ui/backtests.py
-- [ ] T053 [US3] Generate PaginationControl list in service layer in src/services/backtest_query.py
-- [ ] T054 [US3] Add pagination controls (Previous/Next/Page numbers) in templates/backtests/list_fragment.html
-- [ ] T055 [US3] Disable Previous button on first page in templates/backtests/list_fragment.html
-- [ ] T056 [US3] Disable Next button on last page in templates/backtests/list_fragment.html
-- [ ] T057 [US3] Preserve all filter params in pagination links in templates/backtests/list_fragment.html
+- [X] T049 [US3] Add offset/limit pagination to get_filtered_backtests() in src/db/repositories/backtest_repository.py
+- [X] T050 [US3] Return total_count for pagination metadata in src/db/repositories/backtest_repository.py
+- [X] T051 [US3] Update /backtests endpoint to accept page and page_size in src/api/ui/backtests.py
+- [X] T052 [US3] Update /backtests/fragment endpoint to accept page and page_size in src/api/ui/backtests.py
+- [X] T053 [US3] Generate PaginationControl list in service layer in src/services/backtest_query.py
+- [X] T054 [US3] Add pagination controls (Previous/Next/Page numbers) in templates/backtests/list_fragment.html
+- [X] T055 [US3] Disable Previous button on first page in templates/backtests/list_fragment.html
+- [X] T056 [US3] Disable Next button on last page in templates/backtests/list_fragment.html
+- [X] T057 [US3] Preserve all filter params in pagination links in templates/backtests/list_fragment.html
 
 **Checkpoint**: User Story 3 complete - Pagination works independently
 
@@ -160,12 +160,12 @@
 
 ### Implementation for User Story 4
 
-- [ ] T062 [US4] Add instrument filter (ilike partial match) to get_filtered_backtests() in src/db/repositories/backtest_repository.py
-- [ ] T063 [US4] Update /backtests endpoint to accept instrument parameter in src/api/ui/backtests.py
-- [ ] T064 [US4] Update /backtests/fragment endpoint to accept instrument parameter in src/api/ui/backtests.py
-- [ ] T065 [US4] Create /backtests/instruments endpoint for autocomplete in src/api/ui/backtests.py
-- [ ] T066 [US4] Add instrument text input with datalist to filter form in templates/backtests/list.html
-- [ ] T067 [US4] Connect instrument input to autocomplete endpoint with HTMX in templates/backtests/list.html
+- [X] T062 [US4] Add instrument filter (ilike partial match) to get_filtered_backtests() in src/db/repositories/backtest_repository.py
+- [X] T063 [US4] Update /backtests endpoint to accept instrument parameter in src/api/ui/backtests.py
+- [X] T064 [US4] Update /backtests/fragment endpoint to accept instrument parameter in src/api/ui/backtests.py
+- [X] T065 [US4] Create /backtests/instruments endpoint for autocomplete in src/api/ui/backtests.py
+- [X] T066 [US4] Add instrument text input with datalist to filter form in templates/backtests/list.html
+- [X] T067 [US4] Connect instrument input to autocomplete endpoint with HTMX in templates/backtests/list.html
 
 **Checkpoint**: User Story 4 complete - Instrument filtering works independently
 

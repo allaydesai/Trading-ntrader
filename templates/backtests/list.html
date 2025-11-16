@@ -62,6 +62,33 @@
                     </select>
                 </div>
 
+                <!-- Instrument Filter -->
+                <div class="flex-1 min-w-48">
+                    <label for="instrument-filter" class="block text-sm font-medium text-slate-300 mb-1">
+                        Instrument
+                    </label>
+                    <input
+                        type="text"
+                        id="instrument-filter"
+                        name="instrument"
+                        value="{{ list_page.filter_state.instrument or '' }}"
+                        placeholder="e.g. AAPL, SPY"
+                        list="instrument-suggestions"
+                        hx-get="/backtests/fragment"
+                        hx-target="#backtest-table"
+                        hx-swap="innerHTML"
+                        hx-include="#filter-form"
+                        hx-push-url="true"
+                        hx-trigger="change, keyup changed delay:500ms"
+                        class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent placeholder-slate-500"
+                    >
+                    <datalist id="instrument-suggestions">
+                        {% for inst in list_page.available_instruments %}
+                        <option value="{{ inst }}">
+                        {% endfor %}
+                    </datalist>
+                </div>
+
                 <!-- Hidden fields to preserve sort and pagination state -->
                 <input type="hidden" name="sort" value="{{ list_page.filter_state.sort.value }}">
                 <input type="hidden" name="order" value="{{ list_page.filter_state.order.value }}">
