@@ -8,6 +8,44 @@
     </p>
 </div>
 {% else %}
+{# Build sort URL helper - preserves all current filters #}
+{% set sort_base_params = [] %}
+{% if list_page.filter_state.strategy %}
+    {% set _ = sort_base_params.append("strategy=" ~ list_page.filter_state.strategy|urlencode) %}
+{% endif %}
+{% if list_page.filter_state.instrument %}
+    {% set _ = sort_base_params.append("instrument=" ~ list_page.filter_state.instrument|urlencode) %}
+{% endif %}
+{% if list_page.filter_state.status %}
+    {% set _ = sort_base_params.append("status=" ~ list_page.filter_state.status.value) %}
+{% endif %}
+{% set sort_base = sort_base_params|join("&") %}
+{% if sort_base %}{% set sort_base = sort_base ~ "&" %}{% endif %}
+
+{# Macro for sortable column header #}
+{% macro sort_header(column_id, label, align="left") %}
+{% set is_current = list_page.filter_state.sort.value == column_id %}
+{% set next_order = "asc" if (is_current and list_page.filter_state.order.value == "desc") else "desc" %}
+{% set indicator = "" %}
+{% if is_current %}
+    {% set indicator = "&#9660;" if list_page.filter_state.order.value == "desc" else "&#9650;" %}
+{% endif %}
+<th scope="col" class="px-6 py-3 text-{{ align }} text-xs font-medium text-slate-300 uppercase tracking-wider">
+    <button
+        type="button"
+        hx-get="/backtests/fragment?{{ sort_base }}sort={{ column_id }}&order={{ next_order }}&page=1"
+        hx-target="#backtest-table"
+        hx-swap="innerHTML"
+        class="flex items-center gap-1 hover:text-white transition-colors {% if align == 'right' %}ml-auto{% endif %}"
+    >
+        {{ label }}
+        {% if indicator %}
+        <span class="text-blue-400">{{ indicator|safe }}</span>
+        {% endif %}
+    </button>
+</th>
+{% endmacro %}
+
 <div class="bg-slate-900 rounded-lg border border-slate-700 overflow-hidden">
     <div class="overflow-x-auto">
         <table class="min-w-full divide-y divide-slate-700">
@@ -25,21 +63,13 @@
                     <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">
                         Date Range
                     </th>
-                    <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-slate-300 uppercase tracking-wider">
-                        Return
-                    </th>
-                    <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-slate-300 uppercase tracking-wider">
-                        Sharpe
-                    </th>
-                    <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-slate-300 uppercase tracking-wider">
-                        Max DD
-                    </th>
+                    {{ sort_header("total_return", "Return", "right") }}
+                    {{ sort_header("sharpe_ratio", "Sharpe", "right") }}
+                    {{ sort_header("max_drawdown", "Max DD", "right") }}
                     <th scope="col" class="px-6 py-3 text-center text-xs font-medium text-slate-300 uppercase tracking-wider">
                         Status
                     </th>
-                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">
-                        Created
-                    </th>
+                    {{ sort_header("created_at", "Created", "left") }}
                 </tr>
             </thead>
             <tbody class="divide-y divide-slate-800">

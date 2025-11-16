@@ -104,13 +104,13 @@
 
 ### Implementation for User Story 2
 
-- [ ] T038 [US2] Add sort column/order logic to get_filtered_backtests() in src/db/repositories/backtest_repository.py
-- [ ] T039 [US2] Handle JOIN with PerformanceMetrics for metrics sorting in src/db/repositories/backtest_repository.py
-- [ ] T040 [US2] Update /backtests endpoint to accept sort and order parameters in src/api/ui/backtests.py
-- [ ] T041 [US2] Update /backtests/fragment endpoint to accept sort and order parameters in src/api/ui/backtests.py
-- [ ] T042 [US2] Create sortable column headers with hx-get in templates/backtests/list_fragment.html
-- [ ] T043 [US2] Add sort direction indicators (arrows) to column headers in templates/backtests/list_fragment.html
-- [ ] T044 [US2] Generate sortable column metadata in service layer in src/services/backtest_query.py
+- [X] T038 [US2] Add sort column/order logic to get_filtered_backtests() in src/db/repositories/backtest_repository.py
+- [X] T039 [US2] Handle JOIN with PerformanceMetrics for metrics sorting in src/db/repositories/backtest_repository.py
+- [X] T040 [US2] Update /backtests endpoint to accept sort and order parameters in src/api/ui/backtests.py
+- [X] T041 [US2] Update /backtests/fragment endpoint to accept sort and order parameters in src/api/ui/backtests.py
+- [X] T042 [US2] Create sortable column headers with hx-get in templates/backtests/list_fragment.html
+- [X] T043 [US2] Add sort direction indicators (arrows) to column headers in templates/backtests/list_fragment.html
+- [X] T044 [US2] Generate sortable column metadata in service layer in src/services/backtest_query.py
 
 **Checkpoint**: User Story 2 complete - Sorting works independently
 
