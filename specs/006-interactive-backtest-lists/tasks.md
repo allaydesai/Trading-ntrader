@@ -53,7 +53,7 @@
 - [X] T018 Implement get_distinct_strategies() in src/db/repositories/backtest_repository.py
 - [X] T019 [P] Implement get_distinct_instruments() in src/db/repositories/backtest_repository.py
 - [ ] T020 Write service test for get_filtered_backtest_list_page() in tests/services/test_backtest_query_filters.py
-- [ ] T021 Implement get_filtered_backtest_list_page() in src/services/backtest_query.py
+- [X] T021 Implement get_filtered_backtest_list_page() in src/services/backtest_query.py
 - [ ] T022 Run Alembic migration to add database indexes
 
 **Checkpoint**: Foundation ready - user story implementation can now begin
