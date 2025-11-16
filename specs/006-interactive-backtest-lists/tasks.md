@@ -24,13 +24,13 @@
 
 **Purpose**: Create foundational models and database infrastructure needed by all user stories
 
-- [ ] T001 [P] Create SortOrder and ExecutionStatus enums in src/api/models/filter_models.py
-- [ ] T002 [P] Create SortColumn enum in src/api/models/filter_models.py
-- [ ] T003 Create FilterState Pydantic model with validation in src/api/models/filter_models.py
-- [ ] T004 [P] Create SortableColumn model in src/api/models/filter_models.py
-- [ ] T005 [P] Create PaginationControl model in src/api/models/filter_models.py
-- [ ] T006 Create FilteredBacktestListPage response model in src/api/models/backtest_list.py
-- [ ] T007 Create Alembic migration for filter indexes in src/db/migrations/versions/
+- [X] T001 [P] Create SortOrder and ExecutionStatus enums in src/api/models/filter_models.py
+- [X] T002 [P] Create SortColumn enum in src/api/models/filter_models.py
+- [X] T003 Create FilterState Pydantic model with validation in src/api/models/filter_models.py
+- [X] T004 [P] Create SortableColumn model in src/api/models/filter_models.py
+- [X] T005 [P] Create PaginationControl model in src/api/models/filter_models.py
+- [X] T006 Create FilteredBacktestListPage response model in src/api/models/backtest_list.py
+- [X] T007 Create Alembic migration for filter indexes in src/db/migrations/versions/
 
 ---
 
@@ -40,18 +40,18 @@
 
 **WARNING**: No user story work can begin until this phase is complete
 
-- [ ] T008 Write unit tests for FilterState validation (date range, page bounds) in tests/api/models/test_filter_models.py
-- [ ] T009 Write unit tests for FilterState.to_query_params() in tests/api/models/test_filter_models.py
-- [ ] T010 [P] Write unit tests for FilterState.with_sort() toggle behavior in tests/api/models/test_filter_models.py
-- [ ] T011 [P] Write unit tests for FilterState.with_page() in tests/api/models/test_filter_models.py
-- [ ] T012 [P] Write unit tests for FilterState.clear_filters() in tests/api/models/test_filter_models.py
+- [X] T008 Write unit tests for FilterState validation (date range, page bounds) in tests/api/models/test_filter_models.py
+- [X] T009 Write unit tests for FilterState.to_query_params() in tests/api/models/test_filter_models.py
+- [X] T010 [P] Write unit tests for FilterState.with_sort() toggle behavior in tests/api/models/test_filter_models.py
+- [X] T011 [P] Write unit tests for FilterState.with_page() in tests/api/models/test_filter_models.py
+- [X] T012 [P] Write unit tests for FilterState.clear_filters() in tests/api/models/test_filter_models.py
 - [ ] T013 Write repository test for get_filtered_backtests() base query in tests/db/repositories/test_backtest_repository_filters.py
 - [ ] T014 Write repository test for pagination logic in tests/db/repositories/test_backtest_repository_filters.py
 - [ ] T015 Write repository test for get_distinct_strategies() in tests/db/repositories/test_backtest_repository_filters.py
 - [ ] T016 [P] Write repository test for get_distinct_instruments() in tests/db/repositories/test_backtest_repository_filters.py
-- [ ] T017 Implement get_filtered_backtests() base query in src/db/repositories/backtest_repository.py
-- [ ] T018 Implement get_distinct_strategies() in src/db/repositories/backtest_repository.py
-- [ ] T019 [P] Implement get_distinct_instruments() in src/db/repositories/backtest_repository.py
+- [X] T017 Implement get_filtered_backtests() base query in src/db/repositories/backtest_repository.py
+- [X] T018 Implement get_distinct_strategies() in src/db/repositories/backtest_repository.py
+- [X] T019 [P] Implement get_distinct_instruments() in src/db/repositories/backtest_repository.py
 - [ ] T020 Write service test for get_filtered_backtest_list_page() in tests/services/test_backtest_query_filters.py
 - [ ] T021 Implement get_filtered_backtest_list_page() in src/services/backtest_query.py
 - [ ] T022 Run Alembic migration to add database indexes

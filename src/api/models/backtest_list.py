@@ -13,6 +13,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field, computed_field
 
 from src.db.models.backtest import BacktestRun
+from src.api.models.filter_models import FilterState
 
 
 class BacktestListItem(BaseModel):
@@ -166,6 +167,40 @@ class BacktestListPage(BaseModel):
     def has_previous(self) -> bool:
         """Whether there is a previous page."""
         return self.page > 1
+
+
+class FilteredBacktestListPage(BacktestListPage):
+    """
+    Paginated response with filter state context.
+
+    Extends BacktestListPage with filter state and available options
+    for populating filter dropdowns.
+
+    Attributes:
+        filter_state: Current filter and sort state
+        available_strategies: Distinct strategy names for dropdown
+        available_instruments: Distinct instrument symbols for autocomplete
+
+    Example:
+        >>> from src.api.models.filter_models import FilterState
+        >>> page = FilteredBacktestListPage(
+        ...     backtests=[...],
+        ...     page=1,
+        ...     page_size=20,
+        ...     total_count=42,
+        ...     filter_state=FilterState(strategy="SMA Crossover"),
+        ...     available_strategies=["SMA Crossover", "Mean Reversion"],
+        ...     available_instruments=["AAPL", "SPY", "TSLA"]
+        ... )
+    """
+
+    filter_state: FilterState = Field(..., description="Current filter and sort state")
+    available_strategies: list[str] = Field(
+        default_factory=list, description="Distinct strategy names"
+    )
+    available_instruments: list[str] = Field(
+        default_factory=list, description="Distinct instrument symbols"
+    )
 
 
 def truncate_strategy_name(name: str, max_length: int = 50) -> str:
