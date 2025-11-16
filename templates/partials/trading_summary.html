@@ -1,0 +1,98 @@
+<!-- Trading Summary - aggregated statistics from performance metrics -->
+<div class="bg-slate-900 rounded-lg border border-slate-700 p-6">
+    <h2 class="text-xl font-semibold mb-4">Trading Summary</h2>
+
+    {% if view.trading_summary.has_trades %}
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div class="bg-slate-800 rounded p-4">
+            <span class="text-slate-400 text-sm block">Total Trades</span>
+            <p class="text-2xl font-bold text-slate-200">
+                {{ view.trading_summary.total_trades | int }}
+            </p>
+        </div>
+
+        <div class="bg-slate-800 rounded p-4">
+            <span class="text-slate-400 text-sm block">Winning Trades</span>
+            <p class="text-2xl font-bold text-green-400">
+                {{ view.trading_summary.winning_trades | int }}
+            </p>
+        </div>
+
+        <div class="bg-slate-800 rounded p-4">
+            <span class="text-slate-400 text-sm block">Losing Trades</span>
+            <p class="text-2xl font-bold text-red-400">
+                {{ view.trading_summary.losing_trades | int }}
+            </p>
+        </div>
+
+        <div class="bg-slate-800 rounded p-4">
+            <span class="text-slate-400 text-sm block">Win Rate</span>
+            {% if view.trading_summary.win_rate %}
+            <p class="text-2xl font-bold {% if view.trading_summary.win_rate > 0.5 %}text-green-400{% else %}text-yellow-400{% endif %}">
+                {{ (view.trading_summary.win_rate * 100) | round(2) }}%
+            </p>
+            {% else %}
+            <p class="text-2xl font-bold text-slate-400">N/A</p>
+            {% endif %}
+        </div>
+
+        <div class="bg-slate-800 rounded p-4">
+            <span class="text-slate-400 text-sm block">Average Win</span>
+            {% if view.trading_summary.avg_win %}
+            <p class="text-xl font-bold text-green-400">
+                ${{ '{:,.2f}'.format(view.trading_summary.avg_win | float) }}
+            </p>
+            {% else %}
+            <p class="text-xl font-bold text-slate-400">N/A</p>
+            {% endif %}
+        </div>
+
+        <div class="bg-slate-800 rounded p-4">
+            <span class="text-slate-400 text-sm block">Average Loss</span>
+            {% if view.trading_summary.avg_loss %}
+            <p class="text-xl font-bold text-red-400">
+                ${{ '{:,.2f}'.format(view.trading_summary.avg_loss | float | abs) }}
+            </p>
+            {% else %}
+            <p class="text-xl font-bold text-slate-400">N/A</p>
+            {% endif %}
+        </div>
+
+        <div class="bg-slate-800 rounded p-4">
+            <span class="text-slate-400 text-sm block relative group cursor-help">
+                Profit Factor
+                <div class="absolute hidden group-hover:block bg-slate-700 p-3 rounded shadow-lg z-10 w-64 text-sm text-slate-200 left-0 top-full mt-1">
+                    Ratio of gross profits to gross losses. Values > 1 indicate profitability.
+                </div>
+            </span>
+            {% if view.trading_summary.profit_factor %}
+            <p class="text-xl font-bold {% if view.trading_summary.profit_factor > 1 %}text-green-400{% else %}text-red-400{% endif %}">
+                {{ view.trading_summary.profit_factor | float | round(2) }}
+            </p>
+            {% else %}
+            <p class="text-xl font-bold text-slate-400">N/A</p>
+            {% endif %}
+        </div>
+
+        <div class="bg-slate-800 rounded p-4">
+            <span class="text-slate-400 text-sm block relative group cursor-help">
+                Expectancy
+                <div class="absolute hidden group-hover:block bg-slate-700 p-3 rounded shadow-lg z-10 w-64 text-sm text-slate-200 left-0 top-full mt-1">
+                    Expected profit per trade. Positive values indicate a profitable strategy.
+                </div>
+            </span>
+            {% if view.trading_summary.expectancy %}
+            <p class="text-xl font-bold {% if view.trading_summary.expectancy > 0 %}text-green-400{% else %}text-red-400{% endif %}">
+                ${{ '{:,.2f}'.format(view.trading_summary.expectancy | float) }}
+            </p>
+            {% else %}
+            <p class="text-xl font-bold text-slate-400">N/A</p>
+            {% endif %}
+        </div>
+    </div>
+    {% else %}
+    <div class="bg-slate-800 rounded p-6 text-center">
+        <p class="text-slate-400">No trades were executed during this backtest.</p>
+    </div>
+    {% endif %}
+</div>
