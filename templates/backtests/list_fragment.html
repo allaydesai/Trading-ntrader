@@ -58,7 +58,7 @@
                     <td class="px-6 py-4 whitespace-nowrap text-right">
                         {% if item.total_return is not none %}
                         <span class="{% if item.is_positive_return %}text-green-500{% else %}text-red-500{% endif %} font-medium">
-                            {{ "%.2f%%"|format(item.total_return * 100) }}
+                            {{ "%.2f%%"|format(item.return_percentage) }}
                         </span>
                         {% else %}
                         <span class="text-slate-500">N/A</span>

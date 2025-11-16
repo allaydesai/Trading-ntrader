@@ -25,7 +25,8 @@ class BacktestListItem(BaseModel):
         strategy_name: Strategy name (max 50 chars display)
         instrument_symbol: Trading symbol
         date_range: "YYYY-MM-DD to YYYY-MM-DD"
-        total_return: Return percentage (None if failed)
+        total_return: Absolute return in dollars (None if failed)
+        final_balance: Final portfolio balance (None if failed)
         sharpe_ratio: Risk-adjusted return (None if failed)
         max_drawdown: Peak-to-trough decline (None if failed)
         execution_status: Status indicator
@@ -37,12 +38,14 @@ class BacktestListItem(BaseModel):
         ...     strategy_name="SMA Crossover Strategy",
         ...     instrument_symbol="AAPL",
         ...     date_range="2024-01-01 to 2024-12-31",
-        ...     total_return=Decimal("0.25"),
+        ...     total_return=Decimal("4111.68"),
+        ...     final_balance=Decimal("1004111.68"),
         ...     sharpe_ratio=Decimal("1.85"),
         ...     max_drawdown=Decimal("-0.15"),
         ...     execution_status="success",
         ...     created_at=datetime.now()
         ... )
+        >>> print(item.return_percentage)  # 0.41%
     """
 
     run_id: UUID = Field(..., description="Business identifier")
@@ -50,7 +53,10 @@ class BacktestListItem(BaseModel):
     instrument_symbol: str = Field(..., description="Trading symbol")
     date_range: str = Field(..., description="YYYY-MM-DD to YYYY-MM-DD")
     total_return: Optional[Decimal] = Field(
-        None, description="Return percentage (None if failed)"
+        None, description="Absolute return in dollars (None if failed)"
+    )
+    final_balance: Optional[Decimal] = Field(
+        None, description="Final portfolio balance (None if failed)"
     )
     sharpe_ratio: Optional[Decimal] = Field(
         None, description="Risk-adjusted return (None if failed)"
@@ -66,6 +72,34 @@ class BacktestListItem(BaseModel):
     def run_id_short(self) -> str:
         """First 8 characters of UUID for display."""
         return str(self.run_id)[:8]
+
+    @computed_field
+    @property
+    def return_percentage(self) -> float:
+        """
+        Calculate return as a percentage of starting balance.
+
+        Returns:
+            Percentage return (e.g., 0.41 for 0.41% return).
+            Returns 0.0 if calculation is not possible.
+
+        Example:
+            If total_return=4111.68 and final_balance=1004111.68,
+            starting_balance = 1004111.68 - 4111.68 = 1000000.00
+            return_percentage = (4111.68 / 1000000.00) * 100 = 0.41%
+        """
+        if self.total_return is None or self.final_balance is None:
+            return 0.0
+
+        # Calculate starting balance: final_balance - total_return
+        starting_balance = self.final_balance - self.total_return
+
+        # Avoid division by zero
+        if starting_balance == 0:
+            return 0.0
+
+        # Calculate percentage return
+        return float((self.total_return / starting_balance) * 100)
 
     @computed_field
     @property
@@ -176,11 +210,13 @@ def to_list_item(run: BacktestRun) -> BacktestListItem:
 
     # Extract metrics if available
     total_return = None
+    final_balance = None
     sharpe_ratio = None
     max_drawdown = None
 
     if run.metrics and run.execution_status == "success":
         total_return = run.metrics.total_return
+        final_balance = run.metrics.final_balance
         sharpe_ratio = run.metrics.sharpe_ratio
         max_drawdown = run.metrics.max_drawdown
 
@@ -190,6 +226,7 @@ def to_list_item(run: BacktestRun) -> BacktestListItem:
         instrument_symbol=run.instrument_symbol,
         date_range=date_range,
         total_return=total_return,
+        final_balance=final_balance,
         sharpe_ratio=sharpe_ratio,
         max_drawdown=max_drawdown,
         execution_status=run.execution_status,
