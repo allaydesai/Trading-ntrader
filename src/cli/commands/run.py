@@ -65,8 +65,10 @@ def run_simple(
         # Display results
         console.print("[green]✓ Backtest completed successfully![/green]")
         console.print("\n[bold]Results Summary:[/bold]")
+        return_color = "green" if result.total_return >= 0 else "red"
+        return_pct = result.total_return * 100
         console.print(
-            f"Total Return: [{'green' if result.total_return >= 0 else 'red'}]{result.total_return:,.2f}[/{'green' if result.total_return >= 0 else 'red'}]"
+            f"Total Return: [{return_color}]{return_pct:.2f}%[/{return_color}]"
         )
         console.print(f"Total Trades: {result.total_trades}")
         console.print(f"Win Rate: {result.win_rate:.1f}%")
@@ -79,8 +81,9 @@ def run_simple(
             if result.largest_loss < 0:
                 console.print(f"Largest Loss: [red]{result.largest_loss:,.2f}[/red]")
 
+        balance_color = "green" if result.final_balance >= 0 else "red"
         console.print(
-            f"Final Balance: [{'green' if result.final_balance >= 0 else 'red'}]{result.final_balance:,.2f}[/{'green' if result.final_balance >= 0 else 'red'}]"
+            f"Final Balance: [{balance_color}]{result.final_balance:,.2f}[/{balance_color}]"
         )
 
         # Show performance message

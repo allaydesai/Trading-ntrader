@@ -17,7 +17,8 @@ def test_run_simple_command_defaults():
     with patch("src.cli.commands.run.MinimalBacktestRunner") as mock_runner_class:
         mock_runner = Mock()
         mock_result = Mock()
-        mock_result.total_return = 1000.0
+        # total_return is stored as percentage (0.01 = 1%), not dollar amount
+        mock_result.total_return = 0.01  # 1% return
         mock_result.total_trades = 10
         mock_result.win_rate = 60.0
         mock_result.winning_trades = 6
@@ -34,7 +35,7 @@ def test_run_simple_command_defaults():
         assert result.exit_code == 0
         assert "Running simple SMA backtest" in result.output
         assert "Backtest completed successfully" in result.output
-        assert "Total Return: 1,000.00" in result.output
+        assert "Total Return: 1.00%" in result.output  # Percentage display
         assert "Total Trades: 10" in result.output
         assert "Win Rate: 60.0%" in result.output
 
@@ -56,7 +57,8 @@ def test_run_simple_command_with_custom_parameters():
     with patch("src.cli.commands.run.MinimalBacktestRunner") as mock_runner_class:
         mock_runner = Mock()
         mock_result = Mock()
-        mock_result.total_return = 500.0
+        # total_return is stored as percentage (0.005 = 0.5%), not dollar amount
+        mock_result.total_return = 0.005  # 0.5% return
         mock_result.total_trades = 5
         mock_result.win_rate = 80.0
         mock_result.winning_trades = 4
