@@ -5,6 +5,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 from pathlib import Path
+from uuid import UUID
 
 from src.db.session_sync import get_sync_session
 from src.db.repositories.backtest_repository_sync import SyncBacktestRepository
@@ -32,7 +33,7 @@ def summary(result_id: str):
         # Load result from PostgreSQL
         with get_sync_session() as session:
             repository = SyncBacktestRepository(session)
-            backtest = repository.find_by_run_id(result_id)
+            backtest = repository.find_by_run_id(UUID(result_id))
 
             if not backtest:
                 console.print(f"❌ Result not found: {result_id}", style="red bold")
@@ -71,7 +72,7 @@ def generate(result_id: str, output_format: str, output: str):
         # Load result from PostgreSQL
         with get_sync_session() as session:
             repository = SyncBacktestRepository(session)
-            backtest = repository.find_by_run_id(result_id)
+            backtest = repository.find_by_run_id(UUID(result_id))
 
             if not backtest:
                 console.print(f"❌ Result not found: {result_id}", style="red bold")
@@ -161,7 +162,7 @@ def export_all(result_id: str, output_dir: str):
         # Load result from PostgreSQL
         with get_sync_session() as session:
             repository = SyncBacktestRepository(session)
-            backtest = repository.find_by_run_id(result_id)
+            backtest = repository.find_by_run_id(UUID(result_id))
 
             if not backtest:
                 console.print(f"❌ Result not found: {result_id}", style="red bold")
