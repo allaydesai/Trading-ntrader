@@ -13,7 +13,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.api.dependencies import get_backtest_query_service
-from src.api.models.backtest_list import BacktestListItem, BacktestListPage
+from src.api.models.backtest_list import BacktestListItem, FilteredBacktestListPage
+from src.api.models.filter_models import FilterState
 from src.api.web import app
 from src.services.backtest_query import BacktestQueryService
 
@@ -22,8 +23,16 @@ from src.services.backtest_query import BacktestQueryService
 def mock_empty_service() -> BacktestQueryService:
     """Mock service returning empty backtest list."""
     mock_service = AsyncMock(spec=BacktestQueryService)
-    mock_service.get_backtest_list_page = AsyncMock(
-        return_value=BacktestListPage(backtests=[], page=1, page_size=20, total_count=0)
+    mock_service.get_filtered_backtest_list_page = AsyncMock(
+        return_value=FilteredBacktestListPage(
+            backtests=[],
+            page=1,
+            page_size=20,
+            total_count=0,
+            filter_state=FilterState(),
+            available_strategies=[],
+            available_instruments=[],
+        )
     )
     return mock_service
 
@@ -51,9 +60,15 @@ def mock_service_with_backtests() -> BacktestQueryService:
         for i in range(20)
     ]
 
-    mock_service.get_backtest_list_page = AsyncMock(
-        return_value=BacktestListPage(
-            backtests=items, page=1, page_size=20, total_count=25
+    mock_service.get_filtered_backtest_list_page = AsyncMock(
+        return_value=FilteredBacktestListPage(
+            backtests=items,
+            page=1,
+            page_size=20,
+            total_count=25,
+            filter_state=FilterState(),
+            available_strategies=["Strategy 1", "Strategy 2"],
+            available_instruments=["AAPL"],
         )
     )
     return mock_service
@@ -176,7 +191,9 @@ def test_htmx_fragment_includes_pagination(client_with_backtests: TestClient):
     """HTMX fragment includes pagination controls."""
     response = client_with_backtests.get("/backtests/fragment")
     assert "hx-get" in response.text
-    assert "/backtests/fragment?page=" in response.text
+    # Pagination URLs now include all filter state params, so check for page parameter
+    assert "page=" in response.text
+    assert "/backtests/fragment?" in response.text
 
 
 def test_backtest_list_displays_return_color_coding(client_with_backtests: TestClient):
