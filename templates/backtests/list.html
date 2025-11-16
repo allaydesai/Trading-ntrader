@@ -34,6 +34,152 @@
         {% endif %}
     </div>
     {% else %}
+    <!-- Filter Controls -->
+    <div class="bg-slate-900 rounded-lg border border-slate-700 p-4">
+        <form id="filter-form" class="space-y-4">
+            <div class="flex flex-wrap gap-4 items-end">
+                <!-- Strategy Filter -->
+                <div class="flex-1 min-w-48">
+                    <label for="strategy-filter" class="block text-sm font-medium text-slate-300 mb-1">
+                        Strategy
+                    </label>
+                    <select
+                        id="strategy-filter"
+                        name="strategy"
+                        hx-get="/backtests/fragment"
+                        hx-target="#backtest-table"
+                        hx-swap="innerHTML"
+                        hx-include="#filter-form"
+                        hx-push-url="true"
+                        class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    >
+                        <option value="">All Strategies</option>
+                        {% for strat in list_page.available_strategies %}
+                        <option value="{{ strat }}" {% if list_page.filter_state.strategy == strat %}selected{% endif %}>
+                            {{ strat }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <!-- Instrument Filter -->
+                <div class="flex-1 min-w-48">
+                    <label for="instrument-filter" class="block text-sm font-medium text-slate-300 mb-1">
+                        Instrument
+                    </label>
+                    <input
+                        type="text"
+                        id="instrument-filter"
+                        name="instrument"
+                        value="{{ list_page.filter_state.instrument or '' }}"
+                        placeholder="e.g. AAPL, SPY"
+                        list="instrument-suggestions"
+                        hx-get="/backtests/fragment"
+                        hx-target="#backtest-table"
+                        hx-swap="innerHTML"
+                        hx-include="#filter-form"
+                        hx-push-url="true"
+                        hx-trigger="change, keyup changed delay:500ms"
+                        class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent placeholder-slate-500"
+                    >
+                    <datalist id="instrument-suggestions">
+                        {% for inst in list_page.available_instruments %}
+                        <option value="{{ inst }}">
+                        {% endfor %}
+                    </datalist>
+                </div>
+
+                <!-- Status Filter -->
+                <div class="min-w-32">
+                    <label for="status-filter" class="block text-sm font-medium text-slate-300 mb-1">
+                        Status
+                    </label>
+                    <select
+                        id="status-filter"
+                        name="status"
+                        hx-get="/backtests/fragment"
+                        hx-target="#backtest-table"
+                        hx-swap="innerHTML"
+                        hx-include="#filter-form"
+                        hx-push-url="true"
+                        class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    >
+                        <option value="">All</option>
+                        <option value="success" {% if list_page.filter_state.status and list_page.filter_state.status.value == "success" %}selected{% endif %}>
+                            Success
+                        </option>
+                        <option value="failed" {% if list_page.filter_state.status and list_page.filter_state.status.value == "failed" %}selected{% endif %}>
+                            Failed
+                        </option>
+                    </select>
+                </div>
+
+                <!-- Date From Filter -->
+                <div class="min-w-40">
+                    <label for="date-from-filter" class="block text-sm font-medium text-slate-300 mb-1">
+                        From Date
+                    </label>
+                    <input
+                        type="date"
+                        id="date-from-filter"
+                        name="date_from"
+                        value="{{ list_page.filter_state.date_from.isoformat() if list_page.filter_state.date_from else '' }}"
+                        hx-get="/backtests/fragment"
+                        hx-target="#backtest-table"
+                        hx-swap="innerHTML"
+                        hx-include="#filter-form"
+                        hx-push-url="true"
+                        hx-trigger="change"
+                        class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    >
+                </div>
+
+                <!-- Date To Filter -->
+                <div class="min-w-40">
+                    <label for="date-to-filter" class="block text-sm font-medium text-slate-300 mb-1">
+                        To Date
+                    </label>
+                    <input
+                        type="date"
+                        id="date-to-filter"
+                        name="date_to"
+                        value="{{ list_page.filter_state.date_to.isoformat() if list_page.filter_state.date_to else '' }}"
+                        hx-get="/backtests/fragment"
+                        hx-target="#backtest-table"
+                        hx-swap="innerHTML"
+                        hx-include="#filter-form"
+                        hx-push-url="true"
+                        hx-trigger="change"
+                        class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    >
+                </div>
+
+                <!-- Hidden fields to preserve sort and pagination state -->
+                <input type="hidden" name="sort" value="{{ list_page.filter_state.sort.value }}">
+                <input type="hidden" name="order" value="{{ list_page.filter_state.order.value }}">
+                <input type="hidden" name="page" value="1">
+                <input type="hidden" name="page_size" value="{{ list_page.filter_state.page_size }}">
+
+                <!-- Clear Filters Button -->
+                {% if has_filters %}
+                <div>
+                    <button
+                        type="button"
+                        hx-get="/backtests/fragment"
+                        hx-target="#backtest-table"
+                        hx-swap="innerHTML"
+                        hx-push-url="/backtests"
+                        onclick="document.getElementById('filter-form').reset()"
+                        class="px-4 py-2 text-sm bg-slate-700 hover:bg-slate-600 text-slate-200 rounded transition-colors"
+                    >
+                        Clear Filters
+                    </button>
+                </div>
+                {% endif %}
+            </div>
+        </form>
+    </div>
+
     <!-- Backtest Table -->
     <div id="backtest-table">
         {% include "backtests/list_fragment.html" %}

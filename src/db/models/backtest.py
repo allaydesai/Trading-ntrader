@@ -137,6 +137,10 @@ class BacktestRun(Base, TimestampMixin):
             "created_at",
             "id",
         ),
+        # Index for instrument filtering (Phase 2)
+        Index("idx_backtest_runs_instrument", "instrument_symbol"),
+        # Index for status filtering (Phase 2)
+        Index("idx_backtest_runs_status", "execution_status"),
     )
 
     def __repr__(self) -> str:

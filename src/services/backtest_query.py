@@ -13,7 +13,12 @@ from uuid import UUID
 from src.db.repositories.backtest_repository import BacktestRepository
 from src.db.models.backtest import BacktestRun
 from src.api.models.dashboard import DashboardSummary, to_recent_item
-from src.api.models.backtest_list import BacktestListPage, to_list_item
+from src.api.models.backtest_list import (
+    BacktestListPage,
+    FilteredBacktestListPage,
+    to_list_item,
+)
+from src.api.models.filter_models import FilterState
 
 logger = structlog.get_logger(__name__)
 
@@ -332,4 +337,60 @@ class BacktestQueryService:
             page=page,
             page_size=page_size,
             total_count=total_count,
+        )
+
+    async def get_filtered_backtest_list_page(
+        self, filter_state: FilterState
+    ) -> FilteredBacktestListPage:
+        """
+        Get filtered, sorted, and paginated backtest list.
+
+        Applies filters, sorting, and pagination from FilterState and returns
+        complete response with available options for filter dropdowns.
+
+        Args:
+            filter_state: Complete filter/sort/pagination state
+
+        Returns:
+            FilteredBacktestListPage with items, pagination, and filter options
+
+        Example:
+            >>> state = FilterState(
+            ...     strategy="SMA Crossover",
+            ...     sort=SortColumn.SHARPE_RATIO,
+            ...     order=SortOrder.DESC
+            ... )
+            >>> page = await service.get_filtered_backtest_list_page(state)
+            >>> print(f"Found {page.total_count} matching backtests")
+        """
+        logger.debug(
+            "Fetching filtered backtest list",
+            strategy=filter_state.strategy,
+            instrument=filter_state.instrument,
+            status=filter_state.status,
+            sort=filter_state.sort,
+            order=filter_state.order,
+            page=filter_state.page,
+        )
+
+        # Get filtered backtests and total count
+        backtests, total_count = await self.repository.get_filtered_backtests(
+            filter_state
+        )
+
+        # Get available filter options
+        available_strategies = await self.repository.get_distinct_strategies()
+        available_instruments = await self.repository.get_distinct_instruments()
+
+        # Convert to view models
+        items = [to_list_item(bt) for bt in backtests]
+
+        return FilteredBacktestListPage(
+            backtests=items,
+            page=filter_state.page,
+            page_size=filter_state.page_size,
+            total_count=total_count,
+            filter_state=filter_state,
+            available_strategies=available_strategies,
+            available_instruments=available_instruments,
         )

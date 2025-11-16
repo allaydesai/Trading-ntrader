@@ -17,6 +17,7 @@ from sqlalchemy.orm import joinedload, selectinload
 
 from src.db.exceptions import DatabaseConnectionError, DuplicateRecordError
 from src.db.models.backtest import BacktestRun, PerformanceMetrics
+from src.api.models.filter_models import FilterState, SortColumn, SortOrder
 
 
 class BacktestRepository:
@@ -489,3 +490,140 @@ class BacktestRepository:
 
         result = await self.session.execute(stmt)
         return result.scalar_one()
+
+    async def get_filtered_backtests(
+        self,
+        filter_state: FilterState,
+    ) -> Tuple[List[BacktestRun], int]:
+        """
+        Get filtered, sorted, and paginated backtests.
+
+        Applies all filters from FilterState and returns matching results
+        with total count for pagination.
+
+        Args:
+            filter_state: Complete filter/sort/pagination state
+
+        Returns:
+            Tuple of (list of BacktestRun instances, total count)
+
+        Example:
+            >>> state = FilterState(strategy="SMA", sort=SortColumn.SHARPE_RATIO)
+            >>> runs, total = await repo.get_filtered_backtests(state)
+        """
+        # Build base query
+        query = select(BacktestRun).options(selectinload(BacktestRun.metrics))
+        count_query = select(func.count(BacktestRun.id))
+
+        # Apply filters
+        conditions = []
+
+        if filter_state.strategy:
+            conditions.append(BacktestRun.strategy_name == filter_state.strategy)
+
+        if filter_state.instrument:
+            # Case-insensitive partial match
+            conditions.append(
+                BacktestRun.instrument_symbol.ilike(f"%{filter_state.instrument}%")
+            )
+
+        if filter_state.date_from:
+            conditions.append(
+                func.date(BacktestRun.created_at) >= filter_state.date_from
+            )
+
+        if filter_state.date_to:
+            conditions.append(func.date(BacktestRun.created_at) <= filter_state.date_to)
+
+        if filter_state.status:
+            conditions.append(BacktestRun.execution_status == filter_state.status.value)
+
+        # Apply conditions to both queries
+        if conditions:
+            query = query.where(and_(*conditions))
+            count_query = count_query.where(and_(*conditions))
+
+        # Get total count (before pagination)
+        count_result = await self.session.execute(count_query)
+        total_count = count_result.scalar_one()
+
+        # Apply sorting
+        sort_column = self._get_sort_column(filter_state.sort)
+        needs_join = filter_state.sort in [
+            SortColumn.TOTAL_RETURN,
+            SortColumn.SHARPE_RATIO,
+            SortColumn.MAX_DRAWDOWN,
+        ]
+
+        if needs_join:
+            query = query.outerjoin(
+                PerformanceMetrics, BacktestRun.id == PerformanceMetrics.backtest_run_id
+            )
+
+        if filter_state.order == SortOrder.ASC:
+            query = query.order_by(sort_column.asc().nulls_last())
+        else:
+            query = query.order_by(sort_column.desc().nulls_last())
+
+        # Apply pagination
+        offset = (filter_state.page - 1) * filter_state.page_size
+        query = query.offset(offset).limit(filter_state.page_size)
+
+        # Execute query
+        result = await self.session.execute(query)
+        backtests = list(result.scalars().unique().all())
+
+        return backtests, total_count
+
+    def _get_sort_column(self, sort: SortColumn):
+        """
+        Map SortColumn enum to SQLAlchemy column.
+
+        Args:
+            sort: SortColumn enum value
+
+        Returns:
+            SQLAlchemy column for ordering
+        """
+        column_map = {
+            SortColumn.CREATED_AT: BacktestRun.created_at,
+            SortColumn.STRATEGY_NAME: BacktestRun.strategy_name,
+            SortColumn.INSTRUMENT_SYMBOL: BacktestRun.instrument_symbol,
+            SortColumn.EXECUTION_STATUS: BacktestRun.execution_status,
+            SortColumn.TOTAL_RETURN: PerformanceMetrics.total_return,
+            SortColumn.SHARPE_RATIO: PerformanceMetrics.sharpe_ratio,
+            SortColumn.MAX_DRAWDOWN: PerformanceMetrics.max_drawdown,
+        }
+        return column_map[sort]
+
+    async def get_distinct_strategies(self) -> List[str]:
+        """
+        Get all distinct strategy names.
+
+        Returns:
+            List of unique strategy names, sorted alphabetically
+        """
+        stmt = (
+            select(BacktestRun.strategy_name)
+            .distinct()
+            .order_by(BacktestRun.strategy_name)
+        )
+
+        result = await self.session.execute(stmt)
+        return [row[0] for row in result.all()]
+
+    async def get_distinct_instruments(self) -> List[str]:
+        """
+        Get all distinct instrument symbols.
+
+        Returns:
+            List of unique instrument symbols, sorted alphabetically
+        """
+        stmt = (
+            select(BacktestRun.instrument_symbol)
+            .distinct()
+            .order_by(BacktestRun.instrument_symbol)
+        )
+
+        result = await self.session.execute(stmt)
+        return [row[0] for row in result.all()]
