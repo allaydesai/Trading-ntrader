@@ -680,6 +680,8 @@ rg --files -g "*.py"
 - PostgreSQL (existing backtest metadata via SQLAlchemy 2.0 async) (005-webui-foundation)
 - Python 3.11+ + FastAPI 0.109+, Jinja2, HTMX, Tailwind CSS, SQLAlchemy 2.0 (async), Pydantic 2.5+ (006-interactive-backtest-lists)
 - PostgreSQL 16+ (existing backtest metadata via SQLAlchemy 2.0 async) (006-interactive-backtest-lists)
+- Python 3.11+ (matches existing codebase) + FastAPI 0.109+, Jinja2 3.1+, Pydantic 2.5+, SQLAlchemy 2.0+ (async), HTMX 1.9+, Tailwind CSS (007-backtest-detail-view)
+- PostgreSQL 16+ (existing backtest_runs and performance_metrics tables) (007-backtest-detail-view)
 
 ## Recent Changes
 - 004-postgresql-metadata-storage: Added Python 3.11+ + SQLAlchemy 2.0 (async), Alembic, Pydantic 2.5+, asyncpg, PostgreSQL 16+

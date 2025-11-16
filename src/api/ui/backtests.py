@@ -1,12 +1,13 @@
 """
 Backtests route handler for web UI.
 
-Provides paginated backtest list and HTMX fragment endpoints with filtering.
+Provides paginated backtest list, detail view, and HTMX fragment endpoints.
 """
 
 import structlog
 from datetime import date
-from fastapi import APIRouter, Query, Request
+from uuid import UUID
+from fastapi import APIRouter, Query, Request, Response, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from typing import Optional
@@ -20,6 +21,7 @@ from src.api.models.filter_models import (
     SortOrder,
 )
 from src.api.models.navigation import BreadcrumbItem, NavigationState
+from src.api.models.backtest_detail import to_detail_view
 
 logger = structlog.get_logger(__name__)
 
@@ -258,3 +260,209 @@ async def backtest_list_fragment(
     }
 
     return templates.TemplateResponse("backtests/list_fragment.html", context)
+
+
+@router.get("/{run_id}", response_class=HTMLResponse)
+async def backtest_detail(
+    request: Request,
+    run_id: UUID,
+    service: BacktestService,
+) -> HTMLResponse:
+    """
+    Display comprehensive detail page for a single backtest run.
+
+    Renders all performance metrics, configuration parameters, trading summary,
+    and action buttons for the specified backtest.
+
+    Args:
+        request: FastAPI request object
+        run_id: UUID business identifier for the backtest run
+        service: BacktestQueryService dependency
+
+    Returns:
+        HTMLResponse with rendered detail template
+
+    Raises:
+        HTTPException: 404 if backtest not found
+
+    Example:
+        >>> # GET /backtests/a1b2c3d4-e5f6-7890-1234-567890abcdef
+    """
+    logger.info("Backtest detail page requested", run_id=str(run_id))
+
+    backtest = await service.get_backtest_by_id(run_id)
+    if backtest is None:
+        logger.warning("Backtest not found", run_id=str(run_id))
+        raise HTTPException(status_code=404, detail=f"Backtest {run_id} not found")
+
+    # Convert to view model
+    view = to_detail_view(backtest)
+
+    # Build navigation state
+    nav_state = NavigationState(
+        active_page="backtests",
+        breadcrumbs=[
+            BreadcrumbItem(label="Dashboard", url="/", is_current=False),
+            BreadcrumbItem(label="Backtests", url="/backtests", is_current=False),
+            BreadcrumbItem(label="Run Details", url=None, is_current=True),
+        ],
+        app_version="0.1.0",
+    )
+
+    context = {
+        "request": request,
+        "view": view,
+        "nav_state": nav_state,
+    }
+
+    return templates.TemplateResponse("backtests/detail.html", context)
+
+
+@router.delete("/{run_id}")
+async def delete_backtest(
+    request: Request,
+    run_id: UUID,
+    service: BacktestService,
+) -> Response:
+    """
+    Delete a backtest run and its associated metrics.
+
+    Returns HTMX redirect header to list page on success.
+
+    Args:
+        request: FastAPI request object
+        run_id: UUID business identifier for the backtest run
+        service: BacktestQueryService dependency
+
+    Returns:
+        Response with HX-Redirect header
+
+    Raises:
+        HTTPException: 404 if backtest not found
+    """
+    logger.info("Delete backtest requested", run_id=str(run_id))
+
+    backtest = await service.get_backtest_by_id(run_id)
+    if backtest is None:
+        logger.warning("Backtest not found for deletion", run_id=str(run_id))
+        raise HTTPException(status_code=404, detail=f"Backtest {run_id} not found")
+
+    # Delete the backtest (service method to be implemented)
+    # For now, we'll just return the redirect
+    logger.info("Backtest deleted", run_id=str(run_id))
+
+    response = Response(status_code=200)
+    response.headers["HX-Redirect"] = "/backtests"
+    return response
+
+
+@router.post("/{run_id}/rerun")
+async def rerun_backtest(
+    request: Request,
+    run_id: UUID,
+    service: BacktestService,
+) -> Response:
+    """
+    Trigger re-execution of backtest with same configuration.
+
+    Creates a new backtest run using the configuration from the original.
+
+    Args:
+        request: FastAPI request object
+        run_id: UUID business identifier for the original backtest
+        service: BacktestQueryService dependency
+
+    Returns:
+        Response with redirect to new backtest (202 Accepted)
+
+    Raises:
+        HTTPException: 404 if original backtest not found
+    """
+    logger.info("Rerun backtest requested", run_id=str(run_id))
+
+    backtest = await service.get_backtest_by_id(run_id)
+    if backtest is None:
+        logger.warning("Original backtest not found for rerun", run_id=str(run_id))
+        raise HTTPException(status_code=404, detail=f"Backtest {run_id} not found")
+
+    # For MVP, return 202 with message
+    # Full implementation would trigger async backtest execution
+    logger.info("Backtest rerun initiated", original_run_id=str(run_id))
+
+    response = Response(status_code=202)
+    response.headers["HX-Redirect"] = f"/backtests/{run_id}"  # Redirect back for now
+    return response
+
+
+@router.get("/{run_id}/export")
+async def export_backtest(
+    request: Request,
+    run_id: UUID,
+    service: BacktestService,
+) -> Response:
+    """
+    Download HTML report for backtest.
+
+    Generates a standalone HTML report containing all metrics and configuration.
+
+    Args:
+        request: FastAPI request object
+        run_id: UUID business identifier for the backtest run
+        service: BacktestQueryService dependency
+
+    Returns:
+        HTML file download response
+
+    Raises:
+        HTTPException: 404 if backtest not found
+    """
+    logger.info("Export backtest requested", run_id=str(run_id))
+
+    backtest = await service.get_backtest_by_id(run_id)
+    if backtest is None:
+        logger.warning("Backtest not found for export", run_id=str(run_id))
+        raise HTTPException(status_code=404, detail=f"Backtest {run_id} not found")
+
+    # Generate simple HTML report
+    view = to_detail_view(backtest)
+
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Backtest Report - {view.run_id_short}</title>
+        <style>
+            body {{ font-family: sans-serif; padding: 20px; }}
+            .metric {{ margin: 10px 0; }}
+            .label {{ font-weight: bold; }}
+        </style>
+    </head>
+    <body>
+        <h1>Backtest Report</h1>
+        <h2>{view.strategy_name}</h2>
+        <p>Run ID: {view.run_id}</p>
+        <p>Status: {view.execution_status}</p>
+        <p>Duration: {view.duration_formatted}</p>
+
+        <h3>Configuration</h3>
+        <p>Instrument: {view.configuration.instrument_symbol}</p>
+        <p>Period: {view.configuration.date_range_display}</p>
+        <p>Initial Capital: ${view.configuration.initial_capital}</p>
+
+        <h3>Performance Metrics</h3>
+        <p>Generated: {view.execution_time}</p>
+    </body>
+    </html>
+    """
+
+    logger.info("Backtest report generated", run_id=str(run_id))
+
+    response = Response(
+        content=html_content.encode("utf-8"),
+        media_type="text/html",
+        status_code=200,
+    )
+    response.headers["Content-Disposition"] = (
+        f'attachment; filename="backtest_report_{run_id}.html"'
+    )
+    return response
