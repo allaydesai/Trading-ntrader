@@ -16,6 +16,12 @@
 {% if list_page.filter_state.instrument %}
     {% set _ = sort_base_params.append("instrument=" ~ list_page.filter_state.instrument|urlencode) %}
 {% endif %}
+{% if list_page.filter_state.date_from %}
+    {% set _ = sort_base_params.append("date_from=" ~ list_page.filter_state.date_from.isoformat()) %}
+{% endif %}
+{% if list_page.filter_state.date_to %}
+    {% set _ = sort_base_params.append("date_to=" ~ list_page.filter_state.date_to.isoformat()) %}
+{% endif %}
 {% if list_page.filter_state.status %}
     {% set _ = sort_base_params.append("status=" ~ list_page.filter_state.status.value) %}
 {% endif %}
@@ -147,6 +153,12 @@
     {% endif %}
     {% if list_page.filter_state.instrument %}
         {% set _ = base_params.append("instrument=" ~ list_page.filter_state.instrument|urlencode) %}
+    {% endif %}
+    {% if list_page.filter_state.date_from %}
+        {% set _ = base_params.append("date_from=" ~ list_page.filter_state.date_from.isoformat()) %}
+    {% endif %}
+    {% if list_page.filter_state.date_to %}
+        {% set _ = base_params.append("date_to=" ~ list_page.filter_state.date_to.isoformat()) %}
     {% endif %}
     {% if list_page.filter_state.status %}
         {% set _ = base_params.append("status=" ~ list_page.filter_state.status.value) %}

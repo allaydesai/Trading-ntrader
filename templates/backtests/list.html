@@ -114,6 +114,46 @@
                     </select>
                 </div>
 
+                <!-- Date From Filter -->
+                <div class="min-w-40">
+                    <label for="date-from-filter" class="block text-sm font-medium text-slate-300 mb-1">
+                        From Date
+                    </label>
+                    <input
+                        type="date"
+                        id="date-from-filter"
+                        name="date_from"
+                        value="{{ list_page.filter_state.date_from.isoformat() if list_page.filter_state.date_from else '' }}"
+                        hx-get="/backtests/fragment"
+                        hx-target="#backtest-table"
+                        hx-swap="innerHTML"
+                        hx-include="#filter-form"
+                        hx-push-url="true"
+                        hx-trigger="change"
+                        class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    >
+                </div>
+
+                <!-- Date To Filter -->
+                <div class="min-w-40">
+                    <label for="date-to-filter" class="block text-sm font-medium text-slate-300 mb-1">
+                        To Date
+                    </label>
+                    <input
+                        type="date"
+                        id="date-to-filter"
+                        name="date_to"
+                        value="{{ list_page.filter_state.date_to.isoformat() if list_page.filter_state.date_to else '' }}"
+                        hx-get="/backtests/fragment"
+                        hx-target="#backtest-table"
+                        hx-swap="innerHTML"
+                        hx-include="#filter-form"
+                        hx-push-url="true"
+                        hx-trigger="change"
+                        class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    >
+                </div>
+
                 <!-- Hidden fields to preserve sort and pagination state -->
                 <input type="hidden" name="sort" value="{{ list_page.filter_state.sort.value }}">
                 <input type="hidden" name="order" value="{{ list_page.filter_state.order.value }}">

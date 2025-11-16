@@ -5,6 +5,7 @@ Provides paginated backtest list and HTMX fragment endpoints with filtering.
 """
 
 import structlog
+from datetime import date
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
@@ -32,6 +33,8 @@ async def backtest_list(
     service: BacktestService,
     strategy: Optional[str] = Query(None, max_length=255),
     instrument: Optional[str] = Query(None, max_length=50),
+    date_from: Optional[date] = Query(None),
+    date_to: Optional[date] = Query(None),
     status: Optional[ExecutionStatus] = Query(None),
     sort: SortColumn = Query(SortColumn.CREATED_AT),
     order: SortOrder = Query(SortOrder.DESC),
@@ -66,6 +69,8 @@ async def backtest_list(
         "Backtest list page requested",
         strategy=strategy,
         instrument=instrument,
+        date_from=date_from.isoformat() if date_from else None,
+        date_to=date_to.isoformat() if date_to else None,
         status=status.value if status else None,
         sort=sort.value,
         order=order.value,
@@ -77,8 +82,8 @@ async def backtest_list(
     filter_state = FilterState(
         strategy=strategy,
         instrument=instrument,
-        date_from=None,
-        date_to=None,
+        date_from=date_from,
+        date_to=date_to,
         status=status,
         sort=sort,
         order=order,
@@ -118,7 +123,7 @@ async def backtest_list(
 
     # Prepare empty state message if no backtests and no filters applied
     empty_state = None
-    has_filters = any([strategy, instrument, status])
+    has_filters = any([strategy, instrument, date_from, date_to, status])
     if list_page.total_count == 0 and not has_filters:
         empty_state = EmptyStateMessage(
             title="No Backtests Yet",
@@ -144,6 +149,8 @@ async def backtest_list_fragment(
     service: BacktestService,
     strategy: Optional[str] = Query(None, max_length=255),
     instrument: Optional[str] = Query(None, max_length=50),
+    date_from: Optional[date] = Query(None),
+    date_to: Optional[date] = Query(None),
     status: Optional[ExecutionStatus] = Query(None),
     sort: SortColumn = Query(SortColumn.CREATED_AT),
     order: SortOrder = Query(SortOrder.DESC),
@@ -178,6 +185,10 @@ async def backtest_list_fragment(
     logger.info(
         "Backtest list fragment requested",
         strategy=strategy,
+        instrument=instrument,
+        date_from=date_from.isoformat() if date_from else None,
+        date_to=date_to.isoformat() if date_to else None,
+        status=status.value if status else None,
         sort=sort.value,
         order=order.value,
         page=page,
@@ -187,8 +198,8 @@ async def backtest_list_fragment(
     filter_state = FilterState(
         strategy=strategy,
         instrument=instrument,
-        date_from=None,
-        date_to=None,
+        date_from=date_from,
+        date_to=date_to,
         status=status,
         sort=sort,
         order=order,
