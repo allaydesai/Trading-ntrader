@@ -266,12 +266,8 @@ class BacktestDetailView(BaseModel):
     )
 
     breadcrumbs: list[dict[str, str | None]] = Field(
-        default_factory=lambda: [  # type: ignore[arg-type]
-            {"label": "Dashboard", "url": "/"},
-            {"label": "Backtests", "url": "/backtests"},
-            {"label": "Run Details", "url": None},
-        ],
-        description="Navigation breadcrumbs",
+        ...,
+        description="Navigation breadcrumbs - must be constructed by caller",
     )
 
     @computed_field  # type: ignore[prop-decorator]
@@ -304,23 +300,66 @@ class BacktestDetailView(BaseModel):
 
 def build_metrics_panel(metrics) -> Optional[MetricsPanel]:
     """
-    Convert database metrics to display panel.
+    Convert database PerformanceMetrics to a structured display panel.
+
+    Transforms raw performance metrics from the database into an organized
+    MetricsPanel with three categories: return metrics, risk metrics, and
+    trading metrics. Each metric is formatted with appropriate display
+    settings including tooltips and color coding indicators.
 
     Args:
-        metrics: PerformanceMetrics from database (or None)
+        metrics: PerformanceMetrics ORM instance from database containing
+            raw metric values (total_return, sharpe_ratio, max_drawdown, etc.).
+            Can be None if backtest failed or has no metrics.
 
     Returns:
-        MetricsPanel with organized, formatted metrics
+        MetricsPanel containing organized MetricDisplayItem lists for each
+        category, or None if input metrics is None. The panel includes:
+        - return_metrics: Total Return, CAGR, Final Balance
+        - risk_metrics: Sharpe Ratio, Sortino Ratio, Max Drawdown, Volatility
+        - trading_metrics: Total Trades, Win Rate, Profit Factor
 
     Example:
+        >>> from decimal import Decimal
         >>> from src.db.models.backtest import PerformanceMetrics
-        >>> metrics = PerformanceMetrics(total_return=Decimal("0.25"), ...)
+        >>> metrics = PerformanceMetrics(
+        ...     total_return=Decimal("0.25"),
+        ...     cagr=Decimal("0.18"),
+        ...     sharpe_ratio=Decimal("1.67"),
+        ...     max_drawdown=Decimal("-0.12"),
+        ...     total_trades=156,
+        ...     win_rate=Decimal("0.628")
+        ... )
         >>> panel = build_metrics_panel(metrics)
-        >>> print(panel.return_metrics[0].formatted_value)
+        >>> panel.return_metrics[0].name
+        'Total Return'
+        >>> panel.return_metrics[0].formatted_value
         '25.00%'
+        >>> panel.risk_metrics[0].formatted_value
+        '1.6700'
     """
     if metrics is None:
         return None
+
+    # Validate required metrics fields exist
+    required_attrs = [
+        "total_return",
+        "cagr",
+        "final_balance",
+        "sharpe_ratio",
+        "sortino_ratio",
+        "max_drawdown",
+        "volatility",
+        "total_trades",
+        "win_rate",
+        "profit_factor",
+    ]
+
+    missing_attrs = [attr for attr in required_attrs if not hasattr(metrics, attr)]
+    if missing_attrs:
+        raise ValueError(
+            f"Metrics object missing required fields: {', '.join(missing_attrs)}"
+        )
 
     return MetricsPanel(
         return_metrics=[
@@ -461,12 +500,13 @@ def build_trading_summary(metrics) -> Optional[TradingSummary]:
     )
 
 
-def to_detail_view(run) -> BacktestDetailView:
+def to_detail_view(run, base_url: str = "") -> BacktestDetailView:
     """
     Map BacktestRun to complete detail view model.
 
     Args:
         run: BacktestRun with metrics eagerly loaded
+        base_url: Base URL prefix for breadcrumb links (default: "")
 
     Returns:
         BacktestDetailView ready for template rendering
@@ -486,4 +526,9 @@ def to_detail_view(run) -> BacktestDetailView:
         metrics_panel=build_metrics_panel(run.metrics),
         configuration=build_configuration(run),
         trading_summary=build_trading_summary(run.metrics),
+        breadcrumbs=[
+            {"label": "Dashboard", "url": f"{base_url}/"},
+            {"label": "Backtests", "url": f"{base_url}/backtests"},
+            {"label": "Run Details", "url": None},
+        ],
     )

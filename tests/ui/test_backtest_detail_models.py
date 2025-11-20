@@ -232,6 +232,11 @@ class TestBacktestDetailView:
             execution_time=datetime.now(timezone.utc),
             execution_duration=Decimal("45.5"),
             configuration=config,
+            breadcrumbs=[
+                {"label": "Dashboard", "url": "/"},
+                {"label": "Backtests", "url": "/backtests"},
+                {"label": "Run Details", "url": None},
+            ],
         )
 
     def test_run_id_short(self, sample_view):
@@ -258,8 +263,8 @@ class TestBacktestDetailView:
         sample_view.execution_duration = Decimal("120.0")
         assert sample_view.duration_formatted == "2.0m"
 
-    def test_default_breadcrumbs(self, sample_view):
-        """Default breadcrumbs include Dashboard > Backtests > Run Details."""
+    def test_breadcrumbs_structure(self, sample_view):
+        """Breadcrumbs contain expected navigation path."""
         crumbs = sample_view.breadcrumbs
         assert len(crumbs) == 3
         assert crumbs[0]["label"] == "Dashboard"
@@ -343,6 +348,21 @@ class TestMappingFunctions:
         """build_metrics_panel returns None when metrics is None."""
         result = build_metrics_panel(None)
         assert result is None
+
+    def test_build_metrics_panel_raises_error_for_missing_fields(self):
+        """build_metrics_panel raises ValueError for invalid metrics object."""
+
+        class IncompleteMetrics:
+            """Metrics object missing required fields."""
+
+            total_return = Decimal("0.25")
+            # Missing: cagr, final_balance, sharpe_ratio, etc.
+
+        with pytest.raises(ValueError) as exc_info:
+            build_metrics_panel(IncompleteMetrics())
+
+        assert "missing required fields" in str(exc_info.value).lower()
+        assert "cagr" in str(exc_info.value)
 
     def test_build_configuration_extracts_all_fields(self, sample_run):
         """build_configuration extracts all fields from BacktestRun."""
