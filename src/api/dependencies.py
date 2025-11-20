@@ -1,9 +1,11 @@
 """
-FastAPI dependencies for web UI.
+FastAPI dependencies for web UI and REST APIs.
 
-Provides shared dependencies for database sessions and template rendering.
+Provides shared dependencies for database sessions, template rendering,
+and service instances.
 """
 
+import os
 from typing import Annotated, AsyncGenerator
 
 from fastapi import Depends
@@ -13,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.db.session import get_session as get_db_session
 from src.db.repositories.backtest_repository import BacktestRepository
 from src.services.backtest_query import BacktestQueryService
+from src.services.data_catalog import DataCatalogService
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
@@ -94,3 +97,26 @@ def get_templates() -> Jinja2Templates:
         >>> return templates.TemplateResponse("dashboard.html", {"request": request})
     """
     return Jinja2Templates(directory="templates")
+
+
+def get_data_catalog_service() -> DataCatalogService:
+    """
+    Get DataCatalogService instance for Parquet catalog operations.
+
+    Creates a DataCatalogService using the NAUTILUS_PATH environment variable,
+    or defaults to "./data/catalog" if not set.
+
+    Returns:
+        DataCatalogService instance
+
+    Example:
+        >>> @router.get("/")
+        ... def route(catalog: DataCatalog):
+        ...     bars = catalog.query_bars("AAPL.NASDAQ", start, end)
+    """
+    catalog_path = os.environ.get("NAUTILUS_PATH", "./data/catalog")
+    return DataCatalogService(catalog_path=catalog_path)
+
+
+# Type alias for DataCatalogService dependency
+DataCatalog = Annotated[DataCatalogService, Depends(get_data_catalog_service)]
