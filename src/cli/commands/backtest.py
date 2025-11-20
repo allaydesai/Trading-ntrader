@@ -417,7 +417,7 @@ def run_backtest(
                 "Period", f"{start.strftime('%Y-%m-%d')} to {end.strftime('%Y-%m-%d')}"
             )
             table.add_row("Data Source", "Parquet Catalog")
-            table.add_row("Total Return", f"${result.total_return:.2f}")
+            table.add_row("Total Return", f"{result.total_return * 100:.2f}%")
             table.add_row("Total Trades", str(result.total_trades))
             table.add_row("Winning Trades", str(result.winning_trades))
             table.add_row("Losing Trades", str(result.losing_trades))
@@ -563,7 +563,7 @@ def run_config_backtest(
 
             table.add_row("Configuration File", config_file)
             table.add_row("Data Source", data_source.title())
-            table.add_row("Total Return", f"${result.total_return:.2f}")
+            table.add_row("Total Return", f"{result.total_return * 100:.2f}%")
             table.add_row("Total Trades", str(result.total_trades))
             table.add_row("Winning Trades", str(result.winning_trades))
             table.add_row("Losing Trades", str(result.losing_trades))

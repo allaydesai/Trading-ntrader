@@ -1,0 +1,81 @@
+<!-- Configuration Snapshot - collapsible section with CLI command copy -->
+<details open class="bg-slate-900 rounded-lg border border-slate-700">
+    <summary class="cursor-pointer font-semibold text-lg p-6 hover:bg-slate-800/50 transition-colors">
+        Configuration Parameters
+    </summary>
+    <div class="px-6 pb-6 space-y-4">
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div>
+                <span class="text-slate-400 text-sm">Instrument</span>
+                <p class="text-slate-200 font-medium">{{ view.configuration.instrument_symbol }}</p>
+            </div>
+            <div>
+                <span class="text-slate-400 text-sm">Date Range</span>
+                <p class="text-slate-200 font-medium">{{ view.configuration.date_range_display }}</p>
+            </div>
+            <div>
+                <span class="text-slate-400 text-sm">Initial Capital</span>
+                <p class="text-slate-200 font-medium">${{ '{:,.2f}'.format(view.configuration.initial_capital | float) }}</p>
+            </div>
+            <div>
+                <span class="text-slate-400 text-sm">Strategy Name</span>
+                <p class="text-slate-200 font-medium">{{ view.configuration.strategy_name }}</p>
+            </div>
+            <div>
+                <span class="text-slate-400 text-sm">Strategy Type</span>
+                <p class="text-slate-200 font-medium">{{ view.configuration.strategy_type }}</p>
+            </div>
+            <div>
+                <span class="text-slate-400 text-sm">Data Source</span>
+                <p class="text-slate-200 font-medium">{{ view.configuration.data_source }}</p>
+            </div>
+        </div>
+
+        {% if view.configuration.additional_params %}
+        <div class="border-t border-slate-700 pt-4">
+            <h4 class="text-sm font-medium text-slate-300 mb-3">Strategy-Specific Parameters</h4>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {% for key, value in view.configuration.additional_params.items() %}
+                <div>
+                    <span class="text-slate-400 text-sm">{{ key | replace('_', ' ') | title }}</span>
+                    <p class="text-slate-200 font-medium">{{ value }}</p>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- CLI Command Copy Section -->
+        <div class="border-t border-slate-700 pt-4">
+            <h4 class="text-sm font-medium text-slate-300 mb-3">CLI Command to Replicate</h4>
+            <div class="bg-slate-800 rounded p-4 relative">
+                <pre id="cli-command" class="text-green-400 font-mono text-sm whitespace-pre-wrap">{{ view.configuration.cli_command }}</pre>
+                <button onclick="copyCliCommand()"
+                        class="absolute top-2 right-2 bg-blue-600 hover:bg-blue-700 px-3 py-1 rounded text-sm font-medium transition-colors">
+                    Copy
+                </button>
+            </div>
+        </div>
+    </div>
+</details>
+
+<script>
+function copyCliCommand() {
+    const commandText = document.getElementById('cli-command').textContent;
+    navigator.clipboard.writeText(commandText).then(() => {
+        // Show success notification
+        const notification = document.createElement('div');
+        notification.className = 'bg-green-600/90 text-white px-4 py-2 rounded shadow-lg';
+        notification.textContent = 'CLI command copied to clipboard!';
+        document.getElementById('notifications').appendChild(notification);
+
+        // Remove notification after 3 seconds
+        setTimeout(() => {
+            notification.remove();
+        }, 3000);
+    }).catch(err => {
+        console.error('Failed to copy:', err);
+        alert('Failed to copy command to clipboard');
+    });
+}
+</script>

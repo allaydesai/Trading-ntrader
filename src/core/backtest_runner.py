@@ -520,7 +520,8 @@ class MinimalBacktestRunner:
         # Calculate basic metrics
         starting_balance = float(self.settings.default_balance)
         final_balance = float(account.balance_total(USD).as_double())
-        total_return = final_balance - starting_balance
+        # Store total_return as percentage (0.25 = 25%), not dollar amount
+        total_return = (final_balance - starting_balance) / starting_balance
 
         # Get trade statistics from closed positions
         closed_positions = self.engine.cache.positions_closed()

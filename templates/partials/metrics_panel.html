@@ -1,0 +1,69 @@
+<!-- Metrics Panel - displays categorized performance metrics with tooltips -->
+<div class="bg-slate-900 rounded-lg border border-slate-700 p-6">
+    <h2 class="text-xl font-semibold mb-4">Performance Metrics</h2>
+
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <!-- Return Metrics -->
+        <div class="space-y-3">
+            <h3 class="text-lg font-medium text-slate-300 border-b border-slate-700 pb-2">
+                Returns
+            </h3>
+            {% for metric in view.metrics_panel.return_metrics %}
+            <div class="relative group">
+                <div class="flex justify-between items-center">
+                    <span class="text-slate-400 cursor-help">{{ metric.name }}</span>
+                    <span class="{{ metric.color_class }} font-semibold">
+                        {{ metric.formatted_value }}
+                    </span>
+                </div>
+                <!-- Tooltip -->
+                <div class="absolute hidden group-hover:block bg-slate-700 p-3 rounded shadow-lg z-10 w-64 text-sm text-slate-200 left-0 top-full mt-1">
+                    {{ metric.tooltip }}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+
+        <!-- Risk Metrics -->
+        <div class="space-y-3">
+            <h3 class="text-lg font-medium text-slate-300 border-b border-slate-700 pb-2">
+                Risk
+            </h3>
+            {% for metric in view.metrics_panel.risk_metrics %}
+            <div class="relative group">
+                <div class="flex justify-between items-center">
+                    <span class="text-slate-400 cursor-help">{{ metric.name }}</span>
+                    <span class="{{ metric.color_class }} font-semibold">
+                        {{ metric.formatted_value }}
+                    </span>
+                </div>
+                <!-- Tooltip -->
+                <div class="absolute hidden group-hover:block bg-slate-700 p-3 rounded shadow-lg z-10 w-64 text-sm text-slate-200 left-0 top-full mt-1">
+                    {{ metric.tooltip }}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+
+        <!-- Trading Metrics -->
+        <div class="space-y-3">
+            <h3 class="text-lg font-medium text-slate-300 border-b border-slate-700 pb-2">
+                Trading
+            </h3>
+            {% for metric in view.metrics_panel.trading_metrics %}
+            <div class="relative group">
+                <div class="flex justify-between items-center">
+                    <span class="text-slate-400 cursor-help">{{ metric.name }}</span>
+                    <span class="{{ metric.color_class }} font-semibold">
+                        {{ metric.formatted_value }}
+                    </span>
+                </div>
+                <!-- Tooltip -->
+                <div class="absolute hidden group-hover:block bg-slate-700 p-3 rounded shadow-lg z-10 w-64 text-sm text-slate-200 left-0 top-full mt-1">
+                    {{ metric.tooltip }}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</div>

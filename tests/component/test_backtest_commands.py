@@ -19,7 +19,8 @@ class MockBacktestResult:
     """Mock backtest result for testing."""
 
     def __init__(self):
-        self.total_return = Decimal("1500.00")
+        # total_return is stored as percentage (0.15 = 15%), not dollar amount
+        self.total_return = Decimal("0.15")  # 15% return
         self.total_trades = 10
         self.winning_trades = 6
         self.losing_trades = 4
@@ -101,7 +102,7 @@ class TestBacktestCommands:
             "Data available in catalog" in result.output or "Fetched" in result.output
         )
         assert "Backtest Results" in result.output
-        assert "$1500.00" in result.output  # Total return
+        assert "15.00%" in result.output  # Total return (15% as percentage)
         assert "Strategy was profitable!" in result.output
 
         # Verify catalog service was called
@@ -546,7 +547,7 @@ trading:
             assert "Running backtest from config: test_config.yaml" in result.output
             assert "Using mock data for testing" in result.output
             assert "Backtest Results" in result.output
-            assert "$1500.00" in result.output  # Total return from MockBacktestResult
+            assert "15.00%" in result.output  # Total return (15% as percentage)
             assert "Strategy was profitable!" in result.output
 
             # Verify runner was initialized and disposed

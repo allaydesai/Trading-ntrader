@@ -76,6 +76,7 @@ class TestFilterStateValidation:
         """Strategy name must be <= 255 characters."""
         long_name = "A" * 255
         state = FilterState(strategy=long_name)
+        assert state.strategy is not None
         assert len(state.strategy) == 255
 
         with pytest.raises(ValidationError):
@@ -85,6 +86,7 @@ class TestFilterStateValidation:
         """Instrument symbol must be <= 50 characters."""
         long_symbol = "X" * 50
         state = FilterState(instrument=long_symbol)
+        assert state.instrument is not None
         assert len(state.instrument) == 50
 
         with pytest.raises(ValidationError):
