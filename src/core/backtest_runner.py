@@ -83,12 +83,20 @@ class MinimalBacktestRunner:
             run_id = uuid4()
 
             # Build config snapshot for JSONB storage
-            config_snapshot = {
+            config_snapshot: dict[str, Any] = {
                 "strategy_path": f"src.core.strategies.{strategy_type}",
                 "config_path": "runtime_config",
                 "version": "1.0",
                 "config": strategy_config,
             }
+
+            # Extract and store equity curve if engine is available
+            if self.engine:
+                analyzer = self.engine.portfolio.analyzer
+                starting_balance = float(self.settings.default_balance)
+                equity_curve = self._extract_equity_curve(analyzer, starting_balance)
+                if equity_curve:
+                    config_snapshot["equity_curve"] = equity_curve
 
             async with get_session() as session:
                 repository = BacktestRepository(session)
@@ -162,7 +170,7 @@ class MinimalBacktestRunner:
             run_id = uuid4()
 
             # Build config snapshot for JSONB storage
-            config_snapshot = {
+            config_snapshot: dict[str, Any] = {
                 "strategy_path": f"src.core.strategies.{strategy_type}",
                 "config_path": "runtime_config",
                 "version": "1.0",
@@ -754,6 +762,152 @@ class MinimalBacktestRunner:
         except Exception as e:
             logger.warning(f"Could not calculate max drawdown: {e}")
             return None
+
+    def _extract_equity_curve(
+        self, analyzer, starting_balance: float
+    ) -> list[dict[str, int | float]]:
+        """
+        Extract equity curve time series from portfolio analyzer.
+
+        Builds equity curve from cumulative returns data for chart visualization.
+        Falls back to building curve from closed positions if analyzer returns are empty.
+
+        Args:
+            analyzer: Nautilus Trader PortfolioAnalyzer
+            starting_balance: Initial portfolio value
+
+        Returns:
+            List of equity points: [{"time": 1705276800, "value": 100500.0}, ...]
+            Returns empty list if extraction fails
+        """
+        try:
+            # Try method 1: Get returns series from analyzer
+            returns = analyzer.returns()
+
+            if returns is not None and len(returns) > 0:
+                # Calculate cumulative returns to build equity curve
+                cumulative_returns = (1 + returns).cumprod()
+
+                # Convert to equity values
+                equity_values = cumulative_returns * starting_balance
+
+                # Build list of equity points for JSON storage
+                equity_curve = []
+                for timestamp, value in equity_values.items():
+                    # Convert timestamp to Unix timestamp (seconds since epoch)
+                    if hasattr(timestamp, "timestamp"):
+                        time_unix = int(timestamp.timestamp())
+                    elif isinstance(timestamp, int):
+                        time_unix = timestamp
+                    else:
+                        # Try to parse as string and convert
+                        try:
+                            from datetime import datetime
+
+                            dt = datetime.fromisoformat(str(timestamp))
+                            time_unix = int(dt.timestamp())
+                        except (ValueError, AttributeError):
+                            logger.warning(f"Could not parse timestamp: {timestamp}")
+                            continue
+
+                    equity_curve.append(
+                        {"time": time_unix, "value": round(float(value), 2)}
+                    )
+
+                logger.debug(f"Extracted equity curve with {len(equity_curve)} points")
+                return equity_curve
+
+            # Method 2: Build equity curve from closed positions
+            logger.debug(
+                "No returns data available, building equity curve from positions"
+            )
+            return self._build_equity_curve_from_positions(starting_balance)
+
+        except Exception as e:
+            logger.warning(f"Could not extract equity curve: {e}")
+            # Try fallback method
+            try:
+                return self._build_equity_curve_from_positions(starting_balance)
+            except Exception as fallback_error:
+                logger.warning(f"Fallback equity curve failed: {fallback_error}")
+                return []
+
+    def _build_equity_curve_from_positions(
+        self, starting_balance: float
+    ) -> list[dict[str, int | float]]:
+        """
+        Build equity curve from closed positions.
+
+        Creates equity curve by tracking cumulative PnL from each closed position.
+
+        Args:
+            starting_balance: Initial portfolio value
+
+        Returns:
+            List of equity points sorted by time
+        """
+        if not self.engine:
+            return []
+
+        # Get all closed positions
+        closed_positions = self.engine.cache.positions_closed()
+
+        if not closed_positions:
+            logger.debug("No closed positions to build equity curve")
+            return []
+
+        # Build equity points from positions
+        equity_points = []
+        cumulative_pnl = 0.0
+
+        # Add starting point using backtest start date
+        if self._backtest_start_date:
+            equity_points.append(
+                {
+                    "time": int(self._backtest_start_date.timestamp()),
+                    "value": round(starting_balance, 2),
+                }
+            )
+
+        # Sort positions by close time
+        sorted_positions = sorted(
+            [p for p in closed_positions if hasattr(p, "ts_closed") and p.ts_closed],
+            key=lambda x: x.ts_closed,
+        )
+
+        for position in sorted_positions:
+            # Get realized PnL
+            pnl = (
+                position.realized_pnl.as_double()
+                if hasattr(position, "realized_pnl") and position.realized_pnl
+                else 0.0
+            )
+
+            cumulative_pnl += pnl
+            equity_value = starting_balance + cumulative_pnl
+
+            # Convert Nautilus timestamp to Unix timestamp
+            # ts_closed is in nanoseconds, convert to seconds
+            time_unix = int(position.ts_closed / 1_000_000_000)
+
+            equity_points.append({"time": time_unix, "value": round(equity_value, 2)})
+
+        # Add ending point using backtest end date if we have it
+        if self._backtest_end_date and equity_points:
+            final_equity = equity_points[-1]["value"]
+            equity_points.append(
+                {
+                    "time": int(self._backtest_end_date.timestamp()),
+                    "value": final_equity,
+                }
+            )
+
+        logger.debug(
+            f"Built equity curve from {len(sorted_positions)} positions, "
+            f"{len(equity_points)} total points"
+        )
+
+        return equity_points
 
     def _calculate_cagr(
         self, starting_balance: float, final_balance: float, start_date, end_date
