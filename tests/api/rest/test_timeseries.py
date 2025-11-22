@@ -55,7 +55,7 @@ class TestTimeseriesEndpoint:
             assert data["timeframe"] == "1_MIN"
             assert len(data["candles"]) == 1
             candle = data["candles"][0]
-            assert candle["time"] == "2024-01-15"
+            assert candle["time"] == 1705276800  # Unix timestamp for 2024-01-15
             assert candle["open"] == 185.50
             assert candle["high"] == 186.00
             assert candle["low"] == 185.00

@@ -24,10 +24,10 @@ class TestEquityEndpoint:
         mock_backtest.run_id = run_id
         mock_backtest.config_snapshot = {
             "equity_curve": [
-                {"time": "2024-01-01", "value": 100000.0},
-                {"time": "2024-01-15", "value": 100000.0},
-                {"time": "2024-01-20", "value": 100450.0},
-                {"time": "2024-01-31", "value": 100450.0},
+                {"time": 1704067200, "value": 100000.0},  # 2024-01-01
+                {"time": 1705276800, "value": 100000.0},  # 2024-01-15
+                {"time": 1705708800, "value": 100450.0},  # 2024-01-20
+                {"time": 1706659200, "value": 100450.0},  # 2024-01-31
             ]
         }
 
@@ -45,7 +45,7 @@ class TestEquityEndpoint:
             data = response.json()
             assert data["run_id"] == str(run_id)
             assert len(data["equity"]) == 4
-            assert data["equity"][0]["time"] == "2024-01-01"
+            assert data["equity"][0]["time"] == 1704067200  # Unix timestamp
             assert data["equity"][0]["value"] == 100000.0
         finally:
             app.dependency_overrides.pop(get_backtest_query_service, None)
@@ -59,10 +59,10 @@ class TestEquityEndpoint:
         # Equity: 100000 -> 105000 (peak) -> 100000 (5% drawdown) -> 110000 (new peak)
         mock_backtest.config_snapshot = {
             "equity_curve": [
-                {"time": "2024-01-01", "value": 100000.0},
-                {"time": "2024-01-10", "value": 105000.0},
-                {"time": "2024-01-15", "value": 100000.0},
-                {"time": "2024-01-20", "value": 110000.0},
+                {"time": 1704067200, "value": 100000.0},  # 2024-01-01
+                {"time": 1704844800, "value": 105000.0},  # 2024-01-10
+                {"time": 1705276800, "value": 100000.0},  # 2024-01-15
+                {"time": 1705708800, "value": 110000.0},  # 2024-01-20
             ]
         }
 
@@ -98,8 +98,8 @@ class TestEquityEndpoint:
         mock_backtest.run_id = run_id
         mock_backtest.config_snapshot = {
             "equity_curve": [
-                {"time": "2024-01-01", "value": 100000.0},
-                {"time": "2024-01-31", "value": 100450.0},
+                {"time": 1704067200, "value": 100000.0},  # 2024-01-01
+                {"time": 1706659200, "value": 100450.0},  # 2024-01-31
             ]
         }
 
@@ -162,6 +162,7 @@ class TestEquityEmptyData:
         mock_backtest = MagicMock()
         mock_backtest.run_id = run_id
         mock_backtest.config_snapshot = {}  # No equity_curve key
+        mock_backtest.metrics = None  # No metrics to prevent fallback
 
         async def mock_get_backtest(rid):
             return mock_backtest
