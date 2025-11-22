@@ -92,6 +92,52 @@
     {% if view.trading_summary %}
     {% include "partials/trading_summary.html" %}
     {% endif %}
+
+    <!-- Interactive Charts -->
+    <div class="space-y-6">
+        <!-- Price Chart with Indicators and Trade Markers -->
+        <div class="bg-slate-900 rounded-lg border border-slate-700 p-6">
+            <h2 class="text-lg font-semibold mb-4">Price Chart</h2>
+            <div id="run-price-chart"
+                 class="h-96 relative"
+                 data-chart="run-price"
+                 data-run-id="{{ view.run_id }}"
+                 data-symbol="{{ view.configuration.instrument_symbol }}"
+                 data-start="{{ view.configuration.start_date.strftime('%Y-%m-%d') }}"
+                 data-end="{{ view.configuration.end_date.strftime('%Y-%m-%d') }}">
+                <!-- Loading spinner -->
+                <div class="chart-loading absolute inset-0 flex items-center justify-center bg-slate-900/80">
+                    <div class="text-center">
+                        <svg class="animate-spin h-8 w-8 mx-auto mb-2 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        <span class="text-slate-400 text-sm">Loading price data...</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Equity Curve and Drawdown Chart -->
+        <div class="bg-slate-900 rounded-lg border border-slate-700 p-6">
+            <h2 class="text-lg font-semibold mb-4">Equity Curve</h2>
+            <div id="run-equity-chart"
+                 class="h-64 relative"
+                 data-chart="run-equity"
+                 data-run-id="{{ view.run_id }}">
+                <!-- Loading spinner -->
+                <div class="chart-loading absolute inset-0 flex items-center justify-center bg-slate-900/80">
+                    <div class="text-center">
+                        <svg class="animate-spin h-8 w-8 mx-auto mb-2 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        <span class="text-slate-400 text-sm">Loading equity data...</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
     {% endif %}
 
     <!-- Configuration Snapshot -->

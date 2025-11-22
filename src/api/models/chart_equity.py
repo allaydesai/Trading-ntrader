@@ -15,14 +15,14 @@ class EquityPoint(BaseModel):
     Single equity curve point.
 
     Attributes:
-        time: ISO 8601 date format
+        time: Unix timestamp in seconds
         value: Portfolio value
 
     Example:
-        >>> point = EquityPoint(time="2024-01-15", value=100500.0)
+        >>> point = EquityPoint(time=1705276800, value=100500.0)
     """
 
-    time: str = Field(..., description="ISO 8601 date format")
+    time: int = Field(..., description="Unix timestamp in seconds")
     value: float = Field(..., description="Portfolio value")
 
 
@@ -31,14 +31,14 @@ class DrawdownPoint(BaseModel):
     Single drawdown point.
 
     Attributes:
-        time: ISO 8601 date format
+        time: Unix timestamp in seconds
         value: Percentage from peak (negative number)
 
     Example:
-        >>> point = DrawdownPoint(time="2024-01-15", value=-5.2)
+        >>> point = DrawdownPoint(time=1705276800, value=-5.2)
     """
 
-    time: str = Field(..., description="ISO 8601 date format")
+    time: int = Field(..., description="Unix timestamp in seconds")
     value: float = Field(..., le=0, description="Drawdown percentage (negative)")
 
 

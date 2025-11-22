@@ -108,13 +108,12 @@ def get_timeseries(
         # Convert bars to candles
         candles = []
         for bar in bars:
-            # Convert nanosecond timestamp to date string
-            ts_seconds = bar.ts_event / 1e9
-            dt = datetime.fromtimestamp(ts_seconds, tz=timezone.utc)
-            time_str = dt.strftime("%Y-%m-%d")
+            # Convert nanosecond timestamp to seconds (Unix timestamp)
+            # TradingView Lightweight Charts expects seconds since epoch
+            ts_seconds = int(bar.ts_event / 1e9)
 
             candle = Candle(
-                time=time_str,
+                time=ts_seconds,
                 open=bar.open.as_double(),
                 high=bar.high.as_double(),
                 low=bar.low.as_double(),

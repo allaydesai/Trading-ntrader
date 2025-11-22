@@ -35,7 +35,7 @@ class Candle(BaseModel):
     Single OHLCV candle for TradingView chart.
 
     Attributes:
-        time: ISO 8601 date format (e.g., "2023-01-15")
+        time: Unix timestamp in seconds (e.g., 1705276800)
         open: Opening price
         high: High price
         low: Low price
@@ -44,7 +44,7 @@ class Candle(BaseModel):
 
     Example:
         >>> candle = Candle(
-        ...     time="2024-01-15",
+        ...     time=1705276800,
         ...     open=185.50,
         ...     high=186.00,
         ...     low=185.00,
@@ -53,7 +53,7 @@ class Candle(BaseModel):
         ... )
     """
 
-    time: str = Field(..., description="ISO 8601 date format")
+    time: int = Field(..., description="Unix timestamp in seconds")
     open: float = Field(..., description="Opening price")
     high: float = Field(..., description="High price")
     low: float = Field(..., description="Low price")

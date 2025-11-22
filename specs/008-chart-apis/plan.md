@@ -113,3 +113,136 @@ No violations. The design:
 | **VII. Modular** | ✅ PASS | Each endpoint <100 lines estimated |
 
 **Final Gate Result**: ✅ PASS - Ready for task generation
+
+---
+
+## Phase 5: Interactive Charts Implementation
+
+**Date**: 2025-11-19 | **Depends On**: Phase 4 Chart APIs (completed)
+
+### Summary
+
+Implement TradingView Lightweight Charts integration for the backtest detail page, consuming the Chart APIs (Phase 4) to display interactive price charts with indicators, trade markers, and equity curves.
+
+### Technical Context
+
+**Frontend**: TradingView Lightweight Charts 4.1.0 via CDN
+**Integration**: JavaScript consuming FastAPI JSON endpoints
+**Theme**: Dark mode (slate-950 background, slate-100 text)
+**Deliverables**: `static/js/charts.js`, template updates
+
+### Implementation Tasks
+
+#### Task 1: Add TradingView Lightweight Charts Library
+**File**: `templates/base.html`
+
+- Add Lightweight Charts script from CDN before `charts.js`
+- Add custom `charts.js` script reference
+- Ensure proper loading order with `defer`
+
+#### Task 2: Create Chart Container Elements
+**File**: `templates/backtests/detail.html`
+
+Add chart containers with data attributes:
+- **Price Chart**: `div#run-price-chart` with `data-chart="run-price"`, `data-run-id`, `data-symbol`, `data-start`, `data-end`
+- **Equity Chart**: `div#run-equity-chart` with `data-chart="run-equity"`, `data-run-id`
+- Place between Trading Summary and Configuration Snapshot
+- Only show for successful backtests (`view.is_successful`)
+
+#### Task 3: Implement charts.js Module
+**File**: `static/js/charts.js`
+
+##### 3a. Core Bootstrap
+```javascript
+document.addEventListener("DOMContentLoaded", initCharts);
+document.body.addEventListener("htmx:afterSwap", handleHtmxSwap);
+```
+
+##### 3b. initRunPriceChart(el)
+- Fetch `/api/timeseries?symbol=...&start=...&end=...&timeframe=1_DAY`
+- Fetch `/api/trades/{run_id}` and `/api/indicators/{run_id}` in parallel
+- Create candlestick chart with dark theme colors
+- Add SMA indicator line series (if available)
+- Add trade markers (green arrows=buy, red arrows=sell)
+- Configure zoom/pan controls
+
+##### 3c. initEquityChart(el)
+- Fetch `/api/equity/{run_id}`
+- Create line chart for equity curve
+- Add area series for drawdown (negative percentages)
+- Style with dark theme colors
+
+##### 3d. Helper Functions
+- `createChartWithDefaults(el)` - common chart config
+- Error handling for failed API calls
+- Loading state management
+
+#### Task 4: Dark Theme Chart Styling
+
+Configure Lightweight Charts to match Tailwind dark theme:
+- Background: `#020617` (slate-950)
+- Grid lines: `#1e293b` (slate-800)
+- Text: `#e5e7eb` (slate-100)
+- Bullish candles: `#22c55e` (green-500)
+- Bearish candles: `#ef4444` (red-500)
+- SMA fast: `#3b82f6` (blue-500)
+- SMA slow: `#f59e0b` (amber-500)
+
+#### Task 5: Loading States & Error Handling
+
+- Show loading spinner while fetching chart data
+- Display user-friendly error messages if API calls fail
+- Handle empty data gracefully (no trades, no indicators)
+
+#### Task 6: Write Tests
+**File**: `tests/ui/test_charts.py`
+
+- Test that detail page includes chart containers
+- Test that chart data attributes are correct
+- Integration tests for chart API calls
+
+### Project Structure Updates
+
+```text
+templates/
+├── base.html                    # MODIFIED: Add Lightweight Charts CDN + charts.js
+└── backtests/
+    └── detail.html              # MODIFIED: Add chart container divs
+
+static/
+└── js/
+    └── charts.js                # NEW: Chart initialization module
+
+tests/
+└── ui/
+    └── test_charts.py           # NEW: Chart integration tests
+```
+
+### Acceptance Criteria
+
+- [ ] Charts render 1 year of 1-minute data in < 2 seconds
+- [ ] Zoom/pan interactions feel smooth (60 fps)
+- [ ] Trade markers align precisely with timestamps
+- [ ] Charts work correctly after HTMX swaps
+- [ ] Dark theme colors match rest of UI
+- [ ] Graceful handling of missing indicators/trades
+
+### API Endpoints Consumed
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /api/timeseries` | OHLCV candlestick data |
+| `GET /api/trades/{run_id}` | Trade markers (buy/sell) |
+| `GET /api/indicators/{run_id}` | SMA indicator overlays |
+| `GET /api/equity/{run_id}` | Equity curve + drawdown |
+
+### Constitution Check
+
+| Principle | Status | Notes |
+|-----------|--------|-------|
+| **I. Simplicity** | ✅ PASS | Single JS file, follows Developer Guide patterns |
+| **II. TDD** | ✅ PASS | Tests for template structure and API integration |
+| **III. Minimal JS** | ✅ PASS | ~300 lines, no frameworks |
+| **IV. Reuse** | ✅ PASS | Consumes existing Phase 4 APIs |
+
+**Gate Result**: ✅ PASS - Ready for implementation
