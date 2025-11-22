@@ -14,7 +14,7 @@ from typing import Dict, List
 
 import structlog
 from dotenv import load_dotenv
-from nautilus_trader.model.data import Bar
+from nautilus_trader.model.data import Bar, BarType
 from nautilus_trader.persistence.catalog import ParquetDataCatalog
 
 # Load environment variables from .env file
@@ -441,10 +441,15 @@ class DataCatalogService:
             start_ns = int(start.timestamp() * 1e9)
             end_ns = int(end.timestamp() * 1e9)
 
-            # Reason: Query catalog using Nautilus API
-            bars = self.catalog.query(
-                data_cls=Bar,
-                identifiers=[instrument_id],
+            # Reason: Construct bar type string for catalog query
+            # Format: {instrument_id}-{bar_type_spec}-EXTERNAL
+            bar_type_str = f"{instrument_id}-{bar_type_spec}-EXTERNAL"
+            bar_type = BarType.from_str(bar_type_str)
+
+            # Reason: Query catalog using Nautilus bars() API with bar_type filter
+            bars = self.catalog.bars(
+                instrument_ids=[instrument_id],
+                bar_type=bar_type,
                 start=start_ns,
                 end=end_ns,
             )

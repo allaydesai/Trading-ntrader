@@ -1,0 +1,428 @@
+openapi: 3.1.0
+info:
+  title: NTrader Chart APIs
+  description: JSON APIs for TradingView Lightweight Charts rendering
+  version: 1.0.0
+  contact:
+    name: NTrader Development
+
+servers:
+  - url: http://localhost:8000
+    description: Local development server
+
+paths:
+  /api/timeseries:
+    get:
+      summary: Get OHLCV time series data
+      description: Returns candlestick data for chart rendering from Parquet catalog
+      operationId: getTimeseries
+      tags:
+        - Charts
+      parameters:
+        - name: symbol
+          in: query
+          required: true
+          description: Trading symbol (e.g., AAPL)
+          schema:
+            type: string
+            maxLength: 20
+            example: AAPL
+        - name: start
+          in: query
+          required: true
+          description: Start date (ISO 8601)
+          schema:
+            type: string
+            format: date
+            example: "2023-01-01"
+        - name: end
+          in: query
+          required: true
+          description: End date (ISO 8601)
+          schema:
+            type: string
+            format: date
+            example: "2023-12-31"
+        - name: timeframe
+          in: query
+          required: false
+          description: Bar timeframe
+          schema:
+            type: string
+            enum: [1_MIN, 5_MIN, 15_MIN, 1_HOUR, 1_DAY]
+            default: 1_MIN
+      responses:
+        "200":
+          description: Time series data retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TimeseriesResponse"
+        "404":
+          description: Market data not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+              example:
+                detail: "Market data not found for AAPL from 2023-01-01 to 2023-12-31"
+                suggestion: "Run: ntrader data fetch --symbol AAPL --start 2023-01-01 --end 2023-12-31"
+        "422":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationError"
+
+  /api/trades/{run_id}:
+    get:
+      summary: Get trade markers for backtest
+      description: Returns trade entry/exit points for chart overlay
+      operationId: getTrades
+      tags:
+        - Charts
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          description: Backtest run UUID
+          schema:
+            type: string
+            format: uuid
+            example: "550e8400-e29b-41d4-a716-446655440000"
+      responses:
+        "200":
+          description: Trade markers retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TradesResponse"
+        "404":
+          description: Backtest not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+              example:
+                detail: "Backtest run 550e8400-e29b-41d4-a716-446655440000 not found"
+        "422":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationError"
+
+  /api/equity/{run_id}:
+    get:
+      summary: Get equity curve and drawdown
+      description: Returns portfolio value and drawdown time series
+      operationId: getEquity
+      tags:
+        - Charts
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          description: Backtest run UUID
+          schema:
+            type: string
+            format: uuid
+            example: "550e8400-e29b-41d4-a716-446655440000"
+      responses:
+        "200":
+          description: Equity data retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EquityResponse"
+        "404":
+          description: Backtest not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "422":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationError"
+
+  /api/indicators/{run_id}:
+    get:
+      summary: Get indicator series
+      description: Returns indicator values for chart overlay
+      operationId: getIndicators
+      tags:
+        - Charts
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          description: Backtest run UUID
+          schema:
+            type: string
+            format: uuid
+            example: "550e8400-e29b-41d4-a716-446655440000"
+      responses:
+        "200":
+          description: Indicator data retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IndicatorsResponse"
+        "404":
+          description: Backtest not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "422":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationError"
+
+components:
+  schemas:
+    Candle:
+      type: object
+      description: Single OHLCV candlestick
+      required:
+        - time
+        - open
+        - high
+        - low
+        - close
+        - volume
+      properties:
+        time:
+          type: string
+          format: date
+          description: Bar timestamp (ISO 8601 date)
+          example: "2023-01-15"
+        open:
+          type: number
+          format: float
+          description: Opening price
+          example: 177.09
+        high:
+          type: number
+          format: float
+          description: High price
+          example: 177.93
+        low:
+          type: number
+          format: float
+          description: Low price
+          example: 175.86
+        close:
+          type: number
+          format: float
+          description: Closing price
+          example: 177.04
+        volume:
+          type: integer
+          description: Volume
+          example: 1234567
+
+    TimeseriesResponse:
+      type: object
+      required:
+        - symbol
+        - timeframe
+        - candles
+      properties:
+        symbol:
+          type: string
+          description: Trading symbol
+          example: "AAPL"
+        timeframe:
+          type: string
+          description: Bar timeframe
+          example: "1_MIN"
+        candles:
+          type: array
+          items:
+            $ref: "#/components/schemas/Candle"
+
+    TradeMarker:
+      type: object
+      description: Single trade execution marker
+      required:
+        - time
+        - side
+        - price
+        - quantity
+        - pnl
+      properties:
+        time:
+          type: string
+          format: date
+          description: Trade timestamp
+          example: "2023-01-15"
+        side:
+          type: string
+          enum: [buy, sell]
+          description: Trade side
+          example: "buy"
+        price:
+          type: number
+          format: float
+          description: Execution price
+          example: 177.50
+        quantity:
+          type: integer
+          description: Trade quantity
+          example: 100
+        pnl:
+          type: number
+          format: float
+          description: Realized P&L
+          example: 150.00
+
+    TradesResponse:
+      type: object
+      required:
+        - run_id
+        - trade_count
+        - trades
+      properties:
+        run_id:
+          type: string
+          format: uuid
+          description: Backtest run ID
+        trade_count:
+          type: integer
+          description: Total number of trades
+          example: 50
+        trades:
+          type: array
+          items:
+            $ref: "#/components/schemas/TradeMarker"
+
+    EquityPoint:
+      type: object
+      required:
+        - time
+        - value
+      properties:
+        time:
+          type: string
+          format: date
+          example: "2023-01-15"
+        value:
+          type: number
+          format: float
+          description: Portfolio value
+          example: 10500.00
+
+    DrawdownPoint:
+      type: object
+      required:
+        - time
+        - value
+      properties:
+        time:
+          type: string
+          format: date
+          example: "2023-01-15"
+        value:
+          type: number
+          format: float
+          description: Drawdown percentage (negative)
+          example: -5.2
+
+    EquityResponse:
+      type: object
+      required:
+        - run_id
+        - equity
+        - drawdown
+      properties:
+        run_id:
+          type: string
+          format: uuid
+        equity:
+          type: array
+          items:
+            $ref: "#/components/schemas/EquityPoint"
+        drawdown:
+          type: array
+          items:
+            $ref: "#/components/schemas/DrawdownPoint"
+
+    IndicatorPoint:
+      type: object
+      required:
+        - time
+        - value
+      properties:
+        time:
+          type: string
+          format: date
+          example: "2023-01-15"
+        value:
+          type: number
+          format: float
+          example: 175.50
+
+    IndicatorsResponse:
+      type: object
+      required:
+        - run_id
+        - indicators
+      properties:
+        run_id:
+          type: string
+          format: uuid
+        indicators:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              $ref: "#/components/schemas/IndicatorPoint"
+          example:
+            sma_fast:
+              - time: "2023-01-15"
+                value: 175.50
+            sma_slow:
+              - time: "2023-01-15"
+                value: 172.30
+
+    ErrorDetail:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: string
+          description: Error message
+        suggestion:
+          type: string
+          description: Suggested action (CLI command)
+          nullable: true
+
+    ValidationError:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: array
+          items:
+            type: object
+            properties:
+              loc:
+                type: array
+                items:
+                  type: string
+              msg:
+                type: string
+              type:
+                type: string
+
+tags:
+  - name: Charts
+    description: JSON APIs for TradingView Lightweight Charts

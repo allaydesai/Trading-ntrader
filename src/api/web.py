@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from src.api.ui import dashboard, backtests
+from src.api.rest import timeseries, trades, equity, indicators
 
 app = FastAPI(
     title="NTrader Web UI",
@@ -26,3 +27,9 @@ templates = Jinja2Templates(directory="templates")
 # Register UI routers
 app.include_router(dashboard.router, tags=["ui"])
 app.include_router(backtests.router, prefix="/backtests", tags=["ui"])
+
+# Register REST API routers for chart data
+app.include_router(timeseries.router, prefix="/api", tags=["charts"])
+app.include_router(trades.router, prefix="/api", tags=["charts"])
+app.include_router(equity.router, prefix="/api", tags=["charts"])
+app.include_router(indicators.router, prefix="/api", tags=["charts"])
