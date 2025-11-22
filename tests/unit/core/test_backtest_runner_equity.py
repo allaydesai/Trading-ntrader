@@ -235,4 +235,6 @@ class TestPersistBacktestResultsEquityCurve:
 
                     assert "equity_curve" in config_snapshot
                     assert len(config_snapshot["equity_curve"]) == 3
-                    assert config_snapshot["equity_curve"][0]["time"] == 1704067200  # 2024-01-01 Unix timestamp
+                    assert (
+                        config_snapshot["equity_curve"][0]["time"] == 1704067200
+                    )  # 2024-01-01 Unix timestamp
