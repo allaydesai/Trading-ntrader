@@ -51,7 +51,7 @@ class TestExtractEquityCurve:
         for point in result:
             assert "time" in point
             assert "value" in point
-            assert isinstance(point["time"], str)
+            assert isinstance(point["time"], int)  # Unix timestamp
             assert isinstance(point["value"], float)
 
     def test_extract_equity_curve_calculates_correct_values(
@@ -81,17 +81,17 @@ class TestExtractEquityCurve:
     def test_extract_equity_curve_formats_dates_correctly(
         self, backtest_runner, mock_analyzer_with_returns
     ):
-        """Equity curve formats dates as ISO date strings."""
+        """Equity curve formats dates as Unix timestamps."""
         # Act
         result = backtest_runner._extract_equity_curve(
             mock_analyzer_with_returns, starting_balance=100000.0
         )
 
-        # Assert
-        assert result[0]["time"] == "2024-01-01"
-        assert result[1]["time"] == "2024-01-02"
-        assert result[2]["time"] == "2024-01-03"
-        assert result[3]["time"] == "2024-01-04"
+        # Assert - Unix timestamps for 2024-01-01 to 2024-01-04 (midnight UTC)
+        assert result[0]["time"] == 1704067200  # 2024-01-01
+        assert result[1]["time"] == 1704153600  # 2024-01-02
+        assert result[2]["time"] == 1704240000  # 2024-01-03
+        assert result[3]["time"] == 1704326400  # 2024-01-04
 
     def test_extract_equity_curve_returns_empty_for_no_returns(self, backtest_runner):
         """Equity curve returns empty list when no returns data."""
@@ -235,4 +235,4 @@ class TestPersistBacktestResultsEquityCurve:
 
                     assert "equity_curve" in config_snapshot
                     assert len(config_snapshot["equity_curve"]) == 3
-                    assert config_snapshot["equity_curve"][0]["time"] == "2024-01-01"
+                    assert config_snapshot["equity_curve"][0]["time"] == 1704067200  # 2024-01-01 Unix timestamp
