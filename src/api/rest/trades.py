@@ -563,9 +563,9 @@ async def export_trades(
 
     # Create descriptive filename with strategy, instrument, and dates
     strategy_name = backtest.strategy_name.replace(" ", "_")
-    instrument = backtest.configuration["instrument_symbol"]
-    start_date = backtest.configuration["start_date"]
-    end_date = backtest.configuration["end_date"]
+    instrument = backtest.instrument_symbol
+    start_date = backtest.start_date.strftime("%Y-%m-%d")
+    end_date = backtest.end_date.strftime("%Y-%m-%d")
     base_filename = f"{strategy_name}_{instrument}_{start_date}_to_{end_date}_trades"
 
     if format == "csv":

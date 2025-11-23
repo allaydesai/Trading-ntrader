@@ -95,7 +95,8 @@ class StrategyFactory:
 
         if not issubclass(config_class, StrategyConfig):
             raise TypeError(
-                f"Class '{class_name}' must inherit from nautilus_trader.trading.strategy.StrategyConfig"
+                f"Class '{class_name}' must inherit from "
+                f"nautilus_trader.trading.strategy.StrategyConfig"
             )
 
         return config_class

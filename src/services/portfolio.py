@@ -205,36 +205,15 @@ class PortfolioService:
 
         Returns:
             List of Trade instances
+
+        Note:
+            This method is currently not implemented as Trade model doesn't have
+            a from_nautilus_position factory method. Trade instances should be
+            created from database queries instead.
         """
-        trades = []
-
-        try:
-            # Get closed positions
-            closed_positions = self.cache.positions_closed() or []
-            for position in closed_positions:
-                try:
-                    trade = Trade.from_nautilus_position(position)
-                    trades.append(trade)
-                except Exception:
-                    # Skip invalid positions
-                    continue
-
-            # Optionally include open positions
-            if include_open:
-                open_positions = self.cache.positions_open() or []
-                for position in open_positions:
-                    try:
-                        trade = Trade.from_nautilus_position(position)
-                        trades.append(trade)
-                    except Exception:
-                        # Skip invalid positions
-                        continue
-
-        except Exception:
-            # Log error but return what we have
-            pass
-
-        return trades
+        # TODO: Implement proper conversion from Nautilus positions to Trade models
+        # For now, return empty list as trades should be fetched from database
+        return []
 
     def get_performance_attribution(self) -> Dict[str, Any]:
         """

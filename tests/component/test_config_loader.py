@@ -165,17 +165,20 @@ class TestConfigLoader:
                 id="invalid_yaml_syntax",
             ),
             pytest.param(
-                'config_path: "src.core.strategies.sma_crossover:SMAConfig"\nconfig:\n  fast_period: 10',
+                'config_path: "src.core.strategies.sma_crossover:SMAConfig"\n'
+                "config:\n  fast_period: 10",
                 ValueError,
                 id="missing_strategy_path",
             ),
             pytest.param(
-                'strategy_path: "src.core.strategies.sma_crossover:SMACrossover"\nconfig:\n  fast_period: 10',
+                'strategy_path: "src.core.strategies.sma_crossover:SMACrossover"\n'
+                "config:\n  fast_period: 10",
                 ValueError,
                 id="missing_config_path",
             ),
             pytest.param(
-                'strategy_path: "src.core.strategies.sma_crossover:SMACrossover"\nconfig_path: "src.core.strategies.sma_crossover:SMAConfig"',
+                'strategy_path: "src.core.strategies.sma_crossover:SMACrossover"\n'
+                'config_path: "src.core.strategies.sma_crossover:SMAConfig"',
                 ValueError,
                 id="missing_config_section",
             ),

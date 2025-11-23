@@ -71,7 +71,9 @@ def get_backtest_query_service(
 
     Example:
         >>> @router.get("/")
-        ... async def route(service: Annotated[BacktestQueryService, Depends(get_backtest_query_service)]):
+        ... async def route(
+        ...     service: Annotated[BacktestQueryService, Depends(get_backtest_query_service)]
+        ... ):
         ...     backtests = await service.list_recent_backtests(limit=20)
     """
     return BacktestQueryService(repository)

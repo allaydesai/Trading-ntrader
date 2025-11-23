@@ -96,7 +96,8 @@ class TestHistoricalDataFetcherInitialization:
 
             assert fetcher.client == mock_ibkr_client
             assert fetcher.catalog_path == Path("./data/catalog")
-            # ParquetDataCatalog is called with str(Path), which normalizes "./data/catalog" to "data/catalog"
+            # ParquetDataCatalog is called with str(Path),
+            # which normalizes "./data/catalog" to "data/catalog"
             mock_catalog_cls.assert_called_once_with("data/catalog")
 
     @pytest.mark.component

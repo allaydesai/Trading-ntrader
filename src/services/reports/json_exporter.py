@@ -87,22 +87,25 @@ class JSONExporter:
         trades_data = []
         for trade in trades:
             trade_dict = {
-                "position_id": trade.position_id,
+                "id": trade.id,
+                "backtest_run_id": trade.backtest_run_id,
                 "instrument_id": trade.instrument_id,
-                "side": trade.side,
+                "trade_id": trade.trade_id,
+                "venue_order_id": trade.venue_order_id,
+                "client_order_id": trade.client_order_id,
+                "order_side": trade.order_side,
                 "quantity": self._serialize_value(trade.quantity),
                 "entry_price": self._serialize_value(trade.entry_price),
                 "exit_price": self._serialize_value(trade.exit_price),
-                "entry_time": self._serialize_value(trade.entry_time),
-                "exit_time": self._serialize_value(trade.exit_time),
-                "realized_pnl": self._serialize_value(trade.realized_pnl),
-                "pnl_pct": self._serialize_value(trade.pnl_pct),
-                "commission": self._serialize_value(trade.commission),
-                "slippage": self._serialize_value(trade.slippage),
-                "strategy_name": trade.strategy_name,
-                "notes": trade.notes,
-                "duration_hours": trade.duration_hours,
-                "is_winning_trade": trade.is_winning_trade,
+                "entry_timestamp": self._serialize_value(trade.entry_timestamp),
+                "exit_timestamp": self._serialize_value(trade.exit_timestamp),
+                "profit_loss": self._serialize_value(trade.profit_loss),
+                "profit_pct": self._serialize_value(trade.profit_pct),
+                "commission_amount": self._serialize_value(trade.commission_amount),
+                "commission_currency": trade.commission_currency,
+                "fees_amount": self._serialize_value(trade.fees_amount),
+                "holding_period_seconds": trade.holding_period_seconds,
+                "created_at": self._serialize_value(trade.created_at),
             }
             trades_data.append(trade_dict)
 

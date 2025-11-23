@@ -59,7 +59,8 @@ async def _reproduce_backtest_async(run_id_str: str):
 
         # Step 2: Retrieve original backtest (synchronously)
         console.print(
-            f"[cyan]🔍 Retrieving original backtest...[/cyan] [dim]{str(original_run_id)[:8]}...[/dim]"
+            f"[cyan]🔍 Retrieving original backtest...[/cyan] "
+            f"[dim]{str(original_run_id)[:8]}...[/dim]"
         )
 
         with get_sync_session() as session:
@@ -88,7 +89,8 @@ async def _reproduce_backtest_async(run_id_str: str):
             Panel.fit(
                 f"[bold cyan]Original Backtest[/bold cyan]\n"
                 f"Run ID: [yellow]{str(original_run_id)[:12]}...[/yellow]\n"
-                f"Strategy: [magenta]{original_backtest.strategy_name}[/magenta] ({strategy_type})\n"
+                f"Strategy: [magenta]{original_backtest.strategy_name}[/magenta] "
+                f"({strategy_type})\n"
                 f"Symbol: [blue]{symbol}[/blue]\n"
                 f"Period: {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}\n"
                 f"Parameters: {strategy_params}",
@@ -199,12 +201,14 @@ async def _reproduce_backtest_async(run_id_str: str):
             console.print(
                 Panel.fit(
                     f"[bold green]✅ Backtest Reproduced Successfully![/bold green]\n\n"
-                    f"[bold]Original Run ID:[/bold] [yellow]{str(original_run_id)[:12]}...[/yellow]\n"
+                    f"[bold]Original Run ID:[/bold] "
+                    f"[yellow]{str(original_run_id)[:12]}...[/yellow]\n"
                     f"[bold]New Run ID:[/bold] [green]{str(new_run_id)[:12]}...[/green]\n\n"
                     f"[dim]Execution time: {execution_duration:.2f}s[/dim]\n\n"
                     f"[bold cyan]Quick Commands:[/bold cyan]\n"
                     f"  View details: [dim]ntrader backtest show {new_run_id}[/dim]\n"
-                    f"  Compare runs: [dim]ntrader backtest compare {original_run_id} {new_run_id}[/dim]",
+                    f"  Compare runs: [dim]ntrader backtest compare "
+                    f"{original_run_id} {new_run_id}[/dim]",
                     title="🎯 Reproduction Complete",
                     border_style="green",
                 )
@@ -220,9 +224,8 @@ async def _reproduce_backtest_async(run_id_str: str):
                     original_trades = original_backtest.metrics.total_trades
 
                 console.print("\n[bold]Performance Summary:[/bold]")
-                console.print(
-                    f"  Total Return: [{'green' if result.total_return > 0 else 'red'}]{result.total_return:.2%}[/]"
-                )
+                return_color = "green" if result.total_return > 0 else "red"
+                console.print(f"  Total Return: [{return_color}]{result.total_return:.2%}[/]")
 
                 if original_return is not None:
                     diff = result.total_return - original_return
@@ -242,7 +245,8 @@ async def _reproduce_backtest_async(run_id_str: str):
         except DataNotFoundError as e:
             console.print(
                 f"[red]❌ Data not available: {e}[/red]\n"
-                f"[yellow]💡 The required market data for {symbol} may not be in the catalog.[/yellow]\n"
+                f"[yellow]💡 The required market data for {symbol} "
+                f"may not be in the catalog.[/yellow]\n"
                 "[dim]Try importing data first using 'ntrader data import'[/dim]"
             )
             sys.exit(1)
@@ -251,7 +255,8 @@ async def _reproduce_backtest_async(run_id_str: str):
             error_msg = str(e)
             console.print(
                 f"[red]❌ Backtest execution failed: {error_msg}[/red]\n"
-                "[yellow]💡 Check that the strategy parameters are valid and data is available.[/yellow]"
+                "[yellow]💡 Check that the strategy parameters are valid "
+                "and data is available.[/yellow]"
             )
             sys.exit(1)
 

@@ -169,7 +169,10 @@ def _list_history_sync(
 
         # Build table title with count info (T161)
         if total_count is not None:
-            title = f"📋 Backtest History for '{strategy}' (showing {len(backtests)} of {total_count} total) {sort_label}"
+            title = (
+                f"📋 Backtest History for '{strategy}' "
+                f"(showing {len(backtests)} of {total_count} total) {sort_label}"
+            )
         else:
             title = f"📋 Backtest History ({len(backtests)} results) {sort_label}"
 

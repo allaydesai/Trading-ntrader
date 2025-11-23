@@ -119,7 +119,8 @@ def list(limit: int, strategy: str, symbol: str):
                 console.print("📭 No backtest results found", style="yellow")
                 console.print("\n💡 Run a backtest to create results:")
                 console.print(
-                    "   uv run python -m src.cli backtest run --strategy sma_crossover --symbol AAPL ..."
+                    "   uv run python -m src.cli backtest run "
+                    "--strategy sma_crossover --symbol AAPL ..."
                 )
                 return
 

@@ -94,7 +94,8 @@ def import_data(
 
                 if result["conflicts_skipped"] > 0:
                     console.print(
-                        f"⚠️  Skipped {result['conflicts_skipped']} bars (conflict mode: {conflict_mode})",
+                        f"⚠️  Skipped {result['conflicts_skipped']} bars "
+                        f"(conflict mode: {conflict_mode})",
                         style="yellow",
                     )
 
@@ -136,7 +137,8 @@ def import_data(
                         style="cyan",
                     )
                     console.print(
-                        f"   Run: ntrader backtest run --symbol {symbol.upper()} --start YYYY-MM-DD --end YYYY-MM-DD",
+                        f"   Run: ntrader backtest run --symbol {symbol.upper()} "
+                        f"--start YYYY-MM-DD --end YYYY-MM-DD",
                         style="cyan dim",
                     )
 
@@ -351,7 +353,8 @@ def check_data(
                 style="cyan",
             )
             console.print(
-                f"   ntrader backtest run --symbol {symbol.upper()} --start YYYY-MM-DD --end YYYY-MM-DD",
+                f"   ntrader backtest run --symbol {symbol.upper()} "
+                f"--start YYYY-MM-DD --end YYYY-MM-DD",
                 style="cyan dim",
             )
             console.print(
@@ -359,7 +362,8 @@ def check_data(
                 style="cyan",
             )
             console.print(
-                f"   ntrader data import --csv FILE --symbol {symbol.upper()} --venue {venue.upper()}",
+                f"   ntrader data import --csv FILE --symbol {symbol.upper()} "
+                f"--venue {venue.upper()}",
                 style="cyan dim",
             )
             return
@@ -396,7 +400,8 @@ def check_data(
                 )
                 for i, gap in enumerate(gaps, 1):
                     console.print(
-                        f"   {i}. {gap['start'].strftime('%Y-%m-%d')} to {gap['end'].strftime('%Y-%m-%d')}",
+                        f"   {i}. {gap['start'].strftime('%Y-%m-%d')} to "
+                        f"{gap['end'].strftime('%Y-%m-%d')}",
                         style="yellow",
                     )
 
@@ -644,7 +649,8 @@ def fetch(
 
             # Display summary
             console.print(
-                f"\n✅ Successfully fetched {total_bars} bars for {len(instrument_list)} instruments",
+                f"\n✅ Successfully fetched {total_bars} bars for "
+                f"{len(instrument_list)} instruments",
                 style="green bold",
             )
 

@@ -71,7 +71,9 @@ async def dashboard(
     if stats.total_backtests == 0:
         empty_state = EmptyStateMessage(
             title="No Backtests Yet",
-            description="You haven't run any backtests yet. Run your first backtest to see statistics here.",
+            description=(
+                "You haven't run any backtests yet. Run your first backtest to see statistics here."
+            ),
             action_text="Run your first backtest",
             action_command="ntrader backtest run --strategy sma_crossover --symbol AAPL",
         )

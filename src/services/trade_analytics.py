@@ -81,18 +81,26 @@ def generate_equity_curve(
 
     sorted_trades = sorted(
         closed_trades,
-        key=lambda t: t.exit_timestamp,
+        key=lambda t: (
+            t.exit_timestamp
+            if t.exit_timestamp is not None
+            else datetime.min.replace(tzinfo=timezone.utc)
+        ),
     )
 
     # Calculate cumulative balance after each trade
     for idx, trade in enumerate(sorted_trades, start=1):
         # Add trade profit/loss to balance
+        # profit_loss is guaranteed to be not None by filter above
+        assert trade.profit_loss is not None
         balance += trade.profit_loss
 
         # Calculate cumulative return percentage (rounded to 4 decimal places)
         cum_return = ((balance - initial_capital) / initial_capital) * 100
         cum_return = cum_return.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
 
+        # exit_timestamp is guaranteed to be not None by filter above
+        assert trade.exit_timestamp is not None
         points.append(
             EquityCurvePoint(
                 timestamp=trade.exit_timestamp,
@@ -182,6 +190,9 @@ def calculate_trade_statistics(trades: list[Trade]) -> TradeStatistics:
     breakeven_trades = []
 
     for trade in closed_trades:
+        # profit_loss is guaranteed not None by filter above
+        assert trade.profit_loss is not None
+
         # Breakeven threshold: profit/loss between -10 and 0 (basically just commission)
         if trade.profit_loss > Decimal("0"):
             winning_trades.append(trade)
@@ -203,15 +214,28 @@ def calculate_trade_statistics(trades: list[Trade]) -> TradeStatistics:
     win_rate = win_rate.quantize(Decimal("0.01"))
 
     # Calculate profit metrics
-    total_profit = sum((t.profit_loss for t in winning_trades), Decimal("0"))
-    total_loss = abs(sum((t.profit_loss for t in losing_trades), Decimal("0")))
+    # All profit_loss values are guaranteed not None by filter above
+    total_profit = sum(
+        (t.profit_loss for t in winning_trades if t.profit_loss is not None), Decimal("0")
+    )
+    total_loss = abs(
+        sum((t.profit_loss for t in losing_trades if t.profit_loss is not None), Decimal("0"))
+    )
     net_profit = total_profit - total_loss
 
     average_win = total_profit / num_wins if num_wins > 0 else Decimal("0.00")
     average_loss = total_loss / num_losses if num_losses > 0 else Decimal("0.00")
 
-    largest_win = max((t.profit_loss for t in winning_trades), default=Decimal("0.00"))
-    largest_loss = abs(min((t.profit_loss for t in losing_trades), default=Decimal("0.00")))
+    largest_win = max(
+        (t.profit_loss for t in winning_trades if t.profit_loss is not None),
+        default=Decimal("0.00"),
+    )
+    largest_loss = abs(
+        min(
+            (t.profit_loss for t in losing_trades if t.profit_loss is not None),
+            default=Decimal("0.00"),
+        )
+    )
 
     # Calculate profit factor
     profit_factor = None
@@ -234,7 +258,7 @@ def calculate_trade_statistics(trades: list[Trade]) -> TradeStatistics:
     if holding_periods:
         # Convert seconds to hours
         holding_periods_hours = [Decimal(str(sec / 3600)) for sec in holding_periods]
-        avg_holding_hours = sum(holding_periods_hours) / len(holding_periods_hours)
+        avg_holding_hours = sum(holding_periods_hours) / Decimal(len(holding_periods_hours))
         avg_holding_hours = avg_holding_hours.quantize(Decimal("0.01"))
         max_holding_hours = int(max(holding_periods) / 3600)
         min_holding_hours = int(min(holding_periods) / 3600)
@@ -280,7 +304,14 @@ def _calculate_max_consecutive_wins(trades: list[Trade]) -> int:
         return 0
 
     # Sort trades by exit timestamp to get chronological order
-    sorted_trades = sorted(trades, key=lambda t: t.exit_timestamp)
+    sorted_trades = sorted(
+        trades,
+        key=lambda t: (
+            t.exit_timestamp
+            if t.exit_timestamp is not None
+            else datetime.min.replace(tzinfo=timezone.utc)
+        ),
+    )
 
     max_streak = 0
     current_streak = 0
@@ -309,7 +340,14 @@ def _calculate_max_consecutive_losses(trades: list[Trade]) -> int:
         return 0
 
     # Sort trades by exit timestamp to get chronological order
-    sorted_trades = sorted(trades, key=lambda t: t.exit_timestamp)
+    sorted_trades = sorted(
+        trades,
+        key=lambda t: (
+            t.exit_timestamp
+            if t.exit_timestamp is not None
+            else datetime.min.replace(tzinfo=timezone.utc)
+        ),
+    )
 
     max_streak = 0
     current_streak = 0

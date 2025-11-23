@@ -1194,7 +1194,8 @@ class MinimalBacktestRunner:
         Run backtest with specific strategy type using database data.
 
         Args:
-            strategy_type: Type of strategy ("sma_crossover", "mean_reversion", "momentum", or "sma")
+            strategy_type: Type of strategy
+                ("sma_crossover", "mean_reversion", "momentum", or "sma")
             symbol: Trading symbol
             start: Start datetime
             end: End datetime
@@ -1388,7 +1389,8 @@ class MinimalBacktestRunner:
 
         Args:
             bars: Pre-loaded Bar objects from catalog
-            strategy_type: Type of strategy ("sma_crossover", "mean_reversion", "momentum", or "sma")
+            strategy_type: Type of strategy
+                ("sma_crossover", "mean_reversion", "momentum", or "sma")
             symbol: Trading symbol
             start: Start datetime (for display purposes)
             end: End datetime (for display purposes)
@@ -1407,10 +1409,6 @@ class MinimalBacktestRunner:
 
         # Track execution time for persistence
         execution_start_time = time.time()
-
-        # Reason: Handle "sma" alias for backward compatibility
-        if strategy_type == "sma":
-            strategy_type = "sma_crossover"
 
         # Reason: Validate strategy type
         try:

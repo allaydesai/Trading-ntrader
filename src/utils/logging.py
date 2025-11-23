@@ -8,10 +8,8 @@ for machine parsing.
 
 import logging
 import logging.handlers
-import os
 import sys
 from pathlib import Path
-from typing import Any, Dict
 
 import structlog
 from structlog.types import Processor

@@ -141,7 +141,9 @@ def test_show_displays_failed_backtest_with_error(sync_db_session):
         data_source="CSV",
         execution_status="failed",
         execution_duration_seconds=Decimal("2.145"),
-        error_message="DataError: Missing price data for 2024-03-15. Data file corrupted or incomplete.",
+        error_message=(
+            "DataError: Missing price data for 2024-03-15. Data file corrupted or incomplete."
+        ),
         config_snapshot={
             "strategy_path": "src.strategies.rsi_mean_reversion.RSIMeanReversionConfig",
             "config_path": "config/strategies/rsi_mean_reversion.yaml",

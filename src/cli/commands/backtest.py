@@ -72,7 +72,9 @@ def backtest():
     "-ts",
     default=1000000,
     type=int,
-    help="Trade size in SHARES (default: 1,000,000 shares). Note: 1M shares @ $180 = $180M notional",
+    help=(
+        "Trade size in SHARES (default: 1,000,000 shares). Note: 1M shares @ $180 = $180M notional"
+    ),
 )
 @click.option(
     "--timeframe",
@@ -132,7 +134,8 @@ def run_backtest(
             catalog_service = DataCatalogService()
 
             # Reason: Convert symbol to instrument_id format (e.g., "AAPL" -> "AAPL.NASDAQ")
-            # If venue is provided in symbol (e.g., "SPY.ARCA"), use it. Otherwise default to NASDAQ.
+            # If venue is provided in symbol (e.g., "SPY.ARCA"), use it.
+            # Otherwise default to NASDAQ.
             if "." in symbol:
                 instrument_id = symbol.upper()
             else:
@@ -185,7 +188,8 @@ def run_backtest(
                     f"   Requested: {start.strftime('%Y-%m-%d')} to {end.strftime('%Y-%m-%d')}"
                 )
                 console.print(
-                    f"   Available: {availability.start_date.strftime('%Y-%m-%d')} to {availability.end_date.strftime('%Y-%m-%d')}"
+                    f"   Available: {availability.start_date.strftime('%Y-%m-%d')} to "
+                    f"{availability.end_date.strftime('%Y-%m-%d')}"
                 )
                 console.print()
                 console.print("   Will attempt to fetch missing data from IBKR...", style="yellow")
@@ -194,7 +198,8 @@ def run_backtest(
             else:
                 console.print("✅ Data available in catalog", style="green")
                 console.print(
-                    f"   Period: {adjusted_start.strftime('%Y-%m-%d')} to {adjusted_end.strftime('%Y-%m-%d')}"
+                    f"   Period: {adjusted_start.strftime('%Y-%m-%d')} to "
+                    f"{adjusted_end.strftime('%Y-%m-%d')}"
                 )
                 console.print(
                     f"   Files: {availability.file_count} | Rows: ~{availability.total_rows:,}"
@@ -376,9 +381,8 @@ def run_backtest(
             console.print()
 
             # Create results table
-            table = Table(
-                title=f"{symbol.upper()} {display_strategy.replace('_', ' ').title()} Strategy Results"
-            )
+            strategy_name = display_strategy.replace("_", " ").title()
+            table = Table(title=f"{symbol.upper()} {strategy_name} Strategy Results")
             table.add_column("Metric", style="cyan", no_wrap=True)
             table.add_column("Value", style="green")
 
@@ -486,7 +490,8 @@ def run_config_backtest(
 
             console.print(f"   Symbol: {symbol.upper()}")
             console.print(
-                f"   Period: {start.strftime('%Y-%m-%d %H:%M:%S')} to {end.strftime('%Y-%m-%d %H:%M:%S')}"
+                f"   Period: {start.strftime('%Y-%m-%d %H:%M:%S')} to "
+                f"{end.strftime('%Y-%m-%d %H:%M:%S')}"
             )
 
             # Note: Database connection check removed - using catalog for new implementation
@@ -520,7 +525,8 @@ def run_config_backtest(
                     style="red",
                 )
                 console.print(
-                    "   Use: backtest run --strategy <type> --symbol <symbol> for database backtests"
+                    "   Use: backtest run --strategy <type> --symbol <symbol> "
+                    "for database backtests"
                 )
                 return False
 
@@ -627,7 +633,8 @@ def list_backtests():
                 for key, avail in items:
                     console.print(
                         f"   • {avail.instrument_id} ({avail.bar_type_spec}): "
-                        f"{avail.start_date.strftime('%Y-%m-%d')} to {avail.end_date.strftime('%Y-%m-%d')}"
+                        f"{avail.start_date.strftime('%Y-%m-%d')} to "
+                        f"{avail.end_date.strftime('%Y-%m-%d')}"
                     )
                 if len(catalog_service.availability_cache) > 5:
                     remaining = len(catalog_service.availability_cache) - 5
