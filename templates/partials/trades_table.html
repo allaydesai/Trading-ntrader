@@ -1,0 +1,172 @@
+<!-- Trades Table Partial with HTMX Pagination and Sorting -->
+{% if response.pagination.total_items == 0 %}
+<!-- Empty State -->
+<div class="text-center py-12 text-slate-400">
+    <svg class="w-16 h-16 mx-auto mb-4 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+              d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+    </svg>
+    <p class="text-lg font-medium">No trades executed</p>
+    <p class="text-sm mt-2">This backtest did not generate any trade executions</p>
+</div>
+{% else %}
+<!-- Table Header Controls -->
+<div class="flex justify-between items-center mb-4">
+    <div class="text-sm text-slate-400">
+        Showing <span class="text-slate-200 font-medium">{{ (response.pagination.current_page - 1) * response.pagination.page_size + 1 }}</span>
+        to <span class="text-slate-200 font-medium">{{ [response.pagination.current_page * response.pagination.page_size, response.pagination.total_items]|min }}</span>
+        of <span class="text-slate-200 font-medium">{{ response.pagination.total_items }}</span> trades
+    </div>
+
+    <div class="flex items-center gap-2">
+        <label for="page-size" class="text-sm text-slate-400">Per page:</label>
+        <select id="page-size"
+                name="page_size"
+                class="bg-slate-800 border border-slate-600 rounded px-3 py-1 text-sm text-slate-200"
+                hx-get="/api/backtests/{{ backtest_id }}/trades"
+                hx-target="#trades-table-content"
+                hx-include="[name='sort_by'],[name='sort_order']"
+                hx-swap="outerHTML">
+            <option value="20" {% if response.pagination.page_size == 20 %}selected{% endif %}>20</option>
+            <option value="50" {% if response.pagination.page_size == 50 %}selected{% endif %}>50</option>
+            <option value="100" {% if response.pagination.page_size == 100 %}selected{% endif %}>100</option>
+        </select>
+    </div>
+</div>
+
+<!-- Trades Table -->
+<div class="overflow-x-auto">
+    <table class="w-full text-sm">
+        <thead class="bg-slate-800 border-b border-slate-700">
+            <tr>
+                <th class="px-4 py-3 text-left text-slate-300 font-medium">#</th>
+                <th class="px-4 py-3 text-left text-slate-300 font-medium cursor-pointer hover:bg-slate-700"
+                    hx-get="/api/backtests/{{ backtest_id }}/trades?sort_by=entry_timestamp&sort_order={% if response.sorting.sort_by == 'entry_timestamp' and response.sorting.sort_order == 'asc' %}desc{% else %}asc{% endif %}&page={{ response.pagination.current_page }}&page_size={{ response.pagination.page_size }}"
+                    hx-target="#trades-table-content"
+                    hx-swap="outerHTML">
+                    Entry Date
+                    {% if response.sorting.sort_by == 'entry_timestamp' %}
+                        {% if response.sorting.sort_order == 'asc' %}↑{% else %}↓{% endif %}
+                    {% endif %}
+                </th>
+                <th class="px-4 py-3 text-left text-slate-300 font-medium cursor-pointer hover:bg-slate-700"
+                    hx-get="/api/backtests/{{ backtest_id }}/trades?sort_by=exit_timestamp&sort_order={% if response.sorting.sort_by == 'exit_timestamp' and response.sorting.sort_order == 'asc' %}desc{% else %}asc{% endif %}&page={{ response.pagination.current_page }}&page_size={{ response.pagination.page_size }}"
+                    hx-target="#trades-table-content"
+                    hx-swap="outerHTML">
+                    Exit Date
+                    {% if response.sorting.sort_by == 'exit_timestamp' %}
+                        {% if response.sorting.sort_order == 'asc' %}↑{% else %}↓{% endif %}
+                    {% endif %}
+                </th>
+                <th class="px-4 py-3 text-left text-slate-300 font-medium">Symbol</th>
+                <th class="px-4 py-3 text-center text-slate-300 font-medium">Direction</th>
+                <th class="px-4 py-3 text-right text-slate-300 font-medium">Quantity</th>
+                <th class="px-4 py-3 text-right text-slate-300 font-medium">Entry Price</th>
+                <th class="px-4 py-3 text-right text-slate-300 font-medium">Exit Price</th>
+                <th class="px-4 py-3 text-right text-slate-300 font-medium cursor-pointer hover:bg-slate-700"
+                    hx-get="/api/backtests/{{ backtest_id }}/trades?sort_by=profit_loss&sort_order={% if response.sorting.sort_by == 'profit_loss' and response.sorting.sort_order == 'asc' %}desc{% else %}asc{% endif %}&page={{ response.pagination.current_page }}&page_size={{ response.pagination.page_size }}"
+                    hx-target="#trades-table-content"
+                    hx-swap="outerHTML">
+                    P&L ($)
+                    {% if response.sorting.sort_by == 'profit_loss' %}
+                        {% if response.sorting.sort_order == 'asc' %}↑{% else %}↓{% endif %}
+                    {% endif %}
+                </th>
+                <th class="px-4 py-3 text-right text-slate-300 font-medium">P&L %</th>
+                <th class="px-4 py-3 text-right text-slate-300 font-medium">Hold Time</th>
+            </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-700">
+            {% for trade in response.trades %}
+            <tr class="hover:bg-slate-800/50 transition-colors
+                       {% if trade.profit_loss|float > 0 %}bg-green-900/10{% elif trade.profit_loss|float < 0 %}bg-red-900/10{% endif %}">
+                <td class="px-4 py-3 text-slate-400">{{ (response.pagination.current_page - 1) * response.pagination.page_size + loop.index }}</td>
+                <td class="px-4 py-3 text-slate-300 font-mono text-xs">{{ trade.entry_timestamp[:19].replace('T', ' ') }}</td>
+                <td class="px-4 py-3 text-slate-300 font-mono text-xs">{{ trade.exit_timestamp[:19].replace('T', ' ') if trade.exit_timestamp else '-' }}</td>
+                <td class="px-4 py-3 text-slate-200 font-medium">{{ trade.instrument_id }}</td>
+                <td class="px-4 py-3 text-center">
+                    <span class="px-2 py-1 rounded text-xs font-medium
+                                 {% if trade.order_side == 'BUY' %}bg-blue-600/20 text-blue-400{% else %}bg-orange-600/20 text-orange-400{% endif %}">
+                        {{ trade.order_side }}
+                    </span>
+                </td>
+                <td class="px-4 py-3 text-right text-slate-300 font-mono">{{ "{:,.2f}".format(trade.quantity|float) }}</td>
+                <td class="px-4 py-3 text-right text-slate-300 font-mono">${{ "{:,.2f}".format(trade.entry_price|float) }}</td>
+                <td class="px-4 py-3 text-right text-slate-300 font-mono">
+                    {% if trade.exit_price %}${{ "{:,.2f}".format(trade.exit_price|float) }}{% else %}-{% endif %}
+                </td>
+                <td class="px-4 py-3 text-right font-mono font-medium
+                           {% if trade.profit_loss|float > 0 %}text-green-400{% elif trade.profit_loss|float < 0 %}text-red-400{% else %}text-slate-400{% endif %}">
+                    {% if trade.profit_loss|float > 0 %}+{% endif %}${{ "{:,.2f}".format(trade.profit_loss|float) }}
+                </td>
+                <td class="px-4 py-3 text-right font-mono
+                           {% if trade.profit_pct|float > 0 %}text-green-400{% elif trade.profit_pct|float < 0 %}text-red-400{% else %}text-slate-400{% endif %}">
+                    {% if trade.profit_pct|float > 0 %}+{% endif %}{{ "{:.2f}".format(trade.profit_pct|float) }}%
+                </td>
+                <td class="px-4 py-3 text-right text-slate-400 text-xs">
+                    {% if trade.holding_period_seconds %}
+                        {% set days = trade.holding_period_seconds // 86400 %}
+                        {% set hours = (trade.holding_period_seconds % 86400) // 3600 %}
+                        {% set minutes = (trade.holding_period_seconds % 3600) // 60 %}
+                        {% if days > 0 %}{{ days }}d {% endif %}{{ hours }}h {{ minutes }}m
+                    {% else %}-{% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<!-- Pagination Controls -->
+<div class="flex justify-between items-center mt-4 pt-4 border-t border-slate-700">
+    <div class="text-sm text-slate-400">
+        Page {{ response.pagination.current_page }} of {{ response.pagination.total_pages }}
+    </div>
+
+    <div class="flex gap-2">
+        <!-- First Page -->
+        <button class="px-3 py-1 rounded border border-slate-600 text-sm
+                       {% if not response.pagination.has_prev %}text-slate-600 cursor-not-allowed{% else %}text-slate-200 hover:bg-slate-700{% endif %}"
+                {% if response.pagination.has_prev %}
+                hx-get="/api/backtests/{{ backtest_id }}/trades?page=1&page_size={{ response.pagination.page_size }}&sort_by={{ response.sorting.sort_by }}&sort_order={{ response.sorting.sort_order }}"
+                hx-target="#trades-table-content"
+                hx-swap="outerHTML"
+                {% else %}disabled{% endif %}>
+            &#xAB; First
+        </button>
+
+        <!-- Previous Page -->
+        <button class="px-3 py-1 rounded border border-slate-600 text-sm
+                       {% if not response.pagination.has_prev %}text-slate-600 cursor-not-allowed{% else %}text-slate-200 hover:bg-slate-700{% endif %}"
+                {% if response.pagination.has_prev %}
+                hx-get="/api/backtests/{{ backtest_id }}/trades?page={{ response.pagination.current_page - 1 }}&page_size={{ response.pagination.page_size }}&sort_by={{ response.sorting.sort_by }}&sort_order={{ response.sorting.sort_order }}"
+                hx-target="#trades-table-content"
+                hx-swap="outerHTML"
+                {% else %}disabled{% endif %}>
+            &#x2039; Prev
+        </button>
+
+        <!-- Next Page -->
+        <button class="px-3 py-1 rounded border border-slate-600 text-sm
+                       {% if not response.pagination.has_next %}text-slate-600 cursor-not-allowed{% else %}text-slate-200 hover:bg-slate-700{% endif %}"
+                {% if response.pagination.has_next %}
+                hx-get="/api/backtests/{{ backtest_id }}/trades?page={{ response.pagination.current_page + 1 }}&page_size={{ response.pagination.page_size }}&sort_by={{ response.sorting.sort_by }}&sort_order={{ response.sorting.sort_order }}"
+                hx-target="#trades-table-content"
+                hx-swap="outerHTML"
+                {% else %}disabled{% endif %}>
+            Next &#x203A;
+        </button>
+
+        <!-- Last Page -->
+        <button class="px-3 py-1 rounded border border-slate-600 text-sm
+                       {% if not response.pagination.has_next %}text-slate-600 cursor-not-allowed{% else %}text-slate-200 hover:bg-slate-700{% endif %}"
+                {% if response.pagination.has_next %}
+                hx-get="/api/backtests/{{ backtest_id }}/trades?page={{ response.pagination.total_pages }}&page_size={{ response.pagination.page_size }}&sort_by={{ response.sorting.sort_by }}&sort_order={{ response.sorting.sort_order }}"
+                hx-target="#trades-table-content"
+                hx-swap="outerHTML"
+                {% else %}disabled{% endif %}>
+            Last &#xBB;
+        </button>
+    </div>
+</div>
+{% endif %}

@@ -64,14 +64,30 @@ class Trade(TradeBase):
     model_config = {"from_attributes": True}
 
 
+class PaginationMetadata(BaseModel):
+    """Pagination metadata for trade list responses."""
+
+    total_items: int
+    total_pages: int
+    current_page: int
+    page_size: int
+    has_next: bool
+    has_prev: bool
+
+
+class SortingMetadata(BaseModel):
+    """Sorting metadata for trade list responses."""
+
+    sort_by: str
+    sort_order: str  # 'asc' or 'desc'
+
+
 class TradeListResponse(BaseModel):
-    """Paginated trade list response."""
+    """Paginated trade list response with sorting and pagination metadata."""
 
     trades: list[Trade]
-    total_count: int
-    page: int
-    page_size: int
-    total_pages: int
+    pagination: PaginationMetadata
+    sorting: SortingMetadata
 
 
 class EquityCurvePoint(BaseModel):

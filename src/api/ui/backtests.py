@@ -128,7 +128,9 @@ async def backtest_list(
     if list_page.total_count == 0 and not has_filters:
         empty_state = EmptyStateMessage(
             title="No Backtests Yet",
-            description="You haven't run any backtests yet. Run your first backtest to see results here.",
+            description=(
+                "You haven't run any backtests yet. Run your first backtest to see results here."
+            ),
             action_text="Run your first backtest",
             action_command="ntrader backtest run --strategy sma_crossover --symbol AAPL",
         )
@@ -391,6 +393,64 @@ async def rerun_backtest(
     response = Response(status_code=202)
     response.headers["HX-Redirect"] = f"/backtests/{run_id}"  # Redirect back for now
     return response
+
+
+@router.get("/{backtest_id}/trades-table", response_class=HTMLResponse)
+async def get_trades_table(
+    request: Request,
+    backtest_id: int,
+    service: BacktestService,
+    page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(20, ge=1, le=100, description="Items per page"),
+    sort_by: str = Query("entry_timestamp", description="Sort field"),
+    sort_order: str = Query("asc", description="Sort order"),
+) -> HTMLResponse:
+    """
+    Render trades table partial for HTMX pagination.
+
+    Args:
+        request: FastAPI request object
+        backtest_id: Backtest run database ID
+        service: BacktestQueryService dependency
+        page: Page number (default: 1)
+        page_size: Items per page (default: 20)
+        sort_by: Sort field (default: entry_timestamp)
+        sort_order: Sort order (default: asc)
+
+    Returns:
+        HTMLResponse with rendered trades table partial
+
+    Raises:
+        HTTPException: 404 if backtest not found
+    """
+    import httpx
+
+    # Call the API endpoint to get the trades data
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            f"http://localhost:8000/api/backtests/{backtest_id}/trades",
+            params={
+                "page": page,
+                "page_size": page_size,
+                "sort_by": sort_by,
+                "sort_order": sort_order,
+            },
+        )
+
+    if response.status_code == 404:
+        raise HTTPException(status_code=404, detail=f"Backtest {backtest_id} not found")
+
+    # Parse the JSON response
+    trade_data = response.json()
+
+    # Render the partial template
+    context = {
+        "request": request,
+        "backtest_id": backtest_id,
+        "response": trade_data,
+    }
+
+    return templates.TemplateResponse("partials/trades_table.html", context)
 
 
 @router.get("/{run_id}/export")

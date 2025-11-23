@@ -798,3 +798,387 @@ class TestDrawdownEndpoint:
         assert data["total_drawdown_periods"] == 0
 
         app.dependency_overrides.clear()
+
+
+class TestTradesListEndpoint:
+    """Test suite for GET /api/backtests/{id}/trades endpoint with pagination."""
+
+    @pytest.mark.asyncio
+    async def test_trades_list_with_pagination(
+        self,
+        db_session: AsyncSession,
+        sample_backtest_run: BacktestRun,
+    ):
+        """
+        Test trades list endpoint returns paginated results.
+
+        Given: A backtest with 25 trades
+        When: GET /api/backtests/{id}/trades?page=1&page_size=20 is called
+        Then: Returns 200 with 20 trades and correct pagination metadata
+        """
+        from src.api.dependencies import get_db
+
+        async def override_get_db():
+            yield db_session
+
+        app.dependency_overrides[get_db] = override_get_db
+
+        # Create 25 sample trades
+        base_time = datetime(2025, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
+        trades = []
+        for i in range(25):
+            trade = Trade(
+                backtest_run_id=sample_backtest_run.id,
+                instrument_id="AAPL",
+                trade_id=f"trade-{i + 1}",
+                venue_order_id=f"order-{i + 1}",
+                order_side="BUY",
+                quantity=Decimal("100"),
+                entry_price=Decimal("150.00"),
+                exit_price=Decimal("155.00") if i % 2 == 0 else Decimal("145.00"),
+                entry_timestamp=base_time + timedelta(hours=i),
+                exit_timestamp=base_time + timedelta(hours=i + 1),
+                profit_loss=Decimal("500.00") if i % 2 == 0 else Decimal("-500.00"),
+                profit_pct=Decimal("3.33") if i % 2 == 0 else Decimal("-3.33"),
+                holding_period_seconds=3600,
+                commission_amount=Decimal("0.00"),
+            )
+            trades.append(trade)
+
+        for trade in trades:
+            db_session.add(trade)
+        await db_session.commit()
+
+        # Call endpoint with pagination
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get(
+                f"/api/backtests/{sample_backtest_run.id}/trades",
+                params={"page": 1, "page_size": 20},
+            )
+
+        # Verify response
+        assert response.status_code == 200
+        data = response.json()
+
+        # Check trades array
+        assert "trades" in data
+        assert len(data["trades"]) == 20
+
+        # Check pagination metadata
+        assert "pagination" in data
+        pagination = data["pagination"]
+        assert pagination["total_items"] == 25
+        assert pagination["total_pages"] == 2
+        assert pagination["current_page"] == 1
+        assert pagination["page_size"] == 20
+        assert pagination["has_next"] is True
+        assert pagination["has_prev"] is False
+
+        app.dependency_overrides.clear()
+
+    @pytest.mark.asyncio
+    async def test_trades_list_second_page(
+        self,
+        db_session: AsyncSession,
+        sample_backtest_run: BacktestRun,
+    ):
+        """
+        Test trades list endpoint returns second page correctly.
+
+        Given: A backtest with 25 trades
+        When: GET /api/backtests/{id}/trades?page=2&page_size=20 is called
+        Then: Returns 200 with 5 trades (remaining items)
+        """
+        from src.api.dependencies import get_db
+
+        async def override_get_db():
+            yield db_session
+
+        app.dependency_overrides[get_db] = override_get_db
+
+        # Create 25 sample trades
+        base_time = datetime(2025, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
+        for i in range(25):
+            trade = Trade(
+                backtest_run_id=sample_backtest_run.id,
+                instrument_id="AAPL",
+                trade_id=f"trade-{i + 1}",
+                venue_order_id=f"order-{i + 1}",
+                order_side="BUY",
+                quantity=Decimal("100"),
+                entry_price=Decimal("150.00"),
+                exit_price=Decimal("155.00"),
+                entry_timestamp=base_time + timedelta(hours=i),
+                exit_timestamp=base_time + timedelta(hours=i + 1),
+                profit_loss=Decimal("500.00"),
+                profit_pct=Decimal("3.33"),
+                holding_period_seconds=3600,
+            )
+            db_session.add(trade)
+        await db_session.commit()
+
+        # Call endpoint for page 2
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get(
+                f"/api/backtests/{sample_backtest_run.id}/trades",
+                params={"page": 2, "page_size": 20},
+            )
+
+        # Verify response
+        assert response.status_code == 200
+        data = response.json()
+
+        # Should have 5 remaining trades
+        assert len(data["trades"]) == 5
+        assert data["pagination"]["current_page"] == 2
+        assert data["pagination"]["has_next"] is False
+        assert data["pagination"]["has_prev"] is True
+
+        app.dependency_overrides.clear()
+
+    @pytest.mark.asyncio
+    async def test_trades_list_sorting_by_entry_timestamp(
+        self,
+        db_session: AsyncSession,
+        sample_backtest_run: BacktestRun,
+    ):
+        """
+        Test trades list endpoint supports sorting by entry_timestamp.
+
+        Given: A backtest with 5 trades
+        When: GET /api/backtests/{id}/trades?sort_by=entry_timestamp&sort_order=desc
+        Then: Returns trades sorted by entry timestamp descending
+        """
+        from src.api.dependencies import get_db
+
+        async def override_get_db():
+            yield db_session
+
+        app.dependency_overrides[get_db] = override_get_db
+
+        # Create trades with different timestamps
+        base_time = datetime(2025, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
+        timestamps = [
+            base_time + timedelta(hours=5),
+            base_time + timedelta(hours=1),
+            base_time + timedelta(hours=3),
+        ]
+
+        for idx, ts in enumerate(timestamps):
+            trade = Trade(
+                backtest_run_id=sample_backtest_run.id,
+                instrument_id="AAPL",
+                trade_id=f"trade-{idx}",
+                venue_order_id=f"order-{idx}",
+                order_side="BUY",
+                quantity=Decimal("100"),
+                entry_price=Decimal("150.00"),
+                exit_price=Decimal("155.00"),
+                entry_timestamp=ts,
+                exit_timestamp=ts + timedelta(hours=1),
+                profit_loss=Decimal("500.00"),
+                profit_pct=Decimal("3.33"),
+                holding_period_seconds=3600,
+            )
+            db_session.add(trade)
+        await db_session.commit()
+
+        # Call endpoint with descending sort
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get(
+                f"/api/backtests/{sample_backtest_run.id}/trades",
+                params={"sort_by": "entry_timestamp", "sort_order": "desc"},
+            )
+
+        # Verify response
+        assert response.status_code == 200
+        data = response.json()
+
+        # Check sorting metadata
+        assert data["sorting"]["sort_by"] == "entry_timestamp"
+        assert data["sorting"]["sort_order"] == "desc"
+
+        # Verify trades are in descending order
+        trades_list = data["trades"]
+        assert len(trades_list) == 3
+        # First should be latest (hours=5)
+        # Last should be earliest (hours=1)
+        assert trades_list[0]["trade_id"] == "trade-0"  # hours=5
+        assert trades_list[1]["trade_id"] == "trade-2"  # hours=3
+        assert trades_list[2]["trade_id"] == "trade-1"  # hours=1
+
+        app.dependency_overrides.clear()
+
+    @pytest.mark.asyncio
+    async def test_trades_list_sorting_by_profit_loss(
+        self,
+        db_session: AsyncSession,
+        sample_backtest_run: BacktestRun,
+    ):
+        """
+        Test trades list endpoint supports sorting by profit_loss.
+
+        Given: A backtest with trades having different profit/loss values
+        When: GET /api/backtests/{id}/trades?sort_by=profit_loss&sort_order=desc
+        Then: Returns trades sorted by profit descending (best trades first)
+        """
+        from src.api.dependencies import get_db
+
+        async def override_get_db():
+            yield db_session
+
+        app.dependency_overrides[get_db] = override_get_db
+
+        # Create trades with different P&L
+        base_time = datetime(2025, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
+        pnl_values = [
+            Decimal("-500.00"),  # Loss
+            Decimal("1000.00"),  # Big win
+            Decimal("200.00"),  # Small win
+        ]
+
+        for idx, pnl in enumerate(pnl_values):
+            trade = Trade(
+                backtest_run_id=sample_backtest_run.id,
+                instrument_id="AAPL",
+                trade_id=f"trade-{idx}",
+                venue_order_id=f"order-{idx}",
+                order_side="BUY",
+                quantity=Decimal("100"),
+                entry_price=Decimal("150.00"),
+                exit_price=Decimal("150.00") + pnl / Decimal("100"),
+                entry_timestamp=base_time + timedelta(hours=idx),
+                exit_timestamp=base_time + timedelta(hours=idx + 1),
+                profit_loss=pnl,
+                profit_pct=Decimal("3.33"),
+                holding_period_seconds=3600,
+            )
+            db_session.add(trade)
+        await db_session.commit()
+
+        # Call endpoint with profit_loss sorting descending
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get(
+                f"/api/backtests/{sample_backtest_run.id}/trades",
+                params={"sort_by": "profit_loss", "sort_order": "desc"},
+            )
+
+        # Verify response
+        assert response.status_code == 200
+        data = response.json()
+
+        # Verify trades are in descending P&L order
+        trades_list = data["trades"]
+        assert len(trades_list) == 3
+        assert trades_list[0]["trade_id"] == "trade-1"  # $1000 win
+        assert trades_list[1]["trade_id"] == "trade-2"  # $200 win
+        assert trades_list[2]["trade_id"] == "trade-0"  # -$500 loss
+
+        app.dependency_overrides.clear()
+
+    @pytest.mark.asyncio
+    async def test_trades_list_with_different_page_sizes(
+        self,
+        db_session: AsyncSession,
+        sample_backtest_run: BacktestRun,
+    ):
+        """
+        Test trades list endpoint supports different page sizes (20/50/100).
+
+        Given: A backtest with 100 trades
+        When: Requesting with page_size=50
+        Then: Returns 50 trades per page
+        """
+        from src.api.dependencies import get_db
+
+        async def override_get_db():
+            yield db_session
+
+        app.dependency_overrides[get_db] = override_get_db
+
+        # Create 100 trades
+        base_time = datetime(2025, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
+        for i in range(100):
+            trade = Trade(
+                backtest_run_id=sample_backtest_run.id,
+                instrument_id="AAPL",
+                trade_id=f"trade-{i}",
+                venue_order_id=f"order-{i}",
+                order_side="BUY",
+                quantity=Decimal("100"),
+                entry_price=Decimal("150.00"),
+                exit_price=Decimal("155.00"),
+                entry_timestamp=base_time + timedelta(hours=i),
+                exit_timestamp=base_time + timedelta(hours=i + 1),
+                profit_loss=Decimal("500.00"),
+                profit_pct=Decimal("3.33"),
+                holding_period_seconds=3600,
+            )
+            db_session.add(trade)
+        await db_session.commit()
+
+        # Test page_size=50
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get(
+                f"/api/backtests/{sample_backtest_run.id}/trades",
+                params={"page": 1, "page_size": 50},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["trades"]) == 50
+        assert data["pagination"]["page_size"] == 50
+        assert data["pagination"]["total_pages"] == 2
+
+        app.dependency_overrides.clear()
+
+    @pytest.mark.asyncio
+    async def test_trades_list_with_zero_trades(
+        self,
+        db_session: AsyncSession,
+        sample_backtest_run: BacktestRun,
+    ):
+        """
+        Test trades list endpoint handles backtests with no trades gracefully.
+
+        Given: A backtest with zero trades
+        When: GET /api/backtests/{id}/trades is called
+        Then: Returns 200 with empty trades array and zero pagination counts
+        """
+        from src.api.dependencies import get_db
+
+        async def override_get_db():
+            yield db_session
+
+        app.dependency_overrides[get_db] = override_get_db
+
+        # No trades created, backtest exists but has no trades
+
+        # Call endpoint
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get(f"/api/backtests/{sample_backtest_run.id}/trades")
+
+        # Verify response
+        assert response.status_code == 200
+        data = response.json()
+
+        assert data["trades"] == []
+        assert data["pagination"]["total_items"] == 0
+        assert data["pagination"]["total_pages"] == 0
+        assert data["pagination"]["current_page"] == 1
+        assert data["pagination"]["has_next"] is False
+        assert data["pagination"]["has_prev"] is False
+
+        app.dependency_overrides.clear()

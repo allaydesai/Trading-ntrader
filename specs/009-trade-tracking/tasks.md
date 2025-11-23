@@ -12,9 +12,9 @@
 
 ## 📊 Implementation Progress
 
-**Last Updated**: 2025-11-23 (Session 4 Complete)
+**Last Updated**: 2025-11-23 (Session 5 Complete)
 
-### Overall Status: User Story 4 COMPLETE ✅ - Drawdown Analysis Fully Implemented, Tested & UI Integrated 🎉
+### Overall Status: User Story 5 COMPLETE ✅ - Trades Table UI with Pagination, Sorting & Color-Coding 🎉
 
 | Phase | Status | Tasks Complete | Notes |
 |-------|--------|----------------|-------|
@@ -25,15 +25,16 @@
 | **Phase 4: US2** | ✅ COMPLETE | 12/12 (100%) | Equity curve API + UI chart integration complete |
 | **Phase 5: US3** | ✅ COMPLETE | 10/10 (100%) | Trade statistics with 8 passing tests |
 | **Phase 6: US4** | ✅ COMPLETE | 10/10 (100%) | Drawdown analysis with 6 passing tests + UI integration complete |
-| **Phase 7-9: US5-US7** | ⏳ PENDING | 0/35 (0%) | UI Table, Export, Filtering |
+| **Phase 7: US5** | ✅ COMPLETE | 14/14 (100%) | Trades table UI with pagination, sorting & color-coded P&L |
+| **Phase 8-9: US6-US7** | ⏳ PENDING | 0/21 (0%) | Export, Filtering |
 | **Phase 10: Polish** | ⏳ PENDING | 0/16 (0%) | Code quality & validation |
 
-**Total Progress**: 56/108 tasks complete (52%)
+**Total Progress**: 70/108 tasks complete (65%)
 
 ### 🎯 Key Achievements
 - ✅ Database schema created with optimized indexes
-- ✅ Complete data model suite (8 Pydantic models)
-- ✅ 38/38 tests passing with TDD approach (16 US1 + 8 US2 + 8 US3 + 6 US4)
+- ✅ Complete data model suite (10 Pydantic models including pagination/sorting metadata)
+- ✅ 44/44 tests passing with TDD approach (16 US1 + 8 US2 + 8 US3 + 6 US4 + 6 US5)
 - ✅ Bulk insert performance: 500 trades in <1s (5x faster than requirement!)
 - ✅ Equity curve generation: 1000 trades in <1s (meets performance requirement!)
 - ✅ Trade statistics calculation with comprehensive metrics
@@ -41,6 +42,9 @@
 - ✅ Drawdown analysis: peak-to-trough detection, recovery tracking, multiple periods support
 - ✅ Drawdown API endpoint: GET /api/drawdown/{backtest_id} fully functional
 - ✅ Drawdown UI: comprehensive display with max drawdown card, ongoing drawdown alert, top 5 drawdown periods
+- ✅ Trades table UI: server-side pagination (20/50/100 per page), sorting by entry/exit/P&L, color-coded wins/losses
+- ✅ Trades API endpoint: GET /api/backtests/{id}/trades with full pagination and sorting support
+- ✅ HTMX integration: dynamic table updates without full page reloads
 - ✅ Currency formatting with proper thousands separators
 - ✅ Decimal precision fix for equity curve calculations
 - ✅ All code quality checks passing (ruff format + ruff check)
@@ -56,7 +60,7 @@
 8. `tests/integration/api/test_trades_api.py` - API integration tests (607 lines, 10 tests)
 9. `tests/integration/api/conftest.py` - API test fixtures
 
-### 🔧 Files Modified (2025-11-23 Sessions - US3 & US4)
+### 🔧 Files Modified (2025-11-23 Sessions - US3, US4 & US5)
 
 **User Story 3 (Trade Statistics)**:
 - `src/services/trade_analytics.py` - Added calculate_trade_statistics() + streak detection helpers + ROUND_HALF_UP for decimal precision
@@ -74,6 +78,14 @@
 - `templates/backtests/detail.html` - Added Drawdown Analysis section with loading/error states
 - `static/js/charts.js` - Added initDrawdownMetrics() function with formatTimestamp() helper, max drawdown card, ongoing drawdown display, top 5 drawdown periods list
 
+**User Story 5 (Trades Table UI)**:
+- `src/models/trade.py` - Added PaginationMetadata, SortingMetadata models + updated TradeListResponse
+- `src/api/rest/trades.py` - Added GET /api/backtests/{id}/trades endpoint with pagination/sorting (125 lines)
+- `src/api/ui/backtests.py` - Added GET /{id}/trades-table endpoint for HTMX partial rendering
+- `tests/integration/api/test_trades_api.py` - Added 6 integration tests for trades list endpoint (TestTradesListEndpoint class)
+- `templates/backtests/detail.html` - Added Individual Trades section with HTMX integration
+- `templates/partials/trades_table.html` - NEW: Trades table partial with pagination, sorting, color-coding (164 lines)
+
 ### 🐛 Bug Fixes (2025-11-23)
 - Fixed Pydantic decimal precision validation error in equity curve generation
 - Added ROUND_HALF_UP rounding mode to quantize() operations
@@ -82,8 +94,8 @@
 
 ### 🎯 Next Steps
 1. ~~Implement User Story 4 - Calculate Drawdown from Equity Curve (P2)~~ ✅ DONE
-2. Implement User Story 5 - View Trades in Backtest Details UI (P2) ← NEXT
-3. Implement User Story 6 - Export Trade History (P3)
+2. ~~Implement User Story 5 - View Trades in Backtest Details UI (P2)~~ ✅ DONE
+3. Implement User Story 6 - Export Trade History (P3) ← NEXT
 4. Implement User Story 7 - Filter and Query Trades (P3)
 
 ---
@@ -253,33 +265,35 @@ Project uses single-project structure:
 
 ---
 
-## Phase 7: User Story 5 - View Trades in Backtest Details UI (Priority: P2)
+## Phase 7: User Story 5 - View Trades in Backtest Details UI (Priority: P2) ✅ COMPLETE
 
 **Goal**: Display trades table in backtest details page with pagination, sorting, and visual indicators
 
 **Independent Test**: Run a backtest, navigate to details page, verify trades section displays all trades with pagination controls
 
-### Tests for User Story 5
+### Tests for User Story 5 ✅ COMPLETE
 
-- [ ] T058 [P] [US5] Integration test for GET /backtests/{id}/trades with pagination in tests/integration/test_trades_api.py
-- [ ] T059 [P] [US5] Integration test for trades sorting by entry_timestamp in tests/integration/test_trades_api.py
-- [ ] T060 [P] [US5] Integration test for trades sorting by profit_loss in tests/integration/test_trades_api.py
-- [ ] T061 [P] [US5] Integration test for page size options (20/50/100) in tests/integration/test_trades_api.py
-- [ ] T062 [US5] Integration test for handling zero trades in tests/integration/test_trades_api.py
+- [X] T058 [P] [US5] Integration test for GET /backtests/{id}/trades with pagination in tests/integration/test_trades_api.py
+- [X] T059 [P] [US5] Integration test for trades sorting by entry_timestamp in tests/integration/test_trades_api.py
+- [X] T060 [P] [US5] Integration test for trades sorting by profit_loss in tests/integration/test_trades_api.py
+- [X] T061 [P] [US5] Integration test for page size options (20/50/100) in tests/integration/test_trades_api.py
+- [X] T062 [US5] Integration test for handling zero trades in tests/integration/test_trades_api.py
 
-### Implementation for User Story 5
+**Test Results**: 6/6 passing ✅ | All pagination, sorting, and edge cases covered
 
-- [ ] T063 [US5] Implement GET /backtests/{id}/trades endpoint with pagination in src/api/routers/trades.py
-- [ ] T064 [US5] Add server-side sorting by entry_timestamp, exit_timestamp, profit_loss in src/api/routers/trades.py
-- [ ] T065 [US5] Add query validation for sort_by and sort_order parameters in src/api/routers/trades.py
-- [ ] T066 [US5] Create trades table partial template in src/templates/partials/trades_table.html
-- [ ] T067 [US5] Add HTMX pagination controls to trades table partial
-- [ ] T068 [US5] Add color coding for winning/losing trades (green/red) in trades table
-- [ ] T069 [US5] Add trades section to backtest_detail.html with HTMX integration
-- [ ] T070 [US5] Add page size selector (20/50/100 trades per page) to UI
-- [ ] T071 [US5] Add sortable column headers with HTMX triggers
+### Implementation for User Story 5 ✅ COMPLETE
 
-**Checkpoint**: Backtest details page should display paginated trades table with sorting and color-coded P&L
+- [X] T063 [US5] Implement GET /backtests/{id}/trades endpoint with pagination in src/api/rest/trades.py
+- [X] T064 [US5] Add server-side sorting by entry_timestamp, exit_timestamp, profit_loss in src/api/rest/trades.py
+- [X] T065 [US5] Add query validation for sort_by and sort_order parameters in src/api/rest/trades.py
+- [X] T066 [US5] Create trades table partial template in templates/partials/trades_table.html
+- [X] T067 [US5] Add HTMX pagination controls to trades table partial
+- [X] T068 [US5] Add color coding for winning/losing trades (green/red) in trades table
+- [X] T069 [US5] Add trades section to backtest_detail.html with HTMX integration
+- [X] T070 [US5] Add page size selector (20/50/100 trades per page) to UI
+- [X] T071 [US5] Add sortable column headers with HTMX triggers
+
+**Checkpoint**: ✅ COMPLETE - Backtest details page displays paginated trades table with sorting, color-coded P&L, and comprehensive pagination controls. All 16 trades API tests passing.
 
 ---
 
