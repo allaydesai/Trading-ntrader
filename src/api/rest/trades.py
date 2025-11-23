@@ -4,10 +4,13 @@ Trades API endpoint for trade markers and equity curve.
 Provides trade entry/exit points for chart overlay and equity curve generation.
 """
 
+import csv
+import io
 from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.sql import func
 
@@ -489,3 +492,164 @@ async def get_backtest_trades(
             sort_order=sort_order,
         ),
     )
+
+
+@router.get(
+    "/backtests/{backtest_id}/export",
+    responses={
+        404: {"model": ErrorDetail, "description": "Backtest not found"},
+        422: {"description": "Validation error"},
+    },
+    summary="Export trades to CSV or JSON",
+    description=(
+        "Exports all trades for a backtest run to CSV or JSON format for external analysis"
+    ),
+)
+async def export_trades(
+    backtest_id: int,
+    service: BacktestService,
+    db: DbSession,
+    format: Literal["csv", "json"] = Query("csv", description="Export format (csv or json)"),
+) -> Response:
+    """
+    Export complete trade history to CSV or JSON format.
+
+    Exports all trades for a backtest run with full precision for all fields.
+    Useful for external analysis, importing into other tools, or archiving results.
+
+    Args:
+        backtest_id: Backtest run database ID
+        service: BacktestQueryService dependency
+        db: Database session dependency
+        format: Export format (csv or json, default: csv)
+
+    Returns:
+        CSV file (text/csv) or JSON file (application/json) with Content-Disposition
+        header for file download
+
+    Raises:
+        HTTPException: 404 if backtest not found
+
+    Example:
+        GET /api/backtests/123/export?format=csv
+
+        Response Headers:
+        Content-Type: text/csv; charset=utf-8
+        Content-Disposition: attachment; filename="backtest_123_trades.csv"
+
+        Response Body (CSV):
+        instrument_id,trade_id,order_side,entry_timestamp,entry_price,...
+        AAPL,trade-1,BUY,2025-01-01T10:00:00Z,150.25,...
+    """
+    # Verify backtest exists
+    backtest = await service.get_backtest_by_internal_id(backtest_id)
+
+    if not backtest:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Backtest run with ID {backtest_id} not found",
+        )
+
+    # Query all trades for this backtest (no pagination for export)
+    result = await db.execute(
+        select(Trade).where(Trade.backtest_run_id == backtest_id).order_by(Trade.entry_timestamp)
+    )
+    trades = result.scalars().all()
+
+    # Convert SQLAlchemy models to Pydantic models
+    from src.models.trade import Trade as PydanticTrade
+
+    pydantic_trades = [PydanticTrade.model_validate(trade) for trade in trades]
+
+    # Create descriptive filename with strategy, instrument, and dates
+    strategy_name = backtest.strategy_name.replace(" ", "_")
+    instrument = backtest.configuration["instrument_symbol"]
+    start_date = backtest.configuration["start_date"]
+    end_date = backtest.configuration["end_date"]
+    base_filename = f"{strategy_name}_{instrument}_{start_date}_to_{end_date}_trades"
+
+    if format == "csv":
+        # Create CSV in memory
+        output = io.StringIO()
+        writer = csv.DictWriter(
+            output,
+            fieldnames=[
+                "instrument_id",
+                "trade_id",
+                "order_side",
+                "entry_timestamp",
+                "entry_price",
+                "exit_timestamp",
+                "exit_price",
+                "quantity",
+                "profit_loss",
+                "profit_pct",
+                "commission_amount",
+                "holding_period_seconds",
+            ],
+        )
+
+        writer.writeheader()
+
+        for trade in pydantic_trades:
+            writer.writerow(
+                {
+                    "instrument_id": trade.instrument_id,
+                    "trade_id": trade.trade_id,
+                    "order_side": trade.order_side,
+                    "entry_timestamp": trade.entry_timestamp.isoformat(),
+                    "entry_price": str(trade.entry_price),
+                    "exit_timestamp": trade.exit_timestamp.isoformat()
+                    if trade.exit_timestamp
+                    else "",
+                    "exit_price": str(trade.exit_price) if trade.exit_price else "",
+                    "quantity": str(trade.quantity),
+                    "profit_loss": str(trade.profit_loss) if trade.profit_loss else "",
+                    "profit_pct": str(trade.profit_pct) if trade.profit_pct else "",
+                    "commission_amount": str(trade.commission_amount)
+                    if trade.commission_amount
+                    else "",
+                    "holding_period_seconds": trade.holding_period_seconds or "",
+                }
+            )
+
+        csv_content = output.getvalue()
+
+        return Response(
+            content=csv_content,
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{base_filename}.csv"'},
+        )
+    else:  # format == "json"
+        # Export as JSON array
+        json_trades = [
+            {
+                "instrument_id": trade.instrument_id,
+                "trade_id": trade.trade_id,
+                "order_side": trade.order_side,
+                "entry_timestamp": trade.entry_timestamp.isoformat(),
+                "entry_price": str(trade.entry_price),
+                "exit_timestamp": trade.exit_timestamp.isoformat()
+                if trade.exit_timestamp
+                else None,
+                "exit_price": str(trade.exit_price) if trade.exit_price else None,
+                "quantity": str(trade.quantity),
+                "profit_loss": str(trade.profit_loss) if trade.profit_loss else None,
+                "profit_pct": str(trade.profit_pct) if trade.profit_pct else None,
+                "commission_amount": str(trade.commission_amount)
+                if trade.commission_amount
+                else None,
+                "holding_period_seconds": trade.holding_period_seconds,
+            }
+            for trade in pydantic_trades
+        ]
+
+        import json
+
+        json_content = json.dumps(json_trades, indent=2)
+
+        return Response(
+            content=json_content,
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="{base_filename}.json"'},
+        )

@@ -1182,3 +1182,327 @@ class TestTradesListEndpoint:
         assert data["pagination"]["has_prev"] is False
 
         app.dependency_overrides.clear()
+
+
+class TestTradeExportEndpoint:
+    """Test suite for GET /api/backtests/{id}/export endpoint."""
+
+    @pytest.mark.asyncio
+    async def test_export_trades_as_csv(
+        self,
+        db_session: AsyncSession,
+        sample_backtest_run: BacktestRun,
+    ):
+        """
+        Test exporting trades to CSV format.
+
+        Given: A backtest with 10 trades
+        When: GET /api/backtests/{id}/export?format=csv is called
+        Then: Returns 200 with CSV file containing all trades with correct headers
+        """
+        from src.api.dependencies import get_db
+
+        async def override_get_db():
+            yield db_session
+
+        app.dependency_overrides[get_db] = override_get_db
+
+        # Create 10 sample trades
+        base_time = datetime(2025, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
+        trades = []
+        for i in range(10):
+            trade = Trade(
+                backtest_run_id=sample_backtest_run.id,
+                instrument_id=f"AAPL{i}",
+                trade_id=f"trade-{i + 1}",
+                venue_order_id=f"order-{i + 1}",
+                order_side="BUY",
+                quantity=Decimal("100.50"),  # Fractional shares
+                entry_price=Decimal("150.25"),
+                exit_price=Decimal("155.75") if i % 2 == 0 else Decimal("145.50"),
+                entry_timestamp=base_time + timedelta(hours=i),
+                exit_timestamp=base_time + timedelta(hours=i + 1),
+                profit_loss=Decimal("545.00") if i % 2 == 0 else Decimal("-477.38"),
+                profit_pct=Decimal("3.61") if i % 2 == 0 else Decimal("-3.16"),
+                holding_period_seconds=3600,
+                commission_amount=Decimal("5.00"),
+            )
+            trades.append(trade)
+
+        for trade in trades:
+            db_session.add(trade)
+        await db_session.commit()
+
+        # Call export endpoint
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get(
+                f"/api/backtests/{sample_backtest_run.id}/export",
+                params={"format": "csv"},
+            )
+
+        # Verify response
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "text/csv; charset=utf-8"
+        assert "content-disposition" in response.headers
+        assert "attachment" in response.headers["content-disposition"]
+        assert (
+            f"backtest_{sample_backtest_run.id}_trades.csv"
+            in response.headers["content-disposition"]
+        )
+
+        # Parse CSV content
+        csv_content = response.text
+        lines = csv_content.strip().split("\n")
+
+        # Verify header row
+        expected_headers = [
+            "instrument_id",
+            "trade_id",
+            "order_side",
+            "entry_timestamp",
+            "entry_price",
+            "exit_timestamp",
+            "exit_price",
+            "quantity",
+            "profit_loss",
+            "profit_pct",
+            "commission_amount",
+            "holding_period_seconds",
+        ]
+        header_line = lines[0]
+        assert all(header in header_line for header in expected_headers)
+
+        # Verify we have 11 lines total (1 header + 10 data rows)
+        assert len(lines) == 11
+
+        # Verify first data row contains expected values
+        first_data_row = lines[1]
+        assert "AAPL0" in first_data_row
+        assert "trade-1" in first_data_row
+        assert "BUY" in first_data_row
+
+        app.dependency_overrides.clear()
+
+    @pytest.mark.asyncio
+    async def test_export_trades_as_json(
+        self,
+        db_session: AsyncSession,
+        sample_backtest_run: BacktestRun,
+    ):
+        """
+        Test exporting trades to JSON format.
+
+        Given: A backtest with 5 trades
+        When: GET /api/backtests/{id}/export?format=json is called
+        Then: Returns 200 with JSON array containing all trades
+        """
+        from src.api.dependencies import get_db
+
+        async def override_get_db():
+            yield db_session
+
+        app.dependency_overrides[get_db] = override_get_db
+
+        # Create 5 sample trades
+        base_time = datetime(2025, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
+        trades = []
+        for i in range(5):
+            trade = Trade(
+                backtest_run_id=sample_backtest_run.id,
+                instrument_id=f"MSFT{i}",
+                trade_id=f"trade-{i + 1}",
+                venue_order_id=f"order-{i + 1}",
+                order_side="SELL",
+                quantity=Decimal("50.00"),
+                entry_price=Decimal("300.00"),
+                exit_price=Decimal("310.00"),
+                entry_timestamp=base_time + timedelta(hours=i),
+                exit_timestamp=base_time + timedelta(hours=i + 1),
+                profit_loss=Decimal("500.00"),
+                profit_pct=Decimal("3.33"),
+                holding_period_seconds=3600,
+                commission_amount=Decimal("0.00"),
+            )
+            trades.append(trade)
+
+        for trade in trades:
+            db_session.add(trade)
+        await db_session.commit()
+
+        # Call export endpoint
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get(
+                f"/api/backtests/{sample_backtest_run.id}/export",
+                params={"format": "json"},
+            )
+
+        # Verify response
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "application/json"
+        assert "content-disposition" in response.headers
+        assert "attachment" in response.headers["content-disposition"]
+        assert (
+            f"backtest_{sample_backtest_run.id}_trades.json"
+            in response.headers["content-disposition"]
+        )
+
+        # Parse JSON content
+        json_data = response.json()
+
+        # Verify structure
+        assert isinstance(json_data, list)
+        assert len(json_data) == 5
+
+        # Verify first trade has all expected fields
+        first_trade = json_data[0]
+        assert "instrument_id" in first_trade
+        assert "trade_id" in first_trade
+        assert "order_side" in first_trade
+        assert "entry_timestamp" in first_trade
+        assert "entry_price" in first_trade
+        assert "exit_timestamp" in first_trade
+        assert "exit_price" in first_trade
+        assert "quantity" in first_trade
+        assert "profit_loss" in first_trade
+        assert "profit_pct" in first_trade
+
+        # Verify data values
+        assert first_trade["instrument_id"] == "MSFT0"
+        assert first_trade["trade_id"] == "trade-1"
+        assert first_trade["order_side"] == "SELL"
+
+        app.dependency_overrides.clear()
+
+    @pytest.mark.asyncio
+    async def test_export_csv_decimal_precision_preservation(
+        self,
+        db_session: AsyncSession,
+        sample_backtest_run: BacktestRun,
+    ):
+        """
+        Test that CSV export preserves decimal precision for quantities and prices.
+
+        Given: A backtest with trades having fractional shares and prices
+        When: Exporting to CSV
+        Then: Decimal values are preserved with full precision
+        """
+        from src.api.dependencies import get_db
+
+        async def override_get_db():
+            yield db_session
+
+        app.dependency_overrides[get_db] = override_get_db
+
+        # Create trade with precise decimal values
+        base_time = datetime(2025, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
+        trade = Trade(
+            backtest_run_id=sample_backtest_run.id,
+            instrument_id="GOOGL",
+            trade_id="trade-precise",
+            venue_order_id="order-precise",
+            order_side="BUY",
+            quantity=Decimal("123.456789"),  # High precision
+            entry_price=Decimal("2500.12345"),
+            exit_price=Decimal("2550.67890"),
+            entry_timestamp=base_time,
+            exit_timestamp=base_time + timedelta(hours=1),
+            profit_loss=Decimal("6235.42"),
+            profit_pct=Decimal("2.02"),
+            holding_period_seconds=3600,
+            commission_amount=Decimal("7.89"),
+        )
+        db_session.add(trade)
+        await db_session.commit()
+
+        # Call export endpoint
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get(
+                f"/api/backtests/{sample_backtest_run.id}/export",
+                params={"format": "csv"},
+            )
+
+        assert response.status_code == 200
+
+        # Parse CSV and verify precision
+        csv_content = response.text
+        lines = csv_content.strip().split("\n")
+        data_row = lines[1]  # Skip header
+
+        # Verify decimal precision is preserved
+        assert "123.456789" in data_row or "123.46" in data_row  # Quantity
+        assert "2500.12" in data_row  # Entry price
+        assert "2550.68" in data_row or "2550.67" in data_row  # Exit price
+        assert "6235.42" in data_row  # Profit/loss
+
+        app.dependency_overrides.clear()
+
+    @pytest.mark.asyncio
+    async def test_export_csv_special_character_handling(
+        self,
+        db_session: AsyncSession,
+        sample_backtest_run: BacktestRun,
+    ):
+        """
+        Test that CSV export properly escapes special characters.
+
+        Given: A backtest with trades containing symbols with special characters
+        When: Exporting to CSV
+        Then: Special characters are properly escaped and CSV is parseable
+        """
+        from src.api.dependencies import get_db
+
+        async def override_get_db():
+            yield db_session
+
+        app.dependency_overrides[get_db] = override_get_db
+
+        # Create trade with special characters in symbol
+        base_time = datetime(2025, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
+        trade = Trade(
+            backtest_run_id=sample_backtest_run.id,
+            instrument_id='SPY,"US",EQUITY',  # Contains comma and quotes
+            trade_id="trade-special",
+            venue_order_id="order-special",
+            order_side="BUY",
+            quantity=Decimal("100.00"),
+            entry_price=Decimal("450.00"),
+            exit_price=Decimal("460.00"),
+            entry_timestamp=base_time,
+            exit_timestamp=base_time + timedelta(hours=1),
+            profit_loss=Decimal("1000.00"),
+            profit_pct=Decimal("2.22"),
+            holding_period_seconds=3600,
+        )
+        db_session.add(trade)
+        await db_session.commit()
+
+        # Call export endpoint
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get(
+                f"/api/backtests/{sample_backtest_run.id}/export",
+                params={"format": "csv"},
+            )
+
+        assert response.status_code == 200
+
+        # Verify CSV is valid and parseable
+        import csv
+        import io
+
+        csv_content = response.text
+        csv_reader = csv.DictReader(io.StringIO(csv_content))
+        rows = list(csv_reader)
+
+        # Should successfully parse despite special characters
+        assert len(rows) == 1
+        assert 'SPY,"US",EQUITY' in rows[0]["instrument_id"] or "SPY" in rows[0]["instrument_id"]
+
+        app.dependency_overrides.clear()

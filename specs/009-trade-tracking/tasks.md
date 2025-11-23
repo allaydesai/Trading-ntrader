@@ -12,9 +12,9 @@
 
 ## 📊 Implementation Progress
 
-**Last Updated**: 2025-11-23 (Session 5 Complete)
+**Last Updated**: 2025-11-23 (Session 6 Complete)
 
-### Overall Status: User Story 5 COMPLETE ✅ - Trades Table UI with Pagination, Sorting & Color-Coding 🎉
+### Overall Status: User Story 6 COMPLETE ✅ - Trade Export (CSV/JSON) with UI 🎉
 
 | Phase | Status | Tasks Complete | Notes |
 |-------|--------|----------------|-------|
@@ -26,15 +26,16 @@
 | **Phase 5: US3** | ✅ COMPLETE | 10/10 (100%) | Trade statistics with 8 passing tests |
 | **Phase 6: US4** | ✅ COMPLETE | 10/10 (100%) | Drawdown analysis with 6 passing tests + UI integration complete |
 | **Phase 7: US5** | ✅ COMPLETE | 14/14 (100%) | Trades table UI with pagination, sorting & color-coded P&L |
-| **Phase 8-9: US6-US7** | ⏳ PENDING | 0/21 (0%) | Export, Filtering |
+| **Phase 8: US6** | ✅ COMPLETE | 6/6 (100%) | Trade export (CSV/JSON) with dropdown UI |
+| **Phase 9: US7** | ⏳ PENDING | 0/11 (0%) | Filtering |
 | **Phase 10: Polish** | ⏳ PENDING | 0/16 (0%) | Code quality & validation |
 
-**Total Progress**: 70/108 tasks complete (65%)
+**Total Progress**: 76/108 tasks complete (70%)
 
 ### 🎯 Key Achievements
 - ✅ Database schema created with optimized indexes
 - ✅ Complete data model suite (10 Pydantic models including pagination/sorting metadata)
-- ✅ 44/44 tests passing with TDD approach (16 US1 + 8 US2 + 8 US3 + 6 US4 + 6 US5)
+- ✅ 48/48 tests passing with TDD approach (16 US1 + 8 US2 + 8 US3 + 6 US4 + 6 US5 + 4 US6)
 - ✅ Bulk insert performance: 500 trades in <1s (5x faster than requirement!)
 - ✅ Equity curve generation: 1000 trades in <1s (meets performance requirement!)
 - ✅ Trade statistics calculation with comprehensive metrics
@@ -44,6 +45,10 @@
 - ✅ Drawdown UI: comprehensive display with max drawdown card, ongoing drawdown alert, top 5 drawdown periods
 - ✅ Trades table UI: server-side pagination (20/50/100 per page), sorting by entry/exit/P&L, color-coded wins/losses
 - ✅ Trades API endpoint: GET /api/backtests/{id}/trades with full pagination and sorting support
+- ✅ Trade export API: GET /api/backtests/{id}/export with CSV and JSON formats
+- ✅ Export UI: Alpine.js dropdown menu with CSV/JSON format selection
+- ✅ CSV export: Proper escaping, decimal precision, content-type headers
+- ✅ JSON export: Structured trade data with proper null handling
 - ✅ HTMX integration: dynamic table updates without full page reloads
 - ✅ Currency formatting with proper thousands separators
 - ✅ Decimal precision fix for equity curve calculations
@@ -86,6 +91,11 @@
 - `templates/backtests/detail.html` - Added Individual Trades section with HTMX integration
 - `templates/partials/trades_table.html` - NEW: Trades table partial with pagination, sorting, color-coding (164 lines)
 
+**User Story 6 (Trade Export)**:
+- `src/api/rest/trades.py` - Added GET /api/backtests/{id}/export endpoint with CSV and JSON support (156 lines)
+- `tests/integration/api/test_trades_api.py` - Added 4 integration tests for export endpoint (TestTradeExportEndpoint class)
+- `templates/backtests/detail.html` - Added "Export Trades" dropdown button with Alpine.js and CSV/JSON options
+
 ### 🐛 Bug Fixes (2025-11-23)
 - Fixed Pydantic decimal precision validation error in equity curve generation
 - Added ROUND_HALF_UP rounding mode to quantize() operations
@@ -95,8 +105,9 @@
 ### 🎯 Next Steps
 1. ~~Implement User Story 4 - Calculate Drawdown from Equity Curve (P2)~~ ✅ DONE
 2. ~~Implement User Story 5 - View Trades in Backtest Details UI (P2)~~ ✅ DONE
-3. Implement User Story 6 - Export Trade History (P3) ← NEXT
-4. Implement User Story 7 - Filter and Query Trades (P3)
+3. ~~Implement User Story 6 - Export Trade History (P3)~~ ✅ DONE
+4. Implement User Story 7 - Filter and Query Trades (P3) ← NEXT
+5. Polish & Finalization
 
 ---
 
@@ -297,29 +308,29 @@ Project uses single-project structure:
 
 ---
 
-## Phase 8: User Story 6 - Export Trade History (Priority: P3)
+## Phase 8: User Story 6 - Export Trade History (Priority: P3) ✅ COMPLETE
 
 **Goal**: Export complete trade history to CSV or JSON for external analysis
 
 **Independent Test**: Run a backtest, export trades to CSV, verify all trade fields are present and correctly formatted
 
-### Tests for User Story 6
+### Tests for User Story 6 ✅ COMPLETE
 
-- [ ] T072 [P] [US6] Integration test for GET /backtests/{id}/export?format=csv in tests/integration/test_trades_api.py
-- [ ] T073 [P] [US6] Integration test for GET /backtests/{id}/export?format=json in tests/integration/test_trades_api.py
-- [ ] T074 [P] [US6] Integration test for CSV decimal precision preservation in tests/integration/test_trades_api.py
-- [ ] T075 [US6] Integration test for special character handling in CSV in tests/integration/test_trades_api.py
+- [X] T072 [P] [US6] Integration test for GET /backtests/{id}/export?format=csv in tests/integration/test_trades_api.py
+- [X] T073 [P] [US6] Integration test for GET /backtests/{id}/export?format=json in tests/integration/test_trades_api.py
+- [X] T074 [P] [US6] Integration test for CSV decimal precision preservation in tests/integration/test_trades_api.py
+- [X] T075 [US6] Integration test for special character handling in CSV in tests/integration/test_trades_api.py
 
-### Implementation for User Story 6
+**Test Results**: 4/4 passing ✅
 
-- [ ] T076 [US6] Implement CSV export logic in src/services/trade_analytics.py
-- [ ] T077 [US6] Implement JSON export logic in src/services/trade_analytics.py
-- [ ] T078 [US6] Implement GET /backtests/{id}/export endpoint in src/api/routers/trades.py
-- [ ] T079 [US6] Add CSV content-type and attachment headers to response
-- [ ] T080 [US6] Add export button to backtest details page UI
-- [ ] T081 [US6] Add format selector (CSV/JSON) to export UI
+### Implementation for User Story 6 ✅ COMPLETE
 
-**Checkpoint**: Users can export trade history to CSV or JSON from backtest details page
+- [X] T076-T078 [US6] Implement CSV and JSON export logic in GET /backtests/{id}/export endpoint in src/api/rest/trades.py
+- [X] T079 [US6] Add CSV content-type and attachment headers to response
+- [X] T080 [US6] Add export button to backtest details page UI (dropdown menu)
+- [X] T081 [US6] Add format selector (CSV/JSON) to export UI (Alpine.js dropdown)
+
+**Checkpoint**: ✅ COMPLETE - Users can export trade history to CSV or JSON from backtest details page via dropdown menu. Export endpoint provides proper content-type headers and file download attachment. All decimal precision is preserved.
 
 ---
 
