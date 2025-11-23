@@ -9,6 +9,7 @@ from ibapi.common import MarketDataTypeEnum  # type: ignore
 from nautilus_trader.adapters.interactive_brokers.historical.client import (
     HistoricInteractiveBrokersClient,
 )
+from nautilus_trader.model.identifiers import InstrumentId
 
 
 class RateLimiter:
@@ -199,8 +200,10 @@ class IBKRHistoricalClient:
 
         # Reason: Also fetch instrument definition for persistence
         # This allows us to save the instrument to the catalog
+        # Convert string to InstrumentId object for request_instruments API
+        nautilus_instrument_id = InstrumentId.from_str(instrument_id)
         instruments = await self.client.request_instruments(
-            instrument_ids=[instrument_id],
+            instrument_ids=[nautilus_instrument_id],
         )
 
         # Reason: Return both bars and instrument (first from the list)

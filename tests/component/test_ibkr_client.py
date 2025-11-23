@@ -471,3 +471,96 @@ class TestIBKRClientIntegration:
 
             # Client2 should not be affected
             assert len(client2.rate_limiter.requests) == 0
+
+    @pytest.mark.component
+    @pytest.mark.asyncio
+    async def test_fetch_bars_converts_string_to_instrument_id(self):
+        """Test fetch_bars correctly converts string instrument_id to InstrumentId object."""
+        from nautilus_trader.adapters.interactive_brokers.historical.client import (
+            HistoricInteractiveBrokersClient,
+        )
+        from nautilus_trader.model.identifiers import InstrumentId
+
+        from src.services.ibkr_client import IBKRHistoricalClient
+
+        with patch.object(HistoricInteractiveBrokersClient, "__init__", return_value=None):
+            client = IBKRHistoricalClient()
+            client._connected = True
+
+            # Mock the underlying Nautilus client methods
+            mock_bars = []  # Empty list of bars
+            mock_instrument = AsyncMock()
+
+            with patch.object(
+                client.rate_limiter, "acquire", new_callable=AsyncMock
+            ) as mock_acquire:
+                with patch.object(
+                    client.client, "request_bars", new_callable=AsyncMock
+                ) as mock_request_bars:
+                    with patch.object(
+                        client.client, "request_instruments", new_callable=AsyncMock
+                    ) as mock_request_instruments:
+                        mock_request_bars.return_value = mock_bars
+                        mock_request_instruments.return_value = [mock_instrument]
+
+                        # Test parameters
+                        instrument_id_str = "SPY.ARCA"
+                        start = datetime(2025, 1, 1, tzinfo=timezone.utc)
+                        end = datetime(2025, 1, 2, tzinfo=timezone.utc)
+
+                        # Call fetch_bars
+                        bars, instrument = await client.fetch_bars(
+                            instrument_id=instrument_id_str,
+                            start=start,
+                            end=end,
+                            bar_type_spec="1-MINUTE-LAST",
+                        )
+
+                        # Verify rate limiter was called
+                        mock_acquire.assert_called_once()
+
+                        # Verify request_bars was called with string instrument_id
+                        mock_request_bars.assert_called_once()
+                        call_kwargs = mock_request_bars.call_args.kwargs
+                        assert call_kwargs["instrument_ids"] == [instrument_id_str]
+
+                        # CRITICAL: Verify request_instruments was called with InstrumentId object
+                        mock_request_instruments.assert_called_once()
+                        instruments_call_kwargs = mock_request_instruments.call_args.kwargs
+                        assert len(instruments_call_kwargs["instrument_ids"]) == 1
+                        passed_id = instruments_call_kwargs["instrument_ids"][0]
+
+                        # Verify it's an InstrumentId object, not a string
+                        assert isinstance(passed_id, InstrumentId)
+                        assert str(passed_id) == instrument_id_str
+
+                        # Verify return values
+                        assert bars == mock_bars
+                        assert instrument == mock_instrument
+
+    @pytest.mark.component
+    @pytest.mark.asyncio
+    async def test_fetch_bars_invalid_instrument_format(self):
+        """Test fetch_bars raises error for invalid instrument_id format."""
+        from nautilus_trader.adapters.interactive_brokers.historical.client import (
+            HistoricInteractiveBrokersClient,
+        )
+
+        from src.services.ibkr_client import IBKRHistoricalClient
+
+        with patch.object(HistoricInteractiveBrokersClient, "__init__", return_value=None):
+            client = IBKRHistoricalClient()
+
+            with patch.object(client.rate_limiter, "acquire", new_callable=AsyncMock):
+                start = datetime(2025, 1, 1, tzinfo=timezone.utc)
+                end = datetime(2025, 1, 2, tzinfo=timezone.utc)
+
+                # Test with invalid format (missing venue)
+                with pytest.raises(ValueError) as exc_info:
+                    await client.fetch_bars(
+                        instrument_id="SPY",  # Missing .VENUE
+                        start=start,
+                        end=end,
+                    )
+
+                assert "Invalid instrument_id format" in str(exc_info.value)
