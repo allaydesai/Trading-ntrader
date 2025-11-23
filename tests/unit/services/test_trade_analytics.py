@@ -7,8 +7,18 @@ Tests cover equity curve generation, drawdown calculations, and trade statistics
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-from src.models.trade import EquityCurveResponse, Trade, TradeStatistics
-from src.services.trade_analytics import calculate_trade_statistics, generate_equity_curve
+from src.models.trade import (
+    DrawdownMetrics,
+    EquityCurvePoint,
+    EquityCurveResponse,
+    Trade,
+    TradeStatistics,
+)
+from src.services.trade_analytics import (
+    calculate_drawdowns,
+    calculate_trade_statistics,
+    generate_equity_curve,
+)
 
 
 class TestEquityCurveGeneration:
@@ -711,3 +721,250 @@ class TestTradeStatistics:
         assert result.breakeven_trades == 1
         # Win rate: 2 / 4 = 50%
         assert result.win_rate == Decimal("50.00")
+
+
+class TestDrawdownCalculation:
+    """Test suite for drawdown calculation logic."""
+
+    def test_calculate_drawdowns_with_no_drawdown(self):
+        """
+        Test drawdown calculation with monotonically increasing equity curve.
+
+        Given: An equity curve that only goes up (no drawdowns)
+        When: calculate_drawdowns() is called
+        Then: Returns metrics with no drawdowns detected
+        """
+        # Create upward trending equity curve (no drawdowns)
+        equity_curve = [
+            EquityCurvePoint(
+                timestamp=datetime(2025, 1, 1, 10, 0, 0, tzinfo=timezone.utc),
+                balance=Decimal("100000.00"),
+                cumulative_return_pct=Decimal("0.00"),
+                trade_number=0,
+            ),
+            EquityCurvePoint(
+                timestamp=datetime(2025, 1, 1, 11, 0, 0, tzinfo=timezone.utc),
+                balance=Decimal("101000.00"),
+                cumulative_return_pct=Decimal("1.00"),
+                trade_number=1,
+            ),
+            EquityCurvePoint(
+                timestamp=datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
+                balance=Decimal("102500.00"),
+                cumulative_return_pct=Decimal("2.50"),
+                trade_number=2,
+            ),
+            EquityCurvePoint(
+                timestamp=datetime(2025, 1, 1, 13, 0, 0, tzinfo=timezone.utc),
+                balance=Decimal("104000.00"),
+                cumulative_return_pct=Decimal("4.00"),
+                trade_number=3,
+            ),
+        ]
+
+        result = calculate_drawdowns(equity_curve)
+
+        assert isinstance(result, DrawdownMetrics)
+        assert result.max_drawdown is None
+        assert len(result.top_drawdowns) == 0
+        assert result.current_drawdown is None
+        assert result.total_drawdown_periods == 0
+
+    def test_calculate_drawdowns_single_period(self):
+        """
+        Test drawdown calculation with a single complete drawdown period.
+
+        Given: An equity curve with one peak, trough, and recovery
+        When: calculate_drawdowns() is called
+        Then: Returns metrics with single recovered drawdown period
+        """
+        # Create equity curve with single drawdown:
+        # $100k → $120k (peak) → $100k (trough) → $125k (recovery)
+        equity_curve = [
+            EquityCurvePoint(
+                timestamp=datetime(2025, 1, 1, 10, 0, 0, tzinfo=timezone.utc),
+                balance=Decimal("100000.00"),
+                cumulative_return_pct=Decimal("0.00"),
+                trade_number=0,
+            ),
+            EquityCurvePoint(
+                timestamp=datetime(2025, 1, 1, 11, 0, 0, tzinfo=timezone.utc),
+                balance=Decimal("120000.00"),  # Peak
+                cumulative_return_pct=Decimal("20.00"),
+                trade_number=1,
+            ),
+            EquityCurvePoint(
+                timestamp=datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
+                balance=Decimal("110000.00"),
+                cumulative_return_pct=Decimal("10.00"),
+                trade_number=2,
+            ),
+            EquityCurvePoint(
+                timestamp=datetime(2025, 1, 1, 13, 0, 0, tzinfo=timezone.utc),
+                balance=Decimal("100000.00"),  # Trough
+                cumulative_return_pct=Decimal("0.00"),
+                trade_number=3,
+            ),
+            EquityCurvePoint(
+                timestamp=datetime(2025, 1, 1, 14, 0, 0, tzinfo=timezone.utc),
+                balance=Decimal("125000.00"),  # Recovery (new peak)
+                cumulative_return_pct=Decimal("25.00"),
+                trade_number=4,
+            ),
+        ]
+
+        result = calculate_drawdowns(equity_curve)
+
+        assert result.total_drawdown_periods == 1
+        assert result.max_drawdown is not None
+        assert len(result.top_drawdowns) == 1
+        assert result.current_drawdown is None
+
+        # Verify drawdown details
+        dd = result.max_drawdown
+        assert dd.peak_balance == Decimal("120000.00")
+        assert dd.trough_balance == Decimal("100000.00")
+        assert dd.drawdown_amount == Decimal("20000.00")
+        # Expected: (20000 / 120000) * 100 = 16.6667%
+        assert abs(dd.drawdown_pct - Decimal("16.6667")) < Decimal("0.01")
+        assert dd.recovered is True
+        assert dd.recovery_timestamp == datetime(2025, 1, 1, 14, 0, 0, tzinfo=timezone.utc)
+
+    def test_calculate_drawdowns_multiple_periods(self):
+        """
+        Test drawdown calculation with multiple drawdown periods.
+
+        Given: An equity curve with 3 distinct drawdown periods
+        When: calculate_drawdowns() is called
+        Then: Returns metrics with all 3 periods sorted by magnitude
+        """
+        # Create equity curve with 3 drawdown periods
+        equity_curve = [
+            EquityCurvePoint(
+                timestamp=datetime(2025, 1, 1, 10, 0, 0, tzinfo=timezone.utc),
+                balance=Decimal("100000.00"),
+                cumulative_return_pct=Decimal("0.00"),
+                trade_number=0,
+            ),
+            # First drawdown: 5% ($100k → $105k → $100k → $110k)
+            EquityCurvePoint(
+                timestamp=datetime(2025, 1, 1, 11, 0, 0, tzinfo=timezone.utc),
+                balance=Decimal("105000.00"),  # Peak 1
+                cumulative_return_pct=Decimal("5.00"),
+                trade_number=1,
+            ),
+            EquityCurvePoint(
+                timestamp=datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
+                balance=Decimal("100000.00"),  # Trough 1
+                cumulative_return_pct=Decimal("0.00"),
+                trade_number=2,
+            ),
+            # Second drawdown: 10% ($110k → $99k → $115k) - Largest
+            EquityCurvePoint(
+                timestamp=datetime(2025, 1, 1, 13, 0, 0, tzinfo=timezone.utc),
+                balance=Decimal("110000.00"),  # Peak 2
+                cumulative_return_pct=Decimal("10.00"),
+                trade_number=3,
+            ),
+            EquityCurvePoint(
+                timestamp=datetime(2025, 1, 1, 14, 0, 0, tzinfo=timezone.utc),
+                balance=Decimal("99000.00"),  # Trough 2
+                cumulative_return_pct=Decimal("-1.00"),
+                trade_number=4,
+            ),
+            # Third drawdown: 4.35% ($115k → $110k → $120k)
+            EquityCurvePoint(
+                timestamp=datetime(2025, 1, 1, 15, 0, 0, tzinfo=timezone.utc),
+                balance=Decimal("115000.00"),  # Peak 3
+                cumulative_return_pct=Decimal("15.00"),
+                trade_number=5,
+            ),
+            EquityCurvePoint(
+                timestamp=datetime(2025, 1, 1, 16, 0, 0, tzinfo=timezone.utc),
+                balance=Decimal("110000.00"),  # Trough 3
+                cumulative_return_pct=Decimal("10.00"),
+                trade_number=6,
+            ),
+            EquityCurvePoint(
+                timestamp=datetime(2025, 1, 1, 17, 0, 0, tzinfo=timezone.utc),
+                balance=Decimal("120000.00"),  # Recovery
+                cumulative_return_pct=Decimal("20.00"),
+                trade_number=7,
+            ),
+        ]
+
+        result = calculate_drawdowns(equity_curve)
+
+        assert result.total_drawdown_periods == 3
+        assert result.max_drawdown is not None
+        assert len(result.top_drawdowns) == 3
+        assert result.current_drawdown is None
+
+        # Verify largest drawdown is identified
+        max_dd = result.max_drawdown
+        assert max_dd.peak_balance == Decimal("110000.00")
+        assert max_dd.trough_balance == Decimal("99000.00")
+        assert max_dd.drawdown_amount == Decimal("11000.00")
+        # Expected: (11000 / 110000) * 100 = 10%
+        assert abs(max_dd.drawdown_pct - Decimal("10.00")) < Decimal("0.01")
+        assert max_dd.recovered is True
+
+        # Verify top drawdowns are sorted by percentage descending
+        assert result.top_drawdowns[0].drawdown_pct >= result.top_drawdowns[1].drawdown_pct
+        assert result.top_drawdowns[1].drawdown_pct >= result.top_drawdowns[2].drawdown_pct
+
+    def test_calculate_drawdowns_ongoing_not_recovered(self):
+        """
+        Test drawdown calculation with ongoing drawdown (not yet recovered).
+
+        Given: An equity curve ending in a drawdown that hasn't recovered
+        When: calculate_drawdowns() is called
+        Then: Returns metrics with current_drawdown populated and recovered=False
+        """
+        # Create equity curve with ongoing drawdown
+        equity_curve = [
+            EquityCurvePoint(
+                timestamp=datetime(2025, 1, 1, 10, 0, 0, tzinfo=timezone.utc),
+                balance=Decimal("100000.00"),
+                cumulative_return_pct=Decimal("0.00"),
+                trade_number=0,
+            ),
+            EquityCurvePoint(
+                timestamp=datetime(2025, 1, 1, 11, 0, 0, tzinfo=timezone.utc),
+                balance=Decimal("120000.00"),  # Peak
+                cumulative_return_pct=Decimal("20.00"),
+                trade_number=1,
+            ),
+            EquityCurvePoint(
+                timestamp=datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
+                balance=Decimal("110000.00"),
+                cumulative_return_pct=Decimal("10.00"),
+                trade_number=2,
+            ),
+            EquityCurvePoint(
+                timestamp=datetime(2025, 1, 1, 13, 0, 0, tzinfo=timezone.utc),
+                balance=Decimal("100000.00"),  # Trough (ongoing)
+                cumulative_return_pct=Decimal("0.00"),
+                trade_number=3,
+            ),
+        ]
+
+        result = calculate_drawdowns(equity_curve)
+
+        # Should have 0 completed drawdowns
+        assert result.total_drawdown_periods == 0
+        assert len(result.top_drawdowns) == 0
+
+        # Current drawdown should be present
+        assert result.current_drawdown is not None
+        assert result.max_drawdown is not None  # Should point to current drawdown
+
+        # Verify current drawdown details
+        dd = result.current_drawdown
+        assert dd.peak_balance == Decimal("120000.00")
+        assert dd.trough_balance == Decimal("100000.00")
+        assert dd.drawdown_amount == Decimal("20000.00")
+        # Expected: (20000 / 120000) * 100 = 16.6667%
+        assert abs(dd.drawdown_pct - Decimal("16.6667")) < Decimal("0.01")
+        assert dd.recovered is False
+        assert dd.recovery_timestamp is None

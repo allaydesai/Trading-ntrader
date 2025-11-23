@@ -22,18 +22,18 @@ from src.config import get_settings
 def configure_logging() -> None:
     """
     Configure structured logging for the application.
-    
+
     Sets up:
     1. Console handler with colored output (INFO level by default)
     2. File handler with JSON output (DEBUG level by default)
     """
     settings = get_settings()
     log_level = getattr(logging, settings.log_level.upper(), logging.INFO)
-    
+
     # Create logs directory if it doesn't exist
     log_dir = Path("logs")
     log_dir.mkdir(exist_ok=True)
-    
+
     # Log file path
     log_file = log_dir / "ntrader.log"
 
@@ -51,14 +51,14 @@ def configure_logging() -> None:
 
     # Configure standard library logging
     logging.basicConfig(format="%(message)s", stream=sys.stdout, level=log_level)
-    
+
     root_logger = logging.getLogger()
     root_logger.handlers = []  # Clear existing handlers
 
     # 1. Console Handler (Human readable)
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(log_level)
-    
+
     # Use ConsoleRenderer for colorful output in development
     console_formatter = structlog.stdlib.ProcessorFormatter(
         foreign_pre_chain=shared_processors,
@@ -78,7 +78,7 @@ def configure_logging() -> None:
         encoding="utf-8",
     )
     file_handler.setLevel(logging.DEBUG)  # Always log DEBUG to file for troubleshooting
-    
+
     file_formatter = structlog.stdlib.ProcessorFormatter(
         foreign_pre_chain=shared_processors,
         processors=[
@@ -104,4 +104,3 @@ def configure_logging() -> None:
     # Log startup message
     logger = structlog.get_logger()
     logger.info("logging_configured", log_level=settings.log_level, log_file=str(log_file))
-

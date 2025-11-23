@@ -601,3 +601,200 @@ class TestTradeStatisticsEndpoint:
         assert data["win_rate"] == "0.00"
 
         app.dependency_overrides.clear()
+
+
+class TestDrawdownEndpoint:
+    """Test suite for GET /api/drawdown/{id} endpoint."""
+
+    @pytest.mark.asyncio
+    async def test_drawdown_endpoint_with_drawdown(
+        self,
+        db_session: AsyncSession,
+        sample_backtest_run: BacktestRun,
+    ):
+        """
+        Test drawdown endpoint returns correct metrics for backtest with drawdown.
+
+        Given: A backtest with trades creating a peak-trough-recovery pattern
+        When: GET /api/drawdown/{id} is called
+        Then: Returns 200 with drawdown metrics showing max drawdown and recovery
+        """
+        # Override database dependency to use test session
+        from src.api.dependencies import get_db
+
+        async def override_get_db():
+            yield db_session
+
+        app.dependency_overrides[get_db] = override_get_db
+
+        # Create trades that form a drawdown pattern:
+        # $100k initial → $120k (peak) → $100k (trough) → $125k (recovery)
+        base_time = datetime(2025, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
+        trades = [
+            # Trade 1: Win +$20k → Balance $120k (peak)
+            Trade(
+                backtest_run_id=sample_backtest_run.id,
+                instrument_id="AAPL",
+                trade_id="trade-1",
+                venue_order_id="order-1",
+                order_side="BUY",
+                quantity=Decimal("100"),
+                entry_price=Decimal("1000.00"),
+                exit_price=Decimal("1200.00"),
+                profit_loss=Decimal("20000.00"),
+                profit_pct=Decimal("20.00"),
+                entry_timestamp=base_time,
+                exit_timestamp=base_time + timedelta(hours=1),
+                holding_period_seconds=3600,
+            ),
+            # Trade 2: Loss -$20k → Balance $100k (trough)
+            Trade(
+                backtest_run_id=sample_backtest_run.id,
+                instrument_id="MSFT",
+                trade_id="trade-2",
+                venue_order_id="order-2",
+                order_side="BUY",
+                quantity=Decimal("100"),
+                entry_price=Decimal("1200.00"),
+                exit_price=Decimal("1000.00"),
+                profit_loss=Decimal("-20000.00"),
+                profit_pct=Decimal("-16.67"),
+                entry_timestamp=base_time + timedelta(hours=2),
+                exit_timestamp=base_time + timedelta(hours=3),
+                holding_period_seconds=3600,
+            ),
+            # Trade 3: Win +$25k → Balance $125k (recovery)
+            Trade(
+                backtest_run_id=sample_backtest_run.id,
+                instrument_id="GOOGL",
+                trade_id="trade-3",
+                venue_order_id="order-3",
+                order_side="BUY",
+                quantity=Decimal("100"),
+                entry_price=Decimal("1000.00"),
+                exit_price=Decimal("1250.00"),
+                profit_loss=Decimal("25000.00"),
+                profit_pct=Decimal("25.00"),
+                entry_timestamp=base_time + timedelta(hours=4),
+                exit_timestamp=base_time + timedelta(hours=5),
+                holding_period_seconds=3600,
+            ),
+        ]
+
+        # Add trades to database
+        for trade in trades:
+            db_session.add(trade)
+        await db_session.commit()
+
+        # Call endpoint
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get(f"/api/drawdown/{sample_backtest_run.id}")
+
+        # Verify response
+        assert response.status_code == 200
+        data = response.json()
+
+        # Verify max drawdown exists
+        assert data["max_drawdown"] is not None
+        max_dd = data["max_drawdown"]
+
+        # Verify drawdown details
+        # Peak: $120k, Trough: $100k, Drawdown: $20k, %: 16.67%
+        assert max_dd["peak_balance"] == "120000.00"
+        assert max_dd["trough_balance"] == "100000.00"
+        assert max_dd["drawdown_amount"] == "20000.00"
+        assert float(max_dd["drawdown_pct"]) == pytest.approx(16.6667, abs=0.01)
+        assert max_dd["recovered"] is True
+        assert max_dd["recovery_timestamp"] is not None
+
+        # Verify drawdown period count
+        assert data["total_drawdown_periods"] == 1
+
+        # Verify top drawdowns
+        assert len(data["top_drawdowns"]) == 1
+        assert data["top_drawdowns"][0]["drawdown_pct"] == max_dd["drawdown_pct"]
+
+        # No current drawdown (fully recovered)
+        assert data["current_drawdown"] is None
+
+        app.dependency_overrides.clear()
+
+    @pytest.mark.asyncio
+    async def test_drawdown_endpoint_with_no_drawdown(
+        self,
+        db_session: AsyncSession,
+        sample_backtest_run: BacktestRun,
+    ):
+        """
+        Test drawdown endpoint with monotonically increasing equity curve.
+
+        Given: A backtest with only winning trades (no drawdowns)
+        When: GET /api/drawdown/{id} is called
+        Then: Returns 200 with empty drawdown metrics
+        """
+        # Override database dependency
+        from src.api.dependencies import get_db
+
+        async def override_get_db():
+            yield db_session
+
+        app.dependency_overrides[get_db] = override_get_db
+
+        # Create only winning trades (no drawdown)
+        base_time = datetime(2025, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
+        trades = [
+            Trade(
+                backtest_run_id=sample_backtest_run.id,
+                instrument_id="AAPL",
+                trade_id="trade-1",
+                venue_order_id="order-1",
+                order_side="BUY",
+                quantity=Decimal("100"),
+                entry_price=Decimal("100.00"),
+                exit_price=Decimal("110.00"),
+                profit_loss=Decimal("1000.00"),
+                profit_pct=Decimal("10.00"),
+                entry_timestamp=base_time,
+                exit_timestamp=base_time + timedelta(hours=1),
+                holding_period_seconds=3600,
+            ),
+            Trade(
+                backtest_run_id=sample_backtest_run.id,
+                instrument_id="MSFT",
+                trade_id="trade-2",
+                venue_order_id="order-2",
+                order_side="BUY",
+                quantity=Decimal("100"),
+                entry_price=Decimal("200.00"),
+                exit_price=Decimal("220.00"),
+                profit_loss=Decimal("2000.00"),
+                profit_pct=Decimal("10.00"),
+                entry_timestamp=base_time + timedelta(hours=2),
+                exit_timestamp=base_time + timedelta(hours=3),
+                holding_period_seconds=3600,
+            ),
+        ]
+
+        for trade in trades:
+            db_session.add(trade)
+        await db_session.commit()
+
+        # Call endpoint
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get(f"/api/drawdown/{sample_backtest_run.id}")
+
+        # Verify response
+        assert response.status_code == 200
+        data = response.json()
+
+        # No drawdowns
+        assert data["max_drawdown"] is None
+        assert len(data["top_drawdowns"]) == 0
+        assert data["current_drawdown"] is None
+        assert data["total_drawdown_periods"] == 0
+
+        app.dependency_overrides.clear()

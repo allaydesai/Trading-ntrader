@@ -12,9 +12,9 @@
 
 ## 📊 Implementation Progress
 
-**Last Updated**: 2025-11-23 (Session 3 Complete)
+**Last Updated**: 2025-11-23 (Session 4 Complete)
 
-### Overall Status: User Story 3 COMPLETE ✅ - Trade Statistics Fully Implemented & Tested 🎉
+### Overall Status: User Story 4 COMPLETE ✅ - Drawdown Analysis Fully Implemented, Tested & UI Integrated 🎉
 
 | Phase | Status | Tasks Complete | Notes |
 |-------|--------|----------------|-------|
@@ -24,19 +24,23 @@
 | **Phase 3: US1 Implementation** | ✅ COMPLETE | 5/5 (100%) | Trade capture fully functional |
 | **Phase 4: US2** | ✅ COMPLETE | 12/12 (100%) | Equity curve API + UI chart integration complete |
 | **Phase 5: US3** | ✅ COMPLETE | 10/10 (100%) | Trade statistics with 8 passing tests |
-| **Phase 6-9: US4-US7** | ⏳ PENDING | 0/45 (0%) | Drawdown, UI Table, Export, Filtering |
+| **Phase 6: US4** | ✅ COMPLETE | 10/10 (100%) | Drawdown analysis with 6 passing tests + UI integration complete |
+| **Phase 7-9: US5-US7** | ⏳ PENDING | 0/35 (0%) | UI Table, Export, Filtering |
 | **Phase 10: Polish** | ⏳ PENDING | 0/16 (0%) | Code quality & validation |
 
-**Total Progress**: 46/108 tasks complete (43%)
+**Total Progress**: 56/108 tasks complete (52%)
 
 ### 🎯 Key Achievements
 - ✅ Database schema created with optimized indexes
 - ✅ Complete data model suite (8 Pydantic models)
-- ✅ 32/32 tests passing with TDD approach (16 US1 + 8 US2 + 8 US3)
+- ✅ 38/38 tests passing with TDD approach (16 US1 + 8 US2 + 8 US3 + 6 US4)
 - ✅ Bulk insert performance: 500 trades in <1s (5x faster than requirement!)
 - ✅ Equity curve generation: 1000 trades in <1s (meets performance requirement!)
 - ✅ Trade statistics calculation with comprehensive metrics
 - ✅ Trade statistics UI with 4-panel responsive grid layout
+- ✅ Drawdown analysis: peak-to-trough detection, recovery tracking, multiple periods support
+- ✅ Drawdown API endpoint: GET /api/drawdown/{backtest_id} fully functional
+- ✅ Drawdown UI: comprehensive display with max drawdown card, ongoing drawdown alert, top 5 drawdown periods
 - ✅ Currency formatting with proper thousands separators
 - ✅ Decimal precision fix for equity curve calculations
 - ✅ All code quality checks passing (ruff format + ruff check)
@@ -52,13 +56,23 @@
 8. `tests/integration/api/test_trades_api.py` - API integration tests (607 lines, 10 tests)
 9. `tests/integration/api/conftest.py` - API test fixtures
 
-### 🔧 Files Modified (2025-11-23 Session - US3)
+### 🔧 Files Modified (2025-11-23 Sessions - US3 & US4)
+
+**User Story 3 (Trade Statistics)**:
 - `src/services/trade_analytics.py` - Added calculate_trade_statistics() + streak detection helpers + ROUND_HALF_UP for decimal precision
 - `src/api/rest/trades.py` - Added GET /api/statistics/{id} endpoint
 - `tests/unit/services/test_trade_analytics.py` - Added 6 unit tests for trade statistics
 - `tests/integration/api/test_trades_api.py` - Added 2 integration tests for statistics endpoint
 - `templates/backtests/detail.html` - Added trade statistics section with loading states
 - `static/js/charts.js` - Added initTradeStatistics() function with 4-panel grid layout + formatCurrency() helper
+
+**User Story 4 (Drawdown Analysis)**:
+- `src/services/trade_analytics.py` - Added calculate_drawdowns() function (127 lines) with peak-to-trough detection
+- `src/api/rest/trades.py` - Added GET /api/drawdown/{backtest_id} endpoint
+- `tests/unit/services/test_trade_analytics.py` - Added 4 unit tests for drawdown calculation
+- `tests/integration/api/test_trades_api.py` - Added 2 integration tests for drawdown endpoint
+- `templates/backtests/detail.html` - Added Drawdown Analysis section with loading/error states
+- `static/js/charts.js` - Added initDrawdownMetrics() function with formatTimestamp() helper, max drawdown card, ongoing drawdown display, top 5 drawdown periods list
 
 ### 🐛 Bug Fixes (2025-11-23)
 - Fixed Pydantic decimal precision validation error in equity curve generation
@@ -67,9 +81,10 @@
 - Now displays: -$10,496.02 instead of -$10496.02000000
 
 ### 🎯 Next Steps
-1. Implement User Story 4 - Calculate Drawdown from Equity Curve (P2)
-2. Implement User Story 5 - View Trades in Backtest Details UI (P2)
+1. ~~Implement User Story 4 - Calculate Drawdown from Equity Curve (P2)~~ ✅ DONE
+2. Implement User Story 5 - View Trades in Backtest Details UI (P2) ← NEXT
 3. Implement User Story 6 - Export Trade History (P3)
+4. Implement User Story 7 - Filter and Query Trades (P3)
 
 ---
 
@@ -210,29 +225,31 @@ Project uses single-project structure:
 
 ---
 
-## Phase 6: User Story 4 - Calculate Drawdown from Equity Curve (Priority: P2)
+## Phase 6: User Story 4 - Calculate Drawdown from Equity Curve (Priority: P2) ✅ COMPLETE
 
 **Goal**: Calculate maximum drawdown, drawdown duration, and recovery periods to understand risk profile
 
 **Independent Test**: Create an equity curve with a known drawdown pattern, verify system correctly identifies peak, trough, drawdown percentage, and recovery time
 
-### Tests for User Story 4
+### Tests for User Story 4 ✅ COMPLETE
 
-- [ ] T048 [P] [US4] Unit test for calculate_drawdowns() with no drawdown in tests/unit/test_trade_analytics.py
-- [ ] T049 [P] [US4] Unit test for single drawdown period detection in tests/unit/test_trade_analytics.py
-- [ ] T050 [P] [US4] Unit test for multiple drawdown periods in tests/unit/test_trade_analytics.py
-- [ ] T051 [P] [US4] Unit test for ongoing drawdown (not recovered) in tests/unit/test_trade_analytics.py
-- [ ] T052 [US4] Integration test for GET /backtests/{id}/drawdown endpoint in tests/integration/test_trades_api.py
+- [X] T048 [P] [US4] Unit test for calculate_drawdowns() with no drawdown in tests/unit/services/test_trade_analytics.py
+- [X] T049 [P] [US4] Unit test for single drawdown period detection in tests/unit/services/test_trade_analytics.py
+- [X] T050 [P] [US4] Unit test for multiple drawdown periods in tests/unit/services/test_trade_analytics.py
+- [X] T051 [P] [US4] Unit test for ongoing drawdown (not recovered) in tests/unit/services/test_trade_analytics.py
+- [X] T052 [US4] Integration test for GET /api/drawdown/{id} endpoint in tests/integration/api/test_trades_api.py (2 tests added)
 
-### Implementation for User Story 4
+**Test Results**: 6/6 passing ✅ (4 unit + 2 integration = 6 tests)
 
-- [ ] T053 [US4] Implement calculate_drawdowns() function in src/services/trade_analytics.py
-- [ ] T054 [US4] Implement peak-to-trough detection algorithm in src/services/trade_analytics.py
-- [ ] T055 [US4] Implement recovery timestamp calculation in src/services/trade_analytics.py
-- [ ] T056 [US4] Implement GET /backtests/{id}/drawdown endpoint in src/api/routers/trades.py
-- [ ] T057 [US4] Add drawdown metrics section to backtest_detail.html template
+### Implementation for User Story 4 ✅ COMPLETE
 
-**Checkpoint**: Backtest details page should display maximum drawdown and top drawdown periods
+- [X] T053 [US4] Implement calculate_drawdowns() function in src/services/trade_analytics.py (127 lines)
+- [X] T054 [US4] Implement peak-to-trough detection algorithm (integrated in calculate_drawdowns())
+- [X] T055 [US4] Implement recovery timestamp calculation (integrated in calculate_drawdowns())
+- [X] T056 [US4] Implement GET /api/drawdown/{backtest_id} endpoint in src/api/rest/trades.py
+- [x] T057 [US4] Add drawdown metrics section to backtest_detail.html template - Added Drawdown Analysis section with loading states, error handling, and comprehensive display
+
+**Checkpoint**: ✅ COMPLETE - Drawdown API endpoint functional. Returns max drawdown, top drawdown periods, current drawdown status. All tests passing (25/25 total in test suite).
 
 ---
 

@@ -13,8 +13,12 @@ from src.api.dependencies import BacktestService, DbSession
 from src.api.models.chart_errors import ErrorDetail
 from src.api.models.chart_trades import TradeMarker, TradesResponse
 from src.db.models.trade import Trade
-from src.models.trade import EquityCurveResponse, TradeStatistics
-from src.services.trade_analytics import calculate_trade_statistics, generate_equity_curve
+from src.models.trade import DrawdownMetrics, EquityCurveResponse, TradeStatistics
+from src.services.trade_analytics import (
+    calculate_drawdowns,
+    calculate_trade_statistics,
+    generate_equity_curve,
+)
 
 router = APIRouter()
 
@@ -246,3 +250,96 @@ async def get_trade_statistics(
     statistics = calculate_trade_statistics(pydantic_trades)
 
     return statistics
+
+
+@router.get(
+    "/drawdown/{backtest_id}",
+    response_model=DrawdownMetrics,
+    responses={
+        404: {"model": ErrorDetail, "description": "Backtest not found"},
+        422: {"description": "Validation error"},
+    },
+    summary="Get drawdown metrics for backtest",
+    description=(
+        "Returns drawdown analysis from equity curve including maximum drawdown, "
+        "drawdown periods, recovery times, and current drawdown status"
+    ),
+)
+async def get_drawdown_metrics(
+    backtest_id: int,
+    service: BacktestService,
+    db: DbSession,
+) -> DrawdownMetrics:
+    """
+    Get comprehensive drawdown metrics for a backtest run.
+
+    Analyzes equity curve to identify peak-to-trough drawdown periods, their
+    recovery times, and provides comprehensive drawdown statistics including
+    the maximum drawdown and top 5 largest drawdown periods.
+
+    Args:
+        backtest_id: Backtest run database ID
+        service: BacktestQueryService dependency
+        db: Database session dependency
+
+    Returns:
+        DrawdownMetrics with:
+        - max_drawdown: Largest drawdown period by percentage
+        - top_drawdowns: Up to 5 largest drawdown periods
+        - current_drawdown: Ongoing drawdown if not yet recovered
+        - total_drawdown_periods: Count of completed drawdown periods
+
+    Raises:
+        HTTPException: 404 if backtest not found
+
+    Example:
+        GET /api/drawdown/123
+
+        Response:
+        {
+            "max_drawdown": {
+                "peak_timestamp": "2025-01-01T11:00:00Z",
+                "peak_balance": "120000.00",
+                "trough_timestamp": "2025-01-01T13:00:00Z",
+                "trough_balance": "100000.00",
+                "drawdown_amount": "20000.00",
+                "drawdown_pct": "16.6667",
+                "duration_days": 0,
+                "recovery_timestamp": "2025-01-01T14:00:00Z",
+                "recovered": true
+            },
+            "top_drawdowns": [...],
+            "current_drawdown": null,
+            "total_drawdown_periods": 1
+        }
+    """
+    # Get backtest from database using internal ID
+    backtest = await service.get_backtest_by_internal_id(backtest_id)
+
+    if not backtest:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Backtest run with ID {backtest_id} not found",
+        )
+
+    # Query trades for this backtest
+    result = await db.execute(
+        select(Trade).where(Trade.backtest_run_id == backtest_id).order_by(Trade.entry_timestamp)
+    )
+    trades = result.scalars().all()
+
+    # Convert SQLAlchemy models to Pydantic models
+    from src.models.trade import Trade as PydanticTrade
+
+    pydantic_trades = [PydanticTrade.model_validate(trade) for trade in trades]
+
+    # Generate equity curve first
+    equity_curve = generate_equity_curve(
+        pydantic_trades,
+        backtest.initial_capital,
+    )
+
+    # Calculate drawdown metrics from equity curve
+    drawdown_metrics = calculate_drawdowns(equity_curve.points)
+
+    return drawdown_metrics

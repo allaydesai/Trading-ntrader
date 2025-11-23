@@ -644,6 +644,192 @@ async function initTradeStatistics(container) {
     }
 }
 
+/**
+ * Format timestamp for display
+ * @param {string} timestamp - ISO 8601 timestamp
+ * @returns {string} Formatted date/time string
+ */
+function formatTimestamp(timestamp) {
+    if (!timestamp) return 'N/A';
+    const date = new Date(timestamp);
+    return date.toLocaleString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+    });
+}
+
+/**
+ * Initialize drawdown metrics display
+ * @param {HTMLElement} container - Container element with data-backtest-id
+ */
+async function initDrawdownMetrics(container) {
+    const backtestId = container.dataset.backtestId;
+    if (!backtestId) {
+        console.error("Drawdown metrics: missing backtest ID");
+        return;
+    }
+
+    const loadingEl = container.querySelector(".drawdown-loading");
+    const contentEl = container.querySelector(".drawdown-content");
+    const errorEl = container.querySelector(".drawdown-error");
+
+    try {
+        // Fetch drawdown metrics from API
+        const response = await fetch(`/api/drawdown/${backtestId}`);
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        const metrics = await response.json();
+
+        // Build drawdown metrics HTML
+        let html = '';
+
+        // Check if there's a max drawdown
+        if (metrics.max_drawdown) {
+            const maxDD = metrics.max_drawdown;
+            html += `
+                <!-- Max Drawdown Card -->
+                <div class="bg-slate-800 rounded p-4 mb-4">
+                    <h3 class="text-sm text-slate-400 mb-3">Maximum Drawdown</h3>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div>
+                            <div class="flex justify-between text-sm mb-2">
+                                <span class="text-slate-300">Drawdown:</span>
+                                <span class="font-bold text-red-400 text-lg">${parseFloat(maxDD.drawdown_pct).toFixed(2)}%</span>
+                            </div>
+                            <div class="flex justify-between text-sm mb-1">
+                                <span class="text-slate-300">Amount:</span>
+                                <span class="font-semibold text-red-400">${formatCurrency(maxDD.drawdown_amount)}</span>
+                            </div>
+                            <div class="flex justify-between text-sm">
+                                <span class="text-slate-300">Duration:</span>
+                                <span class="font-semibold">${maxDD.duration_days} day${maxDD.duration_days !== 1 ? 's' : ''}</span>
+                            </div>
+                        </div>
+                        <div>
+                            <div class="flex justify-between text-sm mb-1">
+                                <span class="text-slate-300">Peak Balance:</span>
+                                <span class="font-semibold">${formatCurrency(maxDD.peak_balance)}</span>
+                            </div>
+                            <div class="flex justify-between text-sm mb-1">
+                                <span class="text-slate-300">Trough Balance:</span>
+                                <span class="font-semibold text-red-400">${formatCurrency(maxDD.trough_balance)}</span>
+                            </div>
+                            <div class="flex justify-between text-sm">
+                                <span class="text-slate-300">Status:</span>
+                                <span class="font-semibold ${maxDD.recovered ? 'text-green-400' : 'text-yellow-400'}">
+                                    ${maxDD.recovered ? 'Recovered' : 'Ongoing'}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="mt-3 pt-3 border-t border-slate-700">
+                        <div class="text-xs text-slate-400 space-y-1">
+                            <div>Peak: ${formatTimestamp(maxDD.peak_timestamp)}</div>
+                            <div>Trough: ${formatTimestamp(maxDD.trough_timestamp)}</div>
+                            ${maxDD.recovery_timestamp ? `<div>Recovery: ${formatTimestamp(maxDD.recovery_timestamp)}</div>` : ''}
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            // Add current drawdown if it exists and is different from max
+            if (metrics.current_drawdown && !metrics.current_drawdown.recovered) {
+                const currDD = metrics.current_drawdown;
+                // Only show if it's not the same as max drawdown
+                if (currDD !== metrics.max_drawdown) {
+                    html += `
+                        <!-- Current Drawdown Card -->
+                        <div class="bg-slate-800 rounded p-4 mb-4 border-l-4 border-yellow-500">
+                            <h3 class="text-sm text-slate-400 mb-3">Current Drawdown (Ongoing)</h3>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                <div>
+                                    <div class="flex justify-between text-sm mb-2">
+                                        <span class="text-slate-300">Drawdown:</span>
+                                        <span class="font-bold text-yellow-400 text-lg">${parseFloat(currDD.drawdown_pct).toFixed(2)}%</span>
+                                    </div>
+                                    <div class="flex justify-between text-sm">
+                                        <span class="text-slate-300">Amount:</span>
+                                        <span class="font-semibold text-yellow-400">${formatCurrency(currDD.drawdown_amount)}</span>
+                                    </div>
+                                </div>
+                                <div>
+                                    <div class="flex justify-between text-sm mb-1">
+                                        <span class="text-slate-300">Peak Balance:</span>
+                                        <span class="font-semibold">${formatCurrency(currDD.peak_balance)}</span>
+                                    </div>
+                                    <div class="flex justify-between text-sm">
+                                        <span class="text-slate-300">Current Balance:</span>
+                                        <span class="font-semibold text-yellow-400">${formatCurrency(currDD.trough_balance)}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }
+            }
+
+            // Add top drawdowns section
+            if (metrics.top_drawdowns && metrics.top_drawdowns.length > 0) {
+                html += `
+                    <!-- Top Drawdown Periods -->
+                    <div class="bg-slate-800 rounded p-4">
+                        <h3 class="text-sm text-slate-400 mb-3">Top Drawdown Periods (${metrics.total_drawdown_periods} total)</h3>
+                        <div class="space-y-2">
+                `;
+
+                metrics.top_drawdowns.forEach((dd, index) => {
+                    html += `
+                        <div class="flex justify-between items-center text-sm py-2 ${index < metrics.top_drawdowns.length - 1 ? 'border-b border-slate-700' : ''}">
+                            <div class="flex items-center gap-3">
+                                <span class="text-slate-500 font-mono">#${index + 1}</span>
+                                <div>
+                                    <div class="font-semibold text-red-400">${parseFloat(dd.drawdown_pct).toFixed(2)}%</div>
+                                    <div class="text-xs text-slate-400">${formatCurrency(dd.drawdown_amount)}</div>
+                                </div>
+                            </div>
+                            <div class="text-right text-xs text-slate-400">
+                                <div>${dd.duration_days} day${dd.duration_days !== 1 ? 's' : ''}</div>
+                                <div>${dd.recovered ? 'Recovered' : 'Ongoing'}</div>
+                            </div>
+                        </div>
+                    `;
+                });
+
+                html += `
+                        </div>
+                    </div>
+                `;
+            }
+        } else {
+            // No drawdown detected
+            html = `
+                <div class="text-center py-8">
+                    <svg class="h-12 w-12 mx-auto mb-3 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <p class="text-slate-300 font-semibold mb-1">No Drawdowns Detected</p>
+                    <p class="text-sm text-slate-400">The equity curve shows consistent growth without any peak-to-trough periods.</p>
+                </div>
+            `;
+        }
+
+        // Show content
+        contentEl.innerHTML = html;
+        loadingEl.classList.add("hidden");
+        contentEl.classList.remove("hidden");
+
+    } catch (error) {
+        console.error("Error loading drawdown metrics:", error);
+        loadingEl.classList.add("hidden");
+        errorEl.classList.remove("hidden");
+    }
+}
+
 // Initialize on DOM ready
 document.addEventListener("DOMContentLoaded", () => {
     initCharts();
@@ -652,6 +838,12 @@ document.addEventListener("DOMContentLoaded", () => {
     const statsContainer = document.getElementById("trade-statistics");
     if (statsContainer) {
         initTradeStatistics(statsContainer);
+    }
+
+    // Initialize drawdown metrics
+    const drawdownContainer = document.getElementById("drawdown-metrics");
+    if (drawdownContainer) {
+        initDrawdownMetrics(drawdownContainer);
     }
 });
 

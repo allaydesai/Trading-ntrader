@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
 
 from src.models.trade import (
+    DrawdownMetrics,
+    DrawdownPeriod,
     EquityCurvePoint,
     EquityCurveResponse,
     Trade,
@@ -320,3 +322,129 @@ def _calculate_max_consecutive_losses(trades: list[Trade]) -> int:
             current_streak = 0
 
     return max_streak
+
+
+def calculate_drawdowns(equity_curve: list[EquityCurvePoint]) -> DrawdownMetrics:
+    """
+    Calculate drawdown periods from equity curve.
+
+    Analyzes equity curve to identify peak-to-trough drawdown periods, their
+    recovery times, and provides comprehensive drawdown statistics including
+    the maximum drawdown and top 5 largest drawdown periods.
+
+    Args:
+        equity_curve: Time-series of account balances (sorted by timestamp)
+
+    Returns:
+        DrawdownMetrics with max drawdown, top periods, and current drawdown
+
+    Example:
+        >>> equity_curve = [
+        ...     EquityCurvePoint(balance=Decimal("100000"), ...),
+        ...     EquityCurvePoint(balance=Decimal("120000"), ...),  # Peak
+        ...     EquityCurvePoint(balance=Decimal("100000"), ...),  # Trough
+        ...     EquityCurvePoint(balance=Decimal("125000"), ...),  # Recovery
+        ... ]
+        >>> metrics = calculate_drawdowns(equity_curve)
+        >>> metrics.max_drawdown.drawdown_pct
+        Decimal('16.6667')
+
+    Notes:
+        - Drawdown % = (peak - trough) / peak * 100
+        - Duration is calculated in calendar days
+        - Current drawdown is set if equity curve ends in a drawdown
+        - Top drawdowns are sorted by percentage (largest first)
+        - Maximum 5 drawdowns are returned in top_drawdowns list
+    """
+    if not equity_curve or len(equity_curve) < 2:
+        return DrawdownMetrics(
+            max_drawdown=None,
+            top_drawdowns=[],
+            current_drawdown=None,
+            total_drawdown_periods=0,
+        )
+
+    completed_drawdowns: list[DrawdownPeriod] = []
+    peak_balance = equity_curve[0].balance
+    peak_timestamp = equity_curve[0].timestamp
+    in_drawdown = False
+    trough_balance = peak_balance
+    trough_timestamp = peak_timestamp
+
+    # Iterate through equity curve to identify drawdown periods
+    for point in equity_curve[1:]:
+        if point.balance > peak_balance:
+            # New peak - end current drawdown if any
+            if in_drawdown:
+                dd_amount = peak_balance - trough_balance
+                dd_pct = (dd_amount / peak_balance) * 100
+                dd_pct = dd_pct.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+                duration = (trough_timestamp - peak_timestamp).days
+
+                completed_drawdowns.append(
+                    DrawdownPeriod(
+                        peak_timestamp=peak_timestamp,
+                        peak_balance=peak_balance,
+                        trough_timestamp=trough_timestamp,
+                        trough_balance=trough_balance,
+                        drawdown_amount=dd_amount,
+                        drawdown_pct=dd_pct,
+                        duration_days=duration,
+                        recovery_timestamp=point.timestamp,
+                        recovered=True,
+                    )
+                )
+                in_drawdown = False
+
+            # Update peak
+            peak_balance = point.balance
+            peak_timestamp = point.timestamp
+            trough_balance = point.balance
+            trough_timestamp = point.timestamp
+        elif point.balance < trough_balance:
+            # New trough (deeper drawdown)
+            trough_balance = point.balance
+            trough_timestamp = point.timestamp
+            in_drawdown = True
+
+    # Handle ongoing drawdown (not yet recovered)
+    current_dd = None
+    if in_drawdown:
+        dd_amount = peak_balance - trough_balance
+        dd_pct = (dd_amount / peak_balance) * 100
+        dd_pct = dd_pct.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+        duration = (trough_timestamp - peak_timestamp).days
+
+        current_dd = DrawdownPeriod(
+            peak_timestamp=peak_timestamp,
+            peak_balance=peak_balance,
+            trough_timestamp=trough_timestamp,
+            trough_balance=trough_balance,
+            drawdown_amount=dd_amount,
+            drawdown_pct=dd_pct,
+            duration_days=duration,
+            recovery_timestamp=None,
+            recovered=False,
+        )
+
+    # Sort completed drawdowns by percentage (descending)
+    sorted_drawdowns = sorted(completed_drawdowns, key=lambda d: d.drawdown_pct, reverse=True)
+
+    # Get top 5 drawdowns
+    top_drawdowns = sorted_drawdowns[:5]
+
+    # Determine max drawdown (either from completed or current)
+    max_drawdown = None
+    if sorted_drawdowns:
+        max_drawdown = sorted_drawdowns[0]
+
+    # If current drawdown is larger than max completed, use current as max
+    if current_dd and (not max_drawdown or current_dd.drawdown_pct > max_drawdown.drawdown_pct):
+        max_drawdown = current_dd
+
+    return DrawdownMetrics(
+        max_drawdown=max_drawdown,
+        top_drawdowns=top_drawdowns,
+        current_drawdown=current_dd,
+        total_drawdown_periods=len(completed_drawdowns),
+    )
