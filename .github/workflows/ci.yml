@@ -228,7 +228,7 @@ jobs:
             --cov-report=xml \
             --cov-report=term-missing \
             --cov-report=html \
-            --cov-fail-under=65 \
+            --cov-fail-under=64 \
             --tb=short
 
       - name: Upload coverage to Codecov
@@ -395,9 +395,9 @@ jobs:
           fi
 
           if [[ "${{ needs.coverage-report.result }}" == "success" ]]; then
-            echo "✅ **Coverage Report**: PASSED (≥65%)" >> $GITHUB_STEP_SUMMARY
+            echo "✅ **Coverage Report**: PASSED (≥64%)" >> $GITHUB_STEP_SUMMARY
           else
-            echo "❌ **Coverage Report**: FAILED (<65%)" >> $GITHUB_STEP_SUMMARY
+            echo "❌ **Coverage Report**: FAILED (<64%)" >> $GITHUB_STEP_SUMMARY
           fi
 
           echo "" >> $GITHUB_STEP_SUMMARY

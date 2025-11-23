@@ -212,7 +212,7 @@ class TestEquityCurveEndpoint:
         app.dependency_overrides.clear()
 
     @pytest.mark.asyncio
-    async def test_equity_curve_endpoint_with_nonexistent_backtest(self):
+    async def test_equity_curve_endpoint_with_nonexistent_backtest(self, db_session):
         """
         Test equity curve endpoint with invalid backtest ID.
 
