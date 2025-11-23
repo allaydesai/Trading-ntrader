@@ -227,6 +227,7 @@ class TestBacktestDetailView:
             additional_params={},
         )
         return BacktestDetailView(
+            id=1,
             run_id=uuid4(),
             strategy_name="SMA Crossover",
             execution_status="success",

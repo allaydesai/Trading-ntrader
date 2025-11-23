@@ -1248,7 +1248,7 @@ class TestTradeExportEndpoint:
         assert "content-disposition" in response.headers
         assert "attachment" in response.headers["content-disposition"]
         assert (
-            f"backtest_{sample_backtest_run.id}_trades.csv"
+            "SMA_Crossover_AAPL_2025-01-01_to_2025-01-31_trades.csv"
             in response.headers["content-disposition"]
         )
 
@@ -1346,7 +1346,7 @@ class TestTradeExportEndpoint:
         assert "content-disposition" in response.headers
         assert "attachment" in response.headers["content-disposition"]
         assert (
-            f"backtest_{sample_backtest_run.id}_trades.json"
+            "SMA_Crossover_AAPL_2025-01-01_to_2025-01-31_trades.json"
             in response.headers["content-disposition"]
         )
 

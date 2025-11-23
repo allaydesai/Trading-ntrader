@@ -65,12 +65,12 @@
         </a>
 
         <a href="/api/backtests/{{ view.id }}/export?format=csv"
-           download="{{ view.strategy_name|replace(' ', '_') }}_{{ view.instrument_symbol }}_{{ view.start_date.strftime('%Y-%m-%d') }}_to_{{ view.end_date.strftime('%Y-%m-%d') }}_trades.csv"
+           download="{{ view.strategy_name|replace(' ', '_') }}_{{ view.configuration.instrument_symbol }}_{{ view.configuration.start_date.strftime('%Y-%m-%d') }}_to_{{ view.configuration.end_date.strftime('%Y-%m-%d') }}_trades.csv"
            class="bg-emerald-600 hover:bg-emerald-700 px-4 py-2 rounded text-white font-medium transition-colors">
             Export Trades (CSV)
         </a>
         <a href="/api/backtests/{{ view.id }}/export?format=json"
-           download="{{ view.strategy_name|replace(' ', '_') }}_{{ view.instrument_symbol }}_{{ view.start_date.strftime('%Y-%m-%d') }}_to_{{ view.end_date.strftime('%Y-%m-%d') }}_trades.json"
+           download="{{ view.strategy_name|replace(' ', '_') }}_{{ view.configuration.instrument_symbol }}_{{ view.configuration.start_date.strftime('%Y-%m-%d') }}_to_{{ view.configuration.end_date.strftime('%Y-%m-%d') }}_trades.json"
            class="bg-teal-600 hover:bg-teal-700 px-4 py-2 rounded text-white font-medium transition-colors">
             Export Trades (JSON)
         </a>

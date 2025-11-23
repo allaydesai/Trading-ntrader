@@ -33,12 +33,15 @@ class RateLimiter:
         self.requests: deque[datetime] = deque()
         self._lock = asyncio.Lock()
 
-    async def acquire(self):
+    async def acquire(self) -> datetime:
         """
         Wait until a request slot is available.
 
         Implements sliding window rate limiting with thread-safe operations.
         Uses asyncio.Lock to prevent race conditions in concurrent scenarios.
+
+        Returns:
+            The timestamp when this request was recorded
         """
         async with self._lock:
             while True:
@@ -51,7 +54,7 @@ class RateLimiter:
                 # If we have capacity, record this request and return
                 if len(self.requests) < self.requests_per_second:
                     self.requests.append(now)
-                    return
+                    return now
 
                 # At limit, wait until oldest request expires
                 sleep_time = (self.requests[0] + self.window - now).total_seconds()

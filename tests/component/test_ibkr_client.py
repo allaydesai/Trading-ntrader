@@ -167,8 +167,8 @@ class TestRateLimiter:
         request_times = []
 
         async def make_request():
-            await limiter.acquire()
-            request_times.append(datetime.now(timezone.utc))
+            timestamp = await limiter.acquire()
+            request_times.append(timestamp)
 
         # Launch 50 concurrent requests
         tasks = [make_request() for _ in range(50)]
