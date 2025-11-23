@@ -109,6 +109,21 @@ jobs:
     name: Integration Tests (Real Nautilus)
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ntrader_dev_2025
+          POSTGRES_PASSWORD: ntrader_dev_2025
+          POSTGRES_DB: trading_ntrader_dev
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
     strategy:
       matrix:
         python-version: ['3.11', '3.12']
@@ -140,6 +155,8 @@ jobs:
           uv sync --dev
 
       - name: Run integration tests (subprocess isolated)
+        env:
+          DATABASE_URL: postgresql://ntrader_dev_2025:ntrader_dev_2025@localhost:5432/trading_ntrader_dev
         run: |
           uv run pytest tests/integration -v -n auto --forked \
             --ignore=tests/integration/db \
@@ -160,6 +177,21 @@ jobs:
     runs-on: ubuntu-latest
     needs: [unit-tests, component-tests, integration-tests]
     if: always()
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ntrader_dev_2025
+          POSTGRES_PASSWORD: ntrader_dev_2025
+          POSTGRES_DB: trading_ntrader_dev
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
 
     steps:
       - name: Checkout code
@@ -187,6 +219,8 @@ jobs:
         continue-on-error: true
 
       - name: Run all tests with combined coverage
+        env:
+          DATABASE_URL: postgresql://ntrader_dev_2025:ntrader_dev_2025@localhost:5432/trading_ntrader_dev
         run: |
           uv run pytest tests/ -v -n auto \
             --ignore=tests/integration/db \
