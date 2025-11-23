@@ -56,9 +56,7 @@ class TestOrder:
             raise ValueError(f"Invalid side: {self.side}. Must be 'BUY' or 'SELL'")
 
         if self.order_type not in ("MARKET", "LIMIT"):
-            raise ValueError(
-                f"Invalid order_type: {self.order_type}. Must be 'MARKET' or 'LIMIT'"
-            )
+            raise ValueError(f"Invalid order_type: {self.order_type}. Must be 'MARKET' or 'LIMIT'")
 
         if self.quantity <= 0:
             raise ValueError(f"Quantity must be positive, got {self.quantity}")

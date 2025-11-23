@@ -56,7 +56,5 @@ class NavigationState(BaseModel):
         description="Current page identifier",
         pattern=r"^(dashboard|backtests|data|docs)$",
     )
-    breadcrumbs: list[BreadcrumbItem] = Field(
-        default_factory=list, description="Navigation trail"
-    )
+    breadcrumbs: list[BreadcrumbItem] = Field(default_factory=list, description="Navigation trail")
     app_version: str = Field("0.1.0", description="Application version")

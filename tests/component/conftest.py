@@ -7,13 +7,14 @@ Nautilus framework components.
 Reference: design.md Section 2.3 - Test Double Design
 """
 
-import pytest
 from decimal import Decimal
 
-from tests.component.doubles import TestTradingEngine, TestOrder, TestPosition
-from src.core.sma_logic import SMATradingLogic
+import pytest
+
 from src.core.position_sizing import PositionSizingLogic
 from src.core.risk_management import RiskManagementLogic
+from src.core.sma_logic import SMATradingLogic
+from tests.component.doubles import TestOrder, TestPosition, TestTradingEngine
 
 
 @pytest.fixture
@@ -47,9 +48,7 @@ def test_engine_with_limits():
         ...     order = TestOrder("BTCUSDT", "BUY", Decimal("2.0"))
         ...     test_engine_with_limits.submit_order(order)
     """
-    return TestTradingEngine(
-        initial_balance=Decimal("10000"), max_position_size=Decimal("1.0")
-    )
+    return TestTradingEngine(initial_balance=Decimal("10000"), max_position_size=Decimal("1.0"))
 
 
 @pytest.fixture
@@ -122,9 +121,7 @@ def sample_test_order():
         ...     assert sample_test_order.symbol == "BTCUSDT"
         ...     assert sample_test_order.quantity == Decimal("0.5")
     """
-    return TestOrder(
-        symbol="BTCUSDT", side="BUY", quantity=Decimal("0.5"), order_type="MARKET"
-    )
+    return TestOrder(symbol="BTCUSDT", side="BUY", quantity=Decimal("0.5"), order_type="MARKET")
 
 
 @pytest.fixture

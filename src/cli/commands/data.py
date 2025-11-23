@@ -6,14 +6,14 @@ from pathlib import Path
 from typing import Optional
 
 import click
+from nautilus_trader.adapters.interactive_brokers.common import IBContract
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
-from src.services.ibkr_client import IBKRHistoricalClient
-from src.services.data_fetcher import HistoricalDataFetcher
 from src.config import get_settings
-from nautilus_trader.adapters.interactive_brokers.common import IBContract
+from src.services.data_fetcher import HistoricalDataFetcher
+from src.services.ibkr_client import IBKRHistoricalClient
 
 console = Console()
 settings = get_settings()
@@ -123,9 +123,7 @@ def import_data(
                 table.add_row("Rows Processed", str(result["rows_processed"]))
                 table.add_row("Bars Written", str(result["bars_written"]))
                 table.add_row("Conflicts Skipped", str(result["conflicts_skipped"]))
-                table.add_row(
-                    "Validation Errors", str(len(result["validation_errors"]))
-                )
+                table.add_row("Validation Errors", str(len(result["validation_errors"])))
                 table.add_row("Date Range", result["date_range"])
                 table.add_row("File Size", f"{result['file_size_kb']:.2f} KB")
 
@@ -174,8 +172,9 @@ def import_data(
 )
 def list_data(symbol: Optional[str], format: str):
     """List all available market data in catalog."""
-    from src.services.data_catalog import DataCatalogService
     import json
+
+    from src.services.data_catalog import DataCatalogService
 
     try:
         catalog_service = DataCatalogService()
@@ -308,9 +307,7 @@ def list_data(symbol: Optional[str], format: str):
 
 @data.command("check")
 @click.option("--symbol", "-s", required=True, help="Trading symbol to check")
-@click.option(
-    "--venue", "-v", default="NASDAQ", help="Venue/exchange (default: NASDAQ)"
-)
+@click.option("--venue", "-v", default="NASDAQ", help="Venue/exchange (default: NASDAQ)")
 @click.option(
     "--bar-type",
     "-b",
@@ -484,9 +481,7 @@ def connect(host: Optional[str], port: Optional[int], client_id: Optional[int]):
                 progress.update(task, completed=True)
 
                 # Display success message
-                console.print(
-                    "✅ Successfully connected to Interactive Brokers", style="green"
-                )
+                console.print("✅ Successfully connected to Interactive Brokers", style="green")
 
                 # Show connection details in table
                 table = Table(title="Connection Details")
@@ -497,12 +492,8 @@ def connect(host: Optional[str], port: Optional[int], client_id: Optional[int]):
                 table.add_row("Port", str(port_num))
                 table.add_row("Client ID", str(client_id_num))
                 table.add_row("Account ID", connection_info.get("account_id", "N/A"))
-                table.add_row(
-                    "Server Version", str(connection_info.get("server_version", "N/A"))
-                )
-                table.add_row(
-                    "Connection Time", connection_info.get("connection_time", "N/A")
-                )
+                table.add_row("Server Version", str(connection_info.get("server_version", "N/A")))
+                table.add_row("Connection Time", connection_info.get("connection_time", "N/A"))
 
                 console.print(table)
 
@@ -517,16 +508,10 @@ def connect(host: Optional[str], port: Optional[int], client_id: Optional[int]):
 
                 # Show troubleshooting hints
                 console.print("\n[yellow]Troubleshooting:[/yellow]")
-                console.print(
-                    "  1. Ensure TWS or IB Gateway is running on the specified host/port"
-                )
-                console.print(
-                    "  2. Check that API connections are enabled in TWS/Gateway"
-                )
+                console.print("  1. Ensure TWS or IB Gateway is running on the specified host/port")
+                console.print("  2. Check that API connections are enabled in TWS/Gateway")
                 console.print("  3. Verify the host and port are correct")
-                console.print(
-                    "  4. For paper trading, use port 7497 (TWS) or 4002 (Gateway)"
-                )
+                console.print("  4. For paper trading, use port 7497 (TWS) or 4002 (Gateway)")
 
                 return False
 
@@ -567,9 +552,7 @@ def connect(host: Optional[str], port: Optional[int], client_id: Optional[int]):
     "--timeframe",
     "-t",
     default="DAILY",
-    type=click.Choice(
-        ["1-MINUTE", "5-MINUTE", "1-HOUR", "DAILY"], case_sensitive=False
-    ),
+    type=click.Choice(["1-MINUTE", "5-MINUTE", "1-HOUR", "DAILY"], case_sensitive=False),
     help="Bar timeframe",
 )
 @click.option(
@@ -632,9 +615,7 @@ def fetch(
                 transient=False,
             ) as progress:
                 for symbol in instrument_list:
-                    task = progress.add_task(
-                        f"Fetching {symbol} ({timeframe})...", total=None
-                    )
+                    task = progress.add_task(f"Fetching {symbol} ({timeframe})...", total=None)
 
                     # Create contract
                     contract = IBContract(
@@ -656,9 +637,7 @@ def fetch(
 
                     total_bars += len(bars)
 
-                    console.print(
-                        f"  ✅ {symbol}: {len(bars)} bars fetched", style="green"
-                    )
+                    console.print(f"  ✅ {symbol}: {len(bars)} bars fetched", style="green")
 
             # Disconnect
             await client.disconnect()

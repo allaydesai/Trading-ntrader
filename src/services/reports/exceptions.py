@@ -119,9 +119,7 @@ class DirectoryError(ExportError):
         self.directory_path = directory_path
         self.operation = operation
         self.reason = reason
-        super().__init__(
-            f"Directory {operation} failed: {directory_path}", details=reason
-        )
+        super().__init__(f"Directory {operation} failed: {directory_path}", details=reason)
 
 
 class PermissionError(ExportError):

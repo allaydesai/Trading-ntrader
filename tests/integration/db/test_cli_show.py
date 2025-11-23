@@ -5,13 +5,14 @@ Tests the complete CLI command flow for retrieving and displaying
 backtest details by run_id.
 """
 
-import pytest
 from contextlib import contextmanager
-from uuid import uuid4
-from decimal import Decimal
 from datetime import datetime, timezone
-from click.testing import CliRunner
+from decimal import Decimal
 from unittest.mock import patch
+from uuid import uuid4
+
+import pytest
+from click.testing import CliRunner
 
 from src.cli.commands.show import show_backtest_details as show
 from src.db.repositories.backtest_repository_sync import SyncBacktestRepository
@@ -202,10 +203,7 @@ def test_show_handles_not_found_uuid(sync_db_session):
         result = runner.invoke(show, [str(non_existent_id)])
 
     # Assert: Verify not found handling
-    assert (
-        "not found" in result.output.lower()
-        or "does not exist" in result.output.lower()
-    )
+    assert "not found" in result.output.lower() or "does not exist" in result.output.lower()
     assert str(non_existent_id) in result.output
 
 

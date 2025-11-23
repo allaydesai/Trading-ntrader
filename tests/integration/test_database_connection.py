@@ -1,6 +1,7 @@
 """Integration test for database connection."""
 
 import asyncio
+
 import pytest
 
 from src.config import get_settings

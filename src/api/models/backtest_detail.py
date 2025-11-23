@@ -143,9 +143,7 @@ class ConfigurationSnapshot(BaseModel):
     strategy_name: str = Field(..., description="Strategy name")
     strategy_type: str = Field(..., description="Strategy category")
     data_source: str = Field(..., description="Data source")
-    additional_params: dict = Field(
-        default_factory=dict, description="Strategy-specific params"
-    )
+    additional_params: dict = Field(default_factory=dict, description="Strategy-specific params")
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -226,6 +224,7 @@ class BacktestDetailView(BaseModel):
     Combines metrics, configuration, and metadata for template rendering.
 
     Attributes:
+        id: Internal database ID (for API calls)
         run_id: Business identifier (UUID)
         strategy_name: Strategy name for display
         execution_status: "success" or "failed"
@@ -239,6 +238,7 @@ class BacktestDetailView(BaseModel):
 
     Example:
         >>> view = BacktestDetailView(
+        ...     id=123,
         ...     run_id=UUID("..."),
         ...     strategy_name="SMA Crossover",
         ...     execution_status="success",
@@ -250,6 +250,7 @@ class BacktestDetailView(BaseModel):
         ... )
     """
 
+    id: int = Field(..., description="Internal database ID")
     run_id: UUID = Field(..., description="Backtest identifier")
     strategy_name: str = Field(..., description="Strategy name")
     execution_status: str = Field(..., description="success or failed")
@@ -357,9 +358,7 @@ def build_metrics_panel(metrics) -> Optional[MetricsPanel]:
 
     missing_attrs = [attr for attr in required_attrs if not hasattr(metrics, attr)]
     if missing_attrs:
-        raise ValueError(
-            f"Metrics object missing required fields: {', '.join(missing_attrs)}"
-        )
+        raise ValueError(f"Metrics object missing required fields: {', '.join(missing_attrs)}")
 
     return MetricsPanel(
         return_metrics=[
@@ -517,6 +516,7 @@ def to_detail_view(run, base_url: str = "") -> BacktestDetailView:
         >>> return templates.TemplateResponse("detail.html", {"view": view})
     """
     return BacktestDetailView(
+        id=run.id,
         run_id=run.run_id,
         strategy_name=run.strategy_name,
         execution_status=run.execution_status,

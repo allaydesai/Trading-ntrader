@@ -1,9 +1,10 @@
 """Tests for CSV export functionality with precision preservation."""
 
-import pytest
-import pandas as pd
-from decimal import Decimal
 from datetime import datetime, timezone
+from decimal import Decimal
+
+import pandas as pd
+import pytest
 
 from src.services.reports.csv_exporter import CSVExporter
 
@@ -37,9 +38,7 @@ class TestCSVExporter:
             "largest_win": Decimal("3500.00"),
             "largest_loss": Decimal("-2100.00"),
             "total_pnl": Decimal("15300.00"),
-            "calculation_timestamp": datetime(
-                2024, 1, 15, 12, 30, 45, tzinfo=timezone.utc
-            ),
+            "calculation_timestamp": datetime(2024, 1, 15, 12, 30, 45, tzinfo=timezone.utc),
         }
 
     @pytest.fixture
@@ -91,9 +90,7 @@ class TestCSVExporter:
         assert exporter.decimal_places == 5  # Default precision
 
     @pytest.mark.component
-    def test_export_metrics_maintains_precision(
-        self, exporter, sample_metrics, tmp_path
-    ):
+    def test_export_metrics_maintains_precision(self, exporter, sample_metrics, tmp_path):
         """Test that metrics export preserves Decimal precision."""
         output_file = tmp_path / "test_metrics.csv"
 
@@ -119,9 +116,7 @@ class TestCSVExporter:
         assert "15300.00" in str(total_pnl_row["value"].values[0])
 
     @pytest.mark.component
-    def test_export_trades_preserves_decimal_precision(
-        self, exporter, sample_trades, tmp_path
-    ):
+    def test_export_trades_preserves_decimal_precision(self, exporter, sample_trades, tmp_path):
         """Test that trade export preserves precise decimal values."""
         output_file = tmp_path / "test_trades.csv"
 
@@ -183,9 +178,7 @@ class TestCSVExporter:
         """Test export with custom delimiter."""
         output_file = tmp_path / "test_semicolon.csv"
 
-        success = exporter.export_metrics(
-            sample_metrics, str(output_file), delimiter=";"
-        )
+        success = exporter.export_metrics(sample_metrics, str(output_file), delimiter=";")
 
         assert success is True
 
@@ -315,9 +308,7 @@ class TestCSVExporter:
             "strategy": "sma_crossover",
         }
 
-        success = exporter.export_metrics(
-            sample_metrics, str(output_file), metadata=metadata
-        )
+        success = exporter.export_metrics(sample_metrics, str(output_file), metadata=metadata)
 
         assert success is True
 

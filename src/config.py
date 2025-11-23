@@ -13,9 +13,7 @@ class IBKRSettings(BaseSettings):
     """Interactive Brokers configuration settings."""
 
     # Connection settings
-    ibkr_host: str = Field(
-        default="127.0.0.1", description="IB Gateway/TWS host address"
-    )
+    ibkr_host: str = Field(default="127.0.0.1", description="IB Gateway/TWS host address")
     ibkr_port: int = Field(default=7497, description="Connection port (7497=TWS paper)")
     ibkr_client_id: int = Field(default=1, description="Unique client identifier")
 
@@ -41,9 +39,7 @@ class IBKRSettings(BaseSettings):
     )
 
     # Rate limiting
-    ibkr_rate_limit: int = Field(
-        default=45, description="Requests per second (90% of 50 limit)"
-    )
+    ibkr_rate_limit: int = Field(default=45, description="Requests per second (90% of 50 limit)")
 
     # Data settings
     ibkr_use_rth: bool = Field(default=True, description="Regular Trading Hours only")
@@ -89,20 +85,14 @@ class Settings(BaseSettings):
     debug: bool = Field(default=False, description="Enable debug mode")
 
     # Trading settings
-    default_currency: str = Field(
-        default="USD", description="Default currency for accounts"
-    )
+    default_currency: str = Field(default="USD", description="Default currency for accounts")
     default_balance: Decimal = Field(
         default=Decimal("1000000"), description="Default starting balance"
     )
 
     # Backtest settings
-    fast_ema_period: int = Field(
-        default=10, description="Fast EMA period for strategies"
-    )
-    slow_ema_period: int = Field(
-        default=20, description="Slow EMA period for strategies"
-    )
+    fast_ema_period: int = Field(default=10, description="Fast EMA period for strategies")
+    slow_ema_period: int = Field(default=20, description="Slow EMA period for strategies")
     portfolio_value: Decimal = Field(
         default=Decimal("1000000"),
         description="Starting portfolio value in USD for position sizing calculations",
@@ -129,27 +119,17 @@ class Settings(BaseSettings):
     )
 
     # Data settings
-    data_directory: Path = Field(
-        default=Path("data"), description="Directory for data files"
-    )
-    mock_data_bars: int = Field(
-        default=1000, description="Number of mock data bars to generate"
-    )
+    data_directory: Path = Field(default=Path("data"), description="Directory for data files")
+    mock_data_bars: int = Field(default=1000, description="Number of mock data bars to generate")
 
     # Database settings
     database_url: Optional[str] = Field(
         default="postgresql://ntrader:ntrader_dev_2025@localhost:5432/trading_ntrader",
         description="PostgreSQL database URL",
     )
-    database_pool_size: int = Field(
-        default=10, description="Database connection pool size"
-    )
-    database_max_overflow: int = Field(
-        default=20, description="Maximum overflow connections"
-    )
-    database_pool_timeout: int = Field(
-        default=30, description="Pool connection timeout in seconds"
-    )
+    database_pool_size: int = Field(default=10, description="Database connection pool size")
+    database_max_overflow: int = Field(default=20, description="Maximum overflow connections")
+    database_pool_timeout: int = Field(default=30, description="Pool connection timeout in seconds")
 
     # Logging settings
     log_level: str = Field(default="INFO", description="Logging level")

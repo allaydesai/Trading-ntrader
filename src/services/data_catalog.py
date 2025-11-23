@@ -114,9 +114,7 @@ class DataCatalogService:
             # Strip whitespace and handle inline comments
             ibkr_host = os.environ.get("IBKR_HOST", "127.0.0.1").split("#")[0].strip()
             ibkr_port_str = os.environ.get("IBKR_PORT", "7497").split("#")[0].strip()
-            ibkr_client_id_str = (
-                os.environ.get("IBKR_CLIENT_ID", "10").split("#")[0].strip()
-            )
+            ibkr_client_id_str = os.environ.get("IBKR_CLIENT_ID", "10").split("#")[0].strip()
 
             ibkr_port = int(ibkr_port_str)
             ibkr_client_id = int(ibkr_client_id_str)
@@ -246,9 +244,9 @@ class DataCatalogService:
                         ).replace(tzinfo=timezone.utc)
                     else:
                         # Fallback to date only
-                        start_datetime = datetime.strptime(
-                            parts_start[0], "%Y-%m-%d"
-                        ).replace(tzinfo=timezone.utc)
+                        start_datetime = datetime.strptime(parts_start[0], "%Y-%m-%d").replace(
+                            tzinfo=timezone.utc
+                        )
 
                     parts_end = end_clean.split("T")
                     if len(parts_end) == 2:
@@ -259,9 +257,9 @@ class DataCatalogService:
                         ).replace(tzinfo=timezone.utc)
                     else:
                         # Fallback to date only
-                        end_datetime = datetime.strptime(
-                            parts_end[0], "%Y-%m-%d"
-                        ).replace(tzinfo=timezone.utc)
+                        end_datetime = datetime.strptime(parts_end[0], "%Y-%m-%d").replace(
+                            tzinfo=timezone.utc
+                        )
 
                     start_timestamps.append(start_datetime)
                     end_timestamps.append(end_datetime)
@@ -352,9 +350,7 @@ class DataCatalogService:
                 file_path=str(file_path),
                 error=str(e),
             )
-            raise CatalogError(
-                f"Failed to quarantine corrupted file {file_path}: {e}"
-            ) from e
+            raise CatalogError(f"Failed to quarantine corrupted file {file_path}: {e}") from e
 
     def get_availability(
         self, instrument_id: str, bar_type_spec: str
@@ -574,9 +570,7 @@ class DataCatalogService:
         """
         # Reason: Check if IBKR is available
         if not await self._is_ibkr_available():
-            raise IBKRConnectionError(
-                "IBKR connection not available. Cannot fetch instrument."
-            )
+            raise IBKRConnectionError("IBKR connection not available. Cannot fetch instrument.")
 
         try:
             # Reason: Request instrument from IBKR
@@ -792,8 +786,7 @@ class DataCatalogService:
             "data_missing_attempting_ibkr_fetch",
             instrument_id=instrument_id,
             available_range=(
-                f"{availability.start_date.isoformat()} to "
-                f"{availability.end_date.isoformat()}"
+                f"{availability.start_date.isoformat()} to {availability.end_date.isoformat()}"
                 if availability
                 else "None"
             ),

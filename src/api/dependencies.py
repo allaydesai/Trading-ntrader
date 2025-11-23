@@ -12,8 +12,8 @@ from fastapi import Depends
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.db.session import get_session as get_db_session
 from src.db.repositories.backtest_repository import BacktestRepository
+from src.db.session import get_session as get_db_session
 from src.services.backtest_query import BacktestQueryService
 from src.services.data_catalog import DataCatalogService
 

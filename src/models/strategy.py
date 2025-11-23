@@ -1,9 +1,9 @@
 """Trading strategy models."""
 
-from decimal import Decimal
 from datetime import datetime
+from decimal import Decimal
 from enum import Enum
-from typing import Dict, Any
+from typing import Any, Dict
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field, field_validator
@@ -30,9 +30,7 @@ class SMAParameters(BaseModel):
 
     fast_period: int = Field(default=10, ge=1, le=200, description="Fast SMA period")
     slow_period: int = Field(default=20, ge=1, le=200, description="Slow SMA period")
-    trade_size: Decimal = Field(
-        default=Decimal("1000000"), gt=0, description="Size of each trade"
-    )
+    trade_size: Decimal = Field(default=Decimal("1000000"), gt=0, description="Size of each trade")
 
     @field_validator("fast_period", "slow_period")
     @classmethod
@@ -63,9 +61,7 @@ class MeanReversionParameters(BaseModel):
         le=4.0,
         description="Number of standard deviations for bands",
     )
-    trade_size: Decimal = Field(
-        default=Decimal("1000000"), gt=0, description="Size of each trade"
-    )
+    trade_size: Decimal = Field(default=Decimal("1000000"), gt=0, description="Size of each trade")
 
     @field_validator("lookback_period")
     @classmethod
@@ -87,18 +83,14 @@ class MeanReversionParameters(BaseModel):
 class MomentumParameters(BaseModel):
     """Parameters specific to momentum strategy."""
 
-    rsi_period: int = Field(
-        default=14, ge=5, le=50, description="RSI calculation period"
-    )
+    rsi_period: int = Field(default=14, ge=5, le=50, description="RSI calculation period")
     oversold_threshold: float = Field(
         default=30.0, ge=10.0, le=40.0, description="RSI oversold threshold"
     )
     overbought_threshold: float = Field(
         default=70.0, ge=60.0, le=90.0, description="RSI overbought threshold"
     )
-    trade_size: Decimal = Field(
-        default=Decimal("1000000"), gt=0, description="Size of each trade"
-    )
+    trade_size: Decimal = Field(default=Decimal("1000000"), gt=0, description="Size of each trade")
 
     @field_validator("oversold_threshold", "overbought_threshold")
     @classmethod
@@ -114,9 +106,7 @@ class MomentumParameters(BaseModel):
         """Validate overbought threshold is greater than oversold threshold."""
         oversold = info.data.get("oversold_threshold")
         if oversold is not None and v <= oversold:
-            raise ValueError(
-                "Overbought threshold must be greater than oversold threshold"
-            )
+            raise ValueError("Overbought threshold must be greater than oversold threshold")
         return v
 
 
@@ -127,16 +117,12 @@ class TradingStrategy(BaseModel):
     name: str = Field(..., min_length=1, max_length=100, description="Strategy name")
     strategy_type: StrategyType = Field(..., description="Type of strategy")
     parameters: Dict[str, Any] = Field(..., description="Strategy-specific parameters")
-    created_at: datetime = Field(
-        default_factory=datetime.now, description="Creation timestamp"
-    )
+    created_at: datetime = Field(default_factory=datetime.now, description="Creation timestamp")
     updated_at: datetime = Field(
         default_factory=datetime.now, description="Last modification timestamp"
     )
     is_active: bool = Field(default=True, description="Whether strategy can be used")
-    status: StrategyStatus = Field(
-        default=StrategyStatus.DRAFT, description="Strategy status"
-    )
+    status: StrategyStatus = Field(default=StrategyStatus.DRAFT, description="Strategy status")
 
     @field_validator("parameters")
     @classmethod

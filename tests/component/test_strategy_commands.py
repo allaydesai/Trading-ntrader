@@ -61,13 +61,8 @@ class TestStrategyCommands:
             with open(output_file, "r") as f:
                 config = yaml.safe_load(f)
 
-            assert (
-                config["strategy_path"]
-                == "src.core.strategies.sma_crossover:SMACrossover"
-            )
-            assert (
-                config["config_path"] == "src.core.strategies.sma_crossover:SMAConfig"
-            )
+            assert config["strategy_path"] == "src.core.strategies.sma_crossover:SMACrossover"
+            assert config["config_path"] == "src.core.strategies.sma_crossover:SMAConfig"
             assert "config" in config
             assert "fast_period" in config["config"]
             assert "slow_period" in config["config"]
@@ -102,13 +97,9 @@ class TestStrategyCommands:
             with open(output_file, "r") as f:
                 config = yaml.safe_load(f)
 
+            assert config["strategy_path"] == "src.core.strategies.rsi_mean_reversion:RSIMeanRev"
             assert (
-                config["strategy_path"]
-                == "src.core.strategies.rsi_mean_reversion:RSIMeanRev"
-            )
-            assert (
-                config["config_path"]
-                == "src.core.strategies.rsi_mean_reversion:RSIMeanRevConfig"
+                config["config_path"] == "src.core.strategies.rsi_mean_reversion:RSIMeanRevConfig"
             )
             assert "rsi_period" in config["config"]
             assert "rsi_buy_threshold" in config["config"]
@@ -133,14 +124,8 @@ class TestStrategyCommands:
             with open(output_file, "r") as f:
                 config = yaml.safe_load(f)
 
-            assert (
-                config["strategy_path"]
-                == "src.core.strategies.sma_momentum:SMAMomentum"
-            )
-            assert (
-                config["config_path"]
-                == "src.core.strategies.sma_momentum:SMAMomentumConfig"
-            )
+            assert config["strategy_path"] == "src.core.strategies.sma_momentum:SMAMomentum"
+            assert config["config_path"] == "src.core.strategies.sma_momentum:SMAMomentumConfig"
             assert "fast_period" in config["config"]
             assert "slow_period" in config["config"]
             assert "allow_short" in config["config"]
@@ -229,9 +214,7 @@ class TestStrategyCommands:
     @pytest.mark.component
     def test_strategy_create_missing_output(self):
         """Test strategy create without output parameter."""
-        result = self.runner.invoke(
-            cli, ["strategy", "create", "--type", "sma_crossover"]
-        )
+        result = self.runner.invoke(cli, ["strategy", "create", "--type", "sma_crossover"])
 
         assert result.exit_code != 0
         assert "Missing option" in result.output or "required" in result.output
@@ -242,9 +225,7 @@ class TestStrategyCommands:
         with tempfile.TemporaryDirectory() as temp_dir:
             output_file = os.path.join(temp_dir, "test.yaml")
 
-            result = self.runner.invoke(
-                cli, ["strategy", "create", "--output", output_file]
-            )
+            result = self.runner.invoke(cli, ["strategy", "create", "--output", output_file])
 
             assert result.exit_code != 0
             assert "Missing option" in result.output or "required" in result.output

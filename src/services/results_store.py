@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
 
 from src.models.backtest_result import BacktestResult
 
@@ -170,9 +170,7 @@ class ResultsStore:
 
         # Sort by timestamp from metadata (most recent first)
         # Handle potential None timestamps by treating them as very old dates
-        results.sort(
-            key=lambda r: r.get("timestamp") or "1970-01-01 00:00:00", reverse=True
-        )
+        results.sort(key=lambda r: r.get("timestamp") or "1970-01-01 00:00:00", reverse=True)
 
         # Apply limit after sorting
         if limit:
@@ -224,9 +222,7 @@ class ResultsStore:
         Returns:
             Number of results in storage
         """
-        json_files = [
-            f for f in self.storage_dir.glob("*.json") if f.name != ".gitignore"
-        ]
+        json_files = [f for f in self.storage_dir.glob("*.json") if f.name != ".gitignore"]
         return len(json_files)
 
     def clear(self) -> int:
@@ -240,9 +236,7 @@ class ResultsStore:
             This operation cannot be undone!
         """
         count = 0
-        json_files = [
-            f for f in self.storage_dir.glob("*.json") if f.name != ".gitignore"
-        ]
+        json_files = [f for f in self.storage_dir.glob("*.json") if f.name != ".gitignore"]
 
         for file_path in json_files:
             try:
@@ -260,9 +254,7 @@ class ResultsStore:
         Returns:
             Dictionary with storage statistics
         """
-        json_files = [
-            f for f in self.storage_dir.glob("*.json") if f.name != ".gitignore"
-        ]
+        json_files = [f for f in self.storage_dir.glob("*.json") if f.name != ".gitignore"]
 
         total_size = sum(f.stat().st_size for f in json_files)
 
@@ -285,9 +277,7 @@ class ResultsStore:
             List of matching result metadata
         """
         all_results = self.list()
-        return [
-            r for r in all_results if r["strategy"].lower() == strategy_name.lower()
-        ]
+        return [r for r in all_results if r["strategy"].lower() == strategy_name.lower()]
 
     def find_by_symbol(self, symbol: str) -> List[Dict[str, Any]]:
         """

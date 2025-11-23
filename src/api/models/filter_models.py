@@ -78,9 +78,7 @@ class FilterState(BaseModel):
     status: Optional[ExecutionStatus] = Field(
         default=None, description="Filter by execution status"
     )
-    sort: SortColumn = Field(
-        default=SortColumn.CREATED_AT, description="Column to sort by"
-    )
+    sort: SortColumn = Field(default=SortColumn.CREATED_AT, description="Column to sort by")
     order: SortOrder = Field(default=SortOrder.DESC, description="Sort direction")
     page: int = Field(default=1, ge=1, description="Current page number")
     page_size: int = Field(default=20, ge=1, le=100, description="Results per page")
@@ -147,9 +145,7 @@ class FilterState(BaseModel):
             New FilterState with updated sort and reset to page 1
         """
         if self.sort == column:
-            new_order = (
-                SortOrder.ASC if self.order == SortOrder.DESC else SortOrder.DESC
-            )
+            new_order = SortOrder.ASC if self.order == SortOrder.DESC else SortOrder.DESC
         else:
             new_order = SortOrder.DESC
         return self.model_copy(update={"sort": column, "order": new_order, "page": 1})

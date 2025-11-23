@@ -7,11 +7,12 @@ Purpose: Test position management behavior without framework overhead
 Reference: design.md Section 2.3 - Component Tests Using Test Doubles
 """
 
-import pytest
 from decimal import Decimal
 
+import pytest
+
 from src.core.position_sizing import PositionSizingLogic
-from tests.component.doubles import TestTradingEngine, TestOrder
+from tests.component.doubles import TestOrder, TestTradingEngine
 
 
 @pytest.mark.component
@@ -203,14 +204,10 @@ class TestPositionManagerWithTestDoubles:
         engine = TestTradingEngine(initial_balance=Decimal("20000"))
 
         # First entry at $50000
-        engine.submit_order(
-            TestOrder("BTCUSDT", "BUY", Decimal("1.0"), Decimal("50000"))
-        )
+        engine.submit_order(TestOrder("BTCUSDT", "BUY", Decimal("1.0"), Decimal("50000")))
 
         # Second entry at $52000
-        engine.submit_order(
-            TestOrder("BTCUSDT", "BUY", Decimal("1.0"), Decimal("52000"))
-        )
+        engine.submit_order(TestOrder("BTCUSDT", "BUY", Decimal("1.0"), Decimal("52000")))
 
         # Get position details
         position = engine.get_position_details("BTCUSDT", Decimal("53000"))

@@ -1,9 +1,10 @@
 """Test suite for PortfolioAnalytics module."""
 
-import pytest
 from datetime import datetime, timedelta
 from unittest.mock import Mock
+
 import numpy as np
+import pytest
 
 from src.core.analytics import PortfolioAnalytics
 
@@ -26,9 +27,7 @@ class TestPortfolioAnalytics:
         for i in range(3):
             position = Mock()
             position.opened_time = base_time + timedelta(hours=i)
-            position.closed_time = base_time + timedelta(
-                hours=i + 2
-            )  # 2 hour duration each
+            position.closed_time = base_time + timedelta(hours=i + 2)  # 2 hour duration each
             positions.append(position)
 
         duration = analytics.calculate_avg_duration(positions)

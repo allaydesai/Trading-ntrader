@@ -2,8 +2,9 @@
 
 from datetime import datetime
 from unittest.mock import MagicMock, patch
-import pytest
+
 import pandas as pd
+import pytest
 
 from src.utils.data_wrangler import MarketDataWrangler
 from src.utils.mock_data import create_test_instrument
@@ -183,11 +184,11 @@ class TestMarketDataWrangler:
     @pytest.mark.component
     def test_create_bars_manually_with_custom_bar_type(self):
         """Test create_bars_manually with custom bar type."""
-        from nautilus_trader.model.data import BarType, BarSpecification
+        from nautilus_trader.model.data import BarSpecification, BarType
         from nautilus_trader.model.enums import (
+            AggregationSource,
             BarAggregation,
             PriceType,
-            AggregationSource,
         )
 
         # Create custom bar type

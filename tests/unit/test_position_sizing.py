@@ -1,7 +1,8 @@
 """Unit tests for position sizing logic."""
 
-import pytest
 from decimal import Decimal
+
+import pytest
 
 from src.core.position_sizing import PositionSizingLogic
 

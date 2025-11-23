@@ -76,9 +76,7 @@ class ValidatedJSONB(TypeDecorator):
         except ValidationError as e:
             raise ValueError(f"Invalid config_snapshot structure: {e}") from e
 
-    def process_result_value(
-        self, value: Optional[dict], dialect: Any
-    ) -> Optional[dict]:
+    def process_result_value(self, value: Optional[dict], dialect: Any) -> Optional[dict]:
         """
         Process data retrieved from database.
 

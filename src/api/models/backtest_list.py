@@ -12,8 +12,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, computed_field
 
-from src.db.models.backtest import BacktestRun
 from src.api.models.filter_models import FilterState
+from src.db.models.backtest import BacktestRun
 
 
 class BacktestListItem(BaseModel):
@@ -141,9 +141,7 @@ class BacktestListPage(BaseModel):
         >>> print(page.has_next)  # True
     """
 
-    backtests: list[BacktestListItem] = Field(
-        default_factory=list, description="Page of backtests"
-    )
+    backtests: list[BacktestListItem] = Field(default_factory=list, description="Page of backtests")
     page: int = Field(1, ge=1, description="Current page number (1-indexed)")
     page_size: int = Field(20, description="Results per page")
     total_count: int = Field(0, ge=0, description="Total backtests in system")

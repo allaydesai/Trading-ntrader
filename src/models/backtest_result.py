@@ -1,6 +1,6 @@
 """Enhanced backtest result models with Nautilus Trader metrics."""
 
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
 from uuid import uuid4
 
 
@@ -193,9 +193,7 @@ class BacktestResult:
 
     def __str__(self) -> str:
         """String representation of results."""
-        sharpe_str = (
-            f"{self.sharpe_ratio:.2f}" if self.sharpe_ratio is not None else "N/A"
-        )
+        sharpe_str = f"{self.sharpe_ratio:.2f}" if self.sharpe_ratio is not None else "N/A"
         return (
             f"BacktestResult("
             f"total_return={self.total_return:.2f}, "

@@ -14,20 +14,17 @@ class TestIBKRConnection:
     @pytest.mark.asyncio
     async def test_connection_success_with_mock_gateway(self):
         """INTEGRATION: Connection succeeds with mock IB Gateway."""
-        from src.services.ibkr_client import IBKRHistoricalClient
         from nautilus_trader.adapters.interactive_brokers.historical.client import (
             HistoricInteractiveBrokersClient,
         )
 
-        with patch.object(
-            HistoricInteractiveBrokersClient, "__init__", return_value=None
-        ):
+        from src.services.ibkr_client import IBKRHistoricalClient
+
+        with patch.object(HistoricInteractiveBrokersClient, "__init__", return_value=None):
             client = IBKRHistoricalClient(host="127.0.0.1", port=7497, client_id=1)
 
             # Mock the underlying Nautilus client
-            with patch.object(
-                client.client, "connect", new_callable=AsyncMock
-            ) as mock_connect:
+            with patch.object(client.client, "connect", new_callable=AsyncMock) as mock_connect:
                 mock_connect.return_value = None
                 client.client.account_id = "DU123456"
                 client.client.server_version = 176
@@ -44,19 +41,16 @@ class TestIBKRConnection:
     @pytest.mark.asyncio
     async def test_connection_timeout_handling(self):
         """INTEGRATION: Connection timeout is handled gracefully."""
-        from src.services.ibkr_client import IBKRHistoricalClient
         from nautilus_trader.adapters.interactive_brokers.historical.client import (
             HistoricInteractiveBrokersClient,
         )
 
-        with patch.object(
-            HistoricInteractiveBrokersClient, "__init__", return_value=None
-        ):
+        from src.services.ibkr_client import IBKRHistoricalClient
+
+        with patch.object(HistoricInteractiveBrokersClient, "__init__", return_value=None):
             client = IBKRHistoricalClient(host="127.0.0.1", port=7497)
 
-            with patch.object(
-                client.client, "connect", side_effect=asyncio.TimeoutError
-            ):
+            with patch.object(client.client, "connect", side_effect=asyncio.TimeoutError):
                 with pytest.raises(ConnectionError) as exc_info:
                     await client.connect(timeout=5)
 
@@ -65,19 +59,16 @@ class TestIBKRConnection:
     @pytest.mark.asyncio
     async def test_connection_refused_when_gateway_down(self):
         """INTEGRATION: Connection failure doesn't crash the application."""
-        from src.services.ibkr_client import IBKRHistoricalClient
         from nautilus_trader.adapters.interactive_brokers.historical.client import (
             HistoricInteractiveBrokersClient,
         )
 
-        with patch.object(
-            HistoricInteractiveBrokersClient, "__init__", return_value=None
-        ):
+        from src.services.ibkr_client import IBKRHistoricalClient
+
+        with patch.object(HistoricInteractiveBrokersClient, "__init__", return_value=None):
             client = IBKRHistoricalClient(host="127.0.0.1", port=7497)
 
-            with patch.object(
-                client.client, "connect", side_effect=ConnectionRefusedError
-            ):
+            with patch.object(client.client, "connect", side_effect=ConnectionRefusedError):
                 with pytest.raises(ConnectionError) as exc_info:
                     await client.connect()
 
@@ -86,14 +77,13 @@ class TestIBKRConnection:
     @pytest.mark.asyncio
     async def test_disconnect_gracefully(self):
         """INTEGRATION: Disconnection is handled gracefully."""
-        from src.services.ibkr_client import IBKRHistoricalClient
         from nautilus_trader.adapters.interactive_brokers.historical.client import (
             HistoricInteractiveBrokersClient,
         )
 
-        with patch.object(
-            HistoricInteractiveBrokersClient, "__init__", return_value=None
-        ):
+        from src.services.ibkr_client import IBKRHistoricalClient
+
+        with patch.object(HistoricInteractiveBrokersClient, "__init__", return_value=None):
             client = IBKRHistoricalClient(host="127.0.0.1", port=7497)
             client._connected = True
 
@@ -104,14 +94,13 @@ class TestIBKRConnection:
 
     def test_is_connected_property(self):
         """Test connection status property."""
-        from src.services.ibkr_client import IBKRHistoricalClient
         from nautilus_trader.adapters.interactive_brokers.historical.client import (
             HistoricInteractiveBrokersClient,
         )
 
-        with patch.object(
-            HistoricInteractiveBrokersClient, "__init__", return_value=None
-        ):
+        from src.services.ibkr_client import IBKRHistoricalClient
+
+        with patch.object(HistoricInteractiveBrokersClient, "__init__", return_value=None):
             client = IBKRHistoricalClient(host="127.0.0.1", port=7497)
 
             assert client.is_connected is False

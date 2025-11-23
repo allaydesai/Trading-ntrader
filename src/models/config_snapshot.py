@@ -39,12 +39,8 @@ class StrategyConfigSnapshot(BaseModel):
     config_path: str = Field(
         ..., description="Relative path to YAML configuration file", min_length=1
     )
-    version: str = Field(
-        default="1.0", description="Schema version for future compatibility"
-    )
-    config: Dict[str, Any] = Field(
-        default_factory=dict, description="Strategy-specific parameters"
-    )
+    version: str = Field(default="1.0", description="Schema version for future compatibility")
+    config: Dict[str, Any] = Field(default_factory=dict, description="Strategy-specific parameters")
 
     model_config = {
         "json_schema_extra": {

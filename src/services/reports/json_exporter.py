@@ -1,15 +1,15 @@
 """JSON export service for trading data and reports."""
 
 import json
-from decimal import Decimal
 from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
-from typing import List, Dict, Any, Union
+from typing import Any, Dict, List, Union
 
-from ...models.trade import TradeModel
+from ...models.trade import Trade
 from .exceptions import (
-    FileWriteError,
     EmptyDataError,
+    FileWriteError,
     SerializationError,
 )
 from .validators import FileValidator, TradeValidator
@@ -52,7 +52,7 @@ class JSONExporter:
         else:
             return value
 
-    def export_trades(self, trades: List[TradeModel], filename: str = None) -> Path:
+    def export_trades(self, trades: List[Trade], filename: str = None) -> Path:
         """Export trades to JSON file.
 
         Args:
@@ -125,17 +125,13 @@ class JSONExporter:
         except OSError as e:
             raise FileWriteError(str(filepath), f"OS error: {str(e)}") from e
         except (TypeError, ValueError) as e:
-            raise SerializationError(
-                "trades", f"JSON serialization failed: {str(e)}"
-            ) from e
+            raise SerializationError("trades", f"JSON serialization failed: {str(e)}") from e
         except Exception as e:
             raise FileWriteError(str(filepath), f"Unexpected error: {str(e)}") from e
 
         return filepath
 
-    def export_performance_report(
-        self, report_data: Dict[str, Any], filename: str = None
-    ) -> Path:
+    def export_performance_report(self, report_data: Dict[str, Any], filename: str = None) -> Path:
         """Export performance report to JSON file.
 
         Args:

@@ -1,10 +1,11 @@
 """Tests for text report generation with Rich formatting."""
 
-import pytest
-from decimal import Decimal
 from datetime import datetime, timezone
-from unittest.mock import patch, MagicMock
+from decimal import Decimal
+from unittest.mock import MagicMock, patch
+
 import pandas as pd
+import pytest
 
 from src.services.reports.text_report import TextReportGenerator
 
@@ -178,9 +179,7 @@ class TestTextReportGenerator:
         assert "104,500" in report  # Final value
 
     @pytest.mark.component
-    def test_comprehensive_report_generation(
-        self, generator, sample_metrics, sample_trades
-    ):
+    def test_comprehensive_report_generation(self, generator, sample_metrics, sample_trades):
         """Test comprehensive report with all sections."""
         equity_curve = pd.Series(
             [100000, 102000, 101500, 103000, 104500],
@@ -219,10 +218,7 @@ class TestTextReportGenerator:
         assert isinstance(equity_report, str)
 
         # Should contain appropriate messages for empty data
-        assert (
-            "No performance data available" in performance_report
-            or "N/A" in performance_report
-        )
+        assert "No performance data available" in performance_report or "N/A" in performance_report
 
     @pytest.mark.component
     def test_formatting_with_none_values(self, generator):
@@ -238,9 +234,7 @@ class TestTextReportGenerator:
         report = generator.generate_performance_report(metrics_with_nones)
 
         assert isinstance(report, str)
-        assert (
-            "N/A" in report or "None" in report
-        )  # Should handle None values gracefully
+        assert "N/A" in report or "None" in report  # Should handle None values gracefully
 
     @pytest.mark.component
     def test_decimal_precision_formatting(self, generator, sample_trades):

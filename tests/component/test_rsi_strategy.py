@@ -1,10 +1,10 @@
 """Tests for RSI Mean Reversion strategy implementation."""
 
-import pytest
 from decimal import Decimal
 
-from nautilus_trader.model.identifiers import InstrumentId
+import pytest
 from nautilus_trader.model.data import BarType
+from nautilus_trader.model.identifiers import InstrumentId
 
 from src.models.strategy import MeanReversionParameters
 
@@ -24,15 +24,11 @@ class TestRSIMeanReversionStrategy:
         assert params.trade_size == Decimal("1000000")
 
         # Invalid lookback period (Pydantic validation)
-        with pytest.raises(
-            ValueError, match="Input should be greater than or equal to 5"
-        ):
+        with pytest.raises(ValueError, match="Input should be greater than or equal to 5"):
             MeanReversionParameters(lookback_period=0)
 
         # Invalid std dev (Pydantic validation)
-        with pytest.raises(
-            ValueError, match="Input should be greater than or equal to 0.5"
-        ):
+        with pytest.raises(ValueError, match="Input should be greater than or equal to 0.5"):
             MeanReversionParameters(num_std_dev=0.0)
 
         # Invalid trade size
@@ -100,7 +96,7 @@ class TestRSIMeanReversionStrategy:
             RSIMeanRev,
             RSIMeanRevConfig,
         )
-        from src.utils.mock_data import generate_mock_bars, create_test_instrument
+        from src.utils.mock_data import create_test_instrument, generate_mock_bars
 
         # Create test instrument
         instrument, instrument_id = create_test_instrument("EUR/USD")
@@ -197,7 +193,7 @@ class TestRSIMeanReversionStrategy:
 
     def test_rsi_mean_reversion_parameters_in_strategy_model(self):
         """Test that RSI mean reversion parameters validate correctly in TradingStrategy model."""
-        from src.models.strategy import TradingStrategy, StrategyType
+        from src.models.strategy import StrategyType, TradingStrategy
 
         # Valid mean reversion strategy
         strategy = TradingStrategy(

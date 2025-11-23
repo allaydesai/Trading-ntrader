@@ -7,8 +7,9 @@ Purpose: Contract verification without complex protocol testing
 Reference: design.md Section 2.3 - Test Double Verification Strategy
 """
 
-import pytest
 from decimal import Decimal
+
+import pytest
 
 from tests.component.doubles import TestOrder, TestPosition, TestTradingEngine
 

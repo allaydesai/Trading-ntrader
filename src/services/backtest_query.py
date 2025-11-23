@@ -5,20 +5,21 @@ Provides business logic for retrieving, filtering, and comparing
 backtest execution records with proper limit enforcement and pagination.
 """
 
-import structlog
 from datetime import datetime
 from typing import List, Optional, Tuple
 from uuid import UUID
 
-from src.db.repositories.backtest_repository import BacktestRepository
-from src.db.models.backtest import BacktestRun
-from src.api.models.dashboard import DashboardSummary, to_recent_item
+import structlog
+
 from src.api.models.backtest_list import (
     BacktestListPage,
     FilteredBacktestListPage,
     to_list_item,
 )
+from src.api.models.dashboard import DashboardSummary, to_recent_item
 from src.api.models.filter_models import FilterState
+from src.db.models.backtest import BacktestRun
+from src.db.repositories.backtest_repository import BacktestRepository
 
 logger = structlog.get_logger(__name__)
 
@@ -68,6 +69,24 @@ class BacktestQueryService:
         logger.debug("Fetching backtest by ID", run_id=str(run_id))
         return await self.repository.find_by_run_id(run_id)
 
+    async def get_backtest_by_internal_id(self, internal_id: int) -> Optional[BacktestRun]:
+        """
+        Retrieve complete backtest details by internal database ID.
+
+        Args:
+            internal_id: Internal database primary key
+
+        Returns:
+            BacktestRun with metrics loaded, or None if not found
+
+        Example:
+            >>> backtest = await service.get_backtest_by_internal_id(123)
+            >>> if backtest:
+            ...     print(f"Strategy: {backtest.strategy_name}")
+        """
+        logger.debug("Fetching backtest by internal ID", internal_id=internal_id)
+        return await self.repository.find_by_internal_id(internal_id)
+
     async def list_recent_backtests(
         self,
         limit: int = 20,
@@ -93,9 +112,7 @@ class BacktestQueryService:
         # Enforce maximum limit
         limit = min(limit, 1000)
 
-        logger.debug(
-            "Listing recent backtests", limit=limit, has_cursor=cursor is not None
-        )
+        logger.debug("Listing recent backtests", limit=limit, has_cursor=cursor is not None)
         return await self.repository.find_recent(limit=limit, cursor=cursor)
 
     async def list_by_strategy(
@@ -122,9 +139,7 @@ class BacktestQueryService:
         # Enforce maximum limit
         limit = min(limit, 1000)
 
-        logger.debug(
-            "Listing backtests by strategy", strategy=strategy_name, limit=limit
-        )
+        logger.debug("Listing backtests by strategy", strategy=strategy_name, limit=limit)
         return await self.repository.find_by_strategy(
             strategy_name=strategy_name, limit=limit, cursor=cursor
         )
@@ -195,9 +210,7 @@ class BacktestQueryService:
         elif metric == "total_return":
             return await self.repository.find_top_performers_by_return(limit)
         else:
-            raise ValueError(
-                f"Unsupported metric: {metric}. Supported: sharpe_ratio, total_return"
-            )
+            raise ValueError(f"Unsupported metric: {metric}. Supported: sharpe_ratio, total_return")
 
     async def get_dashboard_stats(self) -> DashboardSummary:
         """
@@ -288,15 +301,14 @@ class BacktestQueryService:
         # Get count by loading a limited set and checking if more exist
         # This is a simple approach; for production, add a count method to repository
         from sqlalchemy import func, select
+
         from src.db.models.backtest import BacktestRun
 
         stmt = select(func.count(BacktestRun.id))
         result = await self.repository.session.execute(stmt)
         return result.scalar_one()
 
-    async def get_backtest_list_page(
-        self, page: int = 1, page_size: int = 20
-    ) -> BacktestListPage:
+    async def get_backtest_list_page(self, page: int = 1, page_size: int = 20) -> BacktestListPage:
         """
         Get paginated backtest list for table display.
 
@@ -374,9 +386,7 @@ class BacktestQueryService:
         )
 
         # Get filtered backtests and total count
-        backtests, total_count = await self.repository.get_filtered_backtests(
-            filter_state
-        )
+        backtests, total_count = await self.repository.get_filtered_backtests(filter_state)
 
         # Get available filter options
         available_strategies = await self.repository.get_distinct_strategies()

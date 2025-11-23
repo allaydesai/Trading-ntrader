@@ -205,9 +205,7 @@ def calculate_trade_metrics(trade: TradeCreate) -> dict:
         gross_pnl = (trade.entry_price - trade.exit_price) * trade.quantity
 
     # Subtract costs
-    total_costs = (trade.commission_amount or Decimal("0")) + (
-        trade.fees_amount or Decimal("0")
-    )
+    total_costs = (trade.commission_amount or Decimal("0")) + (trade.fees_amount or Decimal("0"))
     net_pnl = gross_pnl - total_costs
 
     # Calculate percentage return

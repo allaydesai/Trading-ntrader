@@ -45,9 +45,7 @@ def list():
         "   Create config template: ntrader strategy create --type sma_crossover --output my_config.yaml"
     )
     console.print("   Validate config:        ntrader strategy validate my_config.yaml")
-    console.print(
-        "   Run backtest:           ntrader backtest run-config my_config.yaml"
-    )
+    console.print("   Run backtest:           ntrader backtest run-config my_config.yaml")
 
 
 @strategy.command()

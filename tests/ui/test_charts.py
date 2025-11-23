@@ -5,16 +5,17 @@ Tests cover chart container elements, data attributes for API calls,
 and correct display conditions for successful/failed backtests.
 """
 
-import pytest
 from collections.abc import Generator
-from uuid import uuid4
-from decimal import Decimal
 from datetime import datetime, timezone
-from fastapi.testclient import TestClient
+from decimal import Decimal
 from unittest.mock import AsyncMock
+from uuid import uuid4
 
-from src.api.web import app
+import pytest
+from fastapi.testclient import TestClient
+
 from src.api.dependencies import get_backtest_query_service
+from src.api.web import app
 from src.db.models.backtest import BacktestRun, PerformanceMetrics
 
 
@@ -178,9 +179,7 @@ class TestPriceChartContainer:
 
         assert 'id="run-price-chart"' not in html
 
-    def test_price_chart_has_loading_spinner(
-        self, client_with_mock, sample_successful_backtest
-    ):
+    def test_price_chart_has_loading_spinner(self, client_with_mock, sample_successful_backtest):
         """Price chart container includes loading spinner element."""
         client, mock_service = client_with_mock
         mock_service.get_backtest_by_id.return_value = sample_successful_backtest
@@ -241,9 +240,7 @@ class TestEquityChartContainer:
 
         assert 'id="run-equity-chart"' not in html
 
-    def test_equity_chart_has_loading_spinner(
-        self, client_with_mock, sample_successful_backtest
-    ):
+    def test_equity_chart_has_loading_spinner(self, client_with_mock, sample_successful_backtest):
         """Equity chart container includes loading spinner element."""
         client, mock_service = client_with_mock
         mock_service.get_backtest_by_id.return_value = sample_successful_backtest
@@ -301,9 +298,7 @@ class TestChartSectionLayout:
         # Equity chart can be shorter
         assert "h-64" in html
 
-    def test_charts_in_dark_theme_containers(
-        self, client_with_mock, sample_successful_backtest
-    ):
+    def test_charts_in_dark_theme_containers(self, client_with_mock, sample_successful_backtest):
         """Chart containers use dark theme styling."""
         client, mock_service = client_with_mock
         mock_service.get_backtest_by_id.return_value = sample_successful_backtest
@@ -324,9 +319,7 @@ class TestChartSectionLayout:
 class TestBaseTemplateScripts:
     """Tests for required scripts in base template."""
 
-    def test_lightweight_charts_script_included(
-        self, client_with_mock, sample_successful_backtest
-    ):
+    def test_lightweight_charts_script_included(self, client_with_mock, sample_successful_backtest):
         """Base template includes TradingView Lightweight Charts script."""
         client, mock_service = client_with_mock
         mock_service.get_backtest_by_id.return_value = sample_successful_backtest
@@ -336,9 +329,7 @@ class TestBaseTemplateScripts:
 
         assert "lightweight-charts" in html
 
-    def test_charts_js_script_included(
-        self, client_with_mock, sample_successful_backtest
-    ):
+    def test_charts_js_script_included(self, client_with_mock, sample_successful_backtest):
         """Base template includes charts.js initialization script."""
         client, mock_service = client_with_mock
         mock_service.get_backtest_by_id.return_value = sample_successful_backtest

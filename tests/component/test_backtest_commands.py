@@ -1,16 +1,16 @@
 """Tests for backtest CLI commands."""
 
-import pytest
-from decimal import Decimal
 from datetime import datetime, timezone
+from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
+import pytest
 from click.testing import CliRunner
 
 from src.cli.commands.backtest import (
     backtest,
-    run_backtest,
     list_backtests,
+    run_backtest,
     run_config_backtest,
 )
 
@@ -62,9 +62,7 @@ class TestBacktestCommands:
             return [MagicMock()]  # Mock bar objects
 
         mock_catalog_service.fetch_or_load = mock_fetch_or_load
-        mock_catalog_service.load_instrument.return_value = (
-            MagicMock()
-        )  # Mock instrument
+        mock_catalog_service.load_instrument.return_value = MagicMock()  # Mock instrument
         mock_catalog_service_class.return_value = mock_catalog_service
 
         # Mock backtest runner
@@ -98,9 +96,7 @@ class TestBacktestCommands:
 
         assert result.exit_code == 0
         assert "Running SMA_CROSSOVER backtest for AAPL" in result.output
-        assert (
-            "Data available in catalog" in result.output or "Fetched" in result.output
-        )
+        assert "Data available in catalog" in result.output or "Fetched" in result.output
         assert "Backtest Results" in result.output
         assert "15.00%" in result.output  # Total return (15% as percentage)
         assert "Strategy was profitable!" in result.output
@@ -162,9 +158,7 @@ class TestBacktestCommands:
     @patch("src.cli.commands.backtest.DataCatalogService")
     @patch("src.cli.commands.backtest.MinimalBacktestRunner")
     @pytest.mark.component
-    def test_run_backtest_losing_strategy(
-        self, mock_runner_class, mock_catalog_service_class
-    ):
+    def test_run_backtest_losing_strategy(self, mock_runner_class, mock_catalog_service_class):
         """Test backtest with losing strategy."""
         # Mock catalog service
         mock_catalog_service = MagicMock()
@@ -210,9 +204,7 @@ class TestBacktestCommands:
     @patch("src.cli.commands.backtest.DataCatalogService")
     @patch("src.cli.commands.backtest.MinimalBacktestRunner")
     @pytest.mark.component
-    def test_run_backtest_break_even_strategy(
-        self, mock_runner_class, mock_catalog_service_class
-    ):
+    def test_run_backtest_break_even_strategy(self, mock_runner_class, mock_catalog_service_class):
         """Test backtest with break-even strategy."""
         # Mock catalog service
         mock_catalog_service = MagicMock()
@@ -257,9 +249,7 @@ class TestBacktestCommands:
     @patch("src.cli.commands.backtest.DataCatalogService")
     @patch("src.cli.commands.backtest.MinimalBacktestRunner")
     @pytest.mark.component
-    def test_run_backtest_value_error(
-        self, mock_runner_class, mock_catalog_service_class
-    ):
+    def test_run_backtest_value_error(self, mock_runner_class, mock_catalog_service_class):
         """Test backtest when ValueError occurs."""
         # Mock catalog service
         mock_catalog_service = MagicMock()
@@ -290,16 +280,12 @@ class TestBacktestCommands:
         )
 
         assert result.exit_code != 0
-        assert (
-            "Backtest failed" in result.output or "Invalid parameters" in result.output
-        )
+        assert "Backtest failed" in result.output or "Invalid parameters" in result.output
 
     @patch("src.cli.commands.backtest.DataCatalogService")
     @patch("src.cli.commands.backtest.MinimalBacktestRunner")
     @pytest.mark.component
-    def test_run_backtest_unexpected_error(
-        self, mock_runner_class, mock_catalog_service_class
-    ):
+    def test_run_backtest_unexpected_error(self, mock_runner_class, mock_catalog_service_class):
         """Test backtest when unexpected error occurs."""
         # Mock catalog service
         mock_catalog_service = MagicMock()
@@ -338,32 +324,24 @@ class TestBacktestCommands:
         runner = CliRunner()
 
         # Test missing symbol
-        result = runner.invoke(
-            run_backtest, ["--start", "2024-01-01", "--end", "2024-01-31"]
-        )
+        result = runner.invoke(run_backtest, ["--start", "2024-01-01", "--end", "2024-01-31"])
         assert result.exit_code == 2
         assert "Missing option" in result.output
 
         # Test missing start
-        result = runner.invoke(
-            run_backtest, ["--symbol", "AAPL", "--end", "2024-01-31"]
-        )
+        result = runner.invoke(run_backtest, ["--symbol", "AAPL", "--end", "2024-01-31"])
         assert result.exit_code == 2
         assert "Missing option" in result.output
 
         # Test missing end
-        result = runner.invoke(
-            run_backtest, ["--symbol", "AAPL", "--start", "2024-01-01"]
-        )
+        result = runner.invoke(run_backtest, ["--symbol", "AAPL", "--start", "2024-01-01"])
         assert result.exit_code == 2
         assert "Missing option" in result.output
 
     @patch("src.cli.commands.backtest.DataCatalogService")
     @patch("src.cli.commands.backtest.MinimalBacktestRunner")
     @pytest.mark.component
-    def test_run_backtest_default_parameters(
-        self, mock_runner_class, mock_catalog_service_class
-    ):
+    def test_run_backtest_default_parameters(self, mock_runner_class, mock_catalog_service_class):
         """Test that run command uses default values for optional parameters."""
         # Mock catalog service
         mock_catalog_service = MagicMock()
@@ -438,9 +416,7 @@ class TestBacktestCommands:
         mock_availability.start_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
         mock_availability.end_date = datetime(2024, 12, 31, tzinfo=timezone.utc)
 
-        mock_catalog_service.availability_cache = {
-            "AAPL.NASDAQ-1-MINUTE-LAST": mock_availability
-        }
+        mock_catalog_service.availability_cache = {"AAPL.NASDAQ-1-MINUTE-LAST": mock_availability}
         mock_catalog_service.catalog_path = "/tmp/catalog"
         mock_catalog_service_class.return_value = mock_catalog_service
 
@@ -504,10 +480,7 @@ class TestBacktestCommands:
         result = runner.invoke(list_backtests)
 
         assert result.exit_code == 0
-        assert (
-            "Could not fetch data info" in result.output
-            or "error" in result.output.lower()
-        )
+        assert "Could not fetch data info" in result.output or "error" in result.output.lower()
 
 
 class TestRunConfigBacktest:
@@ -603,10 +576,7 @@ strategy:
 
         # Should fail with file not found error
         assert result.exit_code != 0
-        assert (
-            "does not exist" in result.output.lower()
-            or "not found" in result.output.lower()
-        )
+        assert "does not exist" in result.output.lower() or "not found" in result.output.lower()
 
     @patch("src.cli.commands.backtest.MinimalBacktestRunner")
     @pytest.mark.component
@@ -624,9 +594,7 @@ invalid: yaml: structure:
 
             # Mock runner to raise ValueError
             mock_runner = MagicMock()
-            mock_runner.run_from_config_file.side_effect = ValueError(
-                "Invalid configuration"
-            )
+            mock_runner.run_from_config_file.side_effect = ValueError("Invalid configuration")
             mock_runner.dispose = MagicMock()
             mock_runner_class.return_value = mock_runner
 

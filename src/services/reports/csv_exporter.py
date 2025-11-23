@@ -1,14 +1,15 @@
 """CSV export service with precision preservation for trading data."""
 
 import csv
-import pandas as pd
-from typing import Dict, Any, List, Optional, Generator
-from decimal import Decimal
-from datetime import datetime
 import os
+from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
+from typing import Any, Dict, Generator, List, Optional
 
-from .exceptions import FileWriteError, InvalidDataError, EmptyDataError
+import pandas as pd
+
+from .exceptions import EmptyDataError, FileWriteError, InvalidDataError
 from .validators import FileValidator
 
 
@@ -255,9 +256,7 @@ class CSVExporter:
                 df = pd.DataFrame(
                     {
                         "timestamp": equity_curve.index,
-                        "equity": [
-                            self._process_value(val) for val in equity_curve.values
-                        ],
+                        "equity": [self._process_value(val) for val in equity_curve.values],
                     }
                 )
 

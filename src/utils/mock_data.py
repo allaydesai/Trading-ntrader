@@ -73,12 +73,8 @@ def generate_mock_bars(
         close_price = base_price + sine_component
 
         # Add some intrabar variation
-        high_variation = abs(
-            math.sin(cycle_position + 0.5) * volatility * 0.5 * start_price
-        )
-        low_variation = abs(
-            math.sin(cycle_position - 0.5) * volatility * 0.5 * start_price
-        )
+        high_variation = abs(math.sin(cycle_position + 0.5) * volatility * 0.5 * start_price)
+        low_variation = abs(math.sin(cycle_position - 0.5) * volatility * 0.5 * start_price)
 
         high_price = close_price + high_variation
         low_price = close_price - low_variation
@@ -167,12 +163,8 @@ def generate_mock_dataframe(
 
         close_price = base_price + sine_component
 
-        high_variation = abs(
-            math.sin(cycle_position + 0.5) * volatility * 0.5 * start_price
-        )
-        low_variation = abs(
-            math.sin(cycle_position - 0.5) * volatility * 0.5 * start_price
-        )
+        high_variation = abs(math.sin(cycle_position + 0.5) * volatility * 0.5 * start_price)
+        low_variation = abs(math.sin(cycle_position - 0.5) * volatility * 0.5 * start_price)
 
         high_price = close_price + high_variation
         low_price = close_price - low_variation

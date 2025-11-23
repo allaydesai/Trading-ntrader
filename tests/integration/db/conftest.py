@@ -1,12 +1,13 @@
 """Database integration test fixtures."""
 
-import pytest
 import asyncio
 from contextlib import asynccontextmanager
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
+
+import pytest
 from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker
 from sqlalchemy.exc import OperationalError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.orm import sessionmaker
 
 from src.config import get_settings
 from src.db.base import Base
@@ -73,9 +74,7 @@ async def db_session(request):
         await conn.run_sync(Base.metadata.create_all)
 
     # Create session with schema search path
-    async_session_maker = async_sessionmaker(
-        engine, class_=AsyncSession, expire_on_commit=False
-    )
+    async_session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
     async with async_session_maker() as session:
         # Set search path for this session

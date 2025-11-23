@@ -8,14 +8,15 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from src.services.reports.json_exporter import JSONExporter
-from src.models.trade import TradeModel
+from src.models.trade import TradeCreate
 
 
 @pytest.fixture
 def sample_trades():
     """Create sample trades for testing."""
     return [
-        TradeModel(
+        TradeCreate(
+            backtest_run_id=1,
             position_id="POS-001",
             instrument_id="AAPL",
             quantity=Decimal("100"),

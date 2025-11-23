@@ -8,9 +8,12 @@ from decimal import Decimal
 
 import click
 from rich.console import Console
-from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.table import Table
 
+from src.cli.commands.compare import compare_backtests
+from src.cli.commands.reproduce import reproduce_backtest
+from src.cli.commands.show import show_backtest_details
 from src.core.backtest_runner import MinimalBacktestRunner
 from src.services.data_catalog import DataCatalogService
 from src.services.exceptions import (
@@ -28,9 +31,6 @@ from src.utils.error_messages import (
     RATE_LIMIT_EXCEEDED,
     format_error_with_context,
 )
-from src.cli.commands.show import show_backtest_details
-from src.cli.commands.compare import compare_backtests
-from src.cli.commands.reproduce import reproduce_backtest
 
 console = Console()
 error_formatter = ErrorFormatter(console)
@@ -50,9 +50,7 @@ def backtest():
     type=click.Choice(["sma", "sma_crossover", "mean_reversion", "momentum"]),
     help="Strategy to run (sma is alias for sma_crossover)",
 )
-@click.option(
-    "--symbol", "-sym", required=True, help="Trading symbol (e.g., AAPL, EUR/USD)"
-)
+@click.option("--symbol", "-sym", required=True, help="Trading symbol (e.g., AAPL, EUR/USD)")
 @click.option(
     "--start",
     "-st",
@@ -67,12 +65,8 @@ def backtest():
     type=click.DateTime(formats=["%Y-%m-%d", "%Y-%m-%d %H:%M:%S"]),
     help="End date (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS)",
 )
-@click.option(
-    "--fast-period", "-f", default=10, type=int, help="Fast SMA period (default: 10)"
-)
-@click.option(
-    "--slow-period", "-sl", default=20, type=int, help="Slow SMA period (default: 20)"
-)
+@click.option("--fast-period", "-f", default=10, type=int, help="Fast SMA period (default: 10)")
+@click.option("--slow-period", "-sl", default=20, type=int, help="Slow SMA period (default: 20)")
 @click.option(
     "--trade-size",
     "-ts",
@@ -122,15 +116,11 @@ def run_backtest(
             f"🚀 Running {display_strategy.upper()} backtest for {symbol.upper()}",
             style="cyan bold",
         )
-        console.print(
-            f"   Period: {start.strftime('%Y-%m-%d')} to {end.strftime('%Y-%m-%d')}"
-        )
+        console.print(f"   Period: {start.strftime('%Y-%m-%d')} to {end.strftime('%Y-%m-%d')}")
 
         # Display strategy-specific parameters
         if strategy in ["sma", "sma_crossover"]:
-            console.print(
-                f"   Strategy: Fast SMA({fast_period}) vs Slow SMA({slow_period})"
-            )
+            console.print(f"   Strategy: Fast SMA({fast_period}) vs Slow SMA({slow_period})")
         else:
             console.print(f"   Strategy: {display_strategy.replace('_', ' ').title()}")
 
@@ -142,9 +132,11 @@ def run_backtest(
             catalog_service = DataCatalogService()
 
             # Reason: Convert symbol to instrument_id format (e.g., "AAPL" -> "AAPL.NASDAQ")
-            # For now, assume NASDAQ venue for US equities
-            # TODO: Make venue configurable or derive from symbol
-            instrument_id = f"{symbol.upper()}.NASDAQ"
+            # If venue is provided in symbol (e.g., "SPY.ARCA"), use it. Otherwise default to NASDAQ.
+            if "." in symbol:
+                instrument_id = symbol.upper()
+            else:
+                instrument_id = f"{symbol.upper()}.NASDAQ"
 
             # Reason: Determine bar type from explicit timeframe or auto-detect from date format
             if timeframe:
@@ -153,11 +145,7 @@ def run_backtest(
             else:
                 # Auto-detect: Date-only (YYYY-MM-DD) → 1-DAY, Date-time → 1-MINUTE
                 # Click parses date-only as midnight UTC (00:00:00)
-                if (
-                    start.time().hour == 0
-                    and start.time().minute == 0
-                    and start.time().second == 0
-                ):
+                if start.time().hour == 0 and start.time().minute == 0 and start.time().second == 0:
                     bar_type_spec = "1-DAY-LAST"
                 else:
                     bar_type_spec = "1-MINUTE-LAST"
@@ -169,9 +157,7 @@ def run_backtest(
                 transient=True,
             ) as progress:
                 task = progress.add_task("Checking data availability...", total=None)
-                availability = catalog_service.get_availability(
-                    instrument_id, bar_type_spec
-                )
+                availability = catalog_service.get_availability(instrument_id, bar_type_spec)
                 progress.update(task, completed=True)
 
             # Reason: Determine data source and adjust dates if needed
@@ -202,9 +188,7 @@ def run_backtest(
                     f"   Available: {availability.start_date.strftime('%Y-%m-%d')} to {availability.end_date.strftime('%Y-%m-%d')}"
                 )
                 console.print()
-                console.print(
-                    "   Will attempt to fetch missing data from IBKR...", style="yellow"
-                )
+                console.print("   Will attempt to fetch missing data from IBKR...", style="yellow")
                 console.print()
                 data_source = "IBKR Auto-fetch"
             else:
@@ -247,10 +231,8 @@ def run_backtest(
                             style="yellow",
                         )
                         try:
-                            instrument = (
-                                await catalog_service.fetch_instrument_from_ibkr(
-                                    instrument_id
-                                )
+                            instrument = await catalog_service.fetch_instrument_from_ibkr(
+                                instrument_id
                             )
                             console.print(
                                 "✅ Instrument fetched and saved to catalog",
@@ -364,9 +346,7 @@ def run_backtest(
                     # SMA uses portfolio_value and position_size_pct
                     # Convert trade_size to portfolio_value (assume 10% position size)
                     strategy_params = {
-                        "portfolio_value": Decimal(
-                            str(trade_size * 10)
-                        ),  # 10x for 10% sizing
+                        "portfolio_value": Decimal(str(trade_size * 10)),  # 10x for 10% sizing
                         "position_size_pct": Decimal("10.0"),
                         "fast_period": fast_period,
                         "slow_period": slow_period,
@@ -413,9 +393,7 @@ def run_backtest(
 
             table.add_row("Strategy", strategy_description)
             table.add_row("Symbol", symbol.upper())
-            table.add_row(
-                "Period", f"{start.strftime('%Y-%m-%d')} to {end.strftime('%Y-%m-%d')}"
-            )
+            table.add_row("Period", f"{start.strftime('%Y-%m-%d')} to {end.strftime('%Y-%m-%d')}")
             table.add_row("Data Source", "Parquet Catalog")
             table.add_row("Total Return", f"{result.total_return * 100:.2f}%")
             table.add_row("Total Trades", str(result.total_trades))
@@ -458,9 +436,7 @@ def run_backtest(
 
 @backtest.command("run-config")
 @click.argument("config_file", type=click.Path(exists=True, dir_okay=False))
-@click.option(
-    "--symbol", "-sym", help="Trading symbol (overrides config if using database data)"
-)
+@click.option("--symbol", "-sym", help="Trading symbol (overrides config if using database data)")
 @click.option(
     "--start",
     "-st",
@@ -491,9 +467,7 @@ def run_config_backtest(
 
     async def run_config_backtest_async():
         nonlocal start, end
-        console.print(
-            f"🚀 Running backtest from config: {config_file}", style="cyan bold"
-        )
+        console.print(f"🚀 Running backtest from config: {config_file}", style="cyan bold")
         console.print(f"   Data source: {data_source}")
 
         if data_source == "database":
@@ -536,9 +510,7 @@ def run_config_backtest(
                     TextColumn("[progress.description]{task.description}"),
                     transient=True,
                 ) as progress:
-                    task = progress.add_task(
-                        "Running backtest with config...", total=None
-                    )
+                    task = progress.add_task("Running backtest with config...", total=None)
                     result = runner.run_from_config_file(config_file)
                     progress.update(task, completed=True)
             else:

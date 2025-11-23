@@ -7,8 +7,8 @@ and can be tested with simple primitive types.
 """
 
 from src.core.position_sizing import PositionSizingLogic, SizingMethod
-from src.core.risk_management import RiskManagementLogic, RiskLevel
-from src.core.sma_logic import SMATradingLogic, CrossoverSignal
+from src.core.risk_management import RiskLevel, RiskManagementLogic
+from src.core.sma_logic import CrossoverSignal, SMATradingLogic
 
 __all__ = [
     # SMA Trading Logic

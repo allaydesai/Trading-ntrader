@@ -5,16 +5,17 @@ Tests cover all user stories: metrics display, trading summary,
 configuration snapshot, and action buttons (export, delete, re-run).
 """
 
-import pytest
 from collections.abc import Generator
-from uuid import uuid4
-from decimal import Decimal
 from datetime import datetime, timezone
-from fastapi.testclient import TestClient
+from decimal import Decimal
 from unittest.mock import AsyncMock
+from uuid import uuid4
 
-from src.api.web import app
+import pytest
+from fastapi.testclient import TestClient
+
 from src.api.dependencies import get_backtest_query_service
+from src.api.web import app
 from src.db.models.backtest import BacktestRun, PerformanceMetrics
 
 
@@ -123,9 +124,7 @@ class TestDetailPageRouting:
 class TestMetricsDisplay:
     """Tests for metrics display in detail page."""
 
-    def test_displays_all_return_metrics(
-        self, client_with_mock, sample_backtest_with_metrics
-    ):
+    def test_displays_all_return_metrics(self, client_with_mock, sample_backtest_with_metrics):
         """Detail page displays Total Return, CAGR, and Final Balance."""
         client, mock_service = client_with_mock
         mock_service.get_backtest_by_id.return_value = sample_backtest_with_metrics
@@ -140,9 +139,7 @@ class TestMetricsDisplay:
         assert "25.00%" in html  # Total return formatted
         assert "$125,000.00" in html  # Final balance formatted
 
-    def test_displays_all_risk_metrics(
-        self, client_with_mock, sample_backtest_with_metrics
-    ):
+    def test_displays_all_risk_metrics(self, client_with_mock, sample_backtest_with_metrics):
         """Detail page displays Sharpe, Sortino, Max Drawdown, and Volatility."""
         client, mock_service = client_with_mock
         mock_service.get_backtest_by_id.return_value = sample_backtest_with_metrics
@@ -155,9 +152,7 @@ class TestMetricsDisplay:
         assert "Max Drawdown" in html
         assert "Volatility" in html
 
-    def test_displays_all_trading_metrics(
-        self, client_with_mock, sample_backtest_with_metrics
-    ):
+    def test_displays_all_trading_metrics(self, client_with_mock, sample_backtest_with_metrics):
         """Detail page displays Total Trades, Win Rate, and Profit Factor."""
         client, mock_service = client_with_mock
         mock_service.get_backtest_by_id.return_value = sample_backtest_with_metrics
@@ -182,9 +177,7 @@ class TestMetricsDisplay:
         # Check for green color class for positive values
         assert "text-green-400" in html
 
-    def test_negative_metrics_highlighted_red(
-        self, client_with_mock, sample_backtest_with_metrics
-    ):
+    def test_negative_metrics_highlighted_red(self, client_with_mock, sample_backtest_with_metrics):
         """Negative metrics are highlighted with red CSS class."""
         client, mock_service = client_with_mock
         mock_service.get_backtest_by_id.return_value = sample_backtest_with_metrics
@@ -218,9 +211,7 @@ class TestMetricsDisplay:
 class TestTradingSummary:
     """Tests for trading summary panel."""
 
-    def test_displays_total_trades_count(
-        self, client_with_mock, sample_backtest_with_metrics
-    ):
+    def test_displays_total_trades_count(self, client_with_mock, sample_backtest_with_metrics):
         """Trading summary displays total trades count."""
         client, mock_service = client_with_mock
         mock_service.get_backtest_by_id.return_value = sample_backtest_with_metrics
@@ -246,9 +237,7 @@ class TestTradingSummary:
         assert "60" in html  # Winning trades
         assert "40" in html  # Losing trades
 
-    def test_displays_win_rate_percentage(
-        self, client_with_mock, sample_backtest_with_metrics
-    ):
+    def test_displays_win_rate_percentage(self, client_with_mock, sample_backtest_with_metrics):
         """Trading summary displays win rate as percentage."""
         client, mock_service = client_with_mock
         mock_service.get_backtest_by_id.return_value = sample_backtest_with_metrics
@@ -327,9 +316,7 @@ class TestTradingSummary:
 class TestConfigurationDisplay:
     """Tests for configuration snapshot display."""
 
-    def test_displays_instrument_symbol(
-        self, client_with_mock, sample_backtest_with_metrics
-    ):
+    def test_displays_instrument_symbol(self, client_with_mock, sample_backtest_with_metrics):
         """Configuration section displays instrument symbol."""
         client, mock_service = client_with_mock
         mock_service.get_backtest_by_id.return_value = sample_backtest_with_metrics
@@ -352,9 +339,7 @@ class TestConfigurationDisplay:
         assert "2024-01-01" in html
         assert "2024-12-31" in html
 
-    def test_displays_initial_capital(
-        self, client_with_mock, sample_backtest_with_metrics
-    ):
+    def test_displays_initial_capital(self, client_with_mock, sample_backtest_with_metrics):
         """Configuration section displays initial capital."""
         client, mock_service = client_with_mock
         mock_service.get_backtest_by_id.return_value = sample_backtest_with_metrics
@@ -427,9 +412,7 @@ class TestActionEndpoints:
         client, mock_service = client_with_mock
         mock_service.get_backtest_by_id.return_value = sample_backtest_with_metrics
 
-        response = client.get(
-            f"/backtests/{sample_backtest_with_metrics.run_id}/export"
-        )
+        response = client.get(f"/backtests/{sample_backtest_with_metrics.run_id}/export")
 
         assert response.status_code == 200
         assert "attachment" in response.headers.get("content-disposition", "")
@@ -456,15 +439,11 @@ class TestActionEndpoints:
         mock_service.get_backtest_by_id.return_value = None
 
         fake_id = uuid4()
-        response = client.delete(
-            f"/backtests/{fake_id}", headers={"HX-Request": "true"}
-        )
+        response = client.delete(f"/backtests/{fake_id}", headers={"HX-Request": "true"})
 
         assert response.status_code == 404
 
-    def test_rerun_creates_new_backtest_run(
-        self, client_with_mock, sample_backtest_with_metrics
-    ):
+    def test_rerun_creates_new_backtest_run(self, client_with_mock, sample_backtest_with_metrics):
         """POST /backtests/{run_id}/rerun creates new backtest run."""
         client, mock_service = client_with_mock
         new_run_id = uuid4()
@@ -485,9 +464,7 @@ class TestActionEndpoints:
         mock_service.get_backtest_by_id.return_value = None
 
         fake_id = uuid4()
-        response = client.post(
-            f"/backtests/{fake_id}/rerun", headers={"HX-Request": "true"}
-        )
+        response = client.post(f"/backtests/{fake_id}/rerun", headers={"HX-Request": "true"})
 
         assert response.status_code == 404
 
@@ -498,9 +475,7 @@ class TestActionEndpoints:
         client, mock_service = client_with_mock
         mock_service.get_backtest_by_id.return_value = sample_backtest_with_metrics
 
-        response = client.get(
-            f"/backtests/{sample_backtest_with_metrics.run_id}/export"
-        )
+        response = client.get(f"/backtests/{sample_backtest_with_metrics.run_id}/export")
 
         content_disposition = response.headers.get("content-disposition", "")
         assert "attachment" in content_disposition

@@ -112,10 +112,7 @@ class CatalogAvailability(BaseModel):
         # Reason: For DAY-level data, compare dates only (ignore time portion)
         # This prevents false negatives when catalog has 23:59:59 but request is 00:00:00
         if "DAY" in self.bar_type_spec or "WEEK" in self.bar_type_spec:
-            return (
-                self.start_date.date() <= start.date()
-                and self.end_date.date() >= end.date()
-            )
+            return self.start_date.date() <= start.date() and self.end_date.date() >= end.date()
 
         # Reason: For intraday data, compare full timestamps
         return self.start_date <= start and self.end_date >= end

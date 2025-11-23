@@ -1,9 +1,10 @@
 """Tests for IBKR data database integration."""
 
-import pytest
 from datetime import datetime
 from decimal import Decimal
 from unittest.mock import AsyncMock, Mock, patch
+
+import pytest
 
 
 @pytest.mark.integration
@@ -34,14 +35,13 @@ class TestIBKRDatabaseIntegration:
     @pytest.mark.asyncio
     async def test_get_market_data_with_ibkr_source(self):
         """INTEGRATION: get_market_data works with IBKR source."""
-        from src.services.data_service import DataService
         from nautilus_trader.adapters.interactive_brokers.historical.client import (
             HistoricInteractiveBrokersClient,
         )
 
-        with patch.object(
-            HistoricInteractiveBrokersClient, "__init__", return_value=None
-        ):
+        from src.services.data_service import DataService
+
+        with patch.object(HistoricInteractiveBrokersClient, "__init__", return_value=None):
             service = DataService(source="ibkr")
 
             # Mock IBKR fetch through the provider
@@ -95,9 +95,7 @@ class TestIBKRDatabaseIntegration:
         service = DataService(source="database")
 
         # Mock the db_repo method directly to avoid DB connection
-        with patch.object(
-            service.db_repo, "fetch_market_data", new_callable=AsyncMock
-        ) as mock_db:
+        with patch.object(service.db_repo, "fetch_market_data", new_callable=AsyncMock) as mock_db:
             mock_db.side_effect = ValueError("No market data found")
 
             # Should use database (existing M2 logic)

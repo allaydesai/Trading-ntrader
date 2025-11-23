@@ -32,9 +32,7 @@ class TestTimeseriesEndpoint:
 
         mock_data_catalog_service.query_bars.return_value = [mock_bar]
 
-        app.dependency_overrides[get_data_catalog_service] = (
-            lambda: mock_data_catalog_service
-        )
+        app.dependency_overrides[get_data_catalog_service] = lambda: mock_data_catalog_service
 
         try:
             # Act
@@ -70,9 +68,7 @@ class TestTimeseriesEndpoint:
         """Test that timeframe parameter is correctly mapped to Nautilus format."""
         mock_data_catalog_service.query_bars.return_value = []
 
-        app.dependency_overrides[get_data_catalog_service] = (
-            lambda: mock_data_catalog_service
-        )
+        app.dependency_overrides[get_data_catalog_service] = lambda: mock_data_catalog_service
 
         try:
             # Test 1_DAY timeframe
@@ -98,9 +94,7 @@ class TestTimeseriesEndpoint:
         """Test that symbol is converted to Nautilus instrument_id format."""
         mock_data_catalog_service.query_bars.return_value = []
 
-        app.dependency_overrides[get_data_catalog_service] = (
-            lambda: mock_data_catalog_service
-        )
+        app.dependency_overrides[get_data_catalog_service] = lambda: mock_data_catalog_service
 
         try:
             client.get(
@@ -164,9 +158,7 @@ class TestTimeseriesValidation:
         self, client: TestClient, mock_data_catalog_service: MagicMock
     ):
         """Test that end date before start date returns 422."""
-        app.dependency_overrides[get_data_catalog_service] = (
-            lambda: mock_data_catalog_service
-        )
+        app.dependency_overrides[get_data_catalog_service] = lambda: mock_data_catalog_service
 
         try:
             response = client.get(
@@ -213,9 +205,7 @@ class TestTimeseries404Error:
             datetime(2024, 1, 31, tzinfo=timezone.utc),
         )
 
-        app.dependency_overrides[get_data_catalog_service] = (
-            lambda: mock_data_catalog_service
-        )
+        app.dependency_overrides[get_data_catalog_service] = lambda: mock_data_catalog_service
 
         try:
             # Act
@@ -251,9 +241,7 @@ class TestTimeseries404Error:
             datetime(2024, 1, 31, tzinfo=timezone.utc),
         )
 
-        app.dependency_overrides[get_data_catalog_service] = (
-            lambda: mock_data_catalog_service
-        )
+        app.dependency_overrides[get_data_catalog_service] = lambda: mock_data_catalog_service
 
         try:
             response = client.get(
@@ -278,9 +266,7 @@ class TestTimeseries404Error:
         """Test that empty results return 200 with empty candles array."""
         mock_data_catalog_service.query_bars.return_value = []
 
-        app.dependency_overrides[get_data_catalog_service] = (
-            lambda: mock_data_catalog_service
-        )
+        app.dependency_overrides[get_data_catalog_service] = lambda: mock_data_catalog_service
 
         try:
             response = client.get(

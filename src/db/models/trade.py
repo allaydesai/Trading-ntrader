@@ -99,24 +99,14 @@ class Trade(Base):
     exit_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 8), nullable=True)
 
     # Costs
-    commission_amount: Mapped[Optional[Decimal]] = mapped_column(
-        Numeric(20, 8), nullable=True
-    )
-    commission_currency: Mapped[Optional[str]] = mapped_column(
-        String(10), nullable=True
-    )
-    fees_amount: Mapped[Optional[Decimal]] = mapped_column(
-        Numeric(20, 8), nullable=True
-    )
+    commission_amount: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 8), nullable=True)
+    commission_currency: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    fees_amount: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 8), nullable=True)
 
     # Calculated fields
-    profit_loss: Mapped[Optional[Decimal]] = mapped_column(
-        Numeric(20, 8), nullable=True
-    )
+    profit_loss: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 8), nullable=True)
     profit_pct: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 4), nullable=True)
-    holding_period_seconds: Mapped[Optional[int]] = mapped_column(
-        Integer, nullable=True
-    )
+    holding_period_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     # Timestamps (UTC with timezone)
     entry_timestamp: Mapped[datetime] = mapped_column(
@@ -133,17 +123,13 @@ class Trade(Base):
     )
 
     # Relationships
-    backtest_run: Mapped["BacktestRun"] = relationship(
-        "BacktestRun", back_populates="trades"
-    )
+    backtest_run: Mapped["BacktestRun"] = relationship("BacktestRun", back_populates="trades")
 
     # Table constraints
     __table_args__ = (
         CheckConstraint("quantity > 0", name="positive_quantity"),
         CheckConstraint("entry_price > 0", name="positive_entry_price"),
-        CheckConstraint(
-            "exit_price IS NULL OR exit_price > 0", name="positive_exit_price"
-        ),
+        CheckConstraint("exit_price IS NULL OR exit_price > 0", name="positive_exit_price"),
         Index("idx_trades_backtest_time", "backtest_run_id", "entry_timestamp"),
     )
 

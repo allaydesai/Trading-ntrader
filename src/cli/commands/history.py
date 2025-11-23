@@ -7,11 +7,11 @@ past backtest executions with performance metrics.
 
 import click
 from rich.console import Console
-from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.table import Table
 
-from src.db.session_sync import get_sync_session
 from src.db.repositories.backtest_repository_sync import SyncBacktestRepository
+from src.db.session_sync import get_sync_session
 
 console = Console()
 
@@ -24,9 +24,7 @@ console = Console()
     help="Number of results to display (default: 20, max: 1000)",
 )
 @click.option("--strategy", default=None, type=str, help="Filter by strategy name")
-@click.option(
-    "--instrument", default=None, type=str, help="Filter by instrument symbol"
-)
+@click.option("--instrument", default=None, type=str, help="Filter by instrument symbol")
 @click.option(
     "--status",
     type=click.Choice(["success", "failed"], case_sensitive=False),
@@ -75,9 +73,7 @@ def list_backtest_history(
         ntrader history --sort sharpe             # Sort by Sharpe ratio (best first)
         ntrader history --sort return --limit 10  # Top 10 by return
     """
-    _list_history_sync(
-        limit, strategy, instrument, status, sort, strategy_summary, show_params
-    )
+    _list_history_sync(limit, strategy, instrument, status, sort, strategy_summary, show_params)
 
 
 def _list_history_sync(
@@ -119,35 +115,25 @@ def _list_history_sync(
                     backtests = repository.find_top_performers_by_sharpe(limit=limit)
                     # Apply strategy filter if provided
                     if strategy:
-                        backtests = [
-                            bt for bt in backtests if bt.strategy_name == strategy
-                        ]
+                        backtests = [bt for bt in backtests if bt.strategy_name == strategy]
                 elif sort == "return":
                     backtests = repository.find_top_performers_by_return(limit=limit)
                     # Apply strategy filter if provided
                     if strategy:
-                        backtests = [
-                            bt for bt in backtests if bt.strategy_name == strategy
-                        ]
+                        backtests = [bt for bt in backtests if bt.strategy_name == strategy]
                 else:  # sort == "date" (default)
                     # Query based on filters
                     if strategy:
-                        backtests = repository.find_by_strategy(
-                            strategy_name=strategy, limit=limit
-                        )
+                        backtests = repository.find_by_strategy(strategy_name=strategy, limit=limit)
                     else:
                         backtests = repository.find_recent(limit=limit)
 
                 # Apply additional filters (instrument, status) in memory
                 if instrument:
-                    backtests = [
-                        bt for bt in backtests if bt.instrument_symbol == instrument
-                    ]
+                    backtests = [bt for bt in backtests if bt.instrument_symbol == instrument]
 
                 if status:
-                    backtests = [
-                        bt for bt in backtests if bt.execution_status == status
-                    ]
+                    backtests = [bt for bt in backtests if bt.execution_status == status]
 
                 # Get total count if filtering by strategy (T161)
                 total_count = None
@@ -205,12 +191,8 @@ def _list_history_sync(
         table.add_column("Date", style=date_style, no_wrap=True)
         table.add_column("Strategy", style="magenta")
         table.add_column("Symbol", style="blue", no_wrap=True)
-        table.add_column(
-            "Return", style=return_style_base, justify="right", no_wrap=True
-        )
-        table.add_column(
-            "Sharpe", style=sharpe_style_base, justify="right", no_wrap=True
-        )
+        table.add_column("Return", style=return_style_base, justify="right", no_wrap=True)
+        table.add_column("Sharpe", style=sharpe_style_base, justify="right", no_wrap=True)
         table.add_column("Status", justify="center", no_wrap=True)
 
         # Add parameters column if requested (T163)
@@ -232,9 +214,7 @@ def _list_history_sync(
             # Format metrics (handle None values)
             return_display = f"{float(metrics.total_return):.2%}" if metrics else "N/A"
             sharpe_display = (
-                f"{float(metrics.sharpe_ratio):.2f}"
-                if metrics and metrics.sharpe_ratio
-                else "N/A"
+                f"{float(metrics.sharpe_ratio):.2f}" if metrics and metrics.sharpe_ratio else "N/A"
             )
 
             # Colorize return based on value
@@ -268,21 +248,15 @@ def _list_history_sync(
         console.print(table)
 
         # Add summary footer
-        console.print(
-            f"\n✨ Showing {len(backtests)} of {limit} requested", style="dim"
-        )
+        console.print(f"\n✨ Showing {len(backtests)} of {limit} requested", style="dim")
 
         # Add helpful hints
         if len(backtests) == limit:
-            console.print(
-                "💡 Tip: Use --limit to see more results (max 1000)", style="dim italic"
-            )
+            console.print("💡 Tip: Use --limit to see more results (max 1000)", style="dim italic")
 
     except Exception as e:
         console.print(f"❌ Error: {e}", style="red")
-        console.print(
-            "💡 Check database is running and credentials are correct", style="dim"
-        )
+        console.print("💡 Check database is running and credentials are correct", style="dim")
         raise
 
 
@@ -325,9 +299,7 @@ def _display_strategy_summary(backtests: list, strategy_name: str):
         if bt.metrics.max_drawdown is not None
     ]
     win_rates = [
-        float(bt.metrics.win_rate)
-        for bt in successful_backtests
-        if bt.metrics.win_rate is not None
+        float(bt.metrics.win_rate) for bt in successful_backtests if bt.metrics.win_rate is not None
     ]
 
     # Calculate aggregates

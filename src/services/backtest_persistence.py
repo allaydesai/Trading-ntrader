@@ -13,10 +13,10 @@ from uuid import UUID
 
 import structlog
 
-from src.models.backtest_result import BacktestResult
 from src.db.exceptions import ValidationError
 from src.db.models.backtest import BacktestRun
 from src.db.repositories.backtest_repository import BacktestRepository
+from src.models.backtest_result import BacktestResult
 from src.models.config_snapshot import StrategyConfigSnapshot
 
 logger = structlog.get_logger(__name__)
@@ -233,12 +233,8 @@ class BacktestPersistenceService:
             ValidationError: If any required metric is NaN or Infinity
         """
         # Validate required metrics
-        total_return = self._validate_metric(
-            backtest_result.total_return, "total_return"
-        )
-        final_balance = self._validate_metric(
-            backtest_result.final_balance, "final_balance"
-        )
+        total_return = self._validate_metric(backtest_result.total_return, "total_return")
+        final_balance = self._validate_metric(backtest_result.final_balance, "final_balance")
 
         # Calculate win rate
         win_rate = self._calculate_win_rate(
@@ -270,16 +266,12 @@ class BacktestPersistenceService:
             "calmar_ratio": self._validate_optional_metric(
                 backtest_result.calmar_ratio, "calmar_ratio"
             ),
-            "volatility": self._validate_optional_metric(
-                backtest_result.volatility, "volatility"
-            ),
+            "volatility": self._validate_optional_metric(backtest_result.volatility, "volatility"),
             # Returns-based metrics (from get_performance_stats_returns)
             "risk_return_ratio": self._validate_optional_metric(
                 backtest_result.risk_return_ratio, "risk_return_ratio"
             ),
-            "avg_return": self._validate_optional_metric(
-                backtest_result.avg_return, "avg_return"
-            ),
+            "avg_return": self._validate_optional_metric(backtest_result.avg_return, "avg_return"),
             "avg_win_return": self._validate_optional_metric(
                 backtest_result.avg_win_return, "avg_win_return"
             ),
@@ -290,34 +282,18 @@ class BacktestPersistenceService:
             "profit_factor": self._validate_optional_metric(
                 backtest_result.profit_factor, "profit_factor"
             ),
-            "expectancy": self._validate_optional_metric(
-                backtest_result.expectancy, "expectancy"
-            ),
-            "avg_win": self._validate_optional_metric(
-                backtest_result.avg_win, "avg_win"
-            ),
-            "avg_loss": self._validate_optional_metric(
-                backtest_result.avg_loss, "avg_loss"
-            ),
+            "expectancy": self._validate_optional_metric(backtest_result.expectancy, "expectancy"),
+            "avg_win": self._validate_optional_metric(backtest_result.avg_win, "avg_win"),
+            "avg_loss": self._validate_optional_metric(backtest_result.avg_loss, "avg_loss"),
             # Additional PnL-based metrics (from get_performance_stats_pnls)
-            "total_pnl": self._validate_optional_metric(
-                backtest_result.total_pnl, "total_pnl"
-            ),
+            "total_pnl": self._validate_optional_metric(backtest_result.total_pnl, "total_pnl"),
             "total_pnl_percentage": self._validate_optional_metric(
                 backtest_result.total_pnl_percentage, "total_pnl_percentage"
             ),
-            "max_winner": self._validate_optional_metric(
-                backtest_result.max_winner, "max_winner"
-            ),
-            "max_loser": self._validate_optional_metric(
-                backtest_result.max_loser, "max_loser"
-            ),
-            "min_winner": self._validate_optional_metric(
-                backtest_result.min_winner, "min_winner"
-            ),
-            "min_loser": self._validate_optional_metric(
-                backtest_result.min_loser, "min_loser"
-            ),
+            "max_winner": self._validate_optional_metric(backtest_result.max_winner, "max_winner"),
+            "max_loser": self._validate_optional_metric(backtest_result.max_loser, "max_loser"),
+            "min_winner": self._validate_optional_metric(backtest_result.min_winner, "min_winner"),
+            "min_loser": self._validate_optional_metric(backtest_result.min_loser, "min_loser"),
         }
 
     def _validate_metric(self, value: float, field_name: str) -> Decimal:
@@ -360,9 +336,7 @@ class BacktestPersistenceService:
             return None
         return self._validate_metric(value, field_name)
 
-    def _calculate_win_rate(
-        self, winning_trades: int, total_trades: int
-    ) -> Optional[Decimal]:
+    def _calculate_win_rate(self, winning_trades: int, total_trades: int) -> Optional[Decimal]:
         """
         Calculate win rate from trade counts.
 
@@ -377,53 +351,53 @@ class BacktestPersistenceService:
             return None
         return Decimal(str(winning_trades / total_trades))
 
-    async def save_trades_from_fills(
+    async def save_trades_from_positions(
         self,
         backtest_run_id: int,
-        fills_report_df,
+        positions_report_df,
     ) -> int:
         """
-        Save trades from Nautilus Trader fills report to database.
+        Save trades from Nautilus Trader positions report to database.
 
-        Converts fills report DataFrame to Trade records, calculates metrics,
-        and performs bulk insert to database.
+        Converts positions report DataFrame to Trade records with complete
+        entry/exit data and realized PnL.
 
         Args:
             backtest_run_id: ID of the backtest run these trades belong to
-            fills_report_df: Pandas DataFrame from trader.generate_fills_report()
+            positions_report_df: Pandas DataFrame from trader.generate_positions_report()
 
         Returns:
             Number of trades saved
 
         Raises:
-            ValidationError: If fills report data is invalid
+            ValidationError: If positions report data is invalid
 
         Example:
-            >>> fills_df = trader.generate_fills_report()
-            >>> count = await service.save_trades_from_fills(
+            >>> positions_df = trader.generate_positions_report()
+            >>> count = await service.save_trades_from_positions(
             ...     backtest_run_id=123,
-            ...     fills_report_df=fills_df
+            ...     positions_report_df=positions_df
             ... )
         """
         from src.db.models.trade import Trade as TradeDB
-        from src.models.trade import TradeCreate, calculate_trade_metrics
+        from src.models.trade import TradeCreate
 
-        if fills_report_df is None or fills_report_df.empty:
-            logger.info("No fills to save", backtest_run_id=backtest_run_id)
+        if positions_report_df is None or positions_report_df.empty:
+            logger.info("No positions to save", backtest_run_id=backtest_run_id)
             return 0
 
         logger.info(
-            "Saving trades from fills report",
+            "Saving trades from positions report",
             backtest_run_id=backtest_run_id,
-            fill_count=len(fills_report_df),
-            columns=list(fills_report_df.columns),
+            position_count=len(positions_report_df),
+            columns=list(positions_report_df.columns),
         )
 
         # Log first row as sample for debugging
-        if len(fills_report_df) > 0:
-            first_row = fills_report_df.iloc[0]
+        if len(positions_report_df) > 0:
+            first_row = positions_report_df.iloc[0]
             logger.info(
-                "Sample fill row",
+                "Sample position row",
                 backtest_run_id=backtest_run_id,
                 sample_data={k: str(v) for k, v in first_row.to_dict().items()},
             )
@@ -432,62 +406,84 @@ class BacktestPersistenceService:
 
         try:
             # Convert DataFrame rows to Trade models
-            for idx, row in fills_report_df.iterrows():
-                # Convert timestamp to datetime
-                # Handle both pandas Timestamp and raw nanosecond int
-                ts_event = row["ts_event"]
-                if isinstance(ts_event, int):
-                    # Raw nanosecond timestamp
-                    entry_timestamp = datetime.fromtimestamp(
-                        ts_event / 1e9, tz=timezone.utc
-                    )
-                else:
-                    # pandas Timestamp or datetime - convert to datetime with UTC
-                    entry_timestamp = ts_event.to_pydatetime().replace(
-                        tzinfo=timezone.utc
-                    )
+            for position_id, row in positions_report_df.iterrows():
+                # Convert timestamps to datetime
+                # ts_opened is already pandas Timestamp from positions report
+                entry_timestamp = row["ts_opened"]
+                if hasattr(entry_timestamp, "to_pydatetime"):
+                    entry_timestamp = entry_timestamp.to_pydatetime()
+                if entry_timestamp.tzinfo is None:
+                    entry_timestamp = entry_timestamp.replace(tzinfo=timezone.utc)
 
-                # Extract commission (handle Money object or string format)
-                commission_amount = None
-                commission_currency = None
-                if "commission" in row and row["commission"] is not None:
-                    commission_str = str(row["commission"])
-                    # Commission format: "1.00 USD" - split to get amount and currency
-                    parts = commission_str.split()
-                    if len(parts) >= 2:
-                        commission_amount = Decimal(parts[0])
-                        commission_currency = parts[1]
-                    elif len(parts) == 1:
-                        # Just amount, no currency
-                        commission_amount = Decimal(parts[0])
-                        commission_currency = "USD"  # Default
+                # Convert exit timestamp (ts_closed)
+                exit_timestamp = row["ts_closed"]
+                if hasattr(exit_timestamp, "to_pydatetime"):
+                    exit_timestamp = exit_timestamp.to_pydatetime()
+                if exit_timestamp.tzinfo is None:
+                    exit_timestamp = exit_timestamp.replace(tzinfo=timezone.utc)
+
+                # Extract commission from commissions list
+                commission_amount = Decimal("0.00")
+                commission_currency = "USD"
+                if "commissions" in row and row["commissions"]:
+                    # commissions is a list of Money objects
+                    commissions_list = row["commissions"]
+                    if isinstance(commissions_list, list) and len(commissions_list) > 0:
+                        # Take first commission from list and convert to string
+                        comm_str = str(commissions_list[0])
+                        parts = comm_str.split()
+                        if len(parts) >= 2:
+                            commission_amount = Decimal(parts[0])
+                            commission_currency = parts[1]
+                        elif len(parts) == 1:
+                            commission_amount = Decimal(parts[0])
                     else:
-                        # Empty or invalid
-                        commission_amount = Decimal("0.00")
-                        commission_currency = "USD"
+                        # If it's not a list, try parsing as string directly
+                        commissions_str = str(commissions_list).strip("[]")
+                        parts = commissions_str.split()
+                        if len(parts) >= 2:
+                            commission_amount = Decimal(parts[0])
+                            commission_currency = parts[1]
+                        elif len(parts) == 1 and parts[0]:
+                            commission_amount = Decimal(parts[0])
+
+                # Calculate holding period in seconds from duration_ns
+                holding_period_seconds = None
+                if "duration_ns" in row and row["duration_ns"]:
+                    holding_period_seconds = int(row["duration_ns"] / 1_000_000_000)
+
+                # Extract realized PnL (format: "-134.66 USD")
+                profit_loss = Decimal("0.00")
+                if "realized_pnl" in row and row["realized_pnl"]:
+                    pnl_str = str(row["realized_pnl"])
+                    parts = pnl_str.split()
+                    if len(parts) >= 1:
+                        profit_loss = Decimal(parts[0])
+
+                # Calculate profit percentage
+                profit_pct = None
+                entry_price = Decimal(str(row["avg_px_open"]))
+                exit_price = Decimal(str(row["avg_px_close"]))
+                if entry_price > 0:
+                    profit_pct = ((exit_price - entry_price) / entry_price) * Decimal("100")
 
                 # Create TradeCreate model for validation
                 trade_data = TradeCreate(
                     backtest_run_id=backtest_run_id,
                     instrument_id=str(row["instrument_id"]),
-                    trade_id=str(row["trade_id"]),
-                    venue_order_id=str(row["venue_order_id"]),
-                    client_order_id=str(row.get("client_order_id"))
-                    if row.get("client_order_id")
-                    else None,
-                    order_side=str(row["order_side"]),
-                    quantity=Decimal(str(row["last_qty"])),
-                    entry_price=Decimal(str(row["last_px"])),
-                    exit_price=None,  # Will be populated for closed positions
+                    trade_id=str(position_id),  # Use position_id as trade_id
+                    venue_order_id=str(row["opening_order_id"]),
+                    client_order_id=str(row["closing_order_id"]),
+                    order_side=str(row["entry"]),  # BUY or SELL
+                    quantity=Decimal(str(row["peak_qty"])),  # Use peak_qty as quantity
+                    entry_price=entry_price,
+                    exit_price=exit_price,
                     commission_amount=commission_amount,
                     commission_currency=commission_currency,
                     fees_amount=Decimal("0.00"),
                     entry_timestamp=entry_timestamp,
-                    exit_timestamp=None,  # Will be populated for closed positions
+                    exit_timestamp=exit_timestamp,
                 )
-
-                # Calculate metrics (will be None for open trades)
-                metrics = calculate_trade_metrics(trade_data)
 
                 # Create database model
                 trade_db = TradeDB(
@@ -503,9 +499,9 @@ class BacktestPersistenceService:
                     commission_amount=trade_data.commission_amount,
                     commission_currency=trade_data.commission_currency,
                     fees_amount=trade_data.fees_amount,
-                    profit_loss=metrics["profit_loss"],
-                    profit_pct=metrics["profit_pct"],
-                    holding_period_seconds=metrics["holding_period_seconds"],
+                    profit_loss=profit_loss,
+                    profit_pct=profit_pct,
+                    holding_period_seconds=holding_period_seconds,
                     entry_timestamp=trade_data.entry_timestamp,
                     exit_timestamp=trade_data.exit_timestamp,
                 )
@@ -528,7 +524,7 @@ class BacktestPersistenceService:
                 )
             else:
                 logger.warning(
-                    "No trades to save after processing fills",
+                    "No trades to save after processing positions",
                     backtest_run_id=backtest_run_id,
                 )
 
@@ -536,7 +532,7 @@ class BacktestPersistenceService:
 
         except Exception as e:
             logger.error(
-                "Failed to save trades from fills",
+                "Failed to save trades from positions",
                 backtest_run_id=backtest_run_id,
                 error=str(e),
             )

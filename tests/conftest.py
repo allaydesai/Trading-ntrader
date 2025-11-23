@@ -1,8 +1,9 @@
 """Pytest configuration and fixtures."""
 
 import gc
-import pytest
 from pathlib import Path
+
+import pytest
 
 
 @pytest.fixture

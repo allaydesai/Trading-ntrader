@@ -16,7 +16,6 @@ from pydantic import ValidationError
 
 from src.models.trade import (
     Trade,
-    TradeBase,
     TradeCreate,
     calculate_trade_metrics,
 )
@@ -131,7 +130,9 @@ class TestCalculateProfitLongPosition:
         # Expected: (160 - 150) * 100 = 1000
         assert metrics["profit_loss"] == Decimal("1000.00")
         # Expected: 1000 / (150 * 100) * 100 = 6.67%
-        assert abs(metrics["profit_pct"] - Decimal("6.666666666666666666666666667")) < Decimal("0.01")
+        assert abs(metrics["profit_pct"] - Decimal("6.666666666666666666666666667")) < Decimal(
+            "0.01"
+        )
         # Expected: 1 hour = 3600 seconds
         assert metrics["holding_period_seconds"] == 3600
 

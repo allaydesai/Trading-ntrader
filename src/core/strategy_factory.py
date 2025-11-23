@@ -47,9 +47,7 @@ class StrategyFactory:
         try:
             strategy_class = getattr(module, class_name)
         except AttributeError as e:
-            raise AttributeError(
-                f"Class '{class_name}' not found in module '{module_path}': {e}"
-            )
+            raise AttributeError(f"Class '{class_name}' not found in module '{module_path}': {e}")
 
         if not issubclass(strategy_class, Strategy):
             raise TypeError(
@@ -93,9 +91,7 @@ class StrategyFactory:
         try:
             config_class = getattr(module, class_name)
         except AttributeError as e:
-            raise AttributeError(
-                f"Class '{class_name}' not found in module '{module_path}': {e}"
-            )
+            raise AttributeError(f"Class '{class_name}' not found in module '{module_path}': {e}")
 
         if not issubclass(config_class, StrategyConfig):
             raise TypeError(
@@ -219,9 +215,9 @@ class StrategyFactory:
             If configuration is invalid
         """
         from src.models.strategy import (
-            SMAParameters,
             MeanReversionParameters,
             MomentumParameters,
+            SMAParameters,
         )
 
         # Map strategy types to parameter classes

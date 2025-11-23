@@ -1,8 +1,9 @@
 """Unit tests for DataCatalogService bar type filtering."""
 
-import pytest
 from datetime import datetime, timezone
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import MagicMock, Mock, patch
+
+import pytest
 
 from src.services.data_catalog import DataCatalogService
 
@@ -19,9 +20,7 @@ class TestQueryBarsBarTypeFiltering:
     @pytest.fixture
     def data_catalog_service(self, mock_catalog, tmp_path):
         """Create DataCatalogService with mocked catalog."""
-        with patch(
-            "src.services.data_catalog.ParquetDataCatalog", return_value=mock_catalog
-        ):
+        with patch("src.services.data_catalog.ParquetDataCatalog", return_value=mock_catalog):
             service = DataCatalogService(catalog_path=tmp_path)
             service.catalog = mock_catalog
             return service
@@ -50,9 +49,7 @@ class TestQueryBarsBarTypeFiltering:
             )
 
         # Assert
-        mock_bar_type_cls.from_str.assert_called_once_with(
-            "AAPL.NASDAQ-1-MINUTE-LAST-EXTERNAL"
-        )
+        mock_bar_type_cls.from_str.assert_called_once_with("AAPL.NASDAQ-1-MINUTE-LAST-EXTERNAL")
         mock_catalog.bars.assert_called_once()
         call_kwargs = mock_catalog.bars.call_args[1]
         assert call_kwargs["instrument_ids"] == ["AAPL.NASDAQ"]
@@ -82,9 +79,7 @@ class TestQueryBarsBarTypeFiltering:
             )
 
         # Assert
-        mock_bar_type_cls.from_str.assert_called_once_with(
-            "AAPL.NASDAQ-1-DAY-LAST-EXTERNAL"
-        )
+        mock_bar_type_cls.from_str.assert_called_once_with("AAPL.NASDAQ-1-DAY-LAST-EXTERNAL")
         call_kwargs = mock_catalog.bars.call_args[1]
         assert call_kwargs["bar_type"] == mock_bar_type
 
@@ -112,13 +107,9 @@ class TestQueryBarsBarTypeFiltering:
             )
 
         # Assert
-        mock_bar_type_cls.from_str.assert_called_once_with(
-            "TSLA.NASDAQ-5-MINUTE-LAST-EXTERNAL"
-        )
+        mock_bar_type_cls.from_str.assert_called_once_with("TSLA.NASDAQ-5-MINUTE-LAST-EXTERNAL")
 
-    def test_query_bars_passes_correct_time_range(
-        self, data_catalog_service, mock_catalog
-    ):
+    def test_query_bars_passes_correct_time_range(self, data_catalog_service, mock_catalog):
         """Query bars passes correct start and end timestamps."""
         # Arrange
         mock_bar = Mock()

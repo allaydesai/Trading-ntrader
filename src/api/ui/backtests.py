@@ -4,15 +4,17 @@ Backtests route handler for web UI.
 Provides paginated backtest list, detail view, and HTMX fragment endpoints.
 """
 
-import structlog
 from datetime import date
+from typing import Optional
 from uuid import UUID
-from fastapi import APIRouter, Query, Request, Response, HTTPException
+
+import structlog
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
-from typing import Optional
 
 from src.api.dependencies import BacktestService
+from src.api.models.backtest_detail import to_detail_view
 from src.api.models.common import EmptyStateMessage
 from src.api.models.filter_models import (
     ExecutionStatus,
@@ -21,7 +23,6 @@ from src.api.models.filter_models import (
     SortOrder,
 )
 from src.api.models.navigation import BreadcrumbItem, NavigationState
-from src.api.models.backtest_detail import to_detail_view
 
 logger = structlog.get_logger(__name__)
 
@@ -97,9 +98,7 @@ async def backtest_list(
     try:
         list_page = await service.get_filtered_backtest_list_page(filter_state)
     except Exception as e:
-        logger.error(
-            "Failed to fetch backtest list", error=str(e), filter_state=filter_state
-        )
+        logger.error("Failed to fetch backtest list", error=str(e), filter_state=filter_state)
         # Return empty list on database error
         from src.api.models.backtest_list import FilteredBacktestListPage
 

@@ -1,14 +1,14 @@
 """Portfolio tracking and analysis service using Nautilus Trader framework."""
 
-from typing import Dict, List, Optional, Any
 from datetime import datetime
+from typing import Any, Dict, List, Optional
+
 import pandas as pd
-
-from nautilus_trader.portfolio.portfolio import Portfolio
 from nautilus_trader.cache.cache import Cache
+from nautilus_trader.portfolio.portfolio import Portfolio
 
-from src.models.trade import TradeModel
 from src.core.analytics import PortfolioAnalytics
+from src.models.trade import Trade
 
 
 class PortfolioService:
@@ -62,8 +62,7 @@ class PortfolioService:
                 "net_exposure": float(total_net_exposure),
                 "open_positions": len(open_positions) if open_positions else 0,
                 "closed_positions": len(closed_positions) if closed_positions else 0,
-                "total_positions": len(open_positions or [])
-                + len(closed_positions or []),
+                "total_positions": len(open_positions or []) + len(closed_positions or []),
                 "is_flat": self.portfolio.is_completely_flat(),
                 "account_balances": self._get_account_balances(),
                 "position_count_by_instrument": self._get_position_count_by_instrument(),
@@ -100,24 +99,16 @@ class PortfolioService:
             # Get position snapshots from cache
             closed_positions = self.cache.positions_closed()
             if not closed_positions:
-                return pd.DataFrame(
-                    columns=["timestamp", "equity", "cumulative_pnl", "daily_pnl"]
-                )
+                return pd.DataFrame(columns=["timestamp", "equity", "cumulative_pnl", "daily_pnl"])
 
             # Sort positions by closed time
             sorted_positions = sorted(
-                [
-                    p
-                    for p in closed_positions
-                    if hasattr(p, "closed_time") and p.closed_time
-                ],
+                [p for p in closed_positions if hasattr(p, "closed_time") and p.closed_time],
                 key=lambda x: x.closed_time,
             )
 
             if not sorted_positions:
-                return pd.DataFrame(
-                    columns=["timestamp", "equity", "cumulative_pnl", "daily_pnl"]
-                )
+                return pd.DataFrame(columns=["timestamp", "equity", "cumulative_pnl", "daily_pnl"])
 
             # Build equity curve
             equity_data = []
@@ -125,10 +116,7 @@ class PortfolioService:
             initial_capital = 100000.0  # Assume $100k starting capital
 
             for position in sorted_positions:
-                if (
-                    hasattr(position, "realized_pnl")
-                    and position.realized_pnl is not None
-                ):
+                if hasattr(position, "realized_pnl") and position.realized_pnl is not None:
                     cumulative_pnl += float(position.realized_pnl)
 
                     equity_data.append(
@@ -141,9 +129,7 @@ class PortfolioService:
                     )
 
             if not equity_data:
-                return pd.DataFrame(
-                    columns=["timestamp", "equity", "cumulative_pnl", "daily_pnl"]
-                )
+                return pd.DataFrame(columns=["timestamp", "equity", "cumulative_pnl", "daily_pnl"])
 
             df = pd.DataFrame(equity_data)
             df["timestamp"] = pd.to_datetime(df["timestamp"])
@@ -157,9 +143,7 @@ class PortfolioService:
 
         except Exception:
             # Return empty DataFrame on error
-            return pd.DataFrame(
-                columns=["timestamp", "equity", "cumulative_pnl", "daily_pnl"]
-            )
+            return pd.DataFrame(columns=["timestamp", "equity", "cumulative_pnl", "daily_pnl"])
 
     def get_position_summary(self) -> Dict[str, Any]:
         """
@@ -185,9 +169,7 @@ class PortfolioService:
             avg_duration = self.analytics.calculate_avg_duration(closed_positions)
             pnl_stats = self.analytics.calculate_pnl_statistics(closed_positions)
             side_stats = self.analytics.calculate_side_statistics(closed_positions)
-            position_sizes = self.analytics.calculate_position_size_stats(
-                closed_positions
-            )
+            position_sizes = self.analytics.calculate_position_size_stats(closed_positions)
             largest_positions = self.analytics.get_largest_positions(closed_positions)
 
             return {
@@ -214,15 +196,15 @@ class PortfolioService:
                 "error": str(e),
             }
 
-    def get_trades_as_models(self, include_open: bool = True) -> List[TradeModel]:
+    def get_trades_as_models(self, include_open: bool = True) -> List[Trade]:
         """
-        Convert Nautilus positions to TradeModel instances.
+        Convert Nautilus positions to Trade instances.
 
         Args:
             include_open: Whether to include open positions
 
         Returns:
-            List of TradeModel instances
+            List of Trade instances
         """
         trades = []
 
@@ -231,7 +213,7 @@ class PortfolioService:
             closed_positions = self.cache.positions_closed() or []
             for position in closed_positions:
                 try:
-                    trade = TradeModel.from_nautilus_position(position)
+                    trade = Trade.from_nautilus_position(position)
                     trades.append(trade)
                 except Exception:
                     # Skip invalid positions
@@ -242,7 +224,7 @@ class PortfolioService:
                 open_positions = self.cache.positions_open() or []
                 for position in open_positions:
                     try:
-                        trade = TradeModel.from_nautilus_position(position)
+                        trade = Trade.from_nautilus_position(position)
                         trades.append(trade)
                     except Exception:
                         # Skip invalid positions

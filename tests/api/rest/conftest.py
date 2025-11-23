@@ -15,8 +15,8 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from src.api.dependencies import get_data_catalog_service, get_db
 from src.api.web import app
-from src.api.dependencies import get_db, get_data_catalog_service
 from src.db.base import Base
 from src.db.models.backtest import BacktestRun, PerformanceMetrics
 from src.services.data_catalog import DataCatalogService
@@ -56,9 +56,7 @@ async def async_test_db() -> AsyncGenerator[AsyncSession, None]:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-    async_session_maker = async_sessionmaker(
-        engine, class_=AsyncSession, expire_on_commit=False
-    )
+    async_session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
     async with async_session_maker() as session:
         yield session

@@ -8,10 +8,10 @@ import pytest
 from pydantic import ValidationError
 
 from src.models.strategy import (
-    TradingStrategy,
-    StrategyType,
     SMAParameters,
     StrategyStatus,
+    StrategyType,
+    TradingStrategy,
 )
 
 
@@ -19,17 +19,13 @@ from src.models.strategy import (
 def test_sma_parameters_validation():
     """Test SMA parameters validation."""
     # Valid parameters
-    params = SMAParameters(
-        fast_period=10, slow_period=20, trade_size=Decimal("1000000")
-    )
+    params = SMAParameters(fast_period=10, slow_period=20, trade_size=Decimal("1000000"))
     assert params.fast_period == 10
     assert params.slow_period == 20
     assert params.trade_size == Decimal("1000000")
 
     # Invalid: slow period not greater than fast
-    with pytest.raises(
-        ValueError, match="Slow period must be greater than fast period"
-    ):
+    with pytest.raises(ValueError, match="Slow period must be greater than fast period"):
         SMAParameters(fast_period=20, slow_period=10)
 
     # Invalid: negative period
@@ -46,9 +42,7 @@ def test_sma_parameters_edge_cases():
     assert params.slow_period == 2
 
     # Test maximum valid values
-    params = SMAParameters(
-        fast_period=199, slow_period=200, trade_size=Decimal("999999999")
-    )
+    params = SMAParameters(fast_period=199, slow_period=200, trade_size=Decimal("999999999"))
     assert params.fast_period == 199
     assert params.slow_period == 200
 
@@ -57,9 +51,7 @@ def test_sma_parameters_edge_cases():
         SMAParameters(fast_period=0, slow_period=20)
 
     # Test equal periods
-    with pytest.raises(
-        ValueError, match="Slow period must be greater than fast period"
-    ):
+    with pytest.raises(ValueError, match="Slow period must be greater than fast period"):
         SMAParameters(fast_period=20, slow_period=20)
 
     # Test out of range periods

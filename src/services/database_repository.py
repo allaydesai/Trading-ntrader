@@ -1,7 +1,7 @@
 """Database repository for market data operations."""
 
 from datetime import datetime, timezone
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy import text
 
@@ -45,9 +45,7 @@ class DatabaseRepository:
             rows = result.fetchall()
 
         if not rows:
-            raise ValueError(
-                f"No market data found for {symbol} between {start} and {end}"
-            )
+            raise ValueError(f"No market data found for {symbol} between {start} and {end}")
 
         # Convert to list of dictionaries
         data = []
@@ -231,8 +229,7 @@ class DatabaseRepository:
             if end > data_range["end"]:
                 return {
                     "valid": False,
-                    "reason": f"End date {end} is after available data "
-                    f"end {data_range['end']}",
+                    "reason": f"End date {end} is after available data end {data_range['end']}",
                     "available_range": data_range,
                 }
 

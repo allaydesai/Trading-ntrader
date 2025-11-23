@@ -148,8 +148,7 @@ def _display_metadata_table(backtest):
     table.add_row("Instrument", backtest.instrument_symbol)
     table.add_row(
         "Period",
-        f"{backtest.start_date.strftime('%Y-%m-%d')} to "
-        f"{backtest.end_date.strftime('%Y-%m-%d')}",
+        f"{backtest.start_date.strftime('%Y-%m-%d')} to {backtest.end_date.strftime('%Y-%m-%d')}",
     )
     table.add_row("Initial Capital", f"${backtest.initial_capital:,.2f}")
     table.add_row("Data Source", backtest.data_source)
@@ -268,9 +267,7 @@ def _display_performance_metrics(metrics):
 
     if metrics.expectancy is not None:
         exp_color = "green" if metrics.expectancy > 0 else "red"
-        trading_table.add_row(
-            "Expectancy", f"[{exp_color}]${metrics.expectancy:.2f}[/{exp_color}]"
-        )
+        trading_table.add_row("Expectancy", f"[{exp_color}]${metrics.expectancy:.2f}[/{exp_color}]")
 
     if metrics.avg_win is not None:
         trading_table.add_row("Average Win", f"[green]${metrics.avg_win:.2f}[/green]")

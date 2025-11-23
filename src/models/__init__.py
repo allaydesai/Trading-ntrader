@@ -1,6 +1,6 @@
 """Data models for NTrader."""
 
-from .strategy import TradingStrategy, StrategyType, SMAParameters, StrategyStatus
+from .strategy import SMAParameters, StrategyStatus, StrategyType, TradingStrategy
 
 __all__ = [
     "TradingStrategy",

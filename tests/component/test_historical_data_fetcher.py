@@ -106,9 +106,7 @@ class TestHistoricalDataFetcherInitialization:
 
         custom_path = "/custom/path/catalog"
         with patch("src.services.data_fetcher.ParquetDataCatalog") as mock_catalog_cls:
-            fetcher = HistoricalDataFetcher(
-                client=mock_ibkr_client, catalog_path=custom_path
-            )
+            fetcher = HistoricalDataFetcher(client=mock_ibkr_client, catalog_path=custom_path)
 
             assert fetcher.catalog_path == Path(custom_path)
             mock_catalog_cls.assert_called_once_with(custom_path)
@@ -125,9 +123,7 @@ class TestFetchBars:
         """Test successful bar fetching."""
         from src.services.data_fetcher import HistoricalDataFetcher
 
-        with patch(
-            "src.services.data_fetcher.ParquetDataCatalog", return_value=mock_catalog
-        ):
+        with patch("src.services.data_fetcher.ParquetDataCatalog", return_value=mock_catalog):
             fetcher = HistoricalDataFetcher(client=mock_ibkr_client)
 
             # Mock the request_bars method
@@ -151,9 +147,7 @@ class TestFetchBars:
             mock_ibkr_client.rate_limiter.acquire.assert_called_once()
 
             # Verify catalog write
-            mock_catalog.write_data.assert_called_once_with(
-                sample_bars, skip_disjoint_check=True
-            )
+            mock_catalog.write_data.assert_called_once_with(sample_bars, skip_disjoint_check=True)
 
             # Verify request_bars called with correct params
             mock_ibkr_client.client.request_bars.assert_called_once_with(
@@ -174,9 +168,7 @@ class TestFetchBars:
         """Test bar fetching with custom parameters."""
         from src.services.data_fetcher import HistoricalDataFetcher
 
-        with patch(
-            "src.services.data_fetcher.ParquetDataCatalog", return_value=mock_catalog
-        ):
+        with patch("src.services.data_fetcher.ParquetDataCatalog", return_value=mock_catalog):
             fetcher = HistoricalDataFetcher(client=mock_ibkr_client)
             mock_ibkr_client.client.request_bars = AsyncMock(return_value=sample_bars)
 
@@ -201,15 +193,11 @@ class TestFetchBars:
 
     @pytest.mark.component
     @pytest.mark.asyncio
-    async def test_fetch_bars_empty_result(
-        self, mock_ibkr_client, mock_catalog, sample_contracts
-    ):
+    async def test_fetch_bars_empty_result(self, mock_ibkr_client, mock_catalog, sample_contracts):
         """Test bar fetching with empty result."""
         from src.services.data_fetcher import HistoricalDataFetcher
 
-        with patch(
-            "src.services.data_fetcher.ParquetDataCatalog", return_value=mock_catalog
-        ):
+        with patch("src.services.data_fetcher.ParquetDataCatalog", return_value=mock_catalog):
             fetcher = HistoricalDataFetcher(client=mock_ibkr_client)
             mock_ibkr_client.client.request_bars = AsyncMock(return_value=[])
 
@@ -237,9 +225,7 @@ class TestFetchBars:
 
         mock_ibkr_client.is_connected = False
 
-        with patch(
-            "src.services.data_fetcher.ParquetDataCatalog", return_value=mock_catalog
-        ):
+        with patch("src.services.data_fetcher.ParquetDataCatalog", return_value=mock_catalog):
             fetcher = HistoricalDataFetcher(client=mock_ibkr_client)
 
             start_date = datetime(2024, 1, 1)
@@ -258,19 +244,13 @@ class TestFetchBars:
 
     @pytest.mark.component
     @pytest.mark.asyncio
-    async def test_fetch_bars_api_error(
-        self, mock_ibkr_client, mock_catalog, sample_contracts
-    ):
+    async def test_fetch_bars_api_error(self, mock_ibkr_client, mock_catalog, sample_contracts):
         """Test bar fetching handles API errors."""
         from src.services.data_fetcher import HistoricalDataFetcher
 
-        with patch(
-            "src.services.data_fetcher.ParquetDataCatalog", return_value=mock_catalog
-        ):
+        with patch("src.services.data_fetcher.ParquetDataCatalog", return_value=mock_catalog):
             fetcher = HistoricalDataFetcher(client=mock_ibkr_client)
-            mock_ibkr_client.client.request_bars = AsyncMock(
-                side_effect=RuntimeError("API Error")
-            )
+            mock_ibkr_client.client.request_bars = AsyncMock(side_effect=RuntimeError("API Error"))
 
             start_date = datetime(2024, 1, 1)
             end_date = datetime(2024, 1, 2)
@@ -297,9 +277,7 @@ class TestFetchTicks:
         """Test successful tick fetching."""
         from src.services.data_fetcher import HistoricalDataFetcher
 
-        with patch(
-            "src.services.data_fetcher.ParquetDataCatalog", return_value=mock_catalog
-        ):
+        with patch("src.services.data_fetcher.ParquetDataCatalog", return_value=mock_catalog):
             fetcher = HistoricalDataFetcher(client=mock_ibkr_client)
             mock_ibkr_client.client.request_ticks = AsyncMock(return_value=sample_ticks)
 
@@ -321,9 +299,7 @@ class TestFetchTicks:
             mock_ibkr_client.rate_limiter.acquire.assert_called_once()
 
             # Verify catalog write
-            mock_catalog.write_data.assert_called_once_with(
-                sample_ticks, skip_disjoint_check=True
-            )
+            mock_catalog.write_data.assert_called_once_with(sample_ticks, skip_disjoint_check=True)
 
     @pytest.mark.component
     @pytest.mark.asyncio
@@ -333,9 +309,7 @@ class TestFetchTicks:
         """Test tick fetching with multiple tick types."""
         from src.services.data_fetcher import HistoricalDataFetcher
 
-        with patch(
-            "src.services.data_fetcher.ParquetDataCatalog", return_value=mock_catalog
-        ):
+        with patch("src.services.data_fetcher.ParquetDataCatalog", return_value=mock_catalog):
             fetcher = HistoricalDataFetcher(client=mock_ibkr_client)
             mock_ibkr_client.client.request_ticks = AsyncMock(return_value=sample_ticks)
 
@@ -362,9 +336,7 @@ class TestFetchTicks:
         """Test tick fetching with custom timezone."""
         from src.services.data_fetcher import HistoricalDataFetcher
 
-        with patch(
-            "src.services.data_fetcher.ParquetDataCatalog", return_value=mock_catalog
-        ):
+        with patch("src.services.data_fetcher.ParquetDataCatalog", return_value=mock_catalog):
             fetcher = HistoricalDataFetcher(client=mock_ibkr_client)
             mock_ibkr_client.client.request_ticks = AsyncMock(return_value=sample_ticks)
 
@@ -386,15 +358,11 @@ class TestFetchTicks:
 
     @pytest.mark.component
     @pytest.mark.asyncio
-    async def test_fetch_ticks_empty_result(
-        self, mock_ibkr_client, mock_catalog, sample_contracts
-    ):
+    async def test_fetch_ticks_empty_result(self, mock_ibkr_client, mock_catalog, sample_contracts):
         """Test tick fetching with empty result."""
         from src.services.data_fetcher import HistoricalDataFetcher
 
-        with patch(
-            "src.services.data_fetcher.ParquetDataCatalog", return_value=mock_catalog
-        ):
+        with patch("src.services.data_fetcher.ParquetDataCatalog", return_value=mock_catalog):
             fetcher = HistoricalDataFetcher(client=mock_ibkr_client)
             mock_ibkr_client.client.request_ticks = AsyncMock(return_value=[])
 
@@ -421,9 +389,7 @@ class TestFetchTicks:
 
         mock_ibkr_client.is_connected = False
 
-        with patch(
-            "src.services.data_fetcher.ParquetDataCatalog", return_value=mock_catalog
-        ):
+        with patch("src.services.data_fetcher.ParquetDataCatalog", return_value=mock_catalog):
             fetcher = HistoricalDataFetcher(client=mock_ibkr_client)
 
             start_date = datetime(2024, 1, 1)
@@ -451,9 +417,7 @@ class TestRequestInstruments:
         """Test successful instrument request."""
         from src.services.data_fetcher import HistoricalDataFetcher
 
-        with patch(
-            "src.services.data_fetcher.ParquetDataCatalog", return_value=mock_catalog
-        ):
+        with patch("src.services.data_fetcher.ParquetDataCatalog", return_value=mock_catalog):
             fetcher = HistoricalDataFetcher(client=mock_ibkr_client)
 
             mock_instrument = MagicMock()
@@ -461,9 +425,7 @@ class TestRequestInstruments:
             mock_instrument.asset_class = "EQUITY"
             mock_instruments = [mock_instrument]
 
-            mock_ibkr_client.client.request_instruments = AsyncMock(
-                return_value=mock_instruments
-            )
+            mock_ibkr_client.client.request_instruments = AsyncMock(return_value=mock_instruments)
 
             result = await fetcher.request_instruments(contracts=sample_contracts)
 
@@ -481,31 +443,23 @@ class TestRequestInstruments:
 
     @pytest.mark.component
     @pytest.mark.asyncio
-    async def test_request_instruments_multiple_contracts(
-        self, mock_ibkr_client, mock_catalog
-    ):
+    async def test_request_instruments_multiple_contracts(self, mock_ibkr_client, mock_catalog):
         """Test instrument request with multiple contracts."""
         from src.services.data_fetcher import HistoricalDataFetcher
 
-        with patch(
-            "src.services.data_fetcher.ParquetDataCatalog", return_value=mock_catalog
-        ):
+        with patch("src.services.data_fetcher.ParquetDataCatalog", return_value=mock_catalog):
             fetcher = HistoricalDataFetcher(client=mock_ibkr_client)
 
             # Create multiple mock contracts
             contracts = [MagicMock(spec=IBContract) for _ in range(3)]
 
             mock_instruments = [MagicMock() for _ in range(3)]
-            mock_ibkr_client.client.request_instruments = AsyncMock(
-                return_value=mock_instruments
-            )
+            mock_ibkr_client.client.request_instruments = AsyncMock(return_value=mock_instruments)
 
             result = await fetcher.request_instruments(contracts=contracts)
 
             assert len(result) == 3
-            mock_ibkr_client.client.request_instruments.assert_called_once_with(
-                contracts=contracts
-            )
+            mock_ibkr_client.client.request_instruments.assert_called_once_with(contracts=contracts)
 
     @pytest.mark.component
     @pytest.mark.asyncio
@@ -515,9 +469,7 @@ class TestRequestInstruments:
         """Test instrument request with empty result."""
         from src.services.data_fetcher import HistoricalDataFetcher
 
-        with patch(
-            "src.services.data_fetcher.ParquetDataCatalog", return_value=mock_catalog
-        ):
+        with patch("src.services.data_fetcher.ParquetDataCatalog", return_value=mock_catalog):
             fetcher = HistoricalDataFetcher(client=mock_ibkr_client)
             mock_ibkr_client.client.request_instruments = AsyncMock(return_value=[])
 
@@ -536,9 +488,7 @@ class TestRequestInstruments:
 
         mock_ibkr_client.is_connected = False
 
-        with patch(
-            "src.services.data_fetcher.ParquetDataCatalog", return_value=mock_catalog
-        ):
+        with patch("src.services.data_fetcher.ParquetDataCatalog", return_value=mock_catalog):
             fetcher = HistoricalDataFetcher(client=mock_ibkr_client)
 
             with pytest.raises(RuntimeError) as exc_info:
@@ -554,9 +504,7 @@ class TestRequestInstruments:
         """Test instrument request handles API errors."""
         from src.services.data_fetcher import HistoricalDataFetcher
 
-        with patch(
-            "src.services.data_fetcher.ParquetDataCatalog", return_value=mock_catalog
-        ):
+        with patch("src.services.data_fetcher.ParquetDataCatalog", return_value=mock_catalog):
             fetcher = HistoricalDataFetcher(client=mock_ibkr_client)
             mock_ibkr_client.client.request_instruments = AsyncMock(
                 side_effect=RuntimeError("Invalid contract")
@@ -579,9 +527,7 @@ class TestRateLimitingIntegration:
         """Test rate limiter is called before fetching bars."""
         from src.services.data_fetcher import HistoricalDataFetcher
 
-        with patch(
-            "src.services.data_fetcher.ParquetDataCatalog", return_value=mock_catalog
-        ):
+        with patch("src.services.data_fetcher.ParquetDataCatalog", return_value=mock_catalog):
             fetcher = HistoricalDataFetcher(client=mock_ibkr_client)
             mock_ibkr_client.client.request_bars = AsyncMock(return_value=sample_bars)
 
@@ -603,9 +549,7 @@ class TestRateLimitingIntegration:
         """Test rate limiter is called before fetching ticks."""
         from src.services.data_fetcher import HistoricalDataFetcher
 
-        with patch(
-            "src.services.data_fetcher.ParquetDataCatalog", return_value=mock_catalog
-        ):
+        with patch("src.services.data_fetcher.ParquetDataCatalog", return_value=mock_catalog):
             fetcher = HistoricalDataFetcher(client=mock_ibkr_client)
             mock_ibkr_client.client.request_ticks = AsyncMock(return_value=sample_ticks)
 
@@ -626,13 +570,9 @@ class TestRateLimitingIntegration:
         """Test rate limiter is called before requesting instruments."""
         from src.services.data_fetcher import HistoricalDataFetcher
 
-        with patch(
-            "src.services.data_fetcher.ParquetDataCatalog", return_value=mock_catalog
-        ):
+        with patch("src.services.data_fetcher.ParquetDataCatalog", return_value=mock_catalog):
             fetcher = HistoricalDataFetcher(client=mock_ibkr_client)
-            mock_ibkr_client.client.request_instruments = AsyncMock(
-                return_value=[MagicMock()]
-            )
+            mock_ibkr_client.client.request_instruments = AsyncMock(return_value=[MagicMock()])
 
             await fetcher.request_instruments(contracts=sample_contracts)
 
@@ -650,9 +590,7 @@ class TestCatalogIntegration:
         """Test catalog writes bars with skip_disjoint_check=True."""
         from src.services.data_fetcher import HistoricalDataFetcher
 
-        with patch(
-            "src.services.data_fetcher.ParquetDataCatalog", return_value=mock_catalog
-        ):
+        with patch("src.services.data_fetcher.ParquetDataCatalog", return_value=mock_catalog):
             fetcher = HistoricalDataFetcher(client=mock_ibkr_client)
             mock_ibkr_client.client.request_bars = AsyncMock(return_value=sample_bars)
 
@@ -664,9 +602,7 @@ class TestCatalogIntegration:
             )
 
             # Verify skip_disjoint_check parameter
-            mock_catalog.write_data.assert_called_once_with(
-                sample_bars, skip_disjoint_check=True
-            )
+            mock_catalog.write_data.assert_called_once_with(sample_bars, skip_disjoint_check=True)
 
     @pytest.mark.component
     @pytest.mark.asyncio
@@ -676,9 +612,7 @@ class TestCatalogIntegration:
 
         with patch("src.services.data_fetcher.ParquetDataCatalog") as mock_catalog_cls:
             custom_path = "/my/custom/path"
-            fetcher = HistoricalDataFetcher(
-                client=mock_ibkr_client, catalog_path=custom_path
-            )
+            fetcher = HistoricalDataFetcher(client=mock_ibkr_client, catalog_path=custom_path)
 
             # Verify catalog was initialized with correct path
             mock_catalog_cls.assert_called_once_with(custom_path)

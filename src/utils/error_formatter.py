@@ -12,6 +12,7 @@ Features:
 """
 
 from typing import Optional
+
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -22,7 +23,6 @@ from src.utils.error_messages import (
     ErrorMessage,
     ErrorSeverity,
 )
-
 
 # Icon mapping for different severity levels
 SEVERITY_ICONS = {
@@ -261,9 +261,7 @@ class ErrorFormatter:
         return EXIT_CODE_MAP.get(error.category, 1)
 
 
-def format_exception_for_display(
-    exception: Exception, show_traceback: bool = False
-) -> str:
+def format_exception_for_display(exception: Exception, show_traceback: bool = False) -> str:
     """Format exception for user-friendly display.
 
     Args:
@@ -283,9 +281,7 @@ def format_exception_for_display(
         import traceback
 
         return "".join(
-            traceback.format_exception(
-                type(exception), exception, exception.__traceback__
-            )
+            traceback.format_exception(type(exception), exception, exception.__traceback__)
         )
 
     return f"{type(exception).__name__}: {str(exception)}"

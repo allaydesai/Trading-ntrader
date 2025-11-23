@@ -85,9 +85,7 @@ class TestTradePersistence:
         await db_session.commit()
 
         # Verify trade was saved
-        result = await db_session.execute(
-            select(TradeDB).where(TradeDB.id == trade_db.id)
-        )
+        result = await db_session.execute(select(TradeDB).where(TradeDB.id == trade_db.id))
         saved_trade = result.scalar_one()
 
         assert saved_trade.instrument_id == "AAPL"
@@ -221,12 +219,8 @@ class TestBulkTradeInsertion:
                 profit_loss=Decimal("1000.00"),
                 profit_pct=Decimal("6.67"),
                 holding_period_seconds=3600,
-                entry_timestamp=datetime(
-                    2025, 1, 1, 10, i % 60, 0, tzinfo=timezone.utc
-                ),
-                exit_timestamp=datetime(
-                    2025, 1, 1, 11, i % 60, 0, tzinfo=timezone.utc
-                ),
+                entry_timestamp=datetime(2025, 1, 1, 10, i % 60, 0, tzinfo=timezone.utc),
+                exit_timestamp=datetime(2025, 1, 1, 11, i % 60, 0, tzinfo=timezone.utc),
             )
             trades.append(trade)
 
@@ -237,9 +231,7 @@ class TestBulkTradeInsertion:
         elapsed_time = time.time() - start_time
 
         # Verify performance requirement: < 5 seconds
-        assert (
-            elapsed_time < 5.0
-        ), f"Bulk insert took {elapsed_time:.2f}s (should be < 5s)"
+        assert elapsed_time < 5.0, f"Bulk insert took {elapsed_time:.2f}s (should be < 5s)"
 
         # Verify all trades were saved
         result = await db_session.execute(

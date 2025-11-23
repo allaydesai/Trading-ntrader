@@ -13,8 +13,9 @@ Purpose: Ensure test suite maintains fast feedback loops through proper distribu
 Reference: design.md Section 1.1 and tasks.md Phase 7 (User Story 4)
 """
 
-import pytest
 from pathlib import Path
+
+import pytest
 
 
 def get_test_counts_by_marker(pytestconfig) -> dict[str, int]:
@@ -180,8 +181,7 @@ class TestPyramidDistribution:
 
         # Document the actual distribution (informational, not strict)
         print(
-            f"\nE2E test distribution: {e2e_percentage:.1f}% "
-            f"({counts.get('e2e', 0)}/{total} tests)"
+            f"\nE2E test distribution: {e2e_percentage:.1f}% ({counts.get('e2e', 0)}/{total} tests)"
         )
         print("Target: <5%")
         print(f"Full distribution: {counts}")

@@ -10,8 +10,8 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from src.api.dependencies import BacktestService
-from src.api.models.navigation import BreadcrumbItem, NavigationState
 from src.api.models.common import EmptyStateMessage
+from src.api.models.navigation import BreadcrumbItem, NavigationState
 
 logger = structlog.get_logger(__name__)
 

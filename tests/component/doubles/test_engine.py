@@ -53,9 +53,7 @@ class TestTradingEngine:
         """
         self.submitted_orders: List[TestOrder] = []
         self.positions: Dict[str, Decimal] = {}
-        self.initial_balance = (
-            initial_balance  # Store initial balance for test validation
-        )
+        self.initial_balance = initial_balance  # Store initial balance for test validation
         self.balance = initial_balance
         self.event_log: List[str] = []
         self.max_position_size = max_position_size
@@ -140,9 +138,7 @@ class TestTradingEngine:
         """
         return self.positions.get(symbol, Decimal("0"))
 
-    def get_position_details(
-        self, symbol: str, current_price: Decimal
-    ) -> Optional[TestPosition]:
+    def get_position_details(self, symbol: str, current_price: Decimal) -> Optional[TestPosition]:
         """
         Get detailed position information.
 
@@ -177,9 +173,7 @@ class TestTradingEngine:
                 total_quantity += order.quantity * multiplier
                 total_value += order.quantity * fill_price * multiplier
 
-        entry_price = (
-            abs(total_value / total_quantity) if total_quantity != 0 else current_price
-        )
+        entry_price = abs(total_value / total_quantity) if total_quantity != 0 else current_price
 
         return TestPosition(
             symbol=symbol,

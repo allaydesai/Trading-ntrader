@@ -1,15 +1,14 @@
 """CSV data loading service for Parquet catalog."""
 
-from pathlib import Path
-from typing import Dict, Any, List
-from decimal import Decimal
-import pandas as pd
 from datetime import datetime, timezone
+from decimal import Decimal
+from pathlib import Path
+from typing import Any, Dict, List
 
+import pandas as pd
 import structlog
-from nautilus_trader.model.data import Bar
+from nautilus_trader.model.data import Bar, BarType
 from nautilus_trader.model.objects import Price, Quantity
-from nautilus_trader.model.data import BarType
 
 from src.services.data_catalog import DataCatalogService
 
@@ -118,9 +117,7 @@ class CSVLoader:
         self._validate_columns(df)
 
         # Validate and convert to Nautilus Bar objects
-        bars, validation_errors = await self._convert_to_bars(
-            df, symbol, venue, bar_type_spec
-        )
+        bars, validation_errors = await self._convert_to_bars(df, symbol, venue, bar_type_spec)
 
         if not bars:
             return {
@@ -167,7 +164,9 @@ class CSVLoader:
             end_ts = max(bar.ts_event for bar in bars)
             start_dt = datetime.fromtimestamp(start_ts / 1e9, tz=timezone.utc)
             end_dt = datetime.fromtimestamp(end_ts / 1e9, tz=timezone.utc)
-            date_range = f"{start_dt.strftime('%Y-%m-%d %H:%M')} to {end_dt.strftime('%Y-%m-%d %H:%M')}"
+            date_range = (
+                f"{start_dt.strftime('%Y-%m-%d %H:%M')} to {end_dt.strftime('%Y-%m-%d %H:%M')}"
+            )
 
         result = {
             "file": str(file_path),
@@ -239,8 +238,8 @@ class CSVLoader:
                 timestamp = self._parse_timestamp(row["timestamp"], row_num)
 
                 # Reason: Validate OHLCV data
-                open_price, high_price, low_price, close_price, volume = (
-                    self._validate_ohlcv(row, row_num)
+                open_price, high_price, low_price, close_price, volume = self._validate_ohlcv(
+                    row, row_num
                 )
 
                 # Reason: Create Nautilus Bar object
@@ -305,9 +304,7 @@ class CSVLoader:
             return timestamp
 
         except Exception as e:
-            raise ValidationError(
-                row_num, f"Invalid timestamp format: {timestamp_value} ({e})"
-            )
+            raise ValidationError(row_num, f"Invalid timestamp format: {timestamp_value} ({e})")
 
     def _validate_ohlcv(
         self, row: pd.Series, row_num: int
@@ -345,25 +342,15 @@ class CSVLoader:
 
             # Reason: Validate OHLC relationships
             if high_val < low_val:
-                raise ValidationError(
-                    row_num, f"high ({high_val}) must be >= low ({low_val})"
-                )
+                raise ValidationError(row_num, f"high ({high_val}) must be >= low ({low_val})")
             if high_val < open_val:
-                raise ValidationError(
-                    row_num, f"high ({high_val}) must be >= open ({open_val})"
-                )
+                raise ValidationError(row_num, f"high ({high_val}) must be >= open ({open_val})")
             if high_val < close_val:
-                raise ValidationError(
-                    row_num, f"high ({high_val}) must be >= close ({close_val})"
-                )
+                raise ValidationError(row_num, f"high ({high_val}) must be >= close ({close_val})")
             if low_val > open_val:
-                raise ValidationError(
-                    row_num, f"low ({low_val}) must be <= open ({open_val})"
-                )
+                raise ValidationError(row_num, f"low ({low_val}) must be <= open ({open_val})")
             if low_val > close_val:
-                raise ValidationError(
-                    row_num, f"low ({low_val}) must be <= close ({close_val})"
-                )
+                raise ValidationError(row_num, f"low ({low_val}) must be <= close ({close_val})")
 
             # Reason: Validate volume
             if volume_val < 0:
@@ -417,9 +404,7 @@ class CSVLoader:
         """
         if self.conflict_mode == "skip":
             # Reason: Skip if any data exists
-            availability = self.catalog_service.get_availability(
-                instrument_id, bar_type_spec
-            )
+            availability = self.catalog_service.get_availability(instrument_id, bar_type_spec)
             if availability:
                 logger.info(
                     "skipping_existing_data",

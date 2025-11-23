@@ -1,9 +1,10 @@
 """Unit tests for pure SMA trading logic."""
 
-import pytest
 from decimal import Decimal
 
-from src.core.sma_logic import SMATradingLogic, CrossoverSignal
+import pytest
+
+from src.core.sma_logic import CrossoverSignal, SMATradingLogic
 
 
 @pytest.mark.unit
@@ -34,16 +35,12 @@ class TestSMATradingLogicInitialization:
 
     def test_fast_greater_than_slow_raises_error(self):
         """Test that fast >= slow periods raise ValueError."""
-        with pytest.raises(
-            ValueError, match="Fast period must be less than slow period"
-        ):
+        with pytest.raises(ValueError, match="Fast period must be less than slow period"):
             SMATradingLogic(fast_period=20, slow_period=10)
 
     def test_equal_periods_raise_error(self):
         """Test that equal periods raise ValueError."""
-        with pytest.raises(
-            ValueError, match="Fast period must be less than slow period"
-        ):
+        with pytest.raises(ValueError, match="Fast period must be less than slow period"):
             SMATradingLogic(fast_period=10, slow_period=10)
 
 
@@ -138,9 +135,7 @@ class TestLongEntryLogic:
         """Test that long entry is signaled when fast > slow."""
         logic = SMATradingLogic()
 
-        should_enter = logic.should_enter_long(
-            fast_sma=Decimal("105"), slow_sma=Decimal("100")
-        )
+        should_enter = logic.should_enter_long(fast_sma=Decimal("105"), slow_sma=Decimal("100"))
 
         assert should_enter is True
 
@@ -148,9 +143,7 @@ class TestLongEntryLogic:
         """Test that long entry is NOT signaled when fast < slow."""
         logic = SMATradingLogic()
 
-        should_enter = logic.should_enter_long(
-            fast_sma=Decimal("95"), slow_sma=Decimal("100")
-        )
+        should_enter = logic.should_enter_long(fast_sma=Decimal("95"), slow_sma=Decimal("100"))
 
         assert should_enter is False
 
@@ -158,9 +151,7 @@ class TestLongEntryLogic:
         """Test that long entry is NOT signaled when fast == slow."""
         logic = SMATradingLogic()
 
-        should_enter = logic.should_enter_long(
-            fast_sma=Decimal("100"), slow_sma=Decimal("100")
-        )
+        should_enter = logic.should_enter_long(fast_sma=Decimal("100"), slow_sma=Decimal("100"))
 
         assert should_enter is False
 
@@ -173,9 +164,7 @@ class TestShortEntryLogic:
         """Test that short entry is signaled when fast < slow."""
         logic = SMATradingLogic()
 
-        should_enter = logic.should_enter_short(
-            fast_sma=Decimal("95"), slow_sma=Decimal("100")
-        )
+        should_enter = logic.should_enter_short(fast_sma=Decimal("95"), slow_sma=Decimal("100"))
 
         assert should_enter is True
 
@@ -183,9 +172,7 @@ class TestShortEntryLogic:
         """Test that short entry is NOT signaled when fast > slow."""
         logic = SMATradingLogic()
 
-        should_enter = logic.should_enter_short(
-            fast_sma=Decimal("105"), slow_sma=Decimal("100")
-        )
+        should_enter = logic.should_enter_short(fast_sma=Decimal("105"), slow_sma=Decimal("100"))
 
         assert should_enter is False
 
@@ -193,9 +180,7 @@ class TestShortEntryLogic:
         """Test that short entry is NOT signaled when fast == slow."""
         logic = SMATradingLogic()
 
-        should_enter = logic.should_enter_short(
-            fast_sma=Decimal("100"), slow_sma=Decimal("100")
-        )
+        should_enter = logic.should_enter_short(fast_sma=Decimal("100"), slow_sma=Decimal("100"))
 
         assert should_enter is False
 

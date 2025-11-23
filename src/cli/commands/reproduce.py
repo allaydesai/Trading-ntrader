@@ -10,9 +10,9 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
-from src.db.session_sync import get_sync_session
-from src.db.repositories.backtest_repository_sync import SyncBacktestRepository
 from src.core.backtest_runner import MinimalBacktestRunner
+from src.db.repositories.backtest_repository_sync import SyncBacktestRepository
+from src.db.session_sync import get_sync_session
 from src.services.exceptions import DataNotFoundError
 
 console = Console()
@@ -227,23 +227,16 @@ async def _reproduce_backtest_async(run_id_str: str):
                 if original_return is not None:
                     diff = result.total_return - original_return
                     console.print(
-                        f"  Original Return: {original_return:.2%} "
-                        f"[dim](diff: {diff:+.2%})[/dim]"
+                        f"  Original Return: {original_return:.2%} [dim](diff: {diff:+.2%})[/dim]"
                     )
 
                 if result.total_trades is not None:
                     trades_display = f"  Total Trades: {result.total_trades}"
-                    if (
-                        original_trades is not None
-                        and original_trades != result.total_trades
-                    ):
+                    if original_trades is not None and original_trades != result.total_trades:
                         trades_display += f" [dim](original: {original_trades})[/dim]"
                     console.print(trades_display)
 
-                if (
-                    result.winning_trades is not None
-                    or result.losing_trades is not None
-                ):
+                if result.winning_trades is not None or result.losing_trades is not None:
                     console.print(f"  Win Rate: {result.win_rate:.1f}%")
 
         except DataNotFoundError as e:

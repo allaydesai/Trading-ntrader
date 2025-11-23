@@ -1,8 +1,8 @@
 """Tests for IBKR data CLI commands."""
 
-import pytest
 from unittest.mock import AsyncMock, Mock, patch
 
+import pytest
 from click.testing import CliRunner
 
 from src.cli.commands.data import data
@@ -53,9 +53,7 @@ def test_data_connect_with_custom_host_port():
         mock_client.disconnect = AsyncMock()
         mock_client_class.return_value = mock_client
 
-        result = runner.invoke(
-            data, ["connect", "--host", "192.168.1.100", "--port", "4002"]
-        )
+        result = runner.invoke(data, ["connect", "--host", "192.168.1.100", "--port", "4002"])
 
         assert result.exit_code == 0
         # Verify the client was instantiated with correct parameters
@@ -75,9 +73,7 @@ def test_data_connect_connection_failure():
 
     with patch("src.cli.commands.data.IBKRHistoricalClient") as mock_client_class:
         mock_client = Mock()
-        mock_client.connect = AsyncMock(
-            side_effect=ConnectionError("TWS/Gateway not running")
-        )
+        mock_client.connect = AsyncMock(side_effect=ConnectionError("TWS/Gateway not running"))
         mock_client.disconnect = AsyncMock()
         mock_client_class.return_value = mock_client
 
@@ -113,9 +109,7 @@ def test_data_connect_shows_troubleshooting_hints():
 
     with patch("src.cli.commands.data.IBKRHistoricalClient") as mock_client_class:
         mock_client = Mock()
-        mock_client.connect = AsyncMock(
-            side_effect=ConnectionError("Connection refused")
-        )
+        mock_client.connect = AsyncMock(side_effect=ConnectionError("Connection refused"))
         mock_client.disconnect = AsyncMock()
         mock_client_class.return_value = mock_client
 
@@ -255,9 +249,7 @@ def test_data_fetch_connection_failure():
 
     with patch("src.cli.commands.data.IBKRHistoricalClient") as mock_client_class:
         mock_client = Mock()
-        mock_client.connect = AsyncMock(
-            side_effect=ConnectionError("Connection refused")
-        )
+        mock_client.connect = AsyncMock(side_effect=ConnectionError("Connection refused"))
         mock_client.disconnect = AsyncMock()
         mock_client_class.return_value = mock_client
 
@@ -305,22 +297,16 @@ def test_data_fetch_missing_required_parameters():
     runner = CliRunner()
 
     # Missing instruments
-    result = runner.invoke(
-        data, ["fetch", "--start", "2024-01-01", "--end", "2024-01-31"]
-    )
+    result = runner.invoke(data, ["fetch", "--start", "2024-01-01", "--end", "2024-01-31"])
     assert result.exit_code == 2
     assert "Missing option '--instruments'" in result.output
 
     # Missing start
-    result = runner.invoke(
-        data, ["fetch", "--instruments", "AAPL", "--end", "2024-01-31"]
-    )
+    result = runner.invoke(data, ["fetch", "--instruments", "AAPL", "--end", "2024-01-31"])
     assert result.exit_code == 2
 
     # Missing end
-    result = runner.invoke(
-        data, ["fetch", "--instruments", "AAPL", "--start", "2024-01-01"]
-    )
+    result = runner.invoke(data, ["fetch", "--instruments", "AAPL", "--start", "2024-01-01"])
     assert result.exit_code == 2
 
 

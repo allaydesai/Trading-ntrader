@@ -5,8 +5,9 @@ Following TDD approach - these tests define the expected behavior
 for running backtests from YAML configuration files.
 """
 
-import pytest
 from decimal import Decimal
+
+import pytest
 
 from src.core.backtest_runner import MinimalBacktestRunner
 from src.utils.config_loader import ConfigLoader
@@ -75,9 +76,7 @@ class TestBacktestRunnerYAML:
         assert isinstance(result.total_trades, int)
 
     @pytest.mark.integration
-    def test_run_from_config_file_mean_reversion_strategy(
-        self, mean_reversion_yaml_config_file
-    ):
+    def test_run_from_config_file_mean_reversion_strategy(self, mean_reversion_yaml_config_file):
         """Test running backtest from Mean Reversion YAML config file."""
         runner = MinimalBacktestRunner(data_source="mock")
 

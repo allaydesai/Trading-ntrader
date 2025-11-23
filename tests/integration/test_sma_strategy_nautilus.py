@@ -7,7 +7,7 @@ import pytest
 from nautilus_trader.test_kit.providers import TestInstrumentProvider
 from nautilus_trader.test_kit.stubs.data import TestDataStubs
 
-from src.core.strategies.sma_crossover import SMACrossover, SMAConfig
+from src.core.strategies.sma_crossover import SMAConfig, SMACrossover
 
 
 def test_sma_config_creation():

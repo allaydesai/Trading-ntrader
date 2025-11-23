@@ -13,9 +13,9 @@ from src.api.models.filter_models import (
     ExecutionStatus,
     FilterState,
     PaginationControl,
+    SortableColumn,
     SortColumn,
     SortOrder,
-    SortableColumn,
 )
 
 

@@ -26,9 +26,7 @@ console = Console()
 @click.option("--fast-period", type=int, help="Fast SMA period (default: from config)")
 @click.option("--slow-period", type=int, help="Slow SMA period (default: from config)")
 @click.option("--trade-size", type=str, help="Trade size (default: from config)")
-@click.option(
-    "--bars", type=int, help="Number of data bars to generate (default: from config)"
-)
+@click.option("--bars", type=int, help="Number of data bars to generate (default: from config)")
 def run_simple(
     strategy: str,
     data: str,
@@ -67,9 +65,7 @@ def run_simple(
         console.print("\n[bold]Results Summary:[/bold]")
         return_color = "green" if result.total_return >= 0 else "red"
         return_pct = result.total_return * 100
-        console.print(
-            f"Total Return: [{return_color}]{return_pct:.2f}%[/{return_color}]"
-        )
+        console.print(f"Total Return: [{return_color}]{return_pct:.2f}%[/{return_color}]")
         console.print(f"Total Trades: {result.total_trades}")
         console.print(f"Win Rate: {result.win_rate:.1f}%")
 

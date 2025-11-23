@@ -1,8 +1,10 @@
 """Tests for date range adjustment logic."""
 
-import pytest
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
+
+import pytest
+
 from src.services.data_service import DataService
 
 
@@ -34,9 +36,7 @@ class TestDateRangeAdjustment:
             result = await data_service.get_adjusted_date_range("AAPL", start, end)
 
             assert result is not None
-            assert result["start"] == datetime(
-                2024, 1, 2, 9, 30, 0, tzinfo=timezone.utc
-            )
+            assert result["start"] == datetime(2024, 1, 2, 9, 30, 0, tzinfo=timezone.utc)
             assert result["end"] == datetime(2024, 1, 2, 10, 20, 0, tzinfo=timezone.utc)
 
     @pytest.mark.component
@@ -89,9 +89,7 @@ class TestDateRangeAdjustment:
 
             assert result is not None
             # Should adjust to actual data range since no data on requested date
-            assert result["start"] == datetime(
-                2024, 1, 3, 9, 30, 0, tzinfo=timezone.utc
-            )
+            assert result["start"] == datetime(2024, 1, 3, 9, 30, 0, tzinfo=timezone.utc)
             # End date would be the overall end since requested date is before data
             assert result["end"] == datetime(2024, 1, 3, 9, 30, 0, tzinfo=timezone.utc)
 
@@ -139,9 +137,7 @@ class TestDateRangeAdjustment:
 
             assert result is not None
             # Start should be adjusted, end should remain as is
-            assert result["start"] == datetime(
-                2024, 1, 2, 9, 30, 0, tzinfo=timezone.utc
-            )
+            assert result["start"] == datetime(2024, 1, 2, 9, 30, 0, tzinfo=timezone.utc)
             assert result["end"] == datetime(2024, 1, 2, 15, 30, 0, tzinfo=timezone.utc)
 
     @pytest.mark.component
@@ -169,7 +165,5 @@ class TestDateRangeAdjustment:
 
             assert result is not None
             # Should handle timezone-naive dates and preserve the times
-            assert result["start"] == datetime(
-                2024, 1, 2, 10, 0, 0, tzinfo=timezone.utc
-            )
+            assert result["start"] == datetime(2024, 1, 2, 10, 0, 0, tzinfo=timezone.utc)
             assert result["end"] == datetime(2024, 1, 2, 15, 0, 0, tzinfo=timezone.utc)

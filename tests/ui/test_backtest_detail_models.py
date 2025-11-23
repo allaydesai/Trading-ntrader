@@ -5,18 +5,19 @@ Tests cover model validation, computed fields, formatting, and
 mapping functions from database entities to view models.
 """
 
-import pytest
 from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import uuid4
 
+import pytest
+
 from src.api.models.backtest_detail import (
-    MetricDisplayItem,
-    ConfigurationSnapshot,
-    TradingSummary,
     BacktestDetailView,
-    build_metrics_panel,
+    ConfigurationSnapshot,
+    MetricDisplayItem,
+    TradingSummary,
     build_configuration,
+    build_metrics_panel,
     build_trading_summary,
     to_detail_view,
 )

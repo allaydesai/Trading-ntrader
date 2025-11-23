@@ -7,8 +7,7 @@ from nautilus_trader.model.data import Bar, BarType
 from nautilus_trader.model.enums import OrderSide, PriceType
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.objects import Quantity
-from nautilus_trader.trading.strategy import Strategy
-from nautilus_trader.trading.strategy import StrategyConfig
+from nautilus_trader.trading.strategy import Strategy, StrategyConfig
 
 
 class SMAConfig(StrategyConfig):
@@ -59,12 +58,8 @@ class SMACrossover(Strategy):
         self.position_size_pct = config.position_size_pct
 
         # Initialize indicators
-        self.fast_sma = SimpleMovingAverage(
-            period=config.fast_period, price_type=PriceType.LAST
-        )
-        self.slow_sma = SimpleMovingAverage(
-            period=config.slow_period, price_type=PriceType.LAST
-        )
+        self.fast_sma = SimpleMovingAverage(period=config.fast_period, price_type=PriceType.LAST)
+        self.slow_sma = SimpleMovingAverage(period=config.slow_period, price_type=PriceType.LAST)
 
         # Track previous SMA values for crossover detection
         self._prev_fast_sma: float | None = None
@@ -138,9 +133,7 @@ class SMACrossover(Strategy):
             raise ValueError("Cannot calculate position size without current bar data")
 
         # Calculate position value in USD
-        position_value = self.portfolio_value * (
-            self.position_size_pct / Decimal("100")
-        )
+        position_value = self.portfolio_value * (self.position_size_pct / Decimal("100"))
 
         # Get current price (use close price from bar)
         current_price = Decimal(str(self._current_bar.close))

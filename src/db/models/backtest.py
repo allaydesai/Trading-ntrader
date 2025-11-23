@@ -7,8 +7,11 @@ including execution metadata, configuration snapshots, and performance metrics.
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 from uuid import UUID, uuid4
+
+if TYPE_CHECKING:
+    from src.db.models.trade import Trade
 
 from sqlalchemy import (
     BigInteger,
@@ -20,7 +23,8 @@ from sqlalchemy import (
     String,
     Text,
 )
-from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID as PG_UUID
+from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.db.base import Base, TimestampMixin
@@ -87,18 +91,14 @@ class BacktestRun(Base, TimestampMixin):
     instrument_symbol: Mapped[str] = mapped_column(String(50), nullable=False)
 
     # Date range
-    start_date: Mapped[datetime] = mapped_column(
-        TIMESTAMP(timezone=True), nullable=False
-    )
+    start_date: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
     end_date: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
 
     # Execution details
     initial_capital: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False)
     data_source: Mapped[str] = mapped_column(String(100), nullable=False)
     execution_status: Mapped[str] = mapped_column(String(20), nullable=False)
-    execution_duration_seconds: Mapped[Decimal] = mapped_column(
-        Numeric(10, 3), nullable=False
-    )
+    execution_duration_seconds: Mapped[Decimal] = mapped_column(Numeric(10, 3), nullable=False)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Configuration snapshot (JSONB)
@@ -131,9 +131,7 @@ class BacktestRun(Base, TimestampMixin):
         # Capital validation
         CheckConstraint("initial_capital > 0", name="chk_initial_capital"),
         # Duration validation
-        CheckConstraint(
-            "execution_duration_seconds >= 0", name="chk_execution_duration"
-        ),
+        CheckConstraint("execution_duration_seconds >= 0", name="chk_execution_duration"),
         # Composite index for time-based queries (Phase 1)
         Index("idx_backtest_runs_created_id", "created_at", "id"),
         # Composite index for strategy filtering (Phase 1)
@@ -219,61 +217,41 @@ class PerformanceMetrics(Base, TimestampMixin):
     cagr: Mapped[Optional[Decimal]] = mapped_column(Numeric(15, 6), nullable=True)
 
     # Risk metrics
-    sharpe_ratio: Mapped[Optional[Decimal]] = mapped_column(
-        Numeric(15, 6), nullable=True
-    )
-    sortino_ratio: Mapped[Optional[Decimal]] = mapped_column(
-        Numeric(15, 6), nullable=True
-    )
-    max_drawdown: Mapped[Optional[Decimal]] = mapped_column(
-        Numeric(15, 6), nullable=True
-    )
+    sharpe_ratio: Mapped[Optional[Decimal]] = mapped_column(Numeric(15, 6), nullable=True)
+    sortino_ratio: Mapped[Optional[Decimal]] = mapped_column(Numeric(15, 6), nullable=True)
+    max_drawdown: Mapped[Optional[Decimal]] = mapped_column(Numeric(15, 6), nullable=True)
     max_drawdown_date: Mapped[Optional[datetime]] = mapped_column(
         TIMESTAMP(timezone=True), nullable=True
     )
-    calmar_ratio: Mapped[Optional[Decimal]] = mapped_column(
-        Numeric(15, 6), nullable=True
-    )
+    calmar_ratio: Mapped[Optional[Decimal]] = mapped_column(Numeric(15, 6), nullable=True)
     volatility: Mapped[Optional[Decimal]] = mapped_column(Numeric(15, 6), nullable=True)
 
     # Additional returns-based metrics (from get_performance_stats_returns)
-    risk_return_ratio: Mapped[Optional[Decimal]] = mapped_column(
-        Numeric(15, 6), nullable=True
-    )
+    risk_return_ratio: Mapped[Optional[Decimal]] = mapped_column(Numeric(15, 6), nullable=True)
     avg_return: Mapped[Optional[Decimal]] = mapped_column(Numeric(15, 6), nullable=True)
-    avg_win_return: Mapped[Optional[Decimal]] = mapped_column(
-        Numeric(15, 6), nullable=True
-    )
-    avg_loss_return: Mapped[Optional[Decimal]] = mapped_column(
-        Numeric(15, 6), nullable=True
-    )
+    avg_win_return: Mapped[Optional[Decimal]] = mapped_column(Numeric(15, 6), nullable=True)
+    avg_loss_return: Mapped[Optional[Decimal]] = mapped_column(Numeric(15, 6), nullable=True)
 
     # Trading metrics
     total_trades: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     winning_trades: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     losing_trades: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     win_rate: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 4), nullable=True)
-    profit_factor: Mapped[Optional[Decimal]] = mapped_column(
-        Numeric(15, 6), nullable=True
-    )
+    profit_factor: Mapped[Optional[Decimal]] = mapped_column(Numeric(15, 6), nullable=True)
     expectancy: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2), nullable=True)
     avg_win: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2), nullable=True)
     avg_loss: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2), nullable=True)
 
     # Additional PnL-based metrics (from get_performance_stats_pnls)
     total_pnl: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2), nullable=True)
-    total_pnl_percentage: Mapped[Optional[Decimal]] = mapped_column(
-        Numeric(15, 6), nullable=True
-    )
+    total_pnl_percentage: Mapped[Optional[Decimal]] = mapped_column(Numeric(15, 6), nullable=True)
     max_winner: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2), nullable=True)
     max_loser: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2), nullable=True)
     min_winner: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2), nullable=True)
     min_loser: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2), nullable=True)
 
     # Relationships
-    backtest_run: Mapped[BacktestRun] = relationship(
-        "BacktestRun", back_populates="metrics"
-    )
+    backtest_run: Mapped[BacktestRun] = relationship("BacktestRun", back_populates="metrics")
 
     # Table constraints
     __table_args__ = (

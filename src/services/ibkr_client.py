@@ -121,9 +121,7 @@ class IBKRHistoricalClient:
                 "connected": True,
                 "account_id": getattr(self.client, "account_id", "N/A"),
                 "server_version": getattr(self.client, "server_version", "N/A"),
-                "connection_time": datetime.now(timezone.utc).strftime(
-                    "%Y-%m-%d %H:%M:%S"
-                ),
+                "connection_time": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
             }
 
             return info

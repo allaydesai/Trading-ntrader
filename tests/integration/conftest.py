@@ -30,10 +30,11 @@ Reference: design.md Section 2.1 - Subprocess Isolation Pattern
 """
 
 import gc
+
 import pytest
 from nautilus_trader.backtest.engine import BacktestEngine
+from nautilus_trader.model.enums import AccountType, OmsType
 from nautilus_trader.model.identifiers import Venue
-from nautilus_trader.model.enums import OmsType, AccountType
 
 
 @pytest.fixture(autouse=True)

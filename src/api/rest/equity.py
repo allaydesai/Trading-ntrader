@@ -10,8 +10,8 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException
 
 from src.api.dependencies import BacktestService
-from src.api.models.chart_errors import ErrorDetail
 from src.api.models.chart_equity import DrawdownPoint, EquityPoint, EquityResponse
+from src.api.models.chart_errors import ErrorDetail
 
 router = APIRouter()
 

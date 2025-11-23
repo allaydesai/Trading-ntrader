@@ -1,8 +1,8 @@
 """Portfolio analytics and statistical calculations."""
 
-from typing import List, Dict, Any, Optional
-import numpy as np
+from typing import Any, Dict, List, Optional
 
+import numpy as np
 from nautilus_trader.model.position import Position
 
 
@@ -30,9 +30,7 @@ class PortfolioAnalytics:
                 and hasattr(position, "opened_time")
                 and position.opened_time
             ):
-                duration = (
-                    position.closed_time - position.opened_time
-                ).total_seconds() / 3600
+                duration = (position.closed_time - position.opened_time).total_seconds() / 3600
                 durations.append(duration)
 
         return sum(durations) / len(durations) if durations else None
@@ -109,9 +107,7 @@ class PortfolioAnalytics:
             },
         }
 
-    def calculate_position_size_stats(
-        self, positions: List[Position]
-    ) -> Dict[str, Any]:
+    def calculate_position_size_stats(self, positions: List[Position]) -> Dict[str, Any]:
         """
         Calculate position size statistics.
 
@@ -181,9 +177,7 @@ class PortfolioAnalytics:
 
         return position_data[:limit]
 
-    def calculate_performance_attribution(
-        self, positions: List[Position]
-    ) -> Dict[str, Any]:
+    def calculate_performance_attribution(self, positions: List[Position]) -> Dict[str, Any]:
         """
         Calculate performance attribution by instrument and side.
 
@@ -209,9 +203,7 @@ class PortfolioAnalytics:
                 continue
 
             instrument = (
-                str(position.instrument_id)
-                if hasattr(position, "instrument_id")
-                else "UNKNOWN"
+                str(position.instrument_id) if hasattr(position, "instrument_id") else "UNKNOWN"
             )
             pnl = float(position.realized_pnl)
 
@@ -229,9 +221,7 @@ class PortfolioAnalytics:
                 by_instrument[instrument]["winning_trades"] += 1
 
             # Side analysis
-            side = (
-                "LONG" if hasattr(position, "is_long") and position.is_long else "SHORT"
-            )
+            side = "LONG" if hasattr(position, "is_long") and position.is_long else "SHORT"
             by_side[side].append(pnl)
 
         # Calculate averages

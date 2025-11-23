@@ -18,9 +18,7 @@ class TestStrategyConfigSnapshot:
             config={"fast_period": 10, "slow_period": 50, "risk_percent": 2.0},
         )
 
-        assert (
-            snapshot.strategy_path == "src.strategies.sma_crossover.SMAStrategyConfig"
-        )
+        assert snapshot.strategy_path == "src.strategies.sma_crossover.SMAStrategyConfig"
         assert snapshot.config_path == "config/strategies/sma_crossover.yaml"
         assert snapshot.version == "1.0"
         assert snapshot.config["fast_period"] == 10
@@ -77,8 +75,5 @@ class TestStrategyConfigSnapshot:
         snapshot_dict = snapshot.model_dump()
 
         assert isinstance(snapshot_dict, dict)
-        assert (
-            snapshot_dict["strategy_path"]
-            == "src.strategies.sma_crossover.SMAStrategyConfig"
-        )
+        assert snapshot_dict["strategy_path"] == "src.strategies.sma_crossover.SMAStrategyConfig"
         assert "config" in snapshot_dict

@@ -277,9 +277,7 @@ def format_error_with_context(
         try:
             formatted_message = error_template.message.format(**context_vars)
             if error_template.technical_details:
-                formatted_details = error_template.technical_details.format(
-                    **context_vars
-                )
+                formatted_details = error_template.technical_details.format(**context_vars)
         except KeyError as e:
             # If formatting fails, append context as technical details
             formatted_details = f"Context: {context_vars} | Format error: {e}"

@@ -1,16 +1,17 @@
 """Report generation and viewing CLI commands using PostgreSQL storage."""
 
-import click
-from rich.console import Console
-from rich.table import Table
-from rich.panel import Panel
 from pathlib import Path
 from uuid import UUID
 
-from src.db.session_sync import get_sync_session
+import click
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+
 from src.db.repositories.backtest_repository_sync import SyncBacktestRepository
-from src.services.reports.text_report import TextReportGenerator
+from src.db.session_sync import get_sync_session
 from src.services.reports.csv_exporter import CSVExporter
+from src.services.reports.text_report import TextReportGenerator
 
 console = Console()
 
@@ -51,9 +52,7 @@ def summary(result_id: str):
 
 
 @report.command()
-@click.option(
-    "--result-id", required=True, help="Backtest result ID to generate report for"
-)
+@click.option("--result-id", required=True, help="Backtest result ID to generate report for")
 @click.option(
     "--format",
     "output_format",
@@ -86,13 +85,9 @@ def generate(result_id: str, output_format: str, output: str):
             if output_format == "text":
                 _generate_text_report(backtest, output)
             elif output_format == "csv":
-                _generate_csv_report(
-                    backtest, output or f"report_{backtest.run_id}.csv"
-                )
+                _generate_csv_report(backtest, output or f"report_{backtest.run_id}.csv")
             elif output_format == "json":
-                _generate_json_report(
-                    backtest, output or f"report_{backtest.run_id}.json"
-                )
+                _generate_json_report(backtest, output or f"report_{backtest.run_id}.json")
 
     except Exception as e:
         console.print(f"❌ Error generating report: {e}", style="red bold")
@@ -133,9 +128,7 @@ def list(limit: int, strategy: str, symbol: str):
 
             # Show storage info
             total_count = repository.count_all()
-            console.print(
-                f"\n💾 Storage: {total_count} total backtests in PostgreSQL database"
-            )
+            console.print(f"\n💾 Storage: {total_count} total backtests in PostgreSQL database")
 
     except Exception as e:
         console.print(f"❌ Error listing results: {e}", style="red bold")
@@ -213,19 +206,9 @@ def _display_summary_panel(backtest):
 
     # Format metrics (handle None values)
     total_return = f"{float(metrics.total_return):.2%}" if metrics else "N/A"
-    sharpe = (
-        f"{float(metrics.sharpe_ratio):.2f}"
-        if metrics and metrics.sharpe_ratio
-        else "N/A"
-    )
-    max_dd = (
-        f"{float(metrics.max_drawdown):.2%}"
-        if metrics and metrics.max_drawdown
-        else "N/A"
-    )
-    win_rate = (
-        f"{float(metrics.win_rate):.2%}" if metrics and metrics.win_rate else "N/A"
-    )
+    sharpe = f"{float(metrics.sharpe_ratio):.2f}" if metrics and metrics.sharpe_ratio else "N/A"
+    max_dd = f"{float(metrics.max_drawdown):.2%}" if metrics and metrics.max_drawdown else "N/A"
+    win_rate = f"{float(metrics.win_rate):.2%}" if metrics and metrics.win_rate else "N/A"
 
     summary_text = f"""
     [bold cyan]Backtest ID:[/] {str(backtest.run_id)[:12]}...
@@ -287,9 +270,7 @@ def _display_metrics_table(backtest):
 
 def _display_results_table(backtests):
     """Display table of backtest results."""
-    table = Table(
-        title="📋 Backtest Results", show_header=True, header_style="bold cyan"
-    )
+    table = Table(title="📋 Backtest Results", show_header=True, header_style="bold cyan")
     table.add_column("ID", style="cyan", no_wrap=True, max_width=12)
     table.add_column("Timestamp", style="white")
     table.add_column("Strategy", style="magenta")
@@ -304,14 +285,8 @@ def _display_results_table(backtests):
 
         # Format values
         total_return = f"{float(metrics.total_return):.2%}" if metrics else "N/A"
-        win_rate = (
-            f"{float(metrics.win_rate):.2%}" if metrics and metrics.win_rate else "N/A"
-        )
-        sharpe = (
-            f"{float(metrics.sharpe_ratio):.2f}"
-            if metrics and metrics.sharpe_ratio
-            else "N/A"
-        )
+        win_rate = f"{float(metrics.win_rate):.2%}" if metrics and metrics.win_rate else "N/A"
+        sharpe = f"{float(metrics.sharpe_ratio):.2f}" if metrics and metrics.sharpe_ratio else "N/A"
         total_trades = str(metrics.total_trades) if metrics else "0"
 
         table.add_row(
@@ -342,15 +317,11 @@ def _generate_text_report(backtest, output_path=None):
     metrics_dict = {
         "total_return": float(metrics.total_return),
         "sharpe_ratio": float(metrics.sharpe_ratio) if metrics.sharpe_ratio else None,
-        "sortino_ratio": (
-            float(metrics.sortino_ratio) if metrics.sortino_ratio else None
-        ),
+        "sortino_ratio": (float(metrics.sortino_ratio) if metrics.sortino_ratio else None),
         "max_drawdown": float(metrics.max_drawdown) if metrics.max_drawdown else None,
         "calmar_ratio": float(metrics.calmar_ratio) if metrics.calmar_ratio else None,
         "volatility": float(metrics.volatility) if metrics.volatility else None,
-        "profit_factor": (
-            float(metrics.profit_factor) if metrics.profit_factor else None
-        ),
+        "profit_factor": (float(metrics.profit_factor) if metrics.profit_factor else None),
         "win_rate": float(metrics.win_rate) if metrics.win_rate else None,
         "total_trades": metrics.total_trades,
         "winning_trades": metrics.winning_trades,
@@ -396,9 +367,7 @@ def _generate_csv_report(backtest, output_path):
         "total_return": float(metrics.total_return),
         "final_balance": float(metrics.final_balance),
         "sharpe_ratio": float(metrics.sharpe_ratio) if metrics.sharpe_ratio else None,
-        "sortino_ratio": (
-            float(metrics.sortino_ratio) if metrics.sortino_ratio else None
-        ),
+        "sortino_ratio": (float(metrics.sortino_ratio) if metrics.sortino_ratio else None),
         "calmar_ratio": float(metrics.calmar_ratio) if metrics.calmar_ratio else None,
         "max_drawdown": float(metrics.max_drawdown) if metrics.max_drawdown else None,
         "volatility": float(metrics.volatility) if metrics.volatility else None,
@@ -406,9 +375,7 @@ def _generate_csv_report(backtest, output_path):
         "winning_trades": metrics.winning_trades,
         "losing_trades": metrics.losing_trades,
         "win_rate": float(metrics.win_rate) if metrics.win_rate else None,
-        "profit_factor": (
-            float(metrics.profit_factor) if metrics.profit_factor else None
-        ),
+        "profit_factor": (float(metrics.profit_factor) if metrics.profit_factor else None),
         "expectancy": float(metrics.expectancy) if metrics.expectancy else None,
         "avg_win": float(metrics.avg_win) if metrics.avg_win else None,
         "avg_loss": float(metrics.avg_loss) if metrics.avg_loss else None,
@@ -425,8 +392,8 @@ def _generate_csv_report(backtest, output_path):
 def _generate_json_report(backtest, output_path):
     """Generate JSON report."""
     import json
-    from decimal import Decimal
     from datetime import datetime
+    from decimal import Decimal
 
     def json_serializer(obj):
         """Custom JSON serializer."""
