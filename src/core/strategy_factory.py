@@ -1,12 +1,18 @@
 """Strategy factory for dynamic loading of trading strategies."""
 
 import importlib
+from decimal import Decimal
 from typing import Any, Dict, Type
 
 from nautilus_trader.trading.strategy import Strategy, StrategyConfig
 from pydantic import ValidationError
 
-from src.models.strategy import StrategyType
+from src.models.strategy import (
+    MeanReversionParameters,
+    MomentumParameters,
+    SMAParameters,
+    StrategyType,
+)
 
 
 class StrategyFactory:
@@ -215,12 +221,6 @@ class StrategyFactory:
         ValidationError
             If configuration is invalid
         """
-        from src.models.strategy import (
-            MeanReversionParameters,
-            MomentumParameters,
-            SMAParameters,
-        )
-
         # Map strategy types to parameter classes
         param_classes = {
             StrategyType.SMA_CROSSOVER: SMAParameters,
@@ -250,14 +250,17 @@ class StrategyLoader:
         StrategyType.SMA_CROSSOVER: {
             "strategy_path": "src.core.strategies.sma_crossover:SMACrossover",
             "config_path": "src.core.strategies.sma_crossover:SMAConfig",
+            "param_model": SMAParameters,
         },
         StrategyType.MEAN_REVERSION: {
             "strategy_path": "src.core.strategies.rsi_mean_reversion:RSIMeanRev",
             "config_path": "src.core.strategies.rsi_mean_reversion:RSIMeanRevConfig",
+            "param_model": MeanReversionParameters,
         },
         StrategyType.MOMENTUM: {
             "strategy_path": "src.core.strategies.sma_momentum:SMAMomentum",
             "config_path": "src.core.strategies.sma_momentum:SMAMomentumConfig",
+            "param_model": MomentumParameters,
         },
     }
 
@@ -297,6 +300,89 @@ class StrategyLoader:
             config_path=mapping["config_path"],
             config_params=config_params,
         )
+
+    @classmethod
+    def build_strategy_params(
+        cls, strategy_type: StrategyType, overrides: Dict[str, Any], settings: Any
+    ) -> Dict[str, Any]:
+        """
+        Build strategy parameters dynamically using Pydantic introspection.
+
+        Resolves parameters in the following order:
+        1. Explicit overrides (if provided)
+        2. Global settings (via _settings_map metadata)
+        3. Model defaults
+
+        Parameters
+        ----------
+        strategy_type : StrategyType
+            The strategy type to build params for
+        overrides : Dict[str, Any]
+            Dictionary of explicit parameter overrides
+        settings : Any
+            Global settings object to pull defaults from
+
+        Returns
+        -------
+        Dict[str, Any]
+            Validated and fully resolved configuration dictionary
+
+        Raises
+        ------
+        ValueError
+            If strategy type is unknown or validation fails
+        """
+        if strategy_type not in cls.STRATEGY_MAPPINGS:
+            raise ValueError(f"Unsupported strategy type: {strategy_type}")
+
+        # Get the Pydantic model for this strategy
+        param_model_cls = cls.STRATEGY_MAPPINGS[strategy_type]["param_model"]
+
+        # Get the settings map if defined
+        settings_map = getattr(param_model_cls, "_settings_map", {})
+        if not isinstance(settings_map, dict):
+            settings_map = settings_map.default if hasattr(settings_map, "default") else {}
+
+        final_params = {}
+
+        # Iterate over all fields in the model
+        for field_name, field_info in param_model_cls.model_fields.items():
+            # 1. Check for override
+            if field_name in overrides and overrides[field_name] is not None:
+                val = overrides[field_name]
+                # Handle Decimal conversion for string inputs (common in CLI/Web)
+                if field_info.annotation == Decimal and isinstance(val, (str, int, float)):
+                    final_params[field_name] = Decimal(str(val))
+                else:
+                    final_params[field_name] = val
+                continue
+
+            # 2. Check for global setting mapping
+            # _settings_map is a simple dict, check if key exists directly
+            if field_name in settings_map:
+                setting_key = settings_map[field_name]
+                if hasattr(settings, setting_key):
+                    setting_val = getattr(settings, setting_key)
+                    # Convert Decimal if needed (though settings are usually typed)
+                    if field_info.annotation == Decimal and not isinstance(setting_val, Decimal):
+                        final_params[field_name] = Decimal(str(setting_val))
+                    else:
+                        final_params[field_name] = setting_val
+                    continue
+
+            # 3. Fallback to Pydantic default (implicit via model instantiation)
+            # We don't need to do anything here; the model constructor will use default
+            pass
+
+        try:
+            # Create model instance to trigger validation and defaults
+            model_instance = param_model_cls(**final_params)
+
+            # Return as dict for Nautilus
+            return model_instance.model_dump()
+
+        except ValidationError as e:
+            raise ValueError(f"Configuration validation failed for {strategy_type}: {e}")
 
     @classmethod
     def get_available_strategies(cls) -> Dict[StrategyType, Dict[str, str]]:

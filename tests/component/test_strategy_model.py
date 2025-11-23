@@ -19,58 +19,113 @@ from src.models.strategy import (
 def test_sma_parameters_validation():
     """Test SMA parameters validation."""
     # Valid parameters
-    params = SMAParameters(fast_period=10, slow_period=20, trade_size=Decimal("1000000"))
+    params = SMAParameters(
+        fast_period=10,
+        slow_period=20,
+        portfolio_value=Decimal("1000000"),
+        position_size_pct=Decimal("10.0"),
+    )
     assert params.fast_period == 10
     assert params.slow_period == 20
-    assert params.trade_size == Decimal("1000000")
+    assert params.portfolio_value == Decimal("1000000")
 
     # Invalid: slow period not greater than fast
     with pytest.raises(ValueError, match="Slow period must be greater than fast period"):
-        SMAParameters(fast_period=20, slow_period=10)
+        SMAParameters(
+            fast_period=20,
+            slow_period=10,
+            portfolio_value=Decimal("1000000"),
+            position_size_pct=Decimal("10.0"),
+        )
 
     # Invalid: negative period
     with pytest.raises(ValueError):
-        SMAParameters(fast_period=-5, slow_period=20)
+        SMAParameters(
+            fast_period=-5,
+            slow_period=20,
+            portfolio_value=Decimal("1000000"),
+            position_size_pct=Decimal("10.0"),
+        )
 
 
 @pytest.mark.component
 def test_sma_parameters_edge_cases():
     """Test SMA parameters edge case validations."""
     # Test minimum valid values
-    params = SMAParameters(fast_period=1, slow_period=2, trade_size=Decimal("0.01"))
+    params = SMAParameters(
+        fast_period=1,
+        slow_period=2,
+        portfolio_value=Decimal("0.01"),
+        position_size_pct=Decimal("0.1"),
+    )
     assert params.fast_period == 1
     assert params.slow_period == 2
 
     # Test maximum valid values
-    params = SMAParameters(fast_period=199, slow_period=200, trade_size=Decimal("999999999"))
+    params = SMAParameters(
+        fast_period=199,
+        slow_period=200,
+        portfolio_value=Decimal("999999999"),
+        position_size_pct=Decimal("100.0"),
+    )
     assert params.fast_period == 199
     assert params.slow_period == 200
 
     # Test zero period
     with pytest.raises(ValidationError):
-        SMAParameters(fast_period=0, slow_period=20)
+        SMAParameters(
+            fast_period=0,
+            slow_period=20,
+            portfolio_value=Decimal("1000000"),
+            position_size_pct=Decimal("10.0"),
+        )
 
     # Test equal periods
     with pytest.raises(ValueError, match="Slow period must be greater than fast period"):
-        SMAParameters(fast_period=20, slow_period=20)
+        SMAParameters(
+            fast_period=20,
+            slow_period=20,
+            portfolio_value=Decimal("1000000"),
+            position_size_pct=Decimal("10.0"),
+        )
 
     # Test out of range periods
     with pytest.raises(ValidationError):
-        SMAParameters(fast_period=201, slow_period=202)
+        SMAParameters(
+            fast_period=201,
+            slow_period=202,
+            portfolio_value=Decimal("1000000"),
+            position_size_pct=Decimal("10.0"),
+        )
 
-    # Test negative trade size
+    # Test negative portfolio value
     with pytest.raises(ValidationError):
-        SMAParameters(fast_period=10, slow_period=20, trade_size=Decimal("-1000"))
+        SMAParameters(
+            fast_period=10,
+            slow_period=20,
+            portfolio_value=Decimal("-1000"),
+            position_size_pct=Decimal("10.0"),
+        )
 
-    # Test zero trade size
+    # Test invalid position size pct
     with pytest.raises(ValidationError):
-        SMAParameters(fast_period=10, slow_period=20, trade_size=Decimal("0"))
+        SMAParameters(
+            fast_period=10,
+            slow_period=20,
+            portfolio_value=Decimal("1000000"),
+            position_size_pct=Decimal("101.0"),  # > 100
+        )
 
 
 @pytest.mark.component
 def test_trading_strategy_creation():
     """Test trading strategy creation."""
-    sma_params = {"fast_period": 10, "slow_period": 20, "trade_size": "1000000"}
+    sma_params = {
+        "fast_period": 10,
+        "slow_period": 20,
+        "portfolio_value": "1000000",
+        "position_size_pct": "10.0",
+    }
 
     strategy = TradingStrategy(
         name="SMA Crossover Test",
@@ -96,7 +151,12 @@ def test_trading_strategy_validation_errors():
         TradingStrategy(
             name="",
             strategy_type=StrategyType.SMA_CROSSOVER,
-            parameters={"fast_period": 10, "slow_period": 20, "trade_size": "1000000"},
+            parameters={
+                "fast_period": 10,
+                "slow_period": 20,
+                "portfolio_value": "1000000",
+                "position_size_pct": "10.0",
+            },
         )
 
     # Test name too long
@@ -104,7 +164,12 @@ def test_trading_strategy_validation_errors():
         TradingStrategy(
             name="x" * 101,  # Exceeds 100 character limit
             strategy_type=StrategyType.SMA_CROSSOVER,
-            parameters={"fast_period": 10, "slow_period": 20, "trade_size": "1000000"},
+            parameters={
+                "fast_period": 10,
+                "slow_period": 20,
+                "portfolio_value": "1000000",
+                "position_size_pct": "10.0",
+            },
         )
 
     # Test empty parameters
@@ -120,7 +185,12 @@ def test_trading_strategy_validation_errors():
         TradingStrategy(
             name="Test Strategy",
             strategy_type=StrategyType.SMA_CROSSOVER,
-            parameters={"fast_period": 20, "slow_period": 10},  # Invalid: slow < fast
+            parameters={
+                "fast_period": 20,
+                "slow_period": 10,  # Invalid: slow < fast
+                "portfolio_value": "1000000",
+                "position_size_pct": "10.0",
+            },
         )
 
 
@@ -131,7 +201,12 @@ def test_strategy_parameter_validation_by_type():
     valid_sma = TradingStrategy(
         name="SMA Strategy",
         strategy_type=StrategyType.SMA_CROSSOVER,
-        parameters={"fast_period": 10, "slow_period": 20, "trade_size": "1000000"},
+        parameters={
+            "fast_period": 10,
+            "slow_period": 20,
+            "portfolio_value": "1000000",
+            "position_size_pct": "10.0",
+        },
     )
     assert valid_sma.strategy_type == StrategyType.SMA_CROSSOVER
 
@@ -140,7 +215,11 @@ def test_strategy_parameter_validation_by_type():
     mean_reversion = TradingStrategy(
         name="Mean Reversion Strategy",
         strategy_type=StrategyType.MEAN_REVERSION,
-        parameters={"lookback_period": 20, "threshold": 0.02},  # Different params
+        parameters={
+            "rsi_period": 14,
+            "rsi_buy_threshold": 30.0,
+            "trade_size": "1000000",
+        },  # Different params
     )
     assert mean_reversion.strategy_type == StrategyType.MEAN_REVERSION
 
@@ -151,7 +230,12 @@ def test_strategy_status_transitions():
     strategy = TradingStrategy(
         name="Test Strategy",
         strategy_type=StrategyType.SMA_CROSSOVER,
-        parameters={"fast_period": 10, "slow_period": 20, "trade_size": "1000000"},
+        parameters={
+            "fast_period": 10,
+            "slow_period": 20,
+            "portfolio_value": "1000000",
+            "position_size_pct": "10.0",
+        },
     )
 
     # Initial state
@@ -183,7 +267,12 @@ def test_strategy_can_activate_from_draft():
     strategy = TradingStrategy(
         name="Test Strategy",
         strategy_type=StrategyType.SMA_CROSSOVER,
-        parameters={"fast_period": 10, "slow_period": 20, "trade_size": "1000000"},
+        parameters={
+            "fast_period": 10,
+            "slow_period": 20,
+            "portfolio_value": "1000000",
+            "position_size_pct": "10.0",
+        },
     )
 
     assert strategy.status == StrategyStatus.DRAFT
@@ -201,7 +290,12 @@ def test_update_timestamp():
     strategy = TradingStrategy(
         name="Test Strategy",
         strategy_type=StrategyType.SMA_CROSSOVER,
-        parameters={"fast_period": 10, "slow_period": 20, "trade_size": "1000000"},
+        parameters={
+            "fast_period": 10,
+            "slow_period": 20,
+            "portfolio_value": "1000000",
+            "position_size_pct": "10.0",
+        },
     )
 
     initial_updated_at = strategy.updated_at
@@ -215,7 +309,12 @@ def test_strategy_model_config():
     strategy = TradingStrategy(
         name="Test Strategy",
         strategy_type=StrategyType.SMA_CROSSOVER,
-        parameters={"fast_period": 10, "slow_period": 20, "trade_size": "1000000"},
+        parameters={
+            "fast_period": 10,
+            "slow_period": 20,
+            "portfolio_value": "1000000",
+            "position_size_pct": "10.0",
+        },
     )
 
     # Test JSON serialization

@@ -17,19 +17,19 @@ class TestRSIMeanReversionStrategy:
         """Test Mean Reversion parameter validation."""
         # Valid parameters
         params = MeanReversionParameters(
-            lookback_period=20, num_std_dev=2.0, trade_size=Decimal("1000000")
+            rsi_period=14, rsi_buy_threshold=30.0, exit_rsi=60.0, trade_size=Decimal("1000000")
         )
-        assert params.lookback_period == 20
-        assert params.num_std_dev == 2.0
+        assert params.rsi_period == 14
+        assert params.rsi_buy_threshold == 30.0
         assert params.trade_size == Decimal("1000000")
 
-        # Invalid lookback period (Pydantic validation)
-        with pytest.raises(ValueError, match="Input should be greater than or equal to 5"):
-            MeanReversionParameters(lookback_period=0)
+        # Invalid rsi period (Pydantic validation)
+        with pytest.raises(ValueError, match="Input should be greater than or equal to 2"):
+            MeanReversionParameters(rsi_period=0)
 
-        # Invalid std dev (Pydantic validation)
-        with pytest.raises(ValueError, match="Input should be greater than or equal to 0.5"):
-            MeanReversionParameters(num_std_dev=0.0)
+        # Invalid thresholds (Pydantic validation)
+        with pytest.raises(ValueError, match="Input should be greater than or equal to 0"):
+            MeanReversionParameters(rsi_buy_threshold=-10.0)
 
         # Invalid trade size
         with pytest.raises(ValueError):
@@ -200,8 +200,9 @@ class TestRSIMeanReversionStrategy:
             name="Test RSI Mean Reversion",
             strategy_type=StrategyType.MEAN_REVERSION,
             parameters={
-                "lookback_period": 20,
-                "num_std_dev": 2.0,
+                "rsi_period": 14,
+                "rsi_buy_threshold": 30.0,
+                "exit_rsi": 60.0,
                 "trade_size": "1000000",
             },
         )
@@ -213,8 +214,8 @@ class TestRSIMeanReversionStrategy:
                 name="Invalid Mean Reversion",
                 strategy_type=StrategyType.MEAN_REVERSION,
                 parameters={
-                    "lookback_period": 0,  # Invalid
-                    "num_std_dev": 2.0,
+                    "rsi_period": 0,  # Invalid
+                    "rsi_buy_threshold": 30.0,
                     "trade_size": "1000000",
                 },
             )

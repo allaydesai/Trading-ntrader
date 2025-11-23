@@ -17,23 +17,23 @@ class TestSMAMomentumStrategy:
         """Test Momentum parameter validation."""
         # Valid parameters
         params = MomentumParameters(
-            rsi_period=14,
-            oversold_threshold=30.0,
-            overbought_threshold=70.0,
+            fast_period=20,
+            slow_period=50,
             trade_size=Decimal("1000000"),
+            allow_short=False,
         )
-        assert params.rsi_period == 14
-        assert params.oversold_threshold == 30.0
-        assert params.overbought_threshold == 70.0
+        assert params.fast_period == 20
+        assert params.slow_period == 50
         assert params.trade_size == Decimal("1000000")
+        assert params.allow_short is False
 
-        # Invalid RSI period (Pydantic validation)
-        with pytest.raises(ValueError, match="Input should be greater than or equal to 5"):
-            MomentumParameters(rsi_period=0)
+        # Invalid periods (Pydantic validation)
+        with pytest.raises(ValueError, match="Input should be greater than or equal to 1"):
+            MomentumParameters(fast_period=0)
 
-        # Invalid oversold threshold (Pydantic validation)
-        with pytest.raises(ValueError, match="Input should be less than or equal to"):
-            MomentumParameters(oversold_threshold=60.0)  # Above range
+        # Invalid relationship (custom validator)
+        with pytest.raises(ValueError, match="Slow period must be greater than fast period"):
+            MomentumParameters(fast_period=50, slow_period=20)
 
         # Invalid trade size
         with pytest.raises(ValueError):
@@ -229,10 +229,10 @@ class TestSMAMomentumStrategy:
             name="Test SMA Momentum",
             strategy_type=StrategyType.MOMENTUM,
             parameters={
-                "rsi_period": 14,
-                "oversold_threshold": 30.0,
-                "overbought_threshold": 70.0,
+                "fast_period": 20,
+                "slow_period": 50,
                 "trade_size": "1000000",
+                "allow_short": False,
             },
         )
         assert strategy.strategy_type == StrategyType.MOMENTUM
@@ -243,9 +243,8 @@ class TestSMAMomentumStrategy:
                 name="Invalid Momentum",
                 strategy_type=StrategyType.MOMENTUM,
                 parameters={
-                    "rsi_period": 0,  # Invalid
-                    "oversold_threshold": 30.0,
-                    "overbought_threshold": 70.0,
+                    "fast_period": 0,  # Invalid
+                    "slow_period": 50,
                     "trade_size": "1000000",
                 },
             )

@@ -1307,56 +1307,22 @@ class MinimalBacktestRunner:
         # Create bar type string
         bar_type_str = f"{instrument.id}-1-MINUTE-MID-EXTERNAL"
 
-        # Prepare strategy configuration parameters
+        # Use StrategyLoader to build parameters dynamically
+        config_params = StrategyLoader.build_strategy_params(
+            strategy_type=strategy_enum,
+            overrides=strategy_params,
+            settings=self.settings,
+        )
+
+        # Add required base parameters
         from nautilus_trader.model.data import BarType
 
-        config_params = {
-            "instrument_id": instrument.id,
-            "bar_type": BarType.from_str(bar_type_str),
-        }
-
-        # Add strategy-specific parameters based on type
-        if strategy_enum == StrategyType.SMA_CROSSOVER:
-            config_params.update(
-                {
-                    "fast_period": strategy_params.get("fast_period", 10),
-                    "slow_period": strategy_params.get("slow_period", 20),
-                    "portfolio_value": Decimal(
-                        str(strategy_params.get("portfolio_value", self.settings.portfolio_value))
-                    ),
-                    "position_size_pct": Decimal(
-                        str(
-                            strategy_params.get(
-                                "position_size_pct", self.settings.position_size_pct
-                            )
-                        )
-                    ),
-                }
-            )
-        elif strategy_enum == StrategyType.MEAN_REVERSION:
-            config_params.update(
-                {
-                    "trade_size": Decimal(str(strategy_params.get("trade_size", 1000000))),
-                    "order_id_tag": strategy_params.get("order_id_tag", "001"),
-                    "rsi_period": strategy_params.get("rsi_period", 2),
-                    "rsi_buy_threshold": strategy_params.get("rsi_buy_threshold", 10.0),
-                    "exit_rsi": strategy_params.get("exit_rsi", 50.0),
-                    "sma_trend_period": strategy_params.get("sma_trend_period", 200),
-                    "warmup_days": strategy_params.get("warmup_days", 400),
-                    "cooldown_bars": strategy_params.get("cooldown_bars", 0),
-                }
-            )
-        elif strategy_enum == StrategyType.MOMENTUM:
-            config_params.update(
-                {
-                    "trade_size": Decimal(str(strategy_params.get("trade_size", 1000000))),
-                    "order_id_tag": strategy_params.get("order_id_tag", "002"),
-                    "fast_period": strategy_params.get("fast_period", 20),
-                    "slow_period": strategy_params.get("slow_period", 50),
-                    "warmup_days": strategy_params.get("warmup_days", 1),
-                    "allow_short": strategy_params.get("allow_short", False),
-                }
-            )
+        config_params.update(
+            {
+                "instrument_id": instrument.id,
+                "bar_type": BarType.from_str(bar_type_str),
+            }
+        )
 
         # Create strategy using StrategyLoader
         strategy = StrategyLoader.create_strategy(strategy_enum, config_params)
@@ -1519,53 +1485,20 @@ class MinimalBacktestRunner:
         assert instrument is not None, "Instrument must be set by this point"
         assert hasattr(instrument, "id"), "Instrument must have id attribute"
 
-        config_params = {
-            "instrument_id": instrument.id,
-            "bar_type": BarType.from_str(bar_type_str),
-        }
+        # Use StrategyLoader to build parameters dynamically
+        config_params = StrategyLoader.build_strategy_params(
+            strategy_type=strategy_enum,
+            overrides=strategy_params,
+            settings=self.settings,
+        )
 
-        # Reason: Add strategy-specific parameters based on type
-        if strategy_enum == StrategyType.SMA_CROSSOVER:
-            config_params.update(
-                {
-                    "fast_period": strategy_params.get("fast_period", 10),
-                    "slow_period": strategy_params.get("slow_period", 20),
-                    "portfolio_value": Decimal(
-                        str(strategy_params.get("portfolio_value", self.settings.portfolio_value))
-                    ),
-                    "position_size_pct": Decimal(
-                        str(
-                            strategy_params.get(
-                                "position_size_pct", self.settings.position_size_pct
-                            )
-                        )
-                    ),
-                }
-            )
-        elif strategy_enum == StrategyType.MEAN_REVERSION:
-            config_params.update(
-                {
-                    "trade_size": Decimal(str(strategy_params.get("trade_size", 1000000))),
-                    "order_id_tag": strategy_params.get("order_id_tag", "001"),
-                    "rsi_period": strategy_params.get("rsi_period", 2),
-                    "rsi_buy_threshold": strategy_params.get("rsi_buy_threshold", 10.0),
-                    "exit_rsi": strategy_params.get("exit_rsi", 50.0),
-                    "sma_trend_period": strategy_params.get("sma_trend_period", 200),
-                    "warmup_days": strategy_params.get("warmup_days", 400),
-                    "cooldown_bars": strategy_params.get("cooldown_bars", 0),
-                }
-            )
-        elif strategy_enum == StrategyType.MOMENTUM:
-            config_params.update(
-                {
-                    "trade_size": Decimal(str(strategy_params.get("trade_size", 1000000))),
-                    "order_id_tag": strategy_params.get("order_id_tag", "002"),
-                    "fast_period": strategy_params.get("fast_period", 20),
-                    "slow_period": strategy_params.get("slow_period", 50),
-                    "warmup_days": strategy_params.get("warmup_days", 1),
-                    "allow_short": strategy_params.get("allow_short", False),
-                }
-            )
+        # Add required base parameters
+        config_params.update(
+            {
+                "instrument_id": instrument.id,
+                "bar_type": BarType.from_str(bar_type_str),
+            }
+        )
 
         # Reason: Create strategy using StrategyLoader
         strategy = StrategyLoader.create_strategy(strategy_enum, config_params)
@@ -1592,41 +1525,14 @@ class MinimalBacktestRunner:
             # Determine strategy name from type
             strategy_display_name = strategy_type.replace("_", " ").title()
 
-            # Build strategy config for persistence
+            # For persistence, we can now use the resolved config_params directly
+            # but we filter out the base objects (instrument_id, bar_type)
+            # to keep the JSON serializable
             strategy_config_dict = {
-                "portfolio_value": str(
-                    strategy_params.get("portfolio_value", self.settings.portfolio_value)
-                ),
-                "position_size_pct": str(
-                    strategy_params.get("position_size_pct", self.settings.position_size_pct)
-                ),
+                k: str(v) if isinstance(v, (Decimal, UUID)) else v
+                for k, v in config_params.items()
+                if k not in ["instrument_id", "bar_type"]
             }
-
-            # Add strategy-specific parameters
-            if strategy_enum == StrategyType.SMA_CROSSOVER:
-                strategy_config_dict.update(
-                    {
-                        "fast_period": strategy_params.get("fast_period", 10),
-                        "slow_period": strategy_params.get("slow_period", 20),
-                    }
-                )
-            elif strategy_enum == StrategyType.MEAN_REVERSION:
-                strategy_config_dict.update(
-                    {
-                        "rsi_period": strategy_params.get("rsi_period", 2),
-                        "rsi_buy_threshold": strategy_params.get("rsi_buy_threshold", 10.0),
-                        "exit_rsi": strategy_params.get("exit_rsi", 50.0),
-                        "sma_trend_period": strategy_params.get("sma_trend_period", 200),
-                    }
-                )
-            elif strategy_enum == StrategyType.MOMENTUM:
-                strategy_config_dict.update(
-                    {
-                        "fast_period": strategy_params.get("fast_period", 20),
-                        "slow_period": strategy_params.get("slow_period", 50),
-                        "allow_short": strategy_params.get("allow_short", False),
-                    }
-                )
 
             run_id = await self._persist_backtest_results(
                 result=self._results,

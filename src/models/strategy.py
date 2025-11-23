@@ -26,11 +26,31 @@ class StrategyStatus(str, Enum):
 
 
 class SMAParameters(BaseModel):
-    """Parameters specific to SMA crossover strategy."""
+    """
+    Parameters specific to SMA crossover strategy.
+
+    Matches src.core.strategies.sma_crossover.SMAConfig.
+    """
 
     fast_period: int = Field(default=10, ge=1, le=200, description="Fast SMA period")
     slow_period: int = Field(default=20, ge=1, le=200, description="Slow SMA period")
-    trade_size: Decimal = Field(default=Decimal("1000000"), gt=0, description="Size of each trade")
+    portfolio_value: Decimal = Field(
+        default=Decimal("1000000"), gt=0, description="Starting portfolio value in USD"
+    )
+    position_size_pct: Decimal = Field(
+        default=Decimal("10.0"),
+        ge=0.1,
+        le=100.0,
+        description="Position size as percentage of portfolio",
+    )
+
+    # Mapping from model fields to global Settings attributes
+    _settings_map = {
+        "fast_period": "fast_ema_period",
+        "slow_period": "slow_ema_period",
+        "portfolio_value": "portfolio_value",
+        "position_size_pct": "position_size_pct",
+    }
 
     @field_validator("fast_period", "slow_period")
     @classmethod
@@ -50,49 +70,27 @@ class SMAParameters(BaseModel):
 
 
 class MeanReversionParameters(BaseModel):
-    """Parameters specific to mean reversion strategy."""
+    """
+    Parameters specific to mean reversion strategy.
 
-    lookback_period: int = Field(
-        default=20, ge=5, le=100, description="Lookback period for moving average"
-    )
-    num_std_dev: float = Field(
-        default=2.0,
-        ge=0.5,
-        le=4.0,
-        description="Number of standard deviations for bands",
-    )
+    Matches src.core.strategies.rsi_mean_reversion.RSIMeanRevConfig.
+    """
+
     trade_size: Decimal = Field(default=Decimal("1000000"), gt=0, description="Size of each trade")
+    order_id_tag: str = Field(default="001", description="Tag for order IDs")
+    rsi_period: int = Field(default=2, ge=2, le=100, description="RSI calculation period")
+    rsi_buy_threshold: float = Field(default=10.0, ge=0, le=100, description="RSI buy threshold")
+    exit_rsi: float = Field(default=50.0, ge=0, le=100, description="RSI exit threshold")
+    sma_trend_period: int = Field(default=200, ge=1, description="Trend filter SMA period")
+    warmup_days: int = Field(default=400, ge=1, description="Days of data to load for warmup")
+    cooldown_bars: int = Field(default=0, ge=0, description="Bars to wait after exit")
 
-    @field_validator("lookback_period")
-    @classmethod
-    def validate_lookback_period(cls, v: int) -> int:
-        """Validate lookback period is reasonable."""
-        if v <= 0:
-            raise ValueError("Lookback period must be positive")
-        return v
+    # Mapping from model fields to global Settings attributes
+    _settings_map = {
+        "trade_size": "trade_size",
+    }
 
-    @field_validator("num_std_dev")
-    @classmethod
-    def validate_std_dev(cls, v: float) -> float:
-        """Validate standard deviation multiplier is reasonable."""
-        if v <= 0:
-            raise ValueError("Standard deviation multiplier must be positive")
-        return v
-
-
-class MomentumParameters(BaseModel):
-    """Parameters specific to momentum strategy."""
-
-    rsi_period: int = Field(default=14, ge=5, le=50, description="RSI calculation period")
-    oversold_threshold: float = Field(
-        default=30.0, ge=10.0, le=40.0, description="RSI oversold threshold"
-    )
-    overbought_threshold: float = Field(
-        default=70.0, ge=60.0, le=90.0, description="RSI overbought threshold"
-    )
-    trade_size: Decimal = Field(default=Decimal("1000000"), gt=0, description="Size of each trade")
-
-    @field_validator("oversold_threshold", "overbought_threshold")
+    @field_validator("rsi_buy_threshold", "exit_rsi")
     @classmethod
     def validate_thresholds(cls, v: float) -> float:
         """Validate RSI thresholds are in valid range."""
@@ -100,13 +98,34 @@ class MomentumParameters(BaseModel):
             raise ValueError("RSI thresholds must be between 0 and 100")
         return v
 
-    @field_validator("overbought_threshold")
+
+class MomentumParameters(BaseModel):
+    """
+    Parameters specific to momentum strategy.
+
+    Matches src.core.strategies.sma_momentum.SMAMomentumConfig.
+    """
+
+    trade_size: Decimal = Field(default=Decimal("1000000"), gt=0, description="Size of each trade")
+    order_id_tag: str = Field(default="002", description="Tag for order IDs")
+    fast_period: int = Field(default=20, ge=1, description="Fast SMA period")
+    slow_period: int = Field(default=50, ge=1, description="Slow SMA period")
+    warmup_days: int = Field(default=1, ge=0, description="Days of data to load for warmup")
+    allow_short: bool = Field(default=False, description="Allow short selling")
+
+    # Mapping from model fields to global Settings attributes
+    _settings_map = {
+        "trade_size": "trade_size",
+        "fast_period": "fast_ema_period",  # Reuse generic settings if applicable
+        "slow_period": "slow_ema_period",
+    }
+
+    @field_validator("slow_period")
     @classmethod
-    def validate_threshold_relationship(cls, v: float, info) -> float:
-        """Validate overbought threshold is greater than oversold threshold."""
-        oversold = info.data.get("oversold_threshold")
-        if oversold is not None and v <= oversold:
-            raise ValueError("Overbought threshold must be greater than oversold threshold")
+    def validate_slow_greater_than_fast(cls, v: int, info) -> int:
+        """Validate slow period is greater than fast period."""
+        if "fast_period" in info.data and v <= info.data["fast_period"]:
+            raise ValueError("Slow period must be greater than fast period")
         return v
 
 
