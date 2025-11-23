@@ -272,13 +272,19 @@ async function initRunPriceChart(container) {
 }
 
 /**
- * Initialize equity curve chart with drawdown overlay
+ * Initialize equity curve chart based on individual trade tracking
  */
 async function initEquityChart(container) {
     const runId = container.dataset.runId;
+    const backtestId = container.dataset.backtestId;
 
     try {
-        const response = await fetch(`/api/equity/${runId}`);
+        // Use backtest_id if available (new trade tracking), fallback to run_id (legacy)
+        const endpoint = backtestId
+            ? `/api/equity-curve/${backtestId}`
+            : `/api/equity/${runId}`;
+
+        const response = await fetch(endpoint);
 
         if (!response.ok) {
             const error = await response.json();
@@ -290,64 +296,120 @@ async function initEquityChart(container) {
         // Hide loading spinner
         hideLoading(container);
 
-        // Check for empty data
-        if (!data.equity || data.equity.length === 0) {
-            showError(container, "No equity data available");
-            return;
-        }
+        // Handle new equity curve format (from trade tracking)
+        if (data.points) {
+            // Check for empty data
+            if (data.points.length === 0) {
+                showError(container, "No trades executed - equity curve unavailable");
+                return;
+            }
 
-        // Create chart
-        const chart = createChartWithDefaults(container);
+            // Create chart
+            const chart = createChartWithDefaults(container);
 
-        // Add equity line series
-        const equitySeries = chart.addSeries(LightweightCharts.LineSeries, {
-            color: CHART_COLORS.equity,
-            lineWidth: 2,
-            title: "Equity",
-        });
-        const equityData = data.equity.map((p) => ({
-            time: p.time,
-            value: p.value,
-        }));
-        equitySeries.setData(equityData);
-
-        // Add drawdown area series if available
-        if (data.drawdown && data.drawdown.length > 0) {
-            const drawdownSeries = chart.addSeries(LightweightCharts.AreaSeries, {
-                topColor: CHART_COLORS.bearish + "40",
-                bottomColor: CHART_COLORS.bearish + "10",
-                lineColor: CHART_COLORS.bearish,
-                lineWidth: 1,
-                title: "Drawdown %",
-                priceScaleId: "drawdown",
+            // Add equity line series
+            const equitySeries = chart.addSeries(LightweightCharts.LineSeries, {
+                color: CHART_COLORS.equity,
+                lineWidth: 2,
+                title: "Account Balance",
             });
 
-            // Position drawdown scale on the right
-            chart.priceScale("drawdown").applyOptions({
-                scaleMargins: {
-                    top: 0.7,
-                    bottom: 0,
+            // Convert EquityCurvePoint[] to chart format
+            // Timestamps are ISO 8601 strings, convert to Unix timestamps
+            const equityData = data.points.map((point) => {
+                const timestamp = new Date(point.timestamp);
+                return {
+                    time: Math.floor(timestamp.getTime() / 1000), // Unix timestamp in seconds
+                    value: parseFloat(point.balance),
+                };
+            });
+            equitySeries.setData(equityData);
+
+            // Add summary info as chart title/watermark
+            const summaryText = `Initial: $${parseFloat(data.initial_capital).toFixed(2)} | ` +
+                               `Final: $${parseFloat(data.final_balance).toFixed(2)} | ` +
+                               `Return: ${parseFloat(data.total_return_pct).toFixed(2)}%`;
+
+            chart.applyOptions({
+                watermark: {
+                    visible: true,
+                    fontSize: 12,
+                    horzAlign: "left",
+                    vertAlign: "top",
+                    color: CHART_COLORS.text + "40",
+                    text: summaryText,
                 },
             });
 
-            const drawdownData = data.drawdown.map((p) => ({
-                time: p.time,
-                value: Math.abs(p.value), // Convert negative to positive for display
-            }));
-            drawdownSeries.setData(drawdownData);
-        }
+            // Fit content to show all data
+            chart.timeScale().fitContent();
 
-        // Fit content to show all data
-        chart.timeScale().fitContent();
-
-        // Handle container resize
-        const resizeObserver = new ResizeObserver(() => {
-            chart.applyOptions({
-                width: container.clientWidth,
-                height: container.clientHeight,
+            // Handle container resize
+            const resizeObserver = new ResizeObserver(() => {
+                chart.applyOptions({
+                    width: container.clientWidth,
+                    height: container.clientHeight,
+                });
             });
-        });
-        resizeObserver.observe(container);
+            resizeObserver.observe(container);
+
+        } else if (data.equity) {
+            // Legacy format - handle old equity endpoint
+            if (data.equity.length === 0) {
+                showError(container, "No equity data available");
+                return;
+            }
+
+            const chart = createChartWithDefaults(container);
+
+            const equitySeries = chart.addSeries(LightweightCharts.LineSeries, {
+                color: CHART_COLORS.equity,
+                lineWidth: 2,
+                title: "Equity",
+            });
+            const equityData = data.equity.map((p) => ({
+                time: p.time,
+                value: p.value,
+            }));
+            equitySeries.setData(equityData);
+
+            // Add drawdown area series if available
+            if (data.drawdown && data.drawdown.length > 0) {
+                const drawdownSeries = chart.addSeries(LightweightCharts.AreaSeries, {
+                    topColor: CHART_COLORS.bearish + "40",
+                    bottomColor: CHART_COLORS.bearish + "10",
+                    lineColor: CHART_COLORS.bearish,
+                    lineWidth: 1,
+                    title: "Drawdown %",
+                    priceScaleId: "drawdown",
+                });
+
+                chart.priceScale("drawdown").applyOptions({
+                    scaleMargins: {
+                        top: 0.7,
+                        bottom: 0,
+                    },
+                });
+
+                const drawdownData = data.drawdown.map((p) => ({
+                    time: p.time,
+                    value: Math.abs(p.value),
+                }));
+                drawdownSeries.setData(drawdownData);
+            }
+
+            chart.timeScale().fitContent();
+
+            const resizeObserver = new ResizeObserver(() => {
+                chart.applyOptions({
+                    width: container.clientWidth,
+                    height: container.clientHeight,
+                });
+            });
+            resizeObserver.observe(container);
+        } else {
+            throw new Error("Invalid equity curve response format");
+        }
 
     } catch (error) {
         console.error("Error initializing equity chart:", error);
@@ -445,8 +507,153 @@ async function initDataViewChart(container) {
     }
 }
 
+/**
+ * Format currency value for display
+ * @param {string|number} value - Numeric value to format
+ * @returns {string} Formatted currency string
+ */
+function formatCurrency(value) {
+    const num = parseFloat(value);
+    if (isNaN(num)) return '$0.00';
+    return new Intl.NumberFormat('en-US', {
+        style: 'currency',
+        currency: 'USD',
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+    }).format(num);
+}
+
+/**
+ * Initialize trade statistics display
+ * @param {HTMLElement} container - Container element with data-backtest-id
+ */
+async function initTradeStatistics(container) {
+    const backtestId = container.dataset.backtestId;
+    if (!backtestId) {
+        console.error("Trade statistics: missing backtest ID");
+        return;
+    }
+
+    const loadingEl = container.querySelector(".stats-loading");
+    const contentEl = container.querySelector(".stats-content");
+    const errorEl = container.querySelector(".stats-error");
+
+    try {
+        // Fetch statistics from API
+        const response = await fetch(`/api/statistics/${backtestId}`);
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        const stats = await response.json();
+
+        // Build statistics HTML
+        const html = `
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                <!-- Trade Counts -->
+                <div class="bg-slate-800 rounded p-4">
+                    <h3 class="text-sm text-slate-400 mb-2">Trade Counts</h3>
+                    <div class="space-y-1">
+                        <div class="flex justify-between text-sm">
+                            <span class="text-slate-300">Total:</span>
+                            <span class="font-semibold">${stats.total_trades}</span>
+                        </div>
+                        <div class="flex justify-between text-sm">
+                            <span class="text-green-400">Wins:</span>
+                            <span class="font-semibold text-green-400">${stats.winning_trades}</span>
+                        </div>
+                        <div class="flex justify-between text-sm">
+                            <span class="text-red-400">Losses:</span>
+                            <span class="font-semibold text-red-400">${stats.losing_trades}</span>
+                        </div>
+                        <div class="flex justify-between text-sm">
+                            <span class="text-yellow-400">Breakeven:</span>
+                            <span class="font-semibold text-yellow-400">${stats.breakeven_trades}</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Win Rate & Profit Factor -->
+                <div class="bg-slate-800 rounded p-4">
+                    <h3 class="text-sm text-slate-400 mb-2">Performance</h3>
+                    <div class="space-y-1">
+                        <div class="flex justify-between text-sm">
+                            <span class="text-slate-300">Win Rate:</span>
+                            <span class="font-semibold">${stats.win_rate}%</span>
+                        </div>
+                        <div class="flex justify-between text-sm">
+                            <span class="text-slate-300">Profit Factor:</span>
+                            <span class="font-semibold">${stats.profit_factor || 'N/A'}</span>
+                        </div>
+                        <div class="flex justify-between text-sm">
+                            <span class="text-slate-300">Expectancy:</span>
+                            <span class="font-semibold">${formatCurrency(stats.expectancy)}</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Profit Metrics -->
+                <div class="bg-slate-800 rounded p-4">
+                    <h3 class="text-sm text-slate-400 mb-2">Profit/Loss</h3>
+                    <div class="space-y-1">
+                        <div class="flex justify-between text-sm">
+                            <span class="text-slate-300">Net Profit:</span>
+                            <span class="font-semibold ${parseFloat(stats.net_profit) >= 0 ? 'text-green-400' : 'text-red-400'}">${formatCurrency(stats.net_profit)}</span>
+                        </div>
+                        <div class="flex justify-between text-sm">
+                            <span class="text-green-400">Avg Win:</span>
+                            <span class="font-semibold text-green-400">${formatCurrency(stats.average_win)}</span>
+                        </div>
+                        <div class="flex justify-between text-sm">
+                            <span class="text-red-400">Avg Loss:</span>
+                            <span class="font-semibold text-red-400">${formatCurrency(stats.average_loss)}</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Streaks & Holding Period -->
+                <div class="bg-slate-800 rounded p-4">
+                    <h3 class="text-sm text-slate-400 mb-2">Streaks & Time</h3>
+                    <div class="space-y-1">
+                        <div class="flex justify-between text-sm">
+                            <span class="text-green-400">Max Win Streak:</span>
+                            <span class="font-semibold text-green-400">${stats.max_consecutive_wins}</span>
+                        </div>
+                        <div class="flex justify-between text-sm">
+                            <span class="text-red-400">Max Loss Streak:</span>
+                            <span class="font-semibold text-red-400">${stats.max_consecutive_losses}</span>
+                        </div>
+                        <div class="flex justify-between text-sm">
+                            <span class="text-slate-300">Avg Hold:</span>
+                            <span class="font-semibold">${stats.avg_holding_period_hours}h</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        // Show content
+        contentEl.innerHTML = html;
+        loadingEl.classList.add("hidden");
+        contentEl.classList.remove("hidden");
+
+    } catch (error) {
+        console.error("Error loading trade statistics:", error);
+        loadingEl.classList.add("hidden");
+        errorEl.classList.remove("hidden");
+    }
+}
+
 // Initialize on DOM ready
-document.addEventListener("DOMContentLoaded", initCharts);
+document.addEventListener("DOMContentLoaded", () => {
+    initCharts();
+
+    // Initialize trade statistics
+    const statsContainer = document.getElementById("trade-statistics");
+    if (statsContainer) {
+        initTradeStatistics(statsContainer);
+    }
+});
 
 // Reinitialize after HTMX swaps
 document.body.addEventListener("htmx:afterSwap", handleHtmxSwap);
