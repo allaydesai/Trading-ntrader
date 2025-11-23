@@ -1,13 +1,12 @@
 """Minimal backtest engine wrapper for Nautilus Trader."""
 
 import time
-from decimal import Decimal
-from typing import Dict, Any, Optional, Literal
 from datetime import datetime, timezone
-from uuid import uuid4, UUID
+from decimal import Decimal
+from typing import Any, Dict, Literal, Optional
+from uuid import UUID, uuid4
 
 import structlog
-
 from nautilus_trader.backtest.engine import BacktestEngine, BacktestEngineConfig
 from nautilus_trader.backtest.models import FillModel
 from nautilus_trader.model.currencies import USD
@@ -16,17 +15,17 @@ from nautilus_trader.model.enums import AccountType, OmsType
 from nautilus_trader.model.identifiers import TraderId, Venue
 from nautilus_trader.model.objects import Money
 
-from src.core.strategies.sma_crossover import SMACrossover, SMAConfig
-from src.core.strategy_factory import StrategyFactory
-from src.core.fee_models import IBKRCommissionModel
-from src.utils.mock_data import create_test_instrument, generate_mock_bars
-from src.utils.config_loader import ConfigLoader, StrategyConfigWrapper
-from src.services.data_service import DataService
 from src.config import get_settings
-from src.db.session import get_session
+from src.core.fee_models import IBKRCommissionModel
+from src.core.strategies.sma_crossover import SMAConfig, SMACrossover
+from src.core.strategy_factory import StrategyFactory
 from src.db.repositories.backtest_repository import BacktestRepository
-from src.services.backtest_persistence import BacktestPersistenceService
+from src.db.session import get_session
 from src.models.backtest_result import BacktestResult
+from src.services.backtest_persistence import BacktestPersistenceService
+from src.services.data_service import DataService
+from src.utils.config_loader import ConfigLoader, StrategyConfigWrapper
+from src.utils.mock_data import create_test_instrument, generate_mock_bars
 
 logger = structlog.get_logger(__name__)
 
@@ -126,39 +125,39 @@ class MinimalBacktestRunner:
                     )
 
                     if self.engine:
-                        # Generate fills report from Nautilus Trader
+                        # Generate positions report from Nautilus Trader
                         logger.info(
-                            "Calling generate_fills_report",
+                            "Calling generate_positions_report",
                             run_id=str(run_id),
                         )
-                        fills_report_df = self.engine.trader.generate_fills_report()
+                        positions_report_df = self.engine.trader.generate_positions_report()
 
                         logger.info(
-                            "Fills report generated",
+                            "Positions report generated",
                             run_id=str(run_id),
-                            report_type=type(fills_report_df).__name__,
-                            is_none=fills_report_df is None,
-                            is_empty=fills_report_df.empty
-                            if fills_report_df is not None
+                            report_type=type(positions_report_df).__name__,
+                            is_none=positions_report_df is None,
+                            is_empty=positions_report_df.empty
+                            if positions_report_df is not None
                             else "N/A",
-                            row_count=len(fills_report_df)
-                            if fills_report_df is not None
+                            row_count=len(positions_report_df)
+                            if positions_report_df is not None
                             else 0,
                         )
 
-                        if fills_report_df is not None and not fills_report_df.empty:
+                        if positions_report_df is not None and not positions_report_df.empty:
                             logger.info(
-                                "Fills report has data, saving trades",
+                                "Positions report has data, saving trades",
                                 run_id=str(run_id),
-                                columns=list(fills_report_df.columns)
-                                if hasattr(fills_report_df, "columns")
+                                columns=list(positions_report_df.columns)
+                                if hasattr(positions_report_df, "columns")
                                 else "N/A",
                             )
 
                             # Save trades to database
-                            trade_count = await service.save_trades_from_fills(
+                            trade_count = await service.save_trades_from_positions(
                                 backtest_run_id=backtest_run.id,
-                                fills_report_df=fills_report_df,
+                                positions_report_df=positions_report_df,
                             )
 
                             logger.info(
@@ -168,7 +167,7 @@ class MinimalBacktestRunner:
                             )
                         else:
                             logger.warning(
-                                "No fills to capture - fills report empty or None",
+                                "No positions to capture - positions report empty or None",
                                 run_id=str(run_id),
                             )
                 except Exception as trade_error:
@@ -449,9 +448,7 @@ class MinimalBacktestRunner:
             position_size_pct = self.settings.position_size_pct
 
         # Validate data availability
-        validation = await self.data_service.validate_data_availability(
-            symbol, start, end
-        )
+        validation = await self.data_service.validate_data_availability(symbol, start, end)
         if not validation["valid"]:
             raise ValueError(f"Data validation failed: {validation['reason']}")
 
@@ -459,9 +456,7 @@ class MinimalBacktestRunner:
         market_data = await self.data_service.get_market_data(symbol, start, end)
 
         if not market_data:
-            raise ValueError(
-                f"No market data found for {symbol} between {start} and {end}"
-            )
+            raise ValueError(f"No market data found for {symbol} between {start} and {end}")
 
         # Create test instrument for the actual symbol with SIM venue
         # This ensures the instrument matches the data being loaded
@@ -530,9 +525,7 @@ class MinimalBacktestRunner:
 
         # Convert database data to Nautilus Bar objects
         # Use the actual instrument.id that matches the instrument we added
-        bars = self.data_service.convert_to_nautilus_bars(
-            market_data, instrument.id, instrument
-        )
+        bars = self.data_service.convert_to_nautilus_bars(market_data, instrument.id, instrument)
 
         if not bars:
             raise ValueError("No bars were created from the data")
@@ -623,9 +616,12 @@ class MinimalBacktestRunner:
             if pnl > 0:
                 winning_trades += 1
                 largest_win = max(largest_win, pnl)
-            elif pnl < 0:
+            else:
+                # Count breakeven (pnl == 0) and losing trades together
+                # Breakeven trades are considered losses since they didn't generate profit
                 losing_trades += 1
-                largest_loss = min(largest_loss, pnl)
+                if pnl < 0:
+                    largest_loss = min(largest_loss, pnl)
 
         # Extract advanced metrics from Nautilus Trader's PortfolioAnalyzer
         analyzer = self.engine.portfolio.analyzer
@@ -641,11 +637,7 @@ class MinimalBacktestRunner:
 
         # Helper function to safely extract metric
         def safe_float(value) -> float | None:
-            if (
-                value is None
-                or value == ""
-                or (isinstance(value, float) and value != value)
-            ):
+            if value is None or value == "" or (isinstance(value, float) and value != value):
                 return None  # None, empty string, or NaN
             try:
                 result = float(value)
@@ -874,17 +866,13 @@ class MinimalBacktestRunner:
                             logger.warning(f"Could not parse timestamp: {timestamp}")
                             continue
 
-                    equity_curve.append(
-                        {"time": time_unix, "value": round(float(value), 2)}
-                    )
+                    equity_curve.append({"time": time_unix, "value": round(float(value), 2)})
 
                 logger.debug(f"Extracted equity curve with {len(equity_curve)} points")
                 return equity_curve
 
             # Method 2: Build equity curve from closed positions
-            logger.debug(
-                "No returns data available, building equity curve from positions"
-            )
+            logger.debug("No returns data available, building equity curve from positions")
             return self._build_equity_curve_from_positions(starting_balance)
 
         except Exception as e:
@@ -998,17 +986,13 @@ class MinimalBacktestRunner:
                 return None
 
             if final_balance <= 0:
-                logger.warning(
-                    "Final balance is non-positive, CAGR calculation skipped"
-                )
+                logger.warning("Final balance is non-positive, CAGR calculation skipped")
                 return None
 
             # Calculate years (use fractional years for accuracy)
             days = (end_date - start_date).days
             if days <= 0:
-                logger.warning(
-                    "Backtest duration must be positive for CAGR calculation"
-                )
+                logger.warning("Backtest duration must be positive for CAGR calculation")
                 return None
 
             years = days / 365.25  # Account for leap years
@@ -1064,9 +1048,7 @@ class MinimalBacktestRunner:
             logger.warning(f"Could not calculate Calmar ratio: {e}")
             return None
 
-    def run_from_config_object(
-        self, config_obj: StrategyConfigWrapper
-    ) -> BacktestResult:
+    def run_from_config_object(self, config_obj: StrategyConfigWrapper) -> BacktestResult:
         """
         Run backtest from loaded configuration object.
 
@@ -1150,9 +1132,7 @@ class MinimalBacktestRunner:
         if hasattr(config_obj.config, "oversold_threshold"):
             config_params["oversold_threshold"] = config_obj.config.oversold_threshold
         if hasattr(config_obj.config, "overbought_threshold"):
-            config_params["overbought_threshold"] = (
-                config_obj.config.overbought_threshold
-            )
+            config_params["overbought_threshold"] = config_obj.config.overbought_threshold
         if hasattr(config_obj.config, "trade_size"):
             config_params["trade_size"] = config_obj.config.trade_size
 
@@ -1226,8 +1206,8 @@ class MinimalBacktestRunner:
         Raises:
             ValueError: If strategy type is not supported or data is invalid
         """
-        from src.models.strategy import StrategyType
         from src.core.strategy_factory import StrategyLoader
+        from src.models.strategy import StrategyType
 
         # Handle "sma" alias for backward compatibility
         if strategy_type == "sma":
@@ -1246,9 +1226,7 @@ class MinimalBacktestRunner:
             raise ValueError("Data service not initialized")
 
         # Validate data availability
-        validation = await self.data_service.validate_data_availability(
-            symbol, start, end
-        )
+        validation = await self.data_service.validate_data_availability(symbol, start, end)
         if not validation["valid"]:
             raise ValueError(f"Data validation failed: {validation['reason']}")
 
@@ -1256,9 +1234,7 @@ class MinimalBacktestRunner:
         market_data = await self.data_service.get_market_data(symbol, start, end)
 
         if not market_data:
-            raise ValueError(
-                f"No market data found for {symbol} between {start} and {end}"
-            )
+            raise ValueError(f"No market data found for {symbol} between {start} and {end}")
 
         # Create test instrument for the actual symbol with SIM venue
         if "/" in symbol and len(symbol.split("/")) == 2:
@@ -1319,9 +1295,7 @@ class MinimalBacktestRunner:
         self.engine.add_instrument(instrument)
 
         # Convert database data to Nautilus Bar objects
-        bars = self.data_service.convert_to_nautilus_bars(
-            market_data, instrument.id, instrument
-        )
+        bars = self.data_service.convert_to_nautilus_bars(market_data, instrument.id, instrument)
 
         if not bars:
             raise ValueError("No bars were created from the data")
@@ -1347,11 +1321,7 @@ class MinimalBacktestRunner:
                     "fast_period": strategy_params.get("fast_period", 10),
                     "slow_period": strategy_params.get("slow_period", 20),
                     "portfolio_value": Decimal(
-                        str(
-                            strategy_params.get(
-                                "portfolio_value", self.settings.portfolio_value
-                            )
-                        )
+                        str(strategy_params.get("portfolio_value", self.settings.portfolio_value))
                     ),
                     "position_size_pct": Decimal(
                         str(
@@ -1365,9 +1335,7 @@ class MinimalBacktestRunner:
         elif strategy_enum == StrategyType.MEAN_REVERSION:
             config_params.update(
                 {
-                    "trade_size": Decimal(
-                        str(strategy_params.get("trade_size", 1000000))
-                    ),
+                    "trade_size": Decimal(str(strategy_params.get("trade_size", 1000000))),
                     "order_id_tag": strategy_params.get("order_id_tag", "001"),
                     "rsi_period": strategy_params.get("rsi_period", 2),
                     "rsi_buy_threshold": strategy_params.get("rsi_buy_threshold", 10.0),
@@ -1380,9 +1348,7 @@ class MinimalBacktestRunner:
         elif strategy_enum == StrategyType.MOMENTUM:
             config_params.update(
                 {
-                    "trade_size": Decimal(
-                        str(strategy_params.get("trade_size", 1000000))
-                    ),
+                    "trade_size": Decimal(str(strategy_params.get("trade_size", 1000000))),
                     "order_id_tag": strategy_params.get("order_id_tag", "002"),
                     "fast_period": strategy_params.get("fast_period", 20),
                     "slow_period": strategy_params.get("slow_period", 50),
@@ -1436,8 +1402,8 @@ class MinimalBacktestRunner:
         Raises:
             ValueError: If strategy type is not supported or bars are empty
         """
-        from src.models.strategy import StrategyType
         from src.core.strategy_factory import StrategyLoader
+        from src.models.strategy import StrategyType
 
         # Track execution time for persistence
         execution_start_time = time.time()
@@ -1567,11 +1533,7 @@ class MinimalBacktestRunner:
                     "fast_period": strategy_params.get("fast_period", 10),
                     "slow_period": strategy_params.get("slow_period", 20),
                     "portfolio_value": Decimal(
-                        str(
-                            strategy_params.get(
-                                "portfolio_value", self.settings.portfolio_value
-                            )
-                        )
+                        str(strategy_params.get("portfolio_value", self.settings.portfolio_value))
                     ),
                     "position_size_pct": Decimal(
                         str(
@@ -1585,9 +1547,7 @@ class MinimalBacktestRunner:
         elif strategy_enum == StrategyType.MEAN_REVERSION:
             config_params.update(
                 {
-                    "trade_size": Decimal(
-                        str(strategy_params.get("trade_size", 1000000))
-                    ),
+                    "trade_size": Decimal(str(strategy_params.get("trade_size", 1000000))),
                     "order_id_tag": strategy_params.get("order_id_tag", "001"),
                     "rsi_period": strategy_params.get("rsi_period", 2),
                     "rsi_buy_threshold": strategy_params.get("rsi_buy_threshold", 10.0),
@@ -1600,9 +1560,7 @@ class MinimalBacktestRunner:
         elif strategy_enum == StrategyType.MOMENTUM:
             config_params.update(
                 {
-                    "trade_size": Decimal(
-                        str(strategy_params.get("trade_size", 1000000))
-                    ),
+                    "trade_size": Decimal(str(strategy_params.get("trade_size", 1000000))),
                     "order_id_tag": strategy_params.get("order_id_tag", "002"),
                     "fast_period": strategy_params.get("fast_period", 20),
                     "slow_period": strategy_params.get("slow_period", 50),
@@ -1639,14 +1597,10 @@ class MinimalBacktestRunner:
             # Build strategy config for persistence
             strategy_config_dict = {
                 "portfolio_value": str(
-                    strategy_params.get(
-                        "portfolio_value", self.settings.portfolio_value
-                    )
+                    strategy_params.get("portfolio_value", self.settings.portfolio_value)
                 ),
                 "position_size_pct": str(
-                    strategy_params.get(
-                        "position_size_pct", self.settings.position_size_pct
-                    )
+                    strategy_params.get("position_size_pct", self.settings.position_size_pct)
                 ),
             }
 
@@ -1662,13 +1616,9 @@ class MinimalBacktestRunner:
                 strategy_config_dict.update(
                     {
                         "rsi_period": strategy_params.get("rsi_period", 2),
-                        "rsi_buy_threshold": strategy_params.get(
-                            "rsi_buy_threshold", 10.0
-                        ),
+                        "rsi_buy_threshold": strategy_params.get("rsi_buy_threshold", 10.0),
                         "exit_rsi": strategy_params.get("exit_rsi", 50.0),
-                        "sma_trend_period": strategy_params.get(
-                            "sma_trend_period", 200
-                        ),
+                        "sma_trend_period": strategy_params.get("sma_trend_period", 200),
                     }
                 )
             elif strategy_enum == StrategyType.MOMENTUM:
