@@ -117,6 +117,12 @@ class BacktestRun(Base, TimestampMixin):
         uselist=False,
         lazy="selectin",
     )
+    trades: Mapped[list["Trade"]] = relationship(
+        "Trade",
+        back_populates="backtest_run",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
 
     # Table constraints
     __table_args__ = (

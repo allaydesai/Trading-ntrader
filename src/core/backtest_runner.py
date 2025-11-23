@@ -102,7 +102,7 @@ class MinimalBacktestRunner:
                 repository = BacktestRepository(session)
                 service = BacktestPersistenceService(repository)
 
-                await service.save_backtest_results(
+                backtest_run = await service.save_backtest_results(
                     run_id=run_id,
                     strategy_name=strategy_name,
                     strategy_type=strategy_type,
@@ -116,6 +116,70 @@ class MinimalBacktestRunner:
                     backtest_result=result,
                     reproduced_from_run_id=reproduced_from_run_id,
                 )
+
+                # Capture individual trades from fills report
+                try:
+                    logger.info(
+                        "Starting trade capture",
+                        run_id=str(run_id),
+                        has_engine=bool(self.engine),
+                    )
+
+                    if self.engine:
+                        # Generate fills report from Nautilus Trader
+                        logger.info(
+                            "Calling generate_fills_report",
+                            run_id=str(run_id),
+                        )
+                        fills_report_df = self.engine.trader.generate_fills_report()
+
+                        logger.info(
+                            "Fills report generated",
+                            run_id=str(run_id),
+                            report_type=type(fills_report_df).__name__,
+                            is_none=fills_report_df is None,
+                            is_empty=fills_report_df.empty
+                            if fills_report_df is not None
+                            else "N/A",
+                            row_count=len(fills_report_df)
+                            if fills_report_df is not None
+                            else 0,
+                        )
+
+                        if fills_report_df is not None and not fills_report_df.empty:
+                            logger.info(
+                                "Fills report has data, saving trades",
+                                run_id=str(run_id),
+                                columns=list(fills_report_df.columns)
+                                if hasattr(fills_report_df, "columns")
+                                else "N/A",
+                            )
+
+                            # Save trades to database
+                            trade_count = await service.save_trades_from_fills(
+                                backtest_run_id=backtest_run.id,
+                                fills_report_df=fills_report_df,
+                            )
+
+                            logger.info(
+                                "Trades captured from backtest",
+                                run_id=str(run_id),
+                                trade_count=trade_count,
+                            )
+                        else:
+                            logger.warning(
+                                "No fills to capture - fills report empty or None",
+                                run_id=str(run_id),
+                            )
+                except Exception as trade_error:
+                    # Log but don't fail the backtest if trade capture fails
+                    logger.error(
+                        "Failed to capture trades",
+                        run_id=str(run_id),
+                        error=str(trade_error),
+                        error_type=type(trade_error).__name__,
+                        exc_info=True,
+                    )
 
                 # Commit the transaction
                 await session.commit()

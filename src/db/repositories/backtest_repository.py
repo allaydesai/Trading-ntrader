@@ -627,3 +627,22 @@ class BacktestRepository:
 
         result = await self.session.execute(stmt)
         return [row[0] for row in result.all()]
+
+    async def bulk_create_trades(self, trades: List) -> None:
+        """
+        Bulk insert trades for a backtest run.
+
+        Uses SQLAlchemy's add_all() for efficient bulk insertion.
+
+        Args:
+            trades: List of Trade model instances to insert
+
+        Raises:
+            DatabaseConnectionError: If database operation fails
+        """
+        try:
+            self.session.add_all(trades)
+            await self.session.flush()
+
+        except OperationalError as e:
+            raise DatabaseConnectionError(f"Database connection failed: {e}") from e
