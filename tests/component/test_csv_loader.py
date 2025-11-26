@@ -1,14 +1,15 @@
 """Tests for CSV loader service."""
 
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
-from datetime import datetime, timezone
+
 import pandas as pd
 import pytest
+from nautilus_trader.model.data import Bar
 
 from src.services.csv_loader import CSVLoader, ValidationError
-from nautilus_trader.model.data import Bar
 
 
 class TestCSVLoader:
@@ -28,9 +29,7 @@ class TestCSVLoader:
     def test_init_with_conflict_mode(self, mock_catalog_service_class):
         """Test CSV loader initialization with custom conflict mode."""
         mock_catalog_service = MagicMock()
-        loader = CSVLoader(
-            catalog_service=mock_catalog_service, conflict_mode="overwrite"
-        )
+        loader = CSVLoader(catalog_service=mock_catalog_service, conflict_mode="overwrite")
         assert loader.conflict_mode == "overwrite"
         assert loader.catalog_service == mock_catalog_service
 
@@ -100,9 +99,7 @@ class TestCSVLoader:
             }
         )
 
-        bars, errors = await loader._convert_to_bars(
-            df, "AAPL", "NASDAQ", "1-MINUTE-LAST"
-        )
+        bars, errors = await loader._convert_to_bars(df, "AAPL", "NASDAQ", "1-MINUTE-LAST")
 
         assert len(bars) == 1
         assert len(errors) == 0
@@ -131,16 +128,12 @@ class TestCSVLoader:
             }
         )
 
-        bars, errors = await loader._convert_to_bars(
-            df, "AAPL", "NASDAQ", "1-MINUTE-LAST"
-        )
+        bars, errors = await loader._convert_to_bars(df, "AAPL", "NASDAQ", "1-MINUTE-LAST")
 
         # Should collect validation errors rather than raising
         assert len(bars) == 0
         assert len(errors) > 0
-        assert (
-            "Invalid timestamp format" in errors[0] or "Invalid OHLCV data" in errors[0]
-        )
+        assert "Invalid timestamp format" in errors[0] or "Invalid OHLCV data" in errors[0]
 
     @pytest.mark.asyncio
     @patch("src.services.csv_loader.DataCatalogService")
@@ -159,9 +152,7 @@ class TestCSVLoader:
             }
         )
 
-        bars, errors = await loader._convert_to_bars(
-            df, "AAPL", "NASDAQ", "1-MINUTE-LAST"
-        )
+        bars, errors = await loader._convert_to_bars(df, "AAPL", "NASDAQ", "1-MINUTE-LAST")
 
         assert len(bars) == 1
         assert len(errors) == 0
@@ -188,9 +179,7 @@ class TestCSVLoader:
             }
         )
 
-        bars, errors = await loader._convert_to_bars(
-            df, "AAPL", "NASDAQ", "1-MINUTE-LAST"
-        )
+        bars, errors = await loader._convert_to_bars(df, "AAPL", "NASDAQ", "1-MINUTE-LAST")
 
         # Should have validation error
         assert len(bars) == 0
@@ -222,9 +211,7 @@ class TestCSVLoader:
 
             # Mock catalog service
             mock_catalog_service = MagicMock()
-            mock_catalog_service.get_availability.return_value = (
-                None  # No existing data
-            )
+            mock_catalog_service.get_availability.return_value = None  # No existing data
             mock_catalog_service.write_bars = MagicMock()
             mock_catalog_service.catalog_path = Path("/tmp/catalog")
             mock_catalog_service_class.return_value = mock_catalog_service
@@ -232,9 +219,7 @@ class TestCSVLoader:
             # Mock glob to return no files initially
             with patch.object(Path, "glob", return_value=[]):
                 loader = CSVLoader(catalog_service=mock_catalog_service)
-                result = await loader.load_file(
-                    csv_file, "AAPL", "NASDAQ", "1-MINUTE-LAST"
-                )
+                result = await loader.load_file(csv_file, "AAPL", "NASDAQ", "1-MINUTE-LAST")
 
             # Verify result structure
             assert result["file"] == str(csv_file)
@@ -258,9 +243,7 @@ class TestCSVLoader:
     @pytest.mark.asyncio
     @patch("src.services.csv_loader.pd.read_csv")
     @patch("src.services.csv_loader.DataCatalogService")
-    async def test_load_file_with_validation_error(
-        self, mock_catalog_service_class, mock_read_csv
-    ):
+    async def test_load_file_with_validation_error(self, mock_catalog_service_class, mock_read_csv):
         """Test load_file with CSV validation error."""
         # Create a temporary file for testing
         with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
@@ -290,9 +273,7 @@ class TestCSVLoader:
     @pytest.mark.asyncio
     @patch("src.services.csv_loader.pd.read_csv")
     @patch("src.services.csv_loader.DataCatalogService")
-    async def test_load_file_skip_conflicts(
-        self, mock_catalog_service_class, mock_read_csv
-    ):
+    async def test_load_file_skip_conflicts(self, mock_catalog_service_class, mock_read_csv):
         """Test load_file with conflict_mode='skip'."""
         # Create a temporary file
         with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
@@ -323,12 +304,8 @@ class TestCSVLoader:
 
             # Mock glob to return no files
             with patch.object(Path, "glob", return_value=[]):
-                loader = CSVLoader(
-                    catalog_service=mock_catalog_service, conflict_mode="skip"
-                )
-                result = await loader.load_file(
-                    csv_file, "AAPL", "NASDAQ", "1-MINUTE-LAST"
-                )
+                loader = CSVLoader(catalog_service=mock_catalog_service, conflict_mode="skip")
+                result = await loader.load_file(csv_file, "AAPL", "NASDAQ", "1-MINUTE-LAST")
 
             # Should skip all bars due to existing data
             assert result["bars_written"] == 0

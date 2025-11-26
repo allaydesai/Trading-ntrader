@@ -1,9 +1,9 @@
 """Nautilus Trader data format converter."""
 
-from typing import List, Dict, Any
+from typing import Any, Dict, List
 
-from nautilus_trader.model.data import Bar, BarType, BarSpecification
-from nautilus_trader.model.enums import BarAggregation, PriceType, AggregationSource
+from nautilus_trader.model.data import Bar, BarSpecification, BarType
+from nautilus_trader.model.enums import AggregationSource, BarAggregation, PriceType
 from nautilus_trader.model.objects import Price, Quantity
 
 
@@ -63,9 +63,7 @@ class NautilusConverter:
             # Fallback to original implementation
             return self._convert_to_nautilus_bars_fallback(data, instrument_id)
 
-    def _convert_to_nautilus_bars_fallback(
-        self, data: List[Dict[str, Any]], instrument_id
-    ) -> List:
+    def _convert_to_nautilus_bars_fallback(self, data: List[Dict[str, Any]], instrument_id) -> List:
         """
         Fallback method for converting market data to Nautilus Trader Bar objects.
 
@@ -126,9 +124,7 @@ class NautilusConverter:
         # Return the created bars
         return bars
 
-    def convert_to_nautilus_format(
-        self, data: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
+    def convert_to_nautilus_format(self, data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Convert market data to format suitable for Nautilus Trader.
 

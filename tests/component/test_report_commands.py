@@ -1,17 +1,20 @@
 """Tests for report CLI commands."""
 
+from datetime import datetime
+from decimal import Decimal
+from unittest.mock import MagicMock, patch
+
 import pytest
 from click.testing import CliRunner
-from unittest.mock import patch, MagicMock
-from decimal import Decimal
-from datetime import datetime
 
 from src.cli.commands.report import (
+    export_all,
+    generate,
     report,
     summary,
-    generate,
+)
+from src.cli.commands.report import (
     list as list_cmd,
-    export_all,
 )
 
 # Skip entire module until report commands are updated to use new BacktestRun model
@@ -120,9 +123,7 @@ class TestGenerateCommand:
     @patch("src.cli.commands.report.ResultsStore")
     @patch("src.cli.commands.report.TextReportGenerator")
     @pytest.mark.component
-    def test_generate_text_format(
-        self, mock_generator_class, mock_store_class, mock_result
-    ):
+    def test_generate_text_format(self, mock_generator_class, mock_store_class, mock_result):
         """Test generating text format report."""
         # Setup mocks
         mock_store = MagicMock()
@@ -134,9 +135,7 @@ class TestGenerateCommand:
         mock_generator_class.return_value = mock_generator
 
         runner = CliRunner()
-        result = runner.invoke(
-            generate, ["--result-id", "test-123-456", "--format", "text"]
-        )
+        result = runner.invoke(generate, ["--result-id", "test-123-456", "--format", "text"])
 
         assert result.exit_code == 0
         assert "Generating TEXT report" in result.output
@@ -210,9 +209,7 @@ class TestGenerateCommand:
         mock_store_class.return_value = mock_store
 
         runner = CliRunner()
-        result = runner.invoke(
-            generate, ["--result-id", "invalid-id", "--format", "text"]
-        )
+        result = runner.invoke(generate, ["--result-id", "invalid-id", "--format", "text"])
 
         assert result.exit_code == 0
         assert "Result not found" in result.output

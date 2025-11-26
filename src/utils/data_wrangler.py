@@ -1,13 +1,13 @@
 """Data wrangler for converting market data to Nautilus Trader format."""
 
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
-from nautilus_trader.model.data import Bar, BarType, BarSpecification
-from nautilus_trader.model.enums import BarAggregation, PriceType, AggregationSource
-from nautilus_trader.model.objects import Price, Quantity
+from nautilus_trader.model.data import Bar, BarSpecification, BarType
+from nautilus_trader.model.enums import AggregationSource, BarAggregation, PriceType
 from nautilus_trader.model.instruments import Instrument
+from nautilus_trader.model.objects import Price, Quantity
 
 
 class MarketDataWrangler:
@@ -240,9 +240,7 @@ class MarketDataWrangler:
         # Validate data structure
         required_fields = ["timestamp", "open", "high", "low", "close", "volume"]
         first_record = data[0]
-        missing_fields = [
-            field for field in required_fields if field not in first_record
-        ]
+        missing_fields = [field for field in required_fields if field not in first_record]
         if missing_fields:
             raise ValueError(f"Missing required fields: {missing_fields}")
 

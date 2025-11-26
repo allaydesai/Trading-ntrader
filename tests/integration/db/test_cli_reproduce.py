@@ -5,13 +5,14 @@ Tests the complete CLI command flow for re-running previous backtests
 with their exact same configuration.
 """
 
-import pytest
-from uuid import uuid4
-from decimal import Decimal
-from datetime import datetime, timezone
-from click.testing import CliRunner
-from unittest.mock import patch, MagicMock
 from contextlib import contextmanager
+from datetime import datetime, timezone
+from decimal import Decimal
+from unittest.mock import MagicMock, patch
+from uuid import uuid4
+
+import pytest
+from click.testing import CliRunner
 
 from src.cli.commands.reproduce import reproduce_backtest
 from src.db.repositories.backtest_repository_sync import SyncBacktestRepository
@@ -73,12 +74,8 @@ def test_reproduce_creates_new_run_with_same_config(sync_db_session):
 
     with (
         patch("src.cli.commands.reproduce.get_sync_session", mock_get_sync_session),
-        patch(
-            "src.services.data_catalog.DataCatalogService", return_value=mock_catalog
-        ),
-        patch(
-            "src.cli.commands.reproduce.MinimalBacktestRunner", return_value=mock_runner
-        ),
+        patch("src.services.data_catalog.DataCatalogService", return_value=mock_catalog),
+        patch("src.cli.commands.reproduce.MinimalBacktestRunner", return_value=mock_runner),
     ):
         runner = CliRunner()
         result = runner.invoke(reproduce_backtest, [str(original_run_id)])
@@ -88,10 +85,7 @@ def test_reproduce_creates_new_run_with_same_config(sync_db_session):
     # But it should successfully retrieve and display the original config
     assert "SMA Crossover" in result.output or "sma_crossover" in result.output
     assert "AAPL" in result.output
-    assert (
-        str(original_run_id)[:12] in result.output
-        or str(original_run_id)[:8] in result.output
-    )
+    assert str(original_run_id)[:12] in result.output or str(original_run_id)[:8] in result.output
 
 
 @pytest.mark.integration
@@ -149,12 +143,8 @@ def test_reproduce_sets_reproduced_from_run_id(sync_db_session):
 
     with (
         patch("src.cli.commands.reproduce.get_sync_session", mock_get_sync_session),
-        patch(
-            "src.services.data_catalog.DataCatalogService", return_value=mock_catalog
-        ),
-        patch(
-            "src.cli.commands.reproduce.MinimalBacktestRunner", return_value=mock_runner
-        ),
+        patch("src.services.data_catalog.DataCatalogService", return_value=mock_catalog),
+        patch("src.cli.commands.reproduce.MinimalBacktestRunner", return_value=mock_runner),
     ):
         runner = CliRunner()
         result = runner.invoke(reproduce_backtest, [str(original_run_id)])
@@ -162,10 +152,7 @@ def test_reproduce_sets_reproduced_from_run_id(sync_db_session):
     # Assert: Command should retrieve and display original config
     assert "Mean Reversion" in result.output or "mean_reversion" in result.output
     assert "TSLA" in result.output
-    assert (
-        str(original_run_id)[:12] in result.output
-        or str(original_run_id)[:8] in result.output
-    )
+    assert str(original_run_id)[:12] in result.output or str(original_run_id)[:8] in result.output
 
 
 @pytest.mark.integration
@@ -280,20 +267,13 @@ def test_reproduce_displays_original_configuration(sync_db_session):
 
     with (
         patch("src.cli.commands.reproduce.get_sync_session", mock_get_sync_session),
-        patch(
-            "src.services.data_catalog.DataCatalogService", return_value=mock_catalog
-        ),
-        patch(
-            "src.cli.commands.reproduce.MinimalBacktestRunner", return_value=mock_runner
-        ),
+        patch("src.services.data_catalog.DataCatalogService", return_value=mock_catalog),
+        patch("src.cli.commands.reproduce.MinimalBacktestRunner", return_value=mock_runner),
     ):
         runner = CliRunner()
         result = runner.invoke(reproduce_backtest, [str(original_run_id)])
 
     # Assert: Should display original configuration
-    assert (
-        str(original_run_id)[:12] in result.output
-        or str(original_run_id)[:8] in result.output
-    )
+    assert str(original_run_id)[:12] in result.output or str(original_run_id)[:8] in result.output
     assert "Momentum" in result.output or "momentum" in result.output
     assert "GOOGL" in result.output

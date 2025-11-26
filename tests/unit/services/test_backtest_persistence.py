@@ -1,17 +1,18 @@
 """Unit tests for BacktestPersistenceService."""
 
-import pytest
 from datetime import datetime, timezone
 from decimal import Decimal
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
-from unittest.mock import Mock, AsyncMock
 
-from src.services.backtest_persistence import BacktestPersistenceService
+import pytest
+
 from src.core.backtest_runner import BacktestResult
 from src.db.exceptions import (
-    ValidationError,
     DuplicateRecordError,
+    ValidationError,
 )
+from src.services.backtest_persistence import BacktestPersistenceService
 
 
 @pytest.fixture
@@ -186,9 +187,7 @@ class TestBacktestPersistenceServiceValidation:
     """Test suite for metric validation."""
 
     @pytest.mark.asyncio
-    async def test_rejects_nan_metrics(
-        self, persistence_service, sample_config_snapshot
-    ):
+    async def test_rejects_nan_metrics(self, persistence_service, sample_config_snapshot):
         """Test that NaN metrics are rejected with validation error."""
         # Arrange
         result_with_nan = BacktestResult(
@@ -218,9 +217,7 @@ class TestBacktestPersistenceServiceValidation:
             )
 
     @pytest.mark.asyncio
-    async def test_rejects_infinite_metrics(
-        self, persistence_service, sample_config_snapshot
-    ):
+    async def test_rejects_infinite_metrics(self, persistence_service, sample_config_snapshot):
         """Test that infinite metrics are rejected with validation error."""
         # Arrange
         result_with_inf = BacktestResult(
@@ -352,9 +349,7 @@ class TestBacktestPersistenceServiceMetricCalculation:
         )
 
         # Assert
-        metrics_call_kwargs = (
-            mock_repository.create_performance_metrics.call_args.kwargs
-        )
+        metrics_call_kwargs = mock_repository.create_performance_metrics.call_args.kwargs
         expected_win_rate = Decimal("0.6500")  # 65/100
         assert metrics_call_kwargs["win_rate"] == expected_win_rate
 
@@ -394,8 +389,6 @@ class TestBacktestPersistenceServiceMetricCalculation:
         )
 
         # Assert
-        metrics_call_kwargs = (
-            mock_repository.create_performance_metrics.call_args.kwargs
-        )
+        metrics_call_kwargs = mock_repository.create_performance_metrics.call_args.kwargs
         assert metrics_call_kwargs["win_rate"] is None  # Cannot calculate with 0 trades
         assert metrics_call_kwargs["total_trades"] == 0

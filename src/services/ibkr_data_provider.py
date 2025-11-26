@@ -2,13 +2,13 @@
 
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import List, Dict, Any
+from typing import Any, Dict, List
 
 from nautilus_trader.adapters.interactive_brokers.common import IBContract
 
 from src.config import get_settings
-from src.services.ibkr_client import IBKRHistoricalClient
 from src.services.data_fetcher import HistoricalDataFetcher
+from src.services.ibkr_client import IBKRHistoricalClient
 
 
 class IBKRDataProvider:
@@ -88,9 +88,7 @@ class IBKRDataProvider:
             Dictionary with database schema fields
         """
         # Convert nanosecond timestamp to datetime
-        timestamp = datetime.fromtimestamp(
-            bar.ts_event / 1_000_000_000, tz=timezone.utc
-        )
+        timestamp = datetime.fromtimestamp(bar.ts_event / 1_000_000_000, tz=timezone.utc)
 
         return {
             "symbol": symbol,

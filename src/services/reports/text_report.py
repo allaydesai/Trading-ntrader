@@ -1,15 +1,15 @@
 """Text report generation service using Rich formatting."""
 
-from typing import Dict, Any, List, Optional
-from decimal import Decimal
 from datetime import datetime
-import pandas as pd
+from decimal import Decimal
+from typing import Any, Dict, List, Optional
 
-from rich.console import Console
-from rich.table import Table
-from rich.panel import Panel
-from rich.text import Text
+import pandas as pd
 from rich.align import Align
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+from rich.text import Text
 
 
 class TextReportGenerator:
@@ -120,9 +120,7 @@ class TextReportGenerator:
 
         return capture.get()
 
-    def generate_strategy_attribution_report(
-        self, strategy_performance: Dict[str, Dict]
-    ) -> str:
+    def generate_strategy_attribution_report(self, strategy_performance: Dict[str, Dict]) -> str:
         """
         Generate strategy performance attribution report.
 
@@ -158,9 +156,7 @@ class TextReportGenerator:
         """
         try:
             if trades is not None and equity_curve is not None:
-                content = self.generate_comprehensive_report(
-                    metrics, trades, equity_curve
-                )
+                content = self.generate_comprehensive_report(metrics, trades, equity_curve)
             else:
                 content = self.generate_performance_report(metrics)
 
@@ -271,9 +267,7 @@ class TextReportGenerator:
     def _render_trade_history_table(self, trades: List[Dict[str, Any]]) -> None:
         """Render trade history table."""
         if not trades:
-            self.console.print(
-                Panel("No trade data available", title="📋 Trade History")
-            )
+            self.console.print(Panel("No trade data available", title="📋 Trade History"))
             return
 
         table = Table(title="📋 Trade History", style="white")
@@ -319,9 +313,7 @@ class TextReportGenerator:
     def _render_equity_curve_summary(self, equity_curve: pd.Series) -> None:
         """Render equity curve summary."""
         if equity_curve.empty:
-            self.console.print(
-                Panel("No equity curve data available", title="📈 Equity Curve")
-            )
+            self.console.print(Panel("No equity curve data available", title="📈 Equity Curve"))
             return
 
         starting_value = equity_curve.iloc[0]
@@ -341,19 +333,13 @@ class TextReportGenerator:
         Total Return: {self._format_percentage(total_return)}
         """
 
-        panel = Panel(
-            summary_text.strip(), title="📈 Equity Curve Summary", border_style="green"
-        )
+        panel = Panel(summary_text.strip(), title="📈 Equity Curve Summary", border_style="green")
         self.console.print(panel)
 
-    def _render_strategy_attribution_table(
-        self, strategy_performance: Dict[str, Dict]
-    ) -> None:
+    def _render_strategy_attribution_table(self, strategy_performance: Dict[str, Dict]) -> None:
         """Render strategy performance attribution table."""
         if not strategy_performance:
-            self.console.print(
-                Panel("No strategy data available", title="🎯 Strategy Performance")
-            )
+            self.console.print(Panel("No strategy data available", title="🎯 Strategy Performance"))
             return
 
         table = Table(title="🎯 Strategy Performance Attribution", style="blue")

@@ -42,12 +42,11 @@ def list():
     # Show usage example
     console.print("💡 Usage Examples", style="green bold")
     console.print(
-        "   Create config template: ntrader strategy create --type sma_crossover --output my_config.yaml"
+        "   Create config template: ntrader strategy create "
+        "--type sma_crossover --output my_config.yaml"
     )
     console.print("   Validate config:        ntrader strategy validate my_config.yaml")
-    console.print(
-        "   Run backtest:           ntrader backtest run-config my_config.yaml"
-    )
+    console.print("   Run backtest:           ntrader backtest run-config my_config.yaml")
 
 
 @strategy.command()

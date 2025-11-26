@@ -259,13 +259,9 @@ class SyncBacktestRepository:
 
         if cursor:
             created_at, id = cursor
-            stmt = stmt.where(
-                tuple_(BacktestRun.created_at, BacktestRun.id) < (created_at, id)
-            )
+            stmt = stmt.where(tuple_(BacktestRun.created_at, BacktestRun.id) < (created_at, id))
 
-        stmt = stmt.order_by(
-            BacktestRun.created_at.desc(), BacktestRun.id.desc()
-        ).limit(limit)
+        stmt = stmt.order_by(BacktestRun.created_at.desc(), BacktestRun.id.desc()).limit(limit)
 
         result = self.session.execute(stmt)
         return list(result.scalars().all())
@@ -302,9 +298,7 @@ class SyncBacktestRepository:
                 )
             )
 
-        stmt = stmt.order_by(
-            BacktestRun.created_at.desc(), BacktestRun.id.desc()
-        ).limit(limit)
+        stmt = stmt.order_by(BacktestRun.created_at.desc(), BacktestRun.id.desc()).limit(limit)
 
         result = self.session.execute(stmt)
         return list(result.scalars().all())
@@ -352,9 +346,7 @@ class SyncBacktestRepository:
         """
         stmt = (
             select(BacktestRun)
-            .join(
-                PerformanceMetrics, BacktestRun.id == PerformanceMetrics.backtest_run_id
-            )
+            .join(PerformanceMetrics, BacktestRun.id == PerformanceMetrics.backtest_run_id)
             .options(joinedload(BacktestRun.metrics))
             .where(PerformanceMetrics.sharpe_ratio.isnot(None))
             .order_by(PerformanceMetrics.sharpe_ratio.desc())
@@ -392,9 +384,7 @@ class SyncBacktestRepository:
         """
         stmt = (
             select(BacktestRun)
-            .join(
-                PerformanceMetrics, BacktestRun.id == PerformanceMetrics.backtest_run_id
-            )
+            .join(PerformanceMetrics, BacktestRun.id == PerformanceMetrics.backtest_run_id)
             .options(joinedload(BacktestRun.metrics))
             .order_by(PerformanceMetrics.total_return.desc())
             .limit(limit)
@@ -419,9 +409,7 @@ class SyncBacktestRepository:
         Returns:
             Total count of matching backtests
         """
-        stmt = select(func.count(BacktestRun.id)).where(
-            BacktestRun.strategy_name == strategy_name
-        )
+        stmt = select(func.count(BacktestRun.id)).where(BacktestRun.strategy_name == strategy_name)
 
         result = self.session.execute(stmt)
         return result.scalar_one()
@@ -437,9 +425,7 @@ class SyncBacktestRepository:
         result = self.session.execute(stmt)
         return result.scalar_one()
 
-    def find_by_instrument(
-        self, instrument_symbol: str, limit: int = 20
-    ) -> List[BacktestRun]:
+    def find_by_instrument(self, instrument_symbol: str, limit: int = 20) -> List[BacktestRun]:
         """
         Find backtests by instrument symbol.
 

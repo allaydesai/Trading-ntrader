@@ -7,11 +7,12 @@ Purpose: Test risk checks behavior without framework overhead
 Reference: design.md Section 2.3 - Component Tests Using Test Doubles
 """
 
-import pytest
 from decimal import Decimal
 
-from src.core.risk_management import RiskManagementLogic, RiskLevel
-from tests.component.doubles import TestTradingEngine, TestOrder
+import pytest
+
+from src.core.risk_management import RiskLevel, RiskManagementLogic
+from tests.component.doubles import TestOrder, TestTradingEngine
 
 
 @pytest.mark.component
@@ -22,9 +23,7 @@ class TestRiskChecksWithTestDoubles:
         """Test that risk check allows position sizes within risk limits."""
         # Set up test state with engine and risk manager
         engine = TestTradingEngine(initial_balance=Decimal("10000"))
-        assert engine.initial_balance == Decimal("10000"), (
-            "Engine initialized with correct balance"
-        )
+        assert engine.initial_balance == Decimal("10000"), "Engine initialized with correct balance"
 
         risk_manager = RiskManagementLogic(
             max_position_risk=Decimal("0.02"), max_portfolio_risk=Decimal("0.10")
@@ -66,9 +65,7 @@ class TestRiskChecksWithTestDoubles:
         engine = TestTradingEngine(
             initial_balance=Decimal("10000"), max_position_size=Decimal("1.0")
         )
-        assert engine.initial_balance == Decimal("10000"), (
-            "Engine initialized with correct balance"
-        )
+        assert engine.initial_balance == Decimal("10000"), "Engine initialized with correct balance"
         assert engine.max_position_size == Decimal("1.0"), (
             "Engine initialized with correct position limit"
         )

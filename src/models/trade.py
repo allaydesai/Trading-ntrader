@@ -1,259 +1,241 @@
-"""Enhanced trade model extending Nautilus Position data."""
+"""
+Pydantic models for trade tracking and performance analytics.
 
-from decimal import Decimal
+This module defines validation models for trade data, equity curves,
+drawdown analysis, and trade statistics.
+"""
+
 from datetime import datetime
-from typing import Optional, Any, Dict
-from pydantic import BaseModel, Field
-from nautilus_trader.model.position import Position
+from decimal import Decimal
+from typing import Optional
+
+from pydantic import BaseModel, Field, field_validator
 
 
-class TradeModel(BaseModel):
-    """
-    Enhanced trade model extending Nautilus Position data.
+class TradeBase(BaseModel):
+    """Base trade model with common fields."""
 
-    This model provides a structured representation of trading positions
-    with additional metadata for analysis and reporting.
-    """
+    instrument_id: str = Field(..., min_length=1, max_length=50)
+    trade_id: str
+    venue_order_id: str
+    client_order_id: Optional[str] = None
 
-    # Core fields from Nautilus Position
-    position_id: str = Field(..., description="Nautilus position ID")
-    instrument_id: str = Field(..., description="Traded instrument")
-    entry_time: datetime = Field(..., description="Position entry timestamp")
-    entry_price: Decimal = Field(..., ge=0, description="Entry execution price")
-    exit_time: Optional[datetime] = Field(None, description="Position exit timestamp")
-    exit_price: Optional[Decimal] = Field(
-        None, ge=0, description="Exit execution price"
-    )
-    quantity: Decimal = Field(..., ge=0, description="Position size")
-    side: str = Field(..., description="Position side (LONG/SHORT)")
+    order_side: str = Field(..., pattern="^(BUY|SELL)$")
+    quantity: Decimal = Field(..., gt=0, decimal_places=8)
+    entry_price: Decimal = Field(..., gt=0, decimal_places=8)
+    exit_price: Optional[Decimal] = Field(None, gt=0, decimal_places=8)
 
-    # PnL and costs
-    commission: Decimal = Field(
-        default=Decimal("0"), ge=0, description="Total commission"
-    )
-    slippage: Decimal = Field(default=Decimal("0"), description="Slippage cost")
-    realized_pnl: Optional[Decimal] = Field(None, description="Realized PnL")
-    pnl_pct: Optional[Decimal] = Field(None, description="Percentage return")
+    commission_amount: Optional[Decimal] = Field(None, decimal_places=8)
+    commission_currency: Optional[str] = Field(None, max_length=10)
+    fees_amount: Optional[Decimal] = Field(default=Decimal("0.00"), decimal_places=8)
 
-    # Additional tracking fields
-    strategy_name: Optional[str] = Field(
-        None, description="Strategy that created trade"
-    )
-    notes: Optional[str] = Field(None, description="Trade notes")
+    entry_timestamp: datetime
+    exit_timestamp: Optional[datetime] = None
 
-    # Metadata
-    created_at: datetime = Field(
-        default_factory=datetime.now, description="Record creation time"
-    )
-    updated_at: datetime = Field(
-        default_factory=datetime.now, description="Record update time"
-    )
-
-    model_config = {
-        "json_encoders": {Decimal: str, datetime: lambda v: v.isoformat()},
-        "use_enum_values": True,
-    }
-
+    @field_validator("entry_price", "exit_price")
     @classmethod
-    def from_nautilus_position(
-        cls, position: Position, strategy_name: Optional[str] = None
-    ) -> "TradeModel":
-        """
-        Create TradeModel from Nautilus Position.
+    def validate_prices_positive(cls, v: Optional[Decimal]) -> Optional[Decimal]:
+        """Validate that prices are positive."""
+        if v is not None and v <= 0:
+            raise ValueError("Prices must be positive")
+        return v
 
-        Args:
-            position: Nautilus Position instance
-            strategy_name: Optional strategy name that created the trade
+    model_config = {"json_encoders": {Decimal: str, datetime: lambda v: v.isoformat()}}
 
-        Returns:
-            TradeModel instance with data from Nautilus Position
-        """
-        # Extract basic position data
-        position_id = str(position.id) if position.id else "unknown"
-        instrument_id = (
-            str(position.instrument_id) if position.instrument_id else "unknown"
-        )
 
-        # Handle timestamps - Nautilus uses nanosecond precision
-        entry_time = position.opened_time if position.opened_time else datetime.now()
-        exit_time = (
-            position.closed_time
-            if position.is_closed and position.closed_time
-            else None
-        )
+class TradeCreate(TradeBase):
+    """Model for creating new trades from Nautilus Trader FillReports."""
 
-        # Extract prices and quantities
-        entry_price = (
-            Decimal(str(position.avg_px_open)) if position.avg_px_open else Decimal("0")
-        )
-        exit_price = None
-        if position.is_closed and position.avg_px_close:
-            exit_price = Decimal(str(position.avg_px_close))
+    backtest_run_id: int
 
-        quantity = (
-            Decimal(str(abs(position.quantity))) if position.quantity else Decimal("0")
-        )
 
-        # Determine side
-        side = "LONG" if position.is_long else "SHORT"
+class Trade(TradeBase):
+    """Complete trade model including computed fields."""
 
-        # Extract financial data
-        commission = (
-            Decimal(str(position.commission)) if position.commission else Decimal("0")
-        )
-        realized_pnl = None
-        if position.is_closed and position.realized_pnl is not None:
-            realized_pnl = Decimal(str(position.realized_pnl))
+    id: int
+    backtest_run_id: int
 
-        return cls(
-            position_id=position_id,
-            instrument_id=instrument_id,
-            entry_time=entry_time,
-            entry_price=entry_price,
-            exit_time=exit_time,
-            exit_price=exit_price,
-            quantity=quantity,
-            side=side,
-            commission=commission,
-            realized_pnl=realized_pnl,
-            strategy_name=strategy_name,
-            pnl_pct=None,
-            notes=None,
-        )
+    profit_loss: Optional[Decimal] = None
+    profit_pct: Optional[Decimal] = None
+    holding_period_seconds: Optional[int] = None
 
-    def calculate_pnl_percentage(self) -> Optional[Decimal]:
-        """
-        Calculate percentage return for the trade.
+    created_at: datetime
 
-        Returns:
-            Percentage return as Decimal, or None if trade is not closed
-        """
-        if not self.exit_price or not self.entry_price or self.entry_price == 0:
-            return None
+    model_config = {"from_attributes": True}
 
-        if self.side == "LONG":
-            pnl_pct = ((self.exit_price - self.entry_price) / self.entry_price) * 100
-        else:  # SHORT
-            pnl_pct = ((self.entry_price - self.exit_price) / self.entry_price) * 100
 
-        return Decimal(str(pnl_pct))
+class PaginationMetadata(BaseModel):
+    """Pagination metadata for trade list responses."""
 
-    def calculate_gross_pnl(self) -> Optional[Decimal]:
-        """
-        Calculate gross PnL (before costs) for the trade.
+    total_items: int
+    total_pages: int
+    current_page: int
+    page_size: int
+    has_next: bool
+    has_prev: bool
 
-        Returns:
-            Gross PnL as Decimal, or None if trade is not closed
-        """
-        if not self.exit_price or not self.entry_price:
-            return None
 
-        if self.side == "LONG":
-            gross_pnl = (self.exit_price - self.entry_price) * self.quantity
-        else:  # SHORT
-            gross_pnl = (self.entry_price - self.exit_price) * self.quantity
+class SortingMetadata(BaseModel):
+    """Sorting metadata for trade list responses."""
 
-        return Decimal(str(gross_pnl))
+    sort_by: str
+    sort_order: str  # 'asc' or 'desc'
 
-    def calculate_net_pnl(self) -> Optional[Decimal]:
-        """
-        Calculate net PnL (after costs) for the trade.
 
-        Returns:
-            Net PnL as Decimal, or None if trade is not closed
-        """
-        gross_pnl = self.calculate_gross_pnl()
-        if gross_pnl is None:
-            return None
+class TradeListResponse(BaseModel):
+    """Paginated trade list response with sorting and pagination metadata."""
 
-        # Subtract costs
-        net_pnl = gross_pnl - self.commission - self.slippage
+    trades: list[Trade]
+    pagination: PaginationMetadata
+    sorting: SortingMetadata
 
-        return Decimal(str(net_pnl))
 
-    def update_exit_data(
-        self, exit_price: Decimal, exit_time: Optional[datetime] = None
-    ):
-        """
-        Update trade with exit information.
+class EquityCurvePoint(BaseModel):
+    """
+    Single point on equity curve showing account balance at a timestamp.
 
-        Args:
-            exit_price: Exit execution price
-            exit_time: Exit timestamp (defaults to now)
-        """
-        self.exit_price = exit_price
-        self.exit_time = exit_time or datetime.now()
-        self.updated_at = datetime.now()
+    Generated from cumulative trade P&L, not stored in database.
+    """
 
-        # Recalculate derived metrics
-        self.pnl_pct = self.calculate_pnl_percentage()
-        self.realized_pnl = self.calculate_net_pnl()
+    timestamp: datetime
+    balance: Decimal = Field(..., decimal_places=2)
+    cumulative_return_pct: Decimal = Field(..., decimal_places=4)
+    trade_number: Optional[int] = None
 
-    @property
-    def is_open(self) -> bool:
-        """Check if trade is still open."""
-        return self.exit_time is None
+    model_config = {"json_encoders": {Decimal: str, datetime: lambda v: v.isoformat()}}
 
-    @property
-    def is_closed(self) -> bool:
-        """Check if trade is closed."""
-        return self.exit_time is not None
 
-    @property
-    def duration_seconds(self) -> Optional[int]:
-        """Get trade duration in seconds."""
-        if not self.exit_time:
-            return None
-        return int((self.exit_time - self.entry_time).total_seconds())
+class EquityCurveResponse(BaseModel):
+    """API response for equity curve data."""
 
-    @property
-    def duration_hours(self) -> Optional[float]:
-        """Get trade duration in hours."""
-        duration_sec = self.duration_seconds
-        return duration_sec / 3600 if duration_sec is not None else None
+    points: list[EquityCurvePoint]
+    initial_capital: Decimal
+    final_balance: Decimal
+    total_return_pct: Decimal
 
-    @property
-    def is_winning_trade(self) -> Optional[bool]:
-        """Check if trade is profitable."""
-        if self.realized_pnl is None:
-            return None
-        return self.realized_pnl > 0
 
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for export."""
+class DrawdownPeriod(BaseModel):
+    """Single drawdown period from peak to trough."""
+
+    peak_timestamp: datetime
+    peak_balance: Decimal
+    trough_timestamp: datetime
+    trough_balance: Decimal
+    drawdown_amount: Decimal
+    drawdown_pct: Decimal = Field(..., decimal_places=4)
+    duration_days: int
+    recovery_timestamp: Optional[datetime] = None
+    recovered: bool = False
+
+
+class DrawdownMetrics(BaseModel):
+    """Maximum drawdown analysis."""
+
+    max_drawdown: Optional[DrawdownPeriod] = None
+    top_drawdowns: list[DrawdownPeriod] = Field(default_factory=list, max_length=5)
+    current_drawdown: Optional[DrawdownPeriod] = None
+    total_drawdown_periods: int
+
+
+class TradeStatistics(BaseModel):
+    """Aggregate trade performance statistics."""
+
+    # Trade counts
+    total_trades: int
+    winning_trades: int
+    losing_trades: int
+    breakeven_trades: int = 0
+
+    # Win rate
+    win_rate: Decimal = Field(..., ge=0, le=100, decimal_places=2)
+
+    # Profit metrics
+    total_profit: Decimal
+    total_loss: Decimal
+    net_profit: Decimal
+    average_win: Decimal
+    average_loss: Decimal
+    largest_win: Decimal
+    largest_loss: Decimal
+
+    # Risk metrics
+    profit_factor: Optional[Decimal] = None  # total_profit / abs(total_loss)
+    expectancy: Decimal  # average profit per trade
+
+    # Streaks
+    max_consecutive_wins: int
+    max_consecutive_losses: int
+
+    # Holding periods
+    avg_holding_period_hours: Decimal
+    max_holding_period_hours: int
+    min_holding_period_hours: int
+
+    # Monthly breakdown (optional)
+    monthly_breakdown: Optional[dict[str, Decimal]] = None
+
+
+def calculate_trade_metrics(trade: TradeCreate) -> dict:
+    """
+    Calculate derived fields for a trade.
+
+    Args:
+        trade: TradeCreate model with entry/exit details
+
+    Returns:
+        Dictionary with profit_loss, profit_pct, holding_period_seconds
+
+    Example:
+        >>> from datetime import timezone
+        >>> trade = TradeCreate(
+        ...     backtest_run_id=1,
+        ...     instrument_id="AAPL",
+        ...     trade_id="trade-123",
+        ...     venue_order_id="order-456",
+        ...     order_side="BUY",
+        ...     quantity=Decimal("100"),
+        ...     entry_price=Decimal("150.00"),
+        ...     exit_price=Decimal("160.00"),
+        ...     commission_amount=Decimal("5.00"),
+        ...     entry_timestamp=datetime(2025, 1, 1, 10, 0, 0, tzinfo=timezone.utc),
+        ...     exit_timestamp=datetime(2025, 1, 1, 11, 0, 0, tzinfo=timezone.utc)
+        ... )
+        >>> metrics = calculate_trade_metrics(trade)
+        >>> metrics["profit_loss"]
+        Decimal('995.00')
+    """
+    if trade.exit_price is None:
+        # Trade still open
         return {
-            "position_id": self.position_id,
-            "instrument_id": self.instrument_id,
-            "strategy_name": self.strategy_name,
-            "side": self.side,
-            "entry_time": self.entry_time.isoformat(),
-            "entry_price": str(self.entry_price),
-            "exit_time": self.exit_time.isoformat() if self.exit_time else None,
-            "exit_price": str(self.exit_price) if self.exit_price else None,
-            "quantity": str(self.quantity),
-            "commission": str(self.commission),
-            "slippage": str(self.slippage),
-            "realized_pnl": str(self.realized_pnl) if self.realized_pnl else None,
-            "pnl_pct": str(self.pnl_pct) if self.pnl_pct else None,
-            "duration_hours": self.duration_hours,
-            "is_winning_trade": self.is_winning_trade,
-            "notes": self.notes,
+            "profit_loss": None,
+            "profit_pct": None,
+            "holding_period_seconds": None,
         }
 
-    def __str__(self) -> str:
-        """String representation of the trade."""
-        status = "OPEN" if self.is_open else "CLOSED"
-        pnl_str = f"PnL: {self.realized_pnl}" if self.realized_pnl else "PnL: N/A"
+    # Calculate gross P&L (before costs)
+    if trade.order_side == "BUY":
+        # Long position: profit when exit > entry
+        gross_pnl = (trade.exit_price - trade.entry_price) * trade.quantity
+    else:  # SELL
+        # Short position: profit when entry > exit
+        gross_pnl = (trade.entry_price - trade.exit_price) * trade.quantity
 
-        return (
-            f"Trade({self.instrument_id} {self.side} {self.quantity}@{self.entry_price} "
-            f"[{status}] {pnl_str})"
-        )
+    # Subtract costs
+    total_costs = (trade.commission_amount or Decimal("0")) + (trade.fees_amount or Decimal("0"))
+    net_pnl = gross_pnl - total_costs
 
-    def __repr__(self) -> str:
-        """Detailed representation of the trade."""
-        return (
-            f"TradeModel(position_id='{self.position_id}', "
-            f"instrument='{self.instrument_id}', side='{self.side}', "
-            f"entry_price={self.entry_price}, is_open={self.is_open})"
-        )
+    # Calculate percentage return
+    entry_value = trade.entry_price * trade.quantity
+    pnl_pct = (net_pnl / entry_value) * 100 if entry_value > 0 else Decimal("0")
+
+    # Calculate holding period
+    holding_period = None
+    if trade.exit_timestamp and trade.entry_timestamp:
+        delta = trade.exit_timestamp - trade.entry_timestamp
+        holding_period = int(delta.total_seconds())
+
+    return {
+        "profit_loss": net_pnl,
+        "profit_pct": pnl_pct,
+        "holding_period_seconds": holding_period,
+    }

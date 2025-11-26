@@ -2,6 +2,7 @@
 
 import pytest
 from ibapi.common import MarketDataTypeEnum  # type: ignore[import-untyped]
+
 from src.config import get_settings
 
 

@@ -167,8 +167,8 @@ class TestRateLimiter:
         request_times = []
 
         async def make_request():
-            await limiter.acquire()
-            request_times.append(datetime.now(timezone.utc))
+            timestamp = await limiter.acquire()
+            request_times.append(timestamp)
 
         # Launch 50 concurrent requests
         tasks = [make_request() for _ in range(50)]
@@ -185,8 +185,7 @@ class TestRateLimiter:
 
             # Should never exceed the limit
             assert count <= 10, (
-                f"Found {count} requests in 1-second window "
-                f"(limit: 10) - race condition detected!"
+                f"Found {count} requests in 1-second window (limit: 10) - race condition detected!"
             )
 
 
@@ -196,14 +195,13 @@ class TestIBKRHistoricalClient:
     @pytest.mark.component
     def test_initialization_default_parameters(self):
         """Test client initialization with default parameters."""
-        from src.services.ibkr_client import IBKRHistoricalClient
         from nautilus_trader.adapters.interactive_brokers.historical.client import (
             HistoricInteractiveBrokersClient,
         )
 
-        with patch.object(
-            HistoricInteractiveBrokersClient, "__init__", return_value=None
-        ):
+        from src.services.ibkr_client import IBKRHistoricalClient
+
+        with patch.object(HistoricInteractiveBrokersClient, "__init__", return_value=None):
             client = IBKRHistoricalClient()
 
             assert not client._connected
@@ -212,10 +210,11 @@ class TestIBKRHistoricalClient:
     @pytest.mark.component
     def test_initialization_custom_parameters(self):
         """Test client initialization with custom parameters."""
-        from src.services.ibkr_client import IBKRHistoricalClient
         from nautilus_trader.adapters.interactive_brokers.historical.client import (
             HistoricInteractiveBrokersClient,
         )
+
+        from src.services.ibkr_client import IBKRHistoricalClient
 
         with patch.object(
             HistoricInteractiveBrokersClient, "__init__", return_value=None
@@ -240,19 +239,16 @@ class TestIBKRHistoricalClient:
     @pytest.mark.asyncio
     async def test_connect_success(self):
         """Test successful connection to IBKR Gateway."""
-        from src.services.ibkr_client import IBKRHistoricalClient
         from nautilus_trader.adapters.interactive_brokers.historical.client import (
             HistoricInteractiveBrokersClient,
         )
 
-        with patch.object(
-            HistoricInteractiveBrokersClient, "__init__", return_value=None
-        ):
+        from src.services.ibkr_client import IBKRHistoricalClient
+
+        with patch.object(HistoricInteractiveBrokersClient, "__init__", return_value=None):
             client = IBKRHistoricalClient()
 
-            with patch.object(
-                client.client, "connect", new_callable=AsyncMock
-            ) as mock_connect:
+            with patch.object(client.client, "connect", new_callable=AsyncMock) as mock_connect:
                 mock_connect.return_value = None
                 client.client.account_id = "DU123456"
                 client.client.server_version = 176
@@ -269,19 +265,16 @@ class TestIBKRHistoricalClient:
     @pytest.mark.asyncio
     async def test_connect_success_with_missing_attributes(self):
         """Test connection success when some attributes are missing."""
-        from src.services.ibkr_client import IBKRHistoricalClient
         from nautilus_trader.adapters.interactive_brokers.historical.client import (
             HistoricInteractiveBrokersClient,
         )
 
-        with patch.object(
-            HistoricInteractiveBrokersClient, "__init__", return_value=None
-        ):
+        from src.services.ibkr_client import IBKRHistoricalClient
+
+        with patch.object(HistoricInteractiveBrokersClient, "__init__", return_value=None):
             client = IBKRHistoricalClient()
 
-            with patch.object(
-                client.client, "connect", new_callable=AsyncMock
-            ) as mock_connect:
+            with patch.object(client.client, "connect", new_callable=AsyncMock) as mock_connect:
                 mock_connect.return_value = None
                 # Don't set account_id or server_version
 
@@ -295,19 +288,16 @@ class TestIBKRHistoricalClient:
     @pytest.mark.asyncio
     async def test_connect_timeout_error(self):
         """Test connection timeout is handled gracefully."""
-        from src.services.ibkr_client import IBKRHistoricalClient
         from nautilus_trader.adapters.interactive_brokers.historical.client import (
             HistoricInteractiveBrokersClient,
         )
 
-        with patch.object(
-            HistoricInteractiveBrokersClient, "__init__", return_value=None
-        ):
+        from src.services.ibkr_client import IBKRHistoricalClient
+
+        with patch.object(HistoricInteractiveBrokersClient, "__init__", return_value=None):
             client = IBKRHistoricalClient()
 
-            with patch.object(
-                client.client, "connect", side_effect=asyncio.TimeoutError
-            ):
+            with patch.object(client.client, "connect", side_effect=asyncio.TimeoutError):
                 with pytest.raises(ConnectionError) as exc_info:
                     await client.connect(timeout=5)
 
@@ -318,19 +308,16 @@ class TestIBKRHistoricalClient:
     @pytest.mark.asyncio
     async def test_connect_connection_refused(self):
         """Test connection refused error is handled."""
-        from src.services.ibkr_client import IBKRHistoricalClient
         from nautilus_trader.adapters.interactive_brokers.historical.client import (
             HistoricInteractiveBrokersClient,
         )
 
-        with patch.object(
-            HistoricInteractiveBrokersClient, "__init__", return_value=None
-        ):
+        from src.services.ibkr_client import IBKRHistoricalClient
+
+        with patch.object(HistoricInteractiveBrokersClient, "__init__", return_value=None):
             client = IBKRHistoricalClient()
 
-            with patch.object(
-                client.client, "connect", side_effect=ConnectionRefusedError
-            ):
+            with patch.object(client.client, "connect", side_effect=ConnectionRefusedError):
                 with pytest.raises(ConnectionError) as exc_info:
                     await client.connect()
 
@@ -340,19 +327,16 @@ class TestIBKRHistoricalClient:
     @pytest.mark.asyncio
     async def test_connect_generic_exception(self):
         """Test generic exception during connection is handled."""
-        from src.services.ibkr_client import IBKRHistoricalClient
         from nautilus_trader.adapters.interactive_brokers.historical.client import (
             HistoricInteractiveBrokersClient,
         )
 
-        with patch.object(
-            HistoricInteractiveBrokersClient, "__init__", return_value=None
-        ):
+        from src.services.ibkr_client import IBKRHistoricalClient
+
+        with patch.object(HistoricInteractiveBrokersClient, "__init__", return_value=None):
             client = IBKRHistoricalClient()
 
-            with patch.object(
-                client.client, "connect", side_effect=RuntimeError("Network error")
-            ):
+            with patch.object(client.client, "connect", side_effect=RuntimeError("Network error")):
                 with pytest.raises(ConnectionError) as exc_info:
                     await client.connect()
 
@@ -363,14 +347,13 @@ class TestIBKRHistoricalClient:
     @pytest.mark.asyncio
     async def test_disconnect_when_connected(self):
         """Test disconnection when client is connected."""
-        from src.services.ibkr_client import IBKRHistoricalClient
         from nautilus_trader.adapters.interactive_brokers.historical.client import (
             HistoricInteractiveBrokersClient,
         )
 
-        with patch.object(
-            HistoricInteractiveBrokersClient, "__init__", return_value=None
-        ):
+        from src.services.ibkr_client import IBKRHistoricalClient
+
+        with patch.object(HistoricInteractiveBrokersClient, "__init__", return_value=None):
             client = IBKRHistoricalClient()
             client._connected = True
 
@@ -382,14 +365,13 @@ class TestIBKRHistoricalClient:
     @pytest.mark.asyncio
     async def test_disconnect_when_not_connected(self):
         """Test disconnection when client is not connected."""
-        from src.services.ibkr_client import IBKRHistoricalClient
         from nautilus_trader.adapters.interactive_brokers.historical.client import (
             HistoricInteractiveBrokersClient,
         )
 
-        with patch.object(
-            HistoricInteractiveBrokersClient, "__init__", return_value=None
-        ):
+        from src.services.ibkr_client import IBKRHistoricalClient
+
+        with patch.object(HistoricInteractiveBrokersClient, "__init__", return_value=None):
             client = IBKRHistoricalClient()
 
             await client.disconnect()
@@ -399,14 +381,13 @@ class TestIBKRHistoricalClient:
     @pytest.mark.component
     def test_is_connected_property_false(self):
         """Test is_connected property returns False initially."""
-        from src.services.ibkr_client import IBKRHistoricalClient
         from nautilus_trader.adapters.interactive_brokers.historical.client import (
             HistoricInteractiveBrokersClient,
         )
 
-        with patch.object(
-            HistoricInteractiveBrokersClient, "__init__", return_value=None
-        ):
+        from src.services.ibkr_client import IBKRHistoricalClient
+
+        with patch.object(HistoricInteractiveBrokersClient, "__init__", return_value=None):
             client = IBKRHistoricalClient()
 
             assert not client.is_connected
@@ -414,14 +395,13 @@ class TestIBKRHistoricalClient:
     @pytest.mark.component
     def test_is_connected_property_true(self):
         """Test is_connected property returns True when connected."""
-        from src.services.ibkr_client import IBKRHistoricalClient
         from nautilus_trader.adapters.interactive_brokers.historical.client import (
             HistoricInteractiveBrokersClient,
         )
 
-        with patch.object(
-            HistoricInteractiveBrokersClient, "__init__", return_value=None
-        ):
+        from src.services.ibkr_client import IBKRHistoricalClient
+
+        with patch.object(HistoricInteractiveBrokersClient, "__init__", return_value=None):
             client = IBKRHistoricalClient()
             client._connected = True
 
@@ -430,14 +410,13 @@ class TestIBKRHistoricalClient:
     @pytest.mark.component
     def test_rate_limiter_integration(self):
         """Test rate limiter is properly integrated."""
-        from src.services.ibkr_client import IBKRHistoricalClient
         from nautilus_trader.adapters.interactive_brokers.historical.client import (
             HistoricInteractiveBrokersClient,
         )
 
-        with patch.object(
-            HistoricInteractiveBrokersClient, "__init__", return_value=None
-        ):
+        from src.services.ibkr_client import IBKRHistoricalClient
+
+        with patch.object(HistoricInteractiveBrokersClient, "__init__", return_value=None):
             client = IBKRHistoricalClient()
 
             assert hasattr(client, "rate_limiter")
@@ -451,14 +430,13 @@ class TestIBKRClientIntegration:
     @pytest.mark.asyncio
     async def test_client_uses_rate_limiter_on_operations(self):
         """Test client operations use rate limiter."""
-        from src.services.ibkr_client import IBKRHistoricalClient
         from nautilus_trader.adapters.interactive_brokers.historical.client import (
             HistoricInteractiveBrokersClient,
         )
 
-        with patch.object(
-            HistoricInteractiveBrokersClient, "__init__", return_value=None
-        ):
+        from src.services.ibkr_client import IBKRHistoricalClient
+
+        with patch.object(HistoricInteractiveBrokersClient, "__init__", return_value=None):
             client = IBKRHistoricalClient()
 
             # Mock rate limiter
@@ -474,14 +452,13 @@ class TestIBKRClientIntegration:
     @pytest.mark.asyncio
     async def test_multiple_clients_independent_rate_limits(self):
         """Test multiple client instances have independent rate limiters."""
-        from src.services.ibkr_client import IBKRHistoricalClient
         from nautilus_trader.adapters.interactive_brokers.historical.client import (
             HistoricInteractiveBrokersClient,
         )
 
-        with patch.object(
-            HistoricInteractiveBrokersClient, "__init__", return_value=None
-        ):
+        from src.services.ibkr_client import IBKRHistoricalClient
+
+        with patch.object(HistoricInteractiveBrokersClient, "__init__", return_value=None):
             client1 = IBKRHistoricalClient()
             client2 = IBKRHistoricalClient()
 
@@ -494,3 +471,96 @@ class TestIBKRClientIntegration:
 
             # Client2 should not be affected
             assert len(client2.rate_limiter.requests) == 0
+
+    @pytest.mark.component
+    @pytest.mark.asyncio
+    async def test_fetch_bars_converts_string_to_instrument_id(self):
+        """Test fetch_bars correctly converts string instrument_id to InstrumentId object."""
+        from nautilus_trader.adapters.interactive_brokers.historical.client import (
+            HistoricInteractiveBrokersClient,
+        )
+        from nautilus_trader.model.identifiers import InstrumentId
+
+        from src.services.ibkr_client import IBKRHistoricalClient
+
+        with patch.object(HistoricInteractiveBrokersClient, "__init__", return_value=None):
+            client = IBKRHistoricalClient()
+            client._connected = True
+
+            # Mock the underlying Nautilus client methods
+            mock_bars = []  # Empty list of bars
+            mock_instrument = AsyncMock()
+
+            with patch.object(
+                client.rate_limiter, "acquire", new_callable=AsyncMock
+            ) as mock_acquire:
+                with patch.object(
+                    client.client, "request_bars", new_callable=AsyncMock
+                ) as mock_request_bars:
+                    with patch.object(
+                        client.client, "request_instruments", new_callable=AsyncMock
+                    ) as mock_request_instruments:
+                        mock_request_bars.return_value = mock_bars
+                        mock_request_instruments.return_value = [mock_instrument]
+
+                        # Test parameters
+                        instrument_id_str = "SPY.ARCA"
+                        start = datetime(2025, 1, 1, tzinfo=timezone.utc)
+                        end = datetime(2025, 1, 2, tzinfo=timezone.utc)
+
+                        # Call fetch_bars
+                        bars, instrument = await client.fetch_bars(
+                            instrument_id=instrument_id_str,
+                            start=start,
+                            end=end,
+                            bar_type_spec="1-MINUTE-LAST",
+                        )
+
+                        # Verify rate limiter was called
+                        mock_acquire.assert_called_once()
+
+                        # Verify request_bars was called with string instrument_id
+                        mock_request_bars.assert_called_once()
+                        call_kwargs = mock_request_bars.call_args.kwargs
+                        assert call_kwargs["instrument_ids"] == [instrument_id_str]
+
+                        # CRITICAL: Verify request_instruments was called with InstrumentId object
+                        mock_request_instruments.assert_called_once()
+                        instruments_call_kwargs = mock_request_instruments.call_args.kwargs
+                        assert len(instruments_call_kwargs["instrument_ids"]) == 1
+                        passed_id = instruments_call_kwargs["instrument_ids"][0]
+
+                        # Verify it's an InstrumentId object, not a string
+                        assert isinstance(passed_id, InstrumentId)
+                        assert str(passed_id) == instrument_id_str
+
+                        # Verify return values
+                        assert bars == mock_bars
+                        assert instrument == mock_instrument
+
+    @pytest.mark.component
+    @pytest.mark.asyncio
+    async def test_fetch_bars_invalid_instrument_format(self):
+        """Test fetch_bars raises error for invalid instrument_id format."""
+        from nautilus_trader.adapters.interactive_brokers.historical.client import (
+            HistoricInteractiveBrokersClient,
+        )
+
+        from src.services.ibkr_client import IBKRHistoricalClient
+
+        with patch.object(HistoricInteractiveBrokersClient, "__init__", return_value=None):
+            client = IBKRHistoricalClient()
+
+            with patch.object(client.rate_limiter, "acquire", new_callable=AsyncMock):
+                start = datetime(2025, 1, 1, tzinfo=timezone.utc)
+                end = datetime(2025, 1, 2, tzinfo=timezone.utc)
+
+                # Test with invalid format (missing venue)
+                with pytest.raises(ValueError) as exc_info:
+                    await client.fetch_bars(
+                        instrument_id="SPY",  # Missing .VENUE
+                        start=start,
+                        end=end,
+                    )
+
+                assert "Invalid instrument_id format" in str(exc_info.value)

@@ -1,14 +1,14 @@
 """Data service for fetching and converting market data."""
 
 from datetime import datetime
-from typing import List, Optional, Dict, Any, Literal
+from typing import Any, Dict, List, Literal, Optional
 
 import pandas as pd
 
 from src.config import get_settings
 from src.services.database_repository import DatabaseRepository
-from src.services.nautilus_converter import NautilusConverter
 from src.services.ibkr_data_provider import IBKRDataProvider
+from src.services.nautilus_converter import NautilusConverter
 
 
 class DataService:
@@ -113,9 +113,7 @@ class DataService:
         """
         return self.converter.convert_to_nautilus_bars(data, instrument_id, instrument)
 
-    def convert_to_nautilus_format(
-        self, data: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
+    def convert_to_nautilus_format(self, data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Convert market data to format suitable for Nautilus Trader.
 

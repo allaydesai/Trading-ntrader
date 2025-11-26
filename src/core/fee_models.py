@@ -110,9 +110,7 @@ class IBKRCommissionModel(FeeModel):
         # Apply commission rules:
         # 1. At least minimum commission
         # 2. At most max_rate % of order value
-        commission_amount = max(
-            self.min_per_order, min(base_commission, max_commission)
-        )
+        commission_amount = max(self.min_per_order, min(base_commission, max_commission))
 
         # Return commission in instrument's quote currency
         return Money(commission_amount, instrument.quote_currency)

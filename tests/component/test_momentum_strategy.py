@@ -1,10 +1,10 @@
 """Tests for SMA Momentum strategy implementation."""
 
-import pytest
 from decimal import Decimal
 
-from nautilus_trader.model.identifiers import InstrumentId
+import pytest
 from nautilus_trader.model.data import BarType
+from nautilus_trader.model.identifiers import InstrumentId
 
 from src.models.strategy import MomentumParameters
 
@@ -17,25 +17,23 @@ class TestSMAMomentumStrategy:
         """Test Momentum parameter validation."""
         # Valid parameters
         params = MomentumParameters(
-            rsi_period=14,
-            oversold_threshold=30.0,
-            overbought_threshold=70.0,
+            fast_period=20,
+            slow_period=50,
             trade_size=Decimal("1000000"),
+            allow_short=False,
         )
-        assert params.rsi_period == 14
-        assert params.oversold_threshold == 30.0
-        assert params.overbought_threshold == 70.0
+        assert params.fast_period == 20
+        assert params.slow_period == 50
         assert params.trade_size == Decimal("1000000")
+        assert params.allow_short is False
 
-        # Invalid RSI period (Pydantic validation)
-        with pytest.raises(
-            ValueError, match="Input should be greater than or equal to 5"
-        ):
-            MomentumParameters(rsi_period=0)
+        # Invalid periods (Pydantic validation)
+        with pytest.raises(ValueError, match="Input should be greater than or equal to 1"):
+            MomentumParameters(fast_period=0)
 
-        # Invalid oversold threshold (Pydantic validation)
-        with pytest.raises(ValueError, match="Input should be less than or equal to"):
-            MomentumParameters(oversold_threshold=60.0)  # Above range
+        # Invalid relationship (custom validator)
+        with pytest.raises(ValueError, match="Slow period must be greater than fast period"):
+            MomentumParameters(fast_period=50, slow_period=20)
 
         # Invalid trade size
         with pytest.raises(ValueError):
@@ -90,7 +88,7 @@ class TestSMAMomentumStrategy:
     def test_sma_momentum_with_mock_data(self):
         """INTEGRATION: SMA momentum strategy works with mock data."""
         from src.core.strategies.sma_momentum import SMAMomentum, SMAMomentumConfig
-        from src.utils.mock_data import generate_mock_bars, create_test_instrument
+        from src.utils.mock_data import create_test_instrument, generate_mock_bars
 
         # Create test instrument
         instrument, instrument_id = create_test_instrument("EUR/USD")
@@ -128,8 +126,9 @@ class TestSMAMomentumStrategy:
 
     def test_sma_momentum_ma_calculation(self):
         """Test moving average calculation logic."""
-        from src.core.strategies.sma_momentum import SMAMomentum, SMAMomentumConfig
         from collections import deque
+
+        from src.core.strategies.sma_momentum import SMAMomentum, SMAMomentumConfig
 
         config = SMAMomentumConfig(
             instrument_id=InstrumentId.from_str("AAPL.NASDAQ"),
@@ -223,17 +222,17 @@ class TestSMAMomentumStrategy:
 
     def test_sma_momentum_parameters_in_strategy_model(self):
         """Test that SMA momentum parameters validate correctly in TradingStrategy model."""
-        from src.models.strategy import TradingStrategy, StrategyType
+        from src.models.strategy import StrategyType, TradingStrategy
 
         # Valid momentum strategy
         strategy = TradingStrategy(
             name="Test SMA Momentum",
             strategy_type=StrategyType.MOMENTUM,
             parameters={
-                "rsi_period": 14,
-                "oversold_threshold": 30.0,
-                "overbought_threshold": 70.0,
+                "fast_period": 20,
+                "slow_period": 50,
                 "trade_size": "1000000",
+                "allow_short": False,
             },
         )
         assert strategy.strategy_type == StrategyType.MOMENTUM
@@ -244,9 +243,8 @@ class TestSMAMomentumStrategy:
                 name="Invalid Momentum",
                 strategy_type=StrategyType.MOMENTUM,
                 parameters={
-                    "rsi_period": 0,  # Invalid
-                    "oversold_threshold": 30.0,
-                    "overbought_threshold": 70.0,
+                    "fast_period": 0,  # Invalid
+                    "slow_period": 50,
                     "trade_size": "1000000",
                 },
             )

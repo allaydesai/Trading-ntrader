@@ -1,0 +1,769 @@
+openapi: 3.0.3
+info:
+  title: Trade Tracking API
+  description: |
+    RESTful API for individual trade tracking, equity curve generation, and trade analytics.
+
+    This API provides access to trade-level data from backtest runs, enabling detailed
+    performance analysis including equity curves, drawdown metrics, and trade statistics.
+  version: 1.0.0
+  contact:
+    name: Trading-NTrader API Support
+    url: https://github.com/your-org/trading-ntrader
+
+servers:
+  - url: http://localhost:8000/api/v1
+    description: Local development server
+  - url: https://api.trading-ntrader.com/api/v1
+    description: Production server
+
+tags:
+  - name: trades
+    description: Individual trade management and queries
+  - name: analytics
+    description: Equity curves, drawdown, and performance metrics
+
+paths:
+  /backtests/{backtest_run_id}/trades:
+    get:
+      tags:
+        - trades
+      summary: List trades for a backtest run
+      description: |
+        Retrieve a paginated list of trades for a specific backtest run with optional
+        sorting and filtering. Supports server-side pagination for efficient handling
+        of large trade datasets (1000+ trades).
+      operationId: listTrades
+      parameters:
+        - $ref: '#/components/parameters/BacktestRunId'
+        - name: page
+          in: query
+          description: Page number (1-indexed)
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: page_size
+          in: query
+          description: Number of trades per page
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+            enum: [20, 50, 100]
+        - name: sort_by
+          in: query
+          description: Field to sort by
+          required: false
+          schema:
+            type: string
+            enum: [entry_timestamp, exit_timestamp, profit_loss, instrument_id, holding_period_seconds]
+            default: entry_timestamp
+        - name: sort_order
+          in: query
+          description: Sort direction
+          required: false
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: asc
+        - name: instrument_id
+          in: query
+          description: Filter by instrument symbol (exact match)
+          required: false
+          schema:
+            type: string
+            example: "AAPL"
+        - name: min_profit
+          in: query
+          description: Filter trades with profit_loss >= value
+          required: false
+          schema:
+            type: number
+            format: decimal
+        - name: max_profit
+          in: query
+          description: Filter trades with profit_loss <= value
+          required: false
+          schema:
+            type: number
+            format: decimal
+      responses:
+        '200':
+          description: Successful response with paginated trade list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TradeListResponse'
+              example:
+                trades:
+                  - id: 1
+                    backtest_run_id: 42
+                    instrument_id: "AAPL"
+                    trade_id: "trade-123"
+                    venue_order_id: "order-456"
+                    order_side: "BUY"
+                    quantity: "100.00000000"
+                    entry_price: "150.00000000"
+                    exit_price: "160.00000000"
+                    commission_amount: "5.00000000"
+                    commission_currency: "USD"
+                    profit_loss: "995.00000000"
+                    profit_pct: "6.6333"
+                    holding_period_seconds: 3600
+                    entry_timestamp: "2025-01-22T10:00:00Z"
+                    exit_timestamp: "2025-01-22T11:00:00Z"
+                    created_at: "2025-01-22T11:00:05Z"
+                total_count: 150
+                page: 1
+                page_size: 20
+                total_pages: 8
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /backtests/{backtest_run_id}/trades/{trade_id}:
+    get:
+      tags:
+        - trades
+      summary: Get trade by ID
+      description: Retrieve details for a specific trade
+      operationId: getTrade
+      parameters:
+        - $ref: '#/components/parameters/BacktestRunId'
+        - name: trade_id
+          in: path
+          description: Trade ID
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Successful response with trade details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Trade'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /backtests/{backtest_run_id}/equity-curve:
+    get:
+      tags:
+        - analytics
+      summary: Get equity curve for a backtest run
+      description: |
+        Generate equity curve showing account balance evolution over time based on
+        cumulative trade P&L. Computed on-demand from trade data.
+      operationId: getEquityCurve
+      parameters:
+        - $ref: '#/components/parameters/BacktestRunId'
+      responses:
+        '200':
+          description: Successful response with equity curve data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EquityCurveResponse'
+              example:
+                points:
+                  - timestamp: "2025-01-22T10:00:00Z"
+                    balance: "100000.00"
+                    cumulative_return_pct: "0.0000"
+                    trade_number: 0
+                  - timestamp: "2025-01-22T11:00:00Z"
+                    balance: "100995.00"
+                    cumulative_return_pct: "0.9950"
+                    trade_number: 1
+                  - timestamp: "2025-01-22T12:00:00Z"
+                    balance: "101890.00"
+                    cumulative_return_pct: "1.8900"
+                    trade_number: 2
+                initial_capital: "100000.00"
+                final_balance: "101890.00"
+                total_return_pct: "1.8900"
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /backtests/{backtest_run_id}/drawdown:
+    get:
+      tags:
+        - analytics
+      summary: Get drawdown metrics
+      description: |
+        Calculate maximum drawdown and top drawdown periods from equity curve.
+        Includes peak-to-trough analysis, recovery times, and duration.
+      operationId: getDrawdownMetrics
+      parameters:
+        - $ref: '#/components/parameters/BacktestRunId'
+      responses:
+        '200':
+          description: Successful response with drawdown analysis
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DrawdownMetrics'
+              example:
+                max_drawdown:
+                  peak_timestamp: "2025-01-22T10:00:00Z"
+                  peak_balance: "105000.00"
+                  trough_timestamp: "2025-01-22T15:00:00Z"
+                  trough_balance: "98000.00"
+                  drawdown_amount: "7000.00"
+                  drawdown_pct: "6.6667"
+                  duration_days: 0
+                  recovery_timestamp: "2025-01-22T18:00:00Z"
+                  recovered: true
+                top_drawdowns:
+                  - peak_timestamp: "2025-01-22T10:00:00Z"
+                    peak_balance: "105000.00"
+                    trough_timestamp: "2025-01-22T15:00:00Z"
+                    trough_balance: "98000.00"
+                    drawdown_amount: "7000.00"
+                    drawdown_pct: "6.6667"
+                    duration_days: 0
+                    recovery_timestamp: "2025-01-22T18:00:00Z"
+                    recovered: true
+                current_drawdown: null
+                total_drawdown_periods: 3
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /backtests/{backtest_run_id}/statistics:
+    get:
+      tags:
+        - analytics
+      summary: Get trade statistics
+      description: |
+        Calculate aggregate trade statistics including win rate, profit metrics,
+        consecutive win/loss streaks, and holding period analysis.
+      operationId: getTradeStatistics
+      parameters:
+        - $ref: '#/components/parameters/BacktestRunId'
+      responses:
+        '200':
+          description: Successful response with trade statistics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TradeStatistics'
+              example:
+                total_trades: 150
+                winning_trades: 95
+                losing_trades: 50
+                breakeven_trades: 5
+                win_rate: "63.33"
+                total_profit: "125000.00"
+                total_loss: "45000.00"
+                net_profit: "80000.00"
+                average_win: "1315.79"
+                average_loss: "900.00"
+                largest_win: "5000.00"
+                largest_loss: "-3500.00"
+                profit_factor: "2.7778"
+                expectancy: "533.33"
+                max_consecutive_wins: 8
+                max_consecutive_losses: 4
+                avg_holding_period_hours: "24.50"
+                max_holding_period_hours: 120
+                min_holding_period_hours: 2
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /backtests/{backtest_run_id}/export:
+    get:
+      tags:
+        - trades
+      summary: Export trades to CSV
+      description: |
+        Export complete trade history for a backtest run to CSV format for external
+        analysis or archival purposes.
+      operationId: exportTrades
+      parameters:
+        - $ref: '#/components/parameters/BacktestRunId'
+        - name: format
+          in: query
+          description: Export format
+          required: false
+          schema:
+            type: string
+            enum: [csv, json]
+            default: csv
+      responses:
+        '200':
+          description: Successful response with export file
+          content:
+            text/csv:
+              schema:
+                type: string
+                format: binary
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Trade'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+components:
+  parameters:
+    BacktestRunId:
+      name: backtest_run_id
+      in: path
+      description: Backtest run identifier
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+
+  schemas:
+    Trade:
+      type: object
+      required:
+        - id
+        - backtest_run_id
+        - instrument_id
+        - trade_id
+        - venue_order_id
+        - order_side
+        - quantity
+        - entry_price
+        - entry_timestamp
+        - created_at
+      properties:
+        id:
+          type: integer
+          description: Auto-incrementing primary key
+          example: 1
+        backtest_run_id:
+          type: integer
+          description: Foreign key to backtest_runs table
+          example: 42
+        instrument_id:
+          type: string
+          description: Trading symbol
+          maxLength: 50
+          example: "AAPL"
+        trade_id:
+          type: string
+          description: Nautilus Trader trade ID
+          maxLength: 100
+          example: "trade-123-456"
+        venue_order_id:
+          type: string
+          description: Exchange-assigned order ID
+          maxLength: 100
+          example: "order-789"
+        client_order_id:
+          type: string
+          nullable: true
+          description: Client-side order ID
+          maxLength: 100
+          example: "client-order-001"
+        order_side:
+          type: string
+          enum: [BUY, SELL]
+          description: Order direction
+          example: "BUY"
+        quantity:
+          type: string
+          format: decimal
+          description: Number of units traded (8 decimal precision)
+          example: "100.00000000"
+        entry_price:
+          type: string
+          format: decimal
+          description: Price at position entry (8 decimal precision)
+          example: "150.00000000"
+        exit_price:
+          type: string
+          format: decimal
+          nullable: true
+          description: Price at position exit (8 decimal precision)
+          example: "160.00000000"
+        commission_amount:
+          type: string
+          format: decimal
+          nullable: true
+          description: Commission paid (8 decimal precision)
+          example: "5.00000000"
+        commission_currency:
+          type: string
+          nullable: true
+          maxLength: 10
+          description: Currency code for commission
+          example: "USD"
+        fees_amount:
+          type: string
+          format: decimal
+          nullable: true
+          description: Additional fees (8 decimal precision)
+          example: "0.50000000"
+        profit_loss:
+          type: string
+          format: decimal
+          nullable: true
+          description: Realized P&L (8 decimal precision)
+          example: "995.00000000"
+        profit_pct:
+          type: string
+          format: decimal
+          nullable: true
+          description: P&L as percentage (4 decimal precision)
+          example: "6.6333"
+        holding_period_seconds:
+          type: integer
+          nullable: true
+          description: Time between entry and exit in seconds
+          example: 3600
+        entry_timestamp:
+          type: string
+          format: date-time
+          description: Trade entry time (UTC, ISO 8601)
+          example: "2025-01-22T10:00:00Z"
+        exit_timestamp:
+          type: string
+          format: date-time
+          nullable: true
+          description: Trade exit time (UTC, ISO 8601)
+          example: "2025-01-22T11:00:00Z"
+        created_at:
+          type: string
+          format: date-time
+          description: Record creation time (UTC, ISO 8601)
+          example: "2025-01-22T11:00:05Z"
+
+    TradeListResponse:
+      type: object
+      required:
+        - trades
+        - total_count
+        - page
+        - page_size
+        - total_pages
+      properties:
+        trades:
+          type: array
+          items:
+            $ref: '#/components/schemas/Trade'
+        total_count:
+          type: integer
+          description: Total number of trades matching query
+          example: 150
+        page:
+          type: integer
+          description: Current page number (1-indexed)
+          minimum: 1
+          example: 1
+        page_size:
+          type: integer
+          description: Number of trades per page
+          minimum: 1
+          maximum: 100
+          example: 20
+        total_pages:
+          type: integer
+          description: Total number of pages
+          minimum: 0
+          example: 8
+
+    EquityCurvePoint:
+      type: object
+      required:
+        - timestamp
+        - balance
+        - cumulative_return_pct
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+          description: Point in time (UTC, ISO 8601)
+          example: "2025-01-22T10:00:00Z"
+        balance:
+          type: string
+          format: decimal
+          description: Account balance at this point (2 decimal precision)
+          example: "100995.00"
+        cumulative_return_pct:
+          type: string
+          format: decimal
+          description: Cumulative return percentage (4 decimal precision)
+          example: "0.9950"
+        trade_number:
+          type: integer
+          nullable: true
+          description: Sequential trade number (0 for initial capital)
+          example: 1
+
+    EquityCurveResponse:
+      type: object
+      required:
+        - points
+        - initial_capital
+        - final_balance
+        - total_return_pct
+      properties:
+        points:
+          type: array
+          items:
+            $ref: '#/components/schemas/EquityCurvePoint'
+          description: Time-series of balance points
+        initial_capital:
+          type: string
+          format: decimal
+          description: Starting account balance
+          example: "100000.00"
+        final_balance:
+          type: string
+          format: decimal
+          description: Ending account balance
+          example: "101890.00"
+        total_return_pct:
+          type: string
+          format: decimal
+          description: Total return percentage
+          example: "1.8900"
+
+    DrawdownPeriod:
+      type: object
+      required:
+        - peak_timestamp
+        - peak_balance
+        - trough_timestamp
+        - trough_balance
+        - drawdown_amount
+        - drawdown_pct
+        - duration_days
+        - recovered
+      properties:
+        peak_timestamp:
+          type: string
+          format: date-time
+          description: Timestamp of peak balance
+          example: "2025-01-22T10:00:00Z"
+        peak_balance:
+          type: string
+          format: decimal
+          description: Balance at peak
+          example: "105000.00"
+        trough_timestamp:
+          type: string
+          format: date-time
+          description: Timestamp of trough (lowest point)
+          example: "2025-01-22T15:00:00Z"
+        trough_balance:
+          type: string
+          format: decimal
+          description: Balance at trough
+          example: "98000.00"
+        drawdown_amount:
+          type: string
+          format: decimal
+          description: Dollar amount of drawdown
+          example: "7000.00"
+        drawdown_pct:
+          type: string
+          format: decimal
+          description: Drawdown as percentage of peak (4 decimal precision)
+          example: "6.6667"
+        duration_days:
+          type: integer
+          description: Duration from peak to trough in days
+          example: 0
+        recovery_timestamp:
+          type: string
+          format: date-time
+          nullable: true
+          description: Timestamp when balance recovered to peak
+          example: "2025-01-22T18:00:00Z"
+        recovered:
+          type: boolean
+          description: Whether drawdown has been recovered
+          example: true
+
+    DrawdownMetrics:
+      type: object
+      required:
+        - total_drawdown_periods
+      properties:
+        max_drawdown:
+          allOf:
+            - $ref: '#/components/schemas/DrawdownPeriod'
+          description: Largest drawdown period by percentage
+          nullable: true
+        top_drawdowns:
+          type: array
+          items:
+            $ref: '#/components/schemas/DrawdownPeriod'
+          maxItems: 5
+          description: Top 5 largest drawdown periods
+        current_drawdown:
+          allOf:
+            - $ref: '#/components/schemas/DrawdownPeriod'
+          description: Ongoing drawdown if not yet recovered
+          nullable: true
+        total_drawdown_periods:
+          type: integer
+          description: Total number of drawdown periods
+          example: 3
+
+    TradeStatistics:
+      type: object
+      required:
+        - total_trades
+        - winning_trades
+        - losing_trades
+        - breakeven_trades
+        - win_rate
+        - total_profit
+        - total_loss
+        - net_profit
+        - average_win
+        - average_loss
+        - largest_win
+        - largest_loss
+        - expectancy
+        - max_consecutive_wins
+        - max_consecutive_losses
+        - avg_holding_period_hours
+        - max_holding_period_hours
+        - min_holding_period_hours
+      properties:
+        total_trades:
+          type: integer
+          description: Total number of completed trades
+          example: 150
+        winning_trades:
+          type: integer
+          description: Number of profitable trades
+          example: 95
+        losing_trades:
+          type: integer
+          description: Number of losing trades
+          example: 50
+        breakeven_trades:
+          type: integer
+          description: Number of breakeven trades (P&L = 0)
+          example: 5
+        win_rate:
+          type: string
+          format: decimal
+          description: Win rate percentage (2 decimal precision)
+          example: "63.33"
+        total_profit:
+          type: string
+          format: decimal
+          description: Sum of all winning trades
+          example: "125000.00"
+        total_loss:
+          type: string
+          format: decimal
+          description: Sum of all losing trades (absolute value)
+          example: "45000.00"
+        net_profit:
+          type: string
+          format: decimal
+          description: Total profit minus total loss
+          example: "80000.00"
+        average_win:
+          type: string
+          format: decimal
+          description: Average profit per winning trade
+          example: "1315.79"
+        average_loss:
+          type: string
+          format: decimal
+          description: Average loss per losing trade (absolute value)
+          example: "900.00"
+        largest_win:
+          type: string
+          format: decimal
+          description: Largest single winning trade
+          example: "5000.00"
+        largest_loss:
+          type: string
+          format: decimal
+          description: Largest single losing trade
+          example: "-3500.00"
+        profit_factor:
+          type: string
+          format: decimal
+          nullable: true
+          description: Ratio of total_profit to total_loss
+          example: "2.7778"
+        expectancy:
+          type: string
+          format: decimal
+          description: Average profit per trade
+          example: "533.33"
+        max_consecutive_wins:
+          type: integer
+          description: Longest winning streak
+          example: 8
+        max_consecutive_losses:
+          type: integer
+          description: Longest losing streak
+          example: 4
+        avg_holding_period_hours:
+          type: string
+          format: decimal
+          description: Average holding period in hours
+          example: "24.50"
+        max_holding_period_hours:
+          type: integer
+          description: Maximum holding period in hours
+          example: 120
+        min_holding_period_hours:
+          type: integer
+          description: Minimum holding period in hours
+          example: 2
+
+    Error:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: string
+          description: Error message
+          example: "Backtest run not found"
+
+  responses:
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            detail: "Backtest run with id 999 not found"
+
+    ValidationError:
+      description: Validation error
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              detail:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    loc:
+                      type: array
+                      items:
+                        type: string
+                    msg:
+                      type: string
+                    type:
+                      type: string
+          example:
+            detail:
+              - loc: ["query", "page"]
+                msg: "ensure this value is greater than or equal to 1"
+                type: "value_error.number.not_ge"

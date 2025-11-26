@@ -1,7 +1,9 @@
 """Check database tables and schema."""
 
 import asyncio
+
 from sqlalchemy import text
+
 from src.db.session import get_session
 
 

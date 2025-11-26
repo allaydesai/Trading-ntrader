@@ -5,13 +5,14 @@ Tests the business logic layer for querying backtest results,
 including limit enforcement and pagination handling.
 """
 
-import pytest
 from datetime import datetime, timezone
-from uuid import uuid4
 from unittest.mock import AsyncMock, MagicMock
+from uuid import uuid4
 
-from src.services.backtest_query import BacktestQueryService
+import pytest
+
 from src.db.models.backtest import BacktestRun
+from src.services.backtest_query import BacktestQueryService
 
 
 class TestBacktestQueryService:
@@ -28,9 +29,7 @@ class TestBacktestQueryService:
         return BacktestQueryService(mock_repository)
 
     @pytest.mark.asyncio
-    async def test_list_recent_backtests_enforces_max_limit(
-        self, service, mock_repository
-    ):
+    async def test_list_recent_backtests_enforces_max_limit(self, service, mock_repository):
         """
         Test that list_recent_backtests enforces maximum limit of 1000.
 
@@ -48,9 +47,7 @@ class TestBacktestQueryService:
         mock_repository.find_recent.assert_called_once_with(limit=1000, cursor=None)
 
     @pytest.mark.asyncio
-    async def test_list_recent_backtests_respects_reasonable_limit(
-        self, service, mock_repository
-    ):
+    async def test_list_recent_backtests_respects_reasonable_limit(self, service, mock_repository):
         """
         Test that reasonable limits are passed through unchanged.
 
@@ -153,9 +150,7 @@ class TestBacktestQueryService:
         mock_repository.find_by_run_id.assert_called_once_with(run_id)
 
     @pytest.mark.asyncio
-    async def test_get_backtest_by_id_returns_none_when_not_found(
-        self, service, mock_repository
-    ):
+    async def test_get_backtest_by_id_returns_none_when_not_found(self, service, mock_repository):
         """
         Test that get_backtest_by_id returns None for missing backtest.
 
@@ -173,9 +168,7 @@ class TestBacktestQueryService:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_compare_backtests_validates_minimum_count(
-        self, service, mock_repository
-    ):
+    async def test_compare_backtests_validates_minimum_count(self, service, mock_repository):
         """
         Test that compare_backtests rejects fewer than 2 backtests.
 
@@ -193,9 +186,7 @@ class TestBacktestQueryService:
         assert "at least 2 backtests" in str(exc_info.value).lower()
 
     @pytest.mark.asyncio
-    async def test_compare_backtests_validates_maximum_count(
-        self, service, mock_repository
-    ):
+    async def test_compare_backtests_validates_maximum_count(self, service, mock_repository):
         """
         Test that compare_backtests rejects more than 10 backtests.
 
@@ -213,9 +204,7 @@ class TestBacktestQueryService:
         assert "more than 10 backtests" in str(exc_info.value).lower()
 
     @pytest.mark.asyncio
-    async def test_compare_backtests_accepts_valid_range(
-        self, service, mock_repository
-    ):
+    async def test_compare_backtests_accepts_valid_range(self, service, mock_repository):
         """
         Test that compare_backtests accepts valid range (2-10).
 
@@ -236,9 +225,7 @@ class TestBacktestQueryService:
         mock_repository.find_by_run_ids.assert_called_once_with(run_ids)
 
     @pytest.mark.asyncio
-    async def test_compare_backtests_returns_repository_results(
-        self, service, mock_repository
-    ):
+    async def test_compare_backtests_returns_repository_results(self, service, mock_repository):
         """
         Test that compare_backtests returns repository results unchanged.
 

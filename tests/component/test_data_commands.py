@@ -265,9 +265,7 @@ class TestDataCommands:
         runner = CliRunner()
 
         # Test missing csv parameter
-        result = runner.invoke(
-            data, ["import", "--symbol", "AAPL", "--venue", "NASDAQ"]
-        )
+        result = runner.invoke(data, ["import", "--symbol", "AAPL", "--venue", "NASDAQ"])
         assert result.exit_code == 2
         assert "Missing option" in result.output
 
@@ -276,9 +274,7 @@ class TestDataCommands:
             csv_file = Path(f.name)
 
         try:
-            result = runner.invoke(
-                data, ["import", "--csv", str(csv_file), "--venue", "NASDAQ"]
-            )
+            result = runner.invoke(data, ["import", "--csv", str(csv_file), "--venue", "NASDAQ"])
             assert result.exit_code == 2
             assert "Missing option" in result.output
         finally:

@@ -31,15 +31,7 @@ class EmptyStateMessage(BaseModel):
         ... )
     """
 
-    title: str = Field(
-        ..., min_length=1, max_length=100, description="Short message title"
-    )
-    description: str = Field(
-        ..., min_length=1, max_length=500, description="Helpful explanation"
-    )
-    action_text: Optional[str] = Field(
-        None, max_length=100, description="Suggested action text"
-    )
-    action_command: Optional[str] = Field(
-        None, max_length=200, description="CLI command example"
-    )
+    title: str = Field(..., min_length=1, max_length=100, description="Short message title")
+    description: str = Field(..., min_length=1, max_length=500, description="Helpful explanation")
+    action_text: Optional[str] = Field(None, max_length=100, description="Suggested action text")
+    action_command: Optional[str] = Field(None, max_length=200, description="CLI command example")

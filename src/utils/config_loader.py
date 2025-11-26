@@ -5,12 +5,12 @@ This module provides functionality to load and validate YAML strategy configurat
 following the Nautilus Trader ImportableStrategyConfig pattern.
 """
 
-import yaml
+from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path
 from typing import Any, Dict, Type
-from dataclasses import dataclass
 
+import yaml
 from nautilus_trader.trading.strategy import StrategyConfig
 
 
@@ -119,14 +119,10 @@ class ConfigLoader:
         config_class = cls._load_config_class(config_path)
 
         # Handle instrument_id string conversion to InstrumentId
-        if "instrument_id" in config_params and isinstance(
-            config_params["instrument_id"], str
-        ):
+        if "instrument_id" in config_params and isinstance(config_params["instrument_id"], str):
             from nautilus_trader.model.identifiers import InstrumentId
 
-            config_params["instrument_id"] = InstrumentId.from_str(
-                config_params["instrument_id"]
-            )
+            config_params["instrument_id"] = InstrumentId.from_str(config_params["instrument_id"])
 
         # Handle bar_type string conversion to BarType
         if "bar_type" in config_params and isinstance(config_params["bar_type"], str):

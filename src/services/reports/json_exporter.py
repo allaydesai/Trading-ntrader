@@ -1,15 +1,15 @@
 """JSON export service for trading data and reports."""
 
 import json
-from decimal import Decimal
 from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
-from typing import List, Dict, Any, Union
+from typing import Any, Dict, List, Union
 
-from ...models.trade import TradeModel
+from ...models.trade import Trade
 from .exceptions import (
-    FileWriteError,
     EmptyDataError,
+    FileWriteError,
     SerializationError,
 )
 from .validators import FileValidator, TradeValidator
@@ -52,7 +52,7 @@ class JSONExporter:
         else:
             return value
 
-    def export_trades(self, trades: List[TradeModel], filename: str = None) -> Path:
+    def export_trades(self, trades: List[Trade], filename: str = None) -> Path:
         """Export trades to JSON file.
 
         Args:
@@ -87,22 +87,25 @@ class JSONExporter:
         trades_data = []
         for trade in trades:
             trade_dict = {
-                "position_id": trade.position_id,
+                "id": trade.id,
+                "backtest_run_id": trade.backtest_run_id,
                 "instrument_id": trade.instrument_id,
-                "side": trade.side,
+                "trade_id": trade.trade_id,
+                "venue_order_id": trade.venue_order_id,
+                "client_order_id": trade.client_order_id,
+                "order_side": trade.order_side,
                 "quantity": self._serialize_value(trade.quantity),
                 "entry_price": self._serialize_value(trade.entry_price),
                 "exit_price": self._serialize_value(trade.exit_price),
-                "entry_time": self._serialize_value(trade.entry_time),
-                "exit_time": self._serialize_value(trade.exit_time),
-                "realized_pnl": self._serialize_value(trade.realized_pnl),
-                "pnl_pct": self._serialize_value(trade.pnl_pct),
-                "commission": self._serialize_value(trade.commission),
-                "slippage": self._serialize_value(trade.slippage),
-                "strategy_name": trade.strategy_name,
-                "notes": trade.notes,
-                "duration_hours": trade.duration_hours,
-                "is_winning_trade": trade.is_winning_trade,
+                "entry_timestamp": self._serialize_value(trade.entry_timestamp),
+                "exit_timestamp": self._serialize_value(trade.exit_timestamp),
+                "profit_loss": self._serialize_value(trade.profit_loss),
+                "profit_pct": self._serialize_value(trade.profit_pct),
+                "commission_amount": self._serialize_value(trade.commission_amount),
+                "commission_currency": trade.commission_currency,
+                "fees_amount": self._serialize_value(trade.fees_amount),
+                "holding_period_seconds": trade.holding_period_seconds,
+                "created_at": self._serialize_value(trade.created_at),
             }
             trades_data.append(trade_dict)
 
@@ -125,17 +128,13 @@ class JSONExporter:
         except OSError as e:
             raise FileWriteError(str(filepath), f"OS error: {str(e)}") from e
         except (TypeError, ValueError) as e:
-            raise SerializationError(
-                "trades", f"JSON serialization failed: {str(e)}"
-            ) from e
+            raise SerializationError("trades", f"JSON serialization failed: {str(e)}") from e
         except Exception as e:
             raise FileWriteError(str(filepath), f"Unexpected error: {str(e)}") from e
 
         return filepath
 
-    def export_performance_report(
-        self, report_data: Dict[str, Any], filename: str = None
-    ) -> Path:
+    def export_performance_report(self, report_data: Dict[str, Any], filename: str = None) -> Path:
         """Export performance report to JSON file.
 
         Args:

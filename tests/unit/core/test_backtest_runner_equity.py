@@ -1,9 +1,10 @@
 """Unit tests for BacktestRunner equity curve extraction."""
 
-import pytest
-import pandas as pd
 from datetime import datetime, timezone
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import MagicMock, Mock, patch
+
+import pandas as pd
+import pytest
 
 from src.core.backtest_runner import MinimalBacktestRunner
 
@@ -100,25 +101,19 @@ class TestExtractEquityCurve:
         analyzer.returns.return_value = None
 
         # Act
-        result = backtest_runner._extract_equity_curve(
-            analyzer, starting_balance=100000.0
-        )
+        result = backtest_runner._extract_equity_curve(analyzer, starting_balance=100000.0)
 
         # Assert
         assert result == []
 
-    def test_extract_equity_curve_returns_empty_for_empty_returns(
-        self, backtest_runner
-    ):
+    def test_extract_equity_curve_returns_empty_for_empty_returns(self, backtest_runner):
         """Equity curve returns empty list for empty returns series."""
         # Arrange
         analyzer = Mock()
         analyzer.returns.return_value = pd.Series([])
 
         # Act
-        result = backtest_runner._extract_equity_curve(
-            analyzer, starting_balance=100000.0
-        )
+        result = backtest_runner._extract_equity_curve(analyzer, starting_balance=100000.0)
 
         # Assert
         assert result == []
@@ -130,9 +125,7 @@ class TestExtractEquityCurve:
         analyzer.returns.side_effect = Exception("Test error")
 
         # Act
-        result = backtest_runner._extract_equity_curve(
-            analyzer, starting_balance=100000.0
-        )
+        result = backtest_runner._extract_equity_curve(analyzer, starting_balance=100000.0)
 
         # Assert
         assert result == []
@@ -146,9 +139,7 @@ class TestExtractEquityCurve:
         analyzer.returns.return_value = returns
 
         # Act
-        result = backtest_runner._extract_equity_curve(
-            analyzer, starting_balance=100000.0
-        )
+        result = backtest_runner._extract_equity_curve(analyzer, starting_balance=100000.0)
 
         # Assert
         # 100000 * 1.123456789 = 112345.6789, rounded to 112345.68

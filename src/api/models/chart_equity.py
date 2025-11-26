@@ -60,9 +60,5 @@ class EquityResponse(BaseModel):
     """
 
     run_id: UUID = Field(..., description="Backtest run ID")
-    equity: list[EquityPoint] = Field(
-        default_factory=list, description="Equity curve points"
-    )
-    drawdown: list[DrawdownPoint] = Field(
-        default_factory=list, description="Drawdown points"
-    )
+    equity: list[EquityPoint] = Field(default_factory=list, description="Equity curve points")
+    drawdown: list[DrawdownPoint] = Field(default_factory=list, description="Drawdown points")

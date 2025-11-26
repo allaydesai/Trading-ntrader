@@ -4,10 +4,10 @@ Tests IBKR commission model with tiered pricing structure.
 Following TDD principles and project testing standards.
 """
 
-import pytest
 from decimal import Decimal
 from unittest.mock import Mock
 
+import pytest
 from nautilus_trader.model.currencies import USD
 from nautilus_trader.model.enums import OrderSide
 from nautilus_trader.model.objects import Price, Quantity
@@ -205,9 +205,7 @@ class TestIBKRCommissionModel:
         # Test SELL side
         order_sell = Mock()
         order_sell.side = OrderSide.SELL
-        commission_sell = model.get_commission(
-            order_sell, fill_qty, fill_px, instrument
-        )
+        commission_sell = model.get_commission(order_sell, fill_qty, fill_px, instrument)
 
         assert commission_buy.as_decimal() == commission_sell.as_decimal()
         assert commission_buy.as_decimal() == Decimal("2.50")  # 500 * 0.005

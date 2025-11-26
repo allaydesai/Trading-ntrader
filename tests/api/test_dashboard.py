@@ -13,9 +13,9 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 
-from src.api.web import app
 from src.api.dependencies import get_backtest_query_service
 from src.api.models.dashboard import DashboardSummary, RecentBacktestItem
+from src.api.web import app
 from src.services.backtest_query import BacktestQueryService
 
 
@@ -23,9 +23,7 @@ from src.services.backtest_query import BacktestQueryService
 def mock_empty_service() -> BacktestQueryService:
     """Mock service returning empty dashboard stats."""
     mock_service = AsyncMock(spec=BacktestQueryService)
-    mock_service.get_dashboard_stats = AsyncMock(
-        return_value=DashboardSummary(total_backtests=0)
-    )
+    mock_service.get_dashboard_stats = AsyncMock(return_value=DashboardSummary(total_backtests=0))
     return mock_service
 
 

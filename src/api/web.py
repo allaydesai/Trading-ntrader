@@ -9,8 +9,8 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from src.api.ui import dashboard, backtests
-from src.api.rest import timeseries, trades, equity, indicators
+from src.api.rest import equity, indicators, timeseries, trades
+from src.api.ui import backtests, dashboard
 
 app = FastAPI(
     title="NTrader Web UI",

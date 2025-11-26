@@ -1,17 +1,17 @@
 """Performance calculation service using Nautilus Trader analytics framework."""
 
-from typing import Dict, Any, Optional, List
-import pandas as pd
-import numpy as np
+from typing import Any, Dict, List, Optional
 
+import numpy as np
+import pandas as pd
 from nautilus_trader.analysis.analyzer import PortfolioAnalyzer
+from nautilus_trader.analysis.statistic import PortfolioStatistic
+from nautilus_trader.analysis.statistics.profit_factor import ProfitFactor
+from nautilus_trader.analysis.statistics.returns_avg_loss import ReturnsAverageLoss
+from nautilus_trader.analysis.statistics.returns_avg_win import ReturnsAverageWin
+from nautilus_trader.analysis.statistics.returns_volatility import ReturnsVolatility
 from nautilus_trader.analysis.statistics.sharpe_ratio import SharpeRatio
 from nautilus_trader.analysis.statistics.sortino_ratio import SortinoRatio
-from nautilus_trader.analysis.statistics.profit_factor import ProfitFactor
-from nautilus_trader.analysis.statistics.returns_volatility import ReturnsVolatility
-from nautilus_trader.analysis.statistics.returns_avg_win import ReturnsAverageWin
-from nautilus_trader.analysis.statistics.returns_avg_loss import ReturnsAverageLoss
-from nautilus_trader.analysis.statistic import PortfolioStatistic
 from nautilus_trader.portfolio.portfolio import Portfolio
 
 
@@ -293,9 +293,7 @@ class PerformanceCalculator:
                         "total_trades": len(trades),
                         "winning_trades": len(winning_trades),
                         "losing_trades": len(losing_trades),
-                        "win_rate": len(winning_trades) / len(trades)
-                        if trades
-                        else 0.0,
+                        "win_rate": len(winning_trades) / len(trades) if trades else 0.0,
                         "avg_win": np.mean([t["pnl"] for t in winning_trades])
                         if winning_trades
                         else 0.0,
@@ -314,9 +312,7 @@ class PerformanceCalculator:
         metrics["calculation_timestamp"] = pd.Timestamp.now()
         return metrics
 
-    def calculate_metrics_from_backtest_result(
-        self, backtest_result: Any
-    ) -> Dict[str, Any]:
+    def calculate_metrics_from_backtest_result(self, backtest_result: Any) -> Dict[str, Any]:
         """
         Calculate metrics from a backtest result.
 

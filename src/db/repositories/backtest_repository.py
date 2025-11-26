@@ -15,9 +15,9 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
+from src.api.models.filter_models import FilterState, SortColumn, SortOrder
 from src.db.exceptions import DatabaseConnectionError, DuplicateRecordError
 from src.db.models.backtest import BacktestRun, PerformanceMetrics
-from src.api.models.filter_models import FilterState, SortColumn, SortOrder
 
 
 class BacktestRepository:
@@ -239,6 +239,27 @@ class BacktestRepository:
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def find_by_internal_id(self, internal_id: int) -> Optional[BacktestRun]:
+        """
+        Find backtest by internal database ID.
+
+        Eagerly loads associated performance metrics to avoid N+1 queries.
+
+        Args:
+            internal_id: Internal database primary key
+
+        Returns:
+            BacktestRun with metrics loaded, or None if not found
+        """
+        stmt = (
+            select(BacktestRun)
+            .options(selectinload(BacktestRun.metrics))
+            .where(BacktestRun.id == internal_id)
+        )
+
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def find_recent(
         self,
         limit: int = 20,
@@ -262,16 +283,12 @@ class BacktestRepository:
             # Handle both datetime and tuple cursor formats
             if isinstance(cursor, tuple):
                 created_at, id = cursor
-                stmt = stmt.where(
-                    tuple_(BacktestRun.created_at, BacktestRun.id) < (created_at, id)
-                )
+                stmt = stmt.where(tuple_(BacktestRun.created_at, BacktestRun.id) < (created_at, id))
             else:
                 # If cursor is just datetime, filter by created_at only
                 stmt = stmt.where(BacktestRun.created_at < cursor)
 
-        stmt = stmt.order_by(
-            BacktestRun.created_at.desc(), BacktestRun.id.desc()
-        ).limit(limit)
+        stmt = stmt.order_by(BacktestRun.created_at.desc(), BacktestRun.id.desc()).limit(limit)
 
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
@@ -308,9 +325,7 @@ class BacktestRepository:
                 )
             )
 
-        stmt = stmt.order_by(
-            BacktestRun.created_at.desc(), BacktestRun.id.desc()
-        ).limit(limit)
+        stmt = stmt.order_by(BacktestRun.created_at.desc(), BacktestRun.id.desc()).limit(limit)
 
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
@@ -368,17 +383,14 @@ class BacktestRepository:
 
         if metric not in metric_column_map:
             raise ValueError(
-                f"Unsupported metric: {metric}. "
-                f"Supported metrics: {list(metric_column_map.keys())}"
+                f"Unsupported metric: {metric}. Supported metrics: {list(metric_column_map.keys())}"
             )
 
         metric_column = metric_column_map[metric]
 
         stmt = (
             select(BacktestRun)
-            .join(
-                PerformanceMetrics, BacktestRun.id == PerformanceMetrics.backtest_run_id
-            )
+            .join(PerformanceMetrics, BacktestRun.id == PerformanceMetrics.backtest_run_id)
             .options(joinedload(BacktestRun.metrics))
             .where(metric_column.isnot(None))
             .order_by(metric_column.desc())
@@ -417,9 +429,7 @@ class BacktestRepository:
         """
         stmt = (
             select(BacktestRun)
-            .join(
-                PerformanceMetrics, BacktestRun.id == PerformanceMetrics.backtest_run_id
-            )
+            .join(PerformanceMetrics, BacktestRun.id == PerformanceMetrics.backtest_run_id)
             .options(joinedload(BacktestRun.metrics))
             .where(PerformanceMetrics.sharpe_ratio.isnot(None))
             .order_by(PerformanceMetrics.sharpe_ratio.desc())
@@ -457,9 +467,7 @@ class BacktestRepository:
         """
         stmt = (
             select(BacktestRun)
-            .join(
-                PerformanceMetrics, BacktestRun.id == PerformanceMetrics.backtest_run_id
-            )
+            .join(PerformanceMetrics, BacktestRun.id == PerformanceMetrics.backtest_run_id)
             .options(joinedload(BacktestRun.metrics))
             .order_by(PerformanceMetrics.total_return.desc())
             .limit(limit)
@@ -484,9 +492,7 @@ class BacktestRepository:
         Returns:
             Total count of matching backtests
         """
-        stmt = select(func.count(BacktestRun.id)).where(
-            BacktestRun.strategy_name == strategy_name
-        )
+        stmt = select(func.count(BacktestRun.id)).where(BacktestRun.strategy_name == strategy_name)
 
         result = await self.session.execute(stmt)
         return result.scalar_one()
@@ -523,14 +529,10 @@ class BacktestRepository:
 
         if filter_state.instrument:
             # Case-insensitive partial match
-            conditions.append(
-                BacktestRun.instrument_symbol.ilike(f"%{filter_state.instrument}%")
-            )
+            conditions.append(BacktestRun.instrument_symbol.ilike(f"%{filter_state.instrument}%"))
 
         if filter_state.date_from:
-            conditions.append(
-                func.date(BacktestRun.created_at) >= filter_state.date_from
-            )
+            conditions.append(func.date(BacktestRun.created_at) >= filter_state.date_from)
 
         if filter_state.date_to:
             conditions.append(func.date(BacktestRun.created_at) <= filter_state.date_to)
@@ -603,11 +605,7 @@ class BacktestRepository:
         Returns:
             List of unique strategy names, sorted alphabetically
         """
-        stmt = (
-            select(BacktestRun.strategy_name)
-            .distinct()
-            .order_by(BacktestRun.strategy_name)
-        )
+        stmt = select(BacktestRun.strategy_name).distinct().order_by(BacktestRun.strategy_name)
 
         result = await self.session.execute(stmt)
         return [row[0] for row in result.all()]
@@ -620,10 +618,27 @@ class BacktestRepository:
             List of unique instrument symbols, sorted alphabetically
         """
         stmt = (
-            select(BacktestRun.instrument_symbol)
-            .distinct()
-            .order_by(BacktestRun.instrument_symbol)
+            select(BacktestRun.instrument_symbol).distinct().order_by(BacktestRun.instrument_symbol)
         )
 
         result = await self.session.execute(stmt)
         return [row[0] for row in result.all()]
+
+    async def bulk_create_trades(self, trades: List) -> None:
+        """
+        Bulk insert trades for a backtest run.
+
+        Uses SQLAlchemy's add_all() for efficient bulk insertion.
+
+        Args:
+            trades: List of Trade model instances to insert
+
+        Raises:
+            DatabaseConnectionError: If database operation fails
+        """
+        try:
+            self.session.add_all(trades)
+            await self.session.flush()
+
+        except OperationalError as e:
+            raise DatabaseConnectionError(f"Database connection failed: {e}") from e

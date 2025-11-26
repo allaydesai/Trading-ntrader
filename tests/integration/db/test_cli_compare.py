@@ -5,10 +5,11 @@ Tests the complete workflow of comparing multiple backtests,
 including database operations and service layer integration.
 """
 
-import pytest
 from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import uuid4
+
+import pytest
 
 from src.db.repositories.backtest_repository import BacktestRepository
 from src.services.backtest_query import BacktestQueryService

@@ -1,25 +1,23 @@
 """Test suite for performance metrics using Nautilus Trader analytics framework."""
 
-import pytest
-import pandas as pd
 from decimal import Decimal
 from typing import List
 
 import numpy as np
+import pandas as pd
+import pytest
+from nautilus_trader.analysis.statistics.expectancy import Expectancy
+from nautilus_trader.analysis.statistics.profit_factor import ProfitFactor
+from nautilus_trader.analysis.statistics.returns_avg_loss import ReturnsAverageLoss
+from nautilus_trader.analysis.statistics.returns_avg_win import ReturnsAverageWin
+from nautilus_trader.analysis.statistics.returns_volatility import ReturnsVolatility
 from nautilus_trader.analysis.statistics.sharpe_ratio import SharpeRatio
 from nautilus_trader.analysis.statistics.sortino_ratio import SortinoRatio
-from nautilus_trader.analysis.statistics.profit_factor import ProfitFactor
 from nautilus_trader.analysis.statistics.win_rate import WinRate
-from nautilus_trader.analysis.statistics.expectancy import Expectancy
-from nautilus_trader.analysis.statistics.returns_volatility import ReturnsVolatility
-from nautilus_trader.analysis.statistics.returns_avg_win import ReturnsAverageWin
-from nautilus_trader.analysis.statistics.returns_avg_loss import ReturnsAverageLoss
 from nautilus_trader.test_kit.providers import TestInstrumentProvider
 
 
-def create_returns_series(
-    data: List[float], start_date: str = "2024-01-01"
-) -> pd.Series:
+def create_returns_series(data: List[float], start_date: str = "2024-01-01") -> pd.Series:
     """Helper function to create datetime-indexed returns series for Nautilus."""
     dates = pd.date_range(start_date, periods=len(data), freq="D")
     return pd.Series(data, index=dates)
@@ -34,9 +32,7 @@ class TestNautilusStatistics:
         sharpe = SharpeRatio()
 
         # Create test returns data with datetime index (required by Nautilus)
-        returns = create_returns_series(
-            [0.01, -0.005, 0.02, -0.01, 0.015, 0.008, -0.003]
-        )
+        returns = create_returns_series([0.01, -0.005, 0.02, -0.01, 0.015, 0.008, -0.003])
 
         # Calculate using Nautilus
         result = sharpe.calculate_from_returns(returns)
@@ -64,9 +60,7 @@ class TestNautilusStatistics:
     def test_sortino_ratio_calculation(self):
         """Test Sortino ratio focusing on downside deviation."""
         sortino = SortinoRatio()
-        returns = create_returns_series(
-            [0.02, 0.01, -0.03, 0.015, -0.01, 0.008, -0.005]
-        )
+        returns = create_returns_series([0.02, 0.01, -0.03, 0.015, -0.01, 0.008, -0.005])
 
         result = sortino.calculate_from_returns(returns)
 
@@ -112,9 +106,7 @@ class TestNautilusStatistics:
 
         # WinRate returns None when used directly with returns
         # We'll need to implement this through PortfolioAnalyzer with actual trades
-        assert (
-            result is None
-        )  # Expected for now - will implement properly in PerformanceCalculator
+        assert result is None  # Expected for now - will implement properly in PerformanceCalculator
 
     def test_expectancy_calculation(self):
         """Test expectancy calculation."""
@@ -129,9 +121,7 @@ class TestNautilusStatistics:
 
         # Expectancy returns None when used directly with returns
         # We'll need to implement this through PortfolioAnalyzer with actual trades
-        assert (
-            result is None
-        )  # Expected for now - will implement properly in PerformanceCalculator
+        assert result is None  # Expected for now - will implement properly in PerformanceCalculator
 
     def test_returns_volatility_calculation(self):
         """Test returns volatility calculation."""
@@ -178,9 +168,7 @@ class TestNautilusStatistics:
     def test_empty_returns_series(self):
         """Test statistics with empty returns series."""
         sharpe = SharpeRatio()
-        empty_returns = pd.Series(
-            [], dtype=float
-        )  # Empty series doesn't need datetime index
+        empty_returns = pd.Series([], dtype=float)  # Empty series doesn't need datetime index
 
         result = sharpe.calculate_from_returns(empty_returns)
 
@@ -222,9 +210,7 @@ class TestCustomStatistics:
         """Prepare test for CalmarRatio custom statistic."""
         # This test will fail initially - we'll implement CalmarRatio next
 
-        returns = create_returns_series(
-            [0.01, -0.005, 0.02, -0.01, 0.015] * 50
-        )  # 250 data points
+        returns = create_returns_series([0.01, -0.005, 0.02, -0.01, 0.015] * 50)  # 250 data points
 
         # Manual calculation
         (1 + returns).prod() ** (252 / len(returns)) - 1

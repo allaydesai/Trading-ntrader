@@ -8,11 +8,12 @@ Purpose: Test strategy behavior without framework overhead
 Reference: design.md Section 2.3 - Component Tests Using Test Doubles
 """
 
-import pytest
 from decimal import Decimal
 
-from src.core.sma_logic import SMATradingLogic, CrossoverSignal
-from tests.component.doubles import TestTradingEngine, TestOrder
+import pytest
+
+from src.core.sma_logic import CrossoverSignal, SMATradingLogic
+from tests.component.doubles import TestOrder, TestTradingEngine
 
 
 @pytest.mark.component
@@ -131,9 +132,7 @@ class TestSMAStrategyWithTestDoubles:
         logic = SMATradingLogic(fast_period=5, slow_period=20)
 
         # Fast SMA above slow SMA = long entry condition
-        should_enter = logic.should_enter_long(
-            fast_sma=Decimal("105"), slow_sma=Decimal("100")
-        )
+        should_enter = logic.should_enter_long(fast_sma=Decimal("105"), slow_sma=Decimal("100"))
 
         assert should_enter is True
 
@@ -217,8 +216,6 @@ class TestSMAStrategyWithTestDoubles:
         submitted_count = sum(
             1 for event in engine.event_log if event.startswith("ORDER_SUBMITTED")
         )
-        filled_count = sum(
-            1 for event in engine.event_log if event.startswith("ORDER_FILLED")
-        )
+        filled_count = sum(1 for event in engine.event_log if event.startswith("ORDER_FILLED"))
         assert submitted_count >= 2
         assert filled_count >= 2

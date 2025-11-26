@@ -50,9 +50,7 @@ def mock_service_with_backtests() -> BacktestQueryService:
             instrument_symbol="AAPL",
             date_range="2024-01-01 to 2024-12-31",
             total_return=Decimal(f"{(i + 1) * 1000}"),  # Absolute return in dollars
-            final_balance=Decimal(
-                f"{1000000 + (i + 1) * 1000}"
-            ),  # Starting balance + return
+            final_balance=Decimal(f"{1000000 + (i + 1) * 1000}"),  # Starting balance + return
             sharpe_ratio=Decimal(f"{1.0 + i * 0.5}"),
             max_drawdown=Decimal(f"-0.{20 - i}0"),
             execution_status="success",

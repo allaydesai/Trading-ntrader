@@ -9,6 +9,7 @@ from ibapi.common import MarketDataTypeEnum  # type: ignore
 from nautilus_trader.adapters.interactive_brokers.historical.client import (
     HistoricInteractiveBrokersClient,
 )
+from nautilus_trader.model.identifiers import InstrumentId
 
 
 class RateLimiter:
@@ -33,12 +34,15 @@ class RateLimiter:
         self.requests: deque[datetime] = deque()
         self._lock = asyncio.Lock()
 
-    async def acquire(self):
+    async def acquire(self) -> datetime:
         """
         Wait until a request slot is available.
 
         Implements sliding window rate limiting with thread-safe operations.
         Uses asyncio.Lock to prevent race conditions in concurrent scenarios.
+
+        Returns:
+            The timestamp when this request was recorded
         """
         async with self._lock:
             while True:
@@ -51,7 +55,7 @@ class RateLimiter:
                 # If we have capacity, record this request and return
                 if len(self.requests) < self.requests_per_second:
                     self.requests.append(now)
-                    return
+                    return now
 
                 # At limit, wait until oldest request expires
                 sleep_time = (self.requests[0] + self.window - now).total_seconds()
@@ -121,9 +125,7 @@ class IBKRHistoricalClient:
                 "connected": True,
                 "account_id": getattr(self.client, "account_id", "N/A"),
                 "server_version": getattr(self.client, "server_version", "N/A"),
-                "connection_time": datetime.now(timezone.utc).strftime(
-                    "%Y-%m-%d %H:%M:%S"
-                ),
+                "connection_time": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
             }
 
             return info
@@ -198,8 +200,10 @@ class IBKRHistoricalClient:
 
         # Reason: Also fetch instrument definition for persistence
         # This allows us to save the instrument to the catalog
+        # Convert string to InstrumentId object for request_instruments API
+        nautilus_instrument_id = InstrumentId.from_str(instrument_id)
         instruments = await self.client.request_instruments(
-            instrument_ids=[instrument_id],
+            instrument_ids=[nautilus_instrument_id],
         )
 
         # Reason: Return both bars and instrument (first from the list)

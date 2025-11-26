@@ -1,16 +1,19 @@
 """Tests for database session management."""
 
 from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.session import (
+    dispose_all_connections,
     get_async_engine,
     get_async_session_maker,
     get_db,
     get_session,
+)
+from src.db.session import (
     test_connection as db_test_connection,
-    dispose_all_connections,
 )
 
 
@@ -185,9 +188,7 @@ class TestDatabaseSession:
         mock_session_maker = MagicMock()
         mock_session_maker.return_value = mock_session_context
 
-        with patch(
-            "src.db.session.get_async_session_maker", return_value=mock_session_maker
-        ):
+        with patch("src.db.session.get_async_session_maker", return_value=mock_session_maker):
             async with get_session() as session:
                 assert session == mock_session
 

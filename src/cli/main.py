@@ -7,16 +7,20 @@ from rich.console import Console
 # Load environment variables from .env file before any other imports
 load_dotenv()
 
-from src.config import get_settings  # noqa: E402
-from src.cli.commands.run import run_simple  # noqa: E402
-from src.cli.commands.data import data  # noqa: E402
 from src.cli.commands.backtest import backtest  # noqa: E402
-from src.cli.commands.strategy import strategy  # noqa: E402
-from src.cli.commands.report import report  # noqa: E402
+from src.cli.commands.data import data  # noqa: E402
 from src.cli.commands.history import list_backtest_history  # noqa: E402
+from src.cli.commands.report import report  # noqa: E402
+from src.cli.commands.run import run_simple  # noqa: E402
+from src.cli.commands.strategy import strategy  # noqa: E402
+from src.config import get_settings  # noqa: E402
+from src.utils.logging import configure_logging  # noqa: E402
 
 console = Console()
 settings = get_settings()
+
+# Configure logging on startup
+configure_logging()
 
 
 @click.group()

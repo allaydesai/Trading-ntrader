@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from decimal import Decimal
+from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import (
@@ -13,7 +14,6 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 from sqlalchemy.ext.declarative import declarative_base
-from typing import Any
 
 Base: Any = declarative_base()
 
@@ -92,9 +92,7 @@ class MarketDataTable(Base):
     volume = Column(BigInteger, nullable=False)
     created_at = Column(TIMESTAMP(timezone=True), nullable=False)
 
-    __table_args__ = (
-        UniqueConstraint("symbol", "timestamp", name="uq_symbol_timestamp"),
-    )
+    __table_args__ = (UniqueConstraint("symbol", "timestamp", name="uq_symbol_timestamp"),)
 
 
 # Create table object for direct SQL operations

@@ -77,3 +77,19 @@ module = [
     "ibapi.*",
 ]
 ignore_missing_imports = true
+
+[tool.ruff]
+exclude = [
+    "tests/old_tests",
+    "tests_archive",
+    ".github",
+    "alembic",
+    ".git",
+    ".venv",
+    "__pycache__",
+    "*.ipynb",
+]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]

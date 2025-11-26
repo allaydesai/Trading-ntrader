@@ -684,6 +684,8 @@ rg --files -g "*.py"
 - PostgreSQL 16+ (existing backtest_runs and performance_metrics tables) (007-backtest-detail-view)
 - Python 3.11+ + FastAPI 0.109+, Pydantic 2.5+, SQLAlchemy 2.0 (async), structlog (008-chart-apis)
 - PostgreSQL 16+ (backtest metadata), Parquet files (OHLCV market data) (008-chart-apis)
+- Python 3.11+ + Nautilus Trader (FillReport, Position APIs), FastAPI 0.109+, SQLAlchemy 2.0 (async), Pydantic 2.5+, Pandas (for report generation) (009-trade-tracking)
+- PostgreSQL 16+ with existing backtest_runs infrastructure (specs/004-postgresql-metadata-storage) (009-trade-tracking)
 
 ## Recent Changes
 - 004-postgresql-metadata-storage: Added Python 3.11+ + SQLAlchemy 2.0 (async), Alembic, Pydantic 2.5+, asyncpg, PostgreSQL 16+

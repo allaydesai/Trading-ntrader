@@ -272,13 +272,19 @@ async function initRunPriceChart(container) {
 }
 
 /**
- * Initialize equity curve chart with drawdown overlay
+ * Initialize equity curve chart based on individual trade tracking
  */
 async function initEquityChart(container) {
     const runId = container.dataset.runId;
+    const backtestId = container.dataset.backtestId;
 
     try {
-        const response = await fetch(`/api/equity/${runId}`);
+        // Use backtest_id if available (new trade tracking), fallback to run_id (legacy)
+        const endpoint = backtestId
+            ? `/api/equity-curve/${backtestId}`
+            : `/api/equity/${runId}`;
+
+        const response = await fetch(endpoint);
 
         if (!response.ok) {
             const error = await response.json();
@@ -290,64 +296,120 @@ async function initEquityChart(container) {
         // Hide loading spinner
         hideLoading(container);
 
-        // Check for empty data
-        if (!data.equity || data.equity.length === 0) {
-            showError(container, "No equity data available");
-            return;
-        }
+        // Handle new equity curve format (from trade tracking)
+        if (data.points) {
+            // Check for empty data
+            if (data.points.length === 0) {
+                showError(container, "No trades executed - equity curve unavailable");
+                return;
+            }
 
-        // Create chart
-        const chart = createChartWithDefaults(container);
+            // Create chart
+            const chart = createChartWithDefaults(container);
 
-        // Add equity line series
-        const equitySeries = chart.addSeries(LightweightCharts.LineSeries, {
-            color: CHART_COLORS.equity,
-            lineWidth: 2,
-            title: "Equity",
-        });
-        const equityData = data.equity.map((p) => ({
-            time: p.time,
-            value: p.value,
-        }));
-        equitySeries.setData(equityData);
-
-        // Add drawdown area series if available
-        if (data.drawdown && data.drawdown.length > 0) {
-            const drawdownSeries = chart.addSeries(LightweightCharts.AreaSeries, {
-                topColor: CHART_COLORS.bearish + "40",
-                bottomColor: CHART_COLORS.bearish + "10",
-                lineColor: CHART_COLORS.bearish,
-                lineWidth: 1,
-                title: "Drawdown %",
-                priceScaleId: "drawdown",
+            // Add equity line series
+            const equitySeries = chart.addSeries(LightweightCharts.LineSeries, {
+                color: CHART_COLORS.equity,
+                lineWidth: 2,
+                title: "Account Balance",
             });
 
-            // Position drawdown scale on the right
-            chart.priceScale("drawdown").applyOptions({
-                scaleMargins: {
-                    top: 0.7,
-                    bottom: 0,
+            // Convert EquityCurvePoint[] to chart format
+            // Timestamps are ISO 8601 strings, convert to Unix timestamps
+            const equityData = data.points.map((point) => {
+                const timestamp = new Date(point.timestamp);
+                return {
+                    time: Math.floor(timestamp.getTime() / 1000), // Unix timestamp in seconds
+                    value: parseFloat(point.balance),
+                };
+            });
+            equitySeries.setData(equityData);
+
+            // Add summary info as chart title/watermark
+            const summaryText = `Initial: $${parseFloat(data.initial_capital).toFixed(2)} | ` +
+                               `Final: $${parseFloat(data.final_balance).toFixed(2)} | ` +
+                               `Return: ${parseFloat(data.total_return_pct).toFixed(2)}%`;
+
+            chart.applyOptions({
+                watermark: {
+                    visible: true,
+                    fontSize: 12,
+                    horzAlign: "left",
+                    vertAlign: "top",
+                    color: CHART_COLORS.text + "40",
+                    text: summaryText,
                 },
             });
 
-            const drawdownData = data.drawdown.map((p) => ({
-                time: p.time,
-                value: Math.abs(p.value), // Convert negative to positive for display
-            }));
-            drawdownSeries.setData(drawdownData);
-        }
+            // Fit content to show all data
+            chart.timeScale().fitContent();
 
-        // Fit content to show all data
-        chart.timeScale().fitContent();
-
-        // Handle container resize
-        const resizeObserver = new ResizeObserver(() => {
-            chart.applyOptions({
-                width: container.clientWidth,
-                height: container.clientHeight,
+            // Handle container resize
+            const resizeObserver = new ResizeObserver(() => {
+                chart.applyOptions({
+                    width: container.clientWidth,
+                    height: container.clientHeight,
+                });
             });
-        });
-        resizeObserver.observe(container);
+            resizeObserver.observe(container);
+
+        } else if (data.equity) {
+            // Legacy format - handle old equity endpoint
+            if (data.equity.length === 0) {
+                showError(container, "No equity data available");
+                return;
+            }
+
+            const chart = createChartWithDefaults(container);
+
+            const equitySeries = chart.addSeries(LightweightCharts.LineSeries, {
+                color: CHART_COLORS.equity,
+                lineWidth: 2,
+                title: "Equity",
+            });
+            const equityData = data.equity.map((p) => ({
+                time: p.time,
+                value: p.value,
+            }));
+            equitySeries.setData(equityData);
+
+            // Add drawdown area series if available
+            if (data.drawdown && data.drawdown.length > 0) {
+                const drawdownSeries = chart.addSeries(LightweightCharts.AreaSeries, {
+                    topColor: CHART_COLORS.bearish + "40",
+                    bottomColor: CHART_COLORS.bearish + "10",
+                    lineColor: CHART_COLORS.bearish,
+                    lineWidth: 1,
+                    title: "Drawdown %",
+                    priceScaleId: "drawdown",
+                });
+
+                chart.priceScale("drawdown").applyOptions({
+                    scaleMargins: {
+                        top: 0.7,
+                        bottom: 0,
+                    },
+                });
+
+                const drawdownData = data.drawdown.map((p) => ({
+                    time: p.time,
+                    value: Math.abs(p.value),
+                }));
+                drawdownSeries.setData(drawdownData);
+            }
+
+            chart.timeScale().fitContent();
+
+            const resizeObserver = new ResizeObserver(() => {
+                chart.applyOptions({
+                    width: container.clientWidth,
+                    height: container.clientHeight,
+                });
+            });
+            resizeObserver.observe(container);
+        } else {
+            throw new Error("Invalid equity curve response format");
+        }
 
     } catch (error) {
         console.error("Error initializing equity chart:", error);
@@ -445,8 +507,345 @@ async function initDataViewChart(container) {
     }
 }
 
+/**
+ * Format currency value for display
+ * @param {string|number} value - Numeric value to format
+ * @returns {string} Formatted currency string
+ */
+function formatCurrency(value) {
+    const num = parseFloat(value);
+    if (isNaN(num)) return '$0.00';
+    return new Intl.NumberFormat('en-US', {
+        style: 'currency',
+        currency: 'USD',
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+    }).format(num);
+}
+
+/**
+ * Initialize trade statistics display
+ * @param {HTMLElement} container - Container element with data-backtest-id
+ */
+async function initTradeStatistics(container) {
+    const backtestId = container.dataset.backtestId;
+    if (!backtestId) {
+        console.error("Trade statistics: missing backtest ID");
+        return;
+    }
+
+    const loadingEl = container.querySelector(".stats-loading");
+    const contentEl = container.querySelector(".stats-content");
+    const errorEl = container.querySelector(".stats-error");
+
+    try {
+        // Fetch statistics from API
+        const response = await fetch(`/api/statistics/${backtestId}`);
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        const stats = await response.json();
+
+        // Build statistics HTML
+        const html = `
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                <!-- Trade Counts -->
+                <div class="bg-slate-800 rounded p-4">
+                    <h3 class="text-sm text-slate-400 mb-2">Trade Counts</h3>
+                    <div class="space-y-1">
+                        <div class="flex justify-between text-sm">
+                            <span class="text-slate-300">Total:</span>
+                            <span class="font-semibold">${stats.total_trades}</span>
+                        </div>
+                        <div class="flex justify-between text-sm">
+                            <span class="text-green-400">Wins:</span>
+                            <span class="font-semibold text-green-400">${stats.winning_trades}</span>
+                        </div>
+                        <div class="flex justify-between text-sm">
+                            <span class="text-red-400">Losses:</span>
+                            <span class="font-semibold text-red-400">${stats.losing_trades}</span>
+                        </div>
+                        <div class="flex justify-between text-sm">
+                            <span class="text-yellow-400">Breakeven:</span>
+                            <span class="font-semibold text-yellow-400">${stats.breakeven_trades}</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Win Rate & Profit Factor -->
+                <div class="bg-slate-800 rounded p-4">
+                    <h3 class="text-sm text-slate-400 mb-2">Performance</h3>
+                    <div class="space-y-1">
+                        <div class="flex justify-between text-sm">
+                            <span class="text-slate-300">Win Rate:</span>
+                            <span class="font-semibold">${stats.win_rate}%</span>
+                        </div>
+                        <div class="flex justify-between text-sm">
+                            <span class="text-slate-300">Profit Factor:</span>
+                            <span class="font-semibold">${stats.profit_factor || 'N/A'}</span>
+                        </div>
+                        <div class="flex justify-between text-sm">
+                            <span class="text-slate-300">Expectancy:</span>
+                            <span class="font-semibold">${formatCurrency(stats.expectancy)}</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Profit Metrics -->
+                <div class="bg-slate-800 rounded p-4">
+                    <h3 class="text-sm text-slate-400 mb-2">Profit/Loss</h3>
+                    <div class="space-y-1">
+                        <div class="flex justify-between text-sm">
+                            <span class="text-slate-300">Net Profit:</span>
+                            <span class="font-semibold ${parseFloat(stats.net_profit) >= 0 ? 'text-green-400' : 'text-red-400'}">${formatCurrency(stats.net_profit)}</span>
+                        </div>
+                        <div class="flex justify-between text-sm">
+                            <span class="text-green-400">Avg Win:</span>
+                            <span class="font-semibold text-green-400">${formatCurrency(stats.average_win)}</span>
+                        </div>
+                        <div class="flex justify-between text-sm">
+                            <span class="text-red-400">Avg Loss:</span>
+                            <span class="font-semibold text-red-400">${formatCurrency(stats.average_loss)}</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Streaks & Holding Period -->
+                <div class="bg-slate-800 rounded p-4">
+                    <h3 class="text-sm text-slate-400 mb-2">Streaks & Time</h3>
+                    <div class="space-y-1">
+                        <div class="flex justify-between text-sm">
+                            <span class="text-green-400">Max Win Streak:</span>
+                            <span class="font-semibold text-green-400">${stats.max_consecutive_wins}</span>
+                        </div>
+                        <div class="flex justify-between text-sm">
+                            <span class="text-red-400">Max Loss Streak:</span>
+                            <span class="font-semibold text-red-400">${stats.max_consecutive_losses}</span>
+                        </div>
+                        <div class="flex justify-between text-sm">
+                            <span class="text-slate-300">Avg Hold:</span>
+                            <span class="font-semibold">${stats.avg_holding_period_hours}h</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        // Show content
+        contentEl.innerHTML = html;
+        loadingEl.classList.add("hidden");
+        contentEl.classList.remove("hidden");
+
+    } catch (error) {
+        console.error("Error loading trade statistics:", error);
+        loadingEl.classList.add("hidden");
+        errorEl.classList.remove("hidden");
+    }
+}
+
+/**
+ * Format timestamp for display
+ * @param {string} timestamp - ISO 8601 timestamp
+ * @returns {string} Formatted date/time string
+ */
+function formatTimestamp(timestamp) {
+    if (!timestamp) return 'N/A';
+    const date = new Date(timestamp);
+    return date.toLocaleString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+    });
+}
+
+/**
+ * Initialize drawdown metrics display
+ * @param {HTMLElement} container - Container element with data-backtest-id
+ */
+async function initDrawdownMetrics(container) {
+    const backtestId = container.dataset.backtestId;
+    if (!backtestId) {
+        console.error("Drawdown metrics: missing backtest ID");
+        return;
+    }
+
+    const loadingEl = container.querySelector(".drawdown-loading");
+    const contentEl = container.querySelector(".drawdown-content");
+    const errorEl = container.querySelector(".drawdown-error");
+
+    try {
+        // Fetch drawdown metrics from API
+        const response = await fetch(`/api/drawdown/${backtestId}`);
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        const metrics = await response.json();
+
+        // Build drawdown metrics HTML
+        let html = '';
+
+        // Check if there's a max drawdown
+        if (metrics.max_drawdown) {
+            const maxDD = metrics.max_drawdown;
+            html += `
+                <!-- Max Drawdown Card -->
+                <div class="bg-slate-800 rounded p-4 mb-4">
+                    <h3 class="text-sm text-slate-400 mb-3">Maximum Drawdown</h3>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div>
+                            <div class="flex justify-between text-sm mb-2">
+                                <span class="text-slate-300">Drawdown:</span>
+                                <span class="font-bold text-red-400 text-lg">${parseFloat(maxDD.drawdown_pct).toFixed(2)}%</span>
+                            </div>
+                            <div class="flex justify-between text-sm mb-1">
+                                <span class="text-slate-300">Amount:</span>
+                                <span class="font-semibold text-red-400">${formatCurrency(maxDD.drawdown_amount)}</span>
+                            </div>
+                            <div class="flex justify-between text-sm">
+                                <span class="text-slate-300">Duration:</span>
+                                <span class="font-semibold">${maxDD.duration_days} day${maxDD.duration_days !== 1 ? 's' : ''}</span>
+                            </div>
+                        </div>
+                        <div>
+                            <div class="flex justify-between text-sm mb-1">
+                                <span class="text-slate-300">Peak Balance:</span>
+                                <span class="font-semibold">${formatCurrency(maxDD.peak_balance)}</span>
+                            </div>
+                            <div class="flex justify-between text-sm mb-1">
+                                <span class="text-slate-300">Trough Balance:</span>
+                                <span class="font-semibold text-red-400">${formatCurrency(maxDD.trough_balance)}</span>
+                            </div>
+                            <div class="flex justify-between text-sm">
+                                <span class="text-slate-300">Status:</span>
+                                <span class="font-semibold ${maxDD.recovered ? 'text-green-400' : 'text-yellow-400'}">
+                                    ${maxDD.recovered ? 'Recovered' : 'Ongoing'}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="mt-3 pt-3 border-t border-slate-700">
+                        <div class="text-xs text-slate-400 space-y-1">
+                            <div>Peak: ${formatTimestamp(maxDD.peak_timestamp)}</div>
+                            <div>Trough: ${formatTimestamp(maxDD.trough_timestamp)}</div>
+                            ${maxDD.recovery_timestamp ? `<div>Recovery: ${formatTimestamp(maxDD.recovery_timestamp)}</div>` : ''}
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            // Add current drawdown if it exists and is different from max
+            if (metrics.current_drawdown && !metrics.current_drawdown.recovered) {
+                const currDD = metrics.current_drawdown;
+                // Only show if it's not the same as max drawdown
+                if (currDD !== metrics.max_drawdown) {
+                    html += `
+                        <!-- Current Drawdown Card -->
+                        <div class="bg-slate-800 rounded p-4 mb-4 border-l-4 border-yellow-500">
+                            <h3 class="text-sm text-slate-400 mb-3">Current Drawdown (Ongoing)</h3>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                <div>
+                                    <div class="flex justify-between text-sm mb-2">
+                                        <span class="text-slate-300">Drawdown:</span>
+                                        <span class="font-bold text-yellow-400 text-lg">${parseFloat(currDD.drawdown_pct).toFixed(2)}%</span>
+                                    </div>
+                                    <div class="flex justify-between text-sm">
+                                        <span class="text-slate-300">Amount:</span>
+                                        <span class="font-semibold text-yellow-400">${formatCurrency(currDD.drawdown_amount)}</span>
+                                    </div>
+                                </div>
+                                <div>
+                                    <div class="flex justify-between text-sm mb-1">
+                                        <span class="text-slate-300">Peak Balance:</span>
+                                        <span class="font-semibold">${formatCurrency(currDD.peak_balance)}</span>
+                                    </div>
+                                    <div class="flex justify-between text-sm">
+                                        <span class="text-slate-300">Current Balance:</span>
+                                        <span class="font-semibold text-yellow-400">${formatCurrency(currDD.trough_balance)}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }
+            }
+
+            // Add top drawdowns section
+            if (metrics.top_drawdowns && metrics.top_drawdowns.length > 0) {
+                html += `
+                    <!-- Top Drawdown Periods -->
+                    <div class="bg-slate-800 rounded p-4">
+                        <h3 class="text-sm text-slate-400 mb-3">Top Drawdown Periods (${metrics.total_drawdown_periods} total)</h3>
+                        <div class="space-y-2">
+                `;
+
+                metrics.top_drawdowns.forEach((dd, index) => {
+                    html += `
+                        <div class="flex justify-between items-center text-sm py-2 ${index < metrics.top_drawdowns.length - 1 ? 'border-b border-slate-700' : ''}">
+                            <div class="flex items-center gap-3">
+                                <span class="text-slate-500 font-mono">#${index + 1}</span>
+                                <div>
+                                    <div class="font-semibold text-red-400">${parseFloat(dd.drawdown_pct).toFixed(2)}%</div>
+                                    <div class="text-xs text-slate-400">${formatCurrency(dd.drawdown_amount)}</div>
+                                </div>
+                            </div>
+                            <div class="text-right text-xs text-slate-400">
+                                <div>${dd.duration_days} day${dd.duration_days !== 1 ? 's' : ''}</div>
+                                <div>${dd.recovered ? 'Recovered' : 'Ongoing'}</div>
+                            </div>
+                        </div>
+                    `;
+                });
+
+                html += `
+                        </div>
+                    </div>
+                `;
+            }
+        } else {
+            // No drawdown detected
+            html = `
+                <div class="text-center py-8">
+                    <svg class="h-12 w-12 mx-auto mb-3 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <p class="text-slate-300 font-semibold mb-1">No Drawdowns Detected</p>
+                    <p class="text-sm text-slate-400">The equity curve shows consistent growth without any peak-to-trough periods.</p>
+                </div>
+            `;
+        }
+
+        // Show content
+        contentEl.innerHTML = html;
+        loadingEl.classList.add("hidden");
+        contentEl.classList.remove("hidden");
+
+    } catch (error) {
+        console.error("Error loading drawdown metrics:", error);
+        loadingEl.classList.add("hidden");
+        errorEl.classList.remove("hidden");
+    }
+}
+
 // Initialize on DOM ready
-document.addEventListener("DOMContentLoaded", initCharts);
+document.addEventListener("DOMContentLoaded", () => {
+    initCharts();
+
+    // Initialize trade statistics
+    const statsContainer = document.getElementById("trade-statistics");
+    if (statsContainer) {
+        initTradeStatistics(statsContainer);
+    }
+
+    // Initialize drawdown metrics
+    const drawdownContainer = document.getElementById("drawdown-metrics");
+    if (drawdownContainer) {
+        initDrawdownMetrics(drawdownContainer);
+    }
+});
 
 // Reinitialize after HTMX swaps
 document.body.addEventListener("htmx:afterSwap", handleHtmxSwap);

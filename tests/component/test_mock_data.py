@@ -3,9 +3,9 @@
 import pytest
 
 from src.utils.mock_data import (
+    create_test_instrument,
     generate_mock_bars,
     generate_mock_dataframe,
-    create_test_instrument,
 )
 
 

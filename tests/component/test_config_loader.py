@@ -5,9 +5,10 @@ Following TDD approach - these tests define the expected behavior
 for loading YAML strategy configurations.
 """
 
+from decimal import Decimal
+
 import pytest
 import yaml
-from decimal import Decimal
 
 from src.utils.config_loader import ConfigLoader
 
@@ -76,9 +77,7 @@ class TestConfigLoader:
         config_obj = ConfigLoader.load_from_yaml(sma_yaml_config)
 
         # Verify config structure
-        assert (
-            config_obj.strategy_path == "src.core.strategies.sma_crossover:SMACrossover"
-        )
+        assert config_obj.strategy_path == "src.core.strategies.sma_crossover:SMACrossover"
         assert config_obj.config_path == "src.core.strategies.sma_crossover:SMAConfig"
         assert config_obj.config.fast_period == 10
         assert config_obj.config.slow_period == 20
@@ -88,20 +87,12 @@ class TestConfigLoader:
 
     @pytest.mark.integration
     @pytest.mark.component
-    def test_load_from_yaml_string_mean_reversion_strategy(
-        self, mean_reversion_yaml_config
-    ):
+    def test_load_from_yaml_string_mean_reversion_strategy(self, mean_reversion_yaml_config):
         """INTEGRATION: Load Mean Reversion strategy config from YAML string."""
         config_obj = ConfigLoader.load_from_yaml(mean_reversion_yaml_config)
 
-        assert (
-            config_obj.strategy_path
-            == "src.core.strategies.rsi_mean_reversion:RSIMeanRev"
-        )
-        assert (
-            config_obj.config_path
-            == "src.core.strategies.rsi_mean_reversion:RSIMeanRevConfig"
-        )
+        assert config_obj.strategy_path == "src.core.strategies.rsi_mean_reversion:RSIMeanRev"
+        assert config_obj.config_path == "src.core.strategies.rsi_mean_reversion:RSIMeanRevConfig"
         assert config_obj.config.rsi_period == 2
         assert config_obj.config.rsi_buy_threshold == 10.0
         assert config_obj.config.trade_size == Decimal("1000000")
@@ -112,13 +103,8 @@ class TestConfigLoader:
         """INTEGRATION: Load Momentum strategy config from YAML string."""
         config_obj = ConfigLoader.load_from_yaml(momentum_yaml_config)
 
-        assert (
-            config_obj.strategy_path == "src.core.strategies.sma_momentum:SMAMomentum"
-        )
-        assert (
-            config_obj.config_path
-            == "src.core.strategies.sma_momentum:SMAMomentumConfig"
-        )
+        assert config_obj.strategy_path == "src.core.strategies.sma_momentum:SMAMomentum"
+        assert config_obj.config_path == "src.core.strategies.sma_momentum:SMAMomentumConfig"
         assert config_obj.config.fast_period == 20
         assert config_obj.config.slow_period == 50
         assert not config_obj.config.allow_short
@@ -162,9 +148,7 @@ class TestConfigLoader:
 
         assert config_obj.config.fast_period == 10
         assert config_obj.config.slow_period == 20
-        assert (
-            config_obj.strategy_path == "src.core.strategies.sma_crossover:SMACrossover"
-        )
+        assert config_obj.strategy_path == "src.core.strategies.sma_crossover:SMACrossover"
 
     @pytest.mark.component
     def test_load_from_file_not_found(self):
@@ -181,17 +165,20 @@ class TestConfigLoader:
                 id="invalid_yaml_syntax",
             ),
             pytest.param(
-                'config_path: "src.core.strategies.sma_crossover:SMAConfig"\nconfig:\n  fast_period: 10',
+                'config_path: "src.core.strategies.sma_crossover:SMAConfig"\n'
+                "config:\n  fast_period: 10",
                 ValueError,
                 id="missing_strategy_path",
             ),
             pytest.param(
-                'strategy_path: "src.core.strategies.sma_crossover:SMACrossover"\nconfig:\n  fast_period: 10',
+                'strategy_path: "src.core.strategies.sma_crossover:SMACrossover"\n'
+                "config:\n  fast_period: 10",
                 ValueError,
                 id="missing_config_path",
             ),
             pytest.param(
-                'strategy_path: "src.core.strategies.sma_crossover:SMACrossover"\nconfig_path: "src.core.strategies.sma_crossover:SMAConfig"',
+                'strategy_path: "src.core.strategies.sma_crossover:SMACrossover"\n'
+                'config_path: "src.core.strategies.sma_crossover:SMAConfig"',
                 ValueError,
                 id="missing_config_section",
             ),
@@ -246,10 +233,7 @@ class TestConfigLoader:
         """Test dynamic loading of config classes."""
         config_obj = ConfigLoader._create_config_object(mean_reversion_yaml_data)
 
-        assert (
-            config_obj.strategy_path
-            == "src.core.strategies.rsi_mean_reversion:RSIMeanRev"
-        )
+        assert config_obj.strategy_path == "src.core.strategies.rsi_mean_reversion:RSIMeanRev"
         assert config_obj.config.rsi_period == 2
 
     @pytest.mark.parametrize(
@@ -287,12 +271,8 @@ class TestConfigLoader:
     @pytest.mark.parametrize(
         "config_path,should_pass",
         [
-            pytest.param(
-                "src.core.strategies.sma_crossover:SMAConfig", True, id="valid_path"
-            ),
-            pytest.param(
-                "nonexistent.module:NonexistentClass", False, id="invalid_path"
-            ),
+            pytest.param("src.core.strategies.sma_crossover:SMAConfig", True, id="valid_path"),
+            pytest.param("nonexistent.module:NonexistentClass", False, id="invalid_path"),
         ],
     )
     @pytest.mark.component

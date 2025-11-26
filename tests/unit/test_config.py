@@ -69,9 +69,7 @@ def test_settings_decimal_validation():
     assert settings.trade_size == Decimal("500000.25")
 
     # Test with Decimal objects
-    settings = Settings(
-        default_balance=Decimal("2000.75"), trade_size=Decimal("750000.10")
-    )
+    settings = Settings(default_balance=Decimal("2000.75"), trade_size=Decimal("750000.10"))
     assert settings.default_balance == Decimal("2000.75")
     assert settings.trade_size == Decimal("750000.10")
 
@@ -98,9 +96,7 @@ def test_settings_integer_validation():
     assert settings.mock_data_bars == 5000
 
     # Test with string integers
-    settings = Settings(
-        fast_ema_period="30", slow_ema_period="60", mock_data_bars="3000"
-    )
+    settings = Settings(fast_ema_period="30", slow_ema_period="60", mock_data_bars="3000")
     assert settings.fast_ema_period == 30
     assert settings.slow_ema_period == 60
     assert settings.mock_data_bars == 3000
@@ -227,14 +223,9 @@ def test_settings_field_descriptions():
     assert fields["default_balance"].description == "Default starting balance"
     assert fields["fast_ema_period"].description == "Fast EMA period for strategies"
     assert fields["slow_ema_period"].description == "Slow EMA period for strategies"
-    assert (
-        fields["trade_size"].description
-        == "Default trade size in SHARES (not USD notional)"
-    )
+    assert fields["trade_size"].description == "Default trade size in SHARES (not USD notional)"
     assert fields["data_directory"].description == "Directory for data files"
-    assert (
-        fields["mock_data_bars"].description == "Number of mock data bars to generate"
-    )
+    assert fields["mock_data_bars"].description == "Number of mock data bars to generate"
     assert fields["log_level"].description == "Logging level"
 
 

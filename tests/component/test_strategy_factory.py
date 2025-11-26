@@ -1,11 +1,11 @@
 """Tests for Strategy Factory implementation."""
 
-import pytest
 from decimal import Decimal
-from pydantic import ValidationError
 
+import pytest
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.trading.strategy import Strategy, StrategyConfig
+from pydantic import ValidationError
 
 from src.core.strategy_factory import StrategyFactory, StrategyLoader
 from src.models.strategy import StrategyType
@@ -321,9 +321,7 @@ class TestStrategyLoader:
     def test_validate_strategy_type_valid(self):
         """Test validating supported strategy types."""
         assert StrategyLoader.validate_strategy_type(StrategyType.SMA_CROSSOVER) is True
-        assert (
-            StrategyLoader.validate_strategy_type(StrategyType.MEAN_REVERSION) is True
-        )
+        assert StrategyLoader.validate_strategy_type(StrategyType.MEAN_REVERSION) is True
         assert StrategyLoader.validate_strategy_type(StrategyType.MOMENTUM) is True
 
     @pytest.mark.component

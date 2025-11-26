@@ -45,9 +45,7 @@ class RecentBacktestItem(BaseModel):
     instrument_symbol: str = Field(..., description="Trading instrument")
     execution_status: str = Field(..., description="success or failed")
     created_at: datetime = Field(..., description="When backtest was run")
-    total_return: Optional[Decimal] = Field(
-        None, description="Return percentage (if success)"
-    )
+    total_return: Optional[Decimal] = Field(None, description="Return percentage (if success)")
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -79,9 +77,7 @@ class DashboardSummary(BaseModel):
         ... )
     """
 
-    total_backtests: int = Field(
-        default=0, ge=0, description="Count of all backtest runs"
-    )
+    total_backtests: int = Field(default=0, ge=0, description="Count of all backtest runs")
     best_sharpe_ratio: Optional[Decimal] = Field(
         default=None, description="Highest Sharpe ratio achieved"
     )

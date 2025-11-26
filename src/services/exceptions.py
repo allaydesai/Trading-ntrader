@@ -37,8 +37,7 @@ class DataNotFoundError(CatalogError):
         self.start = start
         self.end = end
         super().__init__(
-            f"Data not found: {instrument_id} from "
-            f"{start.isoformat()} to {end.isoformat()}"
+            f"Data not found: {instrument_id} from {start.isoformat()} to {end.isoformat()}"
         )
 
 
@@ -79,9 +78,7 @@ class CatalogCorruptionError(CatalogError):
         """
         self.file_path = file_path
         self.original_error = original_error
-        super().__init__(
-            f"Corrupted catalog file: {file_path} (Error: {original_error})"
-        )
+        super().__init__(f"Corrupted catalog file: {file_path} (Error: {original_error})")
 
 
 class RateLimitExceededError(CatalogError):

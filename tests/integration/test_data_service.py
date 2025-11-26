@@ -6,8 +6,9 @@ Following Phase 5 migration - marked as integration tests.
 
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
-import pytest
+
 import pandas as pd
+import pytest
 
 from src.services.data_service import DataService
 
@@ -581,9 +582,7 @@ class TestDataService:
 
         mock_session.execute.side_effect = [mock_result_first, mock_result_last]
 
-        with patch.object(
-            service.db_repo, "get_data_range", return_value=mock_data_range
-        ):
+        with patch.object(service.db_repo, "get_data_range", return_value=mock_data_range):
             # Test with midnight dates (should be adjusted)
             start = datetime(2024, 1, 1, 0, 0)  # Midnight
             end = datetime(2024, 1, 31, 0, 0)  # Midnight
@@ -620,9 +619,7 @@ class TestDataService:
 
         mock_session.execute.side_effect = [mock_result_start, mock_result_end]
 
-        with patch.object(
-            service.db_repo, "get_data_range", return_value=mock_data_range
-        ):
+        with patch.object(service.db_repo, "get_data_range", return_value=mock_data_range):
             # Test with midnight dates where no data exists on exact dates
             start = datetime(2024, 1, 1, 0, 0)  # Before data start
             end = datetime(2024, 1, 31, 0, 0)  # After data end
@@ -648,9 +645,7 @@ class TestDataService:
             "end": datetime(2024, 1, 31, 16, 0),
         }
 
-        with patch.object(
-            service.db_repo, "get_data_range", return_value=mock_data_range
-        ):
+        with patch.object(service.db_repo, "get_data_range", return_value=mock_data_range):
             # Test with non-midnight dates (should not be adjusted)
             start = datetime(2024, 1, 5, 10, 30)
             end = datetime(2024, 1, 25, 15, 30)
@@ -674,9 +669,7 @@ class TestDataService:
             "end": datetime(2024, 1, 31, 16, 0, tzinfo=timezone.utc),
         }
 
-        with patch.object(
-            service.db_repo, "get_data_range", return_value=mock_data_range
-        ):
+        with patch.object(service.db_repo, "get_data_range", return_value=mock_data_range):
             # Test with naive datetime (should be converted to UTC)
             start = datetime(2024, 1, 5, 10, 30)  # Naive datetime
             end = datetime(2024, 1, 25, 15, 30)  # Naive datetime

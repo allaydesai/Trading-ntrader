@@ -8,9 +8,7 @@ from src.core.backtest_runner import BacktestResult
 @pytest.mark.unit
 def test_backtest_result_creation():
     """Test BacktestResult creation and properties."""
-    result = BacktestResult(
-        total_return=1000.0, total_trades=10, winning_trades=6, losing_trades=4
-    )
+    result = BacktestResult(total_return=1000.0, total_trades=10, winning_trades=6, losing_trades=4)
 
     assert result.total_return == 1000.0
     assert result.total_trades == 10
@@ -49,9 +47,7 @@ def test_backtest_result_win_rate_calculation():
     assert result_all_wins.win_rate == 100.0
 
     # 0% win rate
-    result_all_losses = BacktestResult(
-        total_trades=5, winning_trades=0, losing_trades=5
-    )
+    result_all_losses = BacktestResult(total_trades=5, winning_trades=0, losing_trades=5)
     assert result_all_losses.win_rate == 0.0
 
     # 50% win rate

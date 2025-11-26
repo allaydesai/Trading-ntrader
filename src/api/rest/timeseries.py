@@ -11,10 +11,10 @@ from fastapi import APIRouter, HTTPException, Query
 from src.api.dependencies import DataCatalog
 from src.api.models.chart_errors import ErrorDetail
 from src.api.models.chart_timeseries import (
+    TIMEFRAME_TO_BAR_TYPE,
     Candle,
     Timeframe,
     TimeseriesResponse,
-    TIMEFRAME_TO_BAR_TYPE,
 )
 from src.services.exceptions import DataNotFoundError
 
@@ -59,9 +59,7 @@ def get_timeseries(
     ),
     start: date = Query(..., description="Start date (ISO 8601)"),
     end: date = Query(..., description="End date (ISO 8601)"),
-    timeframe: Timeframe = Query(
-        default=Timeframe.ONE_MIN, description="Bar timeframe"
-    ),
+    timeframe: Timeframe = Query(default=Timeframe.ONE_MIN, description="Bar timeframe"),
 ) -> TimeseriesResponse:
     """
     Get OHLCV time series data for chart rendering.
@@ -135,8 +133,7 @@ def get_timeseries(
             detail={
                 "detail": f"Market data not found for {symbol} from {start} to {end}",
                 "suggestion": (
-                    f"Run: ntrader data fetch --symbol {symbol} "
-                    f"--start {start} --end {end}"
+                    f"Run: ntrader data fetch --symbol {symbol} --start {start} --end {end}"
                 ),
             },
         )

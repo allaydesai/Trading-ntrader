@@ -1,17 +1,19 @@
 """Validation utilities for export services."""
 
 import os
-from decimal import Decimal, InvalidOperation
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, List, Optional, Union
 
 from .exceptions import (
-    InvalidDataError,
-    EmptyDataError,
     DirectoryError,
-    PermissionError as ExportPermissionError,
+    EmptyDataError,
+    InvalidDataError,
     ValidationError,
+)
+from .exceptions import (
+    PermissionError as ExportPermissionError,
 )
 
 
@@ -156,14 +158,10 @@ class DataValidator:
                 numeric_value = float(str(value))
 
             if min_value is not None and numeric_value < min_value:
-                raise InvalidDataError(
-                    field_name, str(value), f"numeric value >= {min_value}"
-                )
+                raise InvalidDataError(field_name, str(value), f"numeric value >= {min_value}")
 
             if max_value is not None and numeric_value > max_value:
-                raise InvalidDataError(
-                    field_name, str(value), f"numeric value <= {max_value}"
-                )
+                raise InvalidDataError(field_name, str(value), f"numeric value <= {max_value}")
 
             return numeric_value
 
@@ -319,9 +317,7 @@ class TradeValidator:
         if hasattr(trade, "side") and trade.side:
             valid_sides = ["LONG", "SHORT", "BUY", "SELL"]
             if trade.side.upper() not in valid_sides:
-                errors.append(
-                    f"Invalid side: {trade.side}. Must be one of: {valid_sides}"
-                )
+                errors.append(f"Invalid side: {trade.side}. Must be one of: {valid_sides}")
 
         # Validate timestamps
         try:
@@ -338,10 +334,7 @@ class TradeValidator:
 
         # Validate instrument_id format
         if hasattr(trade, "instrument_id") and trade.instrument_id:
-            if (
-                not isinstance(trade.instrument_id, str)
-                or len(trade.instrument_id.strip()) == 0
-            ):
+            if not isinstance(trade.instrument_id, str) or len(trade.instrument_id.strip()) == 0:
                 errors.append("Instrument ID must be a non-empty string")
 
         return errors

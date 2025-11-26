@@ -5,10 +5,11 @@ Provides test data and configuration for testing detail view routes,
 templates, and model transformations.
 """
 
-import pytest
 from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import uuid4
+
+import pytest
 
 from src.db.models.backtest import BacktestRun, PerformanceMetrics
 

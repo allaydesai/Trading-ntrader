@@ -1,9 +1,9 @@
 """Tests for CLI main module."""
 
-import pytest
 from unittest.mock import Mock, patch
 
 import click
+import pytest
 from click.testing import CliRunner
 
 from src.cli.main import cli
@@ -110,7 +110,8 @@ def test_cli_help_long_option():
 @pytest.mark.component
 def test_cli_console_initialization():
     """Test that Rich console is initialized."""
-    from src.cli.main import console
     from rich.console import Console
+
+    from src.cli.main import console
 
     assert isinstance(console, Console)

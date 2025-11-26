@@ -25,9 +25,7 @@ def get_async_engine():
     """Get or create async engine."""
     global async_engine
     if async_engine is None and settings.database_url:
-        async_url = settings.database_url.replace(
-            "postgresql://", "postgresql+asyncpg://"
-        )
+        async_url = settings.database_url.replace("postgresql://", "postgresql+asyncpg://")
         async_engine = create_async_engine(
             async_url,
             pool_size=settings.database_pool_size,

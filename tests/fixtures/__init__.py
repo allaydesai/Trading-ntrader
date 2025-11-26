@@ -11,10 +11,10 @@ Available Fixtures:
 """
 
 from tests.fixtures.scenarios import (
-    MarketScenario,
-    VOLATILE_MARKET,
-    TRENDING_MARKET,
     RANGING_MARKET,
+    TRENDING_MARKET,
+    VOLATILE_MARKET,
+    MarketScenario,
 )
 
 __all__ = [

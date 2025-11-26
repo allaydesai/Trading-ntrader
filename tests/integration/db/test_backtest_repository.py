@@ -1,15 +1,15 @@
 """Unit tests for BacktestRepository data access layer."""
 
-import pytest
 from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import uuid4
 
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
+import pytest
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from src.db.repositories.backtest_repository import BacktestRepository
 from src.db.base import Base
+from src.db.repositories.backtest_repository import BacktestRepository
 
 
 def get_worker_id(request):
@@ -347,9 +347,7 @@ class TestBacktestRepositoryRetrieve:
         await async_session.commit()
 
         # Act
-        top_performers = await repository.find_top_performers(
-            metric="sharpe_ratio", limit=2
-        )
+        top_performers = await repository.find_top_performers(metric="sharpe_ratio", limit=2)
 
         # Assert
         assert len(top_performers) == 2
@@ -357,9 +355,7 @@ class TestBacktestRepositoryRetrieve:
         assert top_performers[1].metrics.sharpe_ratio == Decimal("1.8")
 
     @pytest.mark.asyncio
-    async def test_find_top_performers_excludes_null_sharpe(
-        self, repository, async_session
-    ):
+    async def test_find_top_performers_excludes_null_sharpe(self, repository, async_session):
         """Test that top performers query excludes runs with null metrics."""
         # Arrange
         # Create run without metrics
@@ -407,9 +403,7 @@ class TestBacktestRepositoryRetrieve:
         await async_session.commit()
 
         # Act
-        top_performers = await repository.find_top_performers(
-            metric="sharpe_ratio", limit=10
-        )
+        top_performers = await repository.find_top_performers(metric="sharpe_ratio", limit=10)
 
         # Assert
         assert len(top_performers) == 1
@@ -449,9 +443,7 @@ class TestBacktestRepositoryRetrieve:
         await async_session.commit()
 
         # Act
-        top_performers = await repository.find_top_performers(
-            metric="sharpe_ratio", limit=3
-        )
+        top_performers = await repository.find_top_performers(metric="sharpe_ratio", limit=3)
 
         # Assert
         assert len(top_performers) == 3
