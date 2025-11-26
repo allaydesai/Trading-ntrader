@@ -154,6 +154,12 @@ jobs:
         run: |
           uv sync --dev
 
+      - name: Run database migrations
+        env:
+          DATABASE_URL: postgresql://ntrader_dev_2025:ntrader_dev_2025@localhost:5432/trading_ntrader_dev
+        run: |
+          uv run alembic upgrade head
+
       - name: Run integration tests (subprocess isolated)
         env:
           DATABASE_URL: postgresql://ntrader_dev_2025:ntrader_dev_2025@localhost:5432/trading_ntrader_dev
@@ -210,6 +216,12 @@ jobs:
       - name: Install dependencies
         run: |
           uv sync --dev
+
+      - name: Run database migrations
+        env:
+          DATABASE_URL: postgresql://ntrader_dev_2025:ntrader_dev_2025@localhost:5432/trading_ntrader_dev
+        run: |
+          uv run alembic upgrade head
 
       - name: Download all coverage reports
         uses: actions/download-artifact@v4
