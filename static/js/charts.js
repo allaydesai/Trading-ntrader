@@ -211,12 +211,13 @@ async function initRunPriceChart(container) {
         volumeSeries.setData(volumeData);
 
         // Add indicator series if available
+        const indicatorSeries = {};  // Store series references for toggle controls
         if (indicatorsData.indicators) {
             // SMA Fast
             if (indicatorsData.indicators.sma_fast && indicatorsData.indicators.sma_fast.length > 0) {
                 const smaFastSeries = chart.addSeries(LightweightCharts.LineSeries, {
                     color: CHART_COLORS.smaFast,
-                    lineWidth: 1,
+                    lineWidth: 2,
                     title: "SMA Fast",
                 });
                 const smaFastData = indicatorsData.indicators.sma_fast.map((p) => ({
@@ -224,13 +225,14 @@ async function initRunPriceChart(container) {
                     value: p.value,
                 }));
                 smaFastSeries.setData(smaFastData);
+                indicatorSeries['sma_fast'] = smaFastSeries;
             }
 
             // SMA Slow
             if (indicatorsData.indicators.sma_slow && indicatorsData.indicators.sma_slow.length > 0) {
                 const smaSlowSeries = chart.addSeries(LightweightCharts.LineSeries, {
                     color: CHART_COLORS.smaSlow,
-                    lineWidth: 1,
+                    lineWidth: 2,
                     title: "SMA Slow",
                 });
                 const smaSlowData = indicatorsData.indicators.sma_slow.map((p) => ({
@@ -238,23 +240,145 @@ async function initRunPriceChart(container) {
                     value: p.value,
                 }));
                 smaSlowSeries.setData(smaSlowData);
+                indicatorSeries['sma_slow'] = smaSlowSeries;
+            }
+
+            // Bollinger Bands (upper, middle, lower)
+            if (indicatorsData.indicators.upper_band && indicatorsData.indicators.upper_band.length > 0) {
+                const upperBandSeries = chart.addSeries(LightweightCharts.LineSeries, {
+                    color: '#787B86',
+                    lineWidth: 1,
+                    lineStyle: 2,  // Dashed
+                    title: "Upper Band",
+                });
+                const upperBandData = indicatorsData.indicators.upper_band.map((p) => ({
+                    time: p.time,
+                    value: p.value,
+                }));
+                upperBandSeries.setData(upperBandData);
+                indicatorSeries['upper_band'] = upperBandSeries;
+            }
+
+            if (indicatorsData.indicators.middle_band && indicatorsData.indicators.middle_band.length > 0) {
+                const middleBandSeries = chart.addSeries(LightweightCharts.LineSeries, {
+                    color: CHART_COLORS.smaFast,
+                    lineWidth: 2,
+                    title: "Middle Band",
+                });
+                const middleBandData = indicatorsData.indicators.middle_band.map((p) => ({
+                    time: p.time,
+                    value: p.value,
+                }));
+                middleBandSeries.setData(middleBandData);
+                indicatorSeries['middle_band'] = middleBandSeries;
+            }
+
+            if (indicatorsData.indicators.lower_band && indicatorsData.indicators.lower_band.length > 0) {
+                const lowerBandSeries = chart.addSeries(LightweightCharts.LineSeries, {
+                    color: '#787B86',
+                    lineWidth: 1,
+                    lineStyle: 2,  // Dashed
+                    title: "Lower Band",
+                });
+                const lowerBandData = indicatorsData.indicators.lower_band.map((p) => ({
+                    time: p.time,
+                    value: p.value,
+                }));
+                lowerBandSeries.setData(lowerBandData);
+                indicatorSeries['lower_band'] = lowerBandSeries;
             }
         }
 
-        // Add trade markers
+        // Add trade markers with enhanced tooltips
         if (tradesData.trades && tradesData.trades.length > 0) {
-            const markers = tradesData.trades.map((t) => ({
-                time: t.time,
-                position: t.side === "buy" ? "belowBar" : "aboveBar",
-                color: t.side === "buy" ? CHART_COLORS.bullish : CHART_COLORS.bearish,
-                shape: t.side === "buy" ? "arrowUp" : "arrowDown",
-                text: t.side === "buy" ? "B" : "S",
-            }));
+            const markers = tradesData.trades.map((t) => {
+                // Format tooltip with trade details
+                const pnlText = t.pnl !== 0 ? `\nP&L: $${t.pnl.toFixed(2)}` : '';
+                const tooltip = `${t.side.toUpperCase()} @ $${t.price.toFixed(2)}\nQty: ${t.quantity}${pnlText}`;
+
+                return {
+                    time: t.time,
+                    position: t.side === "buy" ? "belowBar" : "aboveBar",
+                    color: t.side === "buy" ? CHART_COLORS.bullish : CHART_COLORS.bearish,
+                    shape: t.side === "buy" ? "arrowUp" : "arrowDown",
+                    text: tooltip,
+                };
+            });
             candlestickSeries.setMarkers(markers);
+        }
+
+        // Add RSI indicator in separate pane if available
+        let rsiChart = null;
+        if (indicatorsData.indicators && indicatorsData.indicators.rsi && indicatorsData.indicators.rsi.length > 0) {
+            // Create RSI chart container
+            const rsiContainer = document.createElement('div');
+            rsiContainer.id = `${container.id}-rsi`;
+            rsiContainer.style.height = '150px';
+            rsiContainer.style.marginTop = '10px';
+            container.parentElement.appendChild(rsiContainer);
+
+            // Create RSI chart
+            rsiChart = createChartWithDefaults(rsiContainer);
+            rsiChart.applyOptions({
+                height: 150,
+            });
+
+            // Add RSI line series
+            const rsiSeries = rsiChart.addSeries(LightweightCharts.LineSeries, {
+                color: '#9C27B0',  // Purple for RSI
+                lineWidth: 2,
+                title: "RSI (14)",
+            });
+            const rsiData = indicatorsData.indicators.rsi.map((p) => ({
+                time: p.time,
+                value: p.value,
+            }));
+            rsiSeries.setData(rsiData);
+
+            // Add overbought threshold line (70)
+            const overboughtSeries = rsiChart.addSeries(LightweightCharts.LineSeries, {
+                color: '#ef5350',  // Red for overbought
+                lineWidth: 1,
+                lineStyle: 2,  // Dashed
+                title: "Overbought (70)",
+            });
+            const overboughtData = rsiData.map((p) => ({ time: p.time, value: 70 }));
+            overboughtSeries.setData(overboughtData);
+
+            // Add oversold threshold line (30)
+            const oversoldSeries = rsiChart.addSeries(LightweightCharts.LineSeries, {
+                color: '#26a69a',  // Green for oversold
+                lineWidth: 1,
+                lineStyle: 2,  // Dashed
+                title: "Oversold (30)",
+            });
+            const oversoldData = rsiData.map((p) => ({ time: p.time, value: 30 }));
+            oversoldSeries.setData(oversoldData);
+
+            // Configure RSI price scale to show 0-100 range
+            rsiChart.priceScale().applyOptions({
+                scaleMargins: {
+                    top: 0.1,
+                    bottom: 0.1,
+                },
+            });
+
+            // Sync time scales between main chart and RSI chart
+            chart.timeScale().subscribeVisibleLogicalRangeChange((timeRange) => {
+                rsiChart.timeScale().setVisibleLogicalRange(timeRange);
+            });
+            rsiChart.timeScale().subscribeVisibleLogicalRangeChange((timeRange) => {
+                chart.timeScale().setVisibleLogicalRange(timeRange);
+            });
+
+            indicatorSeries['rsi'] = rsiSeries;
         }
 
         // Fit content to show all data
         chart.timeScale().fitContent();
+        if (rsiChart) {
+            rsiChart.timeScale().fitContent();
+        }
 
         // Handle container resize
         const resizeObserver = new ResizeObserver(() => {
@@ -262,6 +386,15 @@ async function initRunPriceChart(container) {
                 width: container.clientWidth,
                 height: container.clientHeight,
             });
+            if (rsiChart) {
+                const rsiContainer = document.getElementById(`${container.id}-rsi`);
+                if (rsiContainer) {
+                    rsiChart.applyOptions({
+                        width: rsiContainer.clientWidth,
+                        height: 150,
+                    });
+                }
+            }
         });
         resizeObserver.observe(container);
 
