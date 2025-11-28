@@ -15,6 +15,7 @@ class StrategyType(str, Enum):
     SMA_CROSSOVER = "sma_crossover"
     MEAN_REVERSION = "mean_reversion"
     MOMENTUM = "momentum"
+    BOLLINGER_REVERSAL = "bollinger_reversal"
 
 
 class StrategyStatus(str, Enum):
@@ -129,6 +130,42 @@ class MomentumParameters(BaseModel):
         return v
 
 
+class BollingerReversalParameters(BaseModel):
+    """
+    Parameters specific to Bollinger Reversal strategy.
+
+    Matches src.core.strategies.bollinger_reversal.BollingerReversalConfig.
+    """
+
+    portfolio_value: Decimal = Field(
+        default=Decimal("1000000"), gt=0, description="Starting portfolio value in USD"
+    )
+    daily_bb_period: int = Field(
+        default=20, ge=1, le=100, description="Daily Bollinger Bands period"
+    )
+    daily_bb_std_dev: float = Field(
+        default=2.0, ge=0.1, le=10.0, description="Daily Bollinger Bands standard deviation"
+    )
+    weekly_ma_period: int = Field(
+        default=20, ge=1, le=200, description="Weekly Moving Average period"
+    )
+    weekly_ma_tolerance_pct: float = Field(
+        default=0.05, ge=0.0, le=1.0, description="Tolerance for price near Weekly MA (0.05 = 5%)"
+    )
+    max_risk_pct: Decimal = Field(
+        default=Decimal("1.0"), ge=0.1, le=10.0, description="% of equity risked per trade"
+    )
+    stop_loss_atr_mult: Decimal = Field(
+        default=Decimal("2.0"), ge=0.5, le=10.0, description="ATR multiplier for stop loss"
+    )
+    atr_period: int = Field(default=14, ge=1, le=100, description="ATR period for stop loss")
+
+    # Mapping from model fields to global Settings attributes
+    _settings_map = {
+        "portfolio_value": "portfolio_value",
+    }
+
+
 class TradingStrategy(BaseModel):
     """Trading strategy entity with configuration and metadata."""
 
@@ -172,6 +209,13 @@ class TradingStrategy(BaseModel):
                 MomentumParameters.model_validate(v)
             except Exception as e:
                 raise ValueError(f"Invalid Momentum parameters: {e}")
+
+        elif strategy_type == StrategyType.BOLLINGER_REVERSAL:
+            # Validate Bollinger Reversal parameters
+            try:
+                BollingerReversalParameters.model_validate(v)
+            except Exception as e:
+                raise ValueError(f"Invalid Bollinger Reversal parameters: {e}")
 
         return v
 

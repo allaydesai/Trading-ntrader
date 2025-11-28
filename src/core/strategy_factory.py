@@ -8,6 +8,7 @@ from nautilus_trader.trading.strategy import Strategy, StrategyConfig
 from pydantic import ValidationError
 
 from src.models.strategy import (
+    BollingerReversalParameters,
     MeanReversionParameters,
     MomentumParameters,
     SMAParameters,
@@ -189,6 +190,9 @@ class StrategyFactory:
             "momentumstrategy": StrategyType.MOMENTUM,
             "smamomentum": StrategyType.MOMENTUM,
             "sma_momentum": StrategyType.MOMENTUM,
+            "bollingerreversal": StrategyType.BOLLINGER_REVERSAL,
+            "bollinger_reversal": StrategyType.BOLLINGER_REVERSAL,
+            "bollingerreversalstrategy": StrategyType.BOLLINGER_REVERSAL,
         }
 
         for key, strategy_type in strategy_mappings.items():
@@ -226,6 +230,7 @@ class StrategyFactory:
             StrategyType.SMA_CROSSOVER: SMAParameters,
             StrategyType.MEAN_REVERSION: MeanReversionParameters,
             StrategyType.MOMENTUM: MomentumParameters,
+            StrategyType.BOLLINGER_REVERSAL: BollingerReversalParameters,
         }
 
         if strategy_type not in param_classes:
@@ -261,6 +266,11 @@ class StrategyLoader:
             "strategy_path": "src.core.strategies.sma_momentum:SMAMomentum",
             "config_path": "src.core.strategies.sma_momentum:SMAMomentumConfig",
             "param_model": MomentumParameters,
+        },
+        StrategyType.BOLLINGER_REVERSAL: {
+            "strategy_path": "src.core.strategies.bollinger_reversal:BollingerReversalStrategy",
+            "config_path": "src.core.strategies.bollinger_reversal:BollingerReversalConfig",
+            "param_model": BollingerReversalParameters,
         },
     }
 
@@ -427,6 +437,7 @@ class StrategyLoader:
             StrategyType.SMA_CROSSOVER: "Simple Moving Average Crossover Strategy",
             StrategyType.MEAN_REVERSION: "RSI Mean Reversion Strategy with Trend Filter",
             StrategyType.MOMENTUM: "SMA Momentum Strategy (Golden/Death Cross)",
+            StrategyType.BOLLINGER_REVERSAL: "Bollinger Band Reversal with Weekly MA Confluence",
         }
 
         return {
@@ -499,6 +510,18 @@ class StrategyLoader:
                 "slow_period": 50,
                 "warmup_days": 1,
                 "allow_short": False,
+            },
+            StrategyType.BOLLINGER_REVERSAL: {
+                "instrument_id": "EUR/USD.SIM",
+                "bar_type": "EUR/USD.SIM-1-DAY-MID-EXTERNAL",
+                "portfolio_value": 1000000,
+                "daily_bb_period": 20,
+                "daily_bb_std_dev": 2.0,
+                "weekly_ma_period": 20,
+                "weekly_ma_tolerance_pct": 0.05,
+                "max_risk_pct": 1.0,
+                "stop_loss_atr_mult": 2.0,
+                "atr_period": 14,
             },
         }
 

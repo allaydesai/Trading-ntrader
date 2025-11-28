@@ -47,7 +47,7 @@ def backtest():
     "--strategy",
     "-s",
     default="sma_crossover",
-    type=click.Choice(["sma", "sma_crossover", "mean_reversion", "momentum"]),
+    type=click.Choice(["sma", "sma_crossover", "mean_reversion", "momentum", "bollinger_reversal"]),
     help="Strategy to run (sma is alias for sma_crossover)",
 )
 @click.option("--symbol", "-sym", required=True, help="Trading symbol (e.g., AAPL, EUR/USD)")
@@ -356,6 +356,11 @@ def run_backtest(
                         "fast_period": fast_period,
                         "slow_period": slow_period,
                     }
+                elif strategy == "bollinger_reversal":
+                    # Use defaults for now, can add CLI args later
+                    strategy_params = {
+                        "portfolio_value": Decimal(str(trade_size * 10)),  # 10x for 10% sizing
+                    }
                 else:
                     # Other strategies use trade_size
                     strategy_params = {
@@ -608,6 +613,11 @@ def list_backtests():
         "momentum",
         "SMA Momentum Strategy (Golden/Death Cross)",
         "trade_size, fast_period, slow_period",
+    )
+    strategy_table.add_row(
+        "bollinger_reversal",
+        "Bollinger Band Reversal with Weekly MA Confluence",
+        "trade_size (converts to portfolio_value)",
     )
     strategy_table.add_row(
         "sma",
