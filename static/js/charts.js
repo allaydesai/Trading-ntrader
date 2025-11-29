@@ -221,7 +221,7 @@ async function initRunPriceChart(container) {
                     title: "SMA Fast",
                 });
                 const smaFastData = indicatorsData.indicators.sma_fast.map((p) => ({
-                    time: p.time,
+                    time: Math.floor(new Date(p.time).getTime() / 1000),  // Convert to Unix timestamp
                     value: p.value,
                 }));
                 smaFastSeries.setData(smaFastData);
@@ -236,7 +236,7 @@ async function initRunPriceChart(container) {
                     title: "SMA Slow",
                 });
                 const smaSlowData = indicatorsData.indicators.sma_slow.map((p) => ({
-                    time: p.time,
+                    time: Math.floor(new Date(p.time).getTime() / 1000),  // Convert to Unix timestamp
                     value: p.value,
                 }));
                 smaSlowSeries.setData(smaSlowData);
@@ -252,7 +252,7 @@ async function initRunPriceChart(container) {
                     title: "Upper Band",
                 });
                 const upperBandData = indicatorsData.indicators.upper_band.map((p) => ({
-                    time: p.time,
+                    time: Math.floor(new Date(p.time).getTime() / 1000),  // Convert to Unix timestamp
                     value: p.value,
                 }));
                 upperBandSeries.setData(upperBandData);
@@ -266,7 +266,7 @@ async function initRunPriceChart(container) {
                     title: "Middle Band",
                 });
                 const middleBandData = indicatorsData.indicators.middle_band.map((p) => ({
-                    time: p.time,
+                    time: Math.floor(new Date(p.time).getTime() / 1000),  // Convert to Unix timestamp
                     value: p.value,
                 }));
                 middleBandSeries.setData(middleBandData);
@@ -281,7 +281,7 @@ async function initRunPriceChart(container) {
                     title: "Lower Band",
                 });
                 const lowerBandData = indicatorsData.indicators.lower_band.map((p) => ({
-                    time: p.time,
+                    time: Math.floor(new Date(p.time).getTime() / 1000),  // Convert to Unix timestamp
                     value: p.value,
                 }));
                 lowerBandSeries.setData(lowerBandData);
@@ -304,7 +304,8 @@ async function initRunPriceChart(container) {
                     text: tooltip,
                 };
             });
-            candlestickSeries.setMarkers(markers);
+            // Use createSeriesMarkers for Lightweight Charts v5+
+            LightweightCharts.createSeriesMarkers(candlestickSeries, markers);
         }
 
         // Add RSI indicator in separate pane if available
@@ -330,7 +331,7 @@ async function initRunPriceChart(container) {
                 title: "RSI (14)",
             });
             const rsiData = indicatorsData.indicators.rsi.map((p) => ({
-                time: p.time,
+                time: Math.floor(new Date(p.time).getTime() / 1000),  // Convert to Unix timestamp
                 value: p.value,
             }));
             rsiSeries.setData(rsiData);
