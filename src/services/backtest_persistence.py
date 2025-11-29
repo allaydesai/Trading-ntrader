@@ -11,6 +11,7 @@ from decimal import Decimal
 from typing import Optional
 from uuid import UUID
 
+import pandas as pd
 import structlog
 
 from src.db.exceptions import ValidationError
@@ -403,10 +404,21 @@ class BacktestPersistenceService:
             )
 
         trades_to_save = []
+        skipped_count = 0
 
         try:
             # Convert DataFrame rows to Trade models
             for position_id, row in positions_report_df.iterrows():
+                # Skip unclosed positions - trades require both entry and exit
+                if pd.isna(row["ts_closed"]):
+                    logger.debug(
+                        "Skipping unclosed position",
+                        position_id=str(position_id),
+                        instrument_id=str(row.get("instrument_id", "unknown")),
+                    )
+                    skipped_count += 1
+                    continue
+
                 # Convert timestamps to datetime
                 # ts_opened is already pandas Timestamp from positions report
                 entry_timestamp = row["ts_opened"]
@@ -508,12 +520,21 @@ class BacktestPersistenceService:
 
                 trades_to_save.append(trade_db)
 
+            # Log skipped unclosed positions if any
+            if skipped_count > 0:
+                logger.info(
+                    "Skipped unclosed positions",
+                    backtest_run_id=backtest_run_id,
+                    skipped_count=skipped_count,
+                )
+
             # Bulk insert all trades
             if trades_to_save:
                 logger.info(
                     "Calling bulk_create_trades",
                     backtest_run_id=backtest_run_id,
                     trade_count=len(trades_to_save),
+                    skipped_unclosed=skipped_count,
                 )
                 await self.repository.bulk_create_trades(trades_to_save)
 
@@ -521,11 +542,13 @@ class BacktestPersistenceService:
                     "Trades saved successfully",
                     backtest_run_id=backtest_run_id,
                     trade_count=len(trades_to_save),
+                    skipped_unclosed=skipped_count,
                 )
             else:
                 logger.warning(
                     "No trades to save after processing positions",
                     backtest_run_id=backtest_run_id,
+                    skipped_unclosed=skipped_count,
                 )
 
             return len(trades_to_save)
