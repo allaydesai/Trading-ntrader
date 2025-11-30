@@ -13,6 +13,9 @@ from nautilus_trader.model.objects import Price, Quantity
 from nautilus_trader.model.orders.list import OrderList
 from nautilus_trader.trading.strategy import Strategy, StrategyConfig
 
+from src.core.strategy_registry import StrategyRegistry, register_strategy
+from src.models.strategy import BollingerReversalParameters
+
 
 class BollingerReversalConfig(StrategyConfig):
     """
@@ -32,6 +35,11 @@ class BollingerReversalConfig(StrategyConfig):
     atr_period: int = 14
 
 
+@register_strategy(
+    name="bollinger_reversal",
+    description="Bollinger Band Reversal with Weekly MA Confluence",
+    aliases=["bollinger", "bollingerreversal", "bb_reversal"],
+)
 class BollingerReversalStrategy(Strategy):
     """
     Multi-timeframe strategy combining Daily Bollinger Bands with Weekly SMA support/resistance.
@@ -258,3 +266,23 @@ class BollingerReversalStrategy(Strategy):
             venue=self.instrument_id.venue, instrument_id=self.instrument_id
         )
         return not any(p.is_open for p in positions)
+
+
+# Register config and parameter model for this strategy
+StrategyRegistry.set_config("bollinger_reversal", BollingerReversalConfig)
+StrategyRegistry.set_param_model("bollinger_reversal", BollingerReversalParameters)
+StrategyRegistry.set_default_config(
+    "bollinger_reversal",
+    {
+        "instrument_id": "EUR/USD.SIM",
+        "bar_type": "EUR/USD.SIM-1-DAY-MID-EXTERNAL",
+        "portfolio_value": 1000000,
+        "daily_bb_period": 20,
+        "daily_bb_std_dev": 2.0,
+        "weekly_ma_period": 20,
+        "weekly_ma_tolerance_pct": 0.05,
+        "max_risk_pct": 1.0,
+        "stop_loss_atr_mult": 2.0,
+        "atr_period": 14,
+    },
+)

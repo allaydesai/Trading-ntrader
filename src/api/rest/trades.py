@@ -75,9 +75,7 @@ async def get_trades(
 
     # Query trades from database using backtest's internal ID
     result = await db.execute(
-        select(Trade)
-        .where(Trade.backtest_run_id == backtest.id)
-        .order_by(Trade.entry_timestamp)
+        select(Trade).where(Trade.backtest_run_id == backtest.id).order_by(Trade.entry_timestamp)
     )
     db_trades = result.scalars().all()
 

@@ -1,570 +1,306 @@
-# Quickstart Guide: Enhanced Price Plot Implementation
+# Quickstart Guide: Enhanced Price Plot with Trade Markers
 
 **Feature**: 010-enhanced-price-plot
 **Date**: 2025-01-27
+**Updated**: 2025-01-30
 **Target Audience**: Frontend developers implementing chart enhancements
 
 ## Overview
 
-This guide walks through implementing the enhanced price chart with trade markers and indicator overlays for the backtest detail page. By the end, you'll have a fully functional chart showing OHLCV data, trade entry/exit points, and technical indicators.
+This guide walks through implementing the enhanced price chart with trade markers for the backtest detail page. By the end, you'll have a fully functional chart showing OHLCV candlesticks with trade entry/exit markers and tooltips.
+
+**Current Scope**: Trade markers only (User Story 1)
+**Deferred**: Indicator overlays (SMA, Bollinger, RSI) - use external charting tools
 
 ## Prerequisites
 
 - TradingView Lightweight Charts library (already included via CDN)
 - Existing backtest detail page at `/backtests/{backtest_id}`
-- Working API endpoints: `/api/timeseries`, `/api/trades/{run_id}`, `/api/indicators/{run_id}`
+- Working API endpoints: `/api/timeseries`, `/api/trades/{run_id}`
 - Basic understanding of JavaScript ES6+ and async/await
 
-## Implementation Steps
+## Architecture
 
-### Step 1: Create Chart JavaScript Module
+The chart system is modular, with each file under 500 lines:
 
-**File**: `src/static/js/chart-enhanced.js`
+```
+static/js/
+├── charts-core.js      # Core utilities, theme, shared functions
+├── charts-price.js     # Price chart with trade markers
+├── charts-equity.js    # Equity curve charts
+├── charts-statistics.js # Trade statistics and drawdown metrics
+└── charts.js           # Main orchestrator (entry point)
+```
 
-This module will handle all chart rendering logic.
+**Load order is important** - dependencies must load before dependent modules.
+
+## Implementation Guide
+
+### Step 1: Chart Container (HTML Template)
+
+The backtest detail template needs a chart container with data attributes:
+
+```html
+<!-- Price Chart Container -->
+<div id="price-chart-container"
+     data-chart="run-price"
+     data-run-id="{{ backtest.id }}"
+     data-symbol="{{ backtest.instrument_symbol }}"
+     data-start="{{ backtest.start_date }}"
+     data-end="{{ backtest.end_date }}"
+     class="w-full h-96">
+    <div class="chart-loading flex items-center justify-center h-full">
+        <span class="text-slate-400">Loading chart...</span>
+    </div>
+</div>
+```
+
+**Required data attributes**:
+- `data-chart="run-price"` - Chart type identifier
+- `data-run-id` - Backtest run UUID for trade marker API
+- `data-symbol` - Trading symbol for timeseries API
+- `data-start` - Start date (YYYY-MM-DD)
+- `data-end` - End date (YYYY-MM-DD)
+
+### Step 2: Script Loading (Base Template)
+
+Scripts must load in the correct order:
+
+```html
+<!-- TradingView Lightweight Charts v5 -->
+<script src="https://unpkg.com/lightweight-charts@5.0.0/dist/lightweight-charts.standalone.production.js" defer></script>
+
+<!-- Chart modules (load in order) -->
+<script src="{{ url_for('static', path='js/charts-core.js') }}" defer></script>
+<script src="{{ url_for('static', path='js/charts-price.js') }}" defer></script>
+<script src="{{ url_for('static', path='js/charts-equity.js') }}" defer></script>
+<script src="{{ url_for('static', path='js/charts-statistics.js') }}" defer></script>
+<script src="{{ url_for('static', path='js/charts.js') }}" defer></script>
+```
+
+### Step 3: Trade Marker API Response
+
+The `/api/trades/{run_id}` endpoint returns trades in this format:
+
+```json
+{
+  "trades": [
+    {
+      "time": 1704067200,
+      "side": "buy",
+      "price": 150.25,
+      "quantity": 100,
+      "pnl": 0
+    },
+    {
+      "time": 1704153600,
+      "side": "sell",
+      "price": 155.50,
+      "quantity": 100,
+      "pnl": 525.00
+    }
+  ]
+}
+```
+
+**Fields**:
+- `time` - Unix timestamp (seconds)
+- `side` - "buy" or "sell"
+- `price` - Execution price
+- `quantity` - Trade quantity
+- `pnl` - Profit/loss (0 for entries, calculated for exits)
+
+### Step 4: Trade Marker Rendering
+
+Trade markers are transformed to TradingView format in `charts-price.js`:
 
 ```javascript
-/**
- * Enhanced Chart Module for NTrader Backtest Detail Page
- *
- * Renders TradingView Lightweight Charts with:
- * - OHLCV candlestick data
- * - Trade entry/exit markers
- * - Technical indicator overlays (SMA, Bollinger Bands, RSI)
- */
-
-/**
- * Initialize and render the enhanced chart
- *
- * @param {Object} config - Chart configuration
- * @param {string} config.containerId - DOM element ID for chart
- * @param {string} config.runId - Backtest run UUID
- * @param {string} config.symbol - Trading symbol
- * @param {string} config.strategyName - Strategy name for indicator config
- * @param {string} config.startDate - Start date (YYYY-MM-DD)
- * @param {string} config.endDate - End date (YYYY-MM-DD)
- * @param {string} config.timeframe - Bar timeframe (default: "1-minute")
- * @param {boolean} config.showTradeMarkers - Show trade markers (default: true)
- * @param {boolean} config.showIndicators - Show indicators (default: true)
- */
-async function initializeEnhancedChart(config) {
-    try {
-        // 1. Create chart instance
-        const chart = createChartInstance(config.containerId);
-
-        // 2. Add candlestick series
-        const candlestickSeries = chart.addCandlestickSeries({
-            upColor: '#26a69a',
-            downColor: '#ef5350',
-            borderVisible: false,
-            wickUpColor: '#26a69a',
-            wickDownColor: '#ef5350',
-        });
-
-        // 3. Fetch and render OHLCV data
-        const ohlcvData = await fetchOHLCVData(config);
-        if (!ohlcvData || ohlcvData.candles.length === 0) {
-            displayError('No price data available for selected date range');
-            return;
-        }
-        candlestickSeries.setData(ohlcvData.candles);
-
-        // 4. Fetch and render trade markers (if enabled)
-        if (config.showTradeMarkers) {
-            const markers = await fetchTradeMarkers(config.runId);
-            if (markers && markers.length > 0) {
-                candlestickSeries.setMarkers(markers);
-            }
-        }
-
-        // 5. Fetch and render indicators (if enabled)
-        if (config.showIndicators) {
-            const indicators = await fetchIndicators(config.runId, config.strategyName);
-            renderIndicators(chart, indicators);
-        }
-
-        // 6. Adjust time scale to fit content
-        chart.timeScale().fitContent();
-
-        // 7. Store chart instance for later use
-        window.backtestChart = chart;
-
-    } catch (error) {
-        console.error('Failed to initialize chart:', error);
-        displayError(`Chart initialization failed: ${error.message}`);
-    }
-}
-
-/**
- * Create TradingView Lightweight Charts instance
- */
-function createChartInstance(containerId) {
-    const container = document.getElementById(containerId);
-
-    if (!container) {
-        throw new Error(`Chart container element '${containerId}' not found`);
-    }
-
-    return LightweightCharts.createChart(container, {
-        width: container.clientWidth,
-        height: 600,
-        layout: {
-            backgroundColor: '#1e222d',
-            textColor: '#d1d4dc',
-        },
-        grid: {
-            vertLines: { color: '#2B2B43' },
-            horzLines: { color: '#363C4E' },
-        },
-        crosshair: {
-            mode: LightweightCharts.CrosshairMode.Normal,
-        },
-        rightPriceScale: {
-            borderColor: '#485c7b',
-        },
-        timeScale: {
-            borderColor: '#485c7b',
-            timeVisible: true,
-            secondsVisible: false,
-        },
-    });
-}
-
-/**
- * Fetch OHLCV candlestick data from API
- */
-async function fetchOHLCVData(config) {
-    const url = `/api/timeseries?symbol=${config.symbol}&start=${config.startDate}&end=${config.endDate}&timeframe=${config.timeframe || '1-minute'}`;
-
-    const response = await fetch(url);
-    if (!response.ok) {
-        throw new Error(`Failed to fetch OHLCV data: ${response.statusText}`);
-    }
-
-    return await response.json();
-}
-
-/**
- * Fetch and transform trade markers
- */
-async function fetchTradeMarkers(runId) {
-    const url = `/api/trades/${runId}`;
-
-    const response = await fetch(url);
-    if (!response.ok) {
-        console.warn('No trades found for backtest');
-        return [];
-    }
-
-    const data = await response.json();
-
-    // Transform trades to TradingView markers
-    return data.trades.map(trade => ({
-        time: isoToUnix(trade.time),
-        position: trade.side === 'buy' ? 'belowBar' : 'aboveBar',
-        color: trade.side === 'buy' ? '#26a69a' : '#ef5350',
-        shape: trade.side === 'buy' ? 'arrowUp' : 'arrowDown',
-        text: formatTradeTooltip(trade),
+function createTradeMarkers(trades) {
+    return trades.map((t) => ({
+        time: t.time,
+        position: t.side === "buy" ? "belowBar" : "aboveBar",
+        color: t.side === "buy" ? CHART_COLORS.bullish : CHART_COLORS.bearish,
+        shape: t.side === "buy" ? "arrowUp" : "arrowDown",
+        text: formatTradeTooltip(t),
     }));
 }
 
-/**
- * Format trade tooltip text
- */
 function formatTradeTooltip(trade) {
-    const side = trade.side.toUpperCase();
-    const price = trade.price.toFixed(2);
-    const pnlText = trade.pnl !== 0 ? `\\nP&L: $${trade.pnl.toFixed(2)}` : '';
-
-    return `${side} @ $${price}\\nQty: ${trade.quantity}${pnlText}`;
+    const pnlText = trade.pnl !== 0 ? `\nP&L: $${trade.pnl.toFixed(2)}` : "";
+    return `${trade.side.toUpperCase()} @ $${trade.price.toFixed(2)}\nQty: ${trade.quantity}${pnlText}`;
 }
-
-/**
- * Fetch indicator data from API
- */
-async function fetchIndicators(runId, strategyName) {
-    const url = `/api/indicators/${runId}`;
-
-    const response = await fetch(url);
-    if (!response.ok) {
-        console.warn('No indicators found for backtest');
-        return {};
-    }
-
-    const data = await response.json();
-
-    // Transform and configure indicators based on strategy
-    return transformIndicators(data.indicators, strategyName);
-}
-
-/**
- * Transform API indicator data to chart format with strategy-specific config
- */
-function transformIndicators(apiIndicators, strategyName) {
-    const config = getIndicatorConfig(strategyName);
-    const indicators = {};
-
-    for (const [name, points] of Object.entries(apiIndicators)) {
-        const indicatorConfig = config[name];
-        if (!indicatorConfig) continue;
-
-        indicators[name] = {
-            ...indicatorConfig,
-            data: points.map(p => ({
-                time: isoToUnix(p.time),
-                value: p.value,
-            })),
-        };
-    }
-
-    return indicators;
-}
-
-/**
- * Get indicator display configuration for strategy
- */
-function getIndicatorConfig(strategyName) {
-    const configs = {
-        'SMA Crossover': {
-            'fast_sma': {
-                displayName: 'Fast SMA',
-                color: '#2962FF',
-                lineWidth: 2,
-                pane: 'main',
-            },
-            'slow_sma': {
-                displayName: 'Slow SMA',
-                color: '#FF6D00',
-                lineWidth: 2,
-                pane: 'main',
-            },
-        },
-        'Bollinger Reversal': {
-            'upper_band': {
-                displayName: 'Upper Band',
-                color: '#787B86',
-                lineWidth: 1,
-                lineStyle: 2,  // Dashed
-                pane: 'main',
-            },
-            'middle_band': {
-                displayName: 'Middle Band',
-                color: '#2962FF',
-                lineWidth: 2,
-                pane: 'main',
-            },
-            'lower_band': {
-                displayName: 'Lower Band',
-                color: '#787B86',
-                lineWidth: 1,
-                lineStyle: 2,  // Dashed
-                pane: 'main',
-            },
-        },
-        'RSI Mean Reversion': {
-            'rsi': {
-                displayName: 'RSI (14)',
-                color: '#9C27B0',
-                lineWidth: 2,
-                pane: 'rsi',
-            },
-            'sma_trend': {
-                displayName: 'SMA Trend',
-                color: '#2962FF',
-                lineWidth: 2,
-                pane: 'main',
-            },
-        },
-        // Add SMA Momentum config if needed
-    };
-
-    return configs[strategyName] || {};
-}
-
-/**
- * Render indicator series on chart
- */
-function renderIndicators(chart, indicators) {
-    for (const [name, indicator] of Object.entries(indicators)) {
-        if (indicator.pane === 'main') {
-            // Add to main chart
-            const series = chart.addLineSeries({
-                color: indicator.color,
-                lineWidth: indicator.lineWidth,
-                lineStyle: indicator.lineStyle || 0,  // 0=solid, 2=dashed
-                title: indicator.displayName,
-            });
-            series.setData(indicator.data);
-        }
-        // RSI pane handling deferred to future implementation
-    }
-}
-
-/**
- * Convert ISO 8601 timestamp to Unix seconds
- */
-function isoToUnix(isoString) {
-    return Math.floor(new Date(isoString).getTime() / 1000);
-}
-
-/**
- * Display error message to user
- */
-function displayError(message) {
-    const container = document.getElementById('chart-container');
-    if (container) {
-        container.innerHTML = `
-            <div class="alert alert-error">
-                <p>${message}</p>
-            </div>
-        `;
-    }
-}
-
-// Export for use in template
-window.initializeEnhancedChart = initializeEnhancedChart;
 ```
 
-### Step 2: Update Backtest Detail Template
+**Marker properties**:
+- Buy entries: Green up arrow below bar
+- Sell exits: Red down arrow above bar
+- Tooltips show: Side, price, quantity, P&L (for exits)
 
-**File**: `src/templates/backtests/detail.html`
+---
 
-Add chart container and initialization script.
+## Testing Scenarios
 
-```html
-{% extends "base.html" %}
+### Manual Validation
 
-{% block content %}
-<div class="container mx-auto px-4 py-8">
-    <!-- Existing backtest metadata -->
-    <div class="backtest-metadata mb-8">
-        <!-- Strategy, dates, performance summary, etc. -->
-    </div>
+1. **Start the web server**:
+   ```bash
+   uv run uvicorn src.api.web:app --reload
+   ```
 
-    <!-- Enhanced Chart Section -->
-    <div class="chart-section bg-slate-800 rounded-lg p-6 mb-8">
-        <h2 class="text-2xl font-bold text-white mb-4">Price Chart</h2>
+2. **Navigate to a backtest detail page** (e.g., `/backtests/1`)
 
-        <!-- Chart Container -->
-        <div id="chart-container" class="w-full"></div>
+3. **Verify chart renders**:
+   - ✅ OHLCV candlesticks visible
+   - ✅ Volume histogram at bottom
+   - ✅ Trade markers appear at correct positions
 
-        <!-- Indicator Toggle Controls (P1 - Basic toggles) -->
-        <div id="indicator-controls" class="mt-4 flex gap-4">
-            <!-- Dynamically populated based on strategy -->
-        </div>
-    </div>
+4. **Verify trade markers**:
+   - ✅ Green up arrows for buy entries
+   - ✅ Red down arrows for sell exits
+   - ✅ Markers positioned at correct price/time
 
-    <!-- Existing trade list, statistics, etc. -->
-</div>
+5. **Verify tooltips**:
+   - ✅ Hover over marker shows tooltip
+   - ✅ Tooltip shows side, price, quantity
+   - ✅ Exit markers show P&L
 
-<!-- TradingView Lightweight Charts Library -->
-<script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+6. **Verify zoom/pan**:
+   - ✅ Chart responds to mouse wheel zoom
+   - ✅ Click and drag pans the view
+   - ✅ Markers remain anchored during zoom/pan
 
-<!-- Enhanced Chart Module -->
-<script src="{{ url_for('static', path='/js/chart-enhanced.js') }}"></script>
+### Playwright Integration Tests
 
-<!-- Chart Initialization -->
-<script>
-document.addEventListener('DOMContentLoaded', function() {
-    initializeEnhancedChart({
-        containerId: 'chart-container',
-        runId: '{{ backtest.run_id }}',
-        symbol: '{{ backtest.instrument_symbol }}',
-        strategyName: '{{ backtest.strategy_name }}',
-        startDate: '{{ backtest.start_date }}',
-        endDate: '{{ backtest.end_date }}',
-        timeframe: '1-minute',
-        showTradeMarkers: true,
-        showIndicators: true,
-    });
-});
-</script>
-{% endblock %}
-```
-
-### Step 3: Add Static File Route
-
-**File**: `src/api/web.py`
-
-Ensure static file serving is configured (should already exist):
+Tests should be added to `tests/integration/ui/test_enhanced_chart.py`:
 
 ```python
-from fastapi.staticfiles import StaticFiles
-
-app.mount("/static", StaticFiles(directory="src/static"), name="static")
-```
-
-### Step 4: Test the Implementation
-
-**Manual Testing**:
-1. Start the web server: `uvicorn src.api.web:app --reload`
-2. Navigate to a backtest detail page (e.g., `/backtests/123`)
-3. Verify chart renders with:
-   - ✅ OHLCV candlesticks
-   - ✅ Trade markers (green arrows for buy, red for sell)
-   - ✅ Indicator lines overlaid on price chart
-   - ✅ Tooltips appear on marker hover
-
-**Playwright Integration Tests** (to be added):
-```python
-# tests/integration/ui/test_enhanced_chart.py
-
 import pytest
 from playwright.sync_api import Page, expect
 
-def test_chart_renders_with_ohlcv_data(page: Page, backtest_id: int):
-    """Test that chart renders OHLCV candlesticks"""
-    page.goto(f"http://localhost:8000/backtests/{backtest_id}")
-
-    # Wait for chart to render
-    chart_container = page.locator('#chart-container')
-    expect(chart_container).to_be_visible()
-
-    # Check for canvas element (TradingView chart)
-    canvas = chart_container.locator('canvas')
-    expect(canvas).to_be_visible()
-
-def test_trade_markers_display(page: Page, backtest_with_trades: int):
-    """Test that trade markers appear on chart"""
+def test_chart_renders_with_trade_markers(page: Page, backtest_with_trades: int):
+    """Test that chart renders with trade markers"""
     page.goto(f"http://localhost:8000/backtests/{backtest_with_trades}")
 
-    # Wait for chart and markers
-    page.wait_for_selector('#chart-container canvas')
+    # Wait for chart to render
+    chart = page.locator('[data-chart="run-price"]')
+    expect(chart).to_be_visible()
 
-    # Verify markers exist in DOM
-    # (TradingView renders markers as SVG or Canvas elements)
-    # Exact validation depends on library internals
+    # Check for canvas element (TradingView renders to canvas)
+    canvas = chart.locator('canvas')
+    expect(canvas).to_be_visible()
+
+def test_buy_markers_display_correctly(page: Page, backtest_with_trades: int):
+    """Test that buy markers appear as green up arrows"""
+    page.goto(f"http://localhost:8000/backtests/{backtest_with_trades}")
+    page.wait_for_selector('[data-chart="run-price"] canvas')
+    # TradingView markers are part of canvas rendering
+    # Visual validation may require screenshot comparison
+
+def test_marker_tooltips_show_trade_details(page: Page, backtest_with_trades: int):
+    """Test that hovering markers shows trade details"""
+    page.goto(f"http://localhost:8000/backtests/{backtest_with_trades}")
+    page.wait_for_selector('[data-chart="run-price"] canvas')
+    # Note: TradingView tooltips may require specific hover coordinates
 ```
 
 ---
 
 ## Common Patterns
 
-### Pattern 1: Adding a New Indicator Type
+### Pattern 1: Adding Custom Chart Container
 
-**Example**: Adding MACD indicator
+To add a price chart to a new page:
 
-1. **Update Indicator Config**:
-```javascript
-const configs = {
-    'MACD Strategy': {
-        'macd_line': {
-            displayName: 'MACD Line',
-            color: '#2962FF',
-            lineWidth: 2,
-            pane: 'macd',  // Separate pane
-        },
-        'signal_line': {
-            displayName: 'Signal Line',
-            color: '#FF6D00',
-            lineWidth: 2,
-            pane: 'macd',
-        },
-    },
-};
+```html
+<div id="my-chart"
+     data-chart="run-price"
+     data-run-id="{{ run_id }}"
+     data-symbol="{{ symbol }}"
+     data-start="{{ start }}"
+     data-end="{{ end }}"
+     class="w-full h-96">
+    <div class="chart-loading">Loading...</div>
+</div>
 ```
 
-2. **Handle New Pane Type**:
-```javascript
-function renderIndicators(chart, indicators) {
-    const macdPane = null;  // Will be created if needed
+The chart system automatically initializes all `[data-chart]` elements on page load.
 
-    for (const [name, indicator] of Object.entries(indicators)) {
-        if (indicator.pane === 'macd') {
-            // Create MACD pane if doesn't exist
-            if (!macdPane) {
-                macdPane = createMACDPane();
-            }
-            const series = macdPane.addLineSeries({/*...*/});
-            series.setData(indicator.data);
-        }
-        // ... existing code
-    }
+### Pattern 2: HTMX Integration
+
+Charts auto-reinitialize after HTMX swaps:
+
+```html
+<div hx-get="/api/backtest/{{ id }}/chart-fragment"
+     hx-target="#chart-area"
+     hx-trigger="revealed">
+    <!-- Chart container will be inserted here -->
+</div>
+```
+
+The `htmx:afterSwap` event handler in `charts.js` reinitializes charts.
+
+### Pattern 3: Custom Error Handling
+
+Override error display by customizing `showError()` in `charts-core.js`:
+
+```javascript
+function showError(container, message) {
+    hideLoading(container);
+    const errorDiv = document.createElement("div");
+    errorDiv.className = "error-container";
+    errorDiv.innerHTML = `<p>Error: ${message}</p>`;
+    container.appendChild(errorDiv);
 }
-```
-
-### Pattern 2: Optimizing for Large Datasets
-
-**Problem**: Chart lags with 100k+ bars
-
-**Solution**: Implement downsampling
-
-```javascript
-function downsampleData(data, maxPoints = 10000) {
-    if (data.length <= maxPoints) return data;
-
-    const step = Math.ceil(data.length / maxPoints);
-    return data.filter((_, index) => index % step === 0);
-}
-
-// Apply before setting data
-const downsampled = downsampleData(ohlcvData.candles);
-candlestickSeries.setData(downsampled);
-```
-
-### Pattern 3: Responsive Chart Sizing
-
-**Handle Window Resize**:
-```javascript
-window.addEventListener('resize', () => {
-    const container = document.getElementById('chart-container');
-    if (window.backtestChart && container) {
-        window.backtestChart.applyOptions({
-            width: container.clientWidth
-        });
-    }
-});
 ```
 
 ---
 
 ## Troubleshooting
 
-### Issue: Chart doesn't render
+### Chart doesn't render
 
-**Cause**: Container element not found or has zero dimensions
+**Symptoms**: Chart container is blank or shows loading spinner forever
 
-**Fix**:
-- Ensure `<div id="chart-container">` exists in DOM
-- Give container explicit height: `<div id="chart-container" style="height: 600px;">`
-- Check browser console for errors
+**Causes & Fixes**:
+1. **Missing data attributes**: Ensure all required `data-*` attributes are present
+2. **API errors**: Check browser console for fetch errors
+3. **Script order**: Verify scripts load in correct order (core → modules → main)
+4. **Container size**: Ensure container has explicit height
 
-### Issue: Markers don't appear
+### Trade markers don't appear
 
-**Cause**: Timestamp format mismatch (ISO string vs Unix seconds)
+**Symptoms**: Candlesticks render but no markers visible
 
-**Fix**:
-- Verify `isoToUnix()` transformation is applied to all trade times
-- Check API response format matches expected schema
+**Causes & Fixes**:
+1. **No trades**: Check `/api/trades/{run_id}` returns data
+2. **Timestamp mismatch**: Verify trade times are within chart date range
+3. **Time format**: Ensure API returns Unix timestamps (seconds, not milliseconds)
 
-### Issue: Indicators not showing
+### Tooltips not showing
 
-**Cause**: Strategy name mismatch or no indicator config
+**Symptoms**: Markers appear but hover doesn't show tooltip
 
-**Fix**:
-- Ensure `config.strategyName` matches key in `getIndicatorConfig()`
-- Check API returns non-empty `indicators` object
-- Verify indicator names match between API response and config
+**Causes & Fixes**:
+1. **TradingView version**: Ensure using v5+ which supports markers
+2. **Marker text**: Check `text` property is set in marker object
 
 ---
 
-## Next Steps
+## Performance Considerations
 
-**P1 Implementation** (Current Scope):
-1. ✅ Render OHLCV candlesticks
-2. ✅ Display trade markers with tooltips
-3. ✅ Overlay indicators (SMA, Bollinger Bands)
-4. ✅ Basic visibility toggles for indicators
+### Large Datasets
 
-**P2 Features** (Deferred):
-- RSI separate pane implementation
-- Marker clustering for dense trade datasets
-- Progressive data loading for large date ranges
+For backtests with 100k+ bars:
+- Consider implementing data downsampling for zoomed-out views
+- Load full resolution progressively as user zooms in
 
-**P3 Features** (Future):
-- Advanced visibility controls (hide all, reset view)
-- Chart drawing tools
-- Custom indicator creation
+### Many Trade Markers
+
+For backtests with 1000+ trades:
+- Consider marker clustering when zoomed out
+- Expand clusters on zoom in
+
+**Note**: These optimizations are marked as future enhancements (T029).
 
 ---
 
@@ -572,13 +308,24 @@ window.addEventListener('resize', () => {
 
 - **TradingView Lightweight Charts Docs**: https://tradingview.github.io/lightweight-charts/
 - **Spec 008**: Chart APIs implementation details
-- **data-model.md**: Complete entity definitions
-- **research.md**: Technical decisions and patterns
+- **Spec 009**: Trade tracking and P&L calculation
+- **data-model.md**: Chart entity definitions
 
 ---
 
-**Implementation Time Estimate**: 4-6 hours for core functionality (P1 scope)
+## Deferred Features
 
-**Testing Time Estimate**: 2-3 hours for Playwright integration tests
+The following were originally planned but deferred to simplify scope:
 
-**Total**: ~8 hours for complete P1 feature delivery
+- **Indicator overlays**: SMA, Bollinger Bands, RSI lines on price chart
+- **Indicator visibility toggles**: Show/hide individual indicators
+- **Separate indicator panes**: RSI in separate pane below price chart
+- **Indicator tooltips**: Hover to see indicator values
+
+**Rationale**: External charting tools (TradingView web, etc.) better serve indicator analysis. Trade markers provide the core insight needed for backtest review.
+
+---
+
+**Implementation Time**: ~4 hours for core functionality
+**Testing Time**: ~2 hours for Playwright tests
+**Total**: ~6 hours for complete feature delivery

@@ -13,6 +13,7 @@ class StrategyType(str, Enum):
     """Types of trading strategies available."""
 
     SMA_CROSSOVER = "sma_crossover"
+    SMA_CROSSOVER_LONG_ONLY = "sma_crossover_long_only"
     MEAN_REVERSION = "mean_reversion"
     MOMENTUM = "momentum"
     BOLLINGER_REVERSAL = "bollinger_reversal"
@@ -195,6 +196,13 @@ class TradingStrategy(BaseModel):
                 SMAParameters.model_validate(v)
             except Exception as e:
                 raise ValueError(f"Invalid SMA parameters: {e}")
+
+        elif strategy_type == StrategyType.SMA_CROSSOVER_LONG_ONLY:
+            # Validate SMA Crossover Long-Only parameters (uses same params as SMA)
+            try:
+                SMAParameters.model_validate(v)
+            except Exception as e:
+                raise ValueError(f"Invalid SMA Crossover Long-Only parameters: {e}")
 
         elif strategy_type == StrategyType.MEAN_REVERSION:
             # Validate Mean Reversion parameters

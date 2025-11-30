@@ -1,0 +1,10 @@
+strategy_path: "src.core.strategies.sma_crossover_long_only:SMACrossoverLongOnly"
+config_path: "src.core.strategies.sma_crossover_long_only:SMALongOnlyConfig"
+config:
+  instrument_id: "AAPL.NASDAQ"
+  bar_type: "AAPL.NASDAQ-1-MINUTE-LAST-INTERNAL"
+  fast_period: 50
+  slow_period: 200
+  portfolio_value: 1000000
+  position_size_pct: 10.0
+
