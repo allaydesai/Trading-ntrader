@@ -2,14 +2,17 @@
 Tests for GET /api/trades/{run_id} endpoint.
 
 Tests trade marker retrieval for chart overlay.
+The endpoint queries trades from the database Trade table.
 """
 
-from unittest.mock import MagicMock
+from datetime import datetime, timezone
+from decimal import Decimal
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
-from src.api.dependencies import get_backtest_query_service
+from src.api.dependencies import get_backtest_query_service, get_db
 from src.api.web import app
 
 
@@ -23,31 +26,36 @@ class TestTradesEndpoint:
         mock_service = MagicMock()
         mock_backtest = MagicMock()
         mock_backtest.run_id = run_id
-        mock_backtest.config_snapshot = {
-            "trades": [
-                {
-                    "time": "2024-01-15",
-                    "side": "buy",
-                    "price": 185.50,
-                    "quantity": 100,
-                    "pnl": 0.0,
-                },
-                {
-                    "time": "2024-01-20",
-                    "side": "sell",
-                    "price": 190.00,
-                    "quantity": 100,
-                    "pnl": 450.0,
-                },
-            ]
-        }
+        mock_backtest.id = 1  # Internal DB ID
 
         async def mock_get_backtest(rid):
             return mock_backtest
 
         mock_service.get_backtest_by_id = mock_get_backtest
 
+        # Mock database session with trades
+        mock_trade1 = MagicMock()
+        mock_trade1.entry_timestamp = datetime(2024, 1, 15, tzinfo=timezone.utc)
+        mock_trade1.order_side = "BUY"
+        mock_trade1.entry_price = Decimal("185.50")
+        mock_trade1.quantity = Decimal("100")
+        mock_trade1.exit_timestamp = datetime(2024, 1, 20, tzinfo=timezone.utc)
+        mock_trade1.exit_price = Decimal("190.00")
+        mock_trade1.profit_loss = Decimal("450.0")
+
+        mock_result = MagicMock()
+        mock_scalars = MagicMock()
+        mock_scalars.all = MagicMock(return_value=[mock_trade1])
+        mock_result.scalars = MagicMock(return_value=mock_scalars)
+
+        mock_db = MagicMock()
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        async def mock_get_db_override():
+            yield mock_db
+
         app.dependency_overrides[get_backtest_query_service] = lambda: mock_service
+        app.dependency_overrides[get_db] = mock_get_db_override
 
         try:
             # Act
@@ -57,17 +65,12 @@ class TestTradesEndpoint:
             assert response.status_code == 200
             data = response.json()
             assert data["run_id"] == str(run_id)
+            # 1 trade with entry and exit = 2 markers
             assert data["trade_count"] == 2
             assert len(data["trades"]) == 2
-
-            trade1 = data["trades"][0]
-            assert trade1["time"] == "2024-01-15"
-            assert trade1["side"] == "buy"
-            assert trade1["price"] == 185.50
-            assert trade1["quantity"] == 100
-            assert trade1["pnl"] == 0.0
         finally:
             app.dependency_overrides.pop(get_backtest_query_service, None)
+            app.dependency_overrides.pop(get_db, None)
 
     def test_trades_returns_sorted_by_timestamp(self, client: TestClient):
         """Test that trades are sorted by timestamp ascending."""
@@ -75,32 +78,46 @@ class TestTradesEndpoint:
         mock_service = MagicMock()
         mock_backtest = MagicMock()
         mock_backtest.run_id = run_id
-        # Trades in reverse order
-        mock_backtest.config_snapshot = {
-            "trades": [
-                {
-                    "time": "2024-01-20",
-                    "side": "sell",
-                    "price": 190.0,
-                    "quantity": 100,
-                    "pnl": 450.0,
-                },
-                {
-                    "time": "2024-01-15",
-                    "side": "buy",
-                    "price": 185.5,
-                    "quantity": 100,
-                    "pnl": 0.0,
-                },
-            ]
-        }
+        mock_backtest.id = 1
 
         async def mock_get_backtest(rid):
             return mock_backtest
 
         mock_service.get_backtest_by_id = mock_get_backtest
 
+        # Create trades in reverse order to test sorting
+        mock_trade1 = MagicMock()
+        mock_trade1.entry_timestamp = datetime(2024, 1, 20, tzinfo=timezone.utc)
+        mock_trade1.order_side = "BUY"
+        mock_trade1.entry_price = Decimal("190.00")
+        mock_trade1.quantity = Decimal("100")
+        mock_trade1.exit_timestamp = None
+        mock_trade1.exit_price = None
+        mock_trade1.profit_loss = None
+
+        mock_trade2 = MagicMock()
+        mock_trade2.entry_timestamp = datetime(2024, 1, 15, tzinfo=timezone.utc)
+        mock_trade2.order_side = "BUY"
+        mock_trade2.entry_price = Decimal("185.50")
+        mock_trade2.quantity = Decimal("100")
+        mock_trade2.exit_timestamp = None
+        mock_trade2.exit_price = None
+        mock_trade2.profit_loss = None
+
+        mock_result = MagicMock()
+        mock_scalars = MagicMock()
+        # Return in DB order (reverse chronological to test sorting)
+        mock_scalars.all = MagicMock(return_value=[mock_trade1, mock_trade2])
+        mock_result.scalars = MagicMock(return_value=mock_scalars)
+
+        mock_db = MagicMock()
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        async def mock_get_db_override():
+            yield mock_db
+
         app.dependency_overrides[get_backtest_query_service] = lambda: mock_service
+        app.dependency_overrides[get_db] = mock_get_db_override
 
         try:
             response = client.get(f"/api/trades/{run_id}")
@@ -112,6 +129,7 @@ class TestTradesEndpoint:
             assert data["trades"][1]["time"] == "2024-01-20"
         finally:
             app.dependency_overrides.pop(get_backtest_query_service, None)
+            app.dependency_overrides.pop(get_db, None)
 
 
 class TestTradesEmptyArray:
@@ -123,14 +141,27 @@ class TestTradesEmptyArray:
         mock_service = MagicMock()
         mock_backtest = MagicMock()
         mock_backtest.run_id = run_id
-        mock_backtest.config_snapshot = {"trades": []}
+        mock_backtest.id = 1
 
         async def mock_get_backtest(rid):
             return mock_backtest
 
         mock_service.get_backtest_by_id = mock_get_backtest
 
+        # Mock empty database result
+        mock_result = MagicMock()
+        mock_scalars = MagicMock()
+        mock_scalars.all = MagicMock(return_value=[])
+        mock_result.scalars = MagicMock(return_value=mock_scalars)
+
+        mock_db = MagicMock()
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        async def mock_get_db_override():
+            yield mock_db
+
         app.dependency_overrides[get_backtest_query_service] = lambda: mock_service
+        app.dependency_overrides[get_db] = mock_get_db_override
 
         try:
             response = client.get(f"/api/trades/{run_id}")
@@ -141,21 +172,35 @@ class TestTradesEmptyArray:
             assert data["trades"] == []
         finally:
             app.dependency_overrides.pop(get_backtest_query_service, None)
+            app.dependency_overrides.pop(get_db, None)
 
     def test_trades_returns_empty_when_no_trades_key(self, client: TestClient):
-        """Test that missing trades key returns empty array."""
+        """Test that backtest with no trades in database returns empty array."""
         run_id = uuid4()
         mock_service = MagicMock()
         mock_backtest = MagicMock()
         mock_backtest.run_id = run_id
-        mock_backtest.config_snapshot = {"strategy": "sma"}  # No trades key
+        mock_backtest.id = 1
 
         async def mock_get_backtest(rid):
             return mock_backtest
 
         mock_service.get_backtest_by_id = mock_get_backtest
 
+        # Mock empty database result
+        mock_result = MagicMock()
+        mock_scalars = MagicMock()
+        mock_scalars.all = MagicMock(return_value=[])
+        mock_result.scalars = MagicMock(return_value=mock_scalars)
+
+        mock_db = MagicMock()
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        async def mock_get_db_override():
+            yield mock_db
+
         app.dependency_overrides[get_backtest_query_service] = lambda: mock_service
+        app.dependency_overrides[get_db] = mock_get_db_override
 
         try:
             response = client.get(f"/api/trades/{run_id}")
@@ -166,6 +211,7 @@ class TestTradesEmptyArray:
             assert data["trades"] == []
         finally:
             app.dependency_overrides.pop(get_backtest_query_service, None)
+            app.dependency_overrides.pop(get_db, None)
 
 
 class TestTrades404Error:

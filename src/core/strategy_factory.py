@@ -406,13 +406,13 @@ class StrategyLoader:
             raise ValueError(f"Configuration validation failed for {strategy_type}: {e}")
 
     @classmethod
-    def get_available_strategies(cls) -> Dict[str, Dict[str, str]]:
+    def get_available_strategies(cls) -> Dict[str, Dict[str, str | None]]:
         """
         Get all available strategy types and their mappings.
 
         Returns
         -------
-        Dict[str, Dict[str, str]]
+        Dict[str, Dict[str, str | None]]
             Dictionary mapping strategy names to their paths
         """
         result = {}
@@ -454,13 +454,13 @@ class StrategyLoader:
         return StrategyRegistry.get_names()
 
     @classmethod
-    def list_available(cls) -> Dict[str, Dict[str, str]]:
+    def list_available(cls) -> Dict[str, Dict[str, str | None]]:
         """
         List available strategies with descriptions for CLI.
 
         Returns
         -------
-        Dict[str, Dict[str, str]]
+        Dict[str, Dict[str, str | None]]
             Dictionary mapping strategy names to info
         """
         return {

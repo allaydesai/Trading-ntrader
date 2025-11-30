@@ -327,10 +327,10 @@ class TestStrategyLoader:
     @pytest.mark.component
     def test_strategy_mappings_structure(self):
         """Test that strategy mappings have correct structure."""
-        mappings = StrategyLoader.STRATEGY_MAPPINGS
+        mappings = StrategyLoader.get_available_strategies()
 
-        for strategy_type, mapping in mappings.items():
-            assert isinstance(strategy_type, StrategyType)
+        for strategy_name, mapping in mappings.items():
+            assert isinstance(strategy_name, str)
             assert "strategy_path" in mapping
             assert "config_path" in mapping
             assert ":" in mapping["strategy_path"]

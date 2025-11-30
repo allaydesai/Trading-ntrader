@@ -153,6 +153,7 @@ class TestStrategyCommands:
                 "Invalid strategy type" in result.output
                 or "invalid choice" in result.output
                 or "not one of" in result.output
+                or "Unknown strategy" in result.output
             )
             assert not os.path.exists(output_file)
 
