@@ -12,6 +12,9 @@ from nautilus_trader.model import Bar, BarType, InstrumentId
 from nautilus_trader.model.enums import OrderSide
 from nautilus_trader.trading.strategy import Strategy
 
+from src.core.strategy_registry import StrategyRegistry, register_strategy
+from src.models.strategy import MomentumParameters
+
 
 class SMAMomentumConfig(StrategyConfig):  # type: ignore[misc]
     """Configuration for SMA Momentum strategy."""
@@ -29,6 +32,11 @@ class SMAMomentumConfig(StrategyConfig):  # type: ignore[misc]
     allow_short: bool = False  # set True if you want symmetrical short entries
 
 
+@register_strategy(
+    name="momentum",
+    description="SMA Momentum Strategy (Golden/Death Cross)",
+    aliases=["sma_momentum", "smamomentum", "momentumstrategy"],
+)
 class SMAMomentum(Strategy):
     """
     SMA Momentum Strategy.
@@ -157,3 +165,21 @@ class SMAMomentum(Strategy):
                     self.submit_order(order)
 
         self._prev_fast, self._prev_slow = fast_val, slow_val
+
+
+# Register config and parameter model for this strategy
+StrategyRegistry.set_config("momentum", SMAMomentumConfig)
+StrategyRegistry.set_param_model("momentum", MomentumParameters)
+StrategyRegistry.set_default_config(
+    "momentum",
+    {
+        "instrument_id": "AAPL.NASDAQ",
+        "bar_type": "AAPL.NASDAQ-1-MINUTE-LAST-INTERNAL",
+        "trade_size": 1000000,
+        "order_id_tag": "002",
+        "fast_period": 20,
+        "slow_period": 50,
+        "warmup_days": 1,
+        "allow_short": False,
+    },
+)

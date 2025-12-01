@@ -12,6 +12,9 @@ from nautilus_trader.model import Bar, BarType, InstrumentId
 from nautilus_trader.model.enums import OrderSide
 from nautilus_trader.trading.strategy import Strategy
 
+from src.core.strategy_registry import StrategyRegistry, register_strategy
+from src.models.strategy import MeanReversionParameters
+
 
 class RSIMeanRevConfig(StrategyConfig):  # type: ignore[misc]
     """Configuration for RSI Mean Reversion strategy."""
@@ -31,6 +34,11 @@ class RSIMeanRevConfig(StrategyConfig):  # type: ignore[misc]
     cooldown_bars: int = 0  # optional cooldown after exit to reduce churn
 
 
+@register_strategy(
+    name="mean_reversion",
+    description="RSI Mean Reversion Strategy with Trend Filter",
+    aliases=["rsi", "rsi_mean_reversion", "meanreversion", "rsimeanrev"],
+)
 class RSIMeanRev(Strategy):
     """
     RSI Mean Reversion Strategy.
@@ -171,3 +179,23 @@ class RSIMeanRev(Strategy):
             )
             self.submit_order(order)
             self._cooldown_left = int(self.config.cooldown_bars or 0)
+
+
+# Register config and parameter model for this strategy
+StrategyRegistry.set_config("mean_reversion", RSIMeanRevConfig)
+StrategyRegistry.set_param_model("mean_reversion", MeanReversionParameters)
+StrategyRegistry.set_default_config(
+    "mean_reversion",
+    {
+        "instrument_id": "AAPL.NASDAQ",
+        "bar_type": "AAPL.NASDAQ-1-MINUTE-LAST-INTERNAL",
+        "trade_size": 1000000,
+        "order_id_tag": "001",
+        "rsi_period": 2,
+        "rsi_buy_threshold": 10.0,
+        "exit_rsi": 50.0,
+        "sma_trend_period": 200,
+        "warmup_days": 400,
+        "cooldown_bars": 0,
+    },
+)

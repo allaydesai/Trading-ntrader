@@ -2,12 +2,14 @@
 
 import importlib
 from decimal import Decimal
-from typing import Any, Dict, Type
+from typing import Any, Dict, List, Type
 
 from nautilus_trader.trading.strategy import Strategy, StrategyConfig
 from pydantic import ValidationError
 
+from src.core.strategy_registry import StrategyRegistry
 from src.models.strategy import (
+    BollingerReversalParameters,
     MeanReversionParameters,
     MomentumParameters,
     SMAParameters,
@@ -189,6 +191,9 @@ class StrategyFactory:
             "momentumstrategy": StrategyType.MOMENTUM,
             "smamomentum": StrategyType.MOMENTUM,
             "sma_momentum": StrategyType.MOMENTUM,
+            "bollingerreversal": StrategyType.BOLLINGER_REVERSAL,
+            "bollinger_reversal": StrategyType.BOLLINGER_REVERSAL,
+            "bollingerreversalstrategy": StrategyType.BOLLINGER_REVERSAL,
         }
 
         for key, strategy_type in strategy_mappings.items():
@@ -226,6 +231,7 @@ class StrategyFactory:
             StrategyType.SMA_CROSSOVER: SMAParameters,
             StrategyType.MEAN_REVERSION: MeanReversionParameters,
             StrategyType.MOMENTUM: MomentumParameters,
+            StrategyType.BOLLINGER_REVERSAL: BollingerReversalParameters,
         }
 
         if strategy_type not in param_classes:
@@ -243,30 +249,40 @@ class StrategyFactory:
 
 
 class StrategyLoader:
-    """High-level strategy loader with built-in strategy mappings."""
+    """High-level strategy loader using auto-discovery registry."""
 
-    # Built-in strategy mappings
-    STRATEGY_MAPPINGS = {
-        StrategyType.SMA_CROSSOVER: {
-            "strategy_path": "src.core.strategies.sma_crossover:SMACrossover",
-            "config_path": "src.core.strategies.sma_crossover:SMAConfig",
-            "param_model": SMAParameters,
-        },
-        StrategyType.MEAN_REVERSION: {
-            "strategy_path": "src.core.strategies.rsi_mean_reversion:RSIMeanRev",
-            "config_path": "src.core.strategies.rsi_mean_reversion:RSIMeanRevConfig",
-            "param_model": MeanReversionParameters,
-        },
-        StrategyType.MOMENTUM: {
-            "strategy_path": "src.core.strategies.sma_momentum:SMAMomentum",
-            "config_path": "src.core.strategies.sma_momentum:SMAMomentumConfig",
-            "param_model": MomentumParameters,
-        },
-    }
+    @classmethod
+    def _get_mapping(cls, strategy_name: str) -> Dict[str, Any]:
+        """
+        Get strategy mapping from registry.
+
+        Parameters
+        ----------
+        strategy_name : str
+            Strategy name (canonical or alias)
+
+        Returns
+        -------
+        Dict[str, Any]
+            Dictionary with strategy_path, config_path, param_model
+        """
+        defn = StrategyRegistry.get(strategy_name)
+        return {
+            "strategy_path": defn.strategy_path,
+            "config_path": defn.config_path,
+            "param_model": defn.param_model,
+        }
+
+    @classmethod
+    def _resolve_strategy_name(cls, strategy_type: StrategyType | str) -> str:
+        """Resolve a StrategyType or string to canonical strategy name."""
+        if isinstance(strategy_type, StrategyType):
+            return strategy_type.value
+        return str(strategy_type)
 
     @classmethod
     def create_strategy(
-        cls, strategy_type: StrategyType, config_params: Dict[str, Any]
+        cls, strategy_type: StrategyType | str, config_params: Dict[str, Any]
     ) -> Strategy:
         """
         Create a strategy instance using built-in mappings.
@@ -290,10 +306,12 @@ class StrategyLoader:
         ValidationError
             If configuration parameters are invalid
         """
-        if strategy_type not in cls.STRATEGY_MAPPINGS:
+        strategy_name = cls._resolve_strategy_name(strategy_type)
+
+        if not StrategyRegistry.exists(strategy_name):
             raise ValueError(f"Unsupported strategy type: {strategy_type}")
 
-        mapping = cls.STRATEGY_MAPPINGS[strategy_type]
+        mapping = cls._get_mapping(strategy_name)
 
         return StrategyFactory.create_strategy_from_config(
             strategy_path=mapping["strategy_path"],
@@ -303,7 +321,7 @@ class StrategyLoader:
 
     @classmethod
     def build_strategy_params(
-        cls, strategy_type: StrategyType, overrides: Dict[str, Any], settings: Any
+        cls, strategy_type: StrategyType | str, overrides: Dict[str, Any], settings: Any
     ) -> Dict[str, Any]:
         """
         Build strategy parameters dynamically using Pydantic introspection.
@@ -315,7 +333,7 @@ class StrategyLoader:
 
         Parameters
         ----------
-        strategy_type : StrategyType
+        strategy_type : StrategyType | str
             The strategy type to build params for
         overrides : Dict[str, Any]
             Dictionary of explicit parameter overrides
@@ -332,11 +350,14 @@ class StrategyLoader:
         ValueError
             If strategy type is unknown or validation fails
         """
-        if strategy_type not in cls.STRATEGY_MAPPINGS:
+        strategy_name = cls._resolve_strategy_name(strategy_type)
+
+        if not StrategyRegistry.exists(strategy_name):
             raise ValueError(f"Unsupported strategy type: {strategy_type}")
 
-        # Get the Pydantic model for this strategy
-        param_model_cls = cls.STRATEGY_MAPPINGS[strategy_type]["param_model"]
+        # Get the Pydantic model for this strategy from registry
+        mapping = cls._get_mapping(strategy_name)
+        param_model_cls = mapping["param_model"]
 
         # Get the settings map if defined
         settings_map = getattr(param_model_cls, "_settings_map", {})
@@ -385,25 +406,31 @@ class StrategyLoader:
             raise ValueError(f"Configuration validation failed for {strategy_type}: {e}")
 
     @classmethod
-    def get_available_strategies(cls) -> Dict[StrategyType, Dict[str, str]]:
+    def get_available_strategies(cls) -> Dict[str, Dict[str, str | None]]:
         """
         Get all available strategy types and their mappings.
 
         Returns
         -------
-        Dict[StrategyType, Dict[str, str]]
-            Dictionary mapping strategy types to their paths
+        Dict[str, Dict[str, str | None]]
+            Dictionary mapping strategy names to their paths
         """
-        return cls.STRATEGY_MAPPINGS.copy()
+        result = {}
+        for name, defn in StrategyRegistry.get_all().items():
+            result[name] = {
+                "strategy_path": defn.strategy_path,
+                "config_path": defn.config_path,
+            }
+        return result
 
     @classmethod
-    def validate_strategy_type(cls, strategy_type: StrategyType) -> bool:
+    def validate_strategy_type(cls, strategy_type: StrategyType | str) -> bool:
         """
         Check if a strategy type is supported.
 
         Parameters
         ----------
-        strategy_type : StrategyType
+        strategy_type : StrategyType | str
             The strategy type to check
 
         Returns
@@ -411,31 +438,38 @@ class StrategyLoader:
         bool
             True if strategy type is supported
         """
-        return strategy_type in cls.STRATEGY_MAPPINGS
+        strategy_name = cls._resolve_strategy_name(strategy_type)
+        return StrategyRegistry.exists(strategy_name)
 
     @classmethod
-    def list_available(cls) -> Dict[str, Dict[str, str]]:
+    def get_strategy_names(cls) -> List[str]:
+        """
+        Get list of all available strategy names.
+
+        Returns
+        -------
+        List[str]
+            List of strategy names
+        """
+        return StrategyRegistry.get_names()
+
+    @classmethod
+    def list_available(cls) -> Dict[str, Dict[str, str | None]]:
         """
         List available strategies with descriptions for CLI.
 
         Returns
         -------
-        Dict[str, Dict[str, str]]
+        Dict[str, Dict[str, str | None]]
             Dictionary mapping strategy names to info
         """
-        descriptions = {
-            StrategyType.SMA_CROSSOVER: "Simple Moving Average Crossover Strategy",
-            StrategyType.MEAN_REVERSION: "RSI Mean Reversion Strategy with Trend Filter",
-            StrategyType.MOMENTUM: "SMA Momentum Strategy (Golden/Death Cross)",
-        }
-
         return {
-            strategy_type.value: {
-                "description": descriptions[strategy_type],
-                "strategy_path": mapping["strategy_path"],
-                "config_path": mapping["config_path"],
+            defn.name: {
+                "description": defn.description,
+                "strategy_path": defn.strategy_path,
+                "config_path": defn.config_path,
             }
-            for strategy_type, mapping in cls.STRATEGY_MAPPINGS.items()
+            for defn in StrategyRegistry.get_all().values()
         }
 
     @classmethod
@@ -458,52 +492,16 @@ class StrategyLoader:
         ValueError
             If strategy type is invalid
         """
-        try:
-            strategy_type = StrategyType(strategy_type_str)
-        except ValueError:
-            raise ValueError(f"Invalid strategy type: {strategy_type_str}")
+        if not StrategyRegistry.exists(strategy_type_str):
+            raise ValueError(
+                f"Invalid strategy type: {strategy_type_str}. "
+                f"Available: {StrategyRegistry.get_names()}"
+            )
 
-        if strategy_type not in cls.STRATEGY_MAPPINGS:
-            raise ValueError(f"Unsupported strategy type: {strategy_type}")
-
-        mapping = cls.STRATEGY_MAPPINGS[strategy_type]
-
-        # Default template configurations for each strategy type
-        default_configs = {
-            StrategyType.SMA_CROSSOVER: {
-                "instrument_id": "AAPL.NASDAQ",
-                "bar_type": "AAPL.NASDAQ-1-MINUTE-LAST-INTERNAL",
-                "fast_period": 10,
-                "slow_period": 20,
-                "portfolio_value": 1000000,
-                "position_size_pct": 10.0,
-            },
-            StrategyType.MEAN_REVERSION: {
-                "instrument_id": "AAPL.NASDAQ",
-                "bar_type": "AAPL.NASDAQ-1-MINUTE-LAST-INTERNAL",
-                "trade_size": 1000000,
-                "order_id_tag": "001",
-                "rsi_period": 2,
-                "rsi_buy_threshold": 10.0,
-                "exit_rsi": 50.0,
-                "sma_trend_period": 200,
-                "warmup_days": 400,
-                "cooldown_bars": 0,
-            },
-            StrategyType.MOMENTUM: {
-                "instrument_id": "AAPL.NASDAQ",
-                "bar_type": "AAPL.NASDAQ-1-MINUTE-LAST-INTERNAL",
-                "trade_size": 1000000,
-                "order_id_tag": "002",
-                "fast_period": 20,
-                "slow_period": 50,
-                "warmup_days": 1,
-                "allow_short": False,
-            },
-        }
+        defn = StrategyRegistry.get(strategy_type_str)
 
         return {
-            "strategy_path": mapping["strategy_path"],
-            "config_path": mapping["config_path"],
-            "config": default_configs[strategy_type],
+            "strategy_path": defn.strategy_path,
+            "config_path": defn.config_path,
+            "config": defn.default_config,
         }

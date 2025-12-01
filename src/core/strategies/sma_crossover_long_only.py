@@ -1,4 +1,4 @@
-"""SMA Crossover strategy implementation using Nautilus Trader."""
+"""SMA Crossover Long-Only strategy implementation using Nautilus Trader."""
 
 from decimal import Decimal
 
@@ -13,9 +13,9 @@ from src.core.strategy_registry import StrategyRegistry, register_strategy
 from src.models.strategy import SMAParameters
 
 
-class SMAConfig(StrategyConfig):
+class SMALongOnlyConfig(StrategyConfig):
     """
-    Configuration for SMA crossover strategy.
+    Configuration for SMA crossover long-only strategy.
 
     Parameters
     ----------
@@ -43,20 +43,21 @@ class SMAConfig(StrategyConfig):
 
 
 @register_strategy(
-    name="sma_crossover",
-    description="Simple Moving Average Crossover Strategy (Long/Short)",
-    aliases=["sma", "smacrossover"],
+    name="sma_crossover_long_only",
+    description="SMA Crossover Long-Only Strategy (No Shorts)",
+    aliases=["sma_long", "sma_long_only", "smacrossoverlongonly"],
 )
-class SMACrossover(Strategy):
+class SMACrossoverLongOnly(Strategy):
     """
-    Simple Moving Average Crossover Strategy.
+    Simple Moving Average Crossover Long-Only Strategy.
 
     Generates buy signals when fast SMA crosses above slow SMA.
-    Generates sell signals when fast SMA crosses below slow SMA.
+    Closes long positions when fast SMA crosses below slow SMA.
+    Does not take short positions.
     """
 
-    def __init__(self, config: SMAConfig) -> None:
-        """Initialize the SMA crossover strategy."""
+    def __init__(self, config: SMALongOnlyConfig) -> None:
+        """Initialize the SMA crossover long-only strategy."""
         super().__init__(config)
 
         # Strategy configuration
@@ -189,16 +190,8 @@ class SMACrossover(Strategy):
             venue=self.instrument_id.venue, instrument_id=self.instrument_id
         )
 
-        # Check for open positions
-        has_short = any(p.is_short and p.is_open for p in positions)
+        # Check for open long positions
         has_long = any(p.is_long and p.is_open for p in positions)
-
-        # Close any existing short position first
-        if has_short:
-            for position in positions:
-                if position.is_short and position.is_open:
-                    self.close_position(position)
-                    self.log.info(f"Closed SHORT position: {position.id}")
 
         # Only open new long position if we don't already have one
         if not has_long:
@@ -218,37 +211,24 @@ class SMACrossover(Strategy):
             )
 
     def _generate_sell_signal(self) -> None:
-        """Generate a sell signal."""
+        """Generate a sell signal (close long)."""
         # Get current positions from cache
         positions = self.cache.positions(
             venue=self.instrument_id.venue, instrument_id=self.instrument_id
         )
 
-        # Check for open positions
+        # Check for open long positions
         has_long = any(p.is_long and p.is_open for p in positions)
-        has_short = any(p.is_short and p.is_open for p in positions)
 
-        # Close any existing long position first
+        # Close any existing long position
         if has_long:
             for position in positions:
                 if position.is_long and position.is_open:
                     self.close_position(position)
                     self.log.info(f"Closed LONG position: {position.id}")
 
-        # Only open new short position if we don't already have one
-        if not has_short:
-            # Calculate position size based on current price
-            quantity = self._calculate_position_size()
-
-            order = self.order_factory.market(
-                instrument_id=self.instrument_id,
-                order_side=OrderSide.SELL,
-                quantity=quantity,
-            )
-            self.submit_order(order)
-
             self.log.info(
-                f"Generated SELL signal - Fast SMA: {self.fast_sma.value:.4f}, "
+                f"Generated SELL signal (Close Long) - Fast SMA: {self.fast_sma.value:.4f}, "
                 f"Slow SMA: {self.slow_sma.value:.4f}"
             )
 
@@ -258,10 +238,10 @@ class SMACrossover(Strategy):
 
 
 # Register config and parameter model for this strategy
-StrategyRegistry.set_config("sma_crossover", SMAConfig)
-StrategyRegistry.set_param_model("sma_crossover", SMAParameters)
+StrategyRegistry.set_config("sma_crossover_long_only", SMALongOnlyConfig)
+StrategyRegistry.set_param_model("sma_crossover_long_only", SMAParameters)
 StrategyRegistry.set_default_config(
-    "sma_crossover",
+    "sma_crossover_long_only",
     {
         "instrument_id": "AAPL.NASDAQ",
         "bar_type": "AAPL.NASDAQ-1-MINUTE-LAST-INTERNAL",

@@ -53,6 +53,7 @@ class TestTradePersistence:
             entry_price=Decimal("150.00"),
             exit_price=Decimal("160.00"),
             commission_amount=Decimal("5.00"),
+            commission_currency="USD",
             entry_timestamp=datetime(2025, 1, 1, 10, 0, 0, tzinfo=timezone.utc),
             exit_timestamp=datetime(2025, 1, 1, 11, 0, 0, tzinfo=timezone.utc),
         )

@@ -15,6 +15,7 @@ from src.cli.commands.compare import compare_backtests
 from src.cli.commands.reproduce import reproduce_backtest
 from src.cli.commands.show import show_backtest_details
 from src.core.backtest_runner import MinimalBacktestRunner
+from src.core.strategy_registry import StrategyRegistry
 from src.services.data_catalog import DataCatalogService
 from src.services.exceptions import (
     CatalogCorruptionError,
@@ -36,6 +37,29 @@ console = Console()
 error_formatter = ErrorFormatter(console)
 
 
+def validate_strategy(ctx, param, value):
+    """Validate strategy name against registry."""
+    if value is None:
+        return "sma_crossover"  # default
+
+    # Ensure strategies are discovered
+    StrategyRegistry.discover()
+
+    if not StrategyRegistry.exists(value):
+        available = StrategyRegistry.get_names()
+        raise click.BadParameter(
+            f"Unknown strategy '{value}'. Available strategies: {', '.join(available)}"
+        )
+    return value
+
+
+def get_strategy_names_help() -> str:
+    """Get help text with available strategy names."""
+    StrategyRegistry.discover()
+    names = StrategyRegistry.get_names()
+    return f"Strategy to run. Available: {', '.join(names)}"
+
+
 @click.group()
 def backtest():
     """Backtest commands for running strategies with real data."""
@@ -47,8 +71,8 @@ def backtest():
     "--strategy",
     "-s",
     default="sma_crossover",
-    type=click.Choice(["sma", "sma_crossover", "mean_reversion", "momentum"]),
-    help="Strategy to run (sma is alias for sma_crossover)",
+    callback=validate_strategy,
+    help="Strategy to run. Use 'backtest list' to see available strategies.",
 )
 @click.option("--symbol", "-sym", required=True, help="Trading symbol (e.g., AAPL, EUR/USD)")
 @click.option(
@@ -347,7 +371,7 @@ def run_backtest(
 
                 # Prepare strategy parameters
                 # Note: SMA uses percentage-based sizing, others use trade_size
-                if strategy in ["sma", "sma_crossover"]:
+                if strategy in ["sma", "sma_crossover", "sma_crossover_long_only"]:
                     # SMA uses portfolio_value and position_size_pct
                     # Convert trade_size to portfolio_value (assume 10% position size)
                     strategy_params = {
@@ -355,6 +379,11 @@ def run_backtest(
                         "position_size_pct": Decimal("10.0"),
                         "fast_period": fast_period,
                         "slow_period": slow_period,
+                    }
+                elif strategy == "bollinger_reversal":
+                    # Use defaults for now, can add CLI args later
+                    strategy_params = {
+                        "portfolio_value": Decimal(str(trade_size * 10)),  # 10x for 10% sizing
                     }
                 else:
                     # Other strategies use trade_size
@@ -588,32 +617,18 @@ def list_backtests():
     console.print("📊 Available Strategies", style="cyan bold")
     console.print()
 
-    # Strategy table
+    # Ensure strategies are discovered
+    StrategyRegistry.discover()
+
+    # Strategy table from registry
     strategy_table = Table(title="Supported Strategies")
     strategy_table.add_column("Name", style="cyan")
     strategy_table.add_column("Description", style="white")
-    strategy_table.add_column("Parameters", style="yellow")
+    strategy_table.add_column("Aliases", style="yellow")
 
-    strategy_table.add_row(
-        "sma_crossover",
-        "Simple Moving Average Crossover",
-        "fast_period, slow_period, trade_size",
-    )
-    strategy_table.add_row(
-        "mean_reversion",
-        "RSI Mean Reversion with Trend Filter",
-        "trade_size, rsi_period, rsi_buy_threshold",
-    )
-    strategy_table.add_row(
-        "momentum",
-        "SMA Momentum Strategy (Golden/Death Cross)",
-        "trade_size, fast_period, slow_period",
-    )
-    strategy_table.add_row(
-        "sma",
-        "Alias for sma_crossover (backward compatibility)",
-        "fast_period, slow_period, trade_size",
-    )
+    for defn in StrategyRegistry.get_all().values():
+        aliases = ", ".join(defn.aliases) if defn.aliases else "-"
+        strategy_table.add_row(defn.name, defn.description, aliases)
 
     console.print(strategy_table)
     console.print()

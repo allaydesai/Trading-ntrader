@@ -590,15 +590,10 @@ class MinimalBacktestRunner:
 
         # Get trade statistics from closed positions
         closed_positions = self.engine.cache.positions_closed()
-        open_positions = self.engine.cache.positions_open()
 
-        # Total trades = closed positions (actual executed and completed trades)
+        # Total trades = closed positions only (actual executed and completed trades)
+        # Open positions are NOT counted until they close
         total_trades = len(closed_positions)
-
-        # If there are only open positions and no closed ones, count open positions
-        # This handles strategies that hold positions through the entire backtest
-        if total_trades == 0 and len(open_positions) > 0:
-            total_trades = len(open_positions)
 
         winning_trades = 0
         losing_trades = 0

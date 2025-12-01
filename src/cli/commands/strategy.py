@@ -6,9 +6,21 @@ from rich.console import Console
 from rich.table import Table
 
 from src.core.strategy_factory import StrategyLoader
+from src.core.strategy_registry import StrategyRegistry
 from src.utils.config_loader import ConfigLoader
 
 console = Console(width=200)
+
+
+def validate_strategy_type(ctx, param, value):
+    """Validate strategy type against registry."""
+    StrategyRegistry.discover()
+    if not StrategyRegistry.exists(value):
+        available = StrategyRegistry.get_names()
+        raise click.BadParameter(
+            f"Unknown strategy '{value}'. Available strategies: {', '.join(available)}"
+        )
+    return value
 
 
 @click.group()
@@ -54,8 +66,8 @@ def list():
     "--type",
     "strategy_type",
     required=True,
-    type=click.Choice(["sma_crossover", "mean_reversion", "momentum"]),
-    help="Strategy type to create template for",
+    callback=validate_strategy_type,
+    help="Strategy type to create template for. Use 'strategy list' for available types.",
 )
 @click.option(
     "--output",

@@ -48,6 +48,7 @@ router = APIRouter()
 async def get_trades(
     run_id: UUID,
     service: BacktestService,
+    db: DbSession,
 ) -> TradesResponse:
     """
     Get trade markers for a backtest run.
@@ -55,9 +56,10 @@ async def get_trades(
     Args:
         run_id: Backtest run UUID
         service: BacktestQueryService dependency
+        db: Database session dependency
 
     Returns:
-        TradesResponse with trade markers array
+        TradesResponse with trade markers array (entry + exit markers per trade)
 
     Raises:
         HTTPException: 404 if backtest not found
@@ -71,29 +73,48 @@ async def get_trades(
             detail=f"Backtest run {run_id} not found",
         )
 
-    # Extract trades from config_snapshot
-    config = backtest.config_snapshot or {}
-    trades_data = config.get("trades", [])
+    # Query trades from database using backtest's internal ID
+    result = await db.execute(
+        select(Trade).where(Trade.backtest_run_id == backtest.id).order_by(Trade.entry_timestamp)
+    )
+    db_trades = result.scalars().all()
 
-    # Convert to TradeMarker objects
-    trades = []
-    for trade in trades_data:
-        marker = TradeMarker(
-            time=trade.get("time", ""),
-            side=trade.get("side", "buy"),
-            price=float(trade.get("price", 0)),
-            quantity=int(trade.get("quantity", 0)),
-            pnl=float(trade.get("pnl", 0)),
+    # Convert to TradeMarker objects (entry + exit markers per trade)
+    markers = []
+    for trade in db_trades:
+        # Entry marker
+        entry_time = trade.entry_timestamp.strftime("%Y-%m-%d")
+        markers.append(
+            TradeMarker(
+                time=entry_time,
+                side=trade.order_side.lower(),
+                price=float(trade.entry_price),
+                quantity=int(float(trade.quantity)),
+                pnl=0.0,
+            )
         )
-        trades.append(marker)
 
-    # Sort trades by timestamp ascending
-    trades.sort(key=lambda t: t.time)
+        # Exit marker (if trade is closed)
+        if trade.exit_timestamp and trade.exit_price:
+            exit_time = trade.exit_timestamp.strftime("%Y-%m-%d")
+            exit_side = "sell" if trade.order_side.upper() == "BUY" else "buy"
+            markers.append(
+                TradeMarker(
+                    time=exit_time,
+                    side=exit_side,
+                    price=float(trade.exit_price),
+                    quantity=int(float(trade.quantity)),
+                    pnl=float(trade.profit_loss or 0),
+                )
+            )
+
+    # Sort markers by timestamp ascending
+    markers.sort(key=lambda t: t.time)
 
     return TradesResponse(
         run_id=run_id,
-        trade_count=len(trades),
-        trades=trades,
+        trade_count=len(markers),
+        trades=markers,
     )
 
 

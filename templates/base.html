@@ -14,8 +14,12 @@
     <!-- TradingView Lightweight Charts v5 -->
     <script src="https://unpkg.com/lightweight-charts@5.0.0/dist/lightweight-charts.standalone.production.js" defer></script>
 
-    <!-- Chart initialization -->
-    <script src="{{ url_for('static', path='js/charts.js') }}" defer></script>
+    <!-- Chart modules (load in order) -->
+    <script src="{{ url_for('static', path='js/charts-core.js') }}?v=2" defer></script>
+    <script src="{{ url_for('static', path='js/charts-price.js') }}?v=2" defer></script>
+    <script src="{{ url_for('static', path='js/charts-equity.js') }}?v=1" defer></script>
+    <script src="{{ url_for('static', path='js/charts-statistics.js') }}?v=1" defer></script>
+    <script src="{{ url_for('static', path='js/charts.js') }}?v=4" defer></script>
 
     <!-- Custom styles -->
     <link rel="stylesheet" href="{{ url_for('static', path='css/app.css') }}">
