@@ -7,7 +7,7 @@ Tests paginated backtest list display, HTMX fragments, and template rendering.
 from collections.abc import Generator
 from datetime import datetime, timezone
 from decimal import Decimal
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
@@ -225,3 +225,355 @@ def test_backtest_list_includes_footer(client_with_backtests: TestClient):
     response = client_with_backtests.get("/backtests")
     assert "NTrader v" in response.text
     assert "0.1.0" in response.text
+
+
+# ========== Backtest Detail View Tests ==========
+
+
+@pytest.fixture
+def mock_service_for_detail() -> BacktestQueryService:
+    """Mock service returning a single backtest for detail view."""
+    mock_service = AsyncMock(spec=BacktestQueryService)
+
+    # Create mock backtest with all required attributes
+    backtest = MagicMock()
+    backtest.id = 1
+    backtest.run_id = uuid4()
+    backtest.strategy_name = "SMA Crossover"
+    backtest.strategy_type = "trend_following"
+    backtest.instrument_symbol = "AAPL"
+    backtest.start_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    backtest.end_date = datetime(2024, 12, 31, tzinfo=timezone.utc)
+    backtest.initial_capital = Decimal("100000.00")
+    backtest.data_source = "IBKR"
+    backtest.execution_status = "success"
+    backtest.execution_duration_seconds = Decimal("45.5")
+    backtest.error_message = None  # Must be None or string, not MagicMock
+    backtest.config_snapshot = {"fast_period": 10, "slow_period": 20}
+    backtest.created_at = datetime.now(timezone.utc)
+    backtest.updated_at = datetime.now(timezone.utc)
+
+    # Create mock performance metrics
+    metrics = MagicMock()
+    metrics.id = 1
+    metrics.backtest_run_id = 1
+    metrics.total_return = Decimal("0.25")
+    metrics.final_balance = Decimal("125000.00")
+    metrics.cagr = Decimal("0.28")
+    metrics.sharpe_ratio = Decimal("1.85")
+    metrics.sortino_ratio = Decimal("2.10")
+    metrics.max_drawdown = Decimal("-0.15")
+    metrics.max_drawdown_date = datetime(2024, 6, 15, tzinfo=timezone.utc)
+    metrics.calmar_ratio = Decimal("1.87")
+    metrics.volatility = Decimal("0.18")
+    metrics.total_trades = 100
+    metrics.winning_trades = 60
+    metrics.losing_trades = 40
+    metrics.win_rate = Decimal("0.60")
+    metrics.profit_factor = Decimal("2.5")
+    metrics.expectancy = Decimal("250.00")
+    metrics.avg_win = Decimal("500.00")
+    metrics.avg_loss = Decimal("-250.00")
+    metrics.created_at = datetime.now(timezone.utc)
+    metrics.updated_at = datetime.now(timezone.utc)
+
+    backtest.metrics = metrics
+
+    mock_service.get_backtest_by_id = AsyncMock(return_value=backtest)
+    return mock_service
+
+
+@pytest.fixture
+def client_for_detail(
+    mock_service_for_detail: BacktestQueryService,
+) -> Generator[TestClient, None, None]:
+    """Client with mock service for detail tests."""
+
+    def override_service():
+        return mock_service_for_detail
+
+    app.dependency_overrides[get_backtest_query_service] = override_service
+    client = TestClient(app)
+    yield client
+    app.dependency_overrides.clear()
+
+
+def test_backtest_detail_returns_200(client_for_detail: TestClient):
+    """Backtest detail page loads successfully."""
+    run_id = uuid4()
+    response = client_for_detail.get(f"/backtests/{run_id}")
+    assert response.status_code == 200
+
+
+def test_backtest_detail_returns_404_for_nonexistent_backtest():
+    """Backtest detail returns 404 when backtest not found."""
+    # Create a service that returns None for get_backtest_by_id
+    mock_service = AsyncMock(spec=BacktestQueryService)
+    mock_service.get_backtest_by_id = AsyncMock(return_value=None)
+
+    def override_service():
+        return mock_service
+
+    app.dependency_overrides[get_backtest_query_service] = override_service
+    client = TestClient(app)
+
+    run_id = uuid4()
+    response = client.get(f"/backtests/{run_id}")
+    assert response.status_code == 404
+    assert "not found" in response.text.lower()
+
+    app.dependency_overrides.clear()
+
+
+def test_backtest_detail_displays_strategy_name(client_for_detail: TestClient):
+    """Backtest detail displays strategy name."""
+    run_id = uuid4()
+    response = client_for_detail.get(f"/backtests/{run_id}")
+    assert "SMA Crossover" in response.text
+
+
+def test_backtest_detail_displays_breadcrumbs(client_for_detail: TestClient):
+    """Backtest detail shows breadcrumbs navigation."""
+    run_id = uuid4()
+    response = client_for_detail.get(f"/backtests/{run_id}")
+    assert "Dashboard" in response.text
+    assert "Backtests" in response.text
+    assert "Run Details" in response.text
+
+
+# ========== Delete Backtest Tests ==========
+
+
+def test_delete_backtest_returns_200(client_for_detail: TestClient):
+    """Delete backtest returns 200 on success."""
+    run_id = uuid4()
+    response = client_for_detail.delete(f"/backtests/{run_id}")
+    assert response.status_code == 200
+
+
+def test_delete_backtest_returns_htmx_redirect(client_for_detail: TestClient):
+    """Delete backtest returns HTMX redirect header."""
+    run_id = uuid4()
+    response = client_for_detail.delete(f"/backtests/{run_id}")
+    assert "HX-Redirect" in response.headers
+    assert response.headers["HX-Redirect"] == "/backtests"
+
+
+def test_delete_backtest_returns_404_for_nonexistent():
+    """Delete backtest returns 404 when backtest not found."""
+    # Create a service that returns None for get_backtest_by_id
+    mock_service = AsyncMock(spec=BacktestQueryService)
+    mock_service.get_backtest_by_id = AsyncMock(return_value=None)
+
+    def override_service():
+        return mock_service
+
+    app.dependency_overrides[get_backtest_query_service] = override_service
+    client = TestClient(app)
+
+    run_id = uuid4()
+    response = client.delete(f"/backtests/{run_id}")
+    assert response.status_code == 404
+
+    app.dependency_overrides.clear()
+
+
+# ========== Rerun Backtest Tests ==========
+
+
+def test_rerun_backtest_returns_202(client_for_detail: TestClient):
+    """Rerun backtest returns 202 Accepted."""
+    run_id = uuid4()
+    response = client_for_detail.post(f"/backtests/{run_id}/rerun")
+    assert response.status_code == 202
+
+
+def test_rerun_backtest_returns_htmx_redirect(client_for_detail: TestClient):
+    """Rerun backtest returns HTMX redirect header."""
+    run_id = uuid4()
+    response = client_for_detail.post(f"/backtests/{run_id}/rerun")
+    assert "HX-Redirect" in response.headers
+    assert response.headers["HX-Redirect"] == f"/backtests/{run_id}"
+
+
+def test_rerun_backtest_returns_404_for_nonexistent():
+    """Rerun backtest returns 404 when backtest not found."""
+    # Create a service that returns None for get_backtest_by_id
+    mock_service = AsyncMock(spec=BacktestQueryService)
+    mock_service.get_backtest_by_id = AsyncMock(return_value=None)
+
+    def override_service():
+        return mock_service
+
+    app.dependency_overrides[get_backtest_query_service] = override_service
+    client = TestClient(app)
+
+    run_id = uuid4()
+    response = client.post(f"/backtests/{run_id}/rerun")
+    assert response.status_code == 404
+
+    app.dependency_overrides.clear()
+
+
+# ========== Export Backtest Tests ==========
+
+
+def test_export_backtest_returns_200(client_for_detail: TestClient):
+    """Export backtest returns 200 on success."""
+    run_id = uuid4()
+    response = client_for_detail.get(f"/backtests/{run_id}/export")
+    assert response.status_code == 200
+
+
+def test_export_backtest_returns_html_content(client_for_detail: TestClient):
+    """Export backtest returns HTML content."""
+    run_id = uuid4()
+    response = client_for_detail.get(f"/backtests/{run_id}/export")
+    assert response.headers["content-type"] == "text/html; charset=utf-8"
+    assert "<!DOCTYPE html>" in response.text
+    assert "Backtest Report" in response.text
+
+
+def test_export_backtest_has_download_header(client_for_detail: TestClient):
+    """Export backtest has Content-Disposition download header."""
+    run_id = uuid4()
+    response = client_for_detail.get(f"/backtests/{run_id}/export")
+    assert "Content-Disposition" in response.headers
+    assert "attachment" in response.headers["Content-Disposition"]
+    assert "backtest_report_" in response.headers["Content-Disposition"]
+
+
+def test_export_backtest_returns_404_for_nonexistent():
+    """Export backtest returns 404 when backtest not found."""
+    # Create a service that returns None for get_backtest_by_id
+    mock_service = AsyncMock(spec=BacktestQueryService)
+    mock_service.get_backtest_by_id = AsyncMock(return_value=None)
+
+    def override_service():
+        return mock_service
+
+    app.dependency_overrides[get_backtest_query_service] = override_service
+    client = TestClient(app)
+
+    run_id = uuid4()
+    response = client.get(f"/backtests/{run_id}/export")
+    assert response.status_code == 404
+
+    app.dependency_overrides.clear()
+
+
+# ========== Get Trades Table Tests ==========
+
+
+@pytest.fixture
+def mock_httpx_client():
+    """Mock httpx client for trades table endpoint."""
+    return AsyncMock()
+
+
+def test_get_trades_table_returns_200_on_success(client_for_detail: TestClient, monkeypatch):
+    """Get trades table returns 200 when backtest exists."""
+    backtest_id = 1
+
+    # Mock httpx.AsyncClient to return successful response
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "backtest_id": backtest_id,
+        "trades": [],
+        "pagination": {
+            "total_items": 0,
+            "total_pages": 0,
+            "current_page": 1,
+            "page_size": 20,
+            "has_next": False,
+            "has_prev": False,
+        },
+        "sorting": {"sort_by": "entry_timestamp", "sort_order": "asc"},
+    }
+
+    async def mock_get(*args, **kwargs):
+        return mock_response
+
+    mock_client = MagicMock()
+    mock_client.get = mock_get
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda: mock_client)
+
+    response = client_for_detail.get(f"/backtests/{backtest_id}/trades-table")
+    assert response.status_code == 200
+
+
+def test_get_trades_table_returns_404_when_backtest_not_found(
+    client_for_detail: TestClient, monkeypatch
+):
+    """Get trades table returns 404 when backtest doesn't exist."""
+    backtest_id = 999
+
+    # Mock httpx.AsyncClient to return 404
+    mock_response = MagicMock()
+    mock_response.status_code = 404
+
+    async def mock_get(*args, **kwargs):
+        return mock_response
+
+    mock_client = MagicMock()
+    mock_client.get = mock_get
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda: mock_client)
+
+    response = client_for_detail.get(f"/backtests/{backtest_id}/trades-table")
+    assert response.status_code == 404
+
+
+def test_get_trades_table_accepts_pagination_params(client_for_detail: TestClient, monkeypatch):
+    """Get trades table accepts pagination parameters."""
+    backtest_id = 1
+
+    # Mock httpx.AsyncClient to capture request params
+    captured_params = {}
+
+    async def mock_get(*args, **kwargs):
+        nonlocal captured_params
+        captured_params = kwargs.get("params", {})
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "trades": [],
+            "pagination": {
+                "total_items": 0,
+                "total_pages": 0,
+                "current_page": 2,
+                "page_size": 50,
+                "has_next": False,
+                "has_prev": True,
+            },
+            "sorting": {"sort_by": "pnl", "sort_order": "desc"},
+        }
+        return mock_response
+
+    mock_client = MagicMock()
+    mock_client.get = mock_get
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda: mock_client)
+
+    response = client_for_detail.get(
+        f"/backtests/{backtest_id}/trades-table?page=2&page_size=50&sort_by=pnl&sort_order=desc"
+    )
+    assert response.status_code == 200
+    assert captured_params["page"] == 2
+    assert captured_params["page_size"] == 50
+    assert captured_params["sort_by"] == "pnl"
+    assert captured_params["sort_order"] == "desc"
