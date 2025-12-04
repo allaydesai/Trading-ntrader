@@ -1,10 +1,10 @@
 # Comprehensive QA Test Plan - NTrader Web Application
 
-**Document Version**: 1.0
-**Date**: 2025-11-30
+**Document Version**: 1.1
+**Date**: 2025-12-03
 **Branch**: `qa/comprehensive-testing-plan`
 **Application URL**: http://127.0.0.1:8000
-**Status**: Draft
+**Status**: Active
 
 ---
 
@@ -86,16 +86,94 @@ This document provides a comprehensive QA test plan for the NTrader algorithmic 
 ## 4. Test Environment
 
 ### Server Configuration
+
+#### Development Database (Default)
 ```bash
-# Start web server
+# Start with development database (trading_ntrader)
 uv run uvicorn src.api.web:app --reload --port 8000
 
 # Access URL
 http://127.0.0.1:8000
 ```
 
+#### QA Database (Recommended for Testing)
+```bash
+# Start with QA database (trading_ntrader_qa)
+ENV=qa uv run uvicorn src.api.web:app --reload --port 8000
+
+# Access URL
+http://127.0.0.1:8000
+```
+
+**Important**: If you have `DATABASE_URL` set as an environment variable in your shell, it will override the .env file settings. To use ENV-based database selection, ensure `DATABASE_URL` is not exported:
+
+```bash
+# Check if DATABASE_URL is set
+echo $DATABASE_URL
+
+# If set, unset it before starting the server
+unset DATABASE_URL
+ENV=qa uv run uvicorn src.api.web:app --reload --port 8000
+```
+
+### Database Selection for QA Testing
+
+The application supports environment-based database selection using the `ENV` environment variable:
+
+- **`.env`** - Default configuration (used when ENV not set)
+- **`.env.dev`** - Development database (`trading_ntrader`)
+- **`.env.qa`** - QA/testing database (`trading_ntrader_qa`) - **RECOMMENDED FOR TESTING**
+
+**Configuration Priority** (highest to lowest):
+1. Environment variables (e.g., `DATABASE_URL=...`)
+2. ENV-specific file (`.env.dev`, `.env.qa`)
+3. Default file (`.env`)
+
+**Why Use QA Database?**
+- Isolated from development data
+- Pre-populated with 25 diverse test backtests
+- Covers all test scenarios (multiple strategies, instruments, date ranges, trade counts)
+- Safe to delete/modify data without affecting development work
+
+### QA Test Data Setup
+
+The QA database contains 25 pre-populated backtests created via `scripts/setup_qa_data.sh`:
+
+```bash
+# Create and populate QA database with 25 test backtests
+./scripts/setup_qa_data.sh
+
+# Verify QA data
+PGPASSWORD=ntrader_dev_2025 psql -h localhost -U ntrader -d trading_ntrader_qa \
+  -c 'SELECT COUNT(*) FROM backtest_runs;'
+# Expected: 25
+```
+
+**QA Test Data Coverage**:
+- **Strategies**: SMA Crossover (various periods: 10/20, 20/50, 50/200), Bollinger Reversal
+- **Instruments**: SPY.ARCA, AAPL.NASDAQ, MSFT.NASDAQ
+- **Date Ranges**:
+  - Historical: 2021-2022
+  - Recent: 2023-2024 (full years, H1, H2, quarterly)
+  - Short periods: Q1-Q4 2024
+- **Trade Sizes**: 10,000 to 750,000 shares
+- **Success Status**: All successful (no failed backtests in QA data)
+- **Trade Counts**: Varies by strategy and date range (pagination testing >20 backtests)
+
 ### Test Data Requirements
-- Minimum 5 backtests in database with different:
+
+For comprehensive QA testing, the database should have:
+
+✅ **Using QA Database** (Recommended):
+- 25 pre-populated backtests (via `scripts/setup_qa_data.sh`)
+- Multiple strategies with different configurations
+- Multiple instruments across different sectors
+- Various date ranges (historical to recent)
+- Different trade sizes (small to very large positions)
+- Sufficient data for pagination testing (>20 backtests)
+
+📝 **Using Development Database** (Alternative):
+- Minimum 5 backtests with different:
   - Strategies (SMA crossover, Bollinger reversal, etc.)
   - Instruments (SPY.ARCA, AAPL.NASDAQ, etc.)
   - Date ranges
@@ -103,9 +181,15 @@ http://127.0.0.1:8000
   - Trade counts (including one with 0 trades)
 
 ### Prerequisites
-- PostgreSQL running with backtest_runs and trades tables populated
+- PostgreSQL running with both databases:
+  - `trading_ntrader` (development)
+  - `trading_ntrader_qa` (QA testing) - **Created via setup script**
 - Parquet market data files in `data/catalog/`
 - All dependencies installed (`uv sync`)
+- Environment files configured:
+  - `.env` (default)
+  - `.env.dev` (development database)
+  - `.env.qa` (QA database)
 
 ---
 
@@ -2197,7 +2281,164 @@ SELECT total_return_pct FROM backtest_runs WHERE run_id = '{uuid}';
 
 ---
 
-## Appendix A: Test Data Setup
+## Appendix A: Playwright Verification Results
+
+### Environment-Based Database Selection Verification
+
+**Test Date**: 2025-12-03
+**Test Environment**: QA Database (`trading_ntrader_qa`)
+**Test Method**: Playwright MCP automated browser testing
+**Test Status**: ✅ PASSED
+
+### Test Execution
+
+The QA database was verified using Playwright browser automation with the following results:
+
+#### Server Startup
+```bash
+# Started web server with QA database
+ENV=qa uv run uvicorn src.api.web:app --reload --port 8000
+```
+
+**Server Logs Confirmation**:
+```
+INFO:     Started server process [97231]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+```
+
+**Database Connection Verified**:
+- Server logs confirmed connection to `trading_ntrader_qa`
+- Data catalog initialized: `data/catalog`
+- Availability cache rebuilt with 18 entries
+
+#### Test Case 1: Backtest List Page - Pagination Verification
+
+**Test**: Navigate to `/backtests` and verify 25 backtests loaded
+
+**Results**:
+- ✅ **Total Backtests**: 25 (confirmed via page display)
+- ✅ **Pagination**: Working correctly
+  - Page 1 of 2: Shows 20 backtests
+  - Page 2 of 2: Shows 5 backtests
+- ✅ **Page Navigation**: HTMX-powered navigation working smoothly
+- ✅ **Data Display**: All columns rendering correctly (Strategy, Instrument, Date Range, Metrics)
+
+**Screenshot**: `qa-database-backtests-page1.png`
+
+**Sample Data Observed**:
+- Strategies: SMA Crossover (various periods), Bollinger Reversal
+- Instruments: SPY.ARCA, AAPL.NASDAQ, MSFT.NASDAQ
+- Date Ranges: 2021-2024 (various quarterly and annual periods)
+- Trade Sizes: 10,000 to 750,000 shares
+- All statuses: Success (green badges)
+
+#### Test Case 2: Backtest List Page - Page 2
+
+**Test**: Navigate to page 2 via pagination controls
+
+**Results**:
+- ✅ **Navigation**: HTMX fragment update (no full page reload)
+- ✅ **Data Count**: Exactly 5 backtests displayed
+- ✅ **Pagination Controls**: "Previous" button enabled, "Next" button disabled
+- ✅ **URL State**: Query parameter `?page=2` correctly added
+
+**Screenshot**: `qa-database-backtests-page2.png`
+
+#### Test Case 3: Backtest Detail Page
+
+**Test**: Click on a backtest to view detail page
+
+**Backtest Selected**: `29bb76af-6c0b-4aee-8e46-eac912f1482e`
+
+**Results**:
+- ✅ **Page Load**: HTTP 200, detail page rendered successfully
+- ✅ **Header Information**: Run ID, strategy, execution time displayed
+- ✅ **Performance Metrics**: All metrics panels loaded (Returns, Risk, Trading)
+- ✅ **Charts Section**: Price chart and equity curve containers present
+- ✅ **Trades Table**: Loaded via HTMX fragment
+- ✅ **API Calls**: All chart API endpoints responding:
+  - `GET /api/trades/{run_id}` - 200 OK
+  - `GET /api/timeseries?symbol=SPY.ARCA&...` - 200 OK
+  - `GET /api/equity-curve/{id}` - 200 OK
+  - `GET /api/drawdown/{id}` - 200 OK
+  - `GET /api/statistics/{id}` - 200 OK
+  - `GET /api/backtests/{id}/trades?page=1` - 200 OK
+
+**Screenshot**: `qa-database-backtest-detail.png`
+
+**Data Observed**:
+- Run ID: `29bb76af-6c0b-4aee-8e46-eac912f1482e`
+- Strategy: SMA Crossover (SPY.ARCA)
+- Date Range: 2022-01-01 to 2022-12-31
+- Market Data: 251 bars (1-DAY timeframe)
+- Catalog Query: Successful data retrieval from Parquet files
+
+### Database Query Verification
+
+**Direct Database Query**:
+```bash
+PGPASSWORD=ntrader_dev_2025 psql -h localhost -U ntrader -d trading_ntrader_qa \
+  -c 'SELECT COUNT(*) FROM backtest_runs;'
+```
+
+**Result**:
+```
+ count
+-------
+    25
+(1 row)
+```
+
+✅ **Confirmed**: 25 backtest runs in QA database
+
+### Test Summary
+
+| Test Case | Status | Notes |
+|-----------|--------|-------|
+| Server startup with ENV=qa | ✅ PASSED | Connected to `trading_ntrader_qa` |
+| Backtest list loads 25 records | ✅ PASSED | All records displayed |
+| Pagination Page 1 (20 items) | ✅ PASSED | Correct count, HTMX working |
+| Pagination Page 2 (5 items) | ✅ PASSED | Correct count, controls working |
+| Backtest detail page load | ✅ PASSED | All sections rendered |
+| Chart API endpoints | ✅ PASSED | All returning HTTP 200 |
+| Trades table fragment | ✅ PASSED | HTMX loading working |
+| Database connection | ✅ PASSED | Query confirms 25 records |
+
+### Observations
+
+**Strengths**:
+- Environment-based database selection working as designed
+- QA database provides comprehensive test coverage
+- All 25 backtests loaded and accessible
+- Pagination working correctly for >20 records
+- HTMX-powered interactions functioning smoothly
+- All API endpoints responding correctly
+- Data catalog integration working (Parquet file access)
+
+**No Issues Found**:
+- No console errors
+- No broken links
+- No missing data
+- No rendering issues
+- No database connection errors
+
+### Screenshots
+
+1. **`qa-database-backtests-page1.png`**: Backtest list showing Page 1 of 2 (20 backtests)
+2. **`qa-database-backtests-page2.png`**: Backtest list showing Page 2 of 2 (5 backtests)
+3. **`qa-database-backtest-detail.png`**: Detail page for backtest `29bb76af-6c0b-4aee-8e46-eac912f1482e`
+
+### Conclusion
+
+The environment-based database selection implementation is **VERIFIED and WORKING**. The QA database (`trading_ntrader_qa`) can be reliably accessed using `ENV=qa`, providing a comprehensive test dataset for all QA activities outlined in this test plan.
+
+**Recommendation**: Use `ENV=qa` for all manual QA testing to ensure isolation from development data and access to the full suite of 25 pre-configured test backtests.
+
+---
+
+## Appendix B: Test Data Setup
 
 ### Sample Backtest Creation
 
@@ -2219,7 +2460,7 @@ uv run python -m src.cli.main backtest run \
 
 ---
 
-## Appendix B: Bug Report Template
+## Appendix C: Bug Report Template
 
 ### Bug Report Format
 
@@ -2266,7 +2507,7 @@ What actually happens
 
 ---
 
-## Appendix C: Test Execution Tracking
+## Appendix D: Test Execution Tracking
 
 ### Test Execution Sheet
 
@@ -2300,6 +2541,7 @@ What actually happens
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
 | 1.0 | 2025-11-30 | QA Team | Initial draft |
+| 1.1 | 2025-12-03 | QA Team | Added environment-based database selection details, QA test data setup instructions, Playwright verification results (Appendix A) |
 
 ---
 
