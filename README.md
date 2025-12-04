@@ -157,6 +157,83 @@ The Web UI requires the database to be configured. Set `DATABASE_URL` in your `.
 DATABASE_URL=postgresql://user:password@localhost:5432/ntrader
 ```
 
+## QA Testing Workflow
+
+The NTrader application supports environment-based database selection for testing purposes.
+
+### Environment Configuration
+
+Create environment-specific configuration files:
+- `.env` - Default configuration (used when ENV not set)
+- `.env.dev` - Development database (trading_ntrader)
+- `.env.qa` - QA/testing database (trading_ntrader_qa)
+
+### Switching Databases
+
+Use the `ENV` environment variable to select which configuration to use:
+
+#### Web Application
+
+```bash
+# Run with development database (default)
+uv run uvicorn src.api.web:app --reload
+
+# Run with QA database
+ENV=qa uv run uvicorn src.api.web:app --reload --port 8000
+```
+
+#### CLI Commands
+
+```bash
+# List backtests from development database (default)
+uv run python -m src.cli.main backtest history
+
+# List backtests from QA database
+ENV=qa uv run python -m src.cli.main backtest history
+
+# Run backtest against QA database
+ENV=qa uv run python -m src.cli.main backtest run \
+  -s sma_crossover \
+  -sym SPY.ARCA \
+  -st 2024-01-01 \
+  -e 2024-12-31
+```
+
+### QA Database Setup
+
+The QA database (`trading_ntrader_qa`) contains 25 pre-populated test backtests for web UI testing:
+
+```bash
+# Create and populate QA database
+./scripts/setup_qa_data.sh
+
+# Verify QA data
+PGPASSWORD=ntrader_dev_2025 psql -h localhost -U ntrader -d trading_ntrader_qa \
+  -c 'SELECT COUNT(*) FROM backtest_runs;'
+```
+
+### Configuration Priority
+
+Settings are loaded in this order (highest priority first):
+1. **Environment variables** (e.g., `DATABASE_URL=...`) - These take precedence over everything
+2. **ENV-specific file** (`.env.dev`, `.env.qa`) - Selected via ENV environment variable
+3. **Default file** (`.env`) - Used when ENV is not set
+
+**Important**: If you have `DATABASE_URL` set as an environment variable in your shell, it will override the .env file settings. To use ENV-based database selection, ensure DATABASE_URL is not exported in your shell environment.
+
+### Troubleshooting
+
+**ENV=qa not working:**
+- Verify `.env.qa` file exists in project root
+- Check file has correct `DATABASE_URL` setting
+- **Check if DATABASE_URL is set in your shell**: Run `echo $DATABASE_URL` - if it shows a value, unset it with `unset DATABASE_URL` before running commands
+- Restart application after creating new env files
+
+**Database connection errors:**
+- Verify QA database exists: `psql -h localhost -U ntrader -l | grep trading_ntrader_qa`
+- Run setup script: `./scripts/setup_qa_data.sh`
+- Check PostgreSQL is running: `docker ps | grep pgdb`
+
 ## Quick Start
 
 ### Prerequisites

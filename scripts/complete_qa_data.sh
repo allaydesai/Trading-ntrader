@@ -4,13 +4,14 @@
 
 set -e  # Exit on error
 
-# Export QA database URL
-export DATABASE_URL=postgresql://ntrader:ntrader_dev_2025@localhost:5432/trading_ntrader_qa
+# Use QA environment configuration
+export ENV=qa
 
 echo "========================================="
 echo "Completing QA Test Data Setup"
 echo "========================================="
 echo "Target Database: trading_ntrader_qa"
+echo "Using ENV=qa to target QA database"
 echo "Adding backtests #16-25"
 echo ""
 

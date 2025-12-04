@@ -15,13 +15,14 @@
 
 set -e  # Exit on error
 
-# Export QA database URL
-export DATABASE_URL=postgresql://ntrader:ntrader_dev_2025@localhost:5432/trading_ntrader_qa
+# Use QA environment configuration
+export ENV=qa
 
 echo "========================================="
 echo "NTrader QA Test Data Setup"
 echo "========================================="
 echo "Target Database: trading_ntrader_qa"
+echo "Using ENV=qa to target QA database"
 echo ""
 
 # Function to run backtest
@@ -215,5 +216,5 @@ echo "To verify data:"
 echo "  PGPASSWORD=ntrader_dev_2025 psql -h localhost -U ntrader -d trading_ntrader_qa -c 'SELECT COUNT(*) FROM backtest_runs;'"
 echo ""
 echo "To start web server with QA database:"
-echo "  DATABASE_URL=postgresql://ntrader:ntrader_dev_2025@localhost:5432/trading_ntrader_qa uv run uvicorn src.api.web:app --reload --port 8000"
+echo "  ENV=qa uv run uvicorn src.api.web:app --reload --port 8000"
 echo ""
