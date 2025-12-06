@@ -75,30 +75,40 @@
         {% if stats.recent_backtests %}
         <div class="space-y-3">
             {% for item in stats.recent_backtests %}
-            <div class="flex items-center justify-between py-2 border-b border-slate-800 last:border-0">
-                <div class="flex items-center space-x-3">
+            <!-- Mobile-friendly card layout -->
+            <div class="py-3 border-b border-slate-800 last:border-0">
+                <!-- Top row: Run ID and Status (always visible) -->
+                <div class="flex items-center justify-between mb-2">
                     <span class="font-mono text-sm text-slate-400">{{ item.run_id_short }}</span>
-                    <span class="font-medium text-slate-200" title="{{ item.strategy_name }}">
-                        {% if item.strategy_name|length > 50 %}{{ item.strategy_name[:47] }}...{% else %}{{ item.strategy_name }}{% endif %}
-                    </span>
-                    <span class="text-slate-400">{{ item.instrument_symbol }}</span>
-                </div>
-                <div class="flex items-center space-x-4">
                     {% if item.execution_status == "success" %}
                     <span class="px-2 py-1 text-xs font-medium rounded bg-green-900 text-green-300">
                         success
                     </span>
-                    {% if item.total_return is not none %}
-                    <span class="{% if item.total_return >= 0 %}text-green-500{% else %}text-red-500{% endif %} font-medium">
-                        {{ "%.2f%%"|format(item.total_return * 100) }}
-                    </span>
-                    {% endif %}
                     {% else %}
                     <span class="px-2 py-1 text-xs font-medium rounded bg-red-900 text-red-300">
                         failed
                     </span>
                     {% endif %}
-                    <span class="text-sm text-slate-500">
+                </div>
+
+                <!-- Middle row: Strategy and Instrument -->
+                <div class="mb-2">
+                    <div class="font-medium text-slate-200 mb-1" title="{{ item.strategy_name }}">
+                        {% if item.strategy_name|length > 50 %}{{ item.strategy_name[:47] }}...{% else %}{{ item.strategy_name }}{% endif %}
+                    </div>
+                    <div class="text-sm text-slate-400">{{ item.instrument_symbol }}</div>
+                </div>
+
+                <!-- Bottom row: Return and Date -->
+                <div class="flex items-center justify-between text-sm">
+                    {% if item.execution_status == "success" and item.total_return is not none %}
+                    <span class="{% if item.total_return >= 0 %}text-green-500{% else %}text-red-500{% endif %} font-medium">
+                        {{ "%.2f%%"|format(item.total_return * 100) }}
+                    </span>
+                    {% else %}
+                    <span class="text-slate-500">--</span>
+                    {% endif %}
+                    <span class="text-slate-500">
                         {{ item.created_at.strftime("%Y-%m-%d %H:%M") }}
                     </span>
                 </div>

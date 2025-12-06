@@ -7,8 +7,20 @@
                 <span class="text-xl font-bold text-slate-100">NTrader</span>
             </div>
 
-            <!-- Navigation Links -->
-            <div class="flex space-x-4">
+            <!-- Mobile Menu Button -->
+            <button type="button"
+                    class="md:hidden inline-flex items-center justify-center p-2 rounded-md text-slate-400 hover:text-white hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-white"
+                    onclick="toggleMobileMenu()"
+                    aria-expanded="false"
+                    aria-label="Toggle navigation menu">
+                <svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path id="menu-icon" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
+                    <path id="close-icon" class="hidden" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+            </button>
+
+            <!-- Desktop Navigation Links -->
+            <div class="hidden md:flex space-x-4">
                 <a href="/"
                    class="px-3 py-2 rounded-md text-sm font-medium {% if nav_state.active_page == 'dashboard' %}bg-slate-800 text-white{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %} transition-colors">
                     Dashboard
@@ -28,4 +40,38 @@
             </div>
         </div>
     </div>
+
+    <!-- Mobile Navigation Menu -->
+    <div id="mobile-menu" class="hidden md:hidden">
+        <div class="px-2 pt-2 pb-3 space-y-1">
+            <a href="/"
+               class="block px-3 py-2 rounded-md text-base font-medium {% if nav_state.active_page == 'dashboard' %}bg-slate-800 text-white{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %} transition-colors">
+                Dashboard
+            </a>
+            <a href="/backtests"
+               class="block px-3 py-2 rounded-md text-base font-medium {% if nav_state.active_page == 'backtests' %}bg-slate-800 text-white{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %} transition-colors">
+                Backtests
+            </a>
+            <a href="/data"
+               class="block px-3 py-2 rounded-md text-base font-medium {% if nav_state.active_page == 'data' %}bg-slate-800 text-white{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %} transition-colors">
+                Data
+            </a>
+            <a href="/docs"
+               class="block px-3 py-2 rounded-md text-base font-medium {% if nav_state.active_page == 'docs' %}bg-slate-800 text-white{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %} transition-colors">
+                Docs
+            </a>
+        </div>
+    </div>
 </nav>
+
+<script>
+function toggleMobileMenu() {
+    const menu = document.getElementById('mobile-menu');
+    const menuIcon = document.getElementById('menu-icon');
+    const closeIcon = document.getElementById('close-icon');
+
+    menu.classList.toggle('hidden');
+    menuIcon.classList.toggle('hidden');
+    closeIcon.classList.toggle('hidden');
+}
+</script>
