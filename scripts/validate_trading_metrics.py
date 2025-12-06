@@ -10,18 +10,17 @@ Validates trading metrics calculations against database values.
 
 import asyncio
 import sys
-from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from sqlalchemy import select, func
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from src.db.models.backtest import BacktestRun, PerformanceMetrics
+from src.db.models.backtest import BacktestRun
 from src.db.models.trade import Trade
 
 
@@ -35,21 +34,19 @@ async def validate_win_rate(session: AsyncSession, run_id: str) -> dict:
     Returns:
         dict: Validation results with actual vs expected values
     """
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("TC-DATA-003: Win Rate Calculation Validation")
-    print("="*80)
+    print("=" * 80)
 
     # Get backtest run
-    result = await session.execute(
-        select(BacktestRun).where(BacktestRun.run_id == run_id)
-    )
+    result = await session.execute(select(BacktestRun).where(BacktestRun.run_id == run_id))
     backtest = result.scalar_one_or_none()
 
     if not backtest:
         return {
             "test_case": "TC-DATA-003",
             "status": "FAILED",
-            "error": f"Backtest {run_id} not found"
+            "error": f"Backtest {run_id} not found",
         }
 
     # Get performance metrics
@@ -57,7 +54,7 @@ async def validate_win_rate(session: AsyncSession, run_id: str) -> dict:
         return {
             "test_case": "TC-DATA-003",
             "status": "FAILED",
-            "error": "No performance metrics found for backtest"
+            "error": "No performance metrics found for backtest",
         }
 
     # Get stored win rate from database (stored as decimal: 0.60 = 60%)
@@ -65,16 +62,14 @@ async def validate_win_rate(session: AsyncSession, run_id: str) -> dict:
     stored_win_rate = float(stored_win_rate_decimal) * 100 if stored_win_rate_decimal else 0
 
     # Calculate win rate from trades
-    result = await session.execute(
-        select(Trade).where(Trade.backtest_run_id == backtest.id)
-    )
+    result = await session.execute(select(Trade).where(Trade.backtest_run_id == backtest.id))
     trades = result.scalars().all()
 
     if not trades:
         return {
             "test_case": "TC-DATA-003",
             "status": "FAILED",
-            "error": "No trades found for backtest"
+            "error": "No trades found for backtest",
         }
 
     total_trades = len(trades)
@@ -87,12 +82,12 @@ async def validate_win_rate(session: AsyncSession, run_id: str) -> dict:
 
     print(f"\nBacktest: {backtest.strategy_name} - {backtest.instrument_symbol}")
     print(f"Run ID: {run_id}")
-    print(f"\nTrade Analysis:")
+    print("\nTrade Analysis:")
     print(f"  Total Trades: {total_trades}")
     print(f"  Winning Trades: {winning_trades}")
     print(f"  Losing Trades: {total_trades - winning_trades}")
-    print(f"\nWin Rate Calculation:")
-    print(f"  Formula: (winning_trades / total_trades) * 100")
+    print("\nWin Rate Calculation:")
+    print("  Formula: (winning_trades / total_trades) * 100")
     print(f"  Calculation: ({winning_trades} / {total_trades}) * 100")
     print(f"  Calculated Win Rate: {calculated_win_rate:.2f}%")
     print(f"  Stored Win Rate: {stored_win_rate:.2f}%")
@@ -100,9 +95,9 @@ async def validate_win_rate(session: AsyncSession, run_id: str) -> dict:
     print(f"  Tolerance: {tolerance}%")
 
     if match:
-        print(f"\n✅ PASSED: Win rate calculation is accurate")
+        print("\n✅ PASSED: Win rate calculation is accurate")
     else:
-        print(f"\n❌ FAILED: Win rate mismatch exceeds tolerance")
+        print("\n❌ FAILED: Win rate mismatch exceeds tolerance")
 
     return {
         "test_case": "TC-DATA-003",
@@ -117,7 +112,7 @@ async def validate_win_rate(session: AsyncSession, run_id: str) -> dict:
         "stored_win_rate": float(stored_win_rate),
         "difference": abs(calculated_win_rate - stored_win_rate),
         "tolerance": float(tolerance),
-        "match": match
+        "match": match,
     }
 
 
@@ -130,21 +125,19 @@ async def validate_total_return(session: AsyncSession, run_id: str) -> dict:
     Returns:
         dict: Validation results with actual vs expected values
     """
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("TC-DATA-004: Total Return Calculation Validation")
-    print("="*80)
+    print("=" * 80)
 
     # Get backtest run
-    result = await session.execute(
-        select(BacktestRun).where(BacktestRun.run_id == run_id)
-    )
+    result = await session.execute(select(BacktestRun).where(BacktestRun.run_id == run_id))
     backtest = result.scalar_one_or_none()
 
     if not backtest:
         return {
             "test_case": "TC-DATA-004",
             "status": "FAILED",
-            "error": f"Backtest {run_id} not found"
+            "error": f"Backtest {run_id} not found",
         }
 
     # Get performance metrics
@@ -152,12 +145,14 @@ async def validate_total_return(session: AsyncSession, run_id: str) -> dict:
         return {
             "test_case": "TC-DATA-004",
             "status": "FAILED",
-            "error": "No performance metrics found for backtest"
+            "error": "No performance metrics found for backtest",
         }
 
     # Get stored total return (stored as decimal: 0.25 = 25%)
     stored_total_return_decimal = backtest.metrics.total_return
-    stored_total_return = float(stored_total_return_decimal) * 100 if stored_total_return_decimal else 0
+    stored_total_return = (
+        float(stored_total_return_decimal) * 100 if stored_total_return_decimal else 0
+    )
 
     # Get initial capital and final balance
     initial_capital = backtest.initial_capital
@@ -167,7 +162,7 @@ async def validate_total_return(session: AsyncSession, run_id: str) -> dict:
         return {
             "test_case": "TC-DATA-004",
             "status": "FAILED",
-            "error": "Missing initial_capital or final_balance"
+            "error": "Missing initial_capital or final_balance",
         }
 
     # Calculate total return
@@ -175,26 +170,30 @@ async def validate_total_return(session: AsyncSession, run_id: str) -> dict:
 
     # Compare values (allow 0.01% tolerance)
     tolerance = Decimal("0.01")
-    match = abs(Decimal(str(calculated_total_return)) - Decimal(str(stored_total_return))) <= tolerance
+    match = (
+        abs(Decimal(str(calculated_total_return)) - Decimal(str(stored_total_return))) <= tolerance
+    )
 
     print(f"\nBacktest: {backtest.strategy_name} - {backtest.instrument_symbol}")
     print(f"Run ID: {run_id}")
-    print(f"\nEquity Analysis:")
+    print("\nEquity Analysis:")
     print(f"  Initial Capital: ${initial_capital:,.2f}")
     print(f"  Final Balance: ${final_balance:,.2f}")
     print(f"  Profit/Loss: ${final_balance - initial_capital:,.2f}")
-    print(f"\nTotal Return Calculation:")
-    print(f"  Formula: ((final_balance - initial_capital) / initial_capital) * 100")
-    print(f"  Calculation: (({final_balance:,.2f} - {initial_capital:,.2f}) / {initial_capital:,.2f}) * 100")
+    print("\nTotal Return Calculation:")
+    print("  Formula: ((final_balance - initial_capital) / initial_capital) * 100")
+    calc_str = f"(({final_balance:,.2f} - {initial_capital:,.2f}) / "
+    calc_str += f"{initial_capital:,.2f}) * 100"
+    print(f"  Calculation: {calc_str}")
     print(f"  Calculated Total Return: {calculated_total_return:.2f}%")
     print(f"  Stored Total Return: {stored_total_return:.2f}%")
     print(f"  Difference: {abs(float(calculated_total_return) - float(stored_total_return)):.4f}%")
     print(f"  Tolerance: {float(tolerance)}%")
 
     if match:
-        print(f"\n✅ PASSED: Total return calculation is accurate")
+        print("\n✅ PASSED: Total return calculation is accurate")
     else:
-        print(f"\n❌ FAILED: Total return mismatch exceeds tolerance")
+        print("\n❌ FAILED: Total return mismatch exceeds tolerance")
 
     return {
         "test_case": "TC-DATA-004",
@@ -208,9 +207,11 @@ async def validate_total_return(session: AsyncSession, run_id: str) -> dict:
         "profit_loss": float(final_balance - initial_capital),
         "calculated_total_return": float(calculated_total_return),
         "stored_total_return": float(stored_total_return),
-        "difference": float(abs(Decimal(str(calculated_total_return)) - Decimal(str(stored_total_return)))),
+        "difference": float(
+            abs(Decimal(str(calculated_total_return)) - Decimal(str(stored_total_return)))
+        ),
         "tolerance": float(tolerance),
-        "match": match
+        "match": match,
     }
 
 
@@ -226,28 +227,24 @@ async def validate_trade_pnl(session: AsyncSession, run_id: str, trade_index: in
     Returns:
         dict: Validation results with actual vs expected values
     """
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("TC-DATA-005: Trade P&L Calculation Validation")
-    print("="*80)
+    print("=" * 80)
 
     # Get backtest run
-    result = await session.execute(
-        select(BacktestRun).where(BacktestRun.run_id == run_id)
-    )
+    result = await session.execute(select(BacktestRun).where(BacktestRun.run_id == run_id))
     backtest = result.scalar_one_or_none()
 
     if not backtest:
         return {
             "test_case": "TC-DATA-005",
             "status": "FAILED",
-            "error": f"Backtest {run_id} not found"
+            "error": f"Backtest {run_id} not found",
         }
 
     # Get trades ordered by entry timestamp
     result = await session.execute(
-        select(Trade)
-        .where(Trade.backtest_run_id == backtest.id)
-        .order_by(Trade.entry_timestamp)
+        select(Trade).where(Trade.backtest_run_id == backtest.id).order_by(Trade.entry_timestamp)
     )
     trades = result.scalars().all()
 
@@ -255,14 +252,14 @@ async def validate_trade_pnl(session: AsyncSession, run_id: str, trade_index: in
         return {
             "test_case": "TC-DATA-005",
             "status": "FAILED",
-            "error": "No trades found for backtest"
+            "error": "No trades found for backtest",
         }
 
     if trade_index >= len(trades):
         return {
             "test_case": "TC-DATA-005",
             "status": "FAILED",
-            "error": f"Trade index {trade_index} out of range (total trades: {len(trades)})"
+            "error": f"Trade index {trade_index} out of range (total trades: {len(trades)})",
         }
 
     trade = trades[trade_index]
@@ -275,7 +272,7 @@ async def validate_trade_pnl(session: AsyncSession, run_id: str, trade_index: in
         return {
             "test_case": "TC-DATA-005",
             "status": "FAILED",
-            "error": "Missing entry_price, exit_price, or quantity"
+            "error": "Missing entry_price, exit_price, or quantity",
         }
 
     price_diff = trade.exit_price - trade.entry_price
@@ -290,7 +287,7 @@ async def validate_trade_pnl(session: AsyncSession, run_id: str, trade_index: in
     print(f"\nBacktest: {backtest.strategy_name} - {backtest.instrument_symbol}")
     print(f"Run ID: {run_id}")
     print(f"Trade: {trade_index + 1} of {len(trades)}")
-    print(f"\nTrade Details:")
+    print("\nTrade Details:")
     print(f"  Trade ID: {trade.trade_id}")
     print(f"  Side: {trade.order_side}")
     print(f"  Entry Time: {trade.entry_timestamp}")
@@ -299,8 +296,8 @@ async def validate_trade_pnl(session: AsyncSession, run_id: str, trade_index: in
     print(f"  Entry Price: ${trade.entry_price:.2f}")
     print(f"  Exit Price: ${trade.exit_price:.2f}")
     print(f"  Commission: ${commission:.2f}")
-    print(f"\nP&L Calculation:")
-    print(f"  Formula: (exit_price - entry_price) * quantity - commissions")
+    print("\nP&L Calculation:")
+    print("  Formula: (exit_price - entry_price) * quantity - commissions")
     print(f"  Price Difference: ${price_diff:.2f}")
     print(f"  Gross P&L: ${gross_pnl:.2f}")
     print(f"  Commission: ${commission:.2f}")
@@ -310,9 +307,9 @@ async def validate_trade_pnl(session: AsyncSession, run_id: str, trade_index: in
     print(f"  Tolerance: ${float(tolerance)}")
 
     if match:
-        print(f"\n✅ PASSED: Trade P&L calculation is accurate")
+        print("\n✅ PASSED: Trade P&L calculation is accurate")
     else:
-        print(f"\n❌ FAILED: Trade P&L mismatch exceeds tolerance")
+        print("\n❌ FAILED: Trade P&L mismatch exceeds tolerance")
 
     return {
         "test_case": "TC-DATA-005",
@@ -333,7 +330,7 @@ async def validate_trade_pnl(session: AsyncSession, run_id: str, trade_index: in
         "stored_pnl": float(stored_pnl),
         "difference": float(abs(calculated_pnl - stored_pnl)),
         "tolerance": float(tolerance),
-        "match": match
+        "match": match,
     }
 
 
@@ -347,21 +344,19 @@ async def validate_cagr(session: AsyncSession, run_id: str) -> dict:
     Returns:
         dict: Validation results with actual vs expected values
     """
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("TC-DATA-006: CAGR (Annualized Return) Calculation Validation")
-    print("="*80)
+    print("=" * 80)
 
     # Get backtest run
-    result = await session.execute(
-        select(BacktestRun).where(BacktestRun.run_id == run_id)
-    )
+    result = await session.execute(select(BacktestRun).where(BacktestRun.run_id == run_id))
     backtest = result.scalar_one_or_none()
 
     if not backtest:
         return {
             "test_case": "TC-DATA-006",
             "status": "FAILED",
-            "error": f"Backtest {run_id} not found"
+            "error": f"Backtest {run_id} not found",
         }
 
     # Get performance metrics
@@ -369,7 +364,7 @@ async def validate_cagr(session: AsyncSession, run_id: str) -> dict:
         return {
             "test_case": "TC-DATA-006",
             "status": "FAILED",
-            "error": "No performance metrics found for backtest"
+            "error": "No performance metrics found for backtest",
         }
 
     # Get stored CAGR (stored as decimal: 0.25 = 25%)
@@ -378,7 +373,7 @@ async def validate_cagr(session: AsyncSession, run_id: str) -> dict:
         return {
             "test_case": "TC-DATA-006",
             "status": "FAILED",
-            "error": "No CAGR value found in performance metrics"
+            "error": "No CAGR value found in performance metrics",
         }
     stored_cagr = float(stored_cagr_decimal) * 100
 
@@ -392,7 +387,9 @@ async def validate_cagr(session: AsyncSession, run_id: str) -> dict:
         return {
             "test_case": "TC-DATA-006",
             "status": "FAILED",
-            "error": "Missing required values (initial_capital, final_balance, start_date, or end_date)"
+            "error": (
+                "Missing required values (initial_capital, final_balance, start_date, or end_date)"
+            ),
         }
 
     # Calculate time period in years
@@ -403,7 +400,7 @@ async def validate_cagr(session: AsyncSession, run_id: str) -> dict:
         return {
             "test_case": "TC-DATA-006",
             "status": "FAILED",
-            "error": f"Invalid time period: {days} days"
+            "error": f"Invalid time period: {days} days",
         }
 
     # Calculate CAGR
@@ -416,27 +413,30 @@ async def validate_cagr(session: AsyncSession, run_id: str) -> dict:
 
     print(f"\nBacktest: {backtest.strategy_name} - {backtest.instrument_symbol}")
     print(f"Run ID: {run_id}")
-    print(f"\nTime Period:")
+    print("\nTime Period:")
     print(f"  Start Date: {start_date}")
     print(f"  End Date: {end_date}")
     print(f"  Days: {days}")
     print(f"  Years: {years:.4f}")
-    print(f"\nEquity Analysis:")
+    print("\nEquity Analysis:")
     print(f"  Initial Capital: ${initial_capital:,.2f}")
     print(f"  Final Balance: ${final_balance:,.2f}")
     print(f"  Growth Factor: {growth_factor:.6f}")
-    print(f"\nCAGR Calculation:")
-    print(f"  Formula: ((final_balance / initial_capital) ^ (1 / years)) - 1) * 100")
-    print(f"  Calculation: (({final_balance:,.2f} / {initial_capital:,.2f}) ^ (1 / {years:.4f})) - 1) * 100")
+    print("\nCAGR Calculation:")
+    print("  Formula: ((final_balance / initial_capital) ^ (1 / years)) - 1) * 100")
+    calc_str = f"(({final_balance:,.2f} / {initial_capital:,.2f}) ^ "
+    calc_str += f"(1 / {years:.4f})) - 1) * 100"
+    print(f"  Calculation: {calc_str}")
     print(f"  Calculated CAGR: {calculated_cagr:.2f}%")
     print(f"  Stored CAGR: {stored_cagr:.2f}%")
-    print(f"  Difference: {float(abs(Decimal(str(calculated_cagr)) - Decimal(str(stored_cagr)))):.4f}%")
+    diff_val = float(abs(Decimal(str(calculated_cagr)) - Decimal(str(stored_cagr))))
+    print(f"  Difference: {diff_val:.4f}%")
     print(f"  Tolerance: {float(tolerance)}%")
 
     if match:
-        print(f"\n✅ PASSED: CAGR calculation is accurate")
+        print("\n✅ PASSED: CAGR calculation is accurate")
     else:
-        print(f"\n❌ FAILED: CAGR mismatch exceeds tolerance")
+        print("\n❌ FAILED: CAGR mismatch exceeds tolerance")
 
     return {
         "test_case": "TC-DATA-006",
@@ -456,7 +456,7 @@ async def validate_cagr(session: AsyncSession, run_id: str) -> dict:
         "stored_cagr": float(stored_cagr),
         "difference": float(abs(Decimal(str(calculated_cagr)) - Decimal(str(stored_cagr)))),
         "tolerance": float(tolerance),
-        "match": match
+        "match": match,
     }
 
 
@@ -490,10 +490,10 @@ async def main():
 
             run_id = backtest.run_id
 
-            print("\n" + "="*80)
+            print("\n" + "=" * 80)
             print("TRADING METRICS VALIDATION TEST SUITE")
-            print("="*80)
-            print(f"\nTest Subject:")
+            print("=" * 80)
+            print("\nTest Subject:")
             print(f"  Strategy: {backtest.strategy_name}")
             print(f"  Instrument: {backtest.instrument_symbol}")
             print(f"  Run ID: {run_id}")
@@ -519,9 +519,9 @@ async def main():
             results.append(result)
 
             # Summary
-            print("\n" + "="*80)
+            print("\n" + "=" * 80)
             print("TEST SUMMARY")
-            print("="*80)
+            print("=" * 80)
 
             passed = sum(1 for r in results if r.get("status") == "PASSED")
             total = len(results)
@@ -532,7 +532,7 @@ async def main():
                 if "error" in result:
                     print(f"   Error: {result['error']}")
 
-            print(f"\nTotal: {passed}/{total} tests passed ({passed/total*100:.1f}%)")
+            print(f"\nTotal: {passed}/{total} tests passed ({passed / total * 100:.1f}%)")
 
             if passed == total:
                 print("\n✅ All trading metrics validation tests PASSED!")

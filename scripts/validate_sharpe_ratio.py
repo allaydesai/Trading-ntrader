@@ -4,8 +4,8 @@ TC-DATA-001: Sharpe Ratio Calculation Validation
 
 Manually calculates Sharpe ratio from trade data and compares with database value.
 """
+
 import statistics
-import math
 from decimal import Decimal
 
 # Data from backtest run_id: 864693f2-8347-4065-b7bd-f998e1c22611
@@ -23,9 +23,9 @@ print("TC-DATA-001: Sharpe Ratio Calculation Validation")
 print("=" * 80)
 print(f"\nBacktest Run ID: {run_id}")
 print(f"Database Sharpe Ratio: {db_sharpe_ratio}")
-print(f"\nTrade Returns:")
+print("\nTrade Returns:")
 for i, ret in enumerate(trade_returns, 1):
-    print(f"  Trade {i}: {ret:.6f} ({float(ret)*100:.4f}%)")
+    print(f"  Trade {i}: {ret:.6f} ({float(ret) * 100:.4f}%)")
 
 # Calculate mean return
 mean_return = statistics.mean([float(r) for r in trade_returns])

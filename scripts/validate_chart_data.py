@@ -14,7 +14,6 @@ Usage:
 
 import asyncio
 import sys
-from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -27,8 +26,7 @@ from sqlalchemy.orm import selectinload, sessionmaker
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.db.models.backtest import BacktestRun, PerformanceMetrics
-from src.db.models.trade import Trade
+from src.db.models.backtest import BacktestRun  # noqa: E402
 
 # Configuration
 API_BASE_URL = "http://127.0.0.1:8000/api"
@@ -99,7 +97,7 @@ async def validate_trade_markers(
 
         # Validate marker count
         if actual_marker_count != expected_marker_count:
-            print(f"\n❌ FAILED: Marker count mismatch")
+            print("\n❌ FAILED: Marker count mismatch")
             return {
                 "test_case": "TC-DATA-007",
                 "status": "FAILED",
@@ -124,7 +122,7 @@ async def validate_trade_markers(
             entry_marker = markers[marker_index]
             entry_date = trade.entry_timestamp.strftime("%Y-%m-%d")
 
-            print(f"\nEntry Marker:")
+            print("\nEntry Marker:")
             print(f"  API time: {entry_marker['time']}")
             print(f"  API price: ${entry_marker['price']}")
             print(f"  API side: {entry_marker['side']}")
@@ -135,7 +133,7 @@ async def validate_trade_markers(
                 validation_errors.append(error_msg)
                 all_markers_valid = False
             else:
-                print(f"  ✅ Entry time matches")
+                print("  ✅ Entry time matches")
 
             # Price tolerance: $0.01
             price_diff = abs(Decimal(str(entry_marker["price"])) - trade.entry_price)
@@ -145,7 +143,7 @@ async def validate_trade_markers(
                 validation_errors.append(error_msg)
                 all_markers_valid = False
             else:
-                print(f"  ✅ Entry price matches (within $0.01)")
+                print("  ✅ Entry price matches (within $0.01)")
 
             marker_index += 1
 
@@ -154,7 +152,7 @@ async def validate_trade_markers(
             exit_date = trade.exit_timestamp.strftime("%Y-%m-%d")
             expected_exit_side = "sell" if trade.order_side == "BUY" else "buy"
 
-            print(f"\nExit Marker:")
+            print("\nExit Marker:")
             print(f"  API time: {exit_marker['time']}")
             print(f"  API price: ${exit_marker['price']}")
             print(f"  API side: {exit_marker['side']}")
@@ -165,7 +163,7 @@ async def validate_trade_markers(
                 validation_errors.append(error_msg)
                 all_markers_valid = False
             else:
-                print(f"  ✅ Exit time matches")
+                print("  ✅ Exit time matches")
 
             if exit_marker["side"] != expected_exit_side:
                 error_msg = f"Exit marker side mismatch for trade {i + 1}"
@@ -173,7 +171,7 @@ async def validate_trade_markers(
                 validation_errors.append(error_msg)
                 all_markers_valid = False
             else:
-                print(f"  ✅ Exit side matches")
+                print("  ✅ Exit side matches")
 
             price_diff = abs(Decimal(str(exit_marker["price"])) - trade.exit_price)
             if price_diff > Decimal("0.01"):
@@ -182,7 +180,7 @@ async def validate_trade_markers(
                 validation_errors.append(error_msg)
                 all_markers_valid = False
             else:
-                print(f"  ✅ Exit price matches (within $0.01)")
+                print("  ✅ Exit price matches (within $0.01)")
 
             marker_index += 1
 
@@ -233,9 +231,7 @@ async def validate_equity_curve_start(
 
     try:
         # Get backtest from database
-        result = await session.execute(
-            select(BacktestRun).where(BacktestRun.run_id == run_id)
-        )
+        result = await session.execute(select(BacktestRun).where(BacktestRun.run_id == run_id))
         backtest = result.scalar_one_or_none()
 
         if not backtest:
@@ -417,9 +413,7 @@ async def validate_date_range(session: AsyncSession, run_id: str) -> dict:
 
     try:
         # Get backtest from database
-        result = await session.execute(
-            select(BacktestRun).where(BacktestRun.run_id == run_id)
-        )
+        result = await session.execute(select(BacktestRun).where(BacktestRun.run_id == run_id))
         backtest = result.scalar_one_or_none()
 
         if not backtest:

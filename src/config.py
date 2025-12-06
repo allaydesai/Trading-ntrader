@@ -167,7 +167,7 @@ def get_settings() -> Settings:
     if env in ("dev", "qa", "prod"):
         env_file_path = Path(f".env.{env}")
         if env_file_path.exists():
-            return Settings(_env_file=str(env_file_path))
+            return Settings(_env_file=str(env_file_path))  # type: ignore[call-arg]
         else:
             import logging
 

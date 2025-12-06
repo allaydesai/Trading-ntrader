@@ -71,9 +71,7 @@ async def fix_total_return_values() -> None:
 
             # Guard against division by zero
             if initial_capital == 0:
-                logger.warning(
-                    f"Skipping backtest {backtest_run.run_id}: initial_capital is zero"
-                )
+                logger.warning(f"Skipping backtest {backtest_run.run_id}: initial_capital is zero")
                 skipped_count += 1
                 continue
 

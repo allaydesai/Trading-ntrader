@@ -4,6 +4,7 @@ TC-DATA-002: Max Drawdown Calculation Validation
 
 Validates max drawdown calculation from trade data and explains the methodology.
 """
+
 from decimal import Decimal
 
 # Data from backtest run_id: e88a6aab-9352-444e-8ea3-9154d9b5f42a
@@ -16,16 +17,16 @@ trades_pnl = [
     Decimal("-10017.96"),  # Trade 1: SELL 402.25 → 429.17
     Decimal("-11876.48"),  # Trade 2: BUY 429.17 → 395.15
     Decimal("-12897.38"),  # Trade 3: SELL 395.15 → 429.17
-    Decimal("-582.84"),    # Trade 4: BUY 429.17 → 427.51
-    Decimal("-1295.00"),   # Trade 5: SELL 427.51 → 431.20
-    Decimal("-2213.87"),   # Trade 6: BUY 431.20 → 424.83
+    Decimal("-582.84"),  # Trade 4: BUY 429.17 → 427.51
+    Decimal("-1295.00"),  # Trade 5: SELL 427.51 → 431.20
+    Decimal("-2213.87"),  # Trade 6: BUY 431.20 → 424.83
 ]
 
 print("=" * 80)
 print("TC-DATA-002: Max Drawdown Calculation Validation")
 print("=" * 80)
 print(f"\nBacktest Run ID: {run_id}")
-print(f"Database Max Drawdown: {db_max_drawdown} ({float(db_max_drawdown)*100:.2f}%)")
+print(f"Database Max Drawdown: {db_max_drawdown} ({float(db_max_drawdown) * 100:.2f}%)")
 print(f"Initial Capital: ${initial_capital:,.2f}")
 
 # Calculate equity curve from cumulative P&L
@@ -45,7 +46,7 @@ for i, pnl in enumerate(trades_pnl, 1):
 final_equity = Decimal(str(equity_curve[-1]))
 total_return = (final_equity - initial_capital) / initial_capital
 print(f"\nFinal Equity: ${final_equity:,.2f}")
-print(f"Total Return: {total_return:.6f} ({float(total_return)*100:.2f}%)")
+print(f"Total Return: {total_return:.6f} ({float(total_return) * 100:.2f}%)")
 
 # Calculate max drawdown from equity curve
 print("\n" + "=" * 80)
@@ -68,13 +69,13 @@ for i, equity in enumerate(equity_curve):
 
 print(f"\nRunning Peak: ${running_peak:,.2f}")
 print(f"Trough (at Trade {max_dd_point}): ${equity_curve[max_dd_point]:,.2f}")
-print(f"Calculated Max Drawdown: {max_drawdown_pct:.6f} ({max_drawdown_pct*100:.2f}%)")
+print(f"Calculated Max Drawdown: {max_drawdown_pct:.6f} ({max_drawdown_pct * 100:.2f}%)")
 
 print("\n" + "=" * 80)
 print("COMPARISON: Why Values Might Differ")
 print("=" * 80)
-print(f"\nDatabase Value: {float(db_max_drawdown):.6f} ({float(db_max_drawdown)*100:.2f}%)")
-print(f"Calculated Value (trade-level): {max_drawdown_pct:.6f} ({max_drawdown_pct*100:.2f}%)")
+print(f"\nDatabase Value: {float(db_max_drawdown):.6f} ({float(db_max_drawdown) * 100:.2f}%)")
+print(f"Calculated Value (trade-level): {max_drawdown_pct:.6f} ({max_drawdown_pct * 100:.2f}%)")
 print(f"Difference: {abs(max_drawdown_pct - float(db_max_drawdown)):.6f}")
 
 print("\n" + "=" * 80)
@@ -89,13 +90,13 @@ else:
     print("\n❌ TRADE-LEVEL CALCULATION (What We Did):")
     print("   - Used only end-of-trade equity snapshots (7 data points)")
     print("   - Does NOT capture intra-trade drawdowns")
-    print("   - Result: {:.2f}%".format(max_drawdown_pct*100))
+    print("   - Result: {:.2f}%".format(max_drawdown_pct * 100))
 
     print("\n✅ NAUTILUS TRADER CALCULATION (What's in Database):")
     print("   - Uses DAILY returns from equity curve (hundreds of data points)")
     print("   - Captures ALL intra-trade drawdowns during positions")
     print("   - Includes unrealized P&L fluctuations")
-    print("   - Result: {:.2f}%".format(float(db_max_drawdown)*100))
+    print("   - Result: {:.2f}%".format(float(db_max_drawdown) * 100))
 
     print("\n   Example: If you're holding a losing position for 30 days,")
     print("   the daily equity changes capture the drawdown BEFORE you exit.")
