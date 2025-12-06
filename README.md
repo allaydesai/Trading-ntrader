@@ -123,11 +123,41 @@ uvicorn src.api.web:app --reload                                 # ✅ Start web
 
 **NEW** - The NTrader Web UI provides a browser-based interface for viewing backtest results.
 
-### Starting the Web Server
+### First-Time Setup
+
+Before running the web server, build the Tailwind CSS:
 
 ```bash
-# Start the web server with auto-reload (development mode)
-uvicorn src.api.web:app --reload --host 127.0.0.1 --port 8000
+# Build CSS (one-time setup - downloads Tailwind CLI automatically)
+./scripts/build-css.sh
+
+# Or build minified CSS for production
+./scripts/build-css.sh --minify
+```
+
+### Starting the Web Server
+
+#### Development Mode (with auto-reload)
+
+```bash
+# Start the web server with auto-reload
+uv run uvicorn src.api.web:app --reload --host 127.0.0.1 --port 8000
+
+# In another terminal, watch CSS for changes (optional)
+./scripts/build-css.sh --watch
+
+# Open in browser
+open http://127.0.0.1:8000
+```
+
+#### Production Mode
+
+```bash
+# Build minified CSS
+./scripts/build-css.sh --minify
+
+# Start the web server (no auto-reload)
+uv run uvicorn src.api.web:app --host 0.0.0.0 --port 8000 --workers 4
 
 # Open in browser
 open http://127.0.0.1:8000
@@ -260,7 +290,16 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 uv sync
 ```
 
-3. Set up environment variables (Optional - only needed for IBKR):
+3. Build Tailwind CSS for the Web UI:
+```bash
+# Build CSS (downloads Tailwind CLI automatically on first run)
+./scripts/build-css.sh
+
+# Or build minified CSS for production
+./scripts/build-css.sh --minify
+```
+
+4. Set up environment variables (Optional - only needed for IBKR):
 ```bash
 # Copy the example environment file
 cp .env.example .env
@@ -268,7 +307,7 @@ cp .env.example .env
 # Edit .env with your IBKR connection settings if needed
 ```
 
-4. Create Parquet catalog directory:
+5. Create Parquet catalog directory:
 ```bash
 # The catalog directory will be created automatically, but you can create it manually:
 mkdir -p ./data/catalog
@@ -963,7 +1002,13 @@ This section provides detailed, step-by-step guides for common tasks.
    cp .env.example .env
    ```
 
-2. **Start database**:
+2. **Build Web UI assets**:
+   ```bash
+   # Build Tailwind CSS (downloads CLI automatically on first run)
+   ./scripts/build-css.sh
+   ```
+
+3. **Start database**:
    ```bash
    docker pull postgres:17
    docker volume create pgdata
@@ -976,12 +1021,12 @@ This section provides detailed, step-by-step guides for common tasks.
      postgres:17
    ```
 
-3. **Initialize database**:
+4. **Initialize database**:
    ```bash
    uv run alembic upgrade head
    ```
 
-4. **Import sample data and run backtest**:
+5. **Import sample data and run backtest**:
    ```bash
    # Import sample data
    uv run python -m src.cli.main data import-csv --file data/sample_AAPL.csv --symbol AAPL
