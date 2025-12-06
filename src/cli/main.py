@@ -1,11 +1,7 @@
 """Main CLI application for NTrader."""
 
 import click
-from dotenv import load_dotenv
 from rich.console import Console
-
-# Load environment variables from .env file before any other imports
-load_dotenv()
 
 from src.cli.commands.backtest import backtest  # noqa: E402
 from src.cli.commands.data import data  # noqa: E402

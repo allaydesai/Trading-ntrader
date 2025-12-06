@@ -123,11 +123,41 @@ uvicorn src.api.web:app --reload                                 # ✅ Start web
 
 **NEW** - The NTrader Web UI provides a browser-based interface for viewing backtest results.
 
-### Starting the Web Server
+### First-Time Setup
+
+Before running the web server, build the Tailwind CSS:
 
 ```bash
-# Start the web server with auto-reload (development mode)
-uvicorn src.api.web:app --reload --host 127.0.0.1 --port 8000
+# Build CSS (one-time setup - downloads Tailwind CLI automatically)
+./scripts/build-css.sh
+
+# Or build minified CSS for production
+./scripts/build-css.sh --minify
+```
+
+### Starting the Web Server
+
+#### Development Mode (with auto-reload)
+
+```bash
+# Start the web server with auto-reload
+uv run uvicorn src.api.web:app --reload --host 127.0.0.1 --port 8000
+
+# In another terminal, watch CSS for changes (optional)
+./scripts/build-css.sh --watch
+
+# Open in browser
+open http://127.0.0.1:8000
+```
+
+#### Production Mode
+
+```bash
+# Build minified CSS
+./scripts/build-css.sh --minify
+
+# Start the web server (no auto-reload)
+uv run uvicorn src.api.web:app --host 0.0.0.0 --port 8000 --workers 4
 
 # Open in browser
 open http://127.0.0.1:8000
@@ -157,6 +187,83 @@ The Web UI requires the database to be configured. Set `DATABASE_URL` in your `.
 DATABASE_URL=postgresql://user:password@localhost:5432/ntrader
 ```
 
+## QA Testing Workflow
+
+The NTrader application supports environment-based database selection for testing purposes.
+
+### Environment Configuration
+
+Create environment-specific configuration files:
+- `.env` - Default configuration (used when ENV not set)
+- `.env.dev` - Development database (trading_ntrader)
+- `.env.qa` - QA/testing database (trading_ntrader_qa)
+
+### Switching Databases
+
+Use the `ENV` environment variable to select which configuration to use:
+
+#### Web Application
+
+```bash
+# Run with development database (default)
+uv run uvicorn src.api.web:app --reload
+
+# Run with QA database
+ENV=qa uv run uvicorn src.api.web:app --reload --port 8000
+```
+
+#### CLI Commands
+
+```bash
+# List backtests from development database (default)
+uv run python -m src.cli.main backtest history
+
+# List backtests from QA database
+ENV=qa uv run python -m src.cli.main backtest history
+
+# Run backtest against QA database
+ENV=qa uv run python -m src.cli.main backtest run \
+  -s sma_crossover \
+  -sym SPY.ARCA \
+  -st 2024-01-01 \
+  -e 2024-12-31
+```
+
+### QA Database Setup
+
+The QA database (`trading_ntrader_qa`) contains 25 pre-populated test backtests for web UI testing:
+
+```bash
+# Create and populate QA database
+./scripts/setup_qa_data.sh
+
+# Verify QA data
+PGPASSWORD=ntrader_dev_2025 psql -h localhost -U ntrader -d trading_ntrader_qa \
+  -c 'SELECT COUNT(*) FROM backtest_runs;'
+```
+
+### Configuration Priority
+
+Settings are loaded in this order (highest priority first):
+1. **Environment variables** (e.g., `DATABASE_URL=...`) - These take precedence over everything
+2. **ENV-specific file** (`.env.dev`, `.env.qa`) - Selected via ENV environment variable
+3. **Default file** (`.env`) - Used when ENV is not set
+
+**Important**: If you have `DATABASE_URL` set as an environment variable in your shell, it will override the .env file settings. To use ENV-based database selection, ensure DATABASE_URL is not exported in your shell environment.
+
+### Troubleshooting
+
+**ENV=qa not working:**
+- Verify `.env.qa` file exists in project root
+- Check file has correct `DATABASE_URL` setting
+- **Check if DATABASE_URL is set in your shell**: Run `echo $DATABASE_URL` - if it shows a value, unset it with `unset DATABASE_URL` before running commands
+- Restart application after creating new env files
+
+**Database connection errors:**
+- Verify QA database exists: `psql -h localhost -U ntrader -l | grep trading_ntrader_qa`
+- Run setup script: `./scripts/setup_qa_data.sh`
+- Check PostgreSQL is running: `docker ps | grep pgdb`
+
 ## Quick Start
 
 ### Prerequisites
@@ -183,7 +290,16 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 uv sync
 ```
 
-3. Set up environment variables (Optional - only needed for IBKR):
+3. Build Tailwind CSS for the Web UI:
+```bash
+# Build CSS (downloads Tailwind CLI automatically on first run)
+./scripts/build-css.sh
+
+# Or build minified CSS for production
+./scripts/build-css.sh --minify
+```
+
+4. Set up environment variables (Optional - only needed for IBKR):
 ```bash
 # Copy the example environment file
 cp .env.example .env
@@ -191,7 +307,7 @@ cp .env.example .env
 # Edit .env with your IBKR connection settings if needed
 ```
 
-4. Create Parquet catalog directory:
+5. Create Parquet catalog directory:
 ```bash
 # The catalog directory will be created automatically, but you can create it manually:
 mkdir -p ./data/catalog
@@ -886,7 +1002,13 @@ This section provides detailed, step-by-step guides for common tasks.
    cp .env.example .env
    ```
 
-2. **Start database**:
+2. **Build Web UI assets**:
+   ```bash
+   # Build Tailwind CSS (downloads CLI automatically on first run)
+   ./scripts/build-css.sh
+   ```
+
+3. **Start database**:
    ```bash
    docker pull postgres:17
    docker volume create pgdata
@@ -899,12 +1021,12 @@ This section provides detailed, step-by-step guides for common tasks.
      postgres:17
    ```
 
-3. **Initialize database**:
+4. **Initialize database**:
    ```bash
    uv run alembic upgrade head
    ```
 
-4. **Import sample data and run backtest**:
+5. **Import sample data and run backtest**:
    ```bash
    # Import sample data
    uv run python -m src.cli.main data import-csv --file data/sample_AAPL.csv --symbol AAPL

@@ -1,5 +1,6 @@
 """Configuration settings for NTrader."""
 
+import os
 from decimal import Decimal
 from pathlib import Path
 from typing import Literal, Optional
@@ -153,5 +154,23 @@ class Settings(BaseSettings):
 
 
 def get_settings() -> Settings:
-    """Get application settings singleton."""
+    """
+    Get application settings.
+
+    Uses ENV environment variable to select configuration file:
+    - ENV=dev → loads .env.dev
+    - ENV=qa → loads .env.qa
+    - ENV not set → loads .env (default)
+    """
+    env = os.getenv("ENV", "").lower()
+
+    if env in ("dev", "qa", "prod"):
+        env_file_path = Path(f".env.{env}")
+        if env_file_path.exists():
+            return Settings(_env_file=str(env_file_path))  # type: ignore[call-arg]
+        else:
+            import logging
+
+            logging.warning(f"ENV={env} specified but .env.{env} not found, using .env")
+
     return Settings()

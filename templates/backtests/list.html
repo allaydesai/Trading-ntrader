@@ -160,9 +160,8 @@
                 <input type="hidden" name="page" value="1">
                 <input type="hidden" name="page_size" value="{{ list_page.filter_state.page_size }}">
 
-                <!-- Clear Filters Button -->
-                {% if has_filters %}
-                <div>
+                <!-- Clear Filters Button (Always Visible) -->
+                <div class="flex items-end">
                     <button
                         type="button"
                         hx-get="/backtests/fragment"
@@ -170,12 +169,11 @@
                         hx-swap="innerHTML"
                         hx-push-url="/backtests"
                         onclick="document.getElementById('filter-form').reset()"
-                        class="px-4 py-2 text-sm bg-slate-700 hover:bg-slate-600 text-slate-200 rounded transition-colors"
+                        class="px-4 py-2 text-sm bg-slate-700 hover:bg-slate-600 text-slate-200 rounded transition-colors whitespace-nowrap"
                     >
                         Clear Filters
                     </button>
                 </div>
-                {% endif %}
             </div>
         </form>
     </div>
