@@ -183,3 +183,7 @@ data/catalog/.corrupt/
 
 # Playwright MCP test artifacts
 .playwright-mcp/
+
+# Tailwind CSS standalone CLI
+tailwindcss
+tailwindcss-*

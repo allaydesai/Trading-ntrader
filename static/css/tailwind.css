@@ -1,0 +1,30 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* NTrader Web UI Custom Styles */
+
+/* Metric color utilities */
+.metric-positive {
+    color: rgb(34 197 94); /* green-500 */
+}
+
+.metric-negative {
+    color: rgb(239 68 68); /* red-500 */
+}
+
+/* Ensure focus states have good contrast */
+*:focus {
+    outline: 2px solid rgb(59 130 246); /* blue-500 */
+    outline-offset: 2px;
+}
+
+/* Table row hover states for dark theme */
+.table-row-hover:hover {
+    background-color: rgb(30 41 59); /* slate-800 */
+}
+
+/* Alternate row colors for tables */
+.table-row-alt:nth-child(even) {
+    background-color: rgb(15 23 42); /* slate-900 */
+}
