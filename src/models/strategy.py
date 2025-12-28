@@ -17,6 +17,7 @@ class StrategyType(str, Enum):
     MEAN_REVERSION = "mean_reversion"
     MOMENTUM = "momentum"
     BOLLINGER_REVERSAL = "bollinger_reversal"
+    CONNORS_RSI_MEAN_REV = "connors_rsi_mean_rev"
 
 
 class StrategyStatus(str, Enum):
@@ -167,6 +168,35 @@ class BollingerReversalParameters(BaseModel):
     }
 
 
+class ConnorsRSIParameters(BaseModel):
+    """
+    Parameters specific to Larry Connors RSI Mean Reversion strategy.
+
+    Matches src.core.strategies.larry_connors_RSI_mean_rev.ConnorsRSIMeanRevConfig.
+    """
+
+    trade_size: Decimal = Field(
+        default=Decimal("1000.0"), gt=0, description="Size of each trade in shares"
+    )
+    rsi_period: int = Field(default=2, ge=2, description="RSI period")
+    buy_threshold: float = Field(default=10.0, ge=0, le=100, description="Buy threshold (RSI < X)")
+    sma_trend_period: int = Field(default=200, ge=1, description="Trend filter SMA period")
+    max_holding_days: int = Field(default=5, ge=1, description="Max holding days (time stop)")
+
+    # Mapping from model fields to global Settings attributes
+    _settings_map = {
+        "trade_size": "trade_size",
+    }
+
+    @field_validator("buy_threshold")
+    @classmethod
+    def validate_buy_threshold(cls, v: float) -> float:
+        """Validate buy threshold is in valid range."""
+        if not (0 <= v <= 100):
+            raise ValueError("Buy threshold must be between 0 and 100")
+        return v
+
+
 class TradingStrategy(BaseModel):
     """Trading strategy entity with configuration and metadata."""
 
@@ -224,6 +254,13 @@ class TradingStrategy(BaseModel):
                 BollingerReversalParameters.model_validate(v)
             except Exception as e:
                 raise ValueError(f"Invalid Bollinger Reversal parameters: {e}")
+
+        elif strategy_type == StrategyType.CONNORS_RSI_MEAN_REV:
+            # Validate Connors RSI Mean Reversion parameters
+            try:
+                ConnorsRSIParameters.model_validate(v)
+            except Exception as e:
+                raise ValueError(f"Invalid Connors RSI Mean Reversion parameters: {e}")
 
         return v
 

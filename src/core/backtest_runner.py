@@ -19,9 +19,11 @@ from src.config import get_settings
 from src.core.fee_models import IBKRCommissionModel
 from src.core.strategies.sma_crossover import SMAConfig, SMACrossover
 from src.core.strategy_factory import StrategyFactory
+from src.core.strategy_registry import StrategyRegistry
 from src.db.repositories.backtest_repository import BacktestRepository
 from src.db.session import get_session
 from src.models.backtest_result import BacktestResult
+from src.models.strategy import StrategyType
 from src.services.backtest_persistence import BacktestPersistenceService
 from src.services.data_service import DataService
 from src.utils.config_loader import ConfigLoader, StrategyConfigWrapper
@@ -48,6 +50,38 @@ class MinimalBacktestRunner:
         self._venue: Venue | None = None  # Track venue used in backtest
         self._backtest_start_date: datetime | None = None  # Track backtest date range
         self._backtest_end_date: datetime | None = None
+
+    @staticmethod
+    def _resolve_strategy_type(strategy_type: str) -> StrategyType:
+        """
+        Resolve strategy alias to canonical StrategyType enum.
+
+        Args:
+            strategy_type: Strategy name or alias (e.g., "crsi", "connors_rsi_mean_rev")
+
+        Returns:
+            StrategyType enum value
+
+        Raises:
+            ValueError: If strategy type is not found in registry or not a valid enum
+        """
+        # Handle legacy "sma" alias for backward compatibility
+        if strategy_type == "sma":
+            strategy_type = "sma_crossover"
+
+        # Resolve alias to canonical name using registry
+        StrategyRegistry.discover()  # Ensure strategies are loaded
+        try:
+            strategy_def = StrategyRegistry.get(strategy_type)
+            canonical_name = strategy_def.name
+        except KeyError:
+            raise ValueError(f"Unsupported strategy type: {strategy_type}")
+
+        # Validate against StrategyType enum
+        try:
+            return StrategyType(canonical_name)
+        except ValueError:
+            raise ValueError(f"Unsupported strategy type: {strategy_type}")
 
     async def _persist_backtest_results(
         self,
@@ -1203,17 +1237,9 @@ class MinimalBacktestRunner:
             ValueError: If strategy type is not supported or data is invalid
         """
         from src.core.strategy_factory import StrategyLoader
-        from src.models.strategy import StrategyType
 
-        # Handle "sma" alias for backward compatibility
-        if strategy_type == "sma":
-            strategy_type = "sma_crossover"
-
-        # Validate strategy type
-        try:
-            strategy_enum = StrategyType(strategy_type)
-        except ValueError:
-            raise ValueError(f"Unsupported strategy type: {strategy_type}")
+        # Resolve strategy alias to canonical StrategyType
+        strategy_enum = self._resolve_strategy_type(strategy_type)
 
         if self.data_source != "database":
             raise ValueError("This method requires 'database' data source")
@@ -1366,16 +1392,12 @@ class MinimalBacktestRunner:
             ValueError: If strategy type is not supported or bars are empty
         """
         from src.core.strategy_factory import StrategyLoader
-        from src.models.strategy import StrategyType
 
         # Track execution time for persistence
         execution_start_time = time.time()
 
-        # Reason: Validate strategy type
-        try:
-            strategy_enum = StrategyType(strategy_type)
-        except ValueError:
-            raise ValueError(f"Unsupported strategy type: {strategy_type}")
+        # Resolve strategy alias to canonical StrategyType
+        strategy_enum = self._resolve_strategy_type(strategy_type)
 
         if not bars:
             raise ValueError("No bars provided for backtest")

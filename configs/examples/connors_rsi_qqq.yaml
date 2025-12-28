@@ -1,0 +1,47 @@
+# Larry Connors RSI Mean Reversion Strategy Configuration
+#
+# Trading Rules:
+# 1. Trend Filter: Only buy when Close > 200-day SMA (uptrend)
+# 2. Entry Signal: RSI(2) < 10
+# 3. Exit Signal: Close > Yesterday's High
+# 4. Time Stop: Exit after 5 days if price target not hit
+#
+# References:
+# - Short Term Trading Strategies That Work by Larry Connors
+# - https://www.connorsresearch.com/
+
+strategy_path: "src.core.strategies.larry_connors_RSI_mean_rev:LarryConnorsRSIMeanRev"
+config_path: "src.core.strategies.larry_connors_RSI_mean_rev:ConnorsRSIMeanRevConfig"
+
+config:
+  # Instrument Settings
+  instrument_id: "QQQ.NASDAQ"  # Nasdaq 100 ETF
+  bar_type: "QQQ.NASDAQ-1-DAY-LAST-EXTERNAL"
+
+  # Position Sizing
+  # IMPORTANT: trade_size is in SHARES, not USD
+  # Example: 1000 shares @ $440 = $440,000 notional
+  # For $1M account, this is ~44% position size per trade
+  trade_size: 1000  # Shares per trade
+
+  # Strategy Parameters
+  rsi_period: 2              # 2-period RSI (default per Connors)
+  buy_threshold: 10.0        # Buy when RSI < 10
+  sma_trend_period: 200      # 200-day SMA for trend filter
+  max_holding_days: 5        # Maximum holding period (time stop)
+
+  # Order Management
+  order_id_tag: "CRSI"       # Tag for order IDs
+
+# Backtest Settings
+backtest:
+  start_date: "2024-01-01"
+  end_date: "2024-12-31"
+  initial_capital: 1000000   # $1M starting capital
+
+# Notes:
+# - This strategy is designed for mean reversion in strong uptrends
+# - Works best in trending markets (hence the 200-day SMA filter)
+# - Typical win rate: 60-70%
+# - Expected annual return: 3-8% (conservative estimate)
+# - Adjust trade_size based on your risk tolerance and account size
