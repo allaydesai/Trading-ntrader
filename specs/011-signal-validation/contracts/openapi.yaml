@@ -1,0 +1,577 @@
+openapi: 3.1.0
+info:
+  title: Signal Validation API
+  description: |
+    API for multi-condition signal validation in the Nautilus Trader backtesting system.
+    Provides endpoints for retrieving signal evaluations, statistics, and exporting audit trails.
+  version: 1.0.0
+  contact:
+    name: Trading-ntrader
+    url: https://github.com/allaydesai/Trading-ntrader
+
+servers:
+  - url: /api/v1
+    description: API v1
+
+tags:
+  - name: signals
+    description: Signal evaluation and analysis endpoints
+  - name: export
+    description: Data export endpoints
+
+paths:
+  /backtests/{backtest_run_id}/signals:
+    get:
+      tags:
+        - signals
+      summary: List signal evaluations for a backtest
+      description: |
+        Retrieves paginated signal evaluations for a completed backtest.
+        Supports filtering by signal result and minimum strength.
+      operationId: listSignalEvaluations
+      parameters:
+        - $ref: '#/components/parameters/BacktestRunId'
+        - name: signal
+          in: query
+          description: Filter by signal result (true/false)
+          schema:
+            type: boolean
+        - name: min_strength
+          in: query
+          description: Minimum signal strength (0.0-1.0)
+          schema:
+            type: number
+            format: float
+            minimum: 0.0
+            maximum: 1.0
+        - name: blocking_component
+          in: query
+          description: Filter by blocking component name
+          schema:
+            type: string
+        - $ref: '#/components/parameters/PageNumber'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Paginated list of signal evaluations
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignalEvaluationListResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /backtests/{backtest_run_id}/signals/statistics:
+    get:
+      tags:
+        - signals
+      summary: Get signal statistics for a backtest
+      description: |
+        Returns aggregated statistics including trigger rates, blocking rates,
+        and near-miss analysis for all signal evaluations in a backtest.
+      operationId: getSignalStatistics
+      parameters:
+        - $ref: '#/components/parameters/BacktestRunId'
+        - name: near_miss_threshold
+          in: query
+          description: Strength threshold for near-miss classification (default 0.75)
+          schema:
+            type: number
+            format: float
+            minimum: 0.0
+            maximum: 1.0
+            default: 0.75
+      responses:
+        '200':
+          description: Signal statistics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignalStatisticsResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /backtests/{backtest_run_id}/signals/near-misses:
+    get:
+      tags:
+        - signals
+      summary: Get near-miss signal evaluations
+      description: |
+        Returns signal evaluations where the signal was FALSE but strength
+        was at or above the threshold (default 0.75). Useful for identifying
+        opportunities where the strategy almost triggered.
+      operationId: getNearMisses
+      parameters:
+        - $ref: '#/components/parameters/BacktestRunId'
+        - name: threshold
+          in: query
+          description: Minimum strength to consider as near-miss
+          schema:
+            type: number
+            format: float
+            minimum: 0.0
+            maximum: 1.0
+            default: 0.75
+        - $ref: '#/components/parameters/PageNumber'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: List of near-miss evaluations
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignalEvaluationListResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /backtests/{backtest_run_id}/signals/blocking-analysis:
+    get:
+      tags:
+        - signals
+      summary: Get blocking condition analysis
+      description: |
+        Returns detailed blocking analysis showing which conditions most
+        frequently prevented signals from triggering.
+      operationId: getBlockingAnalysis
+      parameters:
+        - $ref: '#/components/parameters/BacktestRunId'
+      responses:
+        '200':
+          description: Blocking analysis results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BlockingAnalysisResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /backtests/{backtest_run_id}/signals/export:
+    post:
+      tags:
+        - export
+      summary: Export signal evaluations
+      description: |
+        Exports all signal evaluations for a backtest to the specified format.
+        Returns a download URL for the generated file.
+      operationId: exportSignalEvaluations
+      parameters:
+        - $ref: '#/components/parameters/BacktestRunId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignalExportRequest'
+      responses:
+        '202':
+          description: Export started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExportResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /backtests/{backtest_run_id}/signals/export/{export_id}:
+    get:
+      tags:
+        - export
+      summary: Get export status and download URL
+      description: Check the status of an export job and get the download URL when complete.
+      operationId: getExportStatus
+      parameters:
+        - $ref: '#/components/parameters/BacktestRunId'
+        - name: export_id
+          in: path
+          required: true
+          description: Export job identifier
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Export status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExportStatusResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+components:
+  parameters:
+    BacktestRunId:
+      name: backtest_run_id
+      in: path
+      required: true
+      description: Unique identifier of the backtest run
+      schema:
+        type: integer
+        format: int64
+        minimum: 1
+
+    PageNumber:
+      name: page
+      in: query
+      description: Page number (1-indexed)
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+
+    PageSize:
+      name: page_size
+      in: query
+      description: Number of items per page
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 1000
+        default: 100
+
+  schemas:
+    ComponentResult:
+      type: object
+      description: Result of a single condition evaluation
+      required:
+        - name
+        - value
+        - triggered
+        - reason
+      properties:
+        name:
+          type: string
+          description: Component identifier
+          example: "trend_filter"
+        value:
+          type: number
+          format: float
+          description: Calculated value
+          example: 152.30
+        triggered:
+          type: boolean
+          description: Whether the condition passed
+          example: true
+        reason:
+          type: string
+          description: Human-readable explanation
+          example: "Close (152.30) > SMA(200) (148.50)"
+
+    SignalEvaluationResponse:
+      type: object
+      description: Complete signal evaluation at a point in time
+      required:
+        - id
+        - timestamp
+        - bar_type
+        - components
+        - signal
+        - strength
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: Unique identifier
+        timestamp:
+          type: string
+          format: date-time
+          description: Bar timestamp
+        bar_type:
+          type: string
+          description: Bar type identifier
+          example: "AAPL.XNAS-1-DAY-LAST"
+        components:
+          type: array
+          items:
+            $ref: '#/components/schemas/ComponentResult'
+          description: Ordered list of component evaluations
+        signal:
+          type: boolean
+          description: Final composite signal result
+        strength:
+          type: number
+          format: float
+          minimum: 0.0
+          maximum: 1.0
+          description: Ratio of passed conditions to total
+          example: 0.75
+        blocking_component:
+          type: string
+          nullable: true
+          description: Name of first failing component (null if signal=true)
+          example: "fib_level"
+
+    SignalEvaluationListResponse:
+      type: object
+      description: Paginated list of signal evaluations
+      required:
+        - items
+        - total
+        - page
+        - page_size
+        - total_pages
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SignalEvaluationResponse'
+        total:
+          type: integer
+          description: Total number of evaluations
+        page:
+          type: integer
+          description: Current page number
+        page_size:
+          type: integer
+          description: Items per page
+        total_pages:
+          type: integer
+          description: Total number of pages
+
+    SignalStatisticsResponse:
+      type: object
+      description: Aggregated signal statistics
+      required:
+        - total_evaluations
+        - total_triggered
+        - signal_rate
+        - trigger_rates
+        - blocking_rates
+        - near_miss_count
+        - near_miss_threshold
+      properties:
+        total_evaluations:
+          type: integer
+          minimum: 0
+          description: Total number of bar evaluations
+          example: 1000
+        total_triggered:
+          type: integer
+          minimum: 0
+          description: Count where signal=true
+          example: 45
+        signal_rate:
+          type: number
+          format: float
+          minimum: 0.0
+          maximum: 1.0
+          description: Fraction of evaluations where signal triggered
+          example: 0.045
+        trigger_rates:
+          type: object
+          additionalProperties:
+            type: number
+            format: float
+            minimum: 0.0
+            maximum: 1.0
+          description: Per-component trigger rate
+          example:
+            trend_filter: 0.72
+            rsi_threshold: 0.08
+            volume_confirm: 0.45
+        blocking_rates:
+          type: object
+          additionalProperties:
+            type: number
+            format: float
+            minimum: 0.0
+            maximum: 1.0
+          description: Per-component blocking rate
+          example:
+            trend_filter: 0.15
+            rsi_threshold: 0.65
+            volume_confirm: 0.12
+        near_miss_count:
+          type: integer
+          minimum: 0
+          description: Evaluations with strength >= threshold but signal=false
+          example: 23
+        near_miss_threshold:
+          type: number
+          format: float
+          minimum: 0.0
+          maximum: 1.0
+          description: Threshold used for near-miss classification
+          example: 0.75
+        primary_blocker:
+          type: string
+          nullable: true
+          description: Component with highest blocking rate
+          example: "rsi_threshold"
+
+    BlockingComponentStats:
+      type: object
+      description: Statistics for a single blocking component
+      required:
+        - component_name
+        - block_count
+        - block_rate
+        - avg_strength_when_blocking
+      properties:
+        component_name:
+          type: string
+          description: Name of the component
+        block_count:
+          type: integer
+          minimum: 0
+          description: Number of times this component blocked
+        block_rate:
+          type: number
+          format: float
+          minimum: 0.0
+          maximum: 1.0
+          description: Fraction of failed signals blocked by this component
+        avg_strength_when_blocking:
+          type: number
+          format: float
+          minimum: 0.0
+          maximum: 1.0
+          description: Average signal strength when this component was the blocker
+
+    BlockingAnalysisResponse:
+      type: object
+      description: Detailed blocking condition analysis
+      required:
+        - total_failed_signals
+        - components
+        - primary_blocker
+      properties:
+        total_failed_signals:
+          type: integer
+          minimum: 0
+          description: Total evaluations where signal=false
+        components:
+          type: array
+          items:
+            $ref: '#/components/schemas/BlockingComponentStats'
+          description: Statistics per component, sorted by block_rate descending
+        primary_blocker:
+          type: string
+          nullable: true
+          description: Component that blocks most frequently
+
+    SignalExportRequest:
+      type: object
+      description: Request to export signal evaluations
+      properties:
+        format:
+          type: string
+          enum:
+            - csv
+            - json
+          default: csv
+          description: Export format
+        include_passed_only:
+          type: boolean
+          default: false
+          description: Only export evaluations where signal=true
+        min_strength:
+          type: number
+          format: float
+          minimum: 0.0
+          maximum: 1.0
+          nullable: true
+          description: Minimum strength filter
+
+    ExportResponse:
+      type: object
+      description: Export job started response
+      required:
+        - export_id
+        - status
+        - message
+      properties:
+        export_id:
+          type: string
+          format: uuid
+          description: Unique export job identifier
+        status:
+          type: string
+          enum:
+            - pending
+            - processing
+          description: Current export status
+        message:
+          type: string
+          description: Status message
+
+    ExportStatusResponse:
+      type: object
+      description: Export job status
+      required:
+        - export_id
+        - status
+      properties:
+        export_id:
+          type: string
+          format: uuid
+          description: Export job identifier
+        status:
+          type: string
+          enum:
+            - pending
+            - processing
+            - completed
+            - failed
+          description: Current status
+        download_url:
+          type: string
+          format: uri
+          nullable: true
+          description: URL to download completed export (null until completed)
+        error_message:
+          type: string
+          nullable: true
+          description: Error message if status=failed
+        progress:
+          type: number
+          format: float
+          minimum: 0.0
+          maximum: 1.0
+          nullable: true
+          description: Progress percentage (0.0-1.0)
+
+    ErrorResponse:
+      type: object
+      description: Standard error response
+      required:
+        - error
+        - message
+      properties:
+        error:
+          type: string
+          description: Error code
+        message:
+          type: string
+          description: Human-readable error message
+        details:
+          type: object
+          additionalProperties: true
+          description: Additional error details
+
+  responses:
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: "not_found"
+            message: "Backtest run not found"
+
+    ValidationError:
+      description: Validation error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: "validation_error"
+            message: "Invalid request parameters"
+            details:
+              min_strength: "Must be between 0.0 and 1.0"
