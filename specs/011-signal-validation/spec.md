@@ -7,6 +7,58 @@
 
 ## User Scenarios & Testing *(mandatory)*
 
+### User Story 0 - Integrate Signal Validation into Existing Strategy (Priority: P0)
+
+As a trading strategy developer, I want to add signal validation to my existing Nautilus Trader strategy with minimal code changes, so that I can start capturing audit trails and analyzing my signal logic without rewriting my strategy from scratch.
+
+**Why this priority**: This is the prerequisite for all other stories - users cannot benefit from signal validation without a clear integration path. The existing strategies (`LarryConnorsRSIMeanRev`, `SMACrossover`, etc.) need a simple migration path.
+
+**Independent Test**: Take an existing strategy (e.g., `LarryConnorsRSIMeanRev`), add the signal validation mixin, run a backtest, and verify that signal evaluations are captured without changing the strategy's trading behavior.
+
+**Acceptance Scenarios**:
+
+1. **Given** an existing Nautilus Trader strategy class, **When** I add `SignalValidationMixin` and define my conditions, **Then** my strategy gains signal evaluation and audit trail capabilities without modifying my core trading logic.
+2. **Given** a strategy with the mixin applied, **When** I run a backtest, **Then** the `on_bar` execution time increases by less than 5% (minimal performance overhead).
+3. **Given** a strategy configuration, **When** I define signal conditions in the config (not hardcoded), **Then** I can adjust conditions without modifying strategy code.
+4. **Given** an existing strategy that calls `self.submit_order()`, **When** I integrate signal validation, **Then** the order submission is automatically linked to the triggering signal evaluation.
+
+**Example Integration**:
+```python
+from src.core.signals.integration import SignalValidationMixin
+
+class LarryConnorsRSIMeanRev(SignalValidationMixin, Strategy):
+    def __init__(self, config):
+        super().__init__(config)
+        # Define entry signal components
+        self.entry_signal = self.create_composite_signal(
+            name="entry",
+            logic=CombinationLogic.AND,
+            components=[
+                TrendFilterComponent("trend", self.sma),
+                RSIThresholdComponent("rsi_oversold", self.rsi, threshold=10, comparison="<"),
+            ]
+        )
+        # Define exit signal components
+        self.exit_signal = self.create_composite_signal(
+            name="exit",
+            logic=CombinationLogic.OR,
+            components=[
+                PriceBreakoutComponent("prev_high_break", comparison=">"),
+                TimeStopComponent("time_stop", max_bars=5),
+            ]
+        )
+
+    def on_bar(self, bar: Bar) -> None:
+        # ... indicator updates ...
+
+        # Evaluate entry signal (captures audit trail automatically)
+        entry_eval = self.evaluate_signal(self.entry_signal, bar)
+        if entry_eval.triggered:
+            self.submit_order(...)  # Automatically linked to entry_eval
+```
+
+---
+
 ### User Story 1 - Define and Evaluate Multi-Condition Entry Signals (Priority: P1)
 
 As a trading strategy developer, I want to define multiple entry conditions (trend filter, price pattern, Fibonacci level, volume confirmation) that evaluate together as a composite signal, so that I can create sophisticated entry logic while understanding which conditions pass or fail at each bar.
@@ -88,6 +140,84 @@ As a trading strategy developer, I want to see how often each individual conditi
 
 ---
 
+### User Story 6 - Evaluate Exit Signals Separately from Entry Signals (Priority: P1)
+
+As a trading strategy developer, I want to define and evaluate exit signals (stop loss, take profit, time stop) separately from entry signals, so that I can analyze why trades were closed and optimize my exit rules independently.
+
+**Why this priority**: Entry signals are only half the equation. Most strategy tuning involves exit optimization. Without separate exit signal tracking, users cannot analyze why trades were closed profitably or at a loss.
+
+**Independent Test**: Run a backtest with both entry and exit signals defined, verify that the audit trail distinguishes entry evaluations from exit evaluations, and that exit signal blocking analysis is available.
+
+**Acceptance Scenarios**:
+
+1. **Given** a strategy with entry and exit signal generators, **When** viewing the audit trail, **Then** each evaluation is labeled with signal type ("entry" or "exit").
+2. **Given** a completed backtest with 50 closed positions, **When** requesting exit analysis, **Then** I can see which exit condition triggered most often (e.g., "time_stop triggered 60%, prev_high_break triggered 40%").
+3. **Given** a trade that was exited, **When** viewing the trade details, **Then** I can see the specific exit signal evaluation that caused the close.
+4. **Given** multiple exit conditions with OR logic, **When** the first exit condition passes, **Then** the signal evaluates to TRUE and remaining conditions are still captured for analysis.
+
+---
+
+### User Story 7 - Correlate Signals to Executed Trades (Priority: P2)
+
+As a trading strategy developer, I want to see which signal evaluation resulted in each actual trade, so that I can trace from trade outcome back to the decision that created it.
+
+**Why this priority**: Signal evaluations are meaningless in isolation. Users need to connect "this signal triggered" to "this trade was profitable/unprofitable" to learn from outcomes.
+
+**Independent Test**: Run a backtest, select a trade from the trades table, and retrieve the exact signal evaluation that triggered it, including all component states at that moment.
+
+**Acceptance Scenarios**:
+
+1. **Given** a trade with a known entry time, **When** querying the signal audit trail, **Then** I can find the exact `SignalEvaluation` record that triggered the entry order.
+2. **Given** a `SignalEvaluation` that resulted in an order, **When** the order fills, **Then** the resulting trade ID is linked to the signal evaluation.
+3. **Given** a backtest with 100 trades, **When** exporting signal data, **Then** each trade row includes: entry_signal_id, exit_signal_id (if closed), and the component states at both points.
+4. **Given** a signal that triggered but the order was rejected or didn't fill, **When** viewing the evaluation, **Then** it shows `order_id` but `trade_id` is null, indicating the signal fired but no trade resulted.
+
+---
+
+### User Story 8 - Configure Signal Validation via Strategy Config (Priority: P2)
+
+As a trading strategy developer, I want to define my signal conditions in the strategy configuration (YAML/Pydantic), so that I can experiment with different condition parameters without modifying Python code.
+
+**Why this priority**: Rapid iteration requires parameter tuning without code changes. Users should be able to adjust thresholds, add/remove conditions, and change combination logic via configuration.
+
+**Independent Test**: Create two YAML configs with different signal conditions for the same strategy, run both backtests, and verify that each uses the correct conditions as defined in config.
+
+**Acceptance Scenarios**:
+
+1. **Given** a strategy config file with `signal_components` section, **When** the strategy initializes, **Then** components are created from config without hardcoding in Python.
+2. **Given** a config that specifies `rsi_threshold: 15` instead of default `10`, **When** running backtest, **Then** the RSI component uses threshold 15.
+3. **Given** a config that omits a component (e.g., removes volume confirmation), **When** the signal is evaluated, **Then** only the configured components are checked.
+4. **Given** a config with invalid component parameters, **When** the strategy initializes, **Then** a clear validation error is raised before backtest starts.
+
+**Example Config**:
+```yaml
+strategy:
+  type: connors_rsi_mean_rev
+  signal_validation:
+    entry:
+      logic: AND
+      components:
+        - type: trend_filter
+          name: sma_trend
+          period: 200
+        - type: rsi_threshold
+          name: rsi_oversold
+          period: 2
+          threshold: 10
+          comparison: "<"
+    exit:
+      logic: OR
+      components:
+        - type: price_breakout
+          name: prev_high_break
+          comparison: ">"
+        - type: time_stop
+          name: max_hold
+          max_bars: 5
+```
+
+---
+
 ### Edge Cases
 
 - What happens when no conditions are configured in a composite signal?
@@ -115,13 +245,19 @@ As a trading strategy developer, I want to see how often each individual conditi
 - **FR-010**: System MUST manage memory by periodically exporting audit data during long backtests to prevent unbounded growth.
 - **FR-011**: System MUST validate that at least one condition is configured before allowing backtest execution.
 - **FR-012**: System MUST gracefully handle conditions that cannot evaluate (insufficient data) by returning FALSE with an explanatory reason.
+- **FR-013**: System MUST integrate with Nautilus Trader's `on_bar` event handler without blocking backtest execution or significantly impacting performance (<5% overhead).
+- **FR-014**: System MUST support separate entry and exit signal generators, each with independent component sets and combination logic.
+- **FR-015**: System MUST link `SignalEvaluation` records to resulting orders and trades when signals trigger trading actions.
+- **FR-016**: System MUST support defining signal components via Pydantic configuration models, allowing YAML-based strategy configuration.
+- **FR-017**: System MUST provide a `SignalValidationMixin` class that existing Nautilus Trader strategies can inherit to gain signal validation capabilities.
 
 ### Key Entities
 
 - **SignalComponent**: Represents a single tradeable condition with name, evaluated value, triggered status, and reason string. Encapsulates evaluation logic for one specific condition (trend filter, RSI threshold, pattern detection, etc.).
-- **SignalEvaluation**: Captures the complete state of all conditions at a point in time. Contains timestamp, bar reference, list of component states, final signal result, signal strength ratio, and blocking component name.
+- **SignalEvaluation**: Captures the complete state of all conditions at a point in time. Contains timestamp, bar reference, list of component states, final signal result, signal strength ratio, blocking component name, signal type (entry/exit), and optional order_id/trade_id for correlation.
 - **CompositeSignalGenerator**: Orchestrates evaluation of multiple components. Evaluates each component in sequence, combines results using configured logic, calculates signal strength, and identifies blocking conditions.
 - **SignalCollector**: Collects and stores signal evaluations during backtest execution. Provides export functionality and calculates post-backtest statistics. Runs independently from trading strategy logic.
+- **SignalValidationMixin**: A mixin class that existing Nautilus Trader strategies can inherit to gain signal validation capabilities. Provides `create_composite_signal()` and `evaluate_signal()` methods, and wraps `submit_order()` to automatically link orders to triggering signals.
 
 ## Success Criteria *(mandatory)*
 
@@ -146,6 +282,96 @@ As a trading strategy developer, I want to see how often each individual conditi
 - CSV export format is sufficient for post-analysis; advanced formats (Parquet, database) can be added later if needed.
 - Memory management via periodic export is acceptable even if it introduces minor I/O overhead.
 
+---
+
+### User Story 9 - Run Backtest with Signal Validation Enabled (Priority: P1)
+
+As a trading strategy developer, I want to run a backtest with signal validation enabled via the CLI, so that I can capture signal audit data without modifying my backtest workflow.
+
+**Why this priority**: This bridges the gap between defining signals (US0) and analyzing them (US2-5). Without CLI integration, users cannot easily run signal-enabled backtests.
+
+**Independent Test**: Run `ntrader backtest run --strategy crsi --symbol AAPL --enable-signals`, verify that signal evaluations are captured and exported to CSV automatically.
+
+**Acceptance Scenarios**:
+
+1. **Given** a strategy with SignalValidationMixin, **When** I run `backtest run --enable-signals`, **Then** the backtest executes normally AND signal evaluations are captured.
+2. **Given** a completed backtest with signals enabled, **When** the backtest finishes, **Then** a signal audit CSV is automatically exported to the output directory.
+3. **Given** a backtest run with `--signal-export-path ./signals.csv`, **When** the backtest completes, **Then** the audit trail is written to the specified path.
+4. **Given** a backtest with signals enabled, **When** viewing CLI results, **Then** a summary shows: total evaluations, trigger rate, and primary blocking condition.
+
+**CLI Integration**:
+```bash
+# Enable signal validation for backtest
+ntrader backtest run --strategy crsi --symbol AAPL \
+    --start 2024-01-01 --end 2024-06-01 \
+    --enable-signals \
+    --signal-export-path ./output/signals.csv
+
+# Output includes signal summary:
+# 🎯 Backtest Results
+# ...
+# 📊 Signal Analysis
+#    Total Evaluations: 1,234
+#    Entry Signal Trigger Rate: 8.2%
+#    Primary Blocker: rsi_oversold (blocked 72% of failed signals)
+#    Near-Misses (≥75% strength): 45
+#    Audit Trail: ./output/signals.csv
+```
+
+---
+
+### User Story 10 - View Signal Summary in WebUI (Priority: P2)
+
+As a trading strategy developer, I want to see signal analysis summary on the backtest detail page in the WebUI, so that I can quickly understand signal behavior without downloading CSV files.
+
+**Why this priority**: The WebUI already shows backtest details (007-backtest-detail-view). Adding a signal summary tab provides immediate visibility without requiring separate tools.
+
+**Independent Test**: Run a backtest with signals enabled, navigate to backtest detail page, verify signal statistics are displayed in a dedicated tab.
+
+**Acceptance Scenarios**:
+
+1. **Given** a backtest with signal data, **When** viewing the detail page, **Then** a "Signals" tab appears in the navigation.
+2. **Given** the Signals tab is selected, **When** the page loads, **Then** I see: trigger rates per component, blocking rates, and near-miss count.
+3. **Given** the Signals tab, **When** I click "Export CSV", **Then** the full audit trail downloads as a CSV file.
+4. **Given** a backtest without signal data, **When** viewing the detail page, **Then** the Signals tab shows "No signal data available" with instructions.
+
+**WebUI Integration** (minimal):
+- Add "Signals" tab to existing backtest detail page
+- Display signal statistics summary (reuse SignalStatistics from US5)
+- Add CSV download button for full audit trail
+- No complex visualizations in v1 (charts are out of scope)
+
+---
+
+### User Story 11 - Validate Signal Configuration Before Backtest (Priority: P2)
+
+As a trading strategy developer, I want the system to validate my signal configuration before running a backtest, so that I catch configuration errors early rather than mid-execution.
+
+**Why this priority**: Edge cases like missing conditions or invalid thresholds should fail fast with clear error messages.
+
+**Independent Test**: Create a config with zero conditions, attempt to run backtest, verify clear error message before execution starts.
+
+**Acceptance Scenarios**:
+
+1. **Given** a signal config with zero components, **When** the backtest starts, **Then** a clear error is raised: "Signal 'entry' requires at least one component".
+2. **Given** a component with invalid threshold (e.g., RSI threshold > 100), **When** config is loaded, **Then** Pydantic validation fails with specific field error.
+3. **Given** a component referencing an indicator not available in warmup period, **When** the first bar is processed, **Then** the component returns FALSE with reason "Insufficient data: RSI requires 14 bars".
+
+---
+
+## Requirements *(mandatory)* - Integration Additions
+
+### Additional Functional Requirements
+
+- **FR-018**: System MUST provide CLI flags `--enable-signals` and `--signal-export-path` for the `backtest run` command.
+- **FR-019**: System MUST automatically export signal audit trail to CSV when backtest completes with signals enabled.
+- **FR-020**: System MUST display signal summary (total evaluations, trigger rate, primary blocker) in CLI output when signals are enabled.
+- **FR-021**: System MUST persist signal statistics alongside backtest run in the database for WebUI display.
+- **FR-022**: System MUST validate signal configuration before backtest execution, failing fast with clear error messages.
+- **FR-023**: System MUST integrate with existing WebUI backtest detail page to display signal statistics tab.
+
+---
+
 ## Out of Scope
 
 - Real-time signal monitoring or alerting (this feature focuses on backtesting analysis)
@@ -153,3 +379,4 @@ As a trading strategy developer, I want to see how often each individual conditi
 - Complex boolean logic beyond AND/OR (e.g., (A AND B) OR (C AND D))
 - Graphical visualization tools (post-backtest charts and heatmaps are analysis layer, not core feature)
 - Machine learning or automated parameter optimization based on blocking analysis
+- Signal comparison across multiple backtest runs (can be added in future iteration)
