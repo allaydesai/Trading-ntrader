@@ -110,6 +110,18 @@ def backtest():
     ),
     help="Bar timeframe (auto-detected from date format if not specified)",
 )
+@click.option(
+    "--enable-signals",
+    is_flag=True,
+    default=False,
+    help="Enable signal validation and capture audit trail during backtest.",
+)
+@click.option(
+    "--signal-export-path",
+    type=click.Path(),
+    default=None,
+    help="Path to export signal audit trail CSV (requires --enable-signals).",
+)
 def run_backtest(
     strategy: str,
     symbol: str,
@@ -119,6 +131,8 @@ def run_backtest(
     slow_period: int,
     trade_size: int,
     timeframe: str | None,
+    enable_signals: bool,
+    signal_export_path: str | None,
 ):
     """Run backtest with real market data from database."""
 
@@ -400,10 +414,17 @@ def run_backtest(
                     start=adjusted_start,
                     end=adjusted_end,
                     instrument=instrument,
+                    enable_signals=enable_signals,
+                    signal_export_path=signal_export_path,
                     **strategy_params,
                 )
 
                 progress.update(task, completed=True)
+
+                # Reason: Get signal statistics if signals were enabled
+                signal_stats = None
+                if enable_signals and hasattr(runner, "signal_statistics"):
+                    signal_stats = runner.signal_statistics
 
             # Display results
             console.print("🎯 Backtest Results", style="cyan bold")
@@ -448,6 +469,47 @@ def run_backtest(
                 console.print("📉 Strategy lost money", style="red bold")
             else:
                 console.print("➡️  Strategy broke even", style="yellow bold")
+
+            # Signal Analysis summary (when enabled)
+            if enable_signals:
+                console.print()
+                console.print("📊 Signal Analysis", style="cyan bold")
+
+                if signal_stats:
+                    signal_table = Table()
+                    signal_table.add_column("Metric", style="cyan", no_wrap=True)
+                    signal_table.add_column("Value", style="green")
+
+                    signal_table.add_row("Total Evaluations", f"{signal_stats.total_evaluations:,}")
+                    signal_table.add_row(
+                        "Entry Signal Trigger Rate",
+                        f"{signal_stats.signal_rate * 100:.1f}%",
+                    )
+
+                    # Primary blocker (if available)
+                    if hasattr(signal_stats, "primary_blocker") and signal_stats.primary_blocker:
+                        blocking_rate = signal_stats.blocking_rates.get(
+                            signal_stats.primary_blocker, 0
+                        )
+                        signal_table.add_row(
+                            "Primary Blocker",
+                            f"{signal_stats.primary_blocker} (blocked {blocking_rate * 100:.0f}%)",
+                        )
+
+                    # Near misses
+                    if hasattr(signal_stats, "near_miss_count"):
+                        signal_table.add_row(
+                            f"Near-Misses (≥{signal_stats.near_miss_threshold * 100:.0f}%)",
+                            str(signal_stats.near_miss_count),
+                        )
+
+                    console.print(signal_table)
+                else:
+                    console.print("   (Signal data not available)", style="yellow")
+
+                # Show export path if specified
+                if signal_export_path:
+                    console.print(f"   Audit Trail: {signal_export_path}", style="dim")
 
             # Clean up
             runner.dispose()

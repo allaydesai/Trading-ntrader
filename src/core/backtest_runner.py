@@ -17,6 +17,8 @@ from nautilus_trader.model.objects import Money
 
 from src.config import get_settings
 from src.core.fee_models import IBKRCommissionModel
+from src.core.signals.analysis import SignalAnalyzer, SignalStatistics
+from src.core.signals.collector import SignalCollector
 from src.core.strategies.sma_crossover import SMAConfig, SMACrossover
 from src.core.strategy_factory import StrategyFactory
 from src.core.strategy_registry import StrategyRegistry
@@ -50,6 +52,22 @@ class MinimalBacktestRunner:
         self._venue: Venue | None = None  # Track venue used in backtest
         self._backtest_start_date: datetime | None = None  # Track backtest date range
         self._backtest_end_date: datetime | None = None
+        self._signal_collector: SignalCollector | None = None
+        self._signal_statistics: SignalStatistics | None = None
+
+    @property
+    def signal_collector(self) -> SignalCollector | None:
+        """Get the signal collector for the current backtest."""
+        return self._signal_collector
+
+    @property
+    def signal_statistics(self) -> SignalStatistics | None:
+        """Get signal statistics from the last backtest run.
+
+        Returns:
+            SignalStatistics if signals were enabled and collected, None otherwise.
+        """
+        return self._signal_statistics
 
     @staticmethod
     def _resolve_strategy_type(strategy_type: str) -> StrategyType:
@@ -1210,6 +1228,8 @@ class MinimalBacktestRunner:
         self._venue = None
         self._backtest_start_date = None
         self._backtest_end_date = None
+        self._signal_collector = None
+        self._signal_statistics = None
 
     async def run_backtest_with_strategy_type(
         self,
@@ -1369,6 +1389,8 @@ class MinimalBacktestRunner:
         end: datetime,
         instrument: object | None = None,
         reproduced_from_run_id: Optional[UUID] = None,
+        enable_signals: bool = False,
+        signal_export_path: str | None = None,
         **strategy_params,
     ) -> tuple[BacktestResult, Optional[UUID]]:
         """
@@ -1383,6 +1405,8 @@ class MinimalBacktestRunner:
             end: End datetime (for display purposes)
             instrument: Optional Nautilus Instrument object (if None, creates test instrument)
             reproduced_from_run_id: Optional UUID of original backtest if reproduction
+            enable_signals: Enable signal validation and audit capture
+            signal_export_path: Path to export signal audit trail CSV
             **strategy_params: Strategy-specific parameters
 
         Returns:
@@ -1521,6 +1545,11 @@ class MinimalBacktestRunner:
         strategy = StrategyLoader.create_strategy(strategy_enum, config_params)
         self.engine.add_strategy(strategy=strategy)
 
+        # Create signal collector if signals enabled
+        if enable_signals:
+            self._signal_collector = SignalCollector(flush_threshold=10_000)
+            logger.info("Signal validation enabled for backtest")
+
         try:
             # Store backtest date range for CAGR calculation
             self._backtest_start_date = start
@@ -1531,6 +1560,41 @@ class MinimalBacktestRunner:
 
             # Reason: Extract and return results
             self._results = self._extract_results()
+
+            # Handle signal statistics and export after backtest
+            signal_stats_dict: dict[str, Any] | None = None
+            if enable_signals and self._signal_collector is not None:
+                # Calculate signal statistics
+                if self._signal_collector.evaluation_count > 0:
+                    analyzer = SignalAnalyzer(
+                        self._signal_collector.evaluations,
+                        near_miss_threshold=0.75,
+                    )
+                    self._signal_statistics = analyzer.get_statistics()
+                    # Convert to dict for JSON serialization
+                    from dataclasses import asdict
+
+                    signal_stats_dict = asdict(self._signal_statistics)
+                    logger.info(
+                        "Signal statistics calculated",
+                        total_evaluations=self._signal_statistics.total_evaluations,
+                        signal_rate=f"{self._signal_statistics.signal_rate:.1%}",
+                        primary_blocker=self._signal_statistics.primary_blocker,
+                    )
+                else:
+                    logger.info("No signal evaluations recorded during backtest")
+
+                # Export to CSV if path provided
+                if signal_export_path:
+                    from pathlib import Path
+
+                    export_path = Path(signal_export_path)
+                    self._signal_collector.export_csv(export_path)
+                    logger.info(
+                        "Signal audit trail exported",
+                        path=str(export_path),
+                        evaluation_count=self._signal_collector.evaluation_count,
+                    )
 
             # Persist results to database
             execution_duration = Decimal(str(time.time() - execution_start_time))
@@ -1550,6 +1614,10 @@ class MinimalBacktestRunner:
                 for k, v in config_params.items()
                 if k not in ["instrument_id", "bar_type"]
             }
+
+            # Add signal statistics to config for WebUI access (T110)
+            if signal_stats_dict is not None:
+                strategy_config_dict["signal_statistics"] = signal_stats_dict
 
             run_id = await self._persist_backtest_results(
                 result=self._results,

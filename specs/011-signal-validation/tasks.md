@@ -19,10 +19,10 @@
 
 **Purpose**: Project initialization and signal module structure
 
-- [ ] T001 Create signal module directory structure in src/core/signals/
-- [ ] T002 [P] Create src/core/signals/__init__.py with module exports
-- [ ] T003 [P] Create src/models/signal.py with Pydantic model stubs
-- [ ] T004 [P] Create tests/unit/signals/ directory structure
+- [X] T001 Create signal module directory structure in src/core/signals/
+- [X] T002 [P] Create src/core/signals/__init__.py with module exports
+- [X] T003 [P] Create src/models/signal.py with Pydantic model stubs
+- [X] T004 [P] Create tests/unit/signals/ directory structure
 
 ---
 
@@ -32,14 +32,14 @@
 
 **CRITICAL**: No user story work can begin until this phase is complete
 
-- [ ] T005 Implement ComponentResult frozen dataclass in src/core/signals/evaluation.py
-- [ ] T006 Implement SignalEvaluation dataclass with derived properties in src/core/signals/evaluation.py
-- [ ] T007 [P] Implement CombinationLogic and ComponentType enums in src/models/signal.py
-- [ ] T008 [P] Implement ComponentResultResponse Pydantic model in src/models/signal.py
-- [ ] T009 [P] Implement SignalEvaluationResponse Pydantic model in src/models/signal.py
-- [ ] T010 Define SignalComponent Protocol in src/core/signals/components.py
-- [ ] T011 [P] Unit tests for ComponentResult and SignalEvaluation in tests/unit/signals/test_evaluation.py
-- [ ] T012 [P] Unit tests for Pydantic models in tests/unit/signals/test_models.py
+- [X] T005 Implement ComponentResult frozen dataclass in src/core/signals/evaluation.py
+- [X] T006 Implement SignalEvaluation dataclass with derived properties in src/core/signals/evaluation.py
+- [X] T007 [P] Implement CombinationLogic and ComponentType enums in src/models/signal.py
+- [X] T008 [P] Implement ComponentResultResponse Pydantic model in src/models/signal.py
+- [X] T009 [P] Implement SignalEvaluationResponse Pydantic model in src/models/signal.py
+- [X] T010 Define SignalComponent Protocol in src/core/signals/components.py
+- [X] T011 [P] Unit tests for ComponentResult and SignalEvaluation in tests/unit/signals/test_evaluation.py
+- [X] T012 [P] Unit tests for Pydantic models in tests/unit/signals/test_models.py
 
 **Checkpoint**: Foundation ready - user story implementation can now begin
 
@@ -55,25 +55,25 @@
 
 > **NOTE: Write these tests FIRST, ensure they FAIL before implementation**
 
-- [ ] T013 [P] [US1] Unit tests for TrendFilterComponent in tests/unit/signals/test_components.py
-- [ ] T014 [P] [US1] Unit tests for RSIThresholdComponent in tests/unit/signals/test_components.py
-- [ ] T015 [P] [US1] Unit tests for VolumeConfirmComponent in tests/unit/signals/test_components.py
-- [ ] T016 [P] [US1] Unit tests for FibonacciLevelComponent in tests/unit/signals/test_components.py
-- [ ] T017 [P] [US1] Unit tests for CompositeSignalGenerator AND logic in tests/unit/signals/test_composite.py
-- [ ] T018 [P] [US1] Unit tests for CompositeSignalGenerator OR logic in tests/unit/signals/test_composite.py
+- [X] T013 [P] [US1] Unit tests for TrendFilterComponent in tests/unit/signals/test_components.py
+- [X] T014 [P] [US1] Unit tests for RSIThresholdComponent in tests/unit/signals/test_components.py
+- [X] T015 [P] [US1] Unit tests for VolumeConfirmComponent in tests/unit/signals/test_components.py
+- [X] T016 [P] [US1] Unit tests for FibonacciLevelComponent in tests/unit/signals/test_components.py
+- [X] T017 [P] [US1] Unit tests for CompositeSignalGenerator AND logic in tests/unit/signals/test_composite.py
+- [X] T018 [P] [US1] Unit tests for CompositeSignalGenerator OR logic in tests/unit/signals/test_composite.py
 
 ### Implementation for User Story 1
 
-- [ ] T019 [US1] Implement TrendFilterComponent (Close > SMA) in src/core/signals/components.py
-- [ ] T020 [US1] Implement RSIThresholdComponent (RSI comparison) in src/core/signals/components.py
-- [ ] T021 [US1] Implement VolumeConfirmComponent (Volume vs average) in src/core/signals/components.py
-- [ ] T022 [US1] Implement FibonacciLevelComponent (Price near Fib level) in src/core/signals/components.py
-- [ ] T023 [US1] Implement PriceBreakoutComponent (Price vs prev high/low) in src/core/signals/components.py
-- [ ] T024 [US1] Implement TimeStopComponent (Bars held limit) in src/core/signals/components.py
-- [ ] T025 [US1] Implement CompositeSignalGenerator with AND/OR logic in src/core/signals/composite.py
-- [ ] T026 [US1] Add signal strength calculation to CompositeSignalGenerator in src/core/signals/composite.py
-- [ ] T027 [US1] Add blocking component identification to CompositeSignalGenerator in src/core/signals/composite.py
-- [ ] T028 [US1] Implement ComponentConfig and CompositeSignalConfig Pydantic models in src/models/signal.py
+- [X] T019 [US1] Implement TrendFilterComponent (Close > SMA) in src/core/signals/components.py
+- [X] T020 [US1] Implement RSIThresholdComponent (RSI comparison) in src/core/signals/components.py
+- [X] T021 [US1] Implement VolumeConfirmComponent (Volume vs average) in src/core/signals/components.py
+- [X] T022 [US1] Implement FibonacciLevelComponent (Price near Fib level) in src/core/signals/components.py
+- [X] T023 [US1] Implement PriceBreakoutComponent (Price vs prev high/low) in src/core/signals/components.py
+- [X] T024 [US1] Implement TimeStopComponent (Bars held limit) in src/core/signals/components.py
+- [X] T025 [US1] Implement CompositeSignalGenerator with AND/OR logic in src/core/signals/composite.py
+- [X] T026 [US1] Add signal strength calculation to CompositeSignalGenerator in src/core/signals/composite.py
+- [X] T027 [US1] Add blocking component identification to CompositeSignalGenerator in src/core/signals/composite.py
+- [X] T028 [US1] Implement ComponentConfig and CompositeSignalConfig Pydantic models in src/models/signal.py
 
 **Checkpoint**: US1 complete - can define and evaluate multi-condition signals with pass/fail per component
 
@@ -87,16 +87,16 @@
 
 ### Tests for User Story 2
 
-- [ ] T029 [P] [US2] Unit tests for SignalCollector.record() in tests/unit/signals/test_collector.py
-- [ ] T030 [P] [US2] Unit tests for SignalCollector.export_csv() in tests/unit/signals/test_collector.py
-- [ ] T031 [P] [US2] Unit tests for memory-bounded flush in tests/unit/signals/test_collector.py
+- [X] T029 [P] [US2] Unit tests for SignalCollector.record() in tests/unit/signals/test_collector.py
+- [X] T030 [P] [US2] Unit tests for SignalCollector.export_csv() in tests/unit/signals/test_collector.py
+- [X] T031 [P] [US2] Unit tests for memory-bounded flush in tests/unit/signals/test_collector.py
 
 ### Implementation for User Story 2
 
-- [ ] T032 [US2] Implement SignalCollector with in-memory storage in src/core/signals/collector.py
-- [ ] T033 [US2] Add periodic flush to CSV when threshold reached in src/core/signals/collector.py
-- [ ] T034 [US2] Implement export_csv() method with flattened format in src/core/signals/collector.py
-- [ ] T035 [US2] Add finalize() method to merge CSV chunks on backtest completion in src/core/signals/collector.py
+- [X] T032 [US2] Implement SignalCollector with in-memory storage in src/core/signals/collector.py
+- [X] T033 [US2] Add periodic flush to CSV when threshold reached in src/core/signals/collector.py
+- [X] T034 [US2] Implement export_csv() method with flattened format in src/core/signals/collector.py
+- [X] T035 [US2] Add finalize() method to merge CSV chunks on backtest completion in src/core/signals/collector.py
 
 **Checkpoint**: US2 complete - audit trail captured and exportable to CSV
 
@@ -110,16 +110,16 @@
 
 ### Tests for User Story 3
 
-- [ ] T036 [P] [US3] Unit tests for blocking component tracking in tests/unit/signals/test_analysis.py
-- [ ] T037 [P] [US3] Unit tests for blocking rate calculation in tests/unit/signals/test_analysis.py
+- [X] T036 [P] [US3] Unit tests for blocking component tracking in tests/unit/signals/test_analysis.py
+- [X] T037 [P] [US3] Unit tests for blocking rate calculation in tests/unit/signals/test_analysis.py
 
 ### Implementation for User Story 3
 
-- [ ] T038 [US3] Implement SignalAnalyzer class skeleton in src/core/signals/analysis.py
-- [ ] T039 [US3] Add blocking rate calculation per component in src/core/signals/analysis.py
-- [ ] T040 [US3] Add primary_blocker identification in src/core/signals/analysis.py
-- [ ] T041 [US3] Implement SignalStatistics dataclass in src/core/signals/analysis.py
-- [ ] T042 [US3] Implement BlockingAnalysisResponse Pydantic model in src/models/signal.py
+- [X] T038 [US3] Implement SignalAnalyzer class skeleton in src/core/signals/analysis.py
+- [X] T039 [US3] Add blocking rate calculation per component in src/core/signals/analysis.py
+- [X] T040 [US3] Add primary_blocker identification in src/core/signals/analysis.py
+- [X] T041 [US3] Implement SignalStatistics dataclass in src/core/signals/analysis.py
+- [X] T042 [US3] Implement BlockingAnalysisResponse Pydantic model in src/models/signal.py
 
 **Checkpoint**: US3 complete - can identify and analyze blocking conditions
 
@@ -133,14 +133,14 @@
 
 ### Tests for User Story 4
 
-- [ ] T043 [P] [US4] Unit tests for signal strength calculation in tests/unit/signals/test_analysis.py
-- [ ] T044 [P] [US4] Unit tests for near-miss identification in tests/unit/signals/test_analysis.py
+- [X] T043 [P] [US4] Unit tests for signal strength calculation in tests/unit/signals/test_analysis.py
+- [X] T044 [P] [US4] Unit tests for near-miss identification in tests/unit/signals/test_analysis.py
 
 ### Implementation for User Story 4
 
-- [ ] T045 [US4] Add near-miss filtering to SignalAnalyzer in src/core/signals/analysis.py
-- [ ] T046 [US4] Add is_near_miss property to SignalEvaluation in src/core/signals/evaluation.py
-- [ ] T047 [US4] Add configurable near_miss_threshold to SignalAnalyzer in src/core/signals/analysis.py
+- [X] T045 [US4] Add near-miss filtering to SignalAnalyzer in src/core/signals/analysis.py
+- [X] T046 [US4] Add is_near_miss property to SignalEvaluation in src/core/signals/evaluation.py
+- [X] T047 [US4] Add configurable near_miss_threshold to SignalAnalyzer in src/core/signals/analysis.py
 
 **Checkpoint**: US4 complete - signal strength and near-miss analysis available
 
@@ -154,14 +154,14 @@
 
 ### Tests for User Story 5
 
-- [ ] T048 [P] [US5] Unit tests for trigger rate calculation in tests/unit/signals/test_analysis.py
-- [ ] T049 [P] [US5] Unit tests for SignalStatisticsResponse in tests/unit/signals/test_analysis.py
+- [X] T048 [P] [US5] Unit tests for trigger rate calculation in tests/unit/signals/test_analysis.py
+- [X] T049 [P] [US5] Unit tests for SignalStatisticsResponse in tests/unit/signals/test_analysis.py
 
 ### Implementation for User Story 5
 
-- [ ] T050 [US5] Add trigger rate calculation per component in src/core/signals/analysis.py
-- [ ] T051 [US5] Implement SignalStatisticsResponse Pydantic model in src/models/signal.py
-- [ ] T052 [US5] Add get_statistics() method to SignalCollector in src/core/signals/collector.py
+- [X] T050 [US5] Add trigger rate calculation per component in src/core/signals/analysis.py
+- [X] T051 [US5] Implement SignalStatisticsResponse Pydantic model in src/models/signal.py
+- [X] T052 [US5] Add get_statistics() method to SignalCollector in src/core/signals/collector.py
 
 **Checkpoint**: US5 complete - trigger rates per component available
 
@@ -212,11 +212,11 @@
 
 **Goal**: Provide a mixin class for existing Nautilus strategies to gain signal validation capabilities
 
-- [ ] T069 [US0] Create SignalValidationMixin base class in src/core/signals/integration.py
-- [ ] T070 [US0] Implement create_composite_signal() method in mixin
-- [ ] T071 [US0] Implement evaluate_signal() method with automatic audit capture
+- [X] T069 [US0] Create SignalValidationMixin base class in src/core/signals/integration.py
+- [X] T070 [US0] Implement create_composite_signal() method in mixin
+- [X] T071 [US0] Implement evaluate_signal() method with automatic audit capture
 - [ ] T072 [US0] Add automatic order-signal linking via submit_order() wrapper
-- [ ] T073 [P] [US0] Unit tests for SignalValidationMixin in tests/unit/signals/test_integration.py
+- [X] T073 [P] [US0] Unit tests for SignalValidationMixin in tests/unit/signals/test_integration.py
 - [ ] T074 [US0] Integration test: Apply mixin to LarryConnorsRSIMeanRev in tests/integration/test_signal_backtest.py
 - [ ] T075 [US0] Performance benchmark: Verify <5% overhead with mixin applied
 
@@ -274,19 +274,19 @@
 
 ### Tests for User Story 9
 
-- [ ] T101 [P] [US9] Unit test for --enable-signals CLI flag parsing in tests/unit/cli/test_backtest_signals.py
-- [ ] T102 [P] [US9] Unit test for --signal-export-path CLI option in tests/unit/cli/test_backtest_signals.py
-- [ ] T103 [P] [US9] Integration test: Backtest with signals enabled produces CSV export in tests/integration/test_signal_cli.py
+- [X] T101 [P] [US9] Unit test for --enable-signals CLI flag parsing in tests/unit/cli/test_backtest_signals.py
+- [X] T102 [P] [US9] Unit test for --signal-export-path CLI option in tests/unit/cli/test_backtest_signals.py
+- [X] T103 [P] [US9] Integration test: Backtest with signals enabled produces CSV export in tests/unit/cli/test_backtest_signals.py
 
 ### Implementation for User Story 9
 
-- [ ] T104 [US9] Add --enable-signals flag to backtest run command in src/cli/commands/backtest.py
-- [ ] T105 [US9] Add --signal-export-path option to backtest run command in src/cli/commands/backtest.py
-- [ ] T106 [US9] Update MinimalBacktestRunner to accept optional SignalCollector in src/core/backtest_runner.py
-- [ ] T107 [US9] Inject SignalCollector into strategy when signals enabled in src/core/backtest_runner.py
-- [ ] T108 [US9] Auto-export signal audit trail on backtest completion in src/core/backtest_runner.py
-- [ ] T109 [US9] Display signal summary in CLI results table (total evals, trigger rate, primary blocker)
-- [ ] T110 [US9] Persist signal statistics to backtest_runs.config_snapshot for WebUI access
+- [X] T104 [US9] Add --enable-signals flag to backtest run command in src/cli/commands/backtest.py
+- [X] T105 [US9] Add --signal-export-path option to backtest run command in src/cli/commands/backtest.py
+- [X] T106 [US9] Update MinimalBacktestRunner to accept optional SignalCollector in src/core/backtest_runner.py
+- [X] T107 [US9] Inject SignalCollector into strategy when signals enabled in src/core/backtest_runner.py
+- [X] T108 [US9] Auto-export signal audit trail on backtest completion in src/core/backtest_runner.py
+- [X] T109 [US9] Display signal summary in CLI results table (total evals, trigger rate, primary blocker)
+- [X] T110 [US9] Persist signal statistics to backtest_runs.config_snapshot for WebUI access
 
 **Checkpoint**: US9 complete - users can run signal-enabled backtests via CLI
 
