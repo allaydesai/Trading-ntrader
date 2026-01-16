@@ -187,3 +187,6 @@ data/catalog/.corrupt/
 # Tailwind CSS standalone CLI
 tailwindcss
 tailwindcss-*
+
+# Editor-specific instruction files (copies of CLAUDE.md)
+WARP.md
