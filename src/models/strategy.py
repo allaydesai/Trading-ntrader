@@ -18,6 +18,7 @@ class StrategyType(str, Enum):
     MOMENTUM = "momentum"
     BOLLINGER_REVERSAL = "bollinger_reversal"
     CONNORS_RSI_MEAN_REV = "connors_rsi_mean_rev"
+    APOLO_RSI = "apolo_rsi"
 
 
 class StrategyStatus(str, Enum):
@@ -197,6 +198,51 @@ class ConnorsRSIParameters(BaseModel):
         return v
 
 
+class ApoloRSIParameters(BaseModel):
+    """
+    Parameters for Apolo RSI Mean Reversion strategy.
+
+    Simple 2-period RSI strategy:
+    - Buy: RSI(2) < buy_threshold (oversold after sharp decline)
+    - Sell: RSI(2) > sell_threshold (mean reversion back up)
+    - Long only
+
+    Matches src.core.strategies.apolo_rsi.ApoloRSIConfig.
+    """
+
+    trade_size: Decimal = Field(
+        default=Decimal("1000.0"), gt=0, description="Size of each trade in shares"
+    )
+    rsi_period: int = Field(default=2, ge=2, description="RSI calculation period")
+    buy_threshold: float = Field(
+        default=10.0, ge=0, le=100, description="Buy when RSI < threshold (oversold)"
+    )
+    sell_threshold: float = Field(
+        default=50.0, ge=0, le=100, description="Sell when RSI > threshold (mean reversion)"
+    )
+
+    # Mapping from model fields to global Settings attributes
+    _settings_map = {
+        "trade_size": "trade_size",
+    }
+
+    @field_validator("buy_threshold", "sell_threshold")
+    @classmethod
+    def validate_thresholds(cls, v: float) -> float:
+        """Validate thresholds are in valid range."""
+        if not (0 <= v <= 100):
+            raise ValueError("Thresholds must be between 0 and 100")
+        return v
+
+    @field_validator("sell_threshold")
+    @classmethod
+    def validate_sell_greater_than_buy(cls, v: float, info) -> float:
+        """Validate sell threshold is greater than buy threshold."""
+        if "buy_threshold" in info.data and v <= info.data["buy_threshold"]:
+            raise ValueError("Buy threshold must be less than sell threshold")
+        return v
+
+
 class TradingStrategy(BaseModel):
     """Trading strategy entity with configuration and metadata."""
 
@@ -261,6 +307,13 @@ class TradingStrategy(BaseModel):
                 ConnorsRSIParameters.model_validate(v)
             except Exception as e:
                 raise ValueError(f"Invalid Connors RSI Mean Reversion parameters: {e}")
+
+        elif strategy_type == StrategyType.APOLO_RSI:
+            # Validate Apolo RSI parameters
+            try:
+                ApoloRSIParameters.model_validate(v)
+            except Exception as e:
+                raise ValueError(f"Invalid Apolo RSI parameters: {e}")
 
         return v
 
