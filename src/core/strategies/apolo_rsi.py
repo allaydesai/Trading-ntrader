@@ -130,3 +130,14 @@ class ApoloRSI(Strategy):
 # Register config and param model
 StrategyRegistry.set_config("apolo_rsi", ApoloRSIConfig)
 StrategyRegistry.set_param_model("apolo_rsi", ApoloRSIParameters)
+StrategyRegistry.set_default_config(
+    "apolo_rsi",
+    {
+        "instrument_id": "SPY.NYSE",
+        "bar_type": "SPY.NYSE-1-DAY-LAST-INTERNAL",
+        "trade_size": 100,
+        "rsi_period": 2,
+        "buy_threshold": 10.0,
+        "sell_threshold": 50.0,
+    },
+)
