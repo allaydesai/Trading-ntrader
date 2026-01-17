@@ -26,7 +26,8 @@ class TestApoloRSIStrategy:
         assert params.rsi_period == 2
         assert params.buy_threshold == 10.0
         assert params.sell_threshold == 50.0
-        assert params.trade_size == Decimal("1000.0")
+        assert params.trade_size == Decimal("100.0")
+        assert params.order_id_tag == "APOLO"
 
         # Valid custom parameters
         params = ApoloRSIParameters(
@@ -74,6 +75,7 @@ class TestApoloRSIStrategy:
             instrument_id=InstrumentId.from_str("AAPL.NASDAQ"),
             bar_type=BarType.from_str("AAPL.NASDAQ-1-DAY-LAST-INTERNAL"),
             trade_size=Decimal("100.0"),
+            order_id_tag="TEST",
             rsi_period=2,
             buy_threshold=10.0,
             sell_threshold=50.0,
@@ -92,6 +94,7 @@ class TestApoloRSIStrategy:
             instrument_id=InstrumentId.from_str("SPY.NYSE"),
             bar_type=BarType.from_str("SPY.NYSE-1-DAY-LAST-INTERNAL"),
             trade_size=Decimal("100.0"),
+            order_id_tag="TEST",
             rsi_period=2,
         )
 

@@ -211,8 +211,9 @@ class ApoloRSIParameters(BaseModel):
     """
 
     trade_size: Decimal = Field(
-        default=Decimal("1000.0"), gt=0, description="Size of each trade in shares"
+        default=Decimal("100.0"), gt=0, description="Size of each trade in shares"
     )
+    order_id_tag: str = Field(default="APOLO", description="Unique tag for order identification")
     rsi_period: int = Field(default=2, ge=2, description="RSI calculation period")
     buy_threshold: float = Field(
         default=10.0, ge=0, le=100, description="Buy when RSI < threshold (oversold)"

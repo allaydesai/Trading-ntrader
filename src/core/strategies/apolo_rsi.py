@@ -32,12 +32,13 @@ class ApoloRSIConfig(StrategyConfig):  # type: ignore[misc]
     - Long only (no shorting)
     """
 
-    # Required
+    # Required (no defaults - must be provided)
     instrument_id: InstrumentId
     bar_type: BarType
-    trade_size: Decimal = Decimal("1000.0")  # Default: 1000 shares
+    trade_size: Decimal
+    order_id_tag: str  # Unique tag for order identification
 
-    # Parameters
+    # Parameters (with defaults)
     rsi_period: int = 2
     buy_threshold: float = 10.0
     sell_threshold: float = 50.0
@@ -136,6 +137,7 @@ StrategyRegistry.set_default_config(
         "instrument_id": "SPY.NYSE",
         "bar_type": "SPY.NYSE-1-DAY-LAST-INTERNAL",
         "trade_size": 100,
+        "order_id_tag": "APOLO",
         "rsi_period": 2,
         "buy_threshold": 10.0,
         "sell_threshold": 50.0,
