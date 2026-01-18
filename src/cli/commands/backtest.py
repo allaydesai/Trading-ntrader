@@ -485,9 +485,9 @@ def run_backtest(
 @click.option(
     "--data-source",
     "-ds",
-    default="mock",
-    type=click.Choice(["mock", "database"]),
-    help="Data source to use (default: mock)",
+    default="catalog",
+    type=click.Choice(["mock", "database", "catalog"]),
+    help="Data source to use (default: catalog)",
 )
 def run_config_backtest(
     config_file: str,
@@ -528,8 +528,10 @@ def run_config_backtest(
                 "⚠️  Database data source deprecated - use 'mock' or upgrade to catalog",
                 style="yellow",
             )
-        else:
+        elif data_source == "mock":
             console.print("   Using mock data for testing")
+        else:
+            console.print("   Using Parquet catalog data")
 
         console.print()
 
@@ -547,15 +549,94 @@ def run_config_backtest(
                     task = progress.add_task("Running backtest with config...", total=None)
                     result = runner.run_from_config_file(config_file)
                     progress.update(task, completed=True)
+            elif data_source == "catalog":
+                # Run with catalog data using config file
+                from src.utils.config_loader import ConfigLoader
+
+                # Load config to get instrument_id and bar_type
+                config_obj = ConfigLoader.load_from_file(config_file)
+
+                # Extract instrument_id from config
+                instrument_id_str = str(config_obj.config.instrument_id)
+                bar_type_str = str(config_obj.config.bar_type)
+
+                console.print(f"   Instrument: {instrument_id_str}")
+                console.print(f"   Bar Type: {bar_type_str}")
+
+                # Initialize catalog service
+                catalog_service = DataCatalogService()
+
+                # Parse bar type to get spec for catalog lookup
+                # Format: SYMBOL.VENUE-STEP-STEP_TYPE-AGG_SOURCE-PRICE_TYPE
+                parts = bar_type_str.split("-")
+                if len(parts) >= 3:
+                    bar_type_spec = f"{parts[1]}-{parts[2]}-{parts[3]}"  # e.g., "1-DAY-LAST"
+                else:
+                    bar_type_spec = "1-DAY-LAST"
+
+                console.print(f"   Looking for: {bar_type_spec} bars")
+
+                # Check availability
+                availability = catalog_service.get_availability(instrument_id_str, bar_type_spec)
+                if not availability:
+                    console.print(
+                        f"❌ No data found in catalog for {instrument_id_str} with {bar_type_spec}",
+                        style="red",
+                    )
+                    console.print("   Run 'data list' to see available data")
+                    return False
+
+                avail_start = availability.start_date.date()
+                avail_end = availability.end_date.date()
+                console.print(f"   Available: {avail_start} to {avail_end}")
+
+                # Load bars from catalog
+                with Progress(
+                    SpinnerColumn(),
+                    TextColumn("[progress.description]{task.description}"),
+                    transient=True,
+                ) as progress:
+                    task = progress.add_task("Loading data from catalog...", total=None)
+                    bars = await catalog_service.fetch_or_load(
+                        instrument_id=instrument_id_str,
+                        bar_type_spec=bar_type_spec,
+                        start=availability.start_date,
+                        end=availability.end_date,
+                    )
+                    progress.update(task, completed=True)
+
+                if not bars:
+                    console.print("❌ Failed to load bars from catalog", style="red")
+                    return False
+
+                console.print(f"   Loaded {len(bars):,} bars")
+
+                # Load instrument from catalog
+                instrument = catalog_service.load_instrument(instrument_id_str)
+                if not instrument:
+                    console.print(
+                        "⚠️  Instrument not found in catalog, using default",
+                        style="yellow",
+                    )
+
+                # Run backtest with catalog data and config
+                with Progress(
+                    SpinnerColumn(),
+                    TextColumn("[progress.description]{task.description}"),
+                    transient=True,
+                ) as progress:
+                    task = progress.add_task("Running backtest with catalog data...", total=None)
+                    result = runner.run_from_config_with_catalog_data(
+                        config_file=config_file,
+                        bars=bars,
+                        instrument=instrument,
+                    )
+                    progress.update(task, completed=True)
             else:
-                # Run with database data - need to extend the runner for this
+                # Run with database data - deprecated
                 console.print(
-                    "❌ Database data source with config files not yet implemented",
+                    "❌ Database data source deprecated - use 'catalog' or 'mock'",
                     style="red",
-                )
-                console.print(
-                    "   Use: backtest run --strategy <type> --symbol <symbol> "
-                    "for database backtests"
                 )
                 return False
 
