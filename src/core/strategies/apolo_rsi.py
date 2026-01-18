@@ -30,6 +30,9 @@ class ApoloRSIConfig(StrategyConfig):  # type: ignore[misc]
     - Buy Signal: RSI(2) < buy_threshold
     - Sell Signal: RSI(2) > sell_threshold
     - Long only (no shorting)
+
+    Note: Nautilus Trader's RSI indicator returns values in 0-1 range (not 0-100).
+    Thresholds should be specified as decimals (e.g., 0.10 for RSI < 10).
     """
 
     # Required (no defaults - must be provided)
@@ -39,9 +42,10 @@ class ApoloRSIConfig(StrategyConfig):  # type: ignore[misc]
     order_id_tag: str  # Unique tag for order identification
 
     # Parameters (with defaults)
+    # Note: RSI values are in 0-1 range (not 0-100)
     rsi_period: int = 2
-    buy_threshold: float = 10.0
-    sell_threshold: float = 50.0
+    buy_threshold: float = 0.10  # RSI < 10% (traditional RSI < 10)
+    sell_threshold: float = 0.50  # RSI > 50% (traditional RSI > 50)
 
 
 @register_strategy(
@@ -139,7 +143,8 @@ StrategyRegistry.set_default_config(
         "trade_size": 100,
         "order_id_tag": "APOLO",
         "rsi_period": 2,
-        "buy_threshold": 10.0,
-        "sell_threshold": 50.0,
+        # Note: RSI values in Nautilus are 0-1 range (not 0-100)
+        "buy_threshold": 0.10,  # Traditional RSI < 10
+        "sell_threshold": 0.50,  # Traditional RSI > 50
     },
 )
