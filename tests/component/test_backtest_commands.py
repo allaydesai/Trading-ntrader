@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 from decimal import Decimal
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from click.testing import CliRunner
@@ -496,47 +496,68 @@ class TestBacktestCommands:
 class TestRunConfigBacktest:
     """Test cases for run-config backtest command."""
 
-    @patch("src.core.backtest_runner.MinimalBacktestRunner")
+    @patch("src.core.backtest_orchestrator.BacktestOrchestrator")
+    @patch("src.utils.mock_data.generate_mock_data_from_yaml")
     @pytest.mark.component
-    def test_run_config_success_mock_data(self, mock_runner_class):
+    def test_run_config_success_mock_data(self, mock_generate_data, mock_orchestrator_class):
         """Test successful run-config with mock data source."""
+        from datetime import datetime, timezone
+
         # Create a temporary config file
         runner = CliRunner()
 
         with runner.isolated_filesystem():
-            # Create a simple config file
+            # Create config file with structure expected by BacktestRequest.from_yaml_config
             with open("test_config.yaml", "w") as f:
                 f.write("""
-strategy:
-  type: sma_crossover
+strategy_path: "src.core.strategies.sma_crossover:SMACrossover"
+config_path: "src.core.strategies.sma_crossover:SMACrossoverConfig"
+config:
+  instrument_id: "AAPL.NASDAQ"
+  bar_type: "AAPL.NASDAQ-1-DAY-LAST-EXTERNAL"
   fast_period: 5
   slow_period: 10
-trading:
-  trade_size: 100000
+backtest:
+  start_date: "2024-01-01"
+  end_date: "2024-01-31"
+  initial_capital: 100000
 """)
 
-            # Mock backtest runner
-            mock_runner = MagicMock()
-            mock_runner.run_from_config_file.return_value = MockBacktestResult()
-            mock_runner.dispose = MagicMock()
-            mock_runner_class.return_value = mock_runner
+            # Mock generate_mock_data_from_yaml
+            mock_bars = MagicMock()
+            mock_instrument = MagicMock()
+            start_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+            end_date = datetime(2024, 1, 31, tzinfo=timezone.utc)
+            mock_generate_data.return_value = (
+                [mock_bars] * 100,  # 100 mock bars
+                mock_instrument,
+                start_date,
+                end_date,
+            )
+
+            # Mock orchestrator
+            mock_orchestrator = MagicMock()
+            mock_orchestrator.execute = AsyncMock(return_value=(MockBacktestResult(), None))
+            mock_orchestrator.dispose = MagicMock()
+            mock_orchestrator_class.return_value = mock_orchestrator
 
             result = runner.invoke(
                 run_config_backtest,
-                ["test_config.yaml", "--data-source", "mock"],
+                ["test_config.yaml", "--data-source", "mock", "--no-persist"],
             )
 
-            assert result.exit_code == 0
+            assert result.exit_code == 0, f"Exit code was {result.exit_code}: {result.output}"
             assert "Running backtest from config: test_config.yaml" in result.output
             assert "Using mock data for testing" in result.output
+            assert "Generated 100 mock bars" in result.output
             assert "Backtest Results" in result.output
             assert "15.00%" in result.output  # Total return (15% as percentage)
             assert "Strategy was profitable!" in result.output
 
-            # Verify runner was initialized and disposed
-            mock_runner_class.assert_called_once_with(data_source="mock")
-            mock_runner.run_from_config_file.assert_called_once_with("test_config.yaml")
-            mock_runner.dispose.assert_called_once()
+            # Verify orchestrator was used
+            mock_generate_data.assert_called_once()
+            mock_orchestrator.execute.assert_called_once()
+            mock_orchestrator.dispose.assert_called_once()
 
     @pytest.mark.component
     def test_run_config_database_source_deprecated(self):

@@ -52,6 +52,7 @@ class BacktestRequest(BaseModel):
     config_file_path: str | None = Field(
         default=None, description="Source config file path for tracking"
     )
+    data_source: str = Field(default="catalog", description="Data source: catalog, mock")
 
     # Account settings
     starting_balance: Decimal = Field(
@@ -81,6 +82,7 @@ class BacktestRequest(BaseModel):
         yaml_data: dict[str, Any],
         persist: bool = True,
         config_file_path: str | None = None,
+        data_source: str = "catalog",
     ) -> "BacktestRequest":
         """
         Build BacktestRequest from loaded YAML configuration.
@@ -89,6 +91,7 @@ class BacktestRequest(BaseModel):
             yaml_data: Parsed YAML configuration dictionary
             persist: Whether to persist results to database
             config_file_path: Path to the source config file
+            data_source: Data source used (catalog, mock)
 
         Returns:
             BacktestRequest instance
@@ -165,6 +168,7 @@ class BacktestRequest(BaseModel):
             persist=persist,
             config_file_path=config_file_path,
             starting_balance=Decimal(str(initial_capital)),
+            data_source=data_source,
         )
 
     @classmethod

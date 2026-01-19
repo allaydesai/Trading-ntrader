@@ -568,23 +568,54 @@ def run_config_backtest(
         try:
             # Initialize variables for results tracking
             run_id = None
-            runner = None  # Only used for mock data source
 
             if data_source == "mock":
-                # Import MinimalBacktestRunner only when needed for mock data
-                from src.core.backtest_runner import MinimalBacktestRunner
+                # Run with mock data using BacktestOrchestrator
+                import yaml
 
-                runner = MinimalBacktestRunner(data_source=data_source)
+                from src.core.backtest_orchestrator import BacktestOrchestrator
+                from src.models.backtest_request import BacktestRequest
+                from src.utils.mock_data import generate_mock_data_from_yaml
 
-                # Run with mock data using config file
-                with Progress(
-                    SpinnerColumn(),
-                    TextColumn("[progress.description]{task.description}"),
-                    transient=True,
-                ) as progress:
-                    task = progress.add_task("Running backtest with config...", total=None)
-                    result = runner.run_from_config_file(config_file)
-                    progress.update(task, completed=True)
+                # Load YAML config
+                with open(config_file, "r") as f:
+                    yaml_data = yaml.safe_load(f)
+
+                # Generate mock data from config
+                bars, instrument, start_date, end_date = generate_mock_data_from_yaml(yaml_data)
+
+                console.print(f"   Generated {len(bars):,} mock bars")
+                console.print(f"   Persist: {'Yes' if persist else 'No'}")
+
+                # Build BacktestRequest with mock dates
+                request = BacktestRequest.from_yaml_config(
+                    yaml_data=yaml_data,
+                    persist=persist,
+                    config_file_path=config_file,
+                    data_source="mock",
+                )
+                # Override dates from generated mock data
+                request = request.model_copy(
+                    update={"start_date": start_date, "end_date": end_date}
+                )
+
+                # Run with orchestrator
+                orchestrator = BacktestOrchestrator()
+                try:
+                    with Progress(
+                        SpinnerColumn(),
+                        TextColumn("[progress.description]{task.description}"),
+                        transient=True,
+                    ) as progress:
+                        task = progress.add_task("Running backtest with mock data...", total=None)
+                        result, run_id = await orchestrator.execute(request, bars, instrument)
+                        progress.update(task, completed=True)
+
+                    if persist and run_id:
+                        console.print(f"   Run ID: {run_id}", style="dim")
+                finally:
+                    orchestrator.dispose()
+
             elif data_source == "catalog":
                 # Run with catalog data using BacktestOrchestrator
                 import yaml
@@ -741,9 +772,6 @@ def run_config_backtest(
             else:
                 console.print("➡️  Strategy broke even", style="yellow bold")
 
-            # Clean up runner (only used for mock data)
-            if runner is not None:
-                runner.dispose()
             return True
 
         except FileNotFoundError as e:

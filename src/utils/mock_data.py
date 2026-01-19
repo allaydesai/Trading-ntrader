@@ -235,6 +235,82 @@ def generate_mock_dataframe(
     return pd.DataFrame(data)
 
 
+def generate_mock_data_from_yaml(
+    yaml_data: dict,
+    num_bars: int | None = None,
+) -> tuple:
+    """
+    Generate mock bars and instrument from YAML configuration.
+
+    Extracts instrument_id and bar_type from the YAML config, then generates
+    appropriate mock data for backtesting.
+
+    Args:
+        yaml_data: Parsed YAML configuration dictionary
+        num_bars: Number of bars to generate (uses config default if None)
+
+    Returns:
+        Tuple of (bars, instrument, start_date, end_date)
+
+    Raises:
+        ValueError: If required config fields are missing
+    """
+    config_section = yaml_data.get("config", {})
+
+    # Extract instrument_id
+    instrument_id_str = config_section.get("instrument_id")
+    if not instrument_id_str:
+        raise ValueError("config section must contain 'instrument_id'")
+    instrument_id_str = str(instrument_id_str)
+
+    # Extract bar_type
+    bar_type_str = config_section.get("bar_type")
+    if not bar_type_str:
+        raise ValueError("config section must contain 'bar_type'")
+    bar_type_str = str(bar_type_str)
+
+    # Determine symbol and venue from instrument_id
+    parts = instrument_id_str.split(".")
+    symbol = parts[0]
+    venue = parts[-1] if len(parts) > 1 else "SIM"
+
+    # Determine if equity or FX (for price precision)
+    is_fx = "/" in symbol
+    price_precision = 5 if is_fx else 2
+    start_price = 1.1000 if is_fx else 150.0
+
+    # Create test instrument
+    instrument, instrument_id = create_test_instrument(symbol, venue)
+
+    # Build the bar_type_str for mock data generation
+    # Convert from "AMD.NASDAQ-1-DAY-LAST-EXTERNAL" to use the created instrument_id
+    bar_parts = bar_type_str.split("-")
+    if len(bar_parts) >= 4:
+        # Reconstruct bar type with proper instrument_id
+        mock_bar_type_str = f"{instrument_id}-{'-'.join(bar_parts[1:])}"
+    else:
+        mock_bar_type_str = f"{instrument_id}-1-DAY-MID-EXTERNAL"
+
+    # Generate bars
+    bars = generate_mock_bars(
+        instrument_id=instrument_id,
+        num_bars=num_bars,
+        start_price=start_price,
+        bar_type_str=mock_bar_type_str,
+        price_precision=price_precision,
+    )
+
+    # Extract start and end dates from generated bars
+    if bars:
+        start_date = datetime.fromtimestamp(bars[0].ts_event / 1_000_000_000)
+        end_date = datetime.fromtimestamp(bars[-1].ts_event / 1_000_000_000)
+    else:
+        start_date = datetime.now() - timedelta(days=30)
+        end_date = datetime.now()
+
+    return bars, instrument, start_date, end_date
+
+
 def create_test_instrument(symbol: str = "EUR/USD", venue: str = "SIM") -> tuple:
     """
     Create a test instrument for backtesting.
