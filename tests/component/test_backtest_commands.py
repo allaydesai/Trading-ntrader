@@ -42,9 +42,9 @@ class TestBacktestCommands:
         assert "Backtest commands for running strategies" in result.output
 
     @patch("src.cli.commands.backtest.DataCatalogService")
-    @patch("src.cli.commands.backtest.MinimalBacktestRunner")
+    @patch("src.cli.commands.backtest.BacktestOrchestrator")
     @pytest.mark.component
-    def test_run_backtest_success(self, mock_runner_class, mock_catalog_service_class):
+    def test_run_backtest_success(self, mock_orchestrator_class, mock_catalog_service_class):
         """Test successful backtest run with catalog data."""
         # Mock catalog service
         mock_catalog_service = MagicMock()
@@ -65,15 +65,15 @@ class TestBacktestCommands:
         mock_catalog_service.load_instrument.return_value = MagicMock()  # Mock instrument
         mock_catalog_service_class.return_value = mock_catalog_service
 
-        # Mock backtest runner
-        mock_runner = MagicMock()
+        # Mock backtest orchestrator
+        mock_orchestrator = MagicMock()
 
-        async def mock_run_backtest(*args, **kwargs):
+        async def mock_execute(*args, **kwargs):
             return MockBacktestResult(), None  # Returns (result, run_id)
 
-        mock_runner.run_backtest_with_catalog_data = mock_run_backtest
-        mock_runner.dispose = MagicMock()
-        mock_runner_class.return_value = mock_runner
+        mock_orchestrator.execute = mock_execute
+        mock_orchestrator.dispose = MagicMock()
+        mock_orchestrator_class.return_value = mock_orchestrator
 
         runner = CliRunner()
         result = runner.invoke(
@@ -103,7 +103,7 @@ class TestBacktestCommands:
 
         # Verify catalog service was called
         mock_catalog_service.get_availability.assert_called_once()
-        mock_runner.dispose.assert_called_once()
+        mock_orchestrator.dispose.assert_called_once()
 
     @patch("src.cli.commands.backtest.DataCatalogService")
     @pytest.mark.component
@@ -156,9 +156,11 @@ class TestBacktestCommands:
         assert "IBKR" in result.output or "connection" in result.output.lower()
 
     @patch("src.cli.commands.backtest.DataCatalogService")
-    @patch("src.cli.commands.backtest.MinimalBacktestRunner")
+    @patch("src.cli.commands.backtest.BacktestOrchestrator")
     @pytest.mark.component
-    def test_run_backtest_losing_strategy(self, mock_runner_class, mock_catalog_service_class):
+    def test_run_backtest_losing_strategy(
+        self, mock_orchestrator_class, mock_catalog_service_class
+    ):
         """Test backtest with losing strategy."""
         # Mock catalog service
         mock_catalog_service = MagicMock()
@@ -183,14 +185,14 @@ class TestBacktestCommands:
         mock_result.total_return = Decimal("-500.00")
         mock_result.final_balance = Decimal("9500.00")
 
-        mock_runner = MagicMock()
+        mock_orchestrator = MagicMock()
 
-        async def mock_run_backtest(*args, **kwargs):
+        async def mock_execute(*args, **kwargs):
             return (mock_result, None)
 
-        mock_runner.run_backtest_with_catalog_data = mock_run_backtest
-        mock_runner.dispose = MagicMock()
-        mock_runner_class.return_value = mock_runner
+        mock_orchestrator.execute = mock_execute
+        mock_orchestrator.dispose = MagicMock()
+        mock_orchestrator_class.return_value = mock_orchestrator
 
         runner = CliRunner()
         result = runner.invoke(
@@ -202,9 +204,11 @@ class TestBacktestCommands:
         assert "Strategy lost money" in result.output
 
     @patch("src.cli.commands.backtest.DataCatalogService")
-    @patch("src.cli.commands.backtest.MinimalBacktestRunner")
+    @patch("src.cli.commands.backtest.BacktestOrchestrator")
     @pytest.mark.component
-    def test_run_backtest_break_even_strategy(self, mock_runner_class, mock_catalog_service_class):
+    def test_run_backtest_break_even_strategy(
+        self, mock_orchestrator_class, mock_catalog_service_class
+    ):
         """Test backtest with break-even strategy."""
         # Mock catalog service
         mock_catalog_service = MagicMock()
@@ -228,14 +232,14 @@ class TestBacktestCommands:
         mock_result = MockBacktestResult()
         mock_result.total_return = Decimal("0.00")
 
-        mock_runner = MagicMock()
+        mock_orchestrator = MagicMock()
 
-        async def mock_run_backtest(*args, **kwargs):
+        async def mock_execute(*args, **kwargs):
             return (mock_result, None)
 
-        mock_runner.run_backtest_with_catalog_data = mock_run_backtest
-        mock_runner.dispose = MagicMock()
-        mock_runner_class.return_value = mock_runner
+        mock_orchestrator.execute = mock_execute
+        mock_orchestrator.dispose = MagicMock()
+        mock_orchestrator_class.return_value = mock_orchestrator
 
         runner = CliRunner()
         result = runner.invoke(
@@ -247,9 +251,9 @@ class TestBacktestCommands:
         assert "Strategy broke even" in result.output
 
     @patch("src.cli.commands.backtest.DataCatalogService")
-    @patch("src.cli.commands.backtest.MinimalBacktestRunner")
+    @patch("src.cli.commands.backtest.BacktestOrchestrator")
     @pytest.mark.component
-    def test_run_backtest_value_error(self, mock_runner_class, mock_catalog_service_class):
+    def test_run_backtest_value_error(self, mock_orchestrator_class, mock_catalog_service_class):
         """Test backtest when ValueError occurs."""
         # Mock catalog service
         mock_catalog_service = MagicMock()
@@ -264,14 +268,14 @@ class TestBacktestCommands:
         mock_catalog_service.load_instrument.return_value = MagicMock()
         mock_catalog_service_class.return_value = mock_catalog_service
 
-        # Mock runner to raise ValueError
-        mock_runner = MagicMock()
+        # Mock orchestrator to raise ValueError
+        mock_orchestrator = MagicMock()
 
-        async def mock_run_backtest(*args, **kwargs):
+        async def mock_execute(*args, **kwargs):
             raise ValueError("Invalid parameters")
 
-        mock_runner.run_backtest_with_catalog_data = mock_run_backtest
-        mock_runner_class.return_value = mock_runner
+        mock_orchestrator.execute = mock_execute
+        mock_orchestrator_class.return_value = mock_orchestrator
 
         runner = CliRunner()
         result = runner.invoke(
@@ -283,9 +287,11 @@ class TestBacktestCommands:
         assert "Backtest failed" in result.output or "Invalid parameters" in result.output
 
     @patch("src.cli.commands.backtest.DataCatalogService")
-    @patch("src.cli.commands.backtest.MinimalBacktestRunner")
+    @patch("src.cli.commands.backtest.BacktestOrchestrator")
     @pytest.mark.component
-    def test_run_backtest_unexpected_error(self, mock_runner_class, mock_catalog_service_class):
+    def test_run_backtest_unexpected_error(
+        self, mock_orchestrator_class, mock_catalog_service_class
+    ):
         """Test backtest when unexpected error occurs."""
         # Mock catalog service
         mock_catalog_service = MagicMock()
@@ -300,14 +306,14 @@ class TestBacktestCommands:
         mock_catalog_service.load_instrument.return_value = MagicMock()
         mock_catalog_service_class.return_value = mock_catalog_service
 
-        # Mock runner to raise unexpected error
-        mock_runner = MagicMock()
+        # Mock orchestrator to raise unexpected error
+        mock_orchestrator = MagicMock()
 
-        async def mock_run_backtest(*args, **kwargs):
+        async def mock_execute(*args, **kwargs):
             raise Exception("Unexpected failure")
 
-        mock_runner.run_backtest_with_catalog_data = mock_run_backtest
-        mock_runner_class.return_value = mock_runner
+        mock_orchestrator.execute = mock_execute
+        mock_orchestrator_class.return_value = mock_orchestrator
 
         runner = CliRunner()
         result = runner.invoke(
@@ -339,9 +345,12 @@ class TestBacktestCommands:
         assert "Missing option" in result.output
 
     @patch("src.cli.commands.backtest.DataCatalogService")
-    @patch("src.cli.commands.backtest.MinimalBacktestRunner")
+    @patch("src.cli.commands.backtest.BacktestOrchestrator")
+    @patch("src.cli.commands.backtest.BacktestRequest")
     @pytest.mark.component
-    def test_run_backtest_default_parameters(self, mock_runner_class, mock_catalog_service_class):
+    def test_run_backtest_default_parameters(
+        self, mock_request_class, mock_orchestrator_class, mock_catalog_service_class
+    ):
         """Test that run command uses default values for optional parameters."""
         # Mock catalog service
         mock_catalog_service = MagicMock()
@@ -361,17 +370,19 @@ class TestBacktestCommands:
         mock_catalog_service.load_instrument.return_value = MagicMock()
         mock_catalog_service_class.return_value = mock_catalog_service
 
-        # Mock runner
-        mock_runner = MagicMock()
+        # Mock BacktestRequest to capture from_cli_args call
+        mock_request = MagicMock()
+        mock_request_class.from_cli_args.return_value = mock_request
 
-        async def mock_run_backtest(*args, **kwargs):
-            # Capture kwargs to verify defaults
-            mock_run_backtest.last_kwargs = kwargs
+        # Mock orchestrator
+        mock_orchestrator = MagicMock()
+
+        async def mock_execute(*args, **kwargs):
             return (MockBacktestResult(), None)
 
-        mock_runner.run_backtest_with_catalog_data = mock_run_backtest
-        mock_runner.dispose = MagicMock()
-        mock_runner_class.return_value = mock_runner
+        mock_orchestrator.execute = mock_execute
+        mock_orchestrator.dispose = MagicMock()
+        mock_orchestrator_class.return_value = mock_orchestrator
 
         runner = CliRunner()
         result = runner.invoke(
@@ -388,14 +399,13 @@ class TestBacktestCommands:
 
         assert result.exit_code == 0
 
-        # Check that default values were used
-        assert mock_run_backtest.last_kwargs["fast_period"] == 10  # default
-        assert mock_run_backtest.last_kwargs["slow_period"] == 20  # default
+        # Check that from_cli_args was called with default values
+        call_kwargs = mock_request_class.from_cli_args.call_args.kwargs
+        assert call_kwargs["fast_period"] == 10  # default
+        assert call_kwargs["slow_period"] == 20  # default
         # SMA uses portfolio_value and position_size_pct, not trade_size
-        assert mock_run_backtest.last_kwargs["portfolio_value"] == Decimal(
-            "10000000"
-        )  # trade_size * 10
-        assert mock_run_backtest.last_kwargs["position_size_pct"] == Decimal("10.0")
+        assert call_kwargs["portfolio_value"] == Decimal("10000000")  # trade_size * 10
+        assert call_kwargs["position_size_pct"] == Decimal("10.0")
 
     @pytest.mark.component
     def test_list_backtests_command_exists(self):
@@ -486,7 +496,7 @@ class TestBacktestCommands:
 class TestRunConfigBacktest:
     """Test cases for run-config backtest command."""
 
-    @patch("src.cli.commands.backtest.MinimalBacktestRunner")
+    @patch("src.core.backtest_runner.MinimalBacktestRunner")
     @pytest.mark.component
     def test_run_config_success_mock_data(self, mock_runner_class):
         """Test successful run-config with mock data source."""
@@ -578,7 +588,7 @@ strategy:
         assert result.exit_code != 0
         assert "does not exist" in result.output.lower() or "not found" in result.output.lower()
 
-    @patch("src.cli.commands.backtest.MinimalBacktestRunner")
+    @patch("src.core.backtest_runner.MinimalBacktestRunner")
     @pytest.mark.component
     def test_run_config_validation_error(self, mock_runner_class):
         """Test run-config with invalid YAML configuration."""
@@ -606,3 +616,182 @@ invalid: yaml: structure:
             # Should fail with configuration error
             assert result.exit_code != 0
             assert "error" in result.output.lower() or "failed" in result.output.lower()
+
+
+class TestPersistFlag:
+    """Test cases for --persist/--no-persist flag behavior."""
+
+    @patch("src.cli.commands.backtest.DataCatalogService")
+    @patch("src.cli.commands.backtest.BacktestOrchestrator")
+    @patch("src.cli.commands.backtest.BacktestRequest")
+    @pytest.mark.component
+    def test_run_backtest_with_persist_flag(
+        self, mock_request_class, mock_orchestrator_class, mock_catalog_service_class
+    ):
+        """Test that --persist flag is passed to BacktestRequest."""
+        # Mock catalog service
+        mock_catalog_service = MagicMock()
+        mock_availability = MagicMock()
+        mock_availability.start_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        mock_availability.end_date = datetime(2024, 1, 31, tzinfo=timezone.utc)
+        mock_availability.file_count = 5
+        mock_availability.total_rows = 1000
+        mock_catalog_service.get_availability.return_value = mock_availability
+
+        async def mock_fetch_or_load(*args, **kwargs):
+            return [MagicMock()]
+
+        mock_catalog_service.fetch_or_load = mock_fetch_or_load
+        mock_catalog_service.load_instrument.return_value = MagicMock()
+        mock_catalog_service_class.return_value = mock_catalog_service
+
+        # Mock request
+        mock_request = MagicMock()
+        mock_request_class.from_cli_args.return_value = mock_request
+
+        # Mock orchestrator
+        mock_orchestrator = MagicMock()
+
+        async def mock_execute(*args, **kwargs):
+            return (MockBacktestResult(), "test-run-id-123")
+
+        mock_orchestrator.execute = mock_execute
+        mock_orchestrator.dispose = MagicMock()
+        mock_orchestrator_class.return_value = mock_orchestrator
+
+        runner = CliRunner()
+        result = runner.invoke(
+            run_backtest,
+            [
+                "--symbol",
+                "AAPL",
+                "--start",
+                "2024-01-01",
+                "--end",
+                "2024-01-31",
+                "--persist",
+            ],
+        )
+
+        assert result.exit_code == 0
+        # Verify persist=True was passed
+        call_kwargs = mock_request_class.from_cli_args.call_args.kwargs
+        assert call_kwargs["persist"] is True
+        # Verify "Persisted" appears in output
+        assert "Persisted" in result.output
+
+    @patch("src.cli.commands.backtest.DataCatalogService")
+    @patch("src.cli.commands.backtest.BacktestOrchestrator")
+    @patch("src.cli.commands.backtest.BacktestRequest")
+    @pytest.mark.component
+    def test_run_backtest_with_no_persist_flag(
+        self, mock_request_class, mock_orchestrator_class, mock_catalog_service_class
+    ):
+        """Test that --no-persist flag prevents database persistence."""
+        # Mock catalog service
+        mock_catalog_service = MagicMock()
+        mock_availability = MagicMock()
+        mock_availability.start_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        mock_availability.end_date = datetime(2024, 1, 31, tzinfo=timezone.utc)
+        mock_availability.file_count = 5
+        mock_availability.total_rows = 1000
+        mock_catalog_service.get_availability.return_value = mock_availability
+
+        async def mock_fetch_or_load(*args, **kwargs):
+            return [MagicMock()]
+
+        mock_catalog_service.fetch_or_load = mock_fetch_or_load
+        mock_catalog_service.load_instrument.return_value = MagicMock()
+        mock_catalog_service_class.return_value = mock_catalog_service
+
+        # Mock request
+        mock_request = MagicMock()
+        mock_request_class.from_cli_args.return_value = mock_request
+
+        # Mock orchestrator
+        mock_orchestrator = MagicMock()
+
+        async def mock_execute(*args, **kwargs):
+            return (MockBacktestResult(), None)  # None run_id when not persisted
+
+        mock_orchestrator.execute = mock_execute
+        mock_orchestrator.dispose = MagicMock()
+        mock_orchestrator_class.return_value = mock_orchestrator
+
+        runner = CliRunner()
+        result = runner.invoke(
+            run_backtest,
+            [
+                "--symbol",
+                "AAPL",
+                "--start",
+                "2024-01-01",
+                "--end",
+                "2024-01-31",
+                "--no-persist",
+            ],
+        )
+
+        assert result.exit_code == 0
+        # Verify persist=False was passed
+        call_kwargs = mock_request_class.from_cli_args.call_args.kwargs
+        assert call_kwargs["persist"] is False
+        # Verify output shows not persisted
+        assert "--no-persist" in result.output
+
+    @patch("src.cli.commands.backtest.DataCatalogService")
+    @patch("src.cli.commands.backtest.BacktestOrchestrator")
+    @patch("src.cli.commands.backtest.BacktestRequest")
+    @pytest.mark.component
+    def test_run_backtest_persist_default_true(
+        self, mock_request_class, mock_orchestrator_class, mock_catalog_service_class
+    ):
+        """Test that persist defaults to True when flag is not specified."""
+        # Mock catalog service
+        mock_catalog_service = MagicMock()
+        mock_availability = MagicMock()
+        mock_availability.start_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        mock_availability.end_date = datetime(2024, 1, 31, tzinfo=timezone.utc)
+        mock_availability.file_count = 5
+        mock_availability.total_rows = 1000
+        mock_catalog_service.get_availability.return_value = mock_availability
+
+        async def mock_fetch_or_load(*args, **kwargs):
+            return [MagicMock()]
+
+        mock_catalog_service.fetch_or_load = mock_fetch_or_load
+        mock_catalog_service.load_instrument.return_value = MagicMock()
+        mock_catalog_service_class.return_value = mock_catalog_service
+
+        # Mock request
+        mock_request = MagicMock()
+        mock_request_class.from_cli_args.return_value = mock_request
+
+        # Mock orchestrator
+        mock_orchestrator = MagicMock()
+
+        async def mock_execute(*args, **kwargs):
+            return (MockBacktestResult(), "test-run-id")
+
+        mock_orchestrator.execute = mock_execute
+        mock_orchestrator.dispose = MagicMock()
+        mock_orchestrator_class.return_value = mock_orchestrator
+
+        runner = CliRunner()
+        result = runner.invoke(
+            run_backtest,
+            [
+                "--symbol",
+                "AAPL",
+                "--start",
+                "2024-01-01",
+                "--end",
+                "2024-01-31",
+                # No persist flag - should default to True
+            ],
+        )
+
+        assert result.exit_code == 0
+        # Verify persist defaults to True
+        call_kwargs = mock_request_class.from_cli_args.call_args.kwargs
+        assert call_kwargs["persist"] is True

@@ -14,8 +14,9 @@ from rich.table import Table
 from src.cli.commands.compare import compare_backtests
 from src.cli.commands.reproduce import reproduce_backtest
 from src.cli.commands.show import show_backtest_details
-from src.core.backtest_runner import MinimalBacktestRunner
+from src.core.backtest_orchestrator import BacktestOrchestrator
 from src.core.strategy_registry import StrategyRegistry
+from src.models.backtest_request import BacktestRequest
 from src.services.data_catalog import DataCatalogService
 from src.services.exceptions import (
     CatalogCorruptionError,
@@ -24,6 +25,7 @@ from src.services.exceptions import (
     IBKRConnectionError,
     RateLimitExceededError,
 )
+from src.utils.bar_type_utils import parse_bar_type_spec
 from src.utils.error_formatter import ErrorFormatter
 from src.utils.error_messages import (
     CATALOG_CORRUPTION_DETECTED,
@@ -35,6 +37,12 @@ from src.utils.error_messages import (
 
 console = Console()
 error_formatter = ErrorFormatter(console)
+
+# Constants for portfolio sizing
+# When using percentage-based sizing, multiply trade_size by this factor
+# to get portfolio_value (e.g., for 10% position sizing)
+PORTFOLIO_SIZE_MULTIPLIER = 10
+DEFAULT_POSITION_SIZE_PCT = Decimal("10.0")
 
 
 def validate_strategy(ctx, param, value):
@@ -110,6 +118,11 @@ def backtest():
     ),
     help="Bar timeframe (auto-detected from date format if not specified)",
 )
+@click.option(
+    "--persist/--no-persist",
+    default=True,
+    help="Save backtest results to database (default: persist)",
+)
 def run_backtest(
     strategy: str,
     symbol: str,
@@ -119,6 +132,7 @@ def run_backtest(
     slow_period: int,
     trade_size: int,
     timeframe: str | None,
+    persist: bool,
 ):
     """Run backtest with real market data from database."""
 
@@ -357,7 +371,7 @@ def run_backtest(
                     )
                     sys.exit(4)
 
-            # Reason: Run backtest with catalog data
+            # Reason: Run backtest with catalog data using BacktestOrchestrator
             with Progress(
                 SpinnerColumn(),
                 TextColumn("[progress.description]{task.description}"),
@@ -365,25 +379,21 @@ def run_backtest(
             ) as progress:
                 task = progress.add_task("Running backtest...", total=None)
 
-                # Reason: Initialize backtest runner with catalog data
-                # Note: Using "catalog" data source (will need to update runner)
-                runner = MinimalBacktestRunner(data_source="catalog")
-
                 # Prepare strategy parameters
                 # Note: SMA uses percentage-based sizing, others use trade_size
+                portfolio_value = Decimal(str(trade_size * PORTFOLIO_SIZE_MULTIPLIER))
                 if strategy in ["sma", "sma_crossover", "sma_crossover_long_only"]:
                     # SMA uses portfolio_value and position_size_pct
-                    # Convert trade_size to portfolio_value (assume 10% position size)
                     strategy_params = {
-                        "portfolio_value": Decimal(str(trade_size * 10)),  # 10x for 10% sizing
-                        "position_size_pct": Decimal("10.0"),
+                        "portfolio_value": portfolio_value,
+                        "position_size_pct": DEFAULT_POSITION_SIZE_PCT,
                         "fast_period": fast_period,
                         "slow_period": slow_period,
                     }
                 elif strategy == "bollinger_reversal":
                     # Use defaults for now, can add CLI args later
                     strategy_params = {
-                        "portfolio_value": Decimal(str(trade_size * 10)),  # 10x for 10% sizing
+                        "portfolio_value": portfolio_value,
                     }
                 else:
                     # Other strategies use trade_size
@@ -391,17 +401,25 @@ def run_backtest(
                         "trade_size": trade_size,
                     }
 
-                # Reason: Run the backtest with catalog bars and instrument
-                # Returns tuple: (BacktestResult, Optional[UUID])
-                result, run_id = await runner.run_backtest_with_catalog_data(
-                    bars=bars,
-                    strategy_type=strategy,
+                # Build BacktestRequest from CLI args
+                request = BacktestRequest.from_cli_args(
+                    strategy=strategy,
                     symbol=symbol.upper(),
                     start=adjusted_start,
                     end=adjusted_end,
-                    instrument=instrument,
+                    bar_type_spec=bar_type_spec,
+                    persist=persist,
+                    starting_balance=portfolio_value,
                     **strategy_params,
                 )
+
+                # Run backtest with orchestrator
+                orchestrator = BacktestOrchestrator()
+                try:
+                    result, run_id = await orchestrator.execute(request, bars, instrument)
+                finally:
+                    # Ensure cleanup happens even on error
+                    orchestrator.dispose()
 
                 progress.update(task, completed=True)
 
@@ -438,6 +456,14 @@ def run_backtest(
             table.add_row("Final Balance", f"${result.final_balance:.2f}")
             table.add_row("Execution Time", f"{total_execution_time:.2f}s")
 
+            # Show persistence info
+            if persist and run_id:
+                table.add_row("Persisted", f"Yes (Run ID: {str(run_id)[:8]}...)")
+            elif persist:
+                table.add_row("Persisted", "Failed")
+            else:
+                table.add_row("Persisted", "No (--no-persist)")
+
             console.print(table)
             console.print()
 
@@ -449,8 +475,6 @@ def run_backtest(
             else:
                 console.print("➡️  Strategy broke even", style="yellow bold")
 
-            # Clean up
-            runner.dispose()
             return True
 
         except ValueError as e:
@@ -489,12 +513,18 @@ def run_backtest(
     type=click.Choice(["mock", "database", "catalog"]),
     help="Data source to use (default: catalog)",
 )
+@click.option(
+    "--persist/--no-persist",
+    default=True,
+    help="Save backtest results to database (default: persist)",
+)
 def run_config_backtest(
     config_file: str,
     symbol: str | None,
     start: datetime | None,
     end: datetime | None,
     data_source: str,
+    persist: bool,
 ):
     """Run backtest using YAML configuration file."""
 
@@ -536,10 +566,16 @@ def run_config_backtest(
         console.print()
 
         try:
-            # Initialize backtest runner with specified data source
-            runner = MinimalBacktestRunner(data_source=data_source)
+            # Initialize variables for results tracking
+            run_id = None
+            runner = None  # Only used for mock data source
 
             if data_source == "mock":
+                # Import MinimalBacktestRunner only when needed for mock data
+                from src.core.backtest_runner import MinimalBacktestRunner
+
+                runner = MinimalBacktestRunner(data_source=data_source)
+
                 # Run with mock data using config file
                 with Progress(
                     SpinnerColumn(),
@@ -550,29 +586,26 @@ def run_config_backtest(
                     result = runner.run_from_config_file(config_file)
                     progress.update(task, completed=True)
             elif data_source == "catalog":
-                # Run with catalog data using config file
-                from src.utils.config_loader import ConfigLoader
+                # Run with catalog data using BacktestOrchestrator
+                import yaml
 
-                # Load config to get instrument_id and bar_type
-                config_obj = ConfigLoader.load_from_file(config_file)
+                # Load YAML config to get instrument_id and bar_type
+                with open(config_file, "r") as f:
+                    yaml_data = yaml.safe_load(f)
 
-                # Extract instrument_id from config
-                instrument_id_str = str(config_obj.config.instrument_id)
-                bar_type_str = str(config_obj.config.bar_type)
+                config_section = yaml_data.get("config", {})
+                instrument_id_str = str(config_section.get("instrument_id", ""))
+                bar_type_str = str(config_section.get("bar_type", ""))
 
                 console.print(f"   Instrument: {instrument_id_str}")
                 console.print(f"   Bar Type: {bar_type_str}")
+                console.print(f"   Persist: {'Yes' if persist else 'No'}")
 
                 # Initialize catalog service
                 catalog_service = DataCatalogService()
 
                 # Parse bar type to get spec for catalog lookup
-                # Format: SYMBOL.VENUE-STEP-STEP_TYPE-AGG_SOURCE-PRICE_TYPE
-                parts = bar_type_str.split("-")
-                if len(parts) >= 3:
-                    bar_type_spec = f"{parts[1]}-{parts[2]}-{parts[3]}"  # e.g., "1-DAY-LAST"
-                else:
-                    bar_type_spec = "1-DAY-LAST"
+                bar_type_spec = parse_bar_type_spec(bar_type_str)
 
                 console.print(f"   Looking for: {bar_type_spec} bars")
 
@@ -615,23 +648,51 @@ def run_config_backtest(
                 instrument = catalog_service.load_instrument(instrument_id_str)
                 if not instrument:
                     console.print(
-                        "⚠️  Instrument not found in catalog, using default",
+                        "⚠️  Instrument not found in catalog, creating mock instrument",
                         style="yellow",
                     )
-
-                # Run backtest with catalog data and config
-                with Progress(
-                    SpinnerColumn(),
-                    TextColumn("[progress.description]{task.description}"),
-                    transient=True,
-                ) as progress:
-                    task = progress.add_task("Running backtest with catalog data...", total=None)
-                    result = runner.run_from_config_with_catalog_data(
-                        config_file=config_file,
-                        bars=bars,
-                        instrument=instrument,
+                    console.print(
+                        "   Note: Mock instrument may have different tick size/lot size",
+                        style="dim",
                     )
-                    progress.update(task, completed=True)
+                    # Create fallback instrument
+                    from src.utils.mock_data import create_test_instrument
+
+                    symbol_str = instrument_id_str.split(".")[0]
+                    venue_str = (
+                        instrument_id_str.split(".")[-1] if "." in instrument_id_str else "SIM"
+                    )
+                    instrument, _ = create_test_instrument(symbol_str, venue_str)
+
+                # Build BacktestRequest from YAML config
+                request = BacktestRequest.from_yaml_config(
+                    yaml_data=yaml_data,
+                    persist=persist,
+                    config_file_path=config_file,
+                )
+
+                # Run backtest with orchestrator
+                orchestrator = BacktestOrchestrator()
+                run_id = None
+
+                try:
+                    with Progress(
+                        SpinnerColumn(),
+                        TextColumn("[progress.description]{task.description}"),
+                        transient=True,
+                    ) as progress:
+                        task = progress.add_task(
+                            "Running backtest with catalog data...", total=None
+                        )
+                        result, run_id = await orchestrator.execute(request, bars, instrument)
+                        progress.update(task, completed=True)
+
+                    # Show persistence status
+                    if persist and run_id:
+                        console.print(f"   Run ID: {run_id}", style="dim")
+                finally:
+                    # Ensure cleanup happens even on error
+                    orchestrator.dispose()
             else:
                 # Run with database data - deprecated
                 console.print(
@@ -660,6 +721,15 @@ def run_config_backtest(
             table.add_row("Largest Loss", f"${result.largest_loss:.2f}")
             table.add_row("Final Balance", f"${result.final_balance:.2f}")
 
+            # Show persistence info for catalog runs
+            if data_source == "catalog":
+                if persist and run_id:
+                    table.add_row("Persisted", f"Yes (Run ID: {str(run_id)[:8]}...)")
+                elif persist:
+                    table.add_row("Persisted", "Failed")
+                else:
+                    table.add_row("Persisted", "No (--no-persist)")
+
             console.print(table)
             console.print()
 
@@ -671,19 +741,20 @@ def run_config_backtest(
             else:
                 console.print("➡️  Strategy broke even", style="yellow bold")
 
-            # Clean up
-            runner.dispose()
+            # Clean up runner (only used for mock data)
+            if runner is not None:
+                runner.dispose()
             return True
 
         except FileNotFoundError as e:
-            console.print(f"❌ Configuration file not found: {e}", style="red")
-            return False
+            console.print(f"❌ Configuration file not found: {e}", style="red bold")
+            sys.exit(1)
         except ValueError as e:
-            console.print(f"❌ Configuration error: {e}", style="red")
-            return False
+            console.print(f"❌ Configuration error: {e}", style="red bold")
+            sys.exit(2)
         except Exception as e:
-            console.print(f"❌ Unexpected error: {e}", style="red")
-            return False
+            console.print(f"❌ Unexpected error: {e}", style="red bold")
+            sys.exit(3)
 
     # Run async function
     result = asyncio.run(run_config_backtest_async())
