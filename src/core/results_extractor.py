@@ -38,6 +38,7 @@ class ResultsExtractor:
         engine: BacktestEngine,
         venue: Venue | None = None,
         settings=None,
+        starting_balance: float | None = None,
     ):
         """
         Initialize the results extractor.
@@ -46,10 +47,17 @@ class ResultsExtractor:
             engine: The backtest engine to extract results from
             venue: The venue used in the backtest (defaults to SIM)
             settings: Application settings (defaults to get_settings())
+            starting_balance: Actual starting balance used in backtest
+                              (defaults to settings.default_balance)
         """
         self.engine = engine
         self.venue = venue if venue else Venue("SIM")
         self.settings = settings if settings else get_settings()
+        self._starting_balance = (
+            starting_balance
+            if starting_balance is not None
+            else float(self.settings.default_balance)
+        )
 
     def extract_results(
         self,
@@ -74,7 +82,7 @@ class ResultsExtractor:
             return BacktestResult()
 
         # Calculate basic metrics
-        starting_balance = float(self.settings.default_balance)
+        starting_balance = self._starting_balance
         final_balance = float(account.balance_total(USD).as_double())
         total_return = (final_balance - starting_balance) / starting_balance
 
@@ -189,7 +197,7 @@ class ResultsExtractor:
             return []
 
         analyzer = self.engine.portfolio.analyzer
-        starting_balance = float(self.settings.default_balance)
+        starting_balance = self._starting_balance
 
         try:
             returns = analyzer.returns()

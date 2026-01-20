@@ -62,6 +62,7 @@ class BacktestOrchestrator:
         self._venue: Venue | None = None
         self._backtest_start_date: datetime | None = None
         self._backtest_end_date: datetime | None = None
+        self._starting_balance: float | None = None
 
     async def execute(
         self,
@@ -102,15 +103,16 @@ class BacktestOrchestrator:
             assert self.engine is not None, "Engine must be initialized"
             self.engine.add_strategy(strategy)
 
-            # Store date range for CAGR calculation
+            # Store date range and starting balance for results extraction
             self._backtest_start_date = request.start_date
             self._backtest_end_date = request.end_date
+            self._starting_balance = float(request.starting_balance)
 
             # Run backtest
             self.engine.run()
 
             # Extract results
-            result = self._extract_results()
+            result = self._extract_results(self._starting_balance)
 
             # Persist if requested
             if request.persist and run_id:
@@ -265,9 +267,12 @@ class BacktestOrchestrator:
             logger.error(f"Failed to create strategy: {e}")
             raise ValueError(f"Failed to create strategy {request.strategy_type}: {e}")
 
-    def _extract_results(self) -> BacktestResult:
+    def _extract_results(self, starting_balance: float) -> BacktestResult:
         """
         Extract comprehensive results from the backtest engine.
+
+        Args:
+            starting_balance: The actual starting balance used in the backtest
 
         Returns:
             BacktestResult with all available metrics
@@ -279,6 +284,7 @@ class BacktestOrchestrator:
             engine=self.engine,
             venue=self._venue,
             settings=self.settings,
+            starting_balance=starting_balance,
         )
 
         return extractor.extract_results(
@@ -286,9 +292,12 @@ class BacktestOrchestrator:
             end_date=self._backtest_end_date,
         )
 
-    def _extract_equity_curve(self) -> list[dict[str, int | float]]:
+    def _extract_equity_curve(self, starting_balance: float) -> list[dict[str, int | float]]:
         """
         Extract equity curve for chart visualization.
+
+        Args:
+            starting_balance: The actual starting balance used in the backtest
 
         Returns:
             List of equity points: [{"time": unix_ts, "value": equity}, ...]
@@ -300,6 +309,7 @@ class BacktestOrchestrator:
             engine=self.engine,
             venue=self._venue,
             settings=self.settings,
+            starting_balance=starting_balance,
         )
 
         return extractor.extract_equity_curve(
@@ -325,7 +335,7 @@ class BacktestOrchestrator:
             }
 
             # Add equity curve if available
-            equity_curve = self._extract_equity_curve()
+            equity_curve = self._extract_equity_curve(float(request.starting_balance))
             if equity_curve:
                 config_snapshot["equity_curve"] = equity_curve
 
@@ -446,3 +456,4 @@ class BacktestOrchestrator:
         self._venue = None
         self._backtest_start_date = None
         self._backtest_end_date = None
+        self._starting_balance = None

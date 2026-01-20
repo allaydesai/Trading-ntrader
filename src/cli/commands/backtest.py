@@ -622,12 +622,24 @@ def run_config_backtest(
                 with open(config_file, "r") as f:
                     yaml_data = yaml.safe_load(f)
 
+                # Build BacktestRequest FIRST to get dates from YAML config
+                request = BacktestRequest.from_yaml_config(
+                    yaml_data=yaml_data,
+                    persist=persist,
+                    config_file_path=config_file,
+                )
+
                 config_section = yaml_data.get("config", {})
                 instrument_id_str = str(config_section.get("instrument_id", ""))
                 bar_type_str = str(config_section.get("bar_type", ""))
 
                 console.print(f"   Instrument: {instrument_id_str}")
                 console.print(f"   Bar Type: {bar_type_str}")
+                console.print(
+                    f"   Period: {request.start_date.strftime('%Y-%m-%d')} to "
+                    f"{request.end_date.strftime('%Y-%m-%d')}"
+                )
+                console.print(f"   Starting Balance: ${request.starting_balance:,.0f}")
                 console.print(f"   Persist: {'Yes' if persist else 'No'}")
 
                 # Initialize catalog service
@@ -642,7 +654,7 @@ def run_config_backtest(
                 availability = catalog_service.get_availability(instrument_id_str, bar_type_spec)
                 if not availability:
                     console.print(
-                        f"❌ No data found in catalog for {instrument_id_str} with {bar_type_spec}",
+                        f"No data found in catalog for {instrument_id_str} with {bar_type_spec}",
                         style="red",
                     )
                     console.print("   Run 'data list' to see available data")
@@ -652,7 +664,21 @@ def run_config_backtest(
                 avail_end = availability.end_date.date()
                 console.print(f"   Available: {avail_start} to {avail_end}")
 
-                # Load bars from catalog
+                # Validate requested range vs available range
+                if request.start_date < availability.start_date:
+                    console.print(
+                        f"   Warning: Requested start {request.start_date.strftime('%Y-%m-%d')} "
+                        f"before available data starts {avail_start}",
+                        style="yellow",
+                    )
+                if request.end_date > availability.end_date:
+                    console.print(
+                        f"   Warning: Requested end {request.end_date.strftime('%Y-%m-%d')} "
+                        f"after available data ends {avail_end}",
+                        style="yellow",
+                    )
+
+                # Load bars from catalog using REQUEST dates, not availability dates
                 with Progress(
                     SpinnerColumn(),
                     TextColumn("[progress.description]{task.description}"),
@@ -662,13 +688,13 @@ def run_config_backtest(
                     bars = await catalog_service.fetch_or_load(
                         instrument_id=instrument_id_str,
                         bar_type_spec=bar_type_spec,
-                        start=availability.start_date,
-                        end=availability.end_date,
+                        start=request.start_date,
+                        end=request.end_date,
                     )
                     progress.update(task, completed=True)
 
                 if not bars:
-                    console.print("❌ Failed to load bars from catalog", style="red")
+                    console.print("Failed to load bars from catalog", style="red")
                     return False
 
                 console.print(f"   Loaded {len(bars):,} bars")
@@ -677,7 +703,7 @@ def run_config_backtest(
                 instrument = catalog_service.load_instrument(instrument_id_str)
                 if not instrument:
                     console.print(
-                        "⚠️  Instrument not found in catalog, creating mock instrument",
+                        "Instrument not found in catalog, creating mock instrument",
                         style="yellow",
                     )
                     console.print(
@@ -692,13 +718,6 @@ def run_config_backtest(
                         instrument_id_str.split(".")[-1] if "." in instrument_id_str else "SIM"
                     )
                     instrument, _ = create_test_instrument(symbol_str, venue_str)
-
-                # Build BacktestRequest from YAML config
-                request = BacktestRequest.from_yaml_config(
-                    yaml_data=yaml_data,
-                    persist=persist,
-                    config_file_path=config_file,
-                )
 
                 # Run backtest with orchestrator
                 orchestrator = BacktestOrchestrator()
