@@ -573,8 +573,6 @@ def run_config_backtest(
                 # Run with mock data using BacktestOrchestrator
                 import yaml
 
-                from src.core.backtest_orchestrator import BacktestOrchestrator
-                from src.models.backtest_request import BacktestRequest
                 from src.utils.mock_data import generate_mock_data_from_yaml
 
                 # Load YAML config
