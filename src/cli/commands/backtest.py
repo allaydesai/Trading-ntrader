@@ -406,9 +406,28 @@ def run_config_backtest(
     data_source: str,
     persist: bool,
 ):
-    """Run backtest using YAML configuration file."""
+    """[DEPRECATED] Run backtest using YAML configuration file.
+
+    Use 'backtest run <config.yaml>' instead. This command will be removed in a future release.
+    """
 
     async def run_config_backtest_async():
+        # Display deprecation warning first
+        console.print()
+        console.print(
+            "⚠️  DEPRECATED: 'backtest run-config' is deprecated.",
+            style="yellow bold",
+        )
+        console.print(
+            "    Use 'backtest run <config.yaml>' instead.",
+            style="yellow",
+        )
+        console.print(
+            "    This command will be removed in a future release.",
+            style="yellow",
+        )
+        console.print()
+
         nonlocal start, end
         console.print(f"🚀 Running backtest from config: {config_file}", style="cyan bold")
         console.print(f"   Data source: {data_source}")

@@ -448,7 +448,7 @@ Each phase is independently deployable and reversible:
 - [ ] Code reduction: 733 → ~400 lines (-45%) (in progress, will complete with Phase 5/6)
 - [x] All existing tests pass (68 tests: 37 unit + 31 component)
 - [x] No breaking changes to CLI interface during transition
-- [ ] Clear deprecation path for `run-config` (Phase 5)
+- [x] Clear deprecation path for `run-config` (Phase 5)
 
 ## 9. Timeline
 
@@ -457,8 +457,8 @@ Each phase is independently deployable and reversible:
 | 1 | Extract helpers | None | ✅ Complete |
 | 2 | Add config support | Phase 1 | ✅ Complete |
 | 3 | CLI overrides | Phase 2 | ✅ Complete |
-| 4 | Unify data pipeline | Phase 3 | 🔜 Next |
-| 5 | Deprecate run-config | Phase 4 | ⏳ Pending |
+| 4 | Unify data pipeline | Phase 3 | ⏳ Pending |
+| 5 | Deprecate run-config | Phase 4 | ✅ Complete |
 | 6 | Remove run-config | Phase 5 + user migration | ⏳ Pending |
 
 ## 10. Open Questions

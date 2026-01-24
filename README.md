@@ -95,8 +95,8 @@ uv run python -m src.cli.main data check --symbol <SYM> --start <date> --end <da
 # Backtesting (auto-fetches missing data if IBKR connected)
 uv run python -m src.cli.main backtest run --strategy <type>   # ✅ All strategies supported
 
-# Mock data testing
-uv run python -m src.cli.main backtest run-config <config>     # ✅ YAML configs supported
+# Config-based testing
+uv run python -m src.cli.main backtest run <config.yaml>       # ✅ YAML configs supported (run-config is deprecated)
 
 # Backtest history management (NEW - PostgreSQL)
 uv run python -m src.cli.main backtest history                 # ✅ View backtest history
@@ -363,16 +363,14 @@ uv run python -m src.cli.main backtest run \
   --slow-period 10
 ```
 
-Alternative: Use the new YAML configuration approach (mock data only):
+Alternative: Use the YAML configuration approach:
 ```bash
 # Create a strategy config template
 uv run python -m src.cli.main strategy create --type sma_crossover --output my_strategy.yaml
 
-# Run backtest with config file (uses mock data for testing)
-uv run python -m src.cli.main backtest run-config my_strategy.yaml
+# Run backtest with config file
+uv run python -m src.cli.main backtest run my_strategy.yaml
 ```
-
-**Note**: YAML-based backtesting currently supports mock data only. For database backtests, use the `backtest run` command with strategy parameters.
 
 Expected output:
 ```
@@ -602,20 +600,18 @@ Example validation output:
 
 ##### Running Backtests with YAML Configs
 
-Use your validated configurations in backtests (mock data only):
+Use your validated configurations in backtests:
 ```bash
-# Run backtest with YAML config (uses mock data)
-uv run python -m src.cli.main backtest run-config my_mr_config.yaml
+# Run backtest with YAML config
+uv run python -m src.cli.main backtest run my_mr_config.yaml
 
-# For database backtests, use the legacy command:
+# Or use command-line parameters directly:
 uv run python -m src.cli.main backtest run \
   --strategy mean_reversion \
   --symbol AAPL \
   --start 2024-01-02 \
   --end 2024-01-02
 ```
-
-**Current Limitation**: The `run-config` command currently supports mock data only. Database integration with YAML configs is planned for a future release.
 
 ##### Strategy Parameter Examples
 
@@ -929,10 +925,11 @@ This command:
   - `--fast-period`: Fast SMA period (default: 10)
   - `--slow-period`: Slow SMA period (default: 20)
   - `--trade-size`: Trade size in SHARES (default: 1,000,000 shares = very large position!)
-- `backtest run-config <config-file>`: Run backtest with YAML configuration
-  - `--symbol`: Trading symbol (required)
-  - `--start`: Start date for backtest (YYYY-MM-DD)
-  - `--end`: End date for backtest (YYYY-MM-DD)
+- `backtest run <config.yaml>`: Run backtest with YAML configuration (preferred)
+  - `--symbol`: Trading symbol (optional override)
+  - `--start`: Start date for backtest (optional override)
+  - `--end`: End date for backtest (optional override)
+- `backtest run-config <config-file>`: **[DEPRECATED]** Use `backtest run <config.yaml>` instead
 
 ##### Backtest History Commands (New in Milestone 6)
 - `backtest history`: List recent backtest executions with metrics
@@ -1077,12 +1074,12 @@ This section provides detailed, step-by-step guides for common tasks.
 
 5. **Run backtests with different strategies**:
    ```bash
-   # Test strategies with mock data (YAML configs)
-   uv run python -m src.cli.main backtest run-config sma_fast.yaml
-   uv run python -m src.cli.main backtest run-config mean_rev.yaml
-   uv run python -m src.cli.main backtest run-config momentum.yaml
+   # Test strategies with YAML configs
+   uv run python -m src.cli.main backtest run sma_fast.yaml
+   uv run python -m src.cli.main backtest run mean_rev.yaml
+   uv run python -m src.cli.main backtest run momentum.yaml
 
-   # Or test with real database data (legacy command)
+   # Or use command-line parameters directly
    uv run python -m src.cli.main backtest run --strategy sma_crossover \
      --symbol AAPL2018 --start 2018-02-05 --end 2018-02-08
    uv run python -m src.cli.main backtest run --strategy mean_reversion \
