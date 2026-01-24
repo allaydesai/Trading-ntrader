@@ -2,13 +2,11 @@
 
 from datetime import datetime, timezone
 from decimal import Decimal
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 from uuid import UUID
 
 import pytest
 from rich.console import Console
-
-from src.models.backtest_result import BacktestResult
 
 
 class MockBacktestResult:
@@ -84,7 +82,7 @@ class TestLoadBacktestData:
     @pytest.mark.asyncio
     async def test_load_catalog_data_triggers_ibkr_fetch(self):
         """Test that IBKR fetch is triggered when catalog data is partial."""
-        from src.cli.commands._backtest_helpers import DataLoadResult, load_backtest_data
+        from src.cli.commands._backtest_helpers import load_backtest_data
 
         mock_catalog_service = MagicMock()
         mock_availability = MagicMock()
@@ -121,7 +119,7 @@ class TestLoadBacktestData:
     @pytest.mark.asyncio
     async def test_load_catalog_data_no_availability_triggers_ibkr(self):
         """Test that IBKR fetch is triggered when no catalog data exists."""
-        from src.cli.commands._backtest_helpers import DataLoadResult, load_backtest_data
+        from src.cli.commands._backtest_helpers import load_backtest_data
 
         mock_catalog_service = MagicMock()
         mock_catalog_service.get_availability.return_value = None
@@ -197,9 +195,7 @@ class TestLoadBacktestData:
         start = datetime(2024, 1, 1, tzinfo=timezone.utc)
         end = datetime(2024, 6, 30, tzinfo=timezone.utc)
 
-        with patch(
-            "src.cli.commands._backtest_helpers.generate_mock_data_from_yaml"
-        ) as mock_gen:
+        with patch("src.cli.commands._backtest_helpers.generate_mock_data_from_yaml") as mock_gen:
             mock_bars = [MagicMock()]
             mock_instrument = MagicMock()
             mock_gen.return_value = (mock_bars, mock_instrument, start, end)
@@ -243,7 +239,7 @@ class TestLoadBacktestData:
     @pytest.mark.asyncio
     async def test_load_catalog_fetches_instrument_from_ibkr_when_missing(self):
         """Test instrument is fetched from IBKR when not in catalog."""
-        from src.cli.commands._backtest_helpers import DataLoadResult, load_backtest_data
+        from src.cli.commands._backtest_helpers import load_backtest_data
 
         mock_catalog_service = MagicMock()
         mock_availability = MagicMock()
@@ -601,3 +597,513 @@ class TestDisplayBacktestResults:
         assert "500" in captured.out
         assert "200" in captured.out
         assert "11500" in captured.out or "11,500" in captured.out
+
+
+class TestApplyCliOverrides:
+    """Test cases for apply_cli_overrides helper."""
+
+    def test_apply_no_overrides_returns_same_request(self):
+        """Test that no overrides returns the same request."""
+        from src.cli.commands._backtest_helpers import apply_cli_overrides
+        from src.models.backtest_request import BacktestRequest
+
+        request = BacktestRequest(
+            strategy_type="apolo_rsi",
+            strategy_path="src.core.strategies.apolo_rsi:ApoloRSI",
+            config_path="src.core.strategies.apolo_rsi:ApoloRSIConfig",
+            strategy_config={"trade_size": 100},
+            symbol="AMD",
+            instrument_id="AMD.NASDAQ",
+            start_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            end_date=datetime(2024, 6, 30, tzinfo=timezone.utc),
+            bar_type="1-DAY-LAST",
+            starting_balance=Decimal("100000"),
+        )
+
+        result = apply_cli_overrides(
+            request,
+            symbol=None,
+            start=None,
+            end=None,
+            starting_balance=None,
+        )
+
+        assert result is request  # Same object returned when no overrides
+
+    def test_apply_start_date_override(self):
+        """Test that start date override is applied."""
+        from src.cli.commands._backtest_helpers import apply_cli_overrides
+        from src.models.backtest_request import BacktestRequest
+
+        request = BacktestRequest(
+            strategy_type="apolo_rsi",
+            strategy_path="src.core.strategies.apolo_rsi:ApoloRSI",
+            config_path="src.core.strategies.apolo_rsi:ApoloRSIConfig",
+            strategy_config={},
+            symbol="AMD",
+            instrument_id="AMD.NASDAQ",
+            start_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            end_date=datetime(2024, 6, 30, tzinfo=timezone.utc),
+            bar_type="1-DAY-LAST",
+        )
+
+        new_start = datetime(2024, 3, 1, tzinfo=timezone.utc)
+        result = apply_cli_overrides(
+            request,
+            symbol=None,
+            start=new_start,
+            end=None,
+            starting_balance=None,
+        )
+
+        assert result.start_date == new_start
+        assert result.end_date == datetime(2024, 6, 30, tzinfo=timezone.utc)
+
+    def test_apply_symbol_override_rebuilds_instrument_id(self):
+        """Test that symbol override also updates instrument_id."""
+        from src.cli.commands._backtest_helpers import apply_cli_overrides
+        from src.models.backtest_request import BacktestRequest
+
+        request = BacktestRequest(
+            strategy_type="apolo_rsi",
+            strategy_path="src.core.strategies.apolo_rsi:ApoloRSI",
+            config_path="src.core.strategies.apolo_rsi:ApoloRSIConfig",
+            strategy_config={},
+            symbol="AMD",
+            instrument_id="AMD.NASDAQ",
+            start_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            end_date=datetime(2024, 6, 30, tzinfo=timezone.utc),
+            bar_type="1-DAY-LAST",
+        )
+
+        result = apply_cli_overrides(
+            request,
+            symbol="AAPL",
+            start=None,
+            end=None,
+            starting_balance=None,
+        )
+
+        assert result.symbol == "AAPL"
+        assert result.instrument_id == "AAPL.NASDAQ"
+
+    def test_apply_starting_balance_override(self):
+        """Test that starting balance override is applied."""
+        from src.cli.commands._backtest_helpers import apply_cli_overrides
+        from src.models.backtest_request import BacktestRequest
+
+        request = BacktestRequest(
+            strategy_type="apolo_rsi",
+            strategy_path="src.core.strategies.apolo_rsi:ApoloRSI",
+            config_path="src.core.strategies.apolo_rsi:ApoloRSIConfig",
+            strategy_config={},
+            symbol="AMD",
+            instrument_id="AMD.NASDAQ",
+            start_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            end_date=datetime(2024, 6, 30, tzinfo=timezone.utc),
+            bar_type="1-DAY-LAST",
+            starting_balance=Decimal("100000"),
+        )
+
+        result = apply_cli_overrides(
+            request,
+            symbol=None,
+            start=None,
+            end=None,
+            starting_balance=250000.0,
+        )
+
+        assert result.starting_balance == Decimal("250000.0")
+
+    def test_apply_multiple_overrides(self):
+        """Test that multiple overrides can be applied together."""
+        from src.cli.commands._backtest_helpers import apply_cli_overrides
+        from src.models.backtest_request import BacktestRequest
+
+        request = BacktestRequest(
+            strategy_type="apolo_rsi",
+            strategy_path="src.core.strategies.apolo_rsi:ApoloRSI",
+            config_path="src.core.strategies.apolo_rsi:ApoloRSIConfig",
+            strategy_config={},
+            symbol="AMD",
+            instrument_id="AMD.NASDAQ",
+            start_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            end_date=datetime(2024, 6, 30, tzinfo=timezone.utc),
+            bar_type="1-DAY-LAST",
+            starting_balance=Decimal("100000"),
+        )
+
+        new_start = datetime(2024, 3, 1, tzinfo=timezone.utc)
+        new_end = datetime(2024, 4, 30, tzinfo=timezone.utc)
+
+        result = apply_cli_overrides(
+            request,
+            symbol="NVDA",
+            start=new_start,
+            end=new_end,
+            starting_balance=500000.0,
+        )
+
+        assert result.symbol == "NVDA"
+        assert result.instrument_id == "NVDA.NASDAQ"
+        assert result.start_date == new_start
+        assert result.end_date == new_end
+        assert result.starting_balance == Decimal("500000.0")
+
+    def test_apply_timezone_naive_dates_converted_to_utc(self):
+        """Test that timezone-naive dates are converted to UTC."""
+        from src.cli.commands._backtest_helpers import apply_cli_overrides
+        from src.models.backtest_request import BacktestRequest
+
+        request = BacktestRequest(
+            strategy_type="apolo_rsi",
+            strategy_path="src.core.strategies.apolo_rsi:ApoloRSI",
+            config_path="src.core.strategies.apolo_rsi:ApoloRSIConfig",
+            strategy_config={},
+            symbol="AMD",
+            instrument_id="AMD.NASDAQ",
+            start_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            end_date=datetime(2024, 6, 30, tzinfo=timezone.utc),
+            bar_type="1-DAY-LAST",
+        )
+
+        # Pass timezone-naive dates
+        new_start = datetime(2024, 3, 1)  # No timezone
+        result = apply_cli_overrides(
+            request,
+            symbol=None,
+            start=new_start,
+            end=None,
+            starting_balance=None,
+        )
+
+        assert result.start_date.tzinfo == timezone.utc
+
+
+class TestResolveBacktestRequest:
+    """Test cases for resolve_backtest_request helper."""
+
+    def test_resolve_cli_mode_with_required_params(self):
+        """Test CLI mode resolves correctly with required parameters."""
+        from src.cli.commands._backtest_helpers import resolve_backtest_request
+
+        console = Console(force_terminal=True, width=120)
+        start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        end = datetime(2024, 6, 30, tzinfo=timezone.utc)
+
+        request, data_source = resolve_backtest_request(
+            config_file=None,
+            symbol="AAPL",
+            strategy="sma_crossover",
+            start=start,
+            end=end,
+            data_source=None,
+            starting_balance=None,
+            persist=True,
+            console=console,
+            fast_period=10,
+            slow_period=20,
+            trade_size=100000,
+            timeframe=None,
+        )
+
+        assert request.symbol == "AAPL"
+        assert request.instrument_id == "AAPL.NASDAQ"
+        assert request.start_date == start
+        assert request.end_date == end
+        assert request.strategy_type == "sma_crossover"
+        assert data_source == "catalog"
+
+    def test_resolve_cli_mode_missing_symbol_raises_error(self):
+        """Test that CLI mode raises error when symbol is missing."""
+        import click
+
+        from src.cli.commands._backtest_helpers import resolve_backtest_request
+
+        console = Console(force_terminal=True, width=120)
+        start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        end = datetime(2024, 6, 30, tzinfo=timezone.utc)
+
+        with pytest.raises(click.UsageError, match="Missing required option"):
+            resolve_backtest_request(
+                config_file=None,
+                symbol=None,
+                strategy="sma_crossover",
+                start=start,
+                end=end,
+                data_source=None,
+                starting_balance=None,
+                persist=True,
+                console=console,
+            )
+
+    def test_resolve_cli_mode_missing_start_raises_error(self):
+        """Test that CLI mode raises error when start is missing."""
+        import click
+
+        from src.cli.commands._backtest_helpers import resolve_backtest_request
+
+        console = Console(force_terminal=True, width=120)
+        end = datetime(2024, 6, 30, tzinfo=timezone.utc)
+
+        with pytest.raises(click.UsageError, match="Missing required option"):
+            resolve_backtest_request(
+                config_file=None,
+                symbol="AAPL",
+                strategy="sma_crossover",
+                start=None,
+                end=end,
+                data_source=None,
+                starting_balance=None,
+                persist=True,
+                console=console,
+            )
+
+    def test_resolve_cli_mode_missing_end_raises_error(self):
+        """Test that CLI mode raises error when end is missing."""
+        import click
+
+        from src.cli.commands._backtest_helpers import resolve_backtest_request
+
+        console = Console(force_terminal=True, width=120)
+        start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+
+        with pytest.raises(click.UsageError, match="Missing required option"):
+            resolve_backtest_request(
+                config_file=None,
+                symbol="AAPL",
+                strategy="sma_crossover",
+                start=start,
+                end=None,
+                data_source=None,
+                starting_balance=None,
+                persist=True,
+                console=console,
+            )
+
+    def test_resolve_cli_mode_mock_source_raises_error(self):
+        """Test that CLI mode raises error when mock data source is used."""
+        import click
+
+        from src.cli.commands._backtest_helpers import resolve_backtest_request
+
+        console = Console(force_terminal=True, width=120)
+        start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        end = datetime(2024, 6, 30, tzinfo=timezone.utc)
+
+        with pytest.raises(click.UsageError, match="Mock data source requires a YAML config"):
+            resolve_backtest_request(
+                config_file=None,
+                symbol="AAPL",
+                strategy="sma_crossover",
+                start=start,
+                end=end,
+                data_source="mock",
+                starting_balance=None,
+                persist=True,
+                console=console,
+            )
+
+    def test_resolve_config_mode_from_yaml_file(self, tmp_path):
+        """Test config mode resolves correctly from YAML file."""
+        from src.cli.commands._backtest_helpers import resolve_backtest_request
+
+        # Create a temporary YAML config file
+        config_content = """
+strategy_path: "src.core.strategies.apolo_rsi:ApoloRSI"
+config_path: "src.core.strategies.apolo_rsi:ApoloRSIConfig"
+config:
+  instrument_id: "AMD.NASDAQ"
+  bar_type: "AMD.NASDAQ-1-DAY-LAST-EXTERNAL"
+  trade_size: 100
+backtest:
+  start_date: "2024-01-01"
+  end_date: "2024-06-30"
+  initial_capital: 100000
+"""
+        config_file = tmp_path / "test_config.yaml"
+        config_file.write_text(config_content)
+
+        console = Console(force_terminal=True, width=120)
+
+        request, data_source = resolve_backtest_request(
+            config_file=str(config_file),
+            symbol=None,
+            strategy=None,
+            start=None,
+            end=None,
+            data_source=None,
+            starting_balance=None,
+            persist=True,
+            console=console,
+        )
+
+        assert request.symbol == "AMD"
+        assert request.instrument_id == "AMD.NASDAQ"
+        assert request.start_date == datetime(2024, 1, 1, tzinfo=timezone.utc)
+        assert request.end_date == datetime(2024, 6, 30, tzinfo=timezone.utc)
+        assert request.starting_balance == Decimal("100000")
+        assert data_source == "catalog"
+
+    def test_resolve_config_mode_with_date_overrides(self, tmp_path):
+        """Test config mode applies date overrides."""
+        from src.cli.commands._backtest_helpers import resolve_backtest_request
+
+        # Create a temporary YAML config file
+        config_content = """
+strategy_path: "src.core.strategies.apolo_rsi:ApoloRSI"
+config_path: "src.core.strategies.apolo_rsi:ApoloRSIConfig"
+config:
+  instrument_id: "AMD.NASDAQ"
+  bar_type: "AMD.NASDAQ-1-DAY-LAST-EXTERNAL"
+backtest:
+  start_date: "2024-01-01"
+  end_date: "2024-06-30"
+  initial_capital: 100000
+"""
+        config_file = tmp_path / "test_config.yaml"
+        config_file.write_text(config_content)
+
+        console = Console(force_terminal=True, width=120)
+        override_start = datetime(2024, 3, 1, tzinfo=timezone.utc)
+        override_end = datetime(2024, 4, 30, tzinfo=timezone.utc)
+
+        request, _ = resolve_backtest_request(
+            config_file=str(config_file),
+            symbol=None,
+            strategy=None,
+            start=override_start,
+            end=override_end,
+            data_source=None,
+            starting_balance=None,
+            persist=True,
+            console=console,
+        )
+
+        assert request.start_date == override_start
+        assert request.end_date == override_end
+
+    def test_resolve_config_mode_with_mock_data_source(self, tmp_path):
+        """Test config mode with mock data source."""
+        from src.cli.commands._backtest_helpers import resolve_backtest_request
+
+        # Create a temporary YAML config file
+        config_content = """
+strategy_path: "src.core.strategies.apolo_rsi:ApoloRSI"
+config_path: "src.core.strategies.apolo_rsi:ApoloRSIConfig"
+config:
+  instrument_id: "AMD.NASDAQ"
+  bar_type: "AMD.NASDAQ-1-DAY-LAST-EXTERNAL"
+backtest:
+  start_date: "2024-01-01"
+  end_date: "2024-06-30"
+  initial_capital: 100000
+"""
+        config_file = tmp_path / "test_config.yaml"
+        config_file.write_text(config_content)
+
+        console = Console(force_terminal=True, width=120)
+
+        request, data_source = resolve_backtest_request(
+            config_file=str(config_file),
+            symbol=None,
+            strategy=None,
+            start=None,
+            end=None,
+            data_source="mock",
+            starting_balance=None,
+            persist=True,
+            console=console,
+        )
+
+        assert data_source == "mock"
+
+    def test_resolve_config_mode_nonexistent_file_raises_error(self):
+        """Test config mode raises error for nonexistent file."""
+        import click
+
+        from src.cli.commands._backtest_helpers import resolve_backtest_request
+
+        console = Console(force_terminal=True, width=120)
+
+        with pytest.raises(click.UsageError, match="Configuration file not found"):
+            resolve_backtest_request(
+                config_file="/nonexistent/path/config.yaml",
+                symbol=None,
+                strategy=None,
+                start=None,
+                end=None,
+                data_source=None,
+                starting_balance=None,
+                persist=True,
+                console=console,
+            )
+
+    def test_resolve_cli_mode_defaults_strategy_to_sma_crossover(self):
+        """Test that CLI mode defaults strategy to sma_crossover."""
+        from src.cli.commands._backtest_helpers import resolve_backtest_request
+
+        console = Console(force_terminal=True, width=120)
+        start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        end = datetime(2024, 6, 30, tzinfo=timezone.utc)
+
+        request, _ = resolve_backtest_request(
+            config_file=None,
+            symbol="AAPL",
+            strategy=None,  # No strategy specified
+            start=start,
+            end=end,
+            data_source=None,
+            starting_balance=None,
+            persist=True,
+            console=console,
+        )
+
+        assert request.strategy_type == "sma_crossover"
+
+    def test_resolve_cli_mode_auto_detects_daily_bar_type(self):
+        """Test that CLI mode auto-detects daily bar type from date-only format."""
+        from src.cli.commands._backtest_helpers import resolve_backtest_request
+
+        console = Console(force_terminal=True, width=120)
+        # Date-only (no time component) should result in daily bars
+        start = datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+        end = datetime(2024, 6, 30, 0, 0, 0, tzinfo=timezone.utc)
+
+        request, _ = resolve_backtest_request(
+            config_file=None,
+            symbol="AAPL",
+            strategy="sma_crossover",
+            start=start,
+            end=end,
+            data_source=None,
+            starting_balance=None,
+            persist=True,
+            console=console,
+            timeframe=None,  # Auto-detect
+        )
+
+        assert request.bar_type == "1-DAY-LAST"
+
+    def test_resolve_cli_mode_uses_explicit_timeframe(self):
+        """Test that CLI mode uses explicit timeframe when provided."""
+        from src.cli.commands._backtest_helpers import resolve_backtest_request
+
+        console = Console(force_terminal=True, width=120)
+        start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        end = datetime(2024, 6, 30, tzinfo=timezone.utc)
+
+        request, _ = resolve_backtest_request(
+            config_file=None,
+            symbol="AAPL",
+            strategy="sma_crossover",
+            start=start,
+            end=end,
+            data_source=None,
+            starting_balance=None,
+            persist=True,
+            console=console,
+            timeframe="1-HOUR",  # Explicit timeframe
+        )
+
+        assert request.bar_type == "1-HOUR-LAST"

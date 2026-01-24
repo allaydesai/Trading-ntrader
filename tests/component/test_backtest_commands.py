@@ -262,6 +262,10 @@ class TestBacktestCommands:
         mock_catalog_service = MagicMock()
         mock_availability = MagicMock()
         mock_availability.covers_range.return_value = True
+        mock_availability.start_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        mock_availability.end_date = datetime(2024, 12, 31, tzinfo=timezone.utc)
+        mock_availability.file_count = 5
+        mock_availability.total_rows = 1000
         mock_catalog_service.get_availability.return_value = mock_availability
 
         async def mock_fetch_or_load(*args, **kwargs):
@@ -278,6 +282,7 @@ class TestBacktestCommands:
             raise ValueError("Invalid parameters")
 
         mock_orchestrator.execute = mock_execute
+        mock_orchestrator.dispose = MagicMock()
         mock_orchestrator_class.return_value = mock_orchestrator
 
         runner = CliRunner()
@@ -300,6 +305,10 @@ class TestBacktestCommands:
         mock_catalog_service = MagicMock()
         mock_availability = MagicMock()
         mock_availability.covers_range.return_value = True
+        mock_availability.start_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        mock_availability.end_date = datetime(2024, 12, 31, tzinfo=timezone.utc)
+        mock_availability.file_count = 5
+        mock_availability.total_rows = 1000
         mock_catalog_service.get_availability.return_value = mock_availability
 
         async def mock_fetch_or_load(*args, **kwargs):
@@ -316,6 +325,7 @@ class TestBacktestCommands:
             raise Exception("Unexpected failure")
 
         mock_orchestrator.execute = mock_execute
+        mock_orchestrator.dispose = MagicMock()
         mock_orchestrator_class.return_value = mock_orchestrator
 
         runner = CliRunner()
@@ -329,27 +339,27 @@ class TestBacktestCommands:
 
     @pytest.mark.component
     def test_run_backtest_required_parameters(self):
-        """Test that run command requires symbol, start, and end parameters."""
+        """Test that run command requires symbol, start, and end parameters in CLI mode."""
         runner = CliRunner()
 
         # Test missing symbol
         result = runner.invoke(run_backtest, ["--start", "2024-01-01", "--end", "2024-01-31"])
         assert result.exit_code == 2
-        assert "Missing option" in result.output
+        assert "Missing required option" in result.output or "--symbol" in result.output
 
         # Test missing start
         result = runner.invoke(run_backtest, ["--symbol", "AAPL", "--end", "2024-01-31"])
         assert result.exit_code == 2
-        assert "Missing option" in result.output
+        assert "Missing required option" in result.output or "--start" in result.output
 
         # Test missing end
         result = runner.invoke(run_backtest, ["--symbol", "AAPL", "--start", "2024-01-01"])
         assert result.exit_code == 2
-        assert "Missing option" in result.output
+        assert "Missing required option" in result.output or "--end" in result.output
 
     @patch("src.cli.commands._backtest_helpers.DataCatalogService")
     @patch("src.cli.commands._backtest_helpers.BacktestOrchestrator")
-    @patch("src.cli.commands.backtest.BacktestRequest")
+    @patch("src.cli.commands._backtest_helpers.BacktestRequest")
     @pytest.mark.component
     def test_run_backtest_default_parameters(
         self, mock_request_class, mock_orchestrator_class, mock_catalog_service_class
@@ -375,6 +385,14 @@ class TestBacktestCommands:
 
         # Mock BacktestRequest to capture from_cli_args call
         mock_request = MagicMock()
+        mock_request.symbol = "AAPL"
+        mock_request.instrument_id = "AAPL.NASDAQ"
+        mock_request.start_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        mock_request.end_date = datetime(2024, 1, 31, tzinfo=timezone.utc)
+        mock_request.bar_type = "1-DAY-LAST"
+        mock_request.starting_balance = Decimal("10000000")
+        mock_request.strategy_type = "sma_crossover"
+        mock_request.strategy_config = {"fast_period": 10, "slow_period": 20}
         mock_request_class.from_cli_args.return_value = mock_request
 
         # Mock orchestrator
@@ -647,7 +665,7 @@ class TestPersistFlag:
 
     @patch("src.cli.commands._backtest_helpers.DataCatalogService")
     @patch("src.cli.commands._backtest_helpers.BacktestOrchestrator")
-    @patch("src.cli.commands.backtest.BacktestRequest")
+    @patch("src.cli.commands._backtest_helpers.BacktestRequest")
     @pytest.mark.component
     def test_run_backtest_with_persist_flag(
         self, mock_request_class, mock_orchestrator_class, mock_catalog_service_class
@@ -656,6 +674,7 @@ class TestPersistFlag:
         # Mock catalog service
         mock_catalog_service = MagicMock()
         mock_availability = MagicMock()
+        mock_availability.covers_range.return_value = True
         mock_availability.start_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
         mock_availability.end_date = datetime(2024, 1, 31, tzinfo=timezone.utc)
         mock_availability.file_count = 5
@@ -671,6 +690,14 @@ class TestPersistFlag:
 
         # Mock request
         mock_request = MagicMock()
+        mock_request.symbol = "AAPL"
+        mock_request.instrument_id = "AAPL.NASDAQ"
+        mock_request.start_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        mock_request.end_date = datetime(2024, 1, 31, tzinfo=timezone.utc)
+        mock_request.bar_type = "1-DAY-LAST"
+        mock_request.starting_balance = Decimal("10000000")
+        mock_request.strategy_type = "sma_crossover"
+        mock_request.strategy_config = {"fast_period": 10, "slow_period": 20}
         mock_request_class.from_cli_args.return_value = mock_request
 
         # Mock orchestrator
@@ -706,7 +733,7 @@ class TestPersistFlag:
 
     @patch("src.cli.commands._backtest_helpers.DataCatalogService")
     @patch("src.cli.commands._backtest_helpers.BacktestOrchestrator")
-    @patch("src.cli.commands.backtest.BacktestRequest")
+    @patch("src.cli.commands._backtest_helpers.BacktestRequest")
     @pytest.mark.component
     def test_run_backtest_with_no_persist_flag(
         self, mock_request_class, mock_orchestrator_class, mock_catalog_service_class
@@ -715,6 +742,7 @@ class TestPersistFlag:
         # Mock catalog service
         mock_catalog_service = MagicMock()
         mock_availability = MagicMock()
+        mock_availability.covers_range.return_value = True
         mock_availability.start_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
         mock_availability.end_date = datetime(2024, 1, 31, tzinfo=timezone.utc)
         mock_availability.file_count = 5
@@ -730,6 +758,14 @@ class TestPersistFlag:
 
         # Mock request
         mock_request = MagicMock()
+        mock_request.symbol = "AAPL"
+        mock_request.instrument_id = "AAPL.NASDAQ"
+        mock_request.start_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        mock_request.end_date = datetime(2024, 1, 31, tzinfo=timezone.utc)
+        mock_request.bar_type = "1-DAY-LAST"
+        mock_request.starting_balance = Decimal("10000000")
+        mock_request.strategy_type = "sma_crossover"
+        mock_request.strategy_config = {"fast_period": 10, "slow_period": 20}
         mock_request_class.from_cli_args.return_value = mock_request
 
         # Mock orchestrator
@@ -765,7 +801,7 @@ class TestPersistFlag:
 
     @patch("src.cli.commands._backtest_helpers.DataCatalogService")
     @patch("src.cli.commands._backtest_helpers.BacktestOrchestrator")
-    @patch("src.cli.commands.backtest.BacktestRequest")
+    @patch("src.cli.commands._backtest_helpers.BacktestRequest")
     @pytest.mark.component
     def test_run_backtest_persist_default_true(
         self, mock_request_class, mock_orchestrator_class, mock_catalog_service_class
@@ -789,6 +825,14 @@ class TestPersistFlag:
 
         # Mock request
         mock_request = MagicMock()
+        mock_request.symbol = "AAPL"
+        mock_request.instrument_id = "AAPL.NASDAQ"
+        mock_request.start_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        mock_request.end_date = datetime(2024, 1, 31, tzinfo=timezone.utc)
+        mock_request.bar_type = "1-DAY-LAST"
+        mock_request.starting_balance = Decimal("10000000")
+        mock_request.strategy_type = "sma_crossover"
+        mock_request.strategy_config = {"fast_period": 10, "slow_period": 20}
         mock_request_class.from_cli_args.return_value = mock_request
 
         # Mock orchestrator
@@ -819,3 +863,312 @@ class TestPersistFlag:
         # Verify persist defaults to True
         call_kwargs = mock_request_class.from_cli_args.call_args.kwargs
         assert call_kwargs["persist"] is True
+
+
+class TestRunBacktestConfigMode:
+    """Test cases for the unified run_backtest command with config file support."""
+
+    @patch("src.cli.commands._backtest_helpers.BacktestOrchestrator")
+    @patch("src.cli.commands._backtest_helpers.generate_mock_data_from_yaml")
+    @pytest.mark.component
+    def test_run_with_yaml_config(self, mock_generate_data, mock_orchestrator_class):
+        """Test running backtest with YAML config file (config mode)."""
+        runner = CliRunner()
+
+        with runner.isolated_filesystem():
+            # Create config file
+            with open("test_config.yaml", "w") as f:
+                f.write("""
+strategy_path: "src.core.strategies.sma_crossover:SMACrossover"
+config_path: "src.core.strategies.sma_crossover:SMACrossoverConfig"
+config:
+  instrument_id: "AAPL.NASDAQ"
+  bar_type: "AAPL.NASDAQ-1-DAY-LAST-EXTERNAL"
+  fast_period: 5
+  slow_period: 10
+backtest:
+  start_date: "2024-01-01"
+  end_date: "2024-01-31"
+  initial_capital: 100000
+""")
+
+            # Mock generate_mock_data_from_yaml
+            mock_bars = MagicMock()
+            mock_instrument = MagicMock()
+            start_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+            end_date = datetime(2024, 1, 31, tzinfo=timezone.utc)
+            mock_generate_data.return_value = (
+                [mock_bars] * 100,
+                mock_instrument,
+                start_date,
+                end_date,
+            )
+
+            # Mock orchestrator
+            mock_orchestrator = MagicMock()
+            mock_orchestrator.execute = AsyncMock(return_value=(MockBacktestResult(), None))
+            mock_orchestrator.dispose = MagicMock()
+            mock_orchestrator_class.return_value = mock_orchestrator
+
+            result = runner.invoke(
+                run_backtest,
+                ["test_config.yaml", "--data-source", "mock", "--no-persist"],
+            )
+
+            assert result.exit_code == 0, f"Exit code was {result.exit_code}: {result.output}"
+            assert "Running backtest from config" in result.output
+            assert "test_config.yaml" in result.output
+            assert "Backtest Results" in result.output
+            assert "Strategy was profitable!" in result.output
+
+    @patch("src.cli.commands._backtest_helpers.BacktestOrchestrator")
+    @patch("src.cli.commands._backtest_helpers.generate_mock_data_from_yaml")
+    @pytest.mark.component
+    def test_run_with_yaml_and_date_override(self, mock_generate_data, mock_orchestrator_class):
+        """Test running backtest with YAML config and date override."""
+        runner = CliRunner()
+
+        with runner.isolated_filesystem():
+            # Create config file with dates
+            with open("test_config.yaml", "w") as f:
+                f.write("""
+strategy_path: "src.core.strategies.apolo_rsi:ApoloRSI"
+config_path: "src.core.strategies.apolo_rsi:ApoloRSIConfig"
+config:
+  instrument_id: "AMD.NASDAQ"
+  bar_type: "AMD.NASDAQ-1-DAY-LAST-EXTERNAL"
+  trade_size: 100
+backtest:
+  start_date: "2024-01-01"
+  end_date: "2024-12-31"
+  initial_capital: 100000
+""")
+
+            # Mock generate_mock_data_from_yaml
+            mock_bars = MagicMock()
+            mock_instrument = MagicMock()
+            start_date = datetime(2024, 6, 1, tzinfo=timezone.utc)
+            end_date = datetime(2024, 6, 30, tzinfo=timezone.utc)
+            mock_generate_data.return_value = (
+                [mock_bars] * 30,
+                mock_instrument,
+                start_date,
+                end_date,
+            )
+
+            # Mock orchestrator
+            mock_orchestrator = MagicMock()
+            mock_orchestrator.execute = AsyncMock(return_value=(MockBacktestResult(), None))
+            mock_orchestrator.dispose = MagicMock()
+            mock_orchestrator_class.return_value = mock_orchestrator
+
+            # Run with date override
+            result = runner.invoke(
+                run_backtest,
+                [
+                    "test_config.yaml",
+                    "--start",
+                    "2024-06-01",
+                    "--end",
+                    "2024-06-30",
+                    "--data-source",
+                    "mock",
+                    "--no-persist",
+                ],
+            )
+
+            assert result.exit_code == 0, f"Exit code was {result.exit_code}: {result.output}"
+            # Verify the overridden dates are shown
+            assert "2024-06-01" in result.output
+            assert "2024-06-30" in result.output
+
+    @pytest.mark.component
+    def test_run_cli_mode_requires_symbol(self):
+        """Test that CLI mode requires --symbol option."""
+        runner = CliRunner()
+
+        result = runner.invoke(
+            run_backtest,
+            ["--start", "2024-01-01", "--end", "2024-01-31"],
+        )
+
+        assert result.exit_code != 0
+        assert "Missing required option" in result.output or "--symbol" in result.output
+
+    @pytest.mark.component
+    def test_run_cli_mode_requires_start(self):
+        """Test that CLI mode requires --start option."""
+        runner = CliRunner()
+
+        result = runner.invoke(
+            run_backtest,
+            ["--symbol", "AAPL", "--end", "2024-01-31"],
+        )
+
+        assert result.exit_code != 0
+        assert "Missing required option" in result.output or "--start" in result.output
+
+    @pytest.mark.component
+    def test_run_cli_mode_requires_end(self):
+        """Test that CLI mode requires --end option."""
+        runner = CliRunner()
+
+        result = runner.invoke(
+            run_backtest,
+            ["--symbol", "AAPL", "--start", "2024-01-01"],
+        )
+
+        assert result.exit_code != 0
+        assert "Missing required option" in result.output or "--end" in result.output
+
+    @patch("src.cli.commands._backtest_helpers.DataCatalogService")
+    @patch("src.cli.commands._backtest_helpers.BacktestOrchestrator")
+    @pytest.mark.component
+    def test_run_backward_compatibility_cli_mode(
+        self, mock_orchestrator_class, mock_catalog_service_class
+    ):
+        """Test that existing CLI mode behavior is preserved (backward compatibility)."""
+        # Mock catalog service
+        mock_catalog_service = MagicMock()
+        mock_availability = MagicMock()
+        mock_availability.covers_range.return_value = True
+        mock_availability.start_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        mock_availability.end_date = datetime(2024, 12, 31, tzinfo=timezone.utc)
+        mock_availability.file_count = 5
+        mock_availability.total_rows = 1000
+
+        mock_catalog_service.get_availability.return_value = mock_availability
+
+        async def mock_fetch_or_load(*args, **kwargs):
+            return [MagicMock()]
+
+        mock_catalog_service.fetch_or_load = mock_fetch_or_load
+        mock_catalog_service.load_instrument.return_value = MagicMock()
+        mock_catalog_service_class.return_value = mock_catalog_service
+
+        # Mock backtest orchestrator
+        mock_orchestrator = MagicMock()
+
+        async def mock_execute(*args, **kwargs):
+            return MockBacktestResult(), None
+
+        mock_orchestrator.execute = mock_execute
+        mock_orchestrator.dispose = MagicMock()
+        mock_orchestrator_class.return_value = mock_orchestrator
+
+        runner = CliRunner()
+        result = runner.invoke(
+            run_backtest,
+            [
+                "--symbol",
+                "AAPL",
+                "--start",
+                "2024-01-01",
+                "--end",
+                "2024-01-31",
+                "--fast-period",
+                "5",
+                "--slow-period",
+                "10",
+                "--trade-size",
+                "100000",
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert "SMA_CROSSOVER" in result.output.upper() or "AAPL" in result.output
+        assert "Backtest Results" in result.output
+        assert "Strategy was profitable!" in result.output
+
+    @pytest.mark.component
+    def test_run_mock_source_requires_config_file(self):
+        """Test that mock data source requires a config file."""
+        runner = CliRunner()
+
+        result = runner.invoke(
+            run_backtest,
+            [
+                "--symbol",
+                "AAPL",
+                "--start",
+                "2024-01-01",
+                "--end",
+                "2024-01-31",
+                "--data-source",
+                "mock",
+            ],
+        )
+
+        assert result.exit_code != 0
+        assert "Mock data source requires a YAML config" in result.output
+
+    @pytest.mark.component
+    def test_run_config_file_not_found(self):
+        """Test error when config file does not exist."""
+        runner = CliRunner()
+
+        result = runner.invoke(
+            run_backtest,
+            ["nonexistent_config.yaml"],
+        )
+
+        assert result.exit_code != 0
+        assert "does not exist" in result.output.lower() or "not found" in result.output.lower()
+
+    @patch("src.cli.commands._backtest_helpers.BacktestOrchestrator")
+    @patch("src.cli.commands._backtest_helpers.generate_mock_data_from_yaml")
+    @pytest.mark.component
+    def test_run_with_yaml_and_starting_balance_override(
+        self, mock_generate_data, mock_orchestrator_class
+    ):
+        """Test running backtest with YAML config and starting balance override."""
+        runner = CliRunner()
+
+        with runner.isolated_filesystem():
+            # Create config file
+            with open("test_config.yaml", "w") as f:
+                f.write("""
+strategy_path: "src.core.strategies.apolo_rsi:ApoloRSI"
+config_path: "src.core.strategies.apolo_rsi:ApoloRSIConfig"
+config:
+  instrument_id: "AMD.NASDAQ"
+  bar_type: "AMD.NASDAQ-1-DAY-LAST-EXTERNAL"
+backtest:
+  start_date: "2024-01-01"
+  end_date: "2024-06-30"
+  initial_capital: 100000
+""")
+
+            # Mock generate_mock_data_from_yaml
+            mock_bars = MagicMock()
+            mock_instrument = MagicMock()
+            start_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+            end_date = datetime(2024, 6, 30, tzinfo=timezone.utc)
+            mock_generate_data.return_value = (
+                [mock_bars] * 100,
+                mock_instrument,
+                start_date,
+                end_date,
+            )
+
+            # Mock orchestrator
+            mock_orchestrator = MagicMock()
+            mock_orchestrator.execute = AsyncMock(return_value=(MockBacktestResult(), None))
+            mock_orchestrator.dispose = MagicMock()
+            mock_orchestrator_class.return_value = mock_orchestrator
+
+            result = runner.invoke(
+                run_backtest,
+                [
+                    "test_config.yaml",
+                    "--starting-balance",
+                    "500000",
+                    "--data-source",
+                    "mock",
+                    "--no-persist",
+                ],
+            )
+
+            assert result.exit_code == 0, f"Exit code was {result.exit_code}: {result.output}"
+            # Verify the overridden balance is shown
+            assert "$500,000" in result.output

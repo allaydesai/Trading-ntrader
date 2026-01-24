@@ -4,7 +4,6 @@ import asyncio
 import sys
 import time
 from datetime import datetime, timezone
-from decimal import Decimal
 
 import click
 from rich.console import Console
@@ -14,6 +13,7 @@ from src.cli.commands._backtest_helpers import (
     display_backtest_results,
     execute_backtest,
     load_backtest_data,
+    resolve_backtest_request,
 )
 from src.cli.commands.compare import compare_backtests
 from src.cli.commands.reproduce import reproduce_backtest
@@ -41,17 +41,15 @@ from src.utils.error_messages import (
 console = Console()
 error_formatter = ErrorFormatter(console)
 
-# Constants for portfolio sizing
-# When using percentage-based sizing, multiply trade_size by this factor
-# to get portfolio_value (e.g., for 10% position sizing)
-PORTFOLIO_SIZE_MULTIPLIER = 10
-DEFAULT_POSITION_SIZE_PCT = Decimal("10.0")
-
 
 def validate_strategy(ctx, param, value):
-    """Validate strategy name against registry."""
+    """Validate strategy name against registry.
+
+    Returns None for config mode (strategy comes from YAML), validates against
+    registry for CLI mode.
+    """
     if value is None:
-        return "sma_crossover"  # default
+        return None  # Allow None for config mode - will use YAML strategy
 
     # Ensure strategies are discovered
     StrategyRegistry.discover()
@@ -78,34 +76,51 @@ def backtest():
 
 
 @backtest.command("run")
+@click.argument("config_file", type=click.Path(exists=True, dir_okay=False), required=False)
+@click.option(
+    "--symbol",
+    "-sym",
+    help="Trading symbol (required in CLI mode, override in config mode)",
+)
 @click.option(
     "--strategy",
     "-s",
-    default="sma_crossover",
+    default=None,
     callback=validate_strategy,
-    help="Strategy to run. Use 'backtest list' to see available strategies.",
+    help="Strategy to run (CLI mode only). Use 'backtest list' to see available strategies.",
 )
-@click.option("--symbol", "-sym", required=True, help="Trading symbol (e.g., AAPL, EUR/USD)")
 @click.option(
     "--start",
     "-st",
-    required=True,
     type=click.DateTime(formats=["%Y-%m-%d", "%Y-%m-%d %H:%M:%S"]),
     help="Start date (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS)",
 )
 @click.option(
     "--end",
     "-e",
-    required=True,
     type=click.DateTime(formats=["%Y-%m-%d", "%Y-%m-%d %H:%M:%S"]),
     help="End date (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS)",
 )
-@click.option("--fast-period", "-f", default=10, type=int, help="Fast SMA period (default: 10)")
-@click.option("--slow-period", "-sl", default=20, type=int, help="Slow SMA period (default: 20)")
+@click.option(
+    "--data-source",
+    "-ds",
+    type=click.Choice(["catalog", "mock"], case_sensitive=False),
+    default=None,
+    help="Data source to use (default: catalog)",
+)
+@click.option(
+    "--starting-balance",
+    "-sb",
+    type=float,
+    default=None,
+    help="Starting balance (overrides config)",
+)
+@click.option("--fast-period", "-f", default=None, type=int, help="Fast SMA period (default: 10)")
+@click.option("--slow-period", "-sl", default=None, type=int, help="Slow SMA period (default: 20)")
 @click.option(
     "--trade-size",
     "-ts",
-    default=1000000,
+    default=None,
     type=int,
     help=(
         "Trade size in SHARES (default: 1,000,000 shares). Note: 1M shares @ $180 = $180M notional"
@@ -127,148 +142,160 @@ def backtest():
     help="Save backtest results to database (default: persist)",
 )
 def run_backtest(
-    strategy: str,
-    symbol: str,
-    start: datetime,
-    end: datetime,
-    fast_period: int,
-    slow_period: int,
-    trade_size: int,
+    config_file: str | None,
+    symbol: str | None,
+    strategy: str | None,
+    start: datetime | None,
+    end: datetime | None,
+    data_source: str | None,
+    starting_balance: float | None,
+    fast_period: int | None,
+    slow_period: int | None,
+    trade_size: int | None,
     timeframe: str | None,
     persist: bool,
 ):
-    """Run backtest with real market data from database."""
+    """Run backtest with real market data.
+
+    Supports two modes:
+
+    \b
+    CONFIG MODE: backtest run config.yaml [--start DATE] [--end DATE] ...
+      Uses YAML config file for strategy parameters.
+      CLI options override config values.
+
+    \b
+    CLI MODE: backtest run --symbol AAPL --start DATE --end DATE [--strategy NAME] ...
+      All parameters from command line.
+      --symbol, --start, and --end are required.
+
+    \b
+    Examples:
+      backtest run configs/apolo_rsi_amd.yaml
+      backtest run configs/apolo_rsi_amd.yaml --start 2024-06-01
+      backtest run --symbol AAPL --start 2024-01-01 --end 2024-12-31
+      backtest run --symbol AAPL --start 2024-01-01 --end 2024-12-31 --strategy sma_crossover
+    """
 
     async def run_backtest_async():
         # Reason: Track execution time for performance reporting
         execution_start_time = time.time()
 
-        # Ensure start and end dates are timezone-aware (UTC) for catalog comparison
-        nonlocal start, end
-        if start.tzinfo is None:
-            start = start.replace(tzinfo=timezone.utc)
-        if end.tzinfo is None:
-            end = end.replace(tzinfo=timezone.utc)
+        try:
+            # Resolve request based on mode (config vs CLI)
+            request, resolved_data_source = resolve_backtest_request(
+                config_file=config_file,
+                symbol=symbol,
+                strategy=strategy,
+                start=start,
+                end=end,
+                data_source=data_source,
+                starting_balance=starting_balance,
+                persist=persist,
+                console=console,
+                fast_period=fast_period,
+                slow_period=slow_period,
+                trade_size=trade_size,
+                timeframe=timeframe,
+            )
+        except click.UsageError:
+            # Re-raise UsageError to let Click handle it
+            raise
 
-        # Handle strategy alias
-        display_strategy = strategy
-        if strategy == "sma":
-            display_strategy = "SMA_CROSSOVER"
+        # Display mode indicator
+        if config_file:
+            console.print(f"🚀 Running backtest from config: {config_file}", style="cyan bold")
+        else:
+            console.print(
+                f"🚀 Running {request.strategy_type.upper()} backtest for {request.symbol}",
+                style="cyan bold",
+            )
 
         console.print(
-            f"🚀 Running {display_strategy.upper()} backtest for {symbol.upper()}",
-            style="cyan bold",
+            f"   Period: {request.start_date.strftime('%Y-%m-%d')} to "
+            f"{request.end_date.strftime('%Y-%m-%d')}"
         )
-        console.print(f"   Period: {start.strftime('%Y-%m-%d')} to {end.strftime('%Y-%m-%d')}")
-
-        # Display strategy-specific parameters
-        if strategy in ["sma", "sma_crossover"]:
-            console.print(f"   Strategy: Fast SMA({fast_period}) vs Slow SMA({slow_period})")
-        else:
-            console.print(f"   Strategy: {display_strategy.replace('_', ' ').title()}")
-
-        console.print(f"   Trade Size: {trade_size:,}")
+        console.print(f"   Data source: {resolved_data_source}")
+        console.print(f"   Starting Balance: ${request.starting_balance:,.0f}")
         console.print()
 
         try:
-            # Convert symbol to instrument_id format (e.g., "AAPL" -> "AAPL.NASDAQ")
-            if "." in symbol:
-                instrument_id = symbol.upper()
-            else:
-                instrument_id = f"{symbol.upper()}.NASDAQ"
+            # Load data based on data source
+            if resolved_data_source == "mock":
+                # Load YAML for mock data generation
+                import yaml
 
-            # Determine bar type from explicit timeframe or auto-detect from date format
-            if timeframe:
-                bar_type_spec = f"{timeframe}-LAST"
-            else:
-                # Auto-detect: Date-only (YYYY-MM-DD) → 1-DAY, Date-time → 1-MINUTE
-                if start.time().hour == 0 and start.time().minute == 0 and start.time().second == 0:
-                    bar_type_spec = "1-DAY-LAST"
-                else:
-                    bar_type_spec = "1-MINUTE-LAST"
+                with open(config_file, "r") as f:
+                    yaml_data = yaml.safe_load(f)
 
-            # Load data from catalog with IBKR fallback
-            try:
+                data_result = await load_backtest_data(
+                    data_source="mock",
+                    instrument_id=request.instrument_id,
+                    bar_type_spec=request.bar_type,
+                    start=request.start_date,
+                    end=request.end_date,
+                    console=console,
+                    yaml_data=yaml_data,
+                )
+            else:
+                # Load from catalog
                 data_result = await load_backtest_data(
                     data_source="catalog",
-                    instrument_id=instrument_id,
-                    bar_type_spec=bar_type_spec,
-                    start=start,
-                    end=end,
+                    instrument_id=request.instrument_id,
+                    bar_type_spec=request.bar_type,
+                    start=request.start_date,
+                    end=request.end_date,
                     console=console,
                 )
-                bars = data_result.bars
-                instrument = data_result.instrument
-                data_source_used = data_result.data_source_used
-            except DataNotFoundError:
-                console.print()
-                error_msg = format_error_with_context(
-                    DATA_NOT_FOUND_NO_IBKR,
-                    instrument=instrument_id,
-                    start_date=start.strftime("%Y-%m-%d"),
-                    end_date=end.strftime("%Y-%m-%d"),
-                )
-                error_formatter.format_error(error_msg)
-                sys.exit(error_formatter.get_exit_code(error_msg))
-            except IBKRConnectionError as e:
-                console.print()
-                error_msg = format_error_with_context(
-                    IBKR_CONNECTION_FAILED,
-                    connection_details=str(e),
-                )
-                error_formatter.format_error(error_msg)
-                sys.exit(error_formatter.get_exit_code(error_msg))
-            except RateLimitExceededError as e:
-                console.print()
-                error_msg = format_error_with_context(
-                    RATE_LIMIT_EXCEEDED,
-                    retry_after=str(e.retry_after),
-                    request_count=str(e.request_count or "unknown"),
-                )
-                error_formatter.format_error(error_msg)
-                sys.exit(error_formatter.get_exit_code(error_msg))
-            except CatalogCorruptionError as e:
-                console.print()
-                error_msg = format_error_with_context(
-                    CATALOG_CORRUPTION_DETECTED,
-                    file_path=str(e),
-                )
-                error_formatter.format_error(error_msg)
-                sys.exit(error_formatter.get_exit_code(error_msg))
-            except CatalogError as e:
-                console.print()
-                error_formatter.print_warning(
-                    f"Catalog error: {str(e)}",
-                    "Check logs for more details",
-                )
-                sys.exit(4)
 
-            # Prepare strategy parameters
-            portfolio_value = Decimal(str(trade_size * PORTFOLIO_SIZE_MULTIPLIER))
-            if strategy in ["sma", "sma_crossover", "sma_crossover_long_only"]:
-                strategy_params = {
-                    "portfolio_value": portfolio_value,
-                    "position_size_pct": DEFAULT_POSITION_SIZE_PCT,
-                    "fast_period": fast_period,
-                    "slow_period": slow_period,
-                }
-            elif strategy == "bollinger_reversal":
-                strategy_params = {"portfolio_value": portfolio_value}
-            else:
-                strategy_params = {"trade_size": trade_size}
+            bars = data_result.bars
+            instrument = data_result.instrument
+            data_source_used = data_result.data_source_used
 
-            # Build BacktestRequest from CLI args
-            request = BacktestRequest.from_cli_args(
-                strategy=strategy,
-                symbol=symbol.upper(),
-                start=start,
-                end=end,
-                bar_type_spec=bar_type_spec,
-                persist=persist,
-                starting_balance=portfolio_value,
-                **strategy_params,
+        except DataNotFoundError:
+            console.print()
+            error_msg = format_error_with_context(
+                DATA_NOT_FOUND_NO_IBKR,
+                instrument=request.instrument_id,
+                start_date=request.start_date.strftime("%Y-%m-%d"),
+                end_date=request.end_date.strftime("%Y-%m-%d"),
             )
+            error_formatter.format_error(error_msg)
+            sys.exit(error_formatter.get_exit_code(error_msg))
+        except IBKRConnectionError as e:
+            console.print()
+            error_msg = format_error_with_context(
+                IBKR_CONNECTION_FAILED,
+                connection_details=str(e),
+            )
+            error_formatter.format_error(error_msg)
+            sys.exit(error_formatter.get_exit_code(error_msg))
+        except RateLimitExceededError as e:
+            console.print()
+            error_msg = format_error_with_context(
+                RATE_LIMIT_EXCEEDED,
+                retry_after=str(e.retry_after),
+                request_count=str(e.request_count or "unknown"),
+            )
+            error_formatter.format_error(error_msg)
+            sys.exit(error_formatter.get_exit_code(error_msg))
+        except CatalogCorruptionError as e:
+            console.print()
+            error_msg = format_error_with_context(
+                CATALOG_CORRUPTION_DETECTED,
+                file_path=str(e),
+            )
+            error_formatter.format_error(error_msg)
+            sys.exit(error_formatter.get_exit_code(error_msg))
+        except CatalogError as e:
+            console.print()
+            error_formatter.print_warning(
+                f"Catalog error: {str(e)}",
+                "Check logs for more details",
+            )
+            sys.exit(4)
 
+        try:
             # Execute backtest with orchestrator
             result, run_id = await execute_backtest(
                 request=request,
@@ -282,18 +309,37 @@ def run_backtest(
             total_execution_time = time.time() - execution_start_time
 
             # Build context rows for display
-            if strategy in ["sma", "sma_crossover"]:
-                strategy_description = f"SMA({fast_period}/{slow_period})"
+            if config_file:
+                context_rows = {
+                    "Configuration File": config_file,
+                    "Symbol": request.symbol,
+                    "Period": (
+                        f"{request.start_date.strftime('%Y-%m-%d')} to "
+                        f"{request.end_date.strftime('%Y-%m-%d')}"
+                    ),
+                    "Data Source": data_source_used,
+                }
+                table_title = "Strategy Configuration Backtest Results"
             else:
-                strategy_description = display_strategy.replace("_", " ").title()
+                # CLI mode - show strategy details
+                if request.strategy_type in ["sma", "sma_crossover"]:
+                    fast = request.strategy_config.get("fast_period", 10)
+                    slow = request.strategy_config.get("slow_period", 20)
+                    strategy_description = f"SMA({fast}/{slow})"
+                else:
+                    strategy_description = request.strategy_type.replace("_", " ").title()
 
-            strategy_name = display_strategy.replace("_", " ").title()
-            context_rows = {
-                "Strategy": strategy_description,
-                "Symbol": symbol.upper(),
-                "Period": f"{start.strftime('%Y-%m-%d')} to {end.strftime('%Y-%m-%d')}",
-                "Data Source": data_source_used,
-            }
+                context_rows = {
+                    "Strategy": strategy_description,
+                    "Symbol": request.symbol,
+                    "Period": (
+                        f"{request.start_date.strftime('%Y-%m-%d')} to "
+                        f"{request.end_date.strftime('%Y-%m-%d')}"
+                    ),
+                    "Data Source": data_source_used,
+                }
+                strategy_name = request.strategy_type.replace("_", " ").title()
+                table_title = f"{request.symbol} {strategy_name} Strategy Results"
 
             # Display results using helper
             display_backtest_results(
@@ -302,7 +348,7 @@ def run_backtest(
                 run_id=run_id,
                 persist=persist,
                 context_rows=context_rows,
-                table_title=f"{symbol.upper()} {strategy_name} Strategy Results",
+                table_title=table_title,
                 execution_time=total_execution_time,
             )
 
@@ -316,7 +362,10 @@ def run_backtest(
             return False
 
     # Run async function
-    result = asyncio.run(run_backtest_async())
+    try:
+        result = asyncio.run(run_backtest_async())
+    except click.UsageError:
+        raise
 
     if not result:
         raise click.ClickException("Backtest failed")

@@ -4,7 +4,7 @@
 
 **Author:** Development Team
 **Created:** 2025-01-24
-**Status:** In Progress (Phase 1 Complete)
+**Status:** In Progress (Phases 1-3 Complete)
 **Branch:** `strategy_apolo`
 **Last Updated:** 2025-01-24
 
@@ -44,7 +44,20 @@ This creates several issues:
 | `_backtest_helpers.py` | 335 lines | Shared helper functions (new) |
 | **Total** | **925 lines** | Combined (but deduplicated logic) |
 
-**Key Improvement:** Both `run_backtest()` and `run_config_backtest()` now share the same data loading, execution, and display logic via helpers.
+**After Phase 2/3:**
+| Component | Lines of Code | Location |
+|-----------|---------------|----------|
+| `backtest.py` | 639 lines | CLI commands (unified run command) |
+| `_backtest_helpers.py` | 616 lines | Shared helpers + resolve/override functions |
+| **Total** | **1255 lines** | Combined |
+
+**Note:** Line count increased due to:
+- New `resolve_backtest_request()` function (~100 lines)
+- New `apply_cli_overrides()` function (~50 lines)
+- Internal helper functions `_resolve_config_mode()` and `_resolve_cli_mode()` (~80 lines)
+- Enhanced docstrings and validation logic
+
+**Key Improvement:** `run_backtest()` now handles both CLI and config modes through `resolve_backtest_request()`. The `run_config_backtest()` command remains temporarily for backward compatibility but will be deprecated in Phase 5.
 
 ### Duplicated Logic
 
@@ -192,12 +205,17 @@ ntrader backtest run --symbol AAPL --strategy sma_crossover \
 ```
 src/cli/commands/
 ├── backtest.py              # CLI command definitions (slimmed down)
-└── _backtest_helpers.py     # Extracted helper functions (NEW)
-    ├── load_backtest_data()
-    ├── execute_backtest()
-    ├── display_backtest_results()
-    ├── resolve_backtest_request()
-    └── apply_cli_overrides()
+└── _backtest_helpers.py     # Extracted helper functions
+    ├── DataLoadResult       # Dataclass for data loading results
+    ├── apply_cli_overrides()      # ✅ Phase 3: Apply CLI overrides to request
+    ├── resolve_backtest_request() # ✅ Phase 2: Resolve inputs to BacktestRequest
+    ├── _resolve_config_mode()     # Internal: Handle YAML config mode
+    ├── _resolve_cli_mode()        # Internal: Handle CLI flag mode
+    ├── load_backtest_data()       # ✅ Phase 1: Unified data loading
+    ├── _load_mock_data()          # Internal: Generate mock data
+    ├── _load_catalog_data()       # Internal: Load from catalog with IBKR fallback
+    ├── execute_backtest()         # ✅ Phase 1: Orchestrator execution wrapper
+    └── display_backtest_results() # ✅ Phase 1: Results table formatting
 ```
 
 ## 5. Implementation Phases
@@ -226,51 +244,91 @@ src/cli/commands/
 - Created 19 unit tests with 92% coverage for helper functions
 - All 41 tests pass (19 helper + 22 component)
 
-### Phase 2: Add Config File Support to `run`
+### Phase 2: Add Config File Support to `run` ✅ COMPLETE
 **Goal:** Enable `backtest run config.yaml` syntax
 
 **Tasks:**
-- [ ] Add optional `config_file` positional argument to `run_backtest`
-- [ ] Create `resolve_backtest_request()` that handles both YAML and CLI input
-- [ ] Implement input mode detection (YAML file vs CLI flags)
-- [ ] Add validation for mutually exclusive inputs
-- [ ] Add tests for config file mode
+- [x] Add optional `config_file` positional argument to `run_backtest`
+- [x] Create `resolve_backtest_request()` that handles both YAML and CLI input
+- [x] Implement input mode detection (YAML file vs CLI flags)
+- [x] Add validation for mutually exclusive inputs
+- [x] Add tests for config file mode
 
-**New CLI Signature:**
+**Implementation Details (2025-01-24):**
+- Modified `run_backtest()` command in `backtest.py` to accept optional `config_file` positional argument
+- Created `resolve_backtest_request()` function in `_backtest_helpers.py` that:
+  - Detects mode based on `config_file` presence
+  - Validates required parameters for CLI mode (`--symbol`, `--start`, `--end`)
+  - Raises clear error messages guiding users to correct syntax
+- Updated `validate_strategy()` callback to allow `None` for config mode (strategy comes from YAML)
+- Added `--data-source` option supporting "catalog" and "mock"
+- Added `--starting-balance` option for overriding config values
+- Created 9 new component tests in `TestRunBacktestConfigMode` class
+- All 31 component tests pass
+
+**New CLI Signature (implemented):**
 ```python
 @backtest.command("run")
-@click.argument("config_file", type=click.Path(exists=True), required=False)
-@click.option("--symbol", "-s", help="Trading symbol (CLI mode)")
-@click.option("--strategy", help="Strategy name (CLI mode)")
-@click.option("--start", type=click.DateTime(), help="Start date (override)")
-@click.option("--end", type=click.DateTime(), help="End date (override)")
-@click.option("--data-source", type=click.Choice(["catalog", "mock"]))
-@click.option("--starting-balance", type=float, help="Initial capital (override)")
+@click.argument("config_file", type=click.Path(exists=True, dir_okay=False), required=False)
+@click.option("--symbol", "-sym", help="Trading symbol (required in CLI mode, override in config mode)")
+@click.option("--strategy", "-s", default=None, callback=validate_strategy, help="Strategy (CLI mode only)")
+@click.option("--start", "-st", type=click.DateTime(), help="Start date (override)")
+@click.option("--end", "-e", type=click.DateTime(), help="End date (override)")
+@click.option("--data-source", "-ds", type=click.Choice(["catalog", "mock"]))
+@click.option("--starting-balance", "-sb", type=float, help="Initial capital (override)")
 @click.option("--persist/--no-persist", default=True)
 def run_backtest(config_file, symbol, strategy, start, end, ...):
 ```
 
-### Phase 3: Implement CLI Overrides
+### Phase 3: Implement CLI Overrides ✅ COMPLETE
 **Goal:** Allow CLI flags to override YAML config values
 
 **Tasks:**
-- [ ] Create `apply_cli_overrides(yaml_config, cli_args)` function
-- [ ] Support overriding: start, end, data_source, starting_balance, symbol
-- [ ] Add clear precedence rules (CLI > YAML > defaults)
-- [ ] Add tests for override combinations
+- [x] Create `apply_cli_overrides(yaml_config, cli_args)` function
+- [x] Support overriding: start, end, data_source, starting_balance, symbol
+- [x] Add clear precedence rules (CLI > YAML > defaults)
+- [x] Add tests for override combinations
 
-**Override Behavior:**
+**Implementation Details (2025-01-24):**
+- Created `apply_cli_overrides()` function in `_backtest_helpers.py`:
+  - Accepts a `BacktestRequest` and optional override values
+  - Returns the same request if no overrides provided
+  - Creates a new request copy with overrides applied using Pydantic's `model_copy()`
+  - Handles symbol override by rebuilding `instrument_id` (e.g., "AAPL" → "AAPL.NASDAQ")
+  - Ensures timezone-aware dates (converts naive dates to UTC)
+- Added 6 unit tests in `TestApplyCliOverrides` class covering:
+  - No overrides returns same request
+  - Start/end date overrides
+  - Symbol override rebuilds instrument_id
+  - Starting balance override
+  - Multiple overrides applied together
+  - Timezone-naive dates converted to UTC
+- All 37 unit tests pass
+
+**Override Behavior (implemented):**
 ```python
-def apply_cli_overrides(request: BacktestRequest, cli_args: dict) -> BacktestRequest:
+def apply_cli_overrides(
+    request: BacktestRequest,
+    *,
+    symbol: str | None,
+    start: datetime | None,
+    end: datetime | None,
+    starting_balance: float | None,
+) -> BacktestRequest:
     """Apply CLI argument overrides to a config-based request."""
-    if cli_args.get("start"):
-        request.start_date = cli_args["start"]
-    if cli_args.get("end"):
-        request.end_date = cli_args["end"]
-    if cli_args.get("starting_balance"):
-        request.starting_balance = cli_args["starting_balance"]
-    # ... etc
-    return request
+    updates: dict = {}
+    if symbol is not None:
+        symbol_upper = symbol.upper()
+        instrument_id = f"{symbol_upper}.NASDAQ" if "." not in symbol_upper else symbol_upper
+        updates["symbol"] = symbol_upper.split(".")[0]
+        updates["instrument_id"] = instrument_id
+    if start is not None:
+        updates["start_date"] = start.replace(tzinfo=timezone.utc) if start.tzinfo is None else start
+    if end is not None:
+        updates["end_date"] = end.replace(tzinfo=timezone.utc) if end.tzinfo is None else end
+    if starting_balance is not None:
+        updates["starting_balance"] = Decimal(str(starting_balance))
+    return request if not updates else request.model_copy(update=updates)
 ```
 
 ### Phase 4: Unify Data Loading Pipeline
@@ -319,30 +377,44 @@ def apply_cli_overrides(request: BacktestRequest, cli_args: dict) -> BacktestReq
 ### New Test Cases
 
 ```python
-# Config file mode
+# Config file mode ✅ IMPLEMENTED
 def test_run_with_yaml_config():
     """Test running backtest with YAML config file."""
 
 def test_run_with_yaml_and_date_override():
     """Test CLI date override takes precedence over YAML."""
 
-def test_run_with_yaml_and_data_source_override():
-    """Test CLI data source override."""
+def test_run_with_yaml_and_starting_balance_override():
+    """Test CLI starting balance override."""
 
-# Input validation
-def test_run_rejects_config_and_symbol_together():
-    """Test mutual exclusivity of config file and CLI symbol."""
-
-def test_run_requires_symbol_without_config():
+# Input validation ✅ IMPLEMENTED
+def test_run_cli_mode_requires_symbol():
     """Test symbol is required in CLI mode."""
 
-# Data loading
+def test_run_cli_mode_requires_start():
+    """Test start date is required in CLI mode."""
+
+def test_run_cli_mode_requires_end():
+    """Test end date is required in CLI mode."""
+
+def test_run_mock_source_requires_config_file():
+    """Test mock data source requires config file."""
+
+# Backward compatibility ✅ IMPLEMENTED
+def test_run_backward_compatibility_cli_mode():
+    """Test existing CLI mode behavior is preserved."""
+
+# Data loading (existing tests cover this)
 def test_run_catalog_with_ibkr_fallback():
     """Test IBKR auto-fetch when catalog is incomplete."""
 
 def test_run_mock_data_source():
     """Test mock data generation via --data-source mock."""
 ```
+
+**Unit Tests Added (Phase 2/3):**
+- `TestApplyCliOverrides` - 6 tests for CLI override function
+- `TestResolveBacktestRequest` - 11 tests for request resolution logic
 
 ### Coverage Requirements
 
@@ -366,26 +438,26 @@ Each phase is independently deployable and reversible:
 ## 8. Success Criteria
 
 ### Functional Requirements
-- [ ] `backtest run config.yaml` works identically to current `run-config`
-- [ ] `backtest run --symbol X --strategy Y` works identically to current `run`
-- [ ] CLI overrides correctly modify YAML config values
-- [ ] IBKR auto-fetch works in config mode
-- [ ] Results persist and display in Web UI
+- [x] `backtest run config.yaml` works identically to current `run-config`
+- [x] `backtest run --symbol X --strategy Y` works identically to current `run`
+- [x] CLI overrides correctly modify YAML config values
+- [ ] IBKR auto-fetch works in config mode (Phase 4)
+- [ ] Results persist and display in Web UI (needs verification)
 
 ### Non-Functional Requirements
-- [ ] Code reduction: 733 → ~400 lines (-45%)
-- [ ] All existing tests pass
-- [ ] No breaking changes to CLI interface during transition
-- [ ] Clear deprecation path for `run-config`
+- [ ] Code reduction: 733 → ~400 lines (-45%) (in progress, will complete with Phase 5/6)
+- [x] All existing tests pass (68 tests: 37 unit + 31 component)
+- [x] No breaking changes to CLI interface during transition
+- [ ] Clear deprecation path for `run-config` (Phase 5)
 
 ## 9. Timeline
 
 | Phase | Description | Dependencies | Status |
 |-------|-------------|--------------|--------|
 | 1 | Extract helpers | None | ✅ Complete |
-| 2 | Add config support | Phase 1 | 🔜 Next |
-| 3 | CLI overrides | Phase 2 | ⏳ Pending |
-| 4 | Unify data pipeline | Phase 3 | ⏳ Pending |
+| 2 | Add config support | Phase 1 | ✅ Complete |
+| 3 | CLI overrides | Phase 2 | ✅ Complete |
+| 4 | Unify data pipeline | Phase 3 | 🔜 Next |
 | 5 | Deprecate run-config | Phase 4 | ⏳ Pending |
 | 6 | Remove run-config | Phase 5 + user migration | ⏳ Pending |
 
