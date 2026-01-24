@@ -4,7 +4,7 @@
 
 **Author:** Development Team
 **Created:** 2025-01-24
-**Status:** In Progress (Phases 1-3 Complete)
+**Status:** In Progress (Phases 1-3, 5 Complete)
 **Branch:** `strategy_apolo`
 **Last Updated:** 2025-01-24
 
@@ -340,21 +340,31 @@ def apply_cli_overrides(
 - [ ] Add clear messaging about data source used
 - [ ] Test edge cases: partial catalog, no IBKR connection, mock mode
 
-### Phase 5: Deprecate `run-config`
+### Phase 5: Deprecate `run-config` ✅ COMPLETE
 **Goal:** Transition users to unified command
 
 **Tasks:**
-- [ ] Add deprecation warning to `run-config` command
-- [ ] Update documentation to recommend `backtest run config.yaml`
-- [ ] Update README and help text
-- [ ] Keep `run-config` functional for 1-2 releases
+- [x] Add deprecation warning to `run-config` command
+- [x] Update documentation to recommend `backtest run config.yaml`
+- [x] Update README and help text
+- [x] Keep `run-config` functional for 1-2 releases
 
-**Deprecation Message:**
-```
-⚠️  DEPRECATED: 'backtest run-config' is deprecated.
-    Use 'backtest run configs/your_config.yaml' instead.
-    This command will be removed in a future release.
-```
+**Implementation Details (2025-01-24):**
+- Updated `run_config_backtest()` docstring to mark as deprecated
+- Added yellow deprecation warning that displays before command execution:
+  ```
+  ⚠️  DEPRECATED: 'backtest run-config' is deprecated.
+      Use 'backtest run <config.yaml>' instead.
+      This command will be removed in a future release.
+  ```
+- Updated README.md in 5 locations:
+  - Quick reference section: Changed `run-config <config>` to `run <config.yaml>`
+  - YAML config example: Removed "mock data only" limitation note
+  - Mean reversion example: Removed "Current Limitation" note
+  - CLI reference: Added deprecated marker to `run-config`
+  - Journey examples: Updated all examples to use `backtest run`
+- Command remains fully functional - only displays warning before execution
+- All 33 component tests continue to pass
 
 ### Phase 6: Remove `run-config`
 **Goal:** Clean up codebase
@@ -458,7 +468,7 @@ Each phase is independently deployable and reversible:
 | 2 | Add config support | Phase 1 | ✅ Complete |
 | 3 | CLI overrides | Phase 2 | ✅ Complete |
 | 4 | Unify data pipeline | Phase 3 | ⏳ Pending |
-| 5 | Deprecate run-config | Phase 4 | ✅ Complete |
+| 5 | Deprecate run-config | Phase 3 | ✅ Complete |
 | 6 | Remove run-config | Phase 5 + user migration | ⏳ Pending |
 
 ## 10. Open Questions
