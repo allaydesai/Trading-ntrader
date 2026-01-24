@@ -4,7 +4,7 @@
 
 **Author:** Development Team
 **Created:** 2025-01-24
-**Status:** In Progress (Phases 1-3, 5 Complete)
+**Status:** In Progress (Phases 1-5 Complete)
 **Branch:** `strategy_apolo`
 **Last Updated:** 2025-01-24
 
@@ -331,14 +331,32 @@ def apply_cli_overrides(
     return request if not updates else request.model_copy(update=updates)
 ```
 
-### Phase 4: Unify Data Loading Pipeline
+### Phase 4: Unify Data Loading Pipeline ✅ COMPLETE
 **Goal:** Consistent behavior for catalog + IBKR fallback
 
 **Tasks:**
-- [ ] Add IBKR auto-fetch capability to config mode (currently only in CLI mode)
-- [ ] Standardize date range handling (clamp vs warn vs fetch)
-- [ ] Add clear messaging about data source used
-- [ ] Test edge cases: partial catalog, no IBKR connection, mock mode
+- [x] Add IBKR auto-fetch capability to config mode (currently only in CLI mode)
+- [x] Standardize date range handling (clamp vs warn vs fetch)
+- [x] Add clear messaging about data source used
+- [x] Test edge cases: partial catalog, no IBKR connection, mock mode
+
+**Implementation Details (2025-01-24):**
+- Unified `load_backtest_data()` function in `_backtest_helpers.py` handles all data sources
+- Config mode now uses the same data loading pipeline as CLI mode via `resolve_backtest_request()`
+- IBKR auto-fetch triggers when:
+  - No data exists in catalog for the instrument
+  - Requested date range is only partially covered by catalog
+- Clear messaging via `DataLoadResult.data_source_used`:
+  - "Parquet Catalog" - data fully available in catalog
+  - "IBKR Auto-fetch" - fetching from IBKR due to missing/partial data
+  - "Mock" - using generated mock data
+- Unit tests added in `test_backtest_helpers.py`:
+  - `test_load_catalog_data_full_coverage`
+  - `test_load_catalog_data_triggers_ibkr_fetch` (partial coverage)
+  - `test_load_catalog_data_no_availability_triggers_ibkr`
+  - `test_load_catalog_data_no_data_raises_error`
+  - `test_load_mock_data_success`
+  - `test_load_catalog_fetches_instrument_from_ibkr_when_missing`
 
 ### Phase 5: Deprecate `run-config` ✅ COMPLETE
 **Goal:** Transition users to unified command
@@ -451,7 +469,7 @@ Each phase is independently deployable and reversible:
 - [x] `backtest run config.yaml` works identically to current `run-config`
 - [x] `backtest run --symbol X --strategy Y` works identically to current `run`
 - [x] CLI overrides correctly modify YAML config values
-- [ ] IBKR auto-fetch works in config mode (Phase 4)
+- [x] IBKR auto-fetch works in config mode (Phase 4)
 - [ ] Results persist and display in Web UI (needs verification)
 
 ### Non-Functional Requirements
@@ -467,7 +485,7 @@ Each phase is independently deployable and reversible:
 | 1 | Extract helpers | None | ✅ Complete |
 | 2 | Add config support | Phase 1 | ✅ Complete |
 | 3 | CLI overrides | Phase 2 | ✅ Complete |
-| 4 | Unify data pipeline | Phase 3 | ⏳ Pending |
+| 4 | Unify data pipeline | Phase 3 | ✅ Complete |
 | 5 | Deprecate run-config | Phase 3 | ✅ Complete |
 | 6 | Remove run-config | Phase 5 + user migration | ⏳ Pending |
 
