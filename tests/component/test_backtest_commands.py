@@ -41,8 +41,8 @@ class TestBacktestCommands:
         assert result.exit_code == 0
         assert "Backtest commands for running strategies" in result.output
 
-    @patch("src.cli.commands.backtest.DataCatalogService")
-    @patch("src.cli.commands.backtest.BacktestOrchestrator")
+    @patch("src.cli.commands._backtest_helpers.DataCatalogService")
+    @patch("src.cli.commands._backtest_helpers.BacktestOrchestrator")
     @pytest.mark.component
     def test_run_backtest_success(self, mock_orchestrator_class, mock_catalog_service_class):
         """Test successful backtest run with catalog data."""
@@ -96,7 +96,7 @@ class TestBacktestCommands:
 
         assert result.exit_code == 0
         assert "Running SMA_CROSSOVER backtest for AAPL" in result.output
-        assert "Data available in catalog" in result.output or "Fetched" in result.output
+        assert "Data available in catalog" in result.output or "Loaded" in result.output
         assert "Backtest Results" in result.output
         assert "15.00%" in result.output  # Total return (15% as percentage)
         assert "Strategy was profitable!" in result.output
@@ -105,7 +105,7 @@ class TestBacktestCommands:
         mock_catalog_service.get_availability.assert_called_once()
         mock_orchestrator.dispose.assert_called_once()
 
-    @patch("src.cli.commands.backtest.DataCatalogService")
+    @patch("src.cli.commands._backtest_helpers.DataCatalogService")
     @pytest.mark.component
     def test_run_backtest_data_not_found(self, mock_catalog_service_class):
         """Test backtest when data is not found."""
@@ -115,8 +115,11 @@ class TestBacktestCommands:
         mock_catalog_service = MagicMock()
         mock_catalog_service.get_availability.return_value = None
 
+        start_dt = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        end_dt = datetime(2024, 1, 31, tzinfo=timezone.utc)
+
         async def mock_fetch_or_load(*args, **kwargs):
-            raise DataNotFoundError("No data found")
+            raise DataNotFoundError("INVALID.NASDAQ", start_dt, end_dt)
 
         mock_catalog_service.fetch_or_load = mock_fetch_or_load
         mock_catalog_service_class.return_value = mock_catalog_service
@@ -130,7 +133,7 @@ class TestBacktestCommands:
         assert result.exit_code != 0
         assert "No data" in result.output or "not found" in result.output.lower()
 
-    @patch("src.cli.commands.backtest.DataCatalogService")
+    @patch("src.cli.commands._backtest_helpers.DataCatalogService")
     @pytest.mark.component
     def test_run_backtest_ibkr_connection_error(self, mock_catalog_service_class):
         """Test backtest when IBKR connection fails."""
@@ -155,8 +158,8 @@ class TestBacktestCommands:
         assert result.exit_code != 0
         assert "IBKR" in result.output or "connection" in result.output.lower()
 
-    @patch("src.cli.commands.backtest.DataCatalogService")
-    @patch("src.cli.commands.backtest.BacktestOrchestrator")
+    @patch("src.cli.commands._backtest_helpers.DataCatalogService")
+    @patch("src.cli.commands._backtest_helpers.BacktestOrchestrator")
     @pytest.mark.component
     def test_run_backtest_losing_strategy(
         self, mock_orchestrator_class, mock_catalog_service_class
@@ -203,8 +206,8 @@ class TestBacktestCommands:
         assert result.exit_code == 0
         assert "Strategy lost money" in result.output
 
-    @patch("src.cli.commands.backtest.DataCatalogService")
-    @patch("src.cli.commands.backtest.BacktestOrchestrator")
+    @patch("src.cli.commands._backtest_helpers.DataCatalogService")
+    @patch("src.cli.commands._backtest_helpers.BacktestOrchestrator")
     @pytest.mark.component
     def test_run_backtest_break_even_strategy(
         self, mock_orchestrator_class, mock_catalog_service_class
@@ -250,8 +253,8 @@ class TestBacktestCommands:
         assert result.exit_code == 0
         assert "Strategy broke even" in result.output
 
-    @patch("src.cli.commands.backtest.DataCatalogService")
-    @patch("src.cli.commands.backtest.BacktestOrchestrator")
+    @patch("src.cli.commands._backtest_helpers.DataCatalogService")
+    @patch("src.cli.commands._backtest_helpers.BacktestOrchestrator")
     @pytest.mark.component
     def test_run_backtest_value_error(self, mock_orchestrator_class, mock_catalog_service_class):
         """Test backtest when ValueError occurs."""
@@ -286,8 +289,8 @@ class TestBacktestCommands:
         assert result.exit_code != 0
         assert "Backtest failed" in result.output or "Invalid parameters" in result.output
 
-    @patch("src.cli.commands.backtest.DataCatalogService")
-    @patch("src.cli.commands.backtest.BacktestOrchestrator")
+    @patch("src.cli.commands._backtest_helpers.DataCatalogService")
+    @patch("src.cli.commands._backtest_helpers.BacktestOrchestrator")
     @pytest.mark.component
     def test_run_backtest_unexpected_error(
         self, mock_orchestrator_class, mock_catalog_service_class
@@ -344,8 +347,8 @@ class TestBacktestCommands:
         assert result.exit_code == 2
         assert "Missing option" in result.output
 
-    @patch("src.cli.commands.backtest.DataCatalogService")
-    @patch("src.cli.commands.backtest.BacktestOrchestrator")
+    @patch("src.cli.commands._backtest_helpers.DataCatalogService")
+    @patch("src.cli.commands._backtest_helpers.BacktestOrchestrator")
     @patch("src.cli.commands.backtest.BacktestRequest")
     @pytest.mark.component
     def test_run_backtest_default_parameters(
@@ -414,7 +417,7 @@ class TestBacktestCommands:
         result = runner.invoke(list_backtests, ["--help"])
         assert result.exit_code == 0
 
-    @patch("src.cli.commands.backtest.DataCatalogService")
+    @patch("src.cli.commands._backtest_helpers.DataCatalogService")
     @pytest.mark.component
     def test_list_backtests_with_data(self, mock_catalog_service_class):
         """Test list backtests with available data."""
@@ -496,8 +499,8 @@ class TestBacktestCommands:
 class TestRunConfigBacktest:
     """Test cases for run-config backtest command."""
 
-    @patch("src.core.backtest_orchestrator.BacktestOrchestrator")
-    @patch("src.utils.mock_data.generate_mock_data_from_yaml")
+    @patch("src.cli.commands._backtest_helpers.BacktestOrchestrator")
+    @patch("src.cli.commands._backtest_helpers.generate_mock_data_from_yaml")
     @pytest.mark.component
     def test_run_config_success_mock_data(self, mock_generate_data, mock_orchestrator_class):
         """Test successful run-config with mock data source."""
@@ -642,8 +645,8 @@ invalid: yaml: structure:
 class TestPersistFlag:
     """Test cases for --persist/--no-persist flag behavior."""
 
-    @patch("src.cli.commands.backtest.DataCatalogService")
-    @patch("src.cli.commands.backtest.BacktestOrchestrator")
+    @patch("src.cli.commands._backtest_helpers.DataCatalogService")
+    @patch("src.cli.commands._backtest_helpers.BacktestOrchestrator")
     @patch("src.cli.commands.backtest.BacktestRequest")
     @pytest.mark.component
     def test_run_backtest_with_persist_flag(
@@ -701,8 +704,8 @@ class TestPersistFlag:
         # Verify "Persisted" appears in output
         assert "Persisted" in result.output
 
-    @patch("src.cli.commands.backtest.DataCatalogService")
-    @patch("src.cli.commands.backtest.BacktestOrchestrator")
+    @patch("src.cli.commands._backtest_helpers.DataCatalogService")
+    @patch("src.cli.commands._backtest_helpers.BacktestOrchestrator")
     @patch("src.cli.commands.backtest.BacktestRequest")
     @pytest.mark.component
     def test_run_backtest_with_no_persist_flag(
@@ -760,8 +763,8 @@ class TestPersistFlag:
         # Verify output shows not persisted
         assert "--no-persist" in result.output
 
-    @patch("src.cli.commands.backtest.DataCatalogService")
-    @patch("src.cli.commands.backtest.BacktestOrchestrator")
+    @patch("src.cli.commands._backtest_helpers.DataCatalogService")
+    @patch("src.cli.commands._backtest_helpers.BacktestOrchestrator")
     @patch("src.cli.commands.backtest.BacktestRequest")
     @pytest.mark.component
     def test_run_backtest_persist_default_true(

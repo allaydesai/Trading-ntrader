@@ -8,13 +8,16 @@ from decimal import Decimal
 
 import click
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
+from src.cli.commands._backtest_helpers import (
+    display_backtest_results,
+    execute_backtest,
+    load_backtest_data,
+)
 from src.cli.commands.compare import compare_backtests
 from src.cli.commands.reproduce import reproduce_backtest
 from src.cli.commands.show import show_backtest_details
-from src.core.backtest_orchestrator import BacktestOrchestrator
 from src.core.strategy_registry import StrategyRegistry
 from src.models.backtest_request import BacktestRequest
 from src.services.data_catalog import DataCatalogService
@@ -168,320 +171,148 @@ def run_backtest(
         console.print()
 
         try:
-            # Reason: Initialize catalog service for data access
-            catalog_service = DataCatalogService()
-
-            # Reason: Convert symbol to instrument_id format (e.g., "AAPL" -> "AAPL.NASDAQ")
-            # If venue is provided in symbol (e.g., "SPY.ARCA"), use it.
-            # Otherwise default to NASDAQ.
+            # Convert symbol to instrument_id format (e.g., "AAPL" -> "AAPL.NASDAQ")
             if "." in symbol:
                 instrument_id = symbol.upper()
             else:
                 instrument_id = f"{symbol.upper()}.NASDAQ"
 
-            # Reason: Determine bar type from explicit timeframe or auto-detect from date format
+            # Determine bar type from explicit timeframe or auto-detect from date format
             if timeframe:
-                # Use explicit timeframe if provided
                 bar_type_spec = f"{timeframe}-LAST"
             else:
                 # Auto-detect: Date-only (YYYY-MM-DD) → 1-DAY, Date-time → 1-MINUTE
-                # Click parses date-only as midnight UTC (00:00:00)
                 if start.time().hour == 0 and start.time().minute == 0 and start.time().second == 0:
                     bar_type_spec = "1-DAY-LAST"
                 else:
                     bar_type_spec = "1-MINUTE-LAST"
 
-            # Reason: Check catalog availability and fetch from IBKR if needed
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                transient=True,
-            ) as progress:
-                task = progress.add_task("Checking data availability...", total=None)
-                availability = catalog_service.get_availability(instrument_id, bar_type_spec)
-                progress.update(task, completed=True)
-
-            # Reason: Determine data source and adjust dates if needed
-            adjusted_start = start
-            adjusted_end = end
-            data_source = "Parquet Catalog"
-
-            if not availability:
-                console.print(
-                    f"⚠️  No data in catalog for {symbol.upper()}",
-                    style="yellow",
-                )
-                console.print(f"   Instrument: {instrument_id}")
-                console.print(f"   Bar type: {bar_type_spec}")
-                console.print()
-                console.print("   Will attempt to fetch from IBKR...", style="yellow")
-                console.print()
-                data_source = "IBKR Auto-fetch"
-            elif not availability.covers_range(start, end):
-                console.print(
-                    "⚠️  Requested date range partially available in catalog",
-                    style="yellow",
-                )
-                console.print(
-                    f"   Requested: {start.strftime('%Y-%m-%d')} to {end.strftime('%Y-%m-%d')}"
-                )
-                console.print(
-                    f"   Available: {availability.start_date.strftime('%Y-%m-%d')} to "
-                    f"{availability.end_date.strftime('%Y-%m-%d')}"
-                )
-                console.print()
-                console.print("   Will attempt to fetch missing data from IBKR...", style="yellow")
-                console.print()
-                data_source = "IBKR Auto-fetch"
-            else:
-                console.print("✅ Data available in catalog", style="green")
-                console.print(
-                    f"   Period: {adjusted_start.strftime('%Y-%m-%d')} to "
-                    f"{adjusted_end.strftime('%Y-%m-%d')}"
-                )
-                console.print(
-                    f"   Files: {availability.file_count} | Rows: ~{availability.total_rows:,}"
-                )
-                console.print()
-
-            # Reason: Load data from catalog or fetch from IBKR with progress indicator
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                transient=True,
-            ) as progress:
-                task = progress.add_task("Loading/fetching data...", total=None)
-
-                data_load_start = time.time()
-                try:
-                    # Reason: Use fetch_or_load() to automatically fetch from IBKR if needed
-                    bars = await catalog_service.fetch_or_load(
-                        instrument_id=instrument_id,
-                        start=adjusted_start,
-                        end=adjusted_end,
-                        bar_type_spec=bar_type_spec,
-                        correlation_id=f"backtest-{symbol}-{start.strftime('%Y%m%d')}",
-                    )
-                    data_load_time = time.time() - data_load_start
-
-                    # Reason: Load instrument from catalog after bars are loaded/fetched
-                    instrument = catalog_service.load_instrument(instrument_id)
-
-                    # Reason: If instrument not in catalog, fetch it from IBKR (one-time operation)
-                    if instrument is None:
-                        console.print(
-                            f"⚠️  Instrument {instrument_id} not in catalog, fetching from IBKR...",
-                            style="yellow",
-                        )
-                        try:
-                            instrument = await catalog_service.fetch_instrument_from_ibkr(
-                                instrument_id
-                            )
-                            console.print(
-                                "✅ Instrument fetched and saved to catalog",
-                                style="green",
-                            )
-                        except Exception as e:
-                            console.print(
-                                f"❌ Failed to fetch instrument from IBKR: {e}",
-                                style="red",
-                            )
-                            console.print(
-                                "   Using fallback test instrument",
-                                style="yellow",
-                            )
-
-                    progress.update(task, completed=True)
-
-                    # Reason: Show data load/fetch performance with source indication
-                    if data_source == "IBKR Auto-fetch":
-                        console.print(
-                            f"✅ Fetched {len(bars):,} bars from IBKR in {data_load_time:.2f}s",
-                            style="green bold",
-                        )
-                        console.print(
-                            "   💾 Data saved to catalog - future backtests will use cached data",
-                            style="cyan",
-                        )
-                        console.print()
-                    else:
-                        console.print(
-                            f"✅ Loaded {len(bars):,} bars from catalog in {data_load_time:.2f}s",
-                            style="green",
-                        )
-                        console.print()
-                except DataNotFoundError:
-                    progress.update(task, completed=True)
-                    console.print()
-                    error_msg = format_error_with_context(
-                        DATA_NOT_FOUND_NO_IBKR,
-                        instrument=instrument_id,
-                        start_date=adjusted_start.strftime("%Y-%m-%d"),
-                        end_date=adjusted_end.strftime("%Y-%m-%d"),
-                    )
-                    error_formatter.format_error(error_msg)
-                    sys.exit(error_formatter.get_exit_code(error_msg))
-
-                except IBKRConnectionError as e:
-                    progress.update(task, completed=True)
-                    console.print()
-                    error_msg = format_error_with_context(
-                        IBKR_CONNECTION_FAILED,
-                        connection_details=str(e),
-                    )
-                    error_formatter.format_error(error_msg)
-                    sys.exit(error_formatter.get_exit_code(error_msg))
-
-                except RateLimitExceededError as e:
-                    progress.update(task, completed=True)
-                    console.print()
-                    error_msg = format_error_with_context(
-                        RATE_LIMIT_EXCEEDED,
-                        retry_after=str(e.retry_after),
-                        request_count=str(e.request_count or "unknown"),
-                    )
-                    error_formatter.format_error(error_msg)
-                    sys.exit(error_formatter.get_exit_code(error_msg))
-
-                except CatalogCorruptionError as e:
-                    progress.update(task, completed=True)
-                    console.print()
-                    error_msg = format_error_with_context(
-                        CATALOG_CORRUPTION_DETECTED,
-                        file_path=str(e),
-                    )
-                    error_formatter.format_error(error_msg)
-                    sys.exit(error_formatter.get_exit_code(error_msg))
-
-                except CatalogError as e:
-                    progress.update(task, completed=True)
-                    console.print()
-                    error_formatter.print_warning(
-                        f"Catalog error: {str(e)}",
-                        "Check logs for more details",
-                    )
-                    sys.exit(4)
-
-                except Exception as e:
-                    progress.update(task, completed=True)
-                    console.print()
-                    error_formatter.print_warning(
-                        f"Unexpected error: {str(e)}",
-                        "Check logs for stack trace",
-                    )
-                    sys.exit(4)
-
-            # Reason: Run backtest with catalog data using BacktestOrchestrator
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                transient=True,
-            ) as progress:
-                task = progress.add_task("Running backtest...", total=None)
-
-                # Prepare strategy parameters
-                # Note: SMA uses percentage-based sizing, others use trade_size
-                portfolio_value = Decimal(str(trade_size * PORTFOLIO_SIZE_MULTIPLIER))
-                if strategy in ["sma", "sma_crossover", "sma_crossover_long_only"]:
-                    # SMA uses portfolio_value and position_size_pct
-                    strategy_params = {
-                        "portfolio_value": portfolio_value,
-                        "position_size_pct": DEFAULT_POSITION_SIZE_PCT,
-                        "fast_period": fast_period,
-                        "slow_period": slow_period,
-                    }
-                elif strategy == "bollinger_reversal":
-                    # Use defaults for now, can add CLI args later
-                    strategy_params = {
-                        "portfolio_value": portfolio_value,
-                    }
-                else:
-                    # Other strategies use trade_size
-                    strategy_params = {
-                        "trade_size": trade_size,
-                    }
-
-                # Build BacktestRequest from CLI args
-                request = BacktestRequest.from_cli_args(
-                    strategy=strategy,
-                    symbol=symbol.upper(),
-                    start=adjusted_start,
-                    end=adjusted_end,
+            # Load data from catalog with IBKR fallback
+            try:
+                data_result = await load_backtest_data(
+                    data_source="catalog",
+                    instrument_id=instrument_id,
                     bar_type_spec=bar_type_spec,
-                    persist=persist,
-                    starting_balance=portfolio_value,
-                    **strategy_params,
+                    start=start,
+                    end=end,
+                    console=console,
                 )
+                bars = data_result.bars
+                instrument = data_result.instrument
+                data_source_used = data_result.data_source_used
+            except DataNotFoundError:
+                console.print()
+                error_msg = format_error_with_context(
+                    DATA_NOT_FOUND_NO_IBKR,
+                    instrument=instrument_id,
+                    start_date=start.strftime("%Y-%m-%d"),
+                    end_date=end.strftime("%Y-%m-%d"),
+                )
+                error_formatter.format_error(error_msg)
+                sys.exit(error_formatter.get_exit_code(error_msg))
+            except IBKRConnectionError as e:
+                console.print()
+                error_msg = format_error_with_context(
+                    IBKR_CONNECTION_FAILED,
+                    connection_details=str(e),
+                )
+                error_formatter.format_error(error_msg)
+                sys.exit(error_formatter.get_exit_code(error_msg))
+            except RateLimitExceededError as e:
+                console.print()
+                error_msg = format_error_with_context(
+                    RATE_LIMIT_EXCEEDED,
+                    retry_after=str(e.retry_after),
+                    request_count=str(e.request_count or "unknown"),
+                )
+                error_formatter.format_error(error_msg)
+                sys.exit(error_formatter.get_exit_code(error_msg))
+            except CatalogCorruptionError as e:
+                console.print()
+                error_msg = format_error_with_context(
+                    CATALOG_CORRUPTION_DETECTED,
+                    file_path=str(e),
+                )
+                error_formatter.format_error(error_msg)
+                sys.exit(error_formatter.get_exit_code(error_msg))
+            except CatalogError as e:
+                console.print()
+                error_formatter.print_warning(
+                    f"Catalog error: {str(e)}",
+                    "Check logs for more details",
+                )
+                sys.exit(4)
 
-                # Run backtest with orchestrator
-                orchestrator = BacktestOrchestrator()
-                try:
-                    result, run_id = await orchestrator.execute(request, bars, instrument)
-                finally:
-                    # Ensure cleanup happens even on error
-                    orchestrator.dispose()
+            # Prepare strategy parameters
+            portfolio_value = Decimal(str(trade_size * PORTFOLIO_SIZE_MULTIPLIER))
+            if strategy in ["sma", "sma_crossover", "sma_crossover_long_only"]:
+                strategy_params = {
+                    "portfolio_value": portfolio_value,
+                    "position_size_pct": DEFAULT_POSITION_SIZE_PCT,
+                    "fast_period": fast_period,
+                    "slow_period": slow_period,
+                }
+            elif strategy == "bollinger_reversal":
+                strategy_params = {"portfolio_value": portfolio_value}
+            else:
+                strategy_params = {"trade_size": trade_size}
 
-                progress.update(task, completed=True)
+            # Build BacktestRequest from CLI args
+            request = BacktestRequest.from_cli_args(
+                strategy=strategy,
+                symbol=symbol.upper(),
+                start=start,
+                end=end,
+                bar_type_spec=bar_type_spec,
+                persist=persist,
+                starting_balance=portfolio_value,
+                **strategy_params,
+            )
 
-            # Display results
-            console.print("🎯 Backtest Results", style="cyan bold")
-            console.print()
+            # Execute backtest with orchestrator
+            result, run_id = await execute_backtest(
+                request=request,
+                bars=bars,
+                instrument=instrument,
+                console=console,
+                progress_message="Running backtest...",
+            )
 
-            # Create results table
-            strategy_name = display_strategy.replace("_", " ").title()
-            table = Table(title=f"{symbol.upper()} {strategy_name} Strategy Results")
-            table.add_column("Metric", style="cyan", no_wrap=True)
-            table.add_column("Value", style="green")
+            # Calculate total execution time
+            total_execution_time = time.time() - execution_start_time
 
-            # Add strategy-specific description
+            # Build context rows for display
             if strategy in ["sma", "sma_crossover"]:
                 strategy_description = f"SMA({fast_period}/{slow_period})"
             else:
                 strategy_description = display_strategy.replace("_", " ").title()
 
-            # Reason: Calculate total execution time
-            total_execution_time = time.time() - execution_start_time
+            strategy_name = display_strategy.replace("_", " ").title()
+            context_rows = {
+                "Strategy": strategy_description,
+                "Symbol": symbol.upper(),
+                "Period": f"{start.strftime('%Y-%m-%d')} to {end.strftime('%Y-%m-%d')}",
+                "Data Source": data_source_used,
+            }
 
-            table.add_row("Strategy", strategy_description)
-            table.add_row("Symbol", symbol.upper())
-            table.add_row("Period", f"{start.strftime('%Y-%m-%d')} to {end.strftime('%Y-%m-%d')}")
-            table.add_row("Data Source", "Parquet Catalog")
-            table.add_row("Total Return", f"{result.total_return * 100:.2f}%")
-            table.add_row("Total Trades", str(result.total_trades))
-            table.add_row("Winning Trades", str(result.winning_trades))
-            table.add_row("Losing Trades", str(result.losing_trades))
-            table.add_row("Win Rate", f"{result.win_rate:.1f}%")
-            table.add_row("Largest Win", f"${result.largest_win:.2f}")
-            table.add_row("Largest Loss", f"${result.largest_loss:.2f}")
-            table.add_row("Final Balance", f"${result.final_balance:.2f}")
-            table.add_row("Execution Time", f"{total_execution_time:.2f}s")
-
-            # Show persistence info
-            if persist and run_id:
-                table.add_row("Persisted", f"Yes (Run ID: {str(run_id)[:8]}...)")
-            elif persist:
-                table.add_row("Persisted", "Failed")
-            else:
-                table.add_row("Persisted", "No (--no-persist)")
-
-            console.print(table)
-            console.print()
-
-            # Performance summary
-            if result.total_return > 0:
-                console.print("📈 Strategy was profitable!", style="green bold")
-            elif result.total_return < 0:
-                console.print("📉 Strategy lost money", style="red bold")
-            else:
-                console.print("➡️  Strategy broke even", style="yellow bold")
+            # Display results using helper
+            display_backtest_results(
+                result=result,
+                console=console,
+                run_id=run_id,
+                persist=persist,
+                context_rows=context_rows,
+                table_title=f"{symbol.upper()} {strategy_name} Strategy Results",
+                execution_time=total_execution_time,
+            )
 
             return True
 
         except ValueError as e:
-            console.print(f"❌ Backtest failed: {e}", style="red")
+            console.print(f"Backtest failed: {e}", style="red")
             return False
         except Exception as e:
-            console.print(f"❌ Unexpected error: {e}", style="red")
+            console.print(f"Unexpected error: {e}", style="red")
             return False
 
     # Run async function
@@ -566,24 +397,29 @@ def run_config_backtest(
         console.print()
 
         try:
-            # Initialize variables for results tracking
-            run_id = None
+            import yaml
+
+            # Load YAML config
+            with open(config_file, "r") as f:
+                yaml_data = yaml.safe_load(f)
+
+            config_section = yaml_data.get("config", {})
+            instrument_id_str = str(config_section.get("instrument_id", ""))
+            bar_type_str = str(config_section.get("bar_type", ""))
 
             if data_source == "mock":
-                # Run with mock data using BacktestOrchestrator
-                import yaml
-
-                from src.utils.mock_data import generate_mock_data_from_yaml
-
-                # Load YAML config
-                with open(config_file, "r") as f:
-                    yaml_data = yaml.safe_load(f)
-
-                # Generate mock data from config
-                bars, instrument, start_date, end_date = generate_mock_data_from_yaml(yaml_data)
-
-                console.print(f"   Generated {len(bars):,} mock bars")
-                console.print(f"   Persist: {'Yes' if persist else 'No'}")
+                # Load mock data using helper
+                data_result = await load_backtest_data(
+                    data_source="mock",
+                    instrument_id=instrument_id_str,
+                    bar_type_spec=bar_type_str,
+                    start=datetime.now(timezone.utc),
+                    end=datetime.now(timezone.utc),
+                    console=console,
+                    yaml_data=yaml_data,
+                )
+                bars = data_result.bars
+                instrument = data_result.instrument
 
                 # Build BacktestRequest with mock dates
                 request = BacktestRequest.from_yaml_config(
@@ -592,46 +428,25 @@ def run_config_backtest(
                     config_file_path=config_file,
                     data_source="mock",
                 )
-                # Override dates from generated mock data
-                request = request.model_copy(
-                    update={"start_date": start_date, "end_date": end_date}
-                )
+                # Get dates from mock bars
+                if bars:
+                    from datetime import datetime as dt
 
-                # Run with orchestrator
-                orchestrator = BacktestOrchestrator()
-                try:
-                    with Progress(
-                        SpinnerColumn(),
-                        TextColumn("[progress.description]{task.description}"),
-                        transient=True,
-                    ) as progress:
-                        task = progress.add_task("Running backtest with mock data...", total=None)
-                        result, run_id = await orchestrator.execute(request, bars, instrument)
-                        progress.update(task, completed=True)
+                    mock_start = dt.fromtimestamp(bars[0].ts_event / 1_000_000_000)
+                    mock_end = dt.fromtimestamp(bars[-1].ts_event / 1_000_000_000)
+                    request = request.model_copy(
+                        update={"start_date": mock_start, "end_date": mock_end}
+                    )
 
-                    if persist and run_id:
-                        console.print(f"   Run ID: {run_id}", style="dim")
-                finally:
-                    orchestrator.dispose()
+                console.print(f"   Persist: {'Yes' if persist else 'No'}")
 
             elif data_source == "catalog":
-                # Run with catalog data using BacktestOrchestrator
-                import yaml
-
-                # Load YAML config to get instrument_id and bar_type
-                with open(config_file, "r") as f:
-                    yaml_data = yaml.safe_load(f)
-
                 # Build BacktestRequest FIRST to get dates from YAML config
                 request = BacktestRequest.from_yaml_config(
                     yaml_data=yaml_data,
                     persist=persist,
                     config_file_path=config_file,
                 )
-
-                config_section = yaml_data.get("config", {})
-                instrument_id_str = str(config_section.get("instrument_id", ""))
-                bar_type_str = str(config_section.get("bar_type", ""))
 
                 console.print(f"   Instrument: {instrument_id_str}")
                 console.print(f"   Bar Type: {bar_type_str}")
@@ -642,163 +457,70 @@ def run_config_backtest(
                 console.print(f"   Starting Balance: ${request.starting_balance:,.0f}")
                 console.print(f"   Persist: {'Yes' if persist else 'No'}")
 
-                # Initialize catalog service
-                catalog_service = DataCatalogService()
-
                 # Parse bar type to get spec for catalog lookup
                 bar_type_spec = parse_bar_type_spec(bar_type_str)
-
                 console.print(f"   Looking for: {bar_type_spec} bars")
 
-                # Check availability
-                availability = catalog_service.get_availability(instrument_id_str, bar_type_spec)
-                if not availability:
-                    console.print(
-                        f"No data found in catalog for {instrument_id_str} with {bar_type_spec}",
-                        style="red",
-                    )
-                    console.print("   Run 'data list' to see available data")
-                    return False
-
-                avail_start = availability.start_date.date()
-                avail_end = availability.end_date.date()
-                console.print(f"   Available: {avail_start} to {avail_end}")
-
-                # Validate requested range vs available range
-                if request.start_date < availability.start_date:
-                    console.print(
-                        f"   Warning: Requested start {request.start_date.strftime('%Y-%m-%d')} "
-                        f"before available data starts {avail_start}",
-                        style="yellow",
-                    )
-                if request.end_date > availability.end_date:
-                    console.print(
-                        f"   Warning: Requested end {request.end_date.strftime('%Y-%m-%d')} "
-                        f"after available data ends {avail_end}",
-                        style="yellow",
-                    )
-
-                # Load bars from catalog using REQUEST dates, not availability dates
-                with Progress(
-                    SpinnerColumn(),
-                    TextColumn("[progress.description]{task.description}"),
-                    transient=True,
-                ) as progress:
-                    task = progress.add_task("Loading data from catalog...", total=None)
-                    bars = await catalog_service.fetch_or_load(
-                        instrument_id=instrument_id_str,
-                        bar_type_spec=bar_type_spec,
-                        start=request.start_date,
-                        end=request.end_date,
-                    )
-                    progress.update(task, completed=True)
+                # Load catalog data using helper
+                data_result = await load_backtest_data(
+                    data_source="catalog",
+                    instrument_id=instrument_id_str,
+                    bar_type_spec=bar_type_spec,
+                    start=request.start_date,
+                    end=request.end_date,
+                    console=console,
+                )
+                bars = data_result.bars
+                instrument = data_result.instrument
 
                 if not bars:
                     console.print("Failed to load bars from catalog", style="red")
                     return False
 
-                console.print(f"   Loaded {len(bars):,} bars")
-
-                # Load instrument from catalog
-                instrument = catalog_service.load_instrument(instrument_id_str)
-                if not instrument:
-                    console.print(
-                        "Instrument not found in catalog, creating mock instrument",
-                        style="yellow",
-                    )
-                    console.print(
-                        "   Note: Mock instrument may have different tick size/lot size",
-                        style="dim",
-                    )
-                    # Create fallback instrument
-                    from src.utils.mock_data import create_test_instrument
-
-                    symbol_str = instrument_id_str.split(".")[0]
-                    venue_str = (
-                        instrument_id_str.split(".")[-1] if "." in instrument_id_str else "SIM"
-                    )
-                    instrument, _ = create_test_instrument(symbol_str, venue_str)
-
-                # Run backtest with orchestrator
-                orchestrator = BacktestOrchestrator()
-                run_id = None
-
-                try:
-                    with Progress(
-                        SpinnerColumn(),
-                        TextColumn("[progress.description]{task.description}"),
-                        transient=True,
-                    ) as progress:
-                        task = progress.add_task(
-                            "Running backtest with catalog data...", total=None
-                        )
-                        result, run_id = await orchestrator.execute(request, bars, instrument)
-                        progress.update(task, completed=True)
-
-                    # Show persistence status
-                    if persist and run_id:
-                        console.print(f"   Run ID: {run_id}", style="dim")
-                finally:
-                    # Ensure cleanup happens even on error
-                    orchestrator.dispose()
             else:
-                # Run with database data - deprecated
+                # Database data source - deprecated
                 console.print(
-                    "❌ Database data source deprecated - use 'catalog' or 'mock'",
+                    "Database data source deprecated - use 'catalog' or 'mock'",
                     style="red",
                 )
                 return False
 
-            # Display results
-            console.print("🎯 Backtest Results", style="cyan bold")
-            console.print()
+            # Execute backtest using helper
+            progress_msg = f"Running backtest with {data_source} data..."
+            result, run_id = await execute_backtest(
+                request=request,
+                bars=bars,
+                instrument=instrument,
+                console=console,
+                progress_message=progress_msg,
+            )
 
-            # Create results table
-            table = Table(title="Strategy Configuration Backtest Results")
-            table.add_column("Metric", style="cyan", no_wrap=True)
-            table.add_column("Value", style="green")
+            # Build context rows for display
+            context_rows = {
+                "Configuration File": config_file,
+                "Data Source": data_source.title(),
+            }
 
-            table.add_row("Configuration File", config_file)
-            table.add_row("Data Source", data_source.title())
-            table.add_row("Total Return", f"{result.total_return * 100:.2f}%")
-            table.add_row("Total Trades", str(result.total_trades))
-            table.add_row("Winning Trades", str(result.winning_trades))
-            table.add_row("Losing Trades", str(result.losing_trades))
-            table.add_row("Win Rate", f"{result.win_rate:.1f}%")
-            table.add_row("Largest Win", f"${result.largest_win:.2f}")
-            table.add_row("Largest Loss", f"${result.largest_loss:.2f}")
-            table.add_row("Final Balance", f"${result.final_balance:.2f}")
-
-            # Show persistence info for catalog runs
-            if data_source == "catalog":
-                if persist and run_id:
-                    table.add_row("Persisted", f"Yes (Run ID: {str(run_id)[:8]}...)")
-                elif persist:
-                    table.add_row("Persisted", "Failed")
-                else:
-                    table.add_row("Persisted", "No (--no-persist)")
-
-            console.print(table)
-            console.print()
-
-            # Performance summary
-            if result.total_return > 0:
-                console.print("📈 Strategy was profitable!", style="green bold")
-            elif result.total_return < 0:
-                console.print("📉 Strategy lost money", style="red bold")
-            else:
-                console.print("➡️  Strategy broke even", style="yellow bold")
+            # Display results using helper
+            display_backtest_results(
+                result=result,
+                console=console,
+                run_id=run_id,
+                persist=persist,
+                context_rows=context_rows,
+                table_title="Strategy Configuration Backtest Results",
+            )
 
             return True
 
         except FileNotFoundError as e:
-            console.print(f"❌ Configuration file not found: {e}", style="red bold")
+            console.print(f"Configuration file not found: {e}", style="red bold")
             sys.exit(1)
         except ValueError as e:
-            console.print(f"❌ Configuration error: {e}", style="red bold")
+            console.print(f"Configuration error: {e}", style="red bold")
             sys.exit(2)
         except Exception as e:
-            console.print(f"❌ Unexpected error: {e}", style="red bold")
+            console.print(f"Unexpected error: {e}", style="red bold")
             sys.exit(3)
 
     # Run async function
