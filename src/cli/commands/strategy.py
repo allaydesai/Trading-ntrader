@@ -58,7 +58,7 @@ def list():
         "--type sma_crossover --output my_config.yaml"
     )
     console.print("   Validate config:        ntrader strategy validate my_config.yaml")
-    console.print("   Run backtest:           ntrader backtest run-config my_config.yaml")
+    console.print("   Run backtest:           ntrader backtest run my_config.yaml")
 
 
 @strategy.command()
@@ -97,7 +97,7 @@ def create(strategy_type: str, output_file: str):
         console.print("💡 Next steps:")
         console.print(f"   1. Edit {output_file} to customize parameters")
         console.print(f"   2. Validate: ntrader strategy validate {output_file}")
-        console.print(f"   3. Run: ntrader backtest run-config {output_file}")
+        console.print(f"   3. Run: ntrader backtest run {output_file}")
 
     except ValueError as e:
         console.print(f"❌ Error creating template: {e}", style="red")

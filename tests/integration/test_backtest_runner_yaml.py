@@ -21,7 +21,7 @@ def yaml_config_file(tmp_path):
     config_path: "src.core.strategies.sma_crossover:SMAConfig"
     config:
       instrument_id: "AAPL.NASDAQ"
-      bar_type: "AAPL.NASDAQ-1-MINUTE-LAST-INTERNAL"
+      bar_type: "AAPL.NASDAQ-1-MINUTE-LAST-EXTERNAL"
       fast_period: 10
       slow_period: 20
       portfolio_value: 1000000
@@ -41,7 +41,7 @@ def mean_reversion_yaml_config_file(tmp_path):
     config_path: "src.core.strategies.rsi_mean_reversion:RSIMeanRevConfig"
     config:
       instrument_id: "AAPL.NASDAQ"
-      bar_type: "AAPL.NASDAQ-1-MINUTE-LAST-INTERNAL"
+      bar_type: "AAPL.NASDAQ-1-MINUTE-LAST-EXTERNAL"
       trade_size: 1000000
       order_id_tag: "001"
       rsi_period: 2
@@ -101,7 +101,7 @@ class TestBacktestRunnerYAML:
         config_path: "src.core.strategies.sma_crossover:SMAConfig"
         config:
           instrument_id: "AAPL.NASDAQ"
-          bar_type: "AAPL.NASDAQ-1-MINUTE-LAST-INTERNAL"
+          bar_type: "AAPL.NASDAQ-1-MINUTE-LAST-EXTERNAL"
           fast_period: 10
           slow_period: 20
           portfolio_value: 1000000
@@ -128,7 +128,7 @@ class TestBacktestRunnerYAML:
             config_path: "src.core.strategies.sma_crossover:SMAConfig"
             config:
               instrument_id: "AAPL.NASDAQ"
-              bar_type: "AAPL.NASDAQ-1-MINUTE-LAST-INTERNAL"
+              bar_type: "AAPL.NASDAQ-1-MINUTE-LAST-EXTERNAL"
               fast_period: 10
               slow_period: 20
               portfolio_value: 1000000
@@ -143,7 +143,7 @@ class TestBacktestRunnerYAML:
             config_path: "src.core.strategies.rsi_mean_reversion:RSIMeanRevConfig"
             config:
               instrument_id: "AAPL.NASDAQ"
-              bar_type: "AAPL.NASDAQ-1-MINUTE-LAST-INTERNAL"
+              bar_type: "AAPL.NASDAQ-1-MINUTE-LAST-EXTERNAL"
               trade_size: 1000000
               order_id_tag: "001"
               rsi_period: 2
@@ -162,7 +162,7 @@ class TestBacktestRunnerYAML:
             config_path: "src.core.strategies.sma_momentum:SMAMomentumConfig"
             config:
               instrument_id: "AAPL.NASDAQ"
-              bar_type: "AAPL.NASDAQ-1-MINUTE-LAST-INTERNAL"
+              bar_type: "AAPL.NASDAQ-1-MINUTE-LAST-EXTERNAL"
               trade_size: 1000000
               order_id_tag: "002"
               fast_period: 20
@@ -197,7 +197,7 @@ class TestBacktestRunnerYAML:
         config_path: "src.core.strategies.sma_crossover:SMAConfig"
         config:
           instrument_id: "AAPL.NASDAQ"
-          bar_type: "AAPL.NASDAQ-1-MINUTE-LAST-INTERNAL"
+          bar_type: "AAPL.NASDAQ-1-MINUTE-LAST-EXTERNAL"
           fast_period: 10
           slow_period: 20
           portfolio_value: 1000000

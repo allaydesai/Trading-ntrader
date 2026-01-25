@@ -18,6 +18,7 @@ class StrategyType(str, Enum):
     MOMENTUM = "momentum"
     BOLLINGER_REVERSAL = "bollinger_reversal"
     CONNORS_RSI_MEAN_REV = "connors_rsi_mean_rev"
+    APOLO_RSI = "apolo_rsi"
 
 
 class StrategyStatus(str, Enum):
@@ -197,6 +198,61 @@ class ConnorsRSIParameters(BaseModel):
         return v
 
 
+class ApoloRSIParameters(BaseModel):
+    """
+    Parameters for Apolo RSI Mean Reversion strategy.
+
+    Simple 2-period RSI strategy:
+    - Buy: RSI(2) < buy_threshold (oversold after sharp decline)
+    - Sell: RSI(2) > sell_threshold (mean reversion back up)
+    - Long only
+
+    Note: Nautilus Trader's RSI indicator returns values in 0-1 range (not 0-100).
+    Thresholds should be specified as decimals (e.g., 0.10 for RSI < 10).
+
+    Matches src.core.strategies.apolo_rsi.ApoloRSIConfig.
+    """
+
+    trade_size: Decimal = Field(
+        default=Decimal("100.0"), gt=0, description="Size of each trade in shares"
+    )
+    order_id_tag: str = Field(default="APOLO", description="Unique tag for order identification")
+    rsi_period: int = Field(default=2, ge=2, description="RSI calculation period")
+    buy_threshold: float = Field(
+        default=0.10,
+        ge=0.0,
+        le=1.0,
+        description="Buy when RSI < threshold (0.10 = RSI < 10)",
+    )
+    sell_threshold: float = Field(
+        default=0.50,
+        ge=0.0,
+        le=1.0,
+        description="Sell when RSI > threshold (0.50 = RSI > 50)",
+    )
+
+    # Mapping from model fields to global Settings attributes
+    _settings_map = {
+        "trade_size": "trade_size",
+    }
+
+    @field_validator("buy_threshold", "sell_threshold")
+    @classmethod
+    def validate_thresholds(cls, v: float) -> float:
+        """Validate thresholds are in valid range (0-1 for Nautilus RSI)."""
+        if not (0.0 <= v <= 1.0):
+            raise ValueError("Thresholds must be between 0.0 and 1.0 (Nautilus RSI range)")
+        return v
+
+    @field_validator("sell_threshold")
+    @classmethod
+    def validate_sell_greater_than_buy(cls, v: float, info) -> float:
+        """Validate sell threshold is greater than buy threshold."""
+        if "buy_threshold" in info.data and v <= info.data["buy_threshold"]:
+            raise ValueError("Buy threshold must be less than sell threshold")
+        return v
+
+
 class TradingStrategy(BaseModel):
     """Trading strategy entity with configuration and metadata."""
 
@@ -261,6 +317,13 @@ class TradingStrategy(BaseModel):
                 ConnorsRSIParameters.model_validate(v)
             except Exception as e:
                 raise ValueError(f"Invalid Connors RSI Mean Reversion parameters: {e}")
+
+        elif strategy_type == StrategyType.APOLO_RSI:
+            # Validate Apolo RSI parameters
+            try:
+                ApoloRSIParameters.model_validate(v)
+            except Exception as e:
+                raise ValueError(f"Invalid Apolo RSI parameters: {e}")
 
         return v
 

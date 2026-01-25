@@ -808,6 +808,129 @@ class MinimalBacktestRunner:
         config_obj = ConfigLoader.load_from_file(config_file_path)
         return self.run_from_config_object(config_obj)
 
+    def run_from_config_with_catalog_data(
+        self,
+        config_file: str,
+        bars: list,
+        instrument=None,
+    ) -> BacktestResult:
+        """
+        Run backtest from config file using pre-loaded catalog data.
+
+        Args:
+            config_file: Path to YAML configuration file
+            bars: Pre-loaded Bar objects from catalog
+            instrument: Instrument object from catalog (optional)
+
+        Returns:
+            BacktestResult: Results of the backtest
+
+        Raises:
+            ValueError: If configuration is invalid or no bars provided
+        """
+        if not bars:
+            raise ValueError("No bars provided from catalog")
+
+        # Load configuration from file
+        config_obj = ConfigLoader.load_from_file(config_file)
+
+        # If no instrument provided, create one from the bars
+        if instrument is None:
+            # Get instrument_id from bars
+            bar_instrument_id = bars[0].bar_type.instrument_id
+            # Create a test instrument based on the symbol
+            symbol_str = str(bar_instrument_id.symbol)
+            from src.utils.mock_data import create_test_instrument
+
+            instrument, _ = create_test_instrument(symbol_str, str(bar_instrument_id.venue))
+
+        # Get the actual instrument_id from the loaded bars
+        bar_instrument_id = bars[0].bar_type.instrument_id
+        bar_type = bars[0].bar_type
+
+        # Configure backtest engine
+        config = BacktestEngineConfig(
+            trader_id=TraderId("BACKTESTER-001"),
+        )
+
+        # Initialize engine
+        self.engine = BacktestEngine(config=config)
+
+        # Create fill model for realistic execution simulation
+        fill_model = FillModel(
+            prob_fill_on_limit=0.95,
+            prob_fill_on_stop=0.95,
+            prob_slippage=0.01,
+        )
+
+        # Create commission model
+        fee_model = IBKRCommissionModel(
+            commission_per_share=self.settings.commission_per_share,
+            min_per_order=self.settings.commission_min_per_order,
+            max_rate=self.settings.commission_max_rate,
+        )
+
+        # Add venue (use the venue from the bars)
+        venue = Venue(str(bar_instrument_id.venue))
+        self._venue = venue
+        self.engine.add_venue(
+            venue=venue,
+            oms_type=OmsType.HEDGING,
+            account_type=AccountType.MARGIN,
+            starting_balances=[Money(self.settings.default_balance, USD)],
+            fill_model=fill_model,
+            fee_model=fee_model,
+        )
+
+        # Add instrument
+        self.engine.add_instrument(instrument)
+
+        # Add bars to engine
+        self.engine.add_data(bars)
+
+        # Create config parameters dictionary using actual catalog data
+        config_params = {
+            "instrument_id": bar_instrument_id,
+            "bar_type": bar_type,
+        }
+
+        # Copy strategy-specific parameters from config
+        if hasattr(config_obj.config, "trade_size"):
+            config_params["trade_size"] = config_obj.config.trade_size
+        if hasattr(config_obj.config, "order_id_tag"):
+            config_params["order_id_tag"] = config_obj.config.order_id_tag
+        if hasattr(config_obj.config, "rsi_period"):
+            config_params["rsi_period"] = config_obj.config.rsi_period
+        if hasattr(config_obj.config, "buy_threshold"):
+            config_params["buy_threshold"] = config_obj.config.buy_threshold
+        if hasattr(config_obj.config, "sell_threshold"):
+            config_params["sell_threshold"] = config_obj.config.sell_threshold
+        # SMA crossover parameters
+        if hasattr(config_obj.config, "fast_period"):
+            config_params["fast_period"] = config_obj.config.fast_period
+        if hasattr(config_obj.config, "slow_period"):
+            config_params["slow_period"] = config_obj.config.slow_period
+
+        # Create strategy using factory method
+        strategy = StrategyFactory.create_strategy_from_config(
+            strategy_path=config_obj.strategy_path,
+            config_path=config_obj.config_path,
+            config_params=config_params,
+        )
+
+        if strategy is None:
+            raise ValueError(f"Failed to create strategy from config: {config_file}")
+
+        # Add strategy
+        self.engine.add_strategy(strategy)
+
+        # Run backtest
+        self.engine.run()
+
+        # Extract results
+        self._results = self._extract_results()
+        return self._results
+
     def _calculate_max_drawdown(self, analyzer, account) -> float | None:
         """
         Calculate maximum drawdown from account equity history.
@@ -1090,8 +1213,36 @@ class MinimalBacktestRunner:
         Raises:
             ValueError: If strategy cannot be created or configuration is invalid
         """
-        # Create test instrument
-        instrument, instrument_id = create_test_instrument()
+        # Extract symbol from config's instrument_id if available
+        config_instrument_id = getattr(config_obj.config, "instrument_id", None)
+        config_bar_type = getattr(config_obj.config, "bar_type", None)
+
+        # Determine symbol and bar type pattern from config
+        symbol = "EUR/USD"  # Default
+        bar_pattern = "15-MINUTE-MID-EXTERNAL"  # Default
+
+        if config_instrument_id:
+            # Extract symbol from instrument_id (e.g., "QQQ.NASDAQ" -> "QQQ")
+            id_str = str(config_instrument_id)
+            if "." in id_str:
+                symbol = id_str.split(".")[0]
+
+        if config_bar_type:
+            # Extract bar pattern from bar_type (e.g., "QQQ.NASDAQ-1-DAY-LAST-EXTERNAL")
+            # Format: SYMBOL.VENUE-STEP-STEP_TYPE-AGGREGATION_SOURCE-PRICE_TYPE
+            bt_str = str(config_bar_type)
+            parts = bt_str.split("-", 1)
+            if len(parts) > 1:
+                bar_pattern = parts[1]
+                # For mock data, we need MID-EXTERNAL aggregation source
+                # Convert LAST-EXTERNAL to MID-EXTERNAL for mock data compatibility
+                bar_pattern = bar_pattern.replace("LAST-EXTERNAL", "MID-EXTERNAL")
+
+        # Create test instrument with symbol from config
+        instrument, instrument_id = create_test_instrument(symbol)
+
+        # Build bar_type_str using test instrument's ID and config's bar pattern
+        bar_type_str = f"{instrument_id}-{bar_pattern}"
 
         # Configure backtest engine
         config = BacktestEngineConfig(
@@ -1130,12 +1281,25 @@ class MinimalBacktestRunner:
         # Add instrument
         self.engine.add_instrument(instrument)
 
-        # Generate mock data
-        # Must match the bar type created in generate_mock_bars
-        bar_type_str = f"{instrument_id}-15-MINUTE-MID-EXTERNAL"
-        # Create bar type for strategy configuration
+        # Determine mock data parameters based on instrument type
+        # Equities have prices around 400+, FX around 1.1
+        is_equity = "/" not in symbol
+        start_price = 400.0 if is_equity else 1.1000
+        volatility = 0.02 if is_equity else 0.002  # 2% for equities, 0.2% for FX
+        trend_strength = 0.1 if is_equity else 0.0001
+        price_precision = 2 if is_equity else 5  # 2 decimals for equities, 5 for FX
+
+        # Generate mock data with config-aware bar type
         BarType.from_str(bar_type_str)  # Validate format
-        bars = generate_mock_bars(instrument_id, num_bars=self.settings.mock_data_bars)
+        bars = generate_mock_bars(
+            instrument_id,
+            num_bars=self.settings.mock_data_bars,
+            start_price=start_price,
+            volatility=volatility,
+            trend_strength=trend_strength,
+            bar_type_str=bar_type_str,
+            price_precision=price_precision,
+        )
 
         # Add bars to engine
         self.engine.add_data(bars)
@@ -1178,6 +1342,12 @@ class MinimalBacktestRunner:
             config_params["warmup_days"] = config_obj.config.warmup_days
         if hasattr(config_obj.config, "cooldown_bars"):
             config_params["cooldown_bars"] = config_obj.config.cooldown_bars
+
+        # Apolo RSI specific parameters
+        if hasattr(config_obj.config, "buy_threshold"):
+            config_params["buy_threshold"] = config_obj.config.buy_threshold
+        if hasattr(config_obj.config, "sell_threshold"):
+            config_params["sell_threshold"] = config_obj.config.sell_threshold
 
         # SMA Momentum specific parameters
         if hasattr(config_obj.config, "allow_short"):

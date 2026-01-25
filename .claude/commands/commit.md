@@ -2,7 +2,6 @@
 allowed-tools: Bash(git*), TodoWrite
 argument-hint: [type] [scope] [message]
 description: Create a properly formatted git commit following project conventions
-model: claude-3-5-sonnet-20241022
 ---
 
 # Git Commit Command
