@@ -7,8 +7,11 @@ config:
   instrument_id: "QQQ.NASDAQ"
   bar_type: "QQQ.NASDAQ-1-DAY-LAST-EXTERNAL"
 
+  # Position sizing parameters
+  portfolio_value: 100000  # Should match backtest.initial_capital
+  position_size_pct: 50.0  # 10% of portfolio per trade
+
   # Strategy parameters
-  trade_size: 1000
   order_id_tag: "APOLO-QQQ"
   rsi_period: 2
   # Note: Nautilus RSI returns values in 0-1 range (not 0-100)
