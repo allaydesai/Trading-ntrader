@@ -96,7 +96,7 @@ uv run python -m src.cli.main data check --symbol <SYM> --start <date> --end <da
 uv run python -m src.cli.main backtest run --strategy <type>   # ✅ All strategies supported
 
 # Config-based testing
-uv run python -m src.cli.main backtest run <config.yaml>       # ✅ YAML configs supported (run-config is deprecated)
+uv run python -m src.cli.main backtest run <config.yaml>       # ✅ YAML configs supported
 
 # Backtest history management (NEW - PostgreSQL)
 uv run python -m src.cli.main backtest history                 # ✅ View backtest history
@@ -929,7 +929,6 @@ This command:
   - `--symbol`: Trading symbol (optional override)
   - `--start`: Start date for backtest (optional override)
   - `--end`: End date for backtest (optional override)
-- `backtest run-config <config-file>`: **[DEPRECATED]** Use `backtest run <config.yaml>` instead
 
 ##### Backtest History Commands (New in Milestone 6)
 - `backtest history`: List recent backtest executions with metrics

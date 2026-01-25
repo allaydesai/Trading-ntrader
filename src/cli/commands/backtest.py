@@ -3,7 +3,7 @@
 import asyncio
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 
 import click
 from rich.console import Console
@@ -19,7 +19,6 @@ from src.cli.commands.compare import compare_backtests
 from src.cli.commands.reproduce import reproduce_backtest
 from src.cli.commands.show import show_backtest_details
 from src.core.strategy_registry import StrategyRegistry
-from src.models.backtest_request import BacktestRequest
 from src.services.data_catalog import DataCatalogService
 from src.services.exceptions import (
     CatalogCorruptionError,
@@ -28,7 +27,6 @@ from src.services.exceptions import (
     IBKRConnectionError,
     RateLimitExceededError,
 )
-from src.utils.bar_type_utils import parse_bar_type_spec
 from src.utils.error_formatter import ErrorFormatter
 from src.utils.error_messages import (
     CATALOG_CORRUPTION_DETECTED,
@@ -366,233 +364,6 @@ def run_backtest(
         result = asyncio.run(run_backtest_async())
     except click.UsageError:
         raise
-
-    if not result:
-        raise click.ClickException("Backtest failed")
-
-
-@backtest.command("run-config")
-@click.argument("config_file", type=click.Path(exists=True, dir_okay=False))
-@click.option("--symbol", "-sym", help="Trading symbol (overrides config if using database data)")
-@click.option(
-    "--start",
-    "-st",
-    type=click.DateTime(formats=["%Y-%m-%d", "%Y-%m-%d %H:%M:%S"]),
-    help="Start date for database data (overrides mock data)",
-)
-@click.option(
-    "--end",
-    "-e",
-    type=click.DateTime(formats=["%Y-%m-%d", "%Y-%m-%d %H:%M:%S"]),
-    help="End date for database data (overrides mock data)",
-)
-@click.option(
-    "--data-source",
-    "-ds",
-    default="catalog",
-    type=click.Choice(["mock", "database", "catalog"]),
-    help="Data source to use (default: catalog)",
-)
-@click.option(
-    "--persist/--no-persist",
-    default=True,
-    help="Save backtest results to database (default: persist)",
-)
-def run_config_backtest(
-    config_file: str,
-    symbol: str | None,
-    start: datetime | None,
-    end: datetime | None,
-    data_source: str,
-    persist: bool,
-):
-    """[DEPRECATED] Run backtest using YAML configuration file.
-
-    Use 'backtest run <config.yaml>' instead. This command will be removed in a future release.
-    """
-
-    async def run_config_backtest_async():
-        # Display deprecation warning first
-        console.print()
-        console.print(
-            "⚠️  DEPRECATED: 'backtest run-config' is deprecated.",
-            style="yellow bold",
-        )
-        console.print(
-            "    Use 'backtest run <config.yaml>' instead.",
-            style="yellow",
-        )
-        console.print(
-            "    This command will be removed in a future release.",
-            style="yellow",
-        )
-        console.print()
-
-        nonlocal start, end
-        console.print(f"🚀 Running backtest from config: {config_file}", style="cyan bold")
-        console.print(f"   Data source: {data_source}")
-
-        if data_source == "database":
-            if not symbol or not start or not end:
-                console.print(
-                    "❌ Database data source requires --symbol, --start, and --end",
-                    style="red",
-                )
-                return False
-
-            # Ensure start and end dates are timezone-aware (UTC) for database comparison
-            if start.tzinfo is None:
-                start = start.replace(tzinfo=timezone.utc)
-            if end.tzinfo is None:
-                end = end.replace(tzinfo=timezone.utc)
-
-            console.print(f"   Symbol: {symbol.upper()}")
-            console.print(
-                f"   Period: {start.strftime('%Y-%m-%d %H:%M:%S')} to "
-                f"{end.strftime('%Y-%m-%d %H:%M:%S')}"
-            )
-
-            # Note: Database connection check removed - using catalog for new implementation
-            console.print(
-                "⚠️  Database data source deprecated - use 'mock' or upgrade to catalog",
-                style="yellow",
-            )
-        elif data_source == "mock":
-            console.print("   Using mock data for testing")
-        else:
-            console.print("   Using Parquet catalog data")
-
-        console.print()
-
-        try:
-            import yaml
-
-            # Load YAML config
-            with open(config_file, "r") as f:
-                yaml_data = yaml.safe_load(f)
-
-            config_section = yaml_data.get("config", {})
-            instrument_id_str = str(config_section.get("instrument_id", ""))
-            bar_type_str = str(config_section.get("bar_type", ""))
-
-            if data_source == "mock":
-                # Load mock data using helper
-                data_result = await load_backtest_data(
-                    data_source="mock",
-                    instrument_id=instrument_id_str,
-                    bar_type_spec=bar_type_str,
-                    start=datetime.now(timezone.utc),
-                    end=datetime.now(timezone.utc),
-                    console=console,
-                    yaml_data=yaml_data,
-                )
-                bars = data_result.bars
-                instrument = data_result.instrument
-
-                # Build BacktestRequest with mock dates
-                request = BacktestRequest.from_yaml_config(
-                    yaml_data=yaml_data,
-                    persist=persist,
-                    config_file_path=config_file,
-                    data_source="mock",
-                )
-                # Get dates from mock bars
-                if bars:
-                    from datetime import datetime as dt
-
-                    mock_start = dt.fromtimestamp(bars[0].ts_event / 1_000_000_000)
-                    mock_end = dt.fromtimestamp(bars[-1].ts_event / 1_000_000_000)
-                    request = request.model_copy(
-                        update={"start_date": mock_start, "end_date": mock_end}
-                    )
-
-                console.print(f"   Persist: {'Yes' if persist else 'No'}")
-
-            elif data_source == "catalog":
-                # Build BacktestRequest FIRST to get dates from YAML config
-                request = BacktestRequest.from_yaml_config(
-                    yaml_data=yaml_data,
-                    persist=persist,
-                    config_file_path=config_file,
-                )
-
-                console.print(f"   Instrument: {instrument_id_str}")
-                console.print(f"   Bar Type: {bar_type_str}")
-                console.print(
-                    f"   Period: {request.start_date.strftime('%Y-%m-%d')} to "
-                    f"{request.end_date.strftime('%Y-%m-%d')}"
-                )
-                console.print(f"   Starting Balance: ${request.starting_balance:,.0f}")
-                console.print(f"   Persist: {'Yes' if persist else 'No'}")
-
-                # Parse bar type to get spec for catalog lookup
-                bar_type_spec = parse_bar_type_spec(bar_type_str)
-                console.print(f"   Looking for: {bar_type_spec} bars")
-
-                # Load catalog data using helper
-                data_result = await load_backtest_data(
-                    data_source="catalog",
-                    instrument_id=instrument_id_str,
-                    bar_type_spec=bar_type_spec,
-                    start=request.start_date,
-                    end=request.end_date,
-                    console=console,
-                )
-                bars = data_result.bars
-                instrument = data_result.instrument
-
-                if not bars:
-                    console.print("Failed to load bars from catalog", style="red")
-                    return False
-
-            else:
-                # Database data source - deprecated
-                console.print(
-                    "Database data source deprecated - use 'catalog' or 'mock'",
-                    style="red",
-                )
-                return False
-
-            # Execute backtest using helper
-            progress_msg = f"Running backtest with {data_source} data..."
-            result, run_id = await execute_backtest(
-                request=request,
-                bars=bars,
-                instrument=instrument,
-                console=console,
-                progress_message=progress_msg,
-            )
-
-            # Build context rows for display
-            context_rows = {
-                "Configuration File": config_file,
-                "Data Source": data_source.title(),
-            }
-
-            # Display results using helper
-            display_backtest_results(
-                result=result,
-                console=console,
-                run_id=run_id,
-                persist=persist,
-                context_rows=context_rows,
-                table_title="Strategy Configuration Backtest Results",
-            )
-
-            return True
-
-        except FileNotFoundError as e:
-            console.print(f"Configuration file not found: {e}", style="red bold")
-            sys.exit(1)
-        except ValueError as e:
-            console.print(f"Configuration error: {e}", style="red bold")
-            sys.exit(2)
-        except Exception as e:
-            console.print(f"Unexpected error: {e}", style="red bold")
-            sys.exit(3)
-
-    # Run async function
-    result = asyncio.run(run_config_backtest_async())
 
     if not result:
         raise click.ClickException("Backtest failed")
