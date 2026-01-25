@@ -1,7 +1,7 @@
 # NTrader
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
-[![Tests](https://img.shields.io/badge/tests-715%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-1040%20passing-brightgreen.svg)](tests/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Production-grade algorithmic trading backtesting system built with Nautilus Trader.
@@ -196,7 +196,7 @@ uv run python -m src.cli.main backtest run \
   --strategy sma_crossover --symbol AAPL --start 2024-01-02 --end 2024-01-02
 
 uv run python -m src.cli.main backtest run \
-  --strategy mean_reversion --symbol AAPL --start 2024-01-02 --end 2024-01-02
+  --strategy momentum --symbol AAPL --start 2024-01-02 --end 2024-01-02
 
 # View history and find best performers
 uv run python -m src.cli.main backtest history --sort sharpe
@@ -313,9 +313,9 @@ src/
 └── utils/            # Utilities
 
 tests/
-├── unit/             # Fast unit tests (141 tests)
-├── component/        # Component tests (456 tests)
-├── integration/      # Integration tests (112 tests)
+├── unit/             # Fast unit tests (315 tests)
+├── component/        # Component tests (421 tests)
+├── integration/      # Integration tests (135 tests)
 └── e2e/              # End-to-end tests
 ```
 

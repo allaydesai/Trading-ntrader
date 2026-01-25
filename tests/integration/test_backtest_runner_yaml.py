@@ -34,25 +34,23 @@ def yaml_config_file(tmp_path):
 
 
 @pytest.fixture
-def mean_reversion_yaml_config_file(tmp_path):
-    """Create a temporary Mean Reversion YAML config file for testing."""
+def momentum_yaml_config_file(tmp_path):
+    """Create a temporary Momentum YAML config file for testing."""
     config_content = """
-    strategy_path: "src.core.strategies.rsi_mean_reversion:RSIMeanRev"
-    config_path: "src.core.strategies.rsi_mean_reversion:RSIMeanRevConfig"
+    strategy_path: "src.core.strategies.sma_momentum:SMAMomentum"
+    config_path: "src.core.strategies.sma_momentum:SMAMomentumConfig"
     config:
       instrument_id: "AAPL.NASDAQ"
       bar_type: "AAPL.NASDAQ-1-MINUTE-LAST-EXTERNAL"
       trade_size: 1000000
       order_id_tag: "001"
-      rsi_period: 2
-      rsi_buy_threshold: 10.0
-      exit_rsi: 50.0
-      sma_trend_period: 200
-      warmup_days: 400
-      cooldown_bars: 0
+      fast_period: 20
+      slow_period: 50
+      warmup_days: 1
+      allow_short: false
     """
 
-    config_file = tmp_path / "mr_config.yaml"
+    config_file = tmp_path / "momentum_config.yaml"
     config_file.write_text(config_content)
     return str(config_file)
 
@@ -76,11 +74,11 @@ class TestBacktestRunnerYAML:
         assert isinstance(result.total_trades, int)
 
     @pytest.mark.integration
-    def test_run_from_config_file_mean_reversion_strategy(self, mean_reversion_yaml_config_file):
-        """Test running backtest from Mean Reversion YAML config file."""
+    def test_run_from_config_file_momentum_strategy(self, momentum_yaml_config_file):
+        """Test running backtest from Momentum YAML config file."""
         runner = MinimalBacktestRunner(data_source="mock")
 
-        result = runner.run_from_config_file(mean_reversion_yaml_config_file)
+        result = runner.run_from_config_file(momentum_yaml_config_file)
 
         # Verify we get a valid backtest result
         assert result is not None
@@ -135,25 +133,6 @@ class TestBacktestRunnerYAML:
               position_size_pct: 10.0
             """,
                 id="sma_strategy",
-            ),
-            pytest.param(
-                "mean_reversion",
-                """
-            strategy_path: "src.core.strategies.rsi_mean_reversion:RSIMeanRev"
-            config_path: "src.core.strategies.rsi_mean_reversion:RSIMeanRevConfig"
-            config:
-              instrument_id: "AAPL.NASDAQ"
-              bar_type: "AAPL.NASDAQ-1-MINUTE-LAST-EXTERNAL"
-              trade_size: 1000000
-              order_id_tag: "001"
-              rsi_period: 2
-              rsi_buy_threshold: 10.0
-              exit_rsi: 50.0
-              sma_trend_period: 200
-              warmup_days: 400
-              cooldown_bars: 0
-            """,
-                id="mean_reversion_strategy",
             ),
             pytest.param(
                 "momentum",
