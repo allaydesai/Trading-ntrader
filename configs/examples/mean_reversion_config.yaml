@@ -1,8 +1,0 @@
-strategy_path: "src.core.strategies.mean_reversion:MeanReversionStrategy"
-config_path: "src.core.strategies.mean_reversion:MeanReversionConfig"
-config:
-  instrument_id: "AAPL.NASDAQ"
-  bar_type: "AAPL.NASDAQ-1-MINUTE-LAST-INTERNAL"
-  lookback_period: 20
-  num_std_dev: 2.0
-  trade_size: 1000000

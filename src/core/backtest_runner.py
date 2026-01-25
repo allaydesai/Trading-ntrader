@@ -23,7 +23,6 @@ from src.core.strategy_registry import StrategyRegistry
 from src.db.repositories.backtest_repository import BacktestRepository
 from src.db.session import get_session
 from src.models.backtest_result import BacktestResult
-from src.models.strategy import StrategyType
 from src.services.backtest_persistence import BacktestPersistenceService
 from src.services.data_service import DataService
 from src.utils.config_loader import ConfigLoader, StrategyConfigWrapper
@@ -52,18 +51,18 @@ class MinimalBacktestRunner:
         self._backtest_end_date: datetime | None = None
 
     @staticmethod
-    def _resolve_strategy_type(strategy_type: str) -> StrategyType:
+    def _resolve_strategy_type(strategy_type: str) -> str:
         """
-        Resolve strategy alias to canonical StrategyType enum.
+        Resolve strategy alias to canonical strategy name.
 
         Args:
             strategy_type: Strategy name or alias (e.g., "crsi", "connors_rsi_mean_rev")
 
         Returns:
-            StrategyType enum value
+            Canonical strategy name string
 
         Raises:
-            ValueError: If strategy type is not found in registry or not a valid enum
+            ValueError: If strategy type is not found in registry
         """
         # Handle legacy "sma" alias for backward compatibility
         if strategy_type == "sma":
@@ -73,14 +72,8 @@ class MinimalBacktestRunner:
         StrategyRegistry.discover()  # Ensure strategies are loaded
         try:
             strategy_def = StrategyRegistry.get(strategy_type)
-            canonical_name = strategy_def.name
+            return strategy_def.name
         except KeyError:
-            raise ValueError(f"Unsupported strategy type: {strategy_type}")
-
-        # Validate against StrategyType enum
-        try:
-            return StrategyType(canonical_name)
-        except ValueError:
             raise ValueError(f"Unsupported strategy type: {strategy_type}")
 
     async def _persist_backtest_results(
@@ -1409,7 +1402,7 @@ class MinimalBacktestRunner:
         from src.core.strategy_factory import StrategyLoader
 
         # Resolve strategy alias to canonical StrategyType
-        strategy_enum = self._resolve_strategy_type(strategy_type)
+        strategy_name = self._resolve_strategy_type(strategy_type)
 
         if self.data_source != "database":
             raise ValueError("This method requires 'database' data source")
@@ -1500,7 +1493,7 @@ class MinimalBacktestRunner:
 
         # Use StrategyLoader to build parameters dynamically
         config_params = StrategyLoader.build_strategy_params(
-            strategy_type=strategy_enum,
+            strategy_type=strategy_name,
             overrides=strategy_params,
             settings=self.settings,
         )
@@ -1516,7 +1509,7 @@ class MinimalBacktestRunner:
         )
 
         # Create strategy using StrategyLoader
-        strategy = StrategyLoader.create_strategy(strategy_enum, config_params)
+        strategy = StrategyLoader.create_strategy(strategy_name, config_params)
         self.engine.add_strategy(strategy=strategy)
 
         # Store backtest date range for CAGR calculation
@@ -1567,7 +1560,7 @@ class MinimalBacktestRunner:
         execution_start_time = time.time()
 
         # Resolve strategy alias to canonical StrategyType
-        strategy_enum = self._resolve_strategy_type(strategy_type)
+        strategy_name = self._resolve_strategy_type(strategy_type)
 
         if not bars:
             raise ValueError("No bars provided for backtest")
@@ -1674,7 +1667,7 @@ class MinimalBacktestRunner:
 
         # Use StrategyLoader to build parameters dynamically
         config_params = StrategyLoader.build_strategy_params(
-            strategy_type=strategy_enum,
+            strategy_type=strategy_name,
             overrides=strategy_params,
             settings=self.settings,
         )
@@ -1688,7 +1681,7 @@ class MinimalBacktestRunner:
         )
 
         # Reason: Create strategy using StrategyLoader
-        strategy = StrategyLoader.create_strategy(strategy_enum, config_params)
+        strategy = StrategyLoader.create_strategy(strategy_name, config_params)
         self.engine.add_strategy(strategy=strategy)
 
         try:

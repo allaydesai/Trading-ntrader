@@ -1,15 +1,16 @@
+"""Unit tests for StrategyFactory and StrategyLoader."""
+
 from decimal import Decimal
 from unittest.mock import MagicMock
 
 import pytest
 
 from src.core.strategy_factory import StrategyLoader
-from src.models.strategy import (
-    StrategyType,
-)
 
 
 class TestStrategyFactory:
+    """Test cases for StrategyLoader.build_strategy_params method."""
+
     def test_build_strategy_params_sma_defaults(self):
         """Test building SMA params with defaults."""
         settings = MagicMock()
@@ -19,7 +20,7 @@ class TestStrategyFactory:
         settings.position_size_pct = Decimal("5.0")
 
         params = StrategyLoader.build_strategy_params(
-            StrategyType.SMA_CROSSOVER, overrides={}, settings=settings
+            "sma_crossover", overrides={}, settings=settings
         )
 
         assert params["fast_period"] == 15
@@ -37,7 +38,7 @@ class TestStrategyFactory:
         settings.position_size_pct = Decimal("10.0")
 
         params = StrategyLoader.build_strategy_params(
-            StrategyType.SMA_CROSSOVER,
+            "sma_crossover",
             overrides={"fast_period": 5, "slow_period": 10},
             settings=settings,
         )
@@ -53,7 +54,7 @@ class TestStrategyFactory:
         settings.slow_ema_period = 50  # Default
 
         params = StrategyLoader.build_strategy_params(
-            StrategyType.MOMENTUM, overrides={"allow_short": True}, settings=settings
+            "momentum", overrides={"allow_short": True}, settings=settings
         )
 
         assert params["trade_size"] == Decimal("500")
@@ -71,7 +72,7 @@ class TestStrategyFactory:
 
         with pytest.raises(ValueError, match="Configuration validation failed"):
             StrategyLoader.build_strategy_params(
-                StrategyType.SMA_CROSSOVER,
+                "sma_crossover",
                 overrides={"fast_period": 50, "slow_period": 10},  # Invalid: fast > slow
                 settings=settings,
             )

@@ -190,3 +190,10 @@ tailwindcss-*
 
 # Editor-specific instruction files (copies of CLAUDE.md)
 WARP.md
+
+# Private strategies (submodule content)
+# Keep .gitkeep and __init__.py, ignore strategy implementation files
+src/core/strategies/custom/*.py
+src/core/strategies/custom/models/
+!src/core/strategies/custom/.gitkeep
+!src/core/strategies/custom/__init__.py

@@ -236,6 +236,9 @@ class StrategyRegistry:
         This method scans the strategies directory and imports all Python
         modules, which triggers their @register_strategy decorators.
 
+        Also scans the custom/ subdirectory for external strategies
+        (e.g., from git submodules).
+
         Parameters
         ----------
         force : bool
@@ -251,6 +254,7 @@ class StrategyRegistry:
 
         import importlib
         import importlib.util
+        import warnings
 
         # Get the strategies directory
         strategies_dir = Path(__file__).parent / "strategies"
@@ -268,9 +272,20 @@ class StrategyRegistry:
                 importlib.import_module(module_name)
             except ImportError as e:
                 # Log but don't fail - some modules might have optional dependencies
-                import warnings
-
                 warnings.warn(f"Could not import strategy module {module_name}: {e}")
+
+        # Also scan custom/ subdirectory for external strategies
+        custom_dir = strategies_dir / "custom"
+        if custom_dir.exists():
+            for py_file in custom_dir.glob("*.py"):
+                if py_file.name.startswith("_"):
+                    continue
+
+                module_name = f"src.core.strategies.custom.{py_file.stem}"
+                try:
+                    importlib.import_module(module_name)
+                except ImportError as e:
+                    warnings.warn(f"Could not import custom strategy {module_name}: {e}")
 
         cls._discovered = True
         return len(cls._strategies)

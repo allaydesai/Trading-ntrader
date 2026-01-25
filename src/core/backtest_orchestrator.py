@@ -31,7 +31,6 @@ from src.db.repositories.backtest_repository import BacktestRepository
 from src.db.session import get_session
 from src.models.backtest_request import BacktestRequest
 from src.models.backtest_result import BacktestResult
-from src.models.strategy import StrategyType
 from src.services.backtest_persistence import BacktestPersistenceService
 
 logger = structlog.get_logger(__name__)
@@ -263,14 +262,14 @@ class BacktestOrchestrator:
 
         # Fallback to StrategyLoader for CLI-based strategies
         try:
-            # Resolve strategy type to enum
+            # Resolve strategy type to canonical name
             StrategyRegistry.discover()
             strategy_def = StrategyRegistry.get(request.strategy_type)
-            strategy_enum = StrategyType(strategy_def.name)
+            strategy_name = strategy_def.name
 
             # Build parameters using StrategyLoader
             loader_params = StrategyLoader.build_strategy_params(
-                strategy_type=strategy_enum,
+                strategy_type=strategy_name,
                 overrides=request.strategy_config,
                 settings=self.settings,
             )
@@ -281,7 +280,7 @@ class BacktestOrchestrator:
                 }
             )
 
-            return StrategyLoader.create_strategy(strategy_enum, loader_params)
+            return StrategyLoader.create_strategy(strategy_name, loader_params)
         except Exception as e:
             logger.error(f"Failed to create strategy: {e}")
             raise ValueError(f"Failed to create strategy {request.strategy_type}: {e}")
