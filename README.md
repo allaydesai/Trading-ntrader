@@ -1,359 +1,102 @@
-# NTrader - Nautilus Trader Backtesting System
+# NTrader
 
-A production-grade algorithmic trading backtesting system built with the Nautilus Trader framework. This system allows you to backtest trading strategies with historical data and Interactive Brokers integration.
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![Tests](https://img.shields.io/badge/tests-715%20passing-brightgreen.svg)](tests/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-## Features
+Production-grade algorithmic trading backtesting system built with Nautilus Trader.
 
-- 🚀 **Multiple Trading Strategies**: Three built-in strategies with dynamic configuration
-  - **SMA Crossover**: Simple Moving Average crossover strategy
-  - **RSI Mean Reversion**: RSI-based mean reversion with trend filter
-  - **SMA Momentum**: Moving average momentum strategy (golden/death cross)
-- 📊 **Strategy Management**: CLI commands for strategy discovery, configuration, and validation
-- 📋 **YAML Configuration**: Flexible strategy configuration via YAML files
-- 📊 **Mock Data Generation**: Synthetic data with predictable patterns for testing
-- 📈 **CSV Data Import**: Import real market data from CSV files directly to Parquet catalog
-- 📡 **Interactive Brokers Integration**: ✨ Fetch real market data from IBKR TWS/Gateway
-- 🗄️ **Parquet Data Catalog**: ✨ Fast, efficient columnar storage with Nautilus native format
-  - **No Database Required**: Direct Parquet file storage eliminates PostgreSQL dependency
-  - **Auto-Fetch**: Automatically fetches missing data from IBKR when needed
-  - **Data Inspection**: Built-in commands to check availability and detect gaps
-- 🖥️ **CLI Interface**: Easy-to-use command line interface with comprehensive data management
-- 📊 **Performance Analytics**: Comprehensive metrics using Nautilus Trader analytics framework
-  - **Risk Metrics**: Sharpe Ratio, Sortino Ratio, Calmar Ratio, Maximum Drawdown
-  - **Trade Statistics**: Win rate, profit factor, expectancy, average win/loss
-  - **Portfolio Tracking**: Real-time PnL, position monitoring, equity curves
-- 📋 **Report Generation**: Multi-format report export with rich visualizations
-  - **Text Reports**: Rich-formatted console output with tables and charts
-  - **CSV Export**: Precision-preserved data export for spreadsheet analysis
-  - **JSON Export**: Structured data for programmatic analysis
-- 💾 **PostgreSQL Metadata Storage**: ✨ **NEW** - Persistent backtest result storage and retrieval
-  - **Automatic Persistence**: All backtests automatically saved to database
-  - **History Management**: View, filter, and sort past backtests
-  - **Detailed Inspection**: Complete backtest details with configuration snapshots
-  - **Comparison Tools**: Side-by-side comparison of multiple backtests
-  - **Reproducibility**: Re-run previous backtests with exact same configuration
-  - **Performance Tracking**: Track strategy performance over time
-- 🌐 **Web UI**: ✨ **NEW** - Browser-based dashboard for backtest results
-  - **Dashboard**: Overview with key metrics (total backtests, best Sharpe, worst drawdown)
-  - **Backtest List**: Paginated table with color-coded returns and HTMX pagination
-  - **Dark Theme**: Modern dark UI with high-contrast text for professional appearance
-  - **Navigation**: Persistent nav bar with active page highlighting
-- ⚡ **Fast Execution**: Built on Nautilus Trader's high-performance engine
-- 🧪 **Test Coverage**: Comprehensive test suite with 715 tests (688 passing) organized in test pyramid
-  - 141 unit tests executing in 0.55s (99% faster than integration)
-  - 456 component tests with test doubles executing in 0.54s
-  - 112 integration tests with subprocess isolation
-- 🔄 **Real Data Backtesting**: Run backtests on Parquet-stored historical data with full analytics
+## Overview
 
-## Current Status & Capabilities
+NTrader is a comprehensive backtesting platform designed for traders, quants, and developers who need reliable strategy testing with real market data. Built on the high-performance Nautilus Trader engine, it provides:
 
-### ✅ What Works (Parquet Migration Complete)
-- **Strategy Management**: Discover, create, and validate strategy configurations
-- **Multiple Strategy Types**: SMA Crossover, RSI Mean Reversion, SMA Momentum
-- **Parquet Catalog Backtesting**: All strategies work with Parquet-stored data
-- **YAML Configuration**: Create and validate strategy configs via CLI
-- **Mock Data Testing**: Test strategies with synthetic data using YAML configs
-- **Performance Analytics**: Comprehensive metrics with Nautilus Trader integration
-  - Sharpe, Sortino, Calmar ratios
-  - Maximum drawdown with recovery tracking
-  - Win rate, profit factor, expectancy
-  - Portfolio tracking and equity curves
-- **Report Generation**: Multi-format exports (text, CSV, JSON)
-- **Results Persistence**: Save and retrieve backtest results with full analytics
-- **Parquet Data Catalog**: ✨ Simplified data storage architecture
-  - CSV imports directly to Parquet (no database required)
-  - Auto-fetch missing data from IBKR automatically
-  - Data inspection commands (list, check, gap detection)
-  - Fast columnar storage optimized for analytics
-- **Interactive Brokers Integration**:
-  - Fetch historical data directly from IBKR TWS/Gateway
-  - Support for multiple instruments and timeframes
-  - Built-in rate limiting (45 req/sec) to prevent API throttling
-  - Automatic catalog updates with fetched data
-- **PostgreSQL Metadata Storage**: ✨ **NEW** - Complete backtest history management
-  - All backtests automatically saved with full metadata
-  - View backtest history with filtering by strategy, instrument, status
-  - Sort by date, total return, or Sharpe ratio
-  - Show complete backtest details with configuration snapshots
-  - Compare multiple backtests side-by-side (2-10 runs)
-  - Reproduce previous backtests with exact same configuration
-  - Track strategy performance over time with aggregate statistics
+- **7 built-in trading strategies** covering trend-following, mean reversion, and momentum approaches
+- **Interactive Brokers integration** for fetching real market data
+- **Parquet-based data catalog** for fast, efficient storage without database overhead for market data
+- **PostgreSQL metadata storage** for tracking backtest history and performance metrics
+- **Web dashboard** for visualizing results
+- **Comprehensive CLI** for all operations
 
-### 📋 Command Quick Reference
-```bash
-# Strategy management
-uv run python -m src.cli.main strategy list                    # ✅ List available strategies
-uv run python -m src.cli.main strategy create --type <type>    # ✅ Create config template
-uv run python -m src.cli.main strategy validate <config>       # ✅ Validate config
+## Key Features
 
-# Data management (Parquet catalog)
-uv run python -m src.cli.main data import --csv <file> --symbol <SYM> --venue <VENUE>  # ✅ Import CSV to Parquet
-uv run python -m src.cli.main data list                        # ✅ List all catalog contents
-uv run python -m src.cli.main data check --symbol <SYM>        # ✅ Check data availability
-uv run python -m src.cli.main data check --symbol <SYM> --start <date> --end <date>  # ✅ Detect gaps
+### Trading Strategies
+- SMA Crossover (classic moving average crossover)
+- SMA Crossover Long-Only (trend following, long positions only)
+- SMA Momentum (golden/death cross detection)
+- RSI Mean Reversion (RSI-based with trend filter)
+- Larry Connors RSI (short-term mean reversion)
+- Bollinger Band Reversal (volatility-based entries)
+- Apolo RSI (optimized RSI strategy)
 
-# Backtesting (auto-fetches missing data if IBKR connected)
-uv run python -m src.cli.main backtest run --strategy <type>   # ✅ All strategies supported
+### Data Management
+- CSV import directly to Parquet catalog
+- Interactive Brokers historical data fetching
+- Auto-fetch missing data when IBKR is connected
+- Data inspection and gap detection commands
 
-# Config-based testing
-uv run python -m src.cli.main backtest run <config.yaml>       # ✅ YAML configs supported
+### Performance Analytics
+- Risk metrics: Sharpe, Sortino, Calmar ratios
+- Trade statistics: Win rate, profit factor, expectancy
+- Maximum drawdown tracking
+- Multi-format reports (text, CSV, JSON)
 
-# Backtest history management (NEW - PostgreSQL)
-uv run python -m src.cli.main backtest history                 # ✅ View backtest history
-uv run python -m src.cli.main backtest history --limit 50      # ✅ Show more results
-uv run python -m src.cli.main backtest history --strategy "SMA Crossover"  # ✅ Filter by strategy
-uv run python -m src.cli.main backtest history --sort sharpe   # ✅ Sort by Sharpe ratio (best first)
-uv run python -m src.cli.main backtest history --sort return   # ✅ Sort by total return
-uv run python -m src.cli.main backtest show <run-id>           # ✅ View complete backtest details
-uv run python -m src.cli.main backtest compare <id1> <id2>     # ✅ Compare 2-10 backtests side-by-side
-uv run python -m src.cli.main backtest reproduce <run-id>      # ✅ Re-run previous backtest
-
-# Performance reports
-uv run python -m src.cli report summary <result-id>            # ✅ Quick performance summary
-uv run python -m src.cli report generate --result-id <id>      # ✅ Generate text report
-uv run python -m src.cli report generate --result-id <id> --format csv  # ✅ Export to CSV
-uv run python -m src.cli report list                           # ✅ List saved results
-
-# Web UI (NEW)
-uvicorn src.api.web:app --reload                                 # ✅ Start web server
-# Open http://127.0.0.1:8000 in browser for dashboard
-```
-
-## Web UI
-
-**NEW** - The NTrader Web UI provides a browser-based interface for viewing backtest results.
-
-### First-Time Setup
-
-Before running the web server, build the Tailwind CSS:
-
-```bash
-# Build CSS (one-time setup - downloads Tailwind CLI automatically)
-./scripts/build-css.sh
-
-# Or build minified CSS for production
-./scripts/build-css.sh --minify
-```
-
-### Starting the Web Server
-
-#### Development Mode (with auto-reload)
-
-```bash
-# Start the web server with auto-reload
-uv run uvicorn src.api.web:app --reload --host 127.0.0.1 --port 8000
-
-# In another terminal, watch CSS for changes (optional)
-./scripts/build-css.sh --watch
-
-# Open in browser
-open http://127.0.0.1:8000
-```
-
-#### Production Mode
-
-```bash
-# Build minified CSS
-./scripts/build-css.sh --minify
-
-# Start the web server (no auto-reload)
-uv run uvicorn src.api.web:app --host 0.0.0.0 --port 8000 --workers 4
-
-# Open in browser
-open http://127.0.0.1:8000
-```
-
-### Available Pages
-
-- **Dashboard** (`/`): Overview with total backtests, best Sharpe ratio, worst drawdown, and recent activity
-- **Backtest List** (`/backtests`): Paginated table of all backtest runs with key metrics and status
-  - Sortable columns: Run ID, Strategy, Symbol, Date Range, Return, Sharpe, Max DD, Status, Created
-  - Color-coded returns (green for positive, red for negative)
-  - HTMX-powered pagination (no page reload)
-
-### Features
-
-- **Dark Theme**: Modern slate-950 background with high-contrast text (WCAG AA compliant)
-- **Responsive Navigation**: Persistent nav bar with active page highlighting
-- **Empty State Handling**: Helpful messages when no backtests exist
-- **Server-Side Rendering**: Fast load times with Jinja2 templates
-- **HTMX Integration**: Dynamic updates without full page reloads
-
-### Requirements
-
-The Web UI requires the database to be configured. Set `DATABASE_URL` in your `.env` file:
-
-```bash
-DATABASE_URL=postgresql://user:password@localhost:5432/ntrader
-```
-
-## QA Testing Workflow
-
-The NTrader application supports environment-based database selection for testing purposes.
-
-### Environment Configuration
-
-Create environment-specific configuration files:
-- `.env` - Default configuration (used when ENV not set)
-- `.env.dev` - Development database (trading_ntrader)
-- `.env.qa` - QA/testing database (trading_ntrader_qa)
-
-### Switching Databases
-
-Use the `ENV` environment variable to select which configuration to use:
-
-#### Web Application
-
-```bash
-# Run with development database (default)
-uv run uvicorn src.api.web:app --reload
-
-# Run with QA database
-ENV=qa uv run uvicorn src.api.web:app --reload --port 8000
-```
-
-#### CLI Commands
-
-```bash
-# List backtests from development database (default)
-uv run python -m src.cli.main backtest history
-
-# List backtests from QA database
-ENV=qa uv run python -m src.cli.main backtest history
-
-# Run backtest against QA database
-ENV=qa uv run python -m src.cli.main backtest run \
-  -s sma_crossover \
-  -sym SPY.ARCA \
-  -st 2024-01-01 \
-  -e 2024-12-31
-```
-
-### QA Database Setup
-
-The QA database (`trading_ntrader_qa`) contains 25 pre-populated test backtests for web UI testing:
-
-```bash
-# Create and populate QA database
-./scripts/setup_qa_data.sh
-
-# Verify QA data
-PGPASSWORD=ntrader_dev_2025 psql -h localhost -U ntrader -d trading_ntrader_qa \
-  -c 'SELECT COUNT(*) FROM backtest_runs;'
-```
-
-### Configuration Priority
-
-Settings are loaded in this order (highest priority first):
-1. **Environment variables** (e.g., `DATABASE_URL=...`) - These take precedence over everything
-2. **ENV-specific file** (`.env.dev`, `.env.qa`) - Selected via ENV environment variable
-3. **Default file** (`.env`) - Used when ENV is not set
-
-**Important**: If you have `DATABASE_URL` set as an environment variable in your shell, it will override the .env file settings. To use ENV-based database selection, ensure DATABASE_URL is not exported in your shell environment.
-
-### Troubleshooting
-
-**ENV=qa not working:**
-- Verify `.env.qa` file exists in project root
-- Check file has correct `DATABASE_URL` setting
-- **Check if DATABASE_URL is set in your shell**: Run `echo $DATABASE_URL` - if it shows a value, unset it with `unset DATABASE_URL` before running commands
-- Restart application after creating new env files
-
-**Database connection errors:**
-- Verify QA database exists: `psql -h localhost -U ntrader -l | grep trading_ntrader_qa`
-- Run setup script: `./scripts/setup_qa_data.sh`
-- Check PostgreSQL is running: `docker ps | grep pgdb`
+### Web Dashboard
+- Overview with key metrics
+- Paginated backtest list with filtering
+- Dark theme with responsive design
+- HTMX-powered dynamic updates
 
 ## Quick Start
 
 ### Prerequisites
 
 - Python 3.11+
-- UV package manager
-- **Optional**: Interactive Brokers TWS/Gateway (for live data fetching)
-  - See [IBKR Setup Guide](docs/IBKR_SETUP.md) for detailed instructions
+- PostgreSQL 16+ (for metadata storage)
+- Interactive Brokers TWS/Gateway (optional, for live data)
 
 ### Installation
 
-1. Clone the repository:
 ```bash
-git clone <repository-url>
+# Clone the repository
+git clone https://github.com/allaydesai/Trading-ntrader.git
 cd Trading-ntrader
-```
 
-2. Install dependencies using UV:
-```bash
-# Install UV if not already installed
+# Install UV package manager (if not already installed)
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Create virtual environment and install dependencies
+# Install dependencies
 uv sync
-```
 
-3. Build Tailwind CSS for the Web UI:
-```bash
-# Build CSS (downloads Tailwind CLI automatically on first run)
-./scripts/build-css.sh
-
-# Or build minified CSS for production
-./scripts/build-css.sh --minify
-```
-
-4. Set up environment variables (Optional - only needed for IBKR):
-```bash
-# Copy the example environment file
+# Configure environment
 cp .env.example .env
-
-# Edit .env with your IBKR connection settings if needed
+# Edit .env with your database credentials
 ```
 
-5. Create Parquet catalog directory:
+### Database Setup
+
 ```bash
-# The catalog directory will be created automatically, but you can create it manually:
-mkdir -p ./data/catalog
+# Start PostgreSQL (using Docker)
+docker run -d --name pgdb \
+  -e POSTGRES_USER=ntrader \
+  -e POSTGRES_PASSWORD=ntrader_dev_2025 \
+  -e POSTGRES_DB=trading_ntrader \
+  -p 5432:5432 \
+  postgres:17
+
+# Run database migrations
+uv run alembic upgrade head
 ```
 
-## Quick Start Guide
+### Run Your First Backtest
 
-### Your First Backtest in 3 Steps
-
-Follow this guide to run your first successful backtest using the included sample data:
-
-#### Step 1: Import Sample Data to Parquet Catalog
 ```bash
-# Import the included AAPL sample data directly to Parquet catalog
+# Import sample data
 uv run python -m src.cli.main data import \
   --csv data/sample_AAPL.csv \
   --symbol AAPL \
-  --venue NASDAQ \
-  --bar-type 1-MINUTE-LAST
-```
+  --venue NASDAQ
 
-Expected output:
-```
-✅ CSV Import Successful
-┏━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-┃ Metric              ┃ Value                                                 ┃
-┡━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
-│ File                │ data/sample_AAPL.csv                                 │
-│ Instrument ID       │ AAPL.NASDAQ                                          │
-│ Bars Written        │ 50                                                    │
-│ Date Range          │ 2024-01-02 09:30 to 2024-01-02 10:20                │
-│ File Size           │ 3.2 KB                                               │
-└─────────────────────┴───────────────────────────────────────────────────────┘
-```
-
-#### Step 2: Verify Data in Catalog
-```bash
-# List all data in the Parquet catalog
-uv run python -m src.cli.main data list
-```
-
-You should see AAPL.NASDAQ listed with date ranges and bar counts.
-
-#### Step 3: Run Your First Backtest
-```bash
-# Run SMA crossover strategy on the imported data (with specific times)
+# Run a backtest
 uv run python -m src.cli.main backtest run \
   --strategy sma_crossover \
   --symbol AAPL \
@@ -363,1233 +106,162 @@ uv run python -m src.cli.main backtest run \
   --slow-period 10
 ```
 
-Alternative: Use the YAML configuration approach:
+## CLI Commands Reference
+
+### Strategy Commands
+
+| Command | Description |
+|---------|-------------|
+| `strategy list` | List all available trading strategies |
+| `strategy create --type <type> --output <file>` | Create a strategy config template |
+| `strategy validate <config.yaml>` | Validate a strategy configuration |
+
+### Data Commands
+
+| Command | Description |
+|---------|-------------|
+| `data import --csv <file> --symbol <SYM> --venue <VENUE>` | Import CSV to Parquet catalog |
+| `data list` | List all data in the catalog |
+| `data check --symbol <SYM>` | Check data availability |
+| `data check --symbol <SYM> --start <date> --end <date>` | Detect data gaps |
+| `data connect` | Test IBKR connection |
+| `data fetch --instruments <SYM> --start <date> --end <date>` | Fetch data from IBKR |
+
+### Backtest Commands
+
+| Command | Description |
+|---------|-------------|
+| `backtest run --strategy <type> --symbol <SYM> ...` | Run a backtest |
+| `backtest run <config.yaml>` | Run backtest with YAML config |
+| `backtest history` | View recent backtest executions |
+| `backtest history --sort sharpe` | Sort by Sharpe ratio |
+| `backtest show <run-id>` | View complete backtest details |
+| `backtest compare <id1> <id2>` | Compare backtests side-by-side |
+| `backtest reproduce <run-id>` | Re-run a previous backtest |
+
+### Report Commands
+
+| Command | Description |
+|---------|-------------|
+| `report list` | List all saved results |
+| `report summary <result-id>` | Quick performance summary |
+| `report generate --result-id <id> --format <fmt>` | Generate detailed report |
+
+## Common Workflows
+
+### 1. Quick Test with Sample Data
+
 ```bash
-# Create a strategy config template
-uv run python -m src.cli.main strategy create --type sma_crossover --output my_strategy.yaml
+# Import and test with included sample data
+uv run python -m src.cli.main data import \
+  --csv data/sample_AAPL.csv --symbol AAPL --venue NASDAQ
 
-# Run backtest with config file
-uv run python -m src.cli.main backtest run my_strategy.yaml
+uv run python -m src.cli.main backtest run \
+  --strategy sma_crossover --symbol AAPL \
+  --start 2024-01-02 --end 2024-01-02
 ```
 
-Expected output:
-```
-🚀 Running SMA backtest for AAPL
-   Period: 2024-01-02 to 2024-01-02
-   Strategy: Fast SMA(5) vs Slow SMA(10)
-   Trade Size: 1,000,000
+### 2. Import Your Own CSV Data
 
-✅ Data validation passed
-   Available data range: 2024-01-02 09:30:00+00:00 to 2024-01-02 10:20:00+00:00
-
-🎯 Backtest Results
-[Results table with trade statistics]
-```
-
-**Note**: The backtest will automatically fetch missing data from IBKR if connected, otherwise it uses only catalog data.
-
-🎉 **Congratulations!** You've successfully run your first backtest with Parquet-stored data!
-
-### Data Management with Parquet Catalog
-
-The system uses a Parquet-based data catalog for fast, efficient market data storage. No database setup required!
-
-#### Catalog Structure
-
-Data is organized in a hierarchical structure optimized for time-series analytics:
-
-```
-./data/catalog/
-├── AAPL.NASDAQ-1-MINUTE-LAST-EXTERNAL/
-│   ├── 2024-01-02.parquet
-│   ├── 2024-01-03.parquet
-│   └── ...
-├── NVDA.NASDAQ-1-MINUTE-LAST-EXTERNAL/
-│   ├── 2024-06-03.parquet
-│   └── ...
-└── [INSTRUMENT_ID]-[BAR_TYPE]/
-    └── YYYY-MM-DD.parquet
-```
-
-#### Data Inspection Commands
-
-**List all catalog contents:**
 ```bash
+# CSV format: timestamp,open,high,low,close,volume
+uv run python -m src.cli.main data import \
+  --csv /path/to/your/data.csv \
+  --symbol YOUR_SYMBOL \
+  --venue YOUR_VENUE
+
+# Verify import
 uv run python -m src.cli.main data list
-
-# Example output:
-┏━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┓
-┃ Instrument   ┃ Bar Type         ┃ Start Date  ┃ End Date    ┃ Bars   ┃
-┡━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━┩
-│ AAPL.NASDAQ  │ 1-MINUTE-LAST    │ 2024-01-02  │ 2024-01-05  │  1,200 │
-│ NVDA.NASDAQ  │ 1-MINUTE-LAST    │ 2024-06-03  │ 2024-06-03  │     10 │
-└──────────────┴──────────────────┴─────────────┴─────────────┴────────┘
 ```
 
-**Check data for specific symbol:**
-```bash
-uv run python -m src.cli.main data check --symbol AAPL
+### 3. Fetch Data from Interactive Brokers
 
-# With date range and gap detection:
-uv run python -m src.cli.main data check \
-  --symbol AAPL \
+```bash
+# Test connection first
+uv run python -m src.cli.main data connect
+
+# Fetch historical data
+uv run python -m src.cli.main data fetch \
+  --instruments AAPL,MSFT \
   --start 2024-01-01 \
-  --end 2024-01-10
+  --end 2024-01-31 \
+  --timeframe DAILY
 ```
 
-#### Benefits of Parquet Catalog
+For detailed IBKR setup, see [docs/IBKR_SETUP.md](docs/IBKR_SETUP.md).
 
-- **No Database Required**: Simple file-based storage
-- **Fast Analytics**: Columnar format optimized for time-series queries
-- **Auto-Fetch**: Missing data automatically fetched from IBKR when available
-- **Portable**: Easy to backup, share, or migrate data
-- **Nautilus Native**: Data stored in Nautilus Trader's native format for zero-copy access
-
-## Sample Data
-
-The project includes several sample CSV files in the `data/` directory for testing and learning:
-
-### Available Sample Files
-
-#### 1. sample_AAPL.csv
-- **Symbol**: AAPL (Apple Inc.)
-- **Date Range**: January 2, 2024, 09:30:00 to 10:20:00 (50 minutes)
-- **Frequency**: 1-minute bars
-- **Records**: 50 data points
-- **Best for**: Quick testing and learning the system
+### 4. Compare Strategy Performance
 
 ```bash
-# Import this file with:
-uv run python -m src.cli.main data import \
-  --csv data/sample_AAPL.csv \
-  --symbol AAPL \
-  --venue NASDAQ \
-  --bar-type 1-MINUTE-LAST
-
-# Then run backtest with:
+# Run multiple strategies on same data
 uv run python -m src.cli.main backtest run \
-  --symbol AAPL \
-  --start "2024-01-02 09:30:00" \
-  --end "2024-01-02 10:20:00" \
-  --strategy sma_crossover \
-  --fast-period 5 \
-  --slow-period 10
-```
+  --strategy sma_crossover --symbol AAPL --start 2024-01-02 --end 2024-01-02
 
-#### 2. AAPL_test_2018.csv
-- **Symbol**: AAPL (Apple Inc.)
-- **Date Range**: February 5-8, 2018 (04:00 to 19:59 each day)
-- **Frequency**: 1-minute bars
-- **Records**: ~4,800 data points
-- **Best for**: Longer backtests and strategy validation
-
-```bash
-# Import this file with:
-uv run python -m src.cli.main data import-csv --file data/AAPL_test_2018.csv --symbol AAPL2018
-
-# Then run backtest with dates only (system will show exact time range if needed):
-uv run python -m src.cli.main backtest run --symbol AAPL2018 --start 2018-02-05 --end 2018-02-08
-
-# Or with specific times:
-uv run python -m src.cli.main backtest run --symbol AAPL2018 --start "2018-02-05 04:00:00" --end "2018-02-08 19:59:00"
-```
-
-#### 3. AAPL_1min.csv
-- **Symbol**: AAPL (Apple Inc.)
-- **Date Range**: January 4, 2010 to December 31, 2019 (10 years)
-- **Frequency**: 1-minute bars
-- **Records**: 1.6+ million data points (94MB+ file)
-- **Best for**: Performance testing and comprehensive backtests
-
-```bash
-# Import this file with:
-uv run python -m src.cli.main data import-csv --file data/AAPL_1min.csv --symbol AAPL_LARGE
-
-# Then run backtest with any year from 2010-2019:
-uv run python -m src.cli.main backtest run --symbol AAPL_LARGE --start 2019-01-01 --end 2019-12-31
-```
-
-### CSV Format Requirements
-
-All CSV files must follow this exact format:
-```csv
-timestamp,open,high,low,close,volume
-2024-01-02 09:30:00,185.25,186.50,184.75,185.95,2847300
-2024-01-02 09:31:00,185.95,186.25,185.50,186.10,1254800
-```
-
-**Format Rules:**
-- Timestamp format: `YYYY-MM-DD HH:MM:SS`
-- OHLC prices: Decimal numbers (high ≥ open,close,low and low ≤ open,close,high)
-- Volume: Integer values
-- No missing values allowed
-- Timestamps must be unique per symbol
-
-### Usage
-
-#### Strategy Management (New in Milestone 3)
-
-The system now supports multiple trading strategies with flexible configuration management:
-
-##### Available Strategies
-
-1. **SMA Crossover** (`sma_crossover`): Classic moving average crossover strategy
-2. **RSI Mean Reversion** (`mean_reversion`): RSI-based mean reversion with trend filter
-3. **SMA Momentum** (`momentum`): Moving average momentum strategy with golden/death cross
-
-##### Strategy Discovery
-
-List all available strategies:
-```bash
-uv run python -m src.cli.main strategy list
-```
-
-Output shows strategy types, descriptions, and implementations:
-```
-📊 Available Strategies
-
-                          Supported Trading Strategies
-┏━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━┓
-┃ Strategy Type  ┃ Description                                ┃ Implementation ┃
-┡━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━┩
-│ sma_crossover  │ Simple Moving Average Crossover Strategy   │ SMACrossover   │
-│ mean_reversion │ RSI Mean Reversion Strategy with Trend     │ RSIMeanRev     │
-│                │ Filter                                     │                │
-│ momentum       │ SMA Momentum Strategy (Golden/Death Cross) │ SMAMomentum    │
-└────────────────┴────────────────────────────────────────────┴────────────────┘
-```
-
-##### Configuration Management
-
-Create configuration templates for any strategy:
-```bash
-# Create RSI mean reversion config
-uv run python -m src.cli.main strategy create --type mean_reversion --output my_mr_config.yaml
-
-# Create SMA momentum config
-uv run python -m src.cli.main strategy create --type momentum --output my_momentum_config.yaml
-
-# Create SMA crossover config
-uv run python -m src.cli.main strategy create --type sma_crossover --output my_sma_config.yaml
-```
-
-Each template includes strategy-specific parameters with sensible defaults.
-
-##### Configuration Validation
-
-Validate your strategy configurations before running backtests:
-```bash
-uv run python -m src.cli.main strategy validate my_mr_config.yaml
-```
-
-Example validation output:
-```
-🔍 Validating my_mr_config.yaml...
-✅ Config valid
-   Strategy: RSIMeanRev
-   Config class: RSIMeanRevConfig
-
-📋 Configuration Parameters:
-   rsi_period: 2
-   rsi_buy_threshold: 10.0
-   exit_rsi: 50.0
-   sma_trend_period: 200
-   trade_size: 1000000
-   [... other parameters]
-```
-
-##### Running Backtests with YAML Configs
-
-Use your validated configurations in backtests:
-```bash
-# Run backtest with YAML config
-uv run python -m src.cli.main backtest run my_mr_config.yaml
-
-# Or use command-line parameters directly:
 uv run python -m src.cli.main backtest run \
-  --strategy mean_reversion \
-  --symbol AAPL \
-  --start 2024-01-02 \
-  --end 2024-01-02
-```
+  --strategy mean_reversion --symbol AAPL --start 2024-01-02 --end 2024-01-02
 
-##### Strategy Parameter Examples
-
-**RSI Mean Reversion Parameters:**
-- `rsi_period`: RSI calculation period (default: 2)
-- `rsi_buy_threshold`: Buy when RSI below this level (default: 10.0)
-- `exit_rsi`: Exit when RSI above this level (default: 50.0)
-- `sma_trend_period`: Trend filter SMA period (default: 200)
-- `cooldown_bars`: Optional cooldown after exit (default: 0)
-
-**SMA Momentum Parameters:**
-- `fast_period`: Fast moving average period (default: 50)
-- `slow_period`: Slow moving average period (default: 200)
-- `allow_short`: Enable short selling on death cross (default: false)
-
-**SMA Crossover Parameters:**
-- `fast_period`: Fast moving average period (default: 10)
-- `slow_period`: Slow moving average period (default: 20)
-
-#### CSV Data Import
-
-Import historical market data from CSV files:
-
-```bash
-# Import CSV data for a symbol
-uv run python -m src.cli.main data import-csv --file data/sample_AAPL.csv --symbol AAPL
-
-# List available data for a symbol
-uv run python -m src.cli.main data list --symbol AAPL
-```
-
-##### See Sample Data Section Above
-
-For detailed information about available sample files and CSV format requirements, see the **Sample Data** section above.
-
-#### Backtesting
-
-##### List Available Data and Strategies
-
-Before running backtests, check what data and strategies are available:
-
-```bash
-# List all available strategies and imported data
-uv run python -m src.cli.main backtest list
-```
-
-This shows:
-- Available trading strategies (SMA Crossover, RSI Mean Reversion, SMA Momentum)
-- All symbols with imported data
-- Date ranges for each symbol
-
-##### Basic SMA Backtest (Mock Data)
-
-Run a simple SMA crossover backtest with mock data:
-
-```bash
-uv run python -m src.cli.main run-simple
-```
-
-##### Real Data Backtest
-
-Run backtests on imported historical data with different strategies:
-
-```bash
-# Run SMA crossover backtest
-uv run python -m src.cli.main backtest run \
-  --strategy sma_crossover \
-  --symbol AAPL \
-  --start 2024-01-02 \
-  --end 2024-01-02
-
-# Run RSI mean reversion backtest
-uv run python -m src.cli.main backtest run \
-  --strategy mean_reversion \
-  --symbol AAPL \
-  --start 2024-01-02 \
-  --end 2024-01-02
-
-# Run SMA momentum backtest
-uv run python -m src.cli.main backtest run \
-  --strategy momentum \
-  --symbol AAPL \
-  --start 2024-01-02 \
-  --end 2024-01-02
-```
-
-**Important**: Always check available data ranges first with `uv run python -m src.cli.main backtest list` to ensure your start/end dates match the imported data.
-
-##### Custom Parameters
-
-Customize the backtest with your own parameters:
-
-```bash
-uv run python -m src.cli.main run-simple \
-  --fast-period 5 \
-  --slow-period 10 \
-  --trade-size 100000 \
-  --bars 200
-```
-
-#### Performance Reports & Analytics (New in Milestone 4)
-
-After running a backtest, you can generate comprehensive performance reports with detailed analytics.
-
-##### List Saved Backtest Results
-
-```bash
-# List all saved backtest results
-uv run python -m src.cli report list
-
-# Limit results shown
-uv run python -m src.cli report list --limit 5
-```
-
-##### Quick Performance Summary
-
-Get a quick overview of backtest performance:
-
-```bash
-uv run python -m src.cli report summary <result-id>
-```
-
-Example output:
-```
-📊 Performance Summary for result-abc123
-
-┏━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━┓
-┃ Metric            ┃ Value      ┃
-┡━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━┩
-│ Total Return      │ 15.3%      │
-│ Sharpe Ratio      │ 1.42       │
-│ Sortino Ratio     │ 1.68       │
-│ Max Drawdown      │ -8.7%      │
-│ Win Rate          │ 58.3%      │
-│ Profit Factor     │ 1.85       │
-└───────────────────┴────────────┘
-```
-
-##### Generate Detailed Reports
-
-Generate comprehensive reports in multiple formats:
-
-```bash
-# Text report with rich formatting (default)
-uv run python -m src.cli report generate --result-id <id>
-
-# Text report saved to file
-uv run python -m src.cli report generate --result-id <id> --format text -o report.txt
-
-# CSV export for spreadsheet analysis
-uv run python -m src.cli report generate --result-id <id> --format csv -o results.csv
-
-# JSON export for programmatic analysis
-uv run python -m src.cli report generate --result-id <id> --format json -o results.json
-
-# Export all formats at once
-uv run python -m src.cli report export-all <result-id> -o reports/
-```
-
-**Report Contents:**
-- **Summary Panel**: Key performance metrics at a glance
-- **Returns Analysis**: Total return, CAGR, annual return, volatility
-- **Risk Metrics**: Sharpe, Sortino, Calmar ratios, maximum drawdown
-- **Trading Statistics**: Win rate, profit factor, expectancy, avg win/loss
-- **Trade Details**: Complete trade history with entry/exit prices and PnL
-- **Portfolio Analytics**: Position tracking, equity curve, exposure analysis
-
-#### Backtest History Management (New in Milestone 6 - PostgreSQL)
-
-After running backtests, you can view, compare, and reproduce your results using the new PostgreSQL-backed history management system.
-
-##### View Backtest History
-
-List all your past backtests with filtering and sorting options:
-
-```bash
-# View 20 most recent backtests (default)
-uv run python -m src.cli.main backtest history
-
-# Show more results
-uv run python -m src.cli.main backtest history --limit 50
-
-# Filter by strategy
-uv run python -m src.cli.main backtest history --strategy "SMA Crossover"
-
-# Filter by instrument
-uv run python -m src.cli.main backtest history --instrument AAPL
-
-# Filter by status (success or failed)
-uv run python -m src.cli.main backtest history --status success
-
-# Sort by total return (best first)
-uv run python -m src.cli.main backtest history --sort return
-
-# Sort by Sharpe ratio (best first)
+# View history and find best performers
 uv run python -m src.cli.main backtest history --sort sharpe
 
-# View strategy performance summary
-uv run python -m src.cli.main backtest history --strategy "SMA Crossover" --strategy-summary
-
-# Show parameter variations across runs
-uv run python -m src.cli.main backtest history --show-params
-```
-
-Example output:
-```
-📋 Backtest History (20 results) 📅 ↓
-┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━┳━━━━━━━━┳━━━━━━━━┓
-┃ Run ID     ┃ Date            ┃ Strategy       ┃ Symbol ┃ Return  ┃ Sharpe ┃ Status ┃
-┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━╇━━━━━━━━╇━━━━━━━━┩
-│ a1b2c3d4...│ 2024-01-27 14:30│ SMA Crossover  │ AAPL   │ +12.5%  │ 1.82   │ ✅     │
-│ e5f6g7h8...│ 2024-01-27 12:15│ Mean Reversion │ NVDA   │ +8.3%   │ 1.45   │ ✅     │
-│ i9j0k1l2...│ 2024-01-26 16:45│ SMA Momentum   │ MSFT   │ -2.1%   │ 0.65   │ ✅     │
-└────────────┴─────────────────┴────────────────┴────────┴─────────┴────────┴────────┘
-```
-
-##### View Complete Backtest Details
-
-Show all details of a specific backtest including configuration snapshot and performance metrics:
-
-```bash
-# Replace <run-id> with actual UUID from history
-uv run python -m src.cli.main backtest show a1b2c3d4-e5f6-7890-abcd-ef1234567890
-```
-
-This displays:
-- Execution metadata (run ID, strategy, dates, duration)
-- Complete configuration snapshot (all parameters as JSON)
-- Performance metrics (returns, risk metrics, trading statistics)
-- Error details (if backtest failed)
-
-##### Compare Multiple Backtests
-
-Compare 2-10 backtests side-by-side to identify the best performing configuration:
-
-```bash
-# Compare 2 backtests
+# Compare specific runs
 uv run python -m src.cli.main backtest compare <uuid1> <uuid2>
-
-# Compare 3 backtests
-uv run python -m src.cli.main backtest compare <uuid1> <uuid2> <uuid3>
 ```
 
-Example output:
-```
-Backtest Comparison (3 runs)
-┏━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━┓
-┃ Metric             ┃ a1b2c3d4...    ┃ e5f6g7h8...    ┃ i9j0k1l2...    ┃
-┡━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━┩
-│ Strategy           │ SMA Crossover  │ Mean Reversion │ SMA Momentum   │
-│ Symbol             │ AAPL           │ AAPL           │ AAPL           │
-│ Total Return       │ +12.5%         │ +8.3%          │ -2.1%          │
-│ Sharpe Ratio       │ 1.82           │ 1.45           │ 0.65           │
-│ Max Drawdown       │ -5.2%          │ -3.8%          │ -8.1%          │
-│ Win Rate           │ 58.3%          │ 62.5%          │ 45.0%          │
-└────────────────────┴────────────────┴────────────────┴────────────────┘
-
-Best Performer by Sharpe Ratio: a1b2c3d4... (Sharpe: 1.82) - SMA Crossover on AAPL
-```
-
-##### Reproduce Previous Backtests
-
-Re-run a previous backtest with its exact same configuration:
+### 5. Use the Web Dashboard
 
 ```bash
-# Reproduce a backtest by its UUID
-uv run python -m src.cli.main backtest reproduce a1b2c3d4-e5f6-7890-abcd-ef1234567890
+# Build CSS (first time only)
+./scripts/build-css.sh
+
+# Start the web server
+uv run uvicorn src.api.web:app --reload --host 127.0.0.1 --port 8000
+
+# Open in browser: http://127.0.0.1:8000
 ```
 
-This command:
-- Retrieves the original configuration snapshot
-- Loads the same data from the catalog
-- Executes a new backtest with identical parameters
-- Creates a new record linked to the original via `reproduced_from_run_id`
-- Compares results with the original run
+## Available Strategies
 
-**Use Cases**:
-- Validate reproducibility after code changes
-- Re-run with updated market data
-- Test strategy stability over time
-- Debug unexpected behavior
+| Strategy | Type | Key Parameters | Description |
+|----------|------|----------------|-------------|
+| `sma_crossover` | Trend Following | fast_period, slow_period | Classic moving average crossover |
+| `sma_crossover_long_only` | Trend Following | fast_period, slow_period | Long-only SMA crossover |
+| `momentum` | Momentum | fast_period, slow_period | Golden/death cross detection |
+| `mean_reversion` | Mean Reversion | rsi_period, rsi_buy_threshold | RSI-based with trend filter |
+| `larry_connors_rsi` | Mean Reversion | rsi_period, entry_threshold | Short-term RSI mean reversion |
+| `bollinger_reversal` | Volatility | period, num_std | Bollinger Band reversal entries |
+| `apolo_rsi` | Mean Reversion | rsi_period, oversold, overbought | Optimized RSI strategy |
 
-#### Command Options
+## Configuration
 
-##### Data Commands
-- `data import-csv --file <path> --symbol <symbol>`: Import CSV market data
-- `data list --symbol <symbol>`: List available data for a symbol
-- **IBKR Data Commands** (New in Milestone 5):
-  - `data connect`: Test connection to Interactive Brokers TWS/Gateway
-    - `--host`: IBKR host address (default: 127.0.0.1)
-    - `--port`: IBKR port (default: 7497 for paper trading)
-  - `data fetch`: Fetch historical data from IBKR
-    - `--instruments`: Comma-separated list of instruments (e.g., AAPL,MSFT)
-    - `--start`: Start date (YYYY-MM-DD)
-    - `--end`: End date (YYYY-MM-DD)
-    - `--timeframe`: Bar timeframe (DAILY, 1-HOUR, 5-MINUTE, 1-MINUTE)
+### Environment Variables
 
-##### Strategy Management Commands
-- `strategy list`: List all available trading strategies
-- `strategy create --type <strategy> --output <file>`: Create strategy config template
-- `strategy validate <config-file>`: Validate strategy configuration file
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `DATABASE_URL` | PostgreSQL connection string | Required |
+| `IBKR_HOST` | IBKR TWS/Gateway host | `127.0.0.1` |
+| `IBKR_PORT` | IBKR port (7497=paper, 7496=live) | `7497` |
+| `IBKR_CLIENT_ID` | Client ID for IBKR connection | `1` |
+| `TWS_USERNAME` | IBKR username | - |
+| `TWS_PASSWORD` | IBKR password | - |
+| `TWS_ACCOUNT` | IBKR account ID | - |
+| `DEFAULT_BALANCE` | Starting balance for backtests | `1000000` |
+| `TRADE_SIZE` | Default trade size | `1000000` |
 
-##### Backtest Commands
-- `backtest list`: List available strategies and imported data
-- `run-simple`: Run simple backtest with mock data
-- `backtest run`: Run backtest with real data (legacy command-line config)
-  - `--strategy`: Trading strategy to use (`sma_crossover`, `mean_reversion`, `momentum`)
-  - `--symbol`: Trading symbol (required for real data)
-  - `--start`: Start date for backtest (YYYY-MM-DD)
-  - `--end`: End date for backtest (YYYY-MM-DD)
-  - `--fast-period`: Fast SMA period (default: 10)
-  - `--slow-period`: Slow SMA period (default: 20)
-  - `--trade-size`: Trade size in SHARES (default: 1,000,000 shares = very large position!)
-- `backtest run <config.yaml>`: Run backtest with YAML configuration (preferred)
-  - `--symbol`: Trading symbol (optional override)
-  - `--start`: Start date for backtest (optional override)
-  - `--end`: End date for backtest (optional override)
+### YAML Strategy Configuration
 
-##### Backtest History Commands (New in Milestone 6)
-- `backtest history`: List recent backtest executions with metrics
-  - `--limit`: Number of results to display (default: 20, max: 1000)
-  - `--strategy`: Filter by strategy name
-  - `--instrument`: Filter by instrument symbol
-  - `--status`: Filter by execution status (success/failed)
-  - `--sort`: Sort by date (default), return, or sharpe
-  - `--strategy-summary`: Show aggregate statistics for a strategy
-  - `--show-params`: Display parameter variations across runs
-- `backtest show <run-id>`: Display complete details of a specific backtest
-- `backtest compare <uuid1> <uuid2> [uuid3...]`: Compare 2-10 backtests side-by-side
-- `backtest reproduce <run-id>`: Re-run previous backtest with exact same configuration
+Create strategy configs with `strategy create`:
 
-##### Report Commands (New in Milestone 4)
-- `report list`: List all saved backtest results
-  - `--limit`: Maximum number of results to show
-- `report summary <result-id>`: Display quick performance summary
-- `report generate`: Generate comprehensive performance report
-  - `--result-id`: ID of the backtest result
-  - `--format`: Output format (`text`, `csv`, `json`)
-  - `-o, --output`: Output file path
-- `report export-all <result-id>`: Export all report formats
-  - `-o, --output`: Output directory for exports
-
-### Example Output
-
-#### CSV Import
+```yaml
+# my_strategy.yaml
+strategy_type: sma_crossover
+instrument_id: AAPL.NASDAQ
+start_date: "2024-01-01"
+end_date: "2024-12-31"
+parameters:
+  fast_period: 10
+  slow_period: 20
+  trade_size: 100000
 ```
-✅ Imported 1000 records
-⚠️  Skipped 5 duplicates
-```
-
-#### Simple Backtest
-```
-Running simple SMA backtest...
-Initializing backtest engine...
-
-✓ Backtest completed successfully!
-
-Results Summary:
-Total Return: 0.00
-Total Trades: 0
-Win Rate: 0.0%
-Final Balance: 1,000,000.00
-
-🎉 Strategy shows profit on mock data!
-```
-
-## Complete User Journeys
-
-This section provides detailed, step-by-step guides for common tasks.
-
-### Journey 1: First-Time Setup and Quick Test
-
-**Goal**: Get the system running and execute your first backtest
-
-**Prerequisites**: Python 3.11+, Docker installed
-
-**Steps**:
-1. **Clone and setup**:
-   ```bash
-   git clone <repository-url>
-   cd Trading-ntrader
-   curl -LsSf https://astral.sh/uv/install.sh | sh  # Install UV if needed
-   uv sync
-   cp .env.example .env
-   ```
-
-2. **Build Web UI assets**:
-   ```bash
-   # Build Tailwind CSS (downloads CLI automatically on first run)
-   ./scripts/build-css.sh
-   ```
-
-3. **Start database**:
-   ```bash
-   docker pull postgres:17
-   docker volume create pgdata
-   docker run -d --name pgdb \
-     -e POSTGRES_USER=ntrader \
-     -e POSTGRES_PASSWORD=ntrader_dev_2025 \
-     -e POSTGRES_DB=trading_ntrader \
-     -p 5432:5432 \
-     -v pgdata:/var/lib/postgresql/data \
-     postgres:17
-   ```
-
-4. **Initialize database**:
-   ```bash
-   uv run alembic upgrade head
-   ```
-
-5. **Import sample data and run backtest**:
-   ```bash
-   # Import sample data
-   uv run python -m src.cli.main data import-csv --file data/sample_AAPL.csv --symbol AAPL
-
-   # Run your first backtest
-   uv run python -m src.cli.main backtest run \
-     --symbol AAPL --start 2024-01-02 --end 2024-01-02 \
-     --fast-period 5 --slow-period 10
-   ```
-
-**Expected result**: Successful backtest with results table showing trade statistics.
-
-### Journey 2: Testing Multiple Strategies with YAML Configuration
-
-**Goal**: Compare different trading strategies using the new configuration management system
-
-**Prerequisites**: Journey 1 completed successfully
-
-**Steps**:
-1. **Import longer dataset**:
-   ```bash
-   uv run python -m src.cli.main data import-csv --file data/AAPL_test_2018.csv --symbol AAPL2018
-   ```
-
-2. **Discover available strategies**:
-   ```bash
-   uv run python -m src.cli.main strategy list
-   ```
-
-3. **Create configuration files for different strategies**:
-   ```bash
-   # Create SMA crossover config (fast signals)
-   uv run python -m src.cli.main strategy create --type sma_crossover --output sma_fast.yaml
-
-   # Create RSI mean reversion config
-   uv run python -m src.cli.main strategy create --type mean_reversion --output mean_rev.yaml
-
-   # Create SMA momentum config
-   uv run python -m src.cli.main strategy create --type momentum --output momentum.yaml
-   ```
-
-4. **Validate all configurations**:
-   ```bash
-   uv run python -m src.cli.main strategy validate sma_fast.yaml
-   uv run python -m src.cli.main strategy validate mean_rev.yaml
-   uv run python -m src.cli.main strategy validate momentum.yaml
-   ```
-
-5. **Run backtests with different strategies**:
-   ```bash
-   # Test strategies with YAML configs
-   uv run python -m src.cli.main backtest run sma_fast.yaml
-   uv run python -m src.cli.main backtest run mean_rev.yaml
-   uv run python -m src.cli.main backtest run momentum.yaml
-
-   # Or use command-line parameters directly
-   uv run python -m src.cli.main backtest run --strategy sma_crossover \
-     --symbol AAPL2018 --start 2018-02-05 --end 2018-02-08
-   uv run python -m src.cli.main backtest run --strategy mean_reversion \
-     --symbol AAPL2018 --start 2018-02-05 --end 2018-02-08
-   uv run python -m src.cli.main backtest run --strategy momentum \
-     --symbol AAPL2018 --start 2018-02-05 --end 2018-02-08
-   ```
-
-6. **Compare results**: Note differences in:
-   - Trade frequency and timing
-   - Win rate and average trade size
-   - Total return and drawdown patterns
-   - Strategy-specific behavior (mean reversion vs momentum)
-
-**Learning outcome**: Understanding how different trading approaches (crossover, mean reversion, momentum) perform on the same dataset and market conditions.
-
-### Journey 3: Custom Data Import and Analysis
-
-**Goal**: Import your own CSV data and run comprehensive analysis
-
-**Prerequisites**: Your own historical data in CSV format
-
-**Steps**:
-1. **Prepare your CSV file**:
-   - Ensure format: `timestamp,open,high,low,close,volume`
-   - Timestamp format: `YYYY-MM-DD HH:MM:SS`
-   - Verify OHLC relationships are valid
-   - Example:
-     ```csv
-     timestamp,open,high,low,close,volume
-     2024-03-01 09:30:00,175.50,176.25,175.00,176.00,1500000
-     2024-03-01 09:31:00,176.00,176.50,175.75,176.25,1200000
-     ```
-
-2. **Import your data**:
-   ```bash
-   uv run python -m src.cli.main data import-csv --file /path/to/your/data.csv --symbol YOUR_SYMBOL
-   ```
-
-3. **Verify import**:
-   ```bash
-   uv run python -m src.cli.main backtest list
-   ```
-
-4. **Run analysis with different configurations**:
-   ```bash
-   # Conservative strategy
-   uv run python -m src.cli.main backtest run \
-     --symbol YOUR_SYMBOL --start START_DATE --end END_DATE \
-     --fast-period 20 --slow-period 50
-
-   # Aggressive strategy
-   uv run python -m src.cli.main backtest run \
-     --symbol YOUR_SYMBOL --start START_DATE --end END_DATE \
-     --fast-period 5 --slow-period 12
-   ```
-
-**Expected result**: Your own data successfully imported and analyzed with different strategy parameters.
-
-### Journey 4: Multi-Symbol Portfolio Analysis
-
-**Goal**: Import and analyze multiple symbols for portfolio diversification
-
-**Prerequisites**: Multiple CSV files for different symbols
-
-**Steps**:
-1. **Import multiple symbols**:
-   ```bash
-   uv run python -m src.cli.main data import-csv --file data/AAPL_data.csv --symbol AAPL
-   uv run python -m src.cli.main data import-csv --file data/MSFT_data.csv --symbol MSFT
-   uv run python -m src.cli.main data import-csv --file data/GOOGL_data.csv --symbol GOOGL
-   ```
-
-2. **List all available data**:
-   ```bash
-   uv run python -m src.cli.main backtest list
-   ```
-
-3. **Run identical strategy on all symbols**:
-   ```bash
-   # Run same strategy on each symbol (adjust dates based on available data)
-   for symbol in AAPL MSFT GOOGL; do
-     echo "Testing $symbol..."
-     # Use 'backtest list' to check each symbol's available date range first
-     uv run python -m src.cli.main backtest run \
-       --symbol $symbol --start 2024-01-02 --end 2024-01-02 \
-       --fast-period 10 --slow-period 20
-   done
-   ```
-
-   **Note**: Each symbol may have different available date ranges. Check with `backtest list` and adjust dates accordingly.
-
-4. **Compare results**: Analyze which symbols performed best with your strategy.
-
-**Learning outcome**: Understanding how the same strategy performs across different assets.
-
-### Journey 5: Performance Testing with Large Datasets
-
-**Goal**: Test system performance with large datasets
-
-**Prerequisites**: Large CSV file (like AAPL_1min.csv)
-
-**Steps**:
-1. **Import large dataset** (monitor performance):
-   ```bash
-   time uv run python -m src.cli.main data import-csv --file data/AAPL_1min.csv --symbol AAPL_LARGE
-   ```
-
-2. **Run performance backtest**:
-   ```bash
-   time uv run python -m src.cli.main backtest run \
-     --symbol AAPL_LARGE --start 2019-01-01 --end 2019-12-31 \
-     --fast-period 20 --slow-period 50
-   ```
-
-3. **Monitor system resources** during execution:
-   ```bash
-   # In another terminal, monitor memory usage
-   watch -n 1 'ps aux | grep python | head -5'
-   ```
-
-**Expected result**: Understanding system performance characteristics and resource usage.
-
-### Journey 6: Comprehensive Performance Analysis and Reporting (New in Milestone 4)
-
-**Goal**: Run backtests with full performance analytics and generate detailed reports
-
-**Prerequisites**: Journey 1 completed successfully, sample data imported
-
-**Steps**:
-1. **Run backtest with results persistence**:
-   ```bash
-   # Run backtest - results are automatically saved
-   uv run python -m src.cli.main backtest run \
-     --strategy mean_reversion \
-     --symbol AAPL2018 \
-     --start 2018-02-05 \
-     --end 2018-02-08
-
-   # Note the result ID from the output
-   ```
-
-2. **List saved results**:
-   ```bash
-   # View all saved backtest results
-   uv run python -m src.cli report list
-
-   # View recent 5 results
-   uv run python -m src.cli report list --limit 5
-   ```
-
-3. **Get quick performance summary**:
-   ```bash
-   # Replace <result-id> with actual ID from step 1
-   uv run python -m src.cli report summary <result-id>
-   ```
-
-   This displays:
-   - Total return and CAGR
-   - Risk-adjusted metrics (Sharpe, Sortino, Calmar ratios)
-   - Maximum drawdown
-   - Win rate and profit factor
-
-4. **Generate detailed text report**:
-   ```bash
-   # View comprehensive report in terminal
-   uv run python -m src.cli report generate --result-id <result-id> --format text
-
-   # Save to file for later review
-   uv run python -m src.cli report generate --result-id <result-id> --format text -o my_report.txt
-   ```
-
-5. **Export data for further analysis**:
-   ```bash
-   # Export to CSV for spreadsheet analysis
-   uv run python -m src.cli report generate --result-id <result-id> --format csv -o results.csv
-
-   # Export to JSON for programmatic analysis
-   uv run python -m src.cli report generate --result-id <result-id> --format json -o results.json
-
-   # Export all formats at once
-   mkdir reports
-   uv run python -m src.cli report export-all <result-id> -o reports/
-   ```
-
-6. **Compare multiple strategies**:
-   ```bash
-   # Run different strategies on same data
-   uv run python -m src.cli.main backtest run --strategy sma_crossover \
-     --symbol AAPL2018 --start 2018-02-05 --end 2018-02-08
-
-   uv run python -m src.cli.main backtest run --strategy mean_reversion \
-     --symbol AAPL2018 --start 2018-02-05 --end 2018-02-08
-
-   uv run python -m src.cli.main backtest run --strategy momentum \
-     --symbol AAPL2018 --start 2018-02-05 --end 2018-02-08
-
-   # List all results
-   uv run python -m src.cli report list
-
-   # Compare summaries
-   uv run python -m src.cli report summary <result-id-1>
-   uv run python -m src.cli report summary <result-id-2>
-   uv run python -m src.cli report summary <result-id-3>
-   ```
-
-7. **Analyze performance metrics**:
-   - Review Sharpe Ratio (risk-adjusted returns) - higher is better
-   - Check Maximum Drawdown - lower absolute value is better
-   - Evaluate Win Rate vs Profit Factor
-   - Examine trade distribution (wins vs losses)
-   - Study equity curve patterns
-
-**Learning outcome**:
-- Understanding comprehensive performance metrics
-- Comparing strategies using standardized analytics
-- Identifying optimal strategy parameters
-- Exporting data for deeper analysis in spreadsheets or custom tools
-
-**Expected results**:
-- Rich-formatted performance reports with detailed analytics
-- Multi-format exports for various use cases
-- Clear comparison of strategy performance
-- Data-driven insights for strategy optimization
-
-### Journey 7: Backtest History Management and Strategy Optimization (New in Milestone 6)
-
-**Goal**: Use PostgreSQL metadata storage to track, compare, and optimize your trading strategies over time
-
-**Prerequisites**: Journey 1 completed, some backtests already run
-
-**Steps**:
-
-1. **Run multiple backtests with different parameters**:
-   ```bash
-   # Test SMA Crossover with different period combinations
-   uv run python -m src.cli.main backtest run \
-     --strategy sma_crossover --symbol AAPL \
-     --start 2024-01-02 --end 2024-01-02 \
-     --fast-period 5 --slow-period 10
-
-   uv run python -m src.cli.main backtest run \
-     --strategy sma_crossover --symbol AAPL \
-     --start 2024-01-02 --end 2024-01-02 \
-     --fast-period 10 --slow-period 20
-
-   uv run python -m src.cli.main backtest run \
-     --strategy sma_crossover --symbol AAPL \
-     --start 2024-01-02 --end 2024-01-02 \
-     --fast-period 20 --slow-period 50
-
-   # All backtests are automatically saved to PostgreSQL!
-   ```
-
-2. **View your backtest history**:
-   ```bash
-   # See all your recent backtests
-   uv run python -m src.cli.main backtest history
-
-   # Find the best performers by Sharpe ratio
-   uv run python -m src.cli.main backtest history --sort sharpe --limit 10
-
-   # Find the most profitable runs
-   uv run python -m src.cli.main backtest history --sort return --limit 10
-
-   # Filter to see only SMA Crossover backtests
-   uv run python -m src.cli.main backtest history --strategy "SMA Crossover"
-   ```
-
-3. **Inspect detailed results**:
-   ```bash
-   # Copy a run_id from the history output (first 8 characters shown)
-   # Use the full UUID to view complete details
-   uv run python -m src.cli.main backtest show a1b2c3d4-e5f6-7890-abcd-ef1234567890
-   ```
-
-   This shows:
-   - Exact strategy parameters used
-   - Performance metrics (Sharpe, returns, drawdown)
-   - Trading statistics (win rate, total trades)
-   - Configuration snapshot (can reproduce later)
-
-4. **Compare your top performers**:
-   ```bash
-   # Compare the 3 best runs to understand what worked
-   uv run python -m src.cli.main backtest compare <uuid1> <uuid2> <uuid3>
-   ```
-
-   Look for patterns:
-   - Which parameter combinations perform best?
-   - How do returns compare to Sharpe ratios?
-   - What's the trade-off between return and drawdown?
-
-5. **Reproduce a winning configuration**:
-   ```bash
-   # Found a configuration you like? Reproduce it with current data
-   uv run python -m src.cli.main backtest reproduce <winning-run-uuid>
-   ```
-
-   This creates a new backtest with:
-   - Exact same strategy parameters
-   - Same instrument and date range
-   - Link to original run for comparison
-   - Fresh execution with current catalog data
-
-6. **Track strategy performance over time**:
-   ```bash
-   # View strategy summary with aggregate statistics
-   uv run python -m src.cli.main backtest history \
-     --strategy "SMA Crossover" \
-     --strategy-summary
-   ```
-
-   This shows:
-   - Average return across all runs
-   - Best and worst returns
-   - Average Sharpe ratio
-   - Success/failure rate
-   - Average win rate and drawdown
-
-7. **Identify parameter patterns**:
-   ```bash
-   # View parameter variations to spot trends
-   uv run python -m src.cli.main backtest history \
-     --strategy "SMA Crossover" \
-     --show-params \
-     --sort sharpe
-   ```
-
-   This helps you understand:
-   - Which parameter ranges work best
-   - How parameter changes affect performance
-   - Stability across different configurations
-
-**Learning Outcome**:
-- Systematic approach to strategy optimization
-- Understanding parameter sensitivity
-- Building a library of tested configurations
-- Data-driven strategy selection based on metrics
-- Reproducible research with configuration snapshots
-
-**Expected Results**:
-- Complete history of all backtests in PostgreSQL
-- Easy comparison of different strategies and parameters
-- Ability to reproduce any previous test
-- Clear understanding of what works and what doesn't
-- Confidence in strategy selection based on historical testing
-
-### Journey 8: Interactive Brokers Data Integration (New in Milestone 5)
-
-**Goal**: Fetch real market data from Interactive Brokers TWS/Gateway and use it for backtesting
-
-**Prerequisites**:
-- TWS or IB Gateway installed and running
-- Paper trading account (DU prefix) recommended
-- Valid IBKR credentials in `.env` file
-
-**Steps**:
-1. **Set up IBKR connection** (first-time setup):
-   ```bash
-   # Follow the comprehensive setup guide
-   cat docs/IBKR_SETUP.md
-
-   # Quick setup checklist:
-   # 1. Enable API in TWS: File → Global Configuration → API → Settings
-   # 2. Check "Enable ActiveX and Socket Clients"
-   # 3. Set Socket port to 7497 (paper trading)
-   # 4. Restart TWS completely
-   ```
-
-2. **Configure environment variables**:
-   ```bash
-   # Verify your .env file has IBKR settings
-   cat .env | grep IBKR
-
-   # Required settings:
-   # IBKR_HOST=127.0.0.1
-   # IBKR_PORT=7497
-   # IBKR_CLIENT_ID=10
-   # TWS_USERNAME=your_username
-   # TWS_PASSWORD=your_password
-   # TWS_ACCOUNT=DU1234567
-   ```
-
-3. **Test IBKR connection**:
-   ```bash
-   # Verify connection to TWS
-   uv run python -m src.cli.main data connect
-   ```
-
-   Expected output:
-   ```
-   ✅ Successfully connected to Interactive Brokers
-
-   Connection Details
-   ┏━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━┓
-   ┃ Property       ┃ Value                   ┃
-   ┡━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━┩
-   │ Host           │ 127.0.0.1               │
-   │ Port           │ 7497                    │
-   │ Account ID     │ DU1234567               │
-   │ Server Version │ 176                     │
-   └────────────────┴─────────────────────────┘
-   ```
-
-4. **Fetch historical data for single instrument**:
-   ```bash
-   # Fetch AAPL daily data for January 2024
-   uv run python -m src.cli.main data fetch \
-     --instruments AAPL \
-     --start 2024-01-01 \
-     --end 2024-01-31 \
-     --timeframe DAILY
-   ```
-
-   Expected output:
-   ```
-   ✅ AAPL: 21 bars fetched
-
-   ✅ Successfully fetched 21 bars for 1 instruments
-
-   Fetch Summary
-   ┏━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-   ┃ Property     ┃ Value                       ┃
-   ┡━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
-   │ Instruments  │ AAPL                        │
-   │ Start Date   │ 2024-01-01                  │
-   │ End Date     │ 2024-01-31                  │
-   │ Timeframe    │ DAILY                       │
-   │ Total Bars   │ 21                          │
-   │ Data Location│ ./data/catalog              │
-   └──────────────┴─────────────────────────────┘
-   ```
-
-5. **Fetch data for multiple instruments**:
-   ```bash
-   # Fetch data for portfolio of stocks
-   uv run python -m src.cli.main data fetch \
-     --instruments AAPL,MSFT,GOOGL \
-     --start 2024-02-01 \
-     --end 2024-02-29 \
-     --timeframe DAILY
-   ```
-
-6. **Try different timeframes**:
-   ```bash
-   # Intraday 1-minute bars
-   uv run python -m src.cli.main data fetch \
-     --instruments AAPL \
-     --start 2024-01-02 \
-     --end 2024-01-02 \
-     --timeframe 1-MINUTE
-
-   # Hourly bars
-   uv run python -m src.cli.main data fetch \
-     --instruments MSFT \
-     --start 2024-01-01 \
-     --end 2024-01-05 \
-     --timeframe 1-HOUR
-   ```
-
-7. **Verify data storage**:
-   ```bash
-   # Check Parquet files created
-   ls -lh ./data/catalog/data/bar/
-
-   # Files are named: {instrument}-{timeframe}-{venue}.parquet
-   # Example: AAPL-1-DAY-IDEALPRO.parquet
-   ```
-
-8. **Use IBKR data for backtesting** (future integration):
-   ```bash
-   # Note: Integration with backtest engine coming in future milestone
-   # For now, data is stored in Nautilus catalog format
-   # Can be loaded with Nautilus BacktestEngine directly
-   ```
-
-**Key Features**:
-- **Rate Limiting**: Automatic throttling at 45 req/sec (90% of IBKR limit)
-- **Multiple Instruments**: Fetch multiple symbols in one command
-- **Timeframe Support**: DAILY, 1-HOUR, 5-MINUTE, 1-MINUTE
-- **Parquet Storage**: Efficient columnar storage via Nautilus catalog
-- **Market Data Types**: DELAYED_FROZEN for paper accounts, REAL_TIME with subscription
-
-**Troubleshooting**:
-- **Connection refused**: Check TWS is running and API is enabled
-- **Client ID conflict**: Change `IBKR_CLIENT_ID` in `.env` to different number
-- **No data returned**: Paper accounts get delayed/frozen data by default
-- **Rate limiting errors**: System auto-throttles, but reduce concurrent requests
-
-**Learning outcome**:
-- Understanding IBKR API integration and connection management
-- Fetching real market data for backtesting
-- Working with Nautilus Trader data catalog
-- Managing rate limits and API restrictions
-
-**Expected results**:
-- Successfully connected to IBKR TWS/Gateway
-- Historical data fetched and stored in Parquet format
-- Ready to integrate with backtest engine (future milestone)
-- Understanding of IBKR data types and limitations
-
-### Troubleshooting Your Journey
-
-If any journey step fails:
-
-1. **Check the error message** carefully - it usually indicates the specific issue
-2. **Verify data availability**: Use `uv run python -m src.cli.main backtest list`
-3. **Check date ranges**: Ensure your start/end dates are within available data
-4. **Database issues**: Restart the database with `docker restart pgdb`
-5. **Refer to Troubleshooting section** above for specific error solutions
 
 ## Development
 
@@ -1597,186 +269,40 @@ If any journey step fails:
 
 ```
 src/
-├── cli/                 # Command line interface
-│   ├── main.py         # Main CLI entry point
-│   └── commands/       # CLI commands (data, backtest, report)
-├── core/               # Core business logic
-│   ├── strategies/     # Trading strategies
-│   └── backtest_runner.py  # Backtest engine wrapper
-├── models/             # Pydantic data models and schemas
-│   └── market_data.py  # Market data models with validation
-├── services/           # Business services
-│   ├── csv_loader.py   # CSV import service
-│   ├── data_service.py # Data fetching and conversion
-│   ├── ibkr_client.py  # IBKR client wrapper (Milestone 5)
-│   ├── data_fetcher.py # Historical data fetcher (Milestone 5)
-│   └── analytics/      # Performance analytics services
-├── db/                 # Database layer
-│   ├── models.py       # SQLAlchemy ORM models
-│   ├── session.py      # Database session management
-│   └── migrations/     # Alembic database migrations
-├── utils/              # Utilities (mock data, etc.)
-└── config.py           # Configuration management
+├── api/              # FastAPI web application
+├── cli/              # Command line interface
+├── core/             # Core business logic
+│   └── strategies/   # Trading strategy implementations
+├── models/           # Pydantic data models
+├── services/         # Business services (IBKR, analytics)
+├── db/               # Database models and migrations
+└── utils/            # Utilities
 
-tests/                  # Test files mirror src structure
-docs/                   # Documentation (IBKR_SETUP.md, etc.)
-data/
-├── catalog/            # Nautilus Parquet data catalog (IBKR data)
-└── *.csv              # Sample CSV files
+tests/
+├── unit/             # Fast unit tests (141 tests)
+├── component/        # Component tests (456 tests)
+├── integration/      # Integration tests (112 tests)
+└── e2e/              # End-to-end tests
 ```
 
 ### Running Tests
 
-The project uses a comprehensive test pyramid architecture with 715+ tests organized by speed and scope.
-
-#### Quick Test Commands (Recommended)
-
 ```bash
-# Fast unit tests - Pure Python, no Nautilus (141 tests in 0.55s)
+# Fast unit tests (run constantly during development)
 make test-unit
 
-# Component tests - Test doubles, no real engine (456 tests in 0.54s)
+# Component tests (run before commits)
 make test-component
 
-# Integration tests - Real Nautilus, subprocess isolated (112 tests in ~5s)
+# Integration tests (run in CI/CD)
 make test-integration
 
-# Run all tests with optimal parallelization (715 tests in ~19s)
+# All tests
 make test-all
-```
 
-#### Test Organization
-
-Tests are organized into four categories following the test pyramid pattern:
-
-```
-tests/
-├── unit/              # Pure Python logic - Fastest execution
-│   ├── test_sma_logic.py
-│   ├── test_position_sizing.py
-│   ├── test_risk_management.py
-│   └── ...            (7 test files, 141 tests)
-│
-├── component/         # Test doubles - No Nautilus overhead
-│   ├── test_sma_strategy.py
-│   ├── test_doubles_interface.py
-│   ├── doubles/       # Test double implementations
-│   └── ...            (34 test files, 456 tests)
-│
-├── integration/       # Real Nautilus components
-│   ├── test_backtest_engine.py
-│   ├── test_strategy_execution.py
-│   └── ...            (12 test files, 112 tests)
-│
-└── e2e/              # End-to-end scenarios
-    └── ...            (1 test file)
-```
-
-#### Detailed Test Commands
-
-```bash
-# Unit tests (fastest - run constantly during development)
-uv run pytest tests/unit -v -n auto
-# OR: make test-unit
-
-# Component tests (fast - run before commits)
-uv run pytest tests/component -v -n auto
-# OR: make test-component
-
-# Integration tests (slower - run in CI/CD)
-# Note: Uses --forked for subprocess isolation
-uv run pytest tests/integration -v -n auto --forked
-# OR: make test-integration
-
-# Run specific test file
-uv run pytest tests/unit/test_sma_logic.py -v
-
-# Run tests by marker
-uv run pytest -m unit -v -n auto           # Only unit tests
-uv run pytest -m component -v -n auto      # Only component tests
-uv run pytest -m integration -v -n auto --forked  # Only integration tests
-
-# Run tests with coverage
+# With coverage
 make test-coverage
-# OR: uv run pytest tests --cov=src/core --cov=src/strategies --cov-report=html
-
-# Run with verbose output
-uv run pytest tests/ -vv
-
-# Stop at first failure
-uv run pytest tests/ -x
-
-# Show print statements
-uv run pytest tests/ -s
 ```
-
-#### Test Performance Characteristics
-
-| Category | Count | Execution Time | Parallelization | Use When |
-|----------|-------|----------------|-----------------|----------|
-| Unit | 141 tests | 0.55s | 14 workers | Every code change |
-| Component | 456 tests | 0.54s | 14 workers | Before commits |
-| Integration | 112 tests | ~5s | 14 workers + --forked | Before PRs |
-| All | 715 tests | ~19s | 14 workers | CI/CD pipeline |
-
-**Key Features**:
-- ⚡ **99% faster**: Unit tests execute in 0.55s vs minutes for integration tests
-- 🔄 **Parallel execution**: pytest-xdist with auto CPU detection (14 workers)
-- 🛡️ **Subprocess isolation**: Integration tests use --forked to prevent C extension crashes
-- 📊 **Test pyramid**: 20% unit (files), 63% component, 22% integration, 2% e2e
-
-#### Debugging Tests
-
-```bash
-# Run single test with full output
-uv run pytest tests/unit/test_sma_logic.py::test_golden_cross -vv
-
-# Run with Python debugger on failure
-uv run pytest tests/unit/test_sma_logic.py --pdb
-
-# Show local variables on failure
-uv run pytest tests/unit/test_sma_logic.py -l
-
-# Run only failed tests from last run
-uv run pytest --lf
-
-# Run tests matching pattern
-uv run pytest -k "test_sma" -v
-```
-
-#### Coverage Reports
-
-```bash
-# Generate HTML coverage report
-make test-coverage
-
-# View coverage report in browser
-open htmlcov/index.html
-
-# Coverage for specific module
-uv run pytest tests/unit --cov=src/core/sma_logic --cov-report=term
-```
-
-#### CI/CD Integration
-
-The test suite is optimized for CI/CD with separate targets:
-
-```yaml
-# Example GitHub Actions workflow
-- name: Run unit tests
-  run: make test-unit
-
-- name: Run component tests
-  run: make test-component
-
-- name: Run integration tests
-  run: make test-integration
-```
-
-**For more details**, see:
-- Test architecture: `specs/003-rework-unit-testing/design.md`
-- Running tests guide: `specs/003-rework-unit-testing/quickstart.md`
-- Test pyramid validation: `tests/test_pyramid_distribution.py`
 
 ### Code Quality
 
@@ -1787,323 +313,56 @@ uv run ruff format .
 # Lint code
 uv run ruff check .
 
-# Type checking (if mypy is installed)
+# Type checking
 uv run mypy .
 ```
 
-## Configuration
-
-The system uses configuration defaults that can be overridden via environment variables or command line parameters. Default settings include:
-
-- **Starting Balance**: $1,000,000 USD
-- **Fast SMA Period**: 20 periods
-- **Slow SMA Period**: 50 periods
-- **Trade Size**: $1,000,000
-- **Mock Data Bars**: 1,000 bars
-
-## Architecture
-
-### Key Components
-
-1. **CLI Interface**: Built with Click for user-friendly command line interaction
-2. **Strategy Engine**: SMA crossover strategy using Nautilus Trader indicators
-3. **Mock Data Generator**: Creates synthetic OHLCV data with sine wave patterns
-4. **Backtest Runner**: Wraps Nautilus Trader's BacktestEngine for simplified usage
-5. **Result Display**: Rich console output with formatted metrics
-
-### Technology Stack
-
-- **Core Framework**: Nautilus Trader 1.220.0
-- **Database**: PostgreSQL with SQLAlchemy async ORM
-- **Data Processing**: pandas for CSV import, Pydantic v2 for validation
-- **CLI**: Click with Rich formatting and progress bars
-- **Migrations**: Alembic for database schema management
-- **Testing**: pytest with comprehensive coverage (69+ tests)
-- **Package Management**: UV (exclusive)
-- **Code Quality**: Ruff formatter and linter
-
-## Contributing
-
-1. Follow TDD principles - write tests before implementation
-2. Use UV for all package management (`uv add`, `uv remove`)
-3. Maintain test coverage above 80%
-4. Follow the existing code style and patterns
-5. Run tests and linting before submitting changes
-
 ## Troubleshooting
 
-### Common Issues and Solutions
+### Database Connection Errors
 
-#### 1. Database Connection Errors
-
-**Error**: `Database not accessible` or connection timeout
-
-**Solutions**:
 ```bash
-# Check if PostgreSQL container is running
+# Check if PostgreSQL is running
 docker ps | grep pgdb
 
-# Start the database if stopped
+# Start if stopped
 docker start pgdb
 
-# Verify connection with correct credentials
-PGPASSWORD=ntrader_dev_2025 psql -h localhost -U ntrader -d trading_ntrader -c "SELECT version();"
-
-# Check your .env file has correct DATABASE_URL
-cat .env | grep DATABASE_URL
+# Verify connection
+PGPASSWORD=ntrader_dev_2025 psql -h localhost -U ntrader -d trading_ntrader -c "SELECT 1;"
 ```
 
-#### 2. Timezone Comparison Errors
+### Data Not Found
 
-**Error**: `can't compare offset-naive and offset-aware datetimes`
-
-**Cause**: Mixing timezone-aware and timezone-naive datetime objects
-
-**Solution**: Ensure your CSV timestamps don't include timezone info, or use consistent timezone handling throughout.
-
-#### 3. Data Validation Failures
-
-**Error**: `No data available for symbol AAPL`
-
-**Solutions**:
 ```bash
-# List what symbols are actually in the database
-uv run python -m src.cli.main backtest list
+# Check available data
+uv run python -m src.cli.main data list
 
-# Check if your symbol name matches exactly (case sensitive)
-# If you imported as AAPL2018, use that exact name:
-uv run python -m src.cli.main backtest run --symbol AAPL2018 --start 2018-02-05 --end 2018-02-08
+# Verify symbol and date range match your imported data
 ```
 
-#### 4. Date Range Mismatches
+### IBKR Connection Issues
 
-**Error**: `Start date is before available data start` or `End date is after available data end`
+1. Ensure TWS/Gateway is running
+2. Enable API: File → Global Configuration → API → Settings
+3. Check "Enable ActiveX and Socket Clients"
+4. Verify port matches your `.env` configuration
+5. See [docs/IBKR_SETUP.md](docs/IBKR_SETUP.md) for detailed troubleshooting
 
-**Solutions**:
+### Date Range Errors
+
+Always check available data ranges before running backtests:
+
 ```bash
-# Check what date range is available for your symbol
-uv run python -m src.cli.main backtest list
-
-# Use dates within the available range
-# Example: If data shows 2018-02-05 to 2018-02-08, use those dates
-uv run python -m src.cli.main backtest run --symbol AAPL2018 --start 2018-02-05 --end 2018-02-08
+uv run python -m src.cli.main data list
 ```
 
-#### 5. CSV Import Issues
-
-**Error**: `Invalid CSV format` or import failures
-
-**Solutions**:
-```bash
-# Check your CSV format matches exactly:
-head -3 data/sample_AAPL.csv
-
-# Required format:
-# timestamp,open,high,low,close,volume
-# 2024-01-02 09:30:00,185.25,186.50,184.75,185.95,2847300
-
-# Verify OHLC relationships: high >= open,close,low and low <= open,close,high
-# Check for missing values or extra commas
-```
-
-#### 6. Migration Errors
-
-**Error**: Alembic migration failures
-
-**Solutions**:
-```bash
-# Check current migration status
-uv run alembic current
-
-# Apply migrations
-uv run alembic upgrade head
-
-# If database is corrupted, recreate it:
-docker stop pgdb
-docker rm pgdb
-# Then follow database setup steps again
-```
-
-#### 7. Data List Command Shows "Coming Soon"
-
-**Current Status**: The `data list` command is not yet fully implemented.
-
-**Workaround**: Use `backtest list` to see available data and symbols.
-
-#### 8. Performance Issues with Large CSV Files
-
-**Issue**: Slow import or out of memory errors with large files
-
-**Solutions**:
-```bash
-# For very large files, consider splitting them:
-split -l 10000 large_file.csv smaller_chunk_
-
-# Monitor import progress and memory usage
-# The system is optimized for files up to ~100MB
-```
-
-#### 9. Date Range Issues and Tips
-
-**Common Problems**: Date range mismatches, timezone confusion, wrong date formats
-
-**How to avoid date range errors**:
-
-1. **Always check available data first**:
-   ```bash
-   uv run python -m src.cli.main backtest list
-   ```
-
-2. **Understand date-only vs datetime inputs**:
-   - `--start 2024-01-02` = `2024-01-02 00:00:00+00:00` (midnight UTC)
-   - `--start "2024-01-02 09:30:00"` = `2024-01-02 09:30:00+00:00`
-
-3. **Match your date range to available data**:
-   ```bash
-   # Good - matches sample_AAPL.csv range
-   --start 2024-01-02 --end 2024-01-02
-
-   # Good - with specific times for intraday data
-   --start "2024-01-02 09:30:00" --end "2024-01-02 10:20:00"
-
-   # Bad - outside available data range
-   --start 2024-01-01 --end 2024-12-31
-   ```
-
-4. **Sample data ranges quick reference**:
-   - **AAPL** (sample_AAPL.csv): 2024-01-02 (09:30 to 10:20)
-   - **AAPL2018** (AAPL_test_2018.csv): 2018-02-05 to 2018-02-08
-   - **AAPL_LARGE** (AAPL_1min.csv): 2010-01-04 to 2019-12-31
-
-5. **For your own data**: Always import first, then check `backtest list` to see the actual date range before running backtests.
-
-#### 10. IBKR Connection Issues (New in Milestone 5)
-
-**Error**: Connection refused or timeout when connecting to TWS/Gateway
-
-**Solutions**:
-```bash
-# 1. Verify TWS is running
-ps aux | grep -i tws
-
-# 2. Check TWS API settings
-# Go to: File → Global Configuration → API → Settings
-# Ensure "Enable ActiveX and Socket Clients" is checked
-# Verify port is 7497 (paper trading) or 7496 (live)
-
-# 3. Test basic socket connection
-uv run python scripts/test_tws_connection.py
-
-# 4. Restart TWS completely after changing settings
-# Settings don't take effect until restart
-
-# 5. Check firewall isn't blocking localhost connections
-```
-
-**Error**: Client ID already in use (Error 326)
-
-**Solutions**:
-```bash
-# Change client ID in .env file
-# Edit IBKR_CLIENT_ID to a different number (1-999)
-# Then retry connection
-```
-
-**Error**: No market data permissions
-
-**Solutions**:
-- Paper accounts get DELAYED_FROZEN data by default
-- For real-time data, subscribe in IBKR Account Management
-- Verify `.env` has correct market data type setting
-
-**For detailed IBKR troubleshooting**, see [docs/IBKR_SETUP.md](docs/IBKR_SETUP.md)
-
-### Getting Help
-
-If you encounter issues not covered here:
-
-1. **Check logs**: Look for detailed error messages in the console output
-2. **Verify setup**: Ensure all prerequisites are installed and database is running
-3. **Test with sample data**: Try the Quick Start Guide first to verify your setup
-4. **Check database**: Use `backtest list` to see what data is actually available
+Use dates within the available range shown for each symbol.
 
 ## License
 
-[Add your license information here]
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## Roadmap
+---
 
-### Completed ✅
-- [x] **Milestone 1**: Basic SMA crossover strategy and mock data testing
-- [x] **Milestone 2**: CSV data import functionality and database integration
-  - [x] PostgreSQL database integration
-  - [x] Data validation and deduplication
-  - [x] CLI data management commands
-  - [x] Real data backtesting
-- [x] **Milestone 3**: Multi-strategy system with configuration management
-  - [x] RSI Mean Reversion strategy implementation
-  - [x] SMA Momentum strategy implementation
-  - [x] Strategy factory for dynamic loading
-  - [x] YAML configuration support
-  - [x] Strategy management CLI commands
-  - [x] Strategy discovery and validation
-- [x] **Milestone 4**: Performance Metrics & Basic Reports
-  - [x] Performance metrics engine with Nautilus Trader analytics
-  - [x] Custom statistics (MaxDrawdown, CalmarRatio, WinRate, Expectancy)
-  - [x] Enhanced trade tracking with Nautilus Position integration
-  - [x] Portfolio analytics service with real-time metrics
-  - [x] Text report generation with Rich formatting
-  - [x] CSV/JSON export system with precision preservation
-  - [x] CLI report commands (summary, generate, list, export-all)
-  - [x] Results persistence and retrieval system
-  - [x] Comprehensive test suite (106 tests passing)
-- [x] **Milestone 5**: Interactive Brokers Integration
-  - [x] IBKR client wrapper with Nautilus HistoricInteractiveBrokersClient
-  - [x] Connection management and health checks
-  - [x] Rate limiting (45 req/sec with sliding window algorithm)
-  - [x] Historical data fetching (bars, instruments, ticks)
-  - [x] Multi-instrument support with progress tracking
-  - [x] CLI commands (data connect, data fetch)
-  - [x] Parquet catalog integration for data storage
-  - [x] Comprehensive IBKR setup documentation
-  - [x] Full test suite (38 IBKR-specific tests passing)
-- [x] **Milestone 6**: PostgreSQL Metadata Storage (Feature Spec 004)
-  - [x] Automatic backtest persistence with full metadata
-  - [x] Database schema with backtest_runs and performance_metrics tables
-  - [x] Backtest history command with filtering and sorting
-  - [x] Complete backtest details view with configuration snapshots
-  - [x] Side-by-side comparison of 2-10 backtests
-  - [x] Backtest reproduction with exact configuration
-  - [x] Strategy performance tracking over time
-  - [x] Query service with optimized performance (<100ms lookups)
-  - [x] Configuration snapshot storage as JSONB
-  - [x] Integration with existing backtest runner
-  - [x] Rich CLI output with tables and formatting
-
-### In Progress 🚧
-- [ ] Complete data list command implementation (currently shows "coming soon")
-- [ ] IBKR data integration with backtest engine
-- [ ] Advanced visualization and charting
-
-### Completed Recently ✅
-- [x] **Milestone 7**: Web UI Foundation (Feature Spec 005)
-  - [x] Dashboard with summary statistics (total backtests, best Sharpe, worst drawdown)
-  - [x] Recent activity list showing 5 most recent backtests
-  - [x] Backtest list page with paginated table (20 per page)
-  - [x] HTMX-powered pagination without full page reloads
-  - [x] Dark theme with proper color coding (green=positive, red=negative)
-  - [x] Persistent navigation with active page highlighting
-  - [x] Breadcrumb navigation for nested pages
-  - [x] Empty state handling with helpful messages
-  - [x] FastAPI + Jinja2 + HTMX + Tailwind CSS architecture
-  - [x] Comprehensive test suite (87% coverage, 27 tests passing)
-  - [x] Playwright-verified UI functionality
-
-### Planned 📋
-- [ ] TimescaleDB optimization for large datasets
-- [ ] Web UI Phase 2: Backtest detail view with charts
-- [ ] Real-time data streaming
-- [ ] Advanced risk management features
-- [ ] Portfolio optimization tools
-- [ ] Walk-forward analysis
-- [ ] Monte Carlo simulation
+Built with [Nautilus Trader](https://nautilustrader.io/) | [Documentation](docs/) | [Issues](https://github.com/allaydesai/Trading-ntrader/issues)
