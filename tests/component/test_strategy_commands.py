@@ -26,13 +26,11 @@ class TestStrategyCommands:
 
         assert result.exit_code == 0
         assert "sma_crossover" in result.output
-        assert "mean_reversion" in result.output
         assert "momentum" in result.output
 
         # Should show strategy descriptions
         assert "Simple Moving Average Crossover" in result.output
-        assert "Mean Reversion Strategy" in result.output
-        assert "Momentum Strategy" in result.output
+        assert "Momentum Strategy" in result.output or "SMA Momentum" in result.output
 
     @pytest.mark.integration
     @pytest.mark.component
@@ -69,40 +67,6 @@ class TestStrategyCommands:
             # SMA uses percentage-based sizing
             assert "portfolio_value" in config["config"]
             assert "position_size_pct" in config["config"]
-
-    @pytest.mark.integration
-    @pytest.mark.component
-    def test_strategy_create_command_mean_reversion(self):
-        """INTEGRATION: Create Mean Reversion config template."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            output_file = os.path.join(temp_dir, "test_mr.yaml")
-
-            result = self.runner.invoke(
-                cli,
-                [
-                    "strategy",
-                    "create",
-                    "--type",
-                    "mean_reversion",
-                    "--output",
-                    output_file,
-                ],
-            )
-
-            assert result.exit_code == 0
-            assert f"Created {output_file}" in result.output
-            assert os.path.exists(output_file)
-
-            # Validate generated YAML loads correctly
-            with open(output_file, "r") as f:
-                config = yaml.safe_load(f)
-
-            assert config["strategy_path"] == "src.core.strategies.rsi_mean_reversion:RSIMeanRev"
-            assert (
-                config["config_path"] == "src.core.strategies.rsi_mean_reversion:RSIMeanRevConfig"
-            )
-            assert "rsi_period" in config["config"]
-            assert "rsi_buy_threshold" in config["config"]
 
     @pytest.mark.integration
     @pytest.mark.component

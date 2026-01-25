@@ -222,12 +222,12 @@ class TestSMAMomentumStrategy:
 
     def test_sma_momentum_parameters_in_strategy_model(self):
         """Test that SMA momentum parameters validate correctly in TradingStrategy model."""
-        from src.models.strategy import StrategyType, TradingStrategy
+        from src.models.strategy import TradingStrategy
 
         # Valid momentum strategy
         strategy = TradingStrategy(
             name="Test SMA Momentum",
-            strategy_type=StrategyType.MOMENTUM,
+            strategy_type="momentum",
             parameters={
                 "fast_period": 20,
                 "slow_period": 50,
@@ -235,13 +235,13 @@ class TestSMAMomentumStrategy:
                 "allow_short": False,
             },
         )
-        assert strategy.strategy_type == StrategyType.MOMENTUM
+        assert strategy.strategy_type == "momentum"
 
         # Invalid parameters should fail validation
         with pytest.raises(ValueError, match="Invalid Momentum parameters"):
             TradingStrategy(
                 name="Invalid Momentum",
-                strategy_type=StrategyType.MOMENTUM,
+                strategy_type="momentum",
                 parameters={
                     "fast_period": 0,  # Invalid
                     "slow_period": 50,

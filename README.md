@@ -1,7 +1,7 @@
 # NTrader
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
-[![Tests](https://img.shields.io/badge/tests-715%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-1040%20passing-brightgreen.svg)](tests/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Production-grade algorithmic trading backtesting system built with Nautilus Trader.
@@ -10,7 +10,7 @@ Production-grade algorithmic trading backtesting system built with Nautilus Trad
 
 NTrader is a comprehensive backtesting platform designed for traders, quants, and developers who need reliable strategy testing with real market data. Built on the high-performance Nautilus Trader engine, it provides:
 
-- **7 built-in trading strategies** covering trend-following, mean reversion, and momentum approaches
+- **Extensible strategy framework** with example strategies and custom strategy support
 - **Interactive Brokers integration** for fetching real market data
 - **Parquet-based data catalog** for fast, efficient storage without database overhead for market data
 - **PostgreSQL metadata storage** for tracking backtest history and performance metrics
@@ -20,13 +20,11 @@ NTrader is a comprehensive backtesting platform designed for traders, quants, an
 ## Key Features
 
 ### Trading Strategies
-- SMA Crossover (classic moving average crossover)
-- SMA Crossover Long-Only (trend following, long positions only)
-- SMA Momentum (golden/death cross detection)
-- RSI Mean Reversion (RSI-based with trend filter)
-- Larry Connors RSI (short-term mean reversion)
-- Bollinger Band Reversal (volatility-based entries)
-- Apolo RSI (optimized RSI strategy)
+- **Built-in examples:**
+  - SMA Crossover (classic moving average crossover)
+  - SMA Momentum (golden/death cross detection)
+- **Custom strategy support** via `src/core/strategies/custom/` directory
+- Auto-discovery of strategies using `@register_strategy` decorator
 
 ### Data Management
 - CSV import directly to Parquet catalog
@@ -198,7 +196,7 @@ uv run python -m src.cli.main backtest run \
   --strategy sma_crossover --symbol AAPL --start 2024-01-02 --end 2024-01-02
 
 uv run python -m src.cli.main backtest run \
-  --strategy mean_reversion --symbol AAPL --start 2024-01-02 --end 2024-01-02
+  --strategy momentum --symbol AAPL --start 2024-01-02 --end 2024-01-02
 
 # View history and find best performers
 uv run python -m src.cli.main backtest history --sort sharpe
@@ -221,15 +219,51 @@ uv run uvicorn src.api.web:app --reload --host 127.0.0.1 --port 8000
 
 ## Available Strategies
 
+### Built-in Example Strategies
+
 | Strategy | Type | Key Parameters | Description |
 |----------|------|----------------|-------------|
 | `sma_crossover` | Trend Following | fast_period, slow_period | Classic moving average crossover |
-| `sma_crossover_long_only` | Trend Following | fast_period, slow_period | Long-only SMA crossover |
 | `momentum` | Momentum | fast_period, slow_period | Golden/death cross detection |
-| `mean_reversion` | Mean Reversion | rsi_period, rsi_buy_threshold | RSI-based with trend filter |
-| `larry_connors_rsi` | Mean Reversion | rsi_period, entry_threshold | Short-term RSI mean reversion |
-| `bollinger_reversal` | Volatility | period, num_std | Bollinger Band reversal entries |
-| `apolo_rsi` | Mean Reversion | rsi_period, oversold, overbought | Optimized RSI strategy |
+
+### Adding Custom Strategies
+
+Custom strategies can be placed in `src/core/strategies/custom/` directory.
+They will be auto-discovered if they use the `@register_strategy` decorator.
+
+#### Using Git Submodule (Recommended for Private Strategies)
+
+```bash
+git submodule add git@github.com:username/private-strategies.git src/core/strategies/custom
+git submodule update --init --recursive
+```
+
+#### Creating a Custom Strategy
+
+```python
+from nautilus_trader.trading.strategy import Strategy, StrategyConfig
+from src.core.strategy_registry import register_strategy, StrategyRegistry
+
+class MyStrategyConfig(StrategyConfig):
+    instrument_id: InstrumentId
+    bar_type: BarType
+    my_param: int = 10
+
+@register_strategy(
+    name="my_strategy",
+    description="My custom trading strategy",
+    aliases=["mystrat"],
+)
+class MyStrategy(Strategy):
+    def __init__(self, config: MyStrategyConfig):
+        super().__init__(config)
+        # ... strategy implementation
+
+# Register config and param model
+StrategyRegistry.set_config("my_strategy", MyStrategyConfig)
+```
+
+After placing the file in `src/core/strategies/custom/`, the strategy will be auto-discovered and available for use.
 
 ## Configuration
 
@@ -279,9 +313,9 @@ src/
 └── utils/            # Utilities
 
 tests/
-├── unit/             # Fast unit tests (141 tests)
-├── component/        # Component tests (456 tests)
-├── integration/      # Integration tests (112 tests)
+├── unit/             # Fast unit tests (315 tests)
+├── component/        # Component tests (421 tests)
+├── integration/      # Integration tests (135 tests)
 └── e2e/              # End-to-end tests
 ```
 

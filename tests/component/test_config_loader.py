@@ -30,26 +30,6 @@ def sma_yaml_config():
 
 
 @pytest.fixture
-def mean_reversion_yaml_config():
-    """Fixture providing valid Mean Reversion strategy YAML configuration."""
-    return """
-    strategy_path: "src.core.strategies.rsi_mean_reversion:RSIMeanRev"
-    config_path: "src.core.strategies.rsi_mean_reversion:RSIMeanRevConfig"
-    config:
-      instrument_id: "AAPL.NASDAQ"
-      bar_type: "AAPL.NASDAQ-1-MINUTE-LAST-INTERNAL"
-      trade_size: 1000000
-      order_id_tag: "001"
-      rsi_period: 2
-      rsi_buy_threshold: 10.0
-      exit_rsi: 50.0
-      sma_trend_period: 200
-      warmup_days: 400
-      cooldown_bars: 0
-    """
-
-
-@pytest.fixture
 def momentum_yaml_config():
     """Fixture providing valid Momentum strategy YAML configuration."""
     return """
@@ -87,18 +67,6 @@ class TestConfigLoader:
 
     @pytest.mark.integration
     @pytest.mark.component
-    def test_load_from_yaml_string_mean_reversion_strategy(self, mean_reversion_yaml_config):
-        """INTEGRATION: Load Mean Reversion strategy config from YAML string."""
-        config_obj = ConfigLoader.load_from_yaml(mean_reversion_yaml_config)
-
-        assert config_obj.strategy_path == "src.core.strategies.rsi_mean_reversion:RSIMeanRev"
-        assert config_obj.config_path == "src.core.strategies.rsi_mean_reversion:RSIMeanRevConfig"
-        assert config_obj.config.rsi_period == 2
-        assert config_obj.config.rsi_buy_threshold == 10.0
-        assert config_obj.config.trade_size == Decimal("1000000")
-
-    @pytest.mark.integration
-    @pytest.mark.component
     def test_load_from_yaml_string_momentum_strategy(self, momentum_yaml_config):
         """INTEGRATION: Load Momentum strategy config from YAML string."""
         config_obj = ConfigLoader.load_from_yaml(momentum_yaml_config)
@@ -114,10 +82,6 @@ class TestConfigLoader:
         "yaml_config_fixture,expected_strategy_path",
         [
             ("sma_yaml_config", "src.core.strategies.sma_crossover:SMACrossover"),
-            (
-                "mean_reversion_yaml_config",
-                "src.core.strategies.rsi_mean_reversion:RSIMeanRev",
-            ),
             ("momentum_yaml_config", "src.core.strategies.sma_momentum:SMAMomentum"),
         ],
     )
@@ -209,32 +173,30 @@ class TestConfigLoader:
             ConfigLoader.load_from_yaml(yaml_content)
 
     @pytest.fixture
-    def mean_reversion_yaml_data(self):
-        """Fixture providing parsed YAML data for mean reversion strategy."""
+    def momentum_yaml_data(self):
+        """Fixture providing parsed YAML data for momentum strategy."""
         return {
-            "strategy_path": "src.core.strategies.rsi_mean_reversion:RSIMeanRev",
-            "config_path": "src.core.strategies.rsi_mean_reversion:RSIMeanRevConfig",
+            "strategy_path": "src.core.strategies.sma_momentum:SMAMomentum",
+            "config_path": "src.core.strategies.sma_momentum:SMAMomentumConfig",
             "config": {
                 "instrument_id": "AAPL.NASDAQ",
                 "bar_type": "AAPL.NASDAQ-1-MINUTE-LAST-INTERNAL",
                 "trade_size": 1000000,
-                "order_id_tag": "001",
-                "rsi_period": 2,
-                "rsi_buy_threshold": 10.0,
-                "exit_rsi": 50.0,
-                "sma_trend_period": 200,
-                "warmup_days": 400,
-                "cooldown_bars": 0,
+                "order_id_tag": "002",
+                "fast_period": 20,
+                "slow_period": 50,
+                "warmup_days": 1,
+                "allow_short": False,
             },
         }
 
     @pytest.mark.component
-    def test_create_config_object_dynamic_loading(self, mean_reversion_yaml_data):
+    def test_create_config_object_dynamic_loading(self, momentum_yaml_data):
         """Test dynamic loading of config classes."""
-        config_obj = ConfigLoader._create_config_object(mean_reversion_yaml_data)
+        config_obj = ConfigLoader._create_config_object(momentum_yaml_data)
 
-        assert config_obj.strategy_path == "src.core.strategies.rsi_mean_reversion:RSIMeanRev"
-        assert config_obj.config.rsi_period == 2
+        assert config_obj.strategy_path == "src.core.strategies.sma_momentum:SMAMomentum"
+        assert config_obj.config.fast_period == 20
 
     @pytest.mark.parametrize(
         "yaml_data,should_pass",

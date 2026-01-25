@@ -10,7 +10,6 @@ from pydantic import ValidationError
 from src.models.strategy import (
     SMAParameters,
     StrategyStatus,
-    StrategyType,
     TradingStrategy,
 )
 
@@ -129,12 +128,12 @@ def test_trading_strategy_creation():
 
     strategy = TradingStrategy(
         name="SMA Crossover Test",
-        strategy_type=StrategyType.SMA_CROSSOVER,
+        strategy_type="sma_crossover",
         parameters=sma_params,
     )
 
     assert strategy.name == "SMA Crossover Test"
-    assert strategy.strategy_type == StrategyType.SMA_CROSSOVER
+    assert strategy.strategy_type == "sma_crossover"
     assert strategy.parameters == sma_params
     assert strategy.status == StrategyStatus.DRAFT
     assert strategy.is_active is True
@@ -150,7 +149,7 @@ def test_trading_strategy_validation_errors():
     with pytest.raises(ValidationError):
         TradingStrategy(
             name="",
-            strategy_type=StrategyType.SMA_CROSSOVER,
+            strategy_type="sma_crossover",
             parameters={
                 "fast_period": 10,
                 "slow_period": 20,
@@ -163,7 +162,7 @@ def test_trading_strategy_validation_errors():
     with pytest.raises(ValidationError):
         TradingStrategy(
             name="x" * 101,  # Exceeds 100 character limit
-            strategy_type=StrategyType.SMA_CROSSOVER,
+            strategy_type="sma_crossover",
             parameters={
                 "fast_period": 10,
                 "slow_period": 20,
@@ -176,15 +175,15 @@ def test_trading_strategy_validation_errors():
     with pytest.raises(ValueError, match="At least one parameter required"):
         TradingStrategy(
             name="Test Strategy",
-            strategy_type=StrategyType.SMA_CROSSOVER,
+            strategy_type="sma_crossover",
             parameters={},
         )
 
     # Test invalid SMA parameters
-    with pytest.raises(ValueError, match="Invalid SMA parameters"):
+    with pytest.raises(ValueError, match="Invalid Sma Crossover parameters"):
         TradingStrategy(
             name="Test Strategy",
-            strategy_type=StrategyType.SMA_CROSSOVER,
+            strategy_type="sma_crossover",
             parameters={
                 "fast_period": 20,
                 "slow_period": 10,  # Invalid: slow < fast
@@ -200,7 +199,7 @@ def test_strategy_parameter_validation_by_type():
     # Valid SMA parameters
     valid_sma = TradingStrategy(
         name="SMA Strategy",
-        strategy_type=StrategyType.SMA_CROSSOVER,
+        strategy_type="sma_crossover",
         parameters={
             "fast_period": 10,
             "slow_period": 20,
@@ -208,20 +207,19 @@ def test_strategy_parameter_validation_by_type():
             "position_size_pct": "10.0",
         },
     )
-    assert valid_sma.strategy_type == StrategyType.SMA_CROSSOVER
+    assert valid_sma.strategy_type == "sma_crossover"
 
-    # Test non-SMA strategy types don't validate against SMA parameters
-    # (This tests future extensibility)
-    mean_reversion = TradingStrategy(
-        name="Mean Reversion Strategy",
-        strategy_type=StrategyType.MEAN_REVERSION,
+    # Test that unknown strategy types skip validation (allows external strategies)
+    # This enables strategies in custom/ directory to work without modification
+    custom_strategy = TradingStrategy(
+        name="Custom Strategy",
+        strategy_type="custom_external_strategy",
         parameters={
-            "rsi_period": 14,
-            "rsi_buy_threshold": 30.0,
-            "trade_size": "1000000",
-        },  # Different params
+            "some_param": 42,
+            "another_param": "value",
+        },
     )
-    assert mean_reversion.strategy_type == StrategyType.MEAN_REVERSION
+    assert custom_strategy.strategy_type == "custom_external_strategy"
 
 
 @pytest.mark.component
@@ -229,7 +227,7 @@ def test_strategy_status_transitions():
     """Test strategy status transitions."""
     strategy = TradingStrategy(
         name="Test Strategy",
-        strategy_type=StrategyType.SMA_CROSSOVER,
+        strategy_type="sma_crossover",
         parameters={
             "fast_period": 10,
             "slow_period": 20,
@@ -266,7 +264,7 @@ def test_strategy_can_activate_from_draft():
     """Test that draft strategies can be activated."""
     strategy = TradingStrategy(
         name="Test Strategy",
-        strategy_type=StrategyType.SMA_CROSSOVER,
+        strategy_type="sma_crossover",
         parameters={
             "fast_period": 10,
             "slow_period": 20,
@@ -289,7 +287,7 @@ def test_update_timestamp():
     """Test manual timestamp updates."""
     strategy = TradingStrategy(
         name="Test Strategy",
-        strategy_type=StrategyType.SMA_CROSSOVER,
+        strategy_type="sma_crossover",
         parameters={
             "fast_period": 10,
             "slow_period": 20,
@@ -308,7 +306,7 @@ def test_strategy_model_config():
     """Test model configuration and serialization."""
     strategy = TradingStrategy(
         name="Test Strategy",
-        strategy_type=StrategyType.SMA_CROSSOVER,
+        strategy_type="sma_crossover",
         parameters={
             "fast_period": 10,
             "slow_period": 20,
@@ -320,7 +318,7 @@ def test_strategy_model_config():
     # Test JSON serialization
     json_data = strategy.model_dump()
 
-    # Check that enums are serialized as values
+    # Check that strategy_type is serialized as string
     assert json_data["strategy_type"] == "sma_crossover"
     assert json_data["status"] == "draft"
 
@@ -335,13 +333,8 @@ def test_strategy_model_config():
 
 
 @pytest.mark.component
-def test_strategy_enum_values():
-    """Test strategy and status enum values."""
-    # Test StrategyType enum
-    assert StrategyType.SMA_CROSSOVER == "sma_crossover"
-    assert StrategyType.MEAN_REVERSION == "mean_reversion"
-    assert StrategyType.MOMENTUM == "momentum"
-
+def test_strategy_status_enum_values():
+    """Test StrategyStatus enum values."""
     # Test StrategyStatus enum
     assert StrategyStatus.DRAFT == "draft"
     assert StrategyStatus.ACTIVE == "active"

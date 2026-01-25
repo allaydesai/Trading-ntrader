@@ -8,13 +8,6 @@ from nautilus_trader.trading.strategy import Strategy, StrategyConfig
 from pydantic import ValidationError
 
 from src.core.strategy_registry import StrategyRegistry
-from src.models.strategy import (
-    BollingerReversalParameters,
-    MeanReversionParameters,
-    MomentumParameters,
-    SMAParameters,
-    StrategyType,
-)
 
 
 class StrategyFactory:
@@ -153,9 +146,9 @@ class StrategyFactory:
         return strategy
 
     @staticmethod
-    def get_strategy_type_from_path(strategy_path: str) -> StrategyType:
+    def get_strategy_name_from_path(strategy_path: str) -> str:
         """
-        Determine strategy type from strategy path.
+        Determine strategy name from strategy path using registry lookup.
 
         Parameters
         ----------
@@ -164,55 +157,42 @@ class StrategyFactory:
 
         Returns
         -------
-        StrategyType
-            The strategy type enum value
+        str
+            The canonical strategy name
 
         Raises
         ------
         ValueError
             If strategy type cannot be determined
         """
-        # Extract strategy name from path
+        # Extract strategy class name from path
         if ":" in strategy_path:
-            strategy_name = strategy_path.split(":")[-1].lower()
+            class_name = strategy_path.split(":")[-1].lower()
         else:
-            strategy_name = strategy_path.split(".")[-1].lower()
+            class_name = strategy_path.split(".")[-1].lower()
 
-        # Map strategy names to types
-        strategy_mappings = {
-            "smacrossover": StrategyType.SMA_CROSSOVER,
-            "sma_crossover": StrategyType.SMA_CROSSOVER,
-            "meanreversion": StrategyType.MEAN_REVERSION,
-            "mean_reversion": StrategyType.MEAN_REVERSION,
-            "meanreversionstrategy": StrategyType.MEAN_REVERSION,
-            "rsimeanrev": StrategyType.MEAN_REVERSION,
-            "rsi_mean_reversion": StrategyType.MEAN_REVERSION,
-            "momentum": StrategyType.MOMENTUM,
-            "momentumstrategy": StrategyType.MOMENTUM,
-            "smamomentum": StrategyType.MOMENTUM,
-            "sma_momentum": StrategyType.MOMENTUM,
-            "bollingerreversal": StrategyType.BOLLINGER_REVERSAL,
-            "bollinger_reversal": StrategyType.BOLLINGER_REVERSAL,
-            "bollingerreversalstrategy": StrategyType.BOLLINGER_REVERSAL,
-        }
+        # Try to find matching strategy in registry
+        StrategyRegistry.discover()
+        for name, defn in StrategyRegistry.get_all().items():
+            # Check if class name matches
+            if defn.strategy_class.__name__.lower() == class_name:
+                return name
+            # Check aliases
+            for alias in defn.aliases:
+                if alias.lower() == class_name or alias.replace("_", "").lower() == class_name:
+                    return name
 
-        for key, strategy_type in strategy_mappings.items():
-            if key in strategy_name:
-                return strategy_type
-
-        raise ValueError(f"Cannot determine strategy type from path: {strategy_path}")
+        raise ValueError(f"Cannot determine strategy from path: {strategy_path}")
 
     @staticmethod
-    def validate_strategy_config(
-        strategy_type: StrategyType, config_params: Dict[str, Any]
-    ) -> bool:
+    def validate_strategy_config(strategy_type: str, config_params: Dict[str, Any]) -> bool:
         """
         Validate configuration parameters for a specific strategy type.
 
         Parameters
         ----------
-        strategy_type : StrategyType
-            The strategy type to validate against
+        strategy_type : str
+            The strategy type name to validate against
         config_params : Dict[str, Any]
             Configuration parameters to validate
 
@@ -225,27 +205,25 @@ class StrategyFactory:
         ------
         ValidationError
             If configuration is invalid
+        ValueError
+            If strategy type is unknown
         """
-        # Map strategy types to parameter classes
-        param_classes = {
-            StrategyType.SMA_CROSSOVER: SMAParameters,
-            StrategyType.MEAN_REVERSION: MeanReversionParameters,
-            StrategyType.MOMENTUM: MomentumParameters,
-            StrategyType.BOLLINGER_REVERSAL: BollingerReversalParameters,
-        }
-
-        if strategy_type not in param_classes:
-            raise ValueError(f"Unknown strategy type: {strategy_type}")
-
-        param_class = param_classes[strategy_type]
-
+        # Get param model from registry
+        StrategyRegistry.discover()
         try:
+            definition = StrategyRegistry.get(strategy_type)
+            if definition.param_model is None:
+                # No param model defined, skip validation
+                return True
+
             # Validate parameters
-            param_class(**config_params)
+            definition.param_model(**config_params)
             return True
-        except ValidationError as e:
-            # Re-raise the original ValidationError with additional context
-            raise e
+        except KeyError:
+            raise ValueError(f"Unknown strategy type: {strategy_type}")
+        except ValidationError:
+            # Re-raise the original ValidationError
+            raise
 
 
 class StrategyLoader:
@@ -274,23 +252,19 @@ class StrategyLoader:
         }
 
     @classmethod
-    def _resolve_strategy_name(cls, strategy_type: StrategyType | str) -> str:
-        """Resolve a StrategyType or string to canonical strategy name."""
-        if isinstance(strategy_type, StrategyType):
-            return strategy_type.value
+    def _resolve_strategy_name(cls, strategy_type: str) -> str:
+        """Resolve a strategy type string to canonical strategy name."""
         return str(strategy_type)
 
     @classmethod
-    def create_strategy(
-        cls, strategy_type: StrategyType | str, config_params: Dict[str, Any]
-    ) -> Strategy:
+    def create_strategy(cls, strategy_type: str, config_params: Dict[str, Any]) -> Strategy:
         """
-        Create a strategy instance using built-in mappings.
+        Create a strategy instance using registry mappings.
 
         Parameters
         ----------
-        strategy_type : StrategyType
-            The type of strategy to create
+        strategy_type : str
+            The strategy type name (e.g., 'sma_crossover', 'momentum')
         config_params : Dict[str, Any]
             Configuration parameters
 
@@ -321,7 +295,7 @@ class StrategyLoader:
 
     @classmethod
     def build_strategy_params(
-        cls, strategy_type: StrategyType | str, overrides: Dict[str, Any], settings: Any
+        cls, strategy_type: str, overrides: Dict[str, Any], settings: Any
     ) -> Dict[str, Any]:
         """
         Build strategy parameters dynamically using Pydantic introspection.
@@ -333,8 +307,8 @@ class StrategyLoader:
 
         Parameters
         ----------
-        strategy_type : StrategyType | str
-            The strategy type to build params for
+        strategy_type : str
+            The strategy type name to build params for
         overrides : Dict[str, Any]
             Dictionary of explicit parameter overrides
         settings : Any
@@ -424,14 +398,14 @@ class StrategyLoader:
         return result
 
     @classmethod
-    def validate_strategy_type(cls, strategy_type: StrategyType | str) -> bool:
+    def validate_strategy_type(cls, strategy_type: str) -> bool:
         """
         Check if a strategy type is supported.
 
         Parameters
         ----------
-        strategy_type : StrategyType | str
-            The strategy type to check
+        strategy_type : str
+            The strategy type name to check
 
         Returns
         -------
