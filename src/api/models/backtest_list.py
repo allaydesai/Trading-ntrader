@@ -26,7 +26,7 @@ class BacktestListItem(BaseModel):
         strategy_name: Strategy name (max 50 chars display)
         instrument_symbol: Trading symbol
         date_range: "YYYY-MM-DD to YYYY-MM-DD"
-        total_return: Absolute return in dollars (None if failed)
+        total_return: Return as decimal ratio (e.g., 0.9519 for 95.19%)
         final_balance: Final portfolio balance (None if failed)
         sharpe_ratio: Risk-adjusted return (None if failed)
         max_drawdown: Peak-to-trough decline (None if failed)
@@ -39,14 +39,14 @@ class BacktestListItem(BaseModel):
         ...     strategy_name="SMA Crossover Strategy",
         ...     instrument_symbol="AAPL",
         ...     date_range="2024-01-01 to 2024-12-31",
-        ...     total_return=Decimal("4111.68"),
+        ...     total_return=Decimal("0.9519"),
         ...     final_balance=Decimal("1004111.68"),
         ...     sharpe_ratio=Decimal("1.85"),
         ...     max_drawdown=Decimal("-0.15"),
         ...     execution_status="success",
         ...     created_at=datetime.now()
         ... )
-        >>> print(item.return_percentage)  # 0.41%
+        >>> print(item.return_percentage)  # 95.19%
     """
 
     run_id: UUID = Field(..., description="Business identifier")
@@ -54,7 +54,7 @@ class BacktestListItem(BaseModel):
     instrument_symbol: str = Field(..., description="Trading symbol")
     date_range: str = Field(..., description="YYYY-MM-DD to YYYY-MM-DD")
     total_return: Optional[Decimal] = Field(
-        None, description="Absolute return in dollars (None if failed)"
+        None, description="Return as decimal ratio, e.g., 0.9519 for 95.19% (None if failed)"
     )
     final_balance: Optional[Decimal] = Field(
         None, description="Final portfolio balance (None if failed)"
@@ -78,29 +78,22 @@ class BacktestListItem(BaseModel):
     @property
     def return_percentage(self) -> float:
         """
-        Calculate return as a percentage of starting balance.
+        Convert return decimal ratio to percentage.
 
         Returns:
-            Percentage return (e.g., 0.41 for 0.41% return).
-            Returns 0.0 if calculation is not possible.
+            Percentage return (e.g., 95.19 for 95.19% return).
+            Returns 0.0 if total_return is None.
 
         Example:
-            If total_return=4111.68 and final_balance=1004111.68,
-            starting_balance = 1004111.68 - 4111.68 = 1000000.00
-            return_percentage = (4111.68 / 1000000.00) * 100 = 0.41%
+            If total_return=0.9519 (stored as decimal ratio),
+            return_percentage = 0.9519 * 100 = 95.19%
         """
-        if self.total_return is None or self.final_balance is None:
+        if self.total_return is None:
             return 0.0
 
-        # Calculate starting balance: final_balance - total_return
-        starting_balance = self.final_balance - self.total_return
-
-        # Avoid division by zero
-        if starting_balance == 0:
-            return 0.0
-
-        # Calculate percentage return
-        return float((self.total_return / starting_balance) * 100)
+        # total_return is already a decimal ratio (e.g., 0.9519 for 95.19%)
+        # Simply multiply by 100 to get the percentage
+        return float(self.total_return * 100)
 
     @computed_field  # type: ignore[prop-decorator]
     @property
