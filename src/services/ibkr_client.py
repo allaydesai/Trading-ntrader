@@ -11,6 +11,8 @@ from nautilus_trader.adapters.interactive_brokers.historical.client import (
 )
 from nautilus_trader.model.identifiers import InstrumentId
 
+from src.utils.logging import set_nautilus_log_guard
+
 
 class RateLimiter:
     """
@@ -100,6 +102,13 @@ class IBKRHistoricalClient:
         )
         self._connected = False
         self.rate_limiter = RateLimiter(requests_per_second=45)
+
+        # Preserve the LogGuard from HistoricInteractiveBrokersClient to prevent
+        # "logging already initialized" errors when BacktestEngine is created later.
+        # The Nautilus logging subsystem only allows one initialization per process,
+        # so we store the LogGuard to keep it alive throughout the backtest lifecycle.
+        if hasattr(self.client, "_log_guard"):
+            set_nautilus_log_guard(self.client._log_guard)
 
     async def connect(self, timeout: int = 30) -> Dict:
         """
