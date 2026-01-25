@@ -37,6 +37,25 @@ from src.services.backtest_persistence import BacktestPersistenceService
 logger = structlog.get_logger(__name__)
 
 
+def _make_json_serializable(obj: Any) -> Any:
+    """
+    Recursively convert Decimal values to strings for JSON serialization.
+
+    Args:
+        obj: Object to convert (dict, list, or scalar)
+
+    Returns:
+        JSON-serializable version of the object
+    """
+    if isinstance(obj, dict):
+        return {k: _make_json_serializable(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [_make_json_serializable(item) for item in obj]
+    elif isinstance(obj, Decimal):
+        return str(obj)
+    return obj
+
+
 class BacktestOrchestrator:
     """
     Unified backtest execution with optional persistence.
@@ -326,12 +345,12 @@ class BacktestOrchestrator:
     ) -> None:
         """Persist successful backtest results to database."""
         try:
-            # Build config snapshot
+            # Build config snapshot (convert Decimals for JSON serialization)
             config_snapshot: dict[str, Any] = {
                 "strategy_path": request.strategy_path,
                 "config_path": request.config_path,
                 "version": "1.0",
-                "config": request.strategy_config,
+                "config": _make_json_serializable(request.strategy_config),
             }
 
             # Add equity curve if available
@@ -408,7 +427,7 @@ class BacktestOrchestrator:
                 "strategy_path": request.strategy_path,
                 "config_path": request.config_path,
                 "version": "1.0",
-                "config": request.strategy_config,
+                "config": _make_json_serializable(request.strategy_config),
             }
 
             start_tz = (
