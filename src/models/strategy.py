@@ -207,6 +207,9 @@ class ApoloRSIParameters(BaseModel):
     - Sell: RSI(2) > sell_threshold (mean reversion back up)
     - Long only
 
+    Note: Nautilus Trader's RSI indicator returns values in 0-1 range (not 0-100).
+    Thresholds should be specified as decimals (e.g., 0.10 for RSI < 10).
+
     Matches src.core.strategies.apolo_rsi.ApoloRSIConfig.
     """
 
@@ -216,10 +219,16 @@ class ApoloRSIParameters(BaseModel):
     order_id_tag: str = Field(default="APOLO", description="Unique tag for order identification")
     rsi_period: int = Field(default=2, ge=2, description="RSI calculation period")
     buy_threshold: float = Field(
-        default=10.0, ge=0, le=100, description="Buy when RSI < threshold (oversold)"
+        default=0.10,
+        ge=0.0,
+        le=1.0,
+        description="Buy when RSI < threshold (0.10 = RSI < 10)",
     )
     sell_threshold: float = Field(
-        default=50.0, ge=0, le=100, description="Sell when RSI > threshold (mean reversion)"
+        default=0.50,
+        ge=0.0,
+        le=1.0,
+        description="Sell when RSI > threshold (0.50 = RSI > 50)",
     )
 
     # Mapping from model fields to global Settings attributes
@@ -230,9 +239,9 @@ class ApoloRSIParameters(BaseModel):
     @field_validator("buy_threshold", "sell_threshold")
     @classmethod
     def validate_thresholds(cls, v: float) -> float:
-        """Validate thresholds are in valid range."""
-        if not (0 <= v <= 100):
-            raise ValueError("Thresholds must be between 0 and 100")
+        """Validate thresholds are in valid range (0-1 for Nautilus RSI)."""
+        if not (0.0 <= v <= 1.0):
+            raise ValueError("Thresholds must be between 0.0 and 1.0 (Nautilus RSI range)")
         return v
 
     @field_validator("sell_threshold")
