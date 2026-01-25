@@ -1,3 +1,0 @@
-# This file keeps the custom directory in git.
-# Place custom strategies here (e.g., via git submodule).
-# Strategy files will be auto-discovered if they use @register_strategy decorator.
