@@ -9,7 +9,7 @@ Python 3.12 · Nautilus Trader · FastAPI · SQLAlchemy · PostgreSQL/TimescaleD
 ## Foundational Rules
 
 - **TDD is non-negotiable** — every feature starts with a failing test (Red-Green-Refactor)
-- **UV only** for dependencies — `uv add`, `uv remove`, `uv sync`. Never edit pyproject.toml directly
+- **UV only** for dependencies — `uv add`, `uv remove`, `uv sync` (hooks block direct edits to pyproject.toml)
 - **IBKR env vars** — all connection settings via environment variables through `IBKRSettings`. Never hardcode
 - **Size limits** — files <500 lines, functions <50 lines, classes <100 lines, line length 100 chars
 - **context7 MCP** — always use for library documentation lookups
@@ -41,7 +41,17 @@ uv run uvicorn src.api.web:app --reload --host 127.0.0.1 --port 8000  # Web UI
 3. **Strategies submodule** — `src/core/strategies/custom/` is a git submodule. Update: `git submodule update --remote`
 4. **BacktestEngine is single-use** — cannot be reused after a run; create a new instance each time
 5. **Alembic migrations** — run `alembic upgrade head` before first use. 4 migrations in `alembic/versions/`
-6. **Format before commit** — always run `make format && make lint` before committing
+6. **Format before commit** — handled automatically by hooks (pre-commit quality gate + auto-format on every edit)
+
+## Automated Hooks
+
+Project hooks in `.claude/settings.json` enforce rules automatically:
+- **Auto-format**: Python files formatted with ruff after every edit
+- **Protected files**: alembic/versions/, .env*, custom strategies, pyproject.toml blocked from editing
+- **Bash guard**: destructive commands and direct pip install blocked
+- **Pre-commit gate**: format + lint run automatically before any git commit
+
+Hook scripts live in `.claude/hooks/`. See hook scripts for details.
 
 ## Commit Format
 
