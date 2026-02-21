@@ -8,44 +8,21 @@ description: >
 
 # Data Pipeline Guide
 
+> See also: `agent_docs/nautilus.md` (IBKR client, Parquet catalog)
+
 ## Data Flow
 
 ```
-CSV files / IBKR API
-        |
-        v
-nautilus_converter (converts to Nautilus Bar objects)
-        |
-        v
-ParquetDataCatalog (persists as Parquet files)
-        |
-        v
-BacktestEngine.add_data(bars)
+CSV files / IBKR API → nautilus_converter → ParquetDataCatalog → BacktestEngine.add_data(bars)
 ```
-
-## Parquet Catalog Structure
-
-```
-{NAUTILUS_PATH}/
-└── data/
-    └── bar/
-        └── {instrument_id}-{bar_type_spec}-EXTERNAL/
-            └── {start_timestamp}_{end_timestamp}.parquet
-```
-
-Example:
-```
-data/catalog/data/bar/AAPL.NASDAQ-1-MINUTE-LAST-EXTERNAL/
-  2024-01-02T09-30-00-000000000Z_2024-01-02T15-59-00-000000000Z.parquet
-```
-
-The `NAUTILUS_PATH` env var (or `./data/catalog` default) is the catalog root.
 
 ## Bar Type Format
 
 ```
 {SYMBOL}.{VENUE}-{STEP}-{STEP_TYPE}-{PRICE_TYPE}-EXTERNAL
 ```
+
+Example: `QQQ.NASDAQ-1-DAY-LAST-EXTERNAL`
 
 | Component | Examples | Notes |
 |-----------|----------|-------|
@@ -55,18 +32,12 @@ The `NAUTILUS_PATH` env var (or `./data/catalog` default) is the catalog root.
 | PRICE_TYPE | `LAST`, `MID`, `BID`, `ASK` | Price aggregation type |
 | Source | `EXTERNAL` (real data), `INTERNAL` (mock) | Data origin |
 
-Full example: `QQQ.NASDAQ-1-DAY-LAST-EXTERNAL`
-
 ## DataCatalogService API
 
 ```python
 from src.services.data_catalog import DataCatalogService
 service = DataCatalogService()  # Uses NAUTILUS_PATH env or ./data/catalog
-```
 
-### Core Methods
-
-```python
 # Load from catalog, fetch from IBKR if missing (primary method)
 bars = await service.fetch_or_load(
     instrument_id="AAPL.NASDAQ",
@@ -76,92 +47,32 @@ bars = await service.fetch_or_load(
 )
 
 # Query bars directly from catalog (no IBKR fallback)
-bars = service.query_bars(
-    instrument_id="AAPL.NASDAQ",
-    start=datetime(2024, 1, 1, tzinfo=timezone.utc),
-    end=datetime(2024, 12, 31, tzinfo=timezone.utc),
-    bar_type_spec="1-MINUTE-LAST",
-)
+bars = service.query_bars(instrument_id="AAPL.NASDAQ", ...)
 
-# Write bars to catalog
+# Other methods
 service.write_bars(bars, correlation_id="backtest-123")
-
-# Check data availability (from in-memory cache)
 avail = service.get_availability("AAPL.NASDAQ", "1-MINUTE-LAST")
-if avail:
-    print(f"Data: {avail.start_date} to {avail.end_date}")
-
-# Detect gaps in data
-gaps = service.detect_gaps(
-    "AAPL.NASDAQ", "1-MINUTE-LAST",
-    start_date=datetime(2024, 1, 1),
-    end_date=datetime(2024, 12, 31),
-)
-
-# Scan all available data
-catalog_data = service.scan_catalog()  # Dict[instrument_id, List[CatalogAvailability]]
-
-# Load instrument definition from catalog
+gaps = service.detect_gaps("AAPL.NASDAQ", "1-MINUTE-LAST", start_date=..., end_date=...)
+catalog_data = service.scan_catalog()
 instrument = service.load_instrument("AAPL.NASDAQ")
 ```
 
 ### Critical Gotcha: `catalog.bars()` Parameter
 
 ```python
-# WRONG — Using BarType objects causes Nautilus to return ALL bar types
-bars = catalog.bars(bar_types=[BarType.from_str("AAPL.NASDAQ-1-MINUTE-LAST-EXTERNAL")])
+# WRONG — Using BarType objects returns ALL bar types
+bars = catalog.bars(bar_types=[BarType.from_str("...")])
 
 # CORRECT — Must be list of STRINGS
 bars = catalog.bars(bar_types=["AAPL.NASDAQ-1-MINUTE-LAST-EXTERNAL"])
 ```
 
-The parameter is `bar_types` (plural) and expects `list[str]`, NOT `list[BarType]`.
+## IBKR Client
 
-## IBKR Client Configuration
+All connection settings via environment variables through `IBKRSettings`.
+See `agent_docs/nautilus.md` for full IBKR configuration details.
 
-All connection settings via environment variables through `IBKRSettings`:
-
-| Variable | Default | Typical |
-|----------|---------|---------|
-| `IBKR_HOST` | `127.0.0.1` | `127.0.0.1` |
-| `IBKR_PORT` | `7497` | `4002` (Gateway paper) |
-| `IBKR_CLIENT_ID` | `10` | `10` |
-
-### Lazy Initialization
-
-The IBKR client is created lazily on first access — this avoids unnecessary connection attempts during backtests when data is already in the catalog:
-
-```python
-# Client created only when .ibkr_client property is first accessed
-service = DataCatalogService()  # No IBKR connection yet
-bars = service.query_bars(...)   # Still no connection (catalog only)
-bars = await service.fetch_or_load(...)  # NOW creates IBKR client if data missing
-```
-
-### Rate Limiting
-
-IBKR enforces ~45 requests/second. The client uses exponential backoff retry:
-- Max retries: 3 (configurable)
-- Backoff: 2^retry_count seconds (2s, 4s, 8s)
-
-## Data Conversion
-
-### CSV to Nautilus
-```python
-from src.services.csv_loader import CSVLoader
-from src.services.nautilus_converter import NautilusConverter
-
-# Load and convert
-loader = CSVLoader()
-converter = NautilusConverter()
-```
-
-### Database to Nautilus
-```python
-from src.services.data_service import DataService
-service = DataService()
-bars = service.convert_to_nautilus_bars(market_data, instrument_id, instrument)
-```
+The client is created lazily on first access — no connection until data is actually needed from IBKR.
 
 ## Key Source Files
 

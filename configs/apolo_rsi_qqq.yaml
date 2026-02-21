@@ -9,7 +9,7 @@ config:
 
   # Position sizing parameters
   portfolio_value: 100000  # Should match backtest.initial_capital
-  position_size_pct: 50.0  # 10% of portfolio per trade
+  position_size_pct: 50.0  # 50% of portfolio per trade
 
   # Strategy parameters
   order_id_tag: "APOLO-QQQ"

@@ -4,7 +4,7 @@ Production-grade algorithmic trading backtester using Nautilus Trader + IBKR dat
 Follows Python Backend Development principles in `.specify/memory/constitution.md`.
 
 ## Stack
-Python 3.12 · Nautilus Trader · FastAPI · SQLAlchemy · PostgreSQL/TimescaleDB · HTMX/Tailwind
+Python 3.11+ · Nautilus Trader · FastAPI · SQLAlchemy · PostgreSQL/TimescaleDB · HTMX/Tailwind
 
 ## Foundational Rules
 

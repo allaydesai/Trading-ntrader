@@ -9,7 +9,7 @@ REL_PATH="${FILE_PATH#"$CLAUDE_PROJECT_DIR"/}"
 BASENAME=$(basename "$FILE_PATH")
 
 # Protected directories
-for dir in "alembic/versions/" "src/core/strategies/custom/" ".claude/hooks/"; do
+for dir in "alembic/versions/" "src/core/strategies/custom/"; do
   if [[ "$REL_PATH" == "$dir"* ]]; then
     echo "BLOCKED: '$REL_PATH' is in protected directory '$dir'." >&2
     exit 2

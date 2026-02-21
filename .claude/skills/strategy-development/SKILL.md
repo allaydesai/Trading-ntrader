@@ -8,6 +8,8 @@ description: >
 
 # Strategy Development Guide
 
+> See also: `agent_docs/nautilus.md` (engine lifecycle, LogGuard, strategy config pattern)
+
 ## The 4-File Registration Pattern
 
 Every strategy requires exactly 4 components registered in a specific order:

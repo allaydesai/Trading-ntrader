@@ -43,6 +43,12 @@ if echo "$COMMAND" | grep -qE '(^|\s|&&)git\s+commit'; then
     echo "$CHANGED" >&2
     echo "Run 'git add' on changed files, then retry commit." >&2; exit 2
   fi
+  MYPY_OUTPUT=$(uv run mypy src/core src/strategies 2>&1)
+  MYPY_EXIT=$?
+  if [[ $MYPY_EXIT -ne 0 ]]; then
+    echo "PRE-COMMIT: Type check errors. Fix before committing:" >&2
+    echo "$MYPY_OUTPUT" >&2; exit 2
+  fi
 fi
 
 exit 0

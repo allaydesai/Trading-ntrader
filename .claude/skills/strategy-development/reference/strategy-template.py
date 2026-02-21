@@ -14,9 +14,9 @@ from nautilus_trader.model.objects import Quantity
 from nautilus_trader.trading.strategy import Strategy, StrategyConfig
 
 from src.core.strategy_registry import StrategyRegistry, register_strategy
-from src.models.strategy import (
-    pass  # TODO: Import your parameter model from src/models/strategy.py
-)
+
+# TODO: Import your parameter model from src/models/strategy.py
+# from src.models.strategy import MyParameters
 
 
 # --- Config Class (File 2) ---

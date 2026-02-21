@@ -1,4 +1,4 @@
-# Nautilus Trader Notes
+# Nautilus Trader Reference
 
 ## LogGuard Pattern
 
@@ -20,6 +20,9 @@ def set_nautilus_log_guard(log_guard: Any) -> None:
 Always call `set_nautilus_log_guard()` when creating a Nautilus component that initializes
 logging. Never let the guard go out of scope — it must live for the process lifetime.
 
+**Symptoms of double-init**: Process crashes with "logger already initialized" panic — no
+Python traceback, just a segfault or abort.
+
 ## C Extension Isolation
 
 Nautilus uses C/Rust extensions that don't survive `fork()` cleanly. This causes:
@@ -27,12 +30,84 @@ Nautilus uses C/Rust extensions that don't survive `fork()` cleanly. This causes
 - Corrupted global state across tests
 
 **Fix**: Integration tests run with `--forked` (pytest-forked) so each test gets a fresh
-process. See `make test-integration`.
+process. See `make test-integration`. Always double `gc.collect()` after engine disposal.
 
 ## BacktestEngine Lifecycle
 
 `BacktestEngine` is **single-use** — it cannot be reset or reused after a run completes.
 Create a new engine instance for each backtest. The `backtest_runner.py` handles this.
+
+### Engine Setup Sequence (Strict Order)
+
+The engine must be configured in this exact order. Violations cause cryptic errors:
+
+```python
+config = BacktestEngineConfig(trader_id=TraderId("BACKTESTER-001"))
+engine = BacktestEngine(config=config)
+
+# 1. Add venue FIRST (before instrument)
+engine.add_venue(venue=venue, oms_type=OmsType.HEDGING,
+    account_type=AccountType.MARGIN, starting_balances=[Money(1_000_000, USD)],
+    fill_model=fill_model, fee_model=fee_model)
+
+# 2. Add instrument (venue must exist)
+engine.add_instrument(instrument)
+
+# 3. Add data
+engine.add_data(bars)
+
+# 4. Add strategy (last, after all data)
+engine.add_strategy(strategy=strategy)
+
+# 5. Run
+engine.run()
+```
+
+### Result Extraction
+
+```python
+# Portfolio metrics
+analyzer = engine.portfolio.analyzer
+stats_returns = analyzer.get_performance_stats_returns()  # Sharpe, Sortino, etc.
+stats_pnls = analyzer.get_performance_stats_pnls(currency=USD)  # PnL metrics
+
+# Key metric keys
+sharpe = stats_returns.get("Sharpe Ratio (252 days)")
+sortino = stats_returns.get("Sortino Ratio (252 days)")
+profit_factor = stats_returns.get("Profit Factor")
+total_pnl = stats_pnls.get("PnL (total)")
+
+# Account balance
+account = engine.cache.account_for_venue(venue)
+final_balance = float(account.balance_total(USD).as_double())
+
+# Trade history
+closed_positions = engine.cache.positions_closed()
+positions_report = engine.trader.generate_positions_report()
+```
+
+### Venue Configuration
+
+```python
+venue = Venue("SIM")  # mock data
+venue = bars[0].bar_type.instrument_id.venue  # real data (e.g., "NASDAQ")
+```
+
+The venue must match between instrument, bars, and engine setup.
+
+### Fill and Fee Models
+
+```python
+from nautilus_trader.backtest.models import FillModel
+from src.core.fee_models import IBKRCommissionModel
+
+fill_model = FillModel(prob_fill_on_limit=0.95, prob_fill_on_stop=0.95, prob_slippage=0.01)
+fee_model = IBKRCommissionModel(
+    commission_per_share=settings.commission_per_share,
+    min_per_order=settings.commission_min_per_order,
+    max_rate=settings.commission_max_rate,
+)
+```
 
 ## Parquet Data Catalog
 

@@ -151,10 +151,11 @@ Rebuild after template changes that use new Tailwind classes.
 uv run uvicorn src.api.web:app --reload --host 127.0.0.1 --port 8000
 ```
 
-## Deeper Reference
+## Key Source Files
 
-See `agent_docs/architecture.md` Web Stack section for:
-- Full template hierarchy
-- Static asset organization
-- Chart library integration (Lightweight Charts)
-- Database session management
+- `src/api/web.py` — App entry point, router registration
+- `src/api/dependencies.py` — DI providers (get_session, get_service)
+- `src/api/rest/` — JSON API endpoints
+- `src/api/ui/` — HTML page routes
+
+> See also: `agent_docs/architecture.md` Web Stack section for template hierarchy, static assets, and chart library integration.
