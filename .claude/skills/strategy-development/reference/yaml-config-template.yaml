@@ -1,0 +1,35 @@
+# configs/<strategy_name>.yaml
+#
+# Strategy configuration for <STRATEGY_NAME>
+# Used by: `uv run python -m src.cli.main backtest --config configs/<strategy_name>.yaml`
+
+# Import paths — module:ClassName format
+strategy_path: "src.core.strategies.<module>:<StrategyClass>"
+config_path: "src.core.strategies.<module>:<ConfigClass>"
+
+config:
+  # Required: Data identification (must match catalog structure)
+  instrument_id: "AAPL.NASDAQ"
+  # Bar type format: {SYMBOL}.{VENUE}-{STEP}-{STEP_TYPE}-{PRICE_TYPE}-EXTERNAL
+  # Common types: 1-MINUTE-LAST, 1-DAY-LAST, 15-MINUTE-LAST
+  bar_type: "AAPL.NASDAQ-1-DAY-LAST-EXTERNAL"
+
+  # Position sizing
+  portfolio_value: 100000     # Must match backtest.initial_capital
+  position_size_pct: 10.0     # % of portfolio per trade
+
+  # Strategy-specific parameters
+  # TODO: Add your parameters here
+  # order_id_tag: "MY-STRAT"  # Unique tag for order identification
+
+# Optional backtest settings (used by CLI)
+backtest:
+  start_date: "2020-01-01"
+  end_date: "2025-12-31"
+  initial_capital: 100000
+
+# Notes:
+# - For catalog data, use -EXTERNAL suffix in bar_type
+# - For mock data (testing), use -INTERNAL suffix
+# - Nautilus RSI returns 0-1 range, NOT 0-100
+#   Traditional RSI 10 = 0.10 in Nautilus config

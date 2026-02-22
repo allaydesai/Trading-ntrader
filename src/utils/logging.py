@@ -4,17 +4,27 @@ Structured logging configuration for NTrader.
 This module configures structlog to output logs to both console and file.
 Console output is formatted for readability, while file output is JSON formatted
 for machine parsing.
+
+IMPORTANT: Also initializes Nautilus Trader logging subsystem to prevent
+double-initialization errors when using multiple Nautilus components
+(e.g., HistoricInteractiveBrokersClient + BacktestEngine).
 """
 
 import logging
 import logging.handlers
 import sys
 from pathlib import Path
+from typing import Any
 
 import structlog
 from structlog.types import Processor
 
 from src.config import get_settings
+
+# Module-level LogGuard to keep Nautilus logging alive for the process lifetime.
+# This prevents the "logger already initialized" panic when BacktestEngine is
+# created after HistoricInteractiveBrokersClient has already started.
+_nautilus_log_guard: Any = None
 
 
 def configure_logging() -> None:
@@ -102,3 +112,24 @@ def configure_logging() -> None:
     # Log startup message
     logger = structlog.get_logger()
     logger.info("logging_configured", log_level=settings.log_level, log_file=str(log_file))
+
+
+def set_nautilus_log_guard(log_guard: Any) -> None:
+    """
+    Store a LogGuard from a Nautilus component.
+
+    This allows preserving the LogGuard from the first Nautilus component
+    (e.g., HistoricInteractiveBrokersClient) so that subsequent components
+    (e.g., BacktestEngine) can reuse the logging subsystem.
+
+    Args:
+        log_guard: LogGuard object from a Nautilus component
+    """
+    global _nautilus_log_guard
+    if _nautilus_log_guard is None:
+        _nautilus_log_guard = log_guard
+
+
+def get_nautilus_log_guard() -> Any:
+    """Get the stored Nautilus LogGuard, if any."""
+    return _nautilus_log_guard
