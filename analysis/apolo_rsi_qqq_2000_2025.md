@@ -270,7 +270,165 @@ stop_loss_pct: 0.0          # DISABLED - neutral/harmful on daily bars
 
 ### Next Steps
 
-1. **Set YAML to equity-only config** and commit as the new baseline
+1. ~~**Set YAML to equity-only config** and commit as the new baseline~~ **DONE** (commit `3a51dbd`)
 2. **Test equity + higher sell threshold** (0.65-0.70) — let winners run longer
 3. **Test time-based stop** (5-10 day max hold) instead of price-based
 4. **Walk-forward validation** — split into in-sample/out-of-sample to check for overfitting
+
+---
+
+## Refinement Plan — Research-Informed Next Steps
+
+**Date:** 2026-02-23
+**Current baseline:** Equity sizing enabled, SMA/stop-loss disabled (5.18% CAGR, 0.45 Sharpe)
+
+### Literature Review Summary
+
+Research into Connors' RSI(2) strategy and recent practitioner studies (Quantitativo, StockSoft, Alvarez Quant Trading) reveals:
+
+1. **The RSI(2) edge is decaying.** Multiple independent studies confirm underperformance vs benchmark in 2021-2024 (7.1% vs 13.4% Nasdaq-100). More algos front-run the mean-reversion bounce, compressing the snap-back.
+
+2. **Sell threshold of 0.50 is too conservative.** Connors' original work recommends exiting at RSI(2) > 0.65, or when price closes above yesterday's high. Exiting at 0.50 (median) leaves money on the table.
+
+3. **Cumulative RSI outperforms standard RSI on risk-adjusted basis.** Head-to-head (Quantitativo, 1998-2024): nearly identical annual returns but **37% max drawdown vs 57%**, Sharpe 1.18 vs 1.05. Filters ~half the trades, nearly doubles expected return per trade.
+
+4. **SMA filter result aligns with literature.** The strongest oversold bounces happen *in bear markets* (below SMA 200), confirming our finding that the filter destroys edge for short-horizon mean reversion.
+
+5. **Buy threshold may need loosening.** Post-2015 data shows optimal entry threshold has shifted upward — RSI < 15-20 entries now outperform RSI < 5-10 entries as extreme readings are rarer and snap-backs weaker.
+
+6. **"Close above yesterday's high" exit** produces lower drawdowns than RSI-based exits (Quantitativo). Captures the reversion quickly (1-2 days) with less tail risk than waiting for RSI recovery.
+
+7. **Higher volatility = better mean reversion returns.** Larger price dislocations produce larger snap-backs, which the strategy already exploits implicitly.
+
+### Prioritized Test Plan
+
+#### Phase 1 — Config-only changes (no code modifications)
+
+| # | Change | Current | Test Value | Rationale | Risk |
+|---|--------|---------|------------|-----------|------|
+| 1 | Sell threshold | 0.50 | **0.65** | Let winners run; Connors' recommended exit. Should increase avg winner and profit factor | Low — trade stays in slightly longer but RSI(2) moves fast |
+| 2 | Buy threshold | 0.10 | **0.15** | Adapt to modern regime; post-2015 data shows higher thresholds capture more opportunities with similar edge | Low — more trades with slightly lower per-trade edge |
+
+**Test method:** Isolated backtests (one change at a time), same methodology as Refinement Run #2.
+
+#### Phase 2 — Validation
+
+| # | Change | Type | Rationale |
+|---|--------|------|-----------|
+| 3 | Walk-forward split | Analysis | Split 2000-2015 (in-sample) / 2016-2025 (out-of-sample). If CAGR and Sharpe degrade significantly out-of-sample, the edge may be fading. Critical before further parameter changes |
+
+#### Phase 3 — Code changes (strategy modifications)
+
+| # | Change | Implementation | Expected Impact | Risk |
+|---|--------|---------------|-----------------|------|
+| 4 | **Cumulative RSI** | Maintain rolling window of RSI(2) values (size 2), sum for signal. Buy when cumRSI < 0.35, sell when cumRSI > 0.65 | Better Sharpe, ~35% lower drawdown, fewer but higher-quality trades | Fewer trades = lower sample rate |
+| 5 | **"Close > yesterday's high" exit** | Track `previous_bar.high` in `on_bar()`, add config flag `exit_mode: "rsi" \| "prev_high"` | Faster exits, lower drawdown, less tail risk | Lower per-trade profit |
+| 6 | **Time-based exit (10-day max hold)** | Track bars since entry, force exit after N days. Add `max_hold_days` config parameter | Safety valve for trapped positions; unlike price stop-loss, doesn't fight mean-reversion thesis | May exit positions that would have recovered on day 6+ |
+
+#### Deprioritized (future consideration)
+
+- **Multi-threshold diversification** — Spread entries across RSI 5/10/15/20/25/30 with Sharpe-based monthly rebalancing. Promising (Quantitativo: 25.7% annual, Sharpe 1.14) but requires significant architectural changes.
+- **VIX-based filtering** — Adds complexity and second data feed. Volatility relationship already works in the strategy's favor implicitly.
+- **Bollinger/ADX combination signals** — Insufficient empirical evidence that combining indicators improves over tuned RSI(2) alone.
+- **Connors RSI (CRSI) composite** — Combines RSI(2) + streak RSI + percent rank. Profit factor 2.08 over 288 trades (75% win rate). Worth exploring after Phase 3.
+
+### Key Sources
+
+- Connors & Alvarez, *Short Term Trading Strategies That Work* (2009) — original RSI(2) system
+- Quantitativo, "Trading the Mean Reversion Curve" (2024) — edge decay evidence, cumulative RSI comparison, multi-threshold approach
+- StockSoft Research, "RSI 2 Trading Strategy on US Stocks" — performance degradation 1995-2016
+- Alvarez Quant Trading, "ABCs of Mean Reversion" — regime filtering, position sizing
+- MQL5, "Day Trading Connors RSI2 Strategies" — exit strategy comparison
+
+---
+
+## Phase 1 Results — Threshold Optimization
+
+**Date:** 2026-02-24
+**Baseline:** Equity sizing enabled, SMA/stop-loss disabled (buy 0.10, sell 0.50)
+
+### Run IDs
+
+| Test | Run ID |
+|------|--------|
+| Sell 0.65 | `690af833-fc68-4021-ae02-73049c7fb027` |
+| Buy 0.15 | `25e82f87-f5e4-4d11-af1d-bbcf96ffcf8e` |
+| Combined | `280e7726-a7e1-40a3-9ce1-961d20320b38` |
+
+### Full Comparison Table
+
+| Metric | Baseline | Sell 0.65 | Buy 0.15 | Combined |
+|--------|----------|-----------|----------|----------|
+| **Total Return** | 271.34% | **306.17%** | 288.23% | **317.50%** |
+| **CAGR** | 5.18% | **~5.54%** | ~5.35% | **~5.65%** |
+| **Final Balance** | $371,342 | $406,169 | $388,225 | **$417,505** |
+| **Sharpe Ratio** | 0.45 | **0.476** | 0.453 | 0.471 |
+| **Sortino Ratio** | 0.61 | **0.647** | 0.609 | 0.634 |
+| **Profit Factor** | 1.40 | **1.427** | 1.390 | 1.410 |
+| Volatility | 7.97% | 8.06% | 8.28% | 8.35% |
+| Total Trades | 1,258 | 1,237 | 1,337 | 1,314 |
+| Win Rate | 69.7% | 70.0% | 69.7% | 69.9% |
+| Expectancy | $215.52 | **$247.31** | $215.41 | $241.45 |
+| Avg Winner | $1,077 | **$1,172** | $1,081 | $1,161 |
+| Avg Loser | -$1,763 | -$1,905 | -$1,779 | -$1,894 |
+| Max Winner | $10,526 | $11,613 | $11,011 | $11,963 |
+| Max Loser | -$15,680 | -$17,330 | -$16,441 | -$17,838 |
+| Commissions | ~$12K | $13,585 | $14,294 | $14,355 |
+
+### Verdict by Change
+
+#### 1. Sell Threshold 0.65 — CLEAR WINNER (best risk-adjusted improvement)
+
+- **+35 pp total return** (271% → 306%) with FEWER trades (1,237 vs 1,258)
+- Sharpe improved **0.45 → 0.476** (+5.8%) — genuine risk-adjusted improvement
+- Sortino improved **0.61 → 0.647** (+6.1%)
+- Profit Factor improved **1.40 → 1.427** (+1.9%)
+- Expectancy improved **$216 → $247** (+14.8%) — each trade is more valuable
+- Avg winner increased **$1,077 → $1,172** (+8.8%) — letting winners run longer works exactly as predicted
+- Avg loser worsened modestly **$1,763 → $1,905** (+8.1%) — positions held slightly longer through drawdowns too
+- Consistent with Connors' original research: RSI > 0.65 is his recommended exit threshold
+
+**Why it works:** At sell threshold 0.50 (median RSI), the strategy was exiting as soon as the bounce started. Raising to 0.65 captures more of the reversion move — the RSI typically overshoots past 0.50 on a bounce, and exiting at 0.65 captures that overshoot as profit.
+
+#### 2. Buy Threshold 0.15 — MARGINAL (volume improvement, not quality)
+
+- **+17 pp total return** (271% → 288%) through more trades (1,337 vs 1,258, +6.3%)
+- Sharpe essentially flat: **0.45 → 0.453** — return improvement is from volume, not edge quality
+- Profit Factor actually **worsened slightly**: 1.40 → 1.39
+- Expectancy unchanged at **$215** — new trades at RSI 0.10-0.15 have the same average edge
+- The additional ~79 trades capture entries where RSI dips to 0.10-0.15 but not below 0.10 — these are less extreme oversold readings with statistically identical edge quality
+
+**Why it's marginal:** The trades between RSI 0.10 and 0.15 are neither better nor worse than the existing set. They add return through sheer volume but don't improve the strategy's risk profile.
+
+#### 3. Combined (Sell 0.65 + Buy 0.15) — Best absolute return
+
+- **+46 pp total return** (271% → 318%) — highest of all tests
+- Sharpe **0.471** — slightly below sell-only (0.476) but above baseline (0.45)
+- The sell threshold provides the quality improvement; the buy threshold provides additional volume
+- On risk-adjusted basis, the combined is slightly diluted vs sell-only because the looser buy adds marginal trades
+
+### Conclusions
+
+1. **Sell threshold 0.65 is the highest-leverage change.** It improves every risk-adjusted metric while reducing trade count. This aligns with Connors' original research.
+2. **Buy threshold 0.15 adds volume without improving quality.** It's a "more of the same" change — not harmful, but not transformative.
+3. **Combined gives the best absolute return** ($417K vs $406K vs $388K vs $371K) but slightly dilutes risk-adjusted metrics compared to sell-only.
+
+### Recommended Config Update
+
+**Sell threshold 0.65** should be adopted. The buy threshold change is optional — adopt if maximizing absolute return is the priority; skip if optimizing for Sharpe.
+
+```yaml
+buy_threshold: 0.10           # Keep (or optionally raise to 0.15 for +17pp)
+sell_threshold: 0.65          # CHANGE from 0.50 — +35pp return, +5.8% Sharpe
+```
+
+### Cumulative Improvement from Baseline
+
+| Stage | Total Return | CAGR | Sharpe | Delta |
+|-------|-------------|------|--------|-------|
+| Original baseline (fixed sizing) | 137% | 3.38% | 0.45 | — |
+| + Equity sizing | 271% | 5.18% | 0.45 | +134 pp |
+| + Sell threshold 0.65 | 306% | ~5.54% | 0.476 | +35 pp |
+| + Buy threshold 0.15 (optional) | 318% | ~5.65% | 0.471 | +12 pp |
+
+Total improvement from original: **+180 pp return, +2.27 pp CAGR, +0.026 Sharpe** (or +0.021 with both thresholds).
