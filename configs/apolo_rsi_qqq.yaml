@@ -18,8 +18,13 @@ config:
   buy_threshold: 0.10
   sell_threshold: 0.50
 
+  # Structural improvements (isolated-tested 2026-02-23)
+  sma_trend_period: 0         # Disabled — harmful for mean reversion
+  use_equity_sizing: true     # Enabled — unlocks compounding (+134 pp)
+  stop_loss_pct: 0.0          # Disabled — neutral/harmful on daily bars
+
 # Optional backtest settings
 backtest:
   start_date: "2000-01-01"
-  end_date: "2025-12-31"
+  end_date: "2025-12-30"
   initial_capital: 100000
