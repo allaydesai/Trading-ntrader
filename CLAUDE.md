@@ -3,13 +3,16 @@
 Production-grade algorithmic trading backtester using Nautilus Trader + IBKR data.
 Follows Python Backend Development principles in `.specify/memory/constitution.md`.
 
+## Mental Model
+Data flows: IBKR → Parquet catalog → BacktestEngine → Results DB → Web UI/Reports
+
 ## Stack
 Python 3.11+ · Nautilus Trader · FastAPI · SQLAlchemy · PostgreSQL/TimescaleDB · HTMX/Tailwind
 
 ## Foundational Rules
 
 - **TDD is non-negotiable** — every feature starts with a failing test (Red-Green-Refactor)
-- **UV only** for dependencies — `uv add`, `uv remove`, `uv sync` (hooks block direct edits to pyproject.toml)
+- **UV only** for dependencies — `uv add`, `uv remove`, `uv sync`
 - **IBKR env vars** — all connection settings via environment variables through `IBKRSettings`. Never hardcode
 - **Size limits** — files <500 lines, functions <50 lines, classes <100 lines, line length 100 chars
 - **context7 MCP** — always use for library documentation lookups
@@ -41,25 +44,24 @@ uv run uvicorn src.api.web:app --reload --host 127.0.0.1 --port 8000  # Web UI
 3. **Strategies submodule** — `src/core/strategies/custom/` is a git submodule. Update: `git submodule update --remote`
 4. **BacktestEngine is single-use** — cannot be reused after a run; create a new instance each time
 5. **Alembic migrations** — run `alembic upgrade head` before first use. 4 migrations in `alembic/versions/`
-6. **Format before commit** — handled automatically by hooks (pre-commit quality gate + auto-format on every edit)
 
-## Automated Hooks
+## Anti-Patterns (things that break)
 
-Project hooks in `.claude/settings.json` enforce rules automatically:
-- **Auto-format**: Python files formatted with ruff after every edit
-- **Protected files**: alembic/versions/, .env*, custom strategies, pyproject.toml blocked from editing
-- **Bash guard**: destructive commands and direct pip install blocked
-- **Pre-commit gate**: format + lint run automatically before any git commit
+- Never instantiate `LiveLogger` or `Logger` directly — use LogGuard via `set_nautilus_log_guard()`
+- Never reuse a `BacktestEngine` instance across runs — create fresh each time
+- Never import from `src.core.strategies.custom.*` in core code — custom/ is a git submodule
+- Never run integration tests without `--forked` — C extensions corrupt shared state
+- Never hardcode IBKR connection details — use `IBKRSettings` env vars
 
-Hook scripts live in `.claude/hooks/`. See hook scripts for details.
+## Decision Heuristics
 
-## Commit Format
+- **Test tier**: Unit for pure logic · Component for Nautilus with test doubles · Integration for real engine runs (`--forked`) · E2E for full workflows
+- **New file vs edit**: Prefer editing existing files. Only create new for genuinely new concepts (new strategy, new API route)
+- **Stuck on Nautilus error?**: Read `agent_docs/nautilus.md` before trying workarounds
 
-```
-<type>(<scope>): <subject>
-```
-Types: `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`
-Never include AI/claude references in commit messages.
+## Hooks
+
+Hooks in `.claude/hooks/` auto-enforce formatting, file protection, and pre-commit checks.
 
 ## Project Layout
 
@@ -78,7 +80,23 @@ tests/                 # unit/ component/ integration/ e2e/ api/ ui/
 specs/                 # Feature specs 001-010
 ```
 
-See README.md for full setup and usage instructions.
+## Example: Adding a Strategy
+
+```
+Good — single file with register_strategy, test first:
+  tests/unit/strategies/test_my_strat.py   # Write failing test (TDD)
+  src/core/strategies/my_strat.py          # Strategy class + config + register_strategy()
+
+Bad — config in a separate file, no test, missing register_strategy call
+```
+
+## Commit Format
+
+```
+<type>(<scope>): <subject>
+```
+Types: `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`
+Never include AI/claude references in commit messages.
 
 ## Progressive Disclosure
 
@@ -88,3 +106,5 @@ Detailed docs for specific areas — read on demand:
 - `agent_docs/nautilus.md` — LogGuard, C extension isolation, engine lifecycle, IBKR client, Parquet catalog
 - `agent_docs/testing.md` — test pyramid, markers, fixtures, TDD workflow, coverage
 - `agent_docs/conventions.md` — git workflow, UV commands, pre-commit checks, error handling, style
+
+See README.md for full setup and usage instructions.
