@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Literal, Optional
 
 from ibapi.common import MarketDataTypeEnum  # type: ignore
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -77,6 +77,40 @@ class IBKRSettings(BaseSettings):
     }
 
 
+class KrakenSettings(BaseSettings):
+    """Kraken exchange configuration settings."""
+
+    kraken_api_key: str = Field(default="", description="Kraken API key")
+    kraken_api_secret: str = Field(default="", description="Kraken API secret (base64)")
+    kraken_rate_limit: int = Field(
+        default=10, ge=1, le=20, description="Max requests per second (1-20)"
+    )
+    kraken_default_maker_fee: Decimal = Field(
+        default=Decimal("0.0016"), ge=0, le=1, description="Maker fee (0-1)"
+    )
+    kraken_default_taker_fee: Decimal = Field(
+        default=Decimal("0.0026"), ge=0, le=1, description="Taker fee (0-1)"
+    )
+
+    @model_validator(mode="after")
+    def validate_key_secret_pair(self) -> "KrakenSettings":
+        """Both key and secret must be set together or both empty."""
+        has_key = bool(self.kraken_api_key)
+        has_secret = bool(self.kraken_api_secret)
+        if has_key != has_secret:
+            raise ValueError(
+                "kraken_api_key and kraken_api_secret must both be set or both be empty"
+            )
+        return self
+
+    model_config = {
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "case_sensitive": False,
+        "extra": "ignore",
+    }
+
+
 class Settings(BaseSettings):
     """Application settings with validation."""
 
@@ -138,6 +172,11 @@ class Settings(BaseSettings):
     # IBKR settings
     ibkr: IBKRSettings = Field(
         default_factory=IBKRSettings, description="Interactive Brokers settings"
+    )
+
+    # Kraken settings
+    kraken: KrakenSettings = Field(
+        default_factory=KrakenSettings, description="Kraken exchange settings"
     )
 
     @property

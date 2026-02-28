@@ -107,3 +107,49 @@ class RateLimitExceededError(CatalogError):
         if request_count:
             message += f" (Requests: {request_count})"
         super().__init__(message)
+
+
+class KrakenConnectionError(CatalogError):
+    """
+    Raised when Kraken connection is unavailable during fetch operation.
+
+    This exception indicates that the Kraken API is not accessible
+    when attempting to fetch market data.
+    """
+
+    def __init__(self, message: str = "Kraken connection unavailable") -> None:
+        """
+        Initialize KrakenConnectionError.
+
+        Args:
+            message: Error message describing the connection issue
+        """
+        super().__init__(message)
+
+
+class KrakenRateLimitError(CatalogError):
+    """
+    Raised when Kraken rate limit is exceeded during data fetch.
+
+    Kraken enforces rate limits on API requests. This exception
+    is raised when the limit is exceeded and retry is required.
+
+    Attributes:
+        retry_after: Seconds to wait before retrying
+        request_count: Number of requests made
+    """
+
+    def __init__(self, retry_after: int = 2, request_count: int | None = None) -> None:
+        """
+        Initialize KrakenRateLimitError.
+
+        Args:
+            retry_after: Seconds to wait before retrying
+            request_count: Number of requests made (optional)
+        """
+        self.retry_after = retry_after
+        self.request_count = request_count
+        message = f"Kraken rate limit exceeded. Retry after {retry_after} seconds."
+        if request_count:
+            message += f" (Requests: {request_count})"
+        super().__init__(message)
