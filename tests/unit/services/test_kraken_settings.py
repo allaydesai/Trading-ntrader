@@ -128,9 +128,7 @@ class TestKrakenSettingsKeySecretPairValidation:
     def test_both_key_and_secret_set_is_valid(self):
         """Both key and secret set is valid (authenticated mode)."""
         # Arrange & Act
-        settings = KrakenSettings(
-            kraken_api_key="my-key", kraken_api_secret="my-secret"
-        )
+        settings = KrakenSettings(kraken_api_key="my-key", kraken_api_secret="my-secret")
 
         # Assert
         assert settings.kraken_api_key == "my-key"
