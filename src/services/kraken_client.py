@@ -228,8 +228,33 @@ class KrakenHistoricalClient:
         self.rate_limiter = KrakenRateLimiter(requests_per_second=rate_limit)
         self._pair_info_cache: dict[str, dict] = {}
 
+    def _validate_credentials(self) -> None:
+        """Validate API credentials before connecting.
+
+        Raises:
+            KrakenConnectionError: When credentials are missing or incomplete.
+        """
+        has_key = bool(self._api_key)
+        has_secret = bool(self._api_secret)
+        if not has_key and not has_secret:
+            raise KrakenConnectionError(
+                "Kraken API credentials not configured. "
+                "Set KRAKEN_API_KEY and KRAKEN_API_SECRET environment variables."
+            )
+        if not has_key:
+            raise KrakenConnectionError(
+                "Kraken API key not configured. "
+                "Set the KRAKEN_API_KEY environment variable."
+            )
+        if not has_secret:
+            raise KrakenConnectionError(
+                "Kraken API secret not configured. "
+                "Set the KRAKEN_API_SECRET environment variable."
+            )
+
     async def connect(self, timeout: int = 30) -> dict:
         """Initialize Kraken SDK market clients."""
+        self._validate_credentials()
         try:
             self._futures_market = FuturesMarket(key=self._api_key, secret=self._api_secret)
             self._spot_market = SpotMarket(key=self._api_key, secret=self._api_secret)
@@ -240,7 +265,9 @@ class KrakenHistoricalClient:
                 "connection_time": datetime.now(timezone.utc).isoformat(),
             }
         except Exception as e:
-            raise KrakenConnectionError(f"Failed to connect to Kraken: {e}") from e
+            raise KrakenConnectionError(
+                "Failed to connect to Kraken. Verify your credentials are correct."
+            ) from e
 
     async def disconnect(self) -> None:
         """Clean up Kraken SDK clients."""

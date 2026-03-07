@@ -1,11 +1,15 @@
 """Unit tests for KrakenSettings configuration."""
 
 from decimal import Decimal
+from unittest.mock import patch
 
 import pytest
 from pydantic import ValidationError
+from structlog.testing import capture_logs
 
 from src.config import KrakenSettings
+from src.services.exceptions import KrakenConnectionError
+from src.services.kraken_client import KrakenHistoricalClient
 
 
 class TestKrakenSettingsDefaults:
@@ -221,3 +225,116 @@ class TestKrakenSettingsFeeValidation:
         # Arrange & Act & Assert
         with pytest.raises(ValidationError, match="kraken_default_taker_fee"):
             KrakenSettings(kraken_default_taker_fee=Decimal("2"))
+
+
+class TestKrakenCredentialValidationOnConnect:
+    """Test suite for credential validation during connect()."""
+
+    @pytest.mark.asyncio
+    async def test_connect_empty_credentials_raises_connection_error(self):
+        """Empty key + secret raises KrakenConnectionError mentioning KRAKEN_API_KEY."""
+        # Arrange
+        client = KrakenHistoricalClient(api_key="", api_secret="")
+
+        # Act & Assert
+        with pytest.raises(KrakenConnectionError, match="KRAKEN_API_KEY"):
+            await client.connect()
+
+    @pytest.mark.asyncio
+    async def test_connect_key_without_secret_raises_descriptive_error(self):
+        """Key set but secret empty raises KrakenConnectionError mentioning KRAKEN_API_SECRET."""
+        # Arrange
+        client = KrakenHistoricalClient(api_key="my-key", api_secret="")
+
+        # Act & Assert
+        with pytest.raises(KrakenConnectionError, match="KRAKEN_API_SECRET"):
+            await client.connect()
+
+    @pytest.mark.asyncio
+    async def test_connect_valid_credentials_succeeds(self):
+        """Both key + secret set, SDK patched → returns connected: True."""
+        # Arrange
+        client = KrakenHistoricalClient(api_key="test-key", api_secret="test-secret")
+
+        # Act
+        with (
+            patch("src.services.kraken_client.FuturesMarket"),
+            patch("src.services.kraken_client.SpotMarket"),
+        ):
+            result = await client.connect()
+
+        # Assert
+        assert result["connected"] is True
+
+    def test_credentials_hidden_in_str_repr(self):
+        """Secret value must not appear in str() or repr() of settings."""
+        # Arrange
+        secret = "super-secret-base64-value"
+        settings = KrakenSettings(
+            kraken_api_key="my-key", kraken_api_secret=secret
+        )
+
+        # Act & Assert
+        assert secret not in str(settings)
+        assert secret not in repr(settings)
+
+
+class TestKrakenCredentialSecurityHardening:
+    """Test suite for credential security hardening."""
+
+    def test_repr_masks_api_secret(self):
+        """Raw secret value must be absent from repr(KrakenSettings(...))."""
+        # Arrange
+        secret = "dGVzdC1zZWNyZXQ="
+        settings = KrakenSettings(
+            kraken_api_key="test-key", kraken_api_secret=secret
+        )
+
+        # Act
+        settings_repr = repr(settings)
+
+        # Assert
+        assert secret not in settings_repr
+
+    @pytest.mark.asyncio
+    async def test_connection_error_does_not_leak_credentials(self):
+        """When SDK raises, error message must not contain key or secret."""
+        # Arrange
+        api_key = "leaked-api-key-value"
+        api_secret = "leaked-api-secret-value"
+        client = KrakenHistoricalClient(api_key=api_key, api_secret=api_secret)
+
+        # Act
+        with patch(
+            "src.services.kraken_client.FuturesMarket",
+            side_effect=Exception(f"auth failed with key={api_key}"),
+        ):
+            with pytest.raises(KrakenConnectionError) as exc_info:
+                await client.connect()
+
+        # Assert
+        error_msg = str(exc_info.value)
+        assert api_key not in error_msg
+        assert api_secret not in error_msg
+
+    @pytest.mark.asyncio
+    async def test_log_entries_do_not_leak_secrets(self):
+        """Log entries during connect must not contain credential values."""
+        # Arrange
+        api_key = "secret-key-for-log-test"
+        api_secret = "secret-value-for-log-test"
+        client = KrakenHistoricalClient(api_key=api_key, api_secret=api_secret)
+
+        # Act
+        with (
+            patch("src.services.kraken_client.FuturesMarket"),
+            patch("src.services.kraken_client.SpotMarket"),
+            capture_logs() as cap_logs,
+        ):
+            await client.connect()
+
+        # Assert
+        for entry in cap_logs:
+            entry_str = str(entry)
+            assert api_key not in entry_str
+            assert api_secret not in entry_str

@@ -79,11 +79,14 @@ module = [
 ]
 ignore_missing_imports = true
 
+
 [tool.ruff]
 exclude = [
     "tests/old_tests",
     "tests_archive",
     ".github",
+    ".claude",
+    ".specify",
     "alembic",
     ".git",
     ".venv",

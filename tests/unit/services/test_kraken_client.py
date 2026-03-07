@@ -494,7 +494,7 @@ class TestKrakenHistoricalClientConnect:
             patch("src.services.kraken_client.FuturesMarket") as mock_fm,
             patch("src.services.kraken_client.SpotMarket") as mock_sm,
         ):
-            client = KrakenHistoricalClient()
+            client = KrakenHistoricalClient(api_key="test-key", api_secret="test-secret")
             result = await client.connect()
             assert client.is_connected is True
             assert "connected" in result
@@ -507,7 +507,7 @@ class TestKrakenHistoricalClientConnect:
             patch("src.services.kraken_client.FuturesMarket"),
             patch("src.services.kraken_client.SpotMarket"),
         ):
-            client = KrakenHistoricalClient()
+            client = KrakenHistoricalClient(api_key="test-key", api_secret="test-secret")
             await client.connect()
             assert client.is_connected is True
             await client.disconnect()

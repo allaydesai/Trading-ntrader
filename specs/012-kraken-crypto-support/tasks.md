@@ -102,9 +102,9 @@
 
 ### Tests for User Story 3
 
-- [ ] T022 [P] [US3] Write failing tests for credential validation edge cases in `tests/unit/services/test_kraken_settings.py`. Test: (1) `connect()` with empty credentials raises `KrakenConnectionError` with message containing "KRAKEN_API_KEY", (2) `connect()` with key but no secret raises descriptive error, (3) valid credentials succeed, (4) credentials never appear in `str()` or `repr()` of settings object. Reference spec acceptance scenarios for US3.
-- [ ] T023 [US3] Enhance credential validation in `KrakenHistoricalClient.connect()` in `src/services/kraken_client.py`. Before API call: check both `api_key` and `api_secret` are non-empty, raise `KrakenConnectionError` with message guiding user to set `KRAKEN_API_KEY` and `KRAKEN_API_SECRET` env vars. On API auth failure: wrap in `KrakenConnectionError` with clear message. Make T022 tests pass.
-- [ ] T024 [US3] Write security test verifying Kraken credentials never appear in log output or error messages in `tests/unit/services/test_kraken_settings.py`. Test: (1) `KrakenSettings.__repr__()` masks secret, (2) `KrakenConnectionError` messages don't contain raw credentials, (3) structured log entries from client operations don't leak secrets. Make tests pass by adding `repr=False` to secret field if needed.
+- [x] T022 [P] [US3] Write failing tests for credential validation edge cases in `tests/unit/services/test_kraken_settings.py`. Test: (1) `connect()` with empty credentials raises `KrakenConnectionError` with message containing "KRAKEN_API_KEY", (2) `connect()` with key but no secret raises descriptive error, (3) valid credentials succeed, (4) credentials never appear in `str()` or `repr()` of settings object. Reference spec acceptance scenarios for US3.
+- [x] T023 [US3] Enhance credential validation in `KrakenHistoricalClient.connect()` in `src/services/kraken_client.py`. Before API call: check both `api_key` and `api_secret` are non-empty, raise `KrakenConnectionError` with message guiding user to set `KRAKEN_API_KEY` and `KRAKEN_API_SECRET` env vars. On API auth failure: wrap in `KrakenConnectionError` with clear message. Make T022 tests pass.
+- [x] T024 [US3] Write security test verifying Kraken credentials never appear in log output or error messages in `tests/unit/services/test_kraken_settings.py`. Test: (1) `KrakenSettings.__repr__()` masks secret, (2) `KrakenConnectionError` messages don't contain raw credentials, (3) structured log entries from client operations don't leak secrets. Make tests pass by adding `repr=False` to secret field if needed.
 
 **Checkpoint**: All 3 user stories complete — secure credential management, clear error messages, multi-source switching verified.
 
@@ -114,10 +114,10 @@
 
 **Purpose**: Quality assurance across all stories
 
-- [ ] T025 [P] Run full test suite (`make test-all`) and fix any failures across all tiers
-- [ ] T026 [P] Run linting and type checking (`make lint && make typecheck`) — fix all violations
-- [ ] T027 Validate quickstart.md commands work: verify `uv run python -c "from src.config import get_settings; ..."` succeeds, verify CLI help shows --data-source option
-- [ ] T028 Update `.env.example` (if it exists) or document in README the new Kraken environment variables: `KRAKEN_API_KEY`, `KRAKEN_API_SECRET`, `KRAKEN_RATE_LIMIT`, `KRAKEN_DEFAULT_MAKER_FEE`, `KRAKEN_DEFAULT_TAKER_FEE`
+- [x] T025 [P] Run full test suite (`make test-all`) and fix any failures across all tiers
+- [x] T026 [P] Run linting and type checking (`make lint && make typecheck`) — fix all violations
+- [x] T027 Validate quickstart.md commands work: verify `uv run python -c "from src.config import get_settings; ..."` succeeds, verify CLI help shows --data-source option
+- [x] T028 Update `.env.example` (if it exists) or document in README the new Kraken environment variables: `KRAKEN_API_KEY`, `KRAKEN_API_SECRET`, `KRAKEN_RATE_LIMIT`, `KRAKEN_DEFAULT_MAKER_FEE`, `KRAKEN_DEFAULT_TAKER_FEE`
 
 **Checkpoint**: All tests green, linting clean, type checking passes, documentation complete.
 

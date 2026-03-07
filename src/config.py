@@ -81,7 +81,9 @@ class KrakenSettings(BaseSettings):
     """Kraken exchange configuration settings."""
 
     kraken_api_key: str = Field(default="", description="Kraken API key")
-    kraken_api_secret: str = Field(default="", description="Kraken API secret (base64)")
+    kraken_api_secret: str = Field(
+        default="", description="Kraken API secret (base64)", repr=False
+    )
     kraken_rate_limit: int = Field(
         default=10, ge=1, le=20, description="Max requests per second (1-20)"
     )
