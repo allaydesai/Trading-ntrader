@@ -79,14 +79,14 @@
 
 ### Tests for User Story 2
 
-- [ ] T017 [US2] Write failing integration test for end-to-end Kraken backtest in `tests/integration/test_kraken_backtest.py`. Test: (1) create `BacktestRequest` with `data_source="kraken"`, BTC/USD symbol, (2) fetch data via `DataCatalogService.fetch_or_load(data_source="kraken")`, (3) run backtest via `BacktestOrchestrator.execute()`, (4) verify `BacktestResult` contains trades and metrics. Use mocked Kraken API responses for reproducibility. Mark with `@pytest.mark.integration`.
+- [x] T017 [US2] Write failing integration test for end-to-end Kraken backtest in `tests/integration/test_kraken_backtest.py`. Test: (1) create `BacktestRequest` with `data_source="kraken"`, BTC/USD symbol, (2) fetch data via `DataCatalogService.fetch_or_load(data_source="kraken")`, (3) run backtest via `BacktestOrchestrator.execute()`, (4) verify `BacktestResult` contains trades and metrics. Use mocked Kraken API responses for reproducibility. Mark with `@pytest.mark.integration`.
 
 ### Implementation for User Story 2
 
-- [ ] T018 [P] [US2] Update `BacktestRequest` in `src/models/backtest_request.py`: update `data_source` field description to document `"kraken"` as a valid option alongside `"catalog"`, `"ibkr"`, and `"mock"`. Add field validator to validate allowed data_source values.
-- [ ] T019 [P] [US2] Add `--data-source` option to CLI backtest command in `src/cli/main.py`. Add `click.Choice(["ibkr", "kraken", "catalog", "mock"])` option. When `data_source="kraken"`, pass through to `BacktestRequest` and ensure `DataCatalogService.fetch_or_load()` receives `data_source="kraken"`. Follow existing CLI patterns.
-- [ ] T020 [US2] Add Kraken to data source selector in web UI backtest form. Update relevant Jinja2 template(s) in `src/api/templates/` to include "Kraken" option in the data source dropdown. Ensure the selected value passes through to the backtest request handler.
-- [ ] T021 [US2] Run integration tests with `--forked` flag (`make test-integration`) to verify end-to-end Kraken backtest workflow. Verify T017 passes.
+- [x] T018 [P] [US2] Update `BacktestRequest` in `src/models/backtest_request.py`: update `data_source` field description to document `"kraken"` as a valid option alongside `"catalog"`, `"ibkr"`, and `"mock"`. Add field validator to validate allowed data_source values.
+- [x] T019 [P] [US2] Add `--data-source` option to CLI backtest command in `src/cli/main.py`. Add `click.Choice(["ibkr", "kraken", "catalog", "mock"])` option. When `data_source="kraken"`, pass through to `BacktestRequest` and ensure `DataCatalogService.fetch_or_load()` receives `data_source="kraken"`. Follow existing CLI patterns.
+- N/A ~~T020 [US2] Add Kraken to data source selector in web UI backtest form.~~ Deferred — web UI backtest form does not exist yet.
+- [x] T021 [US2] Run integration tests with `--forked` flag (`make test-integration`) to verify end-to-end Kraken backtest workflow. Verify T017 passes.
 
 **Checkpoint**: User Stories 1 AND 2 both work — can fetch Kraken data AND run backtests against it via CLI and web UI.
 
