@@ -243,13 +243,11 @@ class KrakenHistoricalClient:
             )
         if not has_key:
             raise KrakenConnectionError(
-                "Kraken API key not configured. "
-                "Set the KRAKEN_API_KEY environment variable."
+                "Kraken API key not configured. Set the KRAKEN_API_KEY environment variable."
             )
         if not has_secret:
             raise KrakenConnectionError(
-                "Kraken API secret not configured. "
-                "Set the KRAKEN_API_SECRET environment variable."
+                "Kraken API secret not configured. Set the KRAKEN_API_SECRET environment variable."
             )
 
     async def connect(self, timeout: int = 30) -> dict:

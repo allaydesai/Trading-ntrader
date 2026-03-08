@@ -270,9 +270,7 @@ class TestKrakenCredentialValidationOnConnect:
         """Secret value must not appear in str() or repr() of settings."""
         # Arrange
         secret = "super-secret-base64-value"
-        settings = KrakenSettings(
-            kraken_api_key="my-key", kraken_api_secret=secret
-        )
+        settings = KrakenSettings(kraken_api_key="my-key", kraken_api_secret=secret)
 
         # Act & Assert
         assert secret not in str(settings)
@@ -286,9 +284,7 @@ class TestKrakenCredentialSecurityHardening:
         """Raw secret value must be absent from repr(KrakenSettings(...))."""
         # Arrange
         secret = "dGVzdC1zZWNyZXQ="
-        settings = KrakenSettings(
-            kraken_api_key="test-key", kraken_api_secret=secret
-        )
+        settings = KrakenSettings(kraken_api_key="test-key", kraken_api_secret=secret)
 
         # Act
         settings_repr = repr(settings)

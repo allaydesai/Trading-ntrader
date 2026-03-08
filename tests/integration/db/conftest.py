@@ -17,9 +17,7 @@ def is_postgres_available():
     """Check if PostgreSQL is available for testing."""
     try:
         settings = get_settings()
-        async_url = settings.database_url.replace(
-            "postgresql://", "postgresql+asyncpg://"
-        )
+        async_url = settings.database_url.replace("postgresql://", "postgresql+asyncpg://")
         engine = create_async_engine(async_url, echo=False)
 
         async def _check():
@@ -166,9 +164,7 @@ def sync_db_session(request):
     # Use pg8000 (pure Python) instead of psycopg2 to avoid SIGSEGV when
     # nautilus C extensions are loaded before --forked fork(). psycopg2 links
     # against libpq which crashes in forked children after nautilus init.
-    pg8000_url = settings.database_url.replace(
-        "postgresql://", "postgresql+pg8000://"
-    )
+    pg8000_url = settings.database_url.replace("postgresql://", "postgresql+pg8000://")
 
     # Get worker ID for schema isolation
     worker_id = get_worker_id(request)
