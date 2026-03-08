@@ -5,7 +5,7 @@ from typing import AsyncGenerator, Generator
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
 
 from src.config import get_settings
 
@@ -49,17 +49,19 @@ def get_async_session_maker():
     return AsyncSessionLocal
 
 
-if settings.database_url:
-    # Create sync engine
-    engine = create_engine(
-        settings.database_url,
-        pool_size=settings.database_pool_size,
-        max_overflow=settings.database_max_overflow,
-        pool_timeout=settings.database_pool_timeout,
-        pool_pre_ping=True,  # Verify connection health before use
-        pool_recycle=3600,  # Recycle connections after 1 hour
-    )
-    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+def get_sync_engine_legacy():
+    """Get or create sync engine (lazy initialization)."""
+    global engine
+    if engine is None and settings.database_url:
+        engine = create_engine(
+            settings.database_url,
+            pool_size=settings.database_pool_size,
+            max_overflow=settings.database_max_overflow,
+            pool_timeout=settings.database_pool_timeout,
+            pool_pre_ping=True,  # Verify connection health before use
+            pool_recycle=3600,  # Recycle connections after 1 hour
+        )
+    return engine
 
 
 def get_db() -> Generator[Session, None, None]:

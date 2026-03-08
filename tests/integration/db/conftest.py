@@ -17,11 +17,17 @@ def is_postgres_available():
     """Check if PostgreSQL is available for testing."""
     try:
         settings = get_settings()
-        sync_url = settings.database_url
-        engine = create_engine(sync_url, echo=False)
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
-        engine.dispose()
+        async_url = settings.database_url.replace(
+            "postgresql://", "postgresql+asyncpg://"
+        )
+        engine = create_async_engine(async_url, echo=False)
+
+        async def _check():
+            async with engine.connect() as conn:
+                await conn.execute(text("SELECT 1"))
+            await engine.dispose()
+
+        asyncio.run(_check())
         return True
     except (OperationalError, Exception):
         return False
@@ -157,14 +163,20 @@ def sync_db_session(request):
         Session: Synchronous SQLAlchemy session
     """
     settings = get_settings()
-    sync_url = settings.database_url  # Use synchronous psycopg2 driver
+    # Use pg8000 (pure Python) instead of psycopg2 to avoid SIGSEGV when
+    # nautilus C extensions are loaded before --forked fork(). psycopg2 links
+    # against libpq which crashes in forked children after nautilus init.
+    pg8000_url = settings.database_url.replace(
+        "postgresql://", "postgresql+pg8000://"
+    )
 
     # Get worker ID for schema isolation
     worker_id = get_worker_id(request)
     schema_name = f"test_{worker_id}".replace("-", "_")
 
-    # Create sync engine
-    engine = create_engine(sync_url, echo=False)
+    # pg8000 is pure Python — no C extension state to corrupt across forks,
+    # so default QueuePool is safe and preserves SET search_path across commits
+    engine = create_engine(pg8000_url, echo=False)
 
     # Setup: Create schema and tables
     with engine.begin() as conn:
