@@ -113,9 +113,7 @@ class KrakenSettings(BaseSettings):
             try:
                 base64.b64decode(self.kraken_api_secret, validate=True)
             except Exception:
-                raise ValueError(
-                    "kraken_api_secret must be valid base64-encoded data"
-                )
+                raise ValueError("kraken_api_secret must be valid base64-encoded data")
         return self
 
     model_config = {

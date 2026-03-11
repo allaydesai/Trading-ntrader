@@ -333,9 +333,7 @@ class KrakenHistoricalClient:
             KrakenConnectionError: On API failure or client not connected.
         """
         if self._futures_market is None:
-            raise KrakenConnectionError(
-                "Kraken client not connected. Call connect() first."
-            )
+            raise KrakenConnectionError("Kraken client not connected. Call connect() first.")
 
         all_candles: list[dict] = []
         try:
@@ -366,9 +364,7 @@ class KrakenHistoricalClient:
         except KrakenConnectionError:
             raise
         except Exception as e:
-            raise KrakenConnectionError(
-                f"Failed to fetch OHLCV from Kraken: {e}"
-            ) from e
+            raise KrakenConnectionError(f"Failed to fetch OHLCV from Kraken: {e}") from e
 
         return all_candles
 
@@ -403,9 +399,7 @@ class KrakenHistoricalClient:
             raise DataNotFoundError(instrument_id, start, end)
 
         price_prec = pair_info.get("pair_decimals", 1) if pair_info else 1
-        bars = convert_ohlcv_to_bars(
-            all_candles, naut_instrument_id, bar_type_spec, price_prec
-        )
+        bars = convert_ohlcv_to_bars(all_candles, naut_instrument_id, bar_type_spec, price_prec)
 
         currency_pair = None
         if pair_info:

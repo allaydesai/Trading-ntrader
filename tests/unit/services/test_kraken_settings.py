@@ -132,9 +132,7 @@ class TestKrakenSettingsKeySecretPairValidation:
     def test_both_key_and_secret_set_is_valid(self):
         """Both key and secret set is valid (authenticated mode)."""
         # Arrange & Act
-        settings = KrakenSettings(
-            kraken_api_key="my-key", kraken_api_secret="bXktc2VjcmV0"
-        )
+        settings = KrakenSettings(kraken_api_key="my-key", kraken_api_secret="bXktc2VjcmV0")
 
         # Assert
         assert settings.kraken_api_key == "my-key"
@@ -354,9 +352,7 @@ class TestKrakenSettingsCredentialFormatValidation:
     def test_valid_base64_secret_accepted(self):
         """Valid base64 secret is accepted."""
         # "dGVzdC1zZWNyZXQ=" is base64 for "test-secret"
-        settings = KrakenSettings(
-            kraken_api_key="my-key", kraken_api_secret="dGVzdC1zZWNyZXQ="
-        )
+        settings = KrakenSettings(kraken_api_key="my-key", kraken_api_secret="dGVzdC1zZWNyZXQ=")
         assert settings.kraken_api_secret == "dGVzdC1zZWNyZXQ="
 
     def test_empty_credentials_skip_format_validation(self):
@@ -367,9 +363,7 @@ class TestKrakenSettingsCredentialFormatValidation:
 
     def test_client_repr_masks_credentials(self):
         """KrakenHistoricalClient repr must not expose credentials."""
-        client = KrakenHistoricalClient(
-            api_key="secret-key-value", api_secret="secret-value-here"
-        )
+        client = KrakenHistoricalClient(api_key="secret-key-value", api_secret="secret-value-here")
         client_repr = repr(client)
         assert "secret-key-value" not in client_repr
         assert "secret-value-here" not in client_repr
