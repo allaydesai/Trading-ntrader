@@ -1,5 +1,6 @@
 """Configuration settings for NTrader."""
 
+import base64
 import os
 from decimal import Decimal
 from pathlib import Path
@@ -94,13 +95,27 @@ class KrakenSettings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_key_secret_pair(self) -> "KrakenSettings":
-        """Both key and secret must be set together or both empty."""
+        """Both key and secret must be set together or both empty.
+
+        When credentials are provided, also validates:
+        - API key contains at least 1 non-whitespace character
+        - API secret is valid base64
+        """
         has_key = bool(self.kraken_api_key)
         has_secret = bool(self.kraken_api_secret)
         if has_key != has_secret:
             raise ValueError(
                 "kraken_api_key and kraken_api_secret must both be set or both be empty"
             )
+        if has_key:
+            if not self.kraken_api_key.strip():
+                raise ValueError("kraken_api_key must contain non-whitespace characters")
+            try:
+                base64.b64decode(self.kraken_api_secret, validate=True)
+            except Exception:
+                raise ValueError(
+                    "kraken_api_secret must be valid base64-encoded data"
+                )
         return self
 
     model_config = {

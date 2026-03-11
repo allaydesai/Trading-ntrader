@@ -189,8 +189,9 @@ class KrakenRateLimiter:
 
     async def acquire(self) -> datetime:
         """Wait until a request slot is available."""
-        async with self._lock:
-            while True:
+        while True:
+            sleep_time = 0.0
+            async with self._lock:
                 now = datetime.now(timezone.utc)
                 while self.requests and self.requests[0] < now - self.window:
                     self.requests.popleft()
@@ -198,8 +199,8 @@ class KrakenRateLimiter:
                     self.requests.append(now)
                     return now
                 sleep_time = (self.requests[0] + self.window - now).total_seconds()
-                if sleep_time > 0:
-                    await asyncio.sleep(sleep_time)
+            if sleep_time > 0:
+                await asyncio.sleep(sleep_time)
 
 
 # ---------------------------------------------------------------------------
@@ -227,6 +228,12 @@ class KrakenHistoricalClient:
         self._connected = False
         self.rate_limiter = KrakenRateLimiter(requests_per_second=rate_limit)
         self._pair_info_cache: dict[str, dict] = {}
+
+    def __repr__(self) -> str:
+        return (
+            f"KrakenHistoricalClient(connected={self._connected}, "
+            f"rate_limit={self.rate_limiter.requests_per_second})"
+        )
 
     def _validate_credentials(self) -> None:
         """Validate API credentials before connecting.
@@ -310,38 +317,27 @@ class KrakenHistoricalClient:
             logger.warning("failed_to_fetch_pair_info", pair=user_pair, error=str(e))
         return None
 
-    async def fetch_bars(
+    async def _paginated_fetch(
         self,
-        instrument_id: str,
-        start: datetime,
-        end: datetime,
-        bar_type_spec: str = "1-MINUTE-LAST",
-    ) -> tuple[list[Bar], CurrencyPair | None]:
-        """Fetch historical bars from Kraken Charts API.
+        charts_sym: str,
+        resolution: str,
+        from_ts: int,
+        to_ts: int,
+    ) -> list[dict]:
+        """Fetch OHLCV candles with automatic pagination.
 
         Returns:
-            Tuple of (bars, currency_pair).
+            List of raw candle dicts from the Kraken Charts API.
 
         Raises:
-            KrakenConnectionError: On API failure.
-            DataNotFoundError: When no data returned for unknown pair.
+            KrakenConnectionError: On API failure or client not connected.
         """
-        user_pair, venue = KrakenPairMapper.from_nautilus_id(instrument_id)
-        charts_sym = KrakenPairMapper.to_kraken_charts(user_pair)
-        resolution = self._map_resolution(bar_type_spec)
-        naut_instrument_id = InstrumentId(Symbol(user_pair), Venue(venue))
-
-        # Fetch pair metadata for instrument construction
-        pair_info = await self._fetch_pair_info(user_pair)
-
-        # Paginated OHLCV fetch
-        all_candles: list[dict] = []
-        from_ts = int(start.timestamp())
-        to_ts = int(end.timestamp())
-
         if self._futures_market is None:
-            raise KrakenConnectionError("Kraken client not connected. Call connect() first.")
+            raise KrakenConnectionError(
+                "Kraken client not connected. Call connect() first."
+            )
 
+        all_candles: list[dict] = []
         try:
             while True:
                 await self.rate_limiter.acquire()
@@ -370,14 +366,46 @@ class KrakenHistoricalClient:
         except KrakenConnectionError:
             raise
         except Exception as e:
-            raise KrakenConnectionError(f"Failed to fetch OHLCV from Kraken: {e}") from e
+            raise KrakenConnectionError(
+                f"Failed to fetch OHLCV from Kraken: {e}"
+            ) from e
+
+        return all_candles
+
+    async def fetch_bars(
+        self,
+        instrument_id: str,
+        start: datetime,
+        end: datetime,
+        bar_type_spec: str = "1-MINUTE-LAST",
+    ) -> tuple[list[Bar], CurrencyPair | None]:
+        """Fetch historical bars from Kraken Charts API.
+
+        Returns:
+            Tuple of (bars, currency_pair).
+
+        Raises:
+            KrakenConnectionError: On API failure.
+            DataNotFoundError: When no data returned for unknown pair.
+        """
+        user_pair, venue = KrakenPairMapper.from_nautilus_id(instrument_id)
+        charts_sym = KrakenPairMapper.to_kraken_charts(user_pair)
+        resolution = self._map_resolution(bar_type_spec)
+        naut_instrument_id = InstrumentId(Symbol(user_pair), Venue(venue))
+
+        pair_info = await self._fetch_pair_info(user_pair)
+
+        all_candles = await self._paginated_fetch(
+            charts_sym, resolution, int(start.timestamp()), int(end.timestamp())
+        )
 
         if not all_candles:
             raise DataNotFoundError(instrument_id, start, end)
 
-        # Convert to Nautilus objects
         price_prec = pair_info.get("pair_decimals", 1) if pair_info else 1
-        bars = convert_ohlcv_to_bars(all_candles, naut_instrument_id, bar_type_spec, price_prec)
+        bars = convert_ohlcv_to_bars(
+            all_candles, naut_instrument_id, bar_type_spec, price_prec
+        )
 
         currency_pair = None
         if pair_info:

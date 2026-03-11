@@ -63,7 +63,7 @@ class TestKrakenSettingsEnvOverrides:
         """API key loads from KRAKEN_API_KEY env var."""
         # Arrange
         monkeypatch.setenv("KRAKEN_API_KEY", "test-key-123")
-        monkeypatch.setenv("KRAKEN_API_SECRET", "test-secret")
+        monkeypatch.setenv("KRAKEN_API_SECRET", "dGVzdC1zZWNyZXQ=")
 
         # Act
         settings = KrakenSettings()
@@ -132,11 +132,13 @@ class TestKrakenSettingsKeySecretPairValidation:
     def test_both_key_and_secret_set_is_valid(self):
         """Both key and secret set is valid (authenticated mode)."""
         # Arrange & Act
-        settings = KrakenSettings(kraken_api_key="my-key", kraken_api_secret="my-secret")
+        settings = KrakenSettings(
+            kraken_api_key="my-key", kraken_api_secret="bXktc2VjcmV0"
+        )
 
         # Assert
         assert settings.kraken_api_key == "my-key"
-        assert settings.kraken_api_secret == "my-secret"
+        assert settings.kraken_api_secret == "bXktc2VjcmV0"
 
     def test_key_without_secret_raises_error(self):
         """API key set without secret raises validation error."""
@@ -269,7 +271,7 @@ class TestKrakenCredentialValidationOnConnect:
     def test_credentials_hidden_in_str_repr(self):
         """Secret value must not appear in str() or repr() of settings."""
         # Arrange
-        secret = "super-secret-base64-value"
+        secret = "c3VwZXItc2VjcmV0"
         settings = KrakenSettings(kraken_api_key="my-key", kraken_api_secret=secret)
 
         # Act & Assert
@@ -334,3 +336,41 @@ class TestKrakenCredentialSecurityHardening:
             entry_str = str(entry)
             assert api_key not in entry_str
             assert api_secret not in entry_str
+
+
+class TestKrakenSettingsCredentialFormatValidation:
+    """Test suite for API key/secret format validation."""
+
+    def test_whitespace_only_key_raises_error(self):
+        """API key with only whitespace raises validation error."""
+        with pytest.raises(ValidationError, match="non-whitespace"):
+            KrakenSettings(kraken_api_key="   ", kraken_api_secret="dGVzdA==")
+
+    def test_invalid_base64_secret_raises_error(self):
+        """API secret that is not valid base64 raises validation error."""
+        with pytest.raises(ValidationError, match="base64"):
+            KrakenSettings(kraken_api_key="my-key", kraken_api_secret="not-valid-b64!")
+
+    def test_valid_base64_secret_accepted(self):
+        """Valid base64 secret is accepted."""
+        # "dGVzdC1zZWNyZXQ=" is base64 for "test-secret"
+        settings = KrakenSettings(
+            kraken_api_key="my-key", kraken_api_secret="dGVzdC1zZWNyZXQ="
+        )
+        assert settings.kraken_api_secret == "dGVzdC1zZWNyZXQ="
+
+    def test_empty_credentials_skip_format_validation(self):
+        """Empty key+secret bypass format checks (no-auth mode)."""
+        settings = KrakenSettings(kraken_api_key="", kraken_api_secret="")
+        assert settings.kraken_api_key == ""
+        assert settings.kraken_api_secret == ""
+
+    def test_client_repr_masks_credentials(self):
+        """KrakenHistoricalClient repr must not expose credentials."""
+        client = KrakenHistoricalClient(
+            api_key="secret-key-value", api_secret="secret-value-here"
+        )
+        client_repr = repr(client)
+        assert "secret-key-value" not in client_repr
+        assert "secret-value-here" not in client_repr
+        assert "KrakenHistoricalClient" in client_repr
