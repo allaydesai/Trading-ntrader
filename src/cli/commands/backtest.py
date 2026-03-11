@@ -25,6 +25,7 @@ from src.services.exceptions import (
     CatalogError,
     DataNotFoundError,
     IBKRConnectionError,
+    KrakenConnectionError,
     RateLimitExceededError,
 )
 from src.utils.error_formatter import ErrorFormatter
@@ -102,7 +103,7 @@ def backtest():
 @click.option(
     "--data-source",
     "-ds",
-    type=click.Choice(["catalog", "mock"], case_sensitive=False),
+    type=click.Choice(["catalog", "ibkr", "kraken", "mock"], case_sensitive=False),
     default=None,
     help="Data source to use (default: catalog)",
 )
@@ -235,8 +236,17 @@ def run_backtest(
                     console=console,
                     yaml_data=yaml_data,
                 )
+            elif resolved_data_source == "kraken":
+                data_result = await load_backtest_data(
+                    data_source="kraken",
+                    instrument_id=request.instrument_id,
+                    bar_type_spec=request.bar_type,
+                    start=request.start_date,
+                    end=request.end_date,
+                    console=console,
+                )
             else:
-                # Load from catalog
+                # Load from catalog (or ibkr via catalog auto-fetch)
                 data_result = await load_backtest_data(
                     data_source="catalog",
                     instrument_id=request.instrument_id,
@@ -268,6 +278,13 @@ def run_backtest(
             )
             error_formatter.format_error(error_msg)
             sys.exit(error_formatter.get_exit_code(error_msg))
+        except KrakenConnectionError as e:
+            console.print()
+            error_formatter.print_warning(
+                f"Kraken connection failed: {str(e)}",
+                "Check your network connection and Kraken API availability",
+            )
+            sys.exit(3)
         except RateLimitExceededError as e:
             console.print()
             error_msg = format_error_with_context(

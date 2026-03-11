@@ -52,7 +52,18 @@ class BacktestRequest(BaseModel):
     config_file_path: str | None = Field(
         default=None, description="Source config file path for tracking"
     )
-    data_source: str = Field(default="catalog", description="Data source: catalog, mock")
+    data_source: str = Field(
+        default="catalog", description="Data source: catalog, ibkr, kraken, mock"
+    )
+
+    @field_validator("data_source")
+    @classmethod
+    def validate_data_source(cls, v: str) -> str:
+        """Validate data_source against allowed values."""
+        allowed = {"catalog", "ibkr", "kraken", "mock"}
+        if v not in allowed:
+            raise ValueError(f"Invalid data_source '{v}'. Allowed: {', '.join(sorted(allowed))}")
+        return v
 
     # Account settings
     starting_balance: Decimal = Field(
@@ -91,7 +102,7 @@ class BacktestRequest(BaseModel):
             yaml_data: Parsed YAML configuration dictionary
             persist: Whether to persist results to database
             config_file_path: Path to the source config file
-            data_source: Data source used (catalog, mock)
+            data_source: Data source used (catalog, ibkr, kraken, mock)
 
         Returns:
             BacktestRequest instance
@@ -216,6 +227,7 @@ class BacktestRequest(BaseModel):
         bar_type_spec: str = "1-DAY-LAST",
         persist: bool = True,
         starting_balance: Decimal = Decimal("1000000"),
+        data_source: str = "catalog",
         **strategy_params: Any,
     ) -> "BacktestRequest":
         """
@@ -229,6 +241,7 @@ class BacktestRequest(BaseModel):
             bar_type_spec: Bar type specification (e.g., "1-DAY-LAST")
             persist: Whether to persist results to database
             starting_balance: Initial account balance
+            data_source: Data source (catalog, ibkr, kraken, mock)
             **strategy_params: Strategy-specific parameters
 
         Returns:
@@ -263,6 +276,7 @@ class BacktestRequest(BaseModel):
             persist=persist,
             config_file_path=None,
             starting_balance=starting_balance,
+            data_source=data_source,
         )
 
     def to_config_snapshot(self) -> dict[str, Any]:
@@ -284,4 +298,5 @@ class BacktestRequest(BaseModel):
             "bar_type": self.bar_type,
             "config_file_path": self.config_file_path,
             "starting_balance": str(self.starting_balance),
+            "data_source": self.data_source,
         }

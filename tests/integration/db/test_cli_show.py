@@ -210,7 +210,7 @@ def test_show_handles_not_found_uuid(sync_db_session):
 
 
 @pytest.mark.integration
-def test_show_handles_invalid_uuid(sync_db_session):
+def test_show_handles_invalid_uuid():
     """
     Test that 'show' command handles invalid UUID format.
 

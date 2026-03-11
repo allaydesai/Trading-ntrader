@@ -312,6 +312,7 @@ def _resolve_cli_mode(
         bar_type_spec=bar_type_spec,
         persist=persist,
         starting_balance=resolved_starting_balance,
+        data_source=resolved_data_source,
         **strategy_params,
     )
 
@@ -320,7 +321,7 @@ def _resolve_cli_mode(
 
 async def load_backtest_data(
     *,
-    data_source: Literal["catalog", "mock"],
+    data_source: Literal["catalog", "ibkr", "kraken", "mock"],
     instrument_id: str,
     bar_type_spec: str,
     start: datetime,
@@ -329,16 +330,17 @@ async def load_backtest_data(
     catalog_service: DataCatalogService | None = None,
     yaml_data: dict | None = None,
 ) -> DataLoadResult:
-    """Load backtest data from catalog or generate mock data.
+    """Load backtest data from catalog, Kraken, or generate mock data.
 
     Unified data loading that handles:
     - Catalog data with availability checking
     - IBKR auto-fetch when catalog data is incomplete
+    - Kraken historical data fetching for crypto pairs
     - Mock data generation from YAML configuration
 
     Args:
-        data_source: Either "catalog" for real data or "mock" for generated data
-        instrument_id: The instrument identifier (e.g., "AAPL.NASDAQ")
+        data_source: Data source: "catalog", "ibkr", "kraken", or "mock"
+        instrument_id: The instrument identifier (e.g., "AAPL.NASDAQ", "BTC/USD.KRAKEN")
         bar_type_spec: Bar type specification (e.g., "1-DAY-LAST")
         start: Start datetime for the data range
         end: End datetime for the data range
@@ -353,9 +355,18 @@ async def load_backtest_data(
         ValueError: If mock data source is used without yaml_data
         DataNotFoundError: If no data can be found or fetched
         IBKRConnectionError: If IBKR connection fails during fetch
+        KrakenConnectionError: If Kraken connection fails during fetch
     """
     if data_source == "mock":
         return await _load_mock_data(yaml_data=yaml_data, console=console)
+    elif data_source == "kraken":
+        return await _load_kraken_data(
+            instrument_id=instrument_id,
+            bar_type_spec=bar_type_spec,
+            start=start,
+            end=end,
+            console=console,
+        )
     else:
         return await _load_catalog_data(
             instrument_id=instrument_id,
@@ -384,6 +395,86 @@ async def _load_mock_data(
         bars=bars,
         instrument=instrument,
         data_source_used="Mock",
+    )
+
+
+async def _load_kraken_data(
+    *,
+    instrument_id: str,
+    bar_type_spec: str,
+    start: datetime,
+    end: datetime,
+    console: Console,
+) -> DataLoadResult:
+    """Load data from Kraken via DataCatalogService."""
+    from src.services.kraken_client import KrakenHistoricalClient
+
+    console.print("   Loading data from Kraken...", style="cyan")
+
+    kraken_client = KrakenHistoricalClient()
+    catalog_service = DataCatalogService(kraken_client=kraken_client)
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        transient=True,
+        console=console,
+    ) as progress:
+        task = progress.add_task("Fetching Kraken data...", total=None)
+
+        bars = await catalog_service.fetch_or_load(
+            instrument_id=instrument_id,
+            start=start,
+            end=end,
+            bar_type_spec=bar_type_spec,
+            data_source="kraken",
+            correlation_id=f"backtest-kraken-{instrument_id}-{start.strftime('%Y%m%d')}",
+        )
+
+        progress.update(task, completed=True)
+
+    # Load instrument from catalog (written during fetch)
+    instrument = catalog_service.load_instrument(instrument_id)
+
+    if instrument is None:
+        # Build fallback CurrencyPair from instrument_id
+        console.print(
+            f"   Instrument {instrument_id} not in catalog, building fallback...",
+            style="yellow",
+        )
+        from nautilus_trader.model.identifiers import InstrumentId, Symbol, Venue
+        from nautilus_trader.model.objects import Currency, Price, Quantity
+
+        from src.services.kraken_client import KrakenPairMapper
+
+        user_pair, venue = KrakenPairMapper.from_nautilus_id(instrument_id)
+        base_str, quote_str = user_pair.split("/")
+        naut_id = InstrumentId(Symbol(user_pair), Venue(venue))
+
+        from nautilus_trader.model.instruments import CurrencyPair
+
+        instrument = CurrencyPair(
+            instrument_id=naut_id,
+            raw_symbol=Symbol(user_pair.replace("/", "")),
+            base_currency=Currency.from_str(base_str),
+            quote_currency=Currency.from_str(quote_str),
+            price_precision=1,
+            size_precision=8,
+            price_increment=Price.from_str("0.1"),
+            size_increment=Quantity.from_str("0.00000001"),
+            maker_fee=Decimal("0.0016"),
+            taker_fee=Decimal("0.0026"),
+            ts_event=0,
+            ts_init=0,
+        )
+        console.print("   Using fallback crypto instrument", style="yellow")
+
+    console.print(f"   Loaded {len(bars):,} bars from Kraken")
+
+    return DataLoadResult(
+        bars=bars,
+        instrument=instrument,
+        data_source_used="Kraken",
     )
 
 

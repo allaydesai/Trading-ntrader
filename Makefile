@@ -83,7 +83,7 @@ lint:
 
 typecheck:
 	@echo "🔬 Type checking..."
-	uv run mypy src/core src/strategies
+	uv run mypy src/core src/services
 
 clean:
 	@echo "🧹 Cleaning up..."
