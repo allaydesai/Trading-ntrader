@@ -1124,6 +1124,10 @@ video {
   background-color: rgb(127 29 29 / 0.2);
 }
 
+.bg-red-900\/50 {
+  background-color: rgb(127 29 29 / 0.5);
+}
+
 .bg-slate-700 {
   --tw-bg-opacity: 1;
   background-color: rgb(51 65 85 / var(--tw-bg-opacity, 1));
@@ -1567,6 +1571,14 @@ video {
 .focus\:ring-white:focus {
   --tw-ring-opacity: 1;
   --tw-ring-color: rgb(255 255 255 / var(--tw-ring-opacity, 1));
+}
+
+.focus\:ring-offset-2:focus {
+  --tw-ring-offset-width: 2px;
+}
+
+.focus\:ring-offset-slate-950:focus {
+  --tw-ring-offset-color: #020617;
 }
 
 .group:hover .group-hover\:block {

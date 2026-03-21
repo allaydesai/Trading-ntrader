@@ -17,8 +17,8 @@
 
 **Purpose**: Create new files and shared models needed by all user stories
 
-- [ ] T001 [P] Create BacktestRunFormData and StrategyOption Pydantic models in src/api/models/run_backtest.py — include all fields from data-model.md (strategy, symbol, start_date, end_date, data_source, timeframe, starting_balance, timeout_seconds, strategy_params) with validation constraints
-- [ ] T002 [P] Add "Run Backtest" link to navigation in templates/partials/nav.html — add link to `/backtests/run` in both desktop nav and mobile menu sections, with conditional active-page styling for `nav_state.active_page == 'run_backtest'`
+- [X] T001 [P] Create BacktestRunFormData and StrategyOption Pydantic models in src/api/models/run_backtest.py — include all fields from data-model.md (strategy, symbol, start_date, end_date, data_source, timeframe, starting_balance, timeout_seconds, strategy_params) with validation constraints
+- [X] T002 [P] Add "Run Backtest" link to navigation in templates/partials/nav.html — add link to `/backtests/run` in both desktop nav and mobile menu sections, with conditional active-page styling for `nav_state.active_page == 'backtests'`
 
 ---
 
@@ -28,7 +28,7 @@
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete
 
-- [ ] T003 Write unit tests for BacktestRunFormData validation in tests/unit/api/test_run_backtest_models.py — test cases: valid form data, missing required fields (strategy, symbol, start_date, end_date), start_date after end_date rejected, invalid data_source rejected, invalid timeframe rejected, starting_balance <= 0 rejected, timeout_seconds <= 0 rejected, default values applied correctly
+- [X] T003 Write unit tests for BacktestRunFormData validation in tests/unit/api/test_run_backtest_models.py — test cases: valid form data, missing required fields (strategy, symbol, start_date, end_date), start_date after end_date rejected, invalid data_source rejected, invalid timeframe rejected, starting_balance <= 0 rejected, timeout_seconds <= 0 rejected, default values applied correctly
 
 **Checkpoint**: Foundation ready — run `make test-unit` and confirm T003 tests FAIL (models exist but no routes yet)
 
@@ -44,14 +44,14 @@
 
 > **NOTE: Write these tests FIRST, ensure they FAIL before implementation**
 
-- [ ] T004 [P] [US1] Write component test for GET /backtests/run in tests/component/api/test_run_backtest_routes.py — test that route returns 200, template contains strategy dropdown populated with all registered strategies, form fields for symbol/dates/data_source/timeframe/balance/timeout are present
-- [ ] T005 [P] [US1] Write component test for POST /backtests/run in tests/component/api/test_run_backtest_routes.py — test cases: successful submission redirects to detail page (mock BacktestOrchestrator), validation error re-renders form with errors, execution error shows error message in response body
+- [X] T004 [P] [US1] Write component test for GET /backtests/run in tests/component/api/test_run_backtest_routes.py — test that route returns 200, template contains strategy dropdown populated with all registered strategies, form fields for symbol/dates/data_source/timeframe/balance/timeout are present
+- [X] T005 [P] [US1] Write component test for POST /backtests/run in tests/component/api/test_run_backtest_routes.py — test cases: successful submission redirects to detail page (mock BacktestOrchestrator), validation error re-renders form with errors, execution error shows error message in response body
 
 ### Implementation for User Story 1
 
-- [ ] T006 [US1] Implement GET /backtests/run route handler in src/api/ui/backtests.py — query StrategyRegistry.list_strategies() for dropdown options, build template context with strategies, data_sources list, timeframe list, defaults (from Settings), and NavigationState with active_page="run_backtest". Return templates/backtests/run.html
-- [ ] T007 [US1] Create form template templates/backtests/run.html — extend base.html, include nav partial, render form with: strategy dropdown (name + description), symbol text input with placeholder "AAPL or AAPL.NASDAQ", start_date and end_date date inputs, data_source dropdown (catalog/ibkr/kraken/mock), timeframe dropdown, starting_balance number input (default 1000000), timeout_seconds number input (default 300), submit button. Include error display areas for validation errors and execution errors. Use Tailwind styling consistent with existing pages
-- [ ] T008 [US1] Implement POST /backtests/run route handler in src/api/ui/backtests.py — parse form data into BacktestRunFormData, validate inputs (return re-rendered form with errors on failure), call resolve_backtest_request() to create BacktestRequest, call load_backtest_data() to load bars, create BacktestOrchestrator and execute with asyncio.wait_for(timeout), on success return HX-Redirect header to /backtests/{run_id}, on execution error return error HTML fragment, on timeout return timeout-specific error message. Always dispose orchestrator in finally block
+- [X] T006 [US1] Implement GET /backtests/run route handler in src/api/ui/backtests.py — query StrategyRegistry.list_strategies() for dropdown options, build template context with strategies, data_sources list, timeframe list, defaults (from Settings), and NavigationState with active_page="run_backtest". Return templates/backtests/run.html
+- [X] T007 [US1] Create form template templates/backtests/run.html — extend base.html, include nav partial, render form with: strategy dropdown (name + description), symbol text input with placeholder "AAPL or AAPL.NASDAQ", start_date and end_date date inputs, data_source dropdown (catalog/ibkr/kraken/mock), timeframe dropdown, starting_balance number input (default 1000000), timeout_seconds number input (default 300), submit button. Include error display areas for validation errors and execution errors. Use Tailwind styling consistent with existing pages
+- [X] T008 [US1] Implement POST /backtests/run route handler in src/api/ui/backtests.py — parse form data into BacktestRunFormData, validate inputs (return re-rendered form with errors on failure), call resolve_backtest_request() to create BacktestRequest, call load_backtest_data() to load bars, create BacktestOrchestrator and execute with asyncio.wait_for(timeout), on success return HX-Redirect header to /backtests/{run_id}, on execution error return error HTML fragment, on timeout return timeout-specific error message. Always dispose orchestrator in finally block
 
 **Checkpoint**: At this point, User Story 1 should be fully functional — run `make test-component` to verify T004/T005 pass, then manually test at http://127.0.0.1:8000/backtests/run
 

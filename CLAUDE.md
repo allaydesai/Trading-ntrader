@@ -55,9 +55,19 @@ uv run uvicorn src.api.web:app --reload --host 127.0.0.1 --port 8000  # Web UI
 
 ## Decision Heuristics
 
-- **Test tier**: Unit for pure logic · Component for Nautilus with test doubles · Integration for real engine runs (`--forked`) · E2E for full workflows
+- **Test tier**: Unit for pure logic · Component for Nautilus with test doubles · Integration for real engine runs (`--forked`) · E2E for full workflows · **UI testing** via `agent-browser` skill
 - **New file vs edit**: Prefer editing existing files. Only create new for genuinely new concepts (new strategy, new API route)
 - **Stuck on Nautilus error?**: Read `agent_docs/nautilus.md` before trying workarounds
+
+## UI Testing (agent-browser)
+
+Use the `agent-browser` skill for all browser-based UI testing and verification.
+
+- **Always snapshot before interacting** — `agent-browser snapshot -i` to get element refs (@e1, @e2, ...). Never guess selectors
+- **Re-snapshot after navigation/re-render** — refs become stale after page changes
+- **Wait for async content** — use `agent-browser wait --text "Expected"` before snapshotting dynamic pages
+- **Capture evidence** — `agent-browser screenshot result.png` for pass/fail proof
+- Dev server: `http://127.0.0.1:8000` (FastAPI/HTMX)
 
 ## Hooks
 
