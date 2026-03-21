@@ -27,6 +27,7 @@ from src.services.exceptions import (  # noqa: E402
     DataNotFoundError,
     IBKRConnectionError,
     KrakenConnectionError,
+    KrakenRateLimitError,  # noqa: F401
 )
 from src.services.ibkr_client import IBKRHistoricalClient  # noqa: E402
 from src.services.kraken_client import KrakenHistoricalClient  # noqa: E402
@@ -167,6 +168,8 @@ class DataCatalogService:
                 api_key=settings.kraken_api_key,
                 api_secret=settings.kraken_api_secret,
                 rate_limit=settings.kraken_rate_limit,
+                default_maker_fee=settings.kraken_default_maker_fee,
+                default_taker_fee=settings.kraken_default_taker_fee,
             )
             self._kraken_client_initialized = True
 
@@ -978,7 +981,11 @@ class DataCatalogService:
 
                 return bars, instrument
 
-            except Exception as e:
+            except (
+                KrakenConnectionError,
+                KrakenRateLimitError,
+                DataNotFoundError,
+            ) as e:
                 last_error = e
                 retry_count += 1
 

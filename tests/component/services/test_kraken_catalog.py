@@ -1,6 +1,7 @@
 """Component tests for DataCatalogService Kraken integration."""
 
 from datetime import datetime, timezone
+from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
@@ -165,6 +166,50 @@ class TestDataCatalogServiceKrakenIntegration:
             mock_ibkr_client.fetch_bars.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_programming_error_not_retried(self, service, mock_kraken_client):
+        """TypeError from fetch_bars propagates immediately, not retried."""
+        mock_kraken_client.fetch_bars = AsyncMock(side_effect=TypeError("bad arg"))
+        start = datetime(2023, 3, 15, tzinfo=timezone.utc)
+        end = datetime(2023, 3, 16, tzinfo=timezone.utc)
+
+        with pytest.raises(TypeError, match="bad arg"):
+            await service.fetch_or_load(
+                instrument_id="BTC/USD.KRAKEN",
+                start=start,
+                end=end,
+                data_source="kraken",
+            )
+
+        # Should have been called exactly once — no retries
+        assert mock_kraken_client.fetch_bars.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_connection_error_is_retried(self, service, mock_kraken_client):
+        """KrakenConnectionError triggers retry logic."""
+        from src.services.exceptions import KrakenConnectionError
+
+        bar = _make_bar()
+        mock_cp = MagicMock(spec=CurrencyPair)
+        mock_kraken_client.fetch_bars = AsyncMock(
+            side_effect=[KrakenConnectionError("transient"), ([bar], mock_cp)]
+        )
+        mock_kraken_client._catalog = MagicMock()
+        service.catalog.write_data = MagicMock()
+
+        start = datetime(2023, 3, 15, tzinfo=timezone.utc)
+        end = datetime(2023, 3, 16, tzinfo=timezone.utc)
+
+        bars = await service.fetch_or_load(
+            instrument_id="BTC/USD.KRAKEN",
+            start=start,
+            end=end,
+            data_source="kraken",
+        )
+
+        assert len(bars) == 1
+        assert mock_kraken_client.fetch_bars.call_count == 2
+
+    @pytest.mark.asyncio
     async def test_gap_detection_works_with_kraken(self, service):
         """detect_gaps still works for Kraken instruments."""
         start = datetime(2023, 1, 1, tzinfo=timezone.utc)
@@ -175,3 +220,31 @@ class TestDataCatalogServiceKrakenIntegration:
         assert len(gaps) == 1
         assert gaps[0]["start"] == start
         assert gaps[0]["end"] == end
+
+
+class TestKrakenClientLazyInit:
+    """Test that lazy kraken_client property passes all settings including fees."""
+
+    def test_lazy_init_passes_fees(self, tmp_path):
+        """Lazy kraken_client creation passes maker/taker fees from KrakenSettings."""
+        mock_catalog = MagicMock()
+
+        with patch(
+            "src.services.data_catalog.ParquetDataCatalog",
+            return_value=mock_catalog,
+        ):
+            svc = DataCatalogService(catalog_path=tmp_path)
+
+        mock_settings = MagicMock()
+        mock_settings.kraken_api_key = "test-key"
+        mock_settings.kraken_api_secret = "test-secret"
+        mock_settings.kraken_rate_limit = 5
+        mock_settings.kraken_default_maker_fee = Decimal("0.0010")
+        mock_settings.kraken_default_taker_fee = Decimal("0.0020")
+
+        with patch("src.config.KrakenSettings", return_value=mock_settings):
+            client = svc.kraken_client
+
+        assert client._default_maker_fee == Decimal("0.0010")
+        assert client._default_taker_fee == Decimal("0.0020")
+        assert client.rate_limiter.requests_per_second == 5

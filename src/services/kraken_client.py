@@ -59,6 +59,9 @@ BAR_TYPE_MAP = {
     "1-DAY": "1d",
 }
 
+# Known Nautilus price type suffixes appended to bar type specs
+PRICE_TYPE_SUFFIXES = {"LAST", "MID", "BID", "ASK"}
+
 
 # ---------------------------------------------------------------------------
 # KrakenPairMapper
@@ -303,9 +306,12 @@ class KrakenHistoricalClient:
 
     def _map_resolution(self, bar_type_spec: str) -> str:
         """Map Nautilus bar_type_spec to Kraken resolution string."""
-        # Strip price type suffix (e.g., "1-HOUR-LAST" → "1-HOUR")
+        # Strip known price type suffix (e.g., "1-HOUR-LAST" → "1-HOUR")
         parts = bar_type_spec.rsplit("-", 1)
-        key = parts[0] if len(parts) > 1 else bar_type_spec
+        if len(parts) > 1 and parts[1] in PRICE_TYPE_SUFFIXES:
+            key = parts[0]
+        else:
+            key = bar_type_spec
         resolution = BAR_TYPE_MAP.get(key)
         if resolution is None:
             raise ValueError(
@@ -368,7 +374,9 @@ class KrakenHistoricalClient:
                 if not response.get("more_candles", False) or not candles:
                     break
 
-                # Advance from_ts past the last candle
+                # Kraken candle "time" is in milliseconds; Charts API
+                # from_/to parameters accept seconds. Convert and advance
+                # 1 second past the last candle to avoid duplicates.
                 last_time_ms = candles[-1]["time"]
                 from_ts = (last_time_ms // 1000) + 1
 

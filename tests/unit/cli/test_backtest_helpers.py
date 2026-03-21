@@ -1107,3 +1107,52 @@ backtest:
         )
 
         assert request.bar_type == "1-HOUR-LAST"
+
+
+class _FakePrice:
+    """Fake price object that returns a specific string representation."""
+
+    def __init__(self, s: str):
+        self._s = s
+
+    def __str__(self) -> str:
+        return self._s
+
+
+class TestPrecisionFromBars:
+    """Test _precision_from_bars helper for fallback instrument precision."""
+
+    def test_detects_two_decimal_places(self):
+        from src.cli.commands._backtest_helpers import _precision_from_bars
+
+        bar = MagicMock()
+        bar.close = _FakePrice("42350.75")
+        assert _precision_from_bars([bar]) == 2
+
+    def test_detects_high_precision(self):
+        from src.cli.commands._backtest_helpers import _precision_from_bars
+
+        bar = MagicMock()
+        bar.close = _FakePrice("0.00012345")
+        assert _precision_from_bars([bar]) == 8
+
+    def test_minimum_precision_is_one(self):
+        from src.cli.commands._backtest_helpers import _precision_from_bars
+
+        bar = MagicMock()
+        bar.close = _FakePrice("50000")
+        assert _precision_from_bars([bar]) == 1
+
+    def test_empty_bars_returns_one(self):
+        from src.cli.commands._backtest_helpers import _precision_from_bars
+
+        assert _precision_from_bars([]) == 1
+
+    def test_uses_max_across_bars(self):
+        from src.cli.commands._backtest_helpers import _precision_from_bars
+
+        bar1 = MagicMock()
+        bar1.close = _FakePrice("100.5")
+        bar2 = MagicMock()
+        bar2.close = _FakePrice("100.123")
+        assert _precision_from_bars([bar1, bar2]) == 3

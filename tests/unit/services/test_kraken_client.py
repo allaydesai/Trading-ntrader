@@ -476,6 +476,23 @@ class TestKrakenHistoricalClientBarTypeMapping:
     def test_one_day(self, client):
         assert client._map_resolution("1-DAY-LAST") == "1d"
 
+    def test_mid_suffix(self, client):
+        assert client._map_resolution("1-HOUR-MID") == "1h"
+
+    def test_bid_suffix(self, client):
+        assert client._map_resolution("1-HOUR-BID") == "1h"
+
+    def test_ask_suffix(self, client):
+        assert client._map_resolution("1-HOUR-ASK") == "1h"
+
+    def test_bare_spec_without_suffix(self, client):
+        assert client._map_resolution("1-HOUR") == "1h"
+
+    def test_unknown_suffix_not_stripped(self, client):
+        """Unknown suffix is NOT stripped — treated as part of the key."""
+        with pytest.raises(ValueError, match="Unsupported bar type"):
+            client._map_resolution("1-HOUR-VWAP")
+
     def test_unsupported_raises(self, client):
         with pytest.raises(ValueError, match="Unsupported bar type"):
             client._map_resolution("1-WEEK-LAST")

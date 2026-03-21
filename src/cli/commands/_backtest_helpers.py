@@ -400,6 +400,17 @@ async def _load_mock_data(
     )
 
 
+def _precision_from_bars(bars: list) -> int:
+    """Detect price precision from Nautilus Bar close prices."""
+    max_prec = 0
+    for bar in bars[:100]:
+        s = str(bar.close)
+        if "." in s:
+            prec = len(s.rstrip("0").split(".")[1])
+            max_prec = max(max_prec, prec)
+    return max(max_prec, 1)
+
+
 async def _load_kraken_data(
     *,
     instrument_id: str,
@@ -409,20 +420,9 @@ async def _load_kraken_data(
     console: Console,
 ) -> DataLoadResult:
     """Load data from Kraken via DataCatalogService."""
-    from src.config import KrakenSettings
-    from src.services.kraken_client import KrakenHistoricalClient
-
     console.print("   Loading data from Kraken...", style="cyan")
 
-    settings = KrakenSettings()
-    kraken_client = KrakenHistoricalClient(
-        api_key=settings.kraken_api_key,
-        api_secret=settings.kraken_api_secret,
-        rate_limit=settings.kraken_rate_limit,
-        default_maker_fee=settings.kraken_default_maker_fee,
-        default_taker_fee=settings.kraken_default_taker_fee,
-    )
-    catalog_service = DataCatalogService(kraken_client=kraken_client)
+    catalog_service = DataCatalogService()
 
     with Progress(
         SpinnerColumn(),
@@ -463,14 +463,17 @@ async def _load_kraken_data(
 
         from nautilus_trader.model.instruments import CurrencyPair
 
+        price_prec = _precision_from_bars(bars)
+        price_inc = f"0.{'0' * (price_prec - 1)}1" if price_prec > 0 else "1"
+
         instrument = CurrencyPair(
             instrument_id=naut_id,
             raw_symbol=Symbol(user_pair.replace("/", "")),
             base_currency=Currency.from_str(base_str),
             quote_currency=Currency.from_str(quote_str),
-            price_precision=1,
+            price_precision=price_prec,
             size_precision=8,
-            price_increment=Price.from_str("0.1"),
+            price_increment=Price.from_str(price_inc),
             size_increment=Quantity.from_str("0.00000001"),
             maker_fee=Decimal("0.0016"),
             taker_fee=Decimal("0.0026"),
