@@ -115,27 +115,43 @@ class KrakenPairMapper:
 # ---------------------------------------------------------------------------
 
 
+def _detect_price_precision(candles: list[dict]) -> int:
+    """Detect the maximum decimal precision from OHLCV price fields."""
+    max_prec = 0
+    for c in candles:
+        for field in ("open", "high", "low", "close"):
+            s = str(c[field])
+            if "." in s:
+                prec = len(s.rstrip("0").split(".")[1])
+                if prec > max_prec:
+                    max_prec = prec
+    return max_prec
+
+
 def convert_ohlcv_to_bars(
     candles: list[dict],
     instrument_id: InstrumentId,
     bar_type_spec: str,
     price_precision: int = 1,
+    size_precision: int = 8,
 ) -> list[Bar]:
     """Convert Kraken OHLCV candles to Nautilus Bar objects."""
     if not candles:
         return []
 
     bar_type = BarType.from_str(f"{instrument_id}-{bar_type_spec}-EXTERNAL")
+    price_fmt = f"{{:.{price_precision}f}}"
+    size_fmt = f"{{:.{size_precision}f}}"
     bars = []
     for c in candles:
         ts_ns = c["time"] * 1_000_000  # ms → ns
         bar = Bar(
             bar_type=bar_type,
-            open=Price.from_str(str(c["open"])),
-            high=Price.from_str(str(c["high"])),
-            low=Price.from_str(str(c["low"])),
-            close=Price.from_str(str(c["close"])),
-            volume=Quantity.from_str(str(c["volume"])),
+            open=Price.from_str(price_fmt.format(float(c["open"]))),
+            high=Price.from_str(price_fmt.format(float(c["high"]))),
+            low=Price.from_str(price_fmt.format(float(c["low"]))),
+            close=Price.from_str(price_fmt.format(float(c["close"]))),
+            volume=Quantity.from_str(size_fmt.format(float(c["volume"]))),
             ts_event=ts_ns,
             ts_init=ts_ns,
         )
@@ -398,13 +414,23 @@ class KrakenHistoricalClient:
         if not all_candles:
             raise DataNotFoundError(instrument_id, start, end)
 
-        price_prec = pair_info.get("pair_decimals", 1) if pair_info else 1
-        bars = convert_ohlcv_to_bars(all_candles, naut_instrument_id, bar_type_spec, price_prec)
+        # Detect actual price precision from candle data — Kraken's Charts API
+        # often returns higher precision than pair_decimals metadata claims.
+        metadata_prec = pair_info.get("pair_decimals", 1) if pair_info else 1
+        data_prec = _detect_price_precision(all_candles)
+        price_prec = max(metadata_prec, data_prec)
+
+        size_prec = pair_info.get("lot_decimals", 8) if pair_info else 8
+        bars = convert_ohlcv_to_bars(
+            all_candles, naut_instrument_id, bar_type_spec, price_prec, size_prec
+        )
 
         currency_pair = None
         if pair_info:
+            # Override pair_decimals with detected precision so instrument matches bars
+            adjusted_pair_info = {**pair_info, "pair_decimals": price_prec}
             currency_pair = build_currency_pair(
-                pair_info,
+                adjusted_pair_info,
                 naut_instrument_id,
                 user_pair,
                 self._default_maker_fee,

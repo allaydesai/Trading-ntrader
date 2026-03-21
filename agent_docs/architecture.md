@@ -4,7 +4,7 @@
 
 ```
 src/
-├── config.py              # Settings + IBKRSettings (Pydantic, from env vars)
+├── config.py              # Settings + IBKRSettings + KrakenSettings (Pydantic, from env vars)
 ├── api/
 │   ├── web.py             # FastAPI app entry point
 │   ├── dependencies.py    # DI providers
@@ -32,7 +32,9 @@ src/
 ├── models/                # Domain Pydantic models (request, result, trade, etc.)
 ├── services/
 │   ├── ibkr_client.py / ibkr_data_provider.py  # IBKR connectivity
-│   ├── data_catalog.py / data_service.py       # Parquet catalog
+│   ├── kraken_client.py                         # Kraken crypto data (pair mapping, rate limiting)
+│   ├── data_catalog.py / data_service.py        # Parquet catalog (IBKR + Kraken sources)
+│   ├── exceptions.py                            # Service exceptions (IBKR, Kraken)
 │   ├── csv_loader.py / nautilus_converter.py    # Data import
 │   ├── backtest_persistence.py / backtest_query.py
 │   ├── trade_analytics.py / portfolio.py
@@ -45,7 +47,7 @@ src/
 
 ## Data Flow
 
-1. **Data ingestion**: CSV files or IBKR TWS → `nautilus_converter` → Parquet catalog
+1. **Data ingestion**: CSV files, IBKR TWS, or Kraken API → `nautilus_converter` / `kraken_client` → Parquet catalog
 2. **Backtest execution**: Parquet catalog → Nautilus `BacktestEngine` → fills/positions
 3. **Results storage**: `results_extractor` → PostgreSQL (backtest_runs, trades, metrics)
 4. **Presentation**: PostgreSQL → FastAPI REST/UI → Jinja2 + HTMX + Tailwind
@@ -89,4 +91,4 @@ The `custom/` dir is a git submodule — update with `git submodule update --rem
 
 ## Feature Specs
 
-`specs/001-010/` contain feature specifications (spec.md, plan.md, tasks.md, contracts/).
+`specs/001-012/` contain feature specifications (spec.md, plan.md, tasks.md, contracts/).

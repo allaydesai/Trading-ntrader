@@ -260,6 +260,8 @@ class BacktestRequest(BaseModel):
         # Build instrument_id from symbol
         if "." in symbol:
             instrument_id = symbol.upper()
+        elif data_source == "kraken":
+            instrument_id = f"{symbol.upper()}.KRAKEN"
         else:
             instrument_id = f"{symbol.upper()}.NASDAQ"
 

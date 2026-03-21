@@ -160,20 +160,19 @@ class DataCatalogService:
     def kraken_client(self) -> KrakenHistoricalClient:
         """Lazy-initialized Kraken client property."""
         if not self._kraken_client_initialized:
-            kraken_api_key = os.environ.get("KRAKEN_API_KEY", "")
-            kraken_api_secret = os.environ.get("KRAKEN_API_SECRET", "")
-            kraken_rate_limit = int(os.environ.get("KRAKEN_RATE_LIMIT", "10"))
+            from src.config import KrakenSettings
 
+            settings = KrakenSettings()
             self._kraken_client = KrakenHistoricalClient(
-                api_key=kraken_api_key,
-                api_secret=kraken_api_secret,
-                rate_limit=kraken_rate_limit,
+                api_key=settings.kraken_api_key,
+                api_secret=settings.kraken_api_secret,
+                rate_limit=settings.kraken_rate_limit,
             )
             self._kraken_client_initialized = True
 
             logger.info(
                 "kraken_client_lazy_initialized",
-                rate_limit=kraken_rate_limit,
+                rate_limit=settings.kraken_rate_limit,
             )
 
         assert self._kraken_client is not None

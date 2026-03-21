@@ -73,6 +73,8 @@ def apply_cli_overrides(
         symbol_upper = symbol.upper()
         if "." in symbol_upper:
             instrument_id = symbol_upper
+        elif request.data_source == "kraken":
+            instrument_id = f"{symbol_upper}.KRAKEN"
         else:
             instrument_id = f"{symbol_upper}.NASDAQ"
         updates["symbol"] = symbol_upper.split(".")[0]
@@ -407,11 +409,19 @@ async def _load_kraken_data(
     console: Console,
 ) -> DataLoadResult:
     """Load data from Kraken via DataCatalogService."""
+    from src.config import KrakenSettings
     from src.services.kraken_client import KrakenHistoricalClient
 
     console.print("   Loading data from Kraken...", style="cyan")
 
-    kraken_client = KrakenHistoricalClient()
+    settings = KrakenSettings()
+    kraken_client = KrakenHistoricalClient(
+        api_key=settings.kraken_api_key,
+        api_secret=settings.kraken_api_secret,
+        rate_limit=settings.kraken_rate_limit,
+        default_maker_fee=settings.kraken_default_maker_fee,
+        default_taker_fee=settings.kraken_default_taker_fee,
+    )
     catalog_service = DataCatalogService(kraken_client=kraken_client)
 
     with Progress(
