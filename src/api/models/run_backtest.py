@@ -11,7 +11,7 @@ from typing import Any
 from pydantic import BaseModel, Field, model_validator
 
 VALID_DATA_SOURCES = {"catalog", "ibkr", "kraken", "mock"}
-VALID_TIMEFRAMES = {
+VALID_TIMEFRAMES = (
     "1-MINUTE",
     "5-MINUTE",
     "15-MINUTE",
@@ -19,7 +19,7 @@ VALID_TIMEFRAMES = {
     "4-HOUR",
     "1-DAY",
     "1-WEEK",
-}
+)
 
 
 class StrategyOption(BaseModel):

@@ -206,3 +206,48 @@ class TestPostRunBacktest:
         )
         assert response.status_code == 200
         mock_orchestrator.dispose.assert_called_once()
+
+    @patch("src.api.ui.backtests.BacktestOrchestrator")
+    @patch("src.api.ui.backtests.load_backtest_data")
+    @patch("src.api.ui.backtests.BacktestRequest")
+    def test_timeout_shows_error_message(
+        self, mock_request_cls, mock_load_data, mock_orchestrator_cls, client
+    ):
+        import asyncio
+
+        mock_request = MagicMock()
+        mock_request.instrument_id = "AAPL.NASDAQ"
+        mock_request_cls.from_cli_args.return_value = mock_request
+
+        mock_load_result = MagicMock()
+        mock_load_result.bars = [MagicMock()]
+        mock_load_result.instrument = MagicMock()
+        mock_load_data.return_value = mock_load_result
+
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.execute = AsyncMock(side_effect=asyncio.TimeoutError())
+        mock_orchestrator_cls.return_value = mock_orchestrator
+
+        response = client.post(
+            "/backtests/run",
+            data=self._form_data(timeout_seconds="60"),
+        )
+        assert response.status_code == 200
+        assert "timed out after 60 seconds" in response.text
+        assert "Try a shorter date range" in response.text
+        mock_orchestrator.dispose.assert_called_once()
+
+    def test_validation_error_preserves_form_data(self, client):
+        response = client.post(
+            "/backtests/run",
+            data=self._form_data(
+                symbol="MSFT",
+                start_date="2024-12-31",
+                end_date="2024-01-01",
+                starting_balance="500000",
+            ),
+        )
+        assert response.status_code == 200
+        html = response.text
+        assert 'value="MSFT"' in html
+        assert 'value="500000"' in html

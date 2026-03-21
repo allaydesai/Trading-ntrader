@@ -21,7 +21,7 @@
     </div>
     {% endif %}
 
-    <form method="post" action="/backtests/run" hx-post="/backtests/run" hx-target="#result-area" class="space-y-6">
+    <form method="post" action="/backtests/run" hx-post="/backtests/run" class="space-y-6">
         <div class="bg-slate-900 rounded-lg border border-slate-700 p-6 space-y-4">
             <!-- Strategy -->
             <div>
@@ -141,13 +141,5 @@
         </button>
     </form>
 
-    <!-- Result area for HTMX responses -->
-    <div id="result-area"></div>
-
-    {% if errors.get('__root__') or errors.get('value_error') %}
-    <div class="bg-red-900/50 border border-red-700 rounded-lg p-4">
-        <p class="text-red-400 text-sm">{{ errors.get('__root__', errors.get('value_error', '')) }}</p>
-    </div>
-    {% endif %}
 </div>
 {% endblock %}

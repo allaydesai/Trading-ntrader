@@ -6,7 +6,6 @@ Provides paginated backtest list, detail view, and HTMX fragment endpoints.
 
 import asyncio
 from datetime import date, datetime, timezone
-from decimal import Decimal
 from typing import Any, Optional
 from uuid import UUID
 
@@ -29,6 +28,7 @@ from src.api.models.filter_models import (
 from src.api.models.navigation import BreadcrumbItem, NavigationState
 from src.api.models.run_backtest import (
     VALID_DATA_SOURCES,
+    VALID_TIMEFRAMES,
     BacktestRunFormData,
     StrategyOption,
 )
@@ -47,15 +47,7 @@ _quiet_console = Console(quiet=True)
 
 # Sorted lists for template dropdowns
 DATA_SOURCES = sorted(VALID_DATA_SOURCES)
-TIMEFRAMES = [
-    "1-MINUTE",
-    "5-MINUTE",
-    "15-MINUTE",
-    "1-HOUR",
-    "4-HOUR",
-    "1-DAY",
-    "1-WEEK",
-]
+TIMEFRAMES = list(VALID_TIMEFRAMES)
 
 
 def _get_strategies() -> list[StrategyOption]:
@@ -80,7 +72,7 @@ def _build_run_context(
 ) -> dict[str, Any]:
     """Build template context for the run backtest form."""
     nav_state = NavigationState(
-        active_page="backtests",
+        active_page="run_backtest",
         breadcrumbs=[
             BreadcrumbItem(label="Dashboard", url="/", is_current=False),
             BreadcrumbItem(label="Backtests", url="/backtests", is_current=False),
@@ -161,6 +153,7 @@ async def run_backtest_submit(request: Request) -> Response:
         )
 
     # Build backtest request
+    # LAST = last-traded price; standard for equity/crypto bar aggregation
     bar_type_spec = f"{form_data.timeframe}-LAST"
     start_dt = datetime.combine(form_data.start_date, datetime.min.time(), tzinfo=timezone.utc)
     end_dt = datetime.combine(form_data.end_date, datetime.min.time(), tzinfo=timezone.utc)
@@ -173,7 +166,7 @@ async def run_backtest_submit(request: Request) -> Response:
             end=end_dt,
             bar_type_spec=bar_type_spec,
             persist=True,
-            starting_balance=Decimal(str(form_data.starting_balance)),
+            starting_balance=form_data.starting_balance,
             data_source=form_data.data_source,
             **form_data.strategy_params,
         )
@@ -186,7 +179,7 @@ async def run_backtest_submit(request: Request) -> Response:
             end=end_dt,
             console=_quiet_console,
         )
-    except Exception as e:
+    except (ValueError, RuntimeError) as e:
         logger.error("Failed to prepare backtest", error=str(e))
         context = _build_run_context(request, execution_error=str(e), form_data=raw_data)
         return _htmx_full_page_response(
@@ -217,7 +210,7 @@ async def run_backtest_submit(request: Request) -> Response:
         return _htmx_full_page_response(
             request, templates.TemplateResponse("backtests/run.html", context)
         )
-    except Exception as e:
+    except (ValueError, RuntimeError) as e:
         logger.error("Backtest execution failed", error=str(e))
         context = _build_run_context(request, execution_error=str(e), form_data=raw_data)
         return _htmx_full_page_response(
