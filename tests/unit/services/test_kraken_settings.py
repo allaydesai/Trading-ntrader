@@ -15,18 +15,26 @@ from src.services.kraken_client import KrakenHistoricalClient
 class TestKrakenSettingsDefaults:
     """Test suite for KrakenSettings default values."""
 
-    def test_default_api_key_is_empty(self):
+    def test_default_api_key_is_empty(self, monkeypatch):
         """Default API key is empty string."""
-        # Arrange & Act
-        settings = KrakenSettings()
+        # Arrange — clear env vars and skip .env file
+        monkeypatch.delenv("KRAKEN_API_KEY", raising=False)
+        monkeypatch.delenv("KRAKEN_API_SECRET", raising=False)
+
+        # Act
+        settings = KrakenSettings(_env_file=None)
 
         # Assert
         assert settings.kraken_api_key == ""
 
-    def test_default_api_secret_is_empty(self):
+    def test_default_api_secret_is_empty(self, monkeypatch):
         """Default API secret is empty string."""
-        # Arrange & Act
-        settings = KrakenSettings()
+        # Arrange — clear env vars and skip .env file
+        monkeypatch.delenv("KRAKEN_API_KEY", raising=False)
+        monkeypatch.delenv("KRAKEN_API_SECRET", raising=False)
+
+        # Act
+        settings = KrakenSettings(_env_file=None)
 
         # Assert
         assert settings.kraken_api_secret == ""
