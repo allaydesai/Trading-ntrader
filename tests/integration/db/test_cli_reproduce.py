@@ -189,7 +189,7 @@ def test_reproduce_handles_nonexistent_run_id(sync_db_session):
 
 
 @pytest.mark.integration
-def test_reproduce_handles_invalid_uuid_format(sync_db_session):
+def test_reproduce_handles_invalid_uuid_format():
     """
     Test that 'reproduce' command validates UUID format.
 
@@ -200,14 +200,8 @@ def test_reproduce_handles_invalid_uuid_format(sync_db_session):
     """
     invalid_uuid = "not-a-valid-uuid"
 
-    # Mock get_sync_session to use test session
-    @contextmanager
-    def mock_get_sync_session():
-        yield sync_db_session
-
-    with patch("src.cli.commands.reproduce.get_sync_session", mock_get_sync_session):
-        runner = CliRunner()
-        result = runner.invoke(reproduce_backtest, [invalid_uuid])
+    runner = CliRunner()
+    result = runner.invoke(reproduce_backtest, [invalid_uuid])
 
     # Assert: Should show UUID validation error
     # Once implemented:

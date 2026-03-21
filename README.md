@@ -11,7 +11,7 @@ Production-grade algorithmic trading backtesting system built with Nautilus Trad
 NTrader is a comprehensive backtesting platform designed for traders, quants, and developers who need reliable strategy testing with real market data. Built on the high-performance Nautilus Trader engine, it provides:
 
 - **Extensible strategy framework** with example strategies and custom strategy support
-- **Interactive Brokers integration** for fetching real market data
+- **Multi-source market data** — Interactive Brokers and Kraken cryptocurrency exchange
 - **Parquet-based data catalog** for fast, efficient storage without database overhead for market data
 - **PostgreSQL metadata storage** for tracking backtest history and performance metrics
 - **Web dashboard** for visualizing results
@@ -29,6 +29,8 @@ NTrader is a comprehensive backtesting platform designed for traders, quants, an
 ### Data Management
 - CSV import directly to Parquet catalog
 - Interactive Brokers historical data fetching
+- Kraken historical crypto data fetching (BTC/USD, ETH/USD, etc.)
+- Multi-source support: CSV, IBKR, Kraken
 - Auto-fetch missing data when IBKR is connected
 - Data inspection and gap detection commands
 
@@ -51,6 +53,7 @@ NTrader is a comprehensive backtesting platform designed for traders, quants, an
 - Python 3.11+
 - PostgreSQL 16+ (for metadata storage)
 - Interactive Brokers TWS/Gateway (optional, for live data)
+- Kraken account with API keys (optional, for crypto data)
 
 ### Installation
 
@@ -129,7 +132,7 @@ uv run python -m src.cli.main backtest run \
 
 | Command | Description |
 |---------|-------------|
-| `backtest run --strategy <type> --symbol <SYM> ...` | Run a backtest |
+| `backtest run --strategy <type> --symbol <SYM> [--data-source <src>] ...` | Run a backtest (sources: catalog, ibkr, kraken, mock) |
 | `backtest run <config.yaml>` | Run backtest with YAML config |
 | `backtest history` | View recent backtest executions |
 | `backtest history --sort sharpe` | Sort by Sharpe ratio |
@@ -188,7 +191,20 @@ uv run python -m src.cli.main data fetch \
 
 For detailed IBKR setup, see [docs/IBKR_SETUP.md](docs/IBKR_SETUP.md).
 
-### 4. Compare Strategy Performance
+### 4. Fetch Crypto Data from Kraken
+
+```bash
+# Run a backtest with Kraken crypto data
+uv run python -m src.cli.main backtest run \
+  --strategy sma_crossover \
+  --symbol BTC/USD \
+  --start 2026-01-01 \
+  --end 2026-01-31 \
+  --timeframe 1-hour \
+  --data-source kraken
+```
+
+### 5. Compare Strategy Performance
 
 ```bash
 # Run multiple strategies on same data
@@ -205,7 +221,7 @@ uv run python -m src.cli.main backtest history --sort sharpe
 uv run python -m src.cli.main backtest compare <uuid1> <uuid2>
 ```
 
-### 5. Use the Web Dashboard
+### 6. Use the Web Dashboard
 
 ```bash
 # Build CSS (first time only)
@@ -280,6 +296,11 @@ After placing the file in `src/core/strategies/custom/`, the strategy will be au
 | `TWS_ACCOUNT` | IBKR account ID | - |
 | `DEFAULT_BALANCE` | Starting balance for backtests | `1000000` |
 | `TRADE_SIZE` | Default trade size | `1000000` |
+| `KRAKEN_API_KEY` | Kraken API key | - |
+| `KRAKEN_API_SECRET` | Kraken API secret (base64) | - |
+| `KRAKEN_RATE_LIMIT` | Kraken requests/sec | `10` |
+| `KRAKEN_DEFAULT_MAKER_FEE` | Maker fee rate | `0.0016` |
+| `KRAKEN_DEFAULT_TAKER_FEE` | Taker fee rate | `0.0026` |
 
 ### YAML Strategy Configuration
 
@@ -308,7 +329,7 @@ src/
 ├── core/             # Core business logic
 │   └── strategies/   # Trading strategy implementations
 ├── models/           # Pydantic data models
-├── services/         # Business services (IBKR, analytics)
+├── services/         # Business services (IBKR, Kraken, analytics)
 ├── db/               # Database models and migrations
 └── utils/            # Utilities
 
@@ -382,6 +403,13 @@ uv run python -m src.cli.main data list
 3. Check "Enable ActiveX and Socket Clients"
 4. Verify port matches your `.env` configuration
 5. See [docs/IBKR_SETUP.md](docs/IBKR_SETUP.md) for detailed troubleshooting
+
+### Kraken Data Issues
+
+1. Verify API keys are set: `KRAKEN_API_KEY` and `KRAKEN_API_SECRET`
+2. Check symbol format — use standard pairs like `BTC/USD`, not Kraken-native formats
+3. Rate limit errors — reduce `KRAKEN_RATE_LIMIT` (default: 10 req/s)
+4. Missing data — Kraken Charts API may have gaps for low-volume pairs
 
 ### Date Range Errors
 

@@ -114,6 +114,7 @@ fee_model = IBKRCommissionModel(
 Market data lives in Parquet files under the Nautilus catalog structure.
 `src/services/data_catalog.py` and `data_service.py` handle reading/writing.
 CSV data is converted via `csv_loader.py` → `nautilus_converter.py` → Parquet.
+Kraken data is fetched via `kraken_client.py` and written to the same Parquet catalog structure.
 
 ## IBKR Client
 
@@ -126,6 +127,25 @@ CSV data is converted via `csv_loader.py` → `nautilus_converter.py` → Parque
 
 Rate limit: 45 req/s (90% of IBKR's 50/s hard limit).
 Never hardcode IBKR connection values — always use env vars through `IBKRSettings`.
+
+## Kraken Client
+
+`src/services/kraken_client.py` fetches historical OHLCV data from Kraken.
+
+**Configuration** via `src/config.py:KrakenSettings`:
+- `KRAKEN_API_KEY`, `KRAKEN_API_SECRET`
+- `KRAKEN_RATE_LIMIT` (default: 10 req/s)
+- `KRAKEN_DEFAULT_MAKER_FEE` / `KRAKEN_DEFAULT_TAKER_FEE`
+
+**Pair mapping**: Users specify standard pairs (BTC/USD). Internally mapped to:
+- REST API format: XXBTZUSD
+- Charts API format: XBT/USD
+- Nautilus InstrumentId: BTC/USD.KRAKEN
+
+**Data source**: Futures Charts API (`/api/charts/v1/spot/{symbol}/{resolution}`)
+supports arbitrary date ranges with pagination (unlike Spot OHLC which is limited to 720 entries).
+
+Rate limit: 10 req/s default (sliding window). Never hardcode credentials.
 
 ## Strategy Config Pattern
 

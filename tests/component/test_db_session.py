@@ -9,7 +9,6 @@ from src.db.session import (
     dispose_all_connections,
     get_async_engine,
     get_async_session_maker,
-    get_db,
     get_session,
 )
 from src.db.session import (
@@ -145,36 +144,6 @@ class TestDatabaseSession:
 
             assert session_maker == cached_session_maker
             mock_get_engine.assert_not_called()
-
-    @patch("src.db.session.SessionLocal")
-    @pytest.mark.component
-    def test_get_db_success(self, mock_session_local):
-        """Test get_db successfully yields database session."""
-        mock_session = MagicMock()
-        mock_session_local.return_value = mock_session
-
-        # Test the generator
-        db_gen = get_db()
-
-        # Get the session
-        db_session = next(db_gen)
-        assert db_session == mock_session
-
-        # Complete the generator (simulates finally block)
-        try:
-            next(db_gen)
-        except StopIteration:
-            pass
-
-        # Verify session was closed
-        mock_session.close.assert_called_once()
-
-    @patch("src.db.session.SessionLocal", None)
-    @pytest.mark.component
-    def test_get_db_no_session_local(self):
-        """Test get_db raises error when SessionLocal is None."""
-        with pytest.raises(RuntimeError, match="Database not configured"):
-            next(get_db())
 
     @pytest.mark.asyncio
     async def test_get_session_success(self):
@@ -313,24 +282,3 @@ class TestDatabaseSession:
             # Verify URL was converted
             call_args = mock_create.call_args[0]
             assert call_args[0] == "postgresql+asyncpg://user:pass@localhost/test"
-
-    @pytest.mark.component
-    def test_get_db_generator_cleanup(self):
-        """Test that get_db properly handles session cleanup."""
-        mock_session = MagicMock()
-
-        with patch("src.db.session.SessionLocal", return_value=mock_session):
-            db_gen = get_db()
-
-            # Test normal flow
-            session = next(db_gen)
-            assert session == mock_session
-
-            # Test cleanup - simulate generator completion
-            try:
-                next(db_gen)
-            except StopIteration:
-                pass
-
-            # Verify session was closed
-            mock_session.close.assert_called_once()

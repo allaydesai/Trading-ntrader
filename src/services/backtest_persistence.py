@@ -472,10 +472,15 @@ class BacktestPersistenceService:
                     if len(parts) >= 1:
                         profit_loss = Decimal(parts[0])
 
+                # Quantize to 8 decimal places to avoid float artifacts
+                # from Nautilus C extension float → Decimal conversion
+                max_dp = Decimal("0.00000001")
+
                 # Calculate profit percentage
                 profit_pct = None
-                entry_price = Decimal(str(row["avg_px_open"]))
-                exit_price = Decimal(str(row["avg_px_close"]))
+                entry_price = Decimal(str(row["avg_px_open"])).quantize(max_dp)
+                exit_price = Decimal(str(row["avg_px_close"])).quantize(max_dp)
+                quantity = Decimal(str(row["peak_qty"])).quantize(max_dp)
                 if entry_price > 0:
                     profit_pct = ((exit_price - entry_price) / entry_price) * Decimal("100")
 
@@ -487,7 +492,7 @@ class BacktestPersistenceService:
                     venue_order_id=str(row["opening_order_id"]),
                     client_order_id=str(row["closing_order_id"]),
                     order_side=str(row["entry"]),  # BUY or SELL
-                    quantity=Decimal(str(row["peak_qty"])),  # Use peak_qty as quantity
+                    quantity=quantity,
                     entry_price=entry_price,
                     exit_price=exit_price,
                     commission_amount=commission_amount,

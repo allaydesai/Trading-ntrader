@@ -1,12 +1,13 @@
 """Configuration settings for NTrader."""
 
+import base64
 import os
 from decimal import Decimal
 from pathlib import Path
 from typing import Literal, Optional
 
 from ibapi.common import MarketDataTypeEnum  # type: ignore
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -77,6 +78,52 @@ class IBKRSettings(BaseSettings):
     }
 
 
+class KrakenSettings(BaseSettings):
+    """Kraken exchange configuration settings."""
+
+    kraken_api_key: str = Field(default="", description="Kraken API key")
+    kraken_api_secret: str = Field(default="", description="Kraken API secret (base64)", repr=False)
+    kraken_rate_limit: int = Field(
+        default=10, ge=1, le=20, description="Max requests per second (1-20)"
+    )
+    kraken_default_maker_fee: Decimal = Field(
+        default=Decimal("0.0016"), ge=0, le=1, description="Maker fee (0-1)"
+    )
+    kraken_default_taker_fee: Decimal = Field(
+        default=Decimal("0.0026"), ge=0, le=1, description="Taker fee (0-1)"
+    )
+
+    @model_validator(mode="after")
+    def validate_key_secret_pair(self) -> "KrakenSettings":
+        """Both key and secret must be set together or both empty.
+
+        When credentials are provided, also validates:
+        - API key contains at least 1 non-whitespace character
+        - API secret is valid base64
+        """
+        has_key = bool(self.kraken_api_key)
+        has_secret = bool(self.kraken_api_secret)
+        if has_key != has_secret:
+            raise ValueError(
+                "kraken_api_key and kraken_api_secret must both be set or both be empty"
+            )
+        if has_key:
+            if not self.kraken_api_key.strip():
+                raise ValueError("kraken_api_key must contain non-whitespace characters")
+            try:
+                base64.b64decode(self.kraken_api_secret, validate=True)
+            except Exception:
+                raise ValueError("kraken_api_secret must be valid base64-encoded data")
+        return self
+
+    model_config = {
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "case_sensitive": False,
+        "extra": "ignore",
+    }
+
+
 class Settings(BaseSettings):
     """Application settings with validation."""
 
@@ -138,6 +185,11 @@ class Settings(BaseSettings):
     # IBKR settings
     ibkr: IBKRSettings = Field(
         default_factory=IBKRSettings, description="Interactive Brokers settings"
+    )
+
+    # Kraken settings
+    kraken: KrakenSettings = Field(
+        default_factory=KrakenSettings, description="Kraken exchange settings"
     )
 
     @property

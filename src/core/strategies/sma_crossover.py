@@ -146,20 +146,29 @@ class SMACrossover(Strategy):
         # Get current price (use close price from bar)
         current_price = Decimal(str(self._current_bar.close))
 
-        # Calculate number of shares
-        shares = int(position_value / current_price)
+        # Calculate quantity (fractional for crypto, whole for equities)
+        raw_qty = position_value / current_price
+        instrument = self.cache.instrument(self.instrument_id)
+        size_prec = instrument.size_precision if instrument else 0
 
-        # Ensure at least 1 share
-        shares = max(shares, 1)
+        if size_prec > 0:
+            # Crypto: use fractional quantity at instrument precision
+            qty_str = f"{float(raw_qty):.{size_prec}f}"
+            quantity = Quantity.from_str(qty_str)
+        else:
+            # Equities: whole shares
+            shares = max(int(raw_qty), 1)
+            quantity = Quantity.from_int(shares)
 
+        notional = float(raw_qty) * float(current_price)
         self.log.info(
             f"Position sizing: Portfolio=${self.portfolio_value:,.0f}, "
             f"Size%={self.position_size_pct}%, "
             f"Price=${current_price:.2f}, "
-            f"Shares={shares} (~${shares * current_price:,.0f} notional)"
+            f"Qty={quantity} (~${notional:,.0f} notional)"
         )
 
-        return Quantity.from_int(shares)
+        return quantity
 
     def _check_for_signals(self, fast_value: float, slow_value: float) -> None:
         """
