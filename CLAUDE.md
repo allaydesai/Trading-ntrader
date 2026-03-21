@@ -112,6 +112,8 @@ See README.md for full setup and usage instructions.
 ## Active Technologies
 - Python 3.11+ + python-kraken-sdk, nautilus-trader, FastAPI, Pydantic (012-kraken-crypto-support)
 - Parquet (via Nautilus ParquetDataCatalog), PostgreSQL/TimescaleDB (existing backtest results) (012-kraken-crypto-support)
+- Python 3.11+ + FastAPI, Jinja2, HTMX, Pydantic, nautilus-trader (013-backtest-run-page)
+- PostgreSQL/TimescaleDB (existing — no schema changes) (013-backtest-run-page)
 
 ## Recent Changes
 - 012-kraken-crypto-support: Added Python 3.11+ + python-kraken-sdk, nautilus-trader, FastAPI, Pydantic
