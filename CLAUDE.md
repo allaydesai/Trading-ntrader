@@ -57,6 +57,7 @@ uv run uvicorn src.api.web:app --reload --host 127.0.0.1 --port 8000  # Web UI
 
 - **Test tier**: Unit for pure logic · Component for Nautilus with test doubles · Integration for real engine runs (`--forked`) · E2E for full workflows · **UI testing** via `agent-browser` skill
 - **New file vs edit**: Prefer editing existing files. Only create new for genuinely new concepts (new strategy, new API route)
+- **UI changes**: Always invoke the `web-ui-development` skill before editing templates, routes, or HTMX patterns
 - **Stuck on Nautilus error?**: Read `agent_docs/nautilus.md` before trying workarounds
 
 ## UI Testing (agent-browser)

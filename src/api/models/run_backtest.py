@@ -63,3 +63,66 @@ class BacktestRunFormData(BaseModel):
         if self.timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be greater than 0")
         return self
+
+
+class StrategyParamField(BaseModel):
+    """Represents a single strategy parameter for dynamic form rendering."""
+
+    name: str
+    field_type: str  # "integer", "number", "string", "boolean"
+    default: Any = None
+    description: str = ""
+    minimum: float | None = None
+    maximum: float | None = None
+    required: bool = False
+
+
+def _extract_type_and_constraints(
+    prop: dict[str, Any],
+) -> tuple[str, float | None, float | None]:
+    """Extract field_type, minimum, maximum from a JSON schema property."""
+    minimum = None
+    maximum = None
+
+    def _first_not_none(*values: Any) -> float | None:
+        for v in values:
+            if v is not None:
+                return v
+        return None
+
+    # Handle anyOf pattern (Pydantic Decimal fields)
+    if "anyOf" in prop:
+        for variant in prop["anyOf"]:
+            if variant.get("type") == "number":
+                minimum = _first_not_none(variant.get("minimum"), variant.get("exclusiveMinimum"))
+                maximum = _first_not_none(variant.get("maximum"), variant.get("exclusiveMaximum"))
+                return "number", minimum, maximum
+        return "string", None, None
+
+    field_type = prop.get("type", "string")
+    minimum = _first_not_none(prop.get("minimum"), prop.get("exclusiveMinimum"))
+    maximum = _first_not_none(prop.get("maximum"), prop.get("exclusiveMaximum"))
+    return field_type, minimum, maximum
+
+
+def schema_to_fields(param_model: type[BaseModel]) -> list[StrategyParamField]:
+    """Convert a Pydantic model's JSON schema to a list of StrategyParamField."""
+    schema = param_model.model_json_schema()
+    properties = schema.get("properties", {})
+    required_fields = set(schema.get("required", []))
+
+    fields: list[StrategyParamField] = []
+    for name, prop in properties.items():
+        field_type, minimum, maximum = _extract_type_and_constraints(prop)
+        fields.append(
+            StrategyParamField(
+                name=name,
+                field_type=field_type,
+                default=prop.get("default"),
+                description=prop.get("description", prop.get("title", "")),
+                minimum=minimum,
+                maximum=maximum,
+                required=name in required_fields,
+            )
+        )
+    return fields

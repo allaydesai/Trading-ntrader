@@ -27,6 +27,11 @@
             <div>
                 <label for="strategy" class="block text-sm font-medium text-slate-300 mb-1">Strategy</label>
                 <select id="strategy" name="strategy" required
+                        hx-get="/backtests/run/strategy-params/_"
+                        hx-trigger="change"
+                        hx-target="#strategy-params"
+                        hx-swap="innerHTML"
+                        hx-on::config-request="if (!this.value) { event.preventDefault(); document.getElementById('strategy-params').innerHTML = ''; return; } event.detail.path = '/backtests/run/strategy-params/' + this.value"
                         class="w-full bg-slate-800 border border-slate-600 rounded-md px-3 py-2 text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500">
                     <option value="">Select a strategy...</option>
                     {% for s in strategies %}

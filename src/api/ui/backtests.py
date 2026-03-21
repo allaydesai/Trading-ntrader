@@ -220,6 +220,26 @@ async def run_backtest_submit(request: Request) -> Response:
         orchestrator.dispose()
 
 
+@router.get("/run/strategy-params/{strategy_name}", response_class=HTMLResponse)
+async def get_strategy_params(request: Request, strategy_name: str) -> HTMLResponse:
+    """Return HTMX fragment with strategy-specific parameter inputs."""
+    from src.api.models.run_backtest import schema_to_fields
+
+    try:
+        strategy_def = StrategyRegistry.get(strategy_name)
+    except KeyError:
+        return HTMLResponse("<div></div>")
+
+    if not strategy_def.param_model:
+        return HTMLResponse("<div></div>")
+
+    param_fields = schema_to_fields(strategy_def.param_model)
+    return templates.TemplateResponse(
+        "backtests/partials/strategy_params.html",
+        {"request": request, "param_fields": param_fields},
+    )
+
+
 @router.get("/", response_class=HTMLResponse)
 async def backtest_list(
     request: Request,

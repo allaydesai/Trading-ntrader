@@ -31,11 +31,14 @@ def mock_strategy_registry():
     mock_config_class.__module__ = "src.core.strategies.sma_crossover"
     mock_config_class.__name__ = "SMACrossoverConfig"
 
+    from src.models.strategy import SMAParameters
+
     StrategyRegistry._strategies["sma_crossover"] = StrategyDefinition(
         name="sma_crossover",
         description="Simple Moving Average Crossover",
         strategy_class=mock_strategy_class,
         config_class=mock_config_class,
+        param_model=SMAParameters,
         aliases=["sma"],
     )
     StrategyRegistry._aliases["sma_crossover"] = "sma_crossover"
@@ -251,3 +254,37 @@ class TestPostRunBacktest:
         html = response.text
         assert 'value="MSFT"' in html
         assert 'value="500000"' in html
+
+
+class TestGetStrategyParams:
+    """Tests for GET /backtests/run/strategy-params/{strategy_name}."""
+
+    def test_valid_strategy_returns_200(self, client):
+        response = client.get("/backtests/run/strategy-params/sma_crossover")
+        assert response.status_code == 200
+
+    def test_valid_strategy_contains_param_inputs(self, client):
+        response = client.get("/backtests/run/strategy-params/sma_crossover")
+        html = response.text
+        assert 'name="param_fast_period"' in html
+        assert 'name="param_slow_period"' in html
+
+    def test_valid_strategy_has_default_values(self, client):
+        response = client.get("/backtests/run/strategy-params/sma_crossover")
+        html = response.text
+        assert 'value="10"' in html  # fast_period default
+        assert 'value="20"' in html  # slow_period default
+
+    def test_unknown_strategy_returns_empty_div(self, client):
+        response = client.get("/backtests/run/strategy-params/nonexistent")
+        assert response.status_code == 200
+        html = response.text.strip()
+        assert html == "<div></div>" or html == ""
+
+    def test_param_inputs_have_correct_name_prefix(self, client):
+        response = client.get("/backtests/run/strategy-params/sma_crossover")
+        html = response.text
+        # All parameter inputs should be prefixed with param_
+        assert 'name="param_' in html
+        # Should not have unprefixed parameter names as input names
+        assert 'name="fast_period"' not in html
