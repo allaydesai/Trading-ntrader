@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -eo pipefail
 
 INPUT=$(cat)
 COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
@@ -29,21 +29,30 @@ fi
 
 # --- Pre-commit quality gate ---
 if echo "$COMMAND" | grep -qE '(^|\s|&&)git\s+commit'; then
-  cd "$CLAUDE_PROJECT_DIR"
-  uv run ruff format . 2>&1 || true
+  PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null)}"
+  if [[ -z "$PROJECT_DIR" ]]; then
+    echo "PRE-COMMIT: Cannot determine project directory." >&2; exit 2
+  fi
+  cd "$PROJECT_DIR"
+
+  FORMAT_OUTPUT=$(uv run ruff format . 2>&1) || true
+  echo "$FORMAT_OUTPUT"
+
   LINT_OUTPUT=$(uv run ruff check . --fix 2>&1)
   LINT_EXIT=$?
   if [[ $LINT_EXIT -ne 0 ]]; then
     echo "PRE-COMMIT: Unfixable lint errors. Fix before committing:" >&2
     echo "$LINT_OUTPUT" >&2; exit 2
   fi
+
   CHANGED=$(git diff --name-only 2>/dev/null || true)
   if [[ -n "$CHANGED" ]]; then
     echo "PRE-COMMIT: Formatting changed files that need staging:" >&2
     echo "$CHANGED" >&2
     echo "Run 'git add' on changed files, then retry commit." >&2; exit 2
   fi
-  MYPY_OUTPUT=$(uv run mypy src/core 2>&1)
+
+  MYPY_OUTPUT=$(uv run mypy src/core src/services 2>&1)
   MYPY_EXIT=$?
   if [[ $MYPY_EXIT -ne 0 ]]; then
     echo "PRE-COMMIT: Type check errors. Fix before committing:" >&2
