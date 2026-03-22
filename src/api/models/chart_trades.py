@@ -42,7 +42,7 @@ class TradeMarker(BaseModel):
     time: str = Field(..., description="ISO 8601 date format")
     side: str = Field(..., description="Trade side (buy/sell)")
     price: float = Field(..., gt=0, description="Execution price")
-    quantity: int = Field(..., gt=0, description="Trade quantity")
+    quantity: float = Field(..., gt=0, description="Trade quantity")
     pnl: float = Field(..., description="Realized P&L")
 
 

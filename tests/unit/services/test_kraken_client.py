@@ -349,6 +349,35 @@ class TestKrakenHistoricalClientFetchBars:
         return c
 
     @pytest.mark.asyncio
+    async def test_fetch_uses_trade_tick_type_for_volume(
+        self, client, mock_futures_market, mock_spot_market
+    ):
+        """get_ohlc must use tick_type='trade' so candles include real volume."""
+        mock_futures_market.get_ohlc.return_value = {
+            "candles": [
+                {
+                    "time": 1678888800000,
+                    "open": "24885.4",
+                    "high": "25039.43",
+                    "low": "24529.18",
+                    "close": "24793.87",
+                    "volume": "7560378",
+                }
+            ],
+            "more_candles": False,
+        }
+        mock_spot_market.get_asset_pairs.return_value = {
+            "XXBTZUSD": {"pair_decimals": 1, "lot_decimals": 8}
+        }
+        start = datetime(2023, 3, 15, tzinfo=timezone.utc)
+        end = datetime(2023, 3, 16, tzinfo=timezone.utc)
+        await client.fetch_bars("BTC/USD.KRAKEN", start, end, "1-HOUR-LAST")
+        call_kwargs = mock_futures_market.get_ohlc.call_args
+        assert call_kwargs.kwargs.get("tick_type") == "trade", (
+            f"Expected tick_type='trade', got: {call_kwargs}"
+        )
+
+    @pytest.mark.asyncio
     async def test_returns_bars_and_currency_pair(
         self, client, mock_futures_market, mock_spot_market
     ):

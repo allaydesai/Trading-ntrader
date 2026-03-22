@@ -410,14 +410,17 @@ class BacktestOrchestrator:
                                 positions_report_df=positions_df,
                             )
                     except Exception as e:
-                        logger.warning(f"Failed to capture trades: {e}")
+                        logger.warning(
+                            f"Failed to capture trades: {e}",
+                            exc_info=True,
+                        )
 
                 await session.commit()
 
             logger.info("Backtest results persisted", run_id=str(run_id))
 
         except Exception as e:
-            logger.warning(f"Failed to persist backtest results: {e}")
+            logger.warning(f"Failed to persist backtest results: {e}", exc_info=True)
 
     async def _persist_failed(
         self,

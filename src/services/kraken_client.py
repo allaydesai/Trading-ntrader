@@ -362,7 +362,7 @@ class KrakenHistoricalClient:
             while True:
                 await self.rate_limiter.acquire()
                 response = self._futures_market.get_ohlc(
-                    tick_type="spot",
+                    tick_type="trade",
                     symbol=charts_sym,
                     resolution=resolution,
                     from_=from_ts,

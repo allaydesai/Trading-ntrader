@@ -377,6 +377,46 @@ class TestMappingFunctions:
         assert config.data_source == "IBKR"
         assert config.additional_params == {"fast_period": 10, "slow_period": 20}
 
+    def test_build_configuration_kraken_includes_venue_in_symbol(self):
+        """Kraken data_source appends .KRAKEN venue to bare symbol."""
+        run = BacktestRun(
+            id=2,
+            run_id=uuid4(),
+            strategy_name="SMA Crossover",
+            strategy_type="sma_crossover",
+            instrument_symbol="BTC/USD",
+            start_date=datetime(2025, 1, 1, tzinfo=timezone.utc),
+            end_date=datetime(2025, 12, 31, tzinfo=timezone.utc),
+            initial_capital=Decimal("1000000"),
+            data_source="kraken",
+            execution_status="success",
+            execution_duration_seconds=Decimal("0.5"),
+            config_snapshot={},
+        )
+        run.created_at = datetime.now(timezone.utc)
+        config = build_configuration(run)
+        assert config.instrument_symbol == "BTC/USD.KRAKEN"
+
+    def test_build_configuration_non_kraken_preserves_bare_symbol(self):
+        """Non-kraken data_source leaves bare symbol unchanged."""
+        run = BacktestRun(
+            id=3,
+            run_id=uuid4(),
+            strategy_name="SMA Crossover",
+            strategy_type="sma_crossover",
+            instrument_symbol="AAPL",
+            start_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            end_date=datetime(2024, 12, 31, tzinfo=timezone.utc),
+            initial_capital=Decimal("100000"),
+            data_source="catalog",
+            execution_status="success",
+            execution_duration_seconds=Decimal("1.0"),
+            config_snapshot={},
+        )
+        run.created_at = datetime.now(timezone.utc)
+        config = build_configuration(run)
+        assert config.instrument_symbol == "AAPL"
+
     def test_build_trading_summary_extracts_trade_stats(self, sample_metrics):
         """build_trading_summary extracts trading statistics."""
         summary = build_trading_summary(sample_metrics)
