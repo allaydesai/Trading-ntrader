@@ -91,13 +91,13 @@
 
 > **NOTE: Write these tests FIRST, ensure they FAIL before implementation**
 
-- [ ] T015 [P] [US3] Write component test for concurrent execution prevention in tests/component/api/test_run_backtest_routes.py — test that submitting while a backtest is running returns 409 Conflict with "backtest already in progress" message (use asyncio.Lock mock or slow mock orchestrator)
-- [ ] T016 [P] [US3] Write component test for timeout handling in tests/component/api/test_run_backtest_routes.py — test that a backtest exceeding timeout_seconds returns a timeout error message suggesting shorter date range or larger timeframe
+- [X] T015 [P] [US3] Write component test for concurrent execution prevention in tests/component/api/test_run_backtest_routes.py — test that submitting while a backtest is running returns 409 Conflict with "backtest already in progress" message (use asyncio.Lock mock or slow mock orchestrator)
+- [X] T016 [P] [US3] Write component test for timeout handling in tests/component/api/test_run_backtest_routes.py — test that a backtest exceeding timeout_seconds returns a timeout error message suggesting shorter date range or larger timeframe
 
 ### Implementation for User Story 3
 
-- [ ] T017 [US3] Add asyncio.Lock for concurrent execution prevention in src/api/ui/backtests.py — add module-level `_backtest_lock = asyncio.Lock()` and update POST handler to use `_backtest_lock.locked()` check before execution. If locked, return 409 with "backtest already in progress" HTML. Acquire lock around execution block, release in finally
-- [ ] T018 [US3] Add HTMX progress indicator to templates/backtests/run.html — add hx-indicator attribute to the form/submit button pointing to a spinner element. Add a hidden spinner div (CSS animated) that HTMX shows during the POST request. Disable submit button via hx-disabled-elt during submission. Style spinner with Tailwind (animate-spin)
+- [X] T017 [US3] Add asyncio.Lock for concurrent execution prevention in src/api/ui/backtests.py — add module-level `_backtest_lock = asyncio.Lock()` and update POST handler to use `_backtest_lock.locked()` check before execution. If locked, return 409 with "backtest already in progress" HTML. Acquire lock around execution block, release in finally
+- [X] T018 [US3] Add HTMX progress indicator to templates/backtests/run.html — add hx-indicator attribute to the form/submit button pointing to a spinner element. Add a hidden spinner div (CSS animated) that HTMX shows during the POST request. Disable submit button via hx-disabled-elt during submission. Style spinner with Tailwind (animate-spin)
 
 **Checkpoint**: All user stories should now be independently functional — progress spinner shows during execution, concurrent submissions blocked
 
@@ -107,9 +107,9 @@
 
 **Purpose**: Edge case handling, cleanup, and final validation
 
-- [ ] T019 Verify form re-population on validation error — ensure that when POST validation fails, the form is re-rendered with previously submitted values preserved in all fields (form_data context variable)
-- [ ] T020 Run full test suite and fix any failures — execute `make test-unit && make test-component` and verify all new tests pass. Check that existing tests are not broken
-- [ ] T021 Run quickstart.md validation — follow specs/013-backtest-run-page/quickstart.md steps end-to-end to verify the feature works as documented
+- [X] T019 Verify form re-population on validation error — ensure that when POST validation fails, the form is re-rendered with previously submitted values preserved in all fields (form_data context variable)
+- [X] T020 Run full test suite and fix any failures — execute `make test-unit && make test-component` and verify all new tests pass. Check that existing tests are not broken
+- [X] T021 Run quickstart.md validation — follow specs/013-backtest-run-page/quickstart.md steps end-to-end to verify the feature works as documented
 
 ---
 

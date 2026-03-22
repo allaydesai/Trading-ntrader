@@ -1,5 +1,6 @@
 """Component tests for backtest run page routes."""
 
+import asyncio
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
@@ -216,8 +217,6 @@ class TestPostRunBacktest:
     def test_timeout_shows_error_message(
         self, mock_request_cls, mock_load_data, mock_orchestrator_cls, client
     ):
-        import asyncio
-
         mock_request = MagicMock()
         mock_request.instrument_id = "AAPL.NASDAQ"
         mock_request_cls.from_cli_args.return_value = mock_request
@@ -254,6 +253,18 @@ class TestPostRunBacktest:
         html = response.text
         assert 'value="MSFT"' in html
         assert 'value="500000"' in html
+
+    @patch("src.api.ui.backtests._backtest_lock")
+    def test_concurrent_submission_returns_409(self, mock_lock, client):
+        """Submitting while a backtest is running returns 409 with message."""
+        mock_lock.locked.return_value = True
+
+        response = client.post(
+            "/backtests/run",
+            data=self._form_data(),
+        )
+        assert response.status_code == 409
+        assert "already in progress" in response.text.lower()
 
 
 class TestGetStrategyParams:

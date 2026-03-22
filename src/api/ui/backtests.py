@@ -45,6 +45,9 @@ templates = Jinja2Templates(directory="templates")
 # Quiet console for suppressing Rich output in web context
 _quiet_console = Console(quiet=True)
 
+# Only one backtest can run at a time
+_backtest_lock = asyncio.Lock()
+
 # Sorted lists for template dropdowns
 DATA_SOURCES = sorted(VALID_DATA_SOURCES)
 TIMEFRAMES = list(VALID_TIMEFRAMES)
@@ -152,72 +155,86 @@ async def run_backtest_submit(request: Request) -> Response:
             request, templates.TemplateResponse("backtests/run.html", context)
         )
 
-    # Build backtest request
-    # LAST = last-traded price; standard for equity/crypto bar aggregation
-    bar_type_spec = f"{form_data.timeframe}-LAST"
-    start_dt = datetime.combine(form_data.start_date, datetime.min.time(), tzinfo=timezone.utc)
-    end_dt = datetime.combine(form_data.end_date, datetime.min.time(), tzinfo=timezone.utc)
-
-    try:
-        bt_request = BacktestRequest.from_cli_args(
-            strategy=form_data.strategy,
-            symbol=form_data.symbol,
-            start=start_dt,
-            end=end_dt,
-            bar_type_spec=bar_type_spec,
-            persist=True,
-            starting_balance=form_data.starting_balance,
-            data_source=form_data.data_source,
-            **form_data.strategy_params,
-        )
-
-        data_result = await load_backtest_data(
-            data_source=form_data.data_source,
-            instrument_id=bt_request.instrument_id,
-            bar_type_spec=bar_type_spec,
-            start=start_dt,
-            end=end_dt,
-            console=_quiet_console,
-        )
-    except (ValueError, RuntimeError) as e:
-        logger.error("Failed to prepare backtest", error=str(e))
-        context = _build_run_context(request, execution_error=str(e), form_data=raw_data)
-        return _htmx_full_page_response(
-            request, templates.TemplateResponse("backtests/run.html", context)
-        )
-
-    # Execute backtest with timeout
-    orchestrator = BacktestOrchestrator()
-    try:
-        result, run_id = await asyncio.wait_for(
-            orchestrator.execute(bt_request, data_result.bars, data_result.instrument),
-            timeout=form_data.timeout_seconds,
-        )
-        logger.info("Backtest completed", run_id=str(run_id))
-        response = Response(status_code=200)
-        response.headers["HX-Redirect"] = f"/backtests/{run_id}"
-        return response
-    except asyncio.TimeoutError:
-        logger.warning("Backtest timed out", timeout=form_data.timeout_seconds)
+    # Prevent concurrent backtest execution
+    if _backtest_lock.locked():
+        logger.warning("Backtest submission rejected — another backtest is already running")
         context = _build_run_context(
             request,
-            execution_error=(
-                f"Backtest timed out after {form_data.timeout_seconds} seconds. "
-                "Try a shorter date range or larger timeframe."
-            ),
+            execution_error="A backtest is already in progress. Please wait for it to complete.",
             form_data=raw_data,
         )
         return _htmx_full_page_response(
-            request, templates.TemplateResponse("backtests/run.html", context)
+            request,
+            templates.TemplateResponse("backtests/run.html", context, status_code=409),
         )
-    except (ValueError, RuntimeError) as e:
-        logger.error("Backtest execution failed", error=str(e))
-        context = _build_run_context(request, execution_error=str(e), form_data=raw_data)
-        return _htmx_full_page_response(
-            request, templates.TemplateResponse("backtests/run.html", context)
-        )
-    finally:
-        orchestrator.dispose()
+
+    async with _backtest_lock:
+        # Build backtest request
+        # LAST = last-traded price; standard for equity/crypto bar aggregation
+        bar_type_spec = f"{form_data.timeframe}-LAST"
+        start_dt = datetime.combine(form_data.start_date, datetime.min.time(), tzinfo=timezone.utc)
+        end_dt = datetime.combine(form_data.end_date, datetime.min.time(), tzinfo=timezone.utc)
+
+        try:
+            bt_request = BacktestRequest.from_cli_args(
+                strategy=form_data.strategy,
+                symbol=form_data.symbol,
+                start=start_dt,
+                end=end_dt,
+                bar_type_spec=bar_type_spec,
+                persist=True,
+                starting_balance=form_data.starting_balance,
+                data_source=form_data.data_source,
+                **form_data.strategy_params,
+            )
+
+            data_result = await load_backtest_data(
+                data_source=form_data.data_source,
+                instrument_id=bt_request.instrument_id,
+                bar_type_spec=bar_type_spec,
+                start=start_dt,
+                end=end_dt,
+                console=_quiet_console,
+            )
+        except (ValueError, RuntimeError) as e:
+            logger.error("Failed to prepare backtest", error=str(e))
+            context = _build_run_context(request, execution_error=str(e), form_data=raw_data)
+            return _htmx_full_page_response(
+                request, templates.TemplateResponse("backtests/run.html", context)
+            )
+
+        # Execute backtest with timeout
+        orchestrator = BacktestOrchestrator()
+        try:
+            result, run_id = await asyncio.wait_for(
+                orchestrator.execute(bt_request, data_result.bars, data_result.instrument),
+                timeout=form_data.timeout_seconds,
+            )
+            logger.info("Backtest completed", run_id=str(run_id))
+            response = Response(status_code=200)
+            response.headers["HX-Redirect"] = f"/backtests/{run_id}"
+            return response
+        except asyncio.TimeoutError:
+            logger.warning("Backtest timed out", timeout=form_data.timeout_seconds)
+            context = _build_run_context(
+                request,
+                execution_error=(
+                    f"Backtest timed out after {form_data.timeout_seconds} seconds. "
+                    "Try a shorter date range or larger timeframe."
+                ),
+                form_data=raw_data,
+            )
+            return _htmx_full_page_response(
+                request, templates.TemplateResponse("backtests/run.html", context)
+            )
+        except (ValueError, RuntimeError) as e:
+            logger.error("Backtest execution failed", error=str(e))
+            context = _build_run_context(request, execution_error=str(e), form_data=raw_data)
+            return _htmx_full_page_response(
+                request, templates.TemplateResponse("backtests/run.html", context)
+            )
+        finally:
+            orchestrator.dispose()
 
 
 @router.get("/run/strategy-params/{strategy_name}", response_class=HTMLResponse)
