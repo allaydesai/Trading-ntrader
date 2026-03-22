@@ -10,7 +10,46 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+import structlog
 from pydantic import BaseModel, Field, field_validator, model_validator
+
+logger = structlog.get_logger(__name__)
+
+
+def _resolve_instrument_id(symbol: str) -> str:
+    """Resolve a bare symbol to a full instrument ID using the catalog.
+
+    Checks the catalog availability cache for an existing entry matching
+    the symbol (e.g., finds "GDX.ARCA" when given "GDX"). Falls back to
+    "{symbol}.NASDAQ" if no match is found.
+
+    Args:
+        symbol: Uppercase trading symbol (e.g., "GDX", "AAPL")
+
+    Returns:
+        Full instrument ID (e.g., "GDX.ARCA" or "AAPL.NASDAQ")
+    """
+    try:
+        from src.services.data_catalog import DataCatalogService
+
+        catalog = DataCatalogService()
+        prefix = f"{symbol}."
+        for key in catalog.availability_cache:
+            # Cache keys are "{instrument_id}_{bar_type_spec}"
+            instrument_part = key.rsplit("_", 1)[0]
+            if instrument_part.startswith(prefix):
+                resolved = instrument_part
+                logger.info(
+                    "instrument_id_resolved_from_catalog",
+                    symbol=symbol,
+                    resolved=resolved,
+                )
+                return resolved
+    except Exception:
+        pass
+
+    # Default: assume NASDAQ (IBKR will resolve to the correct exchange)
+    return f"{symbol}.NASDAQ"
 
 
 class BacktestRequest(BaseModel):
@@ -263,7 +302,9 @@ class BacktestRequest(BaseModel):
         elif data_source == "kraken":
             instrument_id = f"{symbol.upper()}.KRAKEN"
         else:
-            instrument_id = f"{symbol.upper()}.NASDAQ"
+            # Try to resolve the exchange from the catalog's availability
+            # cache (e.g., GDX may be stored as GDX.ARCA, not GDX.NASDAQ)
+            instrument_id = _resolve_instrument_id(symbol.upper())
 
         return cls(
             strategy_type=strategy,

@@ -14,6 +14,8 @@ from uuid import UUID, uuid4
 import structlog
 from nautilus_trader.backtest.engine import BacktestEngine, BacktestEngineConfig
 from nautilus_trader.backtest.models import FillModel
+from nautilus_trader.common.component import is_logging_initialized
+from nautilus_trader.config import LoggingConfig
 from nautilus_trader.model.currencies import USD
 from nautilus_trader.model.data import Bar
 from nautilus_trader.model.enums import AccountType, OmsType
@@ -175,8 +177,13 @@ class BacktestOrchestrator:
             bars: Bar data for the backtest
             instrument: Instrument to trade
         """
-        # Configure engine
-        config = BacktestEngineConfig(trader_id=TraderId("BACKTESTER-001"))
+        # Configure engine — bypass Nautilus logging if already initialized
+        # (e.g., when running from the web server process)
+        logging_config = LoggingConfig(bypass_logging=is_logging_initialized())
+        config = BacktestEngineConfig(
+            trader_id=TraderId("BACKTESTER-001"),
+            logging=logging_config,
+        )
         self.engine = BacktestEngine(config=config)
 
         # Create fill model

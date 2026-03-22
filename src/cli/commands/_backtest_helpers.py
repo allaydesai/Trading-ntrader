@@ -70,13 +70,15 @@ def apply_cli_overrides(
 
     if symbol is not None:
         # Rebuild instrument_id from symbol
+        from src.models.backtest_request import _resolve_instrument_id
+
         symbol_upper = symbol.upper()
         if "." in symbol_upper:
             instrument_id = symbol_upper
         elif request.data_source == "kraken":
             instrument_id = f"{symbol_upper}.KRAKEN"
         else:
-            instrument_id = f"{symbol_upper}.NASDAQ"
+            instrument_id = _resolve_instrument_id(symbol_upper)
         updates["symbol"] = symbol_upper.split(".")[0]
         updates["instrument_id"] = instrument_id
 
@@ -565,8 +567,14 @@ async def _load_catalog_data(
 
         progress.update(task, completed=True)
 
-    # Load instrument
+    # Load instrument — try the requested ID first, then the resolved ID
+    # from the bars (IBKR may qualify to a different exchange, e.g.,
+    # GDX.NASDAQ → GDX.ARCA)
     instrument = catalog_service.load_instrument(instrument_id)
+    if instrument is None and bars:
+        resolved_id = str(bars[0].bar_type.instrument_id)
+        if resolved_id != instrument_id:
+            instrument = catalog_service.load_instrument(resolved_id)
 
     # Fetch instrument from IBKR if not in catalog
     if instrument is None:

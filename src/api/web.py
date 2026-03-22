@@ -8,9 +8,18 @@ dashboard statistics, and navigating the system.
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from nautilus_trader.common.component import init_logging
 
 from src.api.rest import equity, indicators, timeseries, trades
 from src.api.ui import backtests, dashboard
+from src.utils.logging import set_nautilus_log_guard
+
+# Pre-initialize Nautilus logging subsystem once for the process lifetime.
+# This prevents "Logging subsystem already initialized" errors when running
+# multiple backtests (each BacktestEngine / HistoricInteractiveBrokersClient
+# would otherwise try to re-initialize).
+_log_guard = init_logging()
+set_nautilus_log_guard(_log_guard)
 
 app = FastAPI(
     title="NTrader Web UI",

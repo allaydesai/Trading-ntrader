@@ -53,6 +53,14 @@ uv run uvicorn src.api.web:app --reload --host 127.0.0.1 --port 8000  # Web UI
 - Never run integration tests without `--forked` — C extensions corrupt shared state
 - Never hardcode IBKR connection details — use `IBKRSettings` env vars
 
+## Editing with Auto-Linter
+
+A ruff auto-formatter runs after each file edit. This can silently revert changes (e.g., removing "unused" imports) when dependent edits are split across multiple steps.
+
+- **Make dependent changes in a single edit** — e.g., when moving an import from inline to top-level, remove the inline usage in the same edit that adds the top-level import
+- **When removing a function parameter**, update call sites first (extra args still work), then remove the parameter
+- **Re-read the file after each edit** if you suspect the linter modified it — never assume your edit landed as written
+
 ## Decision Heuristics
 
 - **Test tier**: Unit for pure logic · Component for Nautilus with test doubles · Integration for real engine runs (`--forked`) · E2E for full workflows · **UI testing** via `agent-browser` skill
