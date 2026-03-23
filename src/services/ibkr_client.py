@@ -2,16 +2,51 @@
 
 import asyncio
 from collections import deque
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Dict
 
+import structlog  # noqa: E402
 from ibapi.common import MarketDataTypeEnum  # type: ignore
 from nautilus_trader.adapters.interactive_brokers.historical.client import (
     HistoricInteractiveBrokersClient,
 )
+from nautilus_trader.common import component as _nautilus_component
 from nautilus_trader.model.identifiers import InstrumentId
 
-from src.utils.logging import set_nautilus_log_guard
+from src.utils.logging import get_nautilus_log_guard, set_nautilus_log_guard
+
+logger = structlog.get_logger(__name__)
+
+
+@contextmanager
+def _guard_nautilus_logging():
+    """Patch init_logging to return existing guard if logging is already initialized.
+
+    HistoricInteractiveBrokersClient unconditionally calls init_logging() in its
+    __init__. When the web server has already initialized Nautilus logging, this
+    causes "Logging subsystem already initialized". This context manager temporarily
+    replaces init_logging with a no-op that returns the existing LogGuard.
+    """
+    if _nautilus_component.is_logging_initialized():
+        existing_guard = get_nautilus_log_guard()
+        original_init = _nautilus_component.init_logging
+
+        def _noop_init_logging(**kwargs):
+            return existing_guard
+
+        _nautilus_component.init_logging = _noop_init_logging
+        # Also patch the module-level reference used by the IBKR client
+        import nautilus_trader.adapters.interactive_brokers.historical.client as _ibkr_mod
+
+        _ibkr_mod.init_logging = _noop_init_logging
+        try:
+            yield
+        finally:
+            _nautilus_component.init_logging = original_init
+            _ibkr_mod.init_logging = original_init
+    else:
+        yield
 
 
 class RateLimiter:
@@ -93,13 +128,14 @@ class IBKRHistoricalClient:
             client_id: Unique client identifier
             market_data_type: Data type (DELAYED_FROZEN for paper trading)
         """
-        self.client = HistoricInteractiveBrokersClient(
-            host=host,
-            port=port,
-            client_id=client_id,
-            market_data_type=market_data_type,
-            log_level="INFO",
-        )
+        with _guard_nautilus_logging():
+            self.client = HistoricInteractiveBrokersClient(
+                host=host,
+                port=port,
+                client_id=client_id,
+                market_data_type=market_data_type,
+                log_level="INFO",
+            )
         self._connected = False
         self.rate_limiter = RateLimiter(requests_per_second=45)
 
@@ -194,6 +230,26 @@ class IBKRHistoricalClient:
         start_naive = start.replace(tzinfo=None) if start.tzinfo else start
         end_naive = end.replace(tzinfo=None) if end.tzinfo else end
 
+        # Reason: Resolve instrument first to get the correct exchange.
+        # IBKR qualifies contracts to their primary exchange (e.g., GDX.NASDAQ
+        # resolves to GDX.ARCA). We must use the resolved ID for the bars
+        # request, otherwise Nautilus can't find the instrument in its cache.
+        nautilus_instrument_id = InstrumentId.from_str(instrument_id)
+        instruments = await self.client.request_instruments(
+            instrument_ids=[nautilus_instrument_id],
+        )
+        instrument = instruments[0] if instruments else None
+
+        # Use the resolved instrument ID for bars request if IBKR qualified
+        # the contract to a different exchange
+        resolved_id = str(instrument.id) if instrument else instrument_id
+        if resolved_id != instrument_id:
+            logger.info(
+                "ibkr_instrument_resolved",
+                requested=instrument_id,
+                resolved=resolved_id,
+            )
+
         # Reason: Request bars from IBKR via Nautilus client
         # bar_specifications should be simple format strings like "1-MINUTE-LAST"
         # Use instrument_ids instead of contracts to avoid parsing issues
@@ -202,21 +258,10 @@ class IBKRHistoricalClient:
             end_date_time=end_naive,  # Required parameter (comes before start!)
             tz_name="UTC",
             start_date_time=start_naive,  # Optional start time
-            instrument_ids=[instrument_id],  # Use instrument_ids instead of contracts
+            instrument_ids=[resolved_id],  # Use resolved ID from IBKR
             use_rth=True,  # Regular Trading Hours only
             timeout=120,  # 2 minute timeout
         )
-
-        # Reason: Also fetch instrument definition for persistence
-        # This allows us to save the instrument to the catalog
-        # Convert string to InstrumentId object for request_instruments API
-        nautilus_instrument_id = InstrumentId.from_str(instrument_id)
-        instruments = await self.client.request_instruments(
-            instrument_ids=[nautilus_instrument_id],
-        )
-
-        # Reason: Return both bars and instrument (first from the list)
-        instrument = instruments[0] if instruments else None
 
         return bars, instrument
 

@@ -1,0 +1,43 @@
+{% if param_fields %}
+<div class="border-t border-slate-700 pt-4 mt-4">
+    <h3 class="text-sm font-medium text-slate-300 mb-3">Strategy Parameters</h3>
+    <div class="grid grid-cols-2 gap-4">
+        {% for field in param_fields %}
+        <div>
+            <label for="param_{{ field.name }}" class="block text-sm font-medium text-slate-300 mb-1">
+                {{ field.name | replace("_", " ") | title }}
+            </label>
+            {% if field.field_type == "boolean" %}
+            <label class="flex items-center gap-2">
+                <input type="checkbox"
+                       id="param_{{ field.name }}"
+                       name="param_{{ field.name }}"
+                       value="true"
+                       {% if field.default %}checked{% endif %}
+                       class="rounded bg-slate-800 border-slate-600 text-blue-500 focus:ring-blue-500">
+                <span class="text-sm text-slate-400">{{ field.description }}</span>
+            </label>
+            {% elif field.field_type in ("integer", "number") %}
+            <input type="number"
+                   id="param_{{ field.name }}"
+                   name="param_{{ field.name }}"
+                   value="{{ field.default }}"
+                   {% if field.minimum is not none %}min="{{ field.minimum }}"{% endif %}
+                   {% if field.maximum is not none %}max="{{ field.maximum }}"{% endif %}
+                   {% if field.field_type == "integer" %}step="1"{% else %}step="any"{% endif %}
+                   class="w-full bg-slate-800 border border-slate-600 rounded-md px-3 py-2 text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500">
+            {% else %}
+            <input type="text"
+                   id="param_{{ field.name }}"
+                   name="param_{{ field.name }}"
+                   value="{{ field.default }}"
+                   class="w-full bg-slate-800 border border-slate-600 rounded-md px-3 py-2 text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500">
+            {% endif %}
+            {% if field.description and field.field_type != "boolean" %}
+            <p class="text-slate-500 text-xs mt-1">{{ field.description }}</p>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}

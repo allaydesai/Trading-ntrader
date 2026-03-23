@@ -457,8 +457,16 @@ def build_configuration(run) -> ConfigurationSnapshot:
         >>> print(config.strategy_name)
         'SMA Crossover'
     """
+    # Construct full instrument symbol with venue for chart data lookups
+    symbol = run.instrument_symbol
+    if "." not in symbol:
+        data_source_venue = {"kraken": "KRAKEN"}
+        venue = data_source_venue.get(run.data_source)
+        if venue:
+            symbol = f"{symbol}.{venue}"
+
     return ConfigurationSnapshot(
-        instrument_symbol=run.instrument_symbol,
+        instrument_symbol=symbol,
         start_date=run.start_date,
         end_date=run.end_date,
         initial_capital=run.initial_capital,

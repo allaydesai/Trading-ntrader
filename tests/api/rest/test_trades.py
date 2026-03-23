@@ -214,6 +214,60 @@ class TestTradesEmptyArray:
             app.dependency_overrides.pop(get_db, None)
 
 
+class TestTradesFractionalCryptoQuantity:
+    """Tests for fractional crypto quantities (e.g., 0.98 BTC)."""
+
+    def test_trades_handles_fractional_crypto_quantities(self, client: TestClient):
+        """Sub-1.0 crypto quantities must not truncate to 0 and cause a 500."""
+        run_id = uuid4()
+        mock_service = MagicMock()
+        mock_backtest = MagicMock()
+        mock_backtest.run_id = run_id
+        mock_backtest.id = 1
+
+        async def mock_get_backtest(rid):
+            return mock_backtest
+
+        mock_service.get_backtest_by_id = mock_get_backtest
+
+        mock_trade = MagicMock()
+        mock_trade.entry_timestamp = datetime(2025, 2, 3, tzinfo=timezone.utc)
+        mock_trade.order_side = "SELL"
+        mock_trade.entry_price = Decimal("101443.06")
+        mock_trade.quantity = Decimal("0.98577458")  # Sub-1.0 crypto quantity
+        mock_trade.exit_timestamp = datetime(2025, 3, 24, tzinfo=timezone.utc)
+        mock_trade.exit_price = Decimal("87510.50")
+        mock_trade.profit_loss = Decimal("13730.36")
+
+        mock_result = MagicMock()
+        mock_scalars = MagicMock()
+        mock_scalars.all = MagicMock(return_value=[mock_trade])
+        mock_result.scalars = MagicMock(return_value=mock_scalars)
+
+        mock_db = MagicMock()
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        async def mock_get_db_override():
+            yield mock_db
+
+        app.dependency_overrides[get_backtest_query_service] = lambda: mock_service
+        app.dependency_overrides[get_db] = mock_get_db_override
+
+        try:
+            response = client.get(f"/api/trades/{run_id}")
+
+            assert response.status_code == 200, (
+                f"Expected 200 but got {response.status_code}: {response.text}"
+            )
+            data = response.json()
+            assert data["trade_count"] == 2  # entry + exit
+            # Quantity should be the fractional value, not truncated to 0
+            assert data["trades"][0]["quantity"] > 0
+        finally:
+            app.dependency_overrides.pop(get_backtest_query_service, None)
+            app.dependency_overrides.pop(get_db, None)
+
+
 class TestTrades404Error:
     """Tests for 404 error when run_id not found."""
 

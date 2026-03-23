@@ -89,7 +89,7 @@ async def get_trades(
                 time=entry_time,
                 side=trade.order_side.lower(),
                 price=float(trade.entry_price),
-                quantity=int(float(trade.quantity)),
+                quantity=float(trade.quantity),
                 pnl=0.0,
             )
         )
@@ -103,7 +103,7 @@ async def get_trades(
                     time=exit_time,
                     side=exit_side,
                     price=float(trade.exit_price),
-                    quantity=int(float(trade.quantity)),
+                    quantity=float(trade.quantity),
                     pnl=float(trade.profit_loss or 0),
                 )
             )

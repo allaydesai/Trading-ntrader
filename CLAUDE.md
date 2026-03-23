@@ -53,11 +53,34 @@ uv run uvicorn src.api.web:app --reload --host 127.0.0.1 --port 8000  # Web UI
 - Never run integration tests without `--forked` — C extensions corrupt shared state
 - Never hardcode IBKR connection details — use `IBKRSettings` env vars
 
+## Editing with Auto-Linter
+
+A ruff auto-formatter runs after each file edit. This can silently revert changes (e.g., removing "unused" imports) when dependent edits are split across multiple steps.
+
+- **Make dependent changes in a single edit** — e.g., when moving an import from inline to top-level, remove the inline usage in the same edit that adds the top-level import
+- **When removing a function parameter**, update call sites first (extra args still work), then remove the parameter
+- **Re-read the file after each edit** if you suspect the linter modified it — never assume your edit landed as written
+
 ## Decision Heuristics
 
-- **Test tier**: Unit for pure logic · Component for Nautilus with test doubles · Integration for real engine runs (`--forked`) · E2E for full workflows
+- **Test tier**: Unit for pure logic · Component for Nautilus with test doubles · Integration for real engine runs (`--forked`) · E2E for full workflows · **UI testing** via `agent-browser` skill
 - **New file vs edit**: Prefer editing existing files. Only create new for genuinely new concepts (new strategy, new API route)
+- **UI changes**: Always invoke the `web-ui-development` skill before editing templates, routes, or HTMX patterns
 - **Stuck on Nautilus error?**: Read `agent_docs/nautilus.md` before trying workarounds
+
+## UI Testing (agent-browser)
+
+Use the `agent-browser` skill for all browser-based UI testing and verification.
+
+- **Always snapshot before interacting** — `agent-browser snapshot -i` to get element refs (@e1, @e2, ...). Never guess selectors
+- **Re-snapshot after navigation/re-render** — refs become stale after page changes
+- **Wait for async content** — use `agent-browser wait --text "Expected"` before snapshotting dynamic pages
+- **Capture evidence** — `agent-browser screenshot result.png` for pass/fail proof
+- **Date inputs** — `agent-browser fill @ref` silently fails on `<input type="date">` (exposed as 3 spinbuttons). Use `agent-browser eval` with native value setter + event dispatch instead
+- **HTMX form submission** — `agent-browser click @ref` on submit buttons may not trigger HTMX's event chain. Use `agent-browser eval "document.querySelector('button[type=\"submit\"]').click()"` to ensure HTMX intercepts the submit
+- **Timeouts for long requests** — set `AGENT_BROWSER_DEFAULT_TIMEOUT=120000` when clicking actions that trigger slow server responses (e.g., backtest execution)
+- **Playwright MCP timeouts** — configured with `--timeout-action 60000 --timeout-navigation 120000` to handle long-running backtest requests
+- Dev server: `http://127.0.0.1:8000` (FastAPI/HTMX)
 
 ## Hooks
 
@@ -112,6 +135,8 @@ See README.md for full setup and usage instructions.
 ## Active Technologies
 - Python 3.11+ + python-kraken-sdk, nautilus-trader, FastAPI, Pydantic (012-kraken-crypto-support)
 - Parquet (via Nautilus ParquetDataCatalog), PostgreSQL/TimescaleDB (existing backtest results) (012-kraken-crypto-support)
+- Python 3.11+ + FastAPI, Jinja2, HTMX, Pydantic, nautilus-trader (013-backtest-run-page)
+- PostgreSQL/TimescaleDB (existing — no schema changes) (013-backtest-run-page)
 
 ## Recent Changes
 - 012-kraken-crypto-support: Added Python 3.11+ + python-kraken-sdk, nautilus-trader, FastAPI, Pydantic

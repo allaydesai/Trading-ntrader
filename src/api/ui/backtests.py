@@ -4,14 +4,17 @@ Backtests route handler for web UI.
 Provides paginated backtest list, detail view, and HTMX fragment endpoints.
 """
 
-from datetime import date
-from typing import Optional
+import asyncio
+from datetime import date, datetime, timezone
+from typing import Any, Optional
 from uuid import UUID
 
 import structlog
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
+from pydantic import ValidationError
+from rich.console import Console
 
 from src.api.dependencies import BacktestService
 from src.api.models.backtest_detail import to_detail_view
@@ -23,11 +26,244 @@ from src.api.models.filter_models import (
     SortOrder,
 )
 from src.api.models.navigation import BreadcrumbItem, NavigationState
+from src.api.models.run_backtest import (
+    VALID_DATA_SOURCES,
+    VALID_TIMEFRAMES,
+    BacktestRunFormData,
+    StrategyOption,
+)
+from src.cli.commands._backtest_helpers import load_backtest_data
+from src.core.backtest_orchestrator import BacktestOrchestrator
+from src.core.strategy_registry import StrategyRegistry
+from src.models.backtest_request import BacktestRequest
 
 logger = structlog.get_logger(__name__)
 
 router = APIRouter()
 templates = Jinja2Templates(directory="templates")
+
+# Quiet console for suppressing Rich output in web context.
+# TODO: pass console=None if load_backtest_data adds support for it,
+# avoiding the Rich dependency at module level.
+_quiet_console = Console(quiet=True)
+
+# Only one backtest can run at a time.
+# NOTE: This is a per-process lock — it does NOT prevent concurrent execution
+# across multiple uvicorn workers (--workers N). Acceptable for now since the
+# spec assumes single-process, synchronous execution.
+_backtest_lock = asyncio.Lock()
+
+# Sorted lists for template dropdowns
+DATA_SOURCES = sorted(VALID_DATA_SOURCES)
+TIMEFRAMES = list(VALID_TIMEFRAMES)
+
+
+def _get_strategies() -> list[StrategyOption]:
+    """Get all registered strategies as dropdown options."""
+    strategies = StrategyRegistry.get_all()
+    return [
+        StrategyOption(
+            name=defn.name,
+            description=defn.description,
+            aliases=defn.aliases,
+        )
+        for defn in strategies.values()
+    ]
+
+
+def _build_run_context(
+    request: Request,
+    *,
+    errors: dict[str, str] | None = None,
+    form_data: dict[str, Any] | None = None,
+    execution_error: str | None = None,
+) -> dict[str, Any]:
+    """Build template context for the run backtest form."""
+    nav_state = NavigationState(
+        active_page="run_backtest",
+        breadcrumbs=[
+            BreadcrumbItem(label="Dashboard", url="/", is_current=False),
+            BreadcrumbItem(label="Backtests", url="/backtests", is_current=False),
+            BreadcrumbItem(label="Run Backtest", url=None, is_current=True),
+        ],
+    )
+    return {
+        "request": request,
+        "strategies": _get_strategies(),
+        "data_sources": DATA_SOURCES,
+        "timeframes": TIMEFRAMES,
+        "nav_state": nav_state,
+        "errors": errors or {},
+        "form_data": form_data or {},
+        "execution_error": execution_error,
+    }
+
+
+def _htmx_full_page_response(request: Request, template_response: HTMLResponse) -> HTMLResponse:
+    """Add HTMX headers to retarget full page when form POST returns HTML."""
+    if request.headers.get("HX-Request"):
+        template_response.headers["HX-Retarget"] = "body"
+        template_response.headers["HX-Reswap"] = "innerHTML"
+    return template_response
+
+
+@router.get("/run", response_class=HTMLResponse)
+async def run_backtest_form(request: Request) -> HTMLResponse:
+    """Display the backtest configuration form."""
+    logger.info("Run backtest form requested")
+    context = _build_run_context(request)
+    return templates.TemplateResponse("backtests/run.html", context)
+
+
+@router.post("/run", response_class=HTMLResponse)
+async def run_backtest_submit(request: Request) -> Response:
+    """Submit backtest configuration, execute, and redirect to results."""
+    form = await request.form()
+    raw_data: dict[str, Any] = {
+        "strategy": form.get("strategy", ""),
+        "symbol": form.get("symbol", ""),
+        "start_date": form.get("start_date", ""),
+        "end_date": form.get("end_date", ""),
+        "data_source": form.get("data_source", "catalog"),
+        "timeframe": form.get("timeframe", "1-DAY"),
+        "starting_balance": form.get("starting_balance", "1000000"),
+        "timeout_seconds": form.get("timeout_seconds", "300"),
+    }
+
+    # Collect strategy params (param_ prefixed fields)
+    strategy_params: dict[str, Any] = {}
+    for key, value in form.items():
+        if key.startswith("param_") and value:
+            strategy_params[key.removeprefix("param_")] = value
+    raw_data["strategy_params"] = strategy_params
+
+    # Validate form data
+    try:
+        form_data = BacktestRunFormData(**raw_data)
+    except ValidationError as e:
+        error_messages: dict[str, str] = {}
+        form_error: str | None = None
+        for error in e.errors():
+            if error["loc"]:
+                field = str(error["loc"][-1])
+                error_messages[field] = error["msg"]
+            else:
+                form_error = error["msg"]
+        logger.info("Form validation failed", errors=error_messages, form_error=form_error)
+        context = _build_run_context(
+            request,
+            errors=error_messages,
+            form_data=raw_data,
+            execution_error=form_error,
+        )
+        return _htmx_full_page_response(
+            request, templates.TemplateResponse("backtests/run.html", context)
+        )
+
+    # Prevent concurrent backtest execution.
+    # NOTE: There is a small race window between locked() and `async with` below —
+    # a second request arriving in that gap would block on the lock rather than
+    # getting the 409. Acceptable for a single-user tool; for multi-user, replace
+    # with a database-level advisory lock or distributed mutex.
+    if _backtest_lock.locked():
+        logger.warning("Backtest submission rejected — another backtest is already running")
+        context = _build_run_context(
+            request,
+            execution_error="A backtest is already in progress. Please wait for it to complete.",
+            form_data=raw_data,
+        )
+        return _htmx_full_page_response(
+            request,
+            templates.TemplateResponse("backtests/run.html", context, status_code=409),
+        )
+
+    async with _backtest_lock:
+        # Build backtest request
+        # LAST = last-traded price; standard for equity/crypto bar aggregation
+        bar_type_spec = f"{form_data.timeframe}-LAST"
+        start_dt = datetime.combine(form_data.start_date, datetime.min.time(), tzinfo=timezone.utc)
+        end_dt = datetime.combine(form_data.end_date, datetime.min.time(), tzinfo=timezone.utc)
+
+        try:
+            bt_request = BacktestRequest.from_cli_args(
+                strategy=form_data.strategy,
+                symbol=form_data.symbol,
+                start=start_dt,
+                end=end_dt,
+                bar_type_spec=bar_type_spec,
+                persist=True,
+                starting_balance=form_data.starting_balance,
+                data_source=form_data.data_source,
+                **form_data.strategy_params,
+            )
+
+            data_result = await load_backtest_data(
+                data_source=form_data.data_source,
+                instrument_id=bt_request.instrument_id,
+                bar_type_spec=bar_type_spec,
+                start=start_dt,
+                end=end_dt,
+                console=_quiet_console,
+            )
+        except (ValueError, RuntimeError) as e:
+            logger.error("Failed to prepare backtest", error=str(e))
+            context = _build_run_context(request, execution_error=str(e), form_data=raw_data)
+            return _htmx_full_page_response(
+                request, templates.TemplateResponse("backtests/run.html", context)
+            )
+
+        # Execute backtest with timeout
+        orchestrator = BacktestOrchestrator()
+        try:
+            result, run_id = await asyncio.wait_for(
+                orchestrator.execute(bt_request, data_result.bars, data_result.instrument),
+                timeout=form_data.timeout_seconds,
+            )
+            logger.info("Backtest completed", run_id=str(run_id))
+            response = Response(status_code=200)
+            response.headers["HX-Redirect"] = f"/backtests/{run_id}"
+            return response
+        except asyncio.TimeoutError:
+            logger.warning("Backtest timed out", timeout=form_data.timeout_seconds)
+            context = _build_run_context(
+                request,
+                execution_error=(
+                    f"Backtest timed out after {form_data.timeout_seconds} seconds. "
+                    "Try a shorter date range or larger timeframe."
+                ),
+                form_data=raw_data,
+            )
+            return _htmx_full_page_response(
+                request, templates.TemplateResponse("backtests/run.html", context)
+            )
+        except (ValueError, RuntimeError) as e:
+            logger.error("Backtest execution failed", error=str(e))
+            context = _build_run_context(request, execution_error=str(e), form_data=raw_data)
+            return _htmx_full_page_response(
+                request, templates.TemplateResponse("backtests/run.html", context)
+            )
+        finally:
+            orchestrator.dispose()
+
+
+@router.get("/run/strategy-params/{strategy_name}", response_class=HTMLResponse)
+async def get_strategy_params(request: Request, strategy_name: str) -> HTMLResponse:
+    """Return HTMX fragment with strategy-specific parameter inputs."""
+    from src.api.models.run_backtest import schema_to_fields
+
+    try:
+        strategy_def = StrategyRegistry.get(strategy_name)
+    except KeyError:
+        return HTMLResponse("<div></div>")
+
+    if not strategy_def.param_model:
+        return HTMLResponse("<div></div>")
+
+    param_fields = schema_to_fields(strategy_def.param_model)
+    return templates.TemplateResponse(
+        "backtests/partials/strategy_params.html",
+        {"request": request, "param_fields": param_fields},
+    )
 
 
 @router.get("/", response_class=HTMLResponse)

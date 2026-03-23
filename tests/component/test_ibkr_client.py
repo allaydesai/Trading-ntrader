@@ -490,6 +490,7 @@ class TestIBKRClientIntegration:
             # Mock the underlying Nautilus client methods
             mock_bars = []  # Empty list of bars
             mock_instrument = AsyncMock()
+            mock_instrument.id = InstrumentId.from_str("SPY.ARCA")
 
             with patch.object(
                 client.rate_limiter, "acquire", new_callable=AsyncMock
