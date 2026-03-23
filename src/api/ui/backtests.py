@@ -42,10 +42,15 @@ logger = structlog.get_logger(__name__)
 router = APIRouter()
 templates = Jinja2Templates(directory="templates")
 
-# Quiet console for suppressing Rich output in web context
+# Quiet console for suppressing Rich output in web context.
+# TODO: pass console=None if load_backtest_data adds support for it,
+# avoiding the Rich dependency at module level.
 _quiet_console = Console(quiet=True)
 
-# Only one backtest can run at a time
+# Only one backtest can run at a time.
+# NOTE: This is a per-process lock — it does NOT prevent concurrent execution
+# across multiple uvicorn workers (--workers N). Acceptable for now since the
+# spec assumes single-process, synchronous execution.
 _backtest_lock = asyncio.Lock()
 
 # Sorted lists for template dropdowns
@@ -155,7 +160,11 @@ async def run_backtest_submit(request: Request) -> Response:
             request, templates.TemplateResponse("backtests/run.html", context)
         )
 
-    # Prevent concurrent backtest execution
+    # Prevent concurrent backtest execution.
+    # NOTE: There is a small race window between locked() and `async with` below —
+    # a second request arriving in that gap would block on the lock rather than
+    # getting the 409. Acceptable for a single-user tool; for multi-user, replace
+    # with a database-level advisory lock or distributed mutex.
     if _backtest_lock.locked():
         logger.warning("Backtest submission rejected — another backtest is already running")
         context = _build_run_context(

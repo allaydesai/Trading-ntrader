@@ -46,7 +46,7 @@ def _resolve_instrument_id(symbol: str) -> str:
                 )
                 return resolved
     except Exception:
-        pass
+        logger.debug("catalog_lookup_skipped", symbol=symbol, reason="catalog unavailable")
 
     # Default: assume NASDAQ (IBKR will resolve to the correct exchange)
     return f"{symbol}.NASDAQ"
