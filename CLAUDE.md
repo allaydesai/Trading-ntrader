@@ -4,26 +4,15 @@ Production-grade algorithmic trading backtester using Nautilus Trader + IBKR dat
 
 ## BMAD Context
 
-This project uses the BMAD method for agentic development. Key reference files:
+This project uses the BMAD method for agentic development. Read these before implementing:
 
-- `_bmad-output/project-context.md` — AI agent implementation rules (tech stack, patterns, gotchas)
-- `docs/development-principles.md` — non-negotiable rules (TDD, coverage, performance, security)
-- `_bmad/` — BMAD core config, templates, and agent personas
+- **`_bmad-output/project-context.md`** — implementation rules: tech stack, coding patterns, testing, gotchas (read first)
+- **`docs/development-principles.md`** — non-negotiable rules: TDD, coverage, performance targets, security
+- **`_bmad/`** — BMAD core config, templates, and agent personas
 
 ## Mental Model
-Data flows: IBKR → Parquet catalog → BacktestEngine → Results DB → Web UI/Reports
 
-## Stack
-Python 3.11+ · Nautilus Trader · FastAPI · SQLAlchemy · PostgreSQL/TimescaleDB · HTMX/Tailwind
-
-## Foundational Rules
-
-- **TDD is non-negotiable** — every feature starts with a failing test (Red-Green-Refactor)
-- **UV only** for dependencies — `uv add`, `uv remove`, `uv sync`
-- **IBKR env vars** — all connection settings via environment variables through `IBKRSettings`. Never hardcode
-- **Size limits** — files <500 lines, functions <50 lines, classes <100 lines, line length 100 chars
-- **context7 MCP** — always use for library documentation lookups
-- **Keep README.md in sync** — validate before modifying, update if instructions change
+Data flows: IBKR/Kraken/CSV → Parquet catalog → BacktestEngine → Results DB → Web UI/Reports
 
 ## Commands
 
@@ -44,9 +33,18 @@ uv run uvicorn src.api.web:app --reload --host 127.0.0.1 --port 8000  # Web UI
 ./scripts/build-css.sh                  # Build Tailwind CSS (required first time)
 ```
 
+## Foundational Rules
+
+- **TDD is non-negotiable** — every feature starts with a failing test (Red-Green-Refactor)
+- **UV only** for dependencies — `uv add`, `uv remove`, `uv sync`
+- **IBKR/Kraken env vars** — all connection settings via `IBKRSettings`/`KrakenSettings`. Never hardcode
+- **Size limits** — files <500 lines, functions <50 lines, classes <100 lines, line length 100 chars
+- **context7 MCP** — always use for library documentation lookups
+- **Keep README.md in sync** — validate before modifying, update if instructions change
+
 ## Critical Gotchas
 
-1. **IMPORTANT: Nautilus LogGuard** — C logging panics if initialized twice. Store guard via `set_nautilus_log_guard()` in `src/utils/logging.py`. Never let it go out of scope
+1. **Nautilus LogGuard** — C logging panics if initialized twice. Store guard via `set_nautilus_log_guard()` in `src/utils/logging.py`. Never let it go out of scope
 2. **`--forked` tests** — integration tests need `--forked` because Nautilus C/Rust extensions corrupt state across `fork()`. Already configured in `make test-integration`
 3. **Strategies submodule** — `src/core/strategies/custom/` is a git submodule. Update: `git submodule update --remote`
 4. **BacktestEngine is single-use** — cannot be reused after a run; create a new instance each time
@@ -58,7 +56,7 @@ uv run uvicorn src.api.web:app --reload --host 127.0.0.1 --port 8000  # Web UI
 - Never reuse a `BacktestEngine` instance across runs — create fresh each time
 - Never import from `src.core.strategies.custom.*` in core code — custom/ is a git submodule
 - Never run integration tests without `--forked` — C extensions corrupt shared state
-- Never hardcode IBKR connection details — use `IBKRSettings` env vars
+- Never hardcode IBKR/Kraken connection details — use env var settings classes
 
 ## Editing with Auto-Linter
 
@@ -67,6 +65,14 @@ A ruff auto-formatter runs after each file edit. This can silently revert change
 - **Make dependent changes in a single edit** — e.g., when moving an import from inline to top-level, remove the inline usage in the same edit that adds the top-level import
 - **When removing a function parameter**, update call sites first (extra args still work), then remove the parameter
 - **Re-read the file after each edit** if you suspect the linter modified it — never assume your edit landed as written
+
+## Commit Format
+
+```
+<type>(<scope>): <subject>
+```
+Types: `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`
+Never include AI/claude references in commit messages.
 
 ## Decision Heuristics
 
@@ -107,7 +113,7 @@ src/
 ├── services/          # IBKR client, data catalog, persistence, reports
 └── utils/             # Logging (LogGuard), config loader, helpers
 tests/                 # unit/ component/ integration/ e2e/ api/ ui/
-specs/                 # Feature specs 001-010
+specs/                 # Feature specs 001-013
 ```
 
 ## Example: Adding a Strategy
@@ -120,30 +126,15 @@ Good — single file with register_strategy, test first:
 Bad — config in a separate file, no test, missing register_strategy call
 ```
 
-## Commit Format
-
-```
-<type>(<scope>): <subject>
-```
-Types: `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`
-Never include AI/claude references in commit messages.
-
 ## Progressive Disclosure
 
 Detailed docs for specific areas — read on demand:
 
+- `_bmad-output/project-context.md` — tech stack, coding patterns, testing rules, anti-patterns, data flow
+- `docs/development-principles.md` — TDD enforcement, coverage, performance targets, security, code review
 - `agent_docs/architecture.md` — source tree, data flow, DB schema, strategy registry, Docker, web stack
 - `agent_docs/nautilus.md` — LogGuard, C extension isolation, engine lifecycle, IBKR client, Parquet catalog
 - `agent_docs/testing.md` — test pyramid, markers, fixtures, TDD workflow, coverage
 - `agent_docs/conventions.md` — git workflow, UV commands, pre-commit checks, error handling, style
 
 See README.md for full setup and usage instructions.
-
-## Active Technologies
-- Python 3.11+ + python-kraken-sdk, nautilus-trader, FastAPI, Pydantic (012-kraken-crypto-support)
-- Parquet (via Nautilus ParquetDataCatalog), PostgreSQL/TimescaleDB (existing backtest results) (012-kraken-crypto-support)
-- Python 3.11+ + FastAPI, Jinja2, HTMX, Pydantic, nautilus-trader (013-backtest-run-page)
-- PostgreSQL/TimescaleDB (existing — no schema changes) (013-backtest-run-page)
-
-## Recent Changes
-- 012-kraken-crypto-support: Added Python 3.11+ + python-kraken-sdk, nautilus-trader, FastAPI, Pydantic
