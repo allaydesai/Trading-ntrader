@@ -1,7 +1,14 @@
 # NTrader — Nautilus Trader Backtesting System
 
 Production-grade algorithmic trading backtester using Nautilus Trader + IBKR data.
-Follows Python Backend Development principles in `.specify/memory/constitution.md`.
+
+## BMAD Context
+
+This project uses the BMAD method for agentic development. Key reference files:
+
+- `_bmad-output/project-context.md` — AI agent implementation rules (tech stack, patterns, gotchas)
+- `docs/development-principles.md` — non-negotiable rules (TDD, coverage, performance, security)
+- `_bmad/` — BMAD core config, templates, and agent personas
 
 ## Mental Model
 Data flows: IBKR → Parquet catalog → BacktestEngine → Results DB → Web UI/Reports

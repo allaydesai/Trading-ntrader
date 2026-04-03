@@ -4,7 +4,7 @@ user_name: 'Allay'
 date: '2026-04-03'
 sections_completed: ['technology_stack', 'language_rules', 'framework_rules', 'testing_rules', 'quality_rules', 'workflow_rules', 'anti_patterns']
 status: 'complete'
-rule_count: 62
+rule_count: 74
 optimized_for_llm: true
 ---
 
@@ -31,6 +31,12 @@ _This file contains critical rules and patterns that AI agents must follow when 
 - **Testing**: pytest >=8.4.2, pytest-forked, pytest-xdist, pytest-asyncio (auto mode)
 - **Containers**: Docker (python:3.11-slim), docker-compose (postgres, redis, ib-gateway, app)
 
+## Core Principles
+
+- **Simplicity First (KISS/YAGNI)** — start with the simplest working solution; build features only when needed, never on speculation
+- **Obvious over clever** — write code any developer can understand immediately
+- **Fail Fast & Observable** — validate inputs at system boundaries, raise exceptions early, include correlation IDs for request tracing
+
 ## Critical Implementation Rules
 
 ### Language-Specific Rules (Python)
@@ -44,6 +50,10 @@ _This file contains critical rules and patterns that AI agents must follow when 
 - **All DB operations are async** — `AsyncSession`, `@asynccontextmanager`
 - **Logging**: `structlog.get_logger(__name__)` — DEBUG for calls, INFO/ERROR for issues
 - **Decimal arithmetic** for financial calculations (never float)
+- **Type hints required** (PEP 484) — all functions must have type annotations; mypy validates before commit
+- **Google-style docstrings** on public APIs with Args, Returns, Raises sections
+- **Never use bare `except:`** — always catch specific exceptions
+- **Structured logging with correlation IDs** — include request context for tracing
 - **Ruff auto-formatter runs on save** — can silently revert "unused" imports; make dependent changes in a single edit
 
 ### Framework-Specific Rules
@@ -93,6 +103,8 @@ _This file contains critical rules and patterns that AI agents must follow when 
 - **Layer separation**: `api/` → `services/` → `db/repositories/` → `db/models/`
 - **Domain models** (`src/models/`) vs **DB models** (`src/db/models/`) — never mix
 - **No direct DB access in route handlers** — always go through service → repository chain
+- **Use vectorized operations** over loops for data processing (Pandas/NumPy)
+- **Cache expensive computations** with `functools.lru_cache`; use Redis for shared caching
 
 ### Development Workflow Rules
 
