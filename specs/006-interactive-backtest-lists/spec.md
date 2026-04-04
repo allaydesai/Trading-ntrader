@@ -3,7 +3,7 @@
 **Feature Branch**: `006-interactive-backtest-lists`
 **Created**: 2025-11-15
 **Status**: Draft
-**Input**: User description: "Phase 2: Interactive Lists from @docs/NTrader-webui-specification.md"
+**Input**: User description: "Phase 2: Interactive Lists from @docs/webui/NTrader-webui-specification.md"
 
 ## User Scenarios & Testing *(mandatory)*
 

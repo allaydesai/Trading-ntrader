@@ -3,7 +3,7 @@
 **Feature Branch**: `001-docs-prd-md`  
 **Created**: 2025-01-13  
 **Status**: Draft  
-**Input**: User description: "@docs/PRD.md"
+**Input**: User description: "@docs/product/PRD.md"
 
 ## Execution Flow (main)
 ```

@@ -301,5 +301,5 @@ query = select(BacktestRun).options(selectinload(BacktestRun.metrics))
 - Feature Spec: `specs/007-backtest-detail-view/spec.md`
 - Data Models: `specs/007-backtest-detail-view/data-model.md`
 - Route Contracts: `specs/007-backtest-detail-view/contracts/html-routes.md`
-- NTrader Web UI Spec: `docs/NTrader-webui-specification.md`
+- NTrader Web UI Spec: `docs/webui/NTrader-webui-specification.md`
 - Constitution: `.specify/memory/constitution.md`

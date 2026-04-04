@@ -189,7 +189,7 @@ uv run python -m src.cli.main data fetch \
   --timeframe DAILY
 ```
 
-For detailed IBKR setup, see [docs/IBKR_SETUP.md](docs/IBKR_SETUP.md).
+For detailed IBKR setup, see [docs/setup/IBKR_SETUP.md](docs/setup/IBKR_SETUP.md).
 
 ### 4. Fetch Crypto Data from Kraken
 
@@ -402,7 +402,7 @@ uv run python -m src.cli.main data list
 2. Enable API: File → Global Configuration → API → Settings
 3. Check "Enable ActiveX and Socket Clients"
 4. Verify port matches your `.env` configuration
-5. See [docs/IBKR_SETUP.md](docs/IBKR_SETUP.md) for detailed troubleshooting
+5. See [docs/setup/IBKR_SETUP.md](docs/setup/IBKR_SETUP.md) for detailed troubleshooting
 
 ### Kraken Data Issues
 

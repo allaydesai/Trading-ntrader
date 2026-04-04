@@ -27,17 +27,20 @@ uv remove <package>        # Remove
 uv sync                    # Sync lockfile to environment
 ```
 
-## Pre-Commit Checklist
+## Quality Checks
 
-Run before every commit:
+Run before every commit (enforced by `.claude/hooks/`, no `.pre-commit-config.yaml`):
 ```bash
 make format      # ruff format .
-make lint        # ruff check .
+make lint        # ruff check . (rules: E, F, I)
 make typecheck   # mypy src/core src/strategies
 ```
 
+Ruff excludes: `tests_archive`, `_bmad`, `.claude`, `.cursor`, `alembic`, `.git`, `.venv`.
+
 ## Code Size Limits
 
+Convention-enforced (not tool-enforced):
 - **Files**: <500 lines
 - **Functions**: <50 lines
 - **Classes**: <100 lines
@@ -45,9 +48,10 @@ make typecheck   # mypy src/core src/strategies
 
 ## Error Handling
 
-- Domain exceptions inherit from a base `TradingError` (see `src/db/exceptions.py`)
-- Use `structlog` for all logging — structured key-value pairs, not format strings
+- Domain exceptions: see `src/db/exceptions.py` and `src/services/exceptions.py`
+- Use `structlog` for all logging — `structlog.get_logger(__name__)`, key-value pairs only
 - Logging config in `src/utils/logging.py`: console (colored) + file (JSON, 10MB rotation)
+- Decimal arithmetic for financial calculations (never float)
 
 ## Performance Standards
 

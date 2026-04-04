@@ -296,4 +296,4 @@ uv run mypy src/api/
 - [FastAPI Templates Documentation](https://fastapi.tiangolo.com/advanced/templates/)
 - [HTMX Documentation](https://htmx.org/docs/)
 - [Tailwind CSS Dark Mode](https://tailwindcss.com/docs/dark-mode)
-- [NTrader Developer Guide](../../docs/NTrader_Web_UI–Developer_Guide.md)
+- [NTrader Developer Guide](../../docs/webui/NTrader_Web_UI–Developer_Guide.md)

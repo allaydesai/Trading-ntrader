@@ -86,7 +86,7 @@ tests/
     └── test_backtest_models.py   # NEW: Model unit tests
 ```
 
-**Structure Decision**: Follows existing NTrader Web UI architecture from Phase 1-2. HTML routes in `src/api/ui/`, Pydantic models in `src/api/models/`, Jinja2 templates in `templates/`. Consistent with specification in `docs/NTrader-webui-specification.md`.
+**Structure Decision**: Follows existing NTrader Web UI architecture from Phase 1-2. HTML routes in `src/api/ui/`, Pydantic models in `src/api/models/`, Jinja2 templates in `templates/`. Consistent with specification in `docs/webui/NTrader-webui-specification.md`.
 
 ## Complexity Tracking
 

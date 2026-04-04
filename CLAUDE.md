@@ -7,7 +7,7 @@ Production-grade algorithmic trading backtester using Nautilus Trader + IBKR dat
 This project uses the BMAD method for agentic development. Read these before implementing:
 
 - **`_bmad-output/project-context.md`** — implementation rules: tech stack, coding patterns, testing, gotchas (read first)
-- **`docs/development-principles.md`** — non-negotiable rules: TDD, coverage, performance targets, security
+- **`docs/governance/development-principles.md`** — non-negotiable rules: TDD, coverage, performance targets, security
 - **`_bmad/`** — BMAD core config, templates, and agent personas
 
 ## Mental Model
@@ -128,13 +128,16 @@ Bad — config in a separate file, no test, missing register_strategy call
 
 ## Progressive Disclosure
 
-Detailed docs for specific areas — read on demand:
+Detailed docs for specific areas — read on demand by topic:
 
-- `_bmad-output/project-context.md` — tech stack, coding patterns, testing rules, anti-patterns, data flow
-- `docs/development-principles.md` — TDD enforcement, coverage, performance targets, security, code review
-- `agent_docs/architecture.md` — source tree, data flow, DB schema, strategy registry, Docker, web stack
-- `agent_docs/nautilus.md` — LogGuard, C extension isolation, engine lifecycle, IBKR client, Parquet catalog
+- `_bmad-output/project-context.md` — tech stack, coding patterns, testing rules, anti-patterns
+- `docs/governance/development-principles.md` — TDD enforcement, coverage, performance targets, security
+- `agent_docs/architecture.md` — source tree overview, data flow map, progressive disclosure index
+- `agent_docs/nautilus.md` — LogGuard, C extension isolation, engine lifecycle, strategy config
+- `agent_docs/data-pipeline.md` — DataCatalogService, IBKR/Kraken clients, Parquet catalog, symbol resolution
+- `agent_docs/web-ui.md` — HTMX patterns, templates, DI chain, charts, presentation models
+- `agent_docs/persistence.md` — DB models, async/sync repositories, results extraction, exceptions
 - `agent_docs/testing.md` — test pyramid, markers, fixtures, TDD workflow, coverage
-- `agent_docs/conventions.md` — git workflow, UV commands, pre-commit checks, error handling, style
+- `agent_docs/conventions.md` — git workflow, UV commands, quality checks, error handling, style
 
 See README.md for full setup and usage instructions.

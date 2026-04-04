@@ -3,8 +3,8 @@
 ## LogGuard Pattern
 
 Nautilus Trader's C/Cython logging subsystem **panics if initialized twice** in a process.
-When `HistoricInteractiveBrokersClient` starts first, it initializes logging. If a
-`BacktestEngine` is created later, it would try to re-initialize and crash.
+When `IBKRHistoricalClient` starts first, it initializes logging. If a `BacktestEngine` is
+created later, it would try to re-initialize and crash.
 
 **Solution** — `src/utils/logging.py` stores a module-level `_nautilus_log_guard`:
 
@@ -20,6 +20,9 @@ def set_nautilus_log_guard(log_guard: Any) -> None:
 Always call `set_nautilus_log_guard()` when creating a Nautilus component that initializes
 logging. Never let the guard go out of scope — it must live for the process lifetime.
 
+**Web context**: `init_logging()` called at module level in `src/api/web.py`.
+**IBKR context**: `_guard_nautilus_logging()` context manager in `ibkr_client.py` prevents double-init.
+
 **Symptoms of double-init**: Process crashes with "logger already initialized" panic — no
 Python traceback, just a segfault or abort.
 
@@ -30,12 +33,15 @@ Nautilus uses C/Rust extensions that don't survive `fork()` cleanly. This causes
 - Corrupted global state across tests
 
 **Fix**: Integration tests run with `--forked` (pytest-forked) so each test gets a fresh
-process. See `make test-integration`. Always double `gc.collect()` after engine disposal.
+process. See `make test-integration`. Always double `gc.collect()` after engine disposal
+(see `integration_cleanup()` fixture in `tests/integration/conftest.py`).
 
 ## BacktestEngine Lifecycle
 
 `BacktestEngine` is **single-use** — it cannot be reset or reused after a run completes.
-Create a new engine instance for each backtest. The `backtest_runner.py` handles this.
+Create a new engine instance for each backtest.
+
+**Prefer `BacktestOrchestrator`** (takes `BacktestRequest`, handles persistence) over `MinimalBacktestRunner` (legacy, direct params).
 
 ### Engine Setup Sequence (Strict Order)
 
@@ -65,6 +71,8 @@ engine.run()
 
 ### Result Extraction
 
+Extract results **before engine goes out of scope**:
+
 ```python
 # Portfolio metrics
 analyzer = engine.portfolio.analyzer
@@ -81,10 +89,12 @@ total_pnl = stats_pnls.get("PnL (total)")
 account = engine.cache.account_for_venue(venue)
 final_balance = float(account.balance_total(USD).as_double())
 
-# Trade history
+# Trade history (closed positions only, not open)
 closed_positions = engine.cache.positions_closed()
 positions_report = engine.trader.generate_positions_report()
 ```
+
+**Custom metrics** calculated by `ResultsExtractor` (Nautilus doesn't provide): max drawdown, CAGR, Calmar ratio, max drawdown duration. Starting balance must be passed separately.
 
 ### Venue Configuration
 
@@ -94,6 +104,7 @@ venue = bars[0].bar_type.instrument_id.venue  # real data (e.g., "NASDAQ")
 ```
 
 The venue must match between instrument, bars, and engine setup.
+`BacktestOrchestrator` tracks `_venue`, `_backtest_start_date`, `_backtest_end_date` since Nautilus doesn't retain them.
 
 ### Fill and Fee Models
 
@@ -109,44 +120,6 @@ fee_model = IBKRCommissionModel(
 )
 ```
 
-## Parquet Data Catalog
-
-Market data lives in Parquet files under the Nautilus catalog structure.
-`src/services/data_catalog.py` and `data_service.py` handle reading/writing.
-CSV data is converted via `csv_loader.py` → `nautilus_converter.py` → Parquet.
-Kraken data is fetched via `kraken_client.py` and written to the same Parquet catalog structure.
-
-## IBKR Client
-
-`src/services/ibkr_client.py` connects to Interactive Brokers TWS/Gateway.
-
-**All connection settings come from environment variables** via `src/config.py:IBKRSettings`:
-- `IBKR_HOST`, `IBKR_PORT`, `IBKR_CLIENT_ID`
-- `TWS_USERNAME`, `TWS_PASSWORD`, `TWS_ACCOUNT`
-- `IBKR_TRADING_MODE` (paper/live), `IBKR_READ_ONLY` (default: true)
-
-Rate limit: 45 req/s (90% of IBKR's 50/s hard limit).
-Never hardcode IBKR connection values — always use env vars through `IBKRSettings`.
-
-## Kraken Client
-
-`src/services/kraken_client.py` fetches historical OHLCV data from Kraken.
-
-**Configuration** via `src/config.py:KrakenSettings`:
-- `KRAKEN_API_KEY`, `KRAKEN_API_SECRET`
-- `KRAKEN_RATE_LIMIT` (default: 10 req/s)
-- `KRAKEN_DEFAULT_MAKER_FEE` / `KRAKEN_DEFAULT_TAKER_FEE`
-
-**Pair mapping**: Users specify standard pairs (BTC/USD). Internally mapped to:
-- REST API format: XXBTZUSD
-- Charts API format: XBT/USD
-- Nautilus InstrumentId: BTC/USD.KRAKEN
-
-**Data source**: Futures Charts API (`/api/charts/v1/spot/{symbol}/{resolution}`)
-supports arbitrary date ranges with pagination (unlike Spot OHLC which is limited to 720 entries).
-
-Rate limit: 10 req/s default (sliding window). Never hardcode credentials.
-
 ## Strategy Config Pattern
 
 Each strategy defines a `StrategyConfig` subclass with Pydantic-validated parameters.
@@ -161,5 +134,13 @@ class SMACrossover(Strategy):
     ...
 ```
 
-`StrategyLoader.build_strategy_params()` resolves parameters via:
+**Strategy lifecycle**: `on_start()` → `on_bar()` → `on_stop()` → `on_dispose()`.
+**Extract pure logic** into framework-free classes (e.g., `SMATradingLogic`) for testability.
+**Position sizing**: Must respect instrument precision (fractional crypto, whole equities).
+
+`StrategyFactory.build_strategy_params()` resolves parameters via:
 overrides → settings map → Pydantic defaults.
+
+Config and parameter validation happen separately — a strategy can be registered without a config class.
+
+For data sources and exchange clients, see `agent_docs/data-pipeline.md`.

@@ -9,7 +9,10 @@
 | **Integration** | `tests/integration/` | `make test-integration` | Real Nautilus engine, DB, IBKR |
 | **E2E** | `tests/e2e/` | `make test-e2e` | Full backtest workflow |
 | **API** | `tests/api/` | (included in test-all) | FastAPI endpoint tests |
-| **UI** | `tests/ui/` | (included in test-all) | Template rendering tests |
+| **UI** | `tests/ui/` | (included in test-all) | Template rendering, chart models |
+| **DB** | `tests/db/` | (included in test-all) | Database-specific tests |
+| **Services** | `tests/services/` | (included in test-all) | Service layer tests |
+| **Catalog** | `tests/catalog/` | (included in test-all) | Data catalog tests |
 
 **Tier selection**:
 - Pure logic (math, validation, parsing) -> **Unit**
@@ -33,6 +36,11 @@ Defined in `pytest.ini`:
 - `slow` — takes >1 second
 - `trading` — trading-system specific
 - `db` — requires PostgreSQL
+
+## Async Test Config
+
+`asyncio_mode = "auto"` in pytest.ini — async test functions just work, no decorator needed.
+`asyncio_default_fixture_loop_scope = function` — each test gets its own event loop.
 
 ## Coverage
 
