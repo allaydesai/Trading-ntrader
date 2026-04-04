@@ -89,6 +89,6 @@ uv run pytest tests/integration/test_backtest_engine.py -v
 
 ## Reference
 
-- Design Document: `specs/003-rework-unit-testing/design.md`
-- Tasks: `specs/003-rework-unit-testing/tasks.md`
+- Design Document: `docs/Archive/specs/003-rework-unit-testing/design.md`
+- Tasks: `docs/Archive/specs/003-rework-unit-testing/tasks.md`
 - Nautilus Docs: https://nautilustrader.io/docs/latest/

@@ -143,4 +143,4 @@ overrides → settings map → Pydantic defaults.
 
 Config and parameter validation happen separately — a strategy can be registered without a config class.
 
-For data sources and exchange clients, see `agent_docs/data-pipeline.md`.
+For data sources and exchange clients, see `docs/agent/data-pipeline.md`.

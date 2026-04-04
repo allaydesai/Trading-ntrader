@@ -41,9 +41,8 @@ Data flow: IBKR/Kraken/CSV → Parquet catalog → BacktestEngine → Results DB
 - `templates/` — Jinja2 HTML templates
 - `static/` — CSS, JavaScript, vendor libs
 - `configs/` — Strategy YAML examples
-- `specs/` — Feature specifications (001-013)
-- `docs/` — Project documentation
-- `agent_docs/` — AI agent reference docs (progressive disclosure)
+- `docs/` — Project documentation (includes `agent/` for AI agent reference docs)
+- `docs/Archive/specs/` — Legacy feature specifications 001-013 (archived)
 - `alembic/` — Database migrations
 
 ## Documentation Map

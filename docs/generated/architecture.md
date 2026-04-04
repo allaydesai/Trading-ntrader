@@ -138,7 +138,7 @@ docker-compose.yml:
 ## Cross-References
 
 For implementation details, see:
-- **Agent docs** (`agent_docs/`): architecture.md, nautilus.md, data-pipeline.md, web-ui.md, persistence.md, testing.md, conventions.md
+- **Agent docs** (`docs/agent/`): architecture.md, nautilus.md, data-pipeline.md, web-ui.md, persistence.md, testing.md, conventions.md
 - **Source tree**: `docs/source-tree-analysis.md`
 - **API contracts**: `docs/api-contracts.md`
 - **Data models**: `docs/data-models.md`

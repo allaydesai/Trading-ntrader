@@ -90,7 +90,7 @@ All code must pass before commit:
 
 - These principles supersede ad-hoc decisions unless explicitly overridden in project-specific config
 - Quarterly review of principles for relevance
-- Track significant decisions in architecture docs (`agent_docs/`)
+- Track significant decisions in architecture docs (`docs/agent/`)
 
 ---
 

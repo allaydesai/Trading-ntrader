@@ -7,19 +7,30 @@
 - **Architecture:** Layered monolith (FastAPI + Nautilus Trader + SQLAlchemy)
 - **Entry Points:** CLI (`src/cli/main.py`), Web (`src/api/web.py`)
 
-## Generated Documentation
+## Agent Documentation
 
-- [Project Overview](project-overview.md) — Purpose, capabilities, tech stack summary, repo structure
-- [Architecture](architecture.md) — System design, data flow, deployment, key design decisions
-- [Source Tree Analysis](source-tree-analysis.md) — Annotated directory tree (~222 Python files)
-- [API Contracts](api-contracts.md) — 9 REST endpoints, 11 UI routes, 13 CLI commands
-- [Data Models](data-models.md) — 3 DB tables, ~30 Pydantic models, repository pattern
-- [Development Guide](development-guide.md) — Setup, testing, Docker, common tasks
+AI agent implementation reference docs (progressive disclosure by topic):
+
+| Work Area | Doc |
+|-----------|-----|
+| Architecture overview | [agent/architecture.md](agent/architecture.md) |
+| Nautilus Trader | [agent/nautilus.md](agent/nautilus.md) |
+| Data pipeline | [agent/data-pipeline.md](agent/data-pipeline.md) |
+| Web UI patterns | [agent/web-ui.md](agent/web-ui.md) |
+| Database & persistence | [agent/persistence.md](agent/persistence.md) |
+| Testing | [agent/testing.md](agent/testing.md) |
+| Conventions | [agent/conventions.md](agent/conventions.md) |
+
+Auto-generated implementation rules: [`_bmad-output/project-context.md`](../_bmad-output/project-context.md)
 
 ## Product
 
-- [PRD](product/PRD.md) — Product requirements (MVP scope, objectives, milestones)
-- [Product Overview](product/PRODUCT_OVERVIEW.md) — Feature inventory, roadmap, architecture
+- [PRD](product/PRD.md) — Product requirements (all implemented features, objectives, vNext)
+- [Product Overview](product/PRODUCT_OVERVIEW.md) — Feature inventory, milestones, architecture
+
+## Governance
+
+- [Development Principles](governance/development-principles.md) — TDD, 80% coverage, performance targets, security
 
 ## Setup
 
@@ -29,10 +40,6 @@
 
 - [Web UI Specification](webui/NTrader-webui-specification.md) — Page layouts, HTMX interactions, data models
 - [Web UI Developer Guide](webui/NTrader_Web_UI–Developer_Guide.md) — FastAPI + Jinja2 + HTMX + TradingView
-
-## Governance
-
-- [Development Principles](governance/development-principles.md) — TDD, 80% coverage, performance targets, security
 
 ## Testing
 
@@ -50,24 +57,20 @@
 
 - [Git Worktrees with Claude Code](guides/claude-code-git-worktrees-guide.md) — Parallel development workflow
 
+## Generated (Deep Scan Snapshots)
+
+Point-in-time snapshots from automated project analysis:
+
+- [Project Overview](generated/project-overview.md) — Purpose, capabilities, tech stack summary
+- [Architecture](generated/architecture.md) — System design, data flow, deployment
+- [Source Tree Analysis](generated/source-tree-analysis.md) — Annotated directory tree
+- [API Contracts](generated/api-contracts.md) — REST endpoints, UI routes, CLI commands
+- [Data Models](generated/data-models.md) — DB tables, Pydantic models, repository pattern
+- [Development Guide](generated/development-guide.md) — Setup, testing, Docker, common tasks
+
 ## Archive
 
-Historical artifacts from completed work — see [archive/](archive/).
+Historical artifacts from completed work — not implementation references:
 
----
-
-## Agent Documentation
-
-Agent-consumable reference docs (progressive disclosure by topic):
-
-| Work Area | Agent Doc |
-|-----------|-----------|
-| Architecture overview | [`agent_docs/architecture.md`](../agent_docs/architecture.md) |
-| Nautilus Trader | [`agent_docs/nautilus.md`](../agent_docs/nautilus.md) |
-| Data pipeline | [`agent_docs/data-pipeline.md`](../agent_docs/data-pipeline.md) |
-| Web UI patterns | [`agent_docs/web-ui.md`](../agent_docs/web-ui.md) |
-| Database & persistence | [`agent_docs/persistence.md`](../agent_docs/persistence.md) |
-| Testing | [`agent_docs/testing.md`](../agent_docs/testing.md) |
-| Conventions | [`agent_docs/conventions.md`](../agent_docs/conventions.md) |
-
-Auto-generated implementation rules: [`_bmad-output/project-context.md`](../_bmad-output/project-context.md)
+- [Legacy Feature Specs](Archive/specs/) — speckit specs 001-013 (archived, features captured in PRD)
+- [Other Archives](Archive/) — Completed work documentation

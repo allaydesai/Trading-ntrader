@@ -1,8 +1,8 @@
 # Product Requirements Document: Simple Backtesting Application
 
-**Version**: 1.0  
-**Date**: January 2025  
-**Product**: Nautilus Trader Backtesting System with IBKR Integration  
+**Version**: 2.0
+**Date**: April 2026
+**Product**: NTrader — Nautilus Trader Backtesting System
 
 ---
 
@@ -12,7 +12,7 @@
 Quantitative traders need a reliable, extensible backtesting framework to validate trading strategies on US equities, ETFs, and spot FX using institutional-grade historical data. Current solutions are either too complex, expensive, or lack proper integration with Interactive Brokers' ecosystem.
 
 ### Solution
-A lightweight, Python-based backtesting application built on Nautilus Trader that ingests historical data from IBKR, supports custom strategy development, and provides actionable performance metrics—all while maintaining simplicity and incremental extensibility.
+A production-grade, Python-based backtesting platform built on Nautilus Trader that ingests historical data from IBKR and Kraken, supports custom strategy development, and provides actionable performance metrics through both CLI and web dashboard—all while maintaining simplicity and incremental extensibility.
 
 ### Development Philosophy
 Start with a minimal end-to-end flow (single strategy, single instrument) that can be tested immediately, then incrementally add features while maintaining continuous validation through integration testing.
@@ -51,26 +51,37 @@ Start with a minimal end-to-end flow (single strategy, single instrument) that c
 
 ## 4. Scope
 
-### In Scope (Phase 1)
+### Implemented Capabilities
 - Single strategy backtesting on individual instruments
 - US stocks, ETFs, and major FX pairs (EURUSD, USDJPY, etc.)
 - IBKR historical data ingestion via TWS/Gateway
-- CSV fallback for data import
+- Kraken cryptocurrency data (BTC/USD, ETH/USD, etc.)
+- CSV import to Parquet catalog
 - Multiple timeframe support (1m, 5m, 1h, 1D)
-- Basic performance metrics and visualizations
+- Comprehensive performance metrics and analytics
 - Market and limit orders
 - Short selling (simplified, no borrowing costs)
 - CLI interface with progress indicators
-- HTML/CSV reporting
+- HTML/CSV/JSON reporting
+- Parquet-based data catalog (single source of truth for market data)
+- PostgreSQL metadata storage (backtest history, comparison, reproducibility)
+- Web dashboard with HTMX (dark theme, responsive)
+- Interactive backtest lists with filtering, sorting, and pagination
+- Backtest detail view with metrics, trade blotter, and configuration
+- Chart APIs for TradingView Lightweight Charts integration
+- Individual trade tracking with entry/exit details
+- Equity curve generation and visualization
+- Enhanced price charts with buy/sell trade markers
+- Backtest run page (configure and launch backtests from browser)
+- Three-tier testing architecture (unit/component/integration)
 
-### Out of Scope (Phase 1)
+### Out of Scope (Current)
 - Live trading functionality
 - Portfolio/multi-strategy testing
-- Options, futures, crypto
+- Options, futures
 - Margin/leverage
 - Partial fills
 - Tax modeling
-- Data caching/updates
 - Cloud deployment
 - Advanced metrics (VaR, Monte Carlo, attribution)
 
@@ -81,32 +92,58 @@ Start with a minimal end-to-end flow (single strategy, single instrument) that c
 ### FR1: Data Ingestion
 - **FR1.1**: Connect to IBKR TWS/Gateway and authenticate
 - **FR1.2**: Request historical bars for specified symbols and timeframes
-- **FR1.3**: Handle IBKR rate limits with automatic throttling
-- **FR1.4**: Import CSV data as fallback mechanism
+- **FR1.3**: Handle IBKR rate limits with automatic throttling (45 req/sec)
+- **FR1.4**: Import CSV data directly to Parquet catalog
 - **FR1.5**: Store instrument metadata (tick size, trading hours)
 - **FR1.6**: Use IBKR's adjusted prices for corporate actions
+- **FR1.7**: Fetch cryptocurrency OHLCV data from Kraken API (BTC/USD, ETH/USD, etc.)
+- **FR1.8**: Parquet-based data catalog as single source of truth for market data
+- **FR1.9**: Automatic data fetching when catalog misses occur
+- **FR1.10**: Data availability checks and gap detection
 
 ### FR2: Strategy Framework
 - **FR2.1**: Load strategy from Python module with standardized interface
 - **FR2.2**: Support YAML configuration for strategy parameters
 - **FR2.3**: Provide access to multiple timeframes within single strategy
-- **FR2.4**: Include 3 sample strategies (SMA crossover, mean reversion, momentum)
+- **FR2.4**: Include sample strategies (SMA crossover, SMA momentum)
+- **FR2.5**: Custom strategy support via `@register_strategy` decorator
+- **FR2.6**: Strategy alias resolution (direct name, case-insensitive, fuzzy match)
 
 ### FR3: Backtesting Engine
-- **FR3.1**: Initialize portfolio with $100,000 USD starting capital
-- **FR3.2**: Execute backtests from 2019-01-01 to 2024-12-31 (default)
+- **FR3.1**: Initialize portfolio with $100,000 USD starting capital (configurable)
+- **FR3.2**: Execute backtests for configurable date ranges
 - **FR3.3**: Process market and limit orders
 - **FR3.4**: Apply IBKR commission model + 1bps slippage
 - **FR3.5**: Support position sizing at 1% equity risk per trade
 - **FR3.6**: Handle FX conversions for non-USD instruments
 
-### FR4: Reporting
-- **FR4.1**: Generate equity curve visualization (PNG)
+### FR4: Reporting & Analytics
+- **FR4.1**: Generate equity curve visualization
 - **FR4.2**: Export trade blotter to CSV
-- **FR4.3**: Calculate key metrics: CAGR, Max DD, Sharpe, Sortino, Win Rate
+- **FR4.3**: Calculate key metrics: CAGR, Max DD, Sharpe, Sortino, Calmar, Win Rate, Profit Factor
 - **FR4.4**: Create summary HTML report
 - **FR4.5**: Export metrics to JSON for programmatic access
 - **FR4.6**: Compare performance against SPY benchmark
+- **FR4.7**: Individual trade tracking with entry/exit details and P&L
+
+### FR5: Metadata Storage & History
+- **FR5.1**: Automatic persistence of every backtest run to PostgreSQL
+- **FR5.2**: Complete strategy configuration snapshots (immutable)
+- **FR5.3**: Filter backtests by strategy, instrument, date range, status
+- **FR5.4**: Sort by execution date, return, Sharpe ratio, drawdown
+- **FR5.5**: Side-by-side comparison of 2-10 backtests
+- **FR5.6**: Reproduce past backtests using stored configuration
+
+### FR6: Web Dashboard
+- **FR6.1**: Dashboard overview with key metrics summary
+- **FR6.2**: Paginated backtest list with filtering, sorting, and URL-based filter persistence
+- **FR6.3**: Backtest detail view with metrics, trade blotter, and configuration
+- **FR6.4**: Chart APIs providing OHLCV time series, trade markers, equity curves, and indicator data
+- **FR6.5**: TradingView Lightweight Charts integration for interactive visualization
+- **FR6.6**: Enhanced price charts with buy/sell trade markers and tooltips
+- **FR6.7**: Backtest run page for configuring and launching backtests from browser
+- **FR6.8**: Dark theme with responsive design
+- **FR6.9**: HTMX-powered dynamic updates (no full page reloads)
 
 ---
 
@@ -285,29 +322,31 @@ class SMACrossover(UserStrategy):
 
 ---
 
-## 12. MVP Milestones & vNext
+## 12. Completed Milestones & vNext
 
-### Phase 1 - MVP (Week 1-4)
-1. **Week 1**: Basic IBKR connection and data retrieval for single symbol
-2. **Week 2**: Nautilus integration with simple buy/hold strategy
-3. **Week 3**: SMA crossover strategy + basic metrics calculation
-4. **Week 4**: HTML reporting + equity curve visualization
+### Completed Features (Specs 001-013)
 
-### Phase 2 - Core Features (Week 5-8)
-1. Multiple timeframe support
-2. Additional sample strategies (mean reversion, momentum)
-3. CSV import functionality
-4. Enhanced logging and error handling
-
-### Phase 3 - Advanced Features (Week 9-12)
-1. Portfolio/multi-strategy support
-2. Parameter optimization
-3. Walk-forward analysis
-4. Data caching layer
+| Spec | Feature | Status |
+|------|---------|--------|
+| 001 | Initial backtesting system with IBKR integration | Done |
+| 002 | Parquet-only market data storage (migration from dual) | Done |
+| 003 | Unit testing architecture refactor (3-tier pyramid) | Done |
+| 004 | PostgreSQL metadata storage (history, comparison, repro) | Done |
+| 005 | Web UI foundation (dashboard, navigation, dark theme) | Done |
+| 006 | Interactive backtest lists (filtering, sorting, pagination) | Done |
+| 007 | Backtest detail view (metrics, trade blotter, config) | Done |
+| 008 | Chart APIs (OHLCV, trade markers, equity curves, indicators) | Done |
+| 009 | Individual trade tracking and equity curve generation | Done |
+| 010 | Enhanced price plot with buy/sell trade markers | Done |
+| 012 | Kraken cryptocurrency data support | Done |
+| 013 | Backtest run page (configure + launch from browser) | Done |
 
 ### vNext (Future)
+- Portfolio/multi-strategy support
+- Parameter optimization framework
+- Walk-forward analysis
 - Options and futures support
-- Live trading capability
+- Live trading capability (paper trading first)
 - Cloud deployment
 - Advanced risk metrics (VaR, Monte Carlo)
 - Machine learning integration
@@ -322,12 +361,12 @@ class SMACrossover(UserStrategy):
 - ✅ Corporate actions: Use IBKR adjusted data
 - ✅ Initial strategies: Include SMA, mean reversion, momentum
 
-### Pending Resolution
-1. **Signal vs Order Management**: Determine if strategies generate pure signals or manage orders directly (research Nautilus best practices)
-2. **IBKR Rate Limits**: Document exact limits and implement appropriate throttling
-3. **Commission Structure**: Verify exact IBKR commission tiers for implementation
-4. **Performance Baseline**: Identify reference implementation for validation
-5. **Coding Standards Document**: Obtain project-specific linting/formatting rules
+### Resolved (Since v1.0)
+- Signal vs Order Management: Strategies manage orders directly via Nautilus `order_factory`
+- IBKR Rate Limits: 45 req/sec, enforced in `ibkr_client.py`
+- Commission Structure: IBKR model implemented in `src/core/fee_models.py`
+- Coding Standards: ruff + mypy, enforced via hooks and CI
+- Crypto support: Kraken API integration (was out of scope, now delivered)
 
 ### Decision Log
 | Date | Decision | Rationale |

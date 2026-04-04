@@ -8,11 +8,11 @@ description: >
 
 # Nautilus Engine Patterns
 
-> Full reference: `agent_docs/nautilus.md`
+> Full reference: `docs/agent/nautilus.md`
 
 ## Quick Reference
 
-- **LogGuard**: Store via `set_nautilus_log_guard()` in `src/utils/logging.py`. Never let it go out of scope. See `agent_docs/nautilus.md` for details.
+- **LogGuard**: Store via `set_nautilus_log_guard()` in `src/utils/logging.py`. Never let it go out of scope. See `docs/agent/nautilus.md` for details.
 - **BacktestEngine is single-use**: Cannot reuse after `run()` — create a new instance each time.
 - **C extensions**: Integration tests need `--forked`. Always double `gc.collect()` after engine disposal.
 

@@ -24,7 +24,7 @@
 
 Integration tests use `pytest --forked` because Nautilus C/Rust extensions don't survive
 `fork()` well. Each test runs in a subprocess to avoid corrupted global state and segfaults.
-See `agent_docs/nautilus.md` for details.
+See `docs/agent/nautilus.md` for details.
 
 ## Pytest Markers
 

@@ -158,4 +158,4 @@ uv run uvicorn src.api.web:app --reload --host 127.0.0.1 --port 8000
 - `src/api/rest/` — JSON API endpoints
 - `src/api/ui/` — HTML page routes
 
-> See also: `agent_docs/architecture.md` Web Stack section for template hierarchy, static assets, and chart library integration.
+> See also: `docs/agent/architecture.md` Web Stack section for template hierarchy, static assets, and chart library integration.

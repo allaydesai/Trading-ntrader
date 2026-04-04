@@ -76,7 +76,7 @@ These tests need to be updated to use the current Nautilus TestDataStubs API.
 ## Reference
 
 - Nautilus Trader API: https://nautilustrader.io/docs/latest/
-- Test architecture: `specs/003-rework-unit-testing/spec.md`
+- Test architecture: `docs/Archive/specs/003-rework-unit-testing/spec.md`
 - Helper function: `tests/integration/conftest.py::setup_backtest_venue()`
 
 ## Timeline

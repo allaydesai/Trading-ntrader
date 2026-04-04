@@ -8,7 +8,7 @@ description: >
 
 # Data Pipeline Guide
 
-> See also: `agent_docs/nautilus.md` (IBKR client, Parquet catalog)
+> See also: `docs/agent/nautilus.md` (IBKR client, Parquet catalog)
 
 ## Data Flow
 
@@ -70,7 +70,7 @@ bars = catalog.bars(bar_types=["AAPL.NASDAQ-1-MINUTE-LAST-EXTERNAL"])
 ## IBKR Client
 
 All connection settings via environment variables through `IBKRSettings`.
-See `agent_docs/nautilus.md` for full IBKR configuration details.
+See `docs/agent/nautilus.md` for full IBKR configuration details.
 
 The client is created lazily on first access — no connection until data is actually needed from IBKR.
 

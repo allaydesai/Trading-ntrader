@@ -8,7 +8,7 @@ description: >
 
 # NTrader Testing Guide
 
-> Full reference: `agent_docs/testing.md`
+> Full reference: `docs/agent/testing.md`
 
 ## TDD Workflow (Non-Negotiable)
 
@@ -27,7 +27,7 @@ Every feature starts with a failing test. Follow Red-Green-Refactor:
 
 ## Test Doubles
 
-Located in `tests/component/doubles/`. See `agent_docs/testing.md` for full API.
+Located in `tests/component/doubles/`. See `docs/agent/testing.md` for full API.
 
 ```python
 from tests.component.doubles import TestTradingEngine, TestOrder, TestPosition
@@ -61,4 +61,4 @@ def teardown_method(self):
 
 ## Key Fixtures
 
-See `agent_docs/testing.md` for fixture catalog, market scenarios, and component fixture reference.
+See `docs/agent/testing.md` for fixture catalog, market scenarios, and component fixture reference.

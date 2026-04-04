@@ -79,7 +79,7 @@ Never include AI/claude references in commit messages.
 - **Test tier**: Unit for pure logic · Component for Nautilus with test doubles · Integration for real engine runs (`--forked`) · E2E for full workflows · **UI testing** via `agent-browser` skill
 - **New file vs edit**: Prefer editing existing files. Only create new for genuinely new concepts (new strategy, new API route)
 - **UI changes**: Always invoke the `web-ui-development` skill before editing templates, routes, or HTMX patterns
-- **Stuck on Nautilus error?**: Read `agent_docs/nautilus.md` before trying workarounds
+- **Stuck on Nautilus error?**: Read `docs/agent/nautilus.md` before trying workarounds
 
 ## UI Testing (agent-browser)
 
@@ -113,7 +113,6 @@ src/
 ├── services/          # IBKR client, data catalog, persistence, reports
 └── utils/             # Logging (LogGuard), config loader, helpers
 tests/                 # unit/ component/ integration/ e2e/ api/ ui/
-specs/                 # Feature specs 001-013
 ```
 
 ## Example: Adding a Strategy
@@ -132,12 +131,12 @@ Detailed docs for specific areas — read on demand by topic:
 
 - `_bmad-output/project-context.md` — tech stack, coding patterns, testing rules, anti-patterns
 - `docs/governance/development-principles.md` — TDD enforcement, coverage, performance targets, security
-- `agent_docs/architecture.md` — source tree overview, data flow map, progressive disclosure index
-- `agent_docs/nautilus.md` — LogGuard, C extension isolation, engine lifecycle, strategy config
-- `agent_docs/data-pipeline.md` — DataCatalogService, IBKR/Kraken clients, Parquet catalog, symbol resolution
-- `agent_docs/web-ui.md` — HTMX patterns, templates, DI chain, charts, presentation models
-- `agent_docs/persistence.md` — DB models, async/sync repositories, results extraction, exceptions
-- `agent_docs/testing.md` — test pyramid, markers, fixtures, TDD workflow, coverage
-- `agent_docs/conventions.md` — git workflow, UV commands, quality checks, error handling, style
+- `docs/agent/architecture.md` — source tree overview, data flow map, progressive disclosure index
+- `docs/agent/nautilus.md` — LogGuard, C extension isolation, engine lifecycle, strategy config
+- `docs/agent/data-pipeline.md` — DataCatalogService, IBKR/Kraken clients, Parquet catalog, symbol resolution
+- `docs/agent/web-ui.md` — HTMX patterns, templates, DI chain, charts, presentation models
+- `docs/agent/persistence.md` — DB models, async/sync repositories, results extraction, exceptions
+- `docs/agent/testing.md` — test pyramid, markers, fixtures, TDD workflow, coverage
+- `docs/agent/conventions.md` — git workflow, UV commands, quality checks, error handling, style
 
 See README.md for full setup and usage instructions.

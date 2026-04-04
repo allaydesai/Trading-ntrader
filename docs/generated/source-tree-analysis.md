@@ -173,7 +173,7 @@ tests/
 | `configs/` | 5 YAML | Strategy configuration examples |
 | `templates/` | 14 HTML | Jinja2 templates (base, backtests/, partials/) |
 | `static/` | 9 | CSS (Tailwind), JS (charts), vendor (HTMX) |
-| `specs/` | 13 dirs, ~136 md | Feature specifications 001-013 |
+| `docs/Archive/specs/` | 13 dirs, ~136 md | Legacy feature specifications 001-013 (archived) |
 | `alembic/` | 4 migrations | Database schema versioning |
 | `data/` | — | Parquet catalog (gitignored) |
 | `logs/` | — | Application logs (gitignored) |

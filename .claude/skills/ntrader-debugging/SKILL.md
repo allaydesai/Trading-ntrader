@@ -8,14 +8,14 @@ description: >
 
 # NTrader Debugging Guide
 
-> See also: `agent_docs/nautilus.md` (LogGuard, C extensions, engine lifecycle)
+> See also: `docs/agent/nautilus.md` (LogGuard, C extensions, engine lifecycle)
 
 ## Segfault Diagnosis
 
 If the process crashes with no Python traceback, check in order:
 
 1. **Missing `--forked`** in integration tests — use `make test-integration`
-2. **LogGuard double-init** — store guard via `set_nautilus_log_guard()` (see `agent_docs/nautilus.md`)
+2. **LogGuard double-init** — store guard via `set_nautilus_log_guard()` (see `docs/agent/nautilus.md`)
 3. **C extension state leak** — engine reused after `run()` (single-use violation)
 
 ## Test Failures by Category

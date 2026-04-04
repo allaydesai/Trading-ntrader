@@ -7,7 +7,7 @@ High-level map. For details, read the topic-specific doc for your area of work.
 ```
 src/
 ├── config.py              # Settings + IBKRSettings + KrakenSettings (Pydantic, from env vars)
-├── api/                   # → see agent_docs/web-ui.md
+├── api/                   # → see docs/agent/web-ui.md
 │   ├── web.py             # FastAPI app entry point
 │   ├── dependencies.py    # DI providers
 │   ├── models/            # Pydantic response/presentation models
@@ -16,7 +16,7 @@ src/
 ├── cli/
 │   ├── main.py            # Click CLI entry point
 │   └── commands/          # backtest, compare, data, history, report, reproduce, run, show, strategy
-├── core/                  # → see agent_docs/nautilus.md for engine details
+├── core/                  # → see docs/agent/nautilus.md for engine details
 │   ├── strategy_registry.py   # @register_strategy decorator + StrategyRegistry
 │   ├── strategy_factory.py    # StrategyFactory + StrategyLoader (dynamic import)
 │   ├── backtest_orchestrator.py  # Preferred: takes BacktestRequest, handles persistence
@@ -26,11 +26,11 @@ src/
 │   └── strategies/
 │       ├── sma_crossover.py / sma_momentum.py  # Built-in strategies
 │       └── custom/            # GIT SUBMODULE (private strategies)
-├── db/                    # → see agent_docs/persistence.md
+├── db/                    # → see docs/agent/persistence.md
 │   ├── session.py / session_sync.py   # Async (web) + sync (CLI) sessions
 │   ├── exceptions.py / models/ / repositories/
 ├── models/                # Domain Pydantic models (request, result, trade, strategy)
-├── services/              # → see agent_docs/data-pipeline.md
+├── services/              # → see docs/agent/data-pipeline.md
 │   ├── data_catalog.py / data_service.py / data_fetcher.py
 │   ├── ibkr_client.py / kraken_client.py
 │   ├── exceptions.py / csv_loader.py / nautilus_converter.py
@@ -72,7 +72,7 @@ class SMACrossover(Strategy): ...
 ## Docker & Infrastructure
 
 `docker-compose.yml`: `postgres` (timescaledb:pg16), `redis` (7-alpine), `ib-gateway` (paper trading).
-Feature specs: `specs/001-013/` (spec.md, plan.md, tasks.md, contracts/).
+Feature specs: archived in `docs/Archive/specs/` (legacy speckit artifacts).
 
 ## Progressive Disclosure
 
@@ -80,9 +80,9 @@ Read the topic doc for your area of work:
 
 | Working on... | Read |
 |---------------|------|
-| Nautilus engine, LogGuard, strategies | `agent_docs/nautilus.md` |
-| Data loading, IBKR/Kraken, Parquet | `agent_docs/data-pipeline.md` |
-| Web UI, HTMX, templates, charts | `agent_docs/web-ui.md` |
-| Database, repositories, persistence | `agent_docs/persistence.md` |
-| Tests, fixtures, TDD | `agent_docs/testing.md` |
-| Git, style, dependencies | `agent_docs/conventions.md` |
+| Nautilus engine, LogGuard, strategies | `docs/agent/nautilus.md` |
+| Data loading, IBKR/Kraken, Parquet | `docs/agent/data-pipeline.md` |
+| Web UI, HTMX, templates, charts | `docs/agent/web-ui.md` |
+| Database, repositories, persistence | `docs/agent/persistence.md` |
+| Tests, fixtures, TDD | `docs/agent/testing.md` |
+| Git, style, dependencies | `docs/agent/conventions.md` |

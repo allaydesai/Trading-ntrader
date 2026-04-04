@@ -8,7 +8,7 @@ description: >
 
 # Strategy Development Guide
 
-> See also: `agent_docs/nautilus.md` (engine lifecycle, LogGuard, strategy config pattern)
+> See also: `docs/agent/nautilus.md` (engine lifecycle, LogGuard, strategy config pattern)
 
 ## The 4-File Registration Pattern
 

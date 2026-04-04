@@ -1,7 +1,7 @@
 # Trading-NTrader: Product Overview & Features
 
-**Version**: 1.0
-**Last Updated**: January 2025
+**Version**: 2.0
+**Last Updated**: April 2026
 **Status**: Active Development
 
 ---
@@ -378,6 +378,86 @@ User Request → CLI Command → Backtest Engine
 - Identify best performers (sorting and filtering)
 - Understand what was tested (complete configuration transparency)
 
+### Milestone 5: Web UI Foundation (Spec 005)
+
+**Status**: ✅ Completed
+
+#### Features Delivered
+- Dashboard summary page with key metrics
+- Persistent navigation sidebar
+- Dark theme with responsive Tailwind CSS design
+- FastAPI + Jinja2 + HTMX architecture
+
+### Milestone 6: Interactive Backtest Lists (Spec 006)
+
+**Status**: ✅ Completed
+
+#### Features Delivered
+- Filtering by strategy, instrument, date range, status
+- Sorting by performance metrics (return, Sharpe, drawdown)
+- Server-side pagination
+- URL-based filter persistence via query parameters
+
+### Milestone 7: Backtest Detail View (Spec 007)
+
+**Status**: ✅ Completed
+
+#### Features Delivered
+- Complete performance metrics display
+- Trade history blotter with entry/exit details
+- Configuration snapshot viewer
+- Action buttons (export, delete, re-run)
+
+### Milestone 8: Chart APIs (Spec 008)
+
+**Status**: ✅ Completed
+
+#### Features Delivered
+- OHLCV time series JSON API
+- Trade marker overlay data
+- Equity curve data endpoints
+- Indicator series data
+- TradingView Lightweight Charts integration
+
+### Milestone 9: Trade Tracking & Equity Curves (Spec 009)
+
+**Status**: ✅ Completed
+
+#### Features Delivered
+- Individual trade capture with entry/exit prices and timestamps
+- Balance evolution tracking (equity curve generation)
+- Trade-based performance metric calculations
+- Drawdown analysis from equity curve data
+
+### Milestone 10: Enhanced Price Plot (Spec 010)
+
+**Status**: ✅ Completed
+
+#### Features Delivered
+- Buy/sell entry/exit markers overlaid on candlestick charts
+- Tooltips with trade details
+- Intelligent clustering for dense trade regions
+
+### Milestone 11: Kraken Crypto Support (Spec 012)
+
+**Status**: ✅ Completed
+
+#### Features Delivered
+- Kraken API integration for historical OHLCV data
+- Cryptocurrency pair support (BTC/USD, ETH/USD, etc.)
+- Kraken pair mapping (BTC/USD → XXBTZUSD)
+- Data caching and gap detection for crypto data
+
+### Milestone 12: Backtest Run Page (Spec 013)
+
+**Status**: ✅ Completed
+
+#### Features Delivered
+- Web form for configuring backtests (strategy, symbol, dates, data source)
+- Dynamic strategy parameter fields
+- Progress feedback during execution
+- Result redirect on completion
+
 ---
 
 ## Development Roadmap
@@ -397,31 +477,32 @@ User Request → CLI Command → Backtest Engine
 4. ✅ Enhanced testing architecture (unit/component/integration)
 5. ✅ PostgreSQL metadata storage and backtest history
 
-### Phase 3 - Advanced Testing & Reliability (Weeks 9-12) 🔄 IN PROGRESS
+### Phase 3 - Web UI & Visualization (Specs 005-008, 010, 013) ✅ COMPLETED
 
-1. 🔄 Additional sample strategies (mean reversion, momentum)
-2. 🔄 Enhanced error handling and recovery
-3. 🔄 Performance optimization
-4. 📋 Walk-forward analysis
-5. 📋 Parameter optimization framework
+1. ✅ Web UI foundation with dashboard and dark theme
+2. ✅ Interactive backtest lists with filtering, sorting, pagination
+3. ✅ Backtest detail view with metrics and trade blotter
+4. ✅ Chart APIs for TradingView Lightweight Charts
+5. ✅ Enhanced price charts with buy/sell trade markers
+6. ✅ Backtest run page (configure + launch from browser)
 
-### Phase 4 - Portfolio & Advanced Analytics (Future)
+### Phase 4 - Trade Tracking & Crypto (Specs 009, 012) ✅ COMPLETED
 
-1. 📋 Multi-strategy portfolio support
-2. 📋 Advanced risk metrics (VaR, Monte Carlo)
-3. 📋 Machine learning integration
-4. 📋 Real-time data updates
-5. 📋 Web-based user interface
+1. ✅ Individual trade tracking with entry/exit details
+2. ✅ Equity curve generation and visualization
+3. ✅ Kraken cryptocurrency data support (BTC/USD, ETH/USD, etc.)
 
-### Phase 5 - Production Features (Future)
+### Phase 5 - Advanced Features (Future)
 
-1. 📋 Live trading capability (paper trading first)
-2. 📋 Cloud deployment options
-3. 📋 Multi-user support with authentication
-4. 📋 Options and futures support
-5. 📋 Advanced order types (stop-loss, trailing stops)
+1. 📋 Portfolio/multi-strategy support
+2. 📋 Parameter optimization framework
+3. 📋 Walk-forward analysis
+4. 📋 Advanced risk metrics (VaR, Monte Carlo)
+5. 📋 Live trading capability (paper trading first)
+6. 📋 Cloud deployment options
+7. 📋 Machine learning integration
 
-**Legend**: ✅ Completed | 🔄 In Progress | 📋 Planned
+**Legend**: ✅ Completed | 📋 Planned
 
 ---
 
@@ -758,6 +839,6 @@ open reports/backtest_<run_id>.html
 
 ---
 
-**Document Version**: 1.0
-**Last Updated**: January 2025
+**Document Version**: 2.0
+**Last Updated**: April 2026
 **Maintainer**: Trading-NTrader Development Team
