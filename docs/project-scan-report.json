@@ -1,0 +1,52 @@
+{
+  "workflow_version": "1.2.0",
+  "timestamps": {
+    "started": "2026-04-04T10:50:00Z",
+    "last_updated": "2026-04-04T12:00:00Z",
+    "completed": "2026-04-04T12:00:00Z"
+  },
+  "mode": "full_rescan",
+  "scan_level": "deep",
+  "project_root": "/Users/allay/dev/Trading-ntrader",
+  "project_knowledge": "/Users/allay/dev/Trading-ntrader/docs",
+  "completed_steps": [
+    {"step": "step_1", "status": "completed", "timestamp": "2026-04-04T11:15:00Z", "summary": "Classified as monolith with 1 part: backend (Python/FastAPI/Nautilus)"},
+    {"step": "step_2", "status": "completed", "timestamp": "2026-04-04T11:16:00Z", "summary": "Found 27 existing docs across docs/, agent_docs/, _bmad-output/"},
+    {"step": "step_3", "status": "completed", "timestamp": "2026-04-04T11:17:00Z", "summary": "Tech stack: FastAPI + Nautilus Trader + SQLAlchemy on Python 3.11"},
+    {"step": "step_4", "status": "completed", "timestamp": "2026-04-04T11:35:00Z", "summary": "Deep scan: 9 REST endpoints, 11 UI routes, 13 CLI commands. 3 DB tables, ~30 Pydantic models"},
+    {"step": "step_5", "status": "completed", "timestamp": "2026-04-04T11:40:00Z", "summary": "Source tree: ~222 Python files across src/ and tests/"},
+    {"step": "step_6", "status": "completed", "timestamp": "2026-04-04T11:45:00Z", "summary": "Dev guide: UV, Docker Compose, Makefile targets, TDD workflow"},
+    {"step": "step_7", "status": "skipped", "timestamp": "2026-04-04T11:45:00Z", "summary": "Skipped: single-part monolith, no multi-part integration"},
+    {"step": "step_8", "status": "completed", "timestamp": "2026-04-04T11:50:00Z", "summary": "Architecture doc: layered monolith, data flow diagrams, deployment"},
+    {"step": "step_9", "status": "completed", "timestamp": "2026-04-04T11:52:00Z", "summary": "Project overview and all supporting docs written"},
+    {"step": "step_10", "status": "completed", "timestamp": "2026-04-04T11:55:00Z", "summary": "Master index updated with all generated docs"},
+    {"step": "step_11", "status": "completed", "timestamp": "2026-04-04T11:58:00Z", "summary": "Validation: no stale references, all files exist, no incomplete markers"},
+    {"step": "step_12", "status": "completed", "timestamp": "2026-04-04T12:00:00Z", "summary": "Workflow complete"}
+  ],
+  "current_step": "completed",
+  "findings": {
+    "project_classification": {
+      "repository_type": "monolith",
+      "primary_type": "backend",
+      "secondary_traits": ["web", "cli", "data"],
+      "language": "Python 3.11+",
+      "frameworks": ["FastAPI", "Nautilus Trader", "SQLAlchemy", "Click"]
+    },
+    "api_scan": "9 REST endpoints + 11 UI routes + 13 CLI commands",
+    "data_models": "3 DB tables (backtest_runs, performance_metrics, trades) + ~30 Pydantic models",
+    "source_tree": "~222 Python files (113 src, 109 tests)"
+  },
+  "project_types": [
+    {"part_id": "ntrader", "project_type_id": "backend", "display_name": "NTrader Backend"}
+  ],
+  "outputs_generated": [
+    "project-scan-report.json",
+    "project-overview.md",
+    "architecture.md",
+    "source-tree-analysis.md",
+    "api-contracts.md",
+    "data-models.md",
+    "development-guide.md",
+    "index.md"
+  ]
+}

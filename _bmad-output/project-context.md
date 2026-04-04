@@ -1,10 +1,10 @@
 ---
 project_name: 'Trading-ntrader'
 user_name: 'Allay'
-date: '2026-04-03'
+date: '2026-04-04'
 sections_completed: ['technology_stack', 'language_rules', 'framework_rules', 'testing_rules', 'quality_rules', 'workflow_rules', 'anti_patterns']
 status: 'complete'
-rule_count: 74
+rule_count: 88
 optimized_for_llm: true
 ---
 
@@ -47,7 +47,7 @@ _This file contains critical rules and patterns that AI agents must follow when 
 - **Nested settings**: `Settings.ibkr`, `Settings.kraken` — each with own validators
 - **Custom domain exceptions** in `src/db/exceptions.py` — repos wrap SQLAlchemy errors
 - **API error handling**: `HTTPException` with proper status codes, never bare `raise`
-- **All DB operations are async** — `AsyncSession`, `@asynccontextmanager`
+- **Dual DB pattern**: Web uses async (`AsyncSession`/asyncpg), CLI uses sync (`Session`/psycopg2). **When adding DB features, update both repositories.**
 - **Logging**: `structlog.get_logger(__name__)` — DEBUG for calls, INFO/ERROR for issues
 - **Decimal arithmetic** for financial calculations (never float)
 - **Type hints required** (PEP 484) — all functions must have type annotations; mypy validates before commit
@@ -64,6 +64,9 @@ _This file contains critical rules and patterns that AI agents must follow when 
 - **Extract pure logic** into framework-free classes (e.g., `SMATradingLogic`) — testable without Nautilus
 - **Position sizing**: Must respect instrument precision (fractional crypto, whole equities)
 - **`self.cache.instrument()`** for instrument details, **`self.order_factory.market()`** for orders
+- **Engine setup order is strict**: venue → instrument → data → strategy → run. Violations cause cryptic errors
+- **Prefer `BacktestOrchestrator`** (takes `BacktestRequest`, handles persistence) over `MinimalBacktestRunner` (legacy, direct params)
+- **Double `gc.collect()`** after engine disposal in integration tests (see `integration_cleanup` fixture)
 
 #### FastAPI + HTMX
 - **DI chain**: `get_db()` → repository → service; use type aliases (`BacktestService`) in route signatures
@@ -72,6 +75,10 @@ _This file contains critical rules and patterns that AI agents must follow when 
 - **Always include `request`** in template context dict
 - **`NavigationState`** context object for all page templates
 - **`@computed_field`** for derived display properties in response models
+- **Fragment endpoints** return HTML partials (no html/body tags) — container ID must match `hx-target`
+- **Filter state** preserved in URL query strings via `FilterState.to_query_params()`
+- **`_backtest_lock`** (asyncio.Lock) prevents concurrent backtest execution — per-process only, not cross-worker
+- **Charts JS load order is strict**: core → price → equity → statistics → charts (modular dependency chain)
 
 #### SQLAlchemy
 - **All models**: inherit `Base` + `TimestampMixin`
@@ -142,10 +149,15 @@ _This file contains critical rules and patterns that AI agents must follow when 
 - Never change `TRADING_MODE` to `live` without explicit user confirmation
 - Kraken key/secret must always be set as a pair (model validator enforces this)
 
-#### Data Flow
+#### Data Pipeline
 - IBKR/Kraken/CSV → Parquet catalog → BacktestEngine → Results DB → Web UI/Reports
 - Parquet catalog is the single source of truth for market data
 - Results DB (PostgreSQL/TimescaleDB) stores backtest metadata and trades
+- **DataCatalogService** uses lazy client initialization + availability caching
+- **Symbol resolution fallback**: `{symbol}` → `{symbol}.NASDAQ` (see `_resolve_instrument_id`)
+- **IBKR rate limit**: 45 requests/second — `_guard_nautilus_logging()` context manager prevents double-init
+- **Kraken pair mapping**: `BTC/USD` → `XXBTZUSD` / `XBT/USD` / `BTC/USD.KRAKEN` (Futures Charts API with pagination)
+- **Strategy alias resolution**: direct name → case-insensitive alias → fuzzy match
 
 ---
 
@@ -165,4 +177,4 @@ _This file contains critical rules and patterns that AI agents must follow when 
 - Review quarterly for outdated rules
 - Remove rules that become obvious over time
 
-Last Updated: 2026-04-03
+Last Updated: 2026-04-04
