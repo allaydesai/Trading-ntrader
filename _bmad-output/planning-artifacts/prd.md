@@ -15,9 +15,9 @@ stepsCompleted:
   - 'step-11-polish'
   - 'step-12-complete'
 inputDocuments:
-  - 'product-brief-firstrate-data-import-distillate.md'
+  - 'product-brief-Trading-ntrader-distillate.md'
   - 'project-context.md'
-  - 'product-brief-firstrate-data-import.md'
+  - 'product-brief-Trading-ntrader.md'
 workflowType: 'prd'
 documentCounts:
   briefs: 2
