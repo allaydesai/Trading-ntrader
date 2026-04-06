@@ -1,0 +1,75 @@
+# generated: 2026-04-05
+# last_updated: 2026-04-05
+# project: Trading-ntrader
+# project_key: NOKEY
+# tracking_system: file-system
+# story_location: _bmad-output/implementation-artifacts
+
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+#
+# Epic Status Transitions:
+#   - backlog → in-progress: Automatically when first story is created (via create-story)
+#   - in-progress → done: Manually when all stories reach 'done' status
+#
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - ready-for-dev: Story file created in stories folder
+#   - in-progress: Developer actively working on implementation
+#   - review: Ready for code review (via Dev's code-review workflow)
+#   - done: Story completed
+#
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective has been completed
+#
+# WORKFLOW NOTES:
+# ===============
+# - Epic transitions to 'in-progress' automatically when first story is created
+# - Stories can be worked in parallel if team capacity allows
+# - SM typically creates next story after previous one is 'done' to incorporate learnings
+# - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
+
+generated: 2026-04-05
+last_updated: 2026-04-05
+project: Trading-ntrader
+project_key: NOKEY
+tracking_system: file-system
+story_location: _bmad-output/implementation-artifacts
+
+development_status:
+  # Epic 1: Data Import Pipeline
+  epic-1: backlog
+  1-1-catalog-foundation-and-configuration: backlog
+  1-2-etf-csv-parser-with-ohlc-validation: backlog
+  1-3-instrument-id-mapping-from-company-profiles: backlog
+  1-4-import-pipeline-core: backlog
+  1-5-cli-import-command-with-progress-and-summary: backlog
+  1-6-pre-import-dry-run-validation: backlog
+  1-7-idempotent-import-and-failed-import-recovery: backlog
+  epic-1-retrospective: optional
+
+  # Epic 2: Data Explorer & Verification
+  epic-2: backlog
+  2-1-explorer-page-with-ticker-list: backlog
+  2-2-chart-panel-with-timeframe-switching: backlog
+  2-3-data-statistics-panel: backlog
+  2-4-explorer-ux-polish: backlog
+  epic-2-retrospective: optional
+
+  # Epic 3: Backtest Integration & Verification
+  epic-3: backlog
+  3-1-catalog-integration-with-backtestengine: backlog
+  3-2-explorer-to-backtest-bridge: backlog
+  3-3-backtest-verification-and-reference-comparison: backlog
+  epic-3-retrospective: optional
+
+  # Epic 4: Supplementary Data
+  epic-4: backlog
+  4-1-dividend-and-stock-split-data-parsing: backlog
+  4-2-supplementary-data-display-in-explorer: backlog
+  epic-4-retrospective: optional

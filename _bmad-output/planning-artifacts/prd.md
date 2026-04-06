@@ -77,7 +77,7 @@ The data explorer is deliberately minimal — a catalog browser and verification
 
 - Import pipeline is idempotent — re-running the same command skips complete tickers and re-imports incomplete ones via date-range comparison
 - Pre-import dry-run validates file counts, schemas, date ranges, and disk estimates before committing
-- Import verification at conversion time: row count match (source CSV vs Parquet), OHLC sanity (high >= low, volume >= 0), sample point validation (first/last N rows compared between source and output)
+- Import verification at conversion time: row count match (source CSV vs Parquet), OHLC sanity (high >= low, volume >= 0), sample point validation (first and last 10 rows compared between source and output)
 - Import summary report: total tickers processed, rows imported, failures with reasons
 - Imported Parquet data is directly consumable by Nautilus BacktestEngine without conversion or adaptation layers
 - Backtest results from FirstRate catalog are consistent with results from the existing CSV loader path on a reference dataset (e.g., 1-year SPY)
@@ -264,7 +264,7 @@ KYC/AML, PCI-DSS, regional regulatory compliance, audit trails, fraud prevention
 - **FR5:** System can map FirstRate ticker symbols to Nautilus-qualified instrument IDs (e.g., SPY → SPY.ARCA) using reference data (company_profiles.csv for stocks/ETFs, asset-specific mapping rules for futures/FX/crypto/indices)
 - **FR6:** System can validate OHLC data during import (high >= low, volume >= 0) and reject or flag invalid rows
 - **FR7:** System can verify import completeness by comparing row counts between source CSV and output Parquet per ticker/timeframe
-- **FR8:** System can validate import accuracy by comparing sample data points (first/last N rows) between source CSV and output Parquet
+- **FR8:** System can validate import accuracy by comparing sample data points (first and last 10 rows) between source CSV and output Parquet
 - **FR9:** System can detect incomplete prior imports by comparing last date in existing Parquet against last date in source CSV, and re-import only incomplete tickers
 - **FR10:** System can produce an import summary report showing total tickers processed, rows imported, and any failures with reasons
 - **FR11:** System can report import progress to the CLI during execution (tickers processed, current ticker, errors encountered)
@@ -316,8 +316,8 @@ KYC/AML, PCI-DSS, regional regulatory compliance, audit trails, fraud prevention
 | Chart data load (single ticker/timeframe) | < 2 seconds | Responsive visual verification against TradingView |
 | Ticker list page render (paginated) | < 500ms | Standard pagination at page sizes of 25-50 |
 | Ticker search/filter | < 300ms | Keystroke-responsive filtering across 20,000+ tickers |
-| Explorer page initial load | < 1 second | Simple form with TradingView Lightweight Charts JS |
-| Chart scroll/zoom interaction | 60fps | Handled natively by TradingView Lightweight Charts data conflation |
+| Explorer page initial load | < 1 second | Simple form with charting library |
+| Chart scroll/zoom interaction | 60fps | Handled natively by charting library's data conflation |
 | Catalog metadata read | < 500ms | Enumerate available tickers and timeframes without loading price data |
 | Import performance | No target | One-time activity — prioritize simplicity and reliability. Parsers process one ticker at a time (bounded memory) |
 
@@ -331,13 +331,13 @@ KYC/AML, PCI-DSS, regional regulatory compliance, audit trails, fraud prevention
 
 - **Nautilus BacktestEngine compatibility:** Imported Parquet files directly consumable by BacktestEngine without adapter layers or format conversion at runtime
 - **Existing catalog structure:** Output Parquet follows the same `{INSTRUMENT_ID}/{BAR_TYPE}/*.parquet` directory convention as IBKR/Kraken imports
-- **Existing web UI patterns:** Explorer uses the same FastAPI/HTMX/Jinja2 stack, DI chain, NavigationState, and TradingView Lightweight Charts integration
-- **Existing CLI patterns:** Import commands use the same Click-based CLI structure in `src/cli/`
+- **Existing web UI patterns:** Explorer integrates with the existing web UI stack, dependency injection chain, and charting library
+- **Existing CLI patterns:** Import commands follow the existing CLI framework and directory structure
 
 ### Security
 
 - **Minimal scope:** Personal localhost tool — no authentication, authorization, or encryption required
-- **Env var protection:** Configuration via environment variables or Pydantic settings. No credentials in code or git
+- **Env var protection:** Configuration via environment variables or typed settings framework. No credentials in code or git
 
 ## Risks & Mitigations
 
