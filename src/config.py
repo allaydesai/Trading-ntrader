@@ -124,6 +124,49 @@ class KrakenSettings(BaseSettings):
     }
 
 
+class FirstRateSettings(BaseSettings):
+    """FirstRate Data source configuration settings."""
+
+    firstrate_source_path: str = Field(
+        default="", description="Default source directory for CSV imports"
+    )
+    firstrate_catalog_name: str = Field(
+        default="firstrate-etf",
+        description="Default catalog name for FirstRate imports",
+    )
+
+    model_config = {
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "case_sensitive": False,
+        "extra": "ignore",
+    }
+
+
+class CatalogSettings(BaseSettings):
+    """Catalog configuration settings.
+
+    Catalogs are discovered at runtime from the base path directory.
+    Each subdirectory is a named catalog (Parquet format).
+    """
+
+    catalog_base_path: str = Field(
+        default="",
+        description="Base directory containing Parquet catalog subdirectories",
+    )
+    default_catalog_name: str = Field(
+        default="",
+        description="Default catalog name to pre-select (empty if none)",
+    )
+
+    model_config = {
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "case_sensitive": False,
+        "extra": "ignore",
+    }
+
+
 class Settings(BaseSettings):
     """Application settings with validation."""
 
@@ -190,6 +233,16 @@ class Settings(BaseSettings):
     # Kraken settings
     kraken: KrakenSettings = Field(
         default_factory=KrakenSettings, description="Kraken exchange settings"
+    )
+
+    # FirstRate settings
+    firstrate: FirstRateSettings = Field(
+        default_factory=FirstRateSettings, description="FirstRate Data settings"
+    )
+
+    # Catalog settings
+    catalog: CatalogSettings = Field(
+        default_factory=CatalogSettings, description="Named catalog settings"
     )
 
     @property
