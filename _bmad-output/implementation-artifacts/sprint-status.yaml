@@ -45,7 +45,7 @@ development_status:
   # Epic 1: Data Import Pipeline
   epic-1: in-progress
   1-1-catalog-foundation-and-configuration: done
-  1-2-etf-csv-parser-with-ohlc-validation: backlog
+  1-2-etf-csv-parser-with-ohlc-validation: ready-for-dev
   1-3-instrument-id-mapping-from-company-profiles: backlog
   1-4-import-pipeline-core: backlog
   1-5-cli-import-command-with-progress-and-summary: backlog
