@@ -1,0 +1,274 @@
+"""Unit tests for ETF CSV parser."""
+
+from pathlib import Path
+
+import pytest
+from nautilus_trader.model.data import Bar, BarType
+from nautilus_trader.model.identifiers import InstrumentId
+
+from src.models.catalog import AssetClass
+from src.services.firstrate.parsers.base import (
+    get_parser,
+)
+from src.services.firstrate.parsers.etf_parser import ETFParser
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def parser():
+    """Return a fresh ETFParser instance."""
+    return ETFParser()
+
+
+@pytest.fixture()
+def instrument_id():
+    return InstrumentId.from_str("SPY.ARCA")
+
+
+@pytest.fixture()
+def daily_bar_type():
+    return BarType.from_str("SPY.ARCA-1-DAY-LAST-EXTERNAL")
+
+
+@pytest.fixture()
+def intraday_bar_type():
+    return BarType.from_str("SPY.ARCA-1-MINUTE-LAST-EXTERNAL")
+
+
+def _write_csv(tmp_path: Path, filename: str, lines: list[str]) -> Path:
+    """Helper to write CSV lines to a temp file."""
+    p = tmp_path / filename
+    p.write_text("\n".join(lines))
+    return p
+
+
+# ---------------------------------------------------------------------------
+# Registration (AC #4, #5)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestETFParserRegistration:
+    """ETF parser registration and discovery."""
+
+    def test_registered_for_etf_asset_class(self):
+        """ETFParser is retrievable via get_parser(AssetClass.ETF)."""
+        p = get_parser(AssetClass.ETF)
+        assert isinstance(p, ETFParser)
+
+    def test_decorator_applied(self):
+        """ETFParser class has the @register_parser decorator."""
+        # If get_parser works, the decorator was applied.
+        p = get_parser(AssetClass.ETF)
+        assert p is not None
+
+
+# ---------------------------------------------------------------------------
+# parse_file — daily format (AC #1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestETFParserDaily:
+    """Tests for parsing daily (1day) CSV files."""
+
+    def test_basic_daily_parse(self, parser, instrument_id, daily_bar_type, tmp_path):
+        """Parses daily CSV rows into Bar objects."""
+        lines = [
+            "2002-05-22,43.8068,44.1444,43.0834,43.2522,23762",
+            "2002-05-23,43.3000,43.5000,43.0000,43.2000,15000",
+        ]
+        f = _write_csv(tmp_path, "SPY_full_1day_adjsplitdiv.txt", lines)
+        bars = parser.parse_file(f, instrument_id, daily_bar_type)
+        assert len(bars) == 2
+        assert all(isinstance(b, Bar) for b in bars)
+
+    def test_bars_sorted_by_ts_init(self, parser, instrument_id, daily_bar_type, tmp_path):
+        """Bars are sorted ascending by ts_init."""
+        lines = [
+            "2002-05-23,43.30,43.50,43.00,43.20,15000",
+            "2002-05-22,43.80,44.14,43.08,43.25,23762",
+        ]
+        f = _write_csv(tmp_path, "SPY.txt", lines)
+        bars = parser.parse_file(f, instrument_id, daily_bar_type)
+        assert bars[0].ts_init < bars[1].ts_init
+
+    def test_price_precision_preserved(self, parser, instrument_id, daily_bar_type, tmp_path):
+        """Source decimal precision is maintained in Price objects."""
+        lines = ["2020-01-02,43.8068,44.1444,43.0834,43.2522,23762"]
+        f = _write_csv(tmp_path, "SPY.txt", lines)
+        bars = parser.parse_file(f, instrument_id, daily_bar_type)
+        bar = bars[0]
+        # 4 decimal places in source data
+        assert str(bar.open) == "43.8068"
+        assert str(bar.high) == "44.1444"
+
+    def test_timestamps_are_nanoseconds_utc(self, parser, instrument_id, daily_bar_type, tmp_path):
+        """ts_event and ts_init are nanoseconds since epoch."""
+        lines = ["2020-01-02,100.00,105.00,99.00,103.00,1000"]
+        f = _write_csv(tmp_path, "SPY.txt", lines)
+        bars = parser.parse_file(f, instrument_id, daily_bar_type)
+        bar = bars[0]
+        # 2020-01-02 00:00:00 UTC = 1577923200 seconds
+        expected_ns = 1577923200 * 1_000_000_000
+        assert bar.ts_init == expected_ns
+        assert bar.ts_event == expected_ns
+
+    def test_daily_date_only_format(self, parser, instrument_id, daily_bar_type, tmp_path):
+        """Daily files use YYYY-MM-DD date-only format."""
+        lines = ["2020-06-15,300.00,310.00,295.00,305.00,50000"]
+        f = _write_csv(tmp_path, "SPY.txt", lines)
+        bars = parser.parse_file(f, instrument_id, daily_bar_type)
+        assert len(bars) == 1
+
+
+# ---------------------------------------------------------------------------
+# parse_file — intraday format (AC #1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestETFParserIntraday:
+    """Tests for parsing intraday (1min/5min/1hour) CSV files."""
+
+    def test_basic_intraday_parse(self, parser, instrument_id, intraday_bar_type, tmp_path):
+        """Parses intraday CSV rows with datetime format."""
+        lines = [
+            "2020-09-09 09:00:00,25.1,25.1046,25.08,25.08,10619",
+            "2020-09-09 09:01:00,25.09,25.11,25.07,25.10,5000",
+        ]
+        f = _write_csv(tmp_path, "SPY.txt", lines)
+        bars = parser.parse_file(f, instrument_id, intraday_bar_type)
+        assert len(bars) == 2
+
+    def test_intraday_timestamps_include_time(
+        self, parser, instrument_id, intraday_bar_type, tmp_path
+    ):
+        """Intraday timestamps preserve hours/minutes/seconds."""
+        lines = ["2020-09-09 09:30:00,25.10,25.20,25.05,25.15,8000"]
+        f = _write_csv(tmp_path, "SPY.txt", lines)
+        bars = parser.parse_file(f, instrument_id, intraday_bar_type)
+        bar = bars[0]
+        # ts should NOT be midnight
+        assert bar.ts_init % (24 * 3600 * 1_000_000_000) != 0
+
+    def test_volume_float_notation(self, parser, instrument_id, intraday_bar_type, tmp_path):
+        """Volume as float notation (248.0) is handled correctly."""
+        lines = ["2020-09-09 09:00:00,25.10,25.20,25.05,25.15,248.0"]
+        f = _write_csv(tmp_path, "SPY.txt", lines)
+        bars = parser.parse_file(f, instrument_id, intraday_bar_type)
+        assert int(bars[0].volume) == 248
+
+
+# ---------------------------------------------------------------------------
+# Known data issues (from Dev Notes)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestETFParserKnownDataIssues:
+    """Tests for handling known FirstRate ETF data issues."""
+
+    def test_leading_blank_lines_skipped(self, parser, instrument_id, daily_bar_type, tmp_path):
+        """Files with leading blank lines (773 daily files) are handled."""
+        lines = [
+            "",
+            "",
+            "",
+            "2020-01-02,100.00,105.00,99.00,103.00,1000",
+            "2020-01-03,103.00,108.00,102.00,107.00,2000",
+        ]
+        f = _write_csv(tmp_path, "SPY.txt", lines)
+        bars = parser.parse_file(f, instrument_id, daily_bar_type)
+        assert len(bars) == 2
+
+    def test_crlf_line_endings(self, parser, instrument_id, daily_bar_type, tmp_path):
+        """CRLF line endings are handled (773 daily files use \\r\\n)."""
+        content = (
+            "2020-01-02,100.00,105.00,99.00,103.00,1000\r\n"
+            "2020-01-03,103.00,108.00,102.00,107.00,2000\r\n"
+        )
+        f = tmp_path / "SPY.txt"
+        f.write_bytes(content.encode("utf-8"))
+        bars = parser.parse_file(f, instrument_id, daily_bar_type)
+        assert len(bars) == 2
+
+    def test_empty_file_returns_empty_list(self, parser, instrument_id, daily_bar_type, tmp_path):
+        """Empty (0-byte) files return empty list, no crash."""
+        f = tmp_path / "ARKA.txt"
+        f.write_text("")
+        bars = parser.parse_file(f, instrument_id, daily_bar_type)
+        assert bars == []
+
+    def test_single_row_file(self, parser, instrument_id, daily_bar_type, tmp_path):
+        """Single-row file parses correctly."""
+        lines = ["2020-01-02,100.00,105.00,99.00,103.00,1000"]
+        f = _write_csv(tmp_path, "SPY.txt", lines)
+        bars = parser.parse_file(f, instrument_id, daily_bar_type)
+        assert len(bars) == 1
+
+    def test_malformed_row_wrong_column_count(
+        self, parser, instrument_id, daily_bar_type, tmp_path
+    ):
+        """Rows with wrong column count are skipped, valid rows still parsed."""
+        lines = [
+            "2020-01-02,100.00,105.00,99.00,103.00,1000",
+            "2020-01-03,103.00",  # malformed
+            "2020-01-04,110.00,115.00,108.00,112.00,3000",
+        ]
+        f = _write_csv(tmp_path, "SPY.txt", lines)
+        bars = parser.parse_file(f, instrument_id, daily_bar_type)
+        assert len(bars) == 2
+
+    def test_leading_blanks_with_six_lines(self, parser, instrument_id, daily_bar_type, tmp_path):
+        """Files with 6 leading blank lines (max observed) still parse."""
+        lines = ["", "", "", "", "", "", "2020-01-02,100.00,105.00,99.00,103.00,1000"]
+        f = _write_csv(tmp_path, "SPY.txt", lines)
+        bars = parser.parse_file(f, instrument_id, daily_bar_type)
+        assert len(bars) == 1
+
+    def test_negative_prices_pass_through_parse_file(
+        self, parser, instrument_id, daily_bar_type, tmp_path
+    ):
+        """Negative prices pass through parse_file — validate_bars catches them separately."""
+        lines = [
+            "2020-01-02,100.00,105.00,99.00,103.00,1000",
+            "2020-01-03,-5.00,-4.00,-6.00,-5.50,500",
+            "2020-01-04,110.00,115.00,108.00,112.00,3000",
+        ]
+        f = _write_csv(tmp_path, "SPY.txt", lines)
+        bars = parser.parse_file(f, instrument_id, daily_bar_type)
+        # Nautilus accepts negative prices; validate_bars is the gate
+        assert len(bars) == 3
+
+    def test_negative_prices_caught_by_validate_bars(self, parser, tmp_path):
+        """validate_bars flags negative prices from parsed raw data."""
+        from src.services.firstrate.parsers.base import RawBarData
+
+        rows = [
+            RawBarData("2020-01-02", "100.00", "105.00", "99.00", "103.00", "1000"),
+            RawBarData("2020-01-03", "-5.00", "-4.00", "-6.00", "-5.50", "500"),
+        ]
+        result = parser.validate_bars(rows)
+        assert result.valid is False
+        assert result.invalid_rows == 1
+        assert any("non-positive" in e for e in result.errors)
+
+
+# ---------------------------------------------------------------------------
+# map_instrument_id (AC #4 — stub for Story 1.3)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestETFParserMapInstrumentId:
+    """Tests for map_instrument_id stub."""
+
+    def test_returns_instrument_id(self, parser):
+        """Stub returns an InstrumentId with .ARCA suffix."""
+        iid = parser.map_instrument_id("SPY", "1-DAY-LAST")
+        assert isinstance(iid, InstrumentId)
+        assert "SPY" in str(iid)

@@ -1,6 +1,6 @@
 # Story 1.2: ETF CSV Parser with OHLC Validation
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 
@@ -22,22 +22,22 @@ So that I can trust the data before it enters the Parquet catalog.
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Base parser ABC and registry (AC: #4, #5)
-  - [ ] 1.1 Define `BaseParser` ABC in `src/services/firstrate/parsers/base.py` with abstract methods
-  - [ ] 1.2 Implement `@register_parser(asset_class)` decorator and `_PARSER_REGISTRY` dict
-  - [ ] 1.3 Implement `get_parser(asset_class) -> BaseParser` lookup function
-  - [ ] 1.4 Implement shared `validate_bars(bars) -> ValidationResult` in base class (OHLC + volume checks)
-- [ ] Task 2: ETF parser implementation (AC: #1)
-  - [ ] 2.1 Create `ETFParser` class in `src/services/firstrate/parsers/etf_parser.py`
-  - [ ] 2.2 Implement `parse_file()` — read headerless CSV, produce `list[Bar]` sorted by ts_init
-  - [ ] 2.3 Implement `map_instrument_id()` — stub delegating to future InstrumentMapper (Story 1.3)
-  - [ ] 2.4 Register via `@register_parser(asset_class=AssetClass.ETF)`
-- [ ] Task 3: OHLC validation (AC: #2, #3)
-  - [ ] 3.1 Base class `validate_bars()` checks: high >= low, volume >= 0 for each bar
-  - [ ] 3.2 Return `ValidationResult` with `valid`, `errors` (row-level detail), `row_count`, `invalid_rows`
-- [ ] Task 4: Export and wire up (AC: #4, #5)
-  - [ ] 4.1 Update `src/services/firstrate/parsers/__init__.py` to export base, registry, and ETF parser
-  - [ ] 4.2 Ensure importing the parsers package auto-registers ETF parser
+- [x] Task 1: Base parser ABC and registry (AC: #4, #5)
+  - [x] 1.1 Define `BaseParser` ABC in `src/services/firstrate/parsers/base.py` with abstract methods
+  - [x] 1.2 Implement `@register_parser(asset_class)` decorator and `_PARSER_REGISTRY` dict
+  - [x] 1.3 Implement `get_parser(asset_class) -> BaseParser` lookup function
+  - [x] 1.4 Implement shared `validate_bars(bars) -> ValidationResult` in base class (OHLC + volume checks)
+- [x] Task 2: ETF parser implementation (AC: #1)
+  - [x] 2.1 Create `ETFParser` class in `src/services/firstrate/parsers/etf_parser.py`
+  - [x] 2.2 Implement `parse_file()` — read headerless CSV, produce `list[Bar]` sorted by ts_init
+  - [x] 2.3 Implement `map_instrument_id()` — stub delegating to future InstrumentMapper (Story 1.3)
+  - [x] 2.4 Register via `@register_parser(asset_class=AssetClass.ETF)`
+- [x] Task 3: OHLC validation (AC: #2, #3)
+  - [x] 3.1 Base class `validate_bars()` checks: high >= low, volume >= 0 for each bar
+  - [x] 3.2 Return `ValidationResult` with `valid`, `errors` (row-level detail), `row_count`, `invalid_rows`
+- [x] Task 4: Export and wire up (AC: #4, #5)
+  - [x] 4.1 Update `src/services/firstrate/parsers/__init__.py` to export base, registry, and ETF parser
+  - [x] 4.2 Ensure importing the parsers package auto-registers ETF parser
 
 ## Dev Notes
 
@@ -303,8 +303,42 @@ This story creates the parser framework that **all future parsers** (Stories for
 
 ### Agent Model Used
 
+Claude Opus 4.6 (1M context)
+
 ### Debug Log References
+
+- Nautilus Bar constructor enforces OHLC correctness (high >= open, high >= close, etc.) — cannot create invalid Bar objects. Redesigned `validate_bars()` to operate on `RawBarData` (pre-construction strings) instead of `list[Bar]`.
+- Ruff auto-formatter removed `Decimal` import on first write since it wasn't referenced at module level — re-added after read-back confirmed removal.
 
 ### Completion Notes List
 
+- **Task 1:** Implemented `BaseParser` ABC with `parse_file` and `map_instrument_id` abstract methods, `@register_parser` decorator with `_PARSER_REGISTRY` dict, `get_parser()` lookup, `RawBarData` dataclass, and shared `validate_bars()` with high>=low, volume>=0, and negative price checks. 19 unit tests.
+- **Task 2:** Implemented `ETFParser` in `etf_parser.py` — handles daily (YYYY-MM-DD) and intraday (YYYY-MM-DD HH:MM:SS) formats, blank line skipping, CRLF handling, empty files, float volume notation, malformed row skipping. Registered via `@register_parser(AssetClass.ETF)`. `map_instrument_id()` is a stub (Story 1.3). 17 unit tests.
+- **Task 3:** Validation already fully implemented in Task 1's `validate_bars()` — high>=low, volume>=0, negative prices all checked with row-level detail in ValidationResult.
+- **Task 4:** Updated `__init__.py` to export BaseParser, RawBarData, ETFParser, get_parser, register_parser. ETF parser auto-registers on package import.
+
 ### File List
+
+- `src/services/firstrate/parsers/base.py` — MODIFIED: replaced stub with BaseParser ABC, RawBarData, registry, validate_bars
+- `src/services/firstrate/parsers/etf_parser.py` — NEW: ETFParser class
+- `src/services/firstrate/parsers/__init__.py` — MODIFIED: exports and auto-registration
+- `tests/unit/services/firstrate/test_base_parser.py` — NEW: 19 tests for ABC, registry, validation
+- `tests/unit/services/firstrate/test_etf_parser.py` — NEW: 17 tests for ETF parsing, known data issues
+
+### Change Log
+
+- 2026-04-07: Implemented Story 1.2 — BaseParser ABC, parser registry, ETFParser, OHLC validation. 36 new unit tests, 553 total unit tests passing.
+
+### Review Findings
+
+- [x] [Review][Decision] F1: `validate_bars` is disconnected from `parse_file` — resolved: separation by design. Story 1.4 import pipeline calls validate_bars on RawBarData before parse_file.
+- [x] [Review][Patch] F2: Volume now uses `Quantity.from_str()` for intraday, `Quantity.from_int()` for daily — fixed [etf_parser.py]
+- [x] [Review][Patch] F3: `validate_bars` now catches `InvalidOperation` for non-numeric strings — fixed [base.py]
+- [x] [Review][Patch] F4: Added open/close within high-low range validation — fixed [base.py]
+- [x] [Review][Patch] F5: Changed price check from `< 0` to `<= 0` for consistency with csv_loader.py — fixed [base.py]
+- [x] [Review][Patch] F6: Timestamp conversion now uses `calendar.timegm()` integer arithmetic — fixed [etf_parser.py]
+- [x] [Review][Patch] F7: Added tests for negative prices through both `parse_file` and `validate_bars` flows — fixed [test_etf_parser.py]
+- [x] [Review][Defer] F8: `_row_to_bar` silently swallows all exceptions [etf_parser.py:126] — deferred, design-level decision for Story 1.4 import pipeline
+- [x] [Review][Defer] F9: No duplicate-timestamp detection [etf_parser.py:58] — deferred, pre-existing gap
+- [x] [Review][Defer] F10: `_PARSER_REGISTRY` has no thread safety [base.py:40] — deferred, not relevant until concurrent usage
+- [x] [Review][Defer] F11: Non-UTF-8 file encoding crashes with no context [etf_parser.py:82] — deferred, pre-existing
