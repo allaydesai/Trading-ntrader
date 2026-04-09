@@ -64,3 +64,9 @@ class RecordNotFoundError(BacktestStorageError):
     """
 
     pass
+
+
+class InstrumentMappingError(Exception):
+    """Raised when a ticker cannot be mapped to a Nautilus InstrumentId."""
+
+    pass

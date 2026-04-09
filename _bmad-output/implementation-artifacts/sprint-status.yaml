@@ -1,5 +1,5 @@
 # generated: 2026-04-05
-# last_updated: 2026-04-08
+# last_updated: 2026-04-09
 # project: Trading-ntrader
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-05
-last_updated: 2026-04-08
+last_updated: 2026-04-09
 project: Trading-ntrader
 project_key: NOKEY
 tracking_system: file-system
@@ -46,7 +46,7 @@ development_status:
   epic-1: in-progress
   1-1-catalog-foundation-and-configuration: done
   1-2-etf-csv-parser-with-ohlc-validation: done
-  1-3-instrument-id-mapping-from-company-profiles: backlog
+  1-3-instrument-id-mapping-from-company-profiles: review
   1-4-import-pipeline-core: backlog
   1-5-cli-import-command-with-progress-and-summary: backlog
   1-6-pre-import-dry-run-validation: backlog
