@@ -46,8 +46,8 @@ development_status:
   epic-1: in-progress
   1-1-catalog-foundation-and-configuration: done
   1-2-etf-csv-parser-with-ohlc-validation: done
-  1-3-instrument-id-mapping-from-company-profiles: review
-  1-4-import-pipeline-core: backlog
+  1-3-instrument-id-mapping-from-company-profiles: done
+  1-4-import-pipeline-core: done
   1-5-cli-import-command-with-progress-and-summary: backlog
   1-6-pre-import-dry-run-validation: backlog
   1-7-idempotent-import-and-failed-import-recovery: backlog

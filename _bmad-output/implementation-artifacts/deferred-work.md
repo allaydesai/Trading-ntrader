@@ -12,3 +12,8 @@
 - F9: No duplicate-timestamp detection in `parse_file` — duplicate bars for the same timestamp could silently corrupt backtesting results.
 - F10: `_PARSER_REGISTRY` is a plain dict with no thread safety — not relevant until concurrent usage (e.g., FastAPI async workers).
 - F11: `_read_lines` hardcodes UTF-8 encoding — non-UTF-8 files (Latin-1, Windows-1252) crash with no file-path context in the error.
+
+## Deferred from: code review of 1-4-import-pipeline-core (2026-04-09)
+
+- D1: Permission errors in `_discover_tickers` crash entire batch — `subdir.iterdir()` at line 219 has no exception handling, so an unreadable subdirectory aborts discovery for all tickers.
+- D2: In-place ORM mutation in `_upsert_metadata` before persistence — `get_instrument_sync` returns an ORM object that is mutated directly before `upsert_instrument_sync`. If the upsert fails, dirty state remains on the session-attached object.
