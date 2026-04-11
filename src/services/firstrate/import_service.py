@@ -315,50 +315,68 @@ class ImportService:
         - Source probe returns ``None`` (empty / malformed source): ``"new"``
           so the real import path fails loudly with "No bars parsed from file"
           instead of silently skipping.
-        - Source day < metadata day: ``"reimported"`` with a structured
-          warning — stale metadata should never mask a source regression.
-        - Source day == metadata day: ``"skipped"``.
-        - Source day > metadata day: ``"reimported"``.
+        - For ``DAY`` aggregation, comparison is at day-granularity (daily
+          bars store an implicit midnight UTC ``ts_init``). For intraday
+          aggregations (``HOUR`` / ``MINUTE``), comparison is at full
+          datetime precision so an afternoon re-run of a morning import
+          does not silently skip the new bars.
+        - Source < metadata: ``"reimported"`` with a structured warning —
+          stale metadata should never mask a source regression.
+        - Source == metadata: ``"skipped"``.
+        - Source > metadata: ``"reimported"``.
+
+        The source probe is only called when the metadata row is present
+        AND the bar_count for this timeframe is > 0 — first-time imports
+        and orphan heals skip the full-file scan entirely.
 
         Args:
             ticker: Trading symbol.
             file_path: Source CSV path.
             catalog_name: Catalog name to scope the metadata lookup.
             timeframe: Bar timeframe spec (e.g., ``"1-DAY-LAST"``). Used to
-                pick the right ``bar_count_*`` field.
+                pick the right ``bar_count_*`` field and the comparison
+                granularity.
 
         Returns:
             One of ``"skipped"``, ``"reimported"``, or ``"new"``.
         """
         existing = self._metadata_service.get_instrument_sync(catalog_name, ticker)
-        source_last = compute_source_last_date(file_path)
 
         if existing is None:
-            self._log_classification(ticker, "new", None, source_last, timeframe)
+            self._log_classification(ticker, "new", None, None, timeframe)
             return "new"
 
         metadata_end = existing.date_range_end
+        aggregation = timeframe.split("-")[1] if "-" in timeframe else "DAY"
         bar_count_field = _bar_count_field_for_timeframe(timeframe)
         bar_count = getattr(existing, bar_count_field, 0) or 0
 
-        # Orphan state or never-imported-this-timeframe.
+        # Orphan state or never-imported-this-timeframe. Skip the probe —
+        # the result would be discarded and multi-hundred-MB minute CSVs
+        # would cause wasted I/O on every first-time bulk import.
         if metadata_end is None or bar_count <= 0:
-            self._log_classification(ticker, "new", metadata_end, source_last, timeframe)
+            self._log_classification(ticker, "new", metadata_end, None, timeframe)
             return "new"
+
+        source_last = compute_source_last_date(file_path)
 
         # Empty / malformed source — let the real import path fail loudly.
         if source_last is None:
-            self._log_classification(ticker, "new", metadata_end, source_last, timeframe)
+            self._log_classification(ticker, "new", metadata_end, None, timeframe)
             return "new"
 
-        source_day = source_last.date()
-        metadata_day = metadata_end.date()
+        if aggregation == "DAY":
+            source_ref = source_last.date()
+            metadata_ref = metadata_end.date()
+        else:
+            source_ref = source_last
+            metadata_ref = metadata_end
 
-        if source_day == metadata_day:
+        if source_ref == metadata_ref:
             self._log_classification(ticker, "skipped", metadata_end, source_last, timeframe)
             return "skipped"
 
-        if source_day < metadata_day:
+        if source_ref < metadata_ref:
             logger.warning(
                 "source_date_behind_metadata",
                 ticker=ticker,

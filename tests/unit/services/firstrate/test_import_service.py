@@ -775,6 +775,81 @@ class TestClassifyTicker:
 
         assert decision == "new"
 
+    def test_intraday_same_day_new_bars_is_reimported(
+        self, service, mock_metadata_service, tmp_path
+    ):
+        """Hourly re-run of a morning import must pick up afternoon bars.
+
+        Code review finding: day-granularity comparison silently skipped
+        intraday re-runs on the same UTC day. For HOUR/MINUTE aggregations
+        the classifier must compare at full datetime precision.
+        """
+        csv = tmp_path / "SPY.txt"
+        csv.write_text(
+            "2025-01-15 09:00:00,100,101,99,100,1000\n2025-01-15 15:00:00,101,102,100,101,1100\n",
+            encoding="utf-8",
+        )
+        # Metadata reflects the morning import ending at 09:00 UTC.
+        mock_metadata_service.get_instrument_sync.return_value = _metadata_with(
+            date_range_end=datetime(2025, 1, 15, 9, 0, 0, tzinfo=timezone.utc),
+            bar_count_hourly=1,
+        )
+
+        decision = service._classify_ticker(
+            ticker="SPY",
+            file_path=csv,
+            catalog_name=CATALOG_NAME,
+            timeframe="1-HOUR-LAST",
+        )
+
+        assert decision == "reimported"
+
+    def test_intraday_exact_datetime_match_is_skipped(
+        self, service, mock_metadata_service, tmp_path
+    ):
+        """Intraday re-run where source and metadata share the same last bar."""
+        csv = tmp_path / "SPY.txt"
+        csv.write_text(
+            "2025-01-15 09:00:00,100,101,99,100,1000\n2025-01-15 15:00:00,101,102,100,101,1100\n",
+            encoding="utf-8",
+        )
+        mock_metadata_service.get_instrument_sync.return_value = _metadata_with(
+            date_range_end=datetime(2025, 1, 15, 15, 0, 0, tzinfo=timezone.utc),
+            bar_count_hourly=2,
+        )
+
+        decision = service._classify_ticker(
+            ticker="SPY",
+            file_path=csv,
+            catalog_name=CATALOG_NAME,
+            timeframe="1-HOUR-LAST",
+        )
+
+        assert decision == "skipped"
+
+    def test_intraday_source_behind_metadata_is_reimported(
+        self, service, mock_metadata_service, tmp_path
+    ):
+        """Minute-timeframe source with an earlier last bar still warns + reimports."""
+        csv = tmp_path / "SPY.txt"
+        csv.write_text(
+            "2025-01-15 09:30:00,100,101,99,100,1000\n",
+            encoding="utf-8",
+        )
+        mock_metadata_service.get_instrument_sync.return_value = _metadata_with(
+            date_range_end=datetime(2025, 1, 15, 15, 45, 0, tzinfo=timezone.utc),
+            bar_count_minute=100,
+        )
+
+        decision = service._classify_ticker(
+            ticker="SPY",
+            file_path=csv,
+            catalog_name=CATALOG_NAME,
+            timeframe="1-MINUTE-LAST",
+        )
+
+        assert decision == "reimported"
+
 
 @pytest.mark.unit
 class TestImportTickerOutcomes:

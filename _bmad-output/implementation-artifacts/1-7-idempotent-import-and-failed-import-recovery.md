@@ -1,6 +1,6 @@
 # Story 1.7: Idempotent Import & Failed Import Recovery
 
-Status: review
+Status: done
 
 ## Story
 
@@ -72,6 +72,16 @@ so that I can recover from interrupted imports by re-running the same command.
   - [x] 7.1 `ImportResult` class docstring in `src/models/catalog.py` now documents the `outcome` field and its allowed values.
   - [x] 7.2 Added an ADR-5 block comment above `_classify_ticker` in `import_service.py` pointing to `architecture.md:212-216`.
   - [x] 7.3 Verified `_bmad-output/implementation-artifacts/deferred-work.md` is unchanged for this story.
+
+### Review Findings
+
+- [x] [Review][Patch] Day-granularity skip silently drops intraday mid-day re-runs — for hourly/minute/1min/5min timeframes, `_classify_ticker` must use strict datetime equality (not `.date()`) so an afternoon re-run does not silently skip new bars. Keep day-granularity for `DAY` aggregation. [`src/services/firstrate/import_service.py:354-359`] — fixed; added `TestClassifyTicker::test_intraday_same_day_new_bars_is_reimported`, `::test_intraday_exact_datetime_match_is_skipped`, `::test_intraday_source_behind_metadata_is_reimported`.
+- [x] [Review][Patch] Source probe reads entire file into memory via `read_text()` — unbounded on large intraday CSVs [`src/services/firstrate/source_probe.py:56`] — fixed; streams lines via `file_path.open()` iterator. All existing probe tests still pass.
+- [x] [Review][Patch] Classifier runs `compute_source_last_date` before the `existing is None` / `bar_count <= 0` short-circuit — every first-time import pays a full file scan that is then discarded [`src/services/firstrate/import_service.py:334`] — fixed; probe call moved below the metadata / bar_count checks.
+- [x] [Review][Defer] `_bar_count_field_for_timeframe` silently falls back to `bar_count_daily` for unknown aggregations [`src/services/firstrate/import_service.py:44`] — deferred, latent defensive issue mirrored in `_upsert_metadata:545` and unreachable through the CLI's hardcoded timeframe map.
+- [x] [Review][Defer] `get_instrument_sync` may raise `DetachedInstanceError` if the sync session is reused across tickers in a longer batch [`src/services/firstrate/import_service.py:333`] — deferred, pre-existing session-lifecycle concern not touched by this story.
+- [x] [Review][Defer] `source_day < metadata_day` path logs a warning then reimports, silently overwriting known-good data with a truncated source [`src/services/firstrate/import_service.py:361-370`] — deferred, spec-intentional; enhancement candidate to hard-fail or require `--force`.
+- [x] [Review][Defer] `determine_exit_code` returns 0 on an empty results list — broken discovery looks identical to a clean all-skipped run [`src/cli/commands/import_data.py:98-100`] — deferred, overlaps with D1 scope from Story 1-4.
 
 ## Dev Notes
 

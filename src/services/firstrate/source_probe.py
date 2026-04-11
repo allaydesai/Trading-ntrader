@@ -42,7 +42,9 @@ def compute_source_last_date(file_path: Path) -> datetime | None:
     FirstRate files are not guaranteed sorted (see
     ``FirstRateCsvParser.parse_file``'s explicit ``bars.sort`` call), so
     the whole file is scanned; reading only the last line is unsafe. The
-    probe is cheap: a few MB of text, one ``strptime`` per non-blank line.
+    probe streams lines via ``open()`` rather than loading the full file
+    with ``read_text()`` — intraday minute-bar CSVs can be multi-hundred-MB
+    and loading them whole would balloon RSS on batch re-runs.
 
     Args:
         file_path: Path to the source ``.txt`` file.
@@ -52,8 +54,21 @@ def compute_source_last_date(file_path: Path) -> datetime | None:
         if the file is missing, unreadable, empty, or contains no row
         whose first column parses as a FirstRate timestamp.
     """
+    max_dt: datetime | None = None
     try:
-        text = file_path.read_text(encoding="utf-8", errors="replace")
+        with file_path.open("r", encoding="utf-8", errors="replace") as fh:
+            for raw in fh:
+                stripped = raw.strip()
+                if not stripped:
+                    continue
+                parts = stripped.split(",")
+                if len(parts) != _EXPECTED_COLUMNS:
+                    continue
+                dt = _parse_timestamp(parts[0].strip())
+                if dt is None:
+                    continue
+                if max_dt is None or dt > max_dt:
+                    max_dt = dt
     except FileNotFoundError:
         return None
     except (PermissionError, OSError) as exc:
@@ -63,20 +78,6 @@ def compute_source_last_date(file_path: Path) -> datetime | None:
             error=str(exc),
         )
         return None
-
-    max_dt: datetime | None = None
-    for raw in text.splitlines():
-        stripped = raw.strip("\r").strip()
-        if not stripped:
-            continue
-        parts = stripped.split(",")
-        if len(parts) != _EXPECTED_COLUMNS:
-            continue
-        dt = _parse_timestamp(parts[0].strip())
-        if dt is None:
-            continue
-        if max_dt is None or dt > max_dt:
-            max_dt = dt
 
     if max_dt is None:
         return None
