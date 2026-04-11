@@ -40,7 +40,7 @@ classification:
 
 NTrader is a personal algorithmic trading backtester built on Nautilus Trader with IBKR and Kraken data sources, a PostgreSQL results database, and a FastAPI/HTMX web UI. The current system requires downloading market data from brokers on demand — a bottleneck when running large-scale backtests, parameter optimization sweeps, or walk-forward analysis across multiple instruments and timeframes.
 
-This PRD defines a bulk historical data import pipeline and lightweight data explorer for FirstRate Data — an institutional-grade provider covering 20,934 tickers across 7 asset classes (~387GB+ of professionally cleaned CSV data). The pipeline converts FirstRate's headerless CSV files (6 distinct schemas across stocks, ETFs, futures, FX, crypto, and indices) into NTrader's existing Parquet catalog format for direct consumption by the Nautilus backtest engine. Phase 1 targets ETFs (5,072 tickers) as the simplest and most well-understood asset class.
+This PRD defines a bulk historical data import pipeline and lightweight data explorer for FirstRate Data — an institutional-grade provider covering 20,934 tickers across 7 asset classes (~387GB+ of professionally cleaned CSV data). The pipeline converts FirstRate's headerless CSV files (6 distinct schemas across stocks, ETFs, futures, FX, crypto, and indices) into NTrader's existing Parquet catalog format for direct consumption by the Nautilus backtest engine. Phase 1 targets Stocks (7,794 tickers) — the largest asset class, with `company_profiles.csv` metadata available on disk and the import pipeline already validated end-to-end via a FirstRate Stocks smoke test (2026-04-11).
 
 The primary user is the system owner (sole operator) who needs to test strategies across large timeframes and diverse asset classes with confidence in data quality. No multi-user, authentication, or community-facing features are in scope.
 
@@ -61,15 +61,15 @@ The data explorer is deliberately minimal — a catalog browser and verification
 
 ### User Success
 
-- **Primary success moment:** Kick off a 10-year multi-ETF walk-forward analysis using FirstRate catalog data and it just works — no manual data wrangling, no broker download waits, no data quality doubts
+- **Primary success moment:** Kick off a 10-year multi-stock walk-forward analysis using FirstRate catalog data and it just works — no manual data wrangling, no broker download waits, no data quality doubts
 - **Feature complete moment:** All 7 asset classes imported, verified, and backtestable — strategies can be tested across stocks, ETFs, futures, FX, crypto, indices, and delisted stocks from a single trusted catalog with appropriate position sizing and risk management per asset type
 - Catalog browser shows available tickers with date ranges, letting the user quickly answer "what do I have?" before configuring a backtest
 - Explorer chart loads at any natively-stored timeframe (1-min, 5-min, 1-hour, daily) and visually matches TradingView for the same ticker/period — confirming data integrity
 
 ### Business Success
 
-- **3-month:** All ETFs (5,072 tickers) imported across all 4 timeframes, verified, and backtestable. At least one multi-year, multi-ETF walk-forward analysis completed successfully using exclusively FirstRate catalog data
-- **6-month:** At least 3 additional asset classes imported and backtest-verified following the pipeline pattern established in Phase 1
+- **3-month:** All Stocks (7,794 tickers) imported across all 4 timeframes, verified, and backtestable. At least one multi-year, multi-stock walk-forward analysis completed successfully using exclusively FirstRate catalog data
+- **6-month:** At least 3 additional asset classes (ETFs, Futures, FX, etc.) imported and backtest-verified following the pipeline pattern established in Phase 1
 - **12-month:** All 7 asset classes imported, backtest-verified with asset-appropriate position sizing and risk management. FirstRate catalog is the default data source for backtesting. Feature is complete
 - Import pipeline pattern proven repeatable: adding a new asset class requires only a schema-specific parser, not architectural changes
 
@@ -96,26 +96,28 @@ The data explorer is deliberately minimal — a catalog browser and verification
 
 ### MVP Strategy
 
-**Approach:** Problem-solving MVP — prove the import pipeline works end-to-end for one asset class (ETFs) before committing to the remaining six. ETFs are the validation vehicle: simplest schema, well-understood instrument IDs, largest ticker count after stocks. Success here validates the architecture for all subsequent phases.
+**Approach:** Problem-solving MVP — prove the import pipeline works end-to-end for one asset class (Stocks) before committing to the remaining six. Stocks are the validation vehicle: largest ticker count in the dataset (7,794), `company_profiles.csv` ships with the Stocks bundle and gives us the full ticker→exchange mapping needed for Nautilus InstrumentIds, and the shared 6-column headerless CSV format is identical to ETFs — so whatever parser we build here trivially extends to Phase 2.
+
+**Pivot note (2026-04-11):** Originally Phase 1 was planned as ETFs. During Story 1-5 smoke testing we discovered the ETF bundle ships **without** a `company_profiles.csv`, while the Stocks bundle has a 7,665-row profiles file. A real end-to-end smoke test against FirstRate Stocks data (5 tickers, 25,508 rows, Parquet + DB metadata verified) proved the pipeline works. Swapping Stocks into Phase 1 lets us run against real data immediately; ETFs move to Phase 2 and can proceed once a metadata source is in place (see Story X "FMP metadata loader").
 
 **Resource model:** Solo developer. Each phase is independently shippable — the system is functional for all previously imported asset classes regardless of which phase is in progress.
 
-### Phase 1 — MVP (ETFs)
+### Phase 1 — MVP (Stocks)
 
-**User Journeys Supported:** First-Time Import, Data Verification, Multi-ETF Backtest, Failed Import Recovery
+**User Journeys Supported:** First-Time Import, Data Verification, Multi-Stock Backtest, Failed Import Recovery
 
 **Capabilities:**
-- **Import pipeline:** Idempotent file conversion for ETF asset class, all 4 native timeframes (1-min, 5-min, 1-hour, daily), pre-import dry-run validation, OHLC sanity checks, row count verification, sample point validation, import summary report
-- **CSV parsing:** ETF schema (6-column headerless: Datetime,O,H,L,C,Volume)
-- **Instrument ID mapping:** ETF tickers → Nautilus-qualified IDs using company_profiles.csv exchange data
-- **Catalog output:** Parquet files in existing catalog structure, isolated via `FIRSTRATE_CATALOG_PATH` env var
+- **Import pipeline:** Idempotent file conversion for Stocks asset class, all 4 native timeframes (1-min, 5-min, 1-hour, daily), pre-import dry-run validation, OHLC sanity checks, row count verification, sample point validation, import summary report
+- **CSV parsing:** FirstRate 6-column headerless schema (Datetime,O,H,L,C,Volume) — shared by Stocks, ETFs, and other equity-style assets
+- **Instrument ID mapping:** Stocks tickers → Nautilus-qualified IDs using `company_profiles.csv` exchange data (NASDAQ/NYSE/OTC/etc.)
+- **Catalog output:** Parquet files in existing catalog structure, isolated via `CATALOG_BASE_PATH` env var
 - **Data explorer:** Paginated/searchable ticker list, timeframe selection, windowed chart view, date range and basic statistics display
 - **CLI command:** Import trigger with dry-run mode and progress reporting
-- **Backtest verification:** End-to-end backtest with standard equity position sizing; reference comparison against existing CSV loader path
+- **Backtest verification:** End-to-end backtest with whole-share equity position sizing; reference comparison against existing CSV loader path
 
-### Phase 2 — Stocks (7,794 tickers)
+### Phase 2 — ETFs (5,072 tickers)
 
-Same schema as ETFs — validates pipeline at largest scale. Backtest with whole-share position sizing.
+Same schema as Stocks (the `FirstRateCsvParser` already handles both). Blocked on sourcing instrument metadata for ETF tickers, since the FirstRate ETF bundle ships without a `company_profiles.csv` — a metadata loader (e.g., FMP API-based) is the gating dependency. Backtest with standard equity position sizing.
 
 ### Phase 3 — Futures (132 symbols)
 
@@ -154,15 +156,15 @@ Zip archive extraction, ticker reuse disambiguation. Most complex mapping proble
 
 ### Journey 1: First-Time Data Import (Happy Path)
 
-**Allay, solo quant trader** — has purchased FirstRate Data ETF bundles (1-min, 5-min, 1-hour, daily) and wants to get them into the NTrader Parquet catalog so they're available for backtesting.
+**Allay, solo quant trader** — has purchased FirstRate Data Stocks bundles (1-min, 5-min, 1-hour, daily) and wants to get them into the NTrader Parquet catalog so they're available for backtesting.
 
-**Opening Scene:** Allay has downloaded the FirstRate ETF data to a local directory. Thousands of headerless CSV files organized in alphabetical subdirectories. The goal: get these into the Nautilus-compatible Parquet catalog without writing custom scripts.
+**Opening Scene:** Allay has downloaded the FirstRate Stocks data to a local directory. Thousands of headerless CSV files organized in alphabetical subdirectories plus a `company_profiles.csv` with ticker→exchange mappings. The goal: get these into the Nautilus-compatible Parquet catalog without writing custom scripts.
 
-**Rising Action:** Allay sets the `FIRSTRATE_CATALOG_PATH` env var, points the CLI at the source directory, and runs a dry-run first. The pre-import validation scans the directory structure, reports file counts per timeframe, validates schemas match expected ETF format, and estimates disk usage. Everything checks out. Allay kicks off the actual import. The CLI reports progress — tickers processed, rows converted, any files that failed validation. It runs for a while, but that's fine — it's a one-time activity.
+**Rising Action:** Allay sets the `CATALOG_BASE_PATH` env var, points the CLI at the source directory, and runs a dry-run first. The pre-import validation scans the directory structure, reports file counts per timeframe, validates schemas match expected Stocks format, and estimates disk usage. Everything checks out. Allay kicks off the actual import. The CLI reports progress — tickers processed, rows converted, any files that failed validation. It runs for a while, but that's fine — it's a one-time activity.
 
-**Climax:** Import completes. The summary report shows 5,072 tickers across 4 timeframes, row counts verified against source CSVs, zero failures. The data is in the catalog.
+**Climax:** Import completes. The summary report shows 7,794 tickers across 4 timeframes, row counts verified against source CSVs, zero failures. The data is in the catalog.
 
-**Resolution:** Allay opens the data explorer, searches for SPY, selects daily timeframe — a windowed chart view loads with recent history and the ability to scroll back through 20+ years. The catalog browser shows a paginated, searchable list of all 5,072 ETFs with their available date ranges. The data is ready for backtesting.
+**Resolution:** Allay opens the data explorer, searches for AAPL, selects daily timeframe — a windowed chart view loads with recent history and the ability to scroll back through 20+ years. The catalog browser shows a paginated, searchable list of all 7,794 stocks with their available date ranges. The data is ready for backtesting.
 
 ### Journey 2: Data Verification Against TradingView
 
@@ -174,15 +176,15 @@ Zip archive extraction, ticker reuse disambiguation. Most complex mapping proble
 
 **Resolution:** Allay trusts the data. No more second-guessing whether backtest results are skewed by bad inputs. Confidence established.
 
-### Journey 3: Multi-ETF Backtest (Core Success Moment)
+### Journey 3: Multi-Stock Backtest (Core Success Moment)
 
-**Opening Scene:** Allay has a momentum strategy that's been tested on a handful of ETFs via IBKR data. Now wants to validate it across 50 ETFs over 10 years — the kind of test that was impractical when every ticker required a separate broker download.
+**Opening Scene:** Allay has a momentum strategy that's been tested on a handful of stocks via IBKR data. Now wants to validate it across 50 stocks over 10 years — the kind of test that was impractical when every ticker required a separate broker download.
 
-**Rising Action:** Allay configures backtest runs targeting 50 ETFs from the FirstRate catalog, daily bars, 2014-2024. Selects the momentum strategy with standard equity position sizing. Whether this is a single multi-instrument backtest or 50 individual runs depends on Nautilus engine capabilities — either way, the data is already in the catalog, no download wait.
+**Rising Action:** Allay configures backtest runs targeting 50 stocks from the FirstRate catalog, daily bars, 2014-2024. Selects the momentum strategy with whole-share equity position sizing. Whether this is a single multi-instrument backtest or 50 individual runs depends on Nautilus engine capabilities — either way, the data is already in the catalog, no download wait.
 
-**Climax:** Backtests complete. Results across all 50 ETFs are available with proper position sizing. Walk-forward analysis splits cleanly across the 10-year window. Results are in the database, viewable in the web UI.
+**Climax:** Backtests complete. Results across all 50 stocks are available with proper position sizing. Walk-forward analysis splits cleanly across the 10-year window. Results are in the database, viewable in the web UI.
 
-**Resolution:** Allay can now iterate — adjust parameters, swap strategies, expand the universe to 200 ETFs — all without waiting for data. The feedback loop between hypothesis and validation is minutes, not hours.
+**Resolution:** Allay can now iterate — adjust parameters, swap strategies, expand the universe to 200 stocks — all without waiting for data. The feedback loop between hypothesis and validation is minutes, not hours.
 
 **Open Question:** Nautilus multi-instrument backtest support needs research during architecture phase. Design must support either a single multi-instrument engine run or batch of single-instrument runs with aggregated results.
 
@@ -210,7 +212,7 @@ Zip archive extraction, ticker reuse disambiguation. Most complex mapping proble
 |---|---|
 | First-Time Import | CLI import command, dry-run validation, progress reporting, OHLC checks, row count verification, import summary |
 | Data Verification | Data explorer UI, ticker search, paginated ticker list, timeframe selection, windowed chart rendering, date range display, basic data statistics |
-| Multi-ETF Backtest | FirstRate catalog integration with BacktestEngine, instrument ID mapping, position sizing per asset type. **Open:** multi-instrument vs batch — research needed |
+| Multi-Stock Backtest | FirstRate catalog integration with BacktestEngine, instrument ID mapping, position sizing per asset type. **Open:** multi-instrument vs batch — research needed |
 | Failed Import Recovery | Idempotent imports with date-range validation (last date comparison), re-import of incomplete tickers |
 | Incremental Update | Deferred — future feature spec informed by import implementation details |
 
@@ -346,7 +348,7 @@ KYC/AML, PCI-DSS, regional regulatory compliance, audit trails, fraud prevention
 | Nautilus Catalog v2 schema changes (GitHub Issue #991) | Rework of Parquet writing layer | Abstract catalog writing behind an interface — parsers produce normalized data, writer handles format. Schema change = update writer only |
 | Multi-instrument backtest support unknown | Architecture decision blocks Journey 3 | Research during Phase 1. Design for either single multi-instrument run or batch with aggregated results |
 | FX date format silently misparsed (YYYYMMDD + 7-column 1-min) | Corrupted time series across 79 pairs | Defer FX to Phase 4 (pipeline proven by then). Schema-specific parsers with format validation; sample point checks against known reference dates |
-| Exchange mapping wrong for subset of tickers | Backtest uses wrong instrument metadata | Validate mapped IDs against known subset (e.g., top 50 ETFs by AUM) during Phase 1 verification |
+| Exchange mapping wrong for subset of tickers | Backtest uses wrong instrument metadata | Validate mapped IDs against known subset (e.g., top 50 large-cap stocks by market cap) during Phase 1 verification |
 | Parquet precision loss during conversion | Subtle price errors compound over long backtests | Compare raw CSV values against Parquet output for sample rows; use appropriate Parquet decimal types |
 | Partial import produces valid-looking but incomplete data | Backtest runs on truncated history without warning | Date-range validation on re-run (Journey 4); explorer shows actual date range per ticker |
 | 387GB+ dataset exceeds disk/memory expectations | Import fails or system destabilizes | Pre-import dry-run estimates disk usage. Parsers process one ticker at a time (bounded memory). Import time is not a concern |

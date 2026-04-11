@@ -218,7 +218,8 @@ The FirstRate Data import + explorer feature requires these new capabilities not
 **ADR-6: Instrument Mapping via PostgreSQL**
 - **Decision:** Instrument ID mapping stored in `catalog_instruments` table (same table as ADR-3). First import loads company_profiles.csv into DB. Subsequent imports look up instrument IDs from DB. Each parser implements asset-class-specific mapping logic to populate the table
 - **Rationale:** Leverages existing DB infrastructure, makes mapping data available to both import and explorer, supports manual overrides via DB update + re-import
-- **Phase 1:** company_profiles.csv for ETF exchange mapping (ticker → exchange → Nautilus ID)
+- **Phase 1:** company_profiles.csv for Stocks exchange mapping (ticker → exchange → Nautilus ID). The file ships with the FirstRate Stocks bundle and covers 7,665 tickers across NYSE/NASDAQ/OTC
+- **Phase 2 (ETFs):** ETFs share the same CSV schema but the FirstRate ETF bundle ships without a profiles file. A separate metadata loader story (e.g., FMP-backed) is the gating dependency
 - **Future phases:** Each parser adds its own mapping logic (futures → ES.CME, FX → EUR/USD.SIM, etc.)
 
 ### API & Communication Patterns
@@ -255,7 +256,7 @@ The FirstRate Data import + explorer feature requires these new capabilities not
 **Implementation Sequence:**
 1. Database schema: `catalog_instruments` table + Alembic migration
 2. Pydantic settings: Named catalog configuration
-3. Parser framework: Base class + ETF parser (Phase 1)
+3. Parser framework: `BaseParser` + `FirstRateCsvParser` registered for STOCK and ETF (Phase 1 target: Stocks)
 4. Instrument mapping: company_profiles.csv loader → DB population
 5. Import pipeline: CLI command orchestrating parse → validate → write → metadata upsert
 6. Chart API: Parquet read endpoint with time-range filtering
@@ -296,10 +297,10 @@ New FirstRate-specific code lives under `src/services/firstrate/`:
 ```
 src/services/firstrate/
 ├── __init__.py
-├── parsers/                     # CSV schema parsers (one per asset class)
+├── parsers/                     # CSV schema parsers (one per schema family)
 │   ├── __init__.py
 │   ├── base.py                  # ABC + shared validation + parser registry
-│   └── etf_parser.py            # Phase 1 (additional parsers added per phase)
+│   └── firstrate_csv_parser.py  # Shared 6-column headerless parser (STOCK, ETF); asset-specific parsers added per phase
 ├── import_service.py            # Orchestrates: parse → validate → write → metadata upsert
 ├── instrument_mapper.py         # company_profiles.csv loader → DB population
 ├── catalog_manager.py           # Named catalog resolution (Pydantic settings → ParquetDataCatalog)
@@ -442,7 +443,7 @@ src/
 │       ├── parsers/
 │       │   ├── __init__.py
 │       │   ├── base.py                    # ABC + shared validation + parser registry
-│       │   └── etf_parser.py              # Phase 1 ETF parser
+│       │   └── firstrate_csv_parser.py    # Phase 1 (STOCK); shared with ETF via stacked @register_parser decorators
 │       ├── import_service.py              # Import orchestration
 │       ├── instrument_mapper.py           # company_profiles.csv → DB
 │       ├── catalog_manager.py             # Named catalog → ParquetDataCatalog
@@ -671,7 +672,7 @@ Project structure supports all decisions — every ADR maps to specific files in
 **Key Strengths:**
 - No new frameworks or infrastructure — every decision extends established patterns
 - Clean separation: Parquet for bar data, PostgreSQL for metadata, each queried by appropriate consumers
-- Phased approach: architecture supports all 6 phases but Phase 1 (ETFs) is a self-contained vertical slice
+- Phased approach: architecture supports all 6 phases but Phase 1 (Stocks — validated end-to-end via a 2026-04-11 smoke test) is a self-contained vertical slice
 - Single table simplicity for Phase 1 with clear evolution path for supplementary data
 
 **Areas for Future Enhancement:**
@@ -693,6 +694,6 @@ Project structure supports all decisions — every ADR maps to specific files in
 1. Alembic migration: `catalog_instruments` table
 2. Pydantic settings: `CatalogSettings` in `config.py`
 3. Domain models: `AssetClass` enum, `CatalogConfig`, `ValidationResult` in `models/catalog.py`
-4. ETF parser with TDD (base class + ETF implementation)
+4. `FirstRateCsvParser` with TDD (base class + shared parser registered for STOCK and ETF)
 5. Import service + CLI command
 6. Explorer API + UI

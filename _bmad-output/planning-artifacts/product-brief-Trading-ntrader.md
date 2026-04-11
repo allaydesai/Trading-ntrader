@@ -92,9 +92,9 @@ Without deep historical data, backtests are limited in scope. Without delisted s
 
 ## Roadmap Thinking
 
-**Phase 1 (MVP):** Import pipeline for ETFs (simplest schema, 5,072 tickers, well-understood instrument IDs, no futures expiry complexity or FX date quirks) + data explorer with progressive charting + backtest integration. Validates the end-to-end workflow as a complete vertical slice — from raw CSV to visual exploration to executed backtest.
+**Phase 1 (MVP):** Import pipeline for Stocks (7,794 tickers, `company_profiles.csv` ships with the bundle for full ticker→exchange mapping, validated end-to-end via a 2026-04-11 smoke test against real FirstRate data) + data explorer with progressive charting + backtest integration. Validates the end-to-end workflow as a complete vertical slice — from raw CSV to visual exploration to executed backtest. *Originally scoped as ETFs; pivoted to Stocks during Story 1-5 when we discovered the ETF bundle lacks a profiles file.*
 
-**Phase 2:** Expand import to remaining 6 asset classes, prioritizing Stocks and Delisted Stocks for survivorship-bias coverage. Incorporate supplementary metadata. Incremental import support. Delisted stock namespace handling (ticker reuse disambiguation).
+**Phase 2:** Expand import to remaining asset classes. ETFs come next (same 6-column schema — the shared `FirstRateCsvParser` already handles them — gated on sourcing instrument metadata via a dedicated FMP-backed metadata loader story). Then Delisted Stocks for survivorship-bias coverage, plus Futures / FX / Crypto / Indices per their own schemas. Incorporate supplementary metadata. Incremental import support. Delisted stock namespace handling (ticker reuse disambiguation).
 
 **Phase 3:** Cross-asset exploration features (compare tickers across asset classes), advanced filtering (by sector, exchange, date range coverage), backtest trade signal overlay on explorer charts, and performance optimizations for the full 387GB dataset.
 

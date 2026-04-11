@@ -161,7 +161,7 @@ FR34: Epic 1 - Specify timeframes to import
 ## Epic List
 
 ### Epic 1: Data Import Pipeline
-User can import FirstRate Data ETF CSV files into the Nautilus Parquet catalog via CLI, with dry-run validation, OHLC integrity checks, row count verification, sample point validation, progress reporting, and idempotent re-runs for interrupted imports. Includes the full foundation: database migration (catalog_instruments table), Pydantic settings (CatalogSettings), parser framework with strategy pattern and registry, instrument ID mapping from company_profiles.csv, and the Click CLI command with dry-run mode.
+User can import FirstRate Data Stocks CSV files into the Nautilus Parquet catalog via CLI, with dry-run validation, OHLC integrity checks, row count verification, sample point validation, progress reporting, and idempotent re-runs for interrupted imports. Includes the full foundation: database migration (catalog_instruments table), Pydantic settings (CatalogSettings), parser framework with strategy pattern and registry (shared `FirstRateCsvParser` registered for STOCK and ETF), instrument ID mapping from company_profiles.csv, and the Click CLI command with dry-run mode. **Phase 1 pivoted from ETF to Stocks (2026-04-11)** — Stocks ship with `company_profiles.csv` metadata; ETF metadata will be sourced separately in Phase 2 via a dedicated FMP-backed metadata loader story.
 **FRs covered:** FR1, FR2, FR3, FR4, FR5, FR6, FR7, FR8, FR9, FR10, FR11, FR12, FR13, FR28, FR32, FR33, FR34
 
 ### Epic 2: Data Explorer & Verification
@@ -178,7 +178,7 @@ User can view company profiles, dividend history, and stock split history alongs
 
 ## Epic 1: Data Import Pipeline
 
-User can import FirstRate Data ETF CSV files into the Nautilus Parquet catalog via CLI, with dry-run validation, OHLC integrity checks, row count verification, sample point validation, progress reporting, and idempotent re-runs for interrupted imports.
+User can import FirstRate Data Stocks CSV files into the Nautilus Parquet catalog via CLI, with dry-run validation, OHLC integrity checks, row count verification, sample point validation, progress reporting, and idempotent re-runs for interrupted imports. The same pipeline extends to ETFs (and other asset classes sharing the 6-column CSV schema) once their instrument metadata is available.
 
 ### Story 1.1: Catalog Foundation & Configuration
 
@@ -352,7 +352,7 @@ So that I can verify the source directory structure and estimate disk usage befo
 
 **Acceptance Criteria:**
 
-**Given** a source directory with FirstRate ETF data
+**Given** a source directory with FirstRate Stocks data (the Phase 1 target)
 **When** the user runs `ntrader import --format firstrate --catalog <name> <source-path> --dry-run`
 **Then** the system scans the directory structure without writing any data to Parquet or the database
 
@@ -360,7 +360,7 @@ So that I can verify the source directory structure and estimate disk usage befo
 **When** the results are reported
 **Then** the output includes: detected asset classes, ticker count per asset class, available timeframes per asset class, total file count, and estimated disk usage for Parquet output
 
-**Given** a source directory with files that don't match expected ETF schema
+**Given** a source directory with files that don't match the expected FirstRate 6-column headerless CSV schema
 **When** the dry-run detects schema mismatches
 **Then** the mismatches are reported with file names and detected vs expected column counts
 
@@ -652,7 +652,7 @@ So that I can verify the imported data produces consistent, trustworthy backtest
 
 **Acceptance Criteria:**
 
-**Given** imported FirstRate ETF data in the catalog (e.g., SPY daily)
+**Given** imported FirstRate Stocks data in the catalog (e.g., AAPL daily)
 **When** a backtest is run using an existing strategy with standard equity position sizing (whole shares)
 **Then** the backtest completes successfully with results stored in the database
 **And** results are viewable in the existing web UI backtest detail page
