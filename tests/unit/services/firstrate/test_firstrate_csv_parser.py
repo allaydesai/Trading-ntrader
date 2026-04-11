@@ -1,4 +1,4 @@
-"""Unit tests for ETF CSV parser."""
+"""Unit tests for FirstRate CSV parser."""
 
 from pathlib import Path
 
@@ -10,7 +10,7 @@ from src.models.catalog import AssetClass
 from src.services.firstrate.parsers.base import (
     get_parser,
 )
-from src.services.firstrate.parsers.etf_parser import ETFParser
+from src.services.firstrate.parsers.firstrate_csv_parser import FirstRateCsvParser
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -19,8 +19,8 @@ from src.services.firstrate.parsers.etf_parser import ETFParser
 
 @pytest.fixture()
 def parser():
-    """Return a fresh ETFParser instance."""
-    return ETFParser()
+    """Return a fresh FirstRateCsvParser instance."""
+    return FirstRateCsvParser()
 
 
 @pytest.fixture()
@@ -46,33 +46,38 @@ def _write_csv(tmp_path: Path, filename: str, lines: list[str]) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# Registration (AC #4, #5)
+# Registration
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.unit
-class TestETFParserRegistration:
-    """ETF parser registration and discovery."""
+class TestFirstRateCsvParserRegistration:
+    """FirstRate CSV parser registration and discovery."""
 
     def test_registered_for_etf_asset_class(self):
-        """ETFParser is retrievable via get_parser(AssetClass.ETF)."""
+        """Parser is retrievable via get_parser(AssetClass.ETF)."""
         p = get_parser(AssetClass.ETF)
-        assert isinstance(p, ETFParser)
+        assert isinstance(p, FirstRateCsvParser)
 
-    def test_decorator_applied(self):
-        """ETFParser class has the @register_parser decorator."""
-        # If get_parser works, the decorator was applied.
-        p = get_parser(AssetClass.ETF)
-        assert p is not None
+    def test_registered_for_stock_asset_class(self):
+        """Parser is retrievable via get_parser(AssetClass.STOCK)."""
+        p = get_parser(AssetClass.STOCK)
+        assert isinstance(p, FirstRateCsvParser)
+
+    def test_etf_and_stock_return_same_parser_type(self):
+        """Both ETF and STOCK asset classes resolve to FirstRateCsvParser."""
+        etf_parser = get_parser(AssetClass.ETF)
+        stock_parser = get_parser(AssetClass.STOCK)
+        assert type(etf_parser) is type(stock_parser)
 
 
 # ---------------------------------------------------------------------------
-# parse_file — daily format (AC #1)
+# parse_file — daily format
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.unit
-class TestETFParserDaily:
+class TestFirstRateCsvParserDaily:
     """Tests for parsing daily (1day) CSV files."""
 
     def test_basic_daily_parse(self, parser, instrument_id, daily_bar_type, tmp_path):
@@ -126,12 +131,12 @@ class TestETFParserDaily:
 
 
 # ---------------------------------------------------------------------------
-# parse_file — intraday format (AC #1)
+# parse_file — intraday format
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.unit
-class TestETFParserIntraday:
+class TestFirstRateCsvParserIntraday:
     """Tests for parsing intraday (1min/5min/1hour) CSV files."""
 
     def test_basic_intraday_parse(self, parser, instrument_id, intraday_bar_type, tmp_path):
@@ -169,8 +174,8 @@ class TestETFParserIntraday:
 
 
 @pytest.mark.unit
-class TestETFParserKnownDataIssues:
-    """Tests for handling known FirstRate ETF data issues."""
+class TestFirstRateCsvParserKnownDataIssues:
+    """Tests for handling known FirstRate data issues."""
 
     def test_leading_blank_lines_skipped(self, parser, instrument_id, daily_bar_type, tmp_path):
         """Files with leading blank lines (773 daily files) are handled."""
@@ -259,16 +264,16 @@ class TestETFParserKnownDataIssues:
 
 
 # ---------------------------------------------------------------------------
-# map_instrument_id (AC #4 — stub for Story 1.3)
+# map_instrument_id
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.unit
-class TestETFParserMapInstrumentId:
-    """Tests for map_instrument_id stub."""
+class TestFirstRateCsvParserMapInstrumentId:
+    """Tests for map_instrument_id."""
 
     def test_returns_instrument_id(self, parser):
-        """Stub returns an InstrumentId with .ARCA suffix."""
+        """Returns an InstrumentId with .ARCA suffix."""
         iid = parser.map_instrument_id("SPY", "1-DAY-LAST")
         assert isinstance(iid, InstrumentId)
         assert "SPY" in str(iid)

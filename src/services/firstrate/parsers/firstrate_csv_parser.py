@@ -1,9 +1,12 @@
-"""ETF CSV parser for FirstRate headerless data files.
+"""FirstRate headerless CSV parser.
 
 Parses 6-column headerless CSV files (Datetime/Date, O, H, L, C, Volume)
 into Nautilus Bar objects. Handles both daily (date-only) and intraday
 (datetime) formats, along with known data issues: leading blank lines,
 CRLF line endings, empty files, and float volume notation.
+
+The format is shared by all FirstRate data products (ETF, Stocks, etc.),
+so this parser is registered for every supported asset class.
 """
 
 import calendar
@@ -23,11 +26,14 @@ logger = structlog.get_logger(__name__)
 
 
 @register_parser(asset_class=AssetClass.ETF)
-class ETFParser(BaseParser):
-    """Parser for FirstRate ETF headerless CSV files.
+@register_parser(asset_class=AssetClass.STOCK)
+class FirstRateCsvParser(BaseParser):
+    """Parser for FirstRate headerless CSV files.
 
     Handles both daily (``YYYY-MM-DD``) and intraday
-    (``YYYY-MM-DD HH:MM:SS``) timestamp formats.
+    (``YYYY-MM-DD HH:MM:SS``) timestamp formats. The file format is
+    identical across FirstRate asset-class products, so this parser is
+    registered for ETF and STOCK alike.
     """
 
     def parse_file(
@@ -36,7 +42,7 @@ class ETFParser(BaseParser):
         instrument_id: InstrumentId,
         bar_type: BarType,
     ) -> list[Bar]:
-        """Parse a FirstRate ETF CSV file into sorted Bar objects.
+        """Parse a FirstRate CSV file into sorted Bar objects.
 
         Args:
             file_path: Path to the headerless CSV/txt file.
@@ -64,7 +70,7 @@ class ETFParser(BaseParser):
         return bars
 
     def map_instrument_id(self, ticker: str, bar_type_spec: str) -> InstrumentId:
-        """Map ticker to InstrumentId (stub — Story 1.3 fleshes this out).
+        """Map ticker to InstrumentId with a default ARCA venue.
 
         Args:
             ticker: Raw ticker symbol (e.g. "SPY").
@@ -112,7 +118,7 @@ class ETFParser(BaseParser):
     ) -> Bar | None:
         """Convert a RawBarData to a Nautilus Bar, or None on failure."""
         try:
-            dt = ETFParser._parse_timestamp(row.timestamp)
+            dt = FirstRateCsvParser._parse_timestamp(row.timestamp)
             ts_nanos = calendar.timegm(dt.timetuple()) * 1_000_000_000
 
             if is_daily:
