@@ -161,6 +161,42 @@ class TestDiscoverTickers:
         assert len(result) == 1
         assert result[0][0] == "AAPL"
 
+    def test_extracts_ticker_from_firstrate_filename_pattern(self, service, tmp_path):
+        """FirstRate filenames ({TICKER}_full_{tf}_adjsplitdiv.txt) yield just {TICKER}."""
+        stock_a = tmp_path / "stock_A_full_1day_adjsplitdiv_abc123"
+        stock_a.mkdir()
+        (stock_a / "AAPL_full_1day_adjsplitdiv.txt").write_text("data")
+        (stock_a / "A_full_1day_adjsplitdiv.txt").write_text("data")
+
+        result = service._discover_tickers(tmp_path)
+        tickers = [t for t, _ in result]
+        assert "AAPL" in tickers
+        assert "A" in tickers
+        # Must NOT contain the full stem
+        assert "AAPL_full_1day_adjsplitdiv" not in tickers
+
+    def test_firstrate_multiple_timeframes_in_stem(self, service, tmp_path):
+        """Different timeframe suffixes all resolve to the same ticker."""
+        hourly = tmp_path / "stock_S_full_1hour_adjsplitdiv_xyz789"
+        hourly.mkdir()
+        (hourly / "SPY_full_1hour_adjsplitdiv.txt").write_text("data")
+
+        minute = tmp_path / "stock_S_full_1min_adjsplitdiv_qrs456"
+        minute.mkdir()
+        (minute / "SPY_full_1min_adjsplitdiv.txt").write_text("data")
+
+        result = service._discover_tickers(tmp_path)
+        tickers = [t for t, _ in result]
+        assert tickers == ["SPY", "SPY"]
+
+    def test_non_firstrate_filename_falls_back_to_stem(self, service, tmp_path):
+        """Filenames without '_full_' marker keep using file.stem."""
+        subdir = tmp_path / "A"
+        subdir.mkdir()
+        (subdir / "AAPL.txt").write_text("data")
+        result = service._discover_tickers(tmp_path)
+        assert result[0][0] == "AAPL"
+
 
 # ---------------------------------------------------------------------------
 # Task 3: Per-ticker import orchestration

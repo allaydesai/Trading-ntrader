@@ -240,8 +240,26 @@ class ImportService:
                 continue
             for file in sorted(subdir.iterdir()):
                 if file.suffix == ".txt" and file.is_file():
-                    tickers.append((file.stem, file))
+                    tickers.append((self._extract_ticker(file), file))
         return tickers
+
+    @staticmethod
+    def _extract_ticker(file: Path) -> str:
+        """Extract the ticker symbol from a FirstRate filename.
+
+        FirstRate filenames follow ``{TICKER}_full_{timeframe}_adjsplitdiv.txt``.
+        For other filename patterns, fall back to the stem.
+
+        Args:
+            file: Path to the ticker data file.
+
+        Returns:
+            The ticker symbol (e.g., "SPY" from "SPY_full_1day_adjsplitdiv.txt").
+        """
+        stem = file.stem
+        if "_full_" in stem:
+            return stem.split("_full_", 1)[0]
+        return stem
 
     def _verify_row_count(self, bars_written: list[Bar], bars_read_back: list[Bar]) -> bool:
         """Verify source and catalog row counts match.
