@@ -146,6 +146,52 @@ class TestImportResult:
         )
         assert result.error is None
 
+    def test_outcome_default_none(self):
+        """ImportResult defaults outcome to None for legacy callers."""
+        result = ImportResult(
+            ticker="SPY",
+            status="success",
+            row_count=100,
+            duration=0.5,
+        )
+        assert result.outcome is None
+
+    @pytest.mark.parametrize("outcome", ["new", "reimported", "skipped"])
+    def test_outcome_accepts_known_values(self, outcome):
+        """ImportResult.outcome accepts the three known classifier decisions."""
+        result = ImportResult(
+            ticker="SPY",
+            status="success",
+            row_count=100,
+            duration=0.5,
+            outcome=outcome,
+        )
+        assert result.outcome == outcome
+
+    def test_outcome_rejects_unknown_value(self):
+        """ImportResult.outcome rejects values outside the Literal domain."""
+        with pytest.raises(ValidationError):
+            ImportResult(
+                ticker="SPY",
+                status="success",
+                row_count=100,
+                duration=0.5,
+                outcome="partial",  # type: ignore[arg-type]  # not in the allowed set
+            )
+
+    def test_skipped_status_is_valid(self):
+        """ImportResult allows status='skipped' (story 1-7 adds this domain value)."""
+        result = ImportResult(
+            ticker="SPY",
+            status="skipped",
+            row_count=0,
+            duration=0.001,
+            outcome="skipped",
+        )
+        assert result.status == "skipped"
+        assert result.outcome == "skipped"
+        assert result.row_count == 0
+
 
 @pytest.mark.unit
 class TestSchemaMismatch:

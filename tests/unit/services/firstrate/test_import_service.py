@@ -1,12 +1,16 @@
 """Unit tests for ImportService — per-ticker import orchestration."""
 
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
 from nautilus_trader.model.identifiers import InstrumentId
 
 from src.models.catalog import AssetClass, ImportResult
-from src.services.firstrate.import_service import ImportService
+from src.services.firstrate.import_service import (
+    ImportService,
+    _bar_count_field_for_timeframe,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -21,10 +25,35 @@ def mock_catalog_manager():
     return MagicMock()
 
 
+def _fresh_instrument_row() -> MagicMock:
+    """Return a mock CatalogInstrument in a fresh/new state.
+
+    Story 1-7's classifier reads ``date_range_end`` and the
+    ``bar_count_<tf>`` fields with real comparison operators, so tests
+    that want the "new" branch must supply concrete values (not bare
+    ``MagicMock`` auto-attrs that raise ``TypeError`` on ``<=``).
+    """
+    instrument = MagicMock()
+    instrument.date_range_end = None
+    instrument.date_range_start = None
+    instrument.bar_count_daily = 0
+    instrument.bar_count_hourly = 0
+    instrument.bar_count_minute = 0
+    return instrument
+
+
 @pytest.fixture()
 def mock_metadata_service():
-    """Return a mock MetadataService."""
-    return MagicMock()
+    """Return a mock MetadataService.
+
+    Defaults ``get_instrument_sync`` to a fresh/new instrument row so
+    the story 1-7 classifier routes tickers through the full import
+    path (outcome ``"new"``). Tests that want the skipped/reimported
+    branches override this on a case-by-case basis.
+    """
+    service = MagicMock()
+    service.get_instrument_sync.return_value = _fresh_instrument_row()
+    return service
 
 
 @pytest.fixture()
@@ -234,7 +263,8 @@ def configured_service(
     # read-back returns same bars (verification passes)
     mock_catalog.bars.return_value = mock_bars
 
-    mock_metadata_service.get_instrument_sync.return_value = MagicMock()
+    # Fresh instrument row → classifier picks "new", full import path runs.
+    mock_metadata_service.get_instrument_sync.return_value = _fresh_instrument_row()
 
     return ImportService(
         catalog_manager=mock_catalog_manager,
@@ -567,3 +597,361 @@ class TestErrorIsolation:
         assert "Row count mismatch" in result.error
         # Metadata gatekeeper: no upsert on failure
         mock_metadata_service.upsert_instrument_sync.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Story 1-7 — Idempotent classifier
+# ---------------------------------------------------------------------------
+
+
+def _metadata_with(
+    date_range_end: datetime | None,
+    bar_count_daily: int = 0,
+    bar_count_hourly: int = 0,
+    bar_count_minute: int = 0,
+) -> MagicMock:
+    """Build a mock CatalogInstrument with explicit classifier-relevant fields."""
+    instrument = MagicMock()
+    instrument.date_range_end = date_range_end
+    instrument.bar_count_daily = bar_count_daily
+    instrument.bar_count_hourly = bar_count_hourly
+    instrument.bar_count_minute = bar_count_minute
+    return instrument
+
+
+def _write_daily_csv(path, last_day: str) -> None:
+    """Write a single-row daily FirstRate CSV ending on ``last_day``."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"2000-01-01,100,101,99,100,1000\n{last_day},101,102,100,101,1100\n",
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.unit
+class TestBarCountFieldForTimeframe:
+    """Sanity-check the module-level helper used by the classifier."""
+
+    @pytest.mark.parametrize(
+        ("timeframe", "field"),
+        [
+            ("1-DAY-LAST", "bar_count_daily"),
+            ("1-HOUR-LAST", "bar_count_hourly"),
+            ("1-MINUTE-LAST", "bar_count_minute"),
+            ("5-MINUTE-LAST", "bar_count_minute"),
+            # Unknown aggregations degrade to daily to match _upsert_metadata.
+            ("1-SECOND-LAST", "bar_count_daily"),
+            ("noop", "bar_count_daily"),
+        ],
+    )
+    def test_maps_timeframe_to_bar_count_field(self, timeframe, field):
+        assert _bar_count_field_for_timeframe(timeframe) == field
+
+
+@pytest.mark.unit
+class TestClassifyTicker:
+    """Per-edge-case coverage for ``ImportService._classify_ticker``."""
+
+    def test_complete_ticker_is_skipped(self, service, mock_metadata_service, tmp_path):
+        csv = tmp_path / "SPY.txt"
+        _write_daily_csv(csv, "2025-01-15")
+        mock_metadata_service.get_instrument_sync.return_value = _metadata_with(
+            date_range_end=datetime(2025, 1, 15, tzinfo=timezone.utc),
+            bar_count_daily=42,
+        )
+
+        decision = service._classify_ticker(
+            ticker="SPY",
+            file_path=csv,
+            catalog_name=CATALOG_NAME,
+            timeframe="1-DAY-LAST",
+        )
+
+        assert decision == "skipped"
+
+    def test_source_ahead_of_metadata_is_reimported(self, service, mock_metadata_service, tmp_path):
+        csv = tmp_path / "SPY.txt"
+        _write_daily_csv(csv, "2025-01-20")
+        mock_metadata_service.get_instrument_sync.return_value = _metadata_with(
+            date_range_end=datetime(2025, 1, 15, tzinfo=timezone.utc),
+            bar_count_daily=42,
+        )
+
+        decision = service._classify_ticker(
+            ticker="SPY",
+            file_path=csv,
+            catalog_name=CATALOG_NAME,
+            timeframe="1-DAY-LAST",
+        )
+
+        assert decision == "reimported"
+
+    def test_source_behind_metadata_is_reimported_with_warning(
+        self, service, mock_metadata_service, tmp_path
+    ):
+        """Stale/regressed source must never be silently skipped."""
+        csv = tmp_path / "SPY.txt"
+        _write_daily_csv(csv, "2025-01-10")
+        mock_metadata_service.get_instrument_sync.return_value = _metadata_with(
+            date_range_end=datetime(2025, 1, 15, tzinfo=timezone.utc),
+            bar_count_daily=42,
+        )
+
+        decision = service._classify_ticker(
+            ticker="SPY",
+            file_path=csv,
+            catalog_name=CATALOG_NAME,
+            timeframe="1-DAY-LAST",
+        )
+
+        assert decision == "reimported"
+
+    def test_orphan_metadata_row_is_new(self, service, mock_metadata_service, tmp_path):
+        """date_range_end IS NULL AND bar_count == 0 -> orphan, classify new."""
+        csv = tmp_path / "SPY.txt"
+        _write_daily_csv(csv, "2025-01-15")
+        mock_metadata_service.get_instrument_sync.return_value = _metadata_with(
+            date_range_end=None,
+            bar_count_daily=0,
+        )
+
+        decision = service._classify_ticker(
+            ticker="SPY",
+            file_path=csv,
+            catalog_name=CATALOG_NAME,
+            timeframe="1-DAY-LAST",
+        )
+
+        assert decision == "new"
+
+    def test_other_timeframe_imported_this_one_new(self, service, mock_metadata_service, tmp_path):
+        """bar_count for *this* timeframe is 0 even though another tf has rows."""
+        csv = tmp_path / "SPY.txt"
+        _write_daily_csv(csv, "2025-01-15")
+        mock_metadata_service.get_instrument_sync.return_value = _metadata_with(
+            date_range_end=datetime(2025, 1, 15, tzinfo=timezone.utc),
+            bar_count_daily=999,  # daily already done
+            bar_count_hourly=0,  # but hourly never ran
+        )
+
+        decision = service._classify_ticker(
+            ticker="SPY",
+            file_path=csv,
+            catalog_name=CATALOG_NAME,
+            timeframe="1-HOUR-LAST",
+        )
+
+        assert decision == "new"
+
+    def test_empty_source_returns_new_not_skipped(self, service, mock_metadata_service, tmp_path):
+        """Empty/malformed source must fall through to the real import path."""
+        csv = tmp_path / "SPY.txt"
+        csv.write_text("", encoding="utf-8")
+        mock_metadata_service.get_instrument_sync.return_value = _metadata_with(
+            date_range_end=datetime(2025, 1, 15, tzinfo=timezone.utc),
+            bar_count_daily=42,
+        )
+
+        decision = service._classify_ticker(
+            ticker="SPY",
+            file_path=csv,
+            catalog_name=CATALOG_NAME,
+            timeframe="1-DAY-LAST",
+        )
+
+        assert decision == "new"
+
+    def test_missing_metadata_row_is_new(self, service, mock_metadata_service, tmp_path):
+        csv = tmp_path / "SPY.txt"
+        _write_daily_csv(csv, "2025-01-15")
+        mock_metadata_service.get_instrument_sync.return_value = None
+
+        decision = service._classify_ticker(
+            ticker="SPY",
+            file_path=csv,
+            catalog_name=CATALOG_NAME,
+            timeframe="1-DAY-LAST",
+        )
+
+        assert decision == "new"
+
+
+@pytest.mark.unit
+class TestImportTickerOutcomes:
+    """End-to-end wiring from classifier → ``_import_ticker`` outcome."""
+
+    def test_skipped_short_circuits_full_import_path(
+        self,
+        configured_service,
+        mock_catalog_manager,
+        mock_metadata_service,
+        mock_instrument_mapper,
+        tmp_path,
+    ):
+        csv = tmp_path / "SPY.txt"
+        _write_daily_csv(csv, "2025-01-15")
+        mock_metadata_service.get_instrument_sync.return_value = _metadata_with(
+            date_range_end=datetime(2025, 1, 15, tzinfo=timezone.utc),
+            bar_count_daily=42,
+        )
+
+        with patch("src.services.firstrate.import_service.get_parser") as mock_get_parser:
+            result = configured_service._import_ticker(
+                ticker="SPY",
+                file_path=csv,
+                catalog_name=CATALOG_NAME,
+                asset_class=AssetClass.ETF,
+                timeframe="1-DAY-LAST",
+            )
+            # Parser never fetched — classifier short-circuited.
+            mock_get_parser.assert_not_called()
+
+        assert result.status == "skipped"
+        assert result.outcome == "skipped"
+        assert result.row_count == 0
+        assert result.error is None
+        # Downstream services untouched.
+        mock_catalog_manager.resolve_catalog.assert_not_called()
+        mock_instrument_mapper.resolve_instrument_id.assert_not_called()
+        mock_metadata_service.upsert_instrument_sync.assert_not_called()
+
+    def test_reimported_tags_outcome_and_runs_full_path(
+        self,
+        configured_service,
+        mock_catalog_manager,
+        mock_metadata_service,
+        mock_bars,
+        tmp_path,
+    ):
+        csv = tmp_path / "SPY.txt"
+        _write_daily_csv(csv, "2025-02-01")
+        mock_metadata_service.get_instrument_sync.return_value = _metadata_with(
+            date_range_end=datetime(2025, 1, 15, tzinfo=timezone.utc),
+            bar_count_daily=42,
+        )
+
+        with patch("src.services.firstrate.import_service.get_parser") as mock_get_parser:
+            mock_parser = MagicMock()
+            mock_parser.parse_file.return_value = mock_bars
+            mock_get_parser.return_value = mock_parser
+
+            result = configured_service._import_ticker(
+                ticker="SPY",
+                file_path=csv,
+                catalog_name=CATALOG_NAME,
+                asset_class=AssetClass.ETF,
+                timeframe="1-DAY-LAST",
+            )
+
+        assert result.status == "success"
+        assert result.outcome == "reimported"
+        assert result.row_count == 3
+        mock_catalog_manager.resolve_catalog.return_value.write_data.assert_called_once_with(
+            mock_bars
+        )
+
+    def test_new_tags_outcome_new(
+        self, configured_service, mock_metadata_service, mock_bars, tmp_path
+    ):
+        csv = tmp_path / "SPY.txt"
+        _write_daily_csv(csv, "2025-02-01")
+        # Default fixture already points at a fresh instrument row, but make
+        # it explicit here for readability.
+        mock_metadata_service.get_instrument_sync.return_value = _metadata_with(
+            date_range_end=None,
+            bar_count_daily=0,
+        )
+
+        with patch("src.services.firstrate.import_service.get_parser") as mock_get_parser:
+            mock_parser = MagicMock()
+            mock_parser.parse_file.return_value = mock_bars
+            mock_get_parser.return_value = mock_parser
+
+            result = configured_service._import_ticker(
+                ticker="SPY",
+                file_path=csv,
+                catalog_name=CATALOG_NAME,
+                asset_class=AssetClass.ETF,
+                timeframe="1-DAY-LAST",
+            )
+
+        assert result.status == "success"
+        assert result.outcome == "new"
+        assert result.row_count == 3
+
+    def test_classifier_exception_becomes_failed_result(
+        self, configured_service, mock_metadata_service, tmp_path
+    ):
+        csv = tmp_path / "SPY.txt"
+        csv.write_text("noop", encoding="utf-8")
+        mock_metadata_service.get_instrument_sync.side_effect = RuntimeError("db down")
+
+        result = configured_service._import_ticker(
+            ticker="SPY",
+            file_path=csv,
+            catalog_name=CATALOG_NAME,
+            asset_class=AssetClass.ETF,
+            timeframe="1-DAY-LAST",
+        )
+
+        assert result.status == "failed"
+        assert result.outcome is None
+        assert "db down" in (result.error or "")
+
+
+@pytest.mark.unit
+class TestImportDirectoryCompleteLogLine:
+    """Story 1-7: import_directory_complete must count skip/reimport/new."""
+
+    def test_log_line_includes_outcome_buckets(
+        self, configured_service, mock_metadata_service, mock_bars, tmp_path
+    ):
+        # Build a tree with two tickers — SPY will be skipped, AAPL will be new.
+        spy_dir = tmp_path / "S"
+        spy_dir.mkdir()
+        _write_daily_csv(spy_dir / "SPY.txt", "2025-01-15")
+        aapl_dir = tmp_path / "A"
+        aapl_dir.mkdir()
+        _write_daily_csv(aapl_dir / "AAPL.txt", "2025-02-01")
+
+        def _fake_lookup(_catalog: str, ticker: str):
+            if ticker == "SPY":
+                return _metadata_with(
+                    date_range_end=datetime(2025, 1, 15, tzinfo=timezone.utc),
+                    bar_count_daily=42,
+                )
+            return _metadata_with(date_range_end=None, bar_count_daily=0)
+
+        mock_metadata_service.get_instrument_sync.side_effect = _fake_lookup
+
+        with (
+            patch("src.services.firstrate.import_service.get_parser") as mock_get_parser,
+            patch("src.services.firstrate.import_service.logger") as mock_logger,
+        ):
+            mock_parser = MagicMock()
+            mock_parser.parse_file.return_value = mock_bars
+            mock_get_parser.return_value = mock_parser
+
+            results = configured_service.import_directory(
+                source_dir=tmp_path,
+                catalog_name=CATALOG_NAME,
+                asset_class=AssetClass.ETF,
+                timeframe="1-DAY-LAST",
+            )
+
+        assert len(results) == 2
+        outcomes = sorted(r.outcome or "" for r in results)
+        assert outcomes == ["new", "skipped"]
+
+        complete_calls = [
+            call.kwargs
+            for call in mock_logger.info.call_args_list
+            if call.args and call.args[0] == "import_directory_complete"
+        ]
+        assert len(complete_calls) == 1
+        payload = complete_calls[0]
+        assert payload["total"] == 2
+        assert payload["skipped"] == 1
+        assert payload["new"] == 1
+        assert payload["reimported"] == 0
+        assert payload["failed"] == 0

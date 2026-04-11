@@ -276,12 +276,24 @@ class TestSummaryReport:
 
     @pytest.mark.unit
     def test_summary_totals(self):
-        """Summary includes total tickers, rows, successes, failures."""
+        """Summary includes the Story 1-7 four-bucket breakdown."""
         from src.cli.commands.import_data import build_summary_text
 
         results = [
-            ImportResult(ticker="SPY", status="success", row_count=6523, duration=1.0),
-            ImportResult(ticker="QQQ", status="success", row_count=5892, duration=0.8),
+            ImportResult(
+                ticker="SPY",
+                status="success",
+                row_count=6523,
+                duration=1.0,
+                outcome="new",
+            ),
+            ImportResult(
+                ticker="QQQ",
+                status="success",
+                row_count=5892,
+                duration=0.8,
+                outcome="new",
+            ),
             ImportResult(
                 ticker="BAC",
                 status="failed",
@@ -291,10 +303,13 @@ class TestSummaryReport:
             ),
         ]
         text = build_summary_text(results)
-        assert "Total tickers: 3" in text
-        assert "Successful:    2" in text
-        assert "Failed:        1" in text
+        assert "Total tickers:   3" in text
+        assert "New:             2" in text
+        assert "Re-imported:     0" in text
+        assert "Skipped:         0" in text
+        assert "Failed:          1" in text
         assert "12,415" in text
+        assert "Total processed: 2" in text
 
     @pytest.mark.unit
     def test_failure_table_lists_ticker_and_reason(self):
@@ -544,3 +559,193 @@ class TestRunDryRun:
             _run_dry_run("firstrate", "test", tmp_path, "etf")
 
         assert captured["asset_class"] == AssetClass.ETF
+
+
+# ---------------------------------------------------------------------------
+# Story 1-7 — Skip-outcome progress/summary/exit-code
+# ---------------------------------------------------------------------------
+
+
+class TestStory17ProgressAndSummary:
+    """Three-way bucket rendering + all-skipped exit-code discipline."""
+
+    @pytest.mark.unit
+    def test_progress_line_renders_skip_glyph(self, capsys):
+        from src.cli.commands.import_data import _print_progress_line
+
+        result = ImportResult(
+            ticker="SPY",
+            status="skipped",
+            row_count=0,
+            duration=0.001,
+            outcome="skipped",
+        )
+        _print_progress_line(result, "1-DAY-LAST")
+        out = capsys.readouterr().out
+        assert "SPY" in out
+        assert "1-DAY-LAST" in out
+        assert "skipped" in out
+        assert "\u27f3" in out  # ⟳ glyph
+        assert "\u2713" not in out  # no success check
+        assert "\u2717" not in out  # no failure cross
+
+    @pytest.mark.unit
+    def test_progress_line_renders_success_glyph_for_reimport(self, capsys):
+        from src.cli.commands.import_data import _print_progress_line
+
+        result = ImportResult(
+            ticker="SPY",
+            status="success",
+            row_count=42,
+            duration=0.5,
+            outcome="reimported",
+        )
+        _print_progress_line(result, "1-DAY-LAST")
+        out = capsys.readouterr().out
+        assert "\u2713" in out
+        assert "42" in out
+
+    @pytest.mark.unit
+    def test_build_summary_text_renders_all_four_buckets(self):
+        from src.cli.commands.import_data import build_summary_text
+
+        results = [
+            ImportResult(
+                ticker="A",
+                status="success",
+                row_count=100,
+                duration=0.1,
+                outcome="new",
+            ),
+            ImportResult(
+                ticker="B",
+                status="success",
+                row_count=200,
+                duration=0.1,
+                outcome="reimported",
+            ),
+            ImportResult(
+                ticker="C",
+                status="skipped",
+                row_count=0,
+                duration=0.001,
+                outcome="skipped",
+            ),
+            ImportResult(
+                ticker="D",
+                status="failed",
+                row_count=0,
+                error="boom",
+                duration=0.05,
+            ),
+        ]
+        text = build_summary_text(results)
+        assert "Total tickers:   4" in text
+        assert "New:             1" in text
+        assert "Re-imported:     1" in text
+        assert "Skipped:         1" in text
+        assert "Failed:          1" in text
+        assert "Total rows:      300" in text  # 100 + 200, excludes skipped/failed
+        assert "Total processed: 2" in text  # new + reimported
+
+    @pytest.mark.unit
+    def test_print_summary_shows_all_buckets(self, capsys):
+        from src.cli.commands.import_data import _print_summary
+
+        results = [
+            ImportResult(
+                ticker="A",
+                status="success",
+                row_count=50,
+                duration=0.1,
+                outcome="new",
+            ),
+            ImportResult(
+                ticker="B",
+                status="skipped",
+                row_count=0,
+                duration=0.001,
+                outcome="skipped",
+            ),
+            ImportResult(
+                ticker="C",
+                status="skipped",
+                row_count=0,
+                duration=0.001,
+                outcome="skipped",
+            ),
+        ]
+        _print_summary(results)
+        out = capsys.readouterr().out
+        # Rich-rendered table may wrap; just check key values are present.
+        assert "Total tickers" in out
+        assert "New" in out
+        assert "Re-imported" in out
+        assert "Skipped" in out
+        assert "Total processed" in out
+
+    @pytest.mark.unit
+    def test_determine_exit_code_all_skipped_returns_0(self):
+        from src.cli.commands.import_data import determine_exit_code
+
+        results = [
+            ImportResult(
+                ticker="A",
+                status="skipped",
+                row_count=0,
+                duration=0.001,
+                outcome="skipped",
+            ),
+            ImportResult(
+                ticker="B",
+                status="skipped",
+                row_count=0,
+                duration=0.001,
+                outcome="skipped",
+            ),
+        ]
+        assert determine_exit_code(results) == 0
+
+    @pytest.mark.unit
+    def test_determine_exit_code_mixed_success_and_skipped_returns_0(self):
+        from src.cli.commands.import_data import determine_exit_code
+
+        results = [
+            ImportResult(
+                ticker="A",
+                status="success",
+                row_count=100,
+                duration=0.5,
+                outcome="new",
+            ),
+            ImportResult(
+                ticker="B",
+                status="skipped",
+                row_count=0,
+                duration=0.001,
+                outcome="skipped",
+            ),
+        ]
+        assert determine_exit_code(results) == 0
+
+    @pytest.mark.unit
+    def test_determine_exit_code_with_any_failure_returns_1(self):
+        from src.cli.commands.import_data import determine_exit_code
+
+        results = [
+            ImportResult(
+                ticker="A",
+                status="skipped",
+                row_count=0,
+                duration=0.001,
+                outcome="skipped",
+            ),
+            ImportResult(
+                ticker="B",
+                status="failed",
+                row_count=0,
+                error="boom",
+                duration=0.1,
+            ),
+        ]
+        assert determine_exit_code(results) == 1

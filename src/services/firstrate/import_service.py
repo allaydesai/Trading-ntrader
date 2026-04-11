@@ -8,6 +8,7 @@ single ticker failure does not abort the batch.
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 
 import structlog
 from nautilus_trader.model.data import Bar, BarType
@@ -17,6 +18,7 @@ from src.services.firstrate.catalog_manager import CatalogManager
 from src.services.firstrate.instrument_mapper import InstrumentMapper
 from src.services.firstrate.metadata_service import MetadataService
 from src.services.firstrate.parsers.base import get_parser
+from src.services.firstrate.source_probe import compute_source_last_date
 
 logger = structlog.get_logger(__name__)
 
@@ -26,6 +28,20 @@ _TIMEFRAME_FIELD_MAP = {
     "HOUR": "bar_count_hourly",
     "MINUTE": "bar_count_minute",
 }
+
+#: Decisions returned by :meth:`ImportService._classify_ticker`.
+ClassifierDecision = Literal["new", "reimported", "skipped"]
+
+
+def _bar_count_field_for_timeframe(timeframe: str) -> str:
+    """Return the ``CatalogInstrument.bar_count_*`` attribute for a timeframe.
+
+    Mirrors the ``_TIMEFRAME_FIELD_MAP`` lookup used by ``_upsert_metadata``.
+    Unknown aggregations fall back to ``bar_count_daily`` so the classifier
+    behaves the same as the existing metadata-upsert code path.
+    """
+    aggregation = timeframe.split("-")[1] if "-" in timeframe else "DAY"
+    return _TIMEFRAME_FIELD_MAP.get(aggregation, "bar_count_daily")
 
 
 class ImportService:
@@ -103,11 +119,17 @@ class ImportService:
 
         success = sum(1 for r in results if r.status == "success")
         failed = sum(1 for r in results if r.status == "failed")
+        skipped = sum(1 for r in results if r.outcome == "skipped")
+        reimported = sum(1 for r in results if r.outcome == "reimported")
+        new = sum(1 for r in results if r.outcome == "new")
         logger.info(
             "import_directory_complete",
             total=len(results),
             success=success,
             failed=failed,
+            skipped=skipped,
+            reimported=reimported,
+            new=new,
         )
         return results
 
@@ -121,6 +143,13 @@ class ImportService:
     ) -> ImportResult:
         """Execute the full import loop for a single ticker.
 
+        Story 1-7 adds an idempotent re-run short-circuit: ``_classify_ticker``
+        decides whether this ticker is ``"skipped"``, ``"reimported"``, or
+        ``"new"``. Skipped tickers exit immediately with no parser, no
+        ``catalog.write_data``, and no metadata upsert. Reimported / new
+        tickers go through the full import path and have their result tagged
+        with an ``outcome`` field for the CLI summary.
+
         Args:
             ticker: Trading symbol (e.g., "SPY").
             file_path: Path to the ticker's CSV file.
@@ -129,10 +158,33 @@ class ImportService:
             timeframe: Bar timeframe spec.
 
         Returns:
-            ImportResult with status, row_count, and duration.
+            ImportResult with status, row_count, duration, and outcome.
         """
         start = time.perf_counter()
         try:
+            # 0. Classify (story 1-7): metadata is the source of truth.
+            decision = self._classify_ticker(
+                ticker=ticker,
+                file_path=file_path,
+                catalog_name=catalog_name,
+                timeframe=timeframe,
+            )
+            if decision == "skipped":
+                logger.info(
+                    "ticker_import_skipped",
+                    ticker=ticker,
+                    catalog=catalog_name,
+                    timeframe=timeframe,
+                    reason="already complete",
+                )
+                return ImportResult(
+                    ticker=ticker,
+                    status="skipped",
+                    row_count=0,
+                    outcome="skipped",
+                    duration=time.perf_counter() - start,
+                )
+
             # 1. Resolve instrument ID
             instrument_id = self._instrument_mapper.resolve_instrument_id(ticker, catalog_name)
 
@@ -199,11 +251,13 @@ class ImportService:
                 "ticker_import_success",
                 ticker=ticker,
                 row_count=len(bars),
+                outcome=decision,
             )
             return ImportResult(
                 ticker=ticker,
                 status="success",
                 row_count=len(bars),
+                outcome=decision,
                 duration=time.perf_counter() - start,
             )
 
@@ -224,6 +278,117 @@ class ImportService:
                 error=str(e),
                 duration=time.perf_counter() - start,
             )
+
+    # ------------------------------------------------------------------
+    # Idempotent re-run classifier (story 1-7)
+    # ------------------------------------------------------------------
+    #
+    # ADR-5 in _bmad-output/planning-artifacts/architecture.md:212-216 declares
+    # that the ``catalog_instruments`` row (not the Parquet file on disk) is
+    # the gatekeeper for "what was successfully imported". The classifier
+    # must decide skip / reimport / new *solely* from metadata plus a cheap
+    # source-CSV last-date probe — never by scanning the filesystem for
+    # orphan Parquet files. See that ADR before touching this method.
+
+    def _classify_ticker(
+        self,
+        ticker: str,
+        file_path: Path,
+        catalog_name: str,
+        timeframe: str,
+    ) -> ClassifierDecision:
+        """Classify a ticker as ``"skipped"``, ``"reimported"``, or ``"new"``.
+
+        Looks up the existing :class:`CatalogInstrument` row and compares its
+        ``date_range_end`` / ``bar_count_<timeframe>`` fields against the
+        source CSV's max date (via :func:`compute_source_last_date`). Day-
+        granularity comparison avoids hour/minute drift when daily bars are
+        stored with an implicit midnight UTC.
+
+        Decisions:
+
+        - Metadata row missing (should not happen post-``load_company_profiles``
+          but safe default): ``"new"``.
+        - Metadata row present but ``date_range_end`` is ``None`` OR the
+          ``bar_count_<tf>`` field is 0: ``"new"`` (orphan or never imported
+          *this* timeframe).
+        - Source probe returns ``None`` (empty / malformed source): ``"new"``
+          so the real import path fails loudly with "No bars parsed from file"
+          instead of silently skipping.
+        - Source day < metadata day: ``"reimported"`` with a structured
+          warning — stale metadata should never mask a source regression.
+        - Source day == metadata day: ``"skipped"``.
+        - Source day > metadata day: ``"reimported"``.
+
+        Args:
+            ticker: Trading symbol.
+            file_path: Source CSV path.
+            catalog_name: Catalog name to scope the metadata lookup.
+            timeframe: Bar timeframe spec (e.g., ``"1-DAY-LAST"``). Used to
+                pick the right ``bar_count_*`` field.
+
+        Returns:
+            One of ``"skipped"``, ``"reimported"``, or ``"new"``.
+        """
+        existing = self._metadata_service.get_instrument_sync(catalog_name, ticker)
+        source_last = compute_source_last_date(file_path)
+
+        if existing is None:
+            self._log_classification(ticker, "new", None, source_last, timeframe)
+            return "new"
+
+        metadata_end = existing.date_range_end
+        bar_count_field = _bar_count_field_for_timeframe(timeframe)
+        bar_count = getattr(existing, bar_count_field, 0) or 0
+
+        # Orphan state or never-imported-this-timeframe.
+        if metadata_end is None or bar_count <= 0:
+            self._log_classification(ticker, "new", metadata_end, source_last, timeframe)
+            return "new"
+
+        # Empty / malformed source — let the real import path fail loudly.
+        if source_last is None:
+            self._log_classification(ticker, "new", metadata_end, source_last, timeframe)
+            return "new"
+
+        source_day = source_last.date()
+        metadata_day = metadata_end.date()
+
+        if source_day == metadata_day:
+            self._log_classification(ticker, "skipped", metadata_end, source_last, timeframe)
+            return "skipped"
+
+        if source_day < metadata_day:
+            logger.warning(
+                "source_date_behind_metadata",
+                ticker=ticker,
+                metadata_date_end=metadata_end.isoformat(),
+                source_last_date=source_last.isoformat(),
+                timeframe=timeframe,
+            )
+            self._log_classification(ticker, "reimported", metadata_end, source_last, timeframe)
+            return "reimported"
+
+        self._log_classification(ticker, "reimported", metadata_end, source_last, timeframe)
+        return "reimported"
+
+    @staticmethod
+    def _log_classification(
+        ticker: str,
+        decision: ClassifierDecision,
+        metadata_end: datetime | None,
+        source_last: datetime | None,
+        timeframe: str,
+    ) -> None:
+        """Emit one structured line per classification decision."""
+        logger.debug(
+            "ticker_classification",
+            ticker=ticker,
+            decision=decision,
+            metadata_date_end=metadata_end.isoformat() if metadata_end is not None else None,
+            source_last_date=source_last.isoformat() if source_last is not None else None,
+            timeframe=timeframe,
+        )
 
     def _discover_tickers(self, source_dir: Path) -> list[tuple[str, Path]]:
         """Traverse alphabetical subdirectories and discover ticker files.

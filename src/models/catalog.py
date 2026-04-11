@@ -6,9 +6,14 @@ and import tracking used across the FirstRate data import workflow.
 
 from enum import Enum
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
+
+#: Allowed values for :attr:`ImportResult.outcome`. ``None`` is the default for
+#: legacy call sites (story 1-7 introduced ``outcome``; older callers that pre-
+#: date the classifier do not need to set it).
+ImportOutcome = Literal["new", "reimported", "skipped"]
 
 __all__ = [
     "AssetClass",
@@ -68,10 +73,20 @@ class ImportResult(BaseModel):
 
     Attributes:
         ticker: Symbol that was imported (e.g., "SPY").
-        status: Import outcome ("success" or "failed").
-        row_count: Number of rows imported.
+        status: Import status. One of ``"success"``, ``"failed"``, or
+            ``"skipped"`` (the last added in story 1-7 for idempotent re-runs).
+            Kept as a plain ``str`` rather than a ``Literal`` so existing
+            callers that pass other sentinel strings do not break.
+        row_count: Number of rows imported (always ``0`` for skipped tickers).
         error: Error message if import failed.
         duration: Time taken in seconds.
+        outcome: Classifier decision for this ticker. ``"new"`` for first-time
+            imports (or orphans being healed), ``"reimported"`` when an
+            existing complete import was overwritten because the source moved
+            forward, and ``"skipped"`` when the metadata row already matches
+            the source's max date at day granularity. ``None`` for legacy
+            callers (e.g., direct tests) and for failed imports where the
+            classifier never ran.
     """
 
     ticker: str
@@ -79,6 +94,7 @@ class ImportResult(BaseModel):
     row_count: int = Field(default=0, ge=0)
     error: Optional[str] = None
     duration: float = Field(..., ge=0)
+    outcome: Optional[ImportOutcome] = None
 
 
 class SchemaMismatch(BaseModel):

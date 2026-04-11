@@ -156,12 +156,24 @@ class TestStreamingOutput:
 
     @pytest.mark.component
     def test_summary_report_contains_metrics(self):
-        """Summary text includes all required metrics."""
+        """Summary text includes the Story 1-7 four-bucket metrics."""
         from src.cli.commands.import_data import build_summary_text
 
         results = [
-            ImportResult(ticker="SPY", status="success", row_count=6523, duration=1.2),
-            ImportResult(ticker="QQQ", status="success", row_count=5892, duration=0.9),
+            ImportResult(
+                ticker="SPY",
+                status="success",
+                row_count=6523,
+                duration=1.2,
+                outcome="new",
+            ),
+            ImportResult(
+                ticker="QQQ",
+                status="success",
+                row_count=5892,
+                duration=0.9,
+                outcome="new",
+            ),
             ImportResult(
                 ticker="BAC",
                 status="failed",
@@ -171,10 +183,11 @@ class TestStreamingOutput:
             ),
         ]
         text = build_summary_text(results)
-        assert "Total tickers: 3" in text
-        assert "Successful:    2" in text
-        assert "Failed:        1" in text
+        assert "Total tickers:   3" in text
+        assert "New:             2" in text
+        assert "Failed:          1" in text
         assert "12,415" in text
+        assert "Total processed: 2" in text
         assert "BAC" in text
         assert "parse error" in text
 
@@ -362,3 +375,86 @@ class TestDryRunInvocation:
         assert "1-DAY-LAST" in result.output
         assert "1-HOUR-LAST" in result.output
         assert "TOTAL" in result.output
+
+
+class TestStory17DoubleRun:
+    """Story 1-7 AC-4/5: back-to-back CLI runs show New then Skipped."""
+
+    @pytest.mark.component
+    def test_second_run_shows_skip_glyph_and_summary(self, runner, tmp_path, monkeypatch):
+        """Second CLI invocation surfaces the skip glyph and Skipped: N summary.
+
+        Exercises the real ``_print_progress_line``, ``_print_summary``,
+        and ``determine_exit_code`` rendering code via CliRunner, keeping
+        the heavy ``_run_import`` orchestration out of scope (the whole
+        first-/second-run state lives in a small counter).
+        """
+        import click
+
+        from src.cli.commands import import_data as import_cmd
+
+        _seed_valid_firstrate_dir(tmp_path)
+
+        run_counter = {"n": 0}
+
+        def _fake_run_import(
+            format_name: str,
+            catalog: str,
+            source_path: Path,
+            asset_class: str | None,
+            timeframe: str | None,
+        ) -> int:
+            """Emit the exact progress + summary `_run_import` would."""
+            run_counter["n"] += 1
+            first_run = run_counter["n"] == 1
+            outcome = "new" if first_run else "skipped"
+            status = "success" if first_run else "skipped"
+            row_count = 6523 if first_run else 0
+
+            click_results = [
+                ImportResult(
+                    ticker="AAPL",
+                    status=status,
+                    row_count=row_count,
+                    duration=0.1,
+                    outcome=outcome,
+                ),
+                ImportResult(
+                    ticker="SPY",
+                    status=status,
+                    row_count=row_count,
+                    duration=0.1,
+                    outcome=outcome,
+                ),
+            ]
+
+            click.echo("\n--- STOCK ---")
+            for r in click_results:
+                import_cmd._print_progress_line(r, "1-DAY-LAST")
+            import_cmd._print_summary(click_results)
+            return import_cmd.determine_exit_code(click_results)
+
+        monkeypatch.setattr(import_cmd, "_run_import", _fake_run_import)
+
+        args = [
+            "--format",
+            "firstrate",
+            "--catalog",
+            "test-stocks",
+            "--asset-class",
+            "stock",
+            str(tmp_path),
+        ]
+
+        first_result = runner.invoke(import_cmd.import_firstrate, args)
+        assert first_result.exit_code == 0
+        assert "\u2713" in first_result.output  # success checks on first run
+        assert "\u27f3" not in first_result.output  # no skips on first run
+        assert "New" in first_result.output
+
+        second_result = runner.invoke(import_cmd.import_firstrate, args)
+        assert second_result.exit_code == 0
+        assert "\u27f3" in second_result.output  # skip glyph
+        assert "skipped (already complete)" in second_result.output
+        assert "Skipped" in second_result.output
+        assert "Total processed" in second_result.output
