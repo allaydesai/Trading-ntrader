@@ -6,7 +6,13 @@ import click
 from rich.console import Console
 from rich.table import Table
 
-from src.models.catalog import AssetClass, ImportResult
+from src.models.catalog import AssetClass, DryRunReport, ImportResult
+from src.services.firstrate.dry_run import (
+    _UNKNOWN_TIMEFRAME,
+    build_dry_run_report,
+    estimate_parquet_bytes,
+    format_bytes,
+)
 
 console = Console()
 
@@ -286,6 +292,140 @@ def _run_import(
     return determine_exit_code(all_results)
 
 
+def _print_dry_run_report(report: DryRunReport) -> None:
+    """Render a :class:`DryRunReport` to the terminal with Rich.
+
+    Always prints a ``"No data written — dry run only."`` trailer so operators
+    have explicit confirmation that nothing touched the catalog or DB.
+    """
+    console.print()
+    header = f"[bold]Dry-Run Report[/bold] \u2014 {report.asset_class.value} @ {report.source_path}"
+    if report.catalog:
+        header += f" \u2192 catalog [cyan]{report.catalog}[/cyan]"
+    console.print(header)
+
+    # Empty / all-unknown guard: warn loudly rather than printing a blank table.
+    countable_specs = [spec for spec in report.timeframes if spec != _UNKNOWN_TIMEFRAME]
+    if report.total_file_count == 0 and not report.schema_mismatches:
+        console.print("[yellow]No importable files found. Double-check the source path.[/yellow]")
+        click.echo("No data written \u2014 dry run only.")
+        return
+    if not countable_specs and report.total_file_count > 0:
+        console.print(
+            "[yellow]All discovered files fell into the 'unknown' timeframe bucket "
+            "\u2014 check the filename suffixes.[/yellow]"
+        )
+
+    table = Table()
+    table.add_column("Timeframe", style="cyan")
+    table.add_column("Tickers", style="green", justify="right")
+    table.add_column("Files", style="green", justify="right")
+    table.add_column("Source Size", style="green", justify="right")
+    table.add_column("Est. Parquet Size", style="green", justify="right")
+
+    for spec in sorted(report.timeframes.keys()):
+        summary = report.timeframes[spec]
+        table.add_row(
+            spec,
+            str(summary.ticker_count),
+            str(summary.file_count),
+            format_bytes(summary.source_bytes),
+            format_bytes(estimate_parquet_bytes(summary.source_bytes)),
+        )
+
+    table.add_row(
+        "TOTAL",
+        str(report.distinct_ticker_count),
+        str(report.total_file_count),
+        format_bytes(report.total_source_bytes),
+        format_bytes(report.estimated_parquet_bytes),
+    )
+    console.print(table)
+
+    if report.unreadable_count:
+        console.print(
+            f"[yellow]Warning: {report.unreadable_count} file(s) or director(y/ies) "
+            "could not be read (permission denied or I/O error) and were skipped.[/yellow]"
+        )
+
+    if report.schema_mismatches:
+        console.print()
+        mismatch_table = Table(title="Schema Mismatches")
+        mismatch_table.add_column("File", style="red")
+        mismatch_table.add_column("Expected", style="yellow", justify="right")
+        mismatch_table.add_column("Detected", style="yellow", justify="right")
+        mismatch_table.add_column("Reason", style="yellow")
+
+        limit = 20
+        for mismatch in report.schema_mismatches[:limit]:
+            mismatch_table.add_row(
+                str(mismatch.file_path),
+                str(mismatch.expected_columns),
+                str(mismatch.detected_columns),
+                mismatch.reason or "",
+            )
+        console.print(mismatch_table)
+
+        remaining = len(report.schema_mismatches) - limit
+        if remaining > 0:
+            console.print(f"... and {remaining} more")
+
+    click.echo("No data written \u2014 dry run only.")
+
+
+def _run_dry_run(
+    format_name: str,
+    catalog: str,
+    source_path: Path,
+    asset_class: str | None,
+) -> int:
+    """Execute a dry-run scan without writing to the catalog or DB.
+
+    Zero side effects: does NOT construct ``ImportService``, ``CatalogManager``,
+    ``MetadataService``, ``InstrumentMapper``, or any DB session. Defaults
+    asset class to ``STOCK`` (Phase 1 pivot 2026-04-11). Mismatches are
+    informational — exit code stays 0 per AC-4.
+
+    Args:
+        format_name: Data format. Only ``"firstrate"`` is supported; any other
+            value is rejected with exit code 2 so the dry-run does not silently
+            scan with the wrong parser assumptions.
+        catalog: Target catalog name. Never touched (the dry-run writes
+            nothing) but surfaced in the report header so operators can
+            confirm they targeted the right catalog.
+        source_path: Source directory path.
+        asset_class: Optional asset-class override (defaults to ``stock``).
+
+    Returns:
+        0 on success (even with schema mismatches); 2 on fatal path errors or
+        an unsupported ``format_name``.
+    """
+    if format_name.lower() != "firstrate":
+        console.print(
+            f"\u274c --format '{format_name}' is not supported by --dry-run (only 'firstrate').",
+            style="red",
+        )
+        return 2
+
+    if not source_path.exists() or not source_path.is_dir():
+        console.print(
+            f"\u274c Source path does not exist or is not a directory: {source_path}",
+            style="red",
+        )
+        return 2
+
+    ac = ASSET_CLASS_MAP.get((asset_class or "stock").lower(), AssetClass.STOCK)
+
+    try:
+        report = build_dry_run_report(source_path, ac, catalog=catalog)
+    except (PermissionError, OSError) as e:
+        console.print(f"\u274c Fatal filesystem error: {e}", style="red")
+        return 2
+
+    _print_dry_run_report(report)
+    return 0
+
+
 @click.command("import")
 @click.option(
     "--format",
@@ -306,12 +446,17 @@ def _run_import(
         case_sensitive=False,
     ),
     default=None,
-    help="Filter by asset class (default: etf).",
+    help="Filter by asset class (default: etf for import, stock for --dry-run).",
 )
 @click.option(
     "--timeframe",
     default=None,
     help="Comma-separated timeframes: daily,hourly,minute,1min,5min.",
+)
+@click.option(
+    "--dry-run/--no-dry-run",
+    default=False,
+    help="Scan the source directory and report what would be imported without writing any data.",
 )
 @click.argument(
     "source_path",
@@ -322,12 +467,16 @@ def import_firstrate(
     catalog: str,
     asset_class: str | None,
     timeframe: str | None,
+    dry_run: bool,
     source_path: Path,
 ) -> None:
     """Import market data from external sources to Parquet catalog.
 
     SOURCE_PATH is the directory containing ticker data files.
     """
-    exit_code = _run_import(format_name, catalog, source_path, asset_class, timeframe)
+    if dry_run:
+        exit_code = _run_dry_run(format_name, catalog, source_path, asset_class)
+    else:
+        exit_code = _run_import(format_name, catalog, source_path, asset_class, timeframe)
     if exit_code != 0:
         click.get_current_context().exit(exit_code)

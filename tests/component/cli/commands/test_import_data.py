@@ -1,11 +1,23 @@
 """Component tests for CLI import command with mocked ImportService."""
 
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 from click.testing import CliRunner
 
 from src.models.catalog import ImportResult
+
+_VALID_LINE = "2024-01-02 09:30:00,100.0,101.0,99.5,100.5,1000"
+
+
+def _seed_valid_firstrate_dir(tmp_path: Path) -> Path:
+    """Create a small FirstRate-style directory with 2 tickers in 1 timeframe."""
+    (tmp_path / "A").mkdir()
+    (tmp_path / "S").mkdir()
+    (tmp_path / "A" / "AAPL_full_1day_adjsplitdiv.txt").write_text(_VALID_LINE)
+    (tmp_path / "S" / "SPY_full_1day_adjsplitdiv.txt").write_text(_VALID_LINE)
+    return tmp_path
 
 
 @pytest.fixture
@@ -213,3 +225,140 @@ class TestMultiTimeframe:
 
         result = parse_timeframes("daily,hourly,minute")
         assert result == ["1-DAY-LAST", "1-HOUR-LAST", "1-MINUTE-LAST"]
+
+
+class TestDryRunInvocation:
+    """Component tests for --dry-run flag (Story 1-6, AC-1..AC-4)."""
+
+    @pytest.mark.component
+    def test_happy_path_reports_and_exits_zero(self, runner, tmp_path):
+        """Valid Stocks directory: dry-run exits 0 with a populated report."""
+        from src.cli.commands.import_data import import_firstrate
+
+        _seed_valid_firstrate_dir(tmp_path)
+
+        result = runner.invoke(
+            import_firstrate,
+            [
+                "--format",
+                "firstrate",
+                "--catalog",
+                "test",
+                "--dry-run",
+                str(tmp_path),
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert "Dry-Run Report" in result.output
+        assert "STOCK" in result.output
+        assert "1-DAY-LAST" in result.output
+        # Task 7.1 explicitly requires the Tickers/Files counts to be asserted.
+        # Match the 1-DAY-LAST row's ticker and file columns against "2" with a
+        # regex so we aren't fooled by "2" appearing elsewhere in the output.
+        import re
+
+        assert re.search(r"1-DAY-LAST\D+2\D+2", result.output), (
+            f"expected '1-DAY-LAST ... 2 ... 2' row in output, got:\n{result.output}"
+        )
+        # The catalog name should also appear in the header per D3.
+        assert "test" in result.output
+        assert "No data written" in result.output
+
+    @pytest.mark.component
+    def test_schema_mismatch_still_zero_exit(self, runner, tmp_path):
+        """Files with bad schema produce a mismatch table but exit 0 (AC-4)."""
+        from src.cli.commands.import_data import import_firstrate
+
+        (tmp_path / "A").mkdir()
+        (tmp_path / "A" / "AAPL_full_1day_adjsplitdiv.txt").write_text("1,2,3,4,5")
+
+        result = runner.invoke(
+            import_firstrate,
+            [
+                "--format",
+                "firstrate",
+                "--catalog",
+                "test",
+                "--dry-run",
+                str(tmp_path),
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert "Schema Mismatches" in result.output
+        assert "5" in result.output  # detected column count
+        assert "6" in result.output  # expected column count
+
+    @pytest.mark.component
+    def test_zero_side_effects(self, runner, tmp_path):
+        """Dry-run must not construct any import-path services or DB session."""
+        from src.cli.commands.import_data import import_firstrate
+
+        _seed_valid_firstrate_dir(tmp_path)
+
+        def _should_not_be_called(*_a, **_kw):
+            raise AssertionError("constructed in dry-run")
+
+        with (
+            patch(
+                "src.services.firstrate.import_service.ImportService.__init__",
+                _should_not_be_called,
+            ),
+            patch(
+                "src.services.firstrate.catalog_manager.CatalogManager.__init__",
+                _should_not_be_called,
+            ),
+            patch(
+                "src.services.firstrate.instrument_mapper.InstrumentMapper.__init__",
+                _should_not_be_called,
+            ),
+            patch(
+                "src.services.firstrate.metadata_service.MetadataService.__init__",
+                _should_not_be_called,
+            ),
+            patch(
+                "src.db.session_sync.get_sync_session_maker",
+                side_effect=AssertionError("DB touched in dry-run"),
+            ),
+        ):
+            result = runner.invoke(
+                import_firstrate,
+                [
+                    "--format",
+                    "firstrate",
+                    "--catalog",
+                    "test",
+                    "--dry-run",
+                    str(tmp_path),
+                ],
+                catch_exceptions=False,
+            )
+
+        assert result.exit_code == 0
+
+    @pytest.mark.component
+    def test_multi_timeframe_report_rows(self, runner, tmp_path):
+        """1day + 1hour files produce two timeframe rows plus TOTAL row."""
+        from src.cli.commands.import_data import import_firstrate
+
+        (tmp_path / "A").mkdir()
+        (tmp_path / "A" / "AAPL_full_1day_adjsplitdiv.txt").write_text(_VALID_LINE)
+        (tmp_path / "A" / "AAPL_full_1hour_adjsplitdiv.txt").write_text(_VALID_LINE)
+
+        result = runner.invoke(
+            import_firstrate,
+            [
+                "--format",
+                "firstrate",
+                "--catalog",
+                "test",
+                "--dry-run",
+                str(tmp_path),
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert "1-DAY-LAST" in result.output
+        assert "1-HOUR-LAST" in result.output
+        assert "TOTAL" in result.output

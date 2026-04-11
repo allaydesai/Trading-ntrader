@@ -379,3 +379,168 @@ class TestExitCode:
         from src.cli.commands.import_data import determine_exit_code
 
         assert determine_exit_code([]) == 0
+
+
+# ---------------------------------------------------------------------------
+# Dry-run flag routing tests (Story 1-6, Task 1)
+# ---------------------------------------------------------------------------
+
+
+class TestDryRunFlag:
+    """Test --dry-run flag routes to _run_dry_run and skips _run_import."""
+
+    @pytest.mark.unit
+    @patch("src.cli.commands.import_data._run_dry_run")
+    @patch("src.cli.commands.import_data._run_import")
+    def test_dry_run_routes_to_dry_run(self, mock_import, mock_dry, runner, tmp_path):
+        """--dry-run calls _run_dry_run, not _run_import."""
+        from src.cli.commands.import_data import import_firstrate
+
+        mock_dry.return_value = 0
+        result = runner.invoke(
+            import_firstrate,
+            ["--format", "firstrate", "--catalog", "test", "--dry-run", str(tmp_path)],
+        )
+        assert result.exit_code == 0
+        assert mock_dry.called
+        assert not mock_import.called
+
+    @pytest.mark.unit
+    @patch("src.cli.commands.import_data._run_dry_run")
+    @patch("src.cli.commands.import_data._run_import")
+    def test_no_dry_run_routes_to_import(self, mock_import, mock_dry, runner, tmp_path):
+        """Default (no flag) calls _run_import, not _run_dry_run."""
+        from src.cli.commands.import_data import import_firstrate
+
+        mock_import.return_value = 0
+        runner.invoke(
+            import_firstrate,
+            ["--format", "firstrate", "--catalog", "test", str(tmp_path)],
+        )
+        assert mock_import.called
+        assert not mock_dry.called
+
+    @pytest.mark.unit
+    @patch("src.cli.commands.import_data._run_dry_run")
+    def test_dry_run_never_constructs_services(self, mock_dry, runner, tmp_path, monkeypatch):
+        """Dry-run must not instantiate any import-path services."""
+        from src.cli.commands.import_data import import_firstrate
+
+        mock_dry.return_value = 0
+
+        # Patch every service class and DB accessor that the import path uses.
+        sentinel = []
+
+        def _fail(*_a, **_kw):
+            sentinel.append("called")
+            raise AssertionError("service must not be constructed in dry-run")
+
+        monkeypatch.setattr("src.services.firstrate.import_service.ImportService.__init__", _fail)
+        monkeypatch.setattr("src.services.firstrate.catalog_manager.CatalogManager.__init__", _fail)
+        monkeypatch.setattr(
+            "src.services.firstrate.instrument_mapper.InstrumentMapper.__init__",
+            _fail,
+        )
+        monkeypatch.setattr(
+            "src.services.firstrate.metadata_service.MetadataService.__init__",
+            _fail,
+        )
+
+        def _db_must_not_be_touched():
+            raise AssertionError("DB must not be touched in dry-run")
+
+        monkeypatch.setattr(
+            "src.db.session_sync.get_sync_session_maker",
+            _db_must_not_be_touched,
+        )
+
+        result = runner.invoke(
+            import_firstrate,
+            ["--format", "firstrate", "--catalog", "test", "--dry-run", str(tmp_path)],
+        )
+        assert result.exit_code == 0
+        assert sentinel == []
+
+
+class TestRunDryRun:
+    """Unit tests for _run_dry_run."""
+
+    @pytest.mark.unit
+    def test_happy_path_returns_0(self, tmp_path):
+        """Empty directory is a valid dry-run; returns 0."""
+        from src.cli.commands.import_data import _run_dry_run
+
+        code = _run_dry_run("firstrate", "test", tmp_path, None)
+        assert code == 0
+
+    @pytest.mark.unit
+    def test_mismatches_still_return_0(self, tmp_path):
+        """Schema mismatches are informational — exit code stays 0 (AC-4)."""
+        from src.cli.commands.import_data import _run_dry_run
+
+        subdir = tmp_path / "A"
+        subdir.mkdir()
+        (subdir / "AAPL_full_1day_adjsplitdiv.txt").write_text("1,2,3,4,5")
+
+        code = _run_dry_run("firstrate", "test", tmp_path, None)
+        assert code == 0
+
+    @pytest.mark.unit
+    def test_missing_directory_returns_2(self, tmp_path):
+        """Non-existent source_path returns exit code 2."""
+        from src.cli.commands.import_data import _run_dry_run
+
+        code = _run_dry_run("firstrate", "test", tmp_path / "nope", None)
+        assert code == 2
+
+    @pytest.mark.unit
+    def test_asset_class_defaults_to_stock(self, tmp_path):
+        """Dry-run defaults to STOCK (Phase 1 pivot), not ETF."""
+        from src.cli.commands.import_data import _run_dry_run
+        from src.models.catalog import AssetClass
+
+        captured: dict = {}
+
+        def fake_build(source_path, asset_class, **_kw):
+            from src.models.catalog import DryRunReport
+
+            captured["asset_class"] = asset_class
+            return DryRunReport(
+                asset_class=asset_class,
+                source_path=str(source_path),
+                timeframes={},
+                total_file_count=0,
+                total_source_bytes=0,
+                estimated_parquet_bytes=0,
+            )
+
+        with patch("src.cli.commands.import_data.build_dry_run_report", side_effect=fake_build):
+            _run_dry_run("firstrate", "test", tmp_path, None)
+
+        assert captured["asset_class"] == AssetClass.STOCK
+
+    @pytest.mark.unit
+    def test_asset_class_override(self, tmp_path):
+        """--asset-class override is respected on the dry-run path."""
+        from src.cli.commands.import_data import _run_dry_run
+        from src.models.catalog import AssetClass
+
+        captured: dict = {}
+
+        def fake_build(source_path, asset_class, **_kw):
+            from src.models.catalog import DryRunReport
+
+            captured["asset_class"] = asset_class
+            return DryRunReport(
+                asset_class=asset_class,
+                source_path=str(source_path),
+                timeframes={},
+                total_file_count=0,
+                total_source_bytes=0,
+                estimated_parquet_bytes=0,
+            )
+
+        with patch("src.cli.commands.import_data.build_dry_run_report", side_effect=fake_build):
+            _run_dry_run("firstrate", "test", tmp_path, "etf")
+
+        assert captured["asset_class"] == AssetClass.ETF
