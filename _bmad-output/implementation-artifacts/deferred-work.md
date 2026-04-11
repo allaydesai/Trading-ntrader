@@ -17,3 +17,9 @@
 
 - D1: Permission errors in `_discover_tickers` crash entire batch — `subdir.iterdir()` at line 219 has no exception handling, so an unreadable subdirectory aborts discovery for all tickers.
 - D2: In-place ORM mutation in `_upsert_metadata` before persistence — `get_instrument_sync` returns an ORM object that is mutated directly before `upsert_instrument_sync`. If the upsert fails, dirty state remains on the session-attached object.
+
+## Deferred from: code review of 1-5-cli-import-command-with-progress-and-summary (2026-04-09)
+
+- D3: Broad `except Exception` in `_run_import` swallows errors with generic message — No traceback, no `--verbose`/`--debug` flag. Consistent with existing CLI commands but limits debuggability.
+- D4: No `--dry-run` option — Architecture spec mentions it; planned for Story 1-6 (Pre-import Dry-run Validation).
+- D5: `catalog_base_path` empty string defaults to cwd via `Path("")` — Pre-existing config default in `CatalogSettings`, not introduced by this diff.
