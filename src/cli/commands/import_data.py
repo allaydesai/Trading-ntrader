@@ -28,6 +28,27 @@ ASSET_CLASS_MAP = {
 }
 
 
+def _find_profiles_csv(source_path: Path) -> Path | None:
+    """Locate the FirstRate company_profiles.csv for a given import source.
+
+    FirstRate deliveries usually ship the profiles file alongside the data
+    folders (e.g., ``/Data/Stocks/company_profiles.csv`` for
+    ``/Data/Stocks/Stocks_1day``). Check ``source_path`` first, then its
+    parent directory.
+
+    Args:
+        source_path: Directory passed to the import command.
+
+    Returns:
+        Path to the profiles CSV, or None if not found in either location.
+    """
+    candidates = [source_path / "company_profiles.csv", source_path.parent / "company_profiles.csv"]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
 def parse_timeframes(timeframe_str: str) -> list[str]:
     """Parse comma-separated timeframe string into Nautilus specs.
 
@@ -208,15 +229,15 @@ def _run_import(
 
         # Ensure profiles are loaded
         if not instrument_mapper.is_loaded(catalog):
-            profiles_path = source_path / "company_profiles.csv"
-            if profiles_path.exists():
+            profiles_path = _find_profiles_csv(source_path)
+            if profiles_path is not None:
                 click.echo(f"Loading company profiles from {profiles_path}...")
                 instrument_mapper.load_company_profiles(profiles_path, catalog, ac.value)
             else:
                 console.print(
                     f"\u274c Instrument profiles not loaded for catalog "
                     f"'{catalog}' and no company_profiles.csv found at "
-                    f"{profiles_path}",
+                    f"{source_path} or {source_path.parent}",
                     style="red",
                 )
                 return 2
@@ -237,14 +258,23 @@ def _run_import(
 
             all_results.extend(results)
 
+        # Commit all profile loads and metadata upserts as a single transaction.
+        session.commit()
+
     except FileNotFoundError as e:
         console.print(f"\u274c {e}", style="red")
+        if session is not None:
+            session.rollback()
         return 2
     except ValueError as e:
         console.print(f"\u274c {e}", style="red")
+        if session is not None:
+            session.rollback()
         return 2
     except Exception as e:
         console.print(f"\u274c Fatal error: {e}", style="red")
+        if session is not None:
+            session.rollback()
         return 2
     finally:
         if session is not None:

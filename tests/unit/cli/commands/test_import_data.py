@@ -15,6 +15,67 @@ def runner():
 
 
 # ---------------------------------------------------------------------------
+# Profiles path discovery
+# ---------------------------------------------------------------------------
+
+
+class TestFindProfilesCsv:
+    """Test discovery of company_profiles.csv across source_path and parent."""
+
+    @pytest.mark.unit
+    def test_found_at_source_path(self, tmp_path):
+        """Returns path when csv is directly inside source_path."""
+        from src.cli.commands.import_data import _find_profiles_csv
+
+        source = tmp_path / "data"
+        source.mkdir()
+        expected = source / "company_profiles.csv"
+        expected.write_text("Ticker\nSPY\n")
+
+        assert _find_profiles_csv(source) == expected
+
+    @pytest.mark.unit
+    def test_found_at_parent_directory(self, tmp_path):
+        """Returns parent path when csv lives one level up (FirstRate layout)."""
+        from src.cli.commands.import_data import _find_profiles_csv
+
+        parent = tmp_path / "Stocks"
+        parent.mkdir()
+        source = parent / "Stocks_1day"
+        source.mkdir()
+        expected = parent / "company_profiles.csv"
+        expected.write_text("Ticker\nA\n")
+
+        assert _find_profiles_csv(source) == expected
+
+    @pytest.mark.unit
+    def test_prefers_source_path_over_parent(self, tmp_path):
+        """If both exist, source_path wins."""
+        from src.cli.commands.import_data import _find_profiles_csv
+
+        parent = tmp_path / "Data"
+        parent.mkdir()
+        source = parent / "Stocks_1day"
+        source.mkdir()
+
+        parent_csv = parent / "company_profiles.csv"
+        parent_csv.write_text("parent")
+        source_csv = source / "company_profiles.csv"
+        source_csv.write_text("source")
+
+        assert _find_profiles_csv(source) == source_csv
+
+    @pytest.mark.unit
+    def test_returns_none_when_missing(self, tmp_path):
+        """Returns None when neither location has the csv."""
+        from src.cli.commands.import_data import _find_profiles_csv
+
+        source = tmp_path / "empty"
+        source.mkdir()
+        assert _find_profiles_csv(source) is None
+
+
+# ---------------------------------------------------------------------------
 # Timeframe parsing tests (Task 1.4)
 # ---------------------------------------------------------------------------
 
