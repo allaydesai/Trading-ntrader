@@ -12,10 +12,13 @@ from fastapi import Depends
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.config import CatalogSettings
 from src.db.repositories.backtest_repository import BacktestRepository
+from src.db.repositories.catalog_instrument_repository import CatalogInstrumentRepository
 from src.db.session import get_session as get_db_session
 from src.services.backtest_query import BacktestQueryService
 from src.services.data_catalog import DataCatalogService
+from src.services.firstrate.metadata_service import MetadataService
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
@@ -35,6 +38,51 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """
     async with get_db_session() as session:
         yield session
+
+
+def get_metadata_service(
+    session: Annotated[AsyncSession, Depends(get_db)],
+) -> MetadataService:
+    """Get MetadataService with async repository.
+
+    Args:
+        session: Database session from dependency injection.
+
+    Returns:
+        MetadataService configured with async CatalogInstrumentRepository.
+    """
+    repo = CatalogInstrumentRepository(session)
+    return MetadataService(async_repo=repo)
+
+
+async def get_catalog_list(
+    service: Annotated[MetadataService, Depends(get_metadata_service)],
+) -> list[str]:
+    """Get list of available catalog names from the database.
+
+    Args:
+        service: MetadataService dependency.
+
+    Returns:
+        Sorted list of catalog names that have imported instruments.
+    """
+    return await service.list_catalog_names()
+
+
+def get_default_catalog() -> str:
+    """Get default catalog name from settings.
+
+    Returns:
+        Default catalog name (may be empty string).
+    """
+    settings = CatalogSettings()
+    return settings.default_catalog_name
+
+
+# Type aliases for explorer dependencies
+Metadata = Annotated[MetadataService, Depends(get_metadata_service)]
+CatalogList = Annotated[list[str], Depends(get_catalog_list)]
+DefaultCatalog = Annotated[str, Depends(get_default_catalog)]
 
 
 def get_backtest_repository(

@@ -168,6 +168,113 @@ class TestAsyncCatalogInstrumentRepository:
         tickers = {r.ticker for r in results}
         assert tickers == {"SPY", "SPYG"}
 
+    async def test_count_by_catalog(self, async_session):
+        """count_by_catalog returns total count for a catalog."""
+        repo = CatalogInstrumentRepository(async_session)
+        await repo.upsert(CatalogInstrument(**_make_instrument(ticker="SPY")))
+        await repo.upsert(
+            CatalogInstrument(**_make_instrument(ticker="QQQ", nautilus_id="QQQ.XNAS"))
+        )
+        await repo.upsert(
+            CatalogInstrument(
+                **_make_instrument(ticker="BTC", catalog_name="other", nautilus_id="BTC.KRAKEN")
+            )
+        )
+        await async_session.commit()
+
+        count = await repo.count_by_catalog("firstrate-etf")
+        assert count == 2
+
+    async def test_count_asset_classes(self, async_session):
+        """count_asset_classes returns per-class counts."""
+        repo = CatalogInstrumentRepository(async_session)
+        await repo.upsert(CatalogInstrument(**_make_instrument(ticker="SPY")))
+        await repo.upsert(
+            CatalogInstrument(
+                **_make_instrument(ticker="AAPL", asset_class="STOCK", nautilus_id="AAPL.XNAS")
+            )
+        )
+        await repo.upsert(
+            CatalogInstrument(
+                **_make_instrument(ticker="MSFT", asset_class="STOCK", nautilus_id="MSFT.XNAS")
+            )
+        )
+        await async_session.commit()
+
+        counts = await repo.count_asset_classes("firstrate-etf")
+        assert counts["ETF"] == 1
+        assert counts["STOCK"] == 2
+
+    async def test_list_by_catalog_with_search(self, async_session):
+        """list_by_catalog_with_search uses prefix match."""
+        repo = CatalogInstrumentRepository(async_session)
+        await repo.upsert(CatalogInstrument(**_make_instrument(ticker="SPY")))
+        await repo.upsert(
+            CatalogInstrument(**_make_instrument(ticker="SPYG", nautilus_id="SPYG.ARCA"))
+        )
+        await repo.upsert(
+            CatalogInstrument(**_make_instrument(ticker="QQQ", nautilus_id="QQQ.XNAS"))
+        )
+        await async_session.commit()
+
+        results, total = await repo.list_by_catalog_with_search(
+            catalog_name="firstrate-etf", search="SP"
+        )
+        assert total == 2
+        assert len(results) == 2
+        tickers = {r.ticker for r in results}
+        assert tickers == {"SPY", "SPYG"}
+
+    async def test_list_by_catalog_with_search_and_asset_class(self, async_session):
+        """list_by_catalog_with_search filters by asset class."""
+        repo = CatalogInstrumentRepository(async_session)
+        await repo.upsert(CatalogInstrument(**_make_instrument(ticker="SPY")))
+        await repo.upsert(
+            CatalogInstrument(
+                **_make_instrument(ticker="AAPL", asset_class="STOCK", nautilus_id="AAPL.XNAS")
+            )
+        )
+        await async_session.commit()
+
+        results, total = await repo.list_by_catalog_with_search(
+            catalog_name="firstrate-etf", asset_class="STOCK"
+        )
+        assert total == 1
+        assert results[0].ticker == "AAPL"
+
+    async def test_list_by_catalog_with_search_pagination(self, async_session):
+        """list_by_catalog_with_search respects limit/offset."""
+        repo = CatalogInstrumentRepository(async_session)
+        for i in range(5):
+            await repo.upsert(
+                CatalogInstrument(
+                    **_make_instrument(ticker=f"T{i:02d}", nautilus_id=f"T{i:02d}.ARCA")
+                )
+            )
+        await async_session.commit()
+
+        results, total = await repo.list_by_catalog_with_search(
+            catalog_name="firstrate-etf", limit=2, offset=1
+        )
+        assert total == 5
+        assert len(results) == 2
+        assert results[0].ticker == "T01"
+
+    async def test_list_by_catalog_with_search_prefix_only(self, async_session):
+        """list_by_catalog_with_search uses prefix match, not substring."""
+        repo = CatalogInstrumentRepository(async_session)
+        await repo.upsert(CatalogInstrument(**_make_instrument(ticker="XSPY")))
+        await repo.upsert(
+            CatalogInstrument(**_make_instrument(ticker="SPY", nautilus_id="SPY2.ARCA"))
+        )
+        await async_session.commit()
+
+        results, total = await repo.list_by_catalog_with_search(
+            catalog_name="firstrate-etf", search="SP"
+        )
+        assert total == 1
+        assert results[0].ticker == "SPY"
+
 
 @pytest.mark.component
 class TestSyncCatalogInstrumentRepository:

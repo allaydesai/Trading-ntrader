@@ -4,7 +4,7 @@ Provides both async (web) and sync (CLI) access to catalog_instruments,
 delegating to the appropriate repository.
 """
 
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import structlog
 
@@ -108,6 +108,59 @@ class MetadataService:
         """
         repo = self._require_async()
         return await repo.search(query, limit=limit)
+
+    async def list_catalog_names(self) -> List[str]:
+        """Get distinct catalog names from the database.
+
+        Returns:
+            Sorted list of catalog name strings.
+        """
+        repo = self._require_async()
+        return await repo.list_catalog_names()
+
+    async def list_instruments_with_search(
+        self,
+        catalog_name: str,
+        search: Optional[str] = None,
+        asset_class: Optional[str] = None,
+        sort_by: str = "ticker",
+        limit: int = 25,
+        offset: int = 0,
+    ) -> Tuple[List[CatalogInstrument], int]:
+        """List instruments with combined filters and prefix search.
+
+        Args:
+            catalog_name: Catalog to list from.
+            search: Optional prefix search on ticker.
+            asset_class: Optional asset class filter.
+            sort_by: Sort column name.
+            limit: Max results per page.
+            offset: Pagination offset.
+
+        Returns:
+            Tuple of (instruments, total_count).
+        """
+        repo = self._require_async()
+        return await repo.list_by_catalog_with_search(
+            catalog_name,
+            search=search,
+            asset_class=asset_class,
+            sort_by=sort_by,
+            limit=limit,
+            offset=offset,
+        )
+
+    async def count_asset_classes(self, catalog_name: str) -> Dict[str, int]:
+        """Count instruments per asset class in a catalog.
+
+        Args:
+            catalog_name: Catalog name.
+
+        Returns:
+            Dict mapping asset_class to count.
+        """
+        repo = self._require_async()
+        return await repo.count_asset_classes(catalog_name)
 
     # --- Sync methods (CLI) ---
 

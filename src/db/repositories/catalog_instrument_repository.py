@@ -4,9 +4,9 @@ Provides both async (web) and sync (CLI) access to catalog instrument
 metadata, following the project's dual repository pattern.
 """
 
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
-from sqlalchemy import and_, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
@@ -141,6 +141,112 @@ class CatalogInstrumentRepository:
         )
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
+
+    async def list_catalog_names(self) -> List[str]:
+        """Get distinct catalog names from the database.
+
+        Returns:
+            Sorted list of catalog name strings.
+        """
+        stmt = (
+            select(CatalogInstrument.catalog_name)
+            .distinct()
+            .order_by(CatalogInstrument.catalog_name)
+        )
+        result = await self.session.execute(stmt)
+        return [row[0] for row in result.all()]
+
+    async def count_by_catalog(
+        self,
+        catalog_name: str,
+        asset_class: Optional[str] = None,
+        search: Optional[str] = None,
+    ) -> int:
+        """Count instruments in a catalog with optional filters.
+
+        Args:
+            catalog_name: Catalog name to filter by.
+            asset_class: Optional asset class filter.
+            search: Optional prefix search on ticker.
+
+        Returns:
+            Total count of matching instruments.
+        """
+        conditions = [CatalogInstrument.catalog_name == catalog_name]
+        if asset_class:
+            conditions.append(CatalogInstrument.asset_class == asset_class)
+        if search:
+            escaped = search.replace("%", r"\%").replace("_", r"\_")
+            conditions.append(CatalogInstrument.ticker.ilike(f"{escaped}%"))
+
+        stmt = select(func.count()).select_from(CatalogInstrument).where(and_(*conditions))
+        result = await self.session.execute(stmt)
+        return result.scalar_one()
+
+    async def count_asset_classes(self, catalog_name: str) -> Dict[str, int]:
+        """Count instruments per asset class in a catalog.
+
+        Args:
+            catalog_name: Catalog name to filter by.
+
+        Returns:
+            Dict mapping asset_class string to count.
+        """
+        stmt = (
+            select(CatalogInstrument.asset_class, func.count())
+            .where(CatalogInstrument.catalog_name == catalog_name)
+            .group_by(CatalogInstrument.asset_class)
+        )
+        result = await self.session.execute(stmt)
+        return dict(result.all())
+
+    async def list_by_catalog_with_search(
+        self,
+        catalog_name: str,
+        search: Optional[str] = None,
+        asset_class: Optional[str] = None,
+        sort_by: str = "ticker",
+        limit: int = 25,
+        offset: int = 0,
+    ) -> Tuple[List[CatalogInstrument], int]:
+        """List instruments with combined filters, prefix search, and pagination.
+
+        Args:
+            catalog_name: Catalog name to filter by.
+            search: Optional prefix search on ticker (ILIKE prefix match).
+            asset_class: Optional asset class filter.
+            sort_by: Sort column name (default: ticker).
+            limit: Maximum results per page.
+            offset: Pagination offset.
+
+        Returns:
+            Tuple of (list of instruments, total count).
+        """
+        conditions = [CatalogInstrument.catalog_name == catalog_name]
+        if asset_class:
+            conditions.append(CatalogInstrument.asset_class == asset_class)
+        if search:
+            escaped = search.replace("%", r"\%").replace("_", r"\_")
+            conditions.append(CatalogInstrument.ticker.ilike(f"{escaped}%"))
+
+        where_clause = and_(*conditions)
+
+        count_stmt = select(func.count()).select_from(CatalogInstrument).where(where_clause)
+        count_result = await self.session.execute(count_stmt)
+        total = count_result.scalar_one()
+
+        sort_column = getattr(CatalogInstrument, sort_by, CatalogInstrument.ticker)
+        data_stmt = (
+            select(CatalogInstrument)
+            .where(where_clause)
+            .order_by(sort_column)
+            .limit(limit)
+            .offset(offset)
+        )
+        data_result = await self.session.execute(data_stmt)
+        instruments = list(data_result.scalars().all())
+
+        return instruments, total
 
 
 class SyncCatalogInstrumentRepository:

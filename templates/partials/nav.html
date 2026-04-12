@@ -25,6 +25,10 @@
                    class="px-3 py-2 rounded-md text-sm font-medium {% if nav_state.active_page == 'dashboard' %}bg-slate-800 text-white{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %} transition-colors">
                     Dashboard
                 </a>
+                <a href="/explorer"
+                   class="px-3 py-2 rounded-md text-sm font-medium {% if nav_state.active_page == 'explorer' %}bg-slate-800 text-white{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %} transition-colors">
+                    Explorer
+                </a>
                 <a href="/backtests"
                    class="px-3 py-2 rounded-md text-sm font-medium {% if nav_state.active_page == 'backtests' %}bg-slate-800 text-white{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %} transition-colors">
                     Backtests
@@ -51,6 +55,10 @@
             <a href="/"
                class="block px-3 py-2 rounded-md text-base font-medium {% if nav_state.active_page == 'dashboard' %}bg-slate-800 text-white{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %} transition-colors">
                 Dashboard
+            </a>
+            <a href="/explorer"
+               class="block px-3 py-2 rounded-md text-base font-medium {% if nav_state.active_page == 'explorer' %}bg-slate-800 text-white{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %} transition-colors">
+                Explorer
             </a>
             <a href="/backtests"
                class="block px-3 py-2 rounded-md text-base font-medium {% if nav_state.active_page == 'backtests' %}bg-slate-800 text-white{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %} transition-colors">

@@ -1,0 +1,233 @@
+"""Component tests for explorer REST and UI routes."""
+
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+from fastapi.testclient import TestClient
+
+from src.api.dependencies import get_catalog_list, get_default_catalog, get_metadata_service
+from src.api.web import app
+from src.db.models.catalog_instrument import CatalogInstrument
+
+
+def _make_instrument(**overrides) -> CatalogInstrument:
+    """Create a CatalogInstrument with defaults."""
+    defaults = {
+        "id": 1,
+        "ticker": "AAPL",
+        "nautilus_id": "AAPL.XNAS",
+        "asset_class": "STOCK",
+        "catalog_name": "us_stocks",
+        "exchange": "XNAS",
+        "name": "Apple Inc.",
+        "bar_count_daily": 1250,
+        "bar_count_hourly": 8750,
+        "bar_count_5min": 93750,
+        "bar_count_minute": 468750,
+        "date_range_start": datetime(2020, 1, 2, tzinfo=timezone.utc),
+        "date_range_end": datetime(2025, 12, 31, tzinfo=timezone.utc),
+    }
+    defaults.update(overrides)
+    inst = MagicMock(spec=CatalogInstrument)
+    for k, v in defaults.items():
+        setattr(inst, k, v)
+    return inst
+
+
+@pytest.fixture
+def mock_metadata_service():
+    """Create a mock MetadataService."""
+    service = AsyncMock()
+    service.list_instruments_with_search = AsyncMock(
+        return_value=(
+            [_make_instrument(), _make_instrument(id=2, ticker="MSFT", name="Microsoft Corp")],
+            2,
+        )
+    )
+    service.count_asset_classes = AsyncMock(return_value={"STOCK": 2})
+    return service
+
+
+@pytest.fixture
+def client(mock_metadata_service):
+    """Get test client with mocked dependencies."""
+    app.dependency_overrides[get_metadata_service] = lambda: mock_metadata_service
+    app.dependency_overrides[get_catalog_list] = lambda: ["us_stocks", "crypto"]
+    app.dependency_overrides[get_default_catalog] = lambda: "us_stocks"
+
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.pop(get_metadata_service, None)
+        app.dependency_overrides.pop(get_catalog_list, None)
+        app.dependency_overrides.pop(get_default_catalog, None)
+
+
+@pytest.mark.component
+class TestExplorerRestEndpoint:
+    """Tests for GET /api/explorer/tickers."""
+
+    def test_returns_200_with_tickers(self, client, mock_metadata_service):
+        response = client.get("/api/explorer/tickers?catalog=us_stocks")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_count"] == 2
+        assert len(data["tickers"]) == 2
+        assert data["tickers"][0]["ticker"] == "AAPL"
+
+    def test_response_shape(self, client):
+        response = client.get("/api/explorer/tickers?catalog=us_stocks")
+        data = response.json()
+        assert "tickers" in data
+        assert "total_count" in data
+        assert "page" in data
+        assert "page_size" in data
+        assert "total_pages" in data
+
+    def test_ticker_row_fields(self, client):
+        response = client.get("/api/explorer/tickers?catalog=us_stocks")
+        row = response.json()["tickers"][0]
+        assert row["ticker"] == "AAPL"
+        assert row["asset_class"] == "STOCK"
+        assert row["bar_count_daily"] == 1250
+        assert row["bar_count_5min"] == 93750
+        assert "coverage_pct" in row
+
+    def test_search_param_forwarded(self, client, mock_metadata_service):
+        client.get("/api/explorer/tickers?catalog=us_stocks&search=AA")
+        call_kwargs = mock_metadata_service.list_instruments_with_search.call_args.kwargs
+        assert call_kwargs["search"] == "AA"
+
+    def test_asset_class_param_forwarded(self, client, mock_metadata_service):
+        client.get("/api/explorer/tickers?catalog=us_stocks&asset_class=STOCK")
+        call_kwargs = mock_metadata_service.list_instruments_with_search.call_args.kwargs
+        assert call_kwargs["asset_class"] == "STOCK"
+
+    def test_pagination_params(self, client, mock_metadata_service):
+        client.get("/api/explorer/tickers?catalog=us_stocks&page=3")
+        call_kwargs = mock_metadata_service.list_instruments_with_search.call_args.kwargs
+        assert call_kwargs["offset"] == 50  # (3-1) * 25
+
+    def test_requires_catalog_param(self, client):
+        response = client.get("/api/explorer/tickers")
+        assert response.status_code == 422
+
+    def test_empty_results(self, client, mock_metadata_service):
+        mock_metadata_service.list_instruments_with_search.return_value = ([], 0)
+        response = client.get("/api/explorer/tickers?catalog=us_stocks")
+        data = response.json()
+        assert data["total_count"] == 0
+        assert data["tickers"] == []
+        assert data["total_pages"] == 0
+
+
+@pytest.mark.component
+class TestExplorerUIPage:
+    """Tests for GET /explorer (full page)."""
+
+    def test_returns_200(self, client):
+        response = client.get("/explorer")
+        assert response.status_code == 200
+
+    def test_contains_explorer_title(self, client):
+        response = client.get("/explorer")
+        assert "Data Explorer" in response.text
+
+    def test_nav_explorer_active(self, client):
+        response = client.get("/explorer")
+        # Explorer link should have active styling
+        assert 'href="/explorer"' in response.text
+
+    def test_catalog_selector_rendered(self, client):
+        response = client.get("/explorer")
+        assert "us_stocks" in response.text
+        assert "crypto" in response.text
+
+    def test_ticker_rows_rendered(self, client):
+        response = client.get("/explorer")
+        assert "AAPL" in response.text
+        assert "MSFT" in response.text
+
+    def test_asset_class_badge(self, client):
+        response = client.get("/explorer")
+        assert "Stock" in response.text
+
+    def test_search_input_rendered(self, client):
+        response = client.get("/explorer")
+        assert 'name="search"' in response.text
+
+    def test_breadcrumbs_rendered(self, client):
+        response = client.get("/explorer")
+        assert "Explorer" in response.text
+        assert "us_stocks" in response.text
+
+    def test_deep_link_catalog_param(self, client, mock_metadata_service):
+        client.get("/explorer?catalog=crypto")
+        call_kwargs = mock_metadata_service.list_instruments_with_search.call_args.kwargs
+        assert call_kwargs["catalog_name"] == "crypto"
+
+    def test_deep_link_search_param(self, client, mock_metadata_service):
+        client.get("/explorer?search=MS")
+        call_kwargs = mock_metadata_service.list_instruments_with_search.call_args.kwargs
+        assert call_kwargs["search"] == "MS"
+
+
+@pytest.mark.component
+class TestExplorerTickerListFragment:
+    """Tests for GET /explorer/ticker-list (HTMX fragment)."""
+
+    def test_returns_200(self, client):
+        response = client.get("/explorer/ticker-list?catalog=us_stocks")
+        assert response.status_code == 200
+
+    def test_is_fragment_not_full_page(self, client):
+        response = client.get("/explorer/ticker-list?catalog=us_stocks")
+        # Fragment should NOT have html/body tags
+        assert "<html" not in response.text
+        assert "<body" not in response.text
+
+    def test_contains_ticker_data(self, client):
+        response = client.get("/explorer/ticker-list?catalog=us_stocks")
+        assert "AAPL" in response.text
+        assert "Apple Inc." in response.text
+
+    def test_requires_catalog(self, client):
+        response = client.get("/explorer/ticker-list")
+        assert response.status_code == 422
+
+    def test_empty_search_message(self, client, mock_metadata_service):
+        mock_metadata_service.list_instruments_with_search.return_value = ([], 0)
+        response = client.get("/explorer/ticker-list?catalog=us_stocks&search=ZZZZZ")
+        assert "No tickers found" in response.text
+
+    def test_pagination_rendered(self, client, mock_metadata_service):
+        # Simulate many results requiring pagination
+        mock_metadata_service.list_instruments_with_search.return_value = (
+            [_make_instrument()],
+            100,
+        )
+        response = client.get("/explorer/ticker-list?catalog=us_stocks")
+        assert "Page 1 of" in response.text
+        assert "Next" in response.text
+
+
+@pytest.mark.component
+class TestExplorerEmptyStates:
+    """Tests for empty state handling."""
+
+    def test_no_catalogs_message(self):
+        """When no catalogs exist, show guidance."""
+        app.dependency_overrides[get_metadata_service] = lambda: AsyncMock()
+        app.dependency_overrides[get_catalog_list] = lambda: []
+        app.dependency_overrides[get_default_catalog] = lambda: ""
+
+        try:
+            test_client = TestClient(app)
+            response = test_client.get("/explorer")
+            assert response.status_code == 200
+            assert "No Catalogs Found" in response.text
+        finally:
+            app.dependency_overrides.pop(get_metadata_service, None)
+            app.dependency_overrides.pop(get_catalog_list, None)
+            app.dependency_overrides.pop(get_default_catalog, None)
