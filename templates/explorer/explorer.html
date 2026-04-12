@@ -22,7 +22,7 @@
                     name="catalog"
                     class="bg-slate-800 border border-slate-700 text-slate-100 rounded-md px-3 py-1.5 text-sm focus:ring-blue-500 focus:border-blue-500"
                     hx-get="/explorer/ticker-list"
-                    hx-target="#explorer-content"
+                    hx-target="#ticker-list"
                     hx-include="#search-input, [name='asset_class']:checked"
                     hx-push-url="true"
                     hx-vals='{"page": "1"}'
@@ -38,7 +38,7 @@
     <!-- No catalogs empty state -->
     <div class="bg-slate-900 rounded-lg p-8 text-center">
         <h2 class="text-xl font-medium text-slate-200 mb-2">No Catalogs Found</h2>
-        <p class="text-slate-400 mb-4">No catalogs configured. Run the import command to create one.</p>
+        <p class="text-slate-400 mb-4">No catalogs configured. Run <code class="text-green-400">ntrader import</code> to create one.</p>
         <code class="bg-slate-800 px-3 py-2 rounded text-green-400 font-mono text-sm">ntrader import</code>
     </div>
     {% else %}
@@ -64,38 +64,12 @@
         </div>
     </div>
 
-    <!-- Asset Class Filter Pills (AC #4) -->
-    <div class="flex flex-wrap gap-2" id="asset-class-pills">
-        <button class="px-3 py-1 text-sm rounded-full border transition-colors
-                       {% if not state.asset_class %}bg-blue-500 border-blue-500 text-white{% else %}border-slate-700 text-slate-400 hover:border-slate-500{% endif %}"
-                hx-get="/explorer/ticker-list"
-                hx-target="#ticker-list"
-                hx-include="#catalog-select, #search-input, [name='sort_by']"
-                hx-vals='{"page": "1", "asset_class": ""}'
-                hx-push-url="true"
-                hx-indicator="#loading-bar">
-            All {% if total_count is defined %}({{ total_count }}){% endif %}
-        </button>
-        {% for ac, count in asset_class_counts.items() %}
-        <button class="px-3 py-1 text-sm rounded-full border transition-colors
-                       {% if state.asset_class == ac %}bg-blue-500 border-blue-500 text-white{% else %}border-slate-700 text-slate-400 hover:border-slate-500{% endif %}"
-                hx-get="/explorer/ticker-list"
-                hx-target="#ticker-list"
-                hx-include="#catalog-select, #search-input, [name='sort_by']"
-                hx-vals='{"page": "1", "asset_class": "{{ ac }}"}'
-                hx-push-url="true"
-                hx-indicator="#loading-bar">
-            {{ ac }} ({{ count }})
-        </button>
-        {% endfor %}
-    </div>
-
     <!-- Loading indicator -->
     <div id="loading-bar" class="htmx-indicator h-1 bg-blue-500 rounded-full"></div>
 
     <!-- Explorer Content Area -->
     <div id="explorer-content">
-        <!-- Ticker List (swappable via HTMX) -->
+        <!-- Ticker List (swappable via HTMX, includes pills) -->
         <div id="ticker-list">
             {% include "explorer/ticker_list.html" %}
         </div>

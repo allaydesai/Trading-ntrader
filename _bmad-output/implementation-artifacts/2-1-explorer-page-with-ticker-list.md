@@ -1,6 +1,6 @@
 # Story 2.1: Explorer Page with Ticker List
 
-Status: review
+Status: done
 
 ## Story
 
@@ -234,6 +234,18 @@ Claude Opus 4.6 (1M context)
 - Task 5: Created explorer.html full page (catalog selector, search input, asset class pills, placeholder panels for future stories) and ticker_list.html HTMX fragment (table with sort headers, pagination, all empty states)
 - Task 6: Implemented GET /explorer (full page) and GET /explorer/ticker-list (HTMX fragment) with deep linking via URL params
 - Task 7: 4 unit tests (navigation), 9 unit tests (explorer models), 6 component tests (repository), 25 component tests (REST + UI routes) = 44 new tests, all passing
+
+### Review Findings
+- [x] [Review][Decision] D1: Stale asset class pill counts after HTMX partial swap — resolved: moved pills into ticker_list.html fragment (option A)
+- [x] [Review][Patch] P1: sort_by allows arbitrary ORM attribute access — fixed: added allowlist in repository
+- [x] [Review][Patch] P2: Catalog selector hx-target="#explorer-content" should be "#ticker-list" — fixed
+- [x] [Review][Patch] P3: XSS vector in hx-vals via asset_class value — fixed: use |tojson filter
+- [x] [Review][Patch] P4: Page beyond total shows broken "Showing X-Y" text — fixed: added clamp guard in template
+- [x] [Review][Patch] P5: No catalogs empty state text deviates from spec — fixed: aligned text
+- [x] [Review][Patch] P6: Duplicate PAGE_SIZE constant in rest and ui modules — fixed: extracted EXPLORER_PAGE_SIZE to models
+- [x] [Review][Defer] W1: bar_count_5min not persisted in upsert() — deferred, pre-existing (noted in story spec)
+- [x] [Review][Defer] W2: Legacy search() uses substring match — deferred, pre-existing method not used by this story
+- [x] [Review][Defer] W3: Sort headers only ascending — deferred, not in story scope
 
 ### Change Log
 - 2026-04-12: Story 2-1 implementation complete — explorer page with ticker list, search, filter, pagination, HTMX fragments

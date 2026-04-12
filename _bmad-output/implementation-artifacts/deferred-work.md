@@ -36,3 +36,9 @@
 - D10: `ImportService._classify_ticker` reads `existing.date_range_end` / `bar_count_*` off a potentially-detached SQLAlchemy instance (`src/services/firstrate/import_service.py:333`). The sync session is shared across tickers and across the full timeframe loop in `_run_import`; a long batch could see stale / expired attributes raise `DetachedInstanceError`. Pre-existing pattern (same concern applies to `_upsert_metadata`'s `get_instrument_sync` call); revisit when D2 is addressed.
 - D11: `_classify_ticker`'s `source_day < metadata_day` branch logs a warning and reimports, silently overwriting known-good metadata with a truncated source. Spec Dev Notes lists this as intentional ("reimported + warn (stale/regressed source)") but in practice a warning can be missed in a 500-ticker batch. Consider hard-failing or requiring `--force` once such a flag is introduced. (`src/services/firstrate/import_service.py:361-370`)
 - D12: `determine_exit_code` returns 0 on an empty results list (`src/cli/commands/import_data.py:98-100`) — CI/cron cannot distinguish "broken ticker discovery" from "clean all-skipped re-run". Overlaps with D1 (permission errors in `_discover_tickers`). Fix together once discovery gets proper error surfacing.
+
+## Deferred from: code review of 2-1-explorer-page-with-ticker-list (2026-04-12)
+
+- W1: `bar_count_5min` not persisted in `CatalogInstrumentRepository.upsert()` — both async and sync upsert methods omit `bar_count_5min` from the update field list. 5min counts show 0 for instruments upserted before fix. Pre-existing since migration `67772db31d8d`.
+- W2: Legacy `CatalogInstrumentRepository.search()` uses substring ILIKE (`%query%`) instead of prefix match (`query%`). Not used by Story 2-1 code paths but inconsistent with the new `list_by_catalog_with_search()`.
+- W3: Sort headers in ticker_list.html only support ascending order — no toggle to descending. Not in Story 2-1 task scope.

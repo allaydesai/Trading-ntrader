@@ -235,7 +235,10 @@ class CatalogInstrumentRepository:
         count_result = await self.session.execute(count_stmt)
         total = count_result.scalar_one()
 
-        sort_column = getattr(CatalogInstrument, sort_by, CatalogInstrument.ticker)
+        _SORTABLE_COLUMNS = {"ticker", "date_range_start", "date_range_end", "bar_count_daily"}
+        if sort_by not in _SORTABLE_COLUMNS:
+            sort_by = "ticker"
+        sort_column = getattr(CatalogInstrument, sort_by)
         data_stmt = (
             select(CatalogInstrument)
             .where(where_clause)

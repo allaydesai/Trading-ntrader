@@ -9,6 +9,8 @@ from typing import Optional
 
 from pydantic import BaseModel, Field, computed_field
 
+EXPLORER_PAGE_SIZE = 25
+
 
 class TickerRow(BaseModel):
     """Single ticker row in the explorer table.

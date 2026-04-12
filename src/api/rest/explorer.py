@@ -11,13 +11,13 @@ import structlog
 from fastapi import APIRouter, Query
 
 from src.api.dependencies import Metadata
-from src.api.models.explorer import TickerListResponse, TickerRow
+from src.api.models.explorer import EXPLORER_PAGE_SIZE, TickerListResponse, TickerRow
 
 logger = structlog.get_logger(__name__)
 
 router = APIRouter()
 
-PAGE_SIZE = 25
+PAGE_SIZE = EXPLORER_PAGE_SIZE
 
 
 @router.get(

@@ -13,7 +13,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from src.api.dependencies import CatalogList, DefaultCatalog, Metadata
-from src.api.models.explorer import ExplorerPageState, TickerRow
+from src.api.models.explorer import EXPLORER_PAGE_SIZE, ExplorerPageState, TickerRow
 from src.api.models.navigation import BreadcrumbItem, NavigationState
 
 logger = structlog.get_logger(__name__)
@@ -21,7 +21,7 @@ logger = structlog.get_logger(__name__)
 router = APIRouter()
 templates = Jinja2Templates(directory="templates")
 
-PAGE_SIZE = 25
+PAGE_SIZE = EXPLORER_PAGE_SIZE
 
 
 def _format_bar_count(count: int) -> str:

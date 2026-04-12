@@ -1,12 +1,45 @@
-<!-- HTMX fragment: ticker table + pagination -->
+<!-- HTMX fragment: ticker table + pagination + pills -->
 <input type="hidden" name="sort_by" value="{{ state.sort_by }}">
 <input type="hidden" name="asset_class" value="{{ state.asset_class }}">
+
+<!-- Asset Class Filter Pills (AC #4) -->
+<div class="flex flex-wrap gap-2 mb-4" id="asset-class-pills">
+    {% set all_count = asset_class_counts.values() | sum %}
+    <button class="px-3 py-1 text-sm rounded-full border transition-colors
+                   {% if not state.asset_class %}bg-blue-500 border-blue-500 text-white{% else %}border-slate-700 text-slate-400 hover:border-slate-500{% endif %}"
+            hx-get="/explorer/ticker-list"
+            hx-target="#ticker-list"
+            hx-include="#catalog-select, #search-input, [name='sort_by']"
+            hx-vals='{"page": "1", "asset_class": ""}'
+            hx-push-url="true"
+            hx-indicator="#loading-bar">
+        All ({{ all_count }})
+    </button>
+    {% for ac, count in asset_class_counts.items() %}
+    <button class="px-3 py-1 text-sm rounded-full border transition-colors
+                   {% if state.asset_class == ac %}bg-blue-500 border-blue-500 text-white{% else %}border-slate-700 text-slate-400 hover:border-slate-500{% endif %}"
+            hx-get="/explorer/ticker-list"
+            hx-target="#ticker-list"
+            hx-include="#catalog-select, #search-input, [name='sort_by']"
+            hx-vals='{"page": "1", "asset_class": {{ ac | tojson }}}'
+            hx-push-url="true"
+            hx-indicator="#loading-bar">
+        {{ ac }} ({{ count }})
+    </button>
+    {% endfor %}
+</div>
 
 {% if tickers %}
 <!-- Results summary -->
 <div class="flex items-center justify-between mb-3">
     <span class="text-sm text-slate-400">
-        Showing {{ ((state.page - 1) * 25) + 1 }}-{{ [state.page * 25, total_count] | min }} of {{ total_count }} tickers
+        {% set first = ((state.page - 1) * 25) + 1 %}
+        {% set last = [state.page * 25, total_count] | min %}
+        {% if first <= total_count %}
+        Showing {{ first }}-{{ last }} of {{ total_count }} tickers
+        {% else %}
+        {{ total_count }} tickers
+        {% endif %}
     </span>
 </div>
 
