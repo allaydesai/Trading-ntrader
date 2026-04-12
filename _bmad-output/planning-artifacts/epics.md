@@ -104,11 +104,11 @@ NFR20: Idempotent operations — re-running an import command produces the same 
 
 UX-DR1: Catalog selector dropdown at top of explorer page, scoping all content to selected catalog; persists selection in URL query param (?catalog=name); switching catalog triggers full content refresh
 UX-DR2: Ticker search input with keystroke-responsive filtering (hx-trigger="keyup changed delay:300ms"); auto-focused on page load; clears on Escape key; sends search text + asset class filter + catalog as params
-UX-DR3: Asset class filter pills — horizontal row of pill buttons (All, ETF, Stock, Futures, FX, Crypto, Index, Delisted) with ticker counts; single selection; filter state preserved in URL param (?asset_class=etf); filter changes reset pagination to page 1
+UX-DR3: Asset class filter pills — horizontal row of pill buttons (All, Stock, ETF, Futures, FX, Crypto, Index, Delisted) with ticker counts; single selection; filter state preserved in URL param (e.g. `?asset_class=stock`); filter changes reset pagination to page 1. **Zero-count behavior:** when no search filter is active, pills for asset classes with zero imported tickers are hidden (Phase 1 has Stocks only, so only "All" and "Stock" render by default); when a search filter is active, zero-count pills render with "0" so the user can see their query matched nothing in class X
 UX-DR4: Ticker list table with inline metadata per row: Symbol (mono bold), Name, Asset class badge (colored per type), Date range (mono), Coverage bar (4px proportional fill), Bar counts "D / 1H / 1m" (mono compact); sortable by symbol, date range, bar count; 25 rows per page; clicking row loads chart + stats + supplementary via hx-swap-oob
-UX-DR5: Timeframe button toolbar (1m, 15m, 1H, D) above chart; one-click switching via hx-get targeting chart panel fragment; active state highlighted (bg-blue-500); disabled state for unavailable timeframes; timeframe preserved in URL param (?tf=D)
+UX-DR5: Timeframe button toolbar (1m, 5m, 1H, D) above chart; one-click switching via hx-get targeting chart panel fragment; active state highlighted (bg-blue-500); disabled state for unavailable timeframes (determined from `bar_count_minute`, `bar_count_5min`, `bar_count_hourly`, `bar_count_daily` on the `catalog_instruments` row); timeframe preserved in URL param (?tf=D)
 UX-DR6: Full-width chart panel using TradingView Lightweight Charts v5.0 with progressive loading via time-range API slicing; no loading spinner overlay on chart; thin 2px animated loading bar at top during initial load; chart as hero element maximizing viewport
-UX-DR7: Data statistics panel — grid of stat cards (Date Range, Daily Bars, 1-Hour Bars, 1-Min Bars, Price Range, Nautilus ID); loads simultaneously with chart on ticker selection; font-mono for all numeric data; auto-fit grid columns
+UX-DR7: Data statistics panel — grid of stat cards (Date Range, Daily Bars, 1-Hour Bars, 5-Min Bars, 1-Min Bars, Price Range, Nautilus ID); loads simultaneously with chart on ticker selection; font-mono for all numeric data; auto-fit grid columns
 UX-DR8: Collapsible supplementary data sections via <details> elements for company profile, dividend history, and stock split history; collapsed by default; progressive detail without cluttering primary view
 UX-DR9: "Run Backtest" link/button in chart header that navigates to existing backtest run page with pre-filled query params (?catalog=...&ticker=...&timeframe=...&start=...&end=...); primary action button style (bg-blue-500 text-white)
 UX-DR10: Breadcrumb navigation showing Explorer > {catalog name} > {ticker symbol}; each segment is a clickable link; uses existing breadcrumbs.html partial with NavigationState
@@ -117,7 +117,7 @@ UX-DR12: Loading states — chart: thin progress bar, no spinner overlay, existi
 UX-DR13: Error feedback — chart load failure: error message in chart area itself (not toast); API failure: inline error in affected HTMX fragment; network failure: retry once then "Connection error. Refresh to retry."
 UX-DR14: All explorer state in URL for deep linking and bookmarkability — catalog, search, asset_class, ticker, timeframe, page, sort_by all as query params; browser back button works naturally
 UX-DR15: Stacked full-width layout consistent with existing NTrader pages — filter bar, ticker list, chart, stats panel stacked vertically; each section an independent HTMX swap target; gap-4 between sections, p-4 panel padding, compact py-2 ticker rows
-UX-DR16: Dark theme consistency — slate-950 background, slate-900 cards/panels, slate-800 hover/borders; asset class badge colors: ETF=blue, Stock=slate, Futures=amber, FX=emerald, Crypto=purple, Index=cyan, Delisted=gray
+UX-DR16: Dark theme consistency — slate-950 background, slate-900 cards/panels, slate-800 hover/borders; asset class badge colors: Stock=blue (Phase 1 primary), ETF=slate, Futures=amber, FX=emerald, Crypto=purple, Index=cyan, Delisted=gray
 UX-DR17: Keyboard accessibility — tab through search -> filter pills -> ticker rows -> timeframe buttons -> Run Backtest; visible focus ring (focus:ring-2 focus:ring-blue-500) on all interactive elements; semantic HTML (table, button, nav, details); ARIA labels on search input, filter pills (aria-pressed), selected row (aria-selected), chart region
 UX-DR18: CLI import UX — streaming log lines (one per ticker with status); asset class headers separating batches; green checkmark per success, red X per failure; summary report at end with totals and failure table; no interactive prompts; exit codes 0/1/2
 
@@ -423,11 +423,11 @@ So that I can quickly answer "what data do I have?" across my catalogs.
 **And** the search text is preserved in the URL query param (?search=SP)
 
 **Given** asset class filter pills are displayed
-**When** the user clicks the "ETF" pill
-**Then** the ticker list filters to show only ETF tickers via HTMX partial swap
-**And** the "ETF" pill shows active state (bg-blue-500)
-**And** filter state is preserved in URL param (?asset_class=etf)
-**And** search and filter combine: selecting "ETF" + typing "SP" shows only ETFs matching "SP"
+**When** the user clicks an asset class pill (e.g. "Stock" in Phase 1)
+**Then** the ticker list filters to show only tickers of that asset class via HTMX partial swap
+**And** the active pill shows active state (bg-blue-500)
+**And** filter state is preserved in URL param (e.g. `?asset_class=stock`)
+**And** search and filter combine: selecting "Stock" + typing "SP" shows only Stocks matching "SP"
 
 **Given** the catalog selector dropdown
 **When** the user switches to a different catalog
@@ -502,7 +502,7 @@ So that I can verify date ranges, bar counts, and price ranges match expectation
 
 **Given** a ticker is selected in the explorer
 **When** the stats panel loads (simultaneously with the chart)
-**Then** it displays a grid of stat cards: Date Range, Daily Bars, 1-Hour Bars, 1-Min Bars, Price Range, Nautilus ID
+**Then** it displays a grid of stat cards: Date Range, Daily Bars, 1-Hour Bars, 5-Min Bars, 1-Min Bars, Price Range, Nautilus ID
 **And** the grid uses auto-fit columns that reflow based on viewport width
 
 **Given** the stats panel is displayed
@@ -578,6 +578,13 @@ So that the explorer feels responsive, trustworthy, and usable without a mouse.
 **And** all interactive elements show a visible focus ring (focus:ring-2 focus:ring-blue-500)
 **And** semantic HTML is used throughout (table, button, nav, details)
 **And** ARIA labels are present: search input (aria-label="Search tickers"), filter pills (aria-pressed), selected ticker row (aria-selected), chart region (aria-label="Price chart for {ticker}")
+
+**Given** a ticker is selected and Epic 4 (Supplementary Data) has not yet shipped
+**When** the explorer renders the ticker detail view
+**Then** a small neutral note is shown in the stats panel area: "Dividends and stock splits available in Epic 4"
+**And** the note links to the epic tracker or PRD phase section
+**And** no broken / empty supplementary `<details>` sections are rendered
+**Note:** This AC is removed when Story 4.2 lands and supplementary data display becomes live
 
 ## Epic 3: Backtest Integration & Verification
 

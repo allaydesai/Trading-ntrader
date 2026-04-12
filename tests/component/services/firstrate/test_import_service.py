@@ -85,6 +85,7 @@ def _fresh_instrument_row() -> MagicMock:
     instrument.bar_count_daily = 0
     instrument.bar_count_hourly = 0
     instrument.bar_count_minute = 0
+    instrument.bar_count_5min = 0
     return instrument
 
 
@@ -391,6 +392,7 @@ def stateful_metadata_service():
         row.bar_count_daily = 0
         row.bar_count_hourly = 0
         row.bar_count_minute = 0
+        row.bar_count_5min = 0
         storage[(catalog, ticker)] = row
 
     _seed(CATALOG_NAME, "AAPL")

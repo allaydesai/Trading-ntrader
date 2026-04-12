@@ -22,26 +22,46 @@ from src.services.firstrate.source_probe import compute_source_last_date
 
 logger = structlog.get_logger(__name__)
 
-# Map timeframe step/aggregation to CatalogInstrument bar_count field
+# Map timeframe "{step}-{aggregation}" to CatalogInstrument bar_count field.
+# Keys use the first two components of the full spec (e.g. "1-DAY" from
+# "1-DAY-LAST") so that 1-MINUTE and 5-MINUTE resolve to distinct columns.
 _TIMEFRAME_FIELD_MAP = {
-    "DAY": "bar_count_daily",
-    "HOUR": "bar_count_hourly",
-    "MINUTE": "bar_count_minute",
+    "1-DAY": "bar_count_daily",
+    "1-HOUR": "bar_count_hourly",
+    "1-MINUTE": "bar_count_minute",
+    "5-MINUTE": "bar_count_5min",
 }
 
 #: Decisions returned by :meth:`ImportService._classify_ticker`.
 ClassifierDecision = Literal["new", "reimported", "skipped"]
 
 
+def _timeframe_key(timeframe: str) -> str:
+    """Extract ``"{step}-{aggregation}"`` from a full timeframe spec.
+
+    Examples::
+
+        >>> _timeframe_key("1-DAY-LAST")
+        '1-DAY'
+        >>> _timeframe_key("5-MINUTE-LAST")
+        '5-MINUTE'
+        >>> _timeframe_key("noop")
+        'noop'
+    """
+    parts = timeframe.split("-")
+    if len(parts) >= 2:
+        return f"{parts[0]}-{parts[1]}"
+    return timeframe
+
+
 def _bar_count_field_for_timeframe(timeframe: str) -> str:
     """Return the ``CatalogInstrument.bar_count_*`` attribute for a timeframe.
 
     Mirrors the ``_TIMEFRAME_FIELD_MAP`` lookup used by ``_upsert_metadata``.
-    Unknown aggregations fall back to ``bar_count_daily`` so the classifier
+    Unknown timeframes fall back to ``bar_count_daily`` so the classifier
     behaves the same as the existing metadata-upsert code path.
     """
-    aggregation = timeframe.split("-")[1] if "-" in timeframe else "DAY"
-    return _TIMEFRAME_FIELD_MAP.get(aggregation, "bar_count_daily")
+    return _TIMEFRAME_FIELD_MAP.get(_timeframe_key(timeframe), "bar_count_daily")
 
 
 class ImportService:
@@ -559,8 +579,7 @@ class ImportService:
         )
 
         # Determine bar count field from timeframe
-        aggregation = timeframe.split("-")[1] if "-" in timeframe else "DAY"
-        field_name = _TIMEFRAME_FIELD_MAP.get(aggregation, "bar_count_daily")
+        field_name = _TIMEFRAME_FIELD_MAP.get(_timeframe_key(timeframe), "bar_count_daily")
         setattr(existing, field_name, len(bars))
 
         self._metadata_service.upsert_instrument_sync(existing)

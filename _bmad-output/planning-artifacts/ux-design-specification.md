@@ -81,7 +81,7 @@ The explorer's primary job is answering two questions: "What data do I have?" an
 
 1. **"The data matches"** — Load a ticker in the explorer, open TradingView side-by-side, candles align. Trust in the data established
 2. **"I have everything"** — The ticker list shows thousands of tickers with date ranges across asset classes. The scale of what's available is immediately apparent — no more downloading one ticker at a time
-3. **"This just works"** — Configure a multi-ETF backtest on the existing run page using FirstRate catalog data, and it completes without error. The closed research loop from import to insight is real
+3. **"This just works"** — Configure a multi-Stock backtest on the existing run page using FirstRate catalog data, and it completes without error. The closed research loop from import to insight is real
 
 ### Experience Principles
 
@@ -97,7 +97,7 @@ The CLI import is a utility — reliable and informative, not fancy. Design prio
 **Command structure:**
 ```bash
 ntrader import --format firstrate --catalog my-research-data /path/to/csv          # Import all detected asset classes
-ntrader import --format firstrate --catalog my-research-data /path/to/csv --asset-class etf  # Import one
+ntrader import --format firstrate --catalog my-research-data /path/to/csv --asset-class stock  # Import one
 ntrader import --format firstrate --catalog my-research-data /path/to/csv --dry-run           # Validate only
 ```
 
@@ -290,7 +290,7 @@ Entirely **established patterns** — search box, chart view, filter pills, tool
 **1. Initiation — Landing on the explorer page:**
 - Catalog selector shows the active catalog (e.g., "firstrate-research")
 - Search box is focused and ready for input — it's the hero element
-- Asset class filter pills below (All, ETF, Stock, Futures, FX, Crypto, Index, Delisted) with counts
+- Asset class filter pills below (All, Stock, ETF, Futures, FX, Crypto, Index, Delisted) with counts. Pills with zero count are hidden when no search filter is active, and render as "Class 0" when a search filter narrows the result to zero (Phase 1: only "All" and "Stock" render by default)
 - Paginated ticker list showing all tickers in the selected catalog with inline metadata
 
 **2. Interaction — Finding and viewing a ticker:**
@@ -322,7 +322,7 @@ Entirely **established patterns** — search box, chart view, filter pills, tool
 - **Accent:** Existing `CHART_COLORS` from `charts-core.js` — green for positive/up, red for negative/down
 - **Interactive:** `blue-500` for links and active states (consistent with existing UI)
 - **Status:** `green-500` (success/complete), `yellow-500` (warning), `red-500` (error/failure)
-- **Asset class badges:** Distinct muted colors per asset class for visual scanning in the ticker list (e.g., ETF = blue, Stock = slate, Futures = amber, FX = emerald, Crypto = purple, Index = cyan, Delisted = gray)
+- **Asset class badges:** Distinct muted colors per asset class for visual scanning in the ticker list — Stock = blue (Phase 1 primary), ETF = slate, Futures = amber, FX = emerald, Crypto = purple, Index = cyan, Delisted = gray
 
 ### Typography System
 
@@ -640,7 +640,7 @@ These existing NTrader components are used directly in the explorer without modi
 - Clicking a pill filters the ticker list via `hx-get`
 - Multiple selection NOT supported (one active at a time, or "All")
 - Counts update based on current catalog
-- Filter state preserved in URL param (`?asset_class=etf`)
+- Filter state preserved in URL param (e.g. `?asset_class=stock`)
 
 **Implementation:** `<button>` elements with `hx-get` targeting ticker list fragment. Active state toggled via server-rendered class.
 
@@ -661,7 +661,7 @@ These existing NTrader components are used directly in the explorer without modi
 - Pagination: 25 rows per page, page state in URL
 
 **Sub-components:**
-- **Asset class badge:** Colored pill per asset type (ETF=blue, Stock=slate, Futures=amber, FX=emerald, Crypto=purple, Index=cyan, Delisted=gray)
+- **Asset class badge:** Colored pill per asset type (Stock=blue — Phase 1 primary, ETF=slate, Futures=amber, FX=emerald, Crypto=purple, Index=cyan, Delisted=gray)
 - **Coverage bar:** 4px tall, green fill proportional to date range vs catalog maximum. `bg-slate-800` track, `bg-green-500` fill
 - **Bar counts:** Compact format "8K / 51K / 3.1M" for daily / hourly / minute
 
@@ -687,7 +687,7 @@ These existing NTrader components are used directly in the explorer without modi
 
 **Purpose:** Display ticker-level metadata and data quality indicators.
 **Anatomy:** Grid of stat cards (responsive, auto-fit columns).
-**Cards:** Date Range | Daily Bars | 1-Hour Bars | 1-Min Bars | Price Range | Nautilus ID
+**Cards:** Date Range | Daily Bars | 1-Hour Bars | 5-Min Bars | 1-Min Bars | Price Range | Nautilus ID
 **States:**
 - Loaded: stat values displayed
 - Empty (no ticker selected): panel hidden or shows "Select a ticker to view statistics"
@@ -711,7 +711,7 @@ These existing NTrader components are used directly in the explorer without modi
 
 ### Implementation Roadmap
 
-**Phase 1 — MVP (ETF import + explorer):**
+**Phase 1 — MVP (Stocks import + explorer):**
 All 6 components are needed for Phase 1. Build order by dependency:
 
 1. **Catalog Selector** + **Ticker Search** + **Asset Class Pills** — the filter bar. Needed before the ticker list makes sense
@@ -747,7 +747,7 @@ All 6 components are needed for Phase 1. Build order by dependency:
 
 **No search results:**
 - Ticker list shows: "No tickers found for '{query}'" centered in the table body
-- Asset class pill counts update to reflect filtered state (e.g., "ETF 0" if no ETFs match)
+- Asset class pill counts update to reflect filtered state (e.g., "Stock 0" if no Stocks match)
 
 **Empty catalog:**
 - Full page message: "No data in catalog '{name}'. Run an import to get started."
@@ -795,7 +795,7 @@ All 6 components are needed for Phase 1. Build order by dependency:
 - Browser back button works naturally — all state is in the URL
 
 **Deep linking:**
-- Every explorer state is a bookmarkable URL: `/explorer?catalog=firstrate-research&search=SPY&asset_class=etf&ticker=SPY&tf=D`
+- Every explorer state is a bookmarkable URL: `/explorer?catalog=firstrate-research&search=AAPL&asset_class=stock&ticker=AAPL&tf=D`
 - Sharing a URL reproduces the exact view (selected catalog, search query, active filters, selected ticker, timeframe)
 
 ### Search and Filtering Patterns
@@ -809,7 +809,7 @@ All 6 components are needed for Phase 1. Build order by dependency:
 
 **Filter behavior:**
 - Asset class pills are exclusive (one active at a time, or "All")
-- Filters combine with search: selecting "ETF" + typing "SP" = ETFs matching "SP"
+- Filters combine with search: selecting "Stock" + typing "SP" = Stocks matching "SP"
 - Filter changes reset pagination to page 1
 - Filter state preserved in URL params
 

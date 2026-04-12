@@ -35,7 +35,8 @@ class CatalogInstrument(Base, TimestampMixin):
         date_range_end: Latest imported data timestamp (nullable).
         bar_count_daily: Number of daily bars imported.
         bar_count_hourly: Number of hourly bars imported.
-        bar_count_minute: Number of minute bars imported.
+        bar_count_minute: Number of 1-minute bars imported.
+        bar_count_5min: Number of 5-minute bars imported.
         updated_at: Last update timestamp (auto-set on update).
         created_at: Record creation timestamp (via TimestampMixin).
     """
@@ -65,6 +66,9 @@ class CatalogInstrument(Base, TimestampMixin):
         Integer, nullable=False, default=0, server_default="0"
     )
     bar_count_minute: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    bar_count_5min: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
     )
     updated_at: Mapped[Optional[datetime]] = mapped_column(

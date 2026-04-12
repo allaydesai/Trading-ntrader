@@ -470,6 +470,23 @@ class TestUpsertMetadata:
         assert result is True
         assert existing.bar_count_hourly == 3
 
+    def test_5min_timeframe_sets_bar_count_5min(
+        self, configured_service, mock_metadata_service, mock_bars
+    ):
+        existing = MagicMock()
+        existing.bar_count_5min = 0
+        mock_metadata_service.get_instrument_sync.return_value = existing
+
+        result = configured_service._upsert_metadata(
+            ticker="SPY",
+            catalog_name=CATALOG_NAME,
+            bars=mock_bars,
+            timeframe="5-MINUTE-LAST",
+        )
+
+        assert result is True
+        assert existing.bar_count_5min == 3
+
     def test_returns_false_when_no_existing_instrument(
         self, configured_service, mock_metadata_service, mock_bars
     ):
@@ -609,6 +626,7 @@ def _metadata_with(
     bar_count_daily: int = 0,
     bar_count_hourly: int = 0,
     bar_count_minute: int = 0,
+    bar_count_5min: int = 0,
 ) -> MagicMock:
     """Build a mock CatalogInstrument with explicit classifier-relevant fields."""
     instrument = MagicMock()
@@ -616,6 +634,7 @@ def _metadata_with(
     instrument.bar_count_daily = bar_count_daily
     instrument.bar_count_hourly = bar_count_hourly
     instrument.bar_count_minute = bar_count_minute
+    instrument.bar_count_5min = bar_count_5min
     return instrument
 
 
@@ -638,7 +657,7 @@ class TestBarCountFieldForTimeframe:
             ("1-DAY-LAST", "bar_count_daily"),
             ("1-HOUR-LAST", "bar_count_hourly"),
             ("1-MINUTE-LAST", "bar_count_minute"),
-            ("5-MINUTE-LAST", "bar_count_minute"),
+            ("5-MINUTE-LAST", "bar_count_5min"),
             # Unknown aggregations degrade to daily to match _upsert_metadata.
             ("1-SECOND-LAST", "bar_count_daily"),
             ("noop", "bar_count_daily"),

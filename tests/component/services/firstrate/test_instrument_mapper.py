@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS catalog_instruments (
     bar_count_daily INTEGER NOT NULL DEFAULT 0,
     bar_count_hourly INTEGER NOT NULL DEFAULT 0,
     bar_count_minute INTEGER NOT NULL DEFAULT 0,
+    bar_count_5min INTEGER NOT NULL DEFAULT 0,
     updated_at TIMESTAMP,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(catalog_name, ticker)

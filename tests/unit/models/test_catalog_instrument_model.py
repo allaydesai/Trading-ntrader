@@ -32,6 +32,7 @@ class TestCatalogInstrumentModel:
             "bar_count_daily",
             "bar_count_hourly",
             "bar_count_minute",
+            "bar_count_5min",
             "created_at",
             "updated_at",
         }
