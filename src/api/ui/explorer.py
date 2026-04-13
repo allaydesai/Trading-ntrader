@@ -1,20 +1,35 @@
 """
 Explorer route handlers for web UI.
 
-Provides the data explorer page with ticker browsing, search, and filtering.
+Provides the data explorer page with ticker browsing, search, and filtering,
+plus chart panel fragment for HTMX partial updates.
 """
 
+import json  # noqa: F401 — used in chart_panel_fragment
 import math
+from datetime import datetime, timezone  # noqa: F401
 from typing import Optional
 
 import structlog
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request  # noqa: F401
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
-from src.api.dependencies import CatalogList, DefaultCatalog, Metadata
-from src.api.models.explorer import EXPLORER_PAGE_SIZE, ExplorerPageState, TickerRow
+from src.api.dependencies import (  # noqa: F401
+    CatalogList,
+    DataCatalog,
+    DefaultCatalog,
+    Metadata,
+)
+from src.api.models.chart_timeseries import Candle  # noqa: F401
+from src.api.models.explorer import (
+    EXPLORER_PAGE_SIZE,
+    ExplorerPageState,
+    ExplorerTimeframe,
+    TickerRow,
+)
 from src.api.models.navigation import BreadcrumbItem, NavigationState
+from src.services.exceptions import DataNotFoundError  # noqa: F401
 
 logger = structlog.get_logger(__name__)
 
@@ -22,6 +37,8 @@ router = APIRouter()
 templates = Jinja2Templates(directory="templates")
 
 PAGE_SIZE = EXPLORER_PAGE_SIZE
+VALID_TF_LABELS = {tf.label for tf in ExplorerTimeframe}
+ALL_TIMEFRAMES = list(ExplorerTimeframe)
 
 
 def _format_bar_count(count: int) -> str:
@@ -101,6 +118,8 @@ async def explorer_page(
     asset_class: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     sort_by: str = Query("ticker"),
+    ticker: Optional[str] = Query(None, description="Selected ticker for chart"),
+    tf: str = Query("D", description="Timeframe label for chart"),
 ) -> HTMLResponse:
     """Render the full explorer page (AC #1, #5, #6).
 
@@ -114,6 +133,7 @@ async def explorer_page(
         asset_class: Asset class filter (query param).
         page: Page number (query param).
         sort_by: Sort column (query param).
+        ticker: Selected ticker for chart loading (query param).
 
     Returns:
         HTMLResponse with rendered explorer page.
@@ -144,6 +164,8 @@ async def explorer_page(
                 "total_count": 0,
                 "total_pages": 0,
                 "asset_class_counts": {},
+                "selected_ticker": None,
+                "selected_tf": "D",
             },
         )
 
@@ -162,6 +184,8 @@ async def explorer_page(
             "total_pages": total_pages,
             "asset_class_counts": asset_class_counts,
             "format_bar_count": _format_bar_count,
+            "selected_ticker": ticker,
+            "selected_tf": tf,
         },
     )
 
@@ -203,5 +227,91 @@ async def ticker_list_fragment(
             "total_pages": total_pages,
             "asset_class_counts": asset_class_counts,
             "format_bar_count": _format_bar_count,
+            "selected_ticker": None,
+        },
+    )
+
+
+@router.get("/chart-panel", response_class=HTMLResponse)
+async def chart_panel_fragment(
+    request: Request,
+    service: Metadata,
+    catalog_service: DataCatalog,
+    catalog: str = Query(..., description="Catalog name"),
+    ticker: str = Query(..., description="Ticker symbol"),
+    tf: str = Query("D", description="Timeframe label"),
+) -> HTMLResponse:
+    """Return HTMX fragment for chart panel with timeframe toolbar.
+
+    Args:
+        request: FastAPI request object.
+        service: MetadataService dependency.
+        catalog_service: DataCatalogService dependency.
+        catalog: Catalog name.
+        ticker: Ticker symbol.
+        tf: Timeframe label (D, 1H, 5m, 1m).
+
+    Returns:
+        HTMLResponse with chart_panel.html fragment.
+
+    Raises:
+        HTTPException: 404 if ticker not found.
+    """
+    active_tf = ExplorerTimeframe.from_label(tf if tf in VALID_TF_LABELS else "D")
+
+    instrument = await service.get_instrument(catalog, ticker)
+    if instrument is None or not instrument.nautilus_id:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Ticker '{ticker}' not found in catalog '{catalog}'",
+        )
+    nautilus_id: str = instrument.nautilus_id
+
+    # Determine available timeframes from bar counts
+    available_tfs = set()
+    for etf in ALL_TIMEFRAMES:
+        count = getattr(instrument, etf.bar_count_field, 0) or 0
+        if count > 0:
+            available_tfs.add(etf.label)
+
+    # Fetch bar data
+    start_dt = datetime(1970, 1, 1, tzinfo=timezone.utc)
+    end_dt = datetime(2099, 12, 31, tzinfo=timezone.utc)
+
+    try:
+        bars = catalog_service.query_bars(
+            instrument_id=nautilus_id,
+            start=start_dt,
+            end=end_dt,
+            bar_type_spec=active_tf.bar_type_spec,
+        )
+    except DataNotFoundError:
+        bars = []
+
+    candles = [
+        Candle(
+            time=int(bar.ts_event / 1e9),
+            open=bar.open.as_double(),
+            high=bar.high.as_double(),
+            low=bar.low.as_double(),
+            close=bar.close.as_double(),
+            volume=int(bar.volume.as_double()),
+        )
+        for bar in bars
+    ]
+
+    bars_json = json.dumps([c.model_dump() for c in candles])
+
+    return templates.TemplateResponse(
+        "explorer/chart_panel.html",
+        {
+            "request": request,
+            "ticker": ticker,
+            "catalog": catalog,
+            "active_tf": active_tf,
+            "timeframes": ALL_TIMEFRAMES,
+            "available_tfs": available_tfs,
+            "bars_json": bars_json,
+            "bar_count": len(candles),
         },
     )

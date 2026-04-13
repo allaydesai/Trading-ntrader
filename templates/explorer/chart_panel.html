@@ -1,0 +1,127 @@
+<!-- HTMX fragment: chart panel with timeframe toolbar + candlestick chart -->
+<div id="chart-panel" class="mt-6">
+    <!-- Loading bar (2px animated) -->
+    <div id="chart-loading-bar" class="htmx-indicator h-0.5 bg-blue-500 rounded-full animate-pulse"></div>
+
+    <!-- Timeframe Toolbar -->
+    <div class="flex items-center gap-2 mb-3">
+        <span class="text-xs text-slate-500 uppercase tracking-wider mr-2">Timeframe</span>
+        {% for tf_option in timeframes %}
+        {% set is_active = tf_option.label == active_tf.label %}
+        {% set is_available = tf_option.label in available_tfs %}
+        <button
+            class="px-3 py-1 text-sm rounded border transition-colors
+                   {% if is_active %}bg-blue-500 border-blue-500 text-white
+                   {% elif is_available %}border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-200
+                   {% else %}border-slate-800 text-slate-600 opacity-50 cursor-not-allowed{% endif %}"
+            {% if is_available and not is_active %}
+            hx-get="/explorer/chart-panel"
+            hx-target="#chart-panel"
+            hx-swap="innerHTML"
+            hx-vals='{"catalog": {{ catalog | tojson }}, "ticker": {{ ticker | tojson }}, "tf": {{ tf_option.label | tojson }}}'
+            hx-push-url="true"
+            hx-indicator="#chart-loading-bar"
+            {% endif %}
+            {% if not is_available %}disabled{% endif %}>
+            {{ tf_option.label }}
+        </button>
+        {% endfor %}
+
+        <span class="ml-auto text-xs text-slate-500">
+            {{ ticker }} &middot; {{ bar_count }} bars
+        </span>
+    </div>
+
+    <!-- Chart Container -->
+    <div id="chart-container" class="w-full rounded-lg overflow-hidden" style="height: 480px; background: #020617;">
+    </div>
+</div>
+
+<!-- OOB placeholder for stats panel (Story 2-3) -->
+<div id="stats-panel" hx-swap-oob="true"></div>
+
+<script>
+(function() {
+    var barsJson = {{ bars_json | safe }};
+    var container = document.getElementById('chart-container');
+
+    if (!container) return;
+
+    // Clean up any previous chart instance
+    if (window._explorerChart) {
+        window._explorerChart.remove();
+        window._explorerChart = null;
+    }
+    if (window._explorerResizeObs) {
+        window._explorerResizeObs.disconnect();
+        window._explorerResizeObs = null;
+    }
+
+    if (!barsJson || barsJson.length === 0) {
+        container.innerHTML = '<div class="flex items-center justify-center h-full text-slate-500 text-sm">No chart data available for this timeframe.</div>';
+        return;
+    }
+
+    var chart = createChartWithDefaults(container);
+    chart.applyOptions({
+        width: container.clientWidth,
+        height: container.clientHeight,
+    });
+
+    var candleSeries = chart.addSeries(LightweightCharts.CandlestickSeries, {
+        upColor: CHART_COLORS.bullish,
+        downColor: CHART_COLORS.bearish,
+        borderUpColor: CHART_COLORS.bullish,
+        borderDownColor: CHART_COLORS.bearish,
+        wickUpColor: CHART_COLORS.bullish,
+        wickDownColor: CHART_COLORS.bearish,
+    });
+
+    var dedupedData = deduplicateTimeseriesData(barsJson);
+    candleSeries.setData(dedupedData);
+    chart.timeScale().fitContent();
+
+    window._explorerChart = chart;
+    window._explorerCandleSeries = candleSeries;
+    window._explorerResizeObs = createResizeObserver(container, chart);
+
+    // Progressive loading: fetch more data when user pans to boundary
+    var ticker = {{ ticker | tojson }};
+    var catalog = {{ catalog | tojson }};
+    var tfLabel = {{ active_tf.label | tojson }};
+    var isFetching = false;
+
+    chart.timeScale().subscribeVisibleTimeRangeChange(function(newRange) {
+        if (isFetching || !newRange || newRange.from === null) return;
+
+        var currentData = candleSeries.data();
+        if (!currentData || currentData.length === 0) return;
+
+        var earliestBar = currentData[0].time;
+        // If user panned close to earliest data point, fetch more
+        if (newRange.from <= earliestBar) {
+            isFetching = true;
+            var endDate = new Date(earliestBar * 1000);
+            var endStr = endDate.toISOString().split('T')[0];
+
+            fetch('/api/chart/catalog/' + encodeURIComponent(ticker) +
+                  '?catalog=' + encodeURIComponent(catalog) +
+                  '&tf=' + encodeURIComponent(tfLabel) +
+                  '&end=' + endStr)
+                .then(function(resp) { return resp.json(); })
+                .then(function(data) {
+                    if (data.bars && data.bars.length > 0) {
+                        var allData = data.bars.concat(currentData);
+                        var deduped = deduplicateTimeseriesData(allData);
+                        candleSeries.setData(deduped);
+                    }
+                })
+                .catch(function() {})
+                .finally(function() {
+                    // Debounce to avoid rapid re-fetching
+                    setTimeout(function() { isFetching = false; }, 2000);
+                });
+        }
+    });
+})();
+</script>

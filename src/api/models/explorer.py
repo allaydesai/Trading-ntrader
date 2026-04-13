@@ -5,11 +5,68 @@ and explorer page state management.
 """
 
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Optional
 
 from pydantic import BaseModel, Field, computed_field
 
+from src.api.models.chart_timeseries import Candle
+
 EXPLORER_PAGE_SIZE = 25
+
+
+class ExplorerTimeframe(Enum):
+    """Timeframe options for the explorer chart panel.
+
+    Each member maps a display label to a Nautilus bar type spec
+    and the corresponding CatalogInstrument bar_count field.
+    """
+
+    DAILY = ("D", "1-DAY-LAST", "bar_count_daily")
+    HOURLY = ("1H", "1-HOUR-LAST", "bar_count_hourly")
+    FIVE_MIN = ("5m", "5-MINUTE-LAST", "bar_count_5min")
+    ONE_MIN = ("1m", "1-MINUTE-LAST", "bar_count_minute")
+
+    def __init__(self, label: str, bar_type_spec: str, bar_count_field: str):
+        self._label = label
+        self._bar_type_spec = bar_type_spec
+        self._bar_count_field = bar_count_field
+
+    @property
+    def label(self) -> str:
+        return self._label
+
+    @property
+    def bar_type_spec(self) -> str:
+        return self._bar_type_spec
+
+    @property
+    def bar_count_field(self) -> str:
+        return self._bar_count_field
+
+    @classmethod
+    def from_label(cls, label: str) -> "ExplorerTimeframe":
+        """Resolve a display label to an ExplorerTimeframe, defaulting to DAILY."""
+        for member in cls:
+            if member.label == label:
+                return member
+        return cls.DAILY
+
+
+class ChartDataResponse(BaseModel):
+    """Chart data response for TradingView Lightweight Charts.
+
+    Attributes:
+        bars: List of OHLCV candles in TradingView format.
+        instrument_id: Nautilus instrument ID (e.g., "SPY.ARCA").
+        timeframe: Bar type description (e.g., "1-DAY").
+        bar_count: Total number of bars returned.
+    """
+
+    bars: list[Candle] = Field(default_factory=list)
+    instrument_id: str = Field(..., description="Nautilus instrument ID")
+    timeframe: str = Field(..., description="Bar timeframe description")
+    bar_count: int = Field(..., ge=0, description="Number of bars returned")
 
 
 class TickerRow(BaseModel):

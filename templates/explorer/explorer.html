@@ -74,8 +74,15 @@
             {% include "explorer/ticker_list.html" %}
         </div>
 
-        <!-- Future panels: chart, stats (Story 2-2, 2-3) -->
-        <div id="chart-panel"></div>
+        <!-- Chart Panel (loaded via HTMX on ticker click or URL params) -->
+        <div id="chart-panel"
+             {% if selected_ticker %}
+             hx-get="/explorer/chart-panel"
+             hx-trigger="load"
+             hx-vals='{"catalog": {{ state.catalog | tojson }}, "ticker": {{ selected_ticker | tojson }}, "tf": {{ (selected_tf or "D") | tojson }}}'
+             hx-swap="innerHTML"
+             {% endif %}>
+        </div>
         <div id="stats-panel"></div>
     </div>
 
