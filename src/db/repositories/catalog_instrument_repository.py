@@ -198,7 +198,7 @@ class CatalogInstrumentRepository:
             .group_by(CatalogInstrument.asset_class)
         )
         result = await self.session.execute(stmt)
-        return dict(result.all())
+        return dict(result.tuples().all())
 
     async def list_by_catalog_with_search(
         self,

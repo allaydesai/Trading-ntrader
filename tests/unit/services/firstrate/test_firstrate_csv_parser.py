@@ -333,12 +333,6 @@ class TestFirstRateCsvParserDedup:
         ]
         f = _write_csv(tmp_path, "SPY.txt", lines)
 
-        import structlog
-
-        captured = []
-        old_get = structlog.get_logger
-
-        # Just run parse_file — we verify the count result
         bars = parser.parse_file(f, instrument_id, intraday_bar_type)
         assert len(bars) == 1
 

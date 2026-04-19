@@ -24,11 +24,18 @@ class TestFirstRateSettings:
         assert settings.firstrate_source_path == "/data/firstrate/csv"
 
 
+@pytest.fixture
+def clean_catalog_env(monkeypatch):
+    """Clear catalog-related env vars so default-value tests are isolated from the shell/.env."""
+    monkeypatch.delenv("CATALOG_BASE_PATH", raising=False)
+    monkeypatch.delenv("DEFAULT_CATALOG_NAME", raising=False)
+
+
 @pytest.mark.unit
 class TestCatalogSettings:
     """Tests for CatalogSettings configuration."""
 
-    def test_default_values(self):
+    def test_default_values(self, clean_catalog_env):
         """CatalogSettings has sensible defaults."""
         settings = CatalogSettings(_env_file=None)
         assert settings.catalog_base_path == ""
@@ -50,7 +57,7 @@ class TestCatalogSettings:
         )
         assert settings.default_catalog_name == "firstrate-etf"
 
-    def test_empty_default_catalog_is_valid(self):
+    def test_empty_default_catalog_is_valid(self, clean_catalog_env):
         """Empty default catalog name means no default selected."""
         settings = CatalogSettings(_env_file=None)
         assert settings.default_catalog_name == ""
