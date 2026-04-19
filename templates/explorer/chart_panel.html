@@ -4,16 +4,18 @@
     <div id="chart-loading-bar" class="htmx-indicator h-0.5 bg-blue-500 rounded-full animate-pulse"></div>
 
     <!-- Timeframe Toolbar -->
-    <div class="flex items-center gap-2 mb-3">
+    <div class="flex items-center gap-2 mb-3 timeframe-toolbar" role="toolbar" aria-label="Chart timeframe">
         <span class="text-xs text-slate-500 uppercase tracking-wider mr-2">Timeframe</span>
         {% for tf_option in timeframes %}
         {% set is_active = tf_option.label == active_tf.label %}
         {% set is_available = tf_option.label in available_tfs %}
         <button
-            class="px-3 py-1 text-sm rounded border transition-colors
+            class="px-3 py-1 text-sm rounded border transition-colors focus:ring-2 focus:ring-blue-500 focus:outline-none
                    {% if is_active %}bg-blue-500 border-blue-500 text-white
                    {% elif is_available %}border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-200
                    {% else %}border-slate-800 text-slate-600 opacity-50 cursor-not-allowed{% endif %}"
+            aria-pressed="{{ 'true' if is_active else 'false' }}"
+            aria-label="{{ tf_option.label }} timeframe"
             {% if is_available and not is_active %}
             hx-get="/explorer/chart-panel"
             hx-target="#chart-panel"
@@ -31,9 +33,33 @@
             {{ ticker }} &middot; {{ bar_count }} bars
         </span>
     </div>
+    <script>
+    (function() {
+        // Arrow-key navigation within the timeframe toolbar (AC #10).
+        var wrappers = document.querySelectorAll('.timeframe-toolbar');
+        wrappers.forEach(function(wrap) {
+            if (wrap.dataset.nkbd === '1') return;
+            wrap.dataset.nkbd = '1';
+            wrap.addEventListener('keydown', function(e) {
+                if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+                var btns = Array.prototype.slice.call(wrap.querySelectorAll('button:not([disabled])'));
+                var i = btns.indexOf(document.activeElement);
+                if (i < 0) return;
+                var next = e.key === 'ArrowRight' ? (i + 1) % btns.length : (i - 1 + btns.length) % btns.length;
+                btns[next].focus();
+                e.preventDefault();
+            });
+        });
+    })();
+    </script>
 
     <!-- Chart Container -->
-    <div id="chart-container" class="w-full rounded-lg overflow-hidden" style="height: 480px; background: #020617;">
+    <div role="img" aria-label="Price chart for {{ ticker }}">
+        <div id="chart-container" class="w-full rounded-lg overflow-hidden" style="height: 480px; background: #020617;">
+            {% if bar_count == 0 %}
+            <div class="flex items-center justify-center h-full text-slate-500 text-sm">{{ no_data_message }}</div>
+            {% endif %}
+        </div>
     </div>
 </div>
 
@@ -60,7 +86,8 @@
     }
 
     if (!barsJson || barsJson.length === 0) {
-        container.innerHTML = '<div class="flex items-center justify-center h-full text-slate-500 text-sm">No chart data available for this timeframe.</div>';
+        var noDataMessage = {{ no_data_message | tojson }};
+        container.innerHTML = '<div class="flex items-center justify-center h-full text-slate-500 text-sm">' + noDataMessage + '</div>';
         return;
     }
 

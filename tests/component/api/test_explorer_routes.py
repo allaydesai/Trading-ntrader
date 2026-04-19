@@ -211,6 +211,97 @@ class TestExplorerTickerListFragment:
         assert "Page 1 of" in response.text
         assert "Next" in response.text
 
+    def test_empty_catalog_message(self, client, mock_metadata_service):
+        """AC #6: empty catalog renders AC-worded message + import command example."""
+        mock_metadata_service.list_instruments_with_search.return_value = ([], 0)
+        response = client.get("/explorer/ticker-list?catalog=us_stocks")
+        text = response.text
+        assert "No data in catalog 'us_stocks'. Run an import to get started." in text
+        assert "ntrader import --format firstrate --catalog us_stocks /path/to/data" in text
+
+    def test_empty_search_preserves_query_in_message(self, client, mock_metadata_service):
+        """AC #5: zero-match search preserves the query in the empty-state message."""
+        mock_metadata_service.list_instruments_with_search.return_value = ([], 0)
+        response = client.get("/explorer/ticker-list?catalog=us_stocks&search=ZZZZZ")
+        assert "No tickers found for 'ZZZZZ'" in response.text
+
+
+@pytest.mark.component
+class TestExplorerAccessibility:
+    """AC #10, #11: keyboard tab order, focus rings, ARIA attributes."""
+
+    def test_search_input_has_aria_label(self, client):
+        response = client.get("/explorer")
+        assert 'aria-label="Search tickers"' in response.text
+
+    def test_active_asset_class_pill_has_aria_pressed_true(self, client):
+        response = client.get("/explorer?asset_class=STOCK")
+        assert 'aria-pressed="true"' in response.text
+
+    def test_inactive_pills_have_aria_pressed_false(self, client):
+        response = client.get("/explorer?asset_class=STOCK")
+        assert 'aria-pressed="false"' in response.text
+
+    def test_all_pill_has_aria_pressed(self, client):
+        """The "All" pill has aria-pressed too (true when no filter, false otherwise)."""
+        response = client.get("/explorer")
+        # With no filter, All is active
+        assert 'aria-pressed="true"' in response.text
+
+    def test_ticker_rows_have_role_button_tabindex(self, client):
+        response = client.get("/explorer")
+        text = response.text
+        assert 'role="button"' in text
+        assert 'tabindex="0"' in text
+
+    def test_ticker_row_aria_selected_reflects_selection(self, client):
+        response = client.get("/explorer?ticker=AAPL")
+        text = response.text
+        # AAPL row selected
+        assert 'aria-selected="true"' in text
+        # Other rows not selected
+        assert 'aria-selected="false"' in text
+
+    def test_chart_panel_aria_live_polite(self, client):
+        response = client.get("/explorer?ticker=AAPL")
+        text = response.text
+        # Both chart-panel and stats-panel wrappers carry aria-live
+        assert text.count('aria-live="polite"') >= 2
+
+    def test_focus_ring_classes_present(self, client):
+        response = client.get("/explorer")
+        text = response.text
+        # Focus rings on at least one interactive element
+        assert "focus:ring-2" in text
+        assert "focus:ring-blue-500" in text
+        assert "focus:outline-none" in text
+
+    def test_asset_class_pills_wrapper_class(self, client):
+        """Wrapper class enables the arrow-key JS to scope its listener."""
+        response = client.get("/explorer")
+        assert "asset-class-pills" in response.text
+
+
+@pytest.mark.component
+class TestBaseHtmlErrorHandler:
+    """AC #8, #9: every page must include the shared HTMX error-handler snippet."""
+
+    def test_base_html_includes_error_handler(self, client):
+        response = client.get("/explorer")
+        text = response.text
+        # Handler identifiable by unique marker comment/id
+        assert "ntrader-htmx-error-handler" in text
+
+    def test_error_handler_listens_for_required_events(self, client):
+        response = client.get("/explorer")
+        text = response.text
+        assert "htmx:responseError" in text
+        assert "htmx:sendError" in text
+
+    def test_retry_header_marker_present(self, client):
+        response = client.get("/explorer")
+        assert "X-NTrader-Retry" in response.text
+
 
 @pytest.mark.component
 class TestExplorerEmptyStates:

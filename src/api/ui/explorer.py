@@ -371,6 +371,7 @@ async def chart_panel_fragment(
     window_days = active_tf.initial_window_days or 0
     dr_start = instrument.date_range_start
     dr_start_iso = dr_start.strftime("%Y-%m-%d") if dr_start else None
+    no_data_message = f"No {active_tf.label} data available for {ticker}"
 
     stats = await _build_ticker_stats(service, catalog_service, catalog, ticker, tf)
 
@@ -388,6 +389,7 @@ async def chart_panel_fragment(
             "has_earlier_data": has_earlier_data,
             "window_days": window_days,
             "date_range_start_iso": dr_start_iso,
+            "no_data_message": no_data_message,
             **_stats_template_context(stats),
         },
     )

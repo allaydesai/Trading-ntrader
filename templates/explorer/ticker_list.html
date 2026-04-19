@@ -3,10 +3,11 @@
 <input type="hidden" name="asset_class" value="{{ state.asset_class }}">
 
 <!-- Asset Class Filter Pills (AC #4) -->
-<div class="flex flex-wrap gap-2 mb-4" id="asset-class-pills">
+<div class="flex flex-wrap gap-2 mb-4 asset-class-pills" id="asset-class-pills">
     {% set all_count = asset_class_counts.values() | sum %}
-    <button class="px-3 py-1 text-sm rounded-full border transition-colors
+    <button class="px-3 py-1 text-sm rounded-full border transition-colors focus:ring-2 focus:ring-blue-500 focus:outline-none
                    {% if not state.asset_class %}bg-blue-500 border-blue-500 text-white{% else %}border-slate-700 text-slate-400 hover:border-slate-500{% endif %}"
+            aria-pressed="{{ 'true' if not state.asset_class else 'false' }}"
             hx-get="/explorer/ticker-list"
             hx-target="#ticker-list"
             hx-include="#catalog-select, #search-input, [name='sort_by']"
@@ -16,8 +17,9 @@
         All ({{ all_count }})
     </button>
     {% for ac, count in asset_class_counts.items() %}
-    <button class="px-3 py-1 text-sm rounded-full border transition-colors
+    <button class="px-3 py-1 text-sm rounded-full border transition-colors focus:ring-2 focus:ring-blue-500 focus:outline-none
                    {% if state.asset_class == ac %}bg-blue-500 border-blue-500 text-white{% else %}border-slate-700 text-slate-400 hover:border-slate-500{% endif %}"
+            aria-pressed="{{ 'true' if state.asset_class == ac else 'false' }}"
             hx-get="/explorer/ticker-list"
             hx-target="#ticker-list"
             hx-include="#catalog-select, #search-input, [name='sort_by']"
@@ -28,6 +30,25 @@
     </button>
     {% endfor %}
 </div>
+<script>
+(function() {
+    // Arrow-key navigation within the asset-class pills group (AC #10).
+    var wrappers = document.querySelectorAll('.asset-class-pills');
+    wrappers.forEach(function(wrap) {
+        if (wrap.dataset.nkbd === '1') return;
+        wrap.dataset.nkbd = '1';
+        wrap.addEventListener('keydown', function(e) {
+            if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+            var btns = Array.prototype.slice.call(wrap.querySelectorAll('button'));
+            var i = btns.indexOf(document.activeElement);
+            if (i < 0) return;
+            var next = e.key === 'ArrowRight' ? (i + 1) % btns.length : (i - 1 + btns.length) % btns.length;
+            btns[next].focus();
+            e.preventDefault();
+        });
+    });
+})();
+</script>
 
 {% if tickers %}
 <!-- Results summary -->
@@ -86,7 +107,13 @@
         <tbody>
             {% for row in tickers %}
             <tr class="border-b border-slate-800 hover:bg-slate-800 transition-colors cursor-pointer
+                       focus:ring-2 focus:ring-blue-500 focus:outline-none
                        {% if selected_ticker == row.ticker %}bg-slate-800 ring-1 ring-blue-900{% endif %}"
+                data-ticker="{{ row.ticker }}"
+                role="button"
+                tabindex="0"
+                aria-selected="{{ 'true' if selected_ticker == row.ticker else 'false' }}"
+                onkeydown="if(event.key==='Enter'||event.key===' '){this.dispatchEvent(new Event('click',{bubbles:true}));event.preventDefault();}"
                 hx-get="/explorer/chart-panel"
                 hx-target="#chart-panel"
                 hx-swap="innerHTML"
@@ -167,7 +194,7 @@
 <div class="flex items-center justify-between mt-4">
     <div class="flex gap-2">
         {% if state.page > 1 %}
-        <button class="px-3 py-1 text-sm rounded border border-slate-700 text-slate-400 hover:bg-slate-800 transition-colors"
+        <button class="px-3 py-1 text-sm rounded border border-slate-700 text-slate-400 hover:bg-slate-800 transition-colors focus:ring-2 focus:ring-blue-500 focus:outline-none"
                 hx-get="/explorer/ticker-list"
                 hx-target="#ticker-list"
                 hx-include="#catalog-select, #search-input, [name='asset_class'], [name='sort_by']"
@@ -178,7 +205,7 @@
         </button>
         {% endif %}
         {% if state.page < total_pages %}
-        <button class="px-3 py-1 text-sm rounded border border-slate-700 text-slate-400 hover:bg-slate-800 transition-colors"
+        <button class="px-3 py-1 text-sm rounded border border-slate-700 text-slate-400 hover:bg-slate-800 transition-colors focus:ring-2 focus:ring-blue-500 focus:outline-none"
                 hx-get="/explorer/ticker-list"
                 hx-target="#ticker-list"
                 hx-include="#catalog-select, #search-input, [name='asset_class'], [name='sort_by']"
@@ -206,10 +233,9 @@
 </div>
 
 {% else %}
-<!-- Catalog empty state -->
+<!-- Catalog empty state (AC #6) -->
 <div class="bg-slate-900 rounded-lg p-8 text-center">
-    <h2 class="text-xl font-medium text-slate-200 mb-2">No Imported Tickers</h2>
-    <p class="text-slate-400 mb-4">No imported tickers in this catalog.</p>
-    <code class="bg-slate-800 px-3 py-2 rounded text-green-400 font-mono text-sm">ntrader import</code>
+    <p class="text-slate-300 mb-4">No data in catalog '{{ state.catalog }}'. Run an import to get started.</p>
+    <code class="bg-slate-800 px-3 py-2 rounded text-green-400 font-mono text-sm">ntrader import --format firstrate --catalog {{ state.catalog }} /path/to/data</code>
 </div>
 {% endif %}

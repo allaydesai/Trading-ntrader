@@ -235,3 +235,51 @@ class TestExplorerPageStatsAutoload:
         # The #stats-panel div exists but without hx-get (guarded by selected_ticker)
         assert 'id="stats-panel"' in text
         assert 'hx-get="/explorer/stats-panel"' not in text
+
+
+@pytest.mark.component
+class TestStatsPanelSkeleton:
+    """Tests for the 7-card skeleton rendered on deep-link auto-load (AC #3)."""
+
+    def test_skeleton_rendered_when_ticker_selected(self, client):
+        """Deep-link with ?ticker= must render seven animate-pulse cards inside #stats-panel."""
+        response = client.get("/explorer/?catalog=us_stocks&ticker=AAPL&tf=D")
+        text = response.text
+        # Seven skeleton cards
+        assert text.count("stats-skeleton-card") == 7
+        # Animate-pulse classes present inside the cards
+        assert "animate-pulse bg-slate-800" in text
+
+    def test_skeleton_absent_when_no_ticker(self, client):
+        """No auto-load, no skeleton."""
+        response = client.get("/explorer/?catalog=us_stocks")
+        text = response.text
+        assert "stats-skeleton-card" not in text
+
+    def test_oob_response_does_not_contain_skeleton(self, client):
+        """OOB chart-panel response renders the real stats grid; skeleton must NOT appear there."""
+        response = client.get("/explorer/chart-panel?catalog=us_stocks&ticker=AAPL&tf=D")
+        text = response.text
+        # OOB response carries the real stats grid (Date Range/Daily Bars/etc.)
+        assert "Date Range" in text
+        # But must NOT carry skeleton placeholders
+        assert "stats-skeleton-card" not in text
+
+    def test_standalone_stats_fragment_does_not_contain_skeleton(self, client):
+        """Real stats fragment replaces skeleton; it must not contain skeleton markup."""
+        response = client.get("/explorer/stats-panel?catalog=us_stocks&ticker=AAPL&tf=D")
+        assert "stats-skeleton-card" not in response.text
+
+
+@pytest.mark.component
+class TestStatsPanelEpic4Placeholder:
+    """Tests for the Epic 4 supplementary placeholder note (AC #12)."""
+
+    def test_epic4_note_present_in_stats_fragment(self, client):
+        response = client.get("/explorer/stats-panel?catalog=us_stocks&ticker=AAPL&tf=D")
+        assert "Dividends and stock splits available in" in response.text
+        assert "Epic 4" in response.text
+
+    def test_no_details_tag_in_stats_fragment(self, client):
+        response = client.get("/explorer/stats-panel?catalog=us_stocks&ticker=AAPL&tf=D")
+        assert "<details" not in response.text

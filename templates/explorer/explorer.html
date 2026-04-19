@@ -53,7 +53,8 @@
                    value="{{ state.search }}"
                    placeholder="Search tickers..."
                    autofocus
-                   class="w-full bg-slate-800 border border-slate-700 text-slate-100 placeholder-slate-500 rounded-md px-4 py-2 text-sm focus:ring-blue-500 focus:border-blue-500"
+                   aria-label="Search tickers"
+                   class="w-full bg-slate-800 border border-slate-700 text-slate-100 placeholder-slate-500 rounded-md px-4 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none focus:border-blue-500"
                    hx-get="/explorer/ticker-list"
                    hx-trigger="keyup changed delay:300ms"
                    hx-target="#ticker-list"
@@ -76,6 +77,8 @@
 
         <!-- Chart Panel (loaded via HTMX on ticker click or URL params) -->
         <div id="chart-panel"
+             aria-live="polite"
+             data-ticker="{{ selected_ticker or '' }}"
              {% if selected_ticker %}
              hx-get="/explorer/chart-panel"
              hx-trigger="load"
@@ -84,12 +87,16 @@
              {% endif %}>
         </div>
         <div id="stats-panel"
+             aria-live="polite"
+             data-ticker="{{ selected_ticker or '' }}"
              {% if selected_ticker %}
              hx-get="/explorer/stats-panel"
              hx-trigger="load"
              hx-vals='{"catalog": {{ state.catalog | tojson }}, "ticker": {{ selected_ticker | tojson }}, "tf": {{ (selected_tf or "D") | tojson }}}'
              hx-swap="innerHTML"
-             {% endif %}></div>
+             {% endif %}>
+            {% if selected_ticker %}{% include "explorer/stats_panel_skeleton.html" %}{% endif %}
+        </div>
     </div>
 
     {% endif %}

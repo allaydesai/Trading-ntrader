@@ -234,6 +234,53 @@ class TestChartPanelUIRoute:
         ]:
             assert label in text
 
+    def test_unavailable_tf_inline_message(
+        self, client, mock_metadata_service, mock_catalog_service
+    ):
+        """AC #7: when bar_count for the active tf is 0, render tf-aware message."""
+        mock_metadata_service.get_instrument.return_value = _make_instrument(bar_count_minute=0)
+        mock_catalog_service.query_bars.return_value = []
+        response = client.get("/explorer/chart-panel?catalog=us_stocks&ticker=AAPL&tf=1m")
+        text = response.text
+        # Server-rendered tf-aware no-data message
+        assert "No 1m data available for AAPL" in text
+        # Generic string should NOT appear in server-rendered chart container
+        assert "No chart data available for this timeframe." not in text
+        # 1m button still disabled after render
+        assert "disabled" in text
+
+    def test_timeframe_toolbar_wrapper_class_present(self, client):
+        """Wrapper class scopes arrow-key JS on the tf toolbar (AC #10)."""
+        response = client.get("/explorer/chart-panel?catalog=us_stocks&ticker=AAPL&tf=D")
+        assert "timeframe-toolbar" in response.text
+
+    def test_timeframe_buttons_have_focus_rings(self, client):
+        """Every tf button shows focus rings (AC #10)."""
+        response = client.get("/explorer/chart-panel?catalog=us_stocks&ticker=AAPL&tf=D")
+        text = response.text
+        assert "focus:ring-2" in text
+        assert "focus:ring-blue-500" in text
+
+    def test_active_timeframe_button_has_aria_pressed_true(self, client):
+        """Active tf button carries aria-pressed=true (AC #11)."""
+        response = client.get("/explorer/chart-panel?catalog=us_stocks&ticker=AAPL&tf=1H")
+        assert 'aria-pressed="true"' in response.text
+
+    def test_chart_container_has_role_img_and_aria_label(self, client):
+        """Chart container wrapped in role=img with ticker-aware aria-label (AC #11)."""
+        response = client.get("/explorer/chart-panel?catalog=us_stocks&ticker=AAPL&tf=D")
+        text = response.text
+        assert 'role="img"' in text
+        assert 'aria-label="Price chart for AAPL"' in text
+
+    def test_unavailable_tf_button_has_disabled_attr(self, client, mock_metadata_service):
+        """AC #7: tf button for unavailable timeframe stays disabled."""
+        mock_metadata_service.get_instrument.return_value = _make_instrument(
+            bar_count_hourly=0, bar_count_minute=0, bar_count_5min=0
+        )
+        response = client.get("/explorer/chart-panel?catalog=us_stocks&ticker=AAPL&tf=D")
+        assert "disabled" in response.text
+
 
 @pytest.mark.component
 class TestChartPanelWindowing:
