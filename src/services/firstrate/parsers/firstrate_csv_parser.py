@@ -67,6 +67,7 @@ class FirstRateCsvParser(BaseParser):
                 bars.append(bar)
 
         bars.sort(key=lambda b: b.ts_init)
+        bars = self._dedup_by_timestamp(bars)
         return bars
 
     def map_instrument_id(self, ticker: str, bar_type_spec: str) -> InstrumentId:
@@ -84,6 +85,34 @@ class FirstRateCsvParser(BaseParser):
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _dedup_by_timestamp(bars: list[Bar]) -> list[Bar]:
+        """Remove duplicate bars by ts_init, keeping the last occurrence.
+
+        FirstRate source files sometimes contain the last day's bars
+        duplicated at the end of the file. When duplicates have different
+        OHLCV values, the last occurrence (end-of-day correction) is kept.
+
+        Args:
+            bars: Sorted list of Bar objects.
+
+        Returns:
+            Deduplicated list preserving sort order.
+        """
+        if not bars:
+            return bars
+
+        seen: dict[int, int] = {}
+        for idx, bar in enumerate(bars):
+            seen[bar.ts_init] = idx
+
+        if len(seen) == len(bars):
+            return bars
+
+        removed = len(bars) - len(seen)
+        logger.warning("duplicate_timestamps_removed", count=removed)
+        return [bars[idx] for idx in sorted(seen.values())]
 
     @staticmethod
     def _read_lines(file_path: Path) -> list[str]:
