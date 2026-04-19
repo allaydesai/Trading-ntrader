@@ -1,6 +1,6 @@
 # Story 2.4: Explorer UX Polish
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -99,6 +99,36 @@ so that the explorer feels responsive, trustworthy, and usable without a mouse.
   - [x] 8.1 `make format && make lint && make typecheck`.
   - [x] 8.2 `make test-unit && make test-component` — all green. No new integration or e2e tests required (UI-only change).
   - [x] 8.3 Final `agent-browser screenshot /tmp/story-2-4-evidence/final.png` on `/explorer?catalog=e2e-test&ticker=AAPL&tf=D` as overall evidence.
+
+### Review Findings
+
+_Adversarial review run 2026-04-19 (Blind Hunter + Edge Case Hunter + Acceptance Auditor). 70 raw findings → 8 patch, 10 defer, 7 dismissed._
+
+**Patch items (resolved 2026-04-19):**
+
+- [x] [Review][Patch] XSS: error handler injects `ticker` + `xhr.statusText` into `innerHTML` — switched to DOM construction via `createElement` + `textContent` + `replaceChildren` [templates/partials/htmx_error_handler.html]
+- [x] [Review][Patch] XSS: `no_data_message` (built from user-controlled `ticker` query param) written via `innerHTML` in JS fallback — switched to `createElement` + `textContent` + `replaceChildren` [templates/explorer/chart_panel.html]
+- [x] [Review][Patch] Guard `evt.detail.target` — added `isValidSwapTarget()` helper that rejects `document.body`, `document.documentElement`, and detached nodes [templates/partials/htmx_error_handler.html]
+- [x] [Review][Patch] Restrict retry to GET only — `retryOnce` now returns false when `verb !== "get"` [templates/partials/htmx_error_handler.html]
+- [x] [Review][Patch] Row `onkeydown`: added `e.repeat` guard so Space-hold no longer dispatches N duplicate HTMX requests [templates/explorer/ticker_list.html]
+- [x] [Review][Patch] Row `onkeydown`: replaced synthetic `Event('click')` with `this.click()` for proper MouseEvent semantics [templates/explorer/ticker_list.html]
+- [x] [Review][Patch] IME composition guard: `isComposing`/`keyCode === 229` early-return added to row keydown and both arrow-key toolbar handlers [ticker_list.html, chart_panel.html]
+- [x] [Review][Patch] Removed `evt.detail.shouldSwap = false` no-op from sendError/timeout/responseError handlers; also added case-insensitive `X-NTrader-Retry` header lookup defensively [templates/partials/htmx_error_handler.html]
+
+**Deferred (real concerns, out of scope for this polish story):**
+
+- [x] [Review][Defer] Concurrent overlapping requests race — retry may overwrite a newer response; requires request-id/abort logic [htmx_error_handler.html] — deferred, needs architectural change across HTMX wiring
+- [x] [Review][Defer] Deep-link stats auto-load + rapid ticker click can show stale stats with new chart [explorer.html auto-load flow] — deferred, same abort-logic dependency
+- [x] [Review][Defer] No arrow-key navigation between ticker rows / no roving tabindex — AC #10 only defines Tab flow [ticker_list.html rows] — deferred, accessibility refinement beyond WCAG AA baseline
+- [x] [Review][Defer] `aria-live="polite"` on `#stats-panel` causes verbose screen-reader announcements on every swap [explorer.html:88] — deferred, SR optimization explicitly out of scope per Dev Notes
+- [x] [Review][Defer] `role="button"` on `<tr>` conflicts with row/grid ARIA semantics — spec-mandated in AC #11 [ticker_list.html:~109-113] — deferred, spec update required
+- [x] [Review][Defer] `data-nkbd="1"` rebinding guard is effectively dead code (wrapper replaced on every swap) [chart_panel.html, ticker_list.html inline IIFEs] — deferred, cleanup-only
+- [x] [Review][Defer] Duplicate ~15-line arrow-key IIFE between chart_panel.html and ticker_list.html [inline scripts] — deferred, spec forbids new JS file so current duplication is intentional
+- [x] [Review][Defer] Weak component assertions (substring-only checks for `aria-pressed="false"`, `focus:ring-2`, `X-NTrader-Retry`, event-listener names) — tests pass, refinement is follow-up [tests/component/api/test_explorer_routes.py new tests] — deferred, passes current coverage
+- [x] [Review][Defer] Skeleton hardcoded to 7 cards with no structural link to real stats grid — drifts silently if stats grid grows [stats_panel_skeleton.html:~11] — deferred, no near-term stats-grid churn
+- [x] [Review][Defer] Empty `data-ticker` fallback message reads `Failed to load chart data for selection.` — minor UX polish [htmx_error_handler.html] — deferred
+
+**Dismissed as noise (summary):** static/css/app.css "missing" (false positive — excluded from review diff by default, IS in commit); Epic 4 `href="#epic-4"` (spec Task 6.2 explicitly allows); `tests/ui/test_explorer_errors.py` with no test functions (spec Task 2.1 prescribes docs-only evidence); retry `cfg.parameters` "duplicate query params" (matches HTMX GET behavior, correct); Jinja autoescape entity rendering (correct behavior); pre-existing `setTimeout` in chart-panel debouncer (not in diff); `hx-include="sort_by"` pre-existing.
 
 ## Dev Notes
 

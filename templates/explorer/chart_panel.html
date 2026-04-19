@@ -41,6 +41,7 @@
             if (wrap.dataset.nkbd === '1') return;
             wrap.dataset.nkbd = '1';
             wrap.addEventListener('keydown', function(e) {
+                if (e.isComposing || e.keyCode === 229) return;
                 if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
                 var btns = Array.prototype.slice.call(wrap.querySelectorAll('button:not([disabled])'));
                 var i = btns.indexOf(document.activeElement);
@@ -87,7 +88,10 @@
 
     if (!barsJson || barsJson.length === 0) {
         var noDataMessage = {{ no_data_message | tojson }};
-        container.innerHTML = '<div class="flex items-center justify-center h-full text-slate-500 text-sm">' + noDataMessage + '</div>';
+        var noDataEl = document.createElement('div');
+        noDataEl.className = 'flex items-center justify-center h-full text-slate-500 text-sm';
+        noDataEl.textContent = noDataMessage;
+        container.replaceChildren(noDataEl);
         return;
     }
 

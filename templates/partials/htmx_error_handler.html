@@ -13,16 +13,35 @@
 <script id="ntrader-htmx-error-handler">
 (function () {
     const RETRY_HEADER = "X-NTrader-Retry";
+    const PANEL_CLASSES = "bg-slate-900 rounded-lg p-8 text-center text-slate-400";
 
     function resolveTarget(evt) {
-        // Prefer HTMX-supplied target; fall back to the source element.
         return (evt.detail && evt.detail.target) || (evt.detail && evt.detail.elt) || null;
     }
 
-    function swapInto(target, html) {
-        if (!target || typeof target.innerHTML !== "string") return;
-        target.innerHTML = html;
+    function isValidSwapTarget(target) {
+        if (!target || typeof target.innerHTML !== "string") return false;
+        if (target === document.body || target === document.documentElement) return false;
+        if (!document.contains(target)) return false;
+        return true;
+    }
+
+    function renderPanel(target, message) {
+        if (!isValidSwapTarget(target)) return;
+        const panel = document.createElement("div");
+        panel.className = PANEL_CLASSES;
+        panel.textContent = message;
+        target.replaceChildren(panel);
         target.classList.remove("htmx-request");
+    }
+
+    function getHeaderCI(headers, name) {
+        if (!headers) return null;
+        const lname = name.toLowerCase();
+        for (const k of Object.keys(headers)) {
+            if (k.toLowerCase() === lname) return headers[k];
+        }
+        return null;
     }
 
     function sourceTicker(evt) {
@@ -44,36 +63,32 @@
         return xhr.statusText || (xhr.status ? String(xhr.status) : "");
     }
 
-    function inlineConnectionErrorHtml() {
-        return '<div class="bg-slate-900 rounded-lg p-8 text-center text-slate-400">'
-             + 'Connection error. Refresh to retry.'
-             + '</div>';
+    function connectionErrorMessage() {
+        return "Connection error. Refresh to retry.";
     }
 
-    function inlineResponseErrorHtml(evt) {
+    function responseErrorMessage(evt) {
         const target = resolveTarget(evt);
         const xhr = evt.detail && evt.detail.xhr;
         const reason = reasonFromXhr(xhr);
         const targetId = target && target.id ? target.id : "";
         if (targetId === "chart-panel") {
             const ticker = sourceTicker(evt) || "selection";
-            return '<div class="bg-slate-900 rounded-lg p-8 text-center text-slate-400">'
-                 + 'Failed to load chart data for ' + ticker + '. ' + reason
-                 + '</div>';
+            return "Failed to load chart data for " + ticker + ". " + reason;
         }
-        return '<div class="bg-slate-900 rounded-lg p-8 text-center text-slate-400">'
-             + 'Request failed. ' + reason
-             + '</div>';
+        return "Request failed. " + reason;
     }
 
     function retryOnce(evt) {
         const cfg = evt.detail && evt.detail.requestConfig;
         if (!cfg) return false;
-        const headers = cfg.headers || {};
-        if (headers[RETRY_HEADER]) return false;
-        const target = resolveTarget(evt);
-        if (!target || !window.htmx || typeof window.htmx.ajax !== "function") return false;
         const verb = (cfg.verb || "get").toLowerCase();
+        if (verb !== "get") return false;  // never retry non-idempotent verbs
+        const headers = cfg.headers || {};
+        if (getHeaderCI(headers, RETRY_HEADER)) return false;
+        const target = resolveTarget(evt);
+        if (!isValidSwapTarget(target)) return false;
+        if (!window.htmx || typeof window.htmx.ajax !== "function") return false;
         const path = cfg.path;
         if (!path) return false;
         const retryHeaders = Object.assign({}, headers, { [RETRY_HEADER]: "1" });
@@ -92,22 +107,16 @@
 
     document.body.addEventListener("htmx:sendError", function (evt) {
         if (retryOnce(evt)) return;
-        const target = resolveTarget(evt);
-        swapInto(target, inlineConnectionErrorHtml());
-        if (evt.detail) evt.detail.shouldSwap = false;
+        renderPanel(resolveTarget(evt), connectionErrorMessage());
     });
 
     document.body.addEventListener("htmx:timeout", function (evt) {
         if (retryOnce(evt)) return;
-        const target = resolveTarget(evt);
-        swapInto(target, inlineConnectionErrorHtml());
-        if (evt.detail) evt.detail.shouldSwap = false;
+        renderPanel(resolveTarget(evt), connectionErrorMessage());
     });
 
     document.body.addEventListener("htmx:responseError", function (evt) {
-        const target = resolveTarget(evt);
-        swapInto(target, inlineResponseErrorHtml(evt));
-        if (evt.detail) evt.detail.shouldSwap = false;
+        renderPanel(resolveTarget(evt), responseErrorMessage(evt));
     });
 })();
 </script>

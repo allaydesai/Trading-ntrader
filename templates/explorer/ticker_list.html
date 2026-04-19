@@ -38,6 +38,7 @@
         if (wrap.dataset.nkbd === '1') return;
         wrap.dataset.nkbd = '1';
         wrap.addEventListener('keydown', function(e) {
+            if (e.isComposing || e.keyCode === 229) return;
             if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
             var btns = Array.prototype.slice.call(wrap.querySelectorAll('button'));
             var i = btns.indexOf(document.activeElement);
@@ -113,7 +114,7 @@
                 role="button"
                 tabindex="0"
                 aria-selected="{{ 'true' if selected_ticker == row.ticker else 'false' }}"
-                onkeydown="if(event.key==='Enter'||event.key===' '){this.dispatchEvent(new Event('click',{bubbles:true}));event.preventDefault();}"
+                onkeydown="if(event.isComposing||event.keyCode===229||event.repeat)return;if(event.key==='Enter'||event.key===' '){this.click();event.preventDefault();}"
                 hx-get="/explorer/chart-panel"
                 hx-target="#chart-panel"
                 hx-swap="innerHTML"
