@@ -116,12 +116,12 @@ class TestChartDataRestEndpoint:
 
     def test_timeframe_mapping(self, client, mock_catalog_service):
         client.get("/api/chart/catalog/AAPL?catalog=us_stocks&tf=1H")
-        call_kwargs = mock_catalog_service.query_bars.call_args.kwargs
+        call_kwargs = mock_catalog_service.query_bars.call_args_list[0].kwargs
         assert call_kwargs["bar_type_spec"] == "1-HOUR-LAST"
 
     def test_default_timeframe_is_daily(self, client, mock_catalog_service):
         client.get("/api/chart/catalog/AAPL?catalog=us_stocks")
-        call_kwargs = mock_catalog_service.query_bars.call_args.kwargs
+        call_kwargs = mock_catalog_service.query_bars.call_args_list[0].kwargs
         assert call_kwargs["bar_type_spec"] == "1-DAY-LAST"
 
     def test_ticker_resolved_via_metadata(
@@ -129,7 +129,7 @@ class TestChartDataRestEndpoint:
     ):
         client.get("/api/chart/catalog/AAPL?catalog=us_stocks&tf=D")
         mock_metadata_service.get_instrument.assert_called_once_with("us_stocks", "AAPL")
-        call_kwargs = mock_catalog_service.query_bars.call_args.kwargs
+        call_kwargs = mock_catalog_service.query_bars.call_args_list[0].kwargs
         assert call_kwargs["instrument_id"] == "AAPL.XNAS"
 
     def test_empty_bars_returns_200(self, client, mock_catalog_service):
@@ -151,7 +151,7 @@ class TestChartDataRestEndpoint:
 
     def test_start_end_params_forwarded(self, client, mock_catalog_service):
         client.get("/api/chart/catalog/AAPL?catalog=us_stocks&tf=D&start=2024-01-01&end=2024-06-30")
-        call_kwargs = mock_catalog_service.query_bars.call_args.kwargs
+        call_kwargs = mock_catalog_service.query_bars.call_args_list[0].kwargs
         assert call_kwargs["start"].year == 2024
         assert call_kwargs["start"].month == 1
         assert call_kwargs["end"].year == 2024
@@ -215,10 +215,24 @@ class TestChartPanelUIRoute:
         response = client.get("/explorer/chart-panel")
         assert response.status_code == 422
 
-    def test_oob_stats_panel_placeholder(self, client):
+    def test_oob_stats_panel_wrapper_present(self, client):
         response = client.get("/explorer/chart-panel?catalog=us_stocks&ticker=AAPL&tf=D")
         assert 'id="stats-panel"' in response.text
-        assert "hx-swap-oob" in response.text
+        assert 'hx-swap-oob="innerHTML"' in response.text
+
+    def test_oob_stats_panel_rendered_with_cards(self, client):
+        response = client.get("/explorer/chart-panel?catalog=us_stocks&ticker=AAPL&tf=D")
+        text = response.text
+        for label in [
+            "Date Range",
+            "Daily Bars",
+            "1-Hour Bars",
+            "5-Min Bars",
+            "1-Min Bars",
+            "Price Range",
+            "Nautilus ID",
+        ]:
+            assert label in text
 
 
 @pytest.mark.component
@@ -228,7 +242,7 @@ class TestChartPanelWindowing:
     def test_daily_loads_windowed_range(self, client, mock_catalog_service):
         """Daily timeframe windows to last 1825 days."""
         client.get("/explorer/chart-panel?catalog=us_stocks&ticker=AAPL&tf=D")
-        call_kwargs = mock_catalog_service.query_bars.call_args.kwargs
+        call_kwargs = mock_catalog_service.query_bars.call_args_list[0].kwargs
         assert call_kwargs["end"] == datetime(2025, 12, 31, tzinfo=timezone.utc)
         expected_start = datetime(2025, 12, 31, tzinfo=timezone.utc) - timedelta(days=1825)
         assert call_kwargs["start"] == expected_start
@@ -240,7 +254,7 @@ class TestChartPanelWindowing:
         2025-12-01 (30 days before).
         """
         client.get("/explorer/chart-panel?catalog=us_stocks&ticker=AAPL&tf=5m")
-        call_kwargs = mock_catalog_service.query_bars.call_args.kwargs
+        call_kwargs = mock_catalog_service.query_bars.call_args_list[0].kwargs
         # End anchored to instrument's date_range_end
         assert call_kwargs["end"] == datetime(2025, 12, 31, tzinfo=timezone.utc)
         # Start is 30 days before date_range_end
@@ -250,7 +264,7 @@ class TestChartPanelWindowing:
     def test_hourly_loads_windowed_range(self, client, mock_catalog_service):
         """Hourly timeframe windows to last 180 days."""
         client.get("/explorer/chart-panel?catalog=us_stocks&ticker=AAPL&tf=1H")
-        call_kwargs = mock_catalog_service.query_bars.call_args.kwargs
+        call_kwargs = mock_catalog_service.query_bars.call_args_list[0].kwargs
         assert call_kwargs["end"] == datetime(2025, 12, 31, tzinfo=timezone.utc)
         expected_start = datetime(2025, 12, 31, tzinfo=timezone.utc) - timedelta(days=180)
         assert call_kwargs["start"] == expected_start
@@ -258,7 +272,7 @@ class TestChartPanelWindowing:
     def test_1min_loads_windowed_range(self, client, mock_catalog_service):
         """1-min timeframe windows to last 7 days."""
         client.get("/explorer/chart-panel?catalog=us_stocks&ticker=AAPL&tf=1m")
-        call_kwargs = mock_catalog_service.query_bars.call_args.kwargs
+        call_kwargs = mock_catalog_service.query_bars.call_args_list[0].kwargs
         expected_start = datetime(2025, 12, 31, tzinfo=timezone.utc) - timedelta(days=7)
         assert call_kwargs["start"] == expected_start
 
@@ -276,6 +290,19 @@ class TestChartPanelWindowing:
         response = client.get("/explorer/chart-panel?catalog=us_stocks&ticker=AAPL&tf=5m")
         assert response.status_code == 200
         # Should still call query_bars with some bounded range
-        call_kwargs = mock_catalog_service.query_bars.call_args.kwargs
+        call_kwargs = mock_catalog_service.query_bars.call_args_list[0].kwargs
         assert call_kwargs["end"].year >= 2026
         assert call_kwargs["start"] < call_kwargs["end"]
+
+    def test_chart_and_stats_queries_paired(self, client, mock_catalog_service):
+        """Chart-panel render must issue both the windowed chart query AND the
+        full-range stats query; the tests above use call_args_list[0] for the
+        chart call, so this asserts the stats call actually exists."""
+        client.get("/explorer/chart-panel?catalog=us_stocks&ticker=AAPL&tf=5m")
+        assert mock_catalog_service.query_bars.call_count == 2
+        chart_call = mock_catalog_service.query_bars.call_args_list[0].kwargs
+        stats_call = mock_catalog_service.query_bars.call_args_list[1].kwargs
+        # Chart is windowed; stats scans the instrument's full date range.
+        assert stats_call["start"] == datetime(2020, 1, 2, tzinfo=timezone.utc)
+        assert stats_call["end"] == datetime(2025, 12, 31, tzinfo=timezone.utc)
+        assert chart_call["start"] > stats_call["start"]

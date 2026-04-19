@@ -1,0 +1,69 @@
+{#
+  HTMX fragment: stats panel grid. The #stats-panel wrapper lives in
+  explorer.html (page container) or chart_panel.html (OOB wrapper) — this
+  fragment is the grid itself, swapped in via hx-swap="innerHTML".
+#}
+<div class="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3 mt-6">
+    {# Date Range #}
+    <div class="bg-slate-900 rounded-lg p-4 border border-slate-800">
+        <div class="text-xs text-slate-500 uppercase tracking-wider">Date Range</div>
+        <div class="font-mono text-lg font-semibold text-slate-100 mt-1">
+            {% if date_range_start and date_range_end %}
+            {{ date_range_start.strftime('%Y-%m-%d') }} — {{ date_range_end.strftime('%Y-%m-%d') }}
+            {% else %}
+            —
+            {% endif %}
+        </div>
+    </div>
+
+    {# Daily Bars #}
+    <div class="bg-slate-900 rounded-lg p-4 border border-slate-800 {% if active_tf_label == 'D' %}ring-1 ring-blue-500/40{% endif %}">
+        <div class="text-xs text-slate-500 uppercase tracking-wider">Daily Bars</div>
+        <div class="font-mono text-lg font-semibold text-slate-100 mt-1">
+            {{ format_bar_count(bar_count_daily) }}
+        </div>
+    </div>
+
+    {# 1-Hour Bars #}
+    <div class="bg-slate-900 rounded-lg p-4 border border-slate-800 {% if active_tf_label == '1H' %}ring-1 ring-blue-500/40{% endif %}">
+        <div class="text-xs text-slate-500 uppercase tracking-wider">1-Hour Bars</div>
+        <div class="font-mono text-lg font-semibold text-slate-100 mt-1">
+            {{ format_bar_count(bar_count_hourly) }}
+        </div>
+    </div>
+
+    {# 5-Min Bars #}
+    <div class="bg-slate-900 rounded-lg p-4 border border-slate-800 {% if active_tf_label == '5m' %}ring-1 ring-blue-500/40{% endif %}">
+        <div class="text-xs text-slate-500 uppercase tracking-wider">5-Min Bars</div>
+        <div class="font-mono text-lg font-semibold text-slate-100 mt-1">
+            {{ format_bar_count(bar_count_5min) }}
+        </div>
+    </div>
+
+    {# 1-Min Bars #}
+    <div class="bg-slate-900 rounded-lg p-4 border border-slate-800 {% if active_tf_label == '1m' %}ring-1 ring-blue-500/40{% endif %}">
+        <div class="text-xs text-slate-500 uppercase tracking-wider">1-Min Bars</div>
+        <div class="font-mono text-lg font-semibold text-slate-100 mt-1">
+            {{ format_bar_count(bar_count_minute) }}
+        </div>
+    </div>
+
+    {# Price Range #}
+    <div class="bg-slate-900 rounded-lg p-4 border border-slate-800">
+        <div class="text-xs text-slate-500 uppercase tracking-wider">Price Range</div>
+        <div class="font-mono text-lg font-semibold text-slate-100 mt-1">
+            {% if price_min is not none and price_max is not none %}
+            ${{ "%.2f"|format(price_min) }} – ${{ "%.2f"|format(price_max) }}
+            {% else %}
+            —
+            {% endif %}
+        </div>
+        <div class="text-xs text-slate-500 mt-1">{{ active_tf_label }} timeframe</div>
+    </div>
+
+    {# Nautilus ID #}
+    <div class="bg-slate-900 rounded-lg p-4 border border-slate-800">
+        <div class="text-xs text-slate-500 uppercase tracking-wider">Nautilus ID</div>
+        <div class="font-mono text-lg font-semibold text-slate-100 mt-1">{{ nautilus_id or "—" }}</div>
+    </div>
+</div>

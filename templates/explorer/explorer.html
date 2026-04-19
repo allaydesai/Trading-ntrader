@@ -83,7 +83,13 @@
              hx-swap="innerHTML"
              {% endif %}>
         </div>
-        <div id="stats-panel"></div>
+        <div id="stats-panel"
+             {% if selected_ticker %}
+             hx-get="/explorer/stats-panel"
+             hx-trigger="load"
+             hx-vals='{"catalog": {{ state.catalog | tojson }}, "ticker": {{ selected_ticker | tojson }}, "tf": {{ (selected_tf or "D") | tojson }}}'
+             hx-swap="innerHTML"
+             {% endif %}></div>
     </div>
 
     {% endif %}

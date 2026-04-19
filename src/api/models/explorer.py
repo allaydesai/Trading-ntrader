@@ -145,6 +145,27 @@ class TickerListResponse(BaseModel):
     total_pages: int = 0
 
 
+class TickerStatsResponse(BaseModel):
+    """Ticker statistics for the explorer stats panel.
+
+    Combines DB-sourced metadata (date range, per-timeframe bar counts, Nautilus ID)
+    with per-timeframe price range computed from the Parquet catalog. `active_tf`
+    echoes the timeframe label used to compute `price_min`/`price_max`.
+    """
+
+    ticker: str
+    nautilus_id: Optional[str] = None
+    date_range_start: Optional[datetime] = None
+    date_range_end: Optional[datetime] = None
+    bar_count_daily: int = 0
+    bar_count_hourly: int = 0
+    bar_count_5min: int = 0
+    bar_count_minute: int = 0
+    price_min: Optional[float] = None
+    price_max: Optional[float] = None
+    active_tf: str
+
+
 class ExplorerPageState(BaseModel):
     """Explorer page filter/pagination state for URL params.
 

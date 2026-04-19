@@ -29,6 +29,7 @@ from src.api.models.explorer import (
     TickerRow,
 )
 from src.api.models.navigation import BreadcrumbItem, NavigationState
+from src.api.stats_service import _build_ticker_stats
 from src.services.exceptions import DataNotFoundError  # noqa: F401
 
 logger = structlog.get_logger(__name__)
@@ -39,6 +40,45 @@ templates = Jinja2Templates(directory="templates")
 PAGE_SIZE = EXPLORER_PAGE_SIZE
 VALID_TF_LABELS = {tf.label for tf in ExplorerTimeframe}
 ALL_TIMEFRAMES = list(ExplorerTimeframe)
+
+
+def _stats_template_context(stats) -> dict:
+    """Flatten a TickerStatsResponse for the stats_panel.html template.
+
+    Note: uses `active_tf_label` (string) instead of `active_tf` so this dict
+    can be merged into the chart_panel.html context without clobbering its
+    `active_tf` (ExplorerTimeframe enum) used for `.label` lookups.
+    """
+    return {
+        "date_range_start": stats.date_range_start,
+        "date_range_end": stats.date_range_end,
+        "bar_count_daily": stats.bar_count_daily,
+        "bar_count_hourly": stats.bar_count_hourly,
+        "bar_count_5min": stats.bar_count_5min,
+        "bar_count_minute": stats.bar_count_minute,
+        "price_min": stats.price_min,
+        "price_max": stats.price_max,
+        "active_tf_label": stats.active_tf,
+        "nautilus_id": stats.nautilus_id,
+        "format_bar_count": _format_bar_count,
+    }
+
+
+@router.get("/stats-panel", response_class=HTMLResponse)
+async def stats_panel_fragment(
+    request: Request,
+    service: Metadata,
+    catalog_service: DataCatalog,
+    catalog: str = Query(..., description="Catalog name"),
+    ticker: str = Query(..., description="Ticker symbol"),
+    tf: str = Query("D", description="Timeframe label"),
+) -> HTMLResponse:
+    """Return the stats-panel HTMX fragment (7 stat cards)."""
+    stats = await _build_ticker_stats(service, catalog_service, catalog, ticker, tf)
+    return templates.TemplateResponse(
+        "explorer/stats_panel.html",
+        {"request": request, **_stats_template_context(stats)},
+    )
 
 
 def _format_bar_count(count: int) -> str:
@@ -332,6 +372,8 @@ async def chart_panel_fragment(
     dr_start = instrument.date_range_start
     dr_start_iso = dr_start.strftime("%Y-%m-%d") if dr_start else None
 
+    stats = await _build_ticker_stats(service, catalog_service, catalog, ticker, tf)
+
     return templates.TemplateResponse(
         "explorer/chart_panel.html",
         {
@@ -346,5 +388,6 @@ async def chart_panel_fragment(
             "has_earlier_data": has_earlier_data,
             "window_days": window_days,
             "date_range_start_iso": dr_start_iso,
+            **_stats_template_context(stats),
         },
     )

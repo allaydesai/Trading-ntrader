@@ -20,7 +20,9 @@ from src.api.models.explorer import (
     ExplorerTimeframe,
     TickerListResponse,
     TickerRow,
+    TickerStatsResponse,
 )
+from src.api.stats_service import _build_ticker_stats
 from src.services.exceptions import DataNotFoundError
 
 logger = structlog.get_logger(__name__)
@@ -30,6 +32,23 @@ router = APIRouter()
 PAGE_SIZE = EXPLORER_PAGE_SIZE
 
 VALID_TF_LABELS = {tf.label for tf in ExplorerTimeframe}
+
+
+@router.get(
+    "/explorer/ticker/{ticker}/stats",
+    response_model=TickerStatsResponse,
+    summary="Get statistics for a ticker",
+    description="Returns date range, per-timeframe bar counts, and price range for a ticker.",
+)
+async def get_ticker_stats(
+    ticker: str,
+    service: Metadata,
+    catalog_service: DataCatalog,
+    catalog: str = Query(..., description="Catalog name"),
+    tf: str = Query("D", description="Timeframe label (D, 1H, 5m, 1m)"),
+) -> TickerStatsResponse:
+    """Get ticker statistics and price range for the selected timeframe."""
+    return await _build_ticker_stats(service, catalog_service, catalog, ticker, tf)
 
 
 @router.get(

@@ -1,5 +1,5 @@
 # generated: 2026-04-05
-# last_updated: 2026-04-12 (Story 2-2 → review)
+# last_updated: 2026-04-19 (Story 2-2 → done; Story 2-3 → done after code review)
 # project: Trading-ntrader
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-05
-last_updated: 2026-04-12 (Story 2-2 → review)
+last_updated: 2026-04-19 (Story 2-2 → done; Story 2-3 → done after code review)
 project: Trading-ntrader
 project_key: NOKEY
 tracking_system: file-system
@@ -60,8 +60,8 @@ development_status:
   # Epic 2: Data Explorer & Verification
   epic-2: in-progress
   2-1-explorer-page-with-ticker-list: done
-  2-2-chart-panel-with-timeframe-switching: review
-  2-3-data-statistics-panel: backlog
+  2-2-chart-panel-with-timeframe-switching: done
+  2-3-data-statistics-panel: done
   2-4-explorer-ux-polish: backlog
   epic-2-retrospective: optional
 

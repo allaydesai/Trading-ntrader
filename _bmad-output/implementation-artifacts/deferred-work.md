@@ -42,3 +42,16 @@
 - W1: `bar_count_5min` not persisted in `CatalogInstrumentRepository.upsert()` — both async and sync upsert methods omit `bar_count_5min` from the update field list. 5min counts show 0 for instruments upserted before fix. Pre-existing since migration `67772db31d8d`.
 - W2: Legacy `CatalogInstrumentRepository.search()` uses substring ILIKE (`%query%`) instead of prefix match (`query%`). Not used by Story 2-1 code paths but inconsistent with the new `list_by_catalog_with_search()`.
 - W3: Sort headers in ticker_list.html only support ascending order — no toggle to descending. Not in Story 2-1 task scope.
+
+## Deferred from: code review of 2-3-data-statistics-panel (2026-04-19)
+
+- F5: Duplicate `query_bars` on every chart-panel render (chart windowed + stats full-range). Intentional per Task 6.1 to satisfy "OOB chart + stats atomically in one response"; spec explicitly acknowledges the perf cost. Revisit with Parquet row-group min/max pushdown or a cached stats snapshot.
+- F6: Unbounded 1m full-range scan (~1.95M bars for 5-year 1-min tickers) in `_build_ticker_stats`. Spec Known Perf Note flags as out-of-scope for Phase 1 (correctness over optimization). Address with row-group statistics pushdown or a precomputed min/max column.
+- F7: `catalog_service.query_bars()` is synchronous but awaited from async handlers — blocks the event loop under concurrency. Pre-existing pattern inherited from Story 2-2; needs `asyncio.to_thread` or an async Parquet client project-wide.
+- F8: `tf` coercion does not normalize case or whitespace — `"1h"` / `"1H "` / `""` silently become `"D"`. Matches spec's "coerce to D" mandate but surprises users; add case/whitespace normalization before the `VALID_TF_LABELS` check.
+- F9: `selected_tf` template variable not pinned as a string at the route level — `(selected_tf or "D") | tojson` in `explorer.html:~89` renders the enum name if an `ExplorerTimeframe` slips through. Pin to `.label` in the route.
+- F10: `_compute_price_range` allocates two full lists of lows/highs before calling `min`/`max`; single-pass reduction halves memory on million-bar scans. Pairs naturally with F6.
+- F11: `VALID_TF_LABELS = {tf.label for tf in ExplorerTimeframe}` defined independently in `src/api/stats_service.py`, `src/api/rest/explorer.py`, and `src/api/ui/explorer.py`. Centralize on `ExplorerTimeframe`.
+- F12: `TickerStatsResponse.price_min` / `price_max` typed as `float` rather than `Decimal`. Matches the project's existing price-shape convention but pushes IEEE-754 precision into the REST surface.
+- F13: Datetime TZ ambiguity — naive datetimes serialize without `Z` suffix via Pydantic's default. REST consumers get ambiguous timestamps. Pre-existing; fix with a model `json_encoders` or strict tzinfo coercion upstream in metadata import.
+- F14: `format_bar_count` passed as a callable in per-render template context rather than registered as a Jinja filter (pattern inherited from Story 2-2). Any new caller of `stats_panel.html` must remember to include it in context or the template raises `UndefinedError`.

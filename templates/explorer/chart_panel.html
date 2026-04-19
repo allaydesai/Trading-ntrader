@@ -37,8 +37,10 @@
     </div>
 </div>
 
-<!-- OOB placeholder for stats panel (Story 2-3) -->
-<div id="stats-panel" hx-swap-oob="true"></div>
+<!-- OOB refresh for stats panel (Story 2-3) -->
+<div id="stats-panel" hx-swap-oob="innerHTML">
+    {% include "explorer/stats_panel.html" %}
+</div>
 
 <script>
 (function() {
