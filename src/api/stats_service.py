@@ -10,6 +10,7 @@ active timeframe on purpose — chart panel windows, stats does not. Do not copy
 `_compute_chart_window` logic here.
 """
 
+import asyncio
 import time
 from datetime import datetime, timezone
 from typing import Optional
@@ -63,7 +64,8 @@ async def _build_ticker_stats(
 
     started = time.perf_counter()
     try:
-        bars = catalog_service.query_bars(
+        bars = await asyncio.to_thread(
+            catalog_service.query_bars,
             instrument_id=nautilus_id,
             start=start_dt,
             end=end_dt,

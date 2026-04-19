@@ -5,6 +5,7 @@ Provides indicator values for chart overlay using Nautilus Trader indicator clas
 to ensure identical calculations to the strategy.
 """
 
+import asyncio
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -246,7 +247,8 @@ async def get_indicators(
             catalog = DataCatalogService()
 
             # Query bars for the backtest period
-            bars = catalog.query_bars(
+            bars = await asyncio.to_thread(
+                catalog.query_bars,
                 instrument_id=backtest.instrument_symbol,
                 start=datetime.combine(backtest.start_date, datetime.min.time()).replace(
                     tzinfo=timezone.utc
@@ -274,7 +276,8 @@ async def get_indicators(
             catalog = DataCatalogService()
 
             # Query bars for the backtest period
-            bars = catalog.query_bars(
+            bars = await asyncio.to_thread(
+                catalog.query_bars,
                 instrument_id=backtest.instrument_symbol,
                 start=datetime.combine(backtest.start_date, datetime.min.time()).replace(
                     tzinfo=timezone.utc

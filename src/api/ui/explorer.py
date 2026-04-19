@@ -5,6 +5,7 @@ Provides the data explorer page with ticker browsing, search, and filtering,
 plus chart panel fragment for HTMX partial updates.
 """
 
+import asyncio
 import json  # noqa: F401 — used in chart_panel_fragment
 import math
 from datetime import datetime, timedelta, timezone  # noqa: F401
@@ -346,7 +347,8 @@ async def chart_panel_fragment(
     )
 
     try:
-        bars = catalog_service.query_bars(
+        bars = await asyncio.to_thread(
+            catalog_service.query_bars,
             instrument_id=nautilus_id,
             start=start_dt,
             end=end_dt,

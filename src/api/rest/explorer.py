@@ -5,6 +5,7 @@ Provides paginated, searchable ticker list as JSON for the explorer feature,
 and chart data endpoint for candlestick rendering.
 """
 
+import asyncio
 import math
 from datetime import date, datetime, timezone
 from typing import Optional
@@ -105,7 +106,8 @@ async def get_chart_data(
     )
 
     try:
-        bars = catalog_service.query_bars(
+        bars = await asyncio.to_thread(
+            catalog_service.query_bars,
             instrument_id=nautilus_id,
             start=start_dt,
             end=end_dt,
