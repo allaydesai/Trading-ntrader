@@ -18,19 +18,27 @@ EXPLORER_PAGE_SIZE = 25
 class ExplorerTimeframe(Enum):
     """Timeframe options for the explorer chart panel.
 
-    Each member maps a display label to a Nautilus bar type spec
-    and the corresponding CatalogInstrument bar_count field.
+    Each member maps a display label to a Nautilus bar type spec,
+    the corresponding CatalogInstrument bar_count field, and an
+    optional initial window (days) for chart loading.
     """
 
-    DAILY = ("D", "1-DAY-LAST", "bar_count_daily")
-    HOURLY = ("1H", "1-HOUR-LAST", "bar_count_hourly")
-    FIVE_MIN = ("5m", "5-MINUTE-LAST", "bar_count_5min")
-    ONE_MIN = ("1m", "1-MINUTE-LAST", "bar_count_minute")
+    DAILY = ("D", "1-DAY-LAST", "bar_count_daily", 1825)
+    HOURLY = ("1H", "1-HOUR-LAST", "bar_count_hourly", 180)
+    FIVE_MIN = ("5m", "5-MINUTE-LAST", "bar_count_5min", 30)
+    ONE_MIN = ("1m", "1-MINUTE-LAST", "bar_count_minute", 7)
 
-    def __init__(self, label: str, bar_type_spec: str, bar_count_field: str):
+    def __init__(
+        self,
+        label: str,
+        bar_type_spec: str,
+        bar_count_field: str,
+        initial_window_days: Optional[int],
+    ):
         self._label = label
         self._bar_type_spec = bar_type_spec
         self._bar_count_field = bar_count_field
+        self._initial_window_days = initial_window_days
 
     @property
     def label(self) -> str:
@@ -43,6 +51,11 @@ class ExplorerTimeframe(Enum):
     @property
     def bar_count_field(self) -> str:
         return self._bar_count_field
+
+    @property
+    def initial_window_days(self) -> Optional[int]:
+        """Days of data to load initially, or None for all."""
+        return self._initial_window_days
 
     @classmethod
     def from_label(cls, label: str) -> "ExplorerTimeframe":

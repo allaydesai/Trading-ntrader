@@ -1,6 +1,6 @@
 """Component tests for chart panel REST and UI routes (Story 2-2)."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -219,3 +219,63 @@ class TestChartPanelUIRoute:
         response = client.get("/explorer/chart-panel?catalog=us_stocks&ticker=AAPL&tf=D")
         assert 'id="stats-panel"' in response.text
         assert "hx-swap-oob" in response.text
+
+
+@pytest.mark.component
+class TestChartPanelWindowing:
+    """Tests for windowed chart data loading."""
+
+    def test_daily_loads_windowed_range(self, client, mock_catalog_service):
+        """Daily timeframe windows to last 1825 days."""
+        client.get("/explorer/chart-panel?catalog=us_stocks&ticker=AAPL&tf=D")
+        call_kwargs = mock_catalog_service.query_bars.call_args.kwargs
+        assert call_kwargs["end"] == datetime(2025, 12, 31, tzinfo=timezone.utc)
+        expected_start = datetime(2025, 12, 31, tzinfo=timezone.utc) - timedelta(days=1825)
+        assert call_kwargs["start"] == expected_start
+
+    def test_5min_loads_windowed_range(self, client, mock_catalog_service):
+        """5-min timeframe windows to last 30 days from date_range_end.
+
+        Instrument date_range_end = 2025-12-31, so window starts
+        2025-12-01 (30 days before).
+        """
+        client.get("/explorer/chart-panel?catalog=us_stocks&ticker=AAPL&tf=5m")
+        call_kwargs = mock_catalog_service.query_bars.call_args.kwargs
+        # End anchored to instrument's date_range_end
+        assert call_kwargs["end"] == datetime(2025, 12, 31, tzinfo=timezone.utc)
+        # Start is 30 days before date_range_end
+        expected_start = datetime(2025, 12, 31, tzinfo=timezone.utc) - timedelta(days=30)
+        assert call_kwargs["start"] == expected_start
+
+    def test_hourly_loads_windowed_range(self, client, mock_catalog_service):
+        """Hourly timeframe windows to last 180 days."""
+        client.get("/explorer/chart-panel?catalog=us_stocks&ticker=AAPL&tf=1H")
+        call_kwargs = mock_catalog_service.query_bars.call_args.kwargs
+        assert call_kwargs["end"] == datetime(2025, 12, 31, tzinfo=timezone.utc)
+        expected_start = datetime(2025, 12, 31, tzinfo=timezone.utc) - timedelta(days=180)
+        assert call_kwargs["start"] == expected_start
+
+    def test_1min_loads_windowed_range(self, client, mock_catalog_service):
+        """1-min timeframe windows to last 7 days."""
+        client.get("/explorer/chart-panel?catalog=us_stocks&ticker=AAPL&tf=1m")
+        call_kwargs = mock_catalog_service.query_bars.call_args.kwargs
+        expected_start = datetime(2025, 12, 31, tzinfo=timezone.utc) - timedelta(days=7)
+        assert call_kwargs["start"] == expected_start
+
+    def test_window_metadata_in_response(self, client):
+        """Template receives windowing JS variables for 5-min."""
+        response = client.get("/explorer/chart-panel?catalog=us_stocks&ticker=AAPL&tf=5m")
+        assert "windowDays" in response.text
+        assert "hasEarlierData" in response.text
+
+    def test_no_date_range_end_still_works(
+        self, client, mock_metadata_service, mock_catalog_service
+    ):
+        """When instrument has no date_range_end, falls back to now."""
+        mock_metadata_service.get_instrument.return_value = _make_instrument(date_range_end=None)
+        response = client.get("/explorer/chart-panel?catalog=us_stocks&ticker=AAPL&tf=5m")
+        assert response.status_code == 200
+        # Should still call query_bars with some bounded range
+        call_kwargs = mock_catalog_service.query_bars.call_args.kwargs
+        assert call_kwargs["end"].year >= 2026
+        assert call_kwargs["start"] < call_kwargs["end"]

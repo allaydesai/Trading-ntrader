@@ -50,6 +50,19 @@ class TestExplorerTimeframe:
         assert ExplorerTimeframe.FIVE_MIN.bar_count_field == "bar_count_5min"
         assert ExplorerTimeframe.ONE_MIN.bar_count_field == "bar_count_minute"
 
+    def test_daily_initial_window_days(self):
+        """Daily windows to ~5 years of data."""
+        assert ExplorerTimeframe.DAILY.initial_window_days == 1825
+
+    def test_hourly_initial_window_days(self):
+        assert ExplorerTimeframe.HOURLY.initial_window_days == 180
+
+    def test_five_min_initial_window_days(self):
+        assert ExplorerTimeframe.FIVE_MIN.initial_window_days == 30
+
+    def test_one_min_initial_window_days(self):
+        assert ExplorerTimeframe.ONE_MIN.initial_window_days == 7
+
 
 @pytest.mark.unit
 class TestChartDataResponse:

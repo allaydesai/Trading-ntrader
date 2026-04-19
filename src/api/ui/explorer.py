@@ -7,7 +7,7 @@ plus chart panel fragment for HTMX partial updates.
 
 import json  # noqa: F401 — used in chart_panel_fragment
 import math
-from datetime import datetime, timezone  # noqa: F401
+from datetime import datetime, timedelta, timezone  # noqa: F401
 from typing import Optional
 
 import structlog
@@ -232,6 +232,30 @@ async def ticker_list_fragment(
     )
 
 
+def _compute_chart_window(
+    active_tf: ExplorerTimeframe,
+    date_range_start: Optional[datetime],
+    date_range_end: Optional[datetime],
+) -> tuple[datetime, datetime, bool]:
+    """Compute windowed start/end for initial chart load.
+
+    Returns full 1970–2099 range when the timeframe has no window
+    (daily). Otherwise returns a trailing window anchored to
+    date_range_end, sized by initial_window_days.
+    """
+    window_days = active_tf.initial_window_days
+    if window_days is None:
+        return (
+            datetime(1970, 1, 1, tzinfo=timezone.utc),
+            datetime(2099, 12, 31, tzinfo=timezone.utc),
+            False,
+        )
+    anchor = date_range_end or datetime.now(timezone.utc)
+    window_start = anchor - timedelta(days=window_days)
+    has_earlier = date_range_start is not None and date_range_start < window_start
+    return window_start, anchor, has_earlier
+
+
 @router.get("/chart-panel", response_class=HTMLResponse)
 async def chart_panel_fragment(
     request: Request,
@@ -274,9 +298,12 @@ async def chart_panel_fragment(
         if count > 0:
             available_tfs.add(etf.label)
 
-    # Fetch bar data
-    start_dt = datetime(1970, 1, 1, tzinfo=timezone.utc)
-    end_dt = datetime(2099, 12, 31, tzinfo=timezone.utc)
+    # Compute windowed date range for chart loading
+    start_dt, end_dt, has_earlier_data = _compute_chart_window(
+        active_tf,
+        instrument.date_range_start,
+        instrument.date_range_end,
+    )
 
     try:
         bars = catalog_service.query_bars(
@@ -301,6 +328,9 @@ async def chart_panel_fragment(
     ]
 
     bars_json = json.dumps([c.model_dump() for c in candles])
+    window_days = active_tf.initial_window_days or 0
+    dr_start = instrument.date_range_start
+    dr_start_iso = dr_start.strftime("%Y-%m-%d") if dr_start else None
 
     return templates.TemplateResponse(
         "explorer/chart_panel.html",
@@ -313,5 +343,8 @@ async def chart_panel_fragment(
             "available_tfs": available_tfs,
             "bars_json": bars_json,
             "bar_count": len(candles),
+            "has_earlier_data": has_earlier_data,
+            "window_days": window_days,
+            "date_range_start_iso": dr_start_iso,
         },
     )

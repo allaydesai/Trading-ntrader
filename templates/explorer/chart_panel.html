@@ -85,14 +85,17 @@
     window._explorerCandleSeries = candleSeries;
     window._explorerResizeObs = createResizeObserver(container, chart);
 
-    // Progressive loading: fetch more data when user pans to boundary
+    // Progressive loading: fetch bounded chunks when user pans left
     var ticker = {{ ticker | tojson }};
     var catalog = {{ catalog | tojson }};
     var tfLabel = {{ active_tf.label | tojson }};
+    var windowDays = {{ window_days }};
+    var hasEarlierData = {{ has_earlier_data | tojson }};
+    var dateRangeStartIso = {{ date_range_start_iso | tojson }};
     var isFetching = false;
 
     chart.timeScale().subscribeVisibleTimeRangeChange(function(newRange) {
-        if (isFetching || !newRange || newRange.from === null) return;
+        if (isFetching || !hasEarlierData || !newRange || newRange.from === null) return;
 
         var currentData = candleSeries.data();
         if (!currentData || currentData.length === 0) return;
@@ -102,11 +105,22 @@
         if (newRange.from <= earliestBar) {
             isFetching = true;
             var endDate = new Date(earliestBar * 1000);
+            // Fetch a bounded chunk (windowDays back from earliest bar)
+            var chunkDays = windowDays || 365;
+            var startDate = new Date(endDate);
+            startDate.setDate(startDate.getDate() - chunkDays);
+            // Clamp to instrument's actual data start
+            if (dateRangeStartIso) {
+                var floor = new Date(dateRangeStartIso + 'T00:00:00Z');
+                if (startDate < floor) startDate = floor;
+            }
+            var startStr = startDate.toISOString().split('T')[0];
             var endStr = endDate.toISOString().split('T')[0];
 
             fetch('/api/chart/catalog/' + encodeURIComponent(ticker) +
                   '?catalog=' + encodeURIComponent(catalog) +
                   '&tf=' + encodeURIComponent(tfLabel) +
+                  '&start=' + startStr +
                   '&end=' + endStr)
                 .then(function(resp) { return resp.json(); })
                 .then(function(data) {
@@ -114,6 +128,9 @@
                         var allData = data.bars.concat(currentData);
                         var deduped = deduplicateTimeseriesData(allData);
                         candleSeries.setData(deduped);
+                    } else {
+                        // No more data available — stop fetching
+                        hasEarlierData = false;
                     }
                 })
                 .catch(function() {})
