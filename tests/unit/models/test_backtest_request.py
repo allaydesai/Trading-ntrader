@@ -2,6 +2,7 @@
 
 from datetime import datetime, timezone
 from decimal import Decimal
+from unittest.mock import patch
 
 import pytest
 import yaml
@@ -183,3 +184,92 @@ class TestBacktestRequestFromYaml:
         """Test error when YAML file doesn't exist."""
         with pytest.raises(FileNotFoundError):
             BacktestRequest.from_yaml_file(tmp_path / "nonexistent.yaml")
+
+
+class TestBacktestRequestCatalogName:
+    """Tests for the catalog_name field and persistence helper (Story 3.1)."""
+
+    def _base_kwargs(self) -> dict:
+        return {
+            "strategy_type": "sma_crossover",
+            "strategy_path": "src.core.strategies.sma_crossover:SMACrossover",
+            "symbol": "AAPL",
+            "instrument_id": "AAPL.NASDAQ",
+            "start_date": datetime(2024, 1, 1, tzinfo=timezone.utc),
+            "end_date": datetime(2024, 6, 1, tzinfo=timezone.utc),
+            "bar_type": "1-DAY-LAST",
+        }
+
+    def test_catalog_name_defaults_to_none(self):
+        """catalog_name should default to None when not provided."""
+        request = BacktestRequest(**self._base_kwargs())
+        assert request.catalog_name is None
+
+    def test_catalog_name_can_be_set(self):
+        """catalog_name should accept a string value."""
+        request = BacktestRequest(catalog_name="e2e-test", **self._base_kwargs())
+        assert request.catalog_name == "e2e-test"
+
+    def test_from_cli_args_propagates_catalog_name(self):
+        """from_cli_args should propagate catalog_name to the built request."""
+        request = BacktestRequest.from_cli_args(
+            strategy="sma_crossover",
+            symbol="AAPL",
+            start=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            end=datetime(2024, 6, 1, tzinfo=timezone.utc),
+            bar_type_spec="1-MINUTE-LAST",
+            catalog_name="e2e-test",
+        )
+        assert request.catalog_name == "e2e-test"
+        assert request.symbol == "AAPL"
+
+    def test_from_cli_args_skips_instrument_resolution_when_catalog_name_set(self):
+        """When catalog_name is set, _resolve_instrument_id must not be called.
+
+        The DB-authoritative nautilus_id will be overridden at load time —
+        the request starts with a bare {symbol}.PLACEHOLDER shape that the
+        loader overwrites.
+        """
+        with patch("src.models.backtest_request._resolve_instrument_id") as mock_resolve:
+            BacktestRequest.from_cli_args(
+                strategy="sma_crossover",
+                symbol="AAPL",
+                start=datetime(2024, 1, 1, tzinfo=timezone.utc),
+                end=datetime(2024, 6, 1, tzinfo=timezone.utc),
+                bar_type_spec="1-DAY-LAST",
+                catalog_name="e2e-test",
+            )
+            mock_resolve.assert_not_called()
+
+    def test_to_config_snapshot_includes_catalog_name(self):
+        """Config snapshot should include catalog_name for reproducibility."""
+        request = BacktestRequest(catalog_name="e2e-test", **self._base_kwargs())
+        snapshot = request.to_config_snapshot()
+        assert snapshot["catalog_name"] == "e2e-test"
+
+    def test_to_persistence_data_source_with_catalog_name(self):
+        """Named-catalog runs persist as 'catalog:<name>'."""
+        request = BacktestRequest(catalog_name="e2e-test", **self._base_kwargs())
+        assert request.to_persistence_data_source() == "catalog:e2e-test"
+
+    def test_to_persistence_data_source_without_catalog_name(self):
+        """Non-named runs persist as the underlying data_source."""
+        request = BacktestRequest(**self._base_kwargs())
+        assert request.to_persistence_data_source() == "catalog"
+
+    def test_to_persistence_data_source_with_kraken(self):
+        """Kraken runs persist as 'kraken', unaffected by catalog_name default."""
+        kwargs = self._base_kwargs()
+        kwargs["data_source"] = "kraken"
+        kwargs["instrument_id"] = "BTC/USD.KRAKEN"
+        request = BacktestRequest(**kwargs)
+        assert request.to_persistence_data_source() == "kraken"
+
+    def test_data_source_allow_list_unchanged(self):
+        """The data_source validator allow-list must stay {catalog,ibkr,kraken,mock}."""
+        from pydantic import ValidationError
+
+        kwargs = self._base_kwargs()
+        kwargs["data_source"] = "firstrate"
+        with pytest.raises(ValidationError, match="Invalid data_source"):
+            BacktestRequest(**kwargs)

@@ -1156,3 +1156,101 @@ class TestPrecisionFromBars:
         bar2 = MagicMock()
         bar2.close = _FakePrice("100.123")
         assert _precision_from_bars([bar1, bar2]) == 3
+
+
+class TestLoadBacktestDataCatalogNameRouting:
+    """Tests for the catalog_name short-circuit route (Story 3.1, Task 3)."""
+
+    @pytest.mark.asyncio
+    async def test_catalog_name_routes_to_load_from_catalog(self):
+        """When catalog_name is set, delegate to load_from_catalog and skip DataCatalogService."""
+        from src.cli.commands import _backtest_helpers
+        from src.cli.commands._backtest_helpers import DataLoadResult, load_backtest_data
+
+        captured_kwargs: dict = {}
+
+        async def capture_and_return(**kwargs):
+            captured_kwargs.update(kwargs)
+            return DataLoadResult(
+                bars=[MagicMock()],
+                instrument=MagicMock(),
+                data_source_used="Catalog: e2e-test",
+            )
+
+        mock_session = MagicMock()
+
+        mock_catalog_service = MagicMock()
+
+        start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        end = datetime(2024, 6, 30, tzinfo=timezone.utc)
+
+        with (
+            patch.object(
+                _backtest_helpers, "_resolve_named_catalog_loader", return_value=capture_and_return
+            ),
+            patch.object(
+                _backtest_helpers,
+                "_build_named_catalog_dependencies",
+                return_value=(MagicMock(), MagicMock(), mock_session),
+            ),
+        ):
+            result = await load_backtest_data(
+                data_source="catalog",
+                instrument_id="AAPL.NASDAQ",
+                bar_type_spec="1-MINUTE-LAST",
+                start=start,
+                end=end,
+                console=Console(force_terminal=True, width=120),
+                catalog_service=mock_catalog_service,
+                catalog_name="e2e-test",
+            )
+
+        assert result.data_source_used == "Catalog: e2e-test"
+        assert captured_kwargs["catalog_name"] == "e2e-test"
+        assert captured_kwargs["ticker"] == "AAPL"
+        assert captured_kwargs["bar_type_spec"] == "1-MINUTE-LAST"
+        assert captured_kwargs["start"] == start
+        assert captured_kwargs["end"] == end
+        # Legacy catalog path must be completely bypassed
+        mock_catalog_service.get_availability.assert_not_called()
+        mock_catalog_service.fetch_or_load.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_no_catalog_name_uses_existing_catalog_branch(self):
+        """catalog_name=None leaves the existing _load_catalog_data path untouched."""
+        from src.cli.commands._backtest_helpers import load_backtest_data
+
+        mock_catalog_service = MagicMock()
+        mock_availability = MagicMock()
+        mock_availability.covers_range.return_value = True
+        mock_availability.start_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        mock_availability.end_date = datetime(2024, 12, 31, tzinfo=timezone.utc)
+        mock_availability.file_count = 5
+        mock_availability.total_rows = 1000
+        mock_catalog_service.get_availability.return_value = mock_availability
+
+        mock_bars = [MagicMock()]
+        mock_instrument = MagicMock()
+
+        async def mock_fetch_or_load(*args, **kwargs):
+            return mock_bars
+
+        mock_catalog_service.fetch_or_load = mock_fetch_or_load
+        mock_catalog_service.load_instrument.return_value = mock_instrument
+
+        start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        end = datetime(2024, 6, 30, tzinfo=timezone.utc)
+
+        result = await load_backtest_data(
+            data_source="catalog",
+            instrument_id="AAPL.NASDAQ",
+            bar_type_spec="1-DAY-LAST",
+            start=start,
+            end=end,
+            console=Console(force_terminal=True, width=120),
+            catalog_service=mock_catalog_service,
+            catalog_name=None,
+        )
+
+        assert result.bars == mock_bars
+        mock_catalog_service.get_availability.assert_called_once()

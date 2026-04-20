@@ -266,6 +266,66 @@ class TestPostRunBacktest:
         assert response.status_code == 409
         assert "already in progress" in response.text.lower()
 
+    @patch("src.api.ui.backtests.BacktestOrchestrator")
+    @patch("src.api.ui.backtests.load_backtest_data")
+    @patch("src.api.ui.backtests.BacktestRequest")
+    def test_catalog_name_threaded_through_handler(
+        self, mock_request_cls, mock_load_data, mock_orchestrator_cls, client
+    ):
+        """catalog_name in form data must be passed to load_backtest_data + from_cli_args."""
+        run_id = uuid4()
+        mock_request = MagicMock()
+        mock_request.instrument_id = "AAPL.NASDAQ"
+        mock_request.bar_type = "1-MINUTE-LAST"
+        mock_request.start_date = datetime(2018, 1, 1, tzinfo=timezone.utc)
+        mock_request.end_date = datetime(2018, 6, 30, tzinfo=timezone.utc)
+        mock_request_cls.from_cli_args.return_value = mock_request
+
+        mock_load_result = MagicMock()
+        mock_load_result.bars = [MagicMock()]
+        mock_load_result.instrument = MagicMock()
+        mock_load_data.return_value = mock_load_result
+
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.execute = AsyncMock(return_value=(MagicMock(), run_id))
+        mock_orchestrator_cls.return_value = mock_orchestrator
+
+        response = client.post(
+            "/backtests/run",
+            data=self._form_data(
+                symbol="AAPL",
+                start_date="2018-01-01",
+                end_date="2018-06-30",
+                timeframe="1-MINUTE",
+                catalog_name="e2e-test",
+            ),
+            follow_redirects=False,
+        )
+
+        assert response.headers.get("HX-Redirect") == f"/backtests/{run_id}"
+
+        load_kwargs = mock_load_data.call_args.kwargs
+        assert load_kwargs["catalog_name"] == "e2e-test"
+
+        req_kwargs = mock_request_cls.from_cli_args.call_args.kwargs
+        assert req_kwargs["catalog_name"] == "e2e-test"
+
+
+class TestGetRunBacktestFormCatalogPrefill:
+    """GET /backtests/run must pre-fill catalog_name from ?catalog= query string."""
+
+    def test_catalog_query_string_is_prefilled(self, client):
+        response = client.get("/backtests/run?catalog=e2e-test")
+        assert response.status_code == 200
+        assert 'value="e2e-test"' in response.text
+        assert 'name="catalog_name"' in response.text
+
+    def test_missing_catalog_query_string_has_empty_value(self, client):
+        response = client.get("/backtests/run")
+        assert response.status_code == 200
+        # Catalog field exists (hidden) but empty
+        assert 'name="catalog_name"' in response.text
+
 
 class TestGetStrategyParams:
     """Tests for GET /backtests/run/strategy-params/{strategy_name}."""

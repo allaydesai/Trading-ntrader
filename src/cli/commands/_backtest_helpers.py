@@ -4,7 +4,6 @@ This module extracts common logic shared between run_backtest() and run_config_b
 to reduce code duplication and improve maintainability.
 """
 
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -21,23 +20,13 @@ from rich.table import Table
 from src.core.backtest_orchestrator import BacktestOrchestrator
 from src.models.backtest_request import BacktestRequest
 from src.models.backtest_result import BacktestResult
+from src.models.data_load_result import DataLoadResult
 from src.services.data_catalog import DataCatalogService
 from src.utils.mock_data import generate_mock_data_from_yaml
 
-
-@dataclass
-class DataLoadResult:
-    """Result of loading backtest data from catalog or mock generation.
-
-    Attributes:
-        bars: List of loaded or generated Bar objects
-        instrument: The instrument for the backtest
-        data_source_used: Source description ("Parquet Catalog", "IBKR Auto-fetch", "Mock")
-    """
-
-    bars: list[Bar]
-    instrument: Instrument
-    data_source_used: str
+# Re-export for backwards compatibility — callers that import DataLoadResult
+# from this module continue to work; new code should import from src.models.
+__all__ = ["DataLoadResult"]
 
 
 def apply_cli_overrides(
@@ -118,6 +107,7 @@ def resolve_backtest_request(
     slow_period: int | None = None,
     trade_size: int | None = None,
     timeframe: str | None = None,
+    catalog_name: str | None = None,
 ) -> tuple[BacktestRequest, str]:
     """Resolve inputs into BacktestRequest based on mode (config vs CLI).
 
@@ -157,6 +147,7 @@ def resolve_backtest_request(
             starting_balance=starting_balance,
             persist=persist,
             console=console,
+            catalog_name=catalog_name,
         )
     else:
         return _resolve_cli_mode(
@@ -172,6 +163,7 @@ def resolve_backtest_request(
             slow_period=slow_period,
             trade_size=trade_size,
             timeframe=timeframe,
+            catalog_name=catalog_name,
         )
 
 
@@ -185,6 +177,7 @@ def _resolve_config_mode(
     starting_balance: float | None,
     persist: bool,
     console: Console,
+    catalog_name: str | None = None,
 ) -> tuple[BacktestRequest, str]:
     """Resolve request from YAML config file with optional CLI overrides."""
     import yaml
@@ -217,6 +210,11 @@ def _resolve_config_mode(
         starting_balance=starting_balance,
     )
 
+    # CLI --catalog override wins over any catalog_name in YAML (explicit beats implicit).
+    # YAML-mode catalog_name support itself is a future enhancement (see Task 4.3).
+    if catalog_name is not None:
+        request = request.model_copy(update={"catalog_name": catalog_name})
+
     return request, resolved_data_source
 
 
@@ -234,6 +232,7 @@ def _resolve_cli_mode(
     slow_period: int | None,
     trade_size: int | None,
     timeframe: str | None,
+    catalog_name: str | None = None,
 ) -> tuple[BacktestRequest, str]:
     """Resolve request from CLI arguments (traditional mode)."""
     # Validate required parameters for CLI mode
@@ -317,10 +316,57 @@ def _resolve_cli_mode(
         persist=persist,
         starting_balance=resolved_starting_balance,
         data_source=resolved_data_source,
+        catalog_name=catalog_name,
         **strategy_params,
     )
 
     return request, resolved_data_source
+
+
+def _resolve_named_catalog_loader():
+    """Return the ``load_from_catalog`` callable.
+
+    Factored out so tests can patch the resolution without monkey-patching the
+    loader module directly (which would couple tests to import order).
+    """
+    from src.services.firstrate.backtest_loader import load_from_catalog
+
+    return load_from_catalog
+
+
+def _build_named_catalog_dependencies():
+    """Construct a (CatalogManager, MetadataService) pair for named-catalog loads.
+
+    CLI + web share the same sync session factory; the loader wraps sync calls in
+    ``asyncio.to_thread`` internally so the sync repo is safe on both paths.
+    """
+    from pathlib import Path
+
+    from src.config import get_settings
+    from src.db.repositories.catalog_instrument_repository import (
+        SyncCatalogInstrumentRepository,
+    )
+    from src.db.session_sync import get_sync_session_maker
+    from src.services.firstrate.catalog_manager import CatalogManager
+    from src.services.firstrate.metadata_service import MetadataService
+
+    settings = get_settings()
+    session_maker = get_sync_session_maker()
+    if session_maker is None:
+        raise RuntimeError(
+            "Named-catalog backtest requires a configured database (DATABASE_URL). Check .env."
+        )
+    session = session_maker()
+    try:
+        sync_repo = SyncCatalogInstrumentRepository(session)
+        metadata_service = MetadataService(sync_repo=sync_repo)
+        catalog_manager = CatalogManager(Path(settings.catalog.catalog_base_path))
+    except Exception:
+        # Close the session if any downstream constructor raises, to avoid a
+        # leaked DB connection. The caller owns `session.close()` on success.
+        session.close()
+        raise
+    return catalog_manager, metadata_service, session
 
 
 async def load_backtest_data(
@@ -333,10 +379,12 @@ async def load_backtest_data(
     console: Console,
     catalog_service: DataCatalogService | None = None,
     yaml_data: dict | None = None,
+    catalog_name: str | None = None,
 ) -> DataLoadResult:
     """Load backtest data from catalog, Kraken, or generate mock data.
 
     Unified data loading that handles:
+    - Named FirstRate catalog (short-circuit when ``catalog_name`` is set)
     - Catalog data with availability checking
     - IBKR auto-fetch when catalog data is incomplete
     - Kraken historical data fetching for crypto pairs
@@ -351,16 +399,47 @@ async def load_backtest_data(
         console: Rich console for output
         catalog_service: Optional catalog service instance (created if not provided)
         yaml_data: YAML configuration dict (required for mock data source)
+        catalog_name: Named FirstRate catalog. When set, routes bars through
+            ``load_from_catalog`` (bypasses ``DataCatalogService`` and IBKR).
 
     Returns:
         DataLoadResult containing bars, instrument, and source description
 
     Raises:
-        ValueError: If mock data source is used without yaml_data
+        ValueError: If mock data source is used without yaml_data, or if the
+            named catalog does not exist.
         DataNotFoundError: If no data can be found or fetched
         IBKRConnectionError: If IBKR connection fails during fetch
         KrakenConnectionError: If Kraken connection fails during fetch
     """
+    if catalog_name:
+        loader = _resolve_named_catalog_loader()
+        catalog_manager, metadata_service, session = _build_named_catalog_dependencies()
+        # Strip the `.NAMED_CATALOG` suffix placed by `BacktestRequest.from_cli_args`
+        # when `catalog_name` is set. Using `rsplit` with maxsplit=1 preserves
+        # multi-dot tickers like `BRK.B`, which `split(".", 1)[0]` would truncate.
+        if instrument_id.endswith(".NAMED_CATALOG"):
+            ticker = instrument_id[: -len(".NAMED_CATALOG")]
+        else:
+            ticker = instrument_id.rsplit(".", 1)[0]
+        try:
+            result = await loader(
+                catalog_name=catalog_name,
+                ticker=ticker,
+                bar_type_spec=bar_type_spec,
+                start=start,
+                end=end,
+                catalog_manager=catalog_manager,
+                metadata_service=metadata_service,
+            )
+        finally:
+            session.close()
+        console.print(
+            f"   Loaded {len(result.bars):,} bars from catalog '{catalog_name}'",
+            style="green",
+        )
+        return result
+
     if data_source == "mock":
         return await _load_mock_data(yaml_data=yaml_data, console=console)
     elif data_source == "kraken":

@@ -87,6 +87,14 @@ def _build_run_context(
             BreadcrumbItem(label="Run Backtest", url=None, is_current=True),
         ],
     )
+    merged_form = dict(form_data or {})
+    # Pre-fill catalog from ?catalog= query string on GET (Story 3.1 bridge).
+    # Use `.get()` so a re-rendered form with an explicit None value still
+    # inherits the URL hint — relying on `not in` would treat a None-valued
+    # key as "present" and skip the prefill.
+    catalog_from_query = request.query_params.get("catalog")
+    if catalog_from_query and not merged_form.get("catalog_name"):
+        merged_form["catalog_name"] = catalog_from_query
     return {
         "request": request,
         "strategies": _get_strategies(),
@@ -94,7 +102,7 @@ def _build_run_context(
         "timeframes": TIMEFRAMES,
         "nav_state": nav_state,
         "errors": errors or {},
-        "form_data": form_data or {},
+        "form_data": merged_form,
         "execution_error": execution_error,
     }
 
@@ -119,6 +127,7 @@ async def run_backtest_form(request: Request) -> HTMLResponse:
 async def run_backtest_submit(request: Request) -> Response:
     """Submit backtest configuration, execute, and redirect to results."""
     form = await request.form()
+    raw_catalog = form.get("catalog_name", "")
     raw_data: dict[str, Any] = {
         "strategy": form.get("strategy", ""),
         "symbol": form.get("symbol", ""),
@@ -128,6 +137,7 @@ async def run_backtest_submit(request: Request) -> Response:
         "timeframe": form.get("timeframe", "1-DAY"),
         "starting_balance": form.get("starting_balance", "1000000"),
         "timeout_seconds": form.get("timeout_seconds", "300"),
+        "catalog_name": raw_catalog if raw_catalog else None,
     }
 
     # Collect strategy params (param_ prefixed fields)
@@ -194,6 +204,7 @@ async def run_backtest_submit(request: Request) -> Response:
                 persist=True,
                 starting_balance=form_data.starting_balance,
                 data_source=form_data.data_source,
+                catalog_name=form_data.catalog_name,
                 **form_data.strategy_params,
             )
 
@@ -204,6 +215,7 @@ async def run_backtest_submit(request: Request) -> Response:
                 start=start_dt,
                 end=end_dt,
                 console=_quiet_console,
+                catalog_name=form_data.catalog_name,
             )
         except (ValueError, RuntimeError) as e:
             logger.error("Failed to prepare backtest", error=str(e))

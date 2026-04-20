@@ -157,6 +157,69 @@ class TestBacktestCommands:
         assert result.exit_code != 0
         assert "IBKR" in result.output or "connection" in result.output.lower()
 
+    @patch("src.cli.commands._backtest_helpers._build_named_catalog_dependencies")
+    @patch("src.cli.commands._backtest_helpers._resolve_named_catalog_loader")
+    @patch("src.cli.commands._backtest_helpers.BacktestOrchestrator")
+    @pytest.mark.component
+    def test_catalog_flag_routes_named_catalog(
+        self,
+        mock_orchestrator_class,
+        mock_resolve_loader,
+        mock_build_deps,
+    ):
+        """--catalog <name> must route through load_from_catalog and skip DataCatalogService."""
+        from src.cli.commands._backtest_helpers import DataLoadResult
+
+        captured: dict = {}
+
+        async def fake_loader(**kwargs):
+            captured.update(kwargs)
+            return DataLoadResult(
+                bars=[MagicMock()],
+                instrument=MagicMock(),
+                data_source_used="Catalog: e2e-test",
+            )
+
+        mock_resolve_loader.return_value = fake_loader
+        mock_build_deps.return_value = (MagicMock(), MagicMock(), MagicMock())
+
+        mock_orchestrator = MagicMock()
+
+        async def mock_execute(*args, **kwargs):
+            return MockBacktestResult(), None
+
+        mock_orchestrator.execute = mock_execute
+        mock_orchestrator.dispose = MagicMock()
+        mock_orchestrator_class.return_value = mock_orchestrator
+
+        runner = CliRunner()
+        result = runner.invoke(
+            run_backtest,
+            [
+                "--strategy",
+                "sma_crossover",
+                "--symbol",
+                "AAPL",
+                "--start",
+                "2018-01-01",
+                "--end",
+                "2018-12-31",
+                "--timeframe",
+                "1-MINUTE",
+                "--catalog",
+                "e2e-test",
+                "--no-persist",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert captured["catalog_name"] == "e2e-test"
+        assert captured["ticker"] == "AAPL"
+        assert captured["bar_type_spec"] == "1-MINUTE-LAST"
+        # Catalog context row is surfaced for named catalogs
+        assert "e2e-test" in result.output
+        mock_orchestrator.dispose.assert_called_once()
+
     @patch("src.cli.commands._backtest_helpers.DataCatalogService")
     @patch("src.cli.commands._backtest_helpers.BacktestOrchestrator")
     @pytest.mark.component
@@ -385,6 +448,7 @@ class TestBacktestCommands:
         # Mock BacktestRequest to capture from_cli_args call
         mock_request = MagicMock()
         mock_request.symbol = "AAPL"
+        mock_request.catalog_name = None
         mock_request.instrument_id = "AAPL.NASDAQ"
         mock_request.start_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
         mock_request.end_date = datetime(2024, 1, 31, tzinfo=timezone.utc)
@@ -544,6 +608,7 @@ class TestPersistFlag:
         # Mock request
         mock_request = MagicMock()
         mock_request.symbol = "AAPL"
+        mock_request.catalog_name = None
         mock_request.instrument_id = "AAPL.NASDAQ"
         mock_request.start_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
         mock_request.end_date = datetime(2024, 1, 31, tzinfo=timezone.utc)
@@ -612,6 +677,7 @@ class TestPersistFlag:
         # Mock request
         mock_request = MagicMock()
         mock_request.symbol = "AAPL"
+        mock_request.catalog_name = None
         mock_request.instrument_id = "AAPL.NASDAQ"
         mock_request.start_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
         mock_request.end_date = datetime(2024, 1, 31, tzinfo=timezone.utc)
@@ -679,6 +745,7 @@ class TestPersistFlag:
         # Mock request
         mock_request = MagicMock()
         mock_request.symbol = "AAPL"
+        mock_request.catalog_name = None
         mock_request.instrument_id = "AAPL.NASDAQ"
         mock_request.start_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
         mock_request.end_date = datetime(2024, 1, 31, tzinfo=timezone.utc)

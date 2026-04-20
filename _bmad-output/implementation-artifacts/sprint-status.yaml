@@ -1,5 +1,5 @@
 # generated: 2026-04-05
-# last_updated: 2026-04-19 (Epic 2 retro complete → epic-2 done, epic-2-retrospective done)
+# last_updated: 2026-04-19 (Story 3-1 done)
 # project: Trading-ntrader
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-05
-last_updated: 2026-04-19 (Epic 2 retro complete → epic-2 done, epic-2-retrospective done)
+last_updated: 2026-04-19 (Story 3-1 done)
 project: Trading-ntrader
 project_key: NOKEY
 tracking_system: file-system
@@ -66,8 +66,8 @@ development_status:
   epic-2-retrospective: done
 
   # Epic 3: Backtest Integration & Verification
-  epic-3: backlog
-  3-1-catalog-integration-with-backtestengine: backlog
+  epic-3: in-progress
+  3-1-catalog-integration-with-backtestengine: done
   3-2-explorer-to-backtest-bridge: backlog
   3-3-backtest-verification-and-reference-comparison: backlog
   epic-3-retrospective: optional

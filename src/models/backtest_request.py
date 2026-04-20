@@ -94,6 +94,13 @@ class BacktestRequest(BaseModel):
     data_source: str = Field(
         default="catalog", description="Data source: catalog, ibkr, kraken, mock"
     )
+    catalog_name: str | None = Field(
+        default=None,
+        max_length=64,
+        description="Named FirstRate catalog to target (e.g., 'e2e-test'). "
+        "When set, the loader resolves bars from the named catalog instead "
+        "of the default NAUTILUS_PATH catalog.",
+    )
 
     @field_validator("data_source")
     @classmethod
@@ -103,6 +110,30 @@ class BacktestRequest(BaseModel):
         if v not in allowed:
             raise ValueError(f"Invalid data_source '{v}'. Allowed: {', '.join(sorted(allowed))}")
         return v
+
+    @field_validator("catalog_name", mode="before")
+    @classmethod
+    def validate_catalog_name(cls, v: str | None) -> str | None:
+        """Normalize and validate catalog_name.
+
+        Rejects whitespace-only strings, path traversal sequences, and any
+        character outside ``[A-Za-z0-9_-]``. Treats empty/whitespace as None
+        so callers don't need to pre-normalize form input.
+        """
+        import re
+
+        if v is None:
+            return None
+        if not isinstance(v, str):
+            raise ValueError(f"catalog_name must be a string, got {type(v).__name__}")
+        stripped = v.strip()
+        if not stripped:
+            return None
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", stripped):
+            raise ValueError(
+                f"Invalid catalog_name '{v}'. Allowed: letters, digits, underscore, hyphen."
+            )
+        return stripped
 
     # Account settings
     starting_balance: Decimal = Field(
@@ -124,6 +155,22 @@ class BacktestRequest(BaseModel):
         """Validate that start_date is before end_date."""
         if self.start_date >= self.end_date:
             raise ValueError("start_date must be before end_date")
+        return self
+
+    @model_validator(mode="after")
+    def validate_catalog_name_data_source(self) -> "BacktestRequest":
+        """Reject `catalog_name` when `data_source` is not 'catalog'.
+
+        Without this guard, a request with ``data_source='kraken'`` and
+        ``catalog_name='e2e-test'`` silently bypasses Kraken and routes through
+        the named-catalog loader (because `load_backtest_data` branches on
+        `catalog_name` first).
+        """
+        if self.catalog_name and self.data_source != "catalog":
+            raise ValueError(
+                f"catalog_name='{self.catalog_name}' is only valid when "
+                f"data_source='catalog' (got '{self.data_source}')."
+            )
         return self
 
     @classmethod
@@ -267,6 +314,7 @@ class BacktestRequest(BaseModel):
         persist: bool = True,
         starting_balance: Decimal = Decimal("1000000"),
         data_source: str = "catalog",
+        catalog_name: str | None = None,
         **strategy_params: Any,
     ) -> "BacktestRequest":
         """
@@ -281,6 +329,7 @@ class BacktestRequest(BaseModel):
             persist: Whether to persist results to database
             starting_balance: Initial account balance
             data_source: Data source (catalog, ibkr, kraken, mock)
+            catalog_name: Named FirstRate catalog (overrides default catalog lookup)
             **strategy_params: Strategy-specific parameters
 
         Returns:
@@ -296,8 +345,16 @@ class BacktestRequest(BaseModel):
         if not strategy_def:
             raise ValueError(f"Unknown strategy: {strategy}")
 
-        # Build instrument_id from symbol
-        if "." in symbol:
+        # Build instrument_id from symbol.
+        # Named-catalog path wins over dotted-symbol detection: callers like
+        # `--symbol BRK.B --catalog e2e-test` must route through the DB-backed
+        # loader, not be interpreted as an already-venue-qualified id.
+        if catalog_name:
+            # DB-authoritative nautilus_id is resolved at load time via
+            # MetadataService; the `.NAMED_CATALOG` suffix is a placeholder the
+            # loader strips. Do NOT touch the default-catalog availability cache.
+            instrument_id = f"{symbol.upper()}.NAMED_CATALOG"
+        elif "." in symbol:
             instrument_id = symbol.upper()
         elif data_source == "kraken":
             instrument_id = f"{symbol.upper()}.KRAKEN"
@@ -320,6 +377,7 @@ class BacktestRequest(BaseModel):
             config_file_path=None,
             starting_balance=starting_balance,
             data_source=data_source,
+            catalog_name=catalog_name,
         )
 
     def to_config_snapshot(self) -> dict[str, Any]:
@@ -342,4 +400,16 @@ class BacktestRequest(BaseModel):
             "config_file_path": self.config_file_path,
             "starting_balance": str(self.starting_balance),
             "data_source": self.data_source,
+            "catalog_name": self.catalog_name,
         }
+
+    def to_persistence_data_source(self) -> str:
+        """Return the data_source string for persistence (`backtest_runs.data_source`).
+
+        Named-catalog runs are persisted as ``"catalog:<name>"`` so the UI and
+        downstream queries can distinguish them from the default NAUTILUS_PATH
+        catalog and from IBKR / Kraken / mock sources.
+        """
+        if self.catalog_name:
+            return f"catalog:{self.catalog_name}"
+        return self.data_source

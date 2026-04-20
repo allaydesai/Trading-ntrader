@@ -136,6 +136,16 @@ def backtest():
     help="Bar timeframe (auto-detected from date format if not specified)",
 )
 @click.option(
+    "--catalog",
+    "catalog_name",
+    default=None,
+    type=str,
+    help=(
+        "Named FirstRate catalog (e.g., 'e2e-test'). Overrides the default "
+        "NAUTILUS_PATH catalog and resolves ticker via the import DB."
+    ),
+)
+@click.option(
     "--persist/--no-persist",
     default=True,
     help="Save backtest results to database (default: persist)",
@@ -152,6 +162,7 @@ def run_backtest(
     slow_period: int | None,
     trade_size: int | None,
     timeframe: str | None,
+    catalog_name: str | None,
     persist: bool,
 ):
     """Run backtest with real market data.
@@ -196,6 +207,7 @@ def run_backtest(
                 slow_period=slow_period,
                 trade_size=trade_size,
                 timeframe=timeframe,
+                catalog_name=catalog_name,
             )
         except click.UsageError:
             # Re-raise UsageError to let Click handle it
@@ -254,6 +266,7 @@ def run_backtest(
                     start=request.start_date,
                     end=request.end_date,
                     console=console,
+                    catalog_name=request.catalog_name,
                 )
 
             bars = data_result.bars
@@ -327,6 +340,7 @@ def run_backtest(
             if config_file:
                 context_rows = {
                     "Configuration File": config_file,
+                    "Catalog": request.catalog_name or "(default)",
                     "Symbol": request.symbol,
                     "Period": (
                         f"{request.start_date.strftime('%Y-%m-%d')} to "
@@ -346,6 +360,7 @@ def run_backtest(
 
                 context_rows = {
                     "Strategy": strategy_description,
+                    "Catalog": request.catalog_name or "(default)",
                     "Symbol": request.symbol,
                     "Period": (
                         f"{request.start_date.strftime('%Y-%m-%d')} to "
@@ -370,6 +385,12 @@ def run_backtest(
             return True
 
         except ValueError as e:
+            # Named-catalog resolution raises ValueError with the
+            # "Unknown catalog" prefix when the catalog directory is missing;
+            # surface as a usage error (exit code 2) per AC #6.
+            msg = str(e)
+            if msg.startswith("Unknown catalog"):
+                raise click.UsageError(msg) from e
             console.print(f"Backtest failed: {e}", style="red")
             return False
         except Exception as e:
