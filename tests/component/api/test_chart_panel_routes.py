@@ -283,6 +283,114 @@ class TestChartPanelUIRoute:
 
 
 @pytest.mark.component
+class TestRunBacktestButton:
+    """Story 3.2 — Run Backtest anchor inside the chart panel fragment."""
+
+    def test_button_rendered_with_correct_url(self, client, mock_metadata_service):
+        mock_metadata_service.get_instrument.return_value = _make_instrument(
+            ticker="SPY",
+            nautilus_id="SPY.ARCA",
+            date_range_start=datetime(2003, 1, 2, tzinfo=timezone.utc),
+            date_range_end=datetime(2024, 12, 31, tzinfo=timezone.utc),
+        )
+        response = client.get("/explorer/chart-panel?catalog=firstrate-research&ticker=SPY&tf=D")
+        assert response.status_code == 200
+        text = response.text
+        # Anchor present, not a <button>
+        assert 'aria-label="Run backtest for SPY"' in text
+        assert "Run Backtest" in text
+        # URL carries all four bridge params with the run-form timeframe shape.
+        # `&` is HTML-escaped to `&amp;` inside href attributes by Jinja autoescape.
+        assert "catalog=firstrate-research" in text
+        assert "ticker=SPY" in text
+        assert "timeframe=1-DAY" in text
+        assert "start=2003-01-02" in text
+        assert "end=2024-12-31" in text
+        # Primary-action styling.
+        assert "bg-blue-500" in text
+
+    def test_button_absent_when_chart_panel_not_loaded(self, client):
+        response = client.get("/explorer?catalog=us_stocks")
+        assert response.status_code == 200
+        assert "Run backtest for" not in response.text
+
+    def test_button_url_encodes_special_ticker(self, client, mock_metadata_service):
+        mock_metadata_service.get_instrument.return_value = _make_instrument(
+            ticker="BRK.B",
+            nautilus_id="BRK.B.NYSE",
+        )
+        response = client.get("/explorer/chart-panel?catalog=us_stocks&ticker=BRK.B&tf=D")
+        assert response.status_code == 200
+        assert "ticker=BRK.B" in response.text
+
+    def test_button_hidden_when_no_bars(self, client, mock_metadata_service, mock_catalog_service):
+        """Zero-bar render: anchor is gated on `run_backtest_url`, so it must not appear."""
+        mock_metadata_service.get_instrument.return_value = _make_instrument(
+            bar_count_daily=0,
+            bar_count_hourly=0,
+            bar_count_5min=0,
+            bar_count_minute=0,
+        )
+        mock_catalog_service.query_bars.return_value = []
+        response = client.get("/explorer/chart-panel?catalog=us_stocks&ticker=AAPL&tf=D")
+        assert response.status_code == 200
+        assert "Run backtest for" not in response.text
+
+    def test_button_aria_label_includes_ticker(self, client, mock_metadata_service):
+        mock_metadata_service.get_instrument.return_value = _make_instrument(ticker="MSFT")
+        response = client.get("/explorer/chart-panel?catalog=us_stocks&ticker=MSFT&tf=1H")
+        assert response.status_code == 200
+        assert 'aria-label="Run backtest for MSFT"' in response.text
+
+    def test_button_focus_ring(self, client, mock_metadata_service):
+        mock_metadata_service.get_instrument.return_value = _make_instrument(ticker="AAPL")
+        response = client.get("/explorer/chart-panel?catalog=us_stocks&ticker=AAPL&tf=D")
+        # Pin the ring assertion to the Run Backtest anchor itself — the Story 2-4
+        # focus-ring class appears on multiple elements, so a bare substring check
+        # would pass even if the anchor silently lost it.
+        html = response.text
+        anchor_start = html.find('aria-label="Run backtest for AAPL"')
+        assert anchor_start != -1, "Run Backtest anchor missing"
+        # Scan a reasonable window around the anchor element for the ring class.
+        anchor_tag_open = html.rfind("<a ", 0, anchor_start)
+        anchor_tag_close = html.find(">", anchor_start)
+        assert anchor_tag_open != -1 and anchor_tag_close != -1
+        anchor_markup = html[anchor_tag_open : anchor_tag_close + 1]
+        assert "focus:ring-offset-slate-950" in anchor_markup
+        assert "focus:ring-2" in anchor_markup
+
+    def test_button_threads_explorer_state(self, client, mock_metadata_service):
+        mock_metadata_service.get_instrument.return_value = _make_instrument(ticker="AAPL")
+        response = client.get(
+            "/explorer/chart-panel?catalog=us_stocks&ticker=AAPL&tf=D"
+            "&search=A&asset_class=STOCK&sort_by=ticker&page=2"
+        )
+        assert response.status_code == 200
+        # Parse the Run Backtest anchor's href and confirm the encoded
+        # explorer_return carries every threaded state field.
+        html = response.text
+        anchor_start = html.find('aria-label="Run backtest for AAPL"')
+        assert anchor_start != -1, "Run Backtest anchor missing"
+        tag_open = html.rfind("<a ", 0, anchor_start)
+        tag_close = html.find(">", anchor_start)
+        anchor_markup = html[tag_open : tag_close + 1]
+        assert "explorer_return=" in anchor_markup
+        # explorer_return value is URL-encoded once; search/asset_class/sort_by/page
+        # must all appear inside the encoded /explorer?... nested URL.
+        from urllib.parse import parse_qs, unquote, urlparse
+
+        href_start = anchor_markup.find('href="') + len('href="')
+        href_end = anchor_markup.find('"', href_start)
+        raw_href = anchor_markup[href_start:href_end].replace("&amp;", "&")
+        explorer_return = parse_qs(urlparse(raw_href).query).get("explorer_return", [""])[0]
+        decoded = unquote(explorer_return)
+        assert "search=A" in decoded
+        assert "asset_class=STOCK" in decoded
+        assert "sort_by=ticker" in decoded
+        assert "page=2" in decoded
+
+
+@pytest.mark.component
 class TestChartPanelWindowing:
     """Tests for windowed chart data loading."""
 

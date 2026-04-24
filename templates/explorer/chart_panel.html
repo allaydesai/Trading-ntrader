@@ -20,7 +20,7 @@
             hx-get="/explorer/chart-panel"
             hx-target="#chart-panel"
             hx-swap="innerHTML"
-            hx-vals='{"catalog": {{ catalog | tojson }}, "ticker": {{ ticker | tojson }}, "tf": {{ tf_option.label | tojson }}}'
+            hx-vals='{"catalog": {{ catalog | tojson }}, "ticker": {{ ticker | tojson }}, "tf": {{ tf_option.label | tojson }}{% if explorer_state_search %}, "search": {{ explorer_state_search | tojson }}{% endif %}{% if explorer_state_asset_class %}, "asset_class": {{ explorer_state_asset_class | tojson }}{% endif %}{% if explorer_state_sort_by %}, "sort_by": {{ explorer_state_sort_by | tojson }}{% endif %}{% if explorer_state_page %}, "page": {{ explorer_state_page | tojson }}{% endif %}}'
             hx-push-url="true"
             hx-indicator="#chart-loading-bar"
             {% endif %}
@@ -29,9 +29,18 @@
         </button>
         {% endfor %}
 
-        <span class="ml-auto text-xs text-slate-500">
-            {{ ticker }} &middot; {{ bar_count }} bars
-        </span>
+        <div class="ml-auto flex items-center gap-3">
+            <span class="text-xs text-slate-500">
+                {{ ticker }} &middot; {{ bar_count }} bars
+            </span>
+            {% if run_backtest_url %}
+            <a href="{{ run_backtest_url }}"
+               class="bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium px-3 py-1 rounded transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-slate-950"
+               aria-label="Run backtest for {{ ticker }}">
+                Run Backtest
+            </a>
+            {% endif %}
+        </div>
     </div>
     <script>
     (function() {

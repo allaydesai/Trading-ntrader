@@ -149,6 +149,11 @@
                 <p class="text-xs text-slate-500 mt-1">Backtest is running against the named FirstRate catalog (bars via DB metadata).</p>
             </div>
 
+            <!-- Explorer round-trip (Story 3.2) — hidden; POST preserves so detail page can link back. -->
+            {% if form_data.get('explorer_return') %}
+            <input type="hidden" name="explorer_return" value="{{ form_data.get('explorer_return') }}">
+            {% endif %}
+
             <!-- Strategy Params placeholder (US2) -->
             <div id="strategy-params"></div>
         </div>

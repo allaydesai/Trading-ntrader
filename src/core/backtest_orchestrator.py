@@ -506,6 +506,7 @@ class BacktestOrchestrator:
                 "config_path": request.config_path,
                 "version": "1.0",
                 "config": _make_json_serializable(request.strategy_config),
+                "bar_type": request.bar_type,
             }
 
             # Add equity curve if available
@@ -586,6 +587,7 @@ class BacktestOrchestrator:
                 "config_path": request.config_path,
                 "version": "1.0",
                 "config": _make_json_serializable(request.strategy_config),
+                "bar_type": request.bar_type,
             }
 
             start_tz = (

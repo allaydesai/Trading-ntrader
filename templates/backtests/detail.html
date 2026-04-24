@@ -58,6 +58,13 @@
 
     <!-- Action Buttons -->
     <div class="flex gap-3">
+        {% if back_to_explorer_url %}
+        <a href="{{ back_to_explorer_url }}"
+           class="border border-slate-700 text-slate-400 hover:text-slate-200 px-4 py-2 rounded font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-slate-950">
+            Back to Explorer
+        </a>
+        {% endif %}
+
         <a href="/backtests/{{ view.run_id }}/export"
            download="backtest_report_{{ view.run_id }}.html"
            class="bg-green-600 hover:bg-green-700 px-4 py-2 rounded text-white font-medium transition-colors">

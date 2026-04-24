@@ -269,6 +269,70 @@ class TestPostRunBacktest:
     @patch("src.api.ui.backtests.BacktestOrchestrator")
     @patch("src.api.ui.backtests.load_backtest_data")
     @patch("src.api.ui.backtests.BacktestRequest")
+    def test_post_success_redirects_with_explorer_return(
+        self, mock_request_cls, mock_load_data, mock_orchestrator_cls, client
+    ):
+        """Story 3.2 — successful POST appends explorer_return to HX-Redirect URL."""
+        run_id = uuid4()
+        mock_request = MagicMock()
+        mock_request.instrument_id = "SPY.ARCA"
+        mock_request_cls.from_cli_args.return_value = mock_request
+
+        mock_load_result = MagicMock()
+        mock_load_result.bars = [MagicMock()]
+        mock_load_result.instrument = MagicMock()
+        mock_load_data.return_value = mock_load_result
+
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.execute = AsyncMock(return_value=(MagicMock(), run_id))
+        mock_orchestrator_cls.return_value = mock_orchestrator
+
+        response = client.post(
+            "/backtests/run",
+            data=self._form_data(
+                symbol="SPY",
+                explorer_return="/explorer?catalog=foo&ticker=SPY",
+            ),
+            follow_redirects=False,
+        )
+
+        redirect = response.headers.get("HX-Redirect")
+        assert redirect is not None
+        assert redirect.startswith(f"/backtests/{run_id}?explorer_return=")
+        # URL-encoded value: `/` → `%2F`, `&` → `%26`, `=` → `%3D`.
+        assert "%2Fexplorer%3Fcatalog%3Dfoo%26ticker%3DSPY" in redirect
+
+    @patch("src.api.ui.backtests.BacktestOrchestrator")
+    @patch("src.api.ui.backtests.load_backtest_data")
+    @patch("src.api.ui.backtests.BacktestRequest")
+    def test_post_success_without_explorer_return_unchanged(
+        self, mock_request_cls, mock_load_data, mock_orchestrator_cls, client
+    ):
+        """No explorer_return → HX-Redirect has no query string (regression guard)."""
+        run_id = uuid4()
+        mock_request = MagicMock()
+        mock_request.instrument_id = "AAPL.NASDAQ"
+        mock_request_cls.from_cli_args.return_value = mock_request
+
+        mock_load_result = MagicMock()
+        mock_load_result.bars = [MagicMock()]
+        mock_load_result.instrument = MagicMock()
+        mock_load_data.return_value = mock_load_result
+
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.execute = AsyncMock(return_value=(MagicMock(), run_id))
+        mock_orchestrator_cls.return_value = mock_orchestrator
+
+        response = client.post(
+            "/backtests/run",
+            data=self._form_data(),
+            follow_redirects=False,
+        )
+        assert response.headers.get("HX-Redirect") == f"/backtests/{run_id}"
+
+    @patch("src.api.ui.backtests.BacktestOrchestrator")
+    @patch("src.api.ui.backtests.load_backtest_data")
+    @patch("src.api.ui.backtests.BacktestRequest")
     def test_catalog_name_threaded_through_handler(
         self, mock_request_cls, mock_load_data, mock_orchestrator_cls, client
     ):
@@ -309,6 +373,62 @@ class TestPostRunBacktest:
 
         req_kwargs = mock_request_cls.from_cli_args.call_args.kwargs
         assert req_kwargs["catalog_name"] == "e2e-test"
+
+
+class TestBridgePreFill:
+    """Story 3.2 — explorer bridge pre-fills for GET /backtests/run."""
+
+    def test_full_bridge_url_prefills_all_fields(self, client):
+        response = client.get(
+            "/backtests/run?catalog=firstrate-research&ticker=SPY&timeframe=1-DAY"
+            "&start=2003-01-02&end=2024-12-31"
+            "&explorer_return=%2Fexplorer%3Fcatalog%3Dfirstrate-research"
+        )
+        assert response.status_code == 200
+        html = response.text
+        assert 'name="symbol"' in html and 'value="SPY"' in html
+        assert 'name="start_date"' in html and 'value="2003-01-02"' in html
+        assert 'name="end_date"' in html and 'value="2024-12-31"' in html
+        assert '<option value="1-DAY" selected>' in html
+        assert 'value="firstrate-research"' in html
+        assert 'name="catalog_name"' in html
+        # Hidden explorer_return field (URL-decoded once into value attr).
+        assert 'name="explorer_return"' in html
+        assert "value=&#34;/explorer?catalog=firstrate-research&#34;" in html or (
+            'value="/explorer?catalog=firstrate-research"' in html
+        )
+
+    def test_invalid_bridge_params_do_not_500(self, client):
+        response = client.get(
+            "/backtests/run?ticker=<script>alert(1)</script>"
+            "&timeframe=DANGEROUS&start=garbage&end=2024-13-99"
+        )
+        assert response.status_code == 200
+        html = response.text
+        # XSS: raw <script> must be escaped by Jinja autoescape.
+        assert "&lt;script&gt;" in html
+        assert "<script>alert(1)" not in html
+        # Unknown timeframe silently drops → defaults to 1-DAY.
+        assert '<option value="1-DAY" selected>' in html
+        # "DANGEROUS" should never be selected.
+        assert 'value="DANGEROUS" selected' not in html
+
+    def test_bridge_without_explorer_return(self, client):
+        """No explorer_return in URL → the hidden field simply isn't rendered."""
+        response = client.get(
+            "/backtests/run?catalog=e2e-test&ticker=SPY&timeframe=1-DAY"
+            "&start=2024-01-01&end=2024-12-31"
+        )
+        assert response.status_code == 200
+        html = response.text
+        # Other bridge params applied, but no explorer_return hidden input.
+        assert 'value="SPY"' in html
+        assert 'name="explorer_return"' not in html
+
+    def test_unknown_timeframe_falls_back_to_default(self, client):
+        response = client.get("/backtests/run?timeframe=99-YEARS")
+        assert response.status_code == 200
+        assert '<option value="1-DAY" selected>' in response.text
 
 
 class TestGetRunBacktestFormCatalogPrefill:

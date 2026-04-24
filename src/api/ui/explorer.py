@@ -9,7 +9,8 @@ import asyncio
 import json  # noqa: F401 — used in chart_panel_fragment
 import math
 from datetime import datetime, timedelta, timezone  # noqa: F401
-from typing import Optional
+from typing import Any, Final, Optional
+from urllib.parse import urlencode
 
 import structlog
 from fastapi import APIRouter, HTTPException, Query, Request  # noqa: F401
@@ -41,6 +42,78 @@ templates = Jinja2Templates(directory="templates")
 PAGE_SIZE = EXPLORER_PAGE_SIZE
 VALID_TF_LABELS = {tf.label for tf in ExplorerTimeframe}
 ALL_TIMEFRAMES = list(ExplorerTimeframe)
+
+# Single source of truth for explorer ↔ run-form timeframe translation.
+# KeyError on unmapped explorer label is intentional (new timeframe must be added explicitly).
+TIMEFRAME_EXPLORER_TO_RUN_FORM: Final[dict[str, str]] = {
+    "D": "1-DAY",
+    "1H": "1-HOUR",
+    "5m": "5-MINUTE",
+    "1m": "1-MINUTE",
+}
+TIMEFRAME_RUN_FORM_TO_EXPLORER: Final[dict[str, str]] = {
+    v: k for k, v in TIMEFRAME_EXPLORER_TO_RUN_FORM.items()
+}
+
+
+def _build_explorer_return(
+    catalog: str,
+    ticker: str,
+    active_tf: ExplorerTimeframe,
+    state: dict[str, Any],
+) -> str:
+    """Build the `/explorer?...` URL that 'Back to Explorer' will navigate to."""
+    inner: list[tuple[str, str]] = [
+        ("catalog", catalog),
+        ("ticker", ticker),
+        ("tf", active_tf.label),
+    ]
+    for key in ("search", "asset_class", "sort_by"):
+        value = state.get(key)
+        if value not in (None, ""):
+            inner.append((key, str(value)))
+    page = state.get("page")
+    # Treat page=1 as default to keep the round-trip URL compact.
+    if page not in (None, "", 0, "0", 1, "1"):
+        inner.append(("page", str(page)))
+    return f"/explorer?{urlencode(inner)}"
+
+
+def _build_run_backtest_url(
+    *,
+    catalog: str,
+    ticker: str,
+    active_tf: ExplorerTimeframe,
+    date_range_start: Optional[datetime],
+    date_range_end: Optional[datetime],
+    bar_count: int,
+    explorer_state: Optional[dict[str, Any]] = None,
+) -> Optional[str]:
+    """Build the `/backtests/run` bridge URL; returns None when button should be hidden.
+
+    Returns None when `bar_count <= 0`. A missing `date_range_start` / `date_range_end`
+    is NOT a hide condition — only bars-zero is (tests assert this invariant).
+    """
+    if bar_count <= 0:
+        return None
+    run_form_tf = TIMEFRAME_EXPLORER_TO_RUN_FORM[active_tf.label]
+    params: list[tuple[str, str]] = [
+        ("catalog", catalog),
+        ("ticker", ticker),
+        ("timeframe", run_form_tf),
+    ]
+    if date_range_start is not None:
+        params.append(("start", date_range_start.strftime("%Y-%m-%d")))
+    if date_range_end is not None:
+        params.append(("end", date_range_end.strftime("%Y-%m-%d")))
+    # Only emit explorer_return when at least one state field is actually set.
+    # Truthiness on the dict itself would be True for `{"search": None, ...}` and
+    # every anchor would carry a redundant duplicate of catalog+ticker+tf.
+    if explorer_state and any(v not in (None, "") for v in explorer_state.values()):
+        params.append(
+            ("explorer_return", _build_explorer_return(catalog, ticker, active_tf, explorer_state))
+        )
+    return f"/backtests/run?{urlencode(params)}"
 
 
 def _stats_template_context(stats) -> dict:
@@ -305,6 +378,10 @@ async def chart_panel_fragment(
     catalog: str = Query(..., description="Catalog name"),
     ticker: str = Query(..., description="Ticker symbol"),
     tf: str = Query("D", description="Timeframe label"),
+    search: Optional[str] = Query(None, description="Explorer search query (for round-trip)"),
+    asset_class: Optional[str] = Query(None, description="Explorer asset-class filter"),
+    sort_by: Optional[str] = Query(None, description="Explorer sort column"),
+    page: Optional[int] = Query(None, description="Explorer page number", ge=1),
 ) -> HTMLResponse:
     """Return HTMX fragment for chart panel with timeframe toolbar.
 
@@ -377,6 +454,22 @@ async def chart_panel_fragment(
 
     stats = await _build_ticker_stats(service, catalog_service, catalog, ticker, tf)
 
+    explorer_state: dict[str, Any] = {
+        "search": search,
+        "asset_class": asset_class,
+        "sort_by": sort_by,
+        "page": page,
+    }
+    run_backtest_url = _build_run_backtest_url(
+        catalog=catalog,
+        ticker=ticker,
+        active_tf=active_tf,
+        date_range_start=instrument.date_range_start,
+        date_range_end=instrument.date_range_end,
+        bar_count=len(candles),
+        explorer_state=explorer_state,
+    )
+
     return templates.TemplateResponse(
         "explorer/chart_panel.html",
         {
@@ -392,6 +485,11 @@ async def chart_panel_fragment(
             "window_days": window_days,
             "date_range_start_iso": dr_start_iso,
             "no_data_message": no_data_message,
+            "run_backtest_url": run_backtest_url,
+            "explorer_state_search": search,
+            "explorer_state_asset_class": asset_class,
+            "explorer_state_sort_by": sort_by,
+            "explorer_state_page": page,
             **_stats_template_context(stats),
         },
     )
