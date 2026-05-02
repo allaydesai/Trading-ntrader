@@ -38,6 +38,7 @@ from src.cli.commands._backtest_helpers import load_backtest_data
 from src.core.backtest_orchestrator import BacktestOrchestrator
 from src.core.strategy_registry import StrategyRegistry
 from src.models.backtest_request import BacktestRequest
+from src.services.exceptions import DataNotFoundError
 
 logger = structlog.get_logger(__name__)
 
@@ -306,7 +307,11 @@ async def run_backtest_submit(request: Request) -> Response:
                 console=_quiet_console,
                 catalog_name=form_data.catalog_name,
             )
-        except (ValueError, RuntimeError) as e:
+        except (ValueError, RuntimeError, DataNotFoundError) as e:
+            # Story 3.3 AC #11: DataNotFoundError carries the rich
+            # "Ticker 'X' not found in catalog 'Y'..." or
+            # "No bars... metadata covers..." messages from Story 3.1.
+            # Surface them inline (HTTP 200) rather than letting them 5xx.
             logger.error("Failed to prepare backtest", error=str(e))
             context = _build_run_context(request, execution_error=str(e), form_data=raw_data)
             return _htmx_full_page_response(

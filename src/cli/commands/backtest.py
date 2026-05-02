@@ -273,8 +273,13 @@ def run_backtest(
             instrument = data_result.instrument
             data_source_used = data_result.data_source_used
 
-        except DataNotFoundError:
+        except DataNotFoundError as e:
             console.print()
+            # Story 3.3 AC #10: surface the exception's specific message
+            # (e.g., "Ticker 'X' not found in catalog 'Y'..." or
+            # "No bars... metadata covers 2010 → 2024.") so users can
+            # distinguish missing-ticker vs empty-window cases.
+            console.print(str(e), style="red")
             error_msg = format_error_with_context(
                 DATA_NOT_FOUND_NO_IBKR,
                 instrument=request.instrument_id,
@@ -283,6 +288,14 @@ def run_backtest(
             )
             error_formatter.format_error(error_msg)
             sys.exit(error_formatter.get_exit_code(error_msg))
+        except ValueError as e:
+            # Story 3.3 AC #10: named-catalog "Unknown catalog 'X'..."
+            # ValueError originates from `load_from_catalog` when the catalog
+            # directory is missing. Surface as a Click usage error (exit 2).
+            msg = str(e)
+            if msg.startswith("Unknown catalog"):
+                raise click.UsageError(msg) from e
+            raise
         except IBKRConnectionError as e:
             console.print()
             error_msg = format_error_with_context(

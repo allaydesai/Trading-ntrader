@@ -375,6 +375,178 @@ class TestPostRunBacktest:
         assert req_kwargs["catalog_name"] == "e2e-test"
 
 
+class TestErrorSurface:
+    """Story 3.3 AC #11 — web UI surfaces data-vs-engine error categorisation
+    in inline HTMX error fragments without leaking stack traces or generic
+    placeholders.
+    """
+
+    def _form_data(self, **overrides) -> dict:
+        data = {
+            "strategy": "sma_crossover",
+            "symbol": "AAPL",
+            "start_date": "2018-01-01",
+            "end_date": "2018-12-31",
+            "data_source": "catalog",
+            "timeframe": "1-MINUTE",
+            "starting_balance": "1000000",
+            "timeout_seconds": "300",
+            "catalog_name": "e2e-test",
+        }
+        data.update(overrides)
+        return data
+
+    @patch("src.api.ui.backtests.BacktestOrchestrator")
+    @patch("src.api.ui.backtests.load_backtest_data")
+    @patch("src.api.ui.backtests.BacktestRequest")
+    def test_missing_ticker_inline_error(
+        self, mock_request_cls, mock_load_data, mock_orchestrator_cls, client
+    ):
+        """DataNotFoundError ('Ticker X not found in catalog Y') renders inline."""
+        from src.services.exceptions import DataNotFoundError
+
+        mock_request = MagicMock()
+        mock_request.instrument_id = "DOES_NOT_EXIST.NASDAQ"
+        mock_request.bar_type = "1-MINUTE-LAST"
+        mock_request.start_date = datetime(2018, 1, 1, tzinfo=timezone.utc)
+        mock_request.end_date = datetime(2018, 12, 31, tzinfo=timezone.utc)
+        mock_request_cls.from_cli_args.return_value = mock_request
+
+        mock_load_data.side_effect = DataNotFoundError(
+            instrument_id="DOES_NOT_EXIST",
+            start=datetime(2018, 1, 1, tzinfo=timezone.utc),
+            end=datetime(2018, 12, 31, tzinfo=timezone.utc),
+            message=(
+                "Ticker 'DOES_NOT_EXIST' not found in catalog 'e2e-test'. "
+                "Import it via `ntrader data import-csv` or choose a different catalog."
+            ),
+            context={"missing_from_catalog": "e2e-test"},
+        )
+
+        response = client.post(
+            "/backtests/run",
+            data=self._form_data(symbol="DOES_NOT_EXIST"),
+        )
+
+        # Inline error → HTTP 200, not 5xx
+        assert response.status_code == 200
+        assert "DOES_NOT_EXIST" in response.text
+        assert "e2e-test" in response.text
+        assert "not found in catalog" in response.text
+        # No stack trace leakage
+        assert "Traceback" not in response.text
+
+    @patch("src.api.ui.backtests.BacktestOrchestrator")
+    @patch("src.api.ui.backtests.load_backtest_data")
+    @patch("src.api.ui.backtests.BacktestRequest")
+    def test_empty_window_inline_error(
+        self, mock_request_cls, mock_load_data, mock_orchestrator_cls, client
+    ):
+        """DataNotFoundError ('No bars... metadata covers...') renders inline."""
+        from src.services.exceptions import DataNotFoundError
+
+        mock_request = MagicMock()
+        mock_request.instrument_id = "AAPL.NASDAQ"
+        mock_request.bar_type = "1-MINUTE-LAST"
+        mock_request.start_date = datetime(2030, 1, 1, tzinfo=timezone.utc)
+        mock_request.end_date = datetime(2030, 12, 31, tzinfo=timezone.utc)
+        mock_request_cls.from_cli_args.return_value = mock_request
+
+        mock_load_data.side_effect = DataNotFoundError(
+            instrument_id="AAPL",
+            start=datetime(2030, 1, 1, tzinfo=timezone.utc),
+            end=datetime(2030, 12, 31, tzinfo=timezone.utc),
+            message=(
+                "No bars for 'AAPL' in catalog 'e2e-test' between "
+                "2030-01-01T00:00:00+00:00 and 2030-12-31T23:59:59+00:00. "
+                "Catalog metadata covers 2010-01-04 → 2024-12-31."
+            ),
+        )
+
+        response = client.post(
+            "/backtests/run",
+            data=self._form_data(start_date="2030-01-01", end_date="2030-12-31"),
+        )
+
+        assert response.status_code == 200
+        # Metadata range present (the user-facing AC #8 requirement)
+        assert "2010-01-04" in response.text
+        assert "2024-12-31" in response.text
+        # Requested range present
+        assert "2030" in response.text
+        assert "Traceback" not in response.text
+
+    @patch("src.api.ui.backtests.BacktestOrchestrator")
+    @patch("src.api.ui.backtests.load_backtest_data")
+    @patch("src.api.ui.backtests.BacktestRequest")
+    def test_unknown_catalog_inline_error(
+        self, mock_request_cls, mock_load_data, mock_orchestrator_cls, client
+    ):
+        """ValueError 'Unknown catalog X. Available: [...]' renders inline."""
+        mock_request = MagicMock()
+        mock_request.instrument_id = "AAPL.NAMED_CATALOG"
+        mock_request.bar_type = "1-MINUTE-LAST"
+        mock_request.start_date = datetime(2018, 1, 1, tzinfo=timezone.utc)
+        mock_request.end_date = datetime(2018, 12, 31, tzinfo=timezone.utc)
+        mock_request_cls.from_cli_args.return_value = mock_request
+
+        mock_load_data.side_effect = ValueError(
+            "Unknown catalog 'made-up-name'. Available: ['e2e-test', 'main']"
+        )
+
+        response = client.post(
+            "/backtests/run",
+            data=self._form_data(catalog_name="made-up-name"),
+        )
+
+        assert response.status_code == 200
+        assert "Unknown catalog" in response.text
+        assert "made-up-name" in response.text
+        # Available list surfaces
+        assert "e2e-test" in response.text
+        assert "Traceback" not in response.text
+
+    @patch("src.api.ui.backtests.BacktestOrchestrator")
+    @patch("src.api.ui.backtests.load_backtest_data")
+    @patch("src.api.ui.backtests.BacktestRequest")
+    def test_strategy_error_inline_error(
+        self, mock_request_cls, mock_load_data, mock_orchestrator_cls, client
+    ):
+        """ValueError from BacktestOrchestrator.execute renders inline."""
+        mock_request = MagicMock()
+        mock_request.instrument_id = "AAPL.NASDAQ"
+        mock_request.bar_type = "1-MINUTE-LAST"
+        mock_request.start_date = datetime(2018, 1, 1, tzinfo=timezone.utc)
+        mock_request.end_date = datetime(2018, 12, 31, tzinfo=timezone.utc)
+        mock_request_cls.from_cli_args.return_value = mock_request
+
+        mock_load_result = MagicMock()
+        mock_load_result.bars = [MagicMock()]
+        mock_load_result.instrument = MagicMock()
+        mock_load_data.return_value = mock_load_result
+
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.execute = AsyncMock(
+            side_effect=ValueError("Invalid strategy config: fast_period must be > 0")
+        )
+        mock_orchestrator_cls.return_value = mock_orchestrator
+
+        response = client.post(
+            "/backtests/run",
+            data=self._form_data(),
+        )
+
+        assert response.status_code == 200
+        assert "Invalid strategy config" in response.text or "fast_period" in response.text
+        # Must NOT be confused for a data-source error (AC #11)
+        assert "not found in catalog" not in response.text
+        assert "Traceback" not in response.text
+        # Generic "backtest failed" placeholder is forbidden
+        assert "backtest failed" not in response.text.lower() or (
+            "Invalid strategy config" in response.text
+        )
+
+
 class TestBridgePreFill:
     """Story 3.2 — explorer bridge pre-fills for GET /backtests/run."""
 
