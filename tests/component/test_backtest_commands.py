@@ -1212,11 +1212,13 @@ class TestErrorMessageCategorization:
     @patch("src.cli.commands._backtest_helpers._build_named_catalog_dependencies")
     @patch("src.cli.commands._backtest_helpers._resolve_named_catalog_loader")
     def test_unknown_catalog_message(self, mock_resolve_loader, mock_build_deps):
-        """Unknown catalog: ValueError → click.UsageError, exit 2, available list shown."""
+        """Unknown catalog: UnknownCatalogError → click.UsageError, exit 2, available list shown."""
+        from src.services.exceptions import UnknownCatalogError
+
         mock_build_deps.return_value = (MagicMock(), MagicMock(), MagicMock())
 
         async def loader_raises(**kwargs):
-            raise ValueError("Unknown catalog 'made-up-name'. Available: ['e2e-test', 'main']")
+            raise UnknownCatalogError("made-up-name", ["e2e-test", "main"])
 
         mock_resolve_loader.return_value = loader_raises
 

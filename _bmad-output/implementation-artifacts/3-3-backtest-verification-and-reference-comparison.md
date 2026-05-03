@@ -1,6 +1,6 @@
 # Story 3.3: Backtest Verification & Reference Comparison
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -18,7 +18,7 @@ So that I can prove the FirstRate catalog produces consistent, trustworthy backt
 - A **reproducible reference-comparison harness** comparing two backtest runs of `sma_crossover` against the same logical dataset (AAPL 2018-01-01 → 2018-12-31, 1-MINUTE) loaded via two different paths:
   - **Path A (legacy CSV):** `data/AAPL_1min.csv` filtered to 2018 → imported via `ntrader data import --csv … --symbol AAPL --venue NASDAQ --bar-type 1-MINUTE-LAST` into the default `NAUTILUS_PATH` catalog → backtested without `--catalog` flag.
   - **Path B (FirstRate):** AAPL Stocks bundle imported into `e2e-test` via `ntrader import --format firstrate --catalog e2e-test …` → backtested with `--catalog e2e-test`.
-- A **comparison report** (text + structured JSON) documenting bar count delta, trade count delta, total PnL delta, win-rate delta, and bar-level price deltas across the two runs, with explicit tolerance thresholds: bar count Δ ≤ 0.5%, trade count exact match, total PnL Δ ≤ 0.1%.
+- A **comparison report** (text + structured JSON) documenting bar count delta, trade count delta, and total PnL delta across the two runs, with explicit tolerance thresholds: bar count Δ ≤ 0.5%, trade count exact match, total PnL Δ ≤ 0.1%. (Earlier draft mentioned "win-rate delta" but Task 2.2 omits `win_rate` from `BacktestResultSummary`; dropped by 2026-05-03 code-review patch — re-evaluate in retro if win-rate parity is needed.)
 - An **assertion-driven integration test** (forked, gated on `E2E_CATALOG_AVAILABLE=1` + `data/AAPL_1min.csv` presence) that runs both backtests through the same `BacktestOrchestrator` invocation path, captures both `BacktestResult` objects, and fails CI-locally on any tolerance breach.
 - A **manually-runnable verification script** (`scripts/verify_aapl_2018_reference.py` or equivalent) that drives both backtests end-to-end via the public CLI and writes its evidence (results table, comparison JSON, deltas) to `/tmp/story-3-3-evidence/`.
 - **Asset-appropriate position sizing confirmation** — formal AC + test that `sma_crossover._calculate_position_size` produces `Quantity.from_int(...)` (whole shares) when `instrument.size_precision == 0` (equities) and `Quantity.from_str(f"{q:.{size_precision}f}")` (fractional) when `size_precision > 0` (crypto). No new sizing code; this is a verification-only AC documenting that the architecture already supports per-asset-class sizing through `instrument.size_precision`.
@@ -51,18 +51,18 @@ So that I can prove the FirstRate catalog produces consistent, trustworthy backt
 
 6. **Tolerance breach behavior is loud** — **Given** any one of AC #3 / #4 / #5 fails, **When** the comparison harness completes, **Then** the script exits with a non-zero exit code, the comparison JSON sets `tolerance_passed: false` for the breaching metric and `overall_passed: false`, the stdout output prints a red `❌ TOLERANCE BREACH:` line per failed metric with the actual delta and the threshold, **And** the integration test (`tests/integration/core/test_aapl_2018_reference_comparison.py`) marks the test as `FAIL` with a clear pytest assertion message — the test does NOT silently pass on tolerance breach.
 
-7. **Comparison runs use the same strategy class, the same params, and the same time window** — **Given** the harness invokes both backtests, **When** the strategy configs are compared, **Then** both invocations use exactly: `strategy=sma_crossover`, `fast_ema_period=10`, `slow_ema_period=20`, `position_size_pct=Decimal("10")`, `start=2018-01-01T00:00:00Z`, `end=2018-12-31T23:59:59.999999Z`, `timeframe=1-MINUTE`, `initial_balance=$1,000,000 USD`, `instrument_id="AAPL.NASDAQ"`. The harness asserts (or builds) the `BacktestRequest` for each path so these values are byte-identical strings — diverging configs are a setup bug, not a comparison input.
+7. **Comparison runs use the same strategy class, the same params, and the same time window** — **Given** the harness invokes both backtests, **When** the strategy configs are compared, **Then** both invocations use exactly: `strategy=sma_crossover`, `fast_period=10`, `slow_period=20`, `position_size_pct=Decimal("10")`, `start=2018-01-01T00:00:00Z`, `end=2018-12-31T23:59:59.999999Z`, `timeframe=1-MINUTE`, `initial_balance=$1,000,000 USD`, `instrument_id="AAPL.NASDAQ"`. The harness asserts (or builds) the `BacktestRequest` for each path so these values are byte-identical strings — diverging configs are a setup bug, not a comparison input. (Note: `fast_period`/`slow_period` are the actual `SMACrossoverConfig` field names; an earlier draft of this AC said `fast_ema_period`/`slow_ema_period` which never existed in the codebase — corrected by 2026-05-03 code-review patch.)
 
 8. **Asset-appropriate position sizing — equity confirmation** — **Given** an AAPL 1-MINUTE backtest via `sma_crossover` against the FirstRate catalog, **When** `_calculate_position_size` runs on a typical bar (close ~$165), **Then** the resulting `Quantity` is constructed via `Quantity.from_int(shares)` (whole-share path at `src/core/strategies/sma_crossover.py:160-161`), **And** for a $100K notional the share count is `int($100K / $165) = 606` shares (no fractional digits in `str(quantity)`). Verified by inspecting the `BacktestRun.fills` (or `BacktestResult.total_trades` + first-fill quantity log) — at least one fill in the persisted run shows `quantity` is a whole-number string with no decimal point.
 
 9. **Asset-appropriate position sizing — architecture supports future asset classes** — **Given** the same `_calculate_position_size` implementation, **When** the instrument's `size_precision > 0` (e.g., crypto with precision=8), **Then** the existing branch `Quantity.from_str(f"{float(raw_qty):.{size_prec}f}")` produces fractional quantities at the instrument's native precision (path at `src/core/strategies/sma_crossover.py:154-157`). Verified by a unit test on `_calculate_position_size` with a mock instrument exposing `size_precision=8` — assert the returned `Quantity` has 8 fractional digits. **No code change** — this AC is a verification-only confirmation that the architecture is ready for futures / FX / crypto sizing in Phase 2 without structural changes.
 
-10. **Data error vs engine error are distinguishable** — **Given** four explicit failure modes, **When** the operator triggers each via the CLI, **Then** the user-facing error message identifies the category:
-    - **Missing ticker** (e.g., `--catalog e2e-test --symbol DOES_NOT_EXIST`) → `"Ticker 'DOES_NOT_EXIST' not found in catalog 'e2e-test'. …"` (Story 3.1 AC #7 reuses verbatim).
-    - **Empty window** (e.g., `--catalog e2e-test --symbol AAPL --start 2030-01-01 --end 2030-12-31`) → `DataNotFoundError` message includes both the metadata range and the requested range (Story 3.1 AC #8).
-    - **Unknown catalog** (e.g., `--catalog made-up-name`) → `ValueError("Unknown catalog 'made-up-name'. Available: [...]")` re-raised as `click.UsageError` with exit code 2 (Story 3.1 AC #6).
-    - **Strategy / engine error** (induced by passing `fast_ema_period=0` or similar invalid config) → message contains `"strategy"` or the underlying exception class name (e.g., `ValueError`, `KeyError`) and is NOT confused for a data error. Exit code 1 (orchestration failure), distinct from the data-error exit code 2.
-    AC validated by a parametrised CLI integration test.
+10. **Data error vs engine error are distinguishable** — **Given** four explicit failure modes, **When** the operator triggers each via the CLI, **Then** the user-facing error message identifies the category. Exit codes follow the project's existing `EXIT_CODE_MAP` convention (`src/utils/error_formatter.py`): `DATA → 1`, `INPUT → 2`, `CONNECTION → 3`, `SYSTEM → 4`. Specifically:
+    - **Missing ticker** (e.g., `--catalog e2e-test --symbol DOES_NOT_EXIST`) → `"Ticker 'DOES_NOT_EXIST' not found in catalog 'e2e-test'. …"` (Story 3.1 AC #7 reuses verbatim). `DataNotFoundError` → `DATA` category → exit 1.
+    - **Empty window** (e.g., `--catalog e2e-test --symbol AAPL --start 2030-01-01 --end 2030-12-31`) → `DataNotFoundError` message includes both the metadata range and the requested range (Story 3.1 AC #8). → `DATA` category → exit 1.
+    - **Unknown catalog** (e.g., `--catalog made-up-name`) → typed `UnknownCatalogError("made-up-name", [...])` re-raised as `click.UsageError` (`INPUT` category, exit 2). The user supplied an unknown name — that's an input error, not a data error.
+    - **Strategy / engine error** (induced by passing `fast_period=0` or similar invalid config) → message contains `"strategy"` or the underlying exception class name (e.g., `ValueError`, `KeyError`) and is NOT confused for a data error. Exit code 1 (orchestration failure surfaces through Click's default error path).
+    AC validated by a parametrised CLI integration test. (Earlier draft of this AC said "data-error exit code 2" which conflicted with `EXIT_CODE_MAP`; corrected by 2026-05-03 code-review patch — only `INPUT` errors exit 2.)
 
 11. **Web UI surfaces the same distinction** — **Given** each of the four failure modes from AC #10 triggered via POST `/backtests/run`, **When** the response renders, **Then** the inline error fragment (or run-detail error block) shows the same human-readable message — no stack traces leaked, no generic `"backtest failed"` placeholder. Verified by a component test that overrides `CatalogManager` / `MetadataService` / `BacktestOrchestrator.execute` to raise each exception in turn and asserts the rendered fragment contains the expected substring.
 
@@ -138,7 +138,48 @@ So that I can prove the FirstRate catalog produces consistent, trustworthy backt
 
 ### Review Findings
 
-_To be populated by code-review after Tasks 1–9 are complete. Inherit the three-layer review pattern from Stories 3.1 / 3.2 (Blind Hunter / Edge Case Hunter / Acceptance Auditor). Categorise findings as **Decision needed** / **Patch** / **Defer** matching prior stories._
+Code review run 2026-05-03. Three adversarial layers (Blind Hunter / Edge Case Hunter / Acceptance Auditor) over commit `e0bd57f`. 9 decision-needed (resolved), 10 patch (applied), 11 defer, 4 dismissed as noise.
+
+**Decision needed (resolved 2026-05-03)**
+
+- [x] [Review][Decision] AC #2 — Legacy catalog dir not under `NAUTILUS_PATH`. **Resolved:** accept current implementation; amend AC in Epic 3 retro. The `.env`-driven NAUTILUS_PATH alias to the FirstRate catalog makes "under NAUTILUS_PATH" actively dangerous. Logged for retro.
+- [x] [Review][Decision] AC #2 — Legacy backtest bypasses `load_backtest_data`, imports `_build_equity`. **Resolved:** promoted `_build_equity` → public `build_equity` in `src/services/firstrate/backtest_loader.py`. Cross-module reuse is now legitimate (no `_underscore` reach). Asymmetric data paths persist as a documented trade-off; broader refactor (extending `load_backtest_data` to handle weekend/holiday boundaries) deferred to a follow-up.
+- [x] [Review][Decision] AC #7 — No explicit byte-identical assertion. **Resolved:** added a runtime assertion in `_run_comparison_async` that builds both requests and `assert`s all non-`catalog_name` fields are equal before running. AssertionError fires before the expensive backtests if the shared helper drifts.
+- [x] [Review][Decision] AC #7 / strategy param naming. **Resolved:** AC #7 text amended (`fast_ema_period` → `fast_period`, `slow_ema_period` → `slow_period`) to match `SMACrossoverConfig`.
+- [x] [Review][Decision] AC #8 — behavioral vs structural sizing assertion. **Resolved:** accept behavioral check as adequate proxy. `_calculate_position_size` is the only quantity producer in `sma_crossover`; whole-number string verifies the AC's intent.
+- [x] [Review][Decision] AC #8 — persisted-fill quantity check. **Resolved:** accept unit test on `_calculate_position_size` as sufficient. Task 8.1 manual evidence already showed whole-share fills.
+- [x] [Review][Decision] AC #10 — exit code grouping. **Resolved:** AC #10 text amended to clarify exit codes follow `EXIT_CODE_MAP` convention (DATA→1, INPUT→2, CONNECTION→3, SYSTEM→4). Implementation is correct as-is.
+- [x] [Review][Decision] `BacktestResultSummary.win_rate` field absent. **Resolved:** dropped "win-rate delta" from Scope text. Re-evaluate in retro if win-rate parity is needed.
+- [x] [Review][Decision] Production-edit scope creep + brittle prefix. **Resolved:** typed `UnknownCatalogError(ValueError)` introduced in `src/services/exceptions.py`, raised by `src/services/firstrate/backtest_loader.py:152`, caught directly by `src/cli/commands/backtest.py:291-293`. The brittle `msg.startswith("Unknown catalog")` check is gone; non-catalog `ValueError`s no longer hit this arm.
+
+**Patch (applied 2026-05-03)**
+
+- [x] [Review][Patch] CSV mask drops microseconds at year-end boundary [`scripts/verify_aapl_2018_reference.py:88`] — fixed: changed mask to half-open interval `< "2019-01-01"`.
+- [x] [Review][Patch] Tolerance evaluator silently passes empty-vs-empty and NaN-poisoned PnL [`src/models/comparison_report.py`] — fixed: added `_no_data_failure` short-circuit for both-zero-bars, both-zero-trades, and NaN-PnL. New unit tests `test_zero_bars_on_both_sides_fails_loudly`, `test_zero_trades_on_both_sides_fails_loudly`, `test_nan_pnl_fails_loudly`, `test_one_sided_zero_bars_still_evaluates`.
+- [x] [Review][Patch] `test_renderer_pass_shows_check` strengthened to assert `"✅ ALL TOLERANCES PASSED"` substring instead of bare `"✅"`.
+- [x] [Review][Patch] Hardcoded `"AAPL_2018_1-MINUTE"` dataset default — fixed: harness now passes `dataset=DATASET` (module-level constant derived from `SYMBOL` and `TIMEFRAME_SPEC`).
+- [x] [Review][Patch] Promoted `_build_equity` → public `build_equity` in `src/services/firstrate/backtest_loader.py`. Updated internal call site and `scripts/verify_aapl_2018_reference.py` import.
+- [x] [Review][Patch] Runtime byte-identical request assertion in `_run_comparison_async` (AC #7 enforcement).
+- [x] [Review][Patch] Typed `UnknownCatalogError(ValueError)` in `src/services/exceptions.py`. Replaced string-prefix `ValueError` matching in `src/cli/commands/backtest.py` with `except UnknownCatalogError`. Production raise site `src/services/firstrate/backtest_loader.py:152` updated. Test mocks in `test_backtest_commands.py:1219` and `test_run_backtest_routes.py` updated to raise the typed exception.
+- [x] [Review][Patch] AC #7 text amended: `fast_ema_period`/`slow_ema_period` → `fast_period`/`slow_period`.
+- [x] [Review][Patch] AC #10 text amended to clarify `EXIT_CODE_MAP` convention.
+- [x] [Review][Patch] Scope text amended: "win-rate delta" dropped (matches Task 2.2).
+- [~] [Review][Patch][Dismissed] Patched test loader uses `**kwargs` only — investigated and dismissed: production at `_backtest_helpers.py:426-434` calls the loader with all keyword args, so `**kwargs` correctly matches. False positive.
+- [~] [Review][Patch][Dismissed] Tautological OR in `test_strategy_error_inline_error` — investigated and dismissed: the `or` is intentional implication form ("if 'backtest failed' is present, it must be paired with the specific cause text"). Enforces "no GENERIC placeholder" semantically. False positive.
+
+**Defer (pre-existing or low-impact, logged in `deferred-work.md`)**
+
+- [x] [Review][Defer] `legacy_catalog_service._rebuild_availability_cache()` private API call [`scripts/verify_aapl_2018_reference.py:236`] — implies `CSVLoader.load_file` doesn't update the cache itself; pre-existing fragility in CSVLoader.
+- [x] [Review][Defer] `chmod 0o500` permission test fails when run as root or on filesystems that ignore mode bits [`tests/integration/core/test_aapl_2018_reference_comparison.py:1681-1703`] — gated test, low impact.
+- [x] [Review][Defer] `--skip-import` doesn't validate catalog integrity — stale data from a prior run silently feeds the comparison.
+- [x] [Review][Defer] `CSVLoader(conflict_mode="overwrite")` may leak stale parquet shards across runs with different CSV inputs — pre-existing CSVLoader semantic.
+- [x] [Review][Defer] `output_dir.mkdir` failure has no rich error context — bare `PermissionError` traceback rather than the codebase's `error_formatter` style. Cosmetic.
+- [x] [Review][Defer] `Console(quiet=True)` in `_run_comparison_async` silences orchestrator warnings, making divergences harder to debug. Trade-off, not a bug.
+- [x] [Review][Defer] PnL `1.0` floor changes "0.1% threshold" semantics for tiny absolute PnL — documented behavior, edge of soundness.
+- [x] [Review][Defer] Decimal→float precision drop in `BacktestResultSummary.final_balance` — both sides equally lossy, so the comparison is internally consistent. Existing pattern.
+- [x] [Review][Defer] Mock `cache.instrument()` accepts any argument in sizing tests — does not validate the lookup key, but covered by integration tests.
+- [x] [Review][Defer] `orchestrator.dispose()` exception masking in `_execute_and_summarise:187-190` — Nautilus dispose rarely raises in practice, and each invocation has its own orchestrator instance.
+- [x] [Review][Defer] Renderer hard-codes display thresholds (`"threshold 0.50%"`, `"0.10%"`) at `src/services/comparison_renderer.py:84-96` — accurate for Phase 1 fixed values; would mislead if `evaluate_tolerance` is called with custom tolerances. `ComparisonReport` lacks a `thresholds` field.
 
 ## Dev Notes
 

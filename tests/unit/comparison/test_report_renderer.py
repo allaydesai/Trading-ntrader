@@ -42,7 +42,7 @@ class TestComparisonRenderer:
 
         rendered = render_comparison_table(report)
 
-        assert "✅" in rendered
+        assert "✅ ALL TOLERANCES PASSED" in rendered
         assert "❌ TOLERANCE BREACH" not in rendered
 
     def test_renderer_breach_marks_red(self) -> None:

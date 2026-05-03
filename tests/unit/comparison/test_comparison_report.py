@@ -128,16 +128,48 @@ class TestToleranceEvaluator:
         assert report.pnl_delta_pct == pytest.approx(0.5)
         assert not report.pnl_passed
 
-    def test_zero_bars_does_not_divide_by_zero(self) -> None:
-        """Both runs at zero bars must not raise ZeroDivisionError."""
+    def test_zero_bars_on_both_sides_fails_loudly(self) -> None:
+        """Both runs at zero bars is a vacuous comparison — must fail, not pass."""
         legacy = _summary(bar_count=0)
         firstrate = _summary(bar_count=0)
 
         report = evaluate_tolerance(legacy, firstrate)
 
-        # 0 / max(0, 0, 1) = 0
-        assert report.bar_count_delta == 0.0
-        assert report.bar_count_passed
+        assert not report.bar_count_passed
+        assert not report.overall_passed
+        assert any("zero bars" in note for note in report.notes)
+
+    def test_zero_trades_on_both_sides_fails_loudly(self) -> None:
+        """Both runs at zero trades — strategy never fired — must fail loudly."""
+        legacy = _summary(total_trades=0)
+        firstrate = _summary(total_trades=0)
+
+        report = evaluate_tolerance(legacy, firstrate)
+
+        assert not report.trade_count_passed
+        assert not report.overall_passed
+        assert any("zero trades" in note for note in report.notes)
+
+    def test_nan_pnl_fails_loudly(self) -> None:
+        """NaN PnL on either side must fail, not silently pass via NaN comparison."""
+        legacy = _summary(total_pnl=float("nan"))
+        firstrate = _summary(total_pnl=10_000.0)
+
+        report = evaluate_tolerance(legacy, firstrate)
+
+        assert not report.pnl_passed
+        assert not report.overall_passed
+        assert any("nan" in note.lower() for note in report.notes)
+
+    def test_one_sided_zero_bars_still_evaluates(self) -> None:
+        """One-sided zero bars is a real divergence and should not short-circuit."""
+        legacy = _summary(bar_count=0)
+        firstrate = _summary(bar_count=98_000)
+
+        report = evaluate_tolerance(legacy, firstrate)
+
+        assert not report.bar_count_passed
+        assert report.bar_count_delta == pytest.approx(1.0)
 
     def test_overall_passed_is_and_of_metrics(self) -> None:
         """overall_passed is logical AND of the three per-metric verdicts."""

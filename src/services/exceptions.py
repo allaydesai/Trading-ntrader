@@ -77,6 +77,27 @@ class IBKRConnectionError(CatalogError):
         super().__init__(message)
 
 
+class UnknownCatalogError(ValueError):
+    """
+    Raised when a backtest references a named catalog that does not exist.
+
+    Subclasses ``ValueError`` for backward compatibility with existing
+    callers that catch ``ValueError`` (and existing tests that match on
+    ``pytest.raises(ValueError, match=...)``). Catch this type explicitly
+    in CLI / web handlers to surface a usage-error exit code without
+    string-prefix matching on the message text.
+
+    Attributes:
+        catalog_name: The catalog name that could not be resolved.
+        available: Names of catalogs that ARE configured (for error help).
+    """
+
+    def __init__(self, catalog_name: str, available: list[str]) -> None:
+        self.catalog_name = catalog_name
+        self.available = list(available)
+        super().__init__(f"Unknown catalog '{catalog_name}'. Available: {self.available}")
+
+
 class CatalogCorruptionError(CatalogError):
     """
     Raised when a Parquet file in the catalog is corrupted or unreadable.

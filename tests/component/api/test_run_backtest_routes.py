@@ -482,7 +482,9 @@ class TestErrorSurface:
     def test_unknown_catalog_inline_error(
         self, mock_request_cls, mock_load_data, mock_orchestrator_cls, client
     ):
-        """ValueError 'Unknown catalog X. Available: [...]' renders inline."""
+        """UnknownCatalogError 'Unknown catalog X. Available: [...]' renders inline."""
+        from src.services.exceptions import UnknownCatalogError
+
         mock_request = MagicMock()
         mock_request.instrument_id = "AAPL.NAMED_CATALOG"
         mock_request.bar_type = "1-MINUTE-LAST"
@@ -490,9 +492,7 @@ class TestErrorSurface:
         mock_request.end_date = datetime(2018, 12, 31, tzinfo=timezone.utc)
         mock_request_cls.from_cli_args.return_value = mock_request
 
-        mock_load_data.side_effect = ValueError(
-            "Unknown catalog 'made-up-name'. Available: ['e2e-test', 'main']"
-        )
+        mock_load_data.side_effect = UnknownCatalogError("made-up-name", ["e2e-test", "main"])
 
         response = client.post(
             "/backtests/run",

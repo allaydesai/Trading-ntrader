@@ -91,3 +91,17 @@
 - B4: `bar_type[:-len("-LAST")]` assumes the `-LAST` aggregation suffix always applies. All current bar types are LAST-aggregated; BID/ASK/MID aggregations are future concerns. (`src/api/ui/backtests.py:594`)
 - B5: Fallback "Back to Explorer" URL does not preserve `search`/`asset_class`/`sort_by`/`page` when `explorer_return` is absent. Inherent limitation of the deterministic fallback; acceptable per AC #11. (`src/api/ui/backtests.py:157-162`)
 - B6: `_BRIDGE_PARAM_MAP` relies on `form_data=raw_data` being used on the validation-error re-render path; a future refactor to `form_data=form.model_dump()` would silently drop `explorer_return` because it isn't a field on `BacktestRunFormData`. Latent footgun; spec explicitly chose to keep `explorer_return` out of the form model. Document or add a regression test later. (`src/api/ui/backtests.py` `_build_run_context`)
+
+## Deferred from: code review of 3-3-backtest-verification-and-reference-comparison (2026-05-03)
+
+- C1: `legacy_catalog_service._rebuild_availability_cache()` private API call — implies `CSVLoader.load_file` does not update the cache itself; pre-existing CSVLoader fragility. (`scripts/verify_aapl_2018_reference.py:236`)
+- C2: `chmod 0o500` permission test fails when run as root or on filesystems that ignore mode bits — gated on `E2E_CATALOG_AVAILABLE=1`, low impact. (`tests/integration/core/test_aapl_2018_reference_comparison.py:1681-1703`)
+- C3: `--skip-import` doesn't validate catalog integrity — stale data from a prior run with a different ticker/CSV silently feeds the comparison and produces meaningless verdicts.
+- C4: `CSVLoader(conflict_mode="overwrite")` may leak stale parquet shards across harness runs with different CSV inputs — pre-existing CSVLoader semantic (overwrite is per-(instrument_id, bar_type), not directory-wide).
+- C5: `output_dir.mkdir` failure raises bare `PermissionError` traceback rather than the codebase's `error_formatter` style. Cosmetic.
+- C6: `Console(quiet=True)` in `_run_comparison_async` silences orchestrator warnings, making data divergences harder to debug. Verbosity trade-off.
+- C7: PnL `1.0` floor in `evaluate_tolerance` changes "0.1% threshold" semantics for tiny absolute PnL — `pnl_max=max(abs(legacy), abs(firstrate), 1.0)`. Documented behavior, edge of soundness.
+- C8: `BacktestResultSummary.final_balance` is `float` but the engine returns `Decimal` — both sides equally lossy, so the comparison is internally consistent, but the entire point of FirstRate is decimal preservation. Existing pattern.
+- C9: Mock `cache.instrument()` accepts any argument in sizing tests — does not validate the lookup key, but covered by integration tests.
+- C10: `orchestrator.dispose()` exception masking in `_execute_and_summarise:187-190` — if dispose raises, it propagates from `finally` and masks any in-flight backtest exception. Nautilus dispose rarely raises in practice; each invocation has its own orchestrator instance so cross-call contamination is bounded.
+- C11: Renderer hard-codes display thresholds (`"threshold 0.50%"`, `"0.10%"`) — accurate for Phase 1 fixed values, would mislead if `evaluate_tolerance` is called with custom tolerances. `ComparisonReport` lacks a `thresholds` field. (`src/services/comparison_renderer.py:84-96`)

@@ -11,6 +11,7 @@ are configuration, not law: a real divergence should be fixed at the source,
 not papered over by widening these thresholds.
 """
 
+import math
 from datetime import datetime, timezone
 from typing import Final
 
@@ -61,10 +62,19 @@ def evaluate_tolerance(
 ) -> ComparisonReport:
     """Compute per-metric deltas + verdicts for two backtest summaries.
 
-    Denominators use ``max(..., 1)`` / ``max(..., 1.0)`` so the degenerate
-    "both zero" case yields a 0.0 delta (trivial pass) instead of
-    ``ZeroDivisionError``.
+    Denominators use ``max(..., 1)`` / ``max(..., 1.0)`` so a single zero
+    side does not trigger ``ZeroDivisionError``. Two zero sides
+    (``bar_count == 0`` or ``total_trades == 0`` on both runs) fail loudly —
+    a trivial pass on no-data would silently bless an empty comparison.
+    NaN PnL inputs are likewise rejected.
     """
+    if legacy.bar_count == 0 and firstrate.bar_count == 0:
+        return _no_data_failure(legacy, firstrate, dataset, reason="bar_count")
+    if legacy.total_trades == 0 and firstrate.total_trades == 0:
+        return _no_data_failure(legacy, firstrate, dataset, reason="trade_count")
+    if math.isnan(legacy.total_pnl) or math.isnan(firstrate.total_pnl):
+        return _no_data_failure(legacy, firstrate, dataset, reason="pnl_nan")
+
     bar_max = max(legacy.bar_count, firstrate.bar_count, 1)
     bar_count_delta = abs(legacy.bar_count - firstrate.bar_count) / bar_max
 
@@ -96,6 +106,43 @@ def evaluate_tolerance(
         pnl_passed=pnl_passed,
         overall_passed=bar_count_passed and trade_count_passed and pnl_passed,
         notes=notes,
+        generated_at=datetime.now(timezone.utc),
+        dataset=dataset,
+    )
+
+
+_NO_DATA_NOTES: Final[dict[str, str]] = {
+    "bar_count": "Both runs returned zero bars — comparison is vacuous.",
+    "trade_count": "Both runs placed zero trades — strategy never fired.",
+    "pnl_nan": "PnL is NaN on at least one side — engine returned an undefined result.",
+}
+
+
+def _no_data_failure(
+    legacy: BacktestResultSummary,
+    firstrate: BacktestResultSummary,
+    dataset: str,
+    *,
+    reason: str,
+) -> ComparisonReport:
+    """Build a hard-failure ComparisonReport for vacuous-input cases.
+
+    Used when both runs are empty or PnL is NaN. Delta fields are zeroed
+    (no meaningful comparison was possible) but every ``*_passed`` flag is
+    ``False`` and ``overall_passed`` is ``False`` so the harness exits
+    non-zero and the renderer emits the breach lines.
+    """
+    return ComparisonReport(
+        legacy_metrics=legacy,
+        firstrate_metrics=firstrate,
+        bar_count_delta=0.0,
+        trade_count_delta=0,
+        pnl_delta_pct=0.0,
+        bar_count_passed=False,
+        trade_count_passed=False,
+        pnl_passed=False,
+        overall_passed=False,
+        notes=[_NO_DATA_NOTES[reason]],
         generated_at=datetime.now(timezone.utc),
         dataset=dataset,
     )

@@ -17,7 +17,7 @@ from nautilus_trader.model.objects import Price, Quantity
 from nautilus_trader.test_kit.providers import TestInstrumentProvider
 
 from src.models.data_load_result import DataLoadResult
-from src.services.exceptions import DataNotFoundError
+from src.services.exceptions import DataNotFoundError, UnknownCatalogError
 from src.services.firstrate.catalog_manager import CatalogManager
 from src.services.firstrate.metadata_service import MetadataService
 
@@ -48,7 +48,7 @@ def _infer_price_precision(bars) -> int:
         return 2
 
 
-def _build_equity(nautilus_id: str, ticker: str, bars=None):
+def build_equity(nautilus_id: str, ticker: str, bars=None):
     """Synthesise an ``Equity`` instrument for the given nautilus_id.
 
     Uses ``InstrumentId.from_str`` to parse the venue — correctly handles
@@ -149,8 +149,7 @@ async def load_from_catalog(
     try:
         catalog = catalog_manager.resolve_catalog(catalog_name)
     except FileNotFoundError:
-        available = catalog_manager.list_catalogs()
-        raise ValueError(f"Unknown catalog '{catalog_name}'. Available: {available}") from None
+        raise UnknownCatalogError(catalog_name, catalog_manager.list_catalogs()) from None
 
     bar_type_str = _build_bar_type(nautilus_id, bar_type_spec)
 
@@ -182,7 +181,7 @@ async def load_from_catalog(
             },
         )
 
-    instrument = _build_equity(nautilus_id=nautilus_id, ticker=ticker, bars=bars)
+    instrument = build_equity(nautilus_id=nautilus_id, ticker=ticker, bars=bars)
 
     # Defensive: the venue on the first bar MUST match the synthesised instrument.
     # Silent venue drift leads to Nautilus' "strict order" error at engine setup —

@@ -52,7 +52,7 @@ from src.models.data_load_result import DataLoadResult
 from src.services.comparison_renderer import render_comparison_table
 from src.services.csv_loader import CSVLoader
 from src.services.data_catalog import DataCatalogService
-from src.services.firstrate.backtest_loader import _build_equity
+from src.services.firstrate.backtest_loader import build_equity
 
 logger = structlog.get_logger(__name__)
 
@@ -71,6 +71,7 @@ STRATEGY_PARAMS = {
     "slow_period": 20,
     "position_size_pct": Decimal("10"),
 }
+DATASET = f"{SYMBOL}_2018_{TIMEFRAME_SPEC.split('-LAST')[0]}"
 
 
 def filter_csv_to_2018(src: Path, dst: Path) -> Path:
@@ -81,7 +82,11 @@ def filter_csv_to_2018(src: Path, dst: Path) -> Path:
     catalog.
     """
     df = pd.read_csv(src, parse_dates=["timestamp"])
-    mask = (df["timestamp"] >= "2018-01-01") & (df["timestamp"] <= "2018-12-31 23:59:59")
+    # Half-open interval keeps any sub-second bars at 23:59:59.x in 2018,
+    # matching REFERENCE_END=2018-12-31T23:59:59.999999 (AC #7 byte-identical
+    # window). String "<= 2018-12-31 23:59:59" parsed as .000000 µs would
+    # silently drop those bars on higher-resolution datasets.
+    mask = (df["timestamp"] >= "2018-01-01") & (df["timestamp"] < "2019-01-01")
     filtered = df.loc[mask].copy()
     if len(filtered) == 0:
         raise ValueError(f"No 2018 rows in {src} — verify the CSV covers 2018-01-01..2018-12-31")
@@ -144,7 +149,7 @@ async def _run_legacy_backtest(
             f"{request.end_date}. Did the CSV import run?"
         )
 
-    equity = _build_equity(
+    equity = build_equity(
         nautilus_id=request.instrument_id,
         ticker=SYMBOL,
         bars=bars,
@@ -235,6 +240,23 @@ async def _run_comparison_async(
         # Rebuild the cache so the post-import data is visible.
         legacy_catalog_service._rebuild_availability_cache()
 
+    # AC #7 guard — both requests must differ only by catalog_name.
+    # `_build_request` is the single source of truth, but a future helper
+    # divergence (or a regression in `from_cli_args` silently dropping a
+    # kwarg) would go unnoticed without this assertion.
+    _legacy_req = _build_request(catalog_name=None)
+    _fr_req = _build_request(catalog_name=firstrate_catalog)
+    _diff = {
+        k
+        for k in _legacy_req.model_dump()
+        if k != "catalog_name" and _legacy_req.model_dump()[k] != _fr_req.model_dump()[k]
+    }
+    if _diff:
+        raise AssertionError(
+            f"AC #7 violated: BacktestRequests diverge on fields {sorted(_diff)} "
+            "beyond catalog_name. The shared _build_request helper has drifted."
+        )
+
     # Sequential — never run two BacktestEngines concurrently in one process
     # (CLAUDE.md Gotcha #4).
     legacy_summary = await _run_legacy_backtest(
@@ -244,7 +266,7 @@ async def _run_comparison_async(
         firstrate_catalog=firstrate_catalog, console=console
     )
 
-    report = evaluate_tolerance(legacy_summary, firstrate_summary)
+    report = evaluate_tolerance(legacy_summary, firstrate_summary, dataset=DATASET)
 
     json_path = output_dir / "aapl_2018_comparison.json"
     json_path.write_text(report.model_dump_json(indent=2))
