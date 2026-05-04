@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import structlog
 
@@ -34,6 +35,11 @@ _EXPECTED_COLUMNS: int = 6
 #: accidentally match it via the shorter ``YYYY-MM-DD`` format.
 _INTRADAY_FMT = "%Y-%m-%d %H:%M:%S"
 _DAILY_FMT = "%Y-%m-%d"
+
+#: FirstRate CSV timestamps are local US Eastern Time with DST. Must match
+#: ``FirstRateCsvParser._parse_timestamp`` exactly so the source_probe and
+#: parser agree on what UTC datetime each row represents.
+_FIRSTRATE_TIMEZONE = ZoneInfo("America/New_York")
 
 
 def compute_source_last_date(file_path: Path) -> datetime | None:
@@ -81,11 +87,16 @@ def compute_source_last_date(file_path: Path) -> datetime | None:
 
     if max_dt is None:
         return None
-    return max_dt.replace(tzinfo=timezone.utc)
+    return max_dt
 
 
 def _parse_timestamp(ts_str: str) -> datetime | None:
-    """Parse a FirstRate daily or intraday timestamp to a naive datetime.
+    """Parse a FirstRate timestamp string to a UTC-aware datetime.
+
+    FirstRate CSV timestamps are US Eastern wall-clock time with DST, so
+    ``2018-01-16 09:30:00`` is 09:30 EST (= 14:30 UTC) and
+    ``2018-07-16 09:30:00`` is 09:30 EDT (= 13:30 UTC). Daily rows
+    localize to midnight ET.
 
     Mirrors
     :meth:`src.services.firstrate.parsers.firstrate_csv_parser.FirstRateCsvParser._parse_timestamp`
@@ -95,10 +106,12 @@ def _parse_timestamp(ts_str: str) -> datetime | None:
     """
     if " " in ts_str:
         try:
-            return datetime.strptime(ts_str, _INTRADAY_FMT)
+            naive = datetime.strptime(ts_str, _INTRADAY_FMT)
         except ValueError:
             return None
-    try:
-        return datetime.strptime(ts_str, _DAILY_FMT)
-    except ValueError:
-        return None
+    else:
+        try:
+            naive = datetime.strptime(ts_str, _DAILY_FMT)
+        except ValueError:
+            return None
+    return naive.replace(tzinfo=_FIRSTRATE_TIMEZONE).astimezone(timezone.utc)

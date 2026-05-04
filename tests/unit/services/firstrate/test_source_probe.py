@@ -36,7 +36,8 @@ class TestComputeSourceLastDate:
 
         result = compute_source_last_date(file_path)
 
-        assert result == datetime(2025, 1, 3, 0, 0, 0, tzinfo=timezone.utc)
+        # 2025-01-03 00:00 EST = 05:00 UTC (FirstRate timestamps are ET, not UTC).
+        assert result == datetime(2025, 1, 3, 5, 0, 0, tzinfo=timezone.utc)
 
     def test_intraday_format_returns_max_second(self, tmp_path: Path) -> None:
         body = (
@@ -48,7 +49,8 @@ class TestComputeSourceLastDate:
 
         result = compute_source_last_date(file_path)
 
-        assert result == datetime(2025, 1, 1, 9, 32, 30, tzinfo=timezone.utc)
+        # 2025-01-01 09:32:30 EST = 14:32:30 UTC.
+        assert result == datetime(2025, 1, 1, 14, 32, 30, tzinfo=timezone.utc)
 
     def test_unsorted_rows_still_returns_true_max(self, tmp_path: Path) -> None:
         body = (
@@ -60,7 +62,8 @@ class TestComputeSourceLastDate:
 
         result = compute_source_last_date(file_path)
 
-        assert result == datetime(2025, 1, 3, 0, 0, 0, tzinfo=timezone.utc)
+        # 2025-01-03 00:00 EST = 05:00 UTC.
+        assert result == datetime(2025, 1, 3, 5, 0, 0, tzinfo=timezone.utc)
 
     def test_empty_file_returns_none(self, tmp_path: Path) -> None:
         file_path = _write(tmp_path / "A" / "SPY_full_1day_adjsplitdiv.txt", "")
@@ -78,7 +81,8 @@ class TestComputeSourceLastDate:
 
         result = compute_source_last_date(file_path)
 
-        assert result == datetime(2025, 1, 2, 0, 0, 0, tzinfo=timezone.utc)
+        # 2025-01-02 00:00 EST = 05:00 UTC.
+        assert result == datetime(2025, 1, 2, 5, 0, 0, tzinfo=timezone.utc)
 
     def test_fewer_than_six_columns_returns_none(self, tmp_path: Path) -> None:
         body = "not,a,firstrate,file\nstill,not,it\n"
@@ -92,7 +96,8 @@ class TestComputeSourceLastDate:
 
         result = compute_source_last_date(file_path)
 
-        assert result == datetime(2025, 1, 2, 0, 0, 0, tzinfo=timezone.utc)
+        # 2025-01-02 00:00 EST = 05:00 UTC.
+        assert result == datetime(2025, 1, 2, 5, 0, 0, tzinfo=timezone.utc)
 
     def test_unreadable_file_returns_none(self, tmp_path: Path) -> None:
         file_path = _write(

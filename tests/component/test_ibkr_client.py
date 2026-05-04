@@ -287,7 +287,7 @@ class TestIBKRHistoricalClient:
     @pytest.mark.component
     @pytest.mark.asyncio
     async def test_connect_timeout_error(self):
-        """Test connection timeout is handled gracefully."""
+        """Test connection timeout is handled gracefully (no rotation)."""
         from nautilus_trader.adapters.interactive_brokers.historical.client import (
             HistoricInteractiveBrokersClient,
         )
@@ -299,7 +299,7 @@ class TestIBKRHistoricalClient:
 
             with patch.object(client.client, "connect", side_effect=asyncio.TimeoutError):
                 with pytest.raises(ConnectionError) as exc_info:
-                    await client.connect(timeout=5)
+                    await client.connect(timeout=5, max_id_rotations=0)
 
                 assert "Failed to connect to IBKR" in str(exc_info.value)
                 assert not client.is_connected
@@ -319,7 +319,7 @@ class TestIBKRHistoricalClient:
 
             with patch.object(client.client, "connect", side_effect=ConnectionRefusedError):
                 with pytest.raises(ConnectionError) as exc_info:
-                    await client.connect()
+                    await client.connect(max_id_rotations=0)
 
                 assert "Failed to connect to IBKR" in str(exc_info.value)
 
@@ -338,7 +338,7 @@ class TestIBKRHistoricalClient:
 
             with patch.object(client.client, "connect", side_effect=RuntimeError("Network error")):
                 with pytest.raises(ConnectionError) as exc_info:
-                    await client.connect()
+                    await client.connect(max_id_rotations=0)
 
                 assert "Failed to connect to IBKR" in str(exc_info.value)
                 assert "Network error" in str(exc_info.value)
@@ -421,6 +421,120 @@ class TestIBKRHistoricalClient:
 
             assert hasattr(client, "rate_limiter")
             assert client.rate_limiter.requests_per_second == 45
+
+
+class TestIBKRClientReconnect:
+    """Tests for client_id rotation and graceful disconnect (Story 3.4).
+
+    The Gateway holds the configured client_id for tens of seconds after a
+    SIGKILL'd process; subsequent connect attempts time out silently
+    (IBKR error 326 is logged but never raised). The wrapper rotates
+    client_ids on timeout to recover automatically.
+    """
+
+    @pytest.mark.component
+    @pytest.mark.asyncio
+    async def test_connect_retries_with_rotated_client_id_on_timeout(self):
+        """First attempt times out (id-in-use); retry with id+1 succeeds."""
+        from nautilus_trader.adapters.interactive_brokers.historical.client import (
+            HistoricInteractiveBrokersClient,
+        )
+
+        from src.services.ibkr_client import IBKRHistoricalClient
+
+        with patch.object(HistoricInteractiveBrokersClient, "__init__", return_value=None):
+            client = IBKRHistoricalClient(client_id=10)
+
+            # Track ids passed to rebuild. First rebuild (id=11) makes the
+            # inner connect succeed; this verifies rotation stops at id+1.
+            captured_ids: list[int] = []
+
+            def stub_build(*, client_id: int):
+                captured_ids.append(client_id)
+                client.client = AsyncMock()
+                client.client.connect = AsyncMock(return_value=None)
+                client._active_client_id = client_id
+
+            # Seed initial state: first attempt (id=10, no rebuild) times out.
+            client.client.connect = AsyncMock(side_effect=asyncio.TimeoutError)
+            with patch.object(client, "_build_inner_client", side_effect=stub_build):
+                with patch.object(client, "_stop_inner", new_callable=AsyncMock):
+                    result = await client.connect(timeout=1, max_id_rotations=2)
+
+            assert result["connected"] is True
+            assert result["client_id"] == 11  # base 10 + offset 1
+            assert client.is_connected is True
+            assert captured_ids == [11]  # rebuilt once with id+1
+
+    @pytest.mark.component
+    @pytest.mark.asyncio
+    async def test_connect_exhausts_rotations_and_raises(self):
+        """All rotations time out → raise ConnectionError with helpful message."""
+        from nautilus_trader.adapters.interactive_brokers.historical.client import (
+            HistoricInteractiveBrokersClient,
+        )
+
+        from src.services.ibkr_client import IBKRHistoricalClient
+
+        with patch.object(HistoricInteractiveBrokersClient, "__init__", return_value=None):
+            client = IBKRHistoricalClient(client_id=10)
+
+            def stub_build(*, client_id: int):
+                client.client = AsyncMock()
+                client.client.connect = AsyncMock(side_effect=asyncio.TimeoutError)
+                client._active_client_id = client_id
+
+            client.client.connect = AsyncMock(side_effect=asyncio.TimeoutError)
+            with patch.object(client, "_build_inner_client", side_effect=stub_build):
+                with patch.object(client, "_stop_inner", new_callable=AsyncMock):
+                    with pytest.raises(ConnectionError) as exc_info:
+                        await client.connect(timeout=1, max_id_rotations=2)
+
+            msg = str(exc_info.value)
+            assert "rotations" in msg.lower() or "client_id" in msg.lower()
+            assert "10" in msg  # mentions the base id we tried
+            assert not client.is_connected
+
+    @pytest.mark.component
+    @pytest.mark.asyncio
+    async def test_disconnect_calls_underlying_stop_async(self):
+        """Wrapper.disconnect() must call _stop_async on the inner Nautilus client."""
+        from nautilus_trader.adapters.interactive_brokers.historical.client import (
+            HistoricInteractiveBrokersClient,
+        )
+
+        from src.services.ibkr_client import IBKRHistoricalClient
+
+        with patch.object(HistoricInteractiveBrokersClient, "__init__", return_value=None):
+            client = IBKRHistoricalClient()
+            client._connected = True
+
+            inner = AsyncMock()
+            client.client._client = inner
+
+            await client.disconnect()
+
+            inner._stop_async.assert_awaited_once()
+            assert not client.is_connected
+
+    @pytest.mark.component
+    @pytest.mark.asyncio
+    async def test_disconnect_when_not_connected_skips_stop_async(self):
+        """No-op when never connected — don't call _stop_async on a dead inner."""
+        from nautilus_trader.adapters.interactive_brokers.historical.client import (
+            HistoricInteractiveBrokersClient,
+        )
+
+        from src.services.ibkr_client import IBKRHistoricalClient
+
+        with patch.object(HistoricInteractiveBrokersClient, "__init__", return_value=None):
+            client = IBKRHistoricalClient()
+            inner = AsyncMock()
+            client.client._client = inner
+
+            await client.disconnect()
+
+            inner._stop_async.assert_not_awaited()
 
 
 class TestIBKRClientIntegration:

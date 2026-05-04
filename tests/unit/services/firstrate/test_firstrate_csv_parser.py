@@ -112,13 +112,18 @@ class TestFirstRateCsvParserDaily:
         assert str(bar.high) == "44.1444"
 
     def test_timestamps_are_nanoseconds_utc(self, parser, instrument_id, daily_bar_type, tmp_path):
-        """ts_event and ts_init are nanoseconds since epoch."""
+        """Daily ts is interpreted as midnight ET → converted to UTC.
+
+        FirstRate CSV daily timestamps are local-time midnight in
+        America/New_York. 2020-01-02 (winter, EST = UTC-5) → midnight ET
+        = 05:00 UTC = 1577941200 seconds since epoch.
+        """
         lines = ["2020-01-02,100.00,105.00,99.00,103.00,1000"]
         f = _write_csv(tmp_path, "SPY.txt", lines)
         bars = parser.parse_file(f, instrument_id, daily_bar_type)
         bar = bars[0]
-        # 2020-01-02 00:00:00 UTC = 1577923200 seconds
-        expected_ns = 1577923200 * 1_000_000_000
+        # 2020-01-02 00:00:00 EST = 2020-01-02 05:00:00 UTC = 1577941200 s
+        expected_ns = 1577941200 * 1_000_000_000
         assert bar.ts_init == expected_ns
         assert bar.ts_event == expected_ns
 
@@ -166,6 +171,65 @@ class TestFirstRateCsvParserIntraday:
         f = _write_csv(tmp_path, "SPY.txt", lines)
         bars = parser.parse_file(f, instrument_id, intraday_bar_type)
         assert int(bars[0].volume) == 248
+
+
+# ---------------------------------------------------------------------------
+# Timezone handling — FirstRate timestamps are US Eastern (with DST)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestFirstRateCsvParserTimezone:
+    """Tests verifying FirstRate's ET timestamps convert correctly to UTC.
+
+    FirstRate's CSV uses local US Eastern Time (with DST). A row labelled
+    ``2018-01-16 09:30:00`` is 09:30 EST (= 14:30 UTC), and a row labelled
+    ``2018-07-16 09:30:00`` is 09:30 EDT (= 13:30 UTC). The previous
+    parser stamped these as 09:30 UTC, shifting every bar by 4–5 hours
+    and silently breaking IBKR-vs-FirstRate parity comparisons.
+    """
+
+    def test_winter_intraday_uses_est_offset(
+        self, parser, instrument_id, intraday_bar_type, tmp_path
+    ):
+        """09:30 ET in EST winter = 14:30 UTC (UTC-5)."""
+        lines = ["2018-01-16 09:30:00,44.4775,44.5375,44.4075,44.4350,3081124"]
+        f = _write_csv(tmp_path, "AAPL.txt", lines)
+        bars = parser.parse_file(f, instrument_id, intraday_bar_type)
+        # 2018-01-16 14:30:00 UTC = 1516113000 seconds
+        assert bars[0].ts_event == 1516113000 * 1_000_000_000
+
+    def test_summer_intraday_uses_edt_offset(
+        self, parser, instrument_id, intraday_bar_type, tmp_path
+    ):
+        """09:30 ET in EDT summer = 13:30 UTC (UTC-4)."""
+        lines = ["2018-07-16 09:30:00,46.51,46.52,46.50,46.51,1234567"]
+        f = _write_csv(tmp_path, "AAPL.txt", lines)
+        bars = parser.parse_file(f, instrument_id, intraday_bar_type)
+        # 2018-07-16 13:30:00 UTC = 1531747800 seconds
+        assert bars[0].ts_event == 1531747800 * 1_000_000_000
+
+    def test_dst_spring_forward_handled(self, parser, instrument_id, intraday_bar_type, tmp_path):
+        """Bar at 03:00 ET on DST spring-forward (2018-03-11) is unambiguous.
+
+        09:30 on 2018-03-11 is already in EDT (DST started 02:00 → 03:00),
+        so 09:30 EDT = 13:30 UTC.
+        """
+        lines = ["2018-03-12 09:30:00,46.95,46.96,46.94,46.95,2000000"]
+        f = _write_csv(tmp_path, "AAPL.txt", lines)
+        bars = parser.parse_file(f, instrument_id, intraday_bar_type)
+        # 2018-03-12 09:30 EDT = 13:30 UTC = 1520861400 seconds
+        assert bars[0].ts_event == 1520861400 * 1_000_000_000
+
+    def test_recent_data_matches_real_market_open(
+        self, parser, instrument_id, intraday_bar_type, tmp_path
+    ):
+        """A recent EDT 09:30 row maps to 13:30 UTC (matches IBKR)."""
+        lines = ["2026-05-01 09:30:00,278.855,281.75,278.37,281.4,2813814"]
+        f = _write_csv(tmp_path, "AAPL.txt", lines)
+        bars = parser.parse_file(f, instrument_id, intraday_bar_type)
+        # 2026-05-01 09:30 EDT = 13:30 UTC = 1777642200 seconds
+        assert bars[0].ts_event == 1777642200 * 1_000_000_000
 
 
 # ---------------------------------------------------------------------------

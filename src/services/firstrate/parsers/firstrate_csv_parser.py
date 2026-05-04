@@ -12,6 +12,7 @@ so this parser is registered for every supported asset class.
 import calendar
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import structlog
 from nautilus_trader.model.data import Bar, BarType
@@ -23,6 +24,9 @@ from src.models.catalog import AssetClass
 from src.services.firstrate.parsers.base import BaseParser, RawBarData, register_parser
 
 logger = structlog.get_logger(__name__)
+
+# FirstRate CSV timestamps are local US Eastern Time with DST.
+_FIRSTRATE_TIMEZONE = ZoneInfo("America/New_York")
 
 
 @register_parser(asset_class=AssetClass.ETF)
@@ -171,9 +175,20 @@ class FirstRateCsvParser(BaseParser):
 
     @staticmethod
     def _parse_timestamp(ts_str: str) -> datetime:
-        """Parse daily or intraday timestamp string to UTC datetime."""
+        """Parse a FirstRate daily or intraday timestamp to a UTC datetime.
+
+        FirstRate CSV files use local US Eastern wall-clock time with DST.
+        A row labelled ``2018-01-16 09:30:00`` is 09:30 EST (= 14:30 UTC),
+        and ``2018-07-16 09:30:00`` is 09:30 EDT (= 13:30 UTC). Daily
+        rows (``YYYY-MM-DD``) localize to midnight ET.
+
+        The previous implementation stamped naive timestamps as UTC,
+        producing a 4–5 hour shift (DST-dependent) on every bar. That
+        silently broke any downstream comparison against UTC-correct
+        feeds (e.g. IBKR ``reqHistoricalData``).
+        """
         if " " in ts_str:
             dt = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
         else:
             dt = datetime.strptime(ts_str, "%Y-%m-%d")
-        return dt.replace(tzinfo=timezone.utc)
+        return dt.replace(tzinfo=_FIRSTRATE_TIMEZONE).astimezone(timezone.utc)

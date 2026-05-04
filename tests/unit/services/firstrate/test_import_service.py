@@ -826,14 +826,21 @@ class TestClassifyTicker:
     def test_intraday_exact_datetime_match_is_skipped(
         self, service, mock_metadata_service, tmp_path
     ):
-        """Intraday re-run where source and metadata share the same last bar."""
+        """Intraday re-run where source and metadata share the same last bar.
+
+        FirstRate timestamps are ET; metadata is stored in UTC. The CSV
+        row ``2025-01-15 15:00:00`` is 15:00 EST = 20:00 UTC, so the
+        metadata's ``date_range_end`` must be in UTC at the matching
+        time for the classifier to skip the reimport.
+        """
         csv = tmp_path / "SPY.txt"
         csv.write_text(
             "2025-01-15 09:00:00,100,101,99,100,1000\n2025-01-15 15:00:00,101,102,100,101,1100\n",
             encoding="utf-8",
         )
         mock_metadata_service.get_instrument_sync.return_value = _metadata_with(
-            date_range_end=datetime(2025, 1, 15, 15, 0, 0, tzinfo=timezone.utc),
+            # 2025-01-15 15:00 EST = 20:00 UTC
+            date_range_end=datetime(2025, 1, 15, 20, 0, 0, tzinfo=timezone.utc),
             bar_count_hourly=2,
         )
 

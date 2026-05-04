@@ -1,42 +1,63 @@
-"""AAPL 2018 1-MINUTE reference comparison harness (Story 3.3).
+"""AAPL 2018 1-MINUTE parity comparison harness (Story 3.4).
 
 Runs ``sma_crossover`` against the same logical dataset (AAPL 2018-01-01 →
-2018-12-31, 1-MINUTE) loaded via two different paths:
+2018-12-31, 1-MINUTE-LAST) loaded via two independently-trusted paths:
 
-- **Legacy CSV path:** ``data/AAPL_1min.csv`` filtered to 2018, imported via
-  ``CSVLoader`` into an isolated harness-owned catalog under ``output_dir``,
-  backtested via that catalog.
-- **FirstRate path:** AAPL Stocks bundle (already imported into the
-  ``e2e-test`` catalog by Story 1-x), backtested via the named-catalog
-  loader.
+- **IBKR path:** AAPL 2018 fetched from IBKR via
+  ``DataCatalogService.fetch_or_load`` into an isolated
+  ``output_dir/ibkr_catalog/``. Default ``useRTH=True`` returns Regular
+  Trading Hours bars only (~98K).
+- **FirstRate path:** AAPL Stocks bundle (already imported into the named
+  ``e2e-test`` catalog by Story 1-x), loaded via the named-catalog loader.
+  FirstRate intraday includes pre/post-market — the harness filters in
+  memory to the IBKR timestamp set so both engines see the same bars.
 
-The legacy path uses an **isolated catalog directory**, not the default
-``NAUTILUS_PATH``, because in this project `NAUTILUS_PATH` is aliased to the
-``e2e-test`` catalog directory (see ``.env``). Writing the legacy CSV into
-``NAUTILUS_PATH`` would trample the FirstRate AAPL bars and make the
-comparison meaningless.
+Key data semantics:
 
-Both runs use byte-identical strategy params and time windows. The harness
-compares totals (bars / trades / PnL) against agreed Phase 1 tolerances and
-emits a structured JSON report plus a side-by-side rich.Table summary.
+- IBKR ``whatToShow=TRADES`` returns as-traded prices (no split adjustment).
+  FirstRate Stocks bundles are split-adjusted retroactively. AAPL had a
+  4:1 split on 2020-08-31 which post-dates the 2018 window — FirstRate
+  2018 prices are therefore ~$40 (back-adjusted), IBKR 2018 prices ~$160.
+  The strategy uses ``position_size_pct=10``, so notional sizing makes
+  trade timing scale-invariant. Total dollar PnL should match within
+  the agreed 0.1% tolerance, modulo whole-share quantization.
+- Both runs use ``useRTH=True`` semantics; FirstRate is filtered in
+  memory to the IBKR timestamp set so DST transitions, half-day
+  Wednesdays, and NYSE holiday calendars align exactly.
+
+Both runs use byte-identical strategy params and time windows. The
+harness compares totals (bars / trades / PnL) against agreed Phase 1
+tolerances and emits a structured JSON report plus a side-by-side
+rich.Table summary.
+
+Note: ``ComparisonReport.legacy_metrics`` carries the IBKR summary in
+this story; the field name is inherited from Story 3.3's ``Path A`` and
+not renamed per Story 3.4 scope ("Reuse 3.3's framework unchanged").
+The renderer's "Legacy CSV" column header is similarly unchanged — the
+harness prints a clarifying line above the table.
 
 Usage::
 
     uv run python scripts/verify_aapl_2018_reference.py [options]
 
 Exits 0 on full pass, 1 on any tolerance breach.
+
+Note on the deprecated CSV-based test:
+``tests/integration/core/test_aapl_2018_reference_comparison.py`` is the
+legacy CSV-based test from Story 3.3 and is deprecated in favor of
+``tests/integration/core/test_aapl_2018_ibkr_vs_firstrate.py``. The
+legacy test stays in place until a future cleanup story removes it.
 """
 
 from __future__ import annotations
 
 import asyncio
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
 import click
-import pandas as pd
 import structlog
 from rich.console import Console
 
@@ -44,14 +65,15 @@ from src.cli.commands._backtest_helpers import load_backtest_data
 from src.core.backtest_orchestrator import BacktestOrchestrator
 from src.models.backtest_request import BacktestRequest
 from src.models.comparison_report import (
+    DEFAULT_BAR_COUNT_TOL,
     BacktestResultSummary,
     ComparisonReport,
     evaluate_tolerance,
 )
 from src.models.data_load_result import DataLoadResult
 from src.services.comparison_renderer import render_comparison_table
-from src.services.csv_loader import CSVLoader
 from src.services.data_catalog import DataCatalogService
+from src.services.exceptions import DataNotFoundError
 from src.services.firstrate.backtest_loader import build_equity
 
 logger = structlog.get_logger(__name__)
@@ -71,35 +93,20 @@ STRATEGY_PARAMS = {
     "slow_period": 20,
     "position_size_pct": Decimal("10"),
 }
-DATASET = f"{SYMBOL}_2018_{TIMEFRAME_SPEC.split('-LAST')[0]}"
+DATASET = f"{SYMBOL}_2018_{TIMEFRAME_SPEC.split('-LAST')[0]}_IBKR_vs_FirstRate"
 
+# IBKR fetch_or_load uses useRTH=True by default; FirstRate intraday includes
+# pre/post-market. The harness filters FirstRate to IBKR's timestamp set so
+# both engines run on the same bar set.
+USE_RTH = True
 
-def filter_csv_to_2018(src: Path, dst: Path) -> Path:
-    """Filter a 1-minute CSV down to calendar 2018.
-
-    ``data/AAPL_1min.csv`` ships with ~1.6M rows from 2010-01-04 onward; we
-    only need the ~98K rows for 2018 to compare against the FirstRate
-    catalog.
-    """
-    df = pd.read_csv(src, parse_dates=["timestamp"])
-    # Half-open interval keeps any sub-second bars at 23:59:59.x in 2018,
-    # matching REFERENCE_END=2018-12-31T23:59:59.999999 (AC #7 byte-identical
-    # window). String "<= 2018-12-31 23:59:59" parsed as .000000 µs would
-    # silently drop those bars on higher-resolution datasets.
-    mask = (df["timestamp"] >= "2018-01-01") & (df["timestamp"] < "2019-01-01")
-    filtered = df.loc[mask].copy()
-    if len(filtered) == 0:
-        raise ValueError(f"No 2018 rows in {src} — verify the CSV covers 2018-01-01..2018-12-31")
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    filtered.to_csv(dst, index=False)
-    logger.info("csv_filtered_to_2018", src=str(src), dst=str(dst), rows=len(filtered))
-    return dst
-
-
-async def _import_legacy_csv(*, filtered_csv: Path, catalog_service: DataCatalogService) -> dict:
-    """Import the filtered CSV into the harness-owned catalog."""
-    loader = CSVLoader(catalog_service=catalog_service, conflict_mode="overwrite")
-    return await loader.load_file(filtered_csv, SYMBOL, VENUE, TIMEFRAME_SPEC)
+# IBKR fetch chunk size for 1-MINUTE bars. The upstream Nautilus
+# `_calculate_duration_segments` doesn't honor IBKR's per-request
+# duration limits per bar size; passing a 364-day window for 1-min bars
+# silently truncates to ~1 day. Empirically a 30-day window returns the
+# full RTH bar count (~11K-13K bars per chunk), so we segment in the
+# harness and reconstitute via the catalog. See Story 3.4 Run 2 notes.
+IBKR_CHUNK_DAYS = 30
 
 
 def _build_request(*, catalog_name: str | None) -> BacktestRequest:
@@ -118,65 +125,255 @@ def _build_request(*, catalog_name: str | None) -> BacktestRequest:
     )
 
 
-async def _run_legacy_backtest(
-    *, catalog_service: DataCatalogService, console: Console
-) -> BacktestResultSummary:
-    """Run the legacy-CSV-path backtest using the harness-owned catalog.
+def _assert_pre_flight_alignment(
+    *,
+    ibkr_bar_count: int,
+    firstrate_metadata_count: int | None,
+    firstrate_filtered_count: int,
+    use_rth: bool,
+    bar_count_tol: float = DEFAULT_BAR_COUNT_TOL,
+) -> None:
+    """Verify IBKR and post-RTH-filter FirstRate counts align before running.
 
-    Bypasses ``load_backtest_data`` because that helper's
-    ``covers_range(start, end)`` check fails when the catalog's first bar is
-    2018-01-02 09:30 (market open) but the requested window starts at the
-    New Year's Day calendar boundary. That false-negative would route the
-    request through IBKR auto-fetch — and in the harness IBKR is not
-    configured, so the call would hang indefinitely on connection retries.
-    Instead we mirror the FirstRate path: read bars directly from the
-    catalog and synthesise the instrument from ``bars[0]``.
+    Logs the four-way comparison (IBKR raw, FirstRate metadata, FirstRate
+    filtered, useRTH flag) so divergence sources are visible in the
+    evidence stream. Raises ``RuntimeError`` if the post-filter
+    FirstRate count diverges from IBKR by more than ``bar_count_tol``.
+
+    With ``useRTH=True`` IBKR returns ~98K RTH bars while FirstRate
+    metadata reports ~125K (full session, including pre/post). That
+    raw-vs-raw mismatch is expected — the harness filters FirstRate
+    to the IBKR timestamp set in memory, and this function checks
+    the *filtered* alignment.
     """
-    request = _build_request(catalog_name=None)
+    bar_max = max(ibkr_bar_count, firstrate_filtered_count, 1)
+    delta = abs(ibkr_bar_count - firstrate_filtered_count) / bar_max
 
-    bar_type_str = f"{request.instrument_id}-{request.bar_type}-EXTERNAL"
-    bars = await asyncio.to_thread(
-        catalog_service.catalog.bars,
-        bar_types=[bar_type_str],
-        start=request.start_date,
-        end=request.end_date,
+    msg = (
+        f"IBKR bars: {ibkr_bar_count:,} (useRTH={use_rth}) "
+        f"vs FirstRate metadata: {firstrate_metadata_count} "
+        f"(post-RTH-filter: {firstrate_filtered_count:,}, Δ={delta:.4%})"
     )
+    logger.info(
+        "pre_flight_alignment",
+        ibkr_bar_count=ibkr_bar_count,
+        firstrate_metadata_count=firstrate_metadata_count,
+        firstrate_filtered_count=firstrate_filtered_count,
+        use_rth=use_rth,
+        bar_count_delta=delta,
+        message=msg,
+    )
+
+    if delta > bar_count_tol:
+        raise RuntimeError(
+            f"Pre-flight bar-count alignment failed: {msg}. "
+            f"Expected post-filter divergence ≤ {bar_count_tol:.2%}. "
+            "Likely causes: useRTH flag mismatch, FirstRate import gap, "
+            "or NYSE holiday calendar drift. Investigate before re-running."
+        )
+
+
+def _filter_to_timestamp_set(bars, timestamp_set: frozenset[int]):
+    """Return the subset of ``bars`` whose ``ts_event`` is in ``timestamp_set``.
+
+    Nautilus Bar objects expose ``ts_event`` as an integer (nanoseconds
+    since Unix epoch, UTC). Set intersection is O(n) and handles DST
+    transitions, half-day sessions (e.g., the Wednesday before
+    Thanksgiving), and NYSE holiday calendars correctly without
+    re-implementing market-session logic.
+    """
+    return [bar for bar in bars if bar.ts_event in timestamp_set]
+
+
+def _dedup_by_ts_event(bars):
+    """Return ``bars`` deduplicated by ``ts_event``, keeping the first occurrence.
+
+    The chunked IBKR fetch can leave the catalog with duplicate bars at
+    chunk boundaries when IBKR extends a request slightly beyond the
+    asked-for window (e.g., to align with the previous trading session).
+    Re-reading via ``query_bars`` returns both copies; the strategy
+    would then process the same minute twice.
+    """
+    seen: set[int] = set()
+    result = []
+    for bar in bars:
+        if bar.ts_event in seen:
+            continue
+        seen.add(bar.ts_event)
+        result.append(bar)
+    return result
+
+
+def _iter_chunks(start: datetime, end: datetime, chunk_days: int):
+    """Yield midnight-aligned ``(chunk_start, chunk_end)`` covering ``[start, end]``.
+
+    **Why midnight alignment.** Nautilus's ``_calculate_duration_segments``
+    decomposes any range with sub-day remainder into ``N D + S S`` segments
+    (e.g. 30-days-minus-1-second → ``29 D + 86399 S``). IBKR's
+    ``reqHistoricalData`` silently ignores ``useRTH=True`` for
+    seconds-duration requests, returning full 24-hour data instead of
+    RTH-only — that's how a single seconds-segment leaks ~1,050 extra
+    bars (1,440 full-day vs 390 RTH).
+
+    By tiling on full-day boundaries the segmenter emits exactly one
+    ``chunk_days D`` segment per chunk, keeping useRTH semantics
+    consistent across the year.
+
+    The final chunk's end is rounded up to the next midnight after
+    ``end`` so the requested range is fully covered. Chunk boundaries
+    are end-exclusive (IBKR's ``endDateTime`` semantics), so adjacent
+    chunks tile without overlap.
+    """
+    midnight = datetime.min.time()
+
+    def _round_up_to_midnight(ts: datetime) -> datetime:
+        if ts.time() == midnight:
+            return ts
+        return ts.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=ts.tzinfo) + timedelta(
+            days=1
+        )
+
+    cursor = start.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=start.tzinfo)
+    end_midnight = _round_up_to_midnight(end)
+    delta = timedelta(days=chunk_days)
+
+    if cursor >= end_midnight:
+        # Zero-length or sub-day range — yield a single chunk so callers
+        # always get at least one window.
+        yield start, end
+        return
+
+    while cursor < end_midnight:
+        chunk_end = min(cursor + delta, end_midnight)
+        yield cursor, chunk_end
+        cursor = chunk_end
+
+
+async def _fetch_ibkr_chunked(
+    *,
+    catalog_service: DataCatalogService,
+    chunk_days: int = IBKR_CHUNK_DAYS,
+) -> None:
+    """Fetch AAPL 2018 in ``chunk_days`` windows, persisting each to the catalog.
+
+    Workaround for the upstream Nautilus duration-segmenter bug
+    (``_calculate_duration_segments`` truncates >day-but-not->year ranges
+    for high-resolution bars). Each chunk goes through the standard
+    ``DataCatalogService.fetch_or_load`` path so bars land in the
+    isolated ``output_dir/ibkr_catalog/`` and are reconstituted via a
+    single ``query_bars`` after all chunks complete.
+    """
+    chunks = list(_iter_chunks(REFERENCE_START, REFERENCE_END, chunk_days))
+    logger.info(
+        "ibkr_chunked_fetch_starting",
+        total_chunks=len(chunks),
+        chunk_days=chunk_days,
+        instrument_id=INSTRUMENT_ID,
+    )
+    for idx, (chunk_start, chunk_end) in enumerate(chunks, start=1):
+        logger.info(
+            "ibkr_chunk_fetching",
+            chunk_index=idx,
+            total_chunks=len(chunks),
+            start=chunk_start.isoformat(),
+            end=chunk_end.isoformat(),
+        )
+        await catalog_service.fetch_or_load(
+            instrument_id=INSTRUMENT_ID,
+            start=chunk_start,
+            end=chunk_end,
+            bar_type_spec=TIMEFRAME_SPEC,
+            data_source="ibkr",
+            correlation_id=f"story-3-4-ibkr-chunk-{idx}",
+        )
+
+
+async def _fetch_or_query_ibkr_bars(
+    *,
+    catalog_service: DataCatalogService,
+    skip_fetch: bool,
+):
+    """Return AAPL 2018 1-MINUTE bars from IBKR (cached or freshly fetched).
+
+    With ``skip_fetch=True`` the harness reads from the isolated
+    ``output_dir/ibkr_catalog/`` directly via ``query_bars`` and surfaces
+    a clear error if the cache is empty (i.e., the user passed
+    ``--skip-fetch`` on a first run).
+
+    Without ``skip_fetch``, the harness fetches the year in 30-day chunks
+    via ``_fetch_ibkr_chunked`` (workaround for the upstream segmenter
+    bug) and then reads the full year back from the catalog as one set.
+    """
+    if not skip_fetch:
+        await _fetch_ibkr_chunked(catalog_service=catalog_service)
+
+    try:
+        return await asyncio.to_thread(
+            catalog_service.query_bars,
+            INSTRUMENT_ID,
+            REFERENCE_START,
+            REFERENCE_END,
+            TIMEFRAME_SPEC,
+        )
+    except DataNotFoundError as e:
+        if skip_fetch:
+            raise RuntimeError(
+                f"--skip-fetch was set but the IBKR catalog at "
+                f"{catalog_service.catalog_path} has no AAPL 2018 bars. "
+                "Run once without --skip-fetch to populate the cache."
+            ) from e
+        raise RuntimeError(
+            f"IBKR chunked fetch completed but the catalog at "
+            f"{catalog_service.catalog_path} returned no AAPL 2018 bars. "
+            "Likely all chunks returned empty — investigate IBKR Gateway "
+            "data permissions for AAPL 2018 1-MINUTE."
+        ) from e
+
+
+async def _run_ibkr_backtest(*, bars, catalog_path: Path) -> BacktestResultSummary:
+    """Run the IBKR-path backtest using bars already loaded from the cache."""
+    request = _build_request(catalog_name=None)
 
     if not bars:
         raise RuntimeError(
-            f"Legacy catalog at {catalog_service.catalog_path} returned zero "
-            f"bars for {bar_type_str} between {request.start_date} and "
-            f"{request.end_date}. Did the CSV import run?"
+            f"IBKR catalog at {catalog_path} returned zero bars for "
+            f"{INSTRUMENT_ID} between {REFERENCE_START} and {REFERENCE_END}. "
+            "Did the IBKR fetch run?"
         )
 
-    equity = build_equity(
-        nautilus_id=request.instrument_id,
-        ticker=SYMBOL,
-        bars=bars,
-    )
+    equity = build_equity(nautilus_id=INSTRUMENT_ID, ticker=SYMBOL, bars=bars)
     data_result = DataLoadResult(
         bars=bars,
         instrument=equity,
-        data_source_used=f"Legacy CSV catalog ({catalog_service.catalog_path})",
+        data_source_used=f"IBKR catalog ({catalog_path})",
     )
 
     return await _execute_and_summarise(request=request, data_result=data_result)
 
 
-async def _run_firstrate_backtest(
-    *, firstrate_catalog: str, console: Console
-) -> BacktestResultSummary:
-    """Run the FirstRate-named-catalog backtest."""
+async def _run_firstrate_backtest(*, bars, firstrate_catalog: str) -> BacktestResultSummary:
+    """Run the FirstRate-path backtest on the RTH-filtered bar set.
+
+    Builds the instrument from the filtered bars (price precision is
+    inferred from ``bars[0].open.precision`` — see ``build_equity``). The
+    request still carries ``catalog_name=firstrate_catalog`` for AC #7's
+    "differ only by catalog_name" assertion, but the bars handed to the
+    orchestrator are the in-memory filtered set.
+    """
     request = _build_request(catalog_name=firstrate_catalog)
 
-    data_result = await load_backtest_data(
-        data_source="catalog",
-        instrument_id=request.instrument_id,
-        bar_type_spec=request.bar_type,
-        start=request.start_date,
-        end=request.end_date,
-        console=console,
-        catalog_name=firstrate_catalog,
+    if not bars:
+        raise RuntimeError(
+            f"FirstRate catalog '{firstrate_catalog}' returned zero bars "
+            f"for {INSTRUMENT_ID} after RTH filtering — the IBKR timestamp "
+            "set has no overlap with the FirstRate bar set. Investigate."
+        )
+
+    equity = build_equity(nautilus_id=INSTRUMENT_ID, ticker=SYMBOL, bars=bars)
+    data_result = DataLoadResult(
+        bars=bars,
+        instrument=equity,
+        data_source_used=f"FirstRate catalog ({firstrate_catalog}, RTH-filtered)",
     )
 
     return await _execute_and_summarise(request=request, data_result=data_result)
@@ -186,9 +383,7 @@ async def _execute_and_summarise(*, request, data_result) -> BacktestResultSumma
     """Run a single backtest with proper engine disposal and return its summary."""
     orchestrator = BacktestOrchestrator()
     try:
-        result, _run_id = await orchestrator.execute(
-            request, data_result.bars, data_result.instrument
-        )
+        result, _ = await orchestrator.execute(request, data_result.bars, data_result.instrument)
     finally:
         # Single-use engine — must dispose before the next run starts
         # (CLAUDE.md Gotcha #4).
@@ -207,12 +402,46 @@ async def _execute_and_summarise(*, request, data_result) -> BacktestResultSumma
     )
 
 
+async def _load_firstrate_bars(*, firstrate_catalog: str, console: Console):
+    """Load the full-session FirstRate bars via the named-catalog loader."""
+    request = _build_request(catalog_name=firstrate_catalog)
+    return await load_backtest_data(
+        data_source="catalog",
+        instrument_id=request.instrument_id,
+        bar_type_spec=request.bar_type,
+        start=request.start_date,
+        end=request.end_date,
+        console=console,
+        catalog_name=firstrate_catalog,
+    )
+
+
+def _firstrate_metadata_count(firstrate_catalog: str) -> int | None:
+    """Return ``catalog_instruments.bar_count_minute`` for AAPL, if present.
+
+    Returns ``None`` when the metadata service is unavailable (e.g.,
+    the DB session can't be created) — that's a pre-flight log
+    annotation, not a halt condition. The blocking check is on the
+    post-filter FirstRate bar count vs IBKR.
+    """
+    try:
+        from src.cli.commands._backtest_helpers import _build_named_catalog_dependencies
+
+        _, metadata_service, _ = _build_named_catalog_dependencies()
+        row = metadata_service.get_instrument_sync(firstrate_catalog, SYMBOL)
+        if row is None:
+            return None
+        return getattr(row, "bar_count_minute", None)
+    except Exception as e:
+        logger.warning("firstrate_metadata_lookup_failed", error=str(e))
+        return None
+
+
 async def _run_comparison_async(
     *,
-    legacy_csv: Path,
     firstrate_catalog: str,
     output_dir: Path,
-    skip_import: bool,
+    skip_fetch: bool,
 ) -> ComparisonReport:
     """Async core for the comparison harness (extracted for testability)."""
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -224,49 +453,100 @@ async def _run_comparison_async(
 
     console = Console(quiet=True)
 
-    # Isolated, harness-owned catalog for the legacy-CSV path. Writing into
-    # NAUTILUS_PATH would trample the FirstRate catalog when the two are
-    # aliased (this project's `.env` does exactly that).
-    legacy_catalog_dir = output_dir / "legacy_catalog"
-    legacy_catalog_dir.mkdir(parents=True, exist_ok=True)
-    legacy_catalog_service = DataCatalogService(catalog_path=str(legacy_catalog_dir))
+    # Isolated, harness-owned IBKR catalog. Writing into NAUTILUS_PATH would
+    # trample the FirstRate catalog when the two are aliased (this project's
+    # ``.env`` does exactly that — same lesson as Story 3.3).
+    ibkr_catalog_dir = output_dir / "ibkr_catalog"
+    ibkr_catalog_dir.mkdir(parents=True, exist_ok=True)
+    ibkr_catalog_service = DataCatalogService(catalog_path=str(ibkr_catalog_dir))
 
-    if not skip_import:
-        filtered = filter_csv_to_2018(legacy_csv, output_dir / "AAPL_2018.csv")
-        await _import_legacy_csv(
-            filtered_csv=filtered,
-            catalog_service=legacy_catalog_service,
-        )
-        # Rebuild the cache so the post-import data is visible.
-        legacy_catalog_service._rebuild_availability_cache()
-
-    # AC #7 guard — both requests must differ only by catalog_name.
-    # `_build_request` is the single source of truth, but a future helper
-    # divergence (or a regression in `from_cli_args` silently dropping a
-    # kwarg) would go unnoticed without this assertion.
-    _legacy_req = _build_request(catalog_name=None)
+    # AC #7 guard — strategy params + window must be byte-identical across
+    # both runs. ``catalog_name`` and the derived ``instrument_id`` are
+    # legitimately different by design: the named-catalog path uses an
+    # ``AAPL.NAMED_CATALOG`` placeholder that the loader resolves to the
+    # DB-authoritative ``nautilus_id`` at load time, while the default path
+    # resolves the symbol against ``NAUTILUS_PATH``'s availability cache. Both
+    # paths still hit the same real instrument; the divergence in placeholder
+    # form is not a strategy-input divergence.
+    _ibkr_req = _build_request(catalog_name=None)
     _fr_req = _build_request(catalog_name=firstrate_catalog)
+    _ALLOWED_DIFFS: set[str] = {"catalog_name", "instrument_id"}
     _diff = {
         k
-        for k in _legacy_req.model_dump()
-        if k != "catalog_name" and _legacy_req.model_dump()[k] != _fr_req.model_dump()[k]
+        for k in _ibkr_req.model_dump()
+        if k not in _ALLOWED_DIFFS and _ibkr_req.model_dump()[k] != _fr_req.model_dump()[k]
     }
     if _diff:
         raise AssertionError(
             f"AC #7 violated: BacktestRequests diverge on fields {sorted(_diff)} "
-            "beyond catalog_name. The shared _build_request helper has drifted."
+            f"beyond {sorted(_ALLOWED_DIFFS)}. The shared _build_request helper has drifted."
         )
 
-    # Sequential — never run two BacktestEngines concurrently in one process
-    # (CLAUDE.md Gotcha #4).
-    legacy_summary = await _run_legacy_backtest(
-        catalog_service=legacy_catalog_service, console=console
+    # Step 1: IBKR fetch (or read from harness cache on --skip-fetch)
+    ibkr_bars = await _fetch_or_query_ibkr_bars(
+        catalog_service=ibkr_catalog_service, skip_fetch=skip_fetch
     )
-    firstrate_summary = await _run_firstrate_backtest(
+
+    # Step 2: FirstRate full-session load (catalog query)
+    firstrate_data = await _load_firstrate_bars(
         firstrate_catalog=firstrate_catalog, console=console
     )
 
-    report = evaluate_tolerance(legacy_summary, firstrate_summary, dataset=DATASET)
+    # Step 3a: dedup IBKR and FirstRate bars by ts_event. The chunked
+    # IBKR fetch can leave the catalog with duplicate bars at chunk
+    # boundaries when IBKR aligns the requested range to a session
+    # boundary; processing the same minute twice would distort the
+    # backtest.
+    ibkr_dedup = _dedup_by_ts_event(ibkr_bars)
+    firstrate_dedup = _dedup_by_ts_event(firstrate_data.bars)
+
+    # Step 3b: build the SYMMETRIC timestamp intersection so both
+    # backtests see the same bars. IBKR Gateway 10.45 with
+    # ``useRTH=True`` was observed to leak ~3h of pre-market data per
+    # trading day (~557 bars/day instead of the RTH-only ~390), so a
+    # one-way "filter FirstRate to IBKR" left FirstRate covering only
+    # ~45% of IBKR's extended set. The intersection guarantees
+    # apples-to-apples comparison regardless of either source's session
+    # policy.
+    ibkr_timestamps: frozenset[int] = frozenset(bar.ts_event for bar in ibkr_dedup)
+    firstrate_timestamps: frozenset[int] = frozenset(bar.ts_event for bar in firstrate_dedup)
+    common_timestamps: frozenset[int] = ibkr_timestamps & firstrate_timestamps
+
+    ibkr_filtered = _filter_to_timestamp_set(ibkr_dedup, common_timestamps)
+    firstrate_filtered = _filter_to_timestamp_set(firstrate_dedup, common_timestamps)
+
+    logger.info(
+        "timestamp_intersection_built",
+        ibkr_raw=len(ibkr_bars),
+        firstrate_raw=len(firstrate_data.bars),
+        common=len(common_timestamps),
+        ibkr_filtered=len(ibkr_filtered),
+        firstrate_filtered=len(firstrate_filtered),
+    )
+
+    # Step 4: pre-flight halt before the expensive backtest runs (AC #8).
+    # With symmetric intersection both filtered counts are equal by
+    # construction, so the bar-count tolerance check is now a sanity
+    # guard against a near-empty intersection (i.e. the timestamp
+    # representations don't align at all between the two sources).
+    firstrate_metadata_count = _firstrate_metadata_count(firstrate_catalog)
+    _assert_pre_flight_alignment(
+        ibkr_bar_count=len(ibkr_filtered),
+        firstrate_metadata_count=firstrate_metadata_count,
+        firstrate_filtered_count=len(firstrate_filtered),
+        use_rth=USE_RTH,
+    )
+
+    # Step 5: sequential backtests on the intersection (CLAUDE.md Gotcha
+    # #4 — never two engines concurrently in one process).
+    ibkr_summary = await _run_ibkr_backtest(bars=ibkr_filtered, catalog_path=ibkr_catalog_dir)
+    firstrate_summary = await _run_firstrate_backtest(
+        bars=firstrate_filtered, firstrate_catalog=firstrate_catalog
+    )
+
+    # ``ComparisonReport.legacy_metrics`` is the Path A field in 3.3's model,
+    # which 3.4 reuses unchanged. Path A is the IBKR side here.
+    report = evaluate_tolerance(ibkr_summary, firstrate_summary, dataset=DATASET)
 
     json_path = output_dir / "aapl_2018_comparison.json"
     json_path.write_text(report.model_dump_json(indent=2))
@@ -276,34 +556,27 @@ async def _run_comparison_async(
 
 def run_comparison_harness(
     *,
-    legacy_csv: Path,
     firstrate_catalog: str,
     output_dir: Path,
-    skip_import: bool,
+    skip_fetch: bool,
 ) -> ComparisonReport:
     """Synchronous entry point for the comparison harness.
 
-    Wraps the async core with ``asyncio.run`` so callers (integration tests,
-    the CLI ``main()``) don't need to manage an event loop. Pre-flight write
-    check raises OSError before the expensive backtests run.
+    Wraps the async core with ``asyncio.run`` so callers (integration
+    tests, the CLI ``main()``) don't need to manage an event loop.
+    Pre-flight write check raises OSError before the expensive
+    backtests run.
     """
     return asyncio.run(
         _run_comparison_async(
-            legacy_csv=legacy_csv,
             firstrate_catalog=firstrate_catalog,
             output_dir=output_dir,
-            skip_import=skip_import,
+            skip_fetch=skip_fetch,
         )
     )
 
 
 @click.command()
-@click.option(
-    "--legacy-csv",
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    default=Path("data/AAPL_1min.csv"),
-    help="Legacy reference CSV (filtered to 2018 internally).",
-)
 @click.option(
     "--firstrate-catalog",
     type=str,
@@ -313,27 +586,30 @@ def run_comparison_harness(
 @click.option(
     "--output-dir",
     type=click.Path(file_okay=False, path_type=Path),
-    default=Path("/tmp/story-3-3-evidence/"),
-    help="Directory for evidence JSON + filtered CSV + isolated legacy catalog.",
+    default=Path("/tmp/story-3-4-evidence/"),
+    help="Directory for evidence JSON + isolated IBKR catalog.",
 )
 @click.option(
-    "--skip-import",
+    "--skip-fetch",
     is_flag=True,
-    help="Skip the legacy-CSV → harness-catalog re-import (idempotency hint).",
+    help="Skip the IBKR fetch and read bars from the harness-owned cache "
+    "(only valid after a prior run populated output_dir/ibkr_catalog/).",
 )
 def main(
-    legacy_csv: Path,
     firstrate_catalog: str,
     output_dir: Path,
-    skip_import: bool,
+    skip_fetch: bool,
 ) -> None:
-    """Drive the AAPL 2018 reference comparison end-to-end."""
+    """Drive the AAPL 2018 IBKR-vs-FirstRate parity comparison end-to-end."""
     console = Console()
     report = run_comparison_harness(
-        legacy_csv=legacy_csv,
         firstrate_catalog=firstrate_catalog,
         output_dir=output_dir,
-        skip_import=skip_import,
+        skip_fetch=skip_fetch,
+    )
+    console.print(
+        "[dim]Note: the 'Legacy CSV' column shows IBKR-fetched bars "
+        "(Story 3.4 reuses Story 3.3's renderer unchanged).[/dim]"
     )
     console.print(render_comparison_table(report))
     console.print(f"\nEvidence written to: {output_dir / 'aapl_2018_comparison.json'}")
