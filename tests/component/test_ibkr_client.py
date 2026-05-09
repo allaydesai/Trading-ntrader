@@ -536,6 +536,37 @@ class TestIBKRClientReconnect:
 
             inner._stop_async.assert_not_awaited()
 
+    @pytest.mark.component
+    @pytest.mark.asyncio
+    async def test_connect_rebuild_failure_raises_connection_error(self):
+        """A failed `_build_inner_client` during rotation surfaces clearly.
+
+        Without the rebuild guard a partial-failure left the wrapper holding a
+        half-built `client` for subsequent attempts. The rebuild is now wrapped
+        in a try/except that raises a ConnectionError naming the candidate id.
+        """
+        from nautilus_trader.adapters.interactive_brokers.historical.client import (
+            HistoricInteractiveBrokersClient,
+        )
+
+        from src.services.ibkr_client import IBKRHistoricalClient
+
+        with patch.object(HistoricInteractiveBrokersClient, "__init__", return_value=None):
+            client = IBKRHistoricalClient(client_id=10)
+
+            def stub_build(*, client_id: int):
+                raise RuntimeError(f"simulated rebuild failure for id={client_id}")
+
+            client.client.connect = AsyncMock(side_effect=asyncio.TimeoutError)
+            with patch.object(client, "_build_inner_client", side_effect=stub_build):
+                with patch.object(client, "_stop_inner", new_callable=AsyncMock):
+                    with pytest.raises(ConnectionError) as exc_info:
+                        await client.connect(timeout=1, max_id_rotations=2)
+
+            msg = str(exc_info.value)
+            assert "rebuild" in msg.lower()
+            assert "11" in msg  # the candidate id at the failed rebuild
+
 
 class TestIBKRClientIntegration:
     """Integration tests for IBKR client components."""

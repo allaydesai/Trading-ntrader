@@ -225,7 +225,15 @@ class IBKRHistoricalClient:
                     max_attempts=max_id_rotations,
                 )
                 await self._stop_inner()
-                self._build_inner_client(client_id=candidate_id)
+                try:
+                    self._build_inner_client(client_id=candidate_id)
+                except Exception as build_exc:  # noqa: BLE001
+                    # Rebuild itself failed — surface clearly rather than
+                    # leaving ``self.client`` half-built for the next attempt.
+                    raise ConnectionError(
+                        f"Failed to rebuild IBKR client during rotation "
+                        f"(candidate_id={candidate_id}): {build_exc}"
+                    ) from build_exc
 
             try:
                 await asyncio.wait_for(self.client.connect(), timeout=timeout)
@@ -254,7 +262,10 @@ class IBKRHistoricalClient:
             f"Failed to connect to IBKR after {max_id_rotations + 1} client_id "
             f"rotations (base={self._base_client_id}). The Gateway may be holding "
             f"stale sessions from a previously killed process; wait a minute and "
-            f"retry, or restart the Gateway. Last error: {last_error}"
+            f"retry, or restart the Gateway. If a concurrent harness is running "
+            f"with the same base client_id (rotation is deterministic — "
+            f"base+1, base+2, ...), use a disjoint base id to avoid cross-process "
+            f"contention. Last error: {last_error}"
         )
 
     async def disconnect(self):

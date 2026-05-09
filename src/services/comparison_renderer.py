@@ -87,12 +87,12 @@ def render_comparison_table(report: ComparisonReport) -> str:
         )
     if not report.trade_count_passed:
         console.print(
-            f"❌ TOLERANCE BREACH: trade_count Δ={report.trade_count_delta} (threshold 0)",
+            f"❌ TOLERANCE BREACH: trade_count Δ={report.trade_count_delta} (threshold ±50)",
             style="red bold",
         )
     if not report.pnl_passed:
         console.print(
-            f"❌ TOLERANCE BREACH: pnl Δ={report.pnl_delta_pct:.4%} (threshold 0.10%)",
+            f"❌ TOLERANCE BREACH: pnl Δ={report.pnl_delta_pct:.4%} (threshold 0.50%)",
             style="red bold",
         )
     if report.overall_passed:

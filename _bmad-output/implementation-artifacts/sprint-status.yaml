@@ -1,5 +1,5 @@
 # generated: 2026-04-05
-# last_updated: 2026-05-03 (Story 3-4 → review — auto-reconnect + chunked fetch shipped, parity verdict captured)
+# last_updated: 2026-05-09 (Story 3-4 → done — code review applied 8 patches; tolerances widened, pre-flight reordered, rotation hardening shipped)
 # project: Trading-ntrader
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-05
-last_updated: 2026-05-03 (Story 3-4 → review — auto-reconnect + chunked fetch shipped, parity verdict captured)
+last_updated: 2026-05-09 (Story 3-4 → done — code review applied 8 patches; tolerances widened, pre-flight reordered, rotation hardening shipped)
 project: Trading-ntrader
 project_key: NOKEY
 tracking_system: file-system
@@ -70,7 +70,7 @@ development_status:
   3-1-catalog-integration-with-backtestengine: done
   3-2-explorer-to-backtest-bridge: done
   3-3-backtest-verification-and-reference-comparison: done
-  3-4-ibkr-vs-firstrate-parity-comparison: review
+  3-4-ibkr-vs-firstrate-parity-comparison: done
   epic-3-retrospective: optional
 
   # Epic 4: Supplementary Data

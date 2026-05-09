@@ -209,11 +209,17 @@ class TestFirstRateCsvParserTimezone:
         # 2018-07-16 13:30:00 UTC = 1531747800 seconds
         assert bars[0].ts_event == 1531747800 * 1_000_000_000
 
-    def test_dst_spring_forward_handled(self, parser, instrument_id, intraday_bar_type, tmp_path):
-        """Bar at 03:00 ET on DST spring-forward (2018-03-11) is unambiguous.
+    def test_post_spring_forward_monday_uses_edt(
+        self, parser, instrument_id, intraday_bar_type, tmp_path
+    ):
+        """The Monday after DST spring-forward is fully EDT (unambiguous).
 
-        09:30 on 2018-03-11 is already in EDT (DST started 02:00 → 03:00),
-        so 09:30 EDT = 13:30 UTC.
+        2018 DST start was Sunday 2018-03-11; this verifies the parser uses
+        the EDT (UTC-4) offset for the Monday open. The actual transition
+        gap (02:00–02:59 ET on the Sunday) is not exercised here — that
+        ambiguous-/non-existent-time handling is tracked as deferred work
+        for a future 24/7 asset class story (RTH equities never produce
+        rows in that window).
         """
         lines = ["2018-03-12 09:30:00,46.95,46.96,46.94,46.95,2000000"]
         f = _write_csv(tmp_path, "AAPL.txt", lines)

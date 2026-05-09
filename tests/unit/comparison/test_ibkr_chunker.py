@@ -88,6 +88,18 @@ class TestIterChunks:
         assert thirty_day_chunks[-1][1] == expected_end
 
     @pytest.mark.unit
+    @pytest.mark.parametrize("bad_chunk_days", [0, -1, -30])
+    def test_non_positive_chunk_days_raises(self, bad_chunk_days: int) -> None:
+        """``chunk_days <= 0`` must raise rather than infinite-loop."""
+        from scripts.verify_aapl_2018_reference import _iter_chunks
+
+        start = datetime(2018, 1, 1, tzinfo=timezone.utc)
+        end = datetime(2018, 12, 31, tzinfo=timezone.utc)
+
+        with pytest.raises(ValueError, match="chunk_days must be positive"):
+            list(_iter_chunks(start, end, chunk_days=bad_chunk_days))
+
+    @pytest.mark.unit
     def test_subday_range_expands_to_containing_day(self) -> None:
         """start==end mid-day expands to the full day containing it.
 

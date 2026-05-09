@@ -65,7 +65,6 @@ from src.cli.commands._backtest_helpers import load_backtest_data
 from src.core.backtest_orchestrator import BacktestOrchestrator
 from src.models.backtest_request import BacktestRequest
 from src.models.comparison_report import (
-    DEFAULT_BAR_COUNT_TOL,
     BacktestResultSummary,
     ComparisonReport,
     evaluate_tolerance,
@@ -125,40 +124,51 @@ def _build_request(*, catalog_name: str | None) -> BacktestRequest:
     )
 
 
+#: Maximum tolerated divergence between RAW IBKR and RAW FirstRate bar counts
+#: at pre-flight time. With ``useRTH=True`` IBKR returns ~98K RTH bars while
+#: FirstRate returns ~166K full-session bars (RTH + pre/post-market) for
+#: AAPL 2018 — that's a ~41% Δ. The tolerance is sized to allow this
+#: structural feed-shape difference while still catching real divergences
+#: (partial import, useRTH semantic flip, year-window mismatch).
+PRE_FLIGHT_RAW_TOL: float = 0.50
+
+
 def _assert_pre_flight_alignment(
     *,
-    ibkr_bar_count: int,
+    ibkr_raw_count: int,
+    firstrate_raw_count: int,
     firstrate_metadata_count: int | None,
-    firstrate_filtered_count: int,
     use_rth: bool,
-    bar_count_tol: float = DEFAULT_BAR_COUNT_TOL,
+    bar_count_tol: float = PRE_FLIGHT_RAW_TOL,
 ) -> None:
-    """Verify IBKR and post-RTH-filter FirstRate counts align before running.
+    """Halt the run before the expensive backtests if RAW bar counts diverge wildly.
 
-    Logs the four-way comparison (IBKR raw, FirstRate metadata, FirstRate
-    filtered, useRTH flag) so divergence sources are visible in the
-    evidence stream. Raises ``RuntimeError`` if the post-filter
-    FirstRate count diverges from IBKR by more than ``bar_count_tol``.
+    This check fires BEFORE the symmetric timestamp intersection — comparing
+    post-intersection counts is a tautology (both sides equal by construction).
+    Raw counts surface real ingest-shape mismatches: missing months in the
+    FirstRate import, an IBKR fetch that hit a permission gate, a useRTH flag
+    flip on either side.
 
-    With ``useRTH=True`` IBKR returns ~98K RTH bars while FirstRate
-    metadata reports ~125K (full session, including pre/post). That
-    raw-vs-raw mismatch is expected — the harness filters FirstRate
-    to the IBKR timestamp set in memory, and this function checks
-    the *filtered* alignment.
+    Logs the four-way comparison (IBKR raw, FirstRate raw, FirstRate metadata,
+    useRTH flag) so divergence sources are visible in the evidence stream.
+    Raises ``RuntimeError`` if the raw counts diverge by more than
+    ``bar_count_tol``. The metadata count is logged but not used in the
+    delta — metadata is whole-catalog while the comparison runs on a
+    single year window.
     """
-    bar_max = max(ibkr_bar_count, firstrate_filtered_count, 1)
-    delta = abs(ibkr_bar_count - firstrate_filtered_count) / bar_max
+    bar_max = max(ibkr_raw_count, firstrate_raw_count, 1)
+    delta = abs(ibkr_raw_count - firstrate_raw_count) / bar_max
 
     msg = (
-        f"IBKR bars: {ibkr_bar_count:,} (useRTH={use_rth}) "
-        f"vs FirstRate metadata: {firstrate_metadata_count} "
-        f"(post-RTH-filter: {firstrate_filtered_count:,}, Δ={delta:.4%})"
+        f"IBKR raw bars: {ibkr_raw_count:,} (useRTH={use_rth}) "
+        f"vs FirstRate raw bars: {firstrate_raw_count:,} "
+        f"(metadata total: {firstrate_metadata_count}, Δ={delta:.4%})"
     )
     logger.info(
         "pre_flight_alignment",
-        ibkr_bar_count=ibkr_bar_count,
+        ibkr_raw_count=ibkr_raw_count,
+        firstrate_raw_count=firstrate_raw_count,
         firstrate_metadata_count=firstrate_metadata_count,
-        firstrate_filtered_count=firstrate_filtered_count,
         use_rth=use_rth,
         bar_count_delta=delta,
         message=msg,
@@ -166,10 +176,11 @@ def _assert_pre_flight_alignment(
 
     if delta > bar_count_tol:
         raise RuntimeError(
-            f"Pre-flight bar-count alignment failed: {msg}. "
-            f"Expected post-filter divergence ≤ {bar_count_tol:.2%}. "
-            "Likely causes: useRTH flag mismatch, FirstRate import gap, "
-            "or NYSE holiday calendar drift. Investigate before re-running."
+            f"Pre-flight raw bar-count alignment failed: {msg}. "
+            f"Expected raw divergence ≤ {bar_count_tol:.2%}. "
+            "Likely causes: useRTH flag mismatch, FirstRate import gap "
+            "(year-window partial), or NYSE holiday calendar drift. "
+            "Investigate before re-running."
         )
 
 
@@ -224,6 +235,9 @@ def _iter_chunks(start: datetime, end: datetime, chunk_days: int):
     are end-exclusive (IBKR's ``endDateTime`` semantics), so adjacent
     chunks tile without overlap.
     """
+    if chunk_days <= 0:
+        raise ValueError(f"chunk_days must be positive, got {chunk_days}")
+
     midnight = datetime.min.time()
 
     def _round_up_to_midnight(ts: datetime) -> datetime:
@@ -468,6 +482,11 @@ async def _run_comparison_async(
     # resolves the symbol against ``NAUTILUS_PATH``'s availability cache. Both
     # paths still hit the same real instrument; the divergence in placeholder
     # form is not a strategy-input divergence.
+    #
+    # TODO: When ``BacktestRequest.from_cli_args`` defers ``instrument_id``
+    # resolution to load time, tighten ``_ALLOWED_DIFFS`` back to
+    # ``{"catalog_name"}`` and add a post-resolution equality assertion on
+    # the loaded instrument's ``id``. Tracked in deferred-work for Story 3.4.
     _ibkr_req = _build_request(catalog_name=None)
     _fr_req = _build_request(catalog_name=firstrate_catalog)
     _ALLOWED_DIFFS: set[str] = {"catalog_name", "instrument_id"}
@@ -480,6 +499,17 @@ async def _run_comparison_async(
         raise AssertionError(
             f"AC #7 violated: BacktestRequests diverge on fields {sorted(_diff)} "
             f"beyond {sorted(_ALLOWED_DIFFS)}. The shared _build_request helper has drifted."
+        )
+    if _ibkr_req.instrument_id != _fr_req.instrument_id:
+        # Visible signal that the placeholder split happened — without this,
+        # a real instrument_id regression (e.g. wrong venue) would land
+        # silently inside the allowed-diff set.
+        logger.info(
+            "ac7_instrument_id_placeholder_diverged",
+            ibkr=_ibkr_req.instrument_id,
+            firstrate=_fr_req.instrument_id,
+            note="expected: named-catalog placeholder vs default resolution; both should "
+            "resolve to the same real instrument at load time",
         )
 
     # Step 1: IBKR fetch (or read from harness cache on --skip-fetch)
@@ -500,7 +530,20 @@ async def _run_comparison_async(
     ibkr_dedup = _dedup_by_ts_event(ibkr_bars)
     firstrate_dedup = _dedup_by_ts_event(firstrate_data.bars)
 
-    # Step 3b: build the SYMMETRIC timestamp intersection so both
+    # Step 3b: pre-flight halt on RAW count divergence (AC #8) — runs
+    # BEFORE intersection so it can actually catch ingest-shape mismatches
+    # (post-intersection counts are equal by construction). With
+    # useRTH=True the expected raw delta is ~30-40% (IBKR RTH-only vs
+    # FirstRate full-session); ``PRE_FLIGHT_RAW_TOL`` is sized accordingly.
+    firstrate_metadata_count = _firstrate_metadata_count(firstrate_catalog)
+    _assert_pre_flight_alignment(
+        ibkr_raw_count=len(ibkr_dedup),
+        firstrate_raw_count=len(firstrate_dedup),
+        firstrate_metadata_count=firstrate_metadata_count,
+        use_rth=USE_RTH,
+    )
+
+    # Step 3c: build the SYMMETRIC timestamp intersection so both
     # backtests see the same bars. IBKR Gateway 10.45 with
     # ``useRTH=True`` was observed to leak ~3h of pre-market data per
     # trading day (~557 bars/day instead of the RTH-only ~390), so a
@@ -511,6 +554,19 @@ async def _run_comparison_async(
     ibkr_timestamps: frozenset[int] = frozenset(bar.ts_event for bar in ibkr_dedup)
     firstrate_timestamps: frozenset[int] = frozenset(bar.ts_event for bar in firstrate_dedup)
     common_timestamps: frozenset[int] = ibkr_timestamps & firstrate_timestamps
+
+    if not common_timestamps:
+        # Empty intersection means raw counts looked plausible but the
+        # actual minute-bar timestamps don't overlap — the canonical
+        # symptom of TZ/DST drift between sources (the original Story 3.4
+        # symptom before the FirstRate parser fix).
+        raise RuntimeError(
+            f"IBKR ∩ FirstRate timestamp intersection is empty "
+            f"(IBKR raw={len(ibkr_dedup):,}, FirstRate raw={len(firstrate_dedup):,}). "
+            "Likely cause: timezone/DST drift between sources, or a window "
+            "mismatch where the two ranges genuinely don't overlap. "
+            "Investigate before re-running."
+        )
 
     ibkr_filtered = _filter_to_timestamp_set(ibkr_dedup, common_timestamps)
     firstrate_filtered = _filter_to_timestamp_set(firstrate_dedup, common_timestamps)
@@ -524,20 +580,7 @@ async def _run_comparison_async(
         firstrate_filtered=len(firstrate_filtered),
     )
 
-    # Step 4: pre-flight halt before the expensive backtest runs (AC #8).
-    # With symmetric intersection both filtered counts are equal by
-    # construction, so the bar-count tolerance check is now a sanity
-    # guard against a near-empty intersection (i.e. the timestamp
-    # representations don't align at all between the two sources).
-    firstrate_metadata_count = _firstrate_metadata_count(firstrate_catalog)
-    _assert_pre_flight_alignment(
-        ibkr_bar_count=len(ibkr_filtered),
-        firstrate_metadata_count=firstrate_metadata_count,
-        firstrate_filtered_count=len(firstrate_filtered),
-        use_rth=USE_RTH,
-    )
-
-    # Step 5: sequential backtests on the intersection (CLAUDE.md Gotcha
+    # Step 4: sequential backtests on the intersection (CLAUDE.md Gotcha
     # #4 — never two engines concurrently in one process).
     ibkr_summary = await _run_ibkr_backtest(bars=ibkr_filtered, catalog_path=ibkr_catalog_dir)
     firstrate_summary = await _run_firstrate_backtest(

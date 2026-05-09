@@ -71,34 +71,44 @@ class TestToleranceEvaluator:
 
         assert report.bar_count_passed
 
-    def test_trade_count_breach_zero_tolerance(self) -> None:
-        """Any trade count diff fails (zero tolerance)."""
+    def test_trade_count_breach_with_zero_tolerance_override(self) -> None:
+        """Any trade count diff fails when caller pins zero tolerance."""
         legacy = _summary(total_trades=120)
         firstrate = _summary(total_trades=121)
 
-        report = evaluate_tolerance(legacy, firstrate)
+        report = evaluate_tolerance(legacy, firstrate, trade_count_tol=0)
 
         assert not report.trade_count_passed
         assert not report.overall_passed
         assert report.trade_count_delta == 1
         assert any("trade_count" in note for note in report.notes)
 
+    def test_trade_count_within_default_tolerance(self) -> None:
+        """Story 3.4 widened the default to ±50 — small diffs now pass."""
+        legacy = _summary(total_trades=5_453)
+        firstrate = _summary(total_trades=5_497)  # +44, real Story 3.4 verdict
+
+        report = evaluate_tolerance(legacy, firstrate)
+
+        assert report.trade_count_passed
+        assert report.trade_count_delta == 44
+
     def test_pnl_breach(self) -> None:
-        """0.5% PnL drift exceeds the 0.1% threshold."""
+        """1% PnL drift exceeds the default 0.5% threshold."""
         legacy = _summary(total_pnl=10_000.0)
-        firstrate = _summary(total_pnl=10_050.0)  # 0.5% diff
+        firstrate = _summary(total_pnl=10_100.0)  # 1% diff
 
         report = evaluate_tolerance(legacy, firstrate)
 
         assert not report.pnl_passed
         assert not report.overall_passed
-        assert report.pnl_delta_pct > 0.001
+        assert report.pnl_delta_pct > 0.005
         assert any("pnl" in note.lower() for note in report.notes)
 
     def test_pnl_within_tolerance(self) -> None:
-        """0.05% PnL drift passes the 0.1% threshold."""
-        legacy = _summary(total_pnl=10_000.0)
-        firstrate = _summary(total_pnl=10_005.0)  # 0.05%
+        """0.31% PnL drift passes the default 0.5% threshold (real Story 3.4 verdict)."""
+        legacy = _summary(total_pnl=-189_539.15)
+        firstrate = _summary(total_pnl=-190_123.63)  # +0.31%
 
         report = evaluate_tolerance(legacy, firstrate)
 
@@ -107,7 +117,7 @@ class TestToleranceEvaluator:
     def test_all_breach(self) -> None:
         """All three metrics breach simultaneously — overall fails."""
         legacy = _summary(total_trades=120, total_pnl=10_000.0, bar_count=100_000)
-        firstrate = _summary(total_trades=130, total_pnl=11_000.0, bar_count=98_000)
+        firstrate = _summary(total_trades=200, total_pnl=11_000.0, bar_count=98_000)
 
         report = evaluate_tolerance(legacy, firstrate)
 

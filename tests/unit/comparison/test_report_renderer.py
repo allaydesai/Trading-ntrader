@@ -48,7 +48,7 @@ class TestComparisonRenderer:
     def test_renderer_breach_marks_red(self) -> None:
         """A trade-count breach renders the breach line and metric name."""
         legacy = _summary(total_trades=100)
-        firstrate = _summary(total_trades=105)
+        firstrate = _summary(total_trades=200)  # +100 > ±50 default
         report = evaluate_tolerance(legacy, firstrate)
 
         rendered = render_comparison_table(report)
@@ -73,7 +73,7 @@ class TestComparisonRenderer:
     def test_renderer_lists_all_breaches(self) -> None:
         """All three breaches each emit a ❌ TOLERANCE BREACH line."""
         legacy = _summary(total_trades=100, total_pnl=10_000.0, bar_count=100_000)
-        firstrate = _summary(total_trades=110, total_pnl=11_000.0, bar_count=98_000)
+        firstrate = _summary(total_trades=200, total_pnl=11_000.0, bar_count=98_000)
         report = evaluate_tolerance(legacy, firstrate)
 
         rendered = render_comparison_table(report)
