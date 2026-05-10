@@ -1,5 +1,5 @@
 # generated: 2026-04-05
-# last_updated: 2026-05-09 (Story 3-4 → done — code review applied 8 patches; tolerances widened, pre-flight reordered, rotation hardening shipped)
+# last_updated: 2026-05-10 (Stories 3-5/3-6/3-7 created via bmad-create-story — ready-for-dev; 3-6 is BLOCKING for Epic 4)
 # project: Trading-ntrader
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-05
-last_updated: 2026-05-09 (Story 3-4 → done — code review applied 8 patches; tolerances widened, pre-flight reordered, rotation hardening shipped)
+last_updated: 2026-05-10 (Stories 3-5/3-6/3-7 created via bmad-create-story — ready-for-dev; 3-6 is BLOCKING for Epic 4)
 project: Trading-ntrader
 project_key: NOKEY
 tracking_system: file-system
@@ -66,12 +66,18 @@ development_status:
   epic-2-retrospective: done
 
   # Epic 3: Backtest Integration & Verification
+  # Carryover stories 3-5/3-6/3-7 added 2026-05-09 from Epic 3 retrospective.
+  # 3-6 is BLOCKING for Epic 4 (re-import after FirstRate TZ parser fix).
+  # 3-5 is trivial cleanup; 3-7 is non-blocking optional polish.
   epic-3: in-progress
   3-1-catalog-integration-with-backtestengine: done
   3-2-explorer-to-backtest-bridge: done
   3-3-backtest-verification-and-reference-comparison: done
   3-4-ibkr-vs-firstrate-parity-comparison: done
-  epic-3-retrospective: optional
+  3-5-deprecated-reference-test-cleanup: ready-for-dev
+  3-6-firstrate-catalog-reimport-after-tz-fix: ready-for-dev
+  3-7-residual-pnl-drift-investigation: ready-for-dev
+  epic-3-retrospective: done
 
   # Epic 4: Supplementary Data
   epic-4: backlog
