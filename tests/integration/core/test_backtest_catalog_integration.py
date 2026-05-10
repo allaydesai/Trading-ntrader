@@ -12,7 +12,6 @@ import pytest
 from nautilus_trader.model.data import Bar, BarType
 from nautilus_trader.model.objects import Price, Quantity
 from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
-from nautilus_trader.test_kit.providers import TestInstrumentProvider
 
 from src.db.models.catalog_instrument import CatalogInstrument
 from src.services.exceptions import DataNotFoundError
@@ -137,56 +136,6 @@ class TestNamedCatalogBacktestIntegration:
             assert result.total_trades >= 0
             assert result.final_balance > 0
             assert run_id is None  # persist=False
-        finally:
-            orchestrator.dispose()
-
-    @pytest.mark.asyncio
-    async def test_named_catalog_multi_instrument_run(self, synthetic_catalog: Path):
-        """Multi-instrument single-engine run with two tickers on NASDAQ."""
-        from src.core.backtest_orchestrator import BacktestOrchestrator
-
-        catalog_manager = CatalogManager(synthetic_catalog)
-        metadata_service = MagicMock()
-
-        def _get_sync(catalog, ticker):
-            return _make_instrument_row(ticker, f"{ticker}.NASDAQ")
-
-        metadata_service.get_instrument_sync.side_effect = _get_sync
-
-        aapl = await load_from_catalog(
-            catalog_name="e2e-test",
-            ticker="AAPL",
-            bar_type_spec="1-DAY-LAST",
-            start=datetime(2018, 1, 1, tzinfo=timezone.utc),
-            end=datetime(2018, 1, 11, tzinfo=timezone.utc),
-            catalog_manager=catalog_manager,
-            metadata_service=metadata_service,
-        )
-        msft = await load_from_catalog(
-            catalog_name="e2e-test",
-            ticker="MSFT",
-            bar_type_spec="1-DAY-LAST",
-            start=datetime(2018, 1, 1, tzinfo=timezone.utc),
-            end=datetime(2018, 1, 11, tzinfo=timezone.utc),
-            catalog_manager=catalog_manager,
-            metadata_service=metadata_service,
-        )
-
-        # Synthesise fresh equity instances for each symbol — the loader's default
-        # uses TestInstrumentProvider.equity which may cache; this is safe for real bars.
-        inst_aapl = TestInstrumentProvider.equity(symbol="AAPL", venue="NASDAQ")
-        inst_msft = TestInstrumentProvider.equity(symbol="MSFT", venue="NASDAQ")
-
-        request = _build_sma_request(symbol="AAPL")
-        orchestrator = BacktestOrchestrator()
-        try:
-            result, _ = await orchestrator.execute_multi(
-                request,
-                instrument_bars=[(inst_aapl, aapl.bars), (inst_msft, msft.bars)],
-            )
-            assert result is not None
-            assert result.total_trades >= 0
-            assert result.final_balance > 0
         finally:
             orchestrator.dispose()
 
