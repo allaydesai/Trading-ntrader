@@ -42,11 +42,8 @@ Usage::
 
 Exits 0 on full pass, 1 on any tolerance breach.
 
-Note on the deprecated CSV-based test:
-``tests/integration/core/test_aapl_2018_reference_comparison.py`` is the
-legacy CSV-based test from Story 3.3 and is deprecated in favor of
-``tests/integration/core/test_aapl_2018_ibkr_vs_firstrate.py``. The
-legacy test stays in place until a future cleanup story removes it.
+The matching pytest harness lives at
+``tests/integration/core/test_aapl_2018_ibkr_vs_firstrate.py`` (Story 3.4).
 """
 
 from __future__ import annotations

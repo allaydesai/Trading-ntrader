@@ -94,8 +94,6 @@
 
 ## Deferred from: code review of 3-3-backtest-verification-and-reference-comparison (2026-05-03)
 
-- C1: `legacy_catalog_service._rebuild_availability_cache()` private API call — implies `CSVLoader.load_file` does not update the cache itself; pre-existing CSVLoader fragility. (`scripts/verify_aapl_2018_reference.py:236`)
-- C2: `chmod 0o500` permission test fails when run as root or on filesystems that ignore mode bits — gated on `E2E_CATALOG_AVAILABLE=1`, low impact. (`tests/integration/core/test_aapl_2018_reference_comparison.py:1681-1703`)
 - C3: `--skip-import` doesn't validate catalog integrity — stale data from a prior run with a different ticker/CSV silently feeds the comparison and produces meaningless verdicts.
 - C4: `CSVLoader(conflict_mode="overwrite")` may leak stale parquet shards across harness runs with different CSV inputs — pre-existing CSVLoader semantic (overwrite is per-(instrument_id, bar_type), not directory-wide).
 - C5: `output_dir.mkdir` failure raises bare `PermissionError` traceback rather than the codebase's `error_formatter` style. Cosmetic.
