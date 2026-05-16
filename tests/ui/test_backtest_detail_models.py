@@ -483,3 +483,62 @@ class TestMappingFunctions:
         assert view.trading_summary is None
         # Configuration should still be present
         assert view.configuration is not None
+
+
+class TestDataQualityFlag:
+    """Story 3-6 Task 5A — `data_quality_flag` propagation + display banner."""
+
+    def _build_run(
+        self,
+        *,
+        flag: str | None,
+    ) -> BacktestRun:
+        run = BacktestRun(
+            id=99,
+            run_id=uuid4(),
+            strategy_name="SMA Crossover",
+            strategy_type="trend_following",
+            instrument_symbol="AAPL",
+            start_date=datetime(2018, 1, 1, tzinfo=timezone.utc),
+            end_date=datetime(2018, 12, 31, tzinfo=timezone.utc),
+            initial_capital=Decimal("100000.00"),
+            data_source="catalog:e2e-test",
+            execution_status="success",
+            execution_duration_seconds=Decimal("12.0"),
+            config_snapshot={},
+            data_quality_flag=flag,
+        )
+        run.created_at = datetime.now(timezone.utc)
+        run.metrics = None
+        return run
+
+    def test_default_flag_is_none(self):
+        """Fresh runs have data_quality_flag = None."""
+        run = self._build_run(flag=None)
+        view = to_detail_view(run)
+        assert view.data_quality_flag is None
+        assert view.data_quality_warning is None
+
+    def test_tz_corrupted_flag_surfaces_banner_text(self):
+        """The tz_corrupted_pre_3.6 flag drives a non-empty warning string."""
+        run = self._build_run(flag="tz_corrupted_pre_3.6")
+        view = to_detail_view(run)
+
+        assert view.data_quality_flag == "tz_corrupted_pre_3.6"
+        assert view.data_quality_warning is not None
+        # The banner should explain *what* is wrong and *what to do*.
+        assert "FirstRate" in view.data_quality_warning
+        assert "re-run" in view.data_quality_warning.lower()
+
+    def test_unknown_flag_value_produces_generic_warning(self):
+        """An unrecognised flag still surfaces a generic warning rather than crashing.
+
+        This protects forward-compatibility: if a future story adds a new flag value
+        and an old UI sees it, we'd rather show *something* than silently hide it.
+        """
+        run = self._build_run(flag="some_future_flag")
+        view = to_detail_view(run)
+
+        assert view.data_quality_flag == "some_future_flag"
+        assert view.data_quality_warning is not None
+        assert "some_future_flag" in view.data_quality_warning

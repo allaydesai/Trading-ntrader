@@ -34,6 +34,7 @@ def _make_backtest(**overrides):
     }
     backtest.created_at = datetime.now(timezone.utc)
     backtest.updated_at = datetime.now(timezone.utc)
+    backtest.data_quality_flag = None
 
     metrics = MagicMock()
     metrics.total_return = Decimal("0.05")
@@ -143,3 +144,43 @@ class TestBackToExplorerLink:
         response = client.get(f"/backtests/{backtest.run_id}")
         # Story 2-4 focus-ring pattern
         assert "focus:ring-offset-slate-950" in response.text
+
+
+@pytest.mark.component
+class TestDataQualityBanner:
+    """Story 3-6 Task 5A.4 — yellow banner driven by `data_quality_flag`."""
+
+    def test_banner_absent_when_flag_is_null(self):
+        backtest = _make_backtest(data_quality_flag=None)
+        svc = AsyncMock()
+        svc.get_backtest_by_id = AsyncMock(return_value=backtest)
+        app.dependency_overrides[get_backtest_query_service] = lambda: svc
+        try:
+            client = TestClient(app)
+            response = client.get(f"/backtests/{backtest.run_id}")
+            assert response.status_code == 200
+            assert 'data-testid="data-quality-banner"' not in response.text
+            assert "Data quality warning" not in response.text
+        finally:
+            app.dependency_overrides.pop(get_backtest_query_service, None)
+
+    def test_banner_present_when_flag_is_tz_corrupted(self):
+        backtest = _make_backtest(data_quality_flag="tz_corrupted_pre_3.6")
+        svc = AsyncMock()
+        svc.get_backtest_by_id = AsyncMock(return_value=backtest)
+        app.dependency_overrides[get_backtest_query_service] = lambda: svc
+        try:
+            client = TestClient(app)
+            response = client.get(f"/backtests/{backtest.run_id}")
+            assert response.status_code == 200
+            html = response.text
+            assert 'data-testid="data-quality-banner"' in html
+            assert "Data quality warning" in html
+            # Banner copy references the FirstRate root cause + a re-run call to action.
+            assert "FirstRate" in html
+            assert "re-run" in html.lower()
+            # Yellow theme (Tailwind colour tokens) so it reads as a warning.
+            assert "bg-yellow-900/20" in html
+            assert "border-yellow-700" in html
+        finally:
+            app.dependency_overrides.pop(get_backtest_query_service, None)

@@ -109,6 +109,14 @@ class BacktestRun(Base, TimestampMixin):
         PG_UUID(as_uuid=True), nullable=True
     )
 
+    # Data-quality flag — set when a run is known to have referenced
+    # corrupt or otherwise suspect bar data. NULL means "no known issue."
+    # The first user (Story 3-6) is ``'tz_corrupted_pre_3.6'`` for catalog
+    # runs that pre-date the FirstRate timezone fix.
+    data_quality_flag: Mapped[Optional[str]] = mapped_column(
+        String(50), nullable=True, default=None
+    )
+
     # Relationships
     metrics: Mapped[Optional["PerformanceMetrics"]] = relationship(
         "PerformanceMetrics",

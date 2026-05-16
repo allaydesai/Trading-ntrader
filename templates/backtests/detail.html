@@ -21,6 +21,21 @@
 
 {% block content %}
 <div class="space-y-6">
+    {% if view.data_quality_warning %}
+    <div class="bg-yellow-900/20 border border-yellow-700 rounded-lg p-4"
+         data-testid="data-quality-banner"
+         role="alert">
+        <div class="flex items-start gap-3">
+            <svg class="h-5 w-5 text-yellow-400 flex-shrink-0 mt-0.5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M5.07 19h13.86c1.54 0 2.5-1.67 1.73-3L13.73 4a2 2 0 00-3.46 0L3.34 16c-.77 1.33.19 3 1.73 3z" />
+            </svg>
+            <div>
+                <p class="text-yellow-300 text-sm font-medium">Data quality warning</p>
+                <p class="text-yellow-100/80 text-sm mt-1">{{ view.data_quality_warning }}</p>
+            </div>
+        </div>
+    </div>
+    {% endif %}
     <!-- Header Section -->
     <div class="bg-slate-900 rounded-lg border border-slate-700 p-6">
         <div class="flex justify-between items-start">
