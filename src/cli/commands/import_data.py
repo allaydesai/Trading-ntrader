@@ -1,6 +1,8 @@
 """CLI command for FirstRate data import with progress and summary."""
 
+import re
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import click
 from rich.console import Console
@@ -13,6 +15,9 @@ from src.services.firstrate.dry_run import (
     estimate_parquet_bytes,
     format_bytes,
 )
+
+if TYPE_CHECKING:
+    from src.services.firstrate.supplementary_loader import SupplementaryLoadResult
 
 console = Console()
 
@@ -34,6 +39,19 @@ ASSET_CLASS_MAP = {
 }
 
 
+#: Directory names FirstRate uses for supplementary data, by data type.
+_DIVIDEND_DIR_NAMES = ("stock_dividends", "etf_dividends")
+_SPLIT_DIR_NAMES = ("stock_splits", "etf_splits")
+
+#: How many parent levels to probe when auto-discovering supplementary dirs.
+_SUPPLEMENTARY_PROBE_DEPTH = 3
+
+#: A ticker-shaped filename stem (FirstRate symbols are uppercase, e.g. AAPL,
+#: BRK.B). Used to keep stray non-ticker ``.txt`` docs in a splits directory
+#: (e.g. a non-underscore ``readme.txt``) from being treated as tickers.
+_TICKER_STEM_RE = re.compile(r"^[A-Z0-9][A-Z0-9.\-]*$")
+
+
 def _find_profiles_csv(source_path: Path) -> Path | None:
     """Locate the FirstRate company_profiles.csv for a given import source.
 
@@ -53,6 +71,86 @@ def _find_profiles_csv(source_path: Path) -> Path | None:
         if candidate.exists():
             return candidate
     return None
+
+
+def _probe_supplementary_dir(source_path: Path, names: tuple[str, ...]) -> Path | None:
+    """Probe ``source_path`` and its parents for a supplementary data directory.
+
+    FirstRate ships ``stock_dividends`` / ``stock_splits`` (and the ``etf_*``
+    equivalents) as siblings of the bar-data directory. Walks up from
+    ``source_path`` a few levels looking for any of ``names``.
+
+    Args:
+        source_path: Directory passed to the import command.
+        names: Candidate directory names to look for at each level.
+
+    Returns:
+        First matching directory found, or None.
+    """
+    bases = [source_path, *list(source_path.parents)[:_SUPPLEMENTARY_PROBE_DEPTH]]
+    for base in bases:
+        for name in names:
+            candidate = base / name
+            if candidate.is_dir():
+                return candidate
+    return None
+
+
+def _find_supplementary_dirs(source_path: Path) -> tuple[Path | None, Path | None]:
+    """Best-effort auto-discovery of dividend/split source directories.
+
+    Mirrors :func:`_find_profiles_csv`: probes ``source_path`` and its parents
+    for the FirstRate ``stock_dividends``/``stock_splits`` (or ``etf_*``)
+    directories. Explicit ``--dividends-dir``/``--splits-dir`` flags override
+    discovery; if nothing is found supplementary loading is skipped entirely
+    (AC-6, zero regression).
+
+    Args:
+        source_path: Directory passed to the import command.
+
+    Returns:
+        ``(dividends_dir, splits_dir)`` — either element may be None.
+    """
+    return (
+        _probe_supplementary_dir(source_path, _DIVIDEND_DIR_NAMES),
+        _probe_supplementary_dir(source_path, _SPLIT_DIR_NAMES),
+    )
+
+
+def _discover_supplementary_tickers(
+    dividends_dir: Path | None,
+    splits_dir: Path | None,
+) -> list[str]:
+    """Derive the ticker list from the supplementary source directories.
+
+    Collects every ``{TICKER}_divs.txt`` in ``dividends_dir`` and every
+    ``{TICKER}.txt`` in ``splits_dir``, taking the union. Files whose name
+    starts with ``_`` (e.g. ``_splits_readme.txt``) are ignored.
+
+    Args:
+        dividends_dir: Directory holding ``{ticker}_divs.txt`` (or None).
+        splits_dir: Directory holding ``{ticker}.txt`` (or None).
+
+    Returns:
+        Sorted list of distinct ticker symbols.
+    """
+    tickers: set[str] = set()
+    if dividends_dir is not None:
+        for f in dividends_dir.glob("*_divs.txt"):
+            if f.name.startswith("_"):
+                continue
+            symbol = f.name[: -len("_divs.txt")]
+            if _TICKER_STEM_RE.match(symbol):
+                tickers.add(symbol)
+    if splits_dir is not None:
+        # ``*.txt`` is unanchored, so guard against stray non-ticker docs
+        # (e.g. a non-underscore ``readme.txt``) being treated as tickers.
+        for f in splits_dir.glob("*.txt"):
+            if f.name.startswith("_") or f.name.endswith("_divs.txt"):
+                continue
+            if _TICKER_STEM_RE.match(f.stem):
+                tickers.add(f.stem)
+    return sorted(tickers)
 
 
 def parse_timeframes(timeframe_str: str) -> list[str]:
@@ -183,15 +281,21 @@ def _print_progress_line(result: ImportResult, timeframe: str) -> None:
         )
 
 
-def _print_summary(results: list[ImportResult]) -> None:
+def _print_summary(
+    results: list[ImportResult],
+    supplementary: list["SupplementaryLoadResult"] | None = None,
+) -> None:
     """Print Rich-formatted summary table.
 
     Story 1-7 rows: Total tickers, New, Re-imported, Skipped, Failed,
     Total rows, Total processed. ``Total processed`` equals
-    ``new + reimported`` per AC-4.
+    ``new + reimported`` per AC-4. When ``supplementary`` results are present
+    (Story 4-1) an informational dividends/splits line is appended; it never
+    affects the exit code.
 
     Args:
         results: All import results across timeframes.
+        supplementary: Per-ticker dividend/split load results (Story 4-1).
     """
     buckets = _bucket_results(results)
 
@@ -218,6 +322,47 @@ def _print_summary(results: list[ImportResult]) -> None:
             fail_table.add_row(r.ticker, r.error or "Unknown error")
         console.print(fail_table)
 
+    _print_supplementary_summary(supplementary)
+
+
+def _print_supplementary_summary(
+    supplementary: list["SupplementaryLoadResult"] | None,
+) -> None:
+    """Print an informational dividends/splits summary line (Story 4-1).
+
+    Counts tickers/records loaded and any isolated per-ticker failures. This
+    output is informational only and must not affect ``determine_exit_code``.
+
+    Args:
+        supplementary: Per-ticker dividend/split load results, or None.
+    """
+    if not supplementary:
+        return
+
+    div_tickers = sum(1 for r in supplementary if r.dividend_count > 0)
+    split_tickers = sum(1 for r in supplementary if r.split_count > 0)
+    div_records = sum(r.dividend_count for r in supplementary)
+    split_records = sum(r.split_count for r in supplementary)
+    supp_failures = [r for r in supplementary if r.status == "failed"]
+
+    console.print()
+    supp_table = Table(title="Supplementary Data")
+    supp_table.add_column("Metric", style="cyan")
+    supp_table.add_column("Value", style="green")
+    supp_table.add_row("Dividends", f"{div_tickers} tickers / {div_records} records")
+    supp_table.add_row("Splits", f"{split_tickers} tickers / {split_records} records")
+    supp_table.add_row("Failed (non-blocking)", str(len(supp_failures)))
+    console.print(supp_table)
+
+    if supp_failures:
+        console.print()
+        fail_table = Table(title="Supplementary Failures (non-blocking)")
+        fail_table.add_column("Ticker", style="red")
+        fail_table.add_column("Reason", style="yellow")
+        for r in supp_failures:
+            fail_table.add_row(r.ticker, r.error or "Unknown error")
+        console.print(fail_table)
+
 
 def _run_import(
     format_name: str,
@@ -225,6 +370,8 @@ def _run_import(
     source_path: Path,
     asset_class: str | None,
     timeframe: str | None,
+    dividends_dir: Path | None = None,
+    splits_dir: Path | None = None,
 ) -> int:
     """Execute the import pipeline.
 
@@ -234,21 +381,38 @@ def _run_import(
         source_path: Source directory path.
         asset_class: Optional asset class filter.
         timeframe: Optional comma-separated timeframes.
+        dividends_dir: Explicit dividend source dir (overrides discovery).
+        splits_dir: Explicit split source dir (overrides discovery).
 
     Returns:
         Exit code (0, 1, or 2).
     """
     from src.config import get_settings
+    from src.db.repositories.catalog_dividend_repository import (
+        SyncCatalogDividendRepository,
+    )
     from src.db.repositories.catalog_instrument_repository import (
         SyncCatalogInstrumentRepository,
+    )
+    from src.db.repositories.catalog_stock_split_repository import (
+        SyncCatalogStockSplitRepository,
     )
     from src.db.session_sync import get_sync_session_maker
     from src.services.firstrate.catalog_manager import CatalogManager
     from src.services.firstrate.import_service import ImportService
     from src.services.firstrate.instrument_mapper import InstrumentMapper
     from src.services.firstrate.metadata_service import MetadataService
+    from src.services.firstrate.supplementary_loader import (
+        SupplementaryDataLoader,
+        SupplementaryLoadResult,
+    )
 
     settings = get_settings()
+
+    # Resolve supplementary dirs: explicit flags win over auto-discovery (AC-6).
+    discovered_div, discovered_split = _find_supplementary_dirs(source_path)
+    dividends_dir = dividends_dir or discovered_div
+    splits_dir = splits_dir or discovered_split
 
     # Parse asset class (default to ETF for FirstRate)
     ac = ASSET_CLASS_MAP.get((asset_class or "etf").lower(), AssetClass.ETF)
@@ -290,6 +454,23 @@ def _run_import(
                 )
                 return 2
 
+        # Load supplementary data (dividends/splits) once per invocation,
+        # after profiles and before the per-timeframe bar loop (mirrors how
+        # company profiles load once). Idempotent set-replace makes this safe
+        # to re-run; per-ticker failures are isolated inside the loader (AC-3).
+        supplementary_results: list[SupplementaryLoadResult] = []
+        if dividends_dir is not None or splits_dir is not None:
+            supp_tickers = _discover_supplementary_tickers(dividends_dir, splits_dir)
+            if supp_tickers:
+                loader = SupplementaryDataLoader(
+                    dividend_repo=SyncCatalogDividendRepository(session),
+                    split_repo=SyncCatalogStockSplitRepository(session),
+                )
+                click.echo(f"Loading supplementary data for {len(supp_tickers)} ticker(s)...")
+                supplementary_results = loader.load_for_tickers(
+                    supp_tickers, catalog, dividends_dir, splits_dir
+                )
+
         # Run import for each timeframe
         all_results: list[ImportResult] = []
         click.echo(f"\n--- {ac.value} ---")
@@ -329,8 +510,10 @@ def _run_import(
             session.close()
 
     # Summary
-    _print_summary(all_results)
+    _print_summary(all_results, supplementary_results)
 
+    # Supplementary outcomes are informational only — a supplementary failure
+    # must never flip the exit code (AC-3/AC-6); only bar results decide it.
     return determine_exit_code(all_results)
 
 
@@ -496,6 +679,18 @@ def _run_dry_run(
     help="Comma-separated timeframes: daily,hourly,minute,1min,5min.",
 )
 @click.option(
+    "--dividends-dir",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    default=None,
+    help="Directory of FirstRate {TICKER}_divs.txt files (auto-discovered if omitted).",
+)
+@click.option(
+    "--splits-dir",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    default=None,
+    help="Directory of FirstRate {TICKER}.txt split files (auto-discovered if omitted).",
+)
+@click.option(
     "--dry-run/--no-dry-run",
     default=False,
     help="Scan the source directory and report what would be imported without writing any data.",
@@ -509,6 +704,8 @@ def import_firstrate(
     catalog: str,
     asset_class: str | None,
     timeframe: str | None,
+    dividends_dir: Path | None,
+    splits_dir: Path | None,
     dry_run: bool,
     source_path: Path,
 ) -> None:
@@ -519,6 +716,14 @@ def import_firstrate(
     if dry_run:
         exit_code = _run_dry_run(format_name, catalog, source_path, asset_class)
     else:
-        exit_code = _run_import(format_name, catalog, source_path, asset_class, timeframe)
+        exit_code = _run_import(
+            format_name,
+            catalog,
+            source_path,
+            asset_class,
+            timeframe,
+            dividends_dir,
+            splits_dir,
+        )
     if exit_code != 0:
         click.get_current_context().exit(exit_code)

@@ -120,3 +120,7 @@
 ## Deferred from: Story 3-6 verify-and-close (2026-06-03)
 
 - E1: **Story 3-6 Task 7 — IBKR-vs-FirstRate parity re-run** deferred (non-blocking for Epic 4). Requires IBKR Gateway + `IBKR_AVAILABLE=1 E2E_CATALOG_AVAILABLE=1`; runs `pytest tests/integration/core/test_aapl_2018_ibkr_vs_firstrate.py --forked`. Parity was already characterized in Story 3-4 (post-fix: 0% bar Δ, +44 trade Δ, 0.31% PnL Δ, all within widened tolerances). This re-run only re-confirms parity against the fully re-imported catalog and folds into the **Story 3-7** residual-drift investigation (which is the natural place to run it, since 3-7 already needs IBKR + a single-venue contract spike).
+
+## Deferred from: code review of 4-1-dividend-and-stock-split-data-parsing (2026-06-03)
+
+- W1: `src/cli/commands/import_data.py` is 718 lines, over the <500-line limit. Pre-existing (524 before this story; worsened by +194 from supplementary flags/discovery/summary helpers). Extract supplementary discovery helpers (`_probe_supplementary_dir`, `_find_supplementary_dirs`, `_discover_supplementary_tickers`, `_print_supplementary_summary`) into a dedicated module. Individual functions (<50 lines) and line length (≤100) remain within limits.

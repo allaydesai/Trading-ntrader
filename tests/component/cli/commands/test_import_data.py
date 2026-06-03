@@ -202,7 +202,15 @@ class TestMultiTimeframe:
 
         call_log = []
 
-        def mock_run_import(format_name, catalog, source_path, asset_class, timeframe):
+        def mock_run_import(
+            format_name,
+            catalog,
+            source_path,
+            asset_class,
+            timeframe,
+            dividends_dir=None,
+            splits_dir=None,
+        ):
             call_log.append(timeframe)
             return 0
 
@@ -403,6 +411,8 @@ class TestStory17DoubleRun:
             source_path: Path,
             asset_class: str | None,
             timeframe: str | None,
+            dividends_dir: Path | None = None,
+            splits_dir: Path | None = None,
         ) -> int:
             """Emit the exact progress + summary `_run_import` would."""
             run_counter["n"] += 1

@@ -7,7 +7,11 @@ from alembic import context
 # Import our models and config
 from src.config import get_settings
 from src.db.base import Base as BacktestBase
-from src.db.models import CatalogInstrument  # noqa: F401 — register for autogenerate
+from src.db.models import (  # noqa: F401 — register for autogenerate
+    CatalogDividend,
+    CatalogInstrument,
+    CatalogStockSplit,
+)
 from src.models.market_data import Base as MarketDataBase
 
 # this is the Alembic Config object, which provides
