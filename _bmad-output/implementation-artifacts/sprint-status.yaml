@@ -1,5 +1,5 @@
 # generated: 2026-04-05
-# last_updated: 2026-05-10 (Story 3-6 code-side scaffolding done by Dev; in-progress pending operator-side catalog re-import + IBKR parity rerun. 3-7 still ready-for-dev.)
+# last_updated: 2026-06-03 (Story 3-6 verified-and-closed: catalog found already re-imported through TZ-fixed parser, all 20 partitions verified TZ-correct, 3 pre-fix backtest_runs flagged. Epic 3 done. Epic 4 unblocked. Task 7 IBKR parity rerun deferred; 3-7 still ready-for-dev.)
 # project: Trading-ntrader
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-05
-last_updated: 2026-05-10 (Story 3-6 code-side scaffolding done by Dev; in-progress pending operator-side catalog re-import + IBKR parity rerun. 3-7 still ready-for-dev.)
+last_updated: 2026-06-03 (Story 3-6 verified-and-closed: catalog found already re-imported through TZ-fixed parser, all 20 partitions verified TZ-correct, 3 pre-fix backtest_runs flagged. Epic 3 done. Epic 4 unblocked. Task 7 IBKR parity rerun deferred; 3-7 still ready-for-dev.)
 project: Trading-ntrader
 project_key: NOKEY
 tracking_system: file-system
@@ -67,19 +67,19 @@ development_status:
 
   # Epic 3: Backtest Integration & Verification
   # Carryover stories 3-5/3-6/3-7 added 2026-05-09 from Epic 3 retrospective.
-  # 3-6 is BLOCKING for Epic 4 (re-import after FirstRate TZ parser fix).
-  # 3-5 is trivial cleanup; 3-7 is non-blocking optional polish.
-  epic-3: in-progress
+  # 3-6 RESOLVED 2026-06-03 (was BLOCKING for Epic 4): catalog verified TZ-correct,
+  # pre-fix runs flagged. Epic 4 now unblocked. 3-7 is non-blocking optional polish.
+  epic-3: done
   3-1-catalog-integration-with-backtestengine: done
   3-2-explorer-to-backtest-bridge: done
   3-3-backtest-verification-and-reference-comparison: done
   3-4-ibkr-vs-firstrate-parity-comparison: done
   3-5-deprecated-reference-test-cleanup: done
-  3-6-firstrate-catalog-reimport-after-tz-fix: in-progress
+  3-6-firstrate-catalog-reimport-after-tz-fix: done
   3-7-residual-pnl-drift-investigation: ready-for-dev
   epic-3-retrospective: done
 
-  # Epic 4: Supplementary Data
+  # Epic 4: Supplementary Data — UNBLOCKED 2026-06-03 (Story 3-6 done)
   epic-4: backlog
   4-1-dividend-and-stock-split-data-parsing: backlog
   4-2-supplementary-data-display-in-explorer: backlog

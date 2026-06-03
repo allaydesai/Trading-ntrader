@@ -1,0 +1,120 @@
+{
+  "captured_at": "2026-06-03T20:47:27.872720+00:00",
+  "catalogs": [
+    {
+      "catalog_name": "e2e-test",
+      "instruments": [
+        {
+          "asset_class": "STOCK",
+          "catalog_instrument_id": 22982,
+          "date_range_end": "2026-05-01T19:59:00-04:00",
+          "date_range_start": "2000-01-04T09:30:00-05:00",
+          "nautilus_id": "AAPL.NASDAQ",
+          "ticker": "AAPL",
+          "timeframes": {
+            "1-DAY": {
+              "bar_count": 6621
+            },
+            "1-HOUR": {
+              "bar_count": 93875
+            },
+            "1-MINUTE": {
+              "bar_count": 4073009
+            },
+            "5-MINUTE": {
+              "bar_count": 990036
+            }
+          }
+        },
+        {
+          "asset_class": "STOCK",
+          "catalog_instrument_id": 22983,
+          "date_range_end": "2026-05-01T19:59:00-04:00",
+          "date_range_start": "2000-01-04T09:30:00-05:00",
+          "nautilus_id": "AMZN.NASDAQ",
+          "ticker": "AMZN",
+          "timeframes": {
+            "1-DAY": {
+              "bar_count": 6621
+            },
+            "1-HOUR": {
+              "bar_count": 87316
+            },
+            "1-MINUTE": {
+              "bar_count": 3331198
+            },
+            "5-MINUTE": {
+              "bar_count": 815905
+            }
+          }
+        },
+        {
+          "asset_class": "STOCK",
+          "catalog_instrument_id": 22984,
+          "date_range_end": "2026-05-01T19:59:00-04:00",
+          "date_range_start": "2000-01-03T09:30:00-05:00",
+          "nautilus_id": "MSFT.NASDAQ",
+          "ticker": "MSFT",
+          "timeframes": {
+            "1-DAY": {
+              "bar_count": 6621
+            },
+            "1-HOUR": {
+              "bar_count": 89705
+            },
+            "1-MINUTE": {
+              "bar_count": 3457664
+            },
+            "5-MINUTE": {
+              "bar_count": 868248
+            }
+          }
+        },
+        {
+          "asset_class": "STOCK",
+          "catalog_instrument_id": 22985,
+          "date_range_end": "2026-05-01T19:59:00-04:00",
+          "date_range_start": "2000-01-03T09:30:00-05:00",
+          "nautilus_id": "NVDA.NASDAQ",
+          "ticker": "NVDA",
+          "timeframes": {
+            "1-DAY": {
+              "bar_count": 6621
+            },
+            "1-HOUR": {
+              "bar_count": 83771
+            },
+            "1-MINUTE": {
+              "bar_count": 3485515
+            },
+            "5-MINUTE": {
+              "bar_count": 822184
+            }
+          }
+        },
+        {
+          "asset_class": "STOCK",
+          "catalog_instrument_id": 22986,
+          "date_range_end": "2026-05-01T19:59:00-04:00",
+          "date_range_start": "2010-06-29T11:25:00-04:00",
+          "nautilus_id": "TSLA.NASDAQ",
+          "ticker": "TSLA",
+          "timeframes": {
+            "1-DAY": {
+              "bar_count": 3984
+            },
+            "1-HOUR": {
+              "bar_count": 57913
+            },
+            "1-MINUTE": {
+              "bar_count": 2487497
+            },
+            "5-MINUTE": {
+              "bar_count": 587430
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
