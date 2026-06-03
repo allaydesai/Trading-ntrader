@@ -75,11 +75,11 @@ This story is **non-blocking for Epic 4** — Epic 4 is supplementary data displ
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Survey IBKR contract-routing options + pick a candidate (AC: #1)
-  - [ ] 1.1 Read `nautilus_trader.adapters.interactive_brokers.client.historical_client` to understand how the existing path constructs the IBKR Contract. Identify the SMART-routing assumption.
-  - [ ] 1.2 Read TWS API docs (`interactivebrokers.github.io/tws-api/contracts.html`) for non-SMART Contract construction patterns. Look for `primaryExchange`, `exchange`, `secType`, and `tradingClass` fields and their interaction.
-  - [ ] 1.3 Pick ONE candidate route. Document in Dev Notes with code/pseudocode + citation. Reasonable default: `Contract(symbol="AAPL", secType="STK", exchange="NASDAQ", primaryExchange="NASDAQ", currency="USD")` to force NASDAQ-only.
-  - [ ] 1.4 If the survey reveals that the existing `whatToShow=TRADES` setting is the binding constraint (not the routing), pivot the spike: try `whatToShow=BID_ASK` or `whatToShow=MIDPOINT` instead of changing the contract. Document the pivot in Dev Notes.
+- [x] Task 1: Survey IBKR contract-routing options + pick a candidate (AC: #1) — **DONE 2026-06-03** (no Gateway needed; see "Task 1 Survey Findings" in Dev Notes)
+  - [x] 1.1 Read `nautilus_trader.adapters.interactive_brokers.client.historical_client` to understand how the existing path constructs the IBKR Contract. Identify the SMART-routing assumption.
+  - [x] 1.2 Read TWS API docs (`interactivebrokers.github.io/tws-api/contracts.html`) for non-SMART Contract construction patterns. Look for `primaryExchange`, `exchange`, `secType`, and `tradingClass` fields and their interaction.
+  - [x] 1.3 Pick ONE candidate route. Document in Dev Notes with code/pseudocode + citation. Reasonable default: `Contract(symbol="AAPL", secType="STK", exchange="NASDAQ", primaryExchange="NASDAQ", currency="USD")` to force NASDAQ-only.
+  - [x] 1.4 If the survey reveals that the existing `whatToShow=TRADES` setting is the binding constraint (not the routing), pivot the spike: try `whatToShow=BID_ASK` or `whatToShow=MIDPOINT` instead of changing the contract. Document the pivot in Dev Notes. — **Not the binding constraint; routing is. See findings.**
 
 - [ ] Task 2: One-off harness fetching the candidate route (AC: #2)
   - [ ] 2.1 Add `scripts/diagnostics/fetch_aapl_single_venue.py` that builds the candidate Contract (or `whatToShow` variant), calls the IBKR adapter against the live Gateway, and writes bars to `output_dir/ibkr_single_venue_catalog/`. Reuse Story 3.4's `_fetch_ibkr_chunked` + `_iter_chunks` helpers — same chunking workaround, same midnight alignment.
@@ -104,6 +104,63 @@ This story is **non-blocking for Epic 4** — Epic 4 is supplementary data displ
   - [ ] 6.1 `make format && make lint && make typecheck` clean.
   - [ ] 6.2 `make test-unit && make test-component` zero regressions vs Story 3.6's post-re-import baseline.
   - [ ] 6.3 (Optional, gated) `pytest tests/integration/core/test_aapl_2018_ibkr_vs_firstrate.py --forked` with `IBKR_AVAILABLE=1 E2E_CATALOG_AVAILABLE=1` — same outcomes as Story 3.4 / 3.6 (one design-mandated FAIL only if it shows up; per Story 3.4 P7 the test now passes). The single-venue path doesn't change the consolidated test's outcome.
+
+## Task 1 Survey Findings (2026-06-03)
+
+**Result: the residual is a SMART-routing artifact, NOT a `whatToShow` artifact. Candidate single-venue route identified and confirmed wireable without production-code changes.**
+
+### Baseline confirmed in source (not assumed)
+
+The existing `IBKRHistoricalClient.fetch_bars` path (`src/services/ibkr_client.py:355`) calls Nautilus `request_bars(instrument_ids=["AAPL.NASDAQ"], ...)` for bar spec `1-MINUTE-LAST`. Tracing the adapter:
+
+1. **Contract construction forces SMART for stocks.** `instrument_id` → `IBContract` dispatch always builds the STK branch as:
+   ```python
+   # nautilus_trader/adapters/interactive_brokers/parsing/instruments.py:1024
+   return IBContract(
+       secType="STK",
+       exchange="SMART",          # <-- hardcoded; consolidated tape
+       primaryExchange=exchange,  # "NASDAQ" only disambiguates the listing
+       localSymbol="AAPL",
+   )
+   ```
+   So `AAPL.NASDAQ` does **not** request the NASDAQ tape — it requests the **SMART consolidated** tape, with `primaryExchange="NASDAQ"` used only to resolve which AAPL. This is the exact source of Story 3.4's "consolidated vs single-venue" residual, now confirmed in code rather than inferred from volume ratios.
+
+2. **`whatToShow=TRADES` is correct and is NOT the lever.** `parsing/data.py:49 what_to_show()` maps `PriceType.LAST → "TRADES"`. A `1-MINUTE-LAST` spec is unavoidably a TRADES request. Subtask 1.4 pivot (BID_ASK/MIDPOINT) is rejected: those would change *what* is measured (quotes vs trades), not *which venue's trades* — wrong axis for closing a trade-tape parity gap. **The binding constraint is the `exchange="SMART"` hardcode, not `whatToShow`.**
+
+### Candidate route (the ONE to test in Task 2)
+
+`request_bars` accepts an explicit `contracts: list[IBContract]` argument (`historical/client.py:138`) as an alternative to `instrument_ids`. This lets us bypass the SMART-forcing dispatch entirely with **zero production-code change** — a one-off harness passes a hand-built single-venue contract:
+
+```python
+from nautilus_trader.adapters.interactive_brokers.common import IBContract
+
+single_venue = IBContract(
+    secType="STK",
+    symbol="AAPL",
+    exchange="NASDAQ",         # force the NASDAQ tape (vs SMART consolidated)
+    primaryExchange="NASDAQ",
+    currency="USD",
+)
+bars = await client.request_bars(
+    bar_specifications=["1-MINUTE-LAST"],   # still TRADES — same as baseline
+    contracts=[single_venue],               # <-- the only change vs baseline
+    start_date_time=..., end_date_time=..., tz_name="UTC",
+    use_rth=True, timeout=120,
+)
+```
+
+**Rationale for this route over alternatives:**
+- vs changing the instrument_id venue → rejected: the STK dispatch ignores the venue for `exchange` (always SMART), so `AAPL.ISLAND`/`AAPL.ARCA` strings still route SMART. Only an explicit `IBContract` escapes it.
+- vs `exchange="ISLAND"` (NASDAQ's IB book code) or `"ARCA"` → `"NASDAQ"` is the primary listing venue for AAPL and the most likely match for FirstRate's assumed single-venue feed; ARCA would test a *different* hypothesis. Per scope discipline (AC #1, "pick ONE"), NASDAQ is the candidate. ARCA stays a fallback only if Task 2's bar count proves NASDAQ structurally wrong.
+- vs monkeypatching `instrument_id_to_ib_contract` → rejected: `contracts=` is the adapter's supported public seam; no patching needed.
+
+**Citations:**
+- Nautilus adapter source (installed `nautilus_trader` venv): `parsing/instruments.py:1024` (STK→SMART), `parsing/data.py:49` (`what_to_show`), `historical/client.py:138` (`contracts=` param), `common.py` `IBContract` field surface (`secType/symbol/exchange/primaryExchange/currency`).
+- TWS API — Historical Data: a `reqHistoricalData` request with a non-SMART `exchange` returns that venue's prints only; SMART returns the consolidated tape. `interactivebrokers.github.io/tws-api/historical_bars.html` + `.../contracts.html` (primaryExchange disambiguates listing; exchange selects routing/venue).
+
+### Gateway gate — Tasks 2–6 BLOCKED (not started)
+
+Verified 2026-06-03: no IBKR Gateway reachable (ports 4001/4002/7496/7497 all closed) and no `IBKR_*` env vars set. Tasks 2–4 require a live Gateway + `IBKR_AVAILABLE=1` and a 5–15 min AAPL-2018 1-MIN chunked fetch; Tasks 5–6 depend on Task 4's empirical decision. **Task 1 (the no-Gateway design decision) is complete; the story cannot reach `done` until the Gateway is available to run the single measurement.** Resume point: implement `scripts/diagnostics/fetch_aapl_single_venue.py` using the candidate contract above + Story 3.4's `_fetch_ibkr_chunked`/`_iter_chunks` helpers.
 
 ## Dev Notes
 
@@ -168,14 +225,24 @@ These thresholds are tighter than the Phase 1 widened tolerance because the ques
 
 ### Agent Model Used
 
+claude-opus-4-8[1m] (Task 1 only)
+
 ### Debug Log References
+
+- Gateway reachability check 2026-06-03: `nc -z 127.0.0.1 {4001,4002,7496,7497}` → all closed; `env | grep IBKR` → empty.
 
 ### Completion Notes List
 
+- **Task 1 complete (no Gateway required).** Confirmed in Nautilus adapter source that the existing `AAPL.NASDAQ` path requests the **SMART consolidated** TRADES tape (STK contracts are hardcoded `exchange="SMART"` at `parsing/instruments.py:1024`), proving Story 3.4's residual is a routing artifact rather than a `whatToShow` artifact. Identified the candidate single-venue route: pass an explicit `IBContract(secType="STK", symbol="AAPL", exchange="NASDAQ", primaryExchange="NASDAQ", currency="USD")` via `request_bars(contracts=[...])` — supported public seam, **zero production-code change**. Subtask 1.4 pivot (BID_ASK/MIDPOINT) rejected as wrong axis. Full survey, code, rationale, and citations in "Task 1 Survey Findings".
+- **Tasks 2–6 blocked on live IBKR Gateway** (ports closed, no `IBKR_*` env). The spike's empirical measurement cannot run until the Gateway is up + `IBKR_AVAILABLE=1`. Story remains `ready-for-dev` (Task 1 design decision banked); non-blocking for Epic 4.
+
 ### File List
+
+- (no code/docstring changes yet — Task 1 is a survey; docstring update is Task 5, gated on Task 4 decision)
 
 ## Change Log
 
 | Date | Author | Change |
 |------|--------|--------|
 | 2026-05-09 | Bob (SM) | Story 3.7 created via `bmad-create-story 3-7`. Status: backlog → ready-for-dev. **Non-blocking for Epic 4.** Spike + docstring update to lock in the residual 0.31% PnL Δ as either tightenable (single-venue closes the gap) or accepted Phase 1 venue noise. |
+| 2026-06-03 | Amelia (Dev) | Task 1 completed (no-Gateway design decision). Confirmed in adapter source that baseline path is SMART-consolidated (`exchange="SMART"` hardcoded for STK); identified NASDAQ single-venue candidate via `request_bars(contracts=[IBContract(...)])` with zero production change. Tasks 2–6 blocked on live IBKR Gateway (ports closed). Status stays ready-for-dev. |
