@@ -10,7 +10,9 @@ from src.api.dependencies import (
     get_catalog_list,
     get_data_catalog_service,
     get_default_catalog,
+    get_dividend_repository,
     get_metadata_service,
+    get_stock_split_repository,
 )
 from src.api.web import app
 from src.db.models.catalog_instrument import CatalogInstrument
@@ -76,12 +78,32 @@ def mock_catalog_service():
 
 
 @pytest.fixture
-def client(mock_metadata_service, mock_catalog_service):
+def mock_dividend_repo():
+    """Mock async dividend repo — no rows by default."""
+    repo = AsyncMock()
+    repo.list_by_ticker = AsyncMock(return_value=[])
+    repo.has_for_ticker = AsyncMock(return_value=False)
+    return repo
+
+
+@pytest.fixture
+def mock_split_repo():
+    """Mock async stock-split repo — no rows by default."""
+    repo = AsyncMock()
+    repo.list_by_ticker = AsyncMock(return_value=[])
+    repo.has_for_ticker = AsyncMock(return_value=False)
+    return repo
+
+
+@pytest.fixture
+def client(mock_metadata_service, mock_catalog_service, mock_dividend_repo, mock_split_repo):
     """Get test client with mocked dependencies."""
     app.dependency_overrides[get_metadata_service] = lambda: mock_metadata_service
     app.dependency_overrides[get_data_catalog_service] = lambda: mock_catalog_service
     app.dependency_overrides[get_catalog_list] = lambda: ["us_stocks"]
     app.dependency_overrides[get_default_catalog] = lambda: "us_stocks"
+    app.dependency_overrides[get_dividend_repository] = lambda: mock_dividend_repo
+    app.dependency_overrides[get_stock_split_repository] = lambda: mock_split_repo
 
     try:
         yield TestClient(app)
@@ -90,6 +112,8 @@ def client(mock_metadata_service, mock_catalog_service):
         app.dependency_overrides.pop(get_data_catalog_service, None)
         app.dependency_overrides.pop(get_catalog_list, None)
         app.dependency_overrides.pop(get_default_catalog, None)
+        app.dependency_overrides.pop(get_dividend_repository, None)
+        app.dependency_overrides.pop(get_stock_split_repository, None)
 
 
 @pytest.mark.component
@@ -219,6 +243,14 @@ class TestChartPanelUIRoute:
         response = client.get("/explorer/chart-panel?catalog=us_stocks&ticker=AAPL&tf=D")
         assert 'id="stats-panel"' in response.text
         assert 'hx-swap-oob="innerHTML"' in response.text
+
+    def test_oob_supplementary_panel_wrapper_present(self, client):
+        """Chart-panel response carries the supplementary OOB block (Story 4-2 AC #6)."""
+        response = client.get("/explorer/chart-panel?catalog=us_stocks&ticker=AAPL&tf=D")
+        assert 'id="supplementary-panel"' in response.text
+        assert "Company Profile" in response.text
+        assert "Dividend History" in response.text
+        assert "Stock Split History" in response.text
 
     def test_oob_stats_panel_rendered_with_cards(self, client):
         response = client.get("/explorer/chart-panel?catalog=us_stocks&ticker=AAPL&tf=D")

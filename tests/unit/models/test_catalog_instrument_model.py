@@ -27,6 +27,8 @@ class TestCatalogInstrumentModel:
             "sector",
             "industry",
             "ipo_date",
+            "country",
+            "state",
             "date_range_start",
             "date_range_end",
             "bar_count_daily",
@@ -37,6 +39,16 @@ class TestCatalogInstrumentModel:
             "updated_at",
         }
         assert expected.issubset(columns)
+
+    def test_country_state_columns(self):
+        """country and state are nullable String columns."""
+        from sqlalchemy import String
+
+        cols = {c.name: c for c in CatalogInstrument.__table__.columns}
+        for name in ("country", "state"):
+            assert name in cols, f"{name} column missing"
+            assert isinstance(cols[name].type, String), f"{name} should be String"
+            assert cols[name].nullable, f"{name} should be nullable"
 
     def test_primary_key_is_id(self):
         """Primary key is the id column."""

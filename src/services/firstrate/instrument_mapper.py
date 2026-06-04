@@ -25,6 +25,8 @@ logger = structlog.get_logger(__name__)
 # File may or may not have a header row — auto-detected and skipped
 _COL_TICKER = 0
 _COL_NAME = 1
+_COL_COUNTRY = 2
+_COL_STATE = 3
 _COL_EXCHANGE = 4
 _COL_SECTOR = 5
 _COL_INDUSTRY = 6
@@ -96,6 +98,8 @@ class InstrumentMapper:
                     sector=row[_COL_SECTOR].strip() or None,
                     industry=row[_COL_INDUSTRY].strip() or None,
                     ipo_date=_parse_ipo_date(row[_COL_IPO_DATE]),
+                    country=row[_COL_COUNTRY].strip() or None,
+                    state=row[_COL_STATE].strip() or None,
                     bar_count_daily=0,
                     bar_count_hourly=0,
                     bar_count_minute=0,

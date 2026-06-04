@@ -186,3 +186,25 @@ class TestAsyncCatalogDividendRepository:
         result = await repo.list_by_ticker("cat", "AAPL")
         assert len(result) == 1
         assert result[0].amount == Decimal("0.30")
+
+    async def test_has_for_ticker_true_when_rows_exist(self, async_session):
+        """has_for_ticker returns True when dividend rows exist."""
+        repo = CatalogDividendRepository(async_session)
+        await repo.replace_for_ticker("cat", "AAPL", [_div(date(2026, 2, 9), "0.26")])
+        await async_session.commit()
+
+        assert await repo.has_for_ticker("cat", "AAPL") is True
+
+    async def test_has_for_ticker_false_when_none(self, async_session):
+        """has_for_ticker returns False when no rows exist for the ticker."""
+        repo = CatalogDividendRepository(async_session)
+        assert await repo.has_for_ticker("cat", "AAPL") is False
+
+    async def test_has_for_ticker_catalog_scoped(self, async_session):
+        """has_for_ticker is scoped to the given catalog."""
+        repo = CatalogDividendRepository(async_session)
+        await repo.replace_for_ticker("cat-a", "AAPL", [_div(date(2026, 2, 9), "0.26")])
+        await async_session.commit()
+
+        assert await repo.has_for_ticker("cat-a", "AAPL") is True
+        assert await repo.has_for_ticker("cat-b", "AAPL") is False

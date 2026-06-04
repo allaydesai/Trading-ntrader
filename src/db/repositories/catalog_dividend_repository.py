@@ -8,7 +8,7 @@ duplicate rows and leaves no orphans when a ticker's history shrinks (AC-5).
 
 from typing import List, Sequence
 
-from sqlalchemy import and_, delete, select
+from sqlalchemy import and_, delete, literal, select
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
@@ -93,6 +93,31 @@ class CatalogDividendRepository:
         )
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
+
+    async def has_for_ticker(self, catalog_name: str, ticker: str) -> bool:
+        """Return True if any dividend row exists for ``(catalog_name, ticker)``.
+
+        Uses a ``SELECT 1 … LIMIT 1`` existence probe — does not load full rows.
+
+        Args:
+            catalog_name: Catalog scope.
+            ticker: Trading symbol.
+
+        Returns:
+            True if at least one dividend row exists, else False.
+        """
+        stmt = (
+            select(literal(1))
+            .where(
+                and_(
+                    CatalogDividend.catalog_name == catalog_name,
+                    CatalogDividend.ticker == ticker,
+                )
+            )
+            .limit(1)
+        )
+        result = await self.session.execute(stmt)
+        return result.first() is not None
 
 
 class SyncCatalogDividendRepository:

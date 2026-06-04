@@ -13,7 +13,7 @@ from typing import Optional
 import structlog
 from fastapi import APIRouter, HTTPException, Query
 
-from src.api.dependencies import DataCatalog, Metadata
+from src.api.dependencies import DataCatalog, DividendRepo, Metadata, SplitRepo
 from src.api.models.chart_timeseries import Candle
 from src.api.models.explorer import (
     EXPLORER_PAGE_SIZE,
@@ -45,11 +45,15 @@ async def get_ticker_stats(
     ticker: str,
     service: Metadata,
     catalog_service: DataCatalog,
+    dividend_repo: DividendRepo,
+    split_repo: SplitRepo,
     catalog: str = Query(..., description="Catalog name"),
     tf: str = Query("D", description="Timeframe label (D, 1H, 5m, 1m)"),
 ) -> TickerStatsResponse:
-    """Get ticker statistics and price range for the selected timeframe."""
-    return await _build_ticker_stats(service, catalog_service, catalog, ticker, tf)
+    """Get ticker statistics, price range, and supplementary availability flags."""
+    return await _build_ticker_stats(
+        service, catalog_service, catalog, ticker, tf, dividend_repo, split_repo
+    )
 
 
 @router.get(

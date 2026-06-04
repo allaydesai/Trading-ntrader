@@ -139,3 +139,25 @@ class TestAsyncCatalogStockSplitRepository:
 
         result = await repo.list_by_ticker("cat", "AAPL")
         assert [r.effective_date for r in result] == [date(2020, 8, 31), date(2000, 6, 21)]
+
+    async def test_has_for_ticker_true_when_rows_exist(self, async_session):
+        """has_for_ticker returns True when split rows exist."""
+        repo = CatalogStockSplitRepository(async_session)
+        await repo.replace_for_ticker("cat", "AAPL", [_split(date(2020, 8, 31), "4")])
+        await async_session.commit()
+
+        assert await repo.has_for_ticker("cat", "AAPL") is True
+
+    async def test_has_for_ticker_false_when_none(self, async_session):
+        """has_for_ticker returns False when no split rows exist for the ticker."""
+        repo = CatalogStockSplitRepository(async_session)
+        assert await repo.has_for_ticker("cat", "AAPL") is False
+
+    async def test_has_for_ticker_catalog_scoped(self, async_session):
+        """has_for_ticker is scoped to the given catalog."""
+        repo = CatalogStockSplitRepository(async_session)
+        await repo.replace_for_ticker("cat-a", "AAPL", [_split(date(2020, 8, 31), "4")])
+        await async_session.commit()
+
+        assert await repo.has_for_ticker("cat-a", "AAPL") is True
+        assert await repo.has_for_ticker("cat-b", "AAPL") is False

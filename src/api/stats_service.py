@@ -43,8 +43,14 @@ async def _build_ticker_stats(
     catalog: str,
     ticker: str,
     tf: str,
+    dividend_repo=None,
+    split_repo=None,
 ) -> TickerStatsResponse:
     """Resolve ticker → instrument, compute per-tf price range, build response.
+
+    When ``dividend_repo``/``split_repo`` are provided, the supplementary
+    availability flags (``has_dividends``/``has_splits``/``has_company_profile``)
+    are populated; otherwise they stay ``False`` for back-compat callers.
 
     Raises:
         HTTPException: 404 if the ticker is unknown or has no nautilus_id.
@@ -102,6 +108,16 @@ async def _build_ticker_stats(
 
     price_min, price_max = _compute_price_range(bars)
 
+    has_dividends = (
+        await dividend_repo.has_for_ticker(catalog, ticker) if dividend_repo is not None else False
+    )
+    has_splits = (
+        await split_repo.has_for_ticker(catalog, ticker) if split_repo is not None else False
+    )
+    has_company_profile = (
+        dividend_repo is not None or split_repo is not None
+    ) and instrument is not None
+
     return TickerStatsResponse(
         ticker=ticker,
         nautilus_id=nautilus_id,
@@ -114,4 +130,7 @@ async def _build_ticker_stats(
         price_min=price_min,
         price_max=price_max,
         active_tf=active_tf.label,
+        has_dividends=has_dividends,
+        has_splits=has_splits,
+        has_company_profile=has_company_profile,
     )

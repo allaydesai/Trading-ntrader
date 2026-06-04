@@ -50,6 +50,8 @@ class CatalogInstrumentRepository:
                 existing.sector = instrument.sector
                 existing.industry = instrument.industry
                 existing.ipo_date = instrument.ipo_date
+                existing.country = instrument.country
+                existing.state = instrument.state
                 existing.date_range_start = instrument.date_range_start
                 existing.date_range_end = instrument.date_range_end
                 existing.bar_count_daily = instrument.bar_count_daily
@@ -283,6 +285,8 @@ class SyncCatalogInstrumentRepository:
                 existing.sector = instrument.sector
                 existing.industry = instrument.industry
                 existing.ipo_date = instrument.ipo_date
+                existing.country = instrument.country
+                existing.state = instrument.state
                 existing.date_range_start = instrument.date_range_start
                 existing.date_range_end = instrument.date_range_end
                 existing.bar_count_daily = instrument.bar_count_daily

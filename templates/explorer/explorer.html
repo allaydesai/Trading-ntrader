@@ -97,6 +97,17 @@
              {% endif %}>
             {% if selected_ticker %}{% include "explorer/stats_panel_skeleton.html" %}{% endif %}
         </div>
+        <div id="supplementary-panel"
+             aria-live="polite"
+             data-ticker="{{ selected_ticker or '' }}"
+             {% if selected_ticker %}
+             hx-get="/explorer/supplementary"
+             hx-trigger="load"
+             hx-vals='{"catalog": {{ state.catalog | tojson }}, "ticker": {{ selected_ticker | tojson }}}'
+             hx-swap="innerHTML"
+             {% endif %}>
+            {% if selected_ticker %}{% include "explorer/supplementary_panel_skeleton.html" %}{% endif %}
+        </div>
     </div>
 
     {% endif %}

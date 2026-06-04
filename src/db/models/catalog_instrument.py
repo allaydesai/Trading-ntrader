@@ -31,6 +31,8 @@ class CatalogInstrument(Base, TimestampMixin):
         sector: Industry sector (nullable).
         industry: Specific industry (nullable).
         ipo_date: IPO date (nullable).
+        country: Country of domicile (nullable, e.g. "US").
+        state: State/region of domicile (nullable, e.g. "CA").
         date_range_start: Earliest imported data timestamp (nullable).
         date_range_end: Latest imported data timestamp (nullable).
         bar_count_daily: Number of daily bars imported.
@@ -53,6 +55,8 @@ class CatalogInstrument(Base, TimestampMixin):
     sector: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     industry: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     ipo_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    country: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    state: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     date_range_start: Mapped[Optional[datetime]] = mapped_column(
         TIMESTAMP(timezone=True), nullable=True
     )

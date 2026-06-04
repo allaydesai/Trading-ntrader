@@ -30,6 +30,8 @@ CREATE TABLE IF NOT EXISTS catalog_instruments (
     sector VARCHAR(100),
     industry VARCHAR(100),
     ipo_date DATE,
+    country VARCHAR(100),
+    state VARCHAR(100),
     date_range_start TIMESTAMP,
     date_range_end TIMESTAMP,
     bar_count_daily INTEGER NOT NULL DEFAULT 0,

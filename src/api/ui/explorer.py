@@ -21,7 +21,9 @@ from src.api.dependencies import (  # noqa: F401
     CatalogList,
     DataCatalog,
     DefaultCatalog,
+    DividendRepo,
     Metadata,
+    SplitRepo,
 )
 from src.api.models.chart_timeseries import Candle  # noqa: F401
 from src.api.models.explorer import (
@@ -32,6 +34,7 @@ from src.api.models.explorer import (
 )
 from src.api.models.navigation import BreadcrumbItem, NavigationState
 from src.api.stats_service import _build_ticker_stats
+from src.api.supplementary_service import _build_supplementary_context
 from src.services.exceptions import DataNotFoundError  # noqa: F401
 
 logger = structlog.get_logger(__name__)
@@ -152,6 +155,29 @@ async def stats_panel_fragment(
     return templates.TemplateResponse(
         "explorer/stats_panel.html",
         {"request": request, **_stats_template_context(stats)},
+    )
+
+
+@router.get("/supplementary", response_class=HTMLResponse)
+async def supplementary_panel_fragment(
+    request: Request,
+    service: Metadata,
+    dividend_repo: DividendRepo,
+    split_repo: SplitRepo,
+    catalog: str = Query(..., description="Catalog name"),
+    ticker: str = Query(..., description="Ticker symbol"),
+) -> HTMLResponse:
+    """Return the supplementary-panel HTMX fragment (3 collapsible sections).
+
+    Supplementary data is timeframe-independent — no ``tf`` param. Additive:
+    a missing company profile renders empty sections rather than a 404.
+    """
+    context = await _build_supplementary_context(
+        service, dividend_repo, split_repo, catalog, ticker
+    )
+    return templates.TemplateResponse(
+        "explorer/supplementary_panel.html",
+        {"request": request, **context},
     )
 
 
@@ -375,6 +401,8 @@ async def chart_panel_fragment(
     request: Request,
     service: Metadata,
     catalog_service: DataCatalog,
+    dividend_repo: DividendRepo,
+    split_repo: SplitRepo,
     catalog: str = Query(..., description="Catalog name"),
     ticker: str = Query(..., description="Ticker symbol"),
     tf: str = Query("D", description="Timeframe label"),
@@ -453,6 +481,9 @@ async def chart_panel_fragment(
     no_data_message = f"No {active_tf.label} data available for {ticker}"
 
     stats = await _build_ticker_stats(service, catalog_service, catalog, ticker, tf)
+    supplementary = await _build_supplementary_context(
+        service, dividend_repo, split_repo, catalog, ticker
+    )
 
     explorer_state: dict[str, Any] = {
         "search": search,
@@ -491,5 +522,6 @@ async def chart_panel_fragment(
             "explorer_state_sort_by": sort_by,
             "explorer_state_page": page,
             **_stats_template_context(stats),
+            **supplementary,
         },
     )

@@ -24,6 +24,8 @@ CREATE TABLE IF NOT EXISTS catalog_instruments (
     sector VARCHAR(100),
     industry VARCHAR(100),
     ipo_date DATE,
+    country VARCHAR(100),
+    state VARCHAR(100),
     date_range_start TIMESTAMP,
     date_range_end TIMESTAMP,
     bar_count_daily INTEGER NOT NULL DEFAULT 0,
@@ -90,6 +92,30 @@ class TestAsyncCatalogInstrumentRepository:
 
         assert result.id is not None
         assert result.ticker == "SPY"
+
+    async def test_upsert_updates_country_state_on_existing(self, async_session):
+        """upsert overwrites country/state on an existing row (re-import backfill)."""
+        repo = CatalogInstrumentRepository(async_session)
+        bar_counts = {
+            "bar_count_daily": 0,
+            "bar_count_hourly": 0,
+            "bar_count_minute": 0,
+            "bar_count_5min": 0,
+        }
+        await repo.upsert(
+            CatalogInstrument(**_make_instrument(country=None, state=None, **bar_counts))
+        )
+        await async_session.commit()
+
+        await repo.upsert(
+            CatalogInstrument(**_make_instrument(country="US", state="CA", **bar_counts))
+        )
+        await async_session.commit()
+
+        result = await repo.get_by_ticker("firstrate-etf", "SPY")
+        assert result is not None
+        assert result.country == "US"
+        assert result.state == "CA"
 
     async def test_get_by_ticker(self, async_session):
         """get_by_ticker returns matching instrument."""

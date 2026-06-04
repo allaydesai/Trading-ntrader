@@ -164,6 +164,9 @@ class TickerStatsResponse(BaseModel):
     price_min: Optional[float] = None
     price_max: Optional[float] = None
     active_tf: str
+    has_dividends: bool = False
+    has_splits: bool = False
+    has_company_profile: bool = False
 
 
 class ExplorerPageState(BaseModel):

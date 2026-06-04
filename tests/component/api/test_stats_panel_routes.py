@@ -10,7 +10,9 @@ from src.api.dependencies import (
     get_catalog_list,
     get_data_catalog_service,
     get_default_catalog,
+    get_dividend_repository,
     get_metadata_service,
+    get_stock_split_repository,
 )
 from src.api.web import app
 from src.db.models.catalog_instrument import CatalogInstrument
@@ -70,11 +72,29 @@ def mock_catalog_service():
 
 
 @pytest.fixture
-def client(mock_metadata_service, mock_catalog_service):
+def mock_dividend_repo():
+    repo = AsyncMock()
+    repo.list_by_ticker = AsyncMock(return_value=[])
+    repo.has_for_ticker = AsyncMock(return_value=False)
+    return repo
+
+
+@pytest.fixture
+def mock_split_repo():
+    repo = AsyncMock()
+    repo.list_by_ticker = AsyncMock(return_value=[])
+    repo.has_for_ticker = AsyncMock(return_value=False)
+    return repo
+
+
+@pytest.fixture
+def client(mock_metadata_service, mock_catalog_service, mock_dividend_repo, mock_split_repo):
     app.dependency_overrides[get_metadata_service] = lambda: mock_metadata_service
     app.dependency_overrides[get_data_catalog_service] = lambda: mock_catalog_service
     app.dependency_overrides[get_catalog_list] = lambda: ["us_stocks"]
     app.dependency_overrides[get_default_catalog] = lambda: "us_stocks"
+    app.dependency_overrides[get_dividend_repository] = lambda: mock_dividend_repo
+    app.dependency_overrides[get_stock_split_repository] = lambda: mock_split_repo
     try:
         yield TestClient(app)
     finally:
@@ -82,6 +102,8 @@ def client(mock_metadata_service, mock_catalog_service):
         app.dependency_overrides.pop(get_data_catalog_service, None)
         app.dependency_overrides.pop(get_catalog_list, None)
         app.dependency_overrides.pop(get_default_catalog, None)
+        app.dependency_overrides.pop(get_dividend_repository, None)
+        app.dependency_overrides.pop(get_stock_split_repository, None)
 
 
 @pytest.mark.component
@@ -103,6 +125,26 @@ class TestStatsRestEndpoint:
         assert data["active_tf"] == "D"
         assert data["date_range_start"].startswith("2020-01-02")
         assert data["date_range_end"].startswith("2025-12-31")
+
+    def test_availability_flags_reflect_repos(self, client, mock_dividend_repo, mock_split_repo):
+        """has_dividends/has_splits/has_company_profile reflect the repos (AC #7)."""
+        mock_dividend_repo.has_for_ticker = AsyncMock(return_value=True)
+        mock_split_repo.has_for_ticker = AsyncMock(return_value=False)
+
+        response = client.get("/api/explorer/ticker/AAPL/stats?catalog=us_stocks&tf=D")
+        data = response.json()
+        assert data["has_dividends"] is True
+        assert data["has_splits"] is False
+        assert data["has_company_profile"] is True
+
+    def test_availability_flags_default_false_without_data(
+        self, client, mock_dividend_repo, mock_split_repo
+    ):
+        """Flags are False when no supplementary data exists."""
+        response = client.get("/api/explorer/ticker/AAPL/stats?catalog=us_stocks&tf=D")
+        data = response.json()
+        assert data["has_dividends"] is False
+        assert data["has_splits"] is False
 
     def test_default_timeframe_is_daily(self, client, mock_catalog_service):
         client.get("/api/explorer/ticker/AAPL/stats?catalog=us_stocks")
@@ -273,13 +315,15 @@ class TestStatsPanelSkeleton:
 
 @pytest.mark.component
 class TestStatsPanelEpic4Placeholder:
-    """Tests for the Epic 4 supplementary placeholder note (AC #12)."""
+    """The Epic-4 placeholder note was removed when Story 4-2 landed (AC #8)."""
 
-    def test_epic4_note_present_in_stats_fragment(self, client):
+    def test_epic4_note_removed_from_stats_fragment(self, client):
+        """Story 4-2 removed the 'available in Epic 4' placeholder note."""
         response = client.get("/explorer/stats-panel?catalog=us_stocks&ticker=AAPL&tf=D")
-        assert "Dividends and stock splits available in" in response.text
-        assert "Epic 4" in response.text
+        assert "Dividends and stock splits available in" not in response.text
+        assert "Epic 4" not in response.text
 
     def test_no_details_tag_in_stats_fragment(self, client):
+        """The stats fragment itself has no <details> (those live in the supplementary panel)."""
         response = client.get("/explorer/stats-panel?catalog=us_stocks&ticker=AAPL&tf=D")
         assert "<details" not in response.text

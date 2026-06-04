@@ -139,6 +139,20 @@ class TestLoadCompanyProfiles:
         assert instrument.sector == "Financial Services"
         assert instrument.industry == "Asset Management"
         assert instrument.ipo_date == date(1993, 1, 22)
+        assert instrument.country == "US"
+        assert instrument.state == "NY"
+
+    @pytest.mark.unit
+    def test_blank_country_state_parsed_as_none(self, mapper, mock_repo, tmp_path):
+        """Blank country/state fields become None (not empty string)."""
+        content = "ZZZ,No Domicile Co,,,NASDAQ,Technology,Software,2000-01-01\n"
+        csv_file = tmp_path / "blank_domicile.csv"
+        csv_file.write_text(content)
+
+        mapper.load_company_profiles(csv_file, CATALOG_NAME, ASSET_CLASS)
+        instrument = mock_repo.upsert.call_args[0][0]
+        assert instrument.country is None
+        assert instrument.state is None
 
     @pytest.mark.unit
     def test_nautilus_id_format(self, mapper, mock_repo, valid_csv):
