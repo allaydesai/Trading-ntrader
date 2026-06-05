@@ -12,8 +12,8 @@ from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
+from src.api.chart_bars import _load_chart_bars
 from src.api.dependencies import get_backtest_query_service, get_data_catalog_service
-from src.api.rest.indicators import _load_chart_bars
 from src.api.web import app
 
 
@@ -227,7 +227,7 @@ class TestLoadChartBars:
         """Default-catalog runs query the actual bar type, not hardcoded 1-DAY-LAST."""
         backtest = self._backtest(bar_type="1-MINUTE-LAST")
 
-        with patch("src.api.rest.indicators.DataCatalogService") as mock_svc:
+        with patch("src.api.chart_bars.DataCatalogService") as mock_svc:
             mock_svc.return_value.query_bars.return_value = []
             await _load_chart_bars(backtest)
 
@@ -241,12 +241,12 @@ class TestLoadChartBars:
         backtest = self._backtest(bar_type="5-MINUTE-LAST", catalog_name="e2e-test", _symbol="AAPL")
 
         with (
-            patch("src.api.rest.indicators.DataCatalogService") as mock_svc,
+            patch("src.api.chart_bars.DataCatalogService") as mock_svc,
             patch(
-                "src.api.rest.indicators._resolve_named_nautilus_id",
+                "src.api.chart_bars._resolve_named_nautilus_id",
                 return_value="AAPL.NASDAQ",
             ),
-            patch("src.api.rest.indicators.get_settings") as mock_settings,
+            patch("src.api.chart_bars.get_settings") as mock_settings,
         ):
             mock_settings.return_value.catalog.catalog_base_path = "/tmp/catalogs"
             mock_svc.return_value.query_bars.return_value = []
@@ -264,12 +264,12 @@ class TestLoadChartBars:
         )
 
         with (
-            patch("src.api.rest.indicators.DataCatalogService") as mock_svc,
+            patch("src.api.chart_bars.DataCatalogService") as mock_svc,
             patch(
-                "src.api.rest.indicators._resolve_named_nautilus_id",
+                "src.api.chart_bars._resolve_named_nautilus_id",
                 return_value="AAPL.ARCA",
             ),
-            patch("src.api.rest.indicators.get_settings") as mock_settings,
+            patch("src.api.chart_bars.get_settings") as mock_settings,
         ):
             mock_settings.return_value.catalog.catalog_base_path = "/tmp/catalogs"
             mock_svc.return_value.query_bars.return_value = []

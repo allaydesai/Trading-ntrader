@@ -124,9 +124,9 @@ class TestTradesEndpoint:
 
             assert response.status_code == 200
             data = response.json()
-            # Should be sorted by time
-            assert data["trades"][0]["time"] == "2024-01-15"
-            assert data["trades"][1]["time"] == "2024-01-20"
+            # Should be sorted by time (Unix seconds, UTC midnight)
+            assert data["trades"][0]["time"] == 1705276800  # 2024-01-15
+            assert data["trades"][1]["time"] == 1705708800  # 2024-01-20
         finally:
             app.dependency_overrides.pop(get_backtest_query_service, None)
             app.dependency_overrides.pop(get_db, None)

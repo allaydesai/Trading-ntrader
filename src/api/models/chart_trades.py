@@ -23,7 +23,8 @@ class TradeMarker(BaseModel):
     Single trade marker for chart overlay.
 
     Attributes:
-        time: ISO 8601 date format
+        time: Unix timestamp in seconds (matches candle series time so markers
+            align on intraday charts, not just daily)
         side: Trade side (buy/sell)
         price: Execution price
         quantity: Trade quantity
@@ -31,7 +32,7 @@ class TradeMarker(BaseModel):
 
     Example:
         >>> marker = TradeMarker(
-        ...     time="2024-01-15",
+        ...     time=1705276800,  # 2024-01-15 00:00:00 UTC
         ...     side="buy",
         ...     price=185.50,
         ...     quantity=100,
@@ -39,7 +40,7 @@ class TradeMarker(BaseModel):
         ... )
     """
 
-    time: str = Field(..., description="ISO 8601 date format")
+    time: int = Field(..., description="Unix timestamp in seconds (UTC)")
     side: str = Field(..., description="Trade side (buy/sell)")
     price: float = Field(..., gt=0, description="Execution price")
     quantity: float = Field(..., gt=0, description="Trade quantity")

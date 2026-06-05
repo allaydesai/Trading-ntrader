@@ -34,6 +34,28 @@ async function fetchOHLCVData(symbol, start, end, timeframe = "1_DAY") {
 }
 
 /**
+ * Fetches OHLCV candlestick data for a backtest run from its own catalog.
+ *
+ * Unlike {@link fetchOHLCVData}, this resolves the run's own catalog and bar
+ * type server-side, so named-catalog and intraday runs chart their real data
+ * instead of the default catalog at a hardcoded daily timeframe.
+ *
+ * @param {string} runId - Backtest run UUID
+ * @returns {Promise<Object>} API response with candles array
+ * @throws {Error} If API request fails
+ */
+async function fetchRunOHLCVData(runId) {
+    const response = await fetch(`/api/timeseries/run/${runId}`);
+
+    if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.detail || "Failed to load price data");
+    }
+
+    return await response.json();
+}
+
+/**
  * Fetches trade data for a backtest run
  *
  * @param {string} runId - Backtest run UUID
@@ -171,12 +193,13 @@ function setupVolumeSeries(chart) {
  * await initRunPriceChart(el);
  */
 async function initRunPriceChart(container) {
-    const { runId, symbol, start, end, timeframe = "1_DAY" } = container.dataset;
+    const { runId } = container.dataset;
 
     try {
-        // Fetch data in parallel
+        // Fetch the run's own candles (resolves its catalog + bar type
+        // server-side) and its trades in parallel.
         const [timeseriesData, tradesData] = await Promise.all([
-            fetchOHLCVData(symbol, start, end, timeframe),
+            fetchRunOHLCVData(runId),
             fetchTrades(runId),
         ]);
 
@@ -197,7 +220,7 @@ async function initRunPriceChart(container) {
         candlestickSeries.setData(formatCandleData(timeseriesData.candles));
 
         // Add timeframe indicator badge
-        createTimeframeBadge(container, timeseriesData.timeframe || timeframe);
+        createTimeframeBadge(container, timeseriesData.timeframe);
 
         // Add volume
         const volumeSeries = setupVolumeSeries(chart);
