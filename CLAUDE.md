@@ -69,6 +69,7 @@ A ruff auto-formatter runs after each file edit. `F401` (unused import) is confi
 - **Make dependent changes in a single edit** — e.g., when moving an import from inline to top-level, remove the inline usage in the same edit that adds the top-level import
 - **When removing a function parameter**, update call sites first (extra args still work), then remove the parameter
 - **Re-read the file after each edit** if you suspect the linter modified it — never assume your edit landed as written
+- **Stage and commit in separate Bash calls** — the `.claude/hooks/bash-guard.sh` commit gate runs `ruff format`/`check` and rejects a `git add && git commit` one-liner: as a PreToolUse hook it fires *before* the inline `git add` runs, sees the files still unstaged, and blocks. Run `git add <files>` first, then `git commit` alone (by then the tree is clean and the gate passes)
 
 ## Commit Format
 
