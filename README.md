@@ -68,6 +68,9 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 # Install dependencies
 uv sync
 
+# Install the git pre-commit hook (structural import gate, once per clone)
+make install-hooks
+
 # Configure environment
 cp .env.example .env
 # Edit .env with your database credentials

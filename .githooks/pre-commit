@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -eo pipefail
+# Structural import gate — Epic 4 retro A1.
+# Blocks commits with unused (F401) or undefined (F821) imports.
+# Escape hatch: append `# noqa: F401  # <reason>` to an intentional import.
+cd "$(git rev-parse --show-toplevel)"
+if ! OUT=$(uv run ruff check . 2>&1); then
+  echo "BLOCKED (pre-commit): unused/undefined imports. Fix before committing:" >&2
+  echo "$OUT" >&2
+  echo "Escape hatch: add '# noqa: F401  # <reason>' for an intentional import." >&2
+  exit 1
+fi
+exit 0
