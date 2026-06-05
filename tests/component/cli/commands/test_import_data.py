@@ -157,7 +157,7 @@ class TestStreamingOutput:
     @pytest.mark.component
     def test_summary_report_contains_metrics(self):
         """Summary text includes the Story 1-7 four-bucket metrics."""
-        from src.cli.commands.import_data import build_summary_text
+        from src.cli.commands.import_reporting import build_summary_text
 
         results = [
             ImportResult(

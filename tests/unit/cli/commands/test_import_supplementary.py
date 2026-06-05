@@ -9,8 +9,8 @@ from click.testing import CliRunner
 from src.cli.commands.import_data import (
     _discover_supplementary_tickers,
     _find_supplementary_dirs,
-    _print_supplementary_summary,
 )
+from src.cli.commands.import_reporting import _print_supplementary_summary
 from src.models.catalog import ImportResult
 from src.services.firstrate.supplementary_loader import SupplementaryLoadResult
 

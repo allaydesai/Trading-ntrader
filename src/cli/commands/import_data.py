@@ -1,13 +1,16 @@
 """CLI command for FirstRate data import with progress and summary."""
 
-import re
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import click
 from rich.console import Console
 from rich.table import Table
 
+from src.cli.commands.import_reporting import (
+    _print_progress_line,
+    _print_summary,
+    determine_exit_code,
+)
 from src.models.catalog import AssetClass, DryRunReport, ImportResult
 from src.services.firstrate.dry_run import (
     _UNKNOWN_TIMEFRAME,
@@ -15,9 +18,10 @@ from src.services.firstrate.dry_run import (
     estimate_parquet_bytes,
     format_bytes,
 )
-
-if TYPE_CHECKING:
-    from src.services.firstrate.supplementary_loader import SupplementaryLoadResult
+from src.services.firstrate.supplementary_discovery import (
+    _discover_supplementary_tickers,
+    _find_supplementary_dirs,
+)
 
 console = Console()
 
@@ -39,19 +43,6 @@ ASSET_CLASS_MAP = {
 }
 
 
-#: Directory names FirstRate uses for supplementary data, by data type.
-_DIVIDEND_DIR_NAMES = ("stock_dividends", "etf_dividends")
-_SPLIT_DIR_NAMES = ("stock_splits", "etf_splits")
-
-#: How many parent levels to probe when auto-discovering supplementary dirs.
-_SUPPLEMENTARY_PROBE_DEPTH = 3
-
-#: A ticker-shaped filename stem (FirstRate symbols are uppercase, e.g. AAPL,
-#: BRK.B). Used to keep stray non-ticker ``.txt`` docs in a splits directory
-#: (e.g. a non-underscore ``readme.txt``) from being treated as tickers.
-_TICKER_STEM_RE = re.compile(r"^[A-Z0-9][A-Z0-9.\-]*$")
-
-
 def _find_profiles_csv(source_path: Path) -> Path | None:
     """Locate the FirstRate company_profiles.csv for a given import source.
 
@@ -71,86 +62,6 @@ def _find_profiles_csv(source_path: Path) -> Path | None:
         if candidate.exists():
             return candidate
     return None
-
-
-def _probe_supplementary_dir(source_path: Path, names: tuple[str, ...]) -> Path | None:
-    """Probe ``source_path`` and its parents for a supplementary data directory.
-
-    FirstRate ships ``stock_dividends`` / ``stock_splits`` (and the ``etf_*``
-    equivalents) as siblings of the bar-data directory. Walks up from
-    ``source_path`` a few levels looking for any of ``names``.
-
-    Args:
-        source_path: Directory passed to the import command.
-        names: Candidate directory names to look for at each level.
-
-    Returns:
-        First matching directory found, or None.
-    """
-    bases = [source_path, *list(source_path.parents)[:_SUPPLEMENTARY_PROBE_DEPTH]]
-    for base in bases:
-        for name in names:
-            candidate = base / name
-            if candidate.is_dir():
-                return candidate
-    return None
-
-
-def _find_supplementary_dirs(source_path: Path) -> tuple[Path | None, Path | None]:
-    """Best-effort auto-discovery of dividend/split source directories.
-
-    Mirrors :func:`_find_profiles_csv`: probes ``source_path`` and its parents
-    for the FirstRate ``stock_dividends``/``stock_splits`` (or ``etf_*``)
-    directories. Explicit ``--dividends-dir``/``--splits-dir`` flags override
-    discovery; if nothing is found supplementary loading is skipped entirely
-    (AC-6, zero regression).
-
-    Args:
-        source_path: Directory passed to the import command.
-
-    Returns:
-        ``(dividends_dir, splits_dir)`` — either element may be None.
-    """
-    return (
-        _probe_supplementary_dir(source_path, _DIVIDEND_DIR_NAMES),
-        _probe_supplementary_dir(source_path, _SPLIT_DIR_NAMES),
-    )
-
-
-def _discover_supplementary_tickers(
-    dividends_dir: Path | None,
-    splits_dir: Path | None,
-) -> list[str]:
-    """Derive the ticker list from the supplementary source directories.
-
-    Collects every ``{TICKER}_divs.txt`` in ``dividends_dir`` and every
-    ``{TICKER}.txt`` in ``splits_dir``, taking the union. Files whose name
-    starts with ``_`` (e.g. ``_splits_readme.txt``) are ignored.
-
-    Args:
-        dividends_dir: Directory holding ``{ticker}_divs.txt`` (or None).
-        splits_dir: Directory holding ``{ticker}.txt`` (or None).
-
-    Returns:
-        Sorted list of distinct ticker symbols.
-    """
-    tickers: set[str] = set()
-    if dividends_dir is not None:
-        for f in dividends_dir.glob("*_divs.txt"):
-            if f.name.startswith("_"):
-                continue
-            symbol = f.name[: -len("_divs.txt")]
-            if _TICKER_STEM_RE.match(symbol):
-                tickers.add(symbol)
-    if splits_dir is not None:
-        # ``*.txt`` is unanchored, so guard against stray non-ticker docs
-        # (e.g. a non-underscore ``readme.txt``) being treated as tickers.
-        for f in splits_dir.glob("*.txt"):
-            if f.name.startswith("_") or f.name.endswith("_divs.txt"):
-                continue
-            if _TICKER_STEM_RE.match(f.stem):
-                tickers.add(f.stem)
-    return sorted(tickers)
 
 
 def parse_timeframes(timeframe_str: str) -> list[str]:
@@ -178,190 +89,6 @@ def parse_timeframes(timeframe_str: str) -> list[str]:
             seen.add(spec)
             specs.append(spec)
     return specs
-
-
-def determine_exit_code(results: list[ImportResult]) -> int:
-    """Determine CLI exit code from import results.
-
-    Story 1-7 (AC-5): skipped tickers are a success outcome and must not
-    trigger exit code 1. Only ``status == "failed"`` flips to 1. Exit code
-    2 is reserved for fatal errors in ``_run_import``.
-
-    Args:
-        results: List of import results.
-
-    Returns:
-        0 if all success/skipped, 1 if any failures.
-    """
-    if any(r.status == "failed" for r in results):
-        return 1
-    return 0
-
-
-def _bucket_results(results: list[ImportResult]) -> dict[str, int]:
-    """Return the four Story 1-7 outcome buckets plus totals.
-
-    Counts by ``r.outcome`` so future outcome additions are cheap. Falls
-    back to ``r.status`` only for the "failed" bucket (failed results may
-    not carry an outcome — classification might never have run).
-    """
-    new = sum(1 for r in results if r.outcome == "new")
-    reimported = sum(1 for r in results if r.outcome == "reimported")
-    skipped = sum(1 for r in results if r.outcome == "skipped")
-    failed = sum(1 for r in results if r.status == "failed")
-    # "Total processed" (AC-4) excludes skipped + failed.
-    processed_rows = sum(r.row_count for r in results if r.outcome in ("new", "reimported"))
-    return {
-        "total": len(results),
-        "new": new,
-        "reimported": reimported,
-        "skipped": skipped,
-        "failed": failed,
-        "total_rows": processed_rows,
-        "total_processed": new + reimported,
-    }
-
-
-def build_summary_text(results: list[ImportResult]) -> str:
-    """Build plain-text summary of import results.
-
-    Story 1-7: surface New / Re-imported / Skipped / Failed counts plus
-    a Total processed line (= new + reimported). The skipped bucket is
-    not counted as "processed" but IS counted in Total tickers.
-
-    Args:
-        results: List of import results.
-
-    Returns:
-        Formatted summary string.
-    """
-    buckets = _bucket_results(results)
-
-    lines = [
-        "",
-        "Import Summary",
-        "\u2501" * 27,
-        f"Total tickers:   {buckets['total']}",
-        f"New:             {buckets['new']}",
-        f"Re-imported:     {buckets['reimported']}",
-        f"Skipped:         {buckets['skipped']}",
-        f"Failed:          {buckets['failed']}",
-        f"Total rows:      {buckets['total_rows']:,}",
-        f"Total processed: {buckets['total_processed']}",
-    ]
-
-    failed_results = [r for r in results if r.status == "failed"]
-    if failed_results:
-        lines.append("")
-        lines.append("Failures:")
-        for r in failed_results:
-            lines.append(f"  {r.ticker} \u2014 {r.error}")
-
-    return "\n".join(lines)
-
-
-def _print_progress_line(result: ImportResult, timeframe: str) -> None:
-    """Print a single ticker progress line.
-
-    Three-way glyph split (Story 1-7, AC-4): ``✓`` for successful
-    imports (new or reimported), ``⟳`` for skipped tickers so operators
-    can visually scan a long idempotent re-run, and ``✗`` for failures.
-
-    Args:
-        result: Import result for one ticker.
-        timeframe: Timeframe spec used for this import.
-    """
-    if result.status == "skipped":
-        click.echo(f"{result.ticker} \u2014 {timeframe} \u2014 skipped (already complete) \u27f3")
-    elif result.status == "success":
-        click.echo(f"{result.ticker} \u2014 {timeframe} \u2014 {result.row_count:,} rows \u2713")
-    else:
-        click.echo(
-            f"{result.ticker} \u2014 {timeframe} \u2014 {result.error or 'Unknown error'} \u2717"
-        )
-
-
-def _print_summary(
-    results: list[ImportResult],
-    supplementary: list["SupplementaryLoadResult"] | None = None,
-) -> None:
-    """Print Rich-formatted summary table.
-
-    Story 1-7 rows: Total tickers, New, Re-imported, Skipped, Failed,
-    Total rows, Total processed. ``Total processed`` equals
-    ``new + reimported`` per AC-4. When ``supplementary`` results are present
-    (Story 4-1) an informational dividends/splits line is appended; it never
-    affects the exit code.
-
-    Args:
-        results: All import results across timeframes.
-        supplementary: Per-ticker dividend/split load results (Story 4-1).
-    """
-    buckets = _bucket_results(results)
-
-    console.print()
-    table = Table(title="Import Summary")
-    table.add_column("Metric", style="cyan")
-    table.add_column("Value", style="green")
-    table.add_row("Total tickers", str(buckets["total"]))
-    table.add_row("New", str(buckets["new"]))
-    table.add_row("Re-imported", str(buckets["reimported"]))
-    table.add_row("Skipped", str(buckets["skipped"]))
-    table.add_row("Failed", str(buckets["failed"]))
-    table.add_row("Total rows", f"{buckets['total_rows']:,}")
-    table.add_row("Total processed", str(buckets["total_processed"]))
-    console.print(table)
-
-    failed_results = [r for r in results if r.status == "failed"]
-    if failed_results:
-        console.print()
-        fail_table = Table(title="Failures")
-        fail_table.add_column("Ticker", style="red")
-        fail_table.add_column("Reason", style="yellow")
-        for r in failed_results:
-            fail_table.add_row(r.ticker, r.error or "Unknown error")
-        console.print(fail_table)
-
-    _print_supplementary_summary(supplementary)
-
-
-def _print_supplementary_summary(
-    supplementary: list["SupplementaryLoadResult"] | None,
-) -> None:
-    """Print an informational dividends/splits summary line (Story 4-1).
-
-    Counts tickers/records loaded and any isolated per-ticker failures. This
-    output is informational only and must not affect ``determine_exit_code``.
-
-    Args:
-        supplementary: Per-ticker dividend/split load results, or None.
-    """
-    if not supplementary:
-        return
-
-    div_tickers = sum(1 for r in supplementary if r.dividend_count > 0)
-    split_tickers = sum(1 for r in supplementary if r.split_count > 0)
-    div_records = sum(r.dividend_count for r in supplementary)
-    split_records = sum(r.split_count for r in supplementary)
-    supp_failures = [r for r in supplementary if r.status == "failed"]
-
-    console.print()
-    supp_table = Table(title="Supplementary Data")
-    supp_table.add_column("Metric", style="cyan")
-    supp_table.add_column("Value", style="green")
-    supp_table.add_row("Dividends", f"{div_tickers} tickers / {div_records} records")
-    supp_table.add_row("Splits", f"{split_tickers} tickers / {split_records} records")
-    supp_table.add_row("Failed (non-blocking)", str(len(supp_failures)))
-    console.print(supp_table)
-
-    if supp_failures:
-        console.print()
-        fail_table = Table(title="Supplementary Failures (non-blocking)")
-        fail_table.add_column("Ticker", style="red")
-        fail_table.add_column("Reason", style="yellow")
-        for r in supp_failures:
-            fail_table.add_row(r.ticker, r.error or "Unknown error")
-        console.print(fail_table)
 
 
 def _run_import(
@@ -426,7 +153,7 @@ def _run_import(
         session_maker = get_sync_session_maker()
         if session_maker is None:
             console.print(
-                "\u274c Database not configured. Check DATABASE_URL in .env",
+                "❌ Database not configured. Check DATABASE_URL in .env",
                 style="red",
             )
             return 2
@@ -447,7 +174,7 @@ def _run_import(
                 instrument_mapper.load_company_profiles(profiles_path, catalog, ac.value)
             else:
                 console.print(
-                    f"\u274c Instrument profiles not loaded for catalog "
+                    f"❌ Instrument profiles not loaded for catalog "
                     f"'{catalog}' and no company_profiles.csv found at "
                     f"{source_path} or {source_path.parent}",
                     style="red",
@@ -491,17 +218,17 @@ def _run_import(
         session.commit()
 
     except FileNotFoundError as e:
-        console.print(f"\u274c {e}", style="red")
+        console.print(f"❌ {e}", style="red")
         if session is not None:
             session.rollback()
         return 2
     except ValueError as e:
-        console.print(f"\u274c {e}", style="red")
+        console.print(f"❌ {e}", style="red")
         if session is not None:
             session.rollback()
         return 2
     except Exception as e:
-        console.print(f"\u274c Fatal error: {e}", style="red")
+        console.print(f"❌ Fatal error: {e}", style="red")
         if session is not None:
             session.rollback()
         return 2
@@ -524,21 +251,21 @@ def _print_dry_run_report(report: DryRunReport) -> None:
     have explicit confirmation that nothing touched the catalog or DB.
     """
     console.print()
-    header = f"[bold]Dry-Run Report[/bold] \u2014 {report.asset_class.value} @ {report.source_path}"
+    header = f"[bold]Dry-Run Report[/bold] — {report.asset_class.value} @ {report.source_path}"
     if report.catalog:
-        header += f" \u2192 catalog [cyan]{report.catalog}[/cyan]"
+        header += f" → catalog [cyan]{report.catalog}[/cyan]"
     console.print(header)
 
     # Empty / all-unknown guard: warn loudly rather than printing a blank table.
     countable_specs = [spec for spec in report.timeframes if spec != _UNKNOWN_TIMEFRAME]
     if report.total_file_count == 0 and not report.schema_mismatches:
         console.print("[yellow]No importable files found. Double-check the source path.[/yellow]")
-        click.echo("No data written \u2014 dry run only.")
+        click.echo("No data written — dry run only.")
         return
     if not countable_specs and report.total_file_count > 0:
         console.print(
             "[yellow]All discovered files fell into the 'unknown' timeframe bucket "
-            "\u2014 check the filename suffixes.[/yellow]"
+            "— check the filename suffixes.[/yellow]"
         )
 
     table = Table()
@@ -595,7 +322,7 @@ def _print_dry_run_report(report: DryRunReport) -> None:
         if remaining > 0:
             console.print(f"... and {remaining} more")
 
-    click.echo("No data written \u2014 dry run only.")
+    click.echo("No data written — dry run only.")
 
 
 def _run_dry_run(
@@ -627,14 +354,14 @@ def _run_dry_run(
     """
     if format_name.lower() != "firstrate":
         console.print(
-            f"\u274c --format '{format_name}' is not supported by --dry-run (only 'firstrate').",
+            f"❌ --format '{format_name}' is not supported by --dry-run (only 'firstrate').",
             style="red",
         )
         return 2
 
     if not source_path.exists() or not source_path.is_dir():
         console.print(
-            f"\u274c Source path does not exist or is not a directory: {source_path}",
+            f"❌ Source path does not exist or is not a directory: {source_path}",
             style="red",
         )
         return 2
@@ -644,7 +371,7 @@ def _run_dry_run(
     try:
         report = build_dry_run_report(source_path, ac, catalog=catalog)
     except (PermissionError, OSError) as e:
-        console.print(f"\u274c Fatal filesystem error: {e}", style="red")
+        console.print(f"❌ Fatal filesystem error: {e}", style="red")
         return 2
 
     _print_dry_run_report(report)

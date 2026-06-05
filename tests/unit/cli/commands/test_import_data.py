@@ -277,7 +277,7 @@ class TestSummaryReport:
     @pytest.mark.unit
     def test_summary_totals(self):
         """Summary includes the Story 1-7 four-bucket breakdown."""
-        from src.cli.commands.import_data import build_summary_text
+        from src.cli.commands.import_reporting import build_summary_text
 
         results = [
             ImportResult(
@@ -314,7 +314,7 @@ class TestSummaryReport:
     @pytest.mark.unit
     def test_failure_table_lists_ticker_and_reason(self):
         """Failures listed with ticker + reason."""
-        from src.cli.commands.import_data import build_summary_text
+        from src.cli.commands.import_reporting import build_summary_text
 
         results = [
             ImportResult(
@@ -332,7 +332,7 @@ class TestSummaryReport:
     @pytest.mark.unit
     def test_all_success_no_failure_section(self):
         """When all succeed, no failure details shown."""
-        from src.cli.commands.import_data import build_summary_text
+        from src.cli.commands.import_reporting import build_summary_text
 
         results = [
             ImportResult(ticker="SPY", status="success", row_count=100, duration=0.5),
@@ -607,7 +607,7 @@ class TestStory17ProgressAndSummary:
 
     @pytest.mark.unit
     def test_build_summary_text_renders_all_four_buckets(self):
-        from src.cli.commands.import_data import build_summary_text
+        from src.cli.commands.import_reporting import build_summary_text
 
         results = [
             ImportResult(
