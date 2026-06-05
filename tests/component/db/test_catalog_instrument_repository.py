@@ -117,6 +117,25 @@ class TestAsyncCatalogInstrumentRepository:
         assert result.country == "US"
         assert result.state == "CA"
 
+    async def test_upsert_persists_bar_count_5min_on_existing(self, async_session):
+        """upsert update-branch must copy bar_count_5min (review finding #2).
+
+        The explorer gates the 5-minute toolbar on bar_count_5min > 0, so a
+        dropped copy makes 5-min charts silently disappear for re-imported
+        tickers.
+        """
+        repo = CatalogInstrumentRepository(async_session)
+        base_counts = {"bar_count_daily": 0, "bar_count_hourly": 0, "bar_count_minute": 0}
+        await repo.upsert(CatalogInstrument(**_make_instrument(bar_count_5min=0, **base_counts)))
+        await async_session.commit()
+
+        await repo.upsert(CatalogInstrument(**_make_instrument(bar_count_5min=4242, **base_counts)))
+        await async_session.commit()
+
+        result = await repo.get_by_ticker("firstrate-etf", "SPY")
+        assert result is not None
+        assert result.bar_count_5min == 4242
+
     async def test_get_by_ticker(self, async_session):
         """get_by_ticker returns matching instrument."""
         repo = CatalogInstrumentRepository(async_session)
@@ -316,6 +335,20 @@ class TestSyncCatalogInstrumentRepository:
 
         assert result.id is not None
         assert result.ticker == "SPY"
+
+    def test_upsert_persists_bar_count_5min_on_existing(self, sync_session):
+        """Sync upsert update-branch must copy bar_count_5min (review finding #2)."""
+        repo = SyncCatalogInstrumentRepository(sync_session)
+        base_counts = {"bar_count_daily": 0, "bar_count_hourly": 0, "bar_count_minute": 0}
+        repo.upsert(CatalogInstrument(**_make_instrument(bar_count_5min=0, **base_counts)))
+        sync_session.commit()
+
+        repo.upsert(CatalogInstrument(**_make_instrument(bar_count_5min=777, **base_counts)))
+        sync_session.commit()
+
+        result = repo.get_by_ticker("firstrate-etf", "SPY")
+        assert result is not None
+        assert result.bar_count_5min == 777
 
     def test_get_by_ticker(self, sync_session):
         """get_by_ticker returns matching instrument."""

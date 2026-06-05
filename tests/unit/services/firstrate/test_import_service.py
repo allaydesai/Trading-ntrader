@@ -322,6 +322,44 @@ class TestImportTicker:
         mock_catalog = mock_catalog_manager.resolve_catalog.return_value
         mock_catalog.write_data.assert_called_once_with(mock_bars)
 
+    def test_import_deletes_existing_partition_before_write(
+        self, configured_service, mock_catalog_manager, mock_bars, tmp_path
+    ):
+        """Re-import must clear the bar_type partition before writing.
+
+        Code review finding #1: Nautilus ``write_data`` appends a new parquet
+        part. Without a delete first, a re-import (or orphan-heal) duplicates
+        every bar on disk and corrupts downstream PnL/drawdown. The delete must
+        target the full bar_type identifier and happen *before* the write.
+        """
+        from nautilus_trader.model.data import Bar
+
+        csv_file = tmp_path / "SPY.txt"
+        csv_file.write_text("data")
+
+        mock_catalog = mock_catalog_manager.resolve_catalog.return_value
+        call_order: list[str] = []
+        mock_catalog.delete_data_range.side_effect = lambda *a, **k: call_order.append("delete")
+        mock_catalog.write_data.side_effect = lambda *a, **k: call_order.append("write")
+
+        with patch("src.services.firstrate.import_service.get_parser") as mock_get_parser:
+            mock_parser = MagicMock()
+            mock_parser.parse_file.return_value = mock_bars
+            mock_get_parser.return_value = mock_parser
+
+            configured_service._import_ticker(
+                ticker="SPY",
+                file_path=csv_file,
+                catalog_name=CATALOG_NAME,
+                asset_class=AssetClass.ETF,
+                timeframe="1-DAY-LAST",
+            )
+
+        assert call_order == ["delete", "write"]
+        delete_kwargs = mock_catalog.delete_data_range.call_args.kwargs
+        assert delete_kwargs["data_cls"] is Bar
+        assert delete_kwargs["identifier"] == "SPY.ARCA-1-DAY-LAST-EXTERNAL"
+
     def test_import_tracks_duration(self, configured_service, mock_bars, tmp_path):
         csv_file = tmp_path / "SPY.txt"
         csv_file.write_text("data")

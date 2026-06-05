@@ -225,8 +225,16 @@ class ImportService:
                     duration=time.perf_counter() - start,
                 )
 
-            # 4. Write to catalog
+            # 4. Write to catalog. Delete any existing bars for this exact
+            #    bar_type first so a re-import (or an orphan-heal where the
+            #    metadata row was lost but the Parquet partition survived)
+            #    overwrites rather than appends. Nautilus `write_data` always
+            #    appends a new parquet part, so without the delete the read-back
+            #    at step 5 sees old + new bars, fails verification, and leaves
+            #    duplicated rows on disk that double-count in every backtest.
+            #    delete_data_range is a no-op when the partition does not exist.
             catalog = self._catalog_manager.resolve_catalog(catalog_name)
+            catalog.delete_data_range(data_cls=Bar, identifier=str(bar_type))
             catalog.write_data(bars)
 
             # 5. Verify row count
