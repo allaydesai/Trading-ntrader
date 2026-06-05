@@ -223,6 +223,33 @@ class TestBacktestRequestCatalogName:
         assert request.catalog_name == "e2e-test"
         assert request.symbol == "AAPL"
 
+    def test_from_cli_args_normalizes_midnight_end_to_end_of_day(self):
+        """Review #4: a date-only (midnight) end becomes inclusive end-of-day.
+
+        Without this the CLI's `--end 2024-12-31` (parsed to midnight) silently
+        excluded every bar on the final trading day, diverging from the web UI.
+        """
+        request = BacktestRequest.from_cli_args(
+            strategy="sma_crossover",
+            symbol="AAPL",
+            start=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            end=datetime(2024, 12, 31, tzinfo=timezone.utc),
+            bar_type_spec="1-DAY-LAST",
+        )
+        assert request.end_date == datetime(2024, 12, 31, 23, 59, 59, 999999, tzinfo=timezone.utc)
+
+    def test_from_cli_args_preserves_explicit_end_of_day(self):
+        """A non-midnight end (web end-of-day / explicit time) is left unchanged."""
+        explicit = datetime(2024, 12, 31, 23, 59, 59, 999999, tzinfo=timezone.utc)
+        request = BacktestRequest.from_cli_args(
+            strategy="sma_crossover",
+            symbol="AAPL",
+            start=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            end=explicit,
+            bar_type_spec="1-DAY-LAST",
+        )
+        assert request.end_date == explicit
+
     def test_from_cli_args_skips_instrument_resolution_when_catalog_name_set(self):
         """When catalog_name is set, _resolve_instrument_id must not be called.
 

@@ -7,12 +7,13 @@ based on the strategy_path in config_snapshot.
 """
 
 from datetime import date, datetime, timezone
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
 from src.api.dependencies import get_backtest_query_service, get_data_catalog_service
+from src.api.rest.indicators import _load_chart_bars
 from src.api.web import app
 
 
@@ -208,3 +209,71 @@ class TestIndicators404Error:
         response = client.get("/api/indicators/not-a-uuid")
 
         assert response.status_code == 422
+
+
+class TestLoadChartBars:
+    """Unit tests for the run-aware chart bar loader (review finding #5)."""
+
+    def _backtest(self, **cfg) -> MagicMock:
+        backtest = MagicMock()
+        backtest.config_snapshot = cfg
+        backtest.instrument_symbol = cfg.pop("_symbol", "AAPL.NASDAQ")
+        backtest.data_source = cfg.pop("_data_source", "catalog")
+        backtest.start_date = date(2024, 1, 1)
+        backtest.end_date = date(2024, 1, 31)
+        return backtest
+
+    async def test_uses_config_bar_type_on_default_catalog(self):
+        """Default-catalog runs query the actual bar type, not hardcoded 1-DAY-LAST."""
+        backtest = self._backtest(bar_type="1-MINUTE-LAST")
+
+        with patch("src.api.rest.indicators.DataCatalogService") as mock_svc:
+            mock_svc.return_value.query_bars.return_value = []
+            await _load_chart_bars(backtest)
+
+        mock_svc.assert_called_once_with()  # default NAUTILUS_PATH catalog
+        kwargs = mock_svc.return_value.query_bars.call_args.kwargs
+        assert kwargs["bar_type_spec"] == "1-MINUTE-LAST"
+        assert kwargs["instrument_id"] == "AAPL.NASDAQ"
+
+    async def test_named_catalog_resolves_path_and_nautilus_id(self):
+        """Named-catalog runs read the named directory using the DB nautilus_id."""
+        backtest = self._backtest(bar_type="5-MINUTE-LAST", catalog_name="e2e-test", _symbol="AAPL")
+
+        with (
+            patch("src.api.rest.indicators.DataCatalogService") as mock_svc,
+            patch(
+                "src.api.rest.indicators._resolve_named_nautilus_id",
+                return_value="AAPL.NASDAQ",
+            ),
+            patch("src.api.rest.indicators.get_settings") as mock_settings,
+        ):
+            mock_settings.return_value.catalog.catalog_base_path = "/tmp/catalogs"
+            mock_svc.return_value.query_bars.return_value = []
+            await _load_chart_bars(backtest)
+
+        mock_svc.assert_called_once_with(catalog_path="/tmp/catalogs/e2e-test")
+        kwargs = mock_svc.return_value.query_bars.call_args.kwargs
+        assert kwargs["bar_type_spec"] == "5-MINUTE-LAST"
+        assert kwargs["instrument_id"] == "AAPL.NASDAQ"
+
+    async def test_named_catalog_from_data_source_prefix(self):
+        """`catalog:<name>` data_source prefix is honoured when config lacks catalog_name."""
+        backtest = self._backtest(
+            bar_type="1-DAY-LAST", _symbol="AAPL", _data_source="catalog:firstrate-etf"
+        )
+
+        with (
+            patch("src.api.rest.indicators.DataCatalogService") as mock_svc,
+            patch(
+                "src.api.rest.indicators._resolve_named_nautilus_id",
+                return_value="AAPL.ARCA",
+            ),
+            patch("src.api.rest.indicators.get_settings") as mock_settings,
+        ):
+            mock_settings.return_value.catalog.catalog_base_path = "/tmp/catalogs"
+            mock_svc.return_value.query_bars.return_value = []
+            await _load_chart_bars(backtest)
+
+        mock_svc.assert_called_once_with(catalog_path="/tmp/catalogs/firstrate-etf")
+        assert mock_svc.return_value.query_bars.call_args.kwargs["instrument_id"] == "AAPL.ARCA"

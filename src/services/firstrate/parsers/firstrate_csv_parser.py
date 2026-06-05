@@ -11,12 +11,12 @@ so this parser is registered for every supported asset class.
 
 import calendar
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import structlog
 from nautilus_trader.model.data import Bar, BarType
-from nautilus_trader.model.enums import BarAggregation
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.objects import Price, Quantity
 
@@ -60,13 +60,29 @@ class FirstRateCsvParser(BaseParser):
         if not raw_lines:
             return []
 
-        is_daily = bar_type.spec.aggregation == BarAggregation.DAY
-        bars: list[Bar] = []
+        parsed_rows: list[tuple[int, RawBarData]] = []
         for line_num, line in enumerate(raw_lines, start=1):
             row = self._parse_line(line, line_num)
-            if row is None:
-                continue
-            bar = self._row_to_bar(row, bar_type, line_num, is_daily)
+            if row is not None:
+                parsed_rows.append((line_num, row))
+
+        # Integrity gate (documented in BaseParser.validate_bars): surface
+        # structural issues — high < low, non-positive prices, negative volume —
+        # that Nautilus' Bar constructor does NOT reject. Previously only tests
+        # called this, so the gate never ran on a real import.
+        validation = self.validate_bars([row for _, row in parsed_rows])
+        if not validation.valid:
+            logger.warning(
+                "bar_validation_failed",
+                file=str(file_path),
+                invalid_rows=validation.invalid_rows,
+                row_count=validation.row_count,
+                errors=validation.errors[:10],
+            )
+
+        bars: list[Bar] = []
+        for line_num, row in parsed_rows:
+            bar = self._row_to_bar(row, bar_type, line_num)
             if bar is not None:
                 bars.append(bar)
 
@@ -146,18 +162,26 @@ class FirstRateCsvParser(BaseParser):
         )
 
     @staticmethod
-    def _row_to_bar(
-        row: RawBarData, bar_type: BarType, line_num: int, is_daily: bool
-    ) -> Bar | None:
+    def _parse_volume(raw: str) -> Quantity:
+        """Parse a FirstRate volume string into an exact Quantity.
+
+        FirstRate emits volume in mixed notation across products — plain
+        integers, trailing-zero floats (``"1234567.0"``), and occasional
+        scientific notation (``"1.23e6"``, the "float volume notation" quirk
+        noted in the module docstring). Normalizing through ``Decimal`` then
+        ``format(..., "f")`` handles all three exactly. The previous daily path
+        used ``Quantity.from_int(int(float(v)))`` which truncated fractional /
+        exponential volume, giving the *same instrument* different precision on
+        daily vs intraday bars.
+        """
+        return Quantity.from_str(format(Decimal(raw), "f"))
+
+    @staticmethod
+    def _row_to_bar(row: RawBarData, bar_type: BarType, line_num: int) -> Bar | None:
         """Convert a RawBarData to a Nautilus Bar, or None on failure."""
         try:
             dt = FirstRateCsvParser._parse_timestamp(row.timestamp)
             ts_nanos = calendar.timegm(dt.timetuple()) * 1_000_000_000
-
-            if is_daily:
-                volume = Quantity.from_int(int(float(row.volume)))
-            else:
-                volume = Quantity.from_str(row.volume)
 
             return Bar(
                 bar_type=bar_type,
@@ -165,7 +189,7 @@ class FirstRateCsvParser(BaseParser):
                 high=Price.from_str(row.high),
                 low=Price.from_str(row.low),
                 close=Price.from_str(row.close),
-                volume=volume,
+                volume=FirstRateCsvParser._parse_volume(row.volume),
                 ts_event=ts_nanos,
                 ts_init=ts_nanos,
             )

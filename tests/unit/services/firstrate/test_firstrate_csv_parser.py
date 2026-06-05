@@ -1,6 +1,7 @@
 """Unit tests for FirstRate CSV parser."""
 
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from nautilus_trader.model.data import Bar, BarType
@@ -133,6 +134,42 @@ class TestFirstRateCsvParserDaily:
         f = _write_csv(tmp_path, "SPY.txt", lines)
         bars = parser.parse_file(f, instrument_id, daily_bar_type)
         assert len(bars) == 1
+
+    def test_daily_volume_not_truncated(self, parser, instrument_id, daily_bar_type, tmp_path):
+        """Review #8: daily volume keeps fractional precision (was int(float()) truncated)."""
+        lines = ["2020-06-15,300.00,310.00,295.00,305.00,1234567.5"]
+        f = _write_csv(tmp_path, "SPY.txt", lines)
+        bars = parser.parse_file(f, instrument_id, daily_bar_type)
+        assert float(bars[0].volume) == 1234567.5
+
+    def test_daily_volume_scientific_notation(
+        self, parser, instrument_id, daily_bar_type, tmp_path
+    ):
+        """Review #8: scientific 'float volume notation' still parses exactly."""
+        lines = ["2020-06-15,300.00,310.00,295.00,305.00,1.23e6"]
+        f = _write_csv(tmp_path, "SPY.txt", lines)
+        bars = parser.parse_file(f, instrument_id, daily_bar_type)
+        assert int(bars[0].volume) == 1230000
+
+    def test_validate_bars_runs_during_parse_file(
+        self, parser, instrument_id, daily_bar_type, tmp_path
+    ):
+        """Review #8: validate_bars is wired into parse_file (was dead code).
+
+        high (290) < low (295) is a structural error Nautilus' Bar constructor
+        does not reject, so only the integrity gate catches it.
+        """
+        lines = ["2020-06-15,300.00,290.00,295.00,305.00,50000"]
+        f = _write_csv(tmp_path, "SPY.txt", lines)
+        module = "src.services.firstrate.parsers.firstrate_csv_parser"
+        with patch(f"{module}.logger") as mock_logger:
+            parser.parse_file(f, instrument_id, daily_bar_type)
+        warned = [
+            c
+            for c in mock_logger.warning.call_args_list
+            if c.args and c.args[0] == "bar_validation_failed"
+        ]
+        assert warned, "expected validate_bars to emit a bar_validation_failed warning"
 
 
 # ---------------------------------------------------------------------------

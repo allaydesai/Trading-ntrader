@@ -810,7 +810,9 @@ class TestResolveBacktestRequest:
         assert request.symbol == "AAPL"
         assert request.instrument_id == "AAPL.NASDAQ"
         assert request.start_date == start
-        assert request.end_date == end
+        # Review #4: a date-only (midnight) end is normalized to end-of-day so
+        # the final trading day is inclusive, matching the web UI.
+        assert request.end_date == end.replace(hour=23, minute=59, second=59, microsecond=999999)
         assert request.strategy_type == "sma_crossover"
         assert data_source == "catalog"
 
@@ -835,6 +837,52 @@ class TestResolveBacktestRequest:
                 starting_balance=None,
                 persist=True,
                 console=console,
+            )
+
+    def test_resolve_cli_mode_invalid_catalog_name_raises_usage_error(self):
+        """Review #3: a bad --catalog must surface as a usage error, not a traceback.
+
+        The catalog_name validator raises pydantic ValidationError; without the
+        conversion this crashed with exit 1 instead of a click.UsageError (exit 2).
+        """
+        import click
+
+        from src.cli.commands._backtest_helpers import resolve_backtest_request
+
+        console = Console(force_terminal=True, width=120)
+        with pytest.raises(click.UsageError, match="Invalid catalog_name"):
+            resolve_backtest_request(
+                config_file=None,
+                symbol="AAPL",
+                strategy="sma_crossover",
+                start=datetime(2024, 1, 1, tzinfo=timezone.utc),
+                end=datetime(2024, 6, 30, tzinfo=timezone.utc),
+                data_source=None,
+                starting_balance=None,
+                persist=True,
+                console=console,
+                catalog_name="bad name!",
+            )
+
+    def test_resolve_cli_mode_catalog_with_ibkr_source_raises_usage_error(self):
+        """Review #3: catalog_name + a non-catalog data_source is a usage error."""
+        import click
+
+        from src.cli.commands._backtest_helpers import resolve_backtest_request
+
+        console = Console(force_terminal=True, width=120)
+        with pytest.raises(click.UsageError, match="only valid when"):
+            resolve_backtest_request(
+                config_file=None,
+                symbol="AAPL",
+                strategy="sma_crossover",
+                start=datetime(2024, 1, 1, tzinfo=timezone.utc),
+                end=datetime(2024, 6, 30, tzinfo=timezone.utc),
+                data_source="ibkr",
+                starting_balance=None,
+                persist=True,
+                console=console,
+                catalog_name="e2e-test",
             )
 
     def test_resolve_cli_mode_missing_start_raises_error(self):

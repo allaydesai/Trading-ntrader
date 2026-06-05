@@ -29,7 +29,20 @@ class CatalogManager:
 
         Args:
             base_path: Directory containing catalog subdirectories.
+
+        Raises:
+            ValueError: If ``base_path`` is empty / unset. An empty
+                ``CATALOG_BASE_PATH`` resolves to ``Path("")`` → ``"."``, which
+                would silently scan the current working directory and surface a
+                confusing "available catalogs" list of whatever dirs happen to
+                be in CWD. Fail fast with a clear message instead.
         """
+        if str(base_path).strip() in ("", "."):
+            raise ValueError(
+                "CATALOG_BASE_PATH is not configured. Set it in .env to the "
+                "directory that holds your named Parquet catalogs "
+                "(e.g. ./data/catalogs)."
+            )
         self._base_path = base_path
         self._catalogs: dict[str, ParquetDataCatalog] = {}
 

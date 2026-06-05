@@ -1,5 +1,6 @@
 """Unit tests for CatalogManager service."""
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -10,6 +11,12 @@ from src.services.firstrate.catalog_manager import CatalogManager
 @pytest.mark.unit
 class TestCatalogManager:
     """Tests for CatalogManager catalog resolution."""
+
+    @pytest.mark.parametrize("bad_path", ["", "."])
+    def test_empty_base_path_fails_fast(self, bad_path):
+        """Review finding #7: empty CATALOG_BASE_PATH must not scan CWD."""
+        with pytest.raises(ValueError, match="CATALOG_BASE_PATH is not configured"):
+            CatalogManager(base_path=Path(bad_path))
 
     def test_resolve_catalog_returns_parquet_data_catalog(self, tmp_path):
         """resolve_catalog returns a ParquetDataCatalog instance."""

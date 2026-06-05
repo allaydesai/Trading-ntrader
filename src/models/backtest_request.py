@@ -337,6 +337,16 @@ class BacktestRequest(BaseModel):
         """
         from src.core.strategy_registry import StrategyRegistry
 
+        # Normalize a date-only end (midnight UTC) to end-of-day so the final
+        # trading day is inclusive. The web UI already passes an explicit
+        # end-of-day datetime; the CLI parses `--end 2024-12-31` to midnight and
+        # never bumps it, which silently excluded every bar on the last day.
+        # Centralizing here keeps both callers' windows identical.
+        if end.tzinfo is None:
+            end = end.replace(tzinfo=timezone.utc)
+        if (end.hour, end.minute, end.second, end.microsecond) == (0, 0, 0, 0):
+            end = end.replace(hour=23, minute=59, second=59, microsecond=999999)
+
         # Ensure strategies are discovered
         StrategyRegistry.discover()
 

@@ -35,7 +35,7 @@ from src.api.models.explorer import (
 from src.api.models.navigation import BreadcrumbItem, NavigationState
 from src.api.stats_service import _build_ticker_stats
 from src.api.supplementary_service import _build_supplementary_context
-from src.services.exceptions import DataNotFoundError  # noqa: F401
+from src.services.exceptions import CatalogCorruptionError, DataNotFoundError
 
 logger = structlog.get_logger(__name__)
 
@@ -459,7 +459,10 @@ async def chart_panel_fragment(
             end=end_dt,
             bar_type_spec=active_tf.bar_type_spec,
         )
-    except DataNotFoundError:
+    except (DataNotFoundError, CatalogCorruptionError):
+        # Degrade to the empty-state panel for both a missing instrument and a
+        # corrupt parquet file — the stats path already swallows
+        # CatalogCorruptionError, so a corrupt file must not 500 only the chart.
         bars = []
 
     candles = [

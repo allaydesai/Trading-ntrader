@@ -281,6 +281,21 @@ class TestChartPanelUIRoute:
         # 1m button still disabled after render
         assert "disabled" in text
 
+    def test_corrupt_parquet_degrades_to_empty_panel(self, client, mock_catalog_service):
+        """Review finding #6: a corrupt parquet must degrade, not 500 the panel.
+
+        The stats path already swallows CatalogCorruptionError; the chart
+        fragment previously caught only DataNotFoundError and returned HTTP 500.
+        """
+        from src.services.exceptions import CatalogCorruptionError
+
+        mock_catalog_service.query_bars.side_effect = CatalogCorruptionError(
+            "AAPL.NASDAQ-1-DAY-LAST-EXTERNAL/part-0.parquet",
+            ValueError("invalid parquet footer"),
+        )
+        response = client.get("/explorer/chart-panel?catalog=us_stocks&ticker=AAPL&tf=D")
+        assert response.status_code == 200
+
     def test_timeframe_toolbar_wrapper_class_present(self, client):
         """Wrapper class scopes arrow-key JS on the tf toolbar (AC #10)."""
         response = client.get("/explorer/chart-panel?catalog=us_stocks&ticker=AAPL&tf=D")

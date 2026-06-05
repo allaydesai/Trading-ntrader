@@ -34,42 +34,42 @@ The update branch copies `bar_count_daily/hourly/minute` onto the existing row b
 
 ## 🟠 Medium — wrong behavior / bad failure modes
 
-### ☐ 3. CLI catalog-validation errors crash with a raw traceback (exit 1) instead of a usage error
+### ☑ 3. CLI catalog-validation errors crash with a raw traceback (exit 1) instead of a usage error
 **`src/cli/commands/backtest.py` (first `try` catches only `click.UsageError`) + validators in `src/models/backtest_request.py:133-135, 170-173`**
 
 `BacktestRequest(...)` is constructed inside `resolve_backtest_request`, whose `try` only catches `click.UsageError`. The new validators raise `ValidationError` (not a `ValueError` subclass at the `pydantic_core` level), so `--catalog 'bad name!'` or `--catalog x --data-source ibkr` produces an **unhandled Pydantic traceback, exit code 1** — never reaching the `startswith("Unknown catalog")` handler (which guards a later stage).
 
 **Fix:** catch `ValidationError` at construction and convert to `click.UsageError` (exit 2).
 
-### ☐ 4. Web and CLI compute different backtest windows for the same `end_date`
+### ☑ 4. Web and CLI compute different backtest windows for the same `end_date`
 **`src/api/ui/backtests.py:285` vs `src/cli/commands/_backtest_helpers.py:267-270`**
 
 Web uses `datetime.combine(end_date, datetime.max.time())` (inclusive of the final day); the CLI parses `--end` to midnight `00:00:00` and never bumps it, and the shared model doesn't normalize. So `--end 2024-12-31` on the CLI **excludes the entire last trading day** that the web UI includes — an off-by-one-day discrepancy that directly undermines the IBKR-vs-FirstRate parity work.
 
 **Fix:** normalize end-of-day in one shared place (`BacktestRequest.from_cli_args` or the model).
 
-### ☐ 5. Indicator overlay (and trade chart) query the default catalog for named-catalog runs
+### ☑ 5. Indicator overlay (and trade chart) query the default catalog for named-catalog runs
 **`src/api/rest/indicators.py:247,276` (also the trades/candlestick detail route)**
 
 Both branches build `DataCatalogService()` (default `NAUTILUS_PATH`) with the bare `instrument_symbol`, never reading `config_snapshot.catalog_name` / the `catalog:<name>` prefix. For a named-catalog backtest the bars aren't there → `DataNotFoundError` is swallowed by the broad `except` (`:264-271`) → overlay renders **empty even though the backtest ran on real data**. The hardcoded `"1-DAY-LAST"` (`:259,288`) also mismatches intraday runs.
 
 **Fix:** thread the run's catalog_name + actual bar_type into the indicator/trade detail routes.
 
-### ☐ 6. Corrupt parquet 500s the chart panel instead of degrading gracefully
+### ☑ 6. Corrupt parquet 500s the chart panel instead of degrading gracefully
 **`src/api/ui/explorer.py:454-463`**
 
 `chart_panel_fragment` catches only `DataNotFoundError`, but `query_bars` also raises `CatalogCorruptionError` (`src/services/data_catalog.py:553`). The stats path *does* catch it (`stats_service.py:89`), so this is an inconsistency: a corrupt file returns HTTP 500 on the chart fragment rather than the "no data" empty state.
 
 **Fix:** also catch `CatalogCorruptionError` in `chart_panel_fragment`.
 
-### ☐ 7. Missing `CATALOG_BASE_PATH` silently scans the current working directory
+### ☑ 7. Missing `CATALOG_BASE_PATH` silently scans the current working directory
 **`src/config.py:153-154` + `src/cli/commands/_backtest_helpers.py:363`**
 
 `catalog_base_path` defaults to `""`; `Path("")` resolves to `.`, so `CatalogManager` scans CWD and `resolve_catalog` builds `Path("e2e-test")` relative to CWD instead of failing fast. Users get a confusing "available catalogs" list of whatever dirs happen to be in CWD.
 
 **Fix:** validate the setting is non-empty before use (fail fast with a clear message).
 
-### ☐ 8. Daily volume is truncated; documented OHLC validation never runs
+### ☑ 8. Daily volume is truncated; documented OHLC validation never runs
 **`src/services/firstrate/parsers/firstrate_csv_parser.py:158` vs `:160`; `src/services/firstrate/parsers/base.py:126-195`**
 
 Daily uses `Quantity.from_int(int(float(row.volume)))` (truncates `1.23e6` / fractional volume), intraday uses `Quantity.from_str(row.volume)` (exact) — inconsistent precision for the same instrument, and the module docstring itself flags "float volume notation" as a known FirstRate quirk. Separately, `BaseParser.validate_bars()` (checks high<low, non-positive prices, negative volume) is **never called by `parse_file`** — only tests call it, so the documented integrity gate is dead in the real import path.

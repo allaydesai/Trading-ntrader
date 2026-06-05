@@ -13,6 +13,7 @@ from uuid import UUID
 import click
 from nautilus_trader.model.data import Bar
 from nautilus_trader.model.instruments import Instrument
+from pydantic import ValidationError
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
@@ -136,35 +137,46 @@ def resolve_backtest_request(
         click.UsageError: If required parameters are missing for the mode
         ValueError: If config file has invalid content
     """
-    # Determine mode based on config_file presence
-    if config_file is not None:
-        return _resolve_config_mode(
-            config_file=config_file,
-            symbol=symbol,
-            start=start,
-            end=end,
-            data_source=data_source,
-            starting_balance=starting_balance,
-            persist=persist,
-            console=console,
-            catalog_name=catalog_name,
-        )
-    else:
-        return _resolve_cli_mode(
-            symbol=symbol,
-            strategy=strategy,
-            start=start,
-            end=end,
-            data_source=data_source,
-            starting_balance=starting_balance,
-            persist=persist,
-            console=console,
-            fast_period=fast_period,
-            slow_period=slow_period,
-            trade_size=trade_size,
-            timeframe=timeframe,
-            catalog_name=catalog_name,
-        )
+    # Determine mode based on config_file presence. BacktestRequest validators
+    # (e.g. catalog_name charset, catalog_name-vs-data_source) raise pydantic
+    # ValidationError, which is NOT a click.UsageError — without this guard
+    # `--catalog 'bad name!'` crashes with a raw traceback (exit 1) instead of a
+    # usage error (exit 2). Convert it here, the single construction chokepoint.
+    try:
+        if config_file is not None:
+            return _resolve_config_mode(
+                config_file=config_file,
+                symbol=symbol,
+                start=start,
+                end=end,
+                data_source=data_source,
+                starting_balance=starting_balance,
+                persist=persist,
+                console=console,
+                catalog_name=catalog_name,
+            )
+        else:
+            return _resolve_cli_mode(
+                symbol=symbol,
+                strategy=strategy,
+                start=start,
+                end=end,
+                data_source=data_source,
+                starting_balance=starting_balance,
+                persist=persist,
+                console=console,
+                fast_period=fast_period,
+                slow_period=slow_period,
+                trade_size=trade_size,
+                timeframe=timeframe,
+                catalog_name=catalog_name,
+            )
+    except ValidationError as e:
+        # Surface the validator messages (pydantic prefixes them with
+        # "Value error, " for ValueError-raising validators — strip that noise).
+        messages = "; ".join(err.get("msg", "") for err in e.errors())
+        messages = messages.replace("Value error, ", "")
+        raise click.UsageError(messages or str(e)) from e
 
 
 def _resolve_config_mode(
