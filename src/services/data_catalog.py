@@ -6,6 +6,7 @@ the Nautilus Trader ParquetDataCatalog, including availability checking,
 data queries, and write operations with structured logging.
 """
 
+import asyncio
 import os
 import re
 from datetime import datetime, timezone
@@ -813,7 +814,9 @@ class DataCatalogService:
                 instrument_id=instrument_id,
                 correlation_id=correlation_id,
             )
-            return self.query_bars(instrument_id, start, end, bar_type_spec)
+            return await asyncio.to_thread(
+                self.query_bars, instrument_id, start, end, bar_type_spec
+            )
 
         # Route to appropriate data source
         if data_source == "kraken":

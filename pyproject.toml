@@ -98,3 +98,9 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]
+# Do NOT auto-fix F401 (unused-import). The auto-formatter hook runs after every                                                                         
+# file edit; when a dependent edit is split across steps (add import, then add                                                                           
+# usage), ruff can silently strip the new import before the usage lands, leaving                                                                         
+# the file broken. F401 still reports as a lint warning — operators can prune                                                                            
+# manually with `ruff check --fix --select F401`. See epic-2 retro B3 (2026-04-19).                                                                      
+unfixable = ["F401"]

@@ -1,0 +1,106 @@
+{#
+  HTMX fragment: supplementary data panel (Company Profile / Dividend History /
+  Stock Split History). The #supplementary-panel wrapper lives in explorer.html
+  (page container) or chart_panel.html (OOB wrapper) — this fragment is the
+  content only, swapped in via hx-swap="innerHTML". All three sections are
+  collapsed by default (no `open` attribute).
+#}
+<div class="mt-6 space-y-3">
+
+    {# Company Profile #}
+    <details class="bg-slate-900 rounded-lg border border-slate-800">
+        <summary class="cursor-pointer select-none px-4 py-3 text-sm font-semibold text-slate-200 hover:text-white">
+            Company Profile
+        </summary>
+        <div class="px-4 pb-4 border-t border-slate-800 pt-3">
+            {% if has_company_profile %}
+            <dl class="grid grid-cols-[repeat(auto-fit,minmax(160px,1fr))] gap-3">
+                <div>
+                    <dt class="text-xs text-slate-500 uppercase tracking-wider">Ticker</dt>
+                    <dd class="font-mono text-sm text-slate-100 mt-1">{{ instrument.ticker or "—" }}</dd>
+                </div>
+                <div>
+                    <dt class="text-xs text-slate-500 uppercase tracking-wider">Name</dt>
+                    <dd class="text-sm text-slate-100 mt-1">{{ instrument.name or "—" }}</dd>
+                </div>
+                <div>
+                    <dt class="text-xs text-slate-500 uppercase tracking-wider">Exchange</dt>
+                    <dd class="text-sm text-slate-100 mt-1">{{ instrument.exchange or "—" }}</dd>
+                </div>
+                <div>
+                    <dt class="text-xs text-slate-500 uppercase tracking-wider">Sector</dt>
+                    <dd class="text-sm text-slate-100 mt-1">{{ instrument.sector or "—" }}</dd>
+                </div>
+                <div>
+                    <dt class="text-xs text-slate-500 uppercase tracking-wider">Industry</dt>
+                    <dd class="text-sm text-slate-100 mt-1">{{ instrument.industry or "—" }}</dd>
+                </div>
+                <div>
+                    <dt class="text-xs text-slate-500 uppercase tracking-wider">IPO Date</dt>
+                    <dd class="font-mono text-sm text-slate-100 mt-1">
+                        {{ format_date(instrument.ipo_date) if instrument.ipo_date else "—" }}
+                    </dd>
+                </div>
+                <div>
+                    <dt class="text-xs text-slate-500 uppercase tracking-wider">Country</dt>
+                    <dd class="text-sm text-slate-100 mt-1">{{ instrument.country or "—" }}</dd>
+                </div>
+                <div>
+                    <dt class="text-xs text-slate-500 uppercase tracking-wider">State</dt>
+                    <dd class="text-sm text-slate-100 mt-1">{{ instrument.state or "—" }}</dd>
+                </div>
+            </dl>
+            {% else %}
+            <p class="text-sm text-slate-500">No company profile available</p>
+            {% endif %}
+        </div>
+    </details>
+
+    {# Dividend History #}
+    <details class="bg-slate-900 rounded-lg border border-slate-800">
+        <summary class="cursor-pointer select-none px-4 py-3 text-sm font-semibold text-slate-200 hover:text-white">
+            Dividend History
+            {% if dividends %}<span class="text-xs text-slate-500 font-normal ml-1">({{ dividends|length }})</span>{% endif %}
+        </summary>
+        <div class="px-4 pb-4 border-t border-slate-800 pt-3">
+            {% if dividends %}
+            <ul class="divide-y divide-slate-800">
+                {% for d in dividends %}
+                <li class="flex items-center justify-between py-1.5 text-sm">
+                    <span class="font-mono text-slate-300">{{ format_date(d.ex_date) }}</span>
+                    <span class="font-mono text-slate-100">{{ d.amount }}</span>
+                </li>
+                {% endfor %}
+            </ul>
+            {% else %}
+            <p class="text-sm text-slate-500">No dividend history available</p>
+            {% endif %}
+        </div>
+    </details>
+
+    {# Stock Split History #}
+    <details class="bg-slate-900 rounded-lg border border-slate-800">
+        <summary class="cursor-pointer select-none px-4 py-3 text-sm font-semibold text-slate-200 hover:text-white">
+            Stock Split History
+            {% if splits %}<span class="text-xs text-slate-500 font-normal ml-1">({{ splits|length }})</span>{% endif %}
+        </summary>
+        <div class="px-4 pb-4 border-t border-slate-800 pt-3">
+            {% if splits %}
+            <ul class="divide-y divide-slate-800">
+                {% for s in splits %}
+                <li class="flex items-center justify-between py-1.5 text-sm">
+                    <span class="font-mono text-slate-300">{{ format_date(s.effective_date) }}</span>
+                    <span class="text-slate-100">
+                        {{ format_split_ratio(s.ratio) }}
+                        <span class="font-mono text-xs text-slate-500 ml-1">({{ s.ratio }})</span>
+                    </span>
+                </li>
+                {% endfor %}
+            </ul>
+            {% else %}
+            <p class="text-sm text-slate-500">No split history available</p>
+            {% endif %}
+        </div>
+    </details>
+
+</div>

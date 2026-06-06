@@ -7,6 +7,7 @@ Provides paginated backtest list, detail view, and HTMX fragment endpoints.
 import asyncio
 from datetime import date, datetime, timezone
 from typing import Any, Optional
+from urllib.parse import unquote, urlencode
 from uuid import UUID
 
 import structlog
@@ -32,10 +33,12 @@ from src.api.models.run_backtest import (
     BacktestRunFormData,
     StrategyOption,
 )
+from src.api.ui.explorer import TIMEFRAME_RUN_FORM_TO_EXPLORER
 from src.cli.commands._backtest_helpers import load_backtest_data
 from src.core.backtest_orchestrator import BacktestOrchestrator
 from src.core.strategy_registry import StrategyRegistry
 from src.models.backtest_request import BacktestRequest
+from src.services.exceptions import DataNotFoundError
 
 logger = structlog.get_logger(__name__)
 
@@ -71,6 +74,20 @@ def _get_strategies() -> list[StrategyOption]:
     ]
 
 
+# Query-param → form-field mapping for the Story 3.2 explorer bridge.
+_BRIDGE_PARAM_MAP = {
+    "ticker": "symbol",
+    "start": "start_date",
+    "end": "end_date",
+    "timeframe": "timeframe",
+}
+
+# Hard cap on `explorer_return` to keep the round-tripped URL under typical
+# browser/proxy URL limits (~2KB-8KB). Longer values are dropped on ingestion
+# and the fallback reconstruction kicks in.
+_EXPLORER_RETURN_MAX_LEN = 2000
+
+
 def _build_run_context(
     request: Request,
     *,
@@ -87,6 +104,33 @@ def _build_run_context(
             BreadcrumbItem(label="Run Backtest", url=None, is_current=True),
         ],
     )
+    merged_form = dict(form_data or {})
+    # Pre-fill catalog from ?catalog= query string on GET (Story 3.1 bridge).
+    # Use `.get()` so a re-rendered form with an explicit None value still
+    # inherits the URL hint — relying on `not in` would treat a None-valued
+    # key as "present" and skip the prefill.
+    qp = request.query_params
+    catalog_from_query = qp.get("catalog")
+    if catalog_from_query and not merged_form.get("catalog_name"):
+        merged_form["catalog_name"] = catalog_from_query
+
+    # Story 3.2 — explorer bridge pre-fills. Same "only-if-empty" guard so a
+    # re-rendered form (validation error) keeps the user's input.
+    for src_key, form_key in _BRIDGE_PARAM_MAP.items():
+        value = qp.get(src_key)
+        if value and not merged_form.get(form_key):
+            if form_key == "timeframe" and value not in VALID_TIMEFRAMES:
+                continue  # AC #7: silently drop unknown timeframes
+            merged_form[form_key] = value
+
+    explorer_return = qp.get("explorer_return")
+    if (
+        explorer_return
+        and len(explorer_return) <= _EXPLORER_RETURN_MAX_LEN
+        and not merged_form.get("explorer_return")
+    ):
+        merged_form["explorer_return"] = explorer_return
+
     return {
         "request": request,
         "strategies": _get_strategies(),
@@ -94,9 +138,53 @@ def _build_run_context(
         "timeframes": TIMEFRAMES,
         "nav_state": nav_state,
         "errors": errors or {},
-        "form_data": form_data or {},
+        "form_data": merged_form,
         "execution_error": execution_error,
     }
+
+
+def _safe_explorer_return(explorer_return: str | None) -> str | None:
+    """Return the decoded `explorer_return` if it passes the allow-list, else None.
+
+    AC #10/#12 — strict allow-list: the decoded value must start with `/explorer` and
+    be either exactly `/explorer` or `/explorer?...`. Protocol-relative URLs (`//evil`)
+    and embedded control characters (`\\r\\n\\t\\0`) are rejected. Callers log and
+    fall back on None.
+    """
+    if not explorer_return:
+        return None
+    decoded = unquote(explorer_return).strip()
+    has_control_chars = any(ord(c) < 0x20 or ord(c) == 0x7F for c in decoded)
+    if has_control_chars or decoded.startswith("//"):
+        logger.warning(
+            "explorer_return_rejected",
+            value=explorer_return,
+            reason="control_chars" if has_control_chars else "protocol_relative",
+        )
+        return None
+    if decoded == "/explorer" or decoded.startswith("/explorer?"):
+        return decoded
+    logger.warning("explorer_return_rejected", value=explorer_return, reason="prefix_mismatch")
+    return None
+
+
+def _resolve_back_to_explorer_url(explorer_return: str | None, run: Any) -> str:
+    """Validate explorer_return; fall back to deterministic reconstruction on any failure."""
+    safe = _safe_explorer_return(explorer_return)
+    if safe is not None:
+        return safe
+    catalog_name = getattr(run, "catalog_name", None)
+    if not catalog_name:
+        return "/explorer"
+    parts: list[tuple[str, str]] = [("catalog", catalog_name)]
+    symbol = getattr(run, "symbol", None)
+    if symbol:
+        parts.append(("ticker", symbol))
+    timeframe = getattr(run, "timeframe", None)
+    tf_label = TIMEFRAME_RUN_FORM_TO_EXPLORER.get(timeframe) if timeframe else None
+    if tf_label:
+        parts.append(("tf", tf_label))
+    return f"/explorer?{urlencode(parts)}"
 
 
 def _htmx_full_page_response(request: Request, template_response: HTMLResponse) -> HTMLResponse:
@@ -119,6 +207,13 @@ async def run_backtest_form(request: Request) -> HTMLResponse:
 async def run_backtest_submit(request: Request) -> Response:
     """Submit backtest configuration, execute, and redirect to results."""
     form = await request.form()
+    raw_catalog = form.get("catalog_name", "")
+    raw_explorer_return_raw = form.get("explorer_return", "")
+    raw_explorer_return: str | None = (
+        str(raw_explorer_return_raw) if raw_explorer_return_raw else None
+    )
+    if raw_explorer_return and len(raw_explorer_return) > _EXPLORER_RETURN_MAX_LEN:
+        raw_explorer_return = None
     raw_data: dict[str, Any] = {
         "strategy": form.get("strategy", ""),
         "symbol": form.get("symbol", ""),
@@ -128,6 +223,9 @@ async def run_backtest_submit(request: Request) -> Response:
         "timeframe": form.get("timeframe", "1-DAY"),
         "starting_balance": form.get("starting_balance", "1000000"),
         "timeout_seconds": form.get("timeout_seconds", "300"),
+        "catalog_name": raw_catalog if raw_catalog else None,
+        # Story 3.2 — session state, not domain state. Stays in raw_data only.
+        "explorer_return": raw_explorer_return,
     }
 
     # Collect strategy params (param_ prefixed fields)
@@ -182,7 +280,9 @@ async def run_backtest_submit(request: Request) -> Response:
         # LAST = last-traded price; standard for equity/crypto bar aggregation
         bar_type_spec = f"{form_data.timeframe}-LAST"
         start_dt = datetime.combine(form_data.start_date, datetime.min.time(), tzinfo=timezone.utc)
-        end_dt = datetime.combine(form_data.end_date, datetime.min.time(), tzinfo=timezone.utc)
+        # end_date is inclusive: treat as end-of-day UTC so bars on end_date
+        # (e.g., NYSE close at 21:00 UTC) are included in the backtest window.
+        end_dt = datetime.combine(form_data.end_date, datetime.max.time(), tzinfo=timezone.utc)
 
         try:
             bt_request = BacktestRequest.from_cli_args(
@@ -194,6 +294,7 @@ async def run_backtest_submit(request: Request) -> Response:
                 persist=True,
                 starting_balance=form_data.starting_balance,
                 data_source=form_data.data_source,
+                catalog_name=form_data.catalog_name,
                 **form_data.strategy_params,
             )
 
@@ -204,8 +305,13 @@ async def run_backtest_submit(request: Request) -> Response:
                 start=start_dt,
                 end=end_dt,
                 console=_quiet_console,
+                catalog_name=form_data.catalog_name,
             )
-        except (ValueError, RuntimeError) as e:
+        except (ValueError, RuntimeError, DataNotFoundError) as e:
+            # Story 3.3 AC #11: DataNotFoundError carries the rich
+            # "Ticker 'X' not found in catalog 'Y'..." or
+            # "No bars... metadata covers..." messages from Story 3.1.
+            # Surface them inline (HTTP 200) rather than letting them 5xx.
             logger.error("Failed to prepare backtest", error=str(e))
             context = _build_run_context(request, execution_error=str(e), form_data=raw_data)
             return _htmx_full_page_response(
@@ -221,7 +327,14 @@ async def run_backtest_submit(request: Request) -> Response:
             )
             logger.info("Backtest completed", run_id=str(run_id))
             response = Response(status_code=200)
-            response.headers["HX-Redirect"] = f"/backtests/{run_id}"
+            redirect_url = f"/backtests/{run_id}"
+            # Only forward explorer_return if it passes the same allow-list the
+            # detail page enforces — otherwise attacker-controlled strings would
+            # sit baked into the redirect URL (and the user's browser history).
+            safe_return = _safe_explorer_return(raw_data.get("explorer_return"))
+            if safe_return:
+                redirect_url += "?" + urlencode([("explorer_return", safe_return)])
+            response.headers["HX-Redirect"] = redirect_url
             return response
         except asyncio.TimeoutError:
             logger.warning("Backtest timed out", timeout=form_data.timeout_seconds)
@@ -499,6 +612,32 @@ async def backtest_list_fragment(
     return templates.TemplateResponse("backtests/list_fragment.html", context)
 
 
+def _view_run_for_resolver(run: Any) -> Any:
+    """Adapt a `BacktestRun` ORM row to the flat fields `_resolve_back_to_explorer_url` needs.
+
+    - `catalog_name`: from `config_snapshot.catalog_name`, falling back to the `catalog:<name>`
+      prefix of `data_source` (Story 3.1 persistence format).
+    - `symbol`: `instrument_symbol` on the ORM row.
+    - `timeframe`: strip the `-LAST` aggregation suffix from `config_snapshot.bar_type`
+      to recover the run-form timeframe shape (e.g., `1-DAY-LAST` → `1-DAY`).
+    """
+    from types import SimpleNamespace
+
+    cfg = getattr(run, "config_snapshot", None) or {}
+    catalog_name = cfg.get("catalog_name")
+    if not catalog_name:
+        data_source = getattr(run, "data_source", "") or ""
+        if data_source.startswith("catalog:"):
+            catalog_name = data_source.split(":", 1)[1]
+    bar_type = cfg.get("bar_type") or ""
+    timeframe = bar_type[: -len("-LAST")] if bar_type.endswith("-LAST") else bar_type
+    return SimpleNamespace(
+        catalog_name=catalog_name,
+        symbol=getattr(run, "instrument_symbol", ""),
+        timeframe=timeframe or None,
+    )
+
+
 @router.get("/{run_id}", response_class=HTMLResponse)
 async def backtest_detail(
     request: Request,
@@ -535,6 +674,12 @@ async def backtest_detail(
     # Convert to view model
     view = to_detail_view(backtest)
 
+    # Story 3.2 — resolve "Back to Explorer" URL (guarded against open-redirect).
+    explorer_return = request.query_params.get("explorer_return")
+    back_to_explorer_url = _resolve_back_to_explorer_url(
+        explorer_return, _view_run_for_resolver(backtest)
+    )
+
     # Build navigation state
     nav_state = NavigationState(
         active_page="backtests",
@@ -550,6 +695,7 @@ async def backtest_detail(
         "request": request,
         "view": view,
         "nav_state": nav_state,
+        "back_to_explorer_url": back_to_explorer_url,
     }
 
     return templates.TemplateResponse("backtests/detail.html", context)

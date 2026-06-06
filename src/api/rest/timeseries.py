@@ -5,10 +5,13 @@ Provides TradingView-compatible JSON data from Parquet catalog.
 """
 
 from datetime import date, datetime, timezone
+from uuid import UUID
 
+import structlog
 from fastapi import APIRouter, HTTPException, Query
 
-from src.api.dependencies import DataCatalog
+from src.api.chart_bars import _load_chart_bars, resolve_run_bar_type_spec
+from src.api.dependencies import BacktestService, DataCatalog
 from src.api.models.chart_errors import ErrorDetail
 from src.api.models.chart_timeseries import (
     TIMEFRAME_TO_BAR_TYPE,
@@ -19,6 +22,22 @@ from src.api.models.chart_timeseries import (
 from src.services.exceptions import DataNotFoundError
 
 router = APIRouter()
+logger = structlog.get_logger(__name__)
+
+
+def _bars_to_candles(bars: list) -> list[Candle]:
+    """Convert Nautilus bars to TradingView-compatible candles (seconds epoch)."""
+    return [
+        Candle(
+            time=int(bar.ts_event / 1e9),
+            open=bar.open.as_double(),
+            high=bar.high.as_double(),
+            low=bar.low.as_double(),
+            close=bar.close.as_double(),
+            volume=int(bar.volume.as_double()),
+        )
+        for bar in bars
+    ]
 
 
 def symbol_to_instrument_id(symbol: str) -> str:
@@ -103,27 +122,10 @@ def get_timeseries(
             bar_type_spec=bar_type_spec,
         )
 
-        # Convert bars to candles
-        candles = []
-        for bar in bars:
-            # Convert nanosecond timestamp to seconds (Unix timestamp)
-            # TradingView Lightweight Charts expects seconds since epoch
-            ts_seconds = int(bar.ts_event / 1e9)
-
-            candle = Candle(
-                time=ts_seconds,
-                open=bar.open.as_double(),
-                high=bar.high.as_double(),
-                low=bar.low.as_double(),
-                close=bar.close.as_double(),
-                volume=int(bar.volume.as_double()),
-            )
-            candles.append(candle)
-
         return TimeseriesResponse(
             symbol=symbol,
             timeframe=timeframe.value,
-            candles=candles,
+            candles=_bars_to_candles(bars),
         )
 
     except DataNotFoundError:
@@ -137,3 +139,53 @@ def get_timeseries(
                 ),
             },
         )
+
+
+@router.get(
+    "/timeseries/run/{run_id}",
+    response_model=TimeseriesResponse,
+    responses={
+        404: {"model": ErrorDetail, "description": "Backtest not found"},
+        422: {"description": "Validation error"},
+    },
+    summary="Get OHLCV time series for a backtest run",
+    description=(
+        "Returns candlestick data rendered against the run's own catalog and "
+        "bar type, so named-catalog and intraday runs chart their real data "
+        "instead of the default catalog at a hardcoded daily timeframe."
+    ),
+)
+async def get_run_timeseries(
+    run_id: UUID,
+    service: BacktestService,
+) -> TimeseriesResponse:
+    """Get OHLCV candles for a backtest run's own data.
+
+    Unlike ``/timeseries`` (symbol + timeframe query), this resolves the run's
+    ``config_snapshot`` to read the catalog the backtest actually executed on
+    and the matching bar type — fixing empty/mismatched price charts for
+    named-catalog and intraday runs (review finding #5). On a missing or corrupt
+    catalog it degrades to an empty candle list rather than failing the chart.
+    """
+    backtest = await service.get_backtest_by_id(run_id)
+    if not backtest:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Backtest run {run_id} not found",
+        )
+
+    try:
+        bars = await _load_chart_bars(backtest)
+    except Exception as e:
+        logger.warning(
+            "run_timeseries_load_failed",
+            run_id=str(run_id),
+            error=str(e),
+        )
+        bars = []
+
+    return TimeseriesResponse(
+        symbol=backtest.instrument_symbol,
+        timeframe=resolve_run_bar_type_spec(backtest),
+        candles=_bars_to_candles(bars),
+    )

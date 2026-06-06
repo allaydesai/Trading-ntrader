@@ -22,9 +22,18 @@ class DataNotFoundError(CatalogError):
         instrument_id: Instrument identifier (e.g., "AAPL.NASDAQ")
         start: Start date of requested range
         end: End date of requested range
+        context: Optional diagnostic context (catalog name, metadata range, etc.).
     """
 
-    def __init__(self, instrument_id: str, start: datetime, end: datetime) -> None:
+    def __init__(
+        self,
+        instrument_id: str,
+        start: datetime,
+        end: datetime,
+        *,
+        message: str | None = None,
+        context: dict | None = None,
+    ) -> None:
         """
         Initialize DataNotFoundError.
 
@@ -32,13 +41,22 @@ class DataNotFoundError(CatalogError):
             instrument_id: Instrument identifier
             start: Start date of requested range
             end: End date of requested range
+            message: Optional custom message. Defaults to a range-formatted string.
+            context: Optional dict of diagnostic fields surfaced by callers (e.g.,
+                ``{"missing_from_catalog": "e2e-test"}`` or
+                ``{"metadata_range": (start, end)}``).
         """
         self.instrument_id = instrument_id
         self.start = start
         self.end = end
-        super().__init__(
-            f"Data not found: {instrument_id} from {start.isoformat()} to {end.isoformat()}"
-        )
+        # Defensive copy so post-raise mutation by the caller doesn't change the
+        # exception's stored diagnostic context.
+        self.context = dict(context) if context else {}
+        if message is None:
+            message = (
+                f"Data not found: {instrument_id} from {start.isoformat()} to {end.isoformat()}"
+            )
+        super().__init__(message)
 
 
 class IBKRConnectionError(CatalogError):
@@ -57,6 +75,27 @@ class IBKRConnectionError(CatalogError):
             message: Error message describing the connection issue
         """
         super().__init__(message)
+
+
+class UnknownCatalogError(ValueError):
+    """
+    Raised when a backtest references a named catalog that does not exist.
+
+    Subclasses ``ValueError`` for backward compatibility with existing
+    callers that catch ``ValueError`` (and existing tests that match on
+    ``pytest.raises(ValueError, match=...)``). Catch this type explicitly
+    in CLI / web handlers to surface a usage-error exit code without
+    string-prefix matching on the message text.
+
+    Attributes:
+        catalog_name: The catalog name that could not be resolved.
+        available: Names of catalogs that ARE configured (for error help).
+    """
+
+    def __init__(self, catalog_name: str, available: list[str]) -> None:
+        self.catalog_name = catalog_name
+        self.available = list(available)
+        super().__init__(f"Unknown catalog '{catalog_name}'. Available: {self.available}")
 
 
 class CatalogCorruptionError(CatalogError):

@@ -1,5 +1,5 @@
 # Makefile
-.PHONY: help test-unit test-component test-integration test-e2e test-all test-coverage clean format lint typecheck
+.PHONY: help test-unit test-component test-integration test-e2e test-all test-coverage clean format lint typecheck install-hooks
 
 help:
 	@echo "Test Commands:"
@@ -14,6 +14,7 @@ help:
 	@echo "  make format            - Format code with ruff"
 	@echo "  make lint              - Lint code with ruff"
 	@echo "  make typecheck         - Type check with mypy"
+	@echo "  make install-hooks     - Install git pre-commit hook (run once per clone)"
 
 test-unit:
 	@echo "🧪 Running unit tests (pure Python, no Nautilus)..."
@@ -84,6 +85,10 @@ lint:
 typecheck:
 	@echo "🔬 Type checking..."
 	uv run mypy src/core src/services
+
+install-hooks:
+	@git config core.hooksPath .githooks
+	@echo "✅ Git hooks installed (core.hooksPath → .githooks)"
 
 clean:
 	@echo "🧹 Cleaning up..."

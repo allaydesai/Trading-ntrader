@@ -1,0 +1,191 @@
+<!-- HTMX fragment: chart panel with timeframe toolbar + candlestick chart -->
+<div id="chart-panel" class="mt-6">
+    <!-- Loading bar (2px animated) -->
+    <div id="chart-loading-bar" class="htmx-indicator h-0.5 bg-blue-500 rounded-full animate-pulse"></div>
+
+    <!-- Timeframe Toolbar -->
+    <div class="flex items-center gap-2 mb-3 timeframe-toolbar" role="toolbar" aria-label="Chart timeframe">
+        <span class="text-xs text-slate-500 uppercase tracking-wider mr-2">Timeframe</span>
+        {% for tf_option in timeframes %}
+        {% set is_active = tf_option.label == active_tf.label %}
+        {% set is_available = tf_option.label in available_tfs %}
+        <button
+            class="px-3 py-1 text-sm rounded border transition-colors focus:ring-2 focus:ring-blue-500 focus:outline-none
+                   {% if is_active %}bg-blue-500 border-blue-500 text-white
+                   {% elif is_available %}border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-200
+                   {% else %}border-slate-800 text-slate-600 opacity-50 cursor-not-allowed{% endif %}"
+            aria-pressed="{{ 'true' if is_active else 'false' }}"
+            aria-label="{{ tf_option.label }} timeframe"
+            {% if is_available and not is_active %}
+            hx-get="/explorer/chart-panel"
+            hx-target="#chart-panel"
+            hx-swap="innerHTML"
+            hx-vals='{"catalog": {{ catalog | tojson }}, "ticker": {{ ticker | tojson }}, "tf": {{ tf_option.label | tojson }}{% if explorer_state_search %}, "search": {{ explorer_state_search | tojson }}{% endif %}{% if explorer_state_asset_class %}, "asset_class": {{ explorer_state_asset_class | tojson }}{% endif %}{% if explorer_state_sort_by %}, "sort_by": {{ explorer_state_sort_by | tojson }}{% endif %}{% if explorer_state_page %}, "page": {{ explorer_state_page | tojson }}{% endif %}}'
+            hx-push-url="true"
+            hx-indicator="#chart-loading-bar"
+            {% endif %}
+            {% if not is_available %}disabled{% endif %}>
+            {{ tf_option.label }}
+        </button>
+        {% endfor %}
+
+        <div class="ml-auto flex items-center gap-3">
+            <span class="text-xs text-slate-500">
+                {{ ticker }} &middot; {{ bar_count }} bars
+            </span>
+            {% if run_backtest_url %}
+            <a href="{{ run_backtest_url }}"
+               class="bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium px-3 py-1 rounded transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-slate-950"
+               aria-label="Run backtest for {{ ticker }}">
+                Run Backtest
+            </a>
+            {% endif %}
+        </div>
+    </div>
+    <script>
+    (function() {
+        // Arrow-key navigation within the timeframe toolbar (AC #10).
+        var wrappers = document.querySelectorAll('.timeframe-toolbar');
+        wrappers.forEach(function(wrap) {
+            if (wrap.dataset.nkbd === '1') return;
+            wrap.dataset.nkbd = '1';
+            wrap.addEventListener('keydown', function(e) {
+                if (e.isComposing || e.keyCode === 229) return;
+                if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+                var btns = Array.prototype.slice.call(wrap.querySelectorAll('button:not([disabled])'));
+                var i = btns.indexOf(document.activeElement);
+                if (i < 0) return;
+                var next = e.key === 'ArrowRight' ? (i + 1) % btns.length : (i - 1 + btns.length) % btns.length;
+                btns[next].focus();
+                e.preventDefault();
+            });
+        });
+    })();
+    </script>
+
+    <!-- Chart Container -->
+    <div role="img" aria-label="Price chart for {{ ticker }}">
+        <div id="chart-container" class="w-full rounded-lg overflow-hidden" style="height: 480px; background: #020617;">
+            {% if bar_count == 0 %}
+            <div class="flex items-center justify-center h-full text-slate-500 text-sm">{{ no_data_message }}</div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<!-- OOB refresh for stats panel (Story 2-3) -->
+<div id="stats-panel" hx-swap-oob="innerHTML">
+    {% include "explorer/stats_panel.html" %}
+</div>
+
+<!-- OOB refresh for supplementary panel (Story 4-2) -->
+<div id="supplementary-panel" hx-swap-oob="innerHTML">
+    {% include "explorer/supplementary_panel.html" %}
+</div>
+
+<script>
+(function() {
+    var barsJson = {{ bars_json | safe }};
+    var container = document.getElementById('chart-container');
+
+    if (!container) return;
+
+    // Clean up any previous chart instance
+    if (window._explorerChart) {
+        window._explorerChart.remove();
+        window._explorerChart = null;
+    }
+    if (window._explorerResizeObs) {
+        window._explorerResizeObs.disconnect();
+        window._explorerResizeObs = null;
+    }
+
+    if (!barsJson || barsJson.length === 0) {
+        var noDataMessage = {{ no_data_message | tojson }};
+        var noDataEl = document.createElement('div');
+        noDataEl.className = 'flex items-center justify-center h-full text-slate-500 text-sm';
+        noDataEl.textContent = noDataMessage;
+        container.replaceChildren(noDataEl);
+        return;
+    }
+
+    var chart = createChartWithDefaults(container);
+    chart.applyOptions({
+        width: container.clientWidth,
+        height: container.clientHeight,
+    });
+
+    var candleSeries = chart.addSeries(LightweightCharts.CandlestickSeries, {
+        upColor: CHART_COLORS.bullish,
+        downColor: CHART_COLORS.bearish,
+        borderUpColor: CHART_COLORS.bullish,
+        borderDownColor: CHART_COLORS.bearish,
+        wickUpColor: CHART_COLORS.bullish,
+        wickDownColor: CHART_COLORS.bearish,
+    });
+
+    var dedupedData = deduplicateTimeseriesData(barsJson);
+    candleSeries.setData(dedupedData);
+    chart.timeScale().fitContent();
+
+    window._explorerChart = chart;
+    window._explorerCandleSeries = candleSeries;
+    window._explorerResizeObs = createResizeObserver(container, chart);
+
+    // Progressive loading: fetch bounded chunks when user pans left
+    var ticker = {{ ticker | tojson }};
+    var catalog = {{ catalog | tojson }};
+    var tfLabel = {{ active_tf.label | tojson }};
+    var windowDays = {{ window_days }};
+    var hasEarlierData = {{ has_earlier_data | tojson }};
+    var dateRangeStartIso = {{ date_range_start_iso | tojson }};
+    var isFetching = false;
+
+    chart.timeScale().subscribeVisibleTimeRangeChange(function(newRange) {
+        if (isFetching || !hasEarlierData || !newRange || newRange.from === null) return;
+
+        var currentData = candleSeries.data();
+        if (!currentData || currentData.length === 0) return;
+
+        var earliestBar = currentData[0].time;
+        // If user panned close to earliest data point, fetch more
+        if (newRange.from <= earliestBar) {
+            isFetching = true;
+            var endDate = new Date(earliestBar * 1000);
+            // Fetch a bounded chunk (windowDays back from earliest bar)
+            var chunkDays = windowDays || 365;
+            var startDate = new Date(endDate);
+            startDate.setDate(startDate.getDate() - chunkDays);
+            // Clamp to instrument's actual data start
+            if (dateRangeStartIso) {
+                var floor = new Date(dateRangeStartIso + 'T00:00:00Z');
+                if (startDate < floor) startDate = floor;
+            }
+            var startStr = startDate.toISOString().split('T')[0];
+            var endStr = endDate.toISOString().split('T')[0];
+
+            fetch('/api/chart/catalog/' + encodeURIComponent(ticker) +
+                  '?catalog=' + encodeURIComponent(catalog) +
+                  '&tf=' + encodeURIComponent(tfLabel) +
+                  '&start=' + startStr +
+                  '&end=' + endStr)
+                .then(function(resp) { return resp.json(); })
+                .then(function(data) {
+                    if (data.bars && data.bars.length > 0) {
+                        var allData = data.bars.concat(currentData);
+                        var deduped = deduplicateTimeseriesData(allData);
+                        candleSeries.setData(deduped);
+                    } else {
+                        // No more data available — stop fetching
+                        hasEarlierData = false;
+                    }
+                })
+                .catch(function() {})
+                .finally(function() {
+                    // Debounce to avoid rapid re-fetching
+                    setTimeout(function() { isFetching = false; }, 2000);
+                });
+        }
+    });
+})();
+</script>

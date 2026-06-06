@@ -27,6 +27,7 @@ make test-coverage      # Coverage report (src/core + src/strategies)
 make format             # ruff format .
 make lint               # ruff check .
 make typecheck          # mypy src/core src/strategies
+make install-hooks      # Install git pre-commit hook (run once per clone)
 
 uv run python -m src.cli.main          # CLI entry point
 uv run uvicorn src.api.web:app --reload --host 127.0.0.1 --port 8000  # Web UI
@@ -60,11 +61,15 @@ uv run uvicorn src.api.web:app --reload --host 127.0.0.1 --port 8000  # Web UI
 
 ## Editing with Auto-Linter
 
-A ruff auto-formatter runs after each file edit. This can silently revert changes (e.g., removing "unused" imports) when dependent edits are split across multiple steps.
+A ruff auto-formatter runs after each file edit. `F401` (unused import) is configured `unfixable`, so the formatter no longer silently strips imports — but a half-applied edit (import added, usage not yet) leaves an unused import that **hard-blocks the commit**.
 
+**The structural import gate** — unused (F401) / undefined (F821) imports are rejected at three points: the `.githooks/pre-commit` hook (universal — terminal, IDE, and Claude commits alike; run `make install-hooks` once per clone), the `.claude/hooks/bash-guard.sh` commit gate (Claude-issued commits), and CI. A commit will not land until the import is fixed.
+
+- **Escape hatch** — for an intentional unused import (e.g. a re-export in `__init__.py`), append `# noqa: F401  # <reason>`. The reason comment is a required convention (not machine-enforced).
 - **Make dependent changes in a single edit** — e.g., when moving an import from inline to top-level, remove the inline usage in the same edit that adds the top-level import
 - **When removing a function parameter**, update call sites first (extra args still work), then remove the parameter
 - **Re-read the file after each edit** if you suspect the linter modified it — never assume your edit landed as written
+- **Stage and commit in separate Bash calls** — the `.claude/hooks/bash-guard.sh` commit gate runs `ruff format`/`check` and rejects a `git add && git commit` one-liner: as a PreToolUse hook it fires *before* the inline `git add` runs, sees the files still unstaged, and blocks. Run `git add <files>` first, then `git commit` alone (by then the tree is clean and the gate passes)
 
 ## Commit Format
 
@@ -97,7 +102,7 @@ Use the `agent-browser` skill for all browser-based UI testing and verification.
 
 ## Hooks
 
-Hooks in `.claude/hooks/` auto-enforce formatting, file protection, and pre-commit checks.
+Hooks in `.claude/hooks/` auto-enforce formatting, file protection, and pre-commit checks (Claude-issued actions only). The tracked `.githooks/pre-commit` hook gates the structural import check (F401/F821) for **all** commits — terminal, IDE, and Claude — and is installed via `make install-hooks` (once per clone; sets `core.hooksPath`).
 
 ## Project Layout
 

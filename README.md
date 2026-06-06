@@ -27,10 +27,13 @@ NTrader is a comprehensive backtesting platform designed for traders, quants, an
 - Auto-discovery of strategies using `@register_strategy` decorator
 
 ### Data Management
-- CSV import directly to Parquet catalog
+- **FirstRate bulk import** — multi-ticker, multi-timeframe CSV bundles into named Parquet catalogs, with dry-run preview and supplementary dividend/split data
+- Single-file CSV import directly to Parquet catalog
 - Interactive Brokers historical data fetching
 - Kraken historical crypto data fetching (BTC/USD, ETH/USD, etc.)
-- Multi-source support: CSV, IBKR, Kraken
+- Multi-source support: FirstRate, CSV, IBKR, Kraken
+- **Named catalogs** — isolate datasets (e.g. `e2e-test`, `firstrate-stocks`) under one base path
+- **Data explorer** — browse imported tickers, charts, statistics, and supplementary data in the web UI
 - Auto-fetch missing data when IBKR is connected
 - Data inspection and gap detection commands
 
@@ -67,6 +70,9 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Install dependencies
 uv sync
+
+# Install the git pre-commit hook (structural import gate, once per clone)
+make install-hooks
 
 # Configure environment
 cp .env.example .env
@@ -117,12 +123,38 @@ uv run python -m src.cli.main backtest run \
 | `strategy create --type <type> --output <file>` | Create a strategy config template |
 | `strategy validate <config.yaml>` | Validate a strategy configuration |
 
+### Import Commands (FirstRate bulk import)
+
+The top-level `import` command ingests a FirstRate data directory (many tickers ×
+many timeframes) into a **named** Parquet catalog. It also loads company profiles
+and any supplementary dividend/split files it discovers alongside the bars.
+
+| Command | Description |
+|---------|-------------|
+| `import --format firstrate --catalog <name> --dry-run <dir>` | Preview what would be imported (no writes) — ticker/file counts and estimated size |
+| `import --format firstrate --catalog <name> --asset-class stock --timeframe daily <dir>` | Import a FirstRate directory into a named catalog |
+| `import ... --timeframe daily,hourly,1min,5min <dir>` | Import multiple timeframes in one pass |
+| `import ... --dividends-dir <dir> --splits-dir <dir>` | Override auto-discovery of supplementary data |
+
+Key options:
+
+- `--format firstrate` (required) — only FirstRate is supported today
+- `--catalog <name>` (required) — target catalog under `CATALOG_BASE_PATH`
+- `--asset-class` — `etf` (import default) · `stock` · `futures` · `fx` · `crypto` · `index` (`--dry-run` defaults to `stock`)
+- `--timeframe` — comma-separated: `daily`, `hourly`, `minute`/`1min`, `5min` (default `daily`)
+- `--dividends-dir` / `--splits-dir` — explicit supplementary sources (auto-discovered from the source tree when omitted)
+- `--dry-run` — scan and report only; writes nothing to the catalog or DB
+
+Exit codes: `0` success · `1` partial (some bar files failed) · `2` fatal (bad path, DB not configured, missing profiles). Supplementary (dividend/split) failures are reported but never change the exit code.
+
+> A `company_profiles.csv` must be loadable for the target catalog. The importer looks for it inside the source directory and its parent. Without it (e.g. the ETF bundle, which ships none) the import aborts with exit code 2.
+
 ### Data Commands
 
 | Command | Description |
 |---------|-------------|
-| `data import --csv <file> --symbol <SYM> --venue <VENUE>` | Import CSV to Parquet catalog |
-| `data list` | List all data in the catalog |
+| `data import --csv <file> --symbol <SYM> --venue <VENUE>` | Import a single CSV file to Parquet catalog |
+| `data list` | List all data in the catalog (reads `NAUTILUS_PATH`) |
 | `data check --symbol <SYM>` | Check data availability |
 | `data check --symbol <SYM> --start <date> --end <date>` | Detect data gaps |
 | `data connect` | Test IBKR connection |
@@ -175,7 +207,56 @@ uv run python -m src.cli.main data import \
 uv run python -m src.cli.main data list
 ```
 
-### 3. Fetch Data from Interactive Brokers
+### 3. Bulk Import FirstRate Data
+
+FirstRate ships per-asset-class bundles laid out by timeframe (e.g.
+`~/Data/Stocks/Stocks_1day`, `Stocks_1hour`, `Stocks_1min`, `Stocks_5min`) with a
+`company_profiles.csv` at the bundle root. Import into a **named catalog** so
+datasets stay isolated.
+
+```bash
+# 0. Configure catalog env vars in .env (see Configuration below)
+#    CATALOG_BASE_PATH=./data/catalogs
+#    DEFAULT_CATALOG_NAME=firstrate-stocks
+#    NAUTILUS_PATH=./data/catalogs/firstrate-stocks
+
+# 1. Dry-run first — preview tickers, file counts, and estimated catalog size
+uv run python -m src.cli.main import \
+  --format firstrate \
+  --catalog firstrate-stocks \
+  --asset-class stock \
+  --dry-run \
+  ~/Data/Stocks/Stocks_1day
+
+# 2. Import the timeframes you need (one or many)
+uv run python -m src.cli.main import \
+  --format firstrate \
+  --catalog firstrate-stocks \
+  --asset-class stock \
+  --timeframe daily \
+  ~/Data/Stocks/Stocks_1day
+
+# 3. Verify (point NAUTILUS_PATH at the catalog, then list)
+uv run python -m src.cli.main data list
+
+# 4. Explore in the web UI (see "Use the Web Dashboard" below) → http://127.0.0.1:8000/explorer
+```
+
+**Importing a subset of tickers.** The importer ingests *every* ticker in the
+source directory. To import a few, build a symlink tree with a matching subset
+`company_profiles.csv` and point `import` at that tree. Loading the full
+`company_profiles.csv` writes thousands of zero-bar rows to the DB — prefer a
+subset CSV.
+
+**Supplementary data (dividends & splits).** FirstRate dividend
+(`{TICKER}_divs.txt`) and split (`{TICKER}.txt`) files are auto-discovered next to
+the bars and persisted per ticker. Override with `--dividends-dir` / `--splits-dir`
+if they live elsewhere. Supplementary failures are reported but never fail the import.
+
+> **Tip:** After changing `NAUTILUS_PATH`, restart the web server — `--reload` does
+> not pick up env changes.
+
+### 4. Fetch Data from Interactive Brokers
 
 ```bash
 # Test connection first
@@ -191,7 +272,7 @@ uv run python -m src.cli.main data fetch \
 
 For detailed IBKR setup, see [docs/setup/IBKR_SETUP.md](docs/setup/IBKR_SETUP.md).
 
-### 4. Fetch Crypto Data from Kraken
+### 5. Fetch Crypto Data from Kraken
 
 ```bash
 # Run a backtest with Kraken crypto data
@@ -204,7 +285,7 @@ uv run python -m src.cli.main backtest run \
   --data-source kraken
 ```
 
-### 5. Compare Strategy Performance
+### 6. Compare Strategy Performance
 
 ```bash
 # Run multiple strategies on same data
@@ -221,7 +302,7 @@ uv run python -m src.cli.main backtest history --sort sharpe
 uv run python -m src.cli.main backtest compare <uuid1> <uuid2>
 ```
 
-### 6. Use the Web Dashboard
+### 7. Use the Web Dashboard
 
 ```bash
 # Build CSS (first time only)
@@ -230,8 +311,14 @@ uv run python -m src.cli.main backtest compare <uuid1> <uuid2>
 # Start the web server
 uv run uvicorn src.api.web:app --reload --host 127.0.0.1 --port 8000
 
-# Open in browser: http://127.0.0.1:8000
+# Open in browser:
+#   http://127.0.0.1:8000           — dashboard / backtest results
+#   http://127.0.0.1:8000/explorer  — data explorer (tickers, charts, stats, dividends/splits)
 ```
+
+The **data explorer** browses the catalog at `NAUTILUS_PATH`: pick a ticker to see
+its price chart (switchable timeframes), bar statistics and date coverage, and any
+imported dividend/split data. It pre-selects `DEFAULT_CATALOG_NAME` when set.
 
 ## Available Strategies
 
@@ -296,11 +383,21 @@ After placing the file in `src/core/strategies/custom/`, the strategy will be au
 | `TWS_ACCOUNT` | IBKR account ID | - |
 | `DEFAULT_BALANCE` | Starting balance for backtests | `1000000` |
 | `TRADE_SIZE` | Default trade size | `1000000` |
+| `CATALOG_BASE_PATH` | Base dir holding named catalog subdirectories (import target) | - |
+| `DEFAULT_CATALOG_NAME` | Catalog the explorer pre-selects | - |
+| `NAUTILUS_PATH` | Catalog path read by `data list`, backtests, and the explorer | `./data/catalog` |
+| `FIRSTRATE_SOURCE_PATH` | Default FirstRate source directory | - |
+| `FIRSTRATE_CATALOG_NAME` | Default catalog name for FirstRate imports | `firstrate-etf` |
 | `KRAKEN_API_KEY` | Kraken API key | - |
 | `KRAKEN_API_SECRET` | Kraken API secret (base64) | - |
 | `KRAKEN_RATE_LIMIT` | Kraken requests/sec | `10` |
 | `KRAKEN_DEFAULT_MAKER_FEE` | Maker fee rate | `0.0016` |
 | `KRAKEN_DEFAULT_TAKER_FEE` | Taker fee rate | `0.0026` |
+
+> **Catalog paths.** `import --catalog <name>` writes to `<CATALOG_BASE_PATH>/<name>`.
+> Reading tools (`data list`, backtests, the explorer) use `NAUTILUS_PATH`, so set it
+> to the same `<CATALOG_BASE_PATH>/<name>` to read back what you imported. Restart the
+> web server after changing `NAUTILUS_PATH` (`--reload` ignores env changes).
 
 ### YAML Strategy Configuration
 
@@ -410,6 +507,21 @@ uv run python -m src.cli.main data list
 2. Check symbol format — use standard pairs like `BTC/USD`, not Kraken-native formats
 3. Rate limit errors — reduce `KRAKEN_RATE_LIMIT` (default: 10 req/s)
 4. Missing data — Kraken Charts API may have gaps for low-volume pairs
+
+### FirstRate Import Issues
+
+1. **Exit code 2, "Instrument profiles not loaded"** — the importer could not find a
+   `company_profiles.csv` in the source directory or its parent. Stock bundles ship
+   one; ETF bundles do not. Supply a (subset) profiles CSV alongside the data.
+2. **"Database not configured"** — set `DATABASE_URL`; import persists instrument
+   metadata and supplementary data to PostgreSQL.
+3. **Imported data not showing up** — `data list` and the explorer read `NAUTILUS_PATH`,
+   not `--catalog`. Point `NAUTILUS_PATH` at `<CATALOG_BASE_PATH>/<catalog-name>` and
+   restart the web server.
+4. **Too many zero-bar tickers** — a full `company_profiles.csv` loads every row. Use a
+   subset symlink tree with a matching subset profiles CSV to import only what you need.
+5. **Always dry-run first** — `--dry-run` reports ticker/file counts, schema mismatches,
+   and estimated catalog size without writing anything.
 
 ### Date Range Errors
 

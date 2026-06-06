@@ -6,6 +6,7 @@ from rich.console import Console
 from src.cli.commands.backtest import backtest  # noqa: E402
 from src.cli.commands.data import data  # noqa: E402
 from src.cli.commands.history import list_backtest_history  # noqa: E402
+from src.cli.commands.import_data import import_firstrate  # noqa: E402
 from src.cli.commands.report import report  # noqa: E402
 from src.cli.commands.run import run_simple  # noqa: E402
 from src.cli.commands.strategy import strategy  # noqa: E402
@@ -38,6 +39,7 @@ cli.add_command(backtest)
 cli.add_command(strategy)
 cli.add_command(report)
 cli.add_command(list_backtest_history)
+cli.add_command(import_firstrate, "import")
 
 
 if __name__ == "__main__":

@@ -180,6 +180,7 @@ cython_debug/
 # Data catalog - generated files
 data/catalog/
 data/catalog/.corrupt/
+data/catalogs/
 
 # Playwright MCP test artifacts
 .playwright-mcp/
@@ -193,6 +194,7 @@ WARP.md
 
 # Claude Code local files
 .claude/logs/
+.claude/scheduled_tasks.lock
 
 # Private strategies (submodule content)
 # Keep .gitkeep and __init__.py, ignore strategy implementation files

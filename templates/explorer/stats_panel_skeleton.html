@@ -1,0 +1,13 @@
+{#
+  Stats-panel skeleton: renders seven animate-pulse placeholder cards that match
+  the real stats grid shape. Shown only during the initial deep-link auto-load;
+  OOB chart-panel responses swap the real grid in without flashing the skeleton.
+#}
+<div class="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3 mt-6" aria-hidden="true">
+    {% for _ in range(7) %}
+    <div class="stats-skeleton-card bg-slate-900 rounded-lg p-4 border border-slate-800">
+        <div class="animate-pulse bg-slate-800 h-3 w-24 rounded"></div>
+        <div class="animate-pulse bg-slate-800 h-5 w-32 rounded mt-2"></div>
+    </div>
+    {% endfor %}
+</div>

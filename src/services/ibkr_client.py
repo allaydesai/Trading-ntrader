@@ -125,63 +125,162 @@ class IBKRHistoricalClient:
             host: IB Gateway/TWS host address
             port: Connection port (7497=TWS paper, 7496=TWS live,
                   4002=Gateway paper, 4001=Gateway live)
-            client_id: Unique client identifier
+            client_id: Unique client identifier; rotated automatically on
+                  reconnect if the Gateway holds a stale session for it.
             market_data_type: Data type (DELAYED_FROZEN for paper trading)
         """
-        with _guard_nautilus_logging():
-            self.client = HistoricInteractiveBrokersClient(
-                host=host,
-                port=port,
-                client_id=client_id,
-                market_data_type=market_data_type,
-                log_level="INFO",
-            )
+        # Reason: store params so we can rebuild the underlying client with
+        # a rotated client_id when the Gateway holds a stale session.
+        self._host = host
+        self._port = port
+        self._base_client_id = client_id
+        self._active_client_id = client_id
+        self._market_data_type = market_data_type
+
+        self._build_inner_client(client_id=client_id)
         self._connected = False
         self.rate_limiter = RateLimiter(requests_per_second=45)
 
-        # Preserve the LogGuard from HistoricInteractiveBrokersClient to prevent
-        # "logging already initialized" errors when BacktestEngine is created later.
-        # The Nautilus logging subsystem only allows one initialization per process,
-        # so we store the LogGuard to keep it alive throughout the backtest lifecycle.
+    def _build_inner_client(self, *, client_id: int) -> None:
+        """Construct (or reconstruct) the underlying Nautilus client.
+
+        Called from ``__init__`` and again from ``connect()`` when the
+        previous client_id timed out (likely IBKR error 326 — the Gateway
+        still holds the id from a SIGKILL'd prior process).
+
+        Preserves the LogGuard returned by ``HistoricInteractiveBrokersClient``
+        so the Nautilus logging subsystem stays initialised across rebuilds
+        (CLAUDE.md Gotcha #1).
+        """
+        with _guard_nautilus_logging():
+            self.client = HistoricInteractiveBrokersClient(
+                host=self._host,
+                port=self._port,
+                client_id=client_id,
+                market_data_type=self._market_data_type,
+                log_level="INFO",
+            )
         if hasattr(self.client, "_log_guard"):
             set_nautilus_log_guard(self.client._log_guard)
+        self._active_client_id = client_id
 
-    async def connect(self, timeout: int = 30) -> Dict:
+    async def _stop_inner(self) -> None:
+        """Best-effort graceful stop of the underlying Nautilus client.
+
+        Calls ``InteractiveBrokersClient._stop_async`` which cancels
+        Nautilus's internal tasks and invokes ``EClient.disconnect()``,
+        releasing the client_id on the Gateway side. Errors are logged
+        but never raised — this is called from teardown paths where
+        making things worse on failure is unhelpful.
         """
-        Establish connection to IBKR Gateway.
+        inner = getattr(self.client, "_client", None)
+        if inner is None:
+            return
+        try:
+            await inner._stop_async()
+            # Reason: give the socket close a beat to flush before any
+            # subsequent rebuild reuses the loop / port.
+            await asyncio.sleep(0.5)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("ibkr_inner_stop_failed", error=str(exc))
+
+    async def connect(self, timeout: int = 30, max_id_rotations: int = 5) -> Dict:
+        """
+        Establish connection to IBKR Gateway with automatic client_id rotation.
+
+        IBKR Gateway error 326 ("client id is already in use") is logged
+        by the underlying Nautilus client but is *not* raised — the connect
+        call simply times out waiting for ``_is_client_ready``. After a
+        SIGKILL'd previous run, the Gateway holds the configured client_id
+        for tens of seconds, so reconnects with the same id silently time
+        out and force a Gateway restart.
+
+        To recover automatically, a connect timeout is treated as a likely
+        id conflict: the underlying client is torn down and rebuilt with
+        ``base_client_id + offset`` for offset in ``1..max_id_rotations``.
 
         Args:
-            timeout: Connection timeout in seconds
+            timeout: Per-attempt connection timeout in seconds.
+            max_id_rotations: Maximum number of rotated client_ids to try
+                after the configured one fails. ``0`` disables rotation
+                (legacy behaviour). Default is ``5`` — covers the typical
+                "two recent kills, plus headroom" case.
 
         Returns:
-            Connection info dict with account_id and server_version
+            Connection info dict including ``client_id`` (the id that
+            actually succeeded — may differ from the configured one).
 
         Raises:
-            ConnectionError: If connection fails within timeout
+            ConnectionError: If all ``max_id_rotations + 1`` attempts fail.
         """
-        try:
-            await self.client.connect()
-            await asyncio.sleep(2)  # Allow connection to stabilize
+        last_error: BaseException | None = None
+        for offset in range(max_id_rotations + 1):
+            candidate_id = self._base_client_id + offset
+            if offset > 0:
+                logger.warning(
+                    "ibkr_connect_rotating_client_id",
+                    base_id=self._base_client_id,
+                    candidate_id=candidate_id,
+                    attempt=offset,
+                    max_attempts=max_id_rotations,
+                )
+                await self._stop_inner()
+                try:
+                    self._build_inner_client(client_id=candidate_id)
+                except Exception as build_exc:  # noqa: BLE001
+                    # Rebuild itself failed — surface clearly rather than
+                    # leaving ``self.client`` half-built for the next attempt.
+                    raise ConnectionError(
+                        f"Failed to rebuild IBKR client during rotation "
+                        f"(candidate_id={candidate_id}): {build_exc}"
+                    ) from build_exc
 
-            self._connected = True
+            try:
+                await asyncio.wait_for(self.client.connect(), timeout=timeout)
+                self._connected = True
+                return {
+                    "connected": True,
+                    "account_id": getattr(self.client, "account_id", "N/A"),
+                    "server_version": getattr(self.client, "server_version", "N/A"),
+                    "connection_time": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+                    "client_id": candidate_id,
+                }
+            except asyncio.TimeoutError as e:
+                last_error = e
+                logger.warning(
+                    "ibkr_connect_timeout",
+                    client_id=candidate_id,
+                    attempt=offset,
+                )
+                continue
+            except Exception as e:
+                # Reason: non-timeout errors (refused, generic) aren't id-conflict
+                # symptoms, so don't waste time rotating — surface immediately.
+                raise ConnectionError(f"Failed to connect to IBKR: {e}") from e
 
-            # Get available connection info
-            info = {
-                "connected": True,
-                "account_id": getattr(self.client, "account_id", "N/A"),
-                "server_version": getattr(self.client, "server_version", "N/A"),
-                "connection_time": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
-            }
-
-            return info
-        except Exception as e:
-            raise ConnectionError(f"Failed to connect to IBKR: {e}")
+        raise ConnectionError(
+            f"Failed to connect to IBKR after {max_id_rotations + 1} client_id "
+            f"rotations (base={self._base_client_id}). The Gateway may be holding "
+            f"stale sessions from a previously killed process; wait a minute and "
+            f"retry, or restart the Gateway. If a concurrent harness is running "
+            f"with the same base client_id (rotation is deterministic — "
+            f"base+1, base+2, ...), use a disjoint base id to avoid cross-process "
+            f"contention. Last error: {last_error}"
+        )
 
     async def disconnect(self):
-        """Gracefully disconnect from IBKR."""
+        """Gracefully disconnect from IBKR Gateway.
+
+        Calls ``_stop_async`` on the underlying Nautilus client which
+        cancels its internal tasks and invokes ``EClient.disconnect()``,
+        releasing the client_id on the Gateway side. Without this, an
+        abrupt process exit leaves the Gateway holding the id and the
+        next run hits IBKR error 326 (mitigated by client_id rotation
+        in ``connect()``, but graceful release avoids the rotation
+        entirely).
+        """
         if self._connected:
-            # HistoricInteractiveBrokersClient doesn't have a disconnect method
-            # Connection is managed by the context/lifecycle
+            await self._stop_inner()
             self._connected = False
 
     async def fetch_bars(

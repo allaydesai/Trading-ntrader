@@ -5,11 +5,12 @@ Tests OHLCV candlestick data retrieval from Parquet catalog.
 """
 
 from datetime import datetime, timezone
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
-from src.api.dependencies import get_data_catalog_service
+from src.api.dependencies import get_backtest_query_service, get_data_catalog_service
 from src.api.web import app
 from src.services.exceptions import DataNotFoundError
 
@@ -284,3 +285,84 @@ class TestTimeseries404Error:
             assert data["candles"] == []
         finally:
             app.dependency_overrides.pop(get_data_catalog_service, None)
+
+
+class TestRunTimeseriesEndpoint:
+    """Tests for GET /api/timeseries/run/{run_id} (review finding #5).
+
+    The run-scoped route renders candles from the backtest's own catalog and
+    bar type, so named-catalog / intraday runs no longer chart the default
+    catalog at a hardcoded daily timeframe.
+    """
+
+    @staticmethod
+    def _mock_backtest(**cfg) -> MagicMock:
+        backtest = MagicMock()
+        backtest.instrument_symbol = "AAPL.NASDAQ"
+        backtest.config_snapshot = cfg
+        return backtest
+
+    @staticmethod
+    def _override_service(backtest) -> MagicMock:
+        service = MagicMock()
+        service.get_backtest_by_id = AsyncMock(return_value=backtest)
+        app.dependency_overrides[get_backtest_query_service] = lambda: service
+        return service
+
+    def test_run_timeseries_uses_run_catalog_and_bar_type(self, client: TestClient):
+        """Candles come from the loader; response labels the run's own bar type."""
+        backtest = self._mock_backtest(bar_type="1-MINUTE-LAST", catalog_name="e2e-test")
+        self._override_service(backtest)
+
+        mock_bar = MagicMock()
+        mock_bar.ts_event = 1705276800000000000
+        mock_bar.open.as_double.return_value = 185.50
+        mock_bar.high.as_double.return_value = 186.00
+        mock_bar.low.as_double.return_value = 185.00
+        mock_bar.close.as_double.return_value = 185.75
+        mock_bar.volume.as_double.return_value = 1000000
+
+        try:
+            with patch(
+                "src.api.rest.timeseries._load_chart_bars",
+                new=AsyncMock(return_value=[mock_bar]),
+            ) as mock_loader:
+                response = client.get(f"/api/timeseries/run/{uuid4()}")
+
+            assert response.status_code == 200
+            data = response.json()
+            assert data["symbol"] == "AAPL.NASDAQ"
+            assert data["timeframe"] == "1-MINUTE-LAST"
+            assert len(data["candles"]) == 1
+            assert data["candles"][0]["close"] == 185.75
+            # Loader received the run object (resolves its catalog + bar type).
+            assert mock_loader.await_args.args[0] is backtest
+        finally:
+            app.dependency_overrides.pop(get_backtest_query_service, None)
+
+    def test_run_timeseries_returns_404_when_run_missing(self, client: TestClient):
+        """An unknown run id yields 404, not an empty chart."""
+        self._override_service(None)
+        try:
+            response = client.get(f"/api/timeseries/run/{uuid4()}")
+            assert response.status_code == 404
+        finally:
+            app.dependency_overrides.pop(get_backtest_query_service, None)
+
+    def test_run_timeseries_degrades_to_empty_on_load_error(self, client: TestClient):
+        """A corrupt/missing catalog degrades to an empty candle list (HTTP 200)."""
+        backtest = self._mock_backtest(bar_type="1-DAY-LAST")
+        self._override_service(backtest)
+        try:
+            with patch(
+                "src.api.rest.timeseries._load_chart_bars",
+                new=AsyncMock(side_effect=RuntimeError("corrupt parquet")),
+            ):
+                response = client.get(f"/api/timeseries/run/{uuid4()}")
+
+            assert response.status_code == 200
+            data = response.json()
+            assert data["candles"] == []
+            assert data["timeframe"] == "1-DAY-LAST"
+        finally:
+            app.dependency_overrides.pop(get_backtest_query_service, None)

@@ -1,0 +1,242 @@
+<!-- HTMX fragment: ticker table + pagination + pills -->
+<input type="hidden" name="sort_by" value="{{ state.sort_by }}">
+<input type="hidden" name="asset_class" value="{{ state.asset_class }}">
+
+<!-- Asset Class Filter Pills (AC #4) -->
+<div class="flex flex-wrap gap-2 mb-4 asset-class-pills" id="asset-class-pills">
+    {% set all_count = asset_class_counts.values() | sum %}
+    <button class="px-3 py-1 text-sm rounded-full border transition-colors focus:ring-2 focus:ring-blue-500 focus:outline-none
+                   {% if not state.asset_class %}bg-blue-500 border-blue-500 text-white{% else %}border-slate-700 text-slate-400 hover:border-slate-500{% endif %}"
+            aria-pressed="{{ 'true' if not state.asset_class else 'false' }}"
+            hx-get="/explorer/ticker-list"
+            hx-target="#ticker-list"
+            hx-include="#catalog-select, #search-input, [name='sort_by']"
+            hx-vals='{"page": "1", "asset_class": ""}'
+            hx-push-url="true"
+            hx-indicator="#loading-bar">
+        All ({{ all_count }})
+    </button>
+    {% for ac, count in asset_class_counts.items() %}
+    <button class="px-3 py-1 text-sm rounded-full border transition-colors focus:ring-2 focus:ring-blue-500 focus:outline-none
+                   {% if state.asset_class == ac %}bg-blue-500 border-blue-500 text-white{% else %}border-slate-700 text-slate-400 hover:border-slate-500{% endif %}"
+            aria-pressed="{{ 'true' if state.asset_class == ac else 'false' }}"
+            hx-get="/explorer/ticker-list"
+            hx-target="#ticker-list"
+            hx-include="#catalog-select, #search-input, [name='sort_by']"
+            hx-vals='{"page": "1", "asset_class": {{ ac | tojson }}}'
+            hx-push-url="true"
+            hx-indicator="#loading-bar">
+        {{ ac }} ({{ count }})
+    </button>
+    {% endfor %}
+</div>
+<script>
+(function() {
+    // Arrow-key navigation within the asset-class pills group (AC #10).
+    var wrappers = document.querySelectorAll('.asset-class-pills');
+    wrappers.forEach(function(wrap) {
+        if (wrap.dataset.nkbd === '1') return;
+        wrap.dataset.nkbd = '1';
+        wrap.addEventListener('keydown', function(e) {
+            if (e.isComposing || e.keyCode === 229) return;
+            if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+            var btns = Array.prototype.slice.call(wrap.querySelectorAll('button'));
+            var i = btns.indexOf(document.activeElement);
+            if (i < 0) return;
+            var next = e.key === 'ArrowRight' ? (i + 1) % btns.length : (i - 1 + btns.length) % btns.length;
+            btns[next].focus();
+            e.preventDefault();
+        });
+    });
+})();
+</script>
+
+{% if tickers %}
+<!-- Results summary -->
+<div class="flex items-center justify-between mb-3">
+    <span class="text-sm text-slate-400">
+        {% set first = ((state.page - 1) * 25) + 1 %}
+        {% set last = [state.page * 25, total_count] | min %}
+        {% if first <= total_count %}
+        Showing {{ first }}-{{ last }} of {{ total_count }} tickers
+        {% else %}
+        {{ total_count }} tickers
+        {% endif %}
+    </span>
+</div>
+
+<!-- Ticker Table (AC #2) -->
+<div class="overflow-x-auto">
+    <table class="w-full text-sm">
+        <thead>
+            <tr class="text-xs text-slate-500 uppercase tracking-wider border-b border-slate-800">
+                <th class="px-3 py-2 text-left">
+                    <a href="#" class="hover:text-slate-300"
+                       hx-get="/explorer/ticker-list"
+                       hx-target="#ticker-list"
+                       hx-include="#catalog-select, #search-input, [name='asset_class']"
+                       hx-vals='{"page": "1", "sort_by": "ticker"}'
+                       hx-push-url="true">
+                        Symbol {% if state.sort_by == 'ticker' %}&#9650;{% endif %}
+                    </a>
+                </th>
+                <th class="px-3 py-2 text-left hidden md:table-cell">Name</th>
+                <th class="px-3 py-2 text-left hidden sm:table-cell">Class</th>
+                <th class="px-3 py-2 text-left hidden lg:table-cell">
+                    <a href="#" class="hover:text-slate-300"
+                       hx-get="/explorer/ticker-list"
+                       hx-target="#ticker-list"
+                       hx-include="#catalog-select, #search-input, [name='asset_class']"
+                       hx-vals='{"page": "1", "sort_by": "date_range_start"}'
+                       hx-push-url="true">
+                        Date Range {% if state.sort_by == 'date_range_start' %}&#9650;{% endif %}
+                    </a>
+                </th>
+                <th class="px-3 py-2 text-left hidden lg:table-cell">Coverage</th>
+                <th class="px-3 py-2 text-right hidden xl:table-cell">
+                    <a href="#" class="hover:text-slate-300"
+                       hx-get="/explorer/ticker-list"
+                       hx-target="#ticker-list"
+                       hx-include="#catalog-select, #search-input, [name='asset_class']"
+                       hx-vals='{"page": "1", "sort_by": "bar_count_daily"}'
+                       hx-push-url="true">
+                        D / 1H / 5m / 1m {% if state.sort_by == 'bar_count_daily' %}&#9650;{% endif %}
+                    </a>
+                </th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in tickers %}
+            <tr class="border-b border-slate-800 hover:bg-slate-800 transition-colors cursor-pointer
+                       focus:ring-2 focus:ring-blue-500 focus:outline-none
+                       {% if selected_ticker == row.ticker %}bg-slate-800 ring-1 ring-blue-900{% endif %}"
+                data-ticker="{{ row.ticker }}"
+                role="button"
+                tabindex="0"
+                aria-selected="{{ 'true' if selected_ticker == row.ticker else 'false' }}"
+                onkeydown="if(event.isComposing||event.keyCode===229||event.repeat)return;if(event.key==='Enter'||event.key===' '){this.click();event.preventDefault();}"
+                hx-get="/explorer/chart-panel"
+                hx-target="#chart-panel"
+                hx-swap="innerHTML"
+                hx-vals='{"catalog": {{ state.catalog | tojson }}, "ticker": {{ row.ticker | tojson }}}'
+                hx-push-url='{{ "/explorer?catalog=" ~ state.catalog ~ "&ticker=" ~ row.ticker ~ "&tf=D" }}'
+                hx-indicator="#chart-loading-bar">
+                <!-- Ticker Symbol -->
+                <td class="px-3 py-2">
+                    <span class="font-mono font-bold text-slate-100">{{ row.ticker }}</span>
+                </td>
+
+                <!-- Name -->
+                <td class="px-3 py-2 text-slate-400 hidden md:table-cell">
+                    {% if row.name %}
+                        {% if row.name|length > 35 %}{{ row.name[:32] }}...{% else %}{{ row.name }}{% endif %}
+                    {% else %}
+                        <span class="text-slate-600">—</span>
+                    {% endif %}
+                </td>
+
+                <!-- Asset Class Badge -->
+                <td class="px-3 py-2 hidden sm:table-cell">
+                    {% if row.asset_class == 'STOCK' %}
+                    <span class="px-2 py-0.5 text-xs rounded bg-blue-500/20 text-blue-400">Stock</span>
+                    {% elif row.asset_class == 'ETF' %}
+                    <span class="px-2 py-0.5 text-xs rounded bg-slate-500/20 text-slate-400">ETF</span>
+                    {% elif row.asset_class == 'FUTURES' %}
+                    <span class="px-2 py-0.5 text-xs rounded bg-amber-500/20 text-amber-400">Futures</span>
+                    {% elif row.asset_class == 'FX' %}
+                    <span class="px-2 py-0.5 text-xs rounded bg-emerald-500/20 text-emerald-400">FX</span>
+                    {% elif row.asset_class == 'CRYPTO' %}
+                    <span class="px-2 py-0.5 text-xs rounded bg-purple-500/20 text-purple-400">Crypto</span>
+                    {% elif row.asset_class == 'INDEX' %}
+                    <span class="px-2 py-0.5 text-xs rounded bg-cyan-500/20 text-cyan-400">Index</span>
+                    {% elif row.asset_class == 'DELISTED' %}
+                    <span class="px-2 py-0.5 text-xs rounded bg-gray-500/20 text-gray-400">Delisted</span>
+                    {% else %}
+                    <span class="px-2 py-0.5 text-xs rounded bg-slate-500/20 text-slate-400">{{ row.asset_class }}</span>
+                    {% endif %}
+                </td>
+
+                <!-- Date Range -->
+                <td class="px-3 py-2 hidden lg:table-cell">
+                    {% if row.date_range_start and row.date_range_end %}
+                    <span class="font-mono text-xs text-slate-400">
+                        {{ row.date_range_start.strftime('%Y-%m-%d') }} — {{ row.date_range_end.strftime('%Y-%m-%d') }}
+                    </span>
+                    {% else %}
+                    <span class="text-slate-600">—</span>
+                    {% endif %}
+                </td>
+
+                <!-- Coverage Bar -->
+                <td class="px-3 py-2 hidden lg:table-cell">
+                    {% if row.coverage_pct is not none %}
+                    <div class="w-20 h-1 bg-slate-800 rounded-full overflow-hidden">
+                        <div class="h-full bg-green-500 rounded-full" style="width: {{ row.coverage_pct }}%"></div>
+                    </div>
+                    {% else %}
+                    <span class="text-slate-600">—</span>
+                    {% endif %}
+                </td>
+
+                <!-- Bar Counts -->
+                <td class="px-3 py-2 text-right hidden xl:table-cell">
+                    <span class="font-mono text-xs text-slate-400">
+                        {{ format_bar_count(row.bar_count_daily) }} / {{ format_bar_count(row.bar_count_hourly) }} / {{ format_bar_count(row.bar_count_5min) }} / {{ format_bar_count(row.bar_count_minute) }}
+                    </span>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<!-- Pagination (AC #2) -->
+{% if total_pages > 1 %}
+<div class="flex items-center justify-between mt-4">
+    <div class="flex gap-2">
+        {% if state.page > 1 %}
+        <button class="px-3 py-1 text-sm rounded border border-slate-700 text-slate-400 hover:bg-slate-800 transition-colors focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                hx-get="/explorer/ticker-list"
+                hx-target="#ticker-list"
+                hx-include="#catalog-select, #search-input, [name='asset_class'], [name='sort_by']"
+                hx-vals='{"page": "{{ state.page - 1 }}"}'
+                hx-push-url="true"
+                hx-indicator="#loading-bar">
+            Previous
+        </button>
+        {% endif %}
+        {% if state.page < total_pages %}
+        <button class="px-3 py-1 text-sm rounded border border-slate-700 text-slate-400 hover:bg-slate-800 transition-colors focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                hx-get="/explorer/ticker-list"
+                hx-target="#ticker-list"
+                hx-include="#catalog-select, #search-input, [name='asset_class'], [name='sort_by']"
+                hx-vals='{"page": "{{ state.page + 1 }}"}'
+                hx-push-url="true"
+                hx-indicator="#loading-bar">
+            Next
+        </button>
+        {% endif %}
+    </div>
+    <span class="text-sm text-slate-500">Page {{ state.page }} of {{ total_pages }}</span>
+</div>
+{% endif %}
+
+{% elif state.search %}
+<!-- Search empty state -->
+<div class="bg-slate-900 rounded-lg p-8 text-center">
+    <p class="text-slate-400">No tickers found for '{{ state.search }}'</p>
+</div>
+
+{% elif state.asset_class %}
+<!-- Filter empty state -->
+<div class="bg-slate-900 rounded-lg p-8 text-center">
+    <p class="text-slate-400">No {{ state.asset_class }} tickers in this catalog.</p>
+</div>
+
+{% else %}
+<!-- Catalog empty state (AC #6) -->
+<div class="bg-slate-900 rounded-lg p-8 text-center">
+    <p class="text-slate-300 mb-4">No data in catalog '{{ state.catalog }}'. Run an import to get started.</p>
+    <code class="bg-slate-800 px-3 py-2 rounded text-green-400 font-mono text-sm">ntrader import --format firstrate --catalog {{ state.catalog }} /path/to/data</code>
+</div>
+{% endif %}

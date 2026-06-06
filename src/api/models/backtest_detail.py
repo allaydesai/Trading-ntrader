@@ -266,6 +266,14 @@ class BacktestDetailView(BaseModel):
         default=None, description="Trade statistics (None if failed)"
     )
 
+    data_quality_flag: Optional[str] = Field(
+        default=None,
+        description=(
+            "Sentinel flag indicating the run referenced suspect bar data. "
+            "NULL when the run is trustworthy."
+        ),
+    )
+
     breadcrumbs: list[dict[str, str | None]] = Field(
         ...,
         description="Navigation breadcrumbs - must be constructed by caller",
@@ -292,6 +300,28 @@ class BacktestDetailView(BaseModel):
             return f"{seconds:.1f}s"
         minutes = seconds / 60
         return f"{minutes:.1f}m"
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def data_quality_warning(self) -> Optional[str]:
+        """User-facing warning string for the data-quality flag, or None.
+
+        Known flag values render specific copy; unknown values fall back to
+        a generic "suspect data" message so a forward-compatible UI never
+        silently hides a flag introduced by a later migration.
+        """
+        if self.data_quality_flag is None:
+            return None
+        if self.data_quality_flag == "tz_corrupted_pre_3.6":
+            return (
+                "This backtest ran against a FirstRate catalog with corrupt "
+                "timestamps (4–5h DST-dependent shift). Re-run after the "
+                "Story 3-6 re-import for trustworthy results."
+            )
+        return (
+            f"This backtest is flagged as data_quality_flag={self.data_quality_flag!r}. "
+            "Re-run against the corrected data before relying on these results."
+        )
 
 
 # =============================================================================
@@ -534,6 +564,7 @@ def to_detail_view(run, base_url: str = "") -> BacktestDetailView:
         metrics_panel=build_metrics_panel(run.metrics),
         configuration=build_configuration(run),
         trading_summary=build_trading_summary(run.metrics),
+        data_quality_flag=getattr(run, "data_quality_flag", None),
         breadcrumbs=[
             {"label": "Dashboard", "url": f"{base_url}/"},
             {"label": "Backtests", "url": f"{base_url}/backtests"},

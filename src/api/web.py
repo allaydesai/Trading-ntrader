@@ -11,7 +11,8 @@ from fastapi.templating import Jinja2Templates
 from nautilus_trader.common.component import init_logging
 
 from src.api.rest import equity, indicators, timeseries, trades
-from src.api.ui import backtests, dashboard
+from src.api.rest import explorer as explorer_api
+from src.api.ui import backtests, dashboard, explorer
 from src.utils.logging import set_nautilus_log_guard
 
 # Pre-initialize Nautilus logging subsystem once for the process lifetime.
@@ -35,9 +36,11 @@ templates = Jinja2Templates(directory="templates")
 
 # Register UI routers
 app.include_router(dashboard.router, tags=["ui"])
+app.include_router(explorer.router, prefix="/explorer", tags=["ui"])
 app.include_router(backtests.router, prefix="/backtests", tags=["ui"])
 
 # Register REST API routers for chart data
+app.include_router(explorer_api.router, prefix="/api", tags=["explorer-api"])
 app.include_router(timeseries.router, prefix="/api", tags=["charts"])
 app.include_router(trades.router, prefix="/api", tags=["charts"])
 app.include_router(equity.router, prefix="/api", tags=["charts"])

@@ -42,6 +42,7 @@ class BacktestRunFormData(BaseModel):
     starting_balance: Decimal = Field(default=Decimal("1000000"))
     timeout_seconds: int = Field(default=300)
     strategy_params: dict[str, Any] = Field(default_factory=dict)
+    catalog_name: str | None = Field(default=None, max_length=64)
 
     @model_validator(mode="after")
     def validate_form(self) -> "BacktestRunFormData":

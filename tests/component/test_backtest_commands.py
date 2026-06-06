@@ -157,6 +157,69 @@ class TestBacktestCommands:
         assert result.exit_code != 0
         assert "IBKR" in result.output or "connection" in result.output.lower()
 
+    @patch("src.cli.commands._backtest_helpers._build_named_catalog_dependencies")
+    @patch("src.cli.commands._backtest_helpers._resolve_named_catalog_loader")
+    @patch("src.cli.commands._backtest_helpers.BacktestOrchestrator")
+    @pytest.mark.component
+    def test_catalog_flag_routes_named_catalog(
+        self,
+        mock_orchestrator_class,
+        mock_resolve_loader,
+        mock_build_deps,
+    ):
+        """--catalog <name> must route through load_from_catalog and skip DataCatalogService."""
+        from src.cli.commands._backtest_helpers import DataLoadResult
+
+        captured: dict = {}
+
+        async def fake_loader(**kwargs):
+            captured.update(kwargs)
+            return DataLoadResult(
+                bars=[MagicMock()],
+                instrument=MagicMock(),
+                data_source_used="Catalog: e2e-test",
+            )
+
+        mock_resolve_loader.return_value = fake_loader
+        mock_build_deps.return_value = (MagicMock(), MagicMock(), MagicMock())
+
+        mock_orchestrator = MagicMock()
+
+        async def mock_execute(*args, **kwargs):
+            return MockBacktestResult(), None
+
+        mock_orchestrator.execute = mock_execute
+        mock_orchestrator.dispose = MagicMock()
+        mock_orchestrator_class.return_value = mock_orchestrator
+
+        runner = CliRunner()
+        result = runner.invoke(
+            run_backtest,
+            [
+                "--strategy",
+                "sma_crossover",
+                "--symbol",
+                "AAPL",
+                "--start",
+                "2018-01-01",
+                "--end",
+                "2018-12-31",
+                "--timeframe",
+                "1-MINUTE",
+                "--catalog",
+                "e2e-test",
+                "--no-persist",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert captured["catalog_name"] == "e2e-test"
+        assert captured["ticker"] == "AAPL"
+        assert captured["bar_type_spec"] == "1-MINUTE-LAST"
+        # Catalog context row is surfaced for named catalogs
+        assert "e2e-test" in result.output
+        mock_orchestrator.dispose.assert_called_once()
+
     @patch("src.cli.commands._backtest_helpers.DataCatalogService")
     @patch("src.cli.commands._backtest_helpers.BacktestOrchestrator")
     @pytest.mark.component
@@ -385,6 +448,7 @@ class TestBacktestCommands:
         # Mock BacktestRequest to capture from_cli_args call
         mock_request = MagicMock()
         mock_request.symbol = "AAPL"
+        mock_request.catalog_name = None
         mock_request.instrument_id = "AAPL.NASDAQ"
         mock_request.start_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
         mock_request.end_date = datetime(2024, 1, 31, tzinfo=timezone.utc)
@@ -544,6 +608,7 @@ class TestPersistFlag:
         # Mock request
         mock_request = MagicMock()
         mock_request.symbol = "AAPL"
+        mock_request.catalog_name = None
         mock_request.instrument_id = "AAPL.NASDAQ"
         mock_request.start_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
         mock_request.end_date = datetime(2024, 1, 31, tzinfo=timezone.utc)
@@ -612,6 +677,7 @@ class TestPersistFlag:
         # Mock request
         mock_request = MagicMock()
         mock_request.symbol = "AAPL"
+        mock_request.catalog_name = None
         mock_request.instrument_id = "AAPL.NASDAQ"
         mock_request.start_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
         mock_request.end_date = datetime(2024, 1, 31, tzinfo=timezone.utc)
@@ -679,6 +745,7 @@ class TestPersistFlag:
         # Mock request
         mock_request = MagicMock()
         mock_request.symbol = "AAPL"
+        mock_request.catalog_name = None
         mock_request.instrument_id = "AAPL.NASDAQ"
         mock_request.start_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
         mock_request.end_date = datetime(2024, 1, 31, tzinfo=timezone.utc)
@@ -1025,3 +1092,204 @@ backtest:
             assert result.exit_code == 0, f"Exit code was {result.exit_code}: {result.output}"
             # Verify the overridden balance is shown
             assert "$500,000" in result.output
+
+
+class TestErrorMessageCategorization:
+    """Story 3.3 AC #10 — verify CLI error messages distinguish between
+    data-layer and engine-layer failures. Each parametrised case patches a
+    specific seam to provoke the failure mode and asserts the user-facing
+    output identifies the category.
+    """
+
+    @pytest.mark.component
+    @patch("src.cli.commands._backtest_helpers._build_named_catalog_dependencies")
+    @patch("src.cli.commands._backtest_helpers._resolve_named_catalog_loader")
+    def test_missing_ticker_message(self, mock_resolve_loader, mock_build_deps):
+        """Missing ticker: DataNotFoundError message must surface verbatim."""
+        from src.services.exceptions import DataNotFoundError
+
+        mock_build_deps.return_value = (MagicMock(), MagicMock(), MagicMock())
+
+        async def loader_raises(**kwargs):
+            raise DataNotFoundError(
+                instrument_id="DOES_NOT_EXIST",
+                start=datetime(2018, 1, 1, tzinfo=timezone.utc),
+                end=datetime(2018, 12, 31, tzinfo=timezone.utc),
+                message=(
+                    "Ticker 'DOES_NOT_EXIST' not found in catalog 'e2e-test'. "
+                    "Import it via `ntrader data import-csv` or choose a different catalog."
+                ),
+                context={"missing_from_catalog": "e2e-test"},
+            )
+
+        mock_resolve_loader.return_value = loader_raises
+
+        runner = CliRunner()
+        result = runner.invoke(
+            run_backtest,
+            [
+                "--symbol",
+                "DOES_NOT_EXIST",
+                "--start",
+                "2018-01-01",
+                "--end",
+                "2018-12-31",
+                "--timeframe",
+                "1-MINUTE",
+                "--catalog",
+                "e2e-test",
+                "--no-persist",
+            ],
+        )
+
+        # AC #10: data-error exit code (1 = DATA category)
+        assert result.exit_code == 1, (
+            f"Expected data-error exit 1, got {result.exit_code}: {result.output}"
+        )
+        # AC #10: ticker name + catalog name surface verbatim
+        assert "DOES_NOT_EXIST" in result.output
+        assert "e2e-test" in result.output
+        # AC #10: clear "not found in catalog" phrasing
+        assert "not found in catalog" in result.output
+
+    @pytest.mark.component
+    @patch("src.cli.commands._backtest_helpers._build_named_catalog_dependencies")
+    @patch("src.cli.commands._backtest_helpers._resolve_named_catalog_loader")
+    def test_empty_window_message(self, mock_resolve_loader, mock_build_deps):
+        """Empty window: message includes both metadata range and requested range."""
+        from datetime import date
+
+        from src.services.exceptions import DataNotFoundError
+
+        mock_build_deps.return_value = (MagicMock(), MagicMock(), MagicMock())
+
+        async def loader_raises(**kwargs):
+            raise DataNotFoundError(
+                instrument_id="AAPL",
+                start=datetime(2030, 1, 1, tzinfo=timezone.utc),
+                end=datetime(2030, 12, 31, tzinfo=timezone.utc),
+                message=(
+                    "No bars for 'AAPL' in catalog 'e2e-test' between "
+                    "2030-01-01T00:00:00+00:00 and 2030-12-31T00:00:00+00:00. "
+                    "Catalog metadata covers 2010-01-04 → 2024-12-31."
+                ),
+                context={
+                    "catalog": "e2e-test",
+                    "metadata_range": (date(2010, 1, 4), date(2024, 12, 31)),
+                },
+            )
+
+        mock_resolve_loader.return_value = loader_raises
+
+        runner = CliRunner()
+        result = runner.invoke(
+            run_backtest,
+            [
+                "--symbol",
+                "AAPL",
+                "--start",
+                "2030-01-01",
+                "--end",
+                "2030-12-31",
+                "--timeframe",
+                "1-MINUTE",
+                "--catalog",
+                "e2e-test",
+                "--no-persist",
+            ],
+        )
+
+        assert result.exit_code == 1, (
+            f"Expected data-error exit 1, got {result.exit_code}: {result.output}"
+        )
+        # Metadata range substring must be present
+        assert "2010-01-04" in result.output
+        assert "2024-12-31" in result.output
+        # Requested range must be present
+        assert "2030" in result.output
+
+    @pytest.mark.component
+    @patch("src.cli.commands._backtest_helpers._build_named_catalog_dependencies")
+    @patch("src.cli.commands._backtest_helpers._resolve_named_catalog_loader")
+    def test_unknown_catalog_message(self, mock_resolve_loader, mock_build_deps):
+        """Unknown catalog: UnknownCatalogError → click.UsageError, exit 2, available list shown."""
+        from src.services.exceptions import UnknownCatalogError
+
+        mock_build_deps.return_value = (MagicMock(), MagicMock(), MagicMock())
+
+        async def loader_raises(**kwargs):
+            raise UnknownCatalogError("made-up-name", ["e2e-test", "main"])
+
+        mock_resolve_loader.return_value = loader_raises
+
+        runner = CliRunner()
+        result = runner.invoke(
+            run_backtest,
+            [
+                "--symbol",
+                "AAPL",
+                "--start",
+                "2018-01-01",
+                "--end",
+                "2018-12-31",
+                "--timeframe",
+                "1-MINUTE",
+                "--catalog",
+                "made-up-name",
+                "--no-persist",
+            ],
+        )
+
+        # click.UsageError → exit code 2
+        assert result.exit_code == 2, (
+            f"Expected usage-error exit 2, got {result.exit_code}: {result.output}"
+        )
+        assert "Unknown catalog" in result.output
+        assert "made-up-name" in result.output
+        assert "e2e-test" in result.output  # available list surfaced
+
+    @pytest.mark.component
+    @patch("src.cli.commands._backtest_helpers.DataCatalogService")
+    @patch("src.cli.commands._backtest_helpers.BacktestOrchestrator")
+    def test_strategy_error_message(self, mock_orchestrator_class, mock_catalog_service_class):
+        """Strategy/engine error: surfaces strategy substring, NOT a data-error phrase."""
+        # Mock catalog service so data load succeeds
+        mock_catalog_service = MagicMock()
+        mock_availability = MagicMock()
+        mock_availability.covers_range.return_value = True
+        mock_availability.start_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        mock_availability.end_date = datetime(2024, 12, 31, tzinfo=timezone.utc)
+        mock_availability.file_count = 5
+        mock_availability.total_rows = 1000
+        mock_catalog_service.get_availability.return_value = mock_availability
+
+        async def mock_fetch_or_load(*args, **kwargs):
+            return [MagicMock()]
+
+        mock_catalog_service.fetch_or_load = mock_fetch_or_load
+        mock_catalog_service.load_instrument.return_value = MagicMock()
+        mock_catalog_service_class.return_value = mock_catalog_service
+
+        # Engine raises strategy-config error (NOT an "Unknown catalog" ValueError)
+        mock_orchestrator = MagicMock()
+
+        async def execute_raises(*args, **kwargs):
+            raise ValueError("Invalid strategy config: fast_period must be > 0")
+
+        mock_orchestrator.execute = execute_raises
+        mock_orchestrator.dispose = MagicMock()
+        mock_orchestrator_class.return_value = mock_orchestrator
+
+        runner = CliRunner()
+        result = runner.invoke(
+            run_backtest,
+            ["--symbol", "AAPL", "--start", "2024-01-01", "--end", "2024-01-31"],
+        )
+
+        # ClickException("Backtest failed") → exit code 1, distinct from
+        # data-error exit (1 also) but the message body distinguishes them.
+        assert result.exit_code != 0, result.output
+        # The strategy-error message surfaces — not swallowed
+        assert "strategy" in result.output.lower() or "fast_period" in result.output
+        # AC #10: must NOT be confused for a data error
+        assert "not found in catalog" not in result.output

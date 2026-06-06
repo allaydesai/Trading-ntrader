@@ -82,8 +82,9 @@ async def get_trades(
     # Convert to TradeMarker objects (entry + exit markers per trade)
     markers = []
     for trade in db_trades:
-        # Entry marker
-        entry_time = trade.entry_timestamp.strftime("%Y-%m-%d")
+        # Entry marker. Emit Unix seconds (not a day string) so markers align
+        # with the candle series on intraday charts, not just daily ones.
+        entry_time = int(trade.entry_timestamp.timestamp())
         markers.append(
             TradeMarker(
                 time=entry_time,
@@ -96,7 +97,7 @@ async def get_trades(
 
         # Exit marker (if trade is closed)
         if trade.exit_timestamp and trade.exit_price:
-            exit_time = trade.exit_timestamp.strftime("%Y-%m-%d")
+            exit_time = int(trade.exit_timestamp.timestamp())
             exit_side = "sell" if trade.order_side.upper() == "BUY" else "buy"
             markers.append(
                 TradeMarker(

@@ -1,0 +1,91 @@
+# generated: 2026-04-05
+# last_updated: 2026-06-03 (Story 3-6 verified-and-closed: catalog found already re-imported through TZ-fixed parser, all 20 partitions verified TZ-correct, 3 pre-fix backtest_runs flagged. Epic 3 done. Epic 4 unblocked. Task 7 IBKR parity rerun deferred. 3-7 Task 1 done (NASDAQ single-venue route identified via request_bars contracts= seam, zero prod change); Tasks 2-6 blocked on live IBKR Gateway, stays ready-for-dev.)
+# project: Trading-ntrader
+# project_key: NOKEY
+# tracking_system: file-system
+# story_location: _bmad-output/implementation-artifacts
+
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+#
+# Epic Status Transitions:
+#   - backlog → in-progress: Automatically when first story is created (via create-story)
+#   - in-progress → done: Manually when all stories reach 'done' status
+#
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - ready-for-dev: Story file created in stories folder
+#   - in-progress: Developer actively working on implementation
+#   - review: Ready for code review (via Dev's code-review workflow)
+#   - done: Story completed
+#
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective has been completed
+#
+# WORKFLOW NOTES:
+# ===============
+# - Epic transitions to 'in-progress' automatically when first story is created
+# - Stories can be worked in parallel if team capacity allows
+# - SM typically creates next story after previous one is 'done' to incorporate learnings
+# - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
+
+generated: 2026-04-05
+last_updated: 2026-06-03 (EPIC 4 RETROSPECTIVE complete → epic-4-retro-2026-06-03.md. Decisions: 4-2 review→done, epic-4→done, epic-4-retrospective→done; Story 3-7 closed as accepted Phase-1 venue noise (A6); ruff structural check to be hard-gated (A1, 4th-retro slip resolved); import_data.py 718-line split (A2); Phase 1 (Stocks) MVP COMPLETE — project pauses, Phase 2 (ETFs) gated on FMP metadata loader. Prior: Story 4-2 IMPLEMENTED → review: supplementary data display in explorer. 3 collapsible <details> (Company Profile + country/state / Dividend History / Stock Split History) below stats panel via GET /explorer/supplementary + chart-panel OOB, reusing 4-1 async repos. country/state schema gap closed: CatalogInstrument cols + migration dbec2c1f25a6 (head) + InstrumentMapper persist + e2e-test backfill (AAPL=US/CA). has_for_ticker existence probes; supplementary_service + format_split_ratio presenter; has_dividends/has_splits/has_company_profile flags on TickerStatsResponse; Epic-4 placeholder removed. 49 new/changed tests; 924 unit + 657 component green; lint/format/typecheck clean. New migration head = dbec2c1f25a6. Changes uncommitted. Story 3-6 verified-and-closed: catalog found already re-imported through TZ-fixed parser, all 20 partitions verified TZ-correct, 3 pre-fix backtest_runs flagged. Epic 3 done. Epic 4 unblocked. Task 7 IBKR parity rerun deferred. 3-7 Task 1 done (NASDAQ single-venue route identified via request_bars contracts= seam, zero prod change); Tasks 2-6 blocked on live IBKR Gateway, stays ready-for-dev. Story 4-1 created 2026-06-03 → ready-for-dev; Epic 4 → in-progress. Story 4-1 contexted against real FirstRate data: per-ticker files ~/Data/stock_dividends/{T}_divs.txt + ~/Data/stock_splits/{T}.txt, both comma-delimited. Flagged 2 epic-AC discrepancies: split ratio is a single Decimal (4, 0.5-reverse) not "2:1"; splits readme says slash but real files are CSV. Migration head = 79f6e07bee8b. Story 4-1 IMPLEMENTED 2026-06-03 → review: 2 DB models + migration b3accfdb64bd, dual repos (set-replace), supplementary parsers (+ real-data dedup for FirstRate trailing-dup blocks), loader w/ per-ticker isolation, CLI --dividends-dir/--splits-dir + auto-discovery. 49 new tests; 904 unit + 634 component green; verified vs e2e-test catalog (AAPL 4 splits, idempotent re-run). New migration head = b3accfdb64bd. Story 4-1 CODE-REVIEWED 2026-06-03 → done: adversarial 3-layer review (all 6 ACs verified satisfied). 6 patches applied — preserve-on-empty-file (no history wipe), per-ticker SAVEPOINT for DB-level AC-3 isolation, ticker-shaped split-glob filter, non-finite/non-positive Decimal rejection, explicit utf-8 encoding, typed _dedup_by_date; +5 regression tests. 1 deferred (import_data.py >500 lines, pre-existing). 5 dismissed. Lint+mypy clean; 89 affected tests green. Changes uncommitted. Story 4-2 created 2026-06-03 → ready-for-dev: display half of Epic 4 — 3 collapsible <details> (Company Profile / Dividend History / Stock Split History) below stats panel via GET /explorer/supplementary + chart-panel OOB, reusing 4-1 async list_by_ticker repos. Product decision (Allay): INCLUDE country/state — CSV has them (cols 2,3) but CatalogInstrument/InstrumentMapper never persisted them, so 4-2 carries a model+migration+mapper change + company-profile re-import backfill. Also adds has_dividends/has_splits/has_company_profile flags to TickerStatsResponse and a format_split_ratio Decimal→"4:1"/"1:2" presenter. Migration down_revision = b3accfdb64bd.)
+project: Trading-ntrader
+project_key: NOKEY
+tracking_system: file-system
+story_location: _bmad-output/implementation-artifacts
+
+development_status:
+  # Epic 1: Data Import Pipeline
+  # Phase 1 target pivoted from ETF to Stocks on 2026-04-11 after discovering
+  # the ETF bundle ships without company_profiles.csv. FirstRateCsvParser handles
+  # both schemas; Stocks runs end-to-end today, ETFs become Phase 2 gated on
+  # a new FMP-backed metadata loader story. See prd.md MVP Strategy section.
+  epic-1: done
+  1-1-catalog-foundation-and-configuration: done
+  1-2-etf-csv-parser-with-ohlc-validation: done
+  1-3-instrument-id-mapping-from-company-profiles: done
+  1-4-import-pipeline-core: done
+  1-5-cli-import-command-with-progress-and-summary: done
+  1-6-pre-import-dry-run-validation: done
+  1-7-idempotent-import-and-failed-import-recovery: done
+  epic-1-retrospective: done
+
+  # Epic 2: Data Explorer & Verification
+  epic-2: done
+  2-1-explorer-page-with-ticker-list: done
+  2-2-chart-panel-with-timeframe-switching: done
+  2-3-data-statistics-panel: done
+  2-4-explorer-ux-polish: done
+  epic-2-retrospective: done
+
+  # Epic 3: Backtest Integration & Verification
+  # Carryover stories 3-5/3-6/3-7 added 2026-05-09 from Epic 3 retrospective.
+  # 3-6 RESOLVED 2026-06-03 (was BLOCKING for Epic 4): catalog verified TZ-correct,
+  # pre-fix runs flagged. Epic 4 now unblocked. 3-7 is non-blocking optional polish.
+  epic-3: done
+  3-1-catalog-integration-with-backtestengine: done
+  3-2-explorer-to-backtest-bridge: done
+  3-3-backtest-verification-and-reference-comparison: done
+  3-4-ibkr-vs-firstrate-parity-comparison: done
+  3-5-deprecated-reference-test-cleanup: done
+  3-6-firstrate-catalog-reimport-after-tz-fix: done
+  # 3-7 CLOSED 2026-06-03 (Epic 4 retro A6): residual 0.31% PnL Δ accepted as
+  # Phase-1 consolidated-tape vs single-venue noise (covered by widened tolerances);
+  # Tasks 2-6 were blocked on live IBKR Gateway. Task 1 survey complete.
+  3-7-residual-pnl-drift-investigation: done
+  epic-3-retrospective: done
+
+  # Epic 4: Supplementary Data — DONE 2026-06-03. Caps Phase 1 (Stocks) MVP.
+  # Last drafted epic; project pauses here (Allay). Phase 2 (ETFs) gated on FMP
+  # metadata loader. See epic-4-retro-2026-06-03.md.
+  epic-4: done
+  4-1-dividend-and-stock-split-data-parsing: done
+  4-2-supplementary-data-display-in-explorer: done
+  epic-4-retrospective: done

@@ -11,10 +11,10 @@ from uuid import UUID
 import structlog
 from fastapi import APIRouter, HTTPException
 
+from src.api.chart_bars import _load_chart_bars
 from src.api.dependencies import BacktestService
 from src.api.models.chart_errors import ErrorDetail
 from src.api.models.chart_indicators import IndicatorPoint, IndicatorsResponse
-from src.services.data_catalog import DataCatalogService
 
 router = APIRouter()
 logger = structlog.get_logger(__name__)
@@ -239,54 +239,19 @@ async def get_indicators(
 
     indicators: dict[str, list[IndicatorPoint]] = {}
 
-    # Determine strategy type and compute appropriate indicators
-    if "bollinger" in strategy_path.lower():
+    # Determine strategy type and compute appropriate indicators. Both branches
+    # query the run's own catalog + bar type via the shared loader.
+    strategy_lower = strategy_path.lower()
+    is_bollinger = "bollinger" in strategy_lower
+    is_sma = "sma" in strategy_lower or "crossover" in strategy_lower
+
+    if is_bollinger or is_sma:
         try:
-            # Load OHLCV bars from catalog
-            catalog = DataCatalogService()
-
-            # Query bars for the backtest period
-            bars = catalog.query_bars(
-                instrument_id=backtest.instrument_symbol,
-                start=datetime.combine(backtest.start_date, datetime.min.time()).replace(
-                    tzinfo=timezone.utc
-                ),
-                end=datetime.combine(backtest.end_date, datetime.max.time()).replace(
-                    tzinfo=timezone.utc
-                ),
-                bar_type_spec="1-DAY-LAST",
-            )
-
-            indicators = _compute_bollinger_indicators(bars, strategy_config)
-
-        except Exception as e:
-            logger.error(
-                "failed_to_compute_indicators",
-                run_id=str(run_id),
-                error=str(e),
-            )
-            # Return empty indicators on error rather than failing the request
-            indicators = {}
-
-    elif "sma" in strategy_path.lower() or "crossover" in strategy_path.lower():
-        try:
-            # Load OHLCV bars from catalog
-            catalog = DataCatalogService()
-
-            # Query bars for the backtest period
-            bars = catalog.query_bars(
-                instrument_id=backtest.instrument_symbol,
-                start=datetime.combine(backtest.start_date, datetime.min.time()).replace(
-                    tzinfo=timezone.utc
-                ),
-                end=datetime.combine(backtest.end_date, datetime.max.time()).replace(
-                    tzinfo=timezone.utc
-                ),
-                bar_type_spec="1-DAY-LAST",
-            )
-
-            indicators = _compute_sma_indicators(bars, strategy_config)
-
+            bars = await _load_chart_bars(backtest)
+            if is_bollinger:
+                indicators = _compute_bollinger_indicators(bars, strategy_config)
+            else:
+                indicators = _compute_sma_indicators(bars, strategy_config)
         except Exception as e:
             logger.error(
                 "failed_to_compute_indicators",

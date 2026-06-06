@@ -1,0 +1,1145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NTrader Explorer — Design Directions</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; background: #0a0a0f; color: #e2e8f0; }
+  .mono { font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace; }
+
+  /* Direction Switcher */
+  .switcher { position: fixed; top: 0; left: 0; right: 0; z-index: 100; background: #1a1a2e; border-bottom: 1px solid #334155; padding: 12px 24px; display: flex; align-items: center; gap: 16px; }
+  .switcher h1 { font-size: 14px; color: #94a3b8; white-space: nowrap; }
+  .switcher-tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+  .switcher-tab { padding: 6px 16px; border-radius: 6px; border: 1px solid #334155; background: transparent; color: #94a3b8; cursor: pointer; font-size: 13px; transition: all 0.2s; }
+  .switcher-tab:hover { border-color: #3b82f6; color: #e2e8f0; }
+  .switcher-tab.active { background: #3b82f6; border-color: #3b82f6; color: white; }
+
+  .directions { margin-top: 56px; }
+  .direction { display: none; min-height: calc(100vh - 56px); }
+  .direction.active { display: block; }
+
+  /* Shared Components */
+  .navbar { display: flex; align-items: center; justify-content: space-between; padding: 10px 24px; background: #0f172a; border-bottom: 1px solid #1e293b; }
+  .navbar-brand { font-size: 16px; font-weight: 700; color: #e2e8f0; }
+  .navbar-brand span { color: #3b82f6; }
+  .navbar-links { display: flex; gap: 24px; }
+  .navbar-links a { color: #64748b; text-decoration: none; font-size: 14px; transition: color 0.2s; }
+  .navbar-links a:hover, .navbar-links a.active { color: #e2e8f0; }
+
+  /* Description Banner */
+  .desc-banner { background: #0f172a; border-bottom: 1px solid #1e293b; padding: 16px 24px; }
+  .desc-banner h2 { font-size: 18px; font-weight: 600; margin-bottom: 4px; }
+  .desc-banner p { font-size: 13px; color: #94a3b8; line-height: 1.5; }
+  .desc-tags { display: flex; gap: 8px; margin-top: 8px; }
+  .desc-tag { font-size: 11px; padding: 2px 8px; border-radius: 4px; background: #1e293b; color: #94a3b8; }
+
+  /* Catalog Selector */
+  .catalog-bar { display: flex; align-items: center; gap: 12px; padding: 12px 24px; background: #0f172a; border-bottom: 1px solid #1e293b; }
+  .catalog-select { background: #1e293b; border: 1px solid #334155; color: #e2e8f0; padding: 6px 12px; border-radius: 6px; font-size: 13px; }
+  .catalog-label { font-size: 12px; color: #64748b; }
+  .catalog-stats { margin-left: auto; font-size: 12px; color: #64748b; }
+  .catalog-stats span { color: #e2e8f0; font-weight: 600; }
+
+  /* Search */
+  .search-box { flex: 1; max-width: 400px; position: relative; }
+  .search-input { width: 100%; background: #1e293b; border: 1px solid #334155; color: #e2e8f0; padding: 8px 12px 8px 36px; border-radius: 6px; font-size: 14px; outline: none; transition: border-color 0.2s; }
+  .search-input:focus { border-color: #3b82f6; }
+  .search-input::placeholder { color: #475569; }
+  .search-icon { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: #475569; font-size: 14px; }
+
+  /* Asset Class Pills */
+  .pills { display: flex; gap: 6px; flex-wrap: wrap; }
+  .pill { padding: 4px 12px; border-radius: 20px; border: 1px solid #334155; background: transparent; color: #94a3b8; font-size: 12px; cursor: pointer; transition: all 0.2s; white-space: nowrap; }
+  .pill:hover { border-color: #64748b; color: #e2e8f0; }
+  .pill.active { background: #3b82f6; border-color: #3b82f6; color: white; }
+  .pill .count { color: #64748b; margin-left: 4px; }
+  .pill.active .count { color: rgba(255,255,255,0.7); }
+
+  /* Ticker List */
+  .ticker-table { width: 100%; border-collapse: collapse; }
+  .ticker-table th { text-align: left; padding: 8px 16px; font-size: 11px; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; background: #0f172a; border-bottom: 1px solid #1e293b; position: sticky; top: 0; }
+  .ticker-table td { padding: 8px 16px; font-size: 13px; border-bottom: 1px solid #1e293b; }
+  .ticker-table tr { cursor: pointer; transition: background 0.15s; }
+  .ticker-table tr:hover { background: #1e293b; }
+  .ticker-table tr.selected { background: #1e3a5f; }
+
+  .ticker-symbol { font-family: 'SF Mono', monospace; font-weight: 700; color: #e2e8f0; }
+  .ticker-name { color: #94a3b8; font-size: 12px; }
+  .date-range { font-family: 'SF Mono', monospace; font-size: 12px; color: #94a3b8; }
+
+  /* Asset Badges */
+  .badge { padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+  .badge-etf { background: #1e3a5f; color: #60a5fa; }
+  .badge-stock { background: #1e293b; color: #94a3b8; }
+  .badge-futures { background: #451a03; color: #fbbf24; }
+  .badge-fx { background: #064e3b; color: #34d399; }
+  .badge-crypto { background: #3b0764; color: #c084fc; }
+  .badge-index { background: #083344; color: #22d3ee; }
+  .badge-delisted { background: #1c1917; color: #78716c; }
+
+  /* Timeframe Buttons */
+  .tf-toolbar { display: flex; gap: 4px; }
+  .tf-btn { padding: 4px 12px; border-radius: 4px; border: 1px solid #334155; background: transparent; color: #94a3b8; font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.2s; font-family: 'SF Mono', monospace; }
+  .tf-btn:hover { border-color: #64748b; color: #e2e8f0; }
+  .tf-btn.active { background: #3b82f6; border-color: #3b82f6; color: white; }
+
+  /* TF availability dots */
+  .tf-dots { display: flex; gap: 4px; align-items: center; }
+  .tf-dot { width: 6px; height: 6px; border-radius: 50%; background: #334155; }
+  .tf-dot.available { background: #22c55e; }
+  .tf-dot-label { font-size: 10px; color: #64748b; margin-right: 2px; }
+
+  /* Chart Area */
+  .chart-area { background: #0f172a; border: 1px solid #1e293b; border-radius: 8px; margin: 16px 24px; overflow: hidden; }
+  .chart-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid #1e293b; }
+  .chart-title { display: flex; align-items: center; gap: 12px; }
+  .chart-title h3 { font-size: 16px; font-weight: 700; }
+  .chart-title .price { font-family: 'SF Mono', monospace; font-size: 14px; }
+  .chart-title .price-up { color: #22c55e; }
+  .chart-title .price-down { color: #ef4444; }
+  .chart-canvas { height: 400px; display: flex; align-items: center; justify-content: center; position: relative; }
+  .chart-placeholder { color: #334155; font-size: 14px; }
+
+  /* Simulated candlestick chart */
+  .candle-chart { display: flex; align-items: flex-end; gap: 2px; height: 320px; padding: 20px; width: 100%; }
+  .candle { display: flex; flex-direction: column; align-items: center; flex: 1; position: relative; }
+  .candle-wick { width: 1px; background: #475569; }
+  .candle-body { width: 60%; min-width: 3px; max-width: 8px; border-radius: 1px; }
+  .candle-green .candle-body { background: #22c55e; }
+  .candle-red .candle-body { background: #ef4444; }
+  .candle-green .candle-wick { background: #22c55e; }
+  .candle-red .candle-wick { background: #ef4444; }
+
+  /* Volume bars */
+  .volume-area { height: 60px; display: flex; align-items: flex-end; gap: 2px; padding: 0 20px; border-top: 1px solid #1e293b; }
+  .vol-bar { flex: 1; border-radius: 1px 1px 0 0; min-width: 3px; }
+  .vol-green { background: rgba(34, 197, 94, 0.3); }
+  .vol-red { background: rgba(239, 68, 68, 0.3); }
+
+  /* Stats Panel */
+  .stats-panel { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; padding: 16px 24px; }
+  .stat-card { background: #0f172a; border: 1px solid #1e293b; border-radius: 8px; padding: 12px 16px; }
+  .stat-label { font-size: 11px; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }
+  .stat-value { font-family: 'SF Mono', monospace; font-size: 16px; font-weight: 600; color: #e2e8f0; }
+  .stat-sub { font-size: 11px; color: #64748b; margin-top: 2px; }
+
+  /* Row counts inline */
+  .row-count { font-family: 'SF Mono', monospace; font-size: 12px; color: #64748b; }
+
+  /* Coverage bar */
+  .coverage-bar { height: 4px; background: #1e293b; border-radius: 2px; width: 120px; overflow: hidden; }
+  .coverage-fill { height: 100%; background: #22c55e; border-radius: 2px; }
+
+  /* Action Button */
+  .btn-primary { padding: 6px 16px; background: #3b82f6; color: white; border: none; border-radius: 6px; font-size: 13px; cursor: pointer; transition: background 0.2s; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; }
+  .btn-primary:hover { background: #2563eb; }
+  .btn-outline { padding: 6px 16px; background: transparent; color: #94a3b8; border: 1px solid #334155; border-radius: 6px; font-size: 13px; cursor: pointer; transition: all 0.2s; }
+  .btn-outline:hover { border-color: #64748b; color: #e2e8f0; }
+
+  /* Pagination */
+  .pagination { display: flex; align-items: center; justify-content: space-between; padding: 8px 16px; border-top: 1px solid #1e293b; }
+  .pagination-info { font-size: 12px; color: #64748b; }
+  .pagination-btns { display: flex; gap: 4px; }
+  .page-btn { padding: 4px 10px; border-radius: 4px; border: 1px solid #334155; background: transparent; color: #94a3b8; font-size: 12px; cursor: pointer; }
+  .page-btn.active { background: #3b82f6; border-color: #3b82f6; color: white; }
+
+  /* Supplementary Data */
+  .supp-section { padding: 0 24px 16px; }
+  .supp-card { background: #0f172a; border: 1px solid #1e293b; border-radius: 8px; padding: 16px; }
+  .supp-header { font-size: 13px; font-weight: 600; color: #94a3b8; margin-bottom: 8px; }
+  .supp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+  .supp-item { font-size: 12px; }
+  .supp-item-label { color: #64748b; }
+  .supp-item-value { color: #e2e8f0; font-family: 'SF Mono', monospace; }
+
+  /* Direction-specific overrides */
+  .dir-compact .ticker-table td { padding: 6px 12px; font-size: 12px; }
+  .dir-compact .ticker-table th { padding: 6px 12px; font-size: 10px; }
+
+  /* Loading indicator */
+  .loading-bar { height: 2px; background: #1e293b; overflow: hidden; }
+  .loading-bar .progress { height: 100%; width: 30%; background: #3b82f6; border-radius: 1px; animation: loading 1.5s ease-in-out infinite; }
+  @keyframes loading { 0% { transform: translateX(-100%); } 100% { transform: translateX(400%); } }
+
+  /* Breadcrumbs */
+  .breadcrumbs { padding: 8px 24px; font-size: 12px; color: #64748b; }
+  .breadcrumbs a { color: #64748b; text-decoration: none; }
+  .breadcrumbs a:hover { color: #e2e8f0; }
+  .breadcrumbs .sep { margin: 0 6px; }
+
+  /* Warning banner */
+  .warning-banner { background: #451a03; border: 1px solid #92400e; border-radius: 6px; padding: 8px 12px; font-size: 12px; color: #fbbf24; margin: 0 24px 12px; display: flex; align-items: center; gap: 8px; }
+
+  /* Filter bar variations */
+  .filter-bar-combined { display: flex; align-items: center; gap: 12px; padding: 12px 24px; background: #0f172a; border-bottom: 1px solid #1e293b; flex-wrap: wrap; }
+
+  /* Inline chart sparkline */
+  .sparkline { display: inline-flex; align-items: flex-end; gap: 1px; height: 20px; vertical-align: middle; }
+  .spark-bar { width: 2px; background: #22c55e; border-radius: 1px 1px 0 0; }
+</style>
+</head>
+<body>
+
+<!-- Direction Switcher -->
+<div class="switcher">
+  <h1>NTrader Explorer — Design Directions</h1>
+  <div class="switcher-tabs">
+    <button class="switcher-tab active" onclick="showDirection(1)">1. Clean Minimal</button>
+    <button class="switcher-tab" onclick="showDirection(2)">2. Data Dense</button>
+    <button class="switcher-tab" onclick="showDirection(3)">3. Search Hero</button>
+    <button class="switcher-tab" onclick="showDirection(4)">4. Card Layout</button>
+    <button class="switcher-tab" onclick="showDirection(5)">5. Dashboard</button>
+    <button class="switcher-tab" onclick="showDirection(6)">6. Minimal + Stats</button>
+  </div>
+</div>
+
+<div class="directions">
+
+<!-- ==================== DIRECTION 1: CLEAN MINIMAL ==================== -->
+<div class="direction active" id="dir1">
+  <div class="desc-banner">
+    <h2>Direction 1: Clean Minimal</h2>
+    <p>Maximum clarity, minimal chrome. The search box and ticker list dominate. Chart appears only when a ticker is selected. Closest to the existing NTrader aesthetic — just data and whitespace.</p>
+    <div class="desc-tags"><span class="desc-tag">Stacked</span><span class="desc-tag">Search-First</span><span class="desc-tag">Progressive Disclosure</span></div>
+  </div>
+
+  <nav class="navbar">
+    <div class="navbar-brand">N<span>Trader</span></div>
+    <div class="navbar-links">
+      <a href="#">Dashboard</a>
+      <a href="#" class="active">Explorer</a>
+      <a href="#">Backtests</a>
+      <a href="#">Run Backtest</a>
+    </div>
+  </nav>
+
+  <div class="filter-bar-combined">
+    <div class="catalog-label">Catalog</div>
+    <select class="catalog-select">
+      <option>firstrate-research</option>
+      <option>ibkr-live</option>
+    </select>
+    <div class="search-box">
+      <span class="search-icon">&#x1F50D;</span>
+      <input class="search-input" type="text" placeholder="Search tickers..." value="SPY" autofocus>
+    </div>
+    <div class="pills">
+      <button class="pill active">All <span class="count">20,934</span></button>
+      <button class="pill">ETF <span class="count">5,072</span></button>
+      <button class="pill">Stock <span class="count">7,794</span></button>
+      <button class="pill">Futures <span class="count">132</span></button>
+      <button class="pill">FX <span class="count">79</span></button>
+      <button class="pill">Crypto <span class="count">74</span></button>
+      <button class="pill">Index <span class="count">128</span></button>
+      <button class="pill">Delisted <span class="count">6,887</span></button>
+    </div>
+  </div>
+
+  <div style="padding: 0 24px;">
+    <table class="ticker-table">
+      <thead>
+        <tr>
+          <th>Symbol</th>
+          <th>Name</th>
+          <th>Asset Class</th>
+          <th>Date Range</th>
+          <th>Timeframes</th>
+          <th>Daily Bars</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr class="selected">
+          <td><span class="ticker-symbol">SPY</span></td>
+          <td><span class="ticker-name">SPDR S&P 500 ETF Trust</span></td>
+          <td><span class="badge badge-etf">ETF</span></td>
+          <td><span class="date-range">1993-01-29 → 2024-12-31</span></td>
+          <td>
+            <div class="tf-dots">
+              <span class="tf-dot-label">1m</span><span class="tf-dot available"></span>
+              <span class="tf-dot-label">1H</span><span class="tf-dot available"></span>
+              <span class="tf-dot-label">D</span><span class="tf-dot available"></span>
+            </div>
+          </td>
+          <td><span class="row-count">8,045</span></td>
+        </tr>
+        <tr>
+          <td><span class="ticker-symbol">SPYG</span></td>
+          <td><span class="ticker-name">SPDR Portfolio S&P 500 Growth ETF</span></td>
+          <td><span class="badge badge-etf">ETF</span></td>
+          <td><span class="date-range">2000-09-25 → 2024-12-31</span></td>
+          <td>
+            <div class="tf-dots">
+              <span class="tf-dot-label">1m</span><span class="tf-dot available"></span>
+              <span class="tf-dot-label">1H</span><span class="tf-dot available"></span>
+              <span class="tf-dot-label">D</span><span class="tf-dot available"></span>
+            </div>
+          </td>
+          <td><span class="row-count">6,112</span></td>
+        </tr>
+        <tr>
+          <td><span class="ticker-symbol">SPYV</span></td>
+          <td><span class="ticker-name">SPDR Portfolio S&P 500 Value ETF</span></td>
+          <td><span class="badge badge-etf">ETF</span></td>
+          <td><span class="date-range">2000-09-25 → 2024-12-31</span></td>
+          <td>
+            <div class="tf-dots">
+              <span class="tf-dot-label">1m</span><span class="tf-dot available"></span>
+              <span class="tf-dot-label">1H</span><span class="tf-dot available"></span>
+              <span class="tf-dot-label">D</span><span class="tf-dot available"></span>
+            </div>
+          </td>
+          <td><span class="row-count">6,112</span></td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="pagination">
+      <span class="pagination-info">Showing 1-25 of 3 results for "SPY"</span>
+      <div class="pagination-btns">
+        <button class="page-btn active">1</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Chart appears when ticker selected -->
+  <div class="chart-area">
+    <div class="chart-header">
+      <div class="chart-title">
+        <h3 class="mono">SPY</h3>
+        <span class="price price-up mono">$598.42 +1.24%</span>
+        <div class="tf-toolbar">
+          <button class="tf-btn">1m</button>
+          <button class="tf-btn">15m</button>
+          <button class="tf-btn">1H</button>
+          <button class="tf-btn active">D</button>
+        </div>
+      </div>
+      <a href="#" class="btn-primary">&#x25B6; Run Backtest</a>
+    </div>
+    <div class="chart-canvas">
+      <div class="candle-chart" id="chart1"></div>
+    </div>
+    <div class="volume-area" id="vol1"></div>
+  </div>
+
+  <div class="stats-panel">
+    <div class="stat-card">
+      <div class="stat-label">Date Range</div>
+      <div class="stat-value mono">1993-01-29 → 2024-12-31</div>
+      <div class="stat-sub">31 years, 11 months</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Daily Bars</div>
+      <div class="stat-value mono">8,045</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">1-Hour Bars</div>
+      <div class="stat-value mono">51,488</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">1-Min Bars</div>
+      <div class="stat-value mono">3,089,280</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Price Range (Daily)</div>
+      <div class="stat-value mono">$29.68 — $607.18</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Exchange</div>
+      <div class="stat-value">ARCA</div>
+      <div class="stat-sub">Nautilus ID: SPY.ARCA</div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== DIRECTION 2: DATA DENSE ==================== -->
+<div class="direction" id="dir2">
+  <div class="desc-banner">
+    <h2>Direction 2: Data Dense</h2>
+    <p>Maximum information per pixel. Compact rows, inline sparklines, coverage bars, and row counts all visible in the ticker list. Inspired by Koyfin and Bloomberg Terminal — designed for scanning hundreds of tickers quickly.</p>
+    <div class="desc-tags"><span class="desc-tag">Compact</span><span class="desc-tag">Inline Metrics</span><span class="desc-tag">High Density</span></div>
+  </div>
+
+  <nav class="navbar">
+    <div class="navbar-brand">N<span>Trader</span></div>
+    <div class="navbar-links">
+      <a href="#">Dashboard</a>
+      <a href="#" class="active">Explorer</a>
+      <a href="#">Backtests</a>
+      <a href="#">Run Backtest</a>
+    </div>
+  </nav>
+
+  <div class="filter-bar-combined">
+    <select class="catalog-select">
+      <option>firstrate-research (20,934 tickers)</option>
+      <option>ibkr-live (142 tickers)</option>
+    </select>
+    <div class="search-box">
+      <span class="search-icon">&#x1F50D;</span>
+      <input class="search-input" type="text" placeholder="Search 20,934 tickers...">
+    </div>
+    <div class="pills">
+      <button class="pill active">All</button>
+      <button class="pill">ETF</button>
+      <button class="pill">Stock</button>
+      <button class="pill">Futures</button>
+      <button class="pill">FX</button>
+      <button class="pill">Crypto</button>
+      <button class="pill">Index</button>
+      <button class="pill">Delisted</button>
+    </div>
+    <div style="margin-left: auto;">
+      <button class="btn-outline" style="font-size: 11px;">Compact</button>
+      <button class="btn-outline" style="font-size: 11px; opacity: 0.5;">Comfortable</button>
+    </div>
+  </div>
+
+  <div style="padding: 0 24px;" class="dir-compact">
+    <table class="ticker-table">
+      <thead>
+        <tr>
+          <th style="width: 80px;">Symbol</th>
+          <th>Name</th>
+          <th style="width: 60px;">Type</th>
+          <th style="width: 90px;">Coverage</th>
+          <th style="width: 180px;">Date Range</th>
+          <th style="width: 60px;">1m</th>
+          <th style="width: 60px;">1H</th>
+          <th style="width: 60px;">D</th>
+          <th style="width: 80px;">Trend</th>
+          <th style="width: 80px;"></th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><span class="ticker-symbol">AAPL</span></td>
+          <td><span class="ticker-name">Apple Inc.</span></td>
+          <td><span class="badge badge-stock">Stock</span></td>
+          <td><div class="coverage-bar"><div class="coverage-fill" style="width: 95%;"></div></div></td>
+          <td><span class="date-range">1984-09-07 → 2024-12-31</span></td>
+          <td><span class="row-count">5.8M</span></td>
+          <td><span class="row-count">96K</span></td>
+          <td><span class="row-count">10.1K</span></td>
+          <td>
+            <div class="sparkline">
+              <div class="spark-bar" style="height: 8px;"></div>
+              <div class="spark-bar" style="height: 12px;"></div>
+              <div class="spark-bar" style="height: 10px;"></div>
+              <div class="spark-bar" style="height: 14px;"></div>
+              <div class="spark-bar" style="height: 11px;"></div>
+              <div class="spark-bar" style="height: 16px;"></div>
+              <div class="spark-bar" style="height: 15px;"></div>
+              <div class="spark-bar" style="height: 18px;"></div>
+              <div class="spark-bar" style="height: 20px;"></div>
+            </div>
+          </td>
+          <td><button class="btn-outline" style="font-size: 11px; padding: 2px 8px;">View</button></td>
+        </tr>
+        <tr>
+          <td><span class="ticker-symbol">MSFT</span></td>
+          <td><span class="ticker-name">Microsoft Corp.</span></td>
+          <td><span class="badge badge-stock">Stock</span></td>
+          <td><div class="coverage-bar"><div class="coverage-fill" style="width: 92%;"></div></div></td>
+          <td><span class="date-range">1986-03-13 → 2024-12-31</span></td>
+          <td><span class="row-count">5.2M</span></td>
+          <td><span class="row-count">88K</span></td>
+          <td><span class="row-count">9.7K</span></td>
+          <td>
+            <div class="sparkline">
+              <div class="spark-bar" style="height: 6px;"></div>
+              <div class="spark-bar" style="height: 9px;"></div>
+              <div class="spark-bar" style="height: 8px;"></div>
+              <div class="spark-bar" style="height: 12px;"></div>
+              <div class="spark-bar" style="height: 14px;"></div>
+              <div class="spark-bar" style="height: 13px;"></div>
+              <div class="spark-bar" style="height: 16px;"></div>
+              <div class="spark-bar" style="height: 19px;"></div>
+              <div class="spark-bar" style="height: 20px;"></div>
+            </div>
+          </td>
+          <td><button class="btn-outline" style="font-size: 11px; padding: 2px 8px;">View</button></td>
+        </tr>
+        <tr>
+          <td><span class="ticker-symbol">GOOGL</span></td>
+          <td><span class="ticker-name">Alphabet Inc. Class A</span></td>
+          <td><span class="badge badge-stock">Stock</span></td>
+          <td><div class="coverage-bar"><div class="coverage-fill" style="width: 48%;"></div></div></td>
+          <td><span class="date-range">2004-08-19 → 2024-12-31</span></td>
+          <td><span class="row-count">2.8M</span></td>
+          <td><span class="row-count">46K</span></td>
+          <td><span class="row-count">5.1K</span></td>
+          <td>
+            <div class="sparkline">
+              <div class="spark-bar" style="height: 10px;"></div>
+              <div class="spark-bar" style="height: 8px;"></div>
+              <div class="spark-bar" style="height: 12px;"></div>
+              <div class="spark-bar" style="height: 11px;"></div>
+              <div class="spark-bar" style="height: 15px;"></div>
+              <div class="spark-bar" style="height: 14px;"></div>
+              <div class="spark-bar" style="height: 18px;"></div>
+              <div class="spark-bar" style="height: 17px;"></div>
+              <div class="spark-bar" style="height: 20px;"></div>
+            </div>
+          </td>
+          <td><button class="btn-outline" style="font-size: 11px; padding: 2px 8px;">View</button></td>
+        </tr>
+        <tr>
+          <td><span class="ticker-symbol">ES</span></td>
+          <td><span class="ticker-name">E-mini S&P 500 Futures</span></td>
+          <td><span class="badge badge-futures">Futures</span></td>
+          <td><div class="coverage-bar"><div class="coverage-fill" style="width: 78%;"></div></div></td>
+          <td><span class="date-range">1997-09-09 → 2024-12-31</span></td>
+          <td><span class="row-count">4.1M</span></td>
+          <td><span class="row-count">68K</span></td>
+          <td><span class="row-count">6.8K</span></td>
+          <td>
+            <div class="sparkline">
+              <div class="spark-bar" style="height: 7px;"></div>
+              <div class="spark-bar" style="height: 11px;"></div>
+              <div class="spark-bar" style="height: 9px;"></div>
+              <div class="spark-bar" style="height: 13px;"></div>
+              <div class="spark-bar" style="height: 12px;"></div>
+              <div class="spark-bar" style="height: 16px;"></div>
+              <div class="spark-bar" style="height: 15px;"></div>
+              <div class="spark-bar" style="height: 19px;"></div>
+              <div class="spark-bar" style="height: 20px;"></div>
+            </div>
+          </td>
+          <td><button class="btn-outline" style="font-size: 11px; padding: 2px 8px;">View</button></td>
+        </tr>
+        <tr>
+          <td><span class="ticker-symbol">EURUSD</span></td>
+          <td><span class="ticker-name">Euro / US Dollar</span></td>
+          <td><span class="badge badge-fx">FX</span></td>
+          <td><div class="coverage-bar"><div class="coverage-fill" style="width: 88%;"></div></div></td>
+          <td><span class="date-range">2001-01-02 → 2024-12-31</span></td>
+          <td><span class="row-count">6.1M</span></td>
+          <td><span class="row-count">101K</span></td>
+          <td><span class="row-count">6.0K</span></td>
+          <td>
+            <div class="sparkline">
+              <div class="spark-bar" style="height: 14px;"></div>
+              <div class="spark-bar" style="height: 12px;"></div>
+              <div class="spark-bar" style="height: 10px;"></div>
+              <div class="spark-bar" style="height: 8px;"></div>
+              <div class="spark-bar" style="height: 11px;"></div>
+              <div class="spark-bar" style="height: 9px;"></div>
+              <div class="spark-bar" style="height: 7px;"></div>
+              <div class="spark-bar" style="height: 10px;"></div>
+              <div class="spark-bar" style="height: 8px;"></div>
+            </div>
+          </td>
+          <td><button class="btn-outline" style="font-size: 11px; padding: 2px 8px;">View</button></td>
+        </tr>
+        <tr>
+          <td><span class="ticker-symbol">BTC</span></td>
+          <td><span class="ticker-name">Bitcoin / USD</span></td>
+          <td><span class="badge badge-crypto">Crypto</span></td>
+          <td><div class="coverage-bar"><div class="coverage-fill" style="width: 35%;"></div></div></td>
+          <td><span class="date-range">2014-09-17 → 2024-12-31</span></td>
+          <td><span class="row-count">1.4M</span></td>
+          <td><span class="row-count">23K</span></td>
+          <td><span class="row-count">3.7K</span></td>
+          <td>
+            <div class="sparkline">
+              <div class="spark-bar" style="height: 3px;"></div>
+              <div class="spark-bar" style="height: 5px;"></div>
+              <div class="spark-bar" style="height: 4px;"></div>
+              <div class="spark-bar" style="height: 8px;"></div>
+              <div class="spark-bar" style="height: 6px;"></div>
+              <div class="spark-bar" style="height: 12px;"></div>
+              <div class="spark-bar" style="height: 10px;"></div>
+              <div class="spark-bar" style="height: 16px;"></div>
+              <div class="spark-bar" style="height: 20px;"></div>
+            </div>
+          </td>
+          <td><button class="btn-outline" style="font-size: 11px; padding: 2px 8px;">View</button></td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="pagination">
+      <span class="pagination-info">Showing 1-25 of 20,934 tickers</span>
+      <div class="pagination-btns">
+        <button class="page-btn active">1</button>
+        <button class="page-btn">2</button>
+        <button class="page-btn">3</button>
+        <button class="page-btn">...</button>
+        <button class="page-btn">838</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== DIRECTION 3: SEARCH HERO ==================== -->
+<div class="direction" id="dir3">
+  <div class="desc-banner">
+    <h2>Direction 3: Search Hero</h2>
+    <p>The search box is the centerpiece — large, centered, and prominent like TradingView's symbol search. The page starts nearly empty and fills with content as you search. Feels like a search engine for your data catalog.</p>
+    <div class="desc-tags"><span class="desc-tag">Search-Centric</span><span class="desc-tag">Progressive Reveal</span><span class="desc-tag">TradingView-Inspired</span></div>
+  </div>
+
+  <nav class="navbar">
+    <div class="navbar-brand">N<span>Trader</span></div>
+    <div class="navbar-links">
+      <a href="#">Dashboard</a>
+      <a href="#" class="active">Explorer</a>
+      <a href="#">Backtests</a>
+      <a href="#">Run Backtest</a>
+    </div>
+  </nav>
+
+  <div class="catalog-bar">
+    <div class="catalog-label">Catalog:</div>
+    <select class="catalog-select">
+      <option>firstrate-research</option>
+    </select>
+    <div class="catalog-stats"><span>20,934</span> tickers &middot; <span>7</span> asset classes &middot; <span>1984</span> — <span>2024</span></div>
+  </div>
+
+  <div style="padding: 60px 24px 40px; text-align: center;">
+    <div style="max-width: 600px; margin: 0 auto;">
+      <h2 style="font-size: 24px; font-weight: 300; margin-bottom: 24px; color: #94a3b8;">Explore your data catalog</h2>
+      <div style="position: relative;">
+        <input class="search-input" type="text" placeholder="Type a ticker symbol..." style="font-size: 18px; padding: 14px 20px 14px 48px; border-radius: 12px; max-width: none;">
+        <span class="search-icon" style="left: 16px; font-size: 18px;">&#x1F50D;</span>
+      </div>
+      <div class="pills" style="justify-content: center; margin-top: 16px;">
+        <button class="pill">ETF <span class="count">5,072</span></button>
+        <button class="pill">Stock <span class="count">7,794</span></button>
+        <button class="pill">Futures <span class="count">132</span></button>
+        <button class="pill">FX <span class="count">79</span></button>
+        <button class="pill">Crypto <span class="count">74</span></button>
+        <button class="pill">Index <span class="count">128</span></button>
+        <button class="pill">Delisted <span class="count">6,887</span></button>
+      </div>
+    </div>
+  </div>
+
+  <div style="padding: 0 24px; max-width: 800px; margin: 0 auto;">
+    <h3 style="font-size: 13px; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 12px;">Quick Stats</h3>
+    <div class="stats-panel" style="padding: 0;">
+      <div class="stat-card">
+        <div class="stat-label">Total Tickers</div>
+        <div class="stat-value mono">20,934</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Total Bars</div>
+        <div class="stat-value mono">~4.2B</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Date Coverage</div>
+        <div class="stat-value mono">1984 — 2024</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Catalog Size</div>
+        <div class="stat-value mono">209 GB</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== DIRECTION 4: CARD LAYOUT ==================== -->
+<div class="direction" id="dir4">
+  <div class="desc-banner">
+    <h2>Direction 4: Card Layout</h2>
+    <p>Tickers displayed as cards in a grid instead of table rows. Each card shows the ticker symbol, asset class, date range, and a mini sparkline. More visual but shows fewer tickers per viewport. Good for smaller catalogs or filtered views.</p>
+    <div class="desc-tags"><span class="desc-tag">Grid Layout</span><span class="desc-tag">Visual Cards</span><span class="desc-tag">Scannable</span></div>
+  </div>
+
+  <nav class="navbar">
+    <div class="navbar-brand">N<span>Trader</span></div>
+    <div class="navbar-links">
+      <a href="#">Dashboard</a>
+      <a href="#" class="active">Explorer</a>
+      <a href="#">Backtests</a>
+      <a href="#">Run Backtest</a>
+    </div>
+  </nav>
+
+  <div class="filter-bar-combined">
+    <select class="catalog-select">
+      <option>firstrate-research</option>
+    </select>
+    <div class="search-box">
+      <span class="search-icon">&#x1F50D;</span>
+      <input class="search-input" type="text" placeholder="Search tickers...">
+    </div>
+    <div class="pills">
+      <button class="pill">All</button>
+      <button class="pill active">ETF <span class="count">5,072</span></button>
+      <button class="pill">Stock</button>
+      <button class="pill">Futures</button>
+      <button class="pill">FX</button>
+      <button class="pill">Crypto</button>
+      <button class="pill">Index</button>
+      <button class="pill">Delisted</button>
+    </div>
+  </div>
+
+  <div style="padding: 16px 24px; display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px;">
+    <!-- Card 1 -->
+    <div style="background: #0f172a; border: 1px solid #1e293b; border-radius: 8px; padding: 16px; cursor: pointer; transition: border-color 0.2s;" onmouseover="this.style.borderColor='#334155'" onmouseout="this.style.borderColor='#1e293b'">
+      <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 8px;">
+        <div>
+          <span class="ticker-symbol" style="font-size: 16px;">SPY</span>
+          <span class="badge badge-etf" style="margin-left: 8px;">ETF</span>
+        </div>
+        <div class="sparkline">
+          <div class="spark-bar" style="height: 8px;"></div><div class="spark-bar" style="height: 12px;"></div><div class="spark-bar" style="height: 10px;"></div><div class="spark-bar" style="height: 14px;"></div><div class="spark-bar" style="height: 16px;"></div><div class="spark-bar" style="height: 15px;"></div><div class="spark-bar" style="height: 18px;"></div><div class="spark-bar" style="height: 20px;"></div>
+        </div>
+      </div>
+      <div class="ticker-name" style="margin-bottom: 8px;">SPDR S&P 500 ETF Trust</div>
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <span class="date-range">1993 → 2024</span>
+        <span class="row-count">8,045 daily bars</span>
+      </div>
+      <div style="margin-top: 8px;">
+        <div class="coverage-bar" style="width: 100%;"><div class="coverage-fill" style="width: 78%;"></div></div>
+      </div>
+    </div>
+    <!-- Card 2 -->
+    <div style="background: #0f172a; border: 1px solid #1e293b; border-radius: 8px; padding: 16px; cursor: pointer; transition: border-color 0.2s;" onmouseover="this.style.borderColor='#334155'" onmouseout="this.style.borderColor='#1e293b'">
+      <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 8px;">
+        <div>
+          <span class="ticker-symbol" style="font-size: 16px;">QQQ</span>
+          <span class="badge badge-etf" style="margin-left: 8px;">ETF</span>
+        </div>
+        <div class="sparkline">
+          <div class="spark-bar" style="height: 5px;"></div><div class="spark-bar" style="height: 8px;"></div><div class="spark-bar" style="height: 7px;"></div><div class="spark-bar" style="height: 11px;"></div><div class="spark-bar" style="height: 14px;"></div><div class="spark-bar" style="height: 13px;"></div><div class="spark-bar" style="height: 17px;"></div><div class="spark-bar" style="height: 20px;"></div>
+        </div>
+      </div>
+      <div class="ticker-name" style="margin-bottom: 8px;">Invesco QQQ Trust</div>
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <span class="date-range">1999 → 2024</span>
+        <span class="row-count">6,384 daily bars</span>
+      </div>
+      <div style="margin-top: 8px;">
+        <div class="coverage-bar" style="width: 100%;"><div class="coverage-fill" style="width: 62%;"></div></div>
+      </div>
+    </div>
+    <!-- Card 3 -->
+    <div style="background: #0f172a; border: 1px solid #1e293b; border-radius: 8px; padding: 16px; cursor: pointer; transition: border-color 0.2s;" onmouseover="this.style.borderColor='#334155'" onmouseout="this.style.borderColor='#1e293b'">
+      <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 8px;">
+        <div>
+          <span class="ticker-symbol" style="font-size: 16px;">IWM</span>
+          <span class="badge badge-etf" style="margin-left: 8px;">ETF</span>
+        </div>
+        <div class="sparkline">
+          <div class="spark-bar" style="height: 10px;"></div><div class="spark-bar" style="height: 12px;"></div><div class="spark-bar" style="height: 11px;"></div><div class="spark-bar" style="height: 14px;"></div><div class="spark-bar" style="height: 13px;"></div><div class="spark-bar" style="height: 15px;"></div><div class="spark-bar" style="height: 14px;"></div><div class="spark-bar" style="height: 16px;"></div>
+        </div>
+      </div>
+      <div class="ticker-name" style="margin-bottom: 8px;">iShares Russell 2000 ETF</div>
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <span class="date-range">2000 → 2024</span>
+        <span class="row-count">6,276 daily bars</span>
+      </div>
+      <div style="margin-top: 8px;">
+        <div class="coverage-bar" style="width: 100%;"><div class="coverage-fill" style="width: 60%;"></div></div>
+      </div>
+    </div>
+    <!-- Card 4 -->
+    <div style="background: #0f172a; border: 1px solid #1e293b; border-radius: 8px; padding: 16px; cursor: pointer; transition: border-color 0.2s;" onmouseover="this.style.borderColor='#334155'" onmouseout="this.style.borderColor='#1e293b'">
+      <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 8px;">
+        <div>
+          <span class="ticker-symbol" style="font-size: 16px;">GLD</span>
+          <span class="badge badge-etf" style="margin-left: 8px;">ETF</span>
+        </div>
+        <div class="sparkline">
+          <div class="spark-bar" style="height: 8px;"></div><div class="spark-bar" style="height: 10px;"></div><div class="spark-bar" style="height: 12px;"></div><div class="spark-bar" style="height: 11px;"></div><div class="spark-bar" style="height: 14px;"></div><div class="spark-bar" style="height: 13px;"></div><div class="spark-bar" style="height: 16px;"></div><div class="spark-bar" style="height: 18px;"></div>
+        </div>
+      </div>
+      <div class="ticker-name" style="margin-bottom: 8px;">SPDR Gold Shares</div>
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <span class="date-range">2004 → 2024</span>
+        <span class="row-count">5,208 daily bars</span>
+      </div>
+      <div style="margin-top: 8px;">
+        <div class="coverage-bar" style="width: 100%;"><div class="coverage-fill" style="width: 50%;"></div></div>
+      </div>
+    </div>
+    <!-- Card 5 -->
+    <div style="background: #0f172a; border: 1px solid #1e293b; border-radius: 8px; padding: 16px; cursor: pointer; transition: border-color 0.2s;" onmouseover="this.style.borderColor='#334155'" onmouseout="this.style.borderColor='#1e293b'">
+      <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 8px;">
+        <div>
+          <span class="ticker-symbol" style="font-size: 16px;">TLT</span>
+          <span class="badge badge-etf" style="margin-left: 8px;">ETF</span>
+        </div>
+        <div class="sparkline">
+          <div class="spark-bar" style="height: 18px;"></div><div class="spark-bar" style="height: 16px;"></div><div class="spark-bar" style="height: 14px;"></div><div class="spark-bar" style="height: 12px;"></div><div class="spark-bar" style="height: 10px;"></div><div class="spark-bar" style="height: 8px;"></div><div class="spark-bar" style="height: 7px;"></div><div class="spark-bar" style="height: 6px;"></div>
+        </div>
+      </div>
+      <div class="ticker-name" style="margin-bottom: 8px;">iShares 20+ Year Treasury Bond ETF</div>
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <span class="date-range">2002 → 2024</span>
+        <span class="row-count">5,724 daily bars</span>
+      </div>
+      <div style="margin-top: 8px;">
+        <div class="coverage-bar" style="width: 100%;"><div class="coverage-fill" style="width: 55%;"></div></div>
+      </div>
+    </div>
+    <!-- Card 6 -->
+    <div style="background: #0f172a; border: 1px solid #1e293b; border-radius: 8px; padding: 16px; cursor: pointer; transition: border-color 0.2s;" onmouseover="this.style.borderColor='#334155'" onmouseout="this.style.borderColor='#1e293b'">
+      <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 8px;">
+        <div>
+          <span class="ticker-symbol" style="font-size: 16px;">VTI</span>
+          <span class="badge badge-etf" style="margin-left: 8px;">ETF</span>
+        </div>
+        <div class="sparkline">
+          <div class="spark-bar" style="height: 6px;"></div><div class="spark-bar" style="height: 9px;"></div><div class="spark-bar" style="height: 11px;"></div><div class="spark-bar" style="height: 13px;"></div><div class="spark-bar" style="height: 15px;"></div><div class="spark-bar" style="height: 14px;"></div><div class="spark-bar" style="height: 17px;"></div><div class="spark-bar" style="height: 20px;"></div>
+        </div>
+      </div>
+      <div class="ticker-name" style="margin-bottom: 8px;">Vanguard Total Stock Market ETF</div>
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <span class="date-range">2001 → 2024</span>
+        <span class="row-count">5,960 daily bars</span>
+      </div>
+      <div style="margin-top: 8px;">
+        <div class="coverage-bar" style="width: 100%;"><div class="coverage-fill" style="width: 57%;"></div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== DIRECTION 5: DASHBOARD ==================== -->
+<div class="direction" id="dir5">
+  <div class="desc-banner">
+    <h2>Direction 5: Dashboard Overview</h2>
+    <p>Landing page shows catalog-level statistics and health before any ticker is selected. Asset class breakdown, import status, coverage heatmap. Answers "what do I have?" before "show me a ticker." Grafana-inspired data source overview.</p>
+    <div class="desc-tags"><span class="desc-tag">Overview First</span><span class="desc-tag">Catalog Health</span><span class="desc-tag">Grafana-Inspired</span></div>
+  </div>
+
+  <nav class="navbar">
+    <div class="navbar-brand">N<span>Trader</span></div>
+    <div class="navbar-links">
+      <a href="#">Dashboard</a>
+      <a href="#" class="active">Explorer</a>
+      <a href="#">Backtests</a>
+      <a href="#">Run Backtest</a>
+    </div>
+  </nav>
+
+  <div class="catalog-bar">
+    <div class="catalog-label">Catalog:</div>
+    <select class="catalog-select">
+      <option>firstrate-research</option>
+    </select>
+    <div class="search-box" style="max-width: 300px;">
+      <span class="search-icon">&#x1F50D;</span>
+      <input class="search-input" type="text" placeholder="Search tickers...">
+    </div>
+  </div>
+
+  <div style="padding: 16px 24px;">
+    <h2 style="font-size: 20px; font-weight: 600; margin-bottom: 16px;">Catalog Overview</h2>
+
+    <!-- Summary Stats -->
+    <div class="stats-panel" style="padding: 0; margin-bottom: 16px;">
+      <div class="stat-card">
+        <div class="stat-label">Total Tickers</div>
+        <div class="stat-value mono">20,934</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Total Bars</div>
+        <div class="stat-value mono">~4.2B</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Catalog Size</div>
+        <div class="stat-value mono">209 GB</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Last Import</div>
+        <div class="stat-value mono">2026-04-03</div>
+        <div class="stat-sub" style="color: #22c55e;">All complete</div>
+      </div>
+    </div>
+
+    <!-- Asset Class Breakdown -->
+    <h3 style="font-size: 14px; font-weight: 600; color: #94a3b8; margin-bottom: 12px;">Asset Class Breakdown</h3>
+    <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; margin-bottom: 24px;">
+      <div style="background: #0f172a; border: 1px solid #1e293b; border-radius: 6px; padding: 12px; cursor: pointer; display: flex; align-items: center; gap: 12px;" onmouseover="this.style.borderColor='#334155'" onmouseout="this.style.borderColor='#1e293b'">
+        <span class="badge badge-stock" style="font-size: 13px; padding: 4px 10px;">Stock</span>
+        <div>
+          <div style="font-size: 16px; font-weight: 600;" class="mono">7,794</div>
+          <div style="font-size: 11px; color: #64748b;">tickers &middot; 4 timeframes</div>
+        </div>
+      </div>
+      <div style="background: #0f172a; border: 1px solid #1e293b; border-radius: 6px; padding: 12px; cursor: pointer; display: flex; align-items: center; gap: 12px;" onmouseover="this.style.borderColor='#334155'" onmouseout="this.style.borderColor='#1e293b'">
+        <span class="badge badge-delisted" style="font-size: 13px; padding: 4px 10px;">Delisted</span>
+        <div>
+          <div style="font-size: 16px; font-weight: 600;" class="mono">6,887</div>
+          <div style="font-size: 11px; color: #64748b;">tickers &middot; 4 timeframes</div>
+        </div>
+      </div>
+      <div style="background: #0f172a; border: 1px solid #1e293b; border-radius: 6px; padding: 12px; cursor: pointer; display: flex; align-items: center; gap: 12px;" onmouseover="this.style.borderColor='#334155'" onmouseout="this.style.borderColor='#1e293b'">
+        <span class="badge badge-etf" style="font-size: 13px; padding: 4px 10px;">ETF</span>
+        <div>
+          <div style="font-size: 16px; font-weight: 600;" class="mono">5,072</div>
+          <div style="font-size: 11px; color: #64748b;">tickers &middot; 4 timeframes</div>
+        </div>
+      </div>
+      <div style="background: #0f172a; border: 1px solid #1e293b; border-radius: 6px; padding: 12px; cursor: pointer; display: flex; align-items: center; gap: 12px;" onmouseover="this.style.borderColor='#334155'" onmouseout="this.style.borderColor='#1e293b'">
+        <span class="badge badge-futures" style="font-size: 13px; padding: 4px 10px;">Futures</span>
+        <div>
+          <div style="font-size: 16px; font-weight: 600;" class="mono">132</div>
+          <div style="font-size: 11px; color: #64748b;">symbols &middot; 4 timeframes</div>
+        </div>
+      </div>
+      <div style="background: #0f172a; border: 1px solid #1e293b; border-radius: 6px; padding: 12px; cursor: pointer; display: flex; align-items: center; gap: 12px;" onmouseover="this.style.borderColor='#334155'" onmouseout="this.style.borderColor='#1e293b'">
+        <span class="badge badge-index" style="font-size: 13px; padding: 4px 10px;">Index</span>
+        <div>
+          <div style="font-size: 16px; font-weight: 600;" class="mono">128</div>
+          <div style="font-size: 11px; color: #64748b;">tickers &middot; 4 timeframes</div>
+        </div>
+      </div>
+      <div style="background: #0f172a; border: 1px solid #1e293b; border-radius: 6px; padding: 12px; cursor: pointer; display: flex; align-items: center; gap: 12px;" onmouseover="this.style.borderColor='#334155'" onmouseout="this.style.borderColor='#1e293b'">
+        <span class="badge badge-fx" style="font-size: 13px; padding: 4px 10px;">FX</span>
+        <div>
+          <div style="font-size: 16px; font-weight: 600;" class="mono">79</div>
+          <div style="font-size: 11px; color: #64748b;">pairs &middot; 4 timeframes</div>
+        </div>
+      </div>
+      <div style="background: #0f172a; border: 1px solid #1e293b; border-radius: 6px; padding: 12px; cursor: pointer; display: flex; align-items: center; gap: 12px;" onmouseover="this.style.borderColor='#334155'" onmouseout="this.style.borderColor='#1e293b'">
+        <span class="badge badge-crypto" style="font-size: 13px; padding: 4px 10px;">Crypto</span>
+        <div>
+          <div style="font-size: 16px; font-weight: 600;" class="mono">74</div>
+          <div style="font-size: 11px; color: #64748b;">tickers &middot; 4 timeframes</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== DIRECTION 6: MINIMAL + STATS ==================== -->
+<div class="direction" id="dir6">
+  <div class="desc-banner">
+    <h2>Direction 6: Minimal + Inline Stats</h2>
+    <p>Hybrid of Direction 1 and 2. Clean table layout but with strategic data density — coverage bars and row counts inline, plus a collapsible supplementary data section below the chart. Balances scannability with detail.</p>
+    <div class="desc-tags"><span class="desc-tag">Balanced</span><span class="desc-tag">Collapsible Detail</span><span class="desc-tag">Recommended</span></div>
+  </div>
+
+  <nav class="navbar">
+    <div class="navbar-brand">N<span>Trader</span></div>
+    <div class="navbar-links">
+      <a href="#">Dashboard</a>
+      <a href="#" class="active">Explorer</a>
+      <a href="#">Backtests</a>
+      <a href="#">Run Backtest</a>
+    </div>
+  </nav>
+
+  <div class="breadcrumbs">
+    <a href="#">Explorer</a> <span class="sep">/</span> <a href="#">firstrate-research</a> <span class="sep">/</span> SPY
+  </div>
+
+  <div class="filter-bar-combined">
+    <select class="catalog-select">
+      <option>firstrate-research</option>
+    </select>
+    <div class="search-box">
+      <span class="search-icon">&#x1F50D;</span>
+      <input class="search-input" type="text" placeholder="Search tickers..." value="SPY">
+    </div>
+    <div class="pills">
+      <button class="pill active">All <span class="count">20,934</span></button>
+      <button class="pill">ETF <span class="count">5,072</span></button>
+      <button class="pill">Stock <span class="count">7,794</span></button>
+      <button class="pill">Futures <span class="count">132</span></button>
+      <button class="pill">FX <span class="count">79</span></button>
+      <button class="pill">Crypto <span class="count">74</span></button>
+      <button class="pill">Index <span class="count">128</span></button>
+      <button class="pill">Delisted <span class="count">6,887</span></button>
+    </div>
+  </div>
+
+  <div style="padding: 0 24px;">
+    <table class="ticker-table">
+      <thead>
+        <tr>
+          <th>Symbol</th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Date Range</th>
+          <th>Coverage</th>
+          <th>Bars (D / 1H / 1m)</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr class="selected">
+          <td><span class="ticker-symbol">SPY</span></td>
+          <td><span class="ticker-name">SPDR S&P 500 ETF Trust</span></td>
+          <td><span class="badge badge-etf">ETF</span></td>
+          <td><span class="date-range">1993-01-29 → 2024-12-31</span></td>
+          <td><div class="coverage-bar" style="width: 100%;"><div class="coverage-fill" style="width: 78%;"></div></div></td>
+          <td><span class="row-count">8K / 51K / 3.1M</span></td>
+        </tr>
+        <tr>
+          <td><span class="ticker-symbol">SPYG</span></td>
+          <td><span class="ticker-name">SPDR Portfolio S&P 500 Growth ETF</span></td>
+          <td><span class="badge badge-etf">ETF</span></td>
+          <td><span class="date-range">2000-09-25 → 2024-12-31</span></td>
+          <td><div class="coverage-bar" style="width: 100%;"><div class="coverage-fill" style="width: 60%;"></div></div></td>
+          <td><span class="row-count">6.1K / 39K / 2.3M</span></td>
+        </tr>
+        <tr>
+          <td><span class="ticker-symbol">SPYV</span></td>
+          <td><span class="ticker-name">SPDR Portfolio S&P 500 Value ETF</span></td>
+          <td><span class="badge badge-etf">ETF</span></td>
+          <td><span class="date-range">2000-09-25 → 2024-12-31</span></td>
+          <td><div class="coverage-bar" style="width: 100%;"><div class="coverage-fill" style="width: 60%;"></div></div></td>
+          <td><span class="row-count">6.1K / 39K / 2.3M</span></td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="pagination">
+      <span class="pagination-info">3 results for "SPY"</span>
+      <div class="pagination-btns"></div>
+    </div>
+  </div>
+
+  <!-- Chart with ticker selected -->
+  <div class="chart-area">
+    <div class="chart-header">
+      <div class="chart-title">
+        <h3 class="mono">SPY</h3>
+        <span style="color: #64748b; font-size: 12px;">SPDR S&P 500 ETF Trust &middot; ARCA</span>
+        <div class="tf-toolbar" style="margin-left: 16px;">
+          <button class="tf-btn">1m</button>
+          <button class="tf-btn">15m</button>
+          <button class="tf-btn">1H</button>
+          <button class="tf-btn active">D</button>
+        </div>
+      </div>
+      <div style="display: flex; gap: 8px;">
+        <a href="#" class="btn-primary">&#x25B6; Run Backtest</a>
+      </div>
+    </div>
+    <div class="chart-canvas">
+      <div class="candle-chart" id="chart6"></div>
+    </div>
+    <div class="volume-area" id="vol6"></div>
+  </div>
+
+  <!-- Stats -->
+  <div class="stats-panel">
+    <div class="stat-card">
+      <div class="stat-label">Date Range</div>
+      <div class="stat-value mono">1993-01-29 → 2024-12-31</div>
+      <div class="stat-sub">31 years, 11 months</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Daily Bars</div>
+      <div class="stat-value mono">8,045</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">1-Hour Bars</div>
+      <div class="stat-value mono">51,488</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">1-Min Bars</div>
+      <div class="stat-value mono">3,089,280</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Price Range</div>
+      <div class="stat-value mono">$29.68 — $607.18</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Nautilus ID</div>
+      <div class="stat-value mono">SPY.ARCA</div>
+    </div>
+  </div>
+
+  <!-- Supplementary Data (collapsible) -->
+  <div class="supp-section">
+    <details open>
+      <summary style="cursor: pointer; font-size: 14px; font-weight: 600; color: #94a3b8; margin-bottom: 12px; outline: none;">Company Profile</summary>
+      <div class="supp-card">
+        <div class="supp-grid">
+          <div class="supp-item"><span class="supp-item-label">Sector:</span> <span class="supp-item-value">Financial Services</span></div>
+          <div class="supp-item"><span class="supp-item-label">Industry:</span> <span class="supp-item-value">Exchange Traded Fund</span></div>
+          <div class="supp-item"><span class="supp-item-label">Exchange:</span> <span class="supp-item-value">ARCA</span></div>
+          <div class="supp-item"><span class="supp-item-label">IPO Date:</span> <span class="supp-item-value">1993-01-22</span></div>
+          <div class="supp-item"><span class="supp-item-label">Country:</span> <span class="supp-item-value">US</span></div>
+          <div class="supp-item"><span class="supp-item-label">State:</span> <span class="supp-item-value">MA</span></div>
+        </div>
+      </div>
+    </details>
+  </div>
+
+  <div class="supp-section">
+    <details>
+      <summary style="cursor: pointer; font-size: 14px; font-weight: 600; color: #94a3b8; margin-bottom: 12px; outline: none;">Recent Dividends</summary>
+      <div class="supp-card">
+        <table style="width: 100%; font-size: 12px;">
+          <tr style="color: #64748b;"><td>2024-12-20</td><td class="mono" style="text-align: right;">$1.8282</td></tr>
+          <tr style="color: #64748b;"><td>2024-09-20</td><td class="mono" style="text-align: right;">$1.7714</td></tr>
+          <tr style="color: #64748b;"><td>2024-06-21</td><td class="mono" style="text-align: right;">$1.7925</td></tr>
+          <tr style="color: #64748b;"><td>2024-03-15</td><td class="mono" style="text-align: right;">$1.5962</td></tr>
+        </table>
+      </div>
+    </details>
+  </div>
+</div>
+
+</div><!-- /directions -->
+
+<script>
+function showDirection(num) {
+  document.querySelectorAll('.direction').forEach(d => d.classList.remove('active'));
+  document.querySelectorAll('.switcher-tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('dir' + num).classList.add('active');
+  document.querySelectorAll('.switcher-tab')[num - 1].classList.add('active');
+  window.scrollTo(0, 0);
+  // Generate charts for visible direction
+  generateCharts();
+}
+
+function generateCharts() {
+  ['chart1', 'chart6'].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el || el.children.length > 0) return;
+    const volId = id.replace('chart', 'vol');
+    const volEl = document.getElementById(volId);
+
+    let price = 450;
+    for (let i = 0; i < 80; i++) {
+      const change = (Math.random() - 0.48) * 8;
+      const open = price;
+      const close = price + change;
+      const high = Math.max(open, close) + Math.random() * 4;
+      const low = Math.min(open, close) - Math.random() * 4;
+      const isGreen = close >= open;
+
+      const bodyHeight = Math.abs(close - open) * 0.8;
+      const wickTop = (high - Math.max(open, close)) * 0.8;
+      const wickBottom = (Math.min(open, close) - low) * 0.8;
+
+      const candle = document.createElement('div');
+      candle.className = 'candle ' + (isGreen ? 'candle-green' : 'candle-red');
+      candle.innerHTML = `
+        <div class="candle-wick" style="height: ${wickTop}px;"></div>
+        <div class="candle-body" style="height: ${Math.max(bodyHeight, 2)}px;"></div>
+        <div class="candle-wick" style="height: ${wickBottom}px;"></div>
+      `;
+      el.appendChild(candle);
+
+      if (volEl) {
+        const vol = document.createElement('div');
+        vol.className = 'vol-bar ' + (isGreen ? 'vol-green' : 'vol-red');
+        vol.style.height = (Math.random() * 40 + 5) + 'px';
+        volEl.appendChild(vol);
+      }
+
+      price = close;
+    }
+  });
+}
+
+// Generate charts on load
+generateCharts();
+</script>
+
+</body>
+</html>

@@ -810,7 +810,9 @@ class TestResolveBacktestRequest:
         assert request.symbol == "AAPL"
         assert request.instrument_id == "AAPL.NASDAQ"
         assert request.start_date == start
-        assert request.end_date == end
+        # Review #4: a date-only (midnight) end is normalized to end-of-day so
+        # the final trading day is inclusive, matching the web UI.
+        assert request.end_date == end.replace(hour=23, minute=59, second=59, microsecond=999999)
         assert request.strategy_type == "sma_crossover"
         assert data_source == "catalog"
 
@@ -835,6 +837,52 @@ class TestResolveBacktestRequest:
                 starting_balance=None,
                 persist=True,
                 console=console,
+            )
+
+    def test_resolve_cli_mode_invalid_catalog_name_raises_usage_error(self):
+        """Review #3: a bad --catalog must surface as a usage error, not a traceback.
+
+        The catalog_name validator raises pydantic ValidationError; without the
+        conversion this crashed with exit 1 instead of a click.UsageError (exit 2).
+        """
+        import click
+
+        from src.cli.commands._backtest_helpers import resolve_backtest_request
+
+        console = Console(force_terminal=True, width=120)
+        with pytest.raises(click.UsageError, match="Invalid catalog_name"):
+            resolve_backtest_request(
+                config_file=None,
+                symbol="AAPL",
+                strategy="sma_crossover",
+                start=datetime(2024, 1, 1, tzinfo=timezone.utc),
+                end=datetime(2024, 6, 30, tzinfo=timezone.utc),
+                data_source=None,
+                starting_balance=None,
+                persist=True,
+                console=console,
+                catalog_name="bad name!",
+            )
+
+    def test_resolve_cli_mode_catalog_with_ibkr_source_raises_usage_error(self):
+        """Review #3: catalog_name + a non-catalog data_source is a usage error."""
+        import click
+
+        from src.cli.commands._backtest_helpers import resolve_backtest_request
+
+        console = Console(force_terminal=True, width=120)
+        with pytest.raises(click.UsageError, match="only valid when"):
+            resolve_backtest_request(
+                config_file=None,
+                symbol="AAPL",
+                strategy="sma_crossover",
+                start=datetime(2024, 1, 1, tzinfo=timezone.utc),
+                end=datetime(2024, 6, 30, tzinfo=timezone.utc),
+                data_source="ibkr",
+                starting_balance=None,
+                persist=True,
+                console=console,
+                catalog_name="e2e-test",
             )
 
     def test_resolve_cli_mode_missing_start_raises_error(self):
@@ -1156,3 +1204,101 @@ class TestPrecisionFromBars:
         bar2 = MagicMock()
         bar2.close = _FakePrice("100.123")
         assert _precision_from_bars([bar1, bar2]) == 3
+
+
+class TestLoadBacktestDataCatalogNameRouting:
+    """Tests for the catalog_name short-circuit route (Story 3.1, Task 3)."""
+
+    @pytest.mark.asyncio
+    async def test_catalog_name_routes_to_load_from_catalog(self):
+        """When catalog_name is set, delegate to load_from_catalog and skip DataCatalogService."""
+        from src.cli.commands import _backtest_helpers
+        from src.cli.commands._backtest_helpers import DataLoadResult, load_backtest_data
+
+        captured_kwargs: dict = {}
+
+        async def capture_and_return(**kwargs):
+            captured_kwargs.update(kwargs)
+            return DataLoadResult(
+                bars=[MagicMock()],
+                instrument=MagicMock(),
+                data_source_used="Catalog: e2e-test",
+            )
+
+        mock_session = MagicMock()
+
+        mock_catalog_service = MagicMock()
+
+        start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        end = datetime(2024, 6, 30, tzinfo=timezone.utc)
+
+        with (
+            patch.object(
+                _backtest_helpers, "_resolve_named_catalog_loader", return_value=capture_and_return
+            ),
+            patch.object(
+                _backtest_helpers,
+                "_build_named_catalog_dependencies",
+                return_value=(MagicMock(), MagicMock(), mock_session),
+            ),
+        ):
+            result = await load_backtest_data(
+                data_source="catalog",
+                instrument_id="AAPL.NASDAQ",
+                bar_type_spec="1-MINUTE-LAST",
+                start=start,
+                end=end,
+                console=Console(force_terminal=True, width=120),
+                catalog_service=mock_catalog_service,
+                catalog_name="e2e-test",
+            )
+
+        assert result.data_source_used == "Catalog: e2e-test"
+        assert captured_kwargs["catalog_name"] == "e2e-test"
+        assert captured_kwargs["ticker"] == "AAPL"
+        assert captured_kwargs["bar_type_spec"] == "1-MINUTE-LAST"
+        assert captured_kwargs["start"] == start
+        assert captured_kwargs["end"] == end
+        # Legacy catalog path must be completely bypassed
+        mock_catalog_service.get_availability.assert_not_called()
+        mock_catalog_service.fetch_or_load.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_no_catalog_name_uses_existing_catalog_branch(self):
+        """catalog_name=None leaves the existing _load_catalog_data path untouched."""
+        from src.cli.commands._backtest_helpers import load_backtest_data
+
+        mock_catalog_service = MagicMock()
+        mock_availability = MagicMock()
+        mock_availability.covers_range.return_value = True
+        mock_availability.start_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        mock_availability.end_date = datetime(2024, 12, 31, tzinfo=timezone.utc)
+        mock_availability.file_count = 5
+        mock_availability.total_rows = 1000
+        mock_catalog_service.get_availability.return_value = mock_availability
+
+        mock_bars = [MagicMock()]
+        mock_instrument = MagicMock()
+
+        async def mock_fetch_or_load(*args, **kwargs):
+            return mock_bars
+
+        mock_catalog_service.fetch_or_load = mock_fetch_or_load
+        mock_catalog_service.load_instrument.return_value = mock_instrument
+
+        start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        end = datetime(2024, 6, 30, tzinfo=timezone.utc)
+
+        result = await load_backtest_data(
+            data_source="catalog",
+            instrument_id="AAPL.NASDAQ",
+            bar_type_spec="1-DAY-LAST",
+            start=start,
+            end=end,
+            console=Console(force_terminal=True, width=120),
+            catalog_service=mock_catalog_service,
+            catalog_name=None,
+        )
+
+        assert result.bars == mock_bars
+        mock_catalog_service.get_availability.assert_called_once()

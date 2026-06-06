@@ -249,6 +249,7 @@ def mock_service_for_detail() -> BacktestQueryService:
     backtest.execution_status = "success"
     backtest.execution_duration_seconds = Decimal("45.5")
     backtest.error_message = None  # Must be None or string, not MagicMock
+    backtest.data_quality_flag = None  # Optional[str] — must be None or string, not MagicMock
     backtest.config_snapshot = {"fast_period": 10, "slow_period": 20}
     backtest.created_at = datetime.now(timezone.utc)
     backtest.updated_at = datetime.now(timezone.utc)
