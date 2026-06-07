@@ -155,7 +155,9 @@ Exit codes: `0` success · `1` partial (some bar files failed) · `2` fatal (bad
 |---------|-------------|
 | `data import --csv <file> --symbol <SYM> --venue <VENUE>` | Import a single CSV file to Parquet catalog |
 | `data list` | List all data in the catalog (reads `NAUTILUS_PATH`) |
+| `data list --catalog <name>` | List data in a specific named catalog (overrides `NAUTILUS_PATH`) |
 | `data check --symbol <SYM>` | Check data availability |
+| `data check --symbol <SYM> --catalog <name>` | Check availability in a specific named catalog |
 | `data check --symbol <SYM> --start <date> --end <date>` | Detect data gaps |
 | `data connect` | Test IBKR connection |
 | `data fetch --instruments <SYM> --start <date> --end <date>` | Fetch data from IBKR |
@@ -165,6 +167,7 @@ Exit codes: `0` success · `1` partial (some bar files failed) · `2` fatal (bad
 | Command | Description |
 |---------|-------------|
 | `backtest run --strategy <type> --symbol <SYM> [--data-source <src>] ...` | Run a backtest (sources: catalog, ibkr, kraken, mock) |
+| `backtest run --strategy <type> --symbol <SYM> --catalog <name> ...` | Run against a named FirstRate catalog (resolves the ticker via the import DB; overrides the default `NAUTILUS_PATH`) |
 | `backtest run <config.yaml>` | Run backtest with YAML config |
 | `backtest history` | View recent backtest executions |
 | `backtest history --sort sharpe` | Sort by Sharpe ratio |
@@ -236,10 +239,18 @@ uv run python -m src.cli.main import \
   --timeframe daily \
   ~/Data/Stocks/Stocks_1day
 
-# 3. Verify (point NAUTILUS_PATH at the catalog, then list)
-uv run python -m src.cli.main data list
+# 3. Verify — list what's in the named catalog
+uv run python -m src.cli.main data list --catalog firstrate-stocks
 
-# 4. Explore in the web UI (see "Use the Web Dashboard" below) → http://127.0.0.1:8000/explorer
+# 4. Run a backtest against the named catalog
+uv run python -m src.cli.main backtest run \
+  --strategy sma_crossover \
+  --symbol AAPL \
+  --start 2023-01-01 --end 2023-12-31 \
+  --timeframe 1-day \
+  --catalog firstrate-stocks
+
+# 5. Explore in the web UI (see "Use the Web Dashboard" below) → http://127.0.0.1:8000/explorer
 ```
 
 **Importing a subset of tickers.** The importer ingests *every* ticker in the
@@ -312,13 +323,20 @@ uv run python -m src.cli.main backtest compare <uuid1> <uuid2>
 uv run uvicorn src.api.web:app --reload --host 127.0.0.1 --port 8000
 
 # Open in browser:
-#   http://127.0.0.1:8000           — dashboard / backtest results
-#   http://127.0.0.1:8000/explorer  — data explorer (tickers, charts, stats, dividends/splits)
+#   http://127.0.0.1:8000              — dashboard / backtest results
+#   http://127.0.0.1:8000/explorer     — data explorer (tickers, charts, stats, dividends/splits)
+#   http://127.0.0.1:8000/backtests/run — configure and run a backtest
 ```
 
 The **data explorer** browses the catalog at `NAUTILUS_PATH`: pick a ticker to see
 its price chart (switchable timeframes), bar statistics and date coverage, and any
 imported dividend/split data. It pre-selects `DEFAULT_CATALOG_NAME` when set.
+
+**Run a backtest from the UI.** Open `/backtests/run` — the form pre-fills the
+**Catalog** field from `DEFAULT_CATALOG_NAME`, so a run against the default catalog
+works straight from the nav. To target a different catalog, start from the explorer
+(pick a ticker → *Run Backtest*) or pass `?catalog=<name>` in the URL. Selecting a
+non-catalog data source (mock / ibkr / kraken) ignores the catalog field.
 
 ## Available Strategies
 
