@@ -185,6 +185,13 @@ data/catalogs/
 # Playwright MCP test artifacts
 .playwright-mcp/
 
+# Runtime server logs (regenerated on each run)
+logs/
+
+# Root-level E2E test screenshots (agent-browser / Playwright captures).
+# Scoped to repo root so tracked assets under diagrams/ and docs/ are unaffected.
+/*.png
+
 # Tailwind CSS standalone CLI
 tailwindcss
 tailwindcss-*
