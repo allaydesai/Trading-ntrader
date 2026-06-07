@@ -17,7 +17,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
 from rich.console import Console
 
-from src.api.dependencies import BacktestService
+from src.api.dependencies import BacktestService, get_default_catalog
 from src.api.models.backtest_detail import to_detail_view
 from src.api.models.common import EmptyStateMessage
 from src.api.models.filter_models import (
@@ -131,6 +131,17 @@ def _build_run_context(
     ):
         merged_form["explorer_return"] = explorer_return
 
+    # Fall back to the configured default catalog so the bare run form (reached
+    # from the nav, with no ?catalog= hint or explorer bridge) targets a named
+    # catalog instead of the legacy NAUTILUS_PATH→IBKR path. Gated on the catalog
+    # data source so mock/kraken/ibkr selections aren't shown a stray catalog.
+    if merged_form.get("data_source", "catalog") == "catalog" and not merged_form.get(
+        "catalog_name"
+    ):
+        default_catalog = get_default_catalog()
+        if default_catalog:
+            merged_form["catalog_name"] = default_catalog
+
     return {
         "request": request,
         "strategies": _get_strategies(),
@@ -207,7 +218,16 @@ async def run_backtest_form(request: Request) -> HTMLResponse:
 async def run_backtest_submit(request: Request) -> Response:
     """Submit backtest configuration, execute, and redirect to results."""
     form = await request.form()
-    raw_catalog = form.get("catalog_name", "")
+    data_source = form.get("data_source", "catalog")
+    # catalog_name only applies to the catalog data source. When the catalog
+    # source is selected but no catalog is given (bare nav form), fall back to
+    # the configured default so we use the named-catalog loader rather than the
+    # legacy NAUTILUS_PATH→IBKR path. For mock/kraken/ibkr, force None — the
+    # loader treats any truthy catalog_name as an override of data_source.
+    if data_source == "catalog":
+        raw_catalog = form.get("catalog_name", "") or get_default_catalog()
+    else:
+        raw_catalog = ""
     raw_explorer_return_raw = form.get("explorer_return", "")
     raw_explorer_return: str | None = (
         str(raw_explorer_return_raw) if raw_explorer_return_raw else None
@@ -219,7 +239,7 @@ async def run_backtest_submit(request: Request) -> Response:
         "symbol": form.get("symbol", ""),
         "start_date": form.get("start_date", ""),
         "end_date": form.get("end_date", ""),
-        "data_source": form.get("data_source", "catalog"),
+        "data_source": data_source,
         "timeframe": form.get("timeframe", "1-DAY"),
         "starting_balance": form.get("starting_balance", "1000000"),
         "timeout_seconds": form.get("timeout_seconds", "300"),

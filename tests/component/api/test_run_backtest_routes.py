@@ -651,3 +651,96 @@ class TestGetStrategyParams:
         assert 'name="param_' in html
         # Should not have unprefixed parameter names as input names
         assert 'name="fast_period"' not in html
+
+
+class TestDefaultCatalogPrefill:
+    """The bare run form (no ?catalog=, no explorer bridge) must default to the
+    configured DEFAULT_CATALOG_NAME so it routes through the named-catalog loader
+    instead of the legacy NAUTILUS_PATH→IBKR path — but only for the catalog
+    data source (mock/kraken/ibkr must never be hijacked by a catalog).
+    """
+
+    def _form_data(self, **overrides) -> dict:
+        data = {
+            "strategy": "sma_crossover",
+            "symbol": "AAPL",
+            "start_date": "2024-01-01",
+            "end_date": "2024-12-31",
+            "data_source": "catalog",
+            "timeframe": "1-DAY",
+            "starting_balance": "1000000",
+            "timeout_seconds": "300",
+        }
+        data.update(overrides)
+        return data
+
+    @patch("src.api.ui.backtests.get_default_catalog", return_value="firstrate-stocks")
+    def test_get_bare_form_prefills_default_catalog(self, _mock_default, client):
+        response = client.get("/backtests/run")
+        assert response.status_code == 200
+        # Catalog field is rendered (no longer hidden) with the default value.
+        assert 'value="firstrate-stocks"' in response.text
+
+    @patch("src.api.ui.backtests.get_default_catalog", return_value="")
+    def test_get_bare_form_no_default_leaves_catalog_empty(self, _mock_default, client):
+        response = client.get("/backtests/run")
+        assert response.status_code == 200
+        assert 'value="firstrate-stocks"' not in response.text
+
+    @patch("src.api.ui.backtests.BacktestOrchestrator")
+    @patch("src.api.ui.backtests.load_backtest_data")
+    @patch("src.api.ui.backtests.BacktestRequest")
+    @patch("src.api.ui.backtests.get_default_catalog", return_value="firstrate-stocks")
+    def test_post_catalog_source_defaults_catalog_name(
+        self, _mock_default, mock_request_cls, mock_load_data, mock_orchestrator_cls, client
+    ):
+        run_id = uuid4()
+        mock_request = MagicMock()
+        mock_request.instrument_id = "AAPL.NASDAQ"
+        mock_request_cls.from_cli_args.return_value = mock_request
+        mock_load_result = MagicMock()
+        mock_load_result.bars = [MagicMock()]
+        mock_load_result.instrument = MagicMock()
+        mock_load_data.return_value = mock_load_result
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.execute = AsyncMock(return_value=(MagicMock(), run_id))
+        mock_orchestrator_cls.return_value = mock_orchestrator
+
+        response = client.post(
+            "/backtests/run",
+            data=self._form_data(),  # data_source=catalog, no catalog_name
+            follow_redirects=False,
+        )
+
+        assert response.headers.get("HX-Redirect") == f"/backtests/{run_id}"
+        assert mock_load_data.call_args.kwargs["catalog_name"] == "firstrate-stocks"
+        assert mock_request_cls.from_cli_args.call_args.kwargs["catalog_name"] == "firstrate-stocks"
+
+    @patch("src.api.ui.backtests.BacktestOrchestrator")
+    @patch("src.api.ui.backtests.load_backtest_data")
+    @patch("src.api.ui.backtests.BacktestRequest")
+    @patch("src.api.ui.backtests.get_default_catalog", return_value="firstrate-stocks")
+    def test_post_mock_source_never_uses_catalog(
+        self, _mock_default, mock_request_cls, mock_load_data, mock_orchestrator_cls, client
+    ):
+        run_id = uuid4()
+        mock_request = MagicMock()
+        mock_request.instrument_id = "AAPL.NASDAQ"
+        mock_request_cls.from_cli_args.return_value = mock_request
+        mock_load_result = MagicMock()
+        mock_load_result.bars = [MagicMock()]
+        mock_load_result.instrument = MagicMock()
+        mock_load_data.return_value = mock_load_result
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.execute = AsyncMock(return_value=(MagicMock(), run_id))
+        mock_orchestrator_cls.return_value = mock_orchestrator
+
+        response = client.post(
+            "/backtests/run",
+            data=self._form_data(data_source="mock"),  # default must NOT leak in
+            follow_redirects=False,
+        )
+
+        assert response.headers.get("HX-Redirect") == f"/backtests/{run_id}"
+        assert mock_load_data.call_args.kwargs["catalog_name"] is None
+        assert mock_request_cls.from_cli_args.call_args.kwargs["catalog_name"] is None
