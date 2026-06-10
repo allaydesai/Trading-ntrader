@@ -130,6 +130,13 @@ Good — single file with register_strategy, test first:
 Bad — config in a separate file, no test, missing register_strategy call
 ```
 
+## Design Context
+
+Read before any UI/design work (templates, CSS, charts, new pages):
+
+- **`PRODUCT.md`** — register (product), users, brand personality ("modern quant workbench"), anti-references, strategic design principles
+- **`DESIGN.md`** — visual system: color tokens, typography, elevation doctrine (flat/tonal), component specs, do's and don'ts
+
 ## Progressive Disclosure
 
 Detailed docs for specific areas — read on demand by topic:
