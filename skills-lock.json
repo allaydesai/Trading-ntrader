@@ -5,6 +5,18 @@
       "source": "vercel-labs/agent-browser",
       "sourceType": "github",
       "computedHash": "35478d4b0a33b3f98e22b7b4f3fe2d2919ebe72a6ca24b3a7175a9b17cc2788d"
+    },
+    "impeccable": {
+      "source": "pbakaus/impeccable",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/impeccable/SKILL.md",
+      "computedHash": "1e379bf23b32000ec12e120fcfcec7f2f3845ed5c210864ad7467ad525de065f"
+    },
+    "web-design-guidelines": {
+      "source": "vercel-labs/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/web-design-guidelines/SKILL.md",
+      "computedHash": "f3bc47f890f42a44db1007ab390709ec368e4b8c089baee6b0007182236ac474"
     }
   }
 }
