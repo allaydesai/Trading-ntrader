@@ -15,7 +15,7 @@
     <h1 class="text-2xl font-semibold">Run Backtest</h1>
 
     {% if execution_error %}
-    <div class="bg-red-900/50 border border-red-700 rounded-lg p-4">
+    <div class="bg-red-900/50 border border-red-700 rounded-lg p-4" role="alert">
         <p class="text-red-300 font-medium">Backtest Error</p>
         <p class="text-red-400 text-sm mt-1">{{ execution_error }}</p>
     </div>
@@ -28,14 +28,15 @@
             <!-- Strategy -->
             <div>
                 <label for="strategy" class="block text-sm font-medium text-slate-300 mb-1">Strategy</label>
-                <select id="strategy" name="strategy" required
+                <select id="strategy" name="strategy"
+                       {% if errors.get('strategy') %}aria-invalid="true" aria-describedby="strategy-error"{% endif %} required
                         hx-get="/backtests/run/strategy-params/_"
                         hx-trigger="change"
                         hx-target="#strategy-params"
                         hx-swap="innerHTML"
                         hx-on::config-request="if (!this.value) { event.preventDefault(); document.getElementById('strategy-params').innerHTML = ''; return; } event.detail.path = '/backtests/run/strategy-params/' + this.value"
                         class="w-full bg-slate-800 border border-slate-600 rounded-md px-3 py-2 text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500">
-                    <option value="">Select a strategy...</option>
+                    <option value="">Select a strategy…</option>
                     {% for s in strategies %}
                     <option value="{{ s.name }}" {% if form_data.get('strategy') == s.name %}selected{% endif %}>
                         {{ s.name }} — {{ s.description }}
@@ -43,19 +44,21 @@
                     {% endfor %}
                 </select>
                 {% if errors.get('strategy') %}
-                <p class="text-red-400 text-xs mt-1">{{ errors['strategy'] }}</p>
+                <p id="strategy-error" class="text-red-400 text-xs mt-1">{{ errors['strategy'] }}</p>
                 {% endif %}
             </div>
 
             <!-- Symbol -->
             <div>
                 <label for="symbol" class="block text-sm font-medium text-slate-300 mb-1">Symbol</label>
-                <input type="text" id="symbol" name="symbol" required
-                       placeholder="AAPL or AAPL.NASDAQ"
+                <input type="text" id="symbol" name="symbol"
+                       {% if errors.get('symbol') %}aria-invalid="true" aria-describedby="symbol-error"{% endif %} required
+                       placeholder="AAPL or AAPL.NASDAQ…"
+                       autocomplete="off" spellcheck="false" autocapitalize="characters"
                        value="{{ form_data.get('symbol', '') }}"
                        class="w-full bg-slate-800 border border-slate-600 rounded-md px-3 py-2 text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500">
                 {% if errors.get('symbol') %}
-                <p class="text-red-400 text-xs mt-1">{{ errors['symbol'] }}</p>
+                <p id="symbol-error" class="text-red-400 text-xs mt-1">{{ errors['symbol'] }}</p>
                 {% endif %}
             </div>
 
@@ -63,20 +66,22 @@
             <div class="grid grid-cols-2 gap-4">
                 <div>
                     <label for="start_date" class="block text-sm font-medium text-slate-300 mb-1">Start Date</label>
-                    <input type="date" id="start_date" name="start_date" required
+                    <input type="date" id="start_date" name="start_date"
+                       {% if errors.get('start_date') %}aria-invalid="true" aria-describedby="start_date-error"{% endif %} required
                            value="{{ form_data.get('start_date', '') }}"
                            class="w-full bg-slate-800 border border-slate-600 rounded-md px-3 py-2 text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500">
                     {% if errors.get('start_date') %}
-                    <p class="text-red-400 text-xs mt-1">{{ errors['start_date'] }}</p>
+                    <p id="start_date-error" class="text-red-400 text-xs mt-1">{{ errors['start_date'] }}</p>
                     {% endif %}
                 </div>
                 <div>
                     <label for="end_date" class="block text-sm font-medium text-slate-300 mb-1">End Date</label>
-                    <input type="date" id="end_date" name="end_date" required
+                    <input type="date" id="end_date" name="end_date"
+                       {% if errors.get('end_date') %}aria-invalid="true" aria-describedby="end_date-error"{% endif %} required
                            value="{{ form_data.get('end_date', '') }}"
                            class="w-full bg-slate-800 border border-slate-600 rounded-md px-3 py-2 text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500">
                     {% if errors.get('end_date') %}
-                    <p class="text-red-400 text-xs mt-1">{{ errors['end_date'] }}</p>
+                    <p id="end_date-error" class="text-red-400 text-xs mt-1">{{ errors['end_date'] }}</p>
                     {% endif %}
                 </div>
             </div>
@@ -86,6 +91,7 @@
                 <div>
                     <label for="data_source" class="block text-sm font-medium text-slate-300 mb-1">Data Source</label>
                     <select id="data_source" name="data_source"
+                       {% if errors.get('data_source') %}aria-invalid="true" aria-describedby="data_source-error"{% endif %}
                             class="w-full bg-slate-800 border border-slate-600 rounded-md px-3 py-2 text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500">
                         {% for ds in data_sources %}
                         <option value="{{ ds }}" {% if form_data.get('data_source', 'catalog') == ds %}selected{% endif %}>
@@ -94,12 +100,13 @@
                         {% endfor %}
                     </select>
                     {% if errors.get('data_source') %}
-                    <p class="text-red-400 text-xs mt-1">{{ errors['data_source'] }}</p>
+                    <p id="data_source-error" class="text-red-400 text-xs mt-1">{{ errors['data_source'] }}</p>
                     {% endif %}
                 </div>
                 <div>
                     <label for="timeframe" class="block text-sm font-medium text-slate-300 mb-1">Timeframe</label>
                     <select id="timeframe" name="timeframe"
+                       {% if errors.get('timeframe') %}aria-invalid="true" aria-describedby="timeframe-error"{% endif %}
                             class="w-full bg-slate-800 border border-slate-600 rounded-md px-3 py-2 text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500">
                         {% for tf in timeframes %}
                         <option value="{{ tf }}" {% if form_data.get('timeframe', '1-DAY') == tf %}selected{% endif %}>
@@ -108,7 +115,7 @@
                         {% endfor %}
                     </select>
                     {% if errors.get('timeframe') %}
-                    <p class="text-red-400 text-xs mt-1">{{ errors['timeframe'] }}</p>
+                    <p id="timeframe-error" class="text-red-400 text-xs mt-1">{{ errors['timeframe'] }}</p>
                     {% endif %}
                 </div>
             </div>
@@ -118,21 +125,23 @@
                 <div>
                     <label for="starting_balance" class="block text-sm font-medium text-slate-300 mb-1">Starting Balance ($)</label>
                     <input type="number" id="starting_balance" name="starting_balance"
+                       {% if errors.get('starting_balance') %}aria-invalid="true" aria-describedby="starting_balance-error"{% endif %}
                            value="{{ form_data.get('starting_balance', '1000000') }}"
                            min="1" step="any"
                            class="w-full bg-slate-800 border border-slate-600 rounded-md px-3 py-2 text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500">
                     {% if errors.get('starting_balance') %}
-                    <p class="text-red-400 text-xs mt-1">{{ errors['starting_balance'] }}</p>
+                    <p id="starting_balance-error" class="text-red-400 text-xs mt-1">{{ errors['starting_balance'] }}</p>
                     {% endif %}
                 </div>
                 <div>
                     <label for="timeout_seconds" class="block text-sm font-medium text-slate-300 mb-1">Timeout (seconds)</label>
                     <input type="number" id="timeout_seconds" name="timeout_seconds"
+                       {% if errors.get('timeout_seconds') %}aria-invalid="true" aria-describedby="timeout_seconds-error"{% endif %}
                            value="{{ form_data.get('timeout_seconds', '300') }}"
                            min="1" step="1"
                            class="w-full bg-slate-800 border border-slate-600 rounded-md px-3 py-2 text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500">
                     {% if errors.get('timeout_seconds') %}
-                    <p class="text-red-400 text-xs mt-1">{{ errors['timeout_seconds'] }}</p>
+                    <p id="timeout_seconds-error" class="text-red-400 text-xs mt-1">{{ errors['timeout_seconds'] }}</p>
                     {% endif %}
                 </div>
             </div>
@@ -165,14 +174,20 @@
         </button>
 
         <!-- Progress indicator (shown by HTMX during request) -->
-        <div id="backtest-spinner" class="htmx-indicator flex items-center justify-center gap-3 py-4">
-            <svg class="animate-spin h-5 w-5 text-blue-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+        <div id="backtest-spinner" role="status" aria-live="polite" class="htmx-indicator flex items-center justify-center gap-3 py-4">
+            <svg class="animate-spin h-5 w-5 text-blue-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" aria-hidden="true">
                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                 <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
             </svg>
-            <span class="text-slate-400 text-sm">Running backtest...</span>
+            <span class="text-slate-400 text-sm">Running backtest…</span>
         </div>
     </form>
 
+    <script>
+        (function () {
+            var firstInvalid = document.querySelector('[aria-invalid="true"]');
+            if (firstInvalid) firstInvalid.focus();
+        })();
+    </script>
 </div>
 {% endblock %}

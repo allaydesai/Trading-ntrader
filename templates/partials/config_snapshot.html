@@ -62,8 +62,16 @@
 <script>
 function copyCliCommand() {
     const commandText = document.getElementById('cli-command').textContent;
+    const button = document.querySelector('[onclick="copyCliCommand()"]');
     navigator.clipboard.writeText(commandText).then(() => {
-        // Show success notification
+        // Copied-state feedback on the button itself
+        const originalText = button.textContent;
+        button.textContent = 'Copied!';
+        setTimeout(() => {
+            button.textContent = originalText;
+        }, 2000);
+
+        // Show success notification (container is aria-live)
         const notification = document.createElement('div');
         notification.className = 'bg-green-600/90 text-white px-4 py-2 rounded shadow-lg';
         notification.textContent = 'CLI command copied to clipboard!';

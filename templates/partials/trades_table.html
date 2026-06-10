@@ -2,7 +2,7 @@
 {% if response.pagination.total_items == 0 %}
 <!-- Empty State -->
 <div class="text-center py-12 text-slate-400">
-    <svg class="w-16 h-16 mx-auto mb-4 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <svg class="w-16 h-16 mx-auto mb-4 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
               d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
     </svg>
@@ -40,37 +40,46 @@
         <thead class="bg-slate-800 border-b border-slate-700">
             <tr>
                 <th class="px-4 py-3 text-left text-slate-300 font-medium">#</th>
-                <th class="px-4 py-3 text-left text-slate-300 font-medium cursor-pointer hover:bg-slate-700"
-                    hx-get="/api/backtests/{{ backtest_id }}/trades?sort_by=entry_timestamp&sort_order={% if response.sorting.sort_by == 'entry_timestamp' and response.sorting.sort_order == 'asc' %}desc{% else %}asc{% endif %}&page={{ response.pagination.current_page }}&page_size={{ response.pagination.page_size }}"
-                    hx-target="#trades-table-content"
-                    hx-swap="outerHTML">
-                    Entry Date
-                    {% if response.sorting.sort_by == 'entry_timestamp' %}
-                        {% if response.sorting.sort_order == 'asc' %}↑{% else %}↓{% endif %}
-                    {% endif %}
+                <th class="px-4 py-3 text-left text-slate-300 font-medium">
+                    <button type="button"
+                        class="flex items-center gap-1 hover:text-white transition-colors"
+                        hx-get="/api/backtests/{{ backtest_id }}/trades?sort_by=entry_timestamp&sort_order={% if response.sorting.sort_by == 'entry_timestamp' and response.sorting.sort_order == 'asc' %}desc{% else %}asc{% endif %}&page={{ response.pagination.current_page }}&page_size={{ response.pagination.page_size }}"
+                        hx-target="#trades-table-content"
+                        hx-swap="outerHTML">
+                        Entry Date
+                        {% if response.sorting.sort_by == 'entry_timestamp' %}
+                            {% if response.sorting.sort_order == 'asc' %}↑{% else %}↓{% endif %}
+                        {% endif %}
+                    </button>
                 </th>
-                <th class="px-4 py-3 text-left text-slate-300 font-medium cursor-pointer hover:bg-slate-700"
-                    hx-get="/api/backtests/{{ backtest_id }}/trades?sort_by=exit_timestamp&sort_order={% if response.sorting.sort_by == 'exit_timestamp' and response.sorting.sort_order == 'asc' %}desc{% else %}asc{% endif %}&page={{ response.pagination.current_page }}&page_size={{ response.pagination.page_size }}"
-                    hx-target="#trades-table-content"
-                    hx-swap="outerHTML">
-                    Exit Date
-                    {% if response.sorting.sort_by == 'exit_timestamp' %}
-                        {% if response.sorting.sort_order == 'asc' %}↑{% else %}↓{% endif %}
-                    {% endif %}
+                <th class="px-4 py-3 text-left text-slate-300 font-medium">
+                    <button type="button"
+                        class="flex items-center gap-1 hover:text-white transition-colors"
+                        hx-get="/api/backtests/{{ backtest_id }}/trades?sort_by=exit_timestamp&sort_order={% if response.sorting.sort_by == 'exit_timestamp' and response.sorting.sort_order == 'asc' %}desc{% else %}asc{% endif %}&page={{ response.pagination.current_page }}&page_size={{ response.pagination.page_size }}"
+                        hx-target="#trades-table-content"
+                        hx-swap="outerHTML">
+                        Exit Date
+                        {% if response.sorting.sort_by == 'exit_timestamp' %}
+                            {% if response.sorting.sort_order == 'asc' %}↑{% else %}↓{% endif %}
+                        {% endif %}
+                    </button>
                 </th>
                 <th class="px-4 py-3 text-left text-slate-300 font-medium">Symbol</th>
                 <th class="px-4 py-3 text-center text-slate-300 font-medium">Direction</th>
                 <th class="px-4 py-3 text-right text-slate-300 font-medium">Quantity</th>
                 <th class="px-4 py-3 text-right text-slate-300 font-medium">Entry Price</th>
                 <th class="px-4 py-3 text-right text-slate-300 font-medium">Exit Price</th>
-                <th class="px-4 py-3 text-right text-slate-300 font-medium cursor-pointer hover:bg-slate-700"
-                    hx-get="/api/backtests/{{ backtest_id }}/trades?sort_by=profit_loss&sort_order={% if response.sorting.sort_by == 'profit_loss' and response.sorting.sort_order == 'asc' %}desc{% else %}asc{% endif %}&page={{ response.pagination.current_page }}&page_size={{ response.pagination.page_size }}"
-                    hx-target="#trades-table-content"
-                    hx-swap="outerHTML">
-                    P&L ($)
-                    {% if response.sorting.sort_by == 'profit_loss' %}
-                        {% if response.sorting.sort_order == 'asc' %}↑{% else %}↓{% endif %}
-                    {% endif %}
+                <th class="px-4 py-3 text-right text-slate-300 font-medium">
+                    <button type="button"
+                        class="flex items-center gap-1 hover:text-white transition-colors ml-auto"
+                        hx-get="/api/backtests/{{ backtest_id }}/trades?sort_by=profit_loss&sort_order={% if response.sorting.sort_by == 'profit_loss' and response.sorting.sort_order == 'asc' %}desc{% else %}asc{% endif %}&page={{ response.pagination.current_page }}&page_size={{ response.pagination.page_size }}"
+                        hx-target="#trades-table-content"
+                        hx-swap="outerHTML">
+                        P&L ($)
+                        {% if response.sorting.sort_by == 'profit_loss' %}
+                            {% if response.sorting.sort_order == 'asc' %}↑{% else %}↓{% endif %}
+                        {% endif %}
+                    </button>
                 </th>
                 <th class="px-4 py-3 text-right text-slate-300 font-medium">P&L %</th>
                 <th class="px-4 py-3 text-right text-slate-300 font-medium">Hold Time</th>

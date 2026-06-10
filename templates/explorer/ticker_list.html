@@ -71,37 +71,37 @@
         <thead>
             <tr class="text-xs text-slate-500 uppercase tracking-wider border-b border-slate-800">
                 <th class="px-3 py-2 text-left">
-                    <a href="#" class="hover:text-slate-300"
+                    <button type="button" class="hover:text-slate-300"
                        hx-get="/explorer/ticker-list"
                        hx-target="#ticker-list"
                        hx-include="#catalog-select, #search-input, [name='asset_class']"
                        hx-vals='{"page": "1", "sort_by": "ticker"}'
                        hx-push-url="true">
                         Symbol {% if state.sort_by == 'ticker' %}&#9650;{% endif %}
-                    </a>
+                    </button>
                 </th>
                 <th class="px-3 py-2 text-left hidden md:table-cell">Name</th>
                 <th class="px-3 py-2 text-left hidden sm:table-cell">Class</th>
                 <th class="px-3 py-2 text-left hidden lg:table-cell">
-                    <a href="#" class="hover:text-slate-300"
+                    <button type="button" class="hover:text-slate-300"
                        hx-get="/explorer/ticker-list"
                        hx-target="#ticker-list"
                        hx-include="#catalog-select, #search-input, [name='asset_class']"
                        hx-vals='{"page": "1", "sort_by": "date_range_start"}'
                        hx-push-url="true">
                         Date Range {% if state.sort_by == 'date_range_start' %}&#9650;{% endif %}
-                    </a>
+                    </button>
                 </th>
                 <th class="px-3 py-2 text-left hidden lg:table-cell">Coverage</th>
                 <th class="px-3 py-2 text-right hidden xl:table-cell">
-                    <a href="#" class="hover:text-slate-300"
+                    <button type="button" class="hover:text-slate-300"
                        hx-get="/explorer/ticker-list"
                        hx-target="#ticker-list"
                        hx-include="#catalog-select, #search-input, [name='asset_class']"
                        hx-vals='{"page": "1", "sort_by": "bar_count_daily"}'
                        hx-push-url="true">
                         D / 1H / 5m / 1m {% if state.sort_by == 'bar_count_daily' %}&#9650;{% endif %}
-                    </a>
+                    </button>
                 </th>
             </tr>
         </thead>
@@ -113,7 +113,7 @@
                 data-ticker="{{ row.ticker }}"
                 role="button"
                 tabindex="0"
-                aria-selected="{{ 'true' if selected_ticker == row.ticker else 'false' }}"
+                aria-pressed="{{ 'true' if selected_ticker == row.ticker else 'false' }}"
                 onkeydown="if(event.isComposing||event.keyCode===229||event.repeat)return;if(event.key==='Enter'||event.key===' '){this.click();event.preventDefault();}"
                 hx-get="/explorer/chart-panel"
                 hx-target="#chart-panel"
@@ -123,13 +123,15 @@
                 hx-indicator="#chart-loading-bar">
                 <!-- Ticker Symbol -->
                 <td class="px-3 py-2">
-                    <span class="font-mono font-bold text-slate-100">{{ row.ticker }}</span>
+                    <a href="/explorer?catalog={{ state.catalog | urlencode }}&ticker={{ row.ticker | urlencode }}&tf=D"
+                       class="font-mono font-bold text-slate-100 hover:text-white"
+                       onclick="event.stopPropagation()">{{ row.ticker }}</a>
                 </td>
 
                 <!-- Name -->
                 <td class="px-3 py-2 text-slate-400 hidden md:table-cell">
                     {% if row.name %}
-                        {% if row.name|length > 35 %}{{ row.name[:32] }}...{% else %}{{ row.name }}{% endif %}
+                        {% if row.name|length > 35 %}{{ row.name[:32] }}…{% else %}{{ row.name }}{% endif %}
                     {% else %}
                         <span class="text-slate-600">—</span>
                     {% endif %}
@@ -170,7 +172,10 @@
                 <!-- Coverage Bar -->
                 <td class="px-3 py-2 hidden lg:table-cell">
                     {% if row.coverage_pct is not none %}
-                    <div class="w-20 h-1 bg-slate-800 rounded-full overflow-hidden">
+                    <div class="w-20 h-1 bg-slate-800 rounded-full overflow-hidden"
+                         role="img"
+                         aria-label="{{ row.coverage_pct }}% data coverage"
+                         title="{{ row.coverage_pct }}% data coverage">
                         <div class="h-full bg-green-500 rounded-full" style="width: {{ row.coverage_pct }}%"></div>
                     </div>
                     {% else %}

@@ -42,6 +42,7 @@
         hx-get="/backtests/fragment?{{ sort_base }}sort={{ column_id }}&order={{ next_order }}&page=1"
         hx-target="#backtest-table"
         hx-swap="innerHTML"
+        hx-push-url="/backtests?{{ sort_base }}sort={{ column_id }}&order={{ next_order }}&page=1"
         class="flex items-center gap-1 hover:text-white transition-colors {% if align == 'right' %}ml-auto{% endif %}"
     >
         {{ label }}
@@ -83,12 +84,14 @@
                 <tr class="table-row-alt table-row-hover cursor-pointer"
                     onclick="window.location='/backtests/{{ item.run_id }}'">
                     <td class="px-6 py-4 whitespace-nowrap">
-                        <span class="font-mono text-sm text-slate-400">{{ item.run_id_short }}</span>
+                        <a href="/backtests/{{ item.run_id }}"
+                           class="font-mono text-sm text-slate-400 hover:text-slate-200"
+                           onclick="event.stopPropagation()">{{ item.run_id_short }}</a>
                     </td>
                     <td class="px-6 py-4 whitespace-nowrap">
                         <span class="text-slate-200 font-medium" title="{{ item.strategy_name }}">
                             {% if item.strategy_name|length > 50 %}
-                            {{ item.strategy_name[:47] }}...
+                            {{ item.strategy_name[:47] }}…
                             {% else %}
                             {{ item.strategy_name }}
                             {% endif %}
@@ -102,7 +105,7 @@
                     </td>
                     <td class="px-6 py-4 whitespace-nowrap text-right">
                         {% if item.total_return is not none %}
-                        <span class="{% if item.is_positive_return %}text-green-500{% else %}text-red-500{% endif %} font-medium">
+                        <span class="{% if item.is_positive_return %}text-green-500{% else %}text-red-500{% endif %} font-medium tabular-nums">
                             {{ "%.2f%%"|format(item.return_percentage) }}
                         </span>
                         {% else %}
@@ -111,14 +114,14 @@
                     </td>
                     <td class="px-6 py-4 whitespace-nowrap text-right">
                         {% if item.sharpe_ratio is not none %}
-                        <span class="text-slate-200">{{ "%.2f"|format(item.sharpe_ratio) }}</span>
+                        <span class="text-slate-200 tabular-nums">{{ "%.2f"|format(item.sharpe_ratio) }}</span>
                         {% else %}
                         <span class="text-slate-500">N/A</span>
                         {% endif %}
                     </td>
                     <td class="px-6 py-4 whitespace-nowrap text-right">
                         {% if item.max_drawdown is not none %}
-                        <span class="text-red-500">{{ "%.2f%%"|format(item.max_drawdown * 100) }}</span>
+                        <span class="text-red-500 tabular-nums">{{ "%.2f%%"|format(item.max_drawdown * 100) }}</span>
                         {% else %}
                         <span class="text-slate-500">N/A</span>
                         {% endif %}
@@ -177,6 +180,7 @@
                 hx-get="/backtests/fragment?{{ base_query }}&page={{ list_page.page - 1 }}"
                 hx-target="#backtest-table"
                 hx-swap="innerHTML"
+                hx-push-url="/backtests?{{ base_query }}&page={{ list_page.page - 1 }}"
                 class="px-3 py-1 text-sm bg-slate-700 hover:bg-slate-600 text-slate-200 rounded transition-colors"
             >
                 Previous
@@ -195,6 +199,7 @@
                 hx-get="/backtests/fragment?{{ base_query }}&page={{ list_page.page + 1 }}"
                 hx-target="#backtest-table"
                 hx-swap="innerHTML"
+                hx-push-url="/backtests?{{ base_query }}&page={{ list_page.page + 1 }}"
                 class="px-3 py-1 text-sm bg-slate-700 hover:bg-slate-600 text-slate-200 rounded transition-colors"
             >
                 Next

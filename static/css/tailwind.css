@@ -4,6 +4,11 @@
 
 /* NTrader Web UI Custom Styles */
 
+/* Dark theme: native scrollbars, form controls, etc. */
+html {
+    color-scheme: dark;
+}
+
 /* Metric color utilities */
 .metric-positive {
     color: rgb(34 197 94); /* green-500 */
@@ -13,10 +18,22 @@
     color: rgb(239 68 68); /* red-500 */
 }
 
-/* Ensure focus states have good contrast */
-*:focus {
+/* Ensure focus states have good contrast (keyboard only, no ring on click) */
+*:focus-visible {
     outline: 2px solid rgb(59 130 246); /* blue-500 */
     outline-offset: 2px;
+}
+
+/* Honor reduced-motion preference: loading text still conveys state */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+    }
 }
 
 /* Table row hover states for dark theme */

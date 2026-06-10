@@ -11,13 +11,13 @@
             {% for metric in view.metrics_panel.return_metrics %}
             <div class="relative group">
                 <div class="flex justify-between items-center">
-                    <span class="text-slate-400 cursor-help">{{ metric.name }}</span>
-                    <span class="{{ metric.color_class }} font-semibold">
+                    <button type="button" class="text-slate-400 cursor-help">{{ metric.name }}</button>
+                    <span class="{{ metric.color_class }} font-semibold tabular-nums">
                         {{ metric.formatted_value }}
                     </span>
                 </div>
                 <!-- Tooltip -->
-                <div class="absolute hidden group-hover:block bg-slate-700 p-3 rounded shadow-lg z-10 w-64 text-sm text-slate-200 left-0 top-full mt-1">
+                <div class="absolute hidden group-hover:block group-focus-within:block bg-slate-700 p-3 rounded shadow-lg z-10 w-64 text-sm text-slate-200 left-0 top-full mt-1">
                     {{ metric.tooltip }}
                 </div>
             </div>
@@ -32,13 +32,13 @@
             {% for metric in view.metrics_panel.risk_metrics %}
             <div class="relative group">
                 <div class="flex justify-between items-center">
-                    <span class="text-slate-400 cursor-help">{{ metric.name }}</span>
-                    <span class="{{ metric.color_class }} font-semibold">
+                    <button type="button" class="text-slate-400 cursor-help">{{ metric.name }}</button>
+                    <span class="{{ metric.color_class }} font-semibold tabular-nums">
                         {{ metric.formatted_value }}
                     </span>
                 </div>
                 <!-- Tooltip -->
-                <div class="absolute hidden group-hover:block bg-slate-700 p-3 rounded shadow-lg z-10 w-64 text-sm text-slate-200 left-0 top-full mt-1">
+                <div class="absolute hidden group-hover:block group-focus-within:block bg-slate-700 p-3 rounded shadow-lg z-10 w-64 text-sm text-slate-200 left-0 top-full mt-1">
                     {{ metric.tooltip }}
                 </div>
             </div>
@@ -53,13 +53,13 @@
             {% for metric in view.metrics_panel.trading_metrics %}
             <div class="relative group">
                 <div class="flex justify-between items-center">
-                    <span class="text-slate-400 cursor-help">{{ metric.name }}</span>
-                    <span class="{{ metric.color_class }} font-semibold">
+                    <button type="button" class="text-slate-400 cursor-help">{{ metric.name }}</button>
+                    <span class="{{ metric.color_class }} font-semibold tabular-nums">
                         {{ metric.formatted_value }}
                     </span>
                 </div>
                 <!-- Tooltip -->
-                <div class="absolute hidden group-hover:block bg-slate-700 p-3 rounded shadow-lg z-10 w-64 text-sm text-slate-200 left-0 top-full mt-1">
+                <div class="absolute hidden group-hover:block group-focus-within:block bg-slate-700 p-3 rounded shadow-lg z-10 w-64 text-sm text-slate-200 left-0 top-full mt-1">
                     {{ metric.tooltip }}
                 </div>
             </div>

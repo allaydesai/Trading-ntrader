@@ -7,13 +7,13 @@
 {% endblock %}
 
 {% block breadcrumbs %}
-<nav class="flex text-sm text-slate-400 mb-4">
+<nav class="flex text-sm text-slate-400 mb-4" aria-label="Breadcrumb">
     {% for crumb in view.breadcrumbs %}
     {% if not loop.last %}
     <a href="{{ crumb.url }}" class="hover:text-slate-200">{{ crumb.label }}</a>
     <span class="mx-2">/</span>
     {% else %}
-    <span class="text-slate-200">{{ crumb.label }}</span>
+    <span class="text-slate-200" aria-current="page">{{ crumb.label }}</span>
     {% endif %}
     {% endfor %}
 </nav>
@@ -110,7 +110,7 @@
                 class="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded text-white font-medium transition-colors">
             <span>Re-run Backtest</span>
             <span id="rerun-spinner" class="htmx-indicator ml-2">
-                <svg class="animate-spin h-4 w-4 inline" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <svg class="animate-spin h-4 w-4 inline" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" aria-hidden="true">
                     <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                     <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                 </svg>
@@ -142,11 +142,11 @@
                 <!-- Loading spinner -->
                 <div class="chart-loading absolute inset-0 flex items-center justify-center bg-slate-900/80">
                     <div class="text-center">
-                        <svg class="animate-spin h-8 w-8 mx-auto mb-2 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <svg class="animate-spin h-8 w-8 mx-auto mb-2 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" aria-hidden="true">
                             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                             <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                         </svg>
-                        <span class="text-slate-400 text-sm">Loading price data...</span>
+                        <span class="text-slate-400 text-sm">Loading price data…</span>
                     </div>
                 </div>
             </div>
@@ -163,11 +163,11 @@
                 <!-- Loading spinner -->
                 <div class="chart-loading absolute inset-0 flex items-center justify-center bg-slate-900/80">
                     <div class="text-center">
-                        <svg class="animate-spin h-8 w-8 mx-auto mb-2 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <svg class="animate-spin h-8 w-8 mx-auto mb-2 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" aria-hidden="true">
                             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                             <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                         </svg>
-                        <span class="text-slate-400 text-sm">Loading equity data...</span>
+                        <span class="text-slate-400 text-sm">Loading equity data…</span>
                     </div>
                 </div>
             </div>
@@ -183,11 +183,11 @@
                 <div class="stats-loading">
                     <div class="flex items-center justify-center py-8">
                         <div class="text-center">
-                            <svg class="animate-spin h-8 w-8 mx-auto mb-2 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <svg class="animate-spin h-8 w-8 mx-auto mb-2 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" aria-hidden="true">
                                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                                 <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                             </svg>
-                            <span class="text-slate-400 text-sm">Loading trade statistics...</span>
+                            <span class="text-slate-400 text-sm">Loading trade statistics…</span>
                         </div>
                     </div>
                 </div>
@@ -210,11 +210,11 @@
                 <div class="drawdown-loading">
                     <div class="flex items-center justify-center py-8">
                         <div class="text-center">
-                            <svg class="animate-spin h-8 w-8 mx-auto mb-2 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <svg class="animate-spin h-8 w-8 mx-auto mb-2 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" aria-hidden="true">
                                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                                 <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                             </svg>
-                            <span class="text-slate-400 text-sm">Loading drawdown metrics...</span>
+                            <span class="text-slate-400 text-sm">Loading drawdown metrics…</span>
                         </div>
                     </div>
                 </div>
@@ -241,11 +241,11 @@
                     <!-- Loading state -->
                     <div class="flex items-center justify-center py-12">
                         <div class="text-center">
-                            <svg class="animate-spin h-8 w-8 mx-auto mb-2 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <svg class="animate-spin h-8 w-8 mx-auto mb-2 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" aria-hidden="true">
                                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                                 <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                             </svg>
-                            <span class="text-slate-400 text-sm">Loading trades...</span>
+                            <span class="text-slate-400 text-sm">Loading trades…</span>
                         </div>
                     </div>
                 </div>
@@ -259,7 +259,7 @@
 </div>
 
 <!-- Toast Notifications Container -->
-<div id="notifications" class="fixed top-4 right-4 z-50 space-y-2">
+<div id="notifications" aria-live="polite" class="fixed top-4 right-4 z-50 space-y-2">
     <!-- Notifications will be inserted here -->
 </div>
 {% endblock %}

@@ -51,8 +51,10 @@
                    id="search-input"
                    name="search"
                    value="{{ state.search }}"
-                   placeholder="Search tickers..."
-                   autofocus
+                   placeholder="Search tickers…"
+                   autocomplete="off"
+                   spellcheck="false"
+                   autocapitalize="characters"
                    aria-label="Search tickers"
                    class="w-full bg-slate-800 border border-slate-700 text-slate-100 placeholder-slate-500 rounded-md px-4 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none focus:border-blue-500"
                    hx-get="/explorer/ticker-list"

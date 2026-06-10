@@ -31,15 +31,15 @@
     <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
         <!-- Total Backtests -->
         <div class="bg-slate-900 rounded-lg p-6 border border-slate-700">
-            <h3 class="text-sm font-medium text-slate-400 uppercase tracking-wider">Total Backtests</h3>
-            <p class="text-3xl font-bold text-slate-100 mt-2" id="total-backtests">{{ stats.total_backtests }}</p>
+            <h2 class="text-sm font-medium text-slate-400 uppercase tracking-wider">Total Backtests</h2>
+            <p class="text-3xl font-bold text-slate-100 mt-2 tabular-nums" id="total-backtests">{{ stats.total_backtests }}</p>
         </div>
 
         <!-- Best Sharpe Ratio -->
         <div class="bg-slate-900 rounded-lg p-6 border border-slate-700">
-            <h3 class="text-sm font-medium text-slate-400 uppercase tracking-wider">Best Sharpe Ratio</h3>
+            <h2 class="text-sm font-medium text-slate-400 uppercase tracking-wider">Best Sharpe Ratio</h2>
             {% if stats.best_sharpe_ratio %}
-            <p class="text-3xl font-bold text-green-500 mt-2" id="best-sharpe">
+            <p class="text-3xl font-bold text-green-500 mt-2 tabular-nums" id="best-sharpe">
                 {{ "%.2f"|format(stats.best_sharpe_ratio) }}
             </p>
             <p class="text-sm text-slate-400 mt-1" id="best-sharpe-strategy">
@@ -53,9 +53,9 @@
 
         <!-- Worst Max Drawdown -->
         <div class="bg-slate-900 rounded-lg p-6 border border-slate-700">
-            <h3 class="text-sm font-medium text-slate-400 uppercase tracking-wider">Worst Max Drawdown</h3>
+            <h2 class="text-sm font-medium text-slate-400 uppercase tracking-wider">Worst Max Drawdown</h2>
             {% if stats.worst_max_drawdown %}
-            <p class="text-3xl font-bold text-red-500 mt-2" id="worst-drawdown">
+            <p class="text-3xl font-bold text-red-500 mt-2 tabular-nums" id="worst-drawdown">
                 {{ "%.2f%%"|format(stats.worst_max_drawdown * 100) }}
             </p>
             <p class="text-sm text-slate-400 mt-1" id="worst-drawdown-strategy">
@@ -70,7 +70,7 @@
 
     <!-- Recent Activity -->
     <div class="bg-slate-900 rounded-lg p-6 border border-slate-700">
-        <h3 class="text-lg font-medium text-slate-200 mb-4">Recent Activity</h3>
+        <h2 class="text-lg font-medium text-slate-200 mb-4">Recent Activity</h2>
 
         {% if stats.recent_backtests %}
         <div class="space-y-3">
@@ -94,7 +94,7 @@
                 <!-- Middle row: Strategy and Instrument -->
                 <div class="mb-2">
                     <div class="font-medium text-slate-200 mb-1" title="{{ item.strategy_name }}">
-                        {% if item.strategy_name|length > 50 %}{{ item.strategy_name[:47] }}...{% else %}{{ item.strategy_name }}{% endif %}
+                        {% if item.strategy_name|length > 50 %}{{ item.strategy_name[:47] }}…{% else %}{{ item.strategy_name }}{% endif %}
                     </div>
                     <div class="text-sm text-slate-400">{{ item.instrument_symbol }}</div>
                 </div>
@@ -102,7 +102,7 @@
                 <!-- Bottom row: Return and Date -->
                 <div class="flex items-center justify-between text-sm">
                     {% if item.execution_status == "success" and item.total_return is not none %}
-                    <span class="{% if item.total_return >= 0 %}text-green-500{% else %}text-red-500{% endif %} font-medium">
+                    <span class="{% if item.total_return >= 0 %}text-green-500{% else %}text-red-500{% endif %} font-medium tabular-nums">
                         {{ "%.2f%%"|format(item.total_return * 100) }}
                     </span>
                     {% else %}
@@ -122,7 +122,7 @@
 
     <!-- Quick Actions -->
     <div class="bg-slate-900 rounded-lg p-6 border border-slate-700">
-        <h3 class="text-lg font-medium text-slate-200 mb-4">Quick Actions</h3>
+        <h2 class="text-lg font-medium text-slate-200 mb-4">Quick Actions</h2>
         <div class="flex flex-wrap gap-3">
             <a href="/backtests" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-md transition-colors">
                 View All Backtests
