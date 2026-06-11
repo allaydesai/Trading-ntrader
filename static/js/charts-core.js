@@ -13,13 +13,13 @@
  * @constant {Object}
  */
 const CHART_COLORS = {
-    background: "#020617",      // slate-950
+    background: "#020617",      // terminal black (slate-950)
     text: "#e5e7eb",            // slate-100
-    gridLines: "#1e293b",       // slate-800
-    bullish: "#22c55e",         // green-500
-    bearish: "#ef4444",         // red-500
-    equity: "#22c55e",          // green-500
-    drawdown: "#ef4444",        // red-500
+    gridLines: "#1e293b",       // hairline (slate-800)
+    bullish: "#4ade80",         // profit green (green-400)
+    bearish: "#f87171",         // loss red (red-400)
+    equity: "#2563eb",          // action blue (blue-600) — DESIGN.md: equity lines are blue
+    drawdown: "#f87171",        // loss red (red-400)
     volume: "#475569",          // slate-600
 };
 

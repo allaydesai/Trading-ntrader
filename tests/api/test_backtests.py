@@ -201,15 +201,15 @@ def test_backtest_list_displays_return_color_coding(client_with_backtests: TestC
     """Backtest list applies color coding: green for positive returns."""
     response = client_with_backtests.get("/backtests")
     # Positive returns should have green color
-    assert "text-green-500" in response.text
+    assert "text-green-400" in response.text
     # Negative drawdowns should have red color
-    assert "text-red-500" in response.text
+    assert "text-red-400" in response.text
 
 
 def test_backtest_list_displays_status_badges(client_with_backtests: TestClient):
     """Backtest list displays status badges."""
     response = client_with_backtests.get("/backtests")
-    assert "success" in response.text
+    assert "Success" in response.text
     assert "bg-green-900" in response.text
 
 

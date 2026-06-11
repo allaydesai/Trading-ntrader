@@ -15,7 +15,7 @@
     <h1 class="text-2xl font-semibold">Run Backtest</h1>
 
     {% if execution_error %}
-    <div class="bg-red-900/50 border border-red-700 rounded-lg p-4" role="alert">
+    <div class="bg-red-900/20 border border-red-800 rounded-md p-4" role="alert">
         <p class="text-red-300 font-medium">Backtest Error</p>
         <p class="text-red-400 text-sm mt-1">{{ execution_error }}</p>
     </div>
@@ -155,7 +155,7 @@
                        value="{{ _catalog_value }}"
                        readonly
                        class="w-full bg-slate-800 border border-slate-600 rounded-md px-3 py-2 text-slate-400 focus:outline-none cursor-not-allowed">
-                <p class="text-xs text-slate-500 mt-1">Backtest is running against the named FirstRate catalog (bars via DB metadata).</p>
+                <p class="text-xs text-slate-400 mt-1">Backtest is running against the named FirstRate catalog (bars via DB metadata).</p>
             </div>
 
             <!-- Explorer round-trip (Story 3.2) — hidden; POST preserves so detail page can link back. -->

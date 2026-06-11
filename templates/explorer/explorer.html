@@ -20,7 +20,7 @@
             <label for="catalog-select" class="text-sm text-slate-400">Catalog:</label>
             <select id="catalog-select"
                     name="catalog"
-                    class="bg-slate-800 border border-slate-700 text-slate-100 rounded-md px-3 py-1.5 text-sm focus:ring-blue-500 focus:border-blue-500"
+                    class="bg-slate-800 border border-slate-600 text-slate-100 rounded-md px-3 py-1.5 text-sm focus:ring-blue-500 focus:border-blue-500"
                     hx-get="/explorer/ticker-list"
                     hx-target="#ticker-list"
                     hx-include="#search-input, [name='asset_class']:checked"
@@ -36,10 +36,10 @@
 
     {% if not catalogs %}
     <!-- No catalogs empty state -->
-    <div class="bg-slate-900 rounded-lg p-8 text-center">
+    <div class="bg-slate-900 rounded-lg border border-slate-700 p-8 text-center">
         <h2 class="text-xl font-medium text-slate-200 mb-2">No Catalogs Found</h2>
-        <p class="text-slate-400 mb-4">No catalogs configured. Run <code class="text-green-400">ntrader import</code> to create one.</p>
-        <code class="bg-slate-800 px-3 py-2 rounded text-green-400 font-mono text-sm">ntrader import</code>
+        <p class="text-slate-400 mb-4">No catalogs configured. Run <code class="font-mono text-slate-200">ntrader import</code> to create one.</p>
+        <code class="bg-slate-800 px-3 py-2 rounded text-slate-200 font-mono text-sm">ntrader import</code>
     </div>
     {% else %}
 
@@ -56,7 +56,7 @@
                    spellcheck="false"
                    autocapitalize="characters"
                    aria-label="Search tickers"
-                   class="w-full bg-slate-800 border border-slate-700 text-slate-100 placeholder-slate-500 rounded-md px-4 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none focus:border-blue-500"
+                   class="w-full bg-slate-800 border border-slate-600 text-slate-100 placeholder-slate-500 rounded-md px-4 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none focus:border-blue-500"
                    hx-get="/explorer/ticker-list"
                    hx-trigger="keyup changed delay:300ms"
                    hx-target="#ticker-list"

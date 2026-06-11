@@ -82,8 +82,32 @@ class TestMetricDisplayItem:
         )
         assert metric.formatted_value == "N/A"
 
-    def test_color_class_positive_favorable(self):
-        """Positive values with is_favorable=True are green."""
+    def test_color_class_positive_semantic(self):
+        """Positive signed P&L values (semantic=True) are green."""
+        metric = MetricDisplayItem(
+            name="Total Return",
+            value=Decimal("0.25"),
+            format_type="percentage",
+            tooltip="Test",
+            is_favorable=True,
+            semantic=True,
+        )
+        assert metric.color_class == "text-green-400"
+
+    def test_color_class_negative_semantic(self):
+        """Negative signed P&L values (semantic=True) are red."""
+        metric = MetricDisplayItem(
+            name="Total Return",
+            value=Decimal("-0.10"),
+            format_type="percentage",
+            tooltip="Test",
+            is_favorable=True,
+            semantic=True,
+        )
+        assert metric.color_class == "text-red-400"
+
+    def test_color_class_positive_non_semantic_is_neutral(self):
+        """Ratios/counts (semantic=False, the default) render in neutral ink."""
         metric = MetricDisplayItem(
             name="Sharpe Ratio",
             value=Decimal("1.5"),
@@ -91,29 +115,19 @@ class TestMetricDisplayItem:
             tooltip="Test",
             is_favorable=True,
         )
-        assert metric.color_class == "text-green-400"
-
-    def test_color_class_negative_favorable(self):
-        """Negative values with is_favorable=True are red."""
-        metric = MetricDisplayItem(
-            name="Total Return",
-            value=Decimal("-0.10"),
-            format_type="percentage",
-            tooltip="Test",
-            is_favorable=True,
-        )
-        assert metric.color_class == "text-red-400"
+        assert metric.color_class == "text-slate-100"
 
     def test_color_class_zero_value(self):
-        """Zero values display as slate (neutral)."""
+        """Zero values display as neutral ink."""
         metric = MetricDisplayItem(
             name="Return",
             value=Decimal("0"),
             format_type="percentage",
             tooltip="Test",
             is_favorable=True,
+            semantic=True,
         )
-        assert metric.color_class == "text-slate-300"
+        assert metric.color_class == "text-slate-100"
 
     def test_color_class_negative_unfavorable(self):
         """Negative values with is_favorable=False are red (e.g., drawdown)."""
@@ -123,6 +137,7 @@ class TestMetricDisplayItem:
             format_type="percentage",
             tooltip="Test",
             is_favorable=False,
+            semantic=True,
         )
         assert metric.color_class == "text-red-400"
 
@@ -345,6 +360,24 @@ class TestMappingFunctions:
         assert panel.risk_metrics[0].value == Decimal("1.85")
 
         assert panel.trading_metrics[0].name == "Total Trades"
+
+    def test_build_metrics_panel_color_discipline(self, sample_metrics):
+        """Only signed P&L metrics carry red/green; ratios and counts stay neutral."""
+        panel = build_metrics_panel(sample_metrics)
+
+        # Signed P&L metrics: Total Return, CAGR, Max Drawdown
+        assert panel.return_metrics[0].color_class == "text-green-400"  # Total Return +25%
+        assert panel.return_metrics[1].color_class == "text-green-400"  # CAGR +28%
+        assert panel.risk_metrics[2].color_class == "text-red-400"  # Max Drawdown -15%
+
+        # Everything else is neutral ink regardless of value
+        assert panel.return_metrics[2].color_class == "text-slate-100"  # Final Balance
+        assert panel.risk_metrics[0].color_class == "text-slate-100"  # Sharpe Ratio
+        assert panel.risk_metrics[1].color_class == "text-slate-100"  # Sortino Ratio
+        assert panel.risk_metrics[3].color_class == "text-slate-100"  # Volatility
+        assert panel.trading_metrics[0].color_class == "text-slate-100"  # Total Trades
+        assert panel.trading_metrics[1].color_class == "text-slate-100"  # Win Rate
+        assert panel.trading_metrics[2].color_class == "text-slate-100"  # Profit Factor
 
     def test_build_metrics_panel_returns_none_for_none_input(self):
         """build_metrics_panel returns None when metrics is None."""

@@ -179,5 +179,5 @@ def test_dashboard_displays_recent_backtests(client_with_backtests: TestClient):
 
     assert "Recent Activity" in response.text
     # Should show backtest items
-    assert "success" in response.text
+    assert "Success" in response.text
     assert "AAPL" in response.text
