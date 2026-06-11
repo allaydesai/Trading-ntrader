@@ -735,6 +735,10 @@ video {
   margin-left: auto;
 }
 
+.mr-0\.5 {
+  margin-right: 0.125rem;
+}
+
 .mr-2 {
   margin-right: 0.5rem;
 }
@@ -1027,10 +1031,6 @@ video {
 
 .gap-2 {
   gap: 0.5rem;
-}
-
-.gap-2\.5 {
-  gap: 0.625rem;
 }
 
 .gap-3 {
@@ -1493,10 +1493,6 @@ video {
 
 .tracking-normal {
   letter-spacing: 0em;
-}
-
-.tracking-tight {
-  letter-spacing: -0.025em;
 }
 
 .tracking-wider {
