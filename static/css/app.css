@@ -1505,9 +1505,9 @@ video {
   color: rgb(96 165 250 / var(--tw-text-opacity, 1));
 }
 
-.text-blue-500 {
+.text-blue-600 {
   --tw-text-opacity: 1;
-  color: rgb(59 130 246 / var(--tw-text-opacity, 1));
+  color: rgb(37 99 235 / var(--tw-text-opacity, 1));
 }
 
 .text-green-300 {
@@ -1628,18 +1628,6 @@ video {
 
 html {
   color-scheme: dark;
-}
-
-/* Metric color utilities */
-
-.metric-positive {
-  color: rgb(34 197 94);
-  /* green-500 */
-}
-
-.metric-negative {
-  color: rgb(239 68 68);
-  /* red-500 */
 }
 
 /* Ensure focus states have good contrast (keyboard only, no ring on click) */

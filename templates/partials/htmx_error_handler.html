@@ -13,7 +13,7 @@
 <script id="ntrader-htmx-error-handler">
 (function () {
     const RETRY_HEADER = "X-NTrader-Retry";
-    const PANEL_CLASSES = "bg-slate-900 rounded-lg p-8 text-center text-slate-400";
+    const PANEL_CLASSES = "bg-slate-900 rounded-lg border border-slate-700 p-8 text-center text-slate-400";
 
     function resolveTarget(evt) {
         return (evt.detail && evt.detail.target) || (evt.detail && evt.detail.elt) || null;

@@ -9,15 +9,6 @@ html {
     color-scheme: dark;
 }
 
-/* Metric color utilities */
-.metric-positive {
-    color: rgb(34 197 94); /* green-500 */
-}
-
-.metric-negative {
-    color: rgb(239 68 68); /* red-500 */
-}
-
 /* Ensure focus states have good contrast (keyboard only, no ring on click) */
 *:focus-visible {
     outline: 2px solid rgb(59 130 246); /* blue-500 */

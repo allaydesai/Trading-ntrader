@@ -65,7 +65,7 @@
 
     <!-- Chart Container -->
     <div role="img" aria-label="Price chart for {{ ticker }}">
-        <div id="chart-container" class="w-full rounded-lg overflow-hidden" style="height: 480px; background: #020617;">
+        <div id="chart-container" class="w-full rounded-lg overflow-hidden bg-slate-950" style="height: 480px;">
             {% if bar_count == 0 %}
             <div class="flex items-center justify-center h-full text-slate-500 text-sm">{{ no_data_message }}</div>
             {% endif %}
