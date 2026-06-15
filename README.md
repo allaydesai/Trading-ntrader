@@ -316,11 +316,13 @@ uv run python -m src.cli.main backtest compare <uuid1> <uuid2>
 ### 7. Use the Web Dashboard
 
 ```bash
-# Build CSS (first time only)
-./scripts/build-css.sh
+# First run (or after changing styles): build CSS, then serve
+make dev
 
-# Start the web server
-uv run uvicorn src.api.web:app --reload --host 127.0.0.1 --port 8000
+# Subsequent runs (CSS already built): just serve
+make web
+
+# (make web is equivalent to: uv run uvicorn src.api.web:app --reload --host 127.0.0.1 --port 8000)
 
 # Open in browser:
 #   http://127.0.0.1:8000              — dashboard / backtest results

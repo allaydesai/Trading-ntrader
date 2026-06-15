@@ -30,7 +30,7 @@ make typecheck          # mypy src/core src/strategies
 make install-hooks      # Install git pre-commit hook (run once per clone)
 
 uv run python -m src.cli.main          # CLI entry point
-uv run uvicorn src.api.web:app --reload --host 127.0.0.1 --port 8000  # Web UI
+make web                                # Web UI (http://127.0.0.1:8000)
 ./scripts/build-css.sh                  # Build Tailwind CSS (required first time)
 ```
 
