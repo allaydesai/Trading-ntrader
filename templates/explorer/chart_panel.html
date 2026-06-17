@@ -5,15 +5,15 @@
 
     <!-- Timeframe Toolbar -->
     <div class="flex items-center gap-2 mb-3 timeframe-toolbar" role="toolbar" aria-label="Chart timeframe">
-        <span class="text-xs text-slate-500 uppercase tracking-wider mr-2">Timeframe</span>
+        <span class="text-xs font-medium text-slate-400 uppercase tracking-wider mr-2">Timeframe</span>
         {% for tf_option in timeframes %}
         {% set is_active = tf_option.label == active_tf.label %}
         {% set is_available = tf_option.label in available_tfs %}
         <button
             class="px-3 py-1 text-sm rounded border transition-colors focus:ring-2 focus:ring-blue-500 focus:outline-none
-                   {% if is_active %}bg-blue-500 border-blue-500 text-white
+                   {% if is_active %}bg-blue-600 border-blue-600 text-white
                    {% elif is_available %}border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-200
-                   {% else %}border-slate-800 text-slate-600 opacity-50 cursor-not-allowed{% endif %}"
+                   {% else %}border-slate-800 text-slate-600 cursor-not-allowed{% endif %}"
             aria-pressed="{{ 'true' if is_active else 'false' }}"
             aria-label="{{ tf_option.label }} timeframe"
             {% if is_available and not is_active %}
@@ -21,7 +21,7 @@
             hx-target="#chart-panel"
             hx-swap="innerHTML"
             hx-vals='{"catalog": {{ catalog | tojson }}, "ticker": {{ ticker | tojson }}, "tf": {{ tf_option.label | tojson }}{% if explorer_state_search %}, "search": {{ explorer_state_search | tojson }}{% endif %}{% if explorer_state_asset_class %}, "asset_class": {{ explorer_state_asset_class | tojson }}{% endif %}{% if explorer_state_sort_by %}, "sort_by": {{ explorer_state_sort_by | tojson }}{% endif %}{% if explorer_state_page %}, "page": {{ explorer_state_page | tojson }}{% endif %}}'
-            hx-push-url="true"
+            hx-push-url='{{ "/explorer?catalog=" ~ (catalog | urlencode) ~ "&ticker=" ~ (ticker | urlencode) ~ "&tf=" ~ (tf_option.label | urlencode) }}'
             hx-indicator="#chart-loading-bar"
             {% endif %}
             {% if not is_available %}disabled{% endif %}>
@@ -35,7 +35,7 @@
             </span>
             {% if run_backtest_url %}
             <a href="{{ run_backtest_url }}"
-               class="bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium px-3 py-1 rounded transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-slate-950"
+               class="bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-3 py-1.5 rounded-md transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-slate-950"
                aria-label="Run backtest for {{ ticker }}">
                 Run Backtest
             </a>
@@ -65,7 +65,7 @@
 
     <!-- Chart Container -->
     <div role="img" aria-label="Price chart for {{ ticker }}">
-        <div id="chart-container" class="w-full rounded-lg overflow-hidden" style="height: 480px; background: #020617;">
+        <div id="chart-container" class="relative w-full rounded-lg overflow-hidden bg-slate-950" style="height: 480px;">
             {% if bar_count == 0 %}
             <div class="flex items-center justify-center h-full text-slate-500 text-sm">{{ no_data_message }}</div>
             {% endif %}
@@ -127,6 +127,9 @@
     var dedupedData = deduplicateTimeseriesData(barsJson);
     candleSeries.setData(dedupedData);
     chart.timeScale().fitContent();
+
+    var ohlcTicker = {{ ticker | tojson }};
+    attachOhlcLegend(container, chart, candleSeries, { symbol: ohlcTicker });
 
     window._explorerChart = chart;
     window._explorerCandleSeries = candleSeries;

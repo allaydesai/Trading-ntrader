@@ -1,0 +1,135 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-06-09T00:00:00Z",
+  "title": "Design System: NTrader",
+  "extensions": {
+    "colorMeta": {
+      "terminal-black": { "role": "neutral", "displayName": "Terminal Black", "canonical": "#020617", "tonalRamp": ["#020617", "#0f172a", "#1e293b", "#334155", "#475569", "#64748b", "#94a3b8", "#f1f5f9"] },
+      "panel": { "role": "neutral", "displayName": "Panel", "canonical": "#0f172a", "tonalRamp": ["#020617", "#0f172a", "#1e293b", "#334155", "#475569", "#64748b", "#94a3b8", "#f1f5f9"] },
+      "panel-raised": { "role": "neutral", "displayName": "Panel Raised", "canonical": "#1e293b", "tonalRamp": ["#020617", "#0f172a", "#1e293b", "#334155", "#475569", "#64748b", "#94a3b8", "#f1f5f9"] },
+      "hairline": { "role": "neutral", "displayName": "Hairline", "canonical": "#334155", "tonalRamp": ["#0f172a", "#1e293b", "#334155", "#475569", "#64748b", "#94a3b8", "#cbd5e1", "#f1f5f9"] },
+      "ink": { "role": "neutral", "displayName": "Ink", "canonical": "#f1f5f9", "tonalRamp": ["#020617", "#1e293b", "#475569", "#64748b", "#94a3b8", "#cbd5e1", "#e2e8f0", "#f1f5f9"] },
+      "ink-muted": { "role": "neutral", "displayName": "Ink Muted", "canonical": "#94a3b8", "tonalRamp": ["#1e293b", "#334155", "#475569", "#64748b", "#94a3b8", "#cbd5e1", "#e2e8f0", "#f1f5f9"] },
+      "action-blue": { "role": "primary", "displayName": "Action Blue", "canonical": "#2563eb", "tonalRamp": ["#172554", "#1e3a8a", "#1e40af", "#1d4ed8", "#2563eb", "#3b82f6", "#60a5fa", "#bfdbfe"] },
+      "profit-green": { "role": "semantic", "displayName": "Profit Green", "canonical": "#4ade80", "tonalRamp": ["#052e16", "#14532d", "#166534", "#15803d", "#16a34a", "#22c55e", "#4ade80", "#bbf7d0"] },
+      "loss-red": { "role": "semantic", "displayName": "Loss Red", "canonical": "#f87171", "tonalRamp": ["#450a0a", "#7f1d1d", "#991b1b", "#b91c1c", "#dc2626", "#ef4444", "#f87171", "#fecaca"] }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Display", "purpose": "Page titles only — one per page." },
+      "title": { "displayName": "Title", "purpose": "Panel and card headings." },
+      "body": { "displayName": "Body", "purpose": "Default UI size; most of the interface." },
+      "label": { "displayName": "Label", "purpose": "Uppercase tracked table headers and metric labels — the one sanctioned uppercase treatment." },
+      "data": { "displayName": "Data (mono)", "purpose": "All comparable numbers: prices, P&L, ratios, timestamps. Right-aligned in tables." }
+    },
+    "shadows": [],
+    "motion": [
+      { "name": "transition-state", "value": "150ms ease-out", "purpose": "Color/background transitions on hover, focus, and active states. The only sanctioned motion besides loading skeletons." }
+    ],
+    "breakpoints": [
+      { "name": "sm", "value": "640px" },
+      { "name": "md", "value": "768px" },
+      { "name": "lg", "value": "1024px" },
+      { "name": "xl", "value": "1280px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The single blue action per view — submit, run, confirm.",
+      "html": "<button class=\"ds-btn-primary\">Run Backtest</button>",
+      "css": ".ds-btn-primary { background: #2563eb; color: #ffffff; font: 500 0.875rem/1.5 ui-sans-serif, system-ui, sans-serif; padding: 0.5rem 1rem; border: none; border-radius: 0.375rem; cursor: pointer; transition: background-color 150ms ease-out; } .ds-btn-primary:hover { background: #1d4ed8; } .ds-btn-primary:focus-visible { outline: 2px solid #3b82f6; outline-offset: 2px; } .ds-btn-primary:disabled { background: #1e40af; cursor: not-allowed; }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Non-primary actions: cancel, view, export.",
+      "html": "<button class=\"ds-btn-secondary\">View Details</button>",
+      "css": ".ds-btn-secondary { background: #1e293b; color: #cbd5e1; font: 500 0.875rem/1.5 ui-sans-serif, system-ui, sans-serif; padding: 0.5rem 1rem; border: 1px solid #475569; border-radius: 0.375rem; cursor: pointer; transition: color 150ms ease-out, background-color 150ms ease-out; } .ds-btn-secondary:hover { color: #ffffff; background: #334155; } .ds-btn-secondary:focus-visible { outline: 2px solid #3b82f6; outline-offset: 2px; }"
+    },
+    {
+      "name": "Text Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Form fields on the Run Backtest and Explorer pages.",
+      "html": "<input class=\"ds-input\" type=\"text\" placeholder=\"AAPL\" />",
+      "css": ".ds-input { background: #1e293b; color: #f1f5f9; font: 400 0.875rem/1.5 ui-sans-serif, system-ui, sans-serif; padding: 0.5rem 0.75rem; border: 1px solid #475569; border-radius: 0.375rem; transition: border-color 150ms ease-out; } .ds-input::placeholder { color: #94a3b8; } .ds-input:focus-visible { outline: 2px solid #3b82f6; outline-offset: 0; border-color: transparent; }"
+    },
+    {
+      "name": "Card",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "The default working surface: metrics panels, chart containers, config snapshots.",
+      "html": "<div class=\"ds-card\"><div class=\"ds-card-label\">Sharpe Ratio</div><div class=\"ds-card-value\">1.84</div></div>",
+      "css": ".ds-card { background: #0f172a; border: 1px solid #334155; border-radius: 0.5rem; padding: 1.5rem; } .ds-card-label { color: #94a3b8; font: 500 0.75rem/1.4 ui-sans-serif, system-ui, sans-serif; letter-spacing: 0.05em; text-transform: uppercase; margin-bottom: 0.25rem; } .ds-card-value { color: #f1f5f9; font: 400 1.5rem/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; }"
+    },
+    {
+      "name": "Status Badge (success)",
+      "kind": "chip",
+      "refersTo": "badge-success",
+      "description": "Backtest status chips: completed, failed, pending.",
+      "html": "<span class=\"ds-badge-success\">Completed</span>",
+      "css": ".ds-badge-success { background: #14532d; color: #4ade80; font: 500 0.75rem/1.4 ui-sans-serif, system-ui, sans-serif; padding: 0.125rem 0.5rem; border-radius: 0.25rem; display: inline-block; }"
+    },
+    {
+      "name": "Status Badge (failure)",
+      "kind": "chip",
+      "refersTo": "badge-failure",
+      "description": "Failed-state chip.",
+      "html": "<span class=\"ds-badge-failure\">Failed</span>",
+      "css": ".ds-badge-failure { background: #7f1d1d; color: #f87171; font: 500 0.75rem/1.4 ui-sans-serif, system-ui, sans-serif; padding: 0.125rem 0.5rem; border-radius: 0.25rem; display: inline-block; }"
+    },
+    {
+      "name": "Navigation",
+      "kind": "nav",
+      "refersTo": "nav-link-active",
+      "description": "Top bar with pill links; active page gets the raised pill.",
+      "html": "<nav class=\"ds-nav\"><span class=\"ds-nav-brand\">NTrader</span><a class=\"ds-nav-link ds-nav-link-active\" href=\"#\">Dashboard</a><a class=\"ds-nav-link\" href=\"#\">Explorer</a><a class=\"ds-nav-link\" href=\"#\">Backtests</a></nav>",
+      "css": ".ds-nav { background: #0f172a; border-bottom: 1px solid #334155; padding: 0.75rem 1rem; display: flex; align-items: center; gap: 0.5rem; } .ds-nav-brand { color: #f1f5f9; font: 700 1.25rem/1 ui-sans-serif, system-ui, sans-serif; margin-right: 1rem; } .ds-nav-link { color: #cbd5e1; font: 500 0.875rem/1.5 ui-sans-serif, system-ui, sans-serif; padding: 0.5rem 0.75rem; border-radius: 0.375rem; text-decoration: none; transition: background-color 150ms ease-out, color 150ms ease-out; } .ds-nav-link:hover { background: #1e293b; color: #ffffff; } .ds-nav-link:focus-visible { outline: 2px solid #3b82f6; outline-offset: 2px; } .ds-nav-link-active { background: #1e293b; color: #ffffff; }"
+    },
+    {
+      "name": "Data Table",
+      "kind": "custom",
+      "refersTo": "table",
+      "description": "Signature surface: uppercase tracked headers, mono right-aligned numerics, semantic P&L colors with explicit signs.",
+      "html": "<table class=\"ds-table\"><thead><tr><th>Strategy</th><th class=\"ds-num\">Trades</th><th class=\"ds-num\">P&amp;L</th></tr></thead><tbody><tr><td>sma_crossover</td><td class=\"ds-num\">142</td><td class=\"ds-num ds-profit\">+$4,210.55</td></tr><tr><td>sma_momentum</td><td class=\"ds-num\">87</td><td class=\"ds-num ds-loss\">−$1,033.20</td></tr></tbody></table>",
+      "css": ".ds-table { background: #0f172a; border: 1px solid #334155; border-radius: 0.5rem; border-collapse: separate; border-spacing: 0; width: 100%; overflow: hidden; } .ds-table th { color: #94a3b8; font: 500 0.75rem/1.4 ui-sans-serif, system-ui, sans-serif; letter-spacing: 0.05em; text-transform: uppercase; text-align: left; padding: 0.75rem 1rem; border-bottom: 1px solid #334155; } .ds-table td { color: #cbd5e1; font: 400 0.875rem/1.5 ui-sans-serif, system-ui, sans-serif; padding: 0.75rem 1rem; border-bottom: 1px solid #1e293b; } .ds-table tbody tr { transition: background-color 150ms ease-out; } .ds-table tbody tr:hover { background: #1e293b; } .ds-table .ds-num { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; text-align: right; font-variant-numeric: tabular-nums; } .ds-table .ds-profit { color: #4ade80; } .ds-table .ds-loss { color: #f87171; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Quant's Workbench",
+    "overview": "NTrader's interface is a precision instrument bench: every number in its place, tools at hand, zero ornament. The user is a quant in a long desk session, moving between data import, backtest configuration, and results analysis — the UI's only job is to make those numbers faster to read and easier to trust. The system is dark by physical reality (evening desk work, charts glowing against a dim room), not dark for fashion. Density is welcome; noise is not. A screen full of metrics must feel organized, never loud.",
+    "keyCharacteristics": [
+      "Near-black slate canvas with strictly tonal depth — no shadows, no glass, no gradients",
+      "One action color (blue) reserved for buttons, links, selection, and focus",
+      "Red and green are semantic only: loss and profit, error and success",
+      "Monospace tabular numerals for all market and performance data",
+      "Dense, small-type layouts organized by hairline borders and spacing rhythm"
+    ],
+    "rules": [
+      { "name": "The Semantic Color Rule", "body": "Red and green encode profit/loss and success/failure — nothing else, ever. They never decorate, never glow, and always travel with a sign or label so hue is not the only carrier.", "section": "colors" },
+      { "name": "The One Accent Rule", "body": "Blue means \"you can act here.\" It covers well under 10% of any screen; its rarity is what makes actions findable.", "section": "colors" },
+      { "name": "The Mono Numbers Rule", "body": "Any value a quant would compare — currency, percentage, ratio, count, timestamp — is set in the mono stack, right-aligned, with consistent decimal precision per column. Sans-serif numbers in a data table are a defect.", "section": "typography" },
+      { "name": "The Flat Rule", "body": "Two tonal steps above the canvas is the ceiling. If an element needs more separation than Panel Raised plus a border can give, the layout is wrong — restructure instead of reaching for shadows, glows, or glassmorphism.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do convey depth with tonal steps (#020617 → #0f172a → #1e293b) and 1px borders — The Flat Rule.",
+      "Do set every comparable number in the mono stack, right-aligned, with fixed decimal precision per column.",
+      "Do pair every red/green value with a sign, label, or icon so hue is never the only encoding (WCAG AA, color-blind safety).",
+      "Do give every interactive element a visible 2px Focus Blue ring and a designed disabled state.",
+      "Do design honest async states: skeleton panels while loading, empty states that teach, explicit error panels.",
+      "Do keep Ink Muted (#94a3b8) as the floor for body-size text on Terminal Black."
+    ],
+    "donts": [
+      "Don't ship anything from the crypto-bro trading app family: neon glows, green/red as decoration, gradient hype, gamified streaks.",
+      "Don't build cookie-cutter SaaS admin scaffolding: identical icon+number stat-card grids, decorative icons on every label, gradient accents.",
+      "Don't use box-shadows, glassmorphism, backdrop blurs, or gradient text — flat tonal layering only.",
+      "Don't use Ink Faint (#64748b) for body-size copy on Terminal Black — it fails AA (~4.1:1). It is for large text and true metadata only.",
+      "Don't put Action Blue on non-interactive elements, and don't introduce a second accent hue.",
+      "Don't use colored side-stripe borders (border-left > 1px) on cards, alerts, or list items; use a full hairline border plus a semantic badge instead.",
+      "Don't animate beyond ~150–250ms state transitions; no entrance choreography, and every transition honors prefers-reduced-motion."
+    ]
+  }
+}

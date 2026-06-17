@@ -219,8 +219,12 @@ async function initRunPriceChart(container) {
         );
         candlestickSeries.setData(formatCandleData(timeseriesData.candles));
 
-        // Add timeframe indicator badge
+        // Add timeframe indicator badge + OHLC hover legend (below the badge)
         createTimeframeBadge(container, timeseriesData.timeframe);
+        attachOhlcLegend(container, chart, candlestickSeries, {
+            symbol: timeseriesData.symbol,
+            offsetTop: "top-10",
+        });
 
         // Add volume
         const volumeSeries = setupVolumeSeries(chart);
@@ -269,8 +273,12 @@ async function initDataViewChart(container) {
         );
         candlestickSeries.setData(formatCandleData(data.candles));
 
-        // Add timeframe indicator badge
+        // Add timeframe indicator badge + OHLC hover legend (below the badge)
         createTimeframeBadge(container, data.timeframe || timeframe);
+        attachOhlcLegend(container, chart, candlestickSeries, {
+            symbol: symbol,
+            offsetTop: "top-10",
+        });
 
         // Volume
         const volumeSeries = setupVolumeSeries(chart);

@@ -4,54 +4,54 @@
         Configuration Parameters
     </summary>
     <div class="px-6 pb-6 space-y-4">
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <dl class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-8 gap-y-4">
             <div>
-                <span class="text-slate-400 text-sm">Instrument</span>
-                <p class="text-slate-200 font-medium">{{ view.configuration.instrument_symbol }}</p>
+                <dt class="text-xs font-medium text-slate-400 uppercase tracking-wider">Instrument</dt>
+                <dd class="font-mono text-sm text-slate-100 mt-1">{{ view.configuration.instrument_symbol }}</dd>
             </div>
             <div>
-                <span class="text-slate-400 text-sm">Date Range</span>
-                <p class="text-slate-200 font-medium">{{ view.configuration.date_range_display }}</p>
+                <dt class="text-xs font-medium text-slate-400 uppercase tracking-wider">Date Range</dt>
+                <dd class="font-mono text-sm text-slate-100 mt-1">{{ view.configuration.date_range_display }}</dd>
             </div>
             <div>
-                <span class="text-slate-400 text-sm">Initial Capital</span>
-                <p class="text-slate-200 font-medium">${{ '{:,.2f}'.format(view.configuration.initial_capital | float) }}</p>
+                <dt class="text-xs font-medium text-slate-400 uppercase tracking-wider">Initial Capital</dt>
+                <dd class="font-mono text-sm text-slate-100 mt-1">${{ '{:,.2f}'.format(view.configuration.initial_capital | float) }}</dd>
             </div>
             <div>
-                <span class="text-slate-400 text-sm">Strategy Name</span>
-                <p class="text-slate-200 font-medium">{{ view.configuration.strategy_name }}</p>
+                <dt class="text-xs font-medium text-slate-400 uppercase tracking-wider">Strategy Name</dt>
+                <dd class="text-sm font-medium text-slate-100 mt-1">{{ view.configuration.strategy_name }}</dd>
             </div>
             <div>
-                <span class="text-slate-400 text-sm">Strategy Type</span>
-                <p class="text-slate-200 font-medium">{{ view.configuration.strategy_type }}</p>
+                <dt class="text-xs font-medium text-slate-400 uppercase tracking-wider">Strategy Type</dt>
+                <dd class="font-mono text-sm text-slate-100 mt-1">{{ view.configuration.strategy_type }}</dd>
             </div>
             <div>
-                <span class="text-slate-400 text-sm">Data Source</span>
-                <p class="text-slate-200 font-medium">{{ view.configuration.data_source }}</p>
+                <dt class="text-xs font-medium text-slate-400 uppercase tracking-wider">Data Source</dt>
+                <dd class="font-mono text-sm text-slate-100 mt-1">{{ view.configuration.data_source }}</dd>
             </div>
-        </div>
+        </dl>
 
         {% if view.configuration.additional_params %}
-        <div class="border-t border-slate-700 pt-4">
-            <h4 class="text-sm font-medium text-slate-300 mb-3">Strategy-Specific Parameters</h4>
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div class="border-t border-slate-800 pt-4">
+            <h4 class="text-xs font-medium text-slate-400 uppercase tracking-wider mb-3">Strategy-Specific Parameters</h4>
+            <dl class="grid grid-cols-1 md:grid-cols-3 gap-x-8 gap-y-4">
                 {% for key, value in view.configuration.additional_params.items() %}
                 <div>
-                    <span class="text-slate-400 text-sm">{{ key | replace('_', ' ') | title }}</span>
-                    <p class="text-slate-200 font-medium">{{ value }}</p>
+                    <dt class="text-xs font-medium text-slate-400 uppercase tracking-wider">{{ key | replace('_', ' ') | title }}</dt>
+                    <dd class="font-mono text-sm text-slate-100 mt-1">{{ value }}</dd>
                 </div>
                 {% endfor %}
-            </div>
+            </dl>
         </div>
         {% endif %}
 
         <!-- CLI Command Copy Section -->
-        <div class="border-t border-slate-700 pt-4">
-            <h4 class="text-sm font-medium text-slate-300 mb-3">CLI Command to Replicate</h4>
-            <div class="bg-slate-800 rounded p-4 relative">
-                <pre id="cli-command" class="text-green-400 font-mono text-sm whitespace-pre-wrap">{{ view.configuration.cli_command }}</pre>
+        <div class="border-t border-slate-800 pt-4">
+            <h4 class="text-xs font-medium text-slate-400 uppercase tracking-wider mb-3">CLI Command to Replicate</h4>
+            <div class="bg-slate-800 border border-slate-700 rounded-md p-4 relative">
+                <pre id="cli-command" class="text-slate-200 font-mono text-sm whitespace-pre-wrap pr-20">{{ view.configuration.cli_command }}</pre>
                 <button onclick="copyCliCommand()"
-                        class="absolute top-2 right-2 bg-blue-600 hover:bg-blue-700 px-3 py-1 rounded text-sm font-medium transition-colors">
+                        class="absolute top-2 right-2 bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded-md text-sm font-medium transition-colors">
                     Copy
                 </button>
             </div>
@@ -62,10 +62,18 @@
 <script>
 function copyCliCommand() {
     const commandText = document.getElementById('cli-command').textContent;
+    const button = document.querySelector('[onclick="copyCliCommand()"]');
     navigator.clipboard.writeText(commandText).then(() => {
-        // Show success notification
+        // Copied-state feedback on the button itself
+        const originalText = button.textContent;
+        button.textContent = 'Copied!';
+        setTimeout(() => {
+            button.textContent = originalText;
+        }, 2000);
+
+        // Show success notification (container is aria-live)
         const notification = document.createElement('div');
-        notification.className = 'bg-green-600/90 text-white px-4 py-2 rounded shadow-lg';
+        notification.className = 'bg-green-900 border border-green-700 text-green-300 px-4 py-2 rounded-md text-sm';
         notification.textContent = 'CLI command copied to clipboard!';
         document.getElementById('notifications').appendChild(notification);
 

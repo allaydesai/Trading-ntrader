@@ -3,6 +3,8 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="dark">
+    <meta name="theme-color" content="#020617">
     <title>{% block title %}NTrader{% endblock %}</title>
 
     <!-- Favicon -->
@@ -12,25 +14,31 @@
     <script src="{{ url_for('static', path='vendor/htmx.min.js') }}" defer></script>
 
     <!-- TradingView Lightweight Charts v5 -->
+    <link rel="preconnect" href="https://unpkg.com" crossorigin>
     <script src="https://unpkg.com/lightweight-charts@5.0.0/dist/lightweight-charts.standalone.production.js" defer></script>
 
     <!-- Chart modules (load in order) -->
-    <script src="{{ url_for('static', path='js/charts-core.js') }}?v=2" defer></script>
-    <script src="{{ url_for('static', path='js/charts-price.js') }}?v=3" defer></script>
-    <script src="{{ url_for('static', path='js/charts-equity.js') }}?v=1" defer></script>
-    <script src="{{ url_for('static', path='js/charts-statistics.js') }}?v=1" defer></script>
+    <script src="{{ url_for('static', path='js/charts-core.js') }}?v=4" defer></script>
+    <script src="{{ url_for('static', path='js/charts-price.js') }}?v=4" defer></script>
+    <script src="{{ url_for('static', path='js/charts-equity.js') }}?v=2" defer></script>
+    <script src="{{ url_for('static', path='js/charts-statistics.js') }}?v=2" defer></script>
     <script src="{{ url_for('static', path='js/charts.js') }}?v=4" defer></script>
 
     <!-- Custom styles -->
-    <link rel="stylesheet" href="{{ url_for('static', path='css/app.css') }}?v=2">
+    <link rel="stylesheet" href="{{ url_for('static', path='css/app.css') }}?v=5">
 
     {% block head %}{% endblock %}
 </head>
-<body class="min-h-screen bg-slate-950 text-slate-100">
+<body class="min-h-screen flex flex-col bg-slate-950 text-slate-100">
+    <a href="#main-content"
+       class="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:bg-blue-600 focus:text-white focus:px-4 focus:py-2 focus:rounded-md">
+        Skip to content
+    </a>
+
     <!-- Navigation will be included here -->
     {% block nav %}{% endblock %}
 
-    <main class="max-w-7xl mx-auto px-4 py-6">
+    <main id="main-content" class="w-full max-w-7xl mx-auto px-4 py-6 flex-1">
         <!-- Breadcrumbs will be included here -->
         {% block breadcrumbs %}{% endblock %}
 

@@ -254,13 +254,15 @@ class TestExplorerAccessibility:
         assert 'role="button"' in text
         assert 'tabindex="0"' in text
 
-    def test_ticker_row_aria_selected_reflects_selection(self, client):
+    def test_ticker_row_aria_pressed_reflects_selection(self, client):
+        # aria-pressed (not aria-selected): rows carry role="button", where
+        # aria-selected is invalid ARIA
         response = client.get("/explorer?ticker=AAPL")
         text = response.text
         # AAPL row selected
-        assert 'aria-selected="true"' in text
+        assert 'aria-pressed="true"' in text
         # Other rows not selected
-        assert 'aria-selected="false"' in text
+        assert 'aria-pressed="false"' in text
 
     def test_chart_panel_aria_live_polite(self, client):
         response = client.get("/explorer?ticker=AAPL")

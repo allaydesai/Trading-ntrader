@@ -1,7 +1,12 @@
 # Makefile
-.PHONY: help test-unit test-component test-integration test-e2e test-all test-coverage clean format lint typecheck install-hooks
+.PHONY: help web dev build-css test-unit test-component test-integration test-e2e test-all test-coverage clean format lint typecheck install-hooks
 
 help:
+	@echo "Web UI:"
+	@echo "  make dev               - Build CSS, then launch the web dashboard (first run / after style changes)"
+	@echo "  make web               - Launch the web dashboard (http://127.0.0.1:8000)"
+	@echo "  make build-css         - Build Tailwind CSS only"
+	@echo ""
 	@echo "Test Commands:"
 	@echo "  make test-unit         - Run unit tests (fast, <5s)"
 	@echo "  make test-component    - Run component tests (<10s)"
@@ -15,6 +20,16 @@ help:
 	@echo "  make lint              - Lint code with ruff"
 	@echo "  make typecheck         - Type check with mypy"
 	@echo "  make install-hooks     - Install git pre-commit hook (run once per clone)"
+
+build-css:
+	@echo "🎨 Building Tailwind CSS..."
+	./scripts/build-css.sh
+
+web:
+	@echo "🚀 Launching web dashboard at http://127.0.0.1:8000 ..."
+	uv run uvicorn src.api.web:app --reload --host 127.0.0.1 --port 8000
+
+dev: build-css web
 
 test-unit:
 	@echo "🧪 Running unit tests (pure Python, no Nautilus)..."

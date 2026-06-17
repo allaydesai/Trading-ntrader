@@ -41,6 +41,10 @@ class MetricDisplayItem(BaseModel):
     format_type: str = Field(..., description="percentage, decimal, currency, integer")
     tooltip: str = Field(..., description="Explanation text")
     is_favorable: bool = Field(True, description="Higher is better?")
+    semantic: bool = Field(
+        default=False,
+        description="Sign carries profit/loss meaning; only then is the value colored",
+    )
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -62,9 +66,17 @@ class MetricDisplayItem(BaseModel):
     @computed_field  # type: ignore[prop-decorator]
     @property
     def color_class(self) -> str:
-        """Tailwind CSS color class based on value."""
+        """Tailwind CSS color class based on value.
+
+        Red/green is reserved for signed profit/loss meaning (semantic=True);
+        ratios, counts, and balances render in neutral ink so color stays
+        trustworthy (DESIGN.md: The Semantic Color Rule).
+        """
         if self.value is None:
             return "text-slate-400"
+
+        if not self.semantic:
+            return "text-slate-100"
 
         if self.is_favorable:
             # Higher is better
@@ -72,12 +84,12 @@ class MetricDisplayItem(BaseModel):
                 return "text-green-400"
             elif self.value < 0:
                 return "text-red-400"
-            return "text-slate-300"
+            return "text-slate-100"
         else:
             # Lower is better (e.g., drawdown)
             if self.value < 0:
                 return "text-red-400"
-            return "text-slate-300"
+            return "text-slate-100"
 
 
 class MetricsPanel(BaseModel):
@@ -398,6 +410,7 @@ def build_metrics_panel(metrics) -> Optional[MetricsPanel]:
                 format_type="percentage",
                 tooltip="Total percentage gain/loss from initial capital",
                 is_favorable=True,
+                semantic=True,
             ),
             MetricDisplayItem(
                 name="CAGR",
@@ -405,6 +418,7 @@ def build_metrics_panel(metrics) -> Optional[MetricsPanel]:
                 format_type="percentage",
                 tooltip="Compound Annual Growth Rate - annualized return",
                 is_favorable=True,
+                semantic=True,
             ),
             MetricDisplayItem(
                 name="Final Balance",
@@ -435,6 +449,7 @@ def build_metrics_panel(metrics) -> Optional[MetricsPanel]:
                 format_type="percentage",
                 tooltip="Largest peak-to-trough decline (negative is worse)",
                 is_favorable=False,
+                semantic=True,
             ),
             MetricDisplayItem(
                 name="Volatility",

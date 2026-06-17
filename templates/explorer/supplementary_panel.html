@@ -16,37 +16,37 @@
             {% if has_company_profile %}
             <dl class="grid grid-cols-[repeat(auto-fit,minmax(160px,1fr))] gap-3">
                 <div>
-                    <dt class="text-xs text-slate-500 uppercase tracking-wider">Ticker</dt>
+                    <dt class="text-xs font-medium text-slate-400 uppercase tracking-wider">Ticker</dt>
                     <dd class="font-mono text-sm text-slate-100 mt-1">{{ instrument.ticker or "—" }}</dd>
                 </div>
                 <div>
-                    <dt class="text-xs text-slate-500 uppercase tracking-wider">Name</dt>
+                    <dt class="text-xs font-medium text-slate-400 uppercase tracking-wider">Name</dt>
                     <dd class="text-sm text-slate-100 mt-1">{{ instrument.name or "—" }}</dd>
                 </div>
                 <div>
-                    <dt class="text-xs text-slate-500 uppercase tracking-wider">Exchange</dt>
+                    <dt class="text-xs font-medium text-slate-400 uppercase tracking-wider">Exchange</dt>
                     <dd class="text-sm text-slate-100 mt-1">{{ instrument.exchange or "—" }}</dd>
                 </div>
                 <div>
-                    <dt class="text-xs text-slate-500 uppercase tracking-wider">Sector</dt>
+                    <dt class="text-xs font-medium text-slate-400 uppercase tracking-wider">Sector</dt>
                     <dd class="text-sm text-slate-100 mt-1">{{ instrument.sector or "—" }}</dd>
                 </div>
                 <div>
-                    <dt class="text-xs text-slate-500 uppercase tracking-wider">Industry</dt>
+                    <dt class="text-xs font-medium text-slate-400 uppercase tracking-wider">Industry</dt>
                     <dd class="text-sm text-slate-100 mt-1">{{ instrument.industry or "—" }}</dd>
                 </div>
                 <div>
-                    <dt class="text-xs text-slate-500 uppercase tracking-wider">IPO Date</dt>
+                    <dt class="text-xs font-medium text-slate-400 uppercase tracking-wider">IPO Date</dt>
                     <dd class="font-mono text-sm text-slate-100 mt-1">
                         {{ format_date(instrument.ipo_date) if instrument.ipo_date else "—" }}
                     </dd>
                 </div>
                 <div>
-                    <dt class="text-xs text-slate-500 uppercase tracking-wider">Country</dt>
+                    <dt class="text-xs font-medium text-slate-400 uppercase tracking-wider">Country</dt>
                     <dd class="text-sm text-slate-100 mt-1">{{ instrument.country or "—" }}</dd>
                 </div>
                 <div>
-                    <dt class="text-xs text-slate-500 uppercase tracking-wider">State</dt>
+                    <dt class="text-xs font-medium text-slate-400 uppercase tracking-wider">State</dt>
                     <dd class="text-sm text-slate-100 mt-1">{{ instrument.state or "—" }}</dd>
                 </div>
             </dl>

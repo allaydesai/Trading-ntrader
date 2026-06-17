@@ -7,13 +7,13 @@
 {% endblock %}
 
 {% block breadcrumbs %}
-<nav class="flex text-sm text-slate-400 mb-4">
+<nav class="flex text-sm text-slate-400 mb-4" aria-label="Breadcrumb">
     {% for crumb in view.breadcrumbs %}
     {% if not loop.last %}
     <a href="{{ crumb.url }}" class="hover:text-slate-200">{{ crumb.label }}</a>
     <span class="mx-2">/</span>
     {% else %}
-    <span class="text-slate-200">{{ crumb.label }}</span>
+    <span class="text-slate-200" aria-current="page">{{ crumb.label }}</span>
     {% endif %}
     {% endfor %}
 </nav>
@@ -38,83 +38,79 @@
     {% endif %}
     <!-- Header Section -->
     <div class="bg-slate-900 rounded-lg border border-slate-700 p-6">
-        <div class="flex justify-between items-start">
-            <div>
-                <h1 class="text-2xl font-semibold mb-2">
-                    Run Details: {{ view.run_id_short }}
+        <div class="flex justify-between items-start gap-4">
+            <div class="min-w-0">
+                <h1 class="text-2xl font-semibold mb-2 truncate" title="{{ view.strategy_name }}">
+                    {{ view.strategy_name }}
                 </h1>
-                <p class="text-lg text-slate-300 mb-1">
-                    Strategy: {{ view.strategy_name }}
-                </p>
-                <p class="text-sm text-slate-400">
-                    Executed: {{ view.execution_time.strftime('%Y-%m-%d %H:%M:%S') }} |
-                    Duration: {{ view.duration_formatted }}
+                <p class="font-mono text-sm text-slate-400">
+                    <span class="text-slate-200">{{ view.configuration.instrument_symbol }}</span>
+                    <span class="text-slate-600 mx-1">·</span>{{ view.run_id_short }}
+                    <span class="text-slate-600 mx-1">·</span>{{ view.execution_time.strftime('%Y-%m-%d %H:%M:%S') }}
+                    <span class="text-slate-600 mx-1">·</span>{{ view.duration_formatted }}
                 </p>
             </div>
-            <div>
+            <div class="shrink-0">
                 {% if view.is_successful %}
-                <span class="bg-green-600/20 text-green-400 px-3 py-1 rounded-full text-sm font-medium">
-                    SUCCESS
-                </span>
+                <span class="inline-flex items-center px-2.5 py-0.5 rounded text-xs font-medium bg-green-900 text-green-400">Success</span>
                 {% else %}
-                <span class="bg-red-600/20 text-red-400 px-3 py-1 rounded-full text-sm font-medium">
-                    FAILED
-                </span>
+                <span class="inline-flex items-center px-2.5 py-0.5 rounded text-xs font-medium bg-red-900 text-red-400">Failed</span>
                 {% endif %}
             </div>
         </div>
 
         {% if view.error_message %}
-        <div class="mt-4 bg-red-900/20 border border-red-700 rounded p-3">
+        <div class="mt-4 bg-red-900/20 border border-red-800 rounded-md p-3">
             <p class="text-red-400 text-sm">{{ view.error_message }}</p>
         </div>
         {% endif %}
     </div>
 
     <!-- Action Buttons -->
-    <div class="flex gap-3">
-        {% if back_to_explorer_url %}
-        <a href="{{ back_to_explorer_url }}"
-           class="border border-slate-700 text-slate-400 hover:text-slate-200 px-4 py-2 rounded font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-slate-950">
-            Back to Explorer
-        </a>
-        {% endif %}
+    <div class="flex flex-wrap items-center gap-3">
+        <button hx-post="/backtests/{{ view.run_id }}/rerun"
+                hx-indicator="#rerun-spinner"
+                hx-disabled-elt="this"
+                class="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-800 disabled:cursor-not-allowed text-white text-sm font-medium px-4 py-2 rounded-md transition-colors">
+            <span>Re-run Backtest</span>
+            <span id="rerun-spinner" class="htmx-indicator ml-2">
+                <svg class="animate-spin h-4 w-4 inline" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" aria-hidden="true">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+            </span>
+        </button>
 
         <a href="/backtests/{{ view.run_id }}/export"
            download="backtest_report_{{ view.run_id }}.html"
-           class="bg-green-600 hover:bg-green-700 px-4 py-2 rounded text-white font-medium transition-colors">
+           class="bg-slate-800 border border-slate-600 text-slate-300 hover:text-white text-sm font-medium px-4 py-2 rounded-md transition-colors">
             Export Report
         </a>
 
         <a href="/api/backtests/{{ view.id }}/export?format=csv"
            download="{{ view.strategy_name|replace(' ', '_') }}_{{ view.configuration.instrument_symbol }}_{{ view.configuration.start_date.strftime('%Y-%m-%d') }}_to_{{ view.configuration.end_date.strftime('%Y-%m-%d') }}_trades.csv"
-           class="bg-emerald-600 hover:bg-emerald-700 px-4 py-2 rounded text-white font-medium transition-colors">
+           class="bg-slate-800 border border-slate-600 text-slate-300 hover:text-white text-sm font-medium px-4 py-2 rounded-md transition-colors">
             Export Trades (CSV)
         </a>
         <a href="/api/backtests/{{ view.id }}/export?format=json"
            download="{{ view.strategy_name|replace(' ', '_') }}_{{ view.configuration.instrument_symbol }}_{{ view.configuration.start_date.strftime('%Y-%m-%d') }}_to_{{ view.configuration.end_date.strftime('%Y-%m-%d') }}_trades.json"
-           class="bg-teal-600 hover:bg-teal-700 px-4 py-2 rounded text-white font-medium transition-colors">
+           class="bg-slate-800 border border-slate-600 text-slate-300 hover:text-white text-sm font-medium px-4 py-2 rounded-md transition-colors">
             Export Trades (JSON)
         </a>
+
+        {% if back_to_explorer_url %}
+        <a href="{{ back_to_explorer_url }}"
+           class="bg-slate-800 border border-slate-600 text-slate-300 hover:text-white text-sm font-medium px-4 py-2 rounded-md transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-slate-950">
+            Back to Explorer
+        </a>
+        {% endif %}
 
         <button hx-delete="/backtests/{{ view.run_id }}"
                 hx-confirm="Are you sure you want to delete this backtest? This action cannot be undone."
                 hx-target="body"
                 hx-push-url="/backtests"
-                class="bg-red-600 hover:bg-red-700 px-4 py-2 rounded text-white font-medium transition-colors">
+                class="ml-auto bg-slate-800 border border-slate-600 text-red-400 hover:text-red-300 hover:border-red-800 text-sm font-medium px-4 py-2 rounded-md transition-colors">
             Delete
-        </button>
-        <button hx-post="/backtests/{{ view.run_id }}/rerun"
-                hx-indicator="#rerun-spinner"
-                hx-disabled-elt="this"
-                class="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded text-white font-medium transition-colors">
-            <span>Re-run Backtest</span>
-            <span id="rerun-spinner" class="htmx-indicator ml-2">
-                <svg class="animate-spin h-4 w-4 inline" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
-            </span>
         </button>
     </div>
 
@@ -139,15 +135,9 @@
                  data-symbol="{{ view.configuration.instrument_symbol }}"
                  data-start="{{ view.configuration.start_date.strftime('%Y-%m-%d') }}"
                  data-end="{{ view.configuration.end_date.strftime('%Y-%m-%d') }}">
-                <!-- Loading spinner -->
-                <div class="chart-loading absolute inset-0 flex items-center justify-center bg-slate-900/80">
-                    <div class="text-center">
-                        <svg class="animate-spin h-8 w-8 mx-auto mb-2 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                        </svg>
-                        <span class="text-slate-400 text-sm">Loading price data...</span>
-                    </div>
+                <!-- Loading state -->
+                <div class="chart-loading absolute inset-0 flex items-center justify-center rounded-md bg-slate-800/40 animate-pulse">
+                    <span class="text-slate-400 text-sm">Loading price data…</span>
                 </div>
             </div>
         </div>
@@ -160,15 +150,9 @@
                  data-chart="run-equity"
                  data-run-id="{{ view.run_id }}"
                  data-backtest-id="{{ view.id }}">
-                <!-- Loading spinner -->
-                <div class="chart-loading absolute inset-0 flex items-center justify-center bg-slate-900/80">
-                    <div class="text-center">
-                        <svg class="animate-spin h-8 w-8 mx-auto mb-2 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                        </svg>
-                        <span class="text-slate-400 text-sm">Loading equity data...</span>
-                    </div>
+                <!-- Loading state -->
+                <div class="chart-loading absolute inset-0 flex items-center justify-center rounded-md bg-slate-800/40 animate-pulse">
+                    <span class="text-slate-400 text-sm">Loading equity data…</span>
                 </div>
             </div>
         </div>
@@ -181,14 +165,8 @@
                  data-backtest-id="{{ view.id }}">
                 <!-- Content will be loaded via JavaScript -->
                 <div class="stats-loading">
-                    <div class="flex items-center justify-center py-8">
-                        <div class="text-center">
-                            <svg class="animate-spin h-8 w-8 mx-auto mb-2 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                            </svg>
-                            <span class="text-slate-400 text-sm">Loading trade statistics...</span>
-                        </div>
+                    <div class="flex items-center justify-center py-8 rounded-md bg-slate-800/40 animate-pulse">
+                        <span class="text-slate-400 text-sm">Loading trade statistics…</span>
                     </div>
                 </div>
                 <div class="stats-content hidden"></div>
@@ -208,14 +186,8 @@
                  data-backtest-id="{{ view.id }}">
                 <!-- Content will be loaded via JavaScript -->
                 <div class="drawdown-loading">
-                    <div class="flex items-center justify-center py-8">
-                        <div class="text-center">
-                            <svg class="animate-spin h-8 w-8 mx-auto mb-2 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                            </svg>
-                            <span class="text-slate-400 text-sm">Loading drawdown metrics...</span>
-                        </div>
+                    <div class="flex items-center justify-center py-8 rounded-md bg-slate-800/40 animate-pulse">
+                        <span class="text-slate-400 text-sm">Loading drawdown metrics…</span>
                     </div>
                 </div>
                 <div class="drawdown-content hidden"></div>
@@ -239,14 +211,8 @@
                      hx-trigger="load"
                      hx-swap="outerHTML">
                     <!-- Loading state -->
-                    <div class="flex items-center justify-center py-12">
-                        <div class="text-center">
-                            <svg class="animate-spin h-8 w-8 mx-auto mb-2 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                            </svg>
-                            <span class="text-slate-400 text-sm">Loading trades...</span>
-                        </div>
+                    <div class="flex items-center justify-center py-12 rounded-md bg-slate-800/40 animate-pulse">
+                        <span class="text-slate-400 text-sm">Loading trades…</span>
                     </div>
                 </div>
             </div>
@@ -259,7 +225,7 @@
 </div>
 
 <!-- Toast Notifications Container -->
-<div id="notifications" class="fixed top-4 right-4 z-50 space-y-2">
+<div id="notifications" aria-live="polite" class="fixed top-4 right-4 z-50 space-y-2">
     <!-- Notifications will be inserted here -->
 </div>
 {% endblock %}

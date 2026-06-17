@@ -23,12 +23,12 @@
 
     {% if empty_state %}
     <!-- Empty State -->
-    <div class="bg-slate-900 rounded-lg p-8 text-center">
+    <div class="bg-slate-900 rounded-lg border border-slate-700 p-8 text-center">
         <h2 class="text-xl font-medium text-slate-200 mb-2">{{ empty_state.title }}</h2>
         <p class="text-slate-400 mb-4">{{ empty_state.description }}</p>
         {% if empty_state.action_text %}
         <p class="text-slate-300 mb-2">{{ empty_state.action_text }}:</p>
-        <code class="bg-slate-800 px-3 py-2 rounded text-green-400 font-mono text-sm">
+        <code class="bg-slate-800 px-3 py-2 rounded text-slate-200 font-mono text-sm">
             {{ empty_state.action_command }}
         </code>
         {% endif %}
@@ -51,7 +51,7 @@
                         hx-swap="innerHTML"
                         hx-include="#filter-form"
                         hx-push-url="true"
-                        class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        class="w-full bg-slate-800 border border-slate-600 rounded-md px-3 py-2 text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     >
                         <option value="">All Strategies</option>
                         {% for strat in list_page.available_strategies %}
@@ -72,7 +72,10 @@
                         id="instrument-filter"
                         name="instrument"
                         value="{{ list_page.filter_state.instrument or '' }}"
-                        placeholder="e.g. AAPL, SPY"
+                        placeholder="e.g. AAPL, SPY…"
+                        autocomplete="off"
+                        spellcheck="false"
+                        autocapitalize="characters"
                         list="instrument-suggestions"
                         hx-get="/backtests/fragment"
                         hx-target="#backtest-table"
@@ -80,7 +83,7 @@
                         hx-include="#filter-form"
                         hx-push-url="true"
                         hx-trigger="change, keyup changed delay:500ms"
-                        class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent placeholder-slate-500"
+                        class="w-full bg-slate-800 border border-slate-600 rounded-md px-3 py-2 text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent placeholder-slate-500"
                     >
                     <datalist id="instrument-suggestions">
                         {% for inst in list_page.available_instruments %}
@@ -102,7 +105,7 @@
                         hx-swap="innerHTML"
                         hx-include="#filter-form"
                         hx-push-url="true"
-                        class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        class="w-full bg-slate-800 border border-slate-600 rounded-md px-3 py-2 text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     >
                         <option value="">All</option>
                         <option value="success" {% if list_page.filter_state.status and list_page.filter_state.status.value == "success" %}selected{% endif %}>
@@ -130,7 +133,7 @@
                         hx-include="#filter-form"
                         hx-push-url="true"
                         hx-trigger="change"
-                        class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        class="w-full bg-slate-800 border border-slate-600 rounded-md px-3 py-2 text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     >
                 </div>
 
@@ -150,7 +153,7 @@
                         hx-include="#filter-form"
                         hx-push-url="true"
                         hx-trigger="change"
-                        class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        class="w-full bg-slate-800 border border-slate-600 rounded-md px-3 py-2 text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     >
                 </div>
 
@@ -169,7 +172,7 @@
                         hx-swap="innerHTML"
                         hx-push-url="/backtests"
                         onclick="document.getElementById('filter-form').reset()"
-                        class="px-4 py-2 text-sm bg-slate-700 hover:bg-slate-600 text-slate-200 rounded transition-colors whitespace-nowrap"
+                        class="px-4 py-2 text-sm font-medium bg-slate-800 border border-slate-600 text-slate-300 hover:text-white rounded-md transition-colors whitespace-nowrap"
                     >
                         Clear Filters
                     </button>

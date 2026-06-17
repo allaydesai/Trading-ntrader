@@ -1,97 +1,97 @@
 <!-- Trading Summary - aggregated statistics from performance metrics -->
 <div class="bg-slate-900 rounded-lg border border-slate-700 p-6">
-    <h2 class="text-xl font-semibold mb-4">Trading Summary</h2>
+    <h2 class="text-lg font-semibold mb-5">Trading Summary</h2>
 
     {% if view.trading_summary.has_trades %}
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div class="bg-slate-800 rounded p-4">
-            <span class="text-slate-400 text-sm block">Total Trades</span>
-            <p class="text-2xl font-bold text-slate-200">
+    <dl class="grid grid-cols-2 md:grid-cols-4 gap-x-8 gap-y-6">
+        <div>
+            <dt class="text-xs font-medium text-slate-400 uppercase tracking-wider">Total Trades</dt>
+            <dd class="font-mono text-xl font-semibold text-slate-100 mt-1 tabular-nums">
                 {{ view.trading_summary.total_trades | int }}
-            </p>
+            </dd>
         </div>
 
-        <div class="bg-slate-800 rounded p-4">
-            <span class="text-slate-400 text-sm block">Winning Trades</span>
-            <p class="text-2xl font-bold text-green-400">
+        <div>
+            <dt class="text-xs font-medium text-slate-400 uppercase tracking-wider">Winning Trades</dt>
+            <dd class="font-mono text-xl font-semibold text-slate-100 mt-1 tabular-nums">
                 {{ view.trading_summary.winning_trades | int }}
-            </p>
+            </dd>
         </div>
 
-        <div class="bg-slate-800 rounded p-4">
-            <span class="text-slate-400 text-sm block">Losing Trades</span>
-            <p class="text-2xl font-bold text-red-400">
+        <div>
+            <dt class="text-xs font-medium text-slate-400 uppercase tracking-wider">Losing Trades</dt>
+            <dd class="font-mono text-xl font-semibold text-slate-100 mt-1 tabular-nums">
                 {{ view.trading_summary.losing_trades | int }}
-            </p>
+            </dd>
         </div>
 
-        <div class="bg-slate-800 rounded p-4">
-            <span class="text-slate-400 text-sm block">Win Rate</span>
+        <div>
+            <dt class="text-xs font-medium text-slate-400 uppercase tracking-wider">Win Rate</dt>
             {% if view.trading_summary.win_rate %}
-            <p class="text-2xl font-bold {% if view.trading_summary.win_rate > 0.5 %}text-green-400{% else %}text-yellow-400{% endif %}">
+            <dd class="font-mono text-xl font-semibold text-slate-100 mt-1 tabular-nums">
                 {{ (view.trading_summary.win_rate * 100) | round(2) }}%
-            </p>
+            </dd>
             {% else %}
-            <p class="text-2xl font-bold text-slate-400">N/A</p>
+            <dd class="font-mono text-xl font-semibold text-slate-400 mt-1">N/A</dd>
             {% endif %}
         </div>
 
-        <div class="bg-slate-800 rounded p-4">
-            <span class="text-slate-400 text-sm block">Average Win</span>
+        <div>
+            <dt class="text-xs font-medium text-slate-400 uppercase tracking-wider">Average Win</dt>
             {% if view.trading_summary.avg_win %}
-            <p class="text-xl font-bold text-green-400">
-                ${{ '{:,.2f}'.format(view.trading_summary.avg_win | float) }}
-            </p>
+            <dd class="font-mono text-xl font-semibold text-green-400 mt-1 tabular-nums">
+                +${{ '{:,.2f}'.format(view.trading_summary.avg_win | float) }}
+            </dd>
             {% else %}
-            <p class="text-xl font-bold text-slate-400">N/A</p>
+            <dd class="font-mono text-xl font-semibold text-slate-400 mt-1">N/A</dd>
             {% endif %}
         </div>
 
-        <div class="bg-slate-800 rounded p-4">
-            <span class="text-slate-400 text-sm block">Average Loss</span>
+        <div>
+            <dt class="text-xs font-medium text-slate-400 uppercase tracking-wider">Average Loss</dt>
             {% if view.trading_summary.avg_loss %}
-            <p class="text-xl font-bold text-red-400">
-                ${{ '{:,.2f}'.format(view.trading_summary.avg_loss | float | abs) }}
-            </p>
+            <dd class="font-mono text-xl font-semibold text-red-400 mt-1 tabular-nums">
+                -${{ '{:,.2f}'.format(view.trading_summary.avg_loss | float | abs) }}
+            </dd>
             {% else %}
-            <p class="text-xl font-bold text-slate-400">N/A</p>
+            <dd class="font-mono text-xl font-semibold text-slate-400 mt-1">N/A</dd>
             {% endif %}
         </div>
 
-        <div class="bg-slate-800 rounded p-4">
-            <span class="text-slate-400 text-sm block relative group cursor-help">
-                Profit Factor
-                <div class="absolute hidden group-hover:block bg-slate-700 p-3 rounded shadow-lg z-10 w-64 text-sm text-slate-200 left-0 top-full mt-1">
-                    Ratio of gross profits to gross losses. Values > 1 indicate profitability.
-                </div>
-            </span>
+        <div class="relative group">
+            <dt class="text-xs font-medium text-slate-400 uppercase tracking-wider">
+                <button type="button" class="cursor-help uppercase tracking-wider">Profit Factor</button>
+            </dt>
+            <div class="absolute hidden group-hover:block group-focus-within:block bg-slate-800 border border-slate-600 p-3 rounded-md z-10 w-64 text-sm normal-case tracking-normal text-slate-200 left-0 top-full mt-1">
+                Ratio of gross profits to gross losses. Values > 1 indicate profitability.
+            </div>
             {% if view.trading_summary.profit_factor %}
-            <p class="text-xl font-bold {% if view.trading_summary.profit_factor > 1 %}text-green-400{% else %}text-red-400{% endif %}">
+            <dd class="font-mono text-xl font-semibold text-slate-100 mt-1 tabular-nums">
                 {{ view.trading_summary.profit_factor | float | round(2) }}
-            </p>
+            </dd>
             {% else %}
-            <p class="text-xl font-bold text-slate-400">N/A</p>
+            <dd class="font-mono text-xl font-semibold text-slate-400 mt-1">N/A</dd>
             {% endif %}
         </div>
 
-        <div class="bg-slate-800 rounded p-4">
-            <span class="text-slate-400 text-sm block relative group cursor-help">
-                Expectancy
-                <div class="absolute hidden group-hover:block bg-slate-700 p-3 rounded shadow-lg z-10 w-64 text-sm text-slate-200 left-0 top-full mt-1">
-                    Expected profit per trade. Positive values indicate a profitable strategy.
-                </div>
-            </span>
+        <div class="relative group">
+            <dt class="text-xs font-medium text-slate-400 uppercase tracking-wider">
+                <button type="button" class="cursor-help uppercase tracking-wider">Expectancy</button>
+            </dt>
+            <div class="absolute hidden group-hover:block group-focus-within:block bg-slate-800 border border-slate-600 p-3 rounded-md z-10 w-64 text-sm normal-case tracking-normal text-slate-200 left-0 top-full mt-1">
+                Expected profit per trade. Positive values indicate a profitable strategy.
+            </div>
             {% if view.trading_summary.expectancy %}
-            <p class="text-xl font-bold {% if view.trading_summary.expectancy > 0 %}text-green-400{% else %}text-red-400{% endif %}">
-                ${{ '{:,.2f}'.format(view.trading_summary.expectancy | float) }}
-            </p>
+            <dd class="font-mono text-xl font-semibold mt-1 tabular-nums {% if view.trading_summary.expectancy > 0 %}text-green-400{% else %}text-red-400{% endif %}">
+                {% if view.trading_summary.expectancy > 0 %}+{% elif view.trading_summary.expectancy < 0 %}-{% endif %}${{ '{:,.2f}'.format(view.trading_summary.expectancy | float | abs) }}
+            </dd>
             {% else %}
-            <p class="text-xl font-bold text-slate-400">N/A</p>
+            <dd class="font-mono text-xl font-semibold text-slate-400 mt-1">N/A</dd>
             {% endif %}
         </div>
-    </div>
+    </dl>
     {% else %}
-    <div class="bg-slate-800 rounded p-6 text-center">
+    <div class="border border-slate-800 rounded-md p-6 text-center">
         <p class="text-slate-400">No trades were executed during this backtest.</p>
     </div>
     {% endif %}

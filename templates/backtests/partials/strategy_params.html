@@ -14,7 +14,7 @@
                        name="param_{{ field.name }}"
                        value="true"
                        {% if field.default %}checked{% endif %}
-                       class="rounded bg-slate-800 border-slate-600 text-blue-500 focus:ring-blue-500">
+                       class="rounded bg-slate-800 border-slate-600 text-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500">
                 <span class="text-sm text-slate-400">{{ field.description }}</span>
             </label>
             {% elif field.field_type in ("integer", "number") %}
@@ -34,7 +34,7 @@
                    class="w-full bg-slate-800 border border-slate-600 rounded-md px-3 py-2 text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500">
             {% endif %}
             {% if field.description and field.field_type != "boolean" %}
-            <p class="text-slate-500 text-xs mt-1">{{ field.description }}</p>
+            <p class="text-slate-400 text-xs mt-1">{{ field.description }}</p>
             {% endif %}
         </div>
         {% endfor %}

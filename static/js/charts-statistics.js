@@ -40,6 +40,21 @@ async function fetchDrawdownMetrics(backtestId) {
     return await response.json();
 }
 
+
+/**
+ * Tailwind text class for a signed P&L value.
+ * Red/green is reserved for signed profit/loss meaning; zero and
+ * non-numeric values render in neutral ink (DESIGN.md Semantic Color Rule).
+ *
+ * @param {string|number} value - Signed numeric value
+ * @returns {string} Tailwind text color class
+ */
+function pnlClass(value) {
+    const v = parseFloat(value);
+    if (!isFinite(v) || v === 0) return "text-slate-100";
+    return v > 0 ? "text-green-400" : "text-red-400";
+}
+
 /**
  * Generates HTML for trade counts section
  *
@@ -48,24 +63,24 @@ async function fetchDrawdownMetrics(backtestId) {
  */
 function renderTradeCountsCard(stats) {
     return `
-        <div class="bg-slate-800 rounded p-4">
-            <h3 class="text-sm text-slate-400 mb-2">Trade Counts</h3>
-            <div class="space-y-1">
-                <div class="flex justify-between text-sm">
-                    <span class="text-slate-300">Total:</span>
-                    <span class="font-semibold">${stats.total_trades}</span>
+        <div>
+            <h3 class="text-xs font-medium text-slate-400 uppercase tracking-wider border-b border-slate-800 pb-2 mb-3">Trade Counts</h3>
+            <div class="space-y-2">
+                <div class="flex justify-between items-baseline text-sm">
+                    <span class="text-slate-400">Total</span>
+                    <span class="font-mono font-semibold text-slate-100 tabular-nums">${stats.total_trades}</span>
                 </div>
-                <div class="flex justify-between text-sm">
-                    <span class="text-green-400">Wins:</span>
-                    <span class="font-semibold text-green-400">${stats.winning_trades}</span>
+                <div class="flex justify-between items-baseline text-sm">
+                    <span class="text-slate-400">Wins</span>
+                    <span class="font-mono font-semibold text-slate-100 tabular-nums">${stats.winning_trades}</span>
                 </div>
-                <div class="flex justify-between text-sm">
-                    <span class="text-red-400">Losses:</span>
-                    <span class="font-semibold text-red-400">${stats.losing_trades}</span>
+                <div class="flex justify-between items-baseline text-sm">
+                    <span class="text-slate-400">Losses</span>
+                    <span class="font-mono font-semibold text-slate-100 tabular-nums">${stats.losing_trades}</span>
                 </div>
-                <div class="flex justify-between text-sm">
-                    <span class="text-yellow-400">Breakeven:</span>
-                    <span class="font-semibold text-yellow-400">${stats.breakeven_trades}</span>
+                <div class="flex justify-between items-baseline text-sm">
+                    <span class="text-slate-400">Breakeven</span>
+                    <span class="font-mono font-semibold text-slate-100 tabular-nums">${stats.breakeven_trades}</span>
                 </div>
             </div>
         </div>
@@ -80,20 +95,20 @@ function renderTradeCountsCard(stats) {
  */
 function renderPerformanceCard(stats) {
     return `
-        <div class="bg-slate-800 rounded p-4">
-            <h3 class="text-sm text-slate-400 mb-2">Performance</h3>
-            <div class="space-y-1">
-                <div class="flex justify-between text-sm">
-                    <span class="text-slate-300">Win Rate:</span>
-                    <span class="font-semibold">${stats.win_rate}%</span>
+        <div>
+            <h3 class="text-xs font-medium text-slate-400 uppercase tracking-wider border-b border-slate-800 pb-2 mb-3">Performance</h3>
+            <div class="space-y-2">
+                <div class="flex justify-between items-baseline text-sm">
+                    <span class="text-slate-400">Win Rate</span>
+                    <span class="font-mono font-semibold text-slate-100 tabular-nums">${stats.win_rate}%</span>
                 </div>
-                <div class="flex justify-between text-sm">
-                    <span class="text-slate-300">Profit Factor:</span>
-                    <span class="font-semibold">${stats.profit_factor || "N/A"}</span>
+                <div class="flex justify-between items-baseline text-sm">
+                    <span class="text-slate-400">Profit Factor</span>
+                    <span class="font-mono font-semibold text-slate-100 tabular-nums">${stats.profit_factor || "N/A"}</span>
                 </div>
-                <div class="flex justify-between text-sm">
-                    <span class="text-slate-300">Expectancy:</span>
-                    <span class="font-semibold">${formatCurrency(stats.expectancy)}</span>
+                <div class="flex justify-between items-baseline text-sm">
+                    <span class="text-slate-400">Expectancy</span>
+                    <span class="font-mono font-semibold ${pnlClass(stats.expectancy)} tabular-nums">${formatCurrency(stats.expectancy)}</span>
                 </div>
             </div>
         </div>
@@ -107,22 +122,21 @@ function renderPerformanceCard(stats) {
  * @returns {string} HTML string for profit card
  */
 function renderProfitCard(stats) {
-    const profitClass = parseFloat(stats.net_profit) >= 0 ? "text-green-400" : "text-red-400";
     return `
-        <div class="bg-slate-800 rounded p-4">
-            <h3 class="text-sm text-slate-400 mb-2">Profit/Loss</h3>
-            <div class="space-y-1">
-                <div class="flex justify-between text-sm">
-                    <span class="text-slate-300">Net Profit:</span>
-                    <span class="font-semibold ${profitClass}">${formatCurrency(stats.net_profit)}</span>
+        <div>
+            <h3 class="text-xs font-medium text-slate-400 uppercase tracking-wider border-b border-slate-800 pb-2 mb-3">Profit/Loss</h3>
+            <div class="space-y-2">
+                <div class="flex justify-between items-baseline text-sm">
+                    <span class="text-slate-400">Net Profit</span>
+                    <span class="font-mono font-semibold ${pnlClass(stats.net_profit)} tabular-nums">${formatCurrency(stats.net_profit)}</span>
                 </div>
-                <div class="flex justify-between text-sm">
-                    <span class="text-green-400">Avg Win:</span>
-                    <span class="font-semibold text-green-400">${formatCurrency(stats.average_win)}</span>
+                <div class="flex justify-between items-baseline text-sm">
+                    <span class="text-slate-400">Avg Win</span>
+                    <span class="font-mono font-semibold text-green-400 tabular-nums">${formatCurrency(stats.average_win)}</span>
                 </div>
-                <div class="flex justify-between text-sm">
-                    <span class="text-red-400">Avg Loss:</span>
-                    <span class="font-semibold text-red-400">${formatCurrency(stats.average_loss)}</span>
+                <div class="flex justify-between items-baseline text-sm">
+                    <span class="text-slate-400">Avg Loss</span>
+                    <span class="font-mono font-semibold text-red-400 tabular-nums">${formatCurrency(stats.average_loss)}</span>
                 </div>
             </div>
         </div>
@@ -137,20 +151,20 @@ function renderProfitCard(stats) {
  */
 function renderStreaksCard(stats) {
     return `
-        <div class="bg-slate-800 rounded p-4">
-            <h3 class="text-sm text-slate-400 mb-2">Streaks & Time</h3>
-            <div class="space-y-1">
-                <div class="flex justify-between text-sm">
-                    <span class="text-green-400">Max Win Streak:</span>
-                    <span class="font-semibold text-green-400">${stats.max_consecutive_wins}</span>
+        <div>
+            <h3 class="text-xs font-medium text-slate-400 uppercase tracking-wider border-b border-slate-800 pb-2 mb-3">Streaks &amp; Time</h3>
+            <div class="space-y-2">
+                <div class="flex justify-between items-baseline text-sm">
+                    <span class="text-slate-400">Max Win Streak</span>
+                    <span class="font-mono font-semibold text-slate-100 tabular-nums">${stats.max_consecutive_wins}</span>
                 </div>
-                <div class="flex justify-between text-sm">
-                    <span class="text-red-400">Max Loss Streak:</span>
-                    <span class="font-semibold text-red-400">${stats.max_consecutive_losses}</span>
+                <div class="flex justify-between items-baseline text-sm">
+                    <span class="text-slate-400">Max Loss Streak</span>
+                    <span class="font-mono font-semibold text-slate-100 tabular-nums">${stats.max_consecutive_losses}</span>
                 </div>
-                <div class="flex justify-between text-sm">
-                    <span class="text-slate-300">Avg Hold:</span>
-                    <span class="font-semibold">${stats.avg_holding_period_hours}h</span>
+                <div class="flex justify-between items-baseline text-sm">
+                    <span class="text-slate-400">Avg Hold</span>
+                    <span class="font-mono font-semibold text-slate-100 tabular-nums">${stats.avg_holding_period_hours}h</span>
                 </div>
             </div>
         </div>
@@ -165,7 +179,7 @@ function renderStreaksCard(stats) {
  */
 function renderStatisticsHTML(stats) {
     return `
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-x-8 gap-y-6">
             ${renderTradeCountsCard(stats)}
             ${renderPerformanceCard(stats)}
             ${renderProfitCard(stats)}
@@ -215,44 +229,45 @@ function renderMaxDrawdownCard(maxDD) {
     const recoveryLine = maxDD.recovery_timestamp
         ? `<div>Recovery: ${formatTimestamp(maxDD.recovery_timestamp)}</div>`
         : "";
+    const statusBadge = maxDD.recovered
+        ? '<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-900 text-green-400">Recovered</span>'
+        : '<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-900 text-amber-400">Ongoing</span>';
 
     return `
-        <div class="bg-slate-800 rounded p-4 mb-4">
-            <h3 class="text-sm text-slate-400 mb-3">Maximum Drawdown</h3>
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <div>
-                    <div class="flex justify-between text-sm mb-2">
-                        <span class="text-slate-300">Drawdown:</span>
-                        <span class="font-bold text-red-400 text-lg">${parseFloat(maxDD.drawdown_pct).toFixed(2)}%</span>
+        <div class="mb-6">
+            <h3 class="text-xs font-medium text-slate-400 uppercase tracking-wider border-b border-slate-800 pb-2 mb-3">Maximum Drawdown</h3>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-2">
+                <div class="space-y-2">
+                    <div class="flex justify-between items-baseline text-sm">
+                        <span class="text-slate-400">Drawdown</span>
+                        <span class="font-mono font-semibold text-red-400 tabular-nums">${parseFloat(maxDD.drawdown_pct).toFixed(2)}%</span>
                     </div>
-                    <div class="flex justify-between text-sm mb-1">
-                        <span class="text-slate-300">Amount:</span>
-                        <span class="font-semibold text-red-400">${formatCurrency(maxDD.drawdown_amount)}</span>
+                    <div class="flex justify-between items-baseline text-sm">
+                        <span class="text-slate-400">Amount</span>
+                        <span class="font-mono font-semibold text-red-400 tabular-nums">${formatCurrency(maxDD.drawdown_amount)}</span>
                     </div>
-                    <div class="flex justify-between text-sm">
-                        <span class="text-slate-300">Duration:</span>
-                        <span class="font-semibold">${maxDD.duration_days} day${maxDD.duration_days !== 1 ? "s" : ""}</span>
+                    <div class="flex justify-between items-baseline text-sm">
+                        <span class="text-slate-400">Duration</span>
+                        <span class="font-mono font-semibold text-slate-100 tabular-nums">${maxDD.duration_days} day${maxDD.duration_days !== 1 ? "s" : ""}</span>
                     </div>
                 </div>
-                <div>
-                    <div class="flex justify-between text-sm mb-1">
-                        <span class="text-slate-300">Peak Balance:</span>
-                        <span class="font-semibold">${formatCurrency(maxDD.peak_balance)}</span>
+                <div class="space-y-2">
+                    <div class="flex justify-between items-baseline text-sm">
+                        <span class="text-slate-400">Peak Balance</span>
+                        <span class="font-mono font-semibold text-slate-100 tabular-nums">${formatCurrency(maxDD.peak_balance)}</span>
                     </div>
-                    <div class="flex justify-between text-sm mb-1">
-                        <span class="text-slate-300">Trough Balance:</span>
-                        <span class="font-semibold text-red-400">${formatCurrency(maxDD.trough_balance)}</span>
+                    <div class="flex justify-between items-baseline text-sm">
+                        <span class="text-slate-400">Trough Balance</span>
+                        <span class="font-mono font-semibold text-slate-100 tabular-nums">${formatCurrency(maxDD.trough_balance)}</span>
                     </div>
-                    <div class="flex justify-between text-sm">
-                        <span class="text-slate-300">Status:</span>
-                        <span class="font-semibold ${maxDD.recovered ? "text-green-400" : "text-yellow-400"}">
-                            ${maxDD.recovered ? "Recovered" : "Ongoing"}
-                        </span>
+                    <div class="flex justify-between items-center text-sm">
+                        <span class="text-slate-400">Status</span>
+                        ${statusBadge}
                     </div>
                 </div>
             </div>
-            <div class="mt-3 pt-3 border-t border-slate-700">
-                <div class="text-xs text-slate-400 space-y-1">
+            <div class="mt-3 pt-3 border-t border-slate-800">
+                <div class="font-mono text-xs text-slate-400 space-y-1">
                     <div>Peak: ${formatTimestamp(maxDD.peak_timestamp)}</div>
                     <div>Trough: ${formatTimestamp(maxDD.trough_timestamp)}</div>
                     ${recoveryLine}
@@ -270,27 +285,30 @@ function renderMaxDrawdownCard(maxDD) {
  */
 function renderCurrentDrawdownCard(currDD) {
     return `
-        <div class="bg-slate-800 rounded p-4 mb-4 border-l-4 border-yellow-500">
-            <h3 class="text-sm text-slate-400 mb-3">Current Drawdown (Ongoing)</h3>
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <div>
-                    <div class="flex justify-between text-sm mb-2">
-                        <span class="text-slate-300">Drawdown:</span>
-                        <span class="font-bold text-yellow-400 text-lg">${parseFloat(currDD.drawdown_pct).toFixed(2)}%</span>
+        <div class="bg-yellow-900/10 border border-yellow-900 rounded-md p-4 mb-6">
+            <div class="flex items-center justify-between border-b border-yellow-900/60 pb-2 mb-3">
+                <h3 class="text-xs font-medium text-slate-400 uppercase tracking-wider">Current Drawdown</h3>
+                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-900 text-amber-400">Ongoing</span>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-2">
+                <div class="space-y-2">
+                    <div class="flex justify-between items-baseline text-sm">
+                        <span class="text-slate-400">Drawdown</span>
+                        <span class="font-mono font-semibold text-amber-400 tabular-nums">${parseFloat(currDD.drawdown_pct).toFixed(2)}%</span>
                     </div>
-                    <div class="flex justify-between text-sm">
-                        <span class="text-slate-300">Amount:</span>
-                        <span class="font-semibold text-yellow-400">${formatCurrency(currDD.drawdown_amount)}</span>
+                    <div class="flex justify-between items-baseline text-sm">
+                        <span class="text-slate-400">Amount</span>
+                        <span class="font-mono font-semibold text-amber-400 tabular-nums">${formatCurrency(currDD.drawdown_amount)}</span>
                     </div>
                 </div>
-                <div>
-                    <div class="flex justify-between text-sm mb-1">
-                        <span class="text-slate-300">Peak Balance:</span>
-                        <span class="font-semibold">${formatCurrency(currDD.peak_balance)}</span>
+                <div class="space-y-2">
+                    <div class="flex justify-between items-baseline text-sm">
+                        <span class="text-slate-400">Peak Balance</span>
+                        <span class="font-mono font-semibold text-slate-100 tabular-nums">${formatCurrency(currDD.peak_balance)}</span>
                     </div>
-                    <div class="flex justify-between text-sm">
-                        <span class="text-slate-300">Current Balance:</span>
-                        <span class="font-semibold text-yellow-400">${formatCurrency(currDD.trough_balance)}</span>
+                    <div class="flex justify-between items-baseline text-sm">
+                        <span class="text-slate-400">Current Balance</span>
+                        <span class="font-mono font-semibold text-slate-100 tabular-nums">${formatCurrency(currDD.trough_balance)}</span>
                     </div>
                 </div>
             </div>
@@ -307,18 +325,18 @@ function renderCurrentDrawdownCard(currDD) {
  * @returns {string} HTML string for drawdown row
  */
 function renderDrawdownRow(dd, index, isLast) {
-    const borderClass = !isLast ? "border-b border-slate-700" : "";
+    const borderClass = !isLast ? "border-b border-slate-800" : "";
     return `
         <div class="flex justify-between items-center text-sm py-2 ${borderClass}">
             <div class="flex items-center gap-3">
-                <span class="text-slate-500 font-mono">#${index + 1}</span>
+                <span class="text-slate-500 font-mono tabular-nums">#${index + 1}</span>
                 <div>
-                    <div class="font-semibold text-red-400">${parseFloat(dd.drawdown_pct).toFixed(2)}%</div>
-                    <div class="text-xs text-slate-400">${formatCurrency(dd.drawdown_amount)}</div>
+                    <div class="font-mono font-semibold text-red-400 tabular-nums">${parseFloat(dd.drawdown_pct).toFixed(2)}%</div>
+                    <div class="font-mono text-xs text-slate-400 tabular-nums">${formatCurrency(dd.drawdown_amount)}</div>
                 </div>
             </div>
             <div class="text-right text-xs text-slate-400">
-                <div>${dd.duration_days} day${dd.duration_days !== 1 ? "s" : ""}</div>
+                <div class="font-mono tabular-nums">${dd.duration_days} day${dd.duration_days !== 1 ? "s" : ""}</div>
                 <div>${dd.recovered ? "Recovered" : "Ongoing"}</div>
             </div>
         </div>
@@ -338,9 +356,9 @@ function renderTopDrawdownsCard(drawdowns, totalPeriods) {
         .join("");
 
     return `
-        <div class="bg-slate-800 rounded p-4">
-            <h3 class="text-sm text-slate-400 mb-3">Top Drawdown Periods (${totalPeriods} total)</h3>
-            <div class="space-y-2">
+        <div>
+            <h3 class="text-xs font-medium text-slate-400 uppercase tracking-wider border-b border-slate-800 pb-2 mb-3">Top Drawdown Periods (${totalPeriods} total)</h3>
+            <div>
                 ${rows}
             </div>
         </div>

@@ -30,7 +30,7 @@ make typecheck          # mypy src/core src/strategies
 make install-hooks      # Install git pre-commit hook (run once per clone)
 
 uv run python -m src.cli.main          # CLI entry point
-uv run uvicorn src.api.web:app --reload --host 127.0.0.1 --port 8000  # Web UI
+make web                                # Web UI (http://127.0.0.1:8000)
 ./scripts/build-css.sh                  # Build Tailwind CSS (required first time)
 ```
 
@@ -129,6 +129,13 @@ Good — single file with register_strategy, test first:
 
 Bad — config in a separate file, no test, missing register_strategy call
 ```
+
+## Design Context
+
+Read before any UI/design work (templates, CSS, charts, new pages):
+
+- **`PRODUCT.md`** — register (product), users, brand personality ("modern quant workbench"), anti-references, strategic design principles
+- **`DESIGN.md`** — visual system: color tokens, typography, elevation doctrine (flat/tonal), component specs, do's and don'ts
 
 ## Progressive Disclosure
 
