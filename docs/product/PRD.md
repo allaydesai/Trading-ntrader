@@ -341,6 +341,20 @@ class SMACrossover(UserStrategy):
 | 012 | Kraken cryptocurrency data support | Done |
 | 013 | Backtest run page (configure + launch from browser) | Done |
 
+### BMAD Efforts
+
+Larger multi-epic efforts planned and executed via the BMAD method. Per-effort PRDs,
+epics, and architecture live under `_bmad-output/` (active cycle in `planning-artifacts/`,
+completed cycles archived under `archive/<phase>/`).
+
+| Phase | Effort | Epics | Status |
+|-------|--------|-------|--------|
+| Phase 1 | FirstRate Data import — Stocks (CSV → Parquet catalog, data explorer, backtest integration, supplementary data) | E1 Data Import Pipeline · E2 Data Explorer & Verification · E3 Backtest Integration & Verification · E4 Supplementary Data | Done (2026-06) |
+| Phase 2 | FirstRate Data import — ETFs (FMP-backed metadata loader, ETF catalog) | TBD | Planned |
+
+Phase 1 archive: `_bmad-output/archive/phase-1-stocks/`. Retros and story records:
+`_bmad-output/implementation-artifacts/`.
+
 ### vNext (Future)
 - Portfolio/multi-strategy support
 - Parameter optimization framework
