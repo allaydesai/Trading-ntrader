@@ -188,6 +188,9 @@ data/catalogs/
 # Runtime server logs (regenerated on each run)
 logs/
 
+# Scratch / working docs — temporary notes, plans, capability dumps (not tracked)
+docs/scratch/
+
 # Root-level E2E test screenshots (agent-browser / Playwright captures).
 # Scoped to repo root so tracked assets under diagrams/ and docs/ are unaffected.
 /*.png
