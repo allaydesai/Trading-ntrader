@@ -60,10 +60,17 @@ function createChartWithDefaults(container) {
             vertLines: { color: CHART_COLORS.gridLines },
             horzLines: { color: CHART_COLORS.gridLines },
         },
+        // Bar timestamps are true UTC epochs (see src/api/rest/explorer.py); render
+        // the axis/crosshair in US exchange time so it matches TradingView and how
+        // equity traders read the tape. Intl handles the EDT/EST (DST) switch.
+        localization: {
+            timeFormatter: (time) => formatExchangeTime(time, true),
+        },
         timeScale: {
             timeVisible: true,
             secondsVisible: false,
             borderColor: CHART_COLORS.gridLines,
+            tickMarkFormatter: (time) => formatExchangeTime(time, false),
         },
         rightPriceScale: {
             borderColor: CHART_COLORS.gridLines,
@@ -169,6 +176,31 @@ function formatTimestamp(timestamp) {
 }
 
 /**
+ * Formats a Lightweight Charts UTC epoch (seconds) in US exchange time.
+ *
+ * Bar timestamps stored/served as true UTC; this renders the axis and crosshair
+ * in America/New_York (EDT/EST handled automatically) so charts line up with
+ * TradingView and the way US equities are quoted.
+ *
+ * @param {number} time - Unix timestamp in seconds (UTC), as passed to the chart
+ * @param {boolean} withDate - Include month/day (true for crosshair, false for axis ticks)
+ * @returns {string} e.g. "Apr 27, 09:30" (crosshair) or "09:30" (axis tick)
+ */
+function formatExchangeTime(time, withDate) {
+    const opts = {
+        timeZone: "America/New_York",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+    };
+    if (withDate) {
+        opts.month = "short";
+        opts.day = "numeric";
+    }
+    return new Date(time * 1000).toLocaleString("en-US", opts);
+}
+
+/**
  * Deduplicates and sorts time series data by timestamp
  *
  * @param {Array<Object>} data - Array of objects with 'time' property
@@ -208,6 +240,75 @@ function createTimeframeBadge(container, timeframe) {
     return badge;
 }
 
+/**
+ * Formats a price value for the OHLC legend
+ *
+ * @param {number} value - Price value
+ * @returns {string} Price rounded to 2 decimals, or "—" if not finite
+ */
+function formatOhlcPrice(value) {
+    return Number.isFinite(value) ? value.toFixed(2) : "—";
+}
+
+/**
+ * Attaches a fixed top-left OHLC legend that updates on crosshair move
+ *
+ * Builds an absolutely-positioned readout showing the Open/High/Low/Close of the
+ * bar under the crosshair. TradingView Lightweight Charts has no built-in OHLC
+ * legend, so this wires the documented `subscribeCrosshairMove` event and reads
+ * the hovered bar via `param.seriesData.get(series)`. When the cursor is off the
+ * data, the legend falls back to the most recent bar so it is never empty.
+ *
+ * @param {HTMLElement} container - Chart container element
+ * @param {IChartApi} chart - Chart instance
+ * @param {ISeriesApi} candleSeries - Candlestick series to read OHLC from
+ * @param {Object} [options] - Display options
+ * @param {string} [options.symbol] - Symbol label to prefix the legend
+ * @param {string} [options.offsetTop="top-2"] - Tailwind top-* class (use to sit
+ *     below an existing timeframe badge, e.g. "top-10")
+ * @returns {HTMLElement} The created legend element
+ */
+function attachOhlcLegend(container, chart, candleSeries, options = {}) {
+    const { symbol = "", offsetTop = "top-2" } = options;
+
+    const legend = document.createElement("div");
+    legend.className = `absolute ${offsetTop} left-2 z-10 px-2 py-1 text-xs ` +
+        "font-mono bg-slate-800/80 text-slate-300 rounded border border-slate-700 " +
+        "pointer-events-none whitespace-nowrap";
+    container.style.position = "relative";
+    container.appendChild(legend);
+
+    const render = (bar) => {
+        if (!bar) {
+            legend.textContent = "";
+            return;
+        }
+        const up = bar.close >= bar.open;
+        const closeColor = up ? CHART_COLORS.bullish : CHART_COLORS.bearish;
+        const prefix = symbol ? `<span class="text-slate-100 mr-1">${symbol}</span>` : "";
+        legend.innerHTML = prefix +
+            `<span class="text-slate-500">O</span> ${formatOhlcPrice(bar.open)} ` +
+            `<span class="text-slate-500">H</span> ${formatOhlcPrice(bar.high)} ` +
+            `<span class="text-slate-500">L</span> ${formatOhlcPrice(bar.low)} ` +
+            `<span class="text-slate-500">C</span> ` +
+            `<span style="color: ${closeColor}">${formatOhlcPrice(bar.close)}</span>`;
+    };
+
+    const latestBar = () => {
+        const data = candleSeries.data();
+        return data && data.length > 0 ? data[data.length - 1] : null;
+    };
+
+    render(latestBar());
+
+    chart.subscribeCrosshairMove((param) => {
+        const bar = (param && param.time) ? param.seriesData.get(candleSeries) : null;
+        render(bar || latestBar());
+    });
+
+    return legend;
+}
+
 // Export for module usage (if using ES modules in future)
 if (typeof window !== "undefined") {
     window.CHART_COLORS = CHART_COLORS;
@@ -220,4 +321,6 @@ if (typeof window !== "undefined") {
     window.formatTimestamp = formatTimestamp;
     window.deduplicateTimeseriesData = deduplicateTimeseriesData;
     window.createTimeframeBadge = createTimeframeBadge;
+    window.formatOhlcPrice = formatOhlcPrice;
+    window.attachOhlcLegend = attachOhlcLegend;
 }

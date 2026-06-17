@@ -624,6 +624,10 @@ video {
   border-width: 0;
 }
 
+.pointer-events-none {
+  pointer-events: none;
+}
+
 .visible {
   visibility: visible;
 }
@@ -662,6 +666,10 @@ video {
 
 .right-4 {
   right: 1rem;
+}
+
+.top-10 {
+  top: 2.5rem;
 }
 
 .top-2 {
@@ -733,6 +741,10 @@ video {
 
 .ml-auto {
   margin-left: auto;
+}
+
+.mr-1 {
+  margin-right: 0.25rem;
 }
 
 .mr-2 {

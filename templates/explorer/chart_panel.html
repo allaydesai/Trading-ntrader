@@ -21,7 +21,7 @@
             hx-target="#chart-panel"
             hx-swap="innerHTML"
             hx-vals='{"catalog": {{ catalog | tojson }}, "ticker": {{ ticker | tojson }}, "tf": {{ tf_option.label | tojson }}{% if explorer_state_search %}, "search": {{ explorer_state_search | tojson }}{% endif %}{% if explorer_state_asset_class %}, "asset_class": {{ explorer_state_asset_class | tojson }}{% endif %}{% if explorer_state_sort_by %}, "sort_by": {{ explorer_state_sort_by | tojson }}{% endif %}{% if explorer_state_page %}, "page": {{ explorer_state_page | tojson }}{% endif %}}'
-            hx-push-url="true"
+            hx-push-url='{{ "/explorer?catalog=" ~ (catalog | urlencode) ~ "&ticker=" ~ (ticker | urlencode) ~ "&tf=" ~ (tf_option.label | urlencode) }}'
             hx-indicator="#chart-loading-bar"
             {% endif %}
             {% if not is_available %}disabled{% endif %}>
@@ -65,7 +65,7 @@
 
     <!-- Chart Container -->
     <div role="img" aria-label="Price chart for {{ ticker }}">
-        <div id="chart-container" class="w-full rounded-lg overflow-hidden bg-slate-950" style="height: 480px;">
+        <div id="chart-container" class="relative w-full rounded-lg overflow-hidden bg-slate-950" style="height: 480px;">
             {% if bar_count == 0 %}
             <div class="flex items-center justify-center h-full text-slate-500 text-sm">{{ no_data_message }}</div>
             {% endif %}
@@ -127,6 +127,9 @@
     var dedupedData = deduplicateTimeseriesData(barsJson);
     candleSeries.setData(dedupedData);
     chart.timeScale().fitContent();
+
+    var ohlcTicker = {{ ticker | tojson }};
+    attachOhlcLegend(container, chart, candleSeries, { symbol: ohlcTicker });
 
     window._explorerChart = chart;
     window._explorerCandleSeries = candleSeries;
