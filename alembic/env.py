@@ -11,6 +11,7 @@ from src.db.models import (  # noqa: F401 — register for autogenerate
     CatalogDividend,
     CatalogInstrument,
     CatalogStockSplit,
+    InstrumentMetadata,
 )
 from src.models.market_data import Base as MarketDataBase
 
