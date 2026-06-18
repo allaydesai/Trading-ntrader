@@ -1998,6 +1998,7 @@ dependencies = [
     { name = "docker" },
     { name = "fastapi" },
     { name = "greenlet" },
+    { name = "httpx" },
     { name = "jinja2" },
     { name = "nautilus-trader", extra = ["ib"] },
     { name = "numpy" },
@@ -2018,7 +2019,6 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "aiosqlite" },
-    { name = "httpx" },
     { name = "mypy" },
     { name = "pandas-stubs" },
     { name = "pg8000" },
@@ -2042,6 +2042,7 @@ requires-dist = [
     { name = "docker", specifier = ">=7.1.0" },
     { name = "fastapi", specifier = ">=0.121.2" },
     { name = "greenlet", specifier = ">=3.2.4" },
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "jinja2", specifier = ">=3.1.6" },
     { name = "nautilus-trader", extras = ["ib"], specifier = ">=1.190.0" },
     { name = "numpy", specifier = ">=2.3.3" },
@@ -2062,7 +2063,6 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "aiosqlite", specifier = ">=0.21.0" },
-    { name = "httpx", specifier = ">=0.28.1" },
     { name = "mypy", specifier = ">=1.18.1" },
     { name = "pandas-stubs", specifier = ">=2.3.2.250827" },
     { name = "pg8000", specifier = ">=1.31.5" },

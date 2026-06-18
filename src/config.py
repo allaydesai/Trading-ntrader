@@ -124,6 +124,26 @@ class KrakenSettings(BaseSettings):
     }
 
 
+class FMPSettings(BaseSettings):
+    """Financial Modeling Prep (FMP) metadata provider configuration settings."""
+
+    fmp_api_key: str = Field(default="", repr=False, description="FMP API key")
+    fmp_base_url: str = Field(
+        default="https://financialmodelingprep.com/stable", description="FMP API base URL"
+    )
+    fmp_rate_limit: int = Field(
+        default=300, ge=1, description="Max FMP requests per minute (Starter quota)"
+    )
+    fmp_request_timeout: int = Field(default=30, ge=1, description="Per-request timeout in seconds")
+
+    model_config = {
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "case_sensitive": False,
+        "extra": "ignore",
+    }
+
+
 class FirstRateSettings(BaseSettings):
     """FirstRate Data source configuration settings."""
 
@@ -233,6 +253,11 @@ class Settings(BaseSettings):
     # Kraken settings
     kraken: KrakenSettings = Field(
         default_factory=KrakenSettings, description="Kraken exchange settings"
+    )
+
+    # FMP metadata provider settings
+    fmp: FMPSettings = Field(
+        default_factory=FMPSettings, description="FMP metadata provider settings"
     )
 
     # FirstRate settings
