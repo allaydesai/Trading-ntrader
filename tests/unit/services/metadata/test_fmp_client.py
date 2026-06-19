@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import httpx
 import pytest
+
 from src.services.metadata.fmp_client import FMPClient, _FMPRateLimiter
 
 
@@ -283,6 +284,18 @@ class TestFMPClientGracefulDegradation:
 
         with pytest.raises(ValueError):
             _client(handler).fetch_profile("SPY")
+
+    def test_malformed_200_body_degrades_to_none(self):
+        """A 200 with a non-JSON body (proxy HTML, truncated) degrades, never aborts."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, content=b"<html>upstream error</html>")
+
+        with patch("src.services.metadata.fmp_client.logger") as mock_logger:
+            result = _client(handler).fetch_profile("SPY")
+
+        assert result is None  # degraded, not raised
+        assert mock_logger.error.called  # loud, like a non-transient failure
 
 
 class TestFMPClientLifecycle:

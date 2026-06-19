@@ -103,9 +103,10 @@ class FMPClient:
         return self._client
 
     def close(self) -> None:
-        """Close the underlying httpx client if it was built."""
+        """Close the underlying httpx client; reset so a later use rebuilds it."""
         if self._client is not None:
             self._client.close()
+            self._client = None
 
     def __enter__(self) -> "FMPClient":
         return self
@@ -114,13 +115,7 @@ class FMPClient:
         self.close()
 
     def fetch_profile(self, ticker: str) -> dict[str, Any] | None:
-        """Fetch a single ticker profile, or ``None`` on no-data/degradation.
-
-        Returns the raw FMP profile dict (``data[0]``) for a known ticker, or
-        ``None`` for an unknown ticker (empty ``[]``) or any degraded provider
-        error (retries exhausted / non-transient 4xx). Never re-raises a network
-        error to the caller (AC #4).
-        """
+        """Fetch a ticker profile, or ``None`` on no-data/degradation; never raises (AC #4)."""
         for attempt in range(self.max_retries + 1):
             self._rate_limiter.acquire()  # throttle covers retries too
             try:
@@ -162,7 +157,10 @@ class FMPClient:
 
     def _parse_payload(self, resp: httpx.Response, ticker: str) -> dict[str, Any] | None:
         """Map the FMP top-level array to ``data[0]`` or ``None`` ("no data")."""
-        data = resp.json()
+        try:
+            data = resp.json()
+        except ValueError:  # malformed HTTP-200 body (proxy HTML, truncated) → degrade
+            return self._degraded(ticker, level="error", error="invalid JSON body")
         if not isinstance(data, list) or not data:
             # Empty array (or unexpected shape) → unknown ticker, not an error.
             logger.debug("fmp_profile_no_data", ticker=ticker, provider="FMP")

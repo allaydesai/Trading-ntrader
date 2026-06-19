@@ -1,6 +1,6 @@
 # Story 1.3: FMP Client with Rate-Limit Throttle & Graceful Degradation
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -73,6 +73,14 @@ so that bulk resolution across ~5,039 tickers never exceeds quota and a provider
   - [x] `make lint` clean — watch the F401/F821 import gate: import `httpx`, `time`, `deque`, `Any`, `Callable`, `get_settings`, `FMPSettings`, `structlog` and ensure each is used in the same edit that adds it. [Source: CLAUDE.md "structural import gate"]
   - [x] `make typecheck` clean — `mypy` targets `src/core src/services strategies`, so `src/services/metadata/fmp_client.py` **is** directly checked. Full type annotations required (`-> dict[str, Any] | None`, etc.). [Source: CLAUDE.md commands; Makefile typecheck target]
   - [x] Size limits: `fmp_client.py` < 500 lines, `FMPClient`/`_FMPRateLimiter` classes < 100 lines each, methods < 50 lines, line length ≤ 100. [Source: CLAUDE.md Foundational Rules]
+
+### Review Findings
+
+_Code review 2026-06-18 (adversarial: Blind Hunter + Edge Case Hunter + Acceptance Auditor). All 6 ACs verified met and genuinely tested. Items below are residual gaps._
+
+- [x] [Review][Decision→Patch] Malformed HTTP-200 body (`JSONDecodeError`) aborted the import — **Resolved 2026-06-18 (decision: degrade-to-None).** `_parse_payload` (`src/services/metadata/fmp_client.py`) now wraps `resp.json()` in `try/except ValueError`, degrading a non-JSON 200 (proxy/CDN HTML, truncated body) to `None` with a loud `error`-level log instead of propagating. This overrides the spec's original "let `ValueError` surface" stance for *transport* bodies, per AC#4/NFR15 ("a provider failure never aborts the import"). A genuine code-bug `ValueError` raised during `.get()` still surfaces (existing `test_programming_error_is_not_swallowed` unchanged). New test: `test_malformed_200_body_degrades_to_none`.
+- [x] [Review][Patch] `close()` did not reset `self._client` (reuse-after-close raised an uncaught `RuntimeError`) — **Fixed.** `close()` now sets `self._client = None` so a later call lazily rebuilds; `src/services/metadata/fmp_client.py:close`.
+- [x] [Review][Patch] `FMPClient` class was 101 lines (over the `<100` rule); Completion Notes misreported counts — **Fixed.** Trimmed the `fetch_profile` docstring to one line → class now **99 lines**, file **170**. Completion Notes corrected below.
 
 ## Dev Notes
 
@@ -169,7 +177,14 @@ claude-opus-4-8[1m] (BMAD dev-story workflow)
   fixture exists in `tests/conftest.py` — it does NOT. Not needed: `FMPSettings.fmp_api_key`
   defaults to `""`, so `FMPClient()` construction is CI-safe, and unit tests inject `MockTransport`.
 - **Refactor:** extracted a `_degraded()` helper (DRY for the 3 degradation log sites) to keep
-  the `FMPClient` class within the <100-line convention (99 lines; file 169 lines).
+  the `FMPClient` class within the <100-line convention. (Post-review correction: as first
+  committed the class was actually **101 lines** / file 171; the code-review patch trimmed the
+  `fetch_profile` docstring to land the class at **99 lines** / file **170**.)
+- **Code review (2026-06-18):** adversarial review (Blind + Edge Case + Acceptance) confirmed all
+  6 ACs met and tests non-tautological. Three patches applied: (1) malformed HTTP-200 body now
+  degrades to `None` (decision: robustness over the spec's "let `ValueError` surface" for transport
+  bodies); (2) `close()` resets `self._client` (was a reuse-after-close `RuntimeError` leak);
+  (3) class trimmed to ≤99 lines. 26 unit tests (was 25), 991 unit total, lint + typecheck clean.
 - Open questions 1 (degrade-on-401 vs fail-fast) and 2 (`max_retries`/`backoff_base` as ctor
   params, not `FMPSettings` fields) implemented per the documented defaults.
 
@@ -186,3 +201,4 @@ claude-opus-4-8[1m] (BMAD dev-story workflow)
 | ---------- | --------------------------------------------------------------------------- |
 | 2026-06-17 | Story 1.3 drafted (ready-for-dev): sync `FMPClient` (lazy httpx, single `/stable/profile` GET, `apikey` auth) with a sync sliding-window `_FMPRateLimiter` (300/min), exponential-backoff retry on transient errors, specific-httpx-exception graceful degradation to `None`, empty-`[]` "no data" handling. Unit tests via `httpx.MockTransport` (no network). New `src/services/metadata/` package. |
 | 2026-06-18 | Story 1.3 implemented (review): `src/services/metadata/{__init__,fmp_client}.py` + 25 unit tests. All 6 ACs satisfied. `make test-unit` 990 passed (no regressions), lint clean, typecheck success. Live-smoke verified against real FMP API (SPY resolved; unknown ticker → `None`; no apikey leak). |
+| 2026-06-18 | Code review (done): adversarial review applied 3 patches — malformed-200 body degrades to `None`, `close()` resets the lazy client, class trimmed to ≤99 lines. 26 unit tests, 991 unit total green; lint + typecheck clean. Status → done. |
