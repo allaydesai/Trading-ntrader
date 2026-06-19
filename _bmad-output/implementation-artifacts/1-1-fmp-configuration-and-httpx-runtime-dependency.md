@@ -1,6 +1,6 @@
 # Story 1.1: FMP Configuration & httpx Runtime Dependency
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
