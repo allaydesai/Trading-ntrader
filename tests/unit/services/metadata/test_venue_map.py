@@ -12,6 +12,8 @@ from src.services.metadata.venue_map import (
     normalize_venue,
 )
 
+pytestmark = pytest.mark.unit
+
 
 class TestFMPExchangeToVenue:
     """The confidently-mapped label→venue table (seeded conservatively)."""
@@ -41,7 +43,7 @@ class TestNormalizeVenue:
         # SPY is labeled AMEX by FMP but its real venue is ARCA — never guess.
         assert normalize_venue("AMEX") is None
 
-    @pytest.mark.parametrize("label", ["", None])
+    @pytest.mark.parametrize("label", ["", None, 123])
     def test_blank_or_none_is_unresolved(self, label):
         assert normalize_venue(label) is None
 

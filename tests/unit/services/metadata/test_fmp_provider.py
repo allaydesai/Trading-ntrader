@@ -18,6 +18,8 @@ from src.models.instrument_metadata import (
 )
 from src.services.metadata.providers.fmp_provider import FMPMetadataProvider
 
+pytestmark = pytest.mark.unit
+
 
 class _StubClient:
     """Minimal stand-in for ``FMPClient`` — returns a canned ``fetch_profile``."""

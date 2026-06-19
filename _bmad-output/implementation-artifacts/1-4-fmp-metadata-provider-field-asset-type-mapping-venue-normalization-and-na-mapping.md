@@ -1,6 +1,6 @@
 # Story 1.4: FMP Metadata Provider — Field/Asset-Type Mapping, Venue Normalization & N/A Mapping
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -74,6 +74,12 @@ so that all FMP-specific mapping is contained in one adapter and no FMP types le
   - [x] `make lint` clean — mind the F401/F821 import gate: import `Any`, `date`, `structlog`, `InstrumentMetadata`, `ResolutionStatus`, `AssetType`, `NA_SENTINEL`, `FMPClient`, `normalize_venue` and ensure each is used in the same edit that adds it. [Source: CLAUDE.md "structural import gate"]
   - [x] `make typecheck` clean — `mypy` targets `src/core src/services strategies`, so **both** `venue_map.py` and `providers/fmp_provider.py` are directly checked. Full annotations (`-> InstrumentMetadata`, `-> str | None`, `dict[str, Any]`). [Source: 1-3 story Task 5; Makefile typecheck]
   - [x] Size limits: each file < 500 lines, `FMPMetadataProvider` < 100 lines, methods < 50, line length ≤ 100. [Source: CLAUDE.md Foundational Rules]
+
+### Review Findings
+
+- [x] [Review][Patch] Quote `last_updated` in sprint status so YAML remains parseable [`_bmad-output/implementation-artifacts/sprint-status.yaml`:38]
+- [x] [Review][Patch] Add required unit-tier markers to new unit tests [`tests/unit/services/metadata/test_fmp_provider.py`:1, `tests/unit/services/metadata/test_venue_map.py`:1]
+- [x] [Review][Patch] Guard `normalize_venue` against truthy non-string exchange values [`src/services/metadata/venue_map.py`:35]
 
 ## Dev Notes
 

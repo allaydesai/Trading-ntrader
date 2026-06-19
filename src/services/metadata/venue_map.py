@@ -23,8 +23,9 @@ AMBIGUOUS_LABELS: frozenset[str] = frozenset({"AMEX"})
 def normalize_venue(label: str | None) -> str | None:
     """Translate an FMP exchange label to a Nautilus venue code, or ``None``.
 
-    Blank/``None``, ambiguous, and unmapped labels all return ``None`` — there is
-    no fallback or default venue (ADR-6, "no guessed default").
+    Blank/``None``, malformed non-string values, ambiguous, and unmapped labels
+    all return ``None`` — there is no fallback or default venue (ADR-6, "no
+    guessed default").
 
     Args:
         label: The FMP ``exchange`` short label (e.g. ``"NASDAQ"``), or ``None``.
@@ -32,9 +33,11 @@ def normalize_venue(label: str | None) -> str | None:
     Returns:
         The Nautilus venue code for a confidently-mapped label, else ``None``.
     """
-    if not label:
+    if not isinstance(label, str):
         return None
     key = label.strip().upper()
+    if not key:
+        return None
     if key in AMBIGUOUS_LABELS:
         return None
     return FMP_EXCHANGE_TO_VENUE.get(key)
