@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-06-17
-last_updated: "2026-06-20"  # Story 1-6 reviewed → done
+last_updated: "2026-06-20"  # Epic 1 retrospective completed → epic-1-retro-2026-06-20.md
 project: Trading-ntrader
 project_key: NOKEY
 tracking_system: file-system
@@ -57,7 +57,7 @@ development_status:
   1-4-fmp-metadata-provider-field-asset-type-mapping-venue-normalization-and-na-mapping: done
   1-5-provider-agnostic-resolution-service-with-cache-check-and-fault-isolation: done
   1-6-per-import-resolution-summary-reporting: done
-  epic-1-retrospective: optional
+  epic-1-retrospective: done
 
   # Epic 2: ETF Data Import Pipeline
   epic-2: backlog
