@@ -8,15 +8,18 @@ summary tables; they hold no import logic.
 from typing import TYPE_CHECKING
 
 import click
+import structlog
 from rich.console import Console
 from rich.table import Table
 
 from src.models.catalog import ImportResult
+from src.models.instrument_metadata import InstrumentMetadata, ResolutionSummary
 
 if TYPE_CHECKING:
     from src.services.firstrate.supplementary_loader import SupplementaryLoadResult
 
 console = Console()
+logger = structlog.get_logger(__name__)
 
 
 def determine_exit_code(results: list[ImportResult]) -> int:
@@ -199,3 +202,66 @@ def _print_supplementary_summary(
         for r in supp_failures:
             fail_table.add_row(r.ticker, r.error or "Unknown error")
         console.print(fail_table)
+
+
+def build_resolution_summary_text(summary: ResolutionSummary) -> str:
+    """Build a plain-text block of the per-import resolution counts (Story 1.6).
+
+    Mirrors the ``build_summary_text`` style (title + ``━`` rule + aligned lines).
+    Pure — returns a string and prints nothing.
+
+    Args:
+        summary: Aggregated resolution counters from ``ResolutionSummary.from_results``.
+
+    Returns:
+        Formatted resolution-summary string.
+    """
+    lines = [
+        "",
+        "Resolution Summary",
+        "━" * 27,
+        f"Resolved:         {summary.resolved}",
+        f"Descriptive gaps: {summary.descriptive_gaps}",
+        f"Venue unresolved: {summary.venue_unresolved}",
+    ]
+    return "\n".join(lines)
+
+
+def _print_resolution_summary(summary: ResolutionSummary) -> None:
+    """Print the Rich-formatted resolution summary table (Story 1.6).
+
+    Mirrors the ``_print_summary`` Rich idiom (Metric/Value columns).
+
+    Args:
+        summary: Aggregated resolution counters.
+    """
+    console.print()
+    table = Table(title="Resolution Summary")
+    table.add_column("Metric", style="cyan")
+    table.add_column("Value", style="green")
+    table.add_row("Resolved", str(summary.resolved))
+    table.add_row("Descriptive gaps", str(summary.descriptive_gaps))
+    table.add_row("Venue unresolved", str(summary.venue_unresolved))
+    console.print(table)
+
+
+def log_resolution_results(results: list[InstrumentMetadata]) -> None:
+    """Emit one structlog outcome event per resolved ticker (Story 1.6, AC #2).
+
+    The four-field schema (``ticker``, ``provider``, ``resolution_status``,
+    ``error``) is fixed. ``error`` is always ``None`` here: the domain model
+    carries no error string, and genuine per-ticker failures are already logged
+    by ``InstrumentMetadataService.resolve_batch`` as ``metadata_resolution_failed``.
+    These two complementary streams are not duplicated.
+
+    Args:
+        results: Already-resolved metadata (the output of ``resolve_batch``).
+    """
+    for r in results:
+        logger.info(
+            "metadata_resolution_outcome",
+            ticker=r.ticker,
+            provider=r.metadata_provider,
+            resolution_status=r.resolution_status.value,
+            error=None,
+        )

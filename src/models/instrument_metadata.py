@@ -11,6 +11,7 @@ This is the domain layer. The SQLAlchemy ORM counterpart lives in
 aliasing.
 """
 
+from collections.abc import Iterable
 from datetime import date, datetime
 from enum import Enum
 from typing import Optional
@@ -118,3 +119,45 @@ class ResolutionSummary(BaseModel):
     resolved: int = 0
     descriptive_gaps: int = 0
     venue_unresolved: int = 0
+
+    @classmethod
+    def from_results(cls, results: Iterable["InstrumentMetadata"]) -> "ResolutionSummary":
+        """Aggregate resolved metadata into the three per-import counters (Story 1.6).
+
+        Pure, side-effect-free aggregation over one pass:
+
+        - ``resolved`` / ``venue_unresolved`` are mutually-exclusive *status* counts.
+        - ``descriptive_gaps`` is an *orthogonal* dimension: a RESOLVED record with an
+          ``NA_SENTINEL`` descriptive field is counted in BOTH ``resolved`` and
+          ``descriptive_gaps``. The three counters can therefore sum to MORE than
+          ``len(results)`` — that is correct (FR6: three independent metrics), not a bug.
+
+        ``UNRESOLVED`` rows (which should not appear post-resolution) count toward
+        neither status bucket, but their descriptive gaps still increment.
+        """
+        resolved = 0
+        venue_unresolved = 0
+        descriptive_gaps = 0
+        for md in results:
+            if md.resolution_status == ResolutionStatus.RESOLVED:
+                resolved += 1
+            elif md.resolution_status == ResolutionStatus.VENUE_UNRESOLVED:
+                venue_unresolved += 1
+            if _has_descriptive_gap(md):
+                descriptive_gaps += 1
+        return cls(
+            resolved=resolved,
+            descriptive_gaps=descriptive_gaps,
+            venue_unresolved=venue_unresolved,
+        )
+
+
+#: The exactly-five descriptive fields that may hold ``NA_SENTINEL``. ``venue`` is
+#: excluded (a code or ``None`` — never the sentinel); ``asset_type`` / ``ipo_date``
+#: are typed and absent-as-``None``.
+_DESCRIPTIVE_FIELDS = ("company_name", "sector", "industry", "country", "currency")
+
+
+def _has_descriptive_gap(md: "InstrumentMetadata") -> bool:
+    """True when any of the five descriptive fields equals ``NA_SENTINEL``."""
+    return any(getattr(md, field) == NA_SENTINEL for field in _DESCRIPTIVE_FIELDS)
