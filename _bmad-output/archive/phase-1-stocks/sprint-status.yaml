@@ -3,7 +3,7 @@
 # project: Trading-ntrader
 # project_key: NOKEY
 # tracking_system: file-system
-# story_location: _bmad-output/implementation-artifacts
+# story_location: _bmad-output/archive/phase-1-stocks/implementation-artifacts (moved 2026-06-20; Phase 2 reuses 1-x..4-x numbering)
 
 # STATUS DEFINITIONS:
 # ==================
@@ -39,7 +39,7 @@ last_updated: 2026-06-03 (EPIC 4 RETROSPECTIVE complete → epic-4-retro-2026-06
 project: Trading-ntrader
 project_key: NOKEY
 tracking_system: file-system
-story_location: _bmad-output/implementation-artifacts
+story_location: _bmad-output/archive/phase-1-stocks/implementation-artifacts
 
 development_status:
   # Epic 1: Data Import Pipeline
