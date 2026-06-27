@@ -696,6 +696,7 @@ class TestBarCountFieldForTimeframe:
             ("1-HOUR-LAST", "bar_count_hourly"),
             ("1-MINUTE-LAST", "bar_count_minute"),
             ("5-MINUTE-LAST", "bar_count_5min"),
+            ("30-MINUTE-LAST", "bar_count_30min"),
             # Unknown aggregations degrade to daily to match _upsert_metadata.
             ("1-SECOND-LAST", "bar_count_daily"),
             ("noop", "bar_count_daily"),

@@ -31,6 +31,7 @@ def _make_instrument(**overrides) -> CatalogInstrument:
         "name": "Apple Inc.",
         "bar_count_daily": 1250,
         "bar_count_hourly": 8750,
+        "bar_count_30min": 15625,
         "bar_count_5min": 93750,
         "bar_count_minute": 468750,
         "date_range_start": datetime(2020, 1, 2, tzinfo=timezone.utc),

@@ -24,6 +24,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from src.api.models.explorer import ExplorerTimeframe
 from src.models.catalog import (
     AssetClass,
     DryRunReport,
@@ -38,11 +39,14 @@ from src.models.catalog import (
 #: Filename suffix → Nautilus timeframe spec. Must stay in sync with
 #: ``TIMEFRAME_MAP`` in ``src/cli/commands/import_data.py``. Match is
 #: case-insensitive (we lowercase filenames before the substring check).
+#: The 30-minute spec is sourced from the central timeframe enum
+#: (``ExplorerTimeframe.THIRTY_MIN``) — defined once, never inlined (ADR-9).
 _FILENAME_TIMEFRAME_MAP: dict[str, str] = {
     "_1day_": "1-DAY-LAST",
     "_1hour_": "1-HOUR-LAST",
     "_1min_": "1-MINUTE-LAST",
     "_5min_": "5-MINUTE-LAST",
+    "_30min_": ExplorerTimeframe.THIRTY_MIN.bar_type_spec,
 }
 
 #: Label for files whose suffix does not match any known timeframe. These are

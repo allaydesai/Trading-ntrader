@@ -16,6 +16,9 @@ class TestExplorerTimeframe:
     def test_hourly_label(self):
         assert ExplorerTimeframe.HOURLY.label == "1H"
 
+    def test_thirty_min_label(self):
+        assert ExplorerTimeframe.THIRTY_MIN.label == "30m"
+
     def test_five_min_label(self):
         assert ExplorerTimeframe.FIVE_MIN.label == "5m"
 
@@ -28,6 +31,9 @@ class TestExplorerTimeframe:
     def test_hourly_bar_type_spec(self):
         assert ExplorerTimeframe.HOURLY.bar_type_spec == "1-HOUR-LAST"
 
+    def test_thirty_min_bar_type_spec(self):
+        assert ExplorerTimeframe.THIRTY_MIN.bar_type_spec == "30-MINUTE-LAST"
+
     def test_five_min_bar_type_spec(self):
         assert ExplorerTimeframe.FIVE_MIN.bar_type_spec == "5-MINUTE-LAST"
 
@@ -37,6 +43,7 @@ class TestExplorerTimeframe:
     def test_from_label_valid(self):
         assert ExplorerTimeframe.from_label("D") == ExplorerTimeframe.DAILY
         assert ExplorerTimeframe.from_label("1H") == ExplorerTimeframe.HOURLY
+        assert ExplorerTimeframe.from_label("30m") == ExplorerTimeframe.THIRTY_MIN
         assert ExplorerTimeframe.from_label("5m") == ExplorerTimeframe.FIVE_MIN
         assert ExplorerTimeframe.from_label("1m") == ExplorerTimeframe.ONE_MIN
 
@@ -47,6 +54,7 @@ class TestExplorerTimeframe:
     def test_bar_count_field_mapping(self):
         assert ExplorerTimeframe.DAILY.bar_count_field == "bar_count_daily"
         assert ExplorerTimeframe.HOURLY.bar_count_field == "bar_count_hourly"
+        assert ExplorerTimeframe.THIRTY_MIN.bar_count_field == "bar_count_30min"
         assert ExplorerTimeframe.FIVE_MIN.bar_count_field == "bar_count_5min"
         assert ExplorerTimeframe.ONE_MIN.bar_count_field == "bar_count_minute"
 
@@ -56,6 +64,10 @@ class TestExplorerTimeframe:
 
     def test_hourly_initial_window_days(self):
         assert ExplorerTimeframe.HOURLY.initial_window_days == 180
+
+    def test_thirty_min_initial_window_days(self):
+        """30min windows between hourly (180) and 5-min (30)."""
+        assert ExplorerTimeframe.THIRTY_MIN.initial_window_days == 90
 
     def test_five_min_initial_window_days(self):
         assert ExplorerTimeframe.FIVE_MIN.initial_window_days == 30

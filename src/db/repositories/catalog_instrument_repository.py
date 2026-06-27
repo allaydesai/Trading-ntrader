@@ -58,6 +58,7 @@ class CatalogInstrumentRepository:
                 existing.bar_count_hourly = instrument.bar_count_hourly
                 existing.bar_count_minute = instrument.bar_count_minute
                 existing.bar_count_5min = instrument.bar_count_5min
+                existing.bar_count_30min = instrument.bar_count_30min
                 await self.session.flush()
                 await self.session.refresh(existing)
                 return existing
@@ -294,6 +295,7 @@ class SyncCatalogInstrumentRepository:
                 existing.bar_count_hourly = instrument.bar_count_hourly
                 existing.bar_count_minute = instrument.bar_count_minute
                 existing.bar_count_5min = instrument.bar_count_5min
+                existing.bar_count_30min = instrument.bar_count_30min
                 self.session.flush()
                 self.session.refresh(existing)
                 return existing

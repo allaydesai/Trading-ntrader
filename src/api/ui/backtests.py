@@ -6,7 +6,7 @@ Provides paginated backtest list, detail view, and HTMX fragment endpoints.
 
 import asyncio
 from datetime import date, datetime, timezone
-from typing import Any, Optional
+from typing import Any, Literal, Optional, cast
 from urllib.parse import unquote, urlencode
 from uuid import UUID
 
@@ -103,6 +103,7 @@ def _build_run_context(
             BreadcrumbItem(label="Backtests", url="/backtests", is_current=False),
             BreadcrumbItem(label="Run Backtest", url=None, is_current=True),
         ],
+        app_version="0.1.0",
     )
     merged_form = dict(form_data or {})
     # Pre-fill catalog from ?catalog= query string on GET (Story 3.1 bridge).
@@ -319,7 +320,10 @@ async def run_backtest_submit(request: Request) -> Response:
             )
 
             data_result = await load_backtest_data(
-                data_source=form_data.data_source,
+                # Validated against VALID_DATA_SOURCES by BacktestRunFormData.
+                data_source=cast(
+                    Literal["catalog", "ibkr", "kraken", "mock"], form_data.data_source
+                ),
                 instrument_id=bt_request.instrument_id,
                 bar_type_spec=bar_type_spec,
                 start=start_dt,

@@ -104,6 +104,7 @@ class InstrumentMapper:
                     bar_count_hourly=0,
                     bar_count_minute=0,
                     bar_count_5min=0,
+                    bar_count_30min=0,
                 )
                 self._repo.upsert(instrument)
                 count += 1

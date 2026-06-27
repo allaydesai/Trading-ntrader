@@ -30,6 +30,7 @@ _TIMEFRAME_FIELD_MAP = {
     "1-HOUR": "bar_count_hourly",
     "1-MINUTE": "bar_count_minute",
     "5-MINUTE": "bar_count_5min",
+    "30-MINUTE": "bar_count_30min",
 }
 
 #: Decisions returned by :meth:`ImportService._classify_ticker`.
