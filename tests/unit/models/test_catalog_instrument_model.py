@@ -35,10 +35,22 @@ class TestCatalogInstrumentModel:
             "bar_count_hourly",
             "bar_count_minute",
             "bar_count_5min",
+            "bar_count_30min",
             "created_at",
             "updated_at",
         }
         assert expected.issubset(columns)
+
+    def test_bar_count_30min_column(self):
+        """bar_count_30min is an Integer column, non-null, server_default 0 (Story 2.1, AC3)."""
+        from sqlalchemy import Integer
+
+        cols = {c.name: c for c in CatalogInstrument.__table__.columns}
+        assert "bar_count_30min" in cols, "bar_count_30min column missing"
+        col = cols["bar_count_30min"]
+        assert isinstance(col.type, Integer)
+        assert not col.nullable
+        assert col.server_default is not None
 
     def test_country_state_columns(self):
         """country and state are nullable String columns."""

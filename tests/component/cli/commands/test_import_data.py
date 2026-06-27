@@ -6,7 +6,7 @@ from unittest.mock import patch
 import pytest
 from click.testing import CliRunner
 
-from src.models.catalog import ImportResult
+from src.models.catalog import ImportOutcome, ImportResult
 
 _VALID_LINE = "2024-01-02 09:30:00,100.0,101.0,99.5,100.5,1000"
 
@@ -417,7 +417,7 @@ class TestStory17DoubleRun:
             """Emit the exact progress + summary `_run_import` would."""
             run_counter["n"] += 1
             first_run = run_counter["n"] == 1
-            outcome = "new" if first_run else "skipped"
+            outcome: ImportOutcome = "new" if first_run else "skipped"
             status = "success" if first_run else "skipped"
             row_count = 6523 if first_run else 0
 

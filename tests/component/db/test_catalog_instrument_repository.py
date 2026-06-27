@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS catalog_instruments (
     bar_count_hourly INTEGER NOT NULL DEFAULT 0,
     bar_count_minute INTEGER NOT NULL DEFAULT 0,
     bar_count_5min INTEGER NOT NULL DEFAULT 0,
+    bar_count_30min INTEGER NOT NULL DEFAULT 0,
     updated_at TIMESTAMP,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (catalog_name, ticker)
@@ -101,6 +102,7 @@ class TestAsyncCatalogInstrumentRepository:
             "bar_count_hourly": 0,
             "bar_count_minute": 0,
             "bar_count_5min": 0,
+            "bar_count_30min": 0,
         }
         await repo.upsert(
             CatalogInstrument(**_make_instrument(country=None, state=None, **bar_counts))
@@ -125,7 +127,12 @@ class TestAsyncCatalogInstrumentRepository:
         tickers.
         """
         repo = CatalogInstrumentRepository(async_session)
-        base_counts = {"bar_count_daily": 0, "bar_count_hourly": 0, "bar_count_minute": 0}
+        base_counts = {
+            "bar_count_daily": 0,
+            "bar_count_hourly": 0,
+            "bar_count_minute": 0,
+            "bar_count_30min": 0,
+        }
         await repo.upsert(CatalogInstrument(**_make_instrument(bar_count_5min=0, **base_counts)))
         await async_session.commit()
 
@@ -135,6 +142,32 @@ class TestAsyncCatalogInstrumentRepository:
         result = await repo.get_by_ticker("firstrate-etf", "SPY")
         assert result is not None
         assert result.bar_count_5min == 4242
+
+    async def test_upsert_persists_bar_count_30min_on_existing(self, async_session):
+        """upsert update-branch must copy bar_count_30min (Story 2.1, AC3).
+
+        Mirrors the bar_count_5min guard: the explorer gates the 30-minute
+        toolbar on bar_count_30min > 0, so a dropped copy would make 30-min
+        charts silently disappear for re-imported tickers.
+        """
+        repo = CatalogInstrumentRepository(async_session)
+        base_counts = {
+            "bar_count_daily": 0,
+            "bar_count_hourly": 0,
+            "bar_count_minute": 0,
+            "bar_count_5min": 0,
+        }
+        await repo.upsert(CatalogInstrument(**_make_instrument(bar_count_30min=0, **base_counts)))
+        await async_session.commit()
+
+        await repo.upsert(
+            CatalogInstrument(**_make_instrument(bar_count_30min=3030, **base_counts))
+        )
+        await async_session.commit()
+
+        result = await repo.get_by_ticker("firstrate-etf", "SPY")
+        assert result is not None
+        assert result.bar_count_30min == 3030
 
     async def test_get_by_ticker(self, async_session):
         """get_by_ticker returns matching instrument."""
@@ -339,7 +372,12 @@ class TestSyncCatalogInstrumentRepository:
     def test_upsert_persists_bar_count_5min_on_existing(self, sync_session):
         """Sync upsert update-branch must copy bar_count_5min (review finding #2)."""
         repo = SyncCatalogInstrumentRepository(sync_session)
-        base_counts = {"bar_count_daily": 0, "bar_count_hourly": 0, "bar_count_minute": 0}
+        base_counts = {
+            "bar_count_daily": 0,
+            "bar_count_hourly": 0,
+            "bar_count_minute": 0,
+            "bar_count_30min": 0,
+        }
         repo.upsert(CatalogInstrument(**_make_instrument(bar_count_5min=0, **base_counts)))
         sync_session.commit()
 
@@ -349,6 +387,25 @@ class TestSyncCatalogInstrumentRepository:
         result = repo.get_by_ticker("firstrate-etf", "SPY")
         assert result is not None
         assert result.bar_count_5min == 777
+
+    def test_upsert_persists_bar_count_30min_on_existing(self, sync_session):
+        """Sync upsert update-branch must copy bar_count_30min (Story 2.1, AC3)."""
+        repo = SyncCatalogInstrumentRepository(sync_session)
+        base_counts = {
+            "bar_count_daily": 0,
+            "bar_count_hourly": 0,
+            "bar_count_minute": 0,
+            "bar_count_5min": 0,
+        }
+        repo.upsert(CatalogInstrument(**_make_instrument(bar_count_30min=0, **base_counts)))
+        sync_session.commit()
+
+        repo.upsert(CatalogInstrument(**_make_instrument(bar_count_30min=909, **base_counts)))
+        sync_session.commit()
+
+        result = repo.get_by_ticker("firstrate-etf", "SPY")
+        assert result is not None
+        assert result.bar_count_30min == 909
 
     def test_get_by_ticker(self, sync_session):
         """get_by_ticker returns matching instrument."""

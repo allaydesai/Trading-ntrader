@@ -51,6 +51,7 @@ ALL_TIMEFRAMES = list(ExplorerTimeframe)
 TIMEFRAME_EXPLORER_TO_RUN_FORM: Final[dict[str, str]] = {
     "D": "1-DAY",
     "1H": "1-HOUR",
+    "30m": "30-MINUTE",
     "5m": "5-MINUTE",
     "1m": "1-MINUTE",
 }
@@ -290,6 +291,7 @@ async def explorer_page(
                 is_current=True,
             ),
         ],
+        app_version="0.1.0",
     )
 
     if not catalogs or not selected_catalog:

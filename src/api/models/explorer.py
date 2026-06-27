@@ -25,6 +25,7 @@ class ExplorerTimeframe(Enum):
 
     DAILY = ("D", "1-DAY-LAST", "bar_count_daily", 1825)
     HOURLY = ("1H", "1-HOUR-LAST", "bar_count_hourly", 180)
+    THIRTY_MIN = ("30m", "30-MINUTE-LAST", "bar_count_30min", 90)
     FIVE_MIN = ("5m", "5-MINUTE-LAST", "bar_count_5min", 30)
     ONE_MIN = ("1m", "1-MINUTE-LAST", "bar_count_minute", 7)
 

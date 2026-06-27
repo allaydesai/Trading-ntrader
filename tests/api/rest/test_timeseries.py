@@ -336,6 +336,7 @@ class TestRunTimeseriesEndpoint:
             assert len(data["candles"]) == 1
             assert data["candles"][0]["close"] == 185.75
             # Loader received the run object (resolves its catalog + bar type).
+            assert mock_loader.await_args is not None
             assert mock_loader.await_args.args[0] is backtest
         finally:
             app.dependency_overrides.pop(get_backtest_query_service, None)

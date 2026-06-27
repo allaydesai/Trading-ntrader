@@ -27,10 +27,11 @@ from src.api.ui.explorer import (
 class TestTimeframeMapping:
     """Explorer label ↔ run-form timeframe mapping is the single source of truth."""
 
-    def test_maps_all_four_explorer_labels(self):
+    def test_maps_all_five_explorer_labels(self):
         assert TIMEFRAME_EXPLORER_TO_RUN_FORM == {
             "D": "1-DAY",
             "1H": "1-HOUR",
+            "30m": "30-MINUTE",
             "5m": "5-MINUTE",
             "1m": "1-MINUTE",
         }
@@ -39,6 +40,7 @@ class TestTimeframeMapping:
         assert TIMEFRAME_RUN_FORM_TO_EXPLORER == {
             "1-DAY": "D",
             "1-HOUR": "1H",
+            "30-MINUTE": "30m",
             "5-MINUTE": "5m",
             "1-MINUTE": "1m",
         }
@@ -48,6 +50,7 @@ class TestTimeframeMapping:
         [
             ("1-DAY", "D"),
             ("1-HOUR", "1H"),
+            ("30-MINUTE", "30m"),
             ("5-MINUTE", "5m"),
             ("1-MINUTE", "1m"),
         ],
@@ -98,6 +101,19 @@ class TestBuildRunBacktestUrl:
             explorer_state=None,
         )
         assert self._params(url)["timeframe"] == "1-HOUR"
+
+    def test_build_run_backtest_url_30min(self):
+        """30m must resolve in the bridge map — no KeyError/500 when 30m bars exist (Story 2.1)."""
+        url = _build_run_backtest_url(
+            catalog="c",
+            ticker="AAPL",
+            active_tf=ExplorerTimeframe.THIRTY_MIN,
+            date_range_start=datetime(2020, 1, 1, tzinfo=timezone.utc),
+            date_range_end=datetime(2024, 12, 31, tzinfo=timezone.utc),
+            bar_count=500,
+            explorer_state=None,
+        )
+        assert self._params(url)["timeframe"] == "30-MINUTE"
 
     def test_build_run_backtest_url_5min(self):
         url = _build_run_backtest_url(

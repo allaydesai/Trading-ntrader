@@ -114,6 +114,18 @@ class TestScanFirstRateDirectory:
         assert report.total_file_count == 2
         assert report.timeframes["1-DAY-LAST"].file_count == 2
 
+    def test_30min_timeframe_suffix(self, tmp_path):
+        """The ``_30min_`` filename token maps to ``30-MINUTE-LAST`` (Story 2.1, AC2)."""
+        _make_file(tmp_path / "S" / "SPY_full_30min_adjsplitdiv.txt", _VALID_LINE)
+        _make_file(tmp_path / "S" / "SPY_full_5min_adjsplitdiv.txt", _VALID_LINE)
+
+        report = scan_firstrate_directory(tmp_path, AssetClass.ETF)
+
+        assert "unknown" not in report.timeframes
+        # 30min must NOT be conflated with 5min or 1hour.
+        assert set(report.timeframes.keys()) == {"30-MINUTE-LAST", "5-MINUTE-LAST"}
+        assert report.timeframes["30-MINUTE-LAST"].file_count == 1
+
     def test_uppercase_timeframe_suffix(self, tmp_path):
         """Uppercase suffixes like _1Day_ are mapped to 1-DAY-LAST (not 'unknown')."""
         _make_file(tmp_path / "A" / "AAPL_full_1Day_adjsplitdiv.txt", _VALID_LINE)
