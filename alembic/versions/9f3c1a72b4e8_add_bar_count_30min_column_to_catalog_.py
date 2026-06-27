@@ -1,7 +1,7 @@
 """add bar_count_30min column to catalog_instruments
 
 Revision ID: 9f3c1a72b4e8
-Revises: dbec2c1f25a6
+Revises: f051a079629c
 Create Date: 2026-06-22 10:00:00.000000
 
 """
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = '9f3c1a72b4e8'
-down_revision: Union[str, Sequence[str], None] = 'dbec2c1f25a6'
+down_revision: Union[str, Sequence[str], None] = 'f051a079629c'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
