@@ -1,6 +1,7 @@
 """Unit tests for instrument metadata domain models."""
 
 from datetime import date, datetime, timezone
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -163,7 +164,7 @@ class TestResolutionSummary:
 
 def _resolved(ticker: str = "SPY", **overrides) -> InstrumentMetadata:
     """Fully-clean RESOLVED metadata fixture; override any field for gap cases."""
-    fields = {
+    fields: dict[str, Any] = {
         "ticker": ticker,
         "metadata_provider": "FMP",
         "venue": "XNAS",
