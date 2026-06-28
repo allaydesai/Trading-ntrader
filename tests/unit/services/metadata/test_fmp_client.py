@@ -94,6 +94,8 @@ class TestFMPClientFetchProfile:
     """fetch_profile happy path + empty-array handling (AC #1, #5)."""
 
     def test_returns_first_profile_element(self):
+        from src.config import FMPSettings
+
         captured: dict = {}
 
         def handler(request: httpx.Request) -> httpx.Response:
@@ -101,12 +103,15 @@ class TestFMPClientFetchProfile:
             captured["params"] = dict(request.url.params)
             return httpx.Response(200, json=[_PROFILE])
 
-        result = _client(handler).fetch_profile("SPY")
+        # Inject an explicit key so the assertion is hermetic — it must not
+        # depend on a developer's ambient FMP_API_KEY / .env to pass.
+        settings = FMPSettings(fmp_api_key="test-key")
+        result = _client(handler, settings=settings).fetch_profile("SPY")
 
         assert result == _PROFILE  # AC #1: returns data[0], the single profile dict
         assert captured["path"] == "/stable/profile"  # base /stable + /profile
         assert captured["params"]["symbol"] == "SPY"
-        assert captured["params"]["apikey"] != ""  # apikey auth sent as query param
+        assert captured["params"]["apikey"] == "test-key"  # apikey auth sent as query param
 
     def test_single_request_on_success(self):
         calls = {"n": 0}
