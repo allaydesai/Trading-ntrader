@@ -562,6 +562,173 @@ class TestRunDryRun:
 
 
 # ---------------------------------------------------------------------------
+# Story 2.3 — ETF dry-run wiring (cache reader + date ranges) and rendering
+# ---------------------------------------------------------------------------
+
+
+def _empty_report(source_path, asset_class):
+    from src.models.catalog import DryRunReport
+
+    return DryRunReport(
+        asset_class=asset_class,
+        source_path=str(source_path),
+        timeframes={},
+        total_file_count=0,
+        total_source_bytes=0,
+        estimated_parquet_bytes=0,
+    )
+
+
+class _FakeSession:
+    """Lazy, connection-free stand-in for a sync SQLAlchemy session."""
+
+    def __init__(self):
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
+class TestEtfDryRunWiring:
+    """The ETF path wires the cache reader + date ranges; stocks does not."""
+
+    @pytest.mark.unit
+    def test_etf_passes_cache_reader_and_date_ranges(self, tmp_path, monkeypatch):
+        """ETF dry-run injects a cache reader and requests date ranges (AC1/AC3)."""
+        from src.cli.commands.import_data import _run_dry_run
+
+        captured: dict = {}
+
+        def fake_build(source_path, asset_class, **kw):
+            captured.update(kw)
+            return _empty_report(source_path, asset_class)
+
+        session = _FakeSession()
+        monkeypatch.setattr(
+            "src.db.session_sync.get_sync_session_maker",
+            lambda: (lambda: session),
+        )
+        with patch("src.cli.commands.import_data.build_dry_run_report", side_effect=fake_build):
+            code = _run_dry_run("firstrate", "test", tmp_path, "etf")
+
+        assert code == 0
+        assert captured["include_date_ranges"] is True
+        assert captured["cache_reader"] is not None
+        # The read-only session is always closed when done.
+        assert session.closed is True
+
+    @pytest.mark.unit
+    def test_stock_omits_cache_reader_and_date_ranges(self, tmp_path):
+        """Stocks dry-run passes no reader and no date ranges (invariant intact)."""
+        from src.cli.commands.import_data import _run_dry_run
+
+        captured: dict = {}
+
+        def fake_build(source_path, asset_class, **kw):
+            captured.update(kw)
+            return _empty_report(source_path, asset_class)
+
+        with patch("src.cli.commands.import_data.build_dry_run_report", side_effect=fake_build):
+            code = _run_dry_run("firstrate", "test", tmp_path, None)
+
+        assert code == 0
+        assert captured["cache_reader"] is None
+        assert captured["include_date_ranges"] is False
+
+    @pytest.mark.unit
+    def test_etf_db_unconfigured_degrades_gracefully(self, tmp_path, monkeypatch):
+        """No DB → warn, omit the estimate, still scan and return 0 (AC3 degrade)."""
+        from src.cli.commands.import_data import _run_dry_run
+
+        captured: dict = {}
+
+        def fake_build(source_path, asset_class, **kw):
+            captured.update(kw)
+            return _empty_report(source_path, asset_class)
+
+        monkeypatch.setattr("src.db.session_sync.get_sync_session_maker", lambda: None)
+        with patch("src.cli.commands.import_data.build_dry_run_report", side_effect=fake_build):
+            code = _run_dry_run("firstrate", "test", tmp_path, "etf")
+
+        assert code == 0
+        # No reader (DB unconfigured) but date ranges still requested.
+        assert captured["cache_reader"] is None
+        assert captured["include_date_ranges"] is True
+
+    @pytest.mark.unit
+    def test_etf_db_unavailable_at_query_degrades(self, tmp_path, monkeypatch):
+        """A DB error mid-estimate is caught; the scan still prints and returns 0."""
+        from sqlalchemy.exc import OperationalError
+
+        from src.cli.commands.import_data import _run_dry_run
+
+        calls: dict = {"n": 0}
+
+        def fake_build(source_path, asset_class, **kw):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                # First call (with reader) blows up as if the DB went away.
+                raise OperationalError("SELECT 1", {}, Exception("connection refused"))
+            # Retry (without reader) succeeds.
+            assert kw["cache_reader"] is None
+            return _empty_report(source_path, asset_class)
+
+        session = _FakeSession()
+        monkeypatch.setattr(
+            "src.db.session_sync.get_sync_session_maker",
+            lambda: (lambda: session),
+        )
+        with patch("src.cli.commands.import_data.build_dry_run_report", side_effect=fake_build):
+            code = _run_dry_run("firstrate", "test", tmp_path, "etf")
+
+        assert code == 0
+        assert calls["n"] == 2  # rebuilt offline
+        assert session.closed is True
+
+
+class TestPrintDryRunReportStory23:
+    """_print_dry_run_report renders the new sections and keeps the trailer."""
+
+    @pytest.mark.unit
+    def test_renders_date_ranges_estimate_and_trailer(self, capsys):
+        from src.cli.commands.import_data import _print_dry_run_report
+        from src.models.catalog import (
+            AssetClass,
+            DryRunReport,
+            MetadataEstimate,
+            TickerDateRange,
+            TimeframeSummary,
+        )
+
+        report = DryRunReport(
+            asset_class=AssetClass.ETF,
+            source_path="/data/etf",
+            timeframes={
+                "1-DAY-LAST": TimeframeSummary(ticker_count=2, file_count=2, source_bytes=1000)
+            },
+            total_file_count=2,
+            total_source_bytes=1000,
+            estimated_parquet_bytes=350,
+            distinct_ticker_count=2,
+            ticker_date_ranges={
+                "AAA": TickerDateRange(earliest="2020-01-02", latest="2024-12-31"),
+            },
+            metadata_estimate=MetadataEstimate(
+                total_tickers=2, cached_count=1, needs_resolution_count=1
+            ),
+        )
+
+        _print_dry_run_report(report)
+        out = capsys.readouterr().out
+
+        assert "2020-01-02" in out
+        assert "2024-12-31" in out
+        assert "cached" in out.lower()
+        assert "resolution" in out.lower()
+        assert "No data written — dry run only." in out
+
+
+# ---------------------------------------------------------------------------
 # Story 1-7 — Skip-outcome progress/summary/exit-code
 # ---------------------------------------------------------------------------
 

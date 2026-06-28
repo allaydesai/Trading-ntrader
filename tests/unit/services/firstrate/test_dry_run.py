@@ -6,6 +6,7 @@ tests also enforce that invariant (see ``test_module_does_not_import_nautilus``)
 
 import subprocess
 import sys
+from collections.abc import Iterable
 from pathlib import Path
 from unittest.mock import patch
 
@@ -14,6 +15,7 @@ import pytest
 from src.models.catalog import AssetClass
 from src.services.firstrate.dry_run import (
     PARQUET_COMPRESSION_RATIO,
+    ResolvedTickerReader,
     build_dry_run_report,
     estimate_parquet_bytes,
     format_bytes,
@@ -384,3 +386,129 @@ class TestBuildDryRunReport:
         reasons = {m.reason for m in report.schema_mismatches}
         assert "unrecognized filename pattern" in reasons
         assert None in reasons  # plain column-count mismatch has reason=None
+
+
+# ---------------------------------------------------------------------------
+# Story 2.3 — fake ResolvedTickerReader (offline, records every call)
+# ---------------------------------------------------------------------------
+
+
+class _FakeResolvedReader:
+    """In-memory ``ResolvedTickerReader`` stub for Story 2.3 tests (AC3/AC4).
+
+    Returns only the tickers it was seeded with (those that are ``RESOLVED``)
+    and records every call so a test can assert it was never asked to hit a
+    network/provider. ``network_calls`` stays 0 forever — this stub performs no
+    I/O at all, which is exactly the offline guarantee the estimate requires.
+    """
+
+    def __init__(self, resolved_tickers: set[str]) -> None:
+        self._resolved = set(resolved_tickers)
+        self.calls: list[list[str]] = []
+        self.network_calls = 0
+
+    def resolved(self, tickers: Iterable[str]) -> set[str]:
+        ticker_list = list(tickers)
+        self.calls.append(ticker_list)
+        return {t for t in ticker_list if t in self._resolved}
+
+
+# ---------------------------------------------------------------------------
+# Story 2.3 — per-ticker date-range derivation (AC1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestDateRangeDerivation:
+    def test_per_ticker_earliest_latest_for_etf(self, tmp_path):
+        """An ETF scan reports correct per-ticker earliest/latest dates (AC1)."""
+        aapl = (
+            "2020-01-02 09:30:00,100,101,99,100,10\n"
+            "2020-06-15 09:30:00,110,112,108,111,20\n"
+            "2024-12-31 16:00:00,200,201,199,200,30\n"
+        )
+        spy = "2019-06-03,300,301,299,300,40\n2023-03-15,400,401,399,400,50\n"
+        _make_file(tmp_path / "A" / "AAPL_full_1day_adjsplitdiv.txt", aapl)
+        _make_file(tmp_path / "S" / "SPY_full_1day_adjsplitdiv.txt", spy)
+
+        report = build_dry_run_report(tmp_path, AssetClass.ETF, include_date_ranges=True)
+
+        # distinct ticker count + timeframe grouping + 6-col schema (no mismatches)
+        assert report.distinct_ticker_count == 2
+        assert set(report.timeframes) == {"1-DAY-LAST"}
+        assert report.schema_mismatches == []
+        # per-ticker date ranges
+        assert report.ticker_date_ranges["AAPL"].earliest == "2020-01-02"
+        assert report.ticker_date_ranges["AAPL"].latest == "2024-12-31"
+        assert report.ticker_date_ranges["SPY"].earliest == "2019-06-03"
+        assert report.ticker_date_ranges["SPY"].latest == "2023-03-15"
+        # AC2 — non-zero estimated parquet footprint for the ETF scan
+        assert report.estimated_parquet_bytes > 0
+        assert format_bytes(report.estimated_parquet_bytes)
+
+    def test_aggregates_across_timeframes(self, tmp_path):
+        """earliest/latest fold over ALL of a ticker's files/timeframes (AC1)."""
+        day = "2021-01-04,10,11,9,10,1\n2022-01-04,12,13,11,12,2\n"
+        hour = "2020-02-03 09:30:00,10,11,9,10,1\n2023-09-09 16:00:00,12,13,11,12,2\n"
+        _make_file(tmp_path / "A" / "AAPL_full_1day_adjsplitdiv.txt", day)
+        _make_file(tmp_path / "A" / "AAPL_full_1hour_adjsplitdiv.txt", hour)
+
+        report = build_dry_run_report(tmp_path, AssetClass.ETF, include_date_ranges=True)
+
+        date_range = report.ticker_date_ranges["AAPL"]
+        assert date_range.earliest == "2020-02-03"  # min across both files
+        assert date_range.latest == "2023-09-09"  # max across both files
+
+    def test_date_ranges_absent_by_default(self, tmp_path):
+        """The stocks path leaves ticker_date_ranges empty (invariant intact)."""
+        _make_file(tmp_path / "A" / "AAPL_full_1day_adjsplitdiv.txt", _VALID_LINE)
+        report = build_dry_run_report(tmp_path, AssetClass.STOCK)
+        assert report.ticker_date_ranges == {}
+
+
+# ---------------------------------------------------------------------------
+# Story 2.3 — FMP-aware metadata estimate via injected reader (AC3)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestFmpAwareEstimate:
+    def test_cached_vs_needs_resolution_split(self, tmp_path):
+        """A fake reader marks some tickers RESOLVED; counts must match (AC3)."""
+        for ticker in ("AAA", "BBB", "CCC"):
+            _make_file(tmp_path / ticker[0] / f"{ticker}_full_1day_adjsplitdiv.txt", _VALID_LINE)
+        reader = _FakeResolvedReader({"AAA"})  # only AAA already cached
+
+        report = build_dry_run_report(tmp_path, AssetClass.ETF, cache_reader=reader)
+
+        estimate = report.metadata_estimate
+        assert estimate is not None
+        assert estimate.total_tickers == 3
+        assert estimate.cached_count == 1
+        assert estimate.needs_resolution_count == 2
+        # AC3 — the reader was consulted, and never hit a network/provider.
+        assert reader.calls, "cache reader was never consulted"
+        assert reader.network_calls == 0
+
+    def test_reader_extra_tickers_never_inflate(self, tmp_path):
+        """A reader returning tickers outside the scan can't inflate cached_count."""
+        _make_file(tmp_path / "A" / "AAA_full_1day_adjsplitdiv.txt", _VALID_LINE)
+        reader = _FakeResolvedReader({"AAA", "ZZZ"})  # ZZZ was never scanned
+
+        report = build_dry_run_report(tmp_path, AssetClass.ETF, cache_reader=reader)
+
+        estimate = report.metadata_estimate
+        assert estimate is not None
+        assert estimate.total_tickers == 1
+        assert estimate.cached_count == 1
+        assert estimate.needs_resolution_count == 0
+
+    def test_estimate_absent_without_reader(self, tmp_path):
+        """No reader → no estimate (stocks path / DB-unavailable degradation)."""
+        _make_file(tmp_path / "A" / "AAA_full_1day_adjsplitdiv.txt", _VALID_LINE)
+        report = build_dry_run_report(tmp_path, AssetClass.ETF)
+        assert report.metadata_estimate is None
+
+    def test_fake_reader_satisfies_protocol(self):
+        """The fake structurally satisfies the runtime-checkable seam."""
+        assert isinstance(_FakeResolvedReader(set()), ResolvedTickerReader)
