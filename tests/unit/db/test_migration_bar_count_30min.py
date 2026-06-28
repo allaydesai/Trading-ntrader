@@ -43,8 +43,10 @@ def test_migration_chains_off_current_head():
     """The new migration chains off the prior head, keeping a single linear head.
 
     The bar_count_30min migration mirrors the bar_count_5min migration's
-    column-add pattern, but its down_revision is the *current* head
-    (dbec2c1f25a6) so ``alembic upgrade head`` stays single-headed.
+    column-add pattern. After Epic 1's instrument-metadata migration
+    (f051a079629c) was linearized in ahead of it, its down_revision is that
+    migration — the prior head — so ``alembic upgrade head`` stays single-headed
+    (dbec2c1f25a6 -> f051a079629c -> 9f3c1a72b4e8).
     """
     text = _migration_text_adding_column()
-    assert "dbec2c1f25a6" in text, "down_revision should chain off the current head"
+    assert "f051a079629c" in text, "down_revision should chain off the current head"
