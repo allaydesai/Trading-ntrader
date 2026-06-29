@@ -87,7 +87,18 @@ class BaseParser(ABC):
     Each asset-specific parser must implement ``parse_file`` and
     ``map_instrument_id``.  The shared ``validate_bars`` method is
     provided by this base class.
+
+    Attributes:
+        last_validation: The :class:`ValidationResult` from the most recent
+            ``parse_file`` call (Story 2.5). ``None`` until a file has been
+            parsed (or when the file was empty). The import loop reads this to
+            surface OHLC/integrity violations in the import summary — invalid
+            rows are dropped before becoming bars, so the raw-row validation is
+            the only place those violations are visible.
     """
+
+    #: Set by ``parse_file`` so the import loop can surface OHLC-sanity flags.
+    last_validation: "ValidationResult | None" = None
 
     @abstractmethod
     def parse_file(

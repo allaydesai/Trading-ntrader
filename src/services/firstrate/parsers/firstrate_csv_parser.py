@@ -56,6 +56,7 @@ class FirstRateCsvParser(BaseParser):
         Returns:
             List of Bar objects sorted by ts_init ascending.
         """
+        self.last_validation = None
         raw_lines = self._read_lines(file_path)
         if not raw_lines:
             return []
@@ -71,6 +72,11 @@ class FirstRateCsvParser(BaseParser):
         # that Nautilus' Bar constructor does NOT reject. Previously only tests
         # called this, so the gate never ran on a real import.
         validation = self.validate_bars([row for _, row in parsed_rows])
+        # Expose the raw-row validation so the import loop can surface
+        # OHLC/integrity violations in the summary (Story 2.5 AC1/AC4). Invalid
+        # rows are dropped before becoming bars, so this is the only place the
+        # violations remain visible.
+        self.last_validation = validation
         if not validation.valid:
             logger.warning(
                 "bar_validation_failed",

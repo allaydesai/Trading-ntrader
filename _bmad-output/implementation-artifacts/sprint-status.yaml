@@ -65,7 +65,7 @@ development_status:
   2-2-per-archive-zip-extraction: done
   2-3-dry-run-scan-with-fmp-aware-estimate: done
   2-4-etf-import-parse-convert-and-write-to-isolated-catalog: done
-  2-5-import-verification-ohlc-sanity-row-count-parity-and-sample-point: backlog
+  2-5-import-verification-ohlc-sanity-row-count-parity-and-sample-point: done
   2-6-idempotent-re-runs-via-date-range-comparison: backlog
   2-7-import-summary-and-progress-reporting: backlog
   epic-2-retrospective: optional

@@ -716,6 +716,58 @@ class TestEtfCatalogRoundTrip:
         )
         assert spy_bars[0].ts_init == expected_ts
 
+    def test_real_parser_drops_and_flags_invalid_row_end_to_end(
+        self,
+        etf_catalog_base,
+        tmp_path,
+        mock_metadata_service,
+        mock_instrument_mapper,
+    ):
+        """Story 2.5 AC1/AC4 end-to-end with the REAL parser + catalog.
+
+        An invalid row (high < low) is rejected by Nautilus at Bar construction,
+        so it is dropped before becoming a bar — proving the design's linchpin:
+        the violation survives only at the raw-row layer (``last_validation``)
+        and is surfaced as a non-blocking warning while the valid bars import.
+        """
+        from src.services.firstrate.catalog_manager import CatalogManager
+
+        src = tmp_path / "source"
+        s_dir = src / "S"
+        s_dir.mkdir(parents=True)
+        # Row 2 has high (99.00) < low (100.50) — invalid, dropped by Nautilus.
+        (s_dir / "SPY.txt").write_text(
+            "2024-01-02 09:30:00,100.12,101.55,99.50,100.75,1000\n"
+            "2024-01-02 09:31:00,100.75,99.00,100.50,100.90,2000\n"
+            "2024-01-02 09:32:00,100.90,102.00,100.00,101.25,3000\n"
+        )
+
+        catalog_manager = CatalogManager(etf_catalog_base)
+        service = ImportService(
+            catalog_manager=catalog_manager,
+            metadata_service=mock_metadata_service,
+            instrument_mapper=mock_instrument_mapper,
+        )
+
+        results = service.import_directory(
+            source_dir=src,
+            catalog_name="firstrate-etf",
+            asset_class=AssetClass.ETF,
+            timeframe="1-MINUTE-LAST",
+        )
+
+        assert len(results) == 1
+        spy = results[0]
+        # Non-blocking: the 2 valid bars still import (the invalid row dropped).
+        assert spy.status == "success"
+        assert spy.row_count == 2
+        # AC1/AC4: the invalid row is flagged and surfaced via warnings.
+        assert spy.warnings
+        assert any("high" in w and "low" in w for w in spy.warnings)
+        # The dropped row really is absent from the catalog (2 bars on disk).
+        catalog = catalog_manager.resolve_catalog("firstrate-etf")
+        assert len(catalog.bars(bar_types=["SPY.ARCA-1-MINUTE-LAST-EXTERNAL"])) == 2
+
 
 # ---------------------------------------------------------------------------
 # Story 2.4 — cache-first metadata resolution wiring (AC4)
@@ -962,3 +1014,85 @@ class TestMetadataResolveWiring:
 
         assert all(r.status == "success" for r in results)
         assert resolver.resolve.call_count == 3
+
+
+# ---------------------------------------------------------------------------
+# Story 2.5 AC1/AC4: OHLC-sanity flags surfaced (non-blocking) on import
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.component
+class TestOhlcSanitySurfacing:
+    """OHLC-sanity flags from the parser are surfaced but do not fail the import."""
+
+    def test_ohlc_violation_is_flagged_but_import_succeeds(
+        self,
+        source_dir,
+        mock_catalog_manager,
+        mock_metadata_service,
+        mock_instrument_mapper,
+    ):
+        from src.models.catalog import ValidationResult
+
+        bars_by_ticker = {
+            "AAPL": _make_bars(2),
+            "ARKK": _make_bars(3),
+            "SPY": _make_bars(4),
+        }
+        # AAPL's source has an OHLC-sanity violation that the parser flags via
+        # last_validation (the invalid row is dropped before becoming a bar).
+        invalid_for = {
+            "AAPL": ValidationResult(
+                valid=False,
+                errors=["Row 2: high (90.00) < low (95.00)"],
+                row_count=3,
+                invalid_rows=1,
+            )
+        }
+
+        mock_catalog = mock_catalog_manager.resolve_catalog.return_value
+
+        def _bars_readback(**_kwargs):
+            if mock_catalog.write_data.call_args:
+                return mock_catalog.write_data.call_args[0][0]
+            return []
+
+        mock_catalog.bars.side_effect = _bars_readback
+
+        mock_parser = MagicMock()
+
+        def _parse_file(file_path, _iid, _bt):
+            ticker = file_path.stem
+            # Mirror the real parser: stash validation, return parsed bars.
+            mock_parser.last_validation = invalid_for.get(ticker)
+            return bars_by_ticker[ticker]
+
+        mock_parser.parse_file.side_effect = _parse_file
+
+        with patch("src.services.firstrate.import_service.get_parser") as mock_get_parser:
+            mock_get_parser.return_value = mock_parser
+            with patch("src.services.firstrate.import_service.logger") as mock_logger:
+                service = ImportService(
+                    catalog_manager=mock_catalog_manager,
+                    metadata_service=mock_metadata_service,
+                    instrument_mapper=mock_instrument_mapper,
+                )
+                results = service.import_directory(
+                    source_dir=source_dir,
+                    catalog_name=CATALOG_NAME,
+                    asset_class=AssetClass.ETF,
+                )
+
+        by_ticker = {r.ticker: r for r in results}
+        # Non-blocking: the valid bars still import (AC1 flags, does not reject).
+        assert by_ticker["AAPL"].status == "success"
+        assert by_ticker["AAPL"].row_count == 2
+        # Flagged + surfaced via ImportResult.warnings (AC4).
+        assert by_ticker["AAPL"].warnings
+        assert any("high" in w for w in by_ticker["AAPL"].warnings)
+        # Clean tickers carry no warnings.
+        assert by_ticker["ARKK"].warnings == []
+        assert by_ticker["SPY"].warnings == []
+        # Logged via structured logging (AC4 — never silent).
+        events = [c.args[0] for c in mock_logger.warning.call_args_list if c.args]
+        assert "ohlc_sanity_flagged" in events
