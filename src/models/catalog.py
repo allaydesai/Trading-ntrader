@@ -22,6 +22,8 @@ __all__ = [
     "ImportResult",
     "SchemaMismatch",
     "TimeframeSummary",
+    "TickerDateRange",
+    "MetadataEstimate",
     "DryRunReport",
 ]
 
@@ -132,6 +134,44 @@ class TimeframeSummary(BaseModel):
     source_bytes: int = Field(..., ge=0)
 
 
+class TickerDateRange(BaseModel):
+    """Observed first/last data dates for a single ticker (Story 2.3).
+
+    Derived cheaply by the dry-run scanner from the first and last non-blank
+    data lines of a ticker's source files — never a full parse, no Nautilus, no
+    DB. Dates are stored as ISO ``YYYY-MM-DD`` strings (lexical order ==
+    chronological order); the time-of-day portion of intraday rows is dropped.
+
+    Attributes:
+        earliest: Earliest observed data date across the ticker's files.
+        latest: Latest observed data date across the ticker's files.
+    """
+
+    earliest: str = Field(..., min_length=1)
+    latest: str = Field(..., min_length=1)
+
+
+class MetadataEstimate(BaseModel):
+    """FMP-aware, offline metadata-resolution estimate for a dry-run (Story 2.3).
+
+    Classifies the distinct scanned tickers using ONLY locally-cached metadata
+    state (no network / no provider call): a ticker is "cached" iff the
+    instrument-metadata store already holds a ``RESOLVED`` record for it
+    (``ResolutionStatus.RESOLVED``); everything else "needs resolution". The
+    lookup arrives via an injected read-only reader so the dry-run scanner stays
+    DB-free and Nautilus-free.
+
+    Attributes:
+        total_tickers: Distinct tickers considered (== ``distinct_ticker_count``).
+        cached_count: Tickers already RESOLVED in the metadata store.
+        needs_resolution_count: Tickers that would require FMP resolution.
+    """
+
+    total_tickers: int = Field(..., ge=0)
+    cached_count: int = Field(..., ge=0)
+    needs_resolution_count: int = Field(..., ge=0)
+
+
 class DryRunReport(BaseModel):
     """Result of a ``--dry-run`` directory scan.
 
@@ -160,6 +200,13 @@ class DryRunReport(BaseModel):
         schema_mismatches: Files whose sampled first line did not parse as the
             expected 6-column FirstRate schema, plus files with unrecognized
             filenames or encoding errors. Empty if the scan is clean.
+        ticker_date_ranges: Per-ticker earliest/latest observed data dates
+            (Story 2.3). Empty unless date-range derivation was requested (the
+            ETF dry-run path); keyed by ticker symbol.
+        metadata_estimate: FMP-aware, offline metadata-resolution estimate
+            (Story 2.3). ``None`` unless a cache reader was injected (the ETF
+            dry-run path, or when the DB is unavailable and the estimate is
+            gracefully omitted).
     """
 
     asset_class: AssetClass
@@ -172,3 +219,5 @@ class DryRunReport(BaseModel):
     distinct_ticker_count: int = Field(default=0, ge=0)
     unreadable_count: int = Field(default=0, ge=0)
     schema_mismatches: list[SchemaMismatch] = Field(default_factory=list)
+    ticker_date_ranges: dict[str, TickerDateRange] = Field(default_factory=dict)
+    metadata_estimate: Optional[MetadataEstimate] = None

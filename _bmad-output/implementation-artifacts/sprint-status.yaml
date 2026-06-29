@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-06-17
-last_updated: "2026-06-28"  # Story 2.2 (per-archive ZIP extraction) implemented + code-reviewed → done
+last_updated: "2026-06-28"  # Story 2.3 (dry-run scan with FMP-aware estimate) in development
 project: Trading-ntrader
 project_key: NOKEY
 tracking_system: file-system
@@ -63,7 +63,7 @@ development_status:
   epic-2: in-progress
   2-1-30-minute-timeframe-convention-expansion: done
   2-2-per-archive-zip-extraction: done
-  2-3-dry-run-scan-with-fmp-aware-estimate: backlog
+  2-3-dry-run-scan-with-fmp-aware-estimate: in-progress
   2-4-etf-import-parse-convert-and-write-to-isolated-catalog: backlog
   2-5-import-verification-ohlc-sanity-row-count-parity-and-sample-point: backlog
   2-6-idempotent-re-runs-via-date-range-comparison: backlog

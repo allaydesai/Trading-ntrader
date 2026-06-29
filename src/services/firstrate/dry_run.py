@@ -21,14 +21,18 @@ Public API:
 from __future__ import annotations
 
 import os
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Protocol, runtime_checkable
 
 from src.api.models.explorer import ExplorerTimeframe
 from src.models.catalog import (
     AssetClass,
     DryRunReport,
+    MetadataEstimate,
     SchemaMismatch,
+    TickerDateRange,
     TimeframeSummary,
 )
 
@@ -67,6 +71,32 @@ _EXPECTED_COLUMNS: int = 6
 #: Marker that separates the ticker from the rest of a FirstRate filename,
 #: e.g. ``AAPL_full_1day_adjsplitdiv.txt``.
 _FIRSTRATE_TICKER_MARKER = "_full_"
+
+#: How many bytes to read from a file's tail when finding its last data line.
+#: FirstRate rows are well under 100 chars, so 64 KiB always contains at least
+#: one complete trailing line even with a long run of blank lines at EOF.
+_TAIL_BYTES = 65_536
+
+
+# ---------------------------------------------------------------------------
+# Injected read-only cache-reader seam (Story 2.3)
+# ---------------------------------------------------------------------------
+
+
+@runtime_checkable
+class ResolvedTickerReader(Protocol):
+    """Read-only seam: "which of these tickers are already RESOLVED?".
+
+    Mirrors the Story 2.2 injected hand-off pattern so this module stays pure —
+    the FMP-aware estimate needs cached metadata state, but ``dry_run.py`` must
+    not import :mod:`nautilus_trader` or open a DB session. The CLI wires a real
+    metadata-store-backed reader; tests pass a fake. Implementations MUST be
+    read-only and offline: no network / provider call, no catalog / DB write.
+    """
+
+    def resolved(self, tickers: Iterable[str]) -> set[str]:
+        """Return the subset of ``tickers`` already cached as ``RESOLVED``."""
+        ...
 
 
 # ---------------------------------------------------------------------------
@@ -275,6 +305,86 @@ def _read_first_nonblank_line(file: Path) -> tuple[str | None, str | None]:
     return None, "empty file"
 
 
+def _read_last_nonblank_line(file: Path, tail_bytes: int = _TAIL_BYTES) -> str | None:
+    """Return the last non-blank line of ``file`` via a cheap tail read.
+
+    Seeks to at most the final ``tail_bytes`` and returns the last non-blank,
+    CRLF-stripped line, or ``None`` if the file is empty / unreadable / has no
+    non-blank content. Because the read is anchored to EOF, the trailing line is
+    always complete — only the *first* line of the window can be truncated, and
+    we never return that one. This keeps date derivation cheap: no full parse,
+    no line-by-line scan of multi-million-row files.
+    """
+    try:
+        size = file.stat().st_size
+        if size == 0:
+            return None
+        with file.open("rb") as handle:
+            if size > tail_bytes:
+                handle.seek(-tail_bytes, os.SEEK_END)
+            chunk = handle.read()
+    except (PermissionError, OSError):
+        return None
+    text = chunk.decode("utf-8", errors="ignore")
+    for raw in reversed(text.splitlines()):
+        stripped = raw.strip("\r\n").strip()
+        if stripped:
+            return stripped
+    return None
+
+
+def _date_from_line(line: str | None) -> str | None:
+    """Extract the ISO date (``YYYY-MM-DD``) from a FirstRate data line.
+
+    The first comma-separated field is the row datetime, e.g.
+    ``2024-01-02 09:30:00`` (intraday) or ``2024-01-02`` (daily). We keep only
+    the date portion (token before any whitespace). Returns ``None`` for a blank
+    or fieldless line.
+    """
+    if not line:
+        return None
+    first = line.split(",", 1)[0].strip()
+    if not first:
+        return None
+    return first.split()[0]
+
+
+def _derive_date_ranges(files: Iterable[Path]) -> dict[str, TickerDateRange]:
+    """Derive per-ticker earliest/latest observed data dates (Story 2.3).
+
+    For each file, reads only the first and last non-blank lines (cheap tail
+    seek — no full parse, no Nautilus, no DB) and folds the dates into per-ticker
+    minima/maxima across all the ticker's files/timeframes. Files with an
+    unrecognized name (no ``_full_`` marker) or no readable date are skipped.
+    """
+    earliest: dict[str, str] = {}
+    latest: dict[str, str] = {}
+    for file in files:
+        ticker = _extract_ticker(file)
+        if ticker is None:
+            continue
+        first_line, _ = _read_first_nonblank_line(file)
+        first_date = _date_from_line(first_line)
+        last_date = _date_from_line(_read_last_nonblank_line(file))
+        if first_date is not None:
+            current = earliest.get(ticker)
+            if current is None or first_date < current:
+                earliest[ticker] = first_date
+        if last_date is not None:
+            current = latest.get(ticker)
+            if current is None or last_date > current:
+                latest[ticker] = last_date
+
+    ranges: dict[str, TickerDateRange] = {}
+    for ticker in earliest.keys() | latest.keys():
+        lo = earliest.get(ticker) or latest.get(ticker)
+        hi = latest.get(ticker) or earliest.get(ticker)
+        if lo is None or hi is None:
+            continue
+        ranges[ticker] = TickerDateRange(earliest=lo, latest=hi)
+    return ranges
+
+
 def validate_schema_sample(files: list[Path], sample_size: int = 5) -> list[SchemaMismatch]:
     """Sample-check that files look like valid FirstRate 6-column CSVs.
 
@@ -355,11 +465,29 @@ def format_bytes(n: int) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _estimate_metadata(tickers: set[str], cache_reader: ResolvedTickerReader) -> MetadataEstimate:
+    """Classify distinct tickers as cached (RESOLVED) vs needs-resolution (Story 2.3).
+
+    Offline and read-only: delegates the "already RESOLVED?" lookup to the
+    injected ``cache_reader``. The reader's result is intersected with the
+    scanned set so a reader that returns extra tickers can never inflate the
+    cached count.
+    """
+    resolved = set(cache_reader.resolved(tickers)) & tickers
+    return MetadataEstimate(
+        total_tickers=len(tickers),
+        cached_count=len(resolved),
+        needs_resolution_count=len(tickers) - len(resolved),
+    )
+
+
 def build_dry_run_report(
     source_path: Path,
     asset_class: AssetClass,
     sample_size: int = 5,
     catalog: str | None = None,
+    cache_reader: ResolvedTickerReader | None = None,
+    include_date_ranges: bool = False,
 ) -> DryRunReport:
     """Scan, validate, and estimate in one call — used by the CLI command.
 
@@ -367,6 +495,14 @@ def build_dry_run_report(
     :func:`validate_schema_sample` over each timeframe group's retained file
     list without re-walking. Any schema mismatches are appended to the
     filename-pattern mismatches already surfaced by the walk.
+
+    Story 2.3 additions (opt-in, used by the ETF dry-run path):
+
+    - ``include_date_ranges=True`` derives per-ticker earliest/latest observed
+      data dates from the source files (cheap first+last line reads).
+    - ``cache_reader`` (an injected :class:`ResolvedTickerReader`) produces the
+      FMP-aware, offline cached-vs-needs-resolution estimate. When ``None`` the
+      estimate is omitted. The reader keeps this module DB-free / Nautilus-free.
     """
     state = _walk(source_path)
     report = _state_to_report(state, source_path, asset_class)
@@ -375,10 +511,21 @@ def build_dry_run_report(
     for bucket in state.groups.values():
         schema_mismatches.extend(validate_schema_sample(bucket.files, sample_size))
 
+    ticker_date_ranges: dict[str, TickerDateRange] = {}
+    if include_date_ranges:
+        all_files = [file for bucket in state.groups.values() for file in bucket.files]
+        ticker_date_ranges = _derive_date_ranges(all_files)
+
+    metadata_estimate: MetadataEstimate | None = None
+    if cache_reader is not None:
+        metadata_estimate = _estimate_metadata(set(state.distinct_tickers), cache_reader)
+
     return report.model_copy(
         update={
             "catalog": catalog,
             "schema_mismatches": schema_mismatches,
             "estimated_parquet_bytes": estimate_parquet_bytes(report.total_source_bytes),
+            "ticker_date_ranges": ticker_date_ranges,
+            "metadata_estimate": metadata_estimate,
         }
     )

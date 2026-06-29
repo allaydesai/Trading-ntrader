@@ -1,19 +1,24 @@
 """CLI command for FirstRate data import with progress and summary."""
 
+from collections.abc import Iterable
 from pathlib import Path
 
 import click
 from rich.console import Console
 from rich.table import Table
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import Session
 
 from src.cli.commands.import_reporting import (
     _print_progress_line,
     _print_summary,
     determine_exit_code,
 )
+from src.db.exceptions import DatabaseConnectionError
 from src.models.catalog import AssetClass, DryRunReport, ImportResult
 from src.services.firstrate.dry_run import (
     _UNKNOWN_TIMEFRAME,
+    ResolvedTickerReader,
     build_dry_run_report,
     estimate_parquet_bytes,
     format_bytes,
@@ -41,6 +46,54 @@ ASSET_CLASS_MAP = {
     "crypto": AssetClass.CRYPTO,
     "index": AssetClass.INDEX,
 }
+
+
+class _MetadataStoreReader:
+    """Read-only ``ResolvedTickerReader`` (Story 2.3) backed by the sync repo.
+
+    Satisfies the ``dry_run.ResolvedTickerReader`` protocol structurally so the
+    pure ``dry_run.py`` module never imports the DB layer. Offline and
+    read-only: a single indexed ``SELECT ticker WHERE ticker IN (...) AND
+    status = RESOLVED`` — never a write, never a network/provider call.
+    """
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def resolved(self, tickers: Iterable[str]) -> set[str]:
+        from sqlalchemy import select
+
+        from src.db.models.instrument_metadata import InstrumentMetadata
+        from src.models.instrument_metadata import ResolutionStatus
+
+        ticker_list = list(tickers)
+        if not ticker_list:
+            return set()
+        stmt = select(InstrumentMetadata.ticker).where(
+            InstrumentMetadata.ticker.in_(ticker_list),
+            InstrumentMetadata.resolution_status == ResolutionStatus.RESOLVED,
+        )
+        return set(self._session.execute(stmt).scalars().all())
+
+
+def _open_metadata_session() -> Session | None:
+    """Open a read-only sync DB session for the FMP-aware estimate, or ``None``.
+
+    Returns ``None`` (after a warning) when the DB is unconfigured, so the ETF
+    dry-run degrades gracefully — the scan, date ranges, and disk estimate still
+    print, only the metadata estimate is omitted. The session is created lazily
+    (no connection until the first query), keeping the stocks path DB-free.
+    """
+    try:
+        from src.db.session_sync import get_sync_session_maker
+
+        session_maker = get_sync_session_maker()
+    except Exception:  # pragma: no cover - defensive, treated as "unconfigured"
+        session_maker = None
+    if session_maker is None:
+        console.print("[yellow]Metadata DB not configured — FMP-aware estimate omitted.[/yellow]")
+        return None
+    return session_maker()
 
 
 def _find_profiles_csv(source_path: Path) -> Path | None:
@@ -322,6 +375,33 @@ def _print_dry_run_report(report: DryRunReport) -> None:
         if remaining > 0:
             console.print(f"... and {remaining} more")
 
+    if report.ticker_date_ranges:
+        console.print()
+        dr_table = Table(title="Per-Ticker Date Ranges")
+        dr_table.add_column("Ticker", style="cyan")
+        dr_table.add_column("Earliest", style="green")
+        dr_table.add_column("Latest", style="green")
+
+        limit = 20
+        for ticker in sorted(report.ticker_date_ranges)[:limit]:
+            date_range = report.ticker_date_ranges[ticker]
+            dr_table.add_row(ticker, date_range.earliest, date_range.latest)
+        console.print(dr_table)
+
+        remaining = len(report.ticker_date_ranges) - limit
+        if remaining > 0:
+            console.print(f"... and {remaining} more")
+
+    if report.metadata_estimate is not None:
+        estimate = report.metadata_estimate
+        console.print()
+        console.print(
+            f"[bold]FMP-aware metadata estimate[/bold]: "
+            f"{estimate.cached_count} already cached / "
+            f"{estimate.needs_resolution_count} need FMP resolution "
+            f"(of {estimate.total_tickers} distinct ticker(s))"
+        )
+
     click.echo("No data written — dry run only.")
 
 
@@ -333,10 +413,18 @@ def _run_dry_run(
 ) -> int:
     """Execute a dry-run scan without writing to the catalog or DB.
 
-    Zero side effects: does NOT construct ``ImportService``, ``CatalogManager``,
-    ``MetadataService``, ``InstrumentMapper``, or any DB session. Defaults
-    asset class to ``STOCK`` (Phase 1 pivot 2026-04-11). Mismatches are
-    informational — exit code stays 0 per AC-4.
+    The STOCK path has zero side effects: it does NOT construct
+    ``ImportService``, ``CatalogManager``, ``MetadataService``,
+    ``InstrumentMapper``, or any DB session. Defaults asset class to ``STOCK``
+    (Phase 1 pivot 2026-04-11). Mismatches are informational — exit code stays
+    0 per AC-4.
+
+    The ETF path (Story 2.3) additionally derives per-ticker date ranges and
+    an FMP-aware metadata estimate. The estimate reads cached metadata through
+    a **read-only** sync session via an injected ``ResolvedTickerReader`` — the
+    only DB touch, never a write. If the DB is unconfigured or unavailable the
+    estimate is omitted (graceful offline degradation) and everything else still
+    prints.
 
     Args:
         format_name: Data format. Only ``"firstrate"`` is supported; any other
@@ -368,11 +456,45 @@ def _run_dry_run(
 
     ac = ASSET_CLASS_MAP.get((asset_class or "stock").lower(), AssetClass.STOCK)
 
+    # ETF dry-run (Story 2.3): derive date ranges + an offline FMP-aware
+    # estimate. The cache reader is the only DB touch, and only ever reads.
+    is_etf = ac == AssetClass.ETF
+    session: Session | None = None
+    cache_reader: ResolvedTickerReader | None = None
+    if is_etf:
+        session = _open_metadata_session()
+        if session is not None:
+            cache_reader = _MetadataStoreReader(session)
+
     try:
-        report = build_dry_run_report(source_path, ac, catalog=catalog)
+        try:
+            report = build_dry_run_report(
+                source_path,
+                ac,
+                catalog=catalog,
+                cache_reader=cache_reader,
+                include_date_ranges=is_etf,
+            )
+        except (OperationalError, DatabaseConnectionError) as e:
+            # DB went away while computing the estimate — degrade gracefully:
+            # rebuild offline so the scan, date ranges, and disk estimate still
+            # print, only the metadata estimate is omitted.
+            console.print(
+                f"[yellow]Metadata DB unavailable ({e}) — FMP-aware estimate omitted.[/yellow]"
+            )
+            report = build_dry_run_report(
+                source_path,
+                ac,
+                catalog=catalog,
+                cache_reader=None,
+                include_date_ranges=is_etf,
+            )
     except (PermissionError, OSError) as e:
         console.print(f"❌ Fatal filesystem error: {e}", style="red")
         return 2
+    finally:
+        if session is not None:
+            session.close()
 
     _print_dry_run_report(report)
     return 0
