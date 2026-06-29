@@ -226,6 +226,36 @@ class TestDiscoverTickers:
         result = service._discover_tickers(tmp_path)
         assert result[0][0] == "AAPL"
 
+    def test_filters_tokenized_files_by_requested_timeframe(self, service, tmp_path):
+        """Story 2.4: a per-timeframe pass only sees files of that timeframe.
+
+        Guards against the all-5 ETF default re-parsing every timeframe's file
+        under the wrong BarType when the source mixes timeframes in one tree.
+        """
+        s_dir = tmp_path / "S"
+        s_dir.mkdir()
+        (s_dir / "SPY_full_1day_adjsplitdiv.txt").write_text("data")
+        (s_dir / "SPY_full_1hour_adjsplitdiv.txt").write_text("data")
+        (s_dir / "SPY_full_30min_adjsplitdiv.txt").write_text("data")
+
+        day = service._discover_tickers(tmp_path, "1-DAY-LAST")
+        assert [p.name for _, p in day] == ["SPY_full_1day_adjsplitdiv.txt"]
+
+        hour = service._discover_tickers(tmp_path, "1-HOUR-LAST")
+        assert [p.name for _, p in hour] == ["SPY_full_1hour_adjsplitdiv.txt"]
+
+        thirty = service._discover_tickers(tmp_path, "30-MINUTE-LAST")
+        assert [p.name for _, p in thirty] == ["SPY_full_30min_adjsplitdiv.txt"]
+
+    def test_untokenized_files_included_for_any_timeframe(self, service, tmp_path):
+        """Plain filenames (no tf token) are timeframe-agnostic and always kept."""
+        a_dir = tmp_path / "A"
+        a_dir.mkdir()
+        (a_dir / "AAPL.txt").write_text("data")
+
+        result = service._discover_tickers(tmp_path, "30-MINUTE-LAST")
+        assert [t for t, _ in result] == ["AAPL"]
+
 
 # ---------------------------------------------------------------------------
 # Task 3: Per-ticker import orchestration
