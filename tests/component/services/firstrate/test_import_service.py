@@ -1096,3 +1096,216 @@ class TestOhlcSanitySurfacing:
         # Logged via structured logging (AC4 — never silent).
         events = [c.args[0] for c in mock_logger.warning.call_args_list if c.args]
         assert "ohlc_sanity_flagged" in events
+
+
+# ---------------------------------------------------------------------------
+# Story 2.6 — Idempotent re-runs via date-range comparison
+#
+# Maps each scoped AC to a passing test that exercises the EXISTING Phase-1
+# classifier + Story-2.4 cache-first resolver through ``import_directory`` with
+# the established in-memory doubles (no real import / network / Postgres / DB):
+#   AC1 — date-range comparison re-imports only the incomplete ticker.
+#   AC2 — an already-RESOLVED ticker that is re-processed hits the FMP cache
+#         (the provider is NOT called again).
+#   AC3 — an all-complete re-run rewrites no Parquet AND makes no FMP calls.
+# ---------------------------------------------------------------------------
+
+
+def _make_cache_first_resolver():
+    """Wire the REAL cache-first resolver over the in-memory provider + repo.
+
+    Returns ``(resolver, provider, repo)`` so a test can assert on the counting
+    provider's ``calls`` (actual FMP fetches) while the resolver enforces the
+    cache-first contract exactly as production does.
+    """
+    from typing import cast
+
+    from src.db.repositories.instrument_metadata_repository_sync import (
+        SyncInstrumentMetadataRepository,
+    )
+    from src.services.metadata.instrument_metadata_service import (
+        InstrumentMetadataService,
+    )
+
+    provider = _FakeMetadataProvider()
+    repo = _FakeMetadataRepo()
+    resolver = InstrumentMetadataService(
+        provider=provider,
+        repository=cast(SyncInstrumentMetadataRepository, repo),
+    )
+    return resolver, provider, repo
+
+
+@pytest.mark.component
+class TestStory26IdempotentRerun:
+    """Story 2.6: a re-run skips complete tickers, reuses the cache, and no-ops when unchanged."""
+
+    def test_ac1_rerun_reimports_only_incomplete_tickers(
+        self,
+        idempotent_source_dir,
+        mock_catalog_manager,
+        mock_instrument_mapper,
+        stateful_metadata_service,
+        bars_by_ticker,
+    ):
+        """AC1: date-range comparison re-imports only the incomplete ticker."""
+        cm, mock_parser = _install_parser_and_readback(mock_catalog_manager, bars_by_ticker)
+        _force_bar_end_to_2025_01_15(bars_by_ticker)
+        mock_catalog = mock_catalog_manager.resolve_catalog.return_value
+
+        with cm as mock_get_parser:
+            mock_get_parser.return_value = mock_parser
+            service = ImportService(
+                catalog_manager=mock_catalog_manager,
+                metadata_service=stateful_metadata_service,
+                instrument_mapper=mock_instrument_mapper,
+            )
+            # Run 1: AAPL + SPY both import fresh, metadata end set to 2025-01-15.
+            service.import_directory(
+                source_dir=idempotent_source_dir,
+                catalog_name=CATALOG_NAME,
+                asset_class=AssetClass.ETF,
+                timeframe="1-DAY-LAST",
+            )
+
+            # Simulate a partial prior import for AAPL only — rewind its
+            # date_range_end behind the source while keeping bar_count > 0.
+            # SPY stays complete and must be skipped on the re-run.
+            aapl_row = stateful_metadata_service.storage[(CATALOG_NAME, "AAPL")]
+            aapl_row.date_range_end = stateful_metadata_service._datetime(
+                2024, 12, 31, tzinfo=stateful_metadata_service._tz
+            )
+            aapl_row.bar_count_daily = 5
+
+            writes_before_rerun = mock_catalog.write_data.call_count
+            second = service.import_directory(
+                source_dir=idempotent_source_dir,
+                catalog_name=CATALOG_NAME,
+                asset_class=AssetClass.ETF,
+                timeframe="1-DAY-LAST",
+            )
+
+        by_ticker = {r.ticker: r for r in second}
+        assert by_ticker["AAPL"].outcome == "reimported"
+        assert by_ticker["SPY"].outcome == "skipped"
+        # Exactly one Parquet (re)write on the re-run — AAPL only, never SPY.
+        assert mock_catalog.write_data.call_count == writes_before_rerun + 1
+
+    def test_ac2_reprocessed_ticker_hits_fmp_cache(
+        self,
+        idempotent_source_dir,
+        mock_catalog_manager,
+        mock_instrument_mapper,
+        stateful_metadata_service,
+        bars_by_ticker,
+    ):
+        """AC2: a re-processed already-RESOLVED ticker hits the cache — provider not re-called."""
+        resolver, provider, _repo = _make_cache_first_resolver()
+        cm, mock_parser = _install_parser_and_readback(mock_catalog_manager, bars_by_ticker)
+        _force_bar_end_to_2025_01_15(bars_by_ticker)
+
+        with cm as mock_get_parser:
+            mock_get_parser.return_value = mock_parser
+            # Run 1: a fresh service resolves each ticker once via the provider.
+            first_service = ImportService(
+                catalog_manager=mock_catalog_manager,
+                metadata_service=stateful_metadata_service,
+                instrument_mapper=mock_instrument_mapper,
+                metadata_resolver=resolver,
+            )
+            first_service.import_directory(
+                source_dir=idempotent_source_dir,
+                catalog_name=CATALOG_NAME,
+                asset_class=AssetClass.ETF,
+                timeframe="1-DAY-LAST",
+            )
+            assert sorted(provider.calls) == ["AAPL", "SPY"]
+            provider_calls_after_first = list(provider.calls)
+
+            # Force AAPL to re-import on the next run (source advanced past metadata),
+            # so resolve() is genuinely invoked for it again — the AC2 scenario.
+            aapl_row = stateful_metadata_service.storage[(CATALOG_NAME, "AAPL")]
+            aapl_row.date_range_end = stateful_metadata_service._datetime(
+                2024, 12, 31, tzinfo=stateful_metadata_service._tz
+            )
+            aapl_row.bar_count_daily = 5
+
+            # Run 2: a brand-new service (fresh in-run dedup) sharing the SAME
+            # cache-first resolver. Spy on resolve() to prove it IS invoked.
+            resolver_spy = MagicMock(wraps=resolver)
+            second_service = ImportService(
+                catalog_manager=mock_catalog_manager,
+                metadata_service=stateful_metadata_service,
+                instrument_mapper=mock_instrument_mapper,
+                metadata_resolver=resolver_spy,
+            )
+            second = second_service.import_directory(
+                source_dir=idempotent_source_dir,
+                catalog_name=CATALOG_NAME,
+                asset_class=AssetClass.ETF,
+                timeframe="1-DAY-LAST",
+            )
+
+        by_ticker = {r.ticker: r for r in second}
+        assert by_ticker["AAPL"].outcome == "reimported"  # AAPL is processed again
+        # resolve() WAS invoked for AAPL on the re-run (it is re-processed)...
+        resolved_on_rerun = [c.args[0] for c in resolver_spy.resolve.call_args_list]
+        assert "AAPL" in resolved_on_rerun
+        # ...but the FMP provider was NOT called again — cache hit (near-100%).
+        assert provider.calls == provider_calls_after_first
+
+    def test_ac3_complete_rerun_no_parquet_and_no_fmp(
+        self,
+        idempotent_source_dir,
+        mock_catalog_manager,
+        mock_instrument_mapper,
+        stateful_metadata_service,
+        bars_by_ticker,
+    ):
+        """AC3: an all-complete re-run rewrites no Parquet and makes no FMP calls."""
+        resolver, provider, _repo = _make_cache_first_resolver()
+        cm, mock_parser = _install_parser_and_readback(mock_catalog_manager, bars_by_ticker)
+        _force_bar_end_to_2025_01_15(bars_by_ticker)
+        mock_catalog = mock_catalog_manager.resolve_catalog.return_value
+
+        with cm as mock_get_parser:
+            mock_get_parser.return_value = mock_parser
+            # Run 1: import both tickers — writes Parquet, resolves via provider.
+            first_service = ImportService(
+                catalog_manager=mock_catalog_manager,
+                metadata_service=stateful_metadata_service,
+                instrument_mapper=mock_instrument_mapper,
+                metadata_resolver=resolver,
+            )
+            first_service.import_directory(
+                source_dir=idempotent_source_dir,
+                catalog_name=CATALOG_NAME,
+                asset_class=AssetClass.ETF,
+                timeframe="1-DAY-LAST",
+            )
+            writes_after_first = mock_catalog.write_data.call_count
+            provider_calls_after_first = list(provider.calls)
+            assert writes_after_first == 2  # AAPL + SPY
+            assert sorted(provider_calls_after_first) == ["AAPL", "SPY"]
+
+            # Run 2: everything is complete (metadata end == source last date) →
+            # all skipped. A fresh service ensures the no-op is not an artifact of
+            # the in-run dedup set.
+            second_service = ImportService(
+                catalog_manager=mock_catalog_manager,
+                metadata_service=stateful_metadata_service,
+                instrument_mapper=mock_instrument_mapper,
+                metadata_resolver=resolver,
+            )
+            second = second_service.import_directory(
+                source_dir=idempotent_source_dir,
+                catalog_name=CATALOG_NAME,
+                asset_class=AssetClass.ETF,
+                timeframe="1-DAY-LAST",
+            )
+
+        assert {r.outcome for r in second} == {"skipped"}
+        # AC3: no Parquet rewritten...
+        assert mock_catalog.write_data.call_count == writes_after_first
+        # ...and no FMP calls made.
+        assert provider.calls == provider_calls_after_first
