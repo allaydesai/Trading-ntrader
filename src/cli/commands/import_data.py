@@ -20,11 +20,13 @@ if TYPE_CHECKING:
 
 from src.cli.commands.import_reporting import (
     _print_progress_line,
+    _print_resolution_summary,
     _print_summary,
     determine_exit_code,
 )
 from src.db.exceptions import DatabaseConnectionError
 from src.models.catalog import AssetClass, DryRunReport, ImportResult
+from src.models.instrument_metadata import ResolutionSummary
 from src.services.firstrate.dry_run import (
     _UNKNOWN_TIMEFRAME,
     ResolvedTickerReader,
@@ -379,6 +381,14 @@ def _run_import(
 
     # Summary
     _print_summary(all_results, supplementary_results)
+
+    # Story 2.7 AC2: fold in the Epic-1 ResolutionSummary (resolved /
+    # descriptive-gaps / venue-unresolved) aggregated from the metadata resolved
+    # during this run. Printed only when resolution actually ran (the ETF path
+    # with FMP configured) so the stocks / no-resolver path is unchanged.
+    resolved_metadata = import_service.resolved_metadata
+    if resolved_metadata:
+        _print_resolution_summary(ResolutionSummary.from_results(resolved_metadata))
 
     # Supplementary outcomes are informational only — a supplementary failure
     # must never flip the exit code (AC-3/AC-6); only bar results decide it.

@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-06-17
-last_updated: "2026-06-29"  # Story 2.6 (idempotent re-runs via date-range comparison) done
+last_updated: "2026-06-29"  # Story 2.7 (import summary & progress reporting) done
 project: Trading-ntrader
 project_key: NOKEY
 tracking_system: file-system
@@ -67,7 +67,7 @@ development_status:
   2-4-etf-import-parse-convert-and-write-to-isolated-catalog: done
   2-5-import-verification-ohlc-sanity-row-count-parity-and-sample-point: done
   2-6-idempotent-re-runs-via-date-range-comparison: done
-  2-7-import-summary-and-progress-reporting: backlog
+  2-7-import-summary-and-progress-reporting: done
   epic-2-retrospective: optional
 
   # Epic 3: Venue Resolution & Completeness Gate

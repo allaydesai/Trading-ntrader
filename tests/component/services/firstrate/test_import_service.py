@@ -1309,3 +1309,87 @@ class TestStory26IdempotentRerun:
         assert mock_catalog.write_data.call_count == writes_after_first
         # ...and no FMP calls made.
         assert provider.calls == provider_calls_after_first
+
+
+@pytest.mark.component
+class TestStory27ResolutionSummaryCollection:
+    """Story 2.7 AC2: resolved metadata is collected and aggregates to a summary."""
+
+    def _service(
+        self, mock_catalog_manager, mock_metadata_service, mock_instrument_mapper, resolver
+    ):
+        return ImportService(
+            catalog_manager=mock_catalog_manager,
+            metadata_service=mock_metadata_service,
+            instrument_mapper=mock_instrument_mapper,
+            metadata_resolver=resolver,
+        )
+
+    def test_resolved_metadata_aggregates_to_resolution_summary(
+        self,
+        source_dir,
+        mock_catalog_manager,
+        mock_metadata_service,
+        mock_instrument_mapper,
+        bars_by_ticker,
+    ):
+        from typing import cast
+
+        from src.db.repositories.instrument_metadata_repository_sync import (
+            SyncInstrumentMetadataRepository,
+        )
+        from src.models.instrument_metadata import ResolutionSummary
+        from src.services.metadata.instrument_metadata_service import (
+            InstrumentMetadataService,
+        )
+
+        provider = _FakeMetadataProvider()  # returns RESOLVED rows
+        repo = _FakeMetadataRepo()
+        resolver = InstrumentMetadataService(
+            provider=provider,
+            repository=cast(SyncInstrumentMetadataRepository, repo),
+        )
+
+        cm, mock_parser = _install_parser_and_readback(mock_catalog_manager, bars_by_ticker)
+        with cm as mock_get_parser:
+            mock_get_parser.return_value = mock_parser
+            service = self._service(
+                mock_catalog_manager, mock_metadata_service, mock_instrument_mapper, resolver
+            )
+            service.import_directory(
+                source_dir=source_dir,
+                catalog_name=CATALOG_NAME,
+                asset_class=AssetClass.ETF,
+            )
+
+        collected = service.resolved_metadata
+        assert sorted(m.ticker for m in collected) == ["AAPL", "ARKK", "SPY"]
+
+        summary = ResolutionSummary.from_results(collected)
+        assert summary.resolved == 3
+        assert summary.venue_unresolved == 0
+        assert summary.descriptive_gaps == 0
+
+    def test_no_resolver_collects_nothing(
+        self,
+        source_dir,
+        mock_catalog_manager,
+        mock_metadata_service,
+        mock_instrument_mapper,
+        bars_by_ticker,
+    ):
+        cm, mock_parser = _install_parser_and_readback(mock_catalog_manager, bars_by_ticker)
+        with cm as mock_get_parser:
+            mock_get_parser.return_value = mock_parser
+            service = ImportService(
+                catalog_manager=mock_catalog_manager,
+                metadata_service=mock_metadata_service,
+                instrument_mapper=mock_instrument_mapper,
+            )
+            service.import_directory(
+                source_dir=source_dir,
+                catalog_name=CATALOG_NAME,
+                asset_class=AssetClass.ETF,
+            )
+
+        assert service.resolved_metadata == []
