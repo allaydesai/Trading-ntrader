@@ -1125,3 +1125,171 @@ class TestImportDirectoryCompleteLogLine:
         assert payload["new"] == 1
         assert payload["reimported"] == 0
         assert payload["failed"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Story 2.7: resolved-metadata collection + progress logging
+# ---------------------------------------------------------------------------
+
+
+def _domain_metadata(ticker: str, status=None):
+    """Build a domain InstrumentMetadata for resolver-return stubbing."""
+    from src.models.instrument_metadata import (
+        InstrumentMetadata,
+        ResolutionStatus,
+    )
+
+    return InstrumentMetadata(
+        ticker=ticker,
+        metadata_provider="FAKE",
+        venue="ARCA",
+        currency="USD",
+        company_name="Fake Co",
+        sector="Funds",
+        industry="ETF",
+        country="US",
+        resolution_status=status or ResolutionStatus.RESOLVED,
+    )
+
+
+@pytest.mark.unit
+class TestResolvedMetadataCollection:
+    """Story 2.7 AC2: the resolver's domain results are captured per run."""
+
+    def _service_with_resolver(
+        self, mock_catalog_manager, mock_metadata_service, mock_instrument_mapper, resolver
+    ):
+        return ImportService(
+            catalog_manager=mock_catalog_manager,
+            metadata_service=mock_metadata_service,
+            instrument_mapper=mock_instrument_mapper,
+            metadata_resolver=resolver,
+        )
+
+    def test_resolve_metadata_collects_domain_result(
+        self, mock_catalog_manager, mock_metadata_service, mock_instrument_mapper
+    ):
+        resolver = MagicMock()
+        resolver.resolve.return_value = _domain_metadata("SPY")
+        svc = self._service_with_resolver(
+            mock_catalog_manager, mock_metadata_service, mock_instrument_mapper, resolver
+        )
+
+        svc._resolve_metadata("SPY")
+
+        collected = svc.resolved_metadata
+        assert [m.ticker for m in collected] == ["SPY"]
+
+    def test_resolved_metadata_deduped_per_ticker(
+        self, mock_catalog_manager, mock_metadata_service, mock_instrument_mapper
+    ):
+        resolver = MagicMock()
+        resolver.resolve.return_value = _domain_metadata("SPY")
+        svc = self._service_with_resolver(
+            mock_catalog_manager, mock_metadata_service, mock_instrument_mapper, resolver
+        )
+
+        svc._resolve_metadata("SPY")
+        svc._resolve_metadata("SPY")  # second pass (e.g. another timeframe)
+
+        assert resolver.resolve.call_count == 1  # in-run dedup
+        assert [m.ticker for m in svc.resolved_metadata] == ["SPY"]
+
+    def test_resolver_fault_records_nothing(
+        self, mock_catalog_manager, mock_metadata_service, mock_instrument_mapper
+    ):
+        resolver = MagicMock()
+        resolver.resolve.side_effect = RuntimeError("provider down")
+        svc = self._service_with_resolver(
+            mock_catalog_manager, mock_metadata_service, mock_instrument_mapper, resolver
+        )
+
+        svc._resolve_metadata("SPY")  # must not raise
+
+        assert svc.resolved_metadata == []
+
+    def test_no_resolver_means_empty_collection(self, service):
+        # The Phase-1 stocks path injects no resolver — nothing collected.
+        service._resolve_metadata("SPY")
+        assert service.resolved_metadata == []
+
+
+@pytest.mark.unit
+class TestImportProgressLogging:
+    """Story 2.7 AC1: per-ticker progress with running counts via structlog."""
+
+    def test_progress_line_emitted_per_ticker_with_running_counts(
+        self, configured_service, mock_metadata_service, mock_bars, tmp_path
+    ):
+        # Two tickers, both fresh → both imported as "new".
+        (tmp_path / "A").mkdir()
+        (tmp_path / "S").mkdir()
+        _write_daily_csv(tmp_path / "A" / "AAPL.txt", "2025-02-01")
+        _write_daily_csv(tmp_path / "S" / "SPY.txt", "2025-02-01")
+        mock_metadata_service.get_instrument_sync.return_value = _fresh_instrument_row()
+
+        with (
+            patch("src.services.firstrate.import_service.get_parser") as mock_get_parser,
+            patch("src.services.firstrate.import_service.logger") as mock_logger,
+        ):
+            mock_parser = MagicMock()
+            mock_parser.parse_file.return_value = mock_bars
+            mock_get_parser.return_value = mock_parser
+
+            configured_service.import_directory(
+                source_dir=tmp_path,
+                catalog_name=CATALOG_NAME,
+                asset_class=AssetClass.ETF,
+                timeframe="1-DAY-LAST",
+            )
+
+        progress_calls = [
+            call.kwargs
+            for call in mock_logger.info.call_args_list
+            if call.args and call.args[0] == "import_progress"
+        ]
+        # One progress line per ticker.
+        assert len(progress_calls) == 2
+        # Discovery is sorted: AAPL (A/) before SPY (S/).
+        assert [c["ticker"] for c in progress_calls] == ["AAPL", "SPY"]
+        assert [c["index"] for c in progress_calls] == [1, 2]
+        assert all(c["total"] == 2 for c in progress_calls)
+        # Running success count increments; the final line reflects both done.
+        assert progress_calls[0]["success"] == 1
+        assert progress_calls[-1]["success"] == 2
+        assert progress_calls[-1]["failed"] == 0
+        assert progress_calls[-1]["skipped"] == 0
+
+    def test_progress_line_carries_error_on_failure(
+        self, configured_service, mock_metadata_service, mock_instrument_mapper, mock_bars, tmp_path
+    ):
+        from src.db.exceptions import InstrumentMappingError
+
+        (tmp_path / "B").mkdir()
+        _write_daily_csv(tmp_path / "B" / "BAD.txt", "2025-02-01")
+        mock_metadata_service.get_instrument_sync.return_value = _fresh_instrument_row()
+        mock_instrument_mapper.resolve_instrument_id.side_effect = InstrumentMappingError("boom")
+
+        with (
+            patch("src.services.firstrate.import_service.get_parser") as mock_get_parser,
+            patch("src.services.firstrate.import_service.logger") as mock_logger,
+        ):
+            mock_parser = MagicMock()
+            mock_parser.parse_file.return_value = mock_bars
+            mock_get_parser.return_value = mock_parser
+
+            configured_service.import_directory(
+                source_dir=tmp_path,
+                catalog_name=CATALOG_NAME,
+                asset_class=AssetClass.ETF,
+                timeframe="1-DAY-LAST",
+            )
+
+        progress_calls = [
+            call.kwargs
+            for call in mock_logger.info.call_args_list
+            if call.args and call.args[0] == "import_progress"
+        ]
+        assert len(progress_calls) == 1
+        assert progress_calls[0]["failed"] == 1
+        assert progress_calls[0]["error"] is not None

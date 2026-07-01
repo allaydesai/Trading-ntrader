@@ -89,6 +89,12 @@ class ImportResult(BaseModel):
             the source's max date at day granularity. ``None`` for legacy
             callers (e.g., direct tests) and for failed imports where the
             classifier never ran.
+        warnings: Non-blocking verification flags for this ticker/timeframe
+            (Story 2.5 AC1/AC4) — e.g. OHLC-sanity violations (``high < low`` or
+            ``volume < 0``). The bars still import (status stays ``"success"``),
+            but each flag is logged and surfaced in the import summary so it
+            never silently passes. Empty for a clean import. Distinct from
+            ``error``, which carries a blocking failure reason.
     """
 
     ticker: str
@@ -97,6 +103,7 @@ class ImportResult(BaseModel):
     error: Optional[str] = None
     duration: float = Field(..., ge=0)
     outcome: Optional[ImportOutcome] = None
+    warnings: list[str] = Field(default_factory=list)
 
 
 class SchemaMismatch(BaseModel):

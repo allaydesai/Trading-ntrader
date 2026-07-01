@@ -51,6 +51,13 @@ def _bucket_results(results: list[ImportResult]) -> dict[str, int]:
     reimported = sum(1 for r in results if r.outcome == "reimported")
     skipped = sum(1 for r in results if r.outcome == "skipped")
     failed = sum(1 for r in results if r.status == "failed")
+    # Story 2.5 AC4: tickers carrying non-blocking verification flags
+    # (OHLC-sanity violations) on an otherwise-successful import. Scoped to
+    # non-failed results so a ticker that also failed a blocking check (row
+    # count / sample point) is reported once — under Failures — rather than
+    # double-counted here. Flagged tickers' violations are still logged
+    # (ohlc_sanity_flagged) regardless of final status, so nothing is silent.
+    flagged = sum(1 for r in results if r.warnings and r.status != "failed")
     # "Total processed" (AC-4) excludes skipped + failed.
     processed_rows = sum(r.row_count for r in results if r.outcome in ("new", "reimported"))
     return {
@@ -59,6 +66,7 @@ def _bucket_results(results: list[ImportResult]) -> dict[str, int]:
         "reimported": reimported,
         "skipped": skipped,
         "failed": failed,
+        "flagged": flagged,
         "total_rows": processed_rows,
         "total_processed": new + reimported,
     }
@@ -88,6 +96,7 @@ def build_summary_text(results: list[ImportResult]) -> str:
         f"Re-imported:     {buckets['reimported']}",
         f"Skipped:         {buckets['skipped']}",
         f"Failed:          {buckets['failed']}",
+        f"Flagged (OHLC):  {buckets['flagged']}",
         f"Total rows:      {buckets['total_rows']:,}",
         f"Total processed: {buckets['total_processed']}",
     ]
@@ -97,7 +106,18 @@ def build_summary_text(results: list[ImportResult]) -> str:
         lines.append("")
         lines.append("Failures:")
         for r in failed_results:
-            lines.append(f"  {r.ticker} — {r.error}")
+            lines.append(f"  {r.ticker} — {r.error or 'Unknown error'}")
+
+    # Story 2.5 AC4: surface non-blocking verification flags (OHLC sanity) so a
+    # high<low / negative-volume row never silently passes. Scoped to non-failed
+    # tickers — a failed ticker is reported under Failures, not twice.
+    flagged_results = [r for r in results if r.warnings and r.status != "failed"]
+    if flagged_results:
+        lines.append("")
+        lines.append("Verification Warnings:")
+        for r in flagged_results:
+            for issue in r.warnings:
+                lines.append(f"  {r.ticker} — {issue}")
 
     return "\n".join(lines)
 
@@ -116,7 +136,10 @@ def _print_progress_line(result: ImportResult, timeframe: str) -> None:
     if result.status == "skipped":
         click.echo(f"{result.ticker} — {timeframe} — skipped (already complete) ⟳")
     elif result.status == "success":
-        click.echo(f"{result.ticker} — {timeframe} — {result.row_count:,} rows ✓")
+        # Append a ⚠ when the import carried non-blocking OHLC-sanity flags
+        # (Story 2.5 AC4) so a long run is scannable for verification issues.
+        flag = " ⚠ verification warnings" if result.warnings else ""
+        click.echo(f"{result.ticker} — {timeframe} — {result.row_count:,} rows ✓{flag}")
     else:
         click.echo(f"{result.ticker} — {timeframe} — {result.error or 'Unknown error'} ✗")
 
@@ -148,6 +171,7 @@ def _print_summary(
     table.add_row("Re-imported", str(buckets["reimported"]))
     table.add_row("Skipped", str(buckets["skipped"]))
     table.add_row("Failed", str(buckets["failed"]))
+    table.add_row("Flagged (OHLC)", str(buckets["flagged"]))
     table.add_row("Total rows", f"{buckets['total_rows']:,}")
     table.add_row("Total processed", str(buckets["total_processed"]))
     console.print(table)
@@ -161,6 +185,20 @@ def _print_summary(
         for r in failed_results:
             fail_table.add_row(r.ticker, r.error or "Unknown error")
         console.print(fail_table)
+
+    # Story 2.5 AC4: non-blocking verification flags (OHLC sanity). Bars still
+    # imported, but the violation is surfaced here so it never silently passes.
+    # Scoped to non-failed tickers — a failed ticker is reported under Failures.
+    flagged_results = [r for r in results if r.warnings and r.status != "failed"]
+    if flagged_results:
+        console.print()
+        warn_table = Table(title="Verification Warnings")
+        warn_table.add_column("Ticker", style="yellow")
+        warn_table.add_column("Issue", style="yellow")
+        for r in flagged_results:
+            for issue in r.warnings:
+                warn_table.add_row(r.ticker, issue)
+        console.print(warn_table)
 
     _print_supplementary_summary(supplementary)
 

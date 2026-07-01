@@ -12,8 +12,10 @@ import pytest
 from src.cli.commands import import_reporting
 from src.cli.commands.import_reporting import (
     build_resolution_summary_text,
+    build_summary_text,
     log_resolution_results,
 )
+from src.models.catalog import ImportResult
 from src.models.instrument_metadata import (
     NA_SENTINEL,
     InstrumentMetadata,
@@ -123,3 +125,90 @@ class TestLogResolutionResults:
         log_resolution_results([])
 
         fake_logger.info.assert_not_called()
+
+
+def _success(ticker: str, *, rows: int = 10, warnings: list[str] | None = None) -> ImportResult:
+    return ImportResult(
+        ticker=ticker,
+        status="success",
+        row_count=rows,
+        outcome="new",
+        warnings=warnings or [],
+        duration=0.1,
+    )
+
+
+def _failed(ticker: str, *, error: str) -> ImportResult:
+    return ImportResult(
+        ticker=ticker,
+        status="failed",
+        row_count=0,
+        error=error,
+        duration=0.1,
+    )
+
+
+class TestBuildSummaryTextVerification:
+    """Story 2.5 AC4: verification problems are surfaced in the summary."""
+
+    def test_ohlc_flag_surfaced_as_warning_not_failure(self):
+        results = [
+            _success("SPY", warnings=["bar[0] ts=42: high (90.0) < low (95.0)"]),
+            _success("QQQ"),
+        ]
+        text = build_summary_text(results)
+        # Flagged count surfaced; the flagged ticker is not counted as failed.
+        assert "Flagged (OHLC):  1" in text
+        assert "Failed:          0" in text
+        # The specific violation is surfaced (never silent).
+        assert "Verification Warnings:" in text
+        assert "SPY — bar[0] ts=42: high (90.0) < low (95.0)" in text
+
+    def test_no_warnings_section_when_clean(self):
+        text = build_summary_text([_success("SPY"), _success("QQQ")])
+        assert "Flagged (OHLC):  0" in text
+        assert "Verification Warnings:" not in text
+
+    def test_row_count_failure_still_surfaced_under_failures(self):
+        # AC2/AC3 reporting: a verification failure remains a blocking failure.
+        results = [_failed("SPY", error="Row count mismatch: wrote 10, read back 8")]
+        text = build_summary_text(results)
+        assert "Failed:          1" in text
+        assert "Failures:" in text
+        assert "SPY — Row count mismatch: wrote 10, read back 8" in text
+
+    def test_flagged_and_failed_coexist(self):
+        results = [
+            _success("SPY", warnings=["bar[1] ts=7: volume (-1.0) < 0"]),
+            _failed("QQQ", error="Sample point validation failed"),
+        ]
+        text = build_summary_text(results)
+        assert "Flagged (OHLC):  1" in text
+        assert "Failed:          1" in text
+        assert "Verification Warnings:" in text
+        assert "Failures:" in text
+
+    def test_failed_ticker_with_warnings_reported_once_under_failures(self):
+        # A single ticker that both carries OHLC flags AND fails a blocking
+        # check is reported under Failures only — not double-counted as Flagged.
+        failed_flagged = ImportResult(
+            ticker="SPY",
+            status="failed",
+            row_count=2,
+            error="Row count mismatch: wrote 2, read back 1",
+            warnings=["bar[0] ts=42: high (90.0) < low (95.0)"],
+            duration=0.1,
+        )
+        text = build_summary_text([failed_flagged])
+        assert "Failed:          1" in text
+        assert "Flagged (OHLC):  0" in text
+        assert "Verification Warnings:" not in text
+        assert "SPY — Row count mismatch: wrote 2, read back 1" in text
+
+
+class TestPrintSummaryVerification:
+    """_print_summary renders the warnings table without raising."""
+
+    def test_smoke_call_with_warnings_does_not_raise(self):
+        results = [_success("SPY", warnings=["bar[0] ts=42: high (90.0) < low (95.0)"])]
+        import_reporting._print_summary(results)

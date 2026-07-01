@@ -20,12 +20,14 @@ from src.services.firstrate.catalog_manager import CatalogManager
 # import filter and the dry-run scan agree on which file belongs to which
 # timeframe (single source of truth; no third copy of the suffix map).
 from src.services.firstrate.dry_run import _UNKNOWN_TIMEFRAME, _infer_timeframe
+from src.services.firstrate.import_verification import collect_ohlc_warnings
 from src.services.firstrate.instrument_mapper import InstrumentMapper
 from src.services.firstrate.metadata_service import MetadataService
 from src.services.firstrate.parsers.base import get_parser
 from src.services.firstrate.source_probe import compute_source_last_date
 
 if TYPE_CHECKING:
+    from src.models.instrument_metadata import InstrumentMetadata
     from src.services.metadata.instrument_metadata_service import (
         InstrumentMetadataService,
     )
@@ -109,6 +111,22 @@ class ImportService:
         # would re-invoke resolve() N times, re-hitting the provider for every
         # not-yet-RESOLVED ticker on each pass.
         self._resolved_tickers: set[str] = set()
+        # Story 2.7 AC2: the domain InstrumentMetadata returned by the Epic-1
+        # cache-first resolver, captured per ticker (deduped), so the CLI can
+        # fold a ResolutionSummary (resolved / descriptive-gaps / venue-
+        # unresolved) into the end-of-run summary. Keyed by ticker so a ticker
+        # spanning multiple timeframe passes is recorded exactly once.
+        self._resolved_metadata: dict[str, "InstrumentMetadata"] = {}
+
+    @property
+    def resolved_metadata(self) -> "list[InstrumentMetadata]":
+        """Domain metadata resolved this run, deduped per ticker (Story 2.7 AC2).
+
+        Empty when no metadata resolver is injected (the Phase-1 stocks path) or
+        when every resolution faulted. Consumed by the CLI to build the
+        end-of-run ``ResolutionSummary``.
+        """
+        return list(self._resolved_metadata.values())
 
     def import_directory(
         self,
@@ -151,7 +169,10 @@ class ImportService:
         )
 
         results: list[ImportResult] = []
-        for ticker, file_path in tickers:
+        # Running counts for the per-ticker progress line (Story 2.7 AC1).
+        running = {"success": 0, "failed": 0, "skipped": 0}
+        total = len(tickers)
+        for index, (ticker, file_path) in enumerate(tickers, start=1):
             result = self._import_ticker(
                 ticker=ticker,
                 file_path=file_path,
@@ -160,6 +181,28 @@ class ImportService:
                 timeframe=timeframe,
             )
             results.append(result)
+
+            # Story 2.7 AC1: report progress (current ticker, running counts,
+            # errors) via structured logging so a long batch is observable as it
+            # runs — complementing the start/complete bookends. "skipped" is its
+            # own bucket; any non-success/non-skipped status counts as failed.
+            if result.status == "success":
+                running["success"] += 1
+            elif result.status == "skipped":
+                running["skipped"] += 1
+            else:
+                running["failed"] += 1
+            logger.info(
+                "import_progress",
+                ticker=ticker,
+                timeframe=timeframe,
+                index=index,
+                total=total,
+                success=running["success"],
+                failed=running["failed"],
+                skipped=running["skipped"],
+                error=result.error if result.status == "failed" else None,
+            )
 
         success = sum(1 for r in results if r.status == "success")
         failed = sum(1 for r in results if r.status == "failed")
@@ -249,6 +292,33 @@ class ImportService:
                     duration=time.perf_counter() - start,
                 )
 
+            # 3a. OHLC sanity (Story 2.5 AC1). Nautilus rejects out-of-range
+            #     OHLC at Bar construction, so high<low / negative-volume rows
+            #     are dropped before they become bars — the parser's raw-row
+            #     validation is the only place they stay visible. Surface those
+            #     flags: non-blocking (the valid bars still import) but never
+            #     silent — logged here and threaded into ImportResult.warnings
+            #     (carried on every return below this point) for the summary
+            #     (AC4).
+            ohlc_warnings = collect_ohlc_warnings(parser.last_validation)
+            if ohlc_warnings:
+                # Log the true count of flagged source rows (invalid_rows), not
+                # len(ohlc_warnings): validate_bars can emit several error
+                # strings per row, and the list is capped + carries a truncation
+                # note, so its length over-counts.
+                invalid_rows = (
+                    parser.last_validation.invalid_rows
+                    if parser.last_validation is not None
+                    else len(ohlc_warnings)
+                )
+                logger.warning(
+                    "ohlc_sanity_flagged",
+                    ticker=ticker,
+                    timeframe=timeframe,
+                    invalid_rows=invalid_rows,
+                    sample=ohlc_warnings[:3],
+                )
+
             # 3b. Resolve instrument metadata (Story 2.4 AC4). Cache-first via
             #     the Epic-1 service, which self-upserts into instrument_metadata
             #     and skips the provider when the ticker is already RESOLVED.
@@ -281,6 +351,7 @@ class ImportService:
                     error=(
                         f"Row count mismatch: wrote {len(bars)}, read back {len(bars_read_back)}"
                     ),
+                    warnings=ohlc_warnings,
                     duration=time.perf_counter() - start,
                 )
 
@@ -291,6 +362,7 @@ class ImportService:
                     status="failed",
                     row_count=len(bars),
                     error="Sample point validation failed",
+                    warnings=ohlc_warnings,
                     duration=time.perf_counter() - start,
                 )
 
@@ -306,6 +378,7 @@ class ImportService:
                     status="failed",
                     row_count=len(bars),
                     error="Metadata upsert failed — no instrument record found",
+                    warnings=ohlc_warnings,
                     duration=time.perf_counter() - start,
                 )
 
@@ -320,6 +393,7 @@ class ImportService:
                 status="success",
                 row_count=len(bars),
                 outcome=decision,
+                warnings=ohlc_warnings,
                 duration=time.perf_counter() - start,
             )
 
@@ -639,7 +713,10 @@ class ImportService:
         # every subsequent timeframe pass within the same run.
         self._resolved_tickers.add(ticker)
         try:
-            self._metadata_resolver.resolve(ticker)
+            # Capture the domain result (Story 2.7 AC2) so the end-of-run summary
+            # can aggregate it into a ResolutionSummary. Only successful
+            # resolutions are recorded; a fault records nothing.
+            self._resolved_metadata[ticker] = self._metadata_resolver.resolve(ticker)
         except Exception as e:  # noqa: BLE001 — isolate metadata faults from bars
             logger.warning("metadata_resolution_failed", ticker=ticker, error=str(e))
 
