@@ -248,6 +248,26 @@ async def _get_ticker_data(
     return tickers, total_count, total_pages, asset_class_counts
 
 
+def _build_explorer_nav_state(selected_catalog: str) -> NavigationState:
+    """Build the explorer breadcrumb/nav state for a given catalog.
+
+    Shared by the full-page render and the ticker-list fragment so the
+    breadcrumb stays in sync when the catalog is switched via HTMX.
+    """
+    return NavigationState(
+        active_page="explorer",
+        breadcrumbs=[
+            BreadcrumbItem(label="Explorer", url="/explorer", is_current=False),
+            BreadcrumbItem(
+                label=selected_catalog or "No Catalog",
+                url=None,
+                is_current=True,
+            ),
+        ],
+        app_version="0.1.0",
+    )
+
+
 @router.get("/", response_class=HTMLResponse)
 async def explorer_page(
     request: Request,
@@ -281,18 +301,7 @@ async def explorer_page(
     """
     selected_catalog = catalog or default_catalog or (catalogs[0] if catalogs else "")
 
-    nav_state = NavigationState(
-        active_page="explorer",
-        breadcrumbs=[
-            BreadcrumbItem(label="Explorer", url="/explorer", is_current=False),
-            BreadcrumbItem(
-                label=selected_catalog or "No Catalog",
-                url=None,
-                is_current=True,
-            ),
-        ],
-        app_version="0.1.0",
-    )
+    nav_state = _build_explorer_nav_state(selected_catalog)
 
     if not catalogs or not selected_catalog:
         return templates.TemplateResponse(
@@ -370,6 +379,10 @@ async def ticker_list_fragment(
             "asset_class_counts": asset_class_counts,
             "format_bar_count": _format_bar_count,
             "selected_ticker": None,
+            # Re-render the breadcrumb out-of-band so switching catalog via the
+            # dropdown (which only swaps #ticker-list) keeps it in sync.
+            "nav_state": _build_explorer_nav_state(catalog),
+            "oob_breadcrumb": True,
         },
     )
 

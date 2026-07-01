@@ -1,4 +1,11 @@
 <!-- HTMX fragment: ticker table + pagination + pills -->
+{% if oob_breadcrumb %}
+<!-- Out-of-band breadcrumb refresh: keeps the header breadcrumb in sync when the
+     catalog is switched via the dropdown (which only swaps #ticker-list). -->
+<div id="explorer-breadcrumb" hx-swap-oob="true">
+{% include "partials/breadcrumbs.html" %}
+</div>
+{% endif %}
 <input type="hidden" name="sort_by" value="{{ state.sort_by }}">
 <input type="hidden" name="asset_class" value="{{ state.asset_class }}">
 

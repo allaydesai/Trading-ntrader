@@ -163,6 +163,13 @@ class TestExplorerUIPage:
         assert "Explorer" in response.text
         assert "us_stocks" in response.text
 
+    def test_breadcrumb_not_duplicated_on_full_page(self, client):
+        # The full page includes ticker_list.html; the OOB breadcrumb block must
+        # be suppressed there so the breadcrumb id renders exactly once.
+        response = client.get("/explorer")
+        assert response.text.count('id="explorer-breadcrumb"') == 1
+        assert "hx-swap-oob" not in response.text
+
     def test_deep_link_catalog_param(self, client, mock_metadata_service):
         client.get("/explorer?catalog=crypto")
         call_kwargs = mock_metadata_service.list_instruments_with_search.call_args.kwargs
@@ -196,6 +203,18 @@ class TestExplorerTickerListFragment:
     def test_requires_catalog(self, client):
         response = client.get("/explorer/ticker-list")
         assert response.status_code == 422
+
+    def test_oob_breadcrumb_present(self, client):
+        # Fragment must carry an out-of-band breadcrumb so switching catalog via
+        # the dropdown keeps the header breadcrumb in sync.
+        response = client.get("/explorer/ticker-list?catalog=us_stocks")
+        assert 'id="explorer-breadcrumb"' in response.text
+        assert 'hx-swap-oob="true"' in response.text
+
+    def test_oob_breadcrumb_reflects_selected_catalog(self, client):
+        response = client.get("/explorer/ticker-list?catalog=crypto")
+        # The OOB breadcrumb should label the newly-selected catalog.
+        assert "crypto" in response.text
 
     def test_empty_search_message(self, client, mock_metadata_service):
         mock_metadata_service.list_instruments_with_search.return_value = ([], 0)
