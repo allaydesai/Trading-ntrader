@@ -31,6 +31,11 @@ class TestCatalogInstrumentModel:
             "state",
             "date_range_start",
             "date_range_end",
+            "date_range_end_daily",
+            "date_range_end_hourly",
+            "date_range_end_minute",
+            "date_range_end_5min",
+            "date_range_end_30min",
             "bar_count_daily",
             "bar_count_hourly",
             "bar_count_minute",
@@ -40,6 +45,25 @@ class TestCatalogInstrumentModel:
             "updated_at",
         }
         assert expected.issubset(columns)
+
+    def test_per_timeframe_date_range_end_columns(self):
+        """Per-timeframe date_range_end columns are nullable timezone-aware timestamps.
+
+        These back the idempotent re-run classifier: bar counts are already
+        per-timeframe, but the end-date was a single shared column, so
+        multi-timeframe re-runs mis-compared coarser timeframes against the
+        finest timeframe's end and re-imported every run.
+        """
+        cols = {c.name: c for c in CatalogInstrument.__table__.columns}
+        for name in (
+            "date_range_end_daily",
+            "date_range_end_hourly",
+            "date_range_end_minute",
+            "date_range_end_5min",
+            "date_range_end_30min",
+        ):
+            assert name in cols, f"{name} column missing"
+            assert cols[name].nullable, f"{name} should be nullable"
 
     def test_bar_count_30min_column(self):
         """bar_count_30min is an Integer column, non-null, server_default 0 (Story 2.1, AC3)."""

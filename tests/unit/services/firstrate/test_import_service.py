@@ -10,6 +10,7 @@ from src.models.catalog import AssetClass, ImportResult
 from src.services.firstrate.import_service import (
     ImportService,
     _bar_count_field_for_timeframe,
+    _date_range_end_field_for_timeframe,
 )
 
 # ---------------------------------------------------------------------------
@@ -537,6 +538,10 @@ class TestUpsertMetadata:
 
         assert result is True
         assert existing.bar_count_hourly == 3
+        # Idempotency fix: the per-timeframe end is stamped from this
+        # timeframe's last bar, independent of the shared date_range_end.
+        assert existing.date_range_end_hourly is not None
+        assert existing.date_range_end_hourly == existing.date_range_end
 
     def test_5min_timeframe_sets_bar_count_5min(
         self, configured_service, mock_metadata_service, mock_bars
@@ -695,14 +700,27 @@ def _metadata_with(
     bar_count_hourly: int = 0,
     bar_count_minute: int = 0,
     bar_count_5min: int = 0,
+    bar_count_30min: int = 0,
 ) -> MagicMock:
-    """Build a mock CatalogInstrument with explicit classifier-relevant fields."""
+    """Build a mock CatalogInstrument with explicit classifier-relevant fields.
+
+    The idempotent classifier reads the *per-timeframe* ``date_range_end_<tf>``
+    columns, so broadcast the single ``date_range_end`` to all of them (the
+    common case where every timeframe shares one end). Tests that need a
+    per-timeframe skew set the individual attributes themselves.
+    """
     instrument = MagicMock()
     instrument.date_range_end = date_range_end
+    instrument.date_range_end_daily = date_range_end
+    instrument.date_range_end_hourly = date_range_end
+    instrument.date_range_end_minute = date_range_end
+    instrument.date_range_end_5min = date_range_end
+    instrument.date_range_end_30min = date_range_end
     instrument.bar_count_daily = bar_count_daily
     instrument.bar_count_hourly = bar_count_hourly
     instrument.bar_count_minute = bar_count_minute
     instrument.bar_count_5min = bar_count_5min
+    instrument.bar_count_30min = bar_count_30min
     return instrument
 
 
@@ -734,6 +752,27 @@ class TestBarCountFieldForTimeframe:
     )
     def test_maps_timeframe_to_bar_count_field(self, timeframe, field):
         assert _bar_count_field_for_timeframe(timeframe) == field
+
+
+@pytest.mark.unit
+class TestDateRangeEndFieldForTimeframe:
+    """The per-timeframe ``date_range_end_*`` map that fixes idempotency."""
+
+    @pytest.mark.parametrize(
+        ("timeframe", "field"),
+        [
+            ("1-DAY-LAST", "date_range_end_daily"),
+            ("1-HOUR-LAST", "date_range_end_hourly"),
+            ("1-MINUTE-LAST", "date_range_end_minute"),
+            ("5-MINUTE-LAST", "date_range_end_5min"),
+            ("30-MINUTE-LAST", "date_range_end_30min"),
+            # Unknown aggregations degrade to daily, mirroring the bar_count map.
+            ("1-SECOND-LAST", "date_range_end_daily"),
+            ("noop", "date_range_end_daily"),
+        ],
+    )
+    def test_maps_timeframe_to_end_field(self, timeframe, field):
+        assert _date_range_end_field_for_timeframe(timeframe) == field
 
 
 @pytest.mark.unit
@@ -912,6 +951,41 @@ class TestClassifyTicker:
             date_range_end=datetime(2025, 1, 15, 20, 0, 0, tzinfo=timezone.utc),
             bar_count_hourly=2,
         )
+
+        decision = service._classify_ticker(
+            ticker="SPY",
+            file_path=csv,
+            catalog_name=CATALOG_NAME,
+            timeframe="1-HOUR-LAST",
+        )
+
+        assert decision == "skipped"
+
+    def test_per_timeframe_end_drives_skip_independent_of_shared_end(
+        self, service, mock_metadata_service, tmp_path
+    ):
+        """Multi-timeframe idempotency regression.
+
+        After a full import, the single shared ``date_range_end`` holds the
+        finest timeframe's last bar (1-minute). The classifier must compare an
+        hourly re-run against the *hourly* per-timeframe end, not that shared
+        value — otherwise every coarser timeframe reads as "behind" and
+        re-imports on every run. Here the shared end is 59 min ahead of the
+        hourly end, but the hourly source matches the hourly end exactly.
+        """
+        csv = tmp_path / "SPY.txt"
+        # Hourly source last bar: 2025-01-15 15:00 EST = 20:00 UTC.
+        csv.write_text(
+            "2025-01-15 09:00:00,100,101,99,100,1000\n2025-01-15 15:00:00,101,102,100,101,1100\n",
+            encoding="utf-8",
+        )
+        instrument = MagicMock()
+        # Shared end holds the 1-minute last bar — 59 min past the hourly end.
+        instrument.date_range_end = datetime(2025, 1, 15, 20, 59, 0, tzinfo=timezone.utc)
+        # Per-timeframe hourly end matches the hourly source exactly.
+        instrument.date_range_end_hourly = datetime(2025, 1, 15, 20, 0, 0, tzinfo=timezone.utc)
+        instrument.bar_count_hourly = 7
+        mock_metadata_service.get_instrument_sync.return_value = instrument
 
         decision = service._classify_ticker(
             ticker="SPY",

@@ -54,6 +54,11 @@ class CatalogInstrumentRepository:
                 existing.state = instrument.state
                 existing.date_range_start = instrument.date_range_start
                 existing.date_range_end = instrument.date_range_end
+                existing.date_range_end_daily = instrument.date_range_end_daily
+                existing.date_range_end_hourly = instrument.date_range_end_hourly
+                existing.date_range_end_minute = instrument.date_range_end_minute
+                existing.date_range_end_5min = instrument.date_range_end_5min
+                existing.date_range_end_30min = instrument.date_range_end_30min
                 existing.bar_count_daily = instrument.bar_count_daily
                 existing.bar_count_hourly = instrument.bar_count_hourly
                 existing.bar_count_minute = instrument.bar_count_minute
@@ -291,6 +296,11 @@ class SyncCatalogInstrumentRepository:
                 existing.state = instrument.state
                 existing.date_range_start = instrument.date_range_start
                 existing.date_range_end = instrument.date_range_end
+                existing.date_range_end_daily = instrument.date_range_end_daily
+                existing.date_range_end_hourly = instrument.date_range_end_hourly
+                existing.date_range_end_minute = instrument.date_range_end_minute
+                existing.date_range_end_5min = instrument.date_range_end_5min
+                existing.date_range_end_30min = instrument.date_range_end_30min
                 existing.bar_count_daily = instrument.bar_count_daily
                 existing.bar_count_hourly = instrument.bar_count_hourly
                 existing.bar_count_minute = instrument.bar_count_minute

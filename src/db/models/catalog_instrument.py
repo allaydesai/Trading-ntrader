@@ -35,6 +35,11 @@ class CatalogInstrument(Base, TimestampMixin):
         state: State/region of domicile (nullable, e.g. "CA").
         date_range_start: Earliest imported data timestamp (nullable).
         date_range_end: Latest imported data timestamp (nullable).
+        date_range_end_daily: Latest daily bar timestamp (nullable).
+        date_range_end_hourly: Latest hourly bar timestamp (nullable).
+        date_range_end_minute: Latest 1-minute bar timestamp (nullable).
+        date_range_end_5min: Latest 5-minute bar timestamp (nullable).
+        date_range_end_30min: Latest 30-minute bar timestamp (nullable).
         bar_count_daily: Number of daily bars imported.
         bar_count_hourly: Number of hourly bars imported.
         bar_count_minute: Number of 1-minute bars imported.
@@ -62,6 +67,26 @@ class CatalogInstrument(Base, TimestampMixin):
         TIMESTAMP(timezone=True), nullable=True
     )
     date_range_end: Mapped[Optional[datetime]] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    # Per-timeframe latest-bar timestamps. Bar counts are already tracked
+    # per timeframe; the end-date must be too, or the idempotent re-run
+    # classifier compares every timeframe against the finest timeframe's end
+    # (the shared date_range_end after a full import) and re-imports on
+    # every run. See ImportService._classify_ticker / _upsert_metadata.
+    date_range_end_daily: Mapped[Optional[datetime]] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    date_range_end_hourly: Mapped[Optional[datetime]] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    date_range_end_minute: Mapped[Optional[datetime]] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    date_range_end_5min: Mapped[Optional[datetime]] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    date_range_end_30min: Mapped[Optional[datetime]] = mapped_column(
         TIMESTAMP(timezone=True), nullable=True
     )
     bar_count_daily: Mapped[int] = mapped_column(

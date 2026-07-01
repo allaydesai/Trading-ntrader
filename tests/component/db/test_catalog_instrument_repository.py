@@ -28,6 +28,11 @@ CREATE TABLE IF NOT EXISTS catalog_instruments (
     state VARCHAR(100),
     date_range_start TIMESTAMP,
     date_range_end TIMESTAMP,
+    date_range_end_daily TIMESTAMP,
+    date_range_end_hourly TIMESTAMP,
+    date_range_end_minute TIMESTAMP,
+    date_range_end_5min TIMESTAMP,
+    date_range_end_30min TIMESTAMP,
     bar_count_daily INTEGER NOT NULL DEFAULT 0,
     bar_count_hourly INTEGER NOT NULL DEFAULT 0,
     bar_count_minute INTEGER NOT NULL DEFAULT 0,
@@ -168,6 +173,37 @@ class TestAsyncCatalogInstrumentRepository:
         result = await repo.get_by_ticker("firstrate-etf", "SPY")
         assert result is not None
         assert result.bar_count_30min == 3030
+
+    async def test_upsert_persists_per_timeframe_end_on_existing(self, async_session):
+        """upsert update-branch must copy per-timeframe date_range_end fields.
+
+        These drive the idempotent re-run classifier; a dropped copy would make
+        an already-imported timeframe re-import on every subsequent run.
+        """
+        from datetime import datetime, timezone
+
+        repo = CatalogInstrumentRepository(async_session)
+        base_counts = {
+            "bar_count_daily": 0,
+            "bar_count_hourly": 0,
+            "bar_count_minute": 0,
+            "bar_count_5min": 0,
+            "bar_count_30min": 0,
+        }
+        await repo.upsert(CatalogInstrument(**_make_instrument(**base_counts)))
+        await async_session.commit()
+
+        hourly_end = datetime(2025, 1, 15, 20, 0, 0, tzinfo=timezone.utc)
+        await repo.upsert(
+            CatalogInstrument(**_make_instrument(date_range_end_hourly=hourly_end, **base_counts))
+        )
+        await async_session.commit()
+
+        result = await repo.get_by_ticker("firstrate-etf", "SPY")
+        assert result is not None
+        # SQLite stores TIMESTAMP tz-naive; compare on the naive instant
+        # (Postgres TIMESTAMP(timezone=True) preserves the tz in production).
+        assert result.date_range_end_hourly == hourly_end.replace(tzinfo=None)
 
     async def test_get_by_ticker(self, async_session):
         """get_by_ticker returns matching instrument."""

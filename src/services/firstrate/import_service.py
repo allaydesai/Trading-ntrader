@@ -45,6 +45,19 @@ _TIMEFRAME_FIELD_MAP = {
     "30-MINUTE": "bar_count_30min",
 }
 
+# Map timeframe "{step}-{aggregation}" to the per-timeframe
+# CatalogInstrument.date_range_end_* field. Mirrors _TIMEFRAME_FIELD_MAP so the
+# idempotent re-run classifier compares each timeframe against ITS OWN stored
+# end, not the single shared date_range_end (which after a full import holds the
+# finest timeframe's last bar and made coarser timeframes re-import every run).
+_TIMEFRAME_END_FIELD_MAP = {
+    "1-DAY": "date_range_end_daily",
+    "1-HOUR": "date_range_end_hourly",
+    "1-MINUTE": "date_range_end_minute",
+    "5-MINUTE": "date_range_end_5min",
+    "30-MINUTE": "date_range_end_30min",
+}
+
 #: Decisions returned by :meth:`ImportService._classify_ticker`.
 ClassifierDecision = Literal["new", "reimported", "skipped"]
 
@@ -75,6 +88,15 @@ def _bar_count_field_for_timeframe(timeframe: str) -> str:
     behaves the same as the existing metadata-upsert code path.
     """
     return _TIMEFRAME_FIELD_MAP.get(_timeframe_key(timeframe), "bar_count_daily")
+
+
+def _date_range_end_field_for_timeframe(timeframe: str) -> str:
+    """Return the ``CatalogInstrument.date_range_end_*`` attribute for a timeframe.
+
+    Mirrors :func:`_bar_count_field_for_timeframe`. Unknown timeframes fall back
+    to ``date_range_end_daily`` so behaviour matches the bar-count mapping.
+    """
+    return _TIMEFRAME_END_FIELD_MAP.get(_timeframe_key(timeframe), "date_range_end_daily")
 
 
 class ImportService:
@@ -482,7 +504,11 @@ class ImportService:
             self._log_classification(ticker, "new", None, None, timeframe)
             return "new"
 
-        metadata_end = existing.date_range_end
+        # Compare against THIS timeframe's own stored end, not the shared
+        # date_range_end (which after a full import holds the finest timeframe's
+        # last bar and made every coarser timeframe re-import on each run).
+        end_field = _date_range_end_field_for_timeframe(timeframe)
+        metadata_end = getattr(existing, end_field, None)
         aggregation = timeframe.split("-")[1] if "-" in timeframe else "DAY"
         bar_count_field = _bar_count_field_for_timeframe(timeframe)
         bar_count = getattr(existing, bar_count_field, 0) or 0
@@ -751,9 +777,12 @@ class ImportService:
         existing.date_range_start = datetime.fromtimestamp(
             bars[0].ts_init / 1_000_000_000, tz=timezone.utc
         )
-        existing.date_range_end = datetime.fromtimestamp(
-            bars[-1].ts_init / 1_000_000_000, tz=timezone.utc
-        )
+        tf_end = datetime.fromtimestamp(bars[-1].ts_init / 1_000_000_000, tz=timezone.utc)
+        existing.date_range_end = tf_end
+        # Stamp this timeframe's own end so idempotent re-runs compare like for
+        # like (see _classify_ticker). The shared date_range_end above stays for
+        # display/coverage; this per-timeframe column drives skip decisions.
+        setattr(existing, _date_range_end_field_for_timeframe(timeframe), tf_end)
 
         # Determine bar count field from timeframe
         field_name = _TIMEFRAME_FIELD_MAP.get(_timeframe_key(timeframe), "bar_count_daily")
