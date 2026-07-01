@@ -198,6 +198,7 @@ class BacktestOrchestrator:
             commission_per_share=self.settings.commission_per_share,
             min_per_order=self.settings.commission_min_per_order,
             max_rate=self.settings.commission_max_rate,
+            slippage_per_share=self.settings.slippage_per_share,
         )
 
         # Determine venue from instrument or bars

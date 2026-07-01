@@ -1,0 +1,38 @@
+# configs/riptide.yaml
+# Riptide — long-only pullback mean-reversion (US equities, daily bars).
+# Per-symbol scope: universe ROC-100 ranking and the 10-position portfolio cap
+# are a documented follow-up requiring a multi-instrument runner.
+strategy_path: "src.core.strategies.riptide:Riptide"
+config_path: "src.core.strategies.riptide:RiptideConfig"
+
+config:
+  # Data identification - matches catalog structure
+  instrument_id: "AAPL.NASDAQ"
+  bar_type: "AAPL.NASDAQ-1-DAY-LAST-EXTERNAL"
+
+  # Position sizing
+  portfolio_value: 100000    # Should match backtest.initial_capital
+  position_size_pct: 10.0    # 10% of portfolio per trade
+
+  # Setup filters
+  sma_trend_period: 200      # Trend: close must be above the 200-day SMA
+  pullback_period: 15        # Pullback: close must be a 15-day low
+  adv_period: 20             # Liquidity: 20-day average dollar volume
+  min_adv_dollars: 10000000  # ...must be at least $10M
+
+  # Entry
+  limit_offset_pct: 2.0      # Buy limit 2% below the setup-day close (1-day validity)
+
+  # Exits
+  atr_period: 14             # ATR(14) for the hard stop
+  atr_stop_mult: 2.5         # Hard stop at 2.5 * ATR below entry
+  max_hold_days: 10          # Time stop: exit at the open after 10 held days
+
+  # Ranking hook (informational this phase)
+  roc_period: 100
+
+# Optional backtest settings
+backtest:
+  start_date: "2023-12-15"
+  end_date: "2024-01-30"
+  initial_capital: 100000

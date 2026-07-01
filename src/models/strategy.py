@@ -91,6 +91,53 @@ class MomentumParameters(BaseModel):
         return v
 
 
+class RiptideParameters(BaseModel):
+    """
+    Parameters specific to the Riptide pullback mean-reversion strategy.
+
+    Matches src.core.strategies.riptide.RiptideConfig.
+    """
+
+    portfolio_value: Decimal = Field(
+        default=Decimal("1000000"), gt=0, description="Starting portfolio value in USD"
+    )
+    position_size_pct: Decimal = Field(
+        default=Decimal("10.0"),
+        ge=0.1,
+        le=100.0,
+        description="Position size as percentage of portfolio",
+    )
+    sma_trend_period: int = Field(default=200, ge=1, le=500, description="Trend SMA period")
+    pullback_period: int = Field(
+        default=15, ge=2, le=100, description="Lookback for the N-day-low pullback"
+    )
+    limit_offset_pct: Decimal = Field(
+        default=Decimal("2.0"), gt=0, le=50, description="Buy-limit distance below close (%)"
+    )
+    atr_period: int = Field(default=14, ge=1, le=100, description="ATR period for the hard stop")
+    atr_stop_mult: Decimal = Field(
+        default=Decimal("2.5"), gt=0, le=20, description="Hard-stop distance in ATR multiples"
+    )
+    max_hold_days: int = Field(
+        default=10, ge=1, le=250, description="Max trading days to hold before the time stop"
+    )
+    adv_period: int = Field(
+        default=20, ge=1, le=250, description="Lookback for average dollar volume"
+    )
+    min_adv_dollars: Decimal = Field(
+        default=Decimal("10000000"), ge=0, description="Minimum average dollar volume (liquidity)"
+    )
+    roc_period: int = Field(
+        default=100, ge=1, le=500, description="Rate-of-change period (universe ranking hook)"
+    )
+
+    # Mapping from model fields to global Settings attributes
+    _settings_map = {
+        "portfolio_value": "portfolio_value",
+        "position_size_pct": "position_size_pct",
+    }
+
+
 class TradingStrategy(BaseModel):
     """Trading strategy entity with configuration and metadata."""
 

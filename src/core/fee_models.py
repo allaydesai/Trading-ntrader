@@ -40,6 +40,7 @@ class IBKRCommissionModel(FeeModel):
         commission_per_share: Decimal = Decimal("0.005"),
         min_per_order: Decimal = Decimal("1.00"),
         max_rate: Decimal = Decimal("0.005"),
+        slippage_per_share: Decimal = Decimal("0"),
     ):
         """
         Initialize IBKR commission model.
@@ -48,6 +49,11 @@ class IBKRCommissionModel(FeeModel):
             commission_per_share: Commission rate per share (default: $0.005)
             min_per_order: Minimum commission per order (default: $1.00)
             max_rate: Maximum commission as % of order value (default: 0.005 = 0.5%)
+            slippage_per_share: Fixed per-share slippage added on top of commission
+                as a deterministic P&L drag (default: $0.00). This approximates
+                execution slippage as a symmetric cost per filled share rather than
+                directional price impact — a simplification that keeps the venue
+                model minimal; it applies on every fill (entry and exit).
 
         Raises:
             ValueError: If any parameter is negative
@@ -60,10 +66,13 @@ class IBKRCommissionModel(FeeModel):
             raise ValueError("min_per_order cannot be negative")
         if max_rate < 0:
             raise ValueError("max_rate cannot be negative")
+        if slippage_per_share < 0:
+            raise ValueError("slippage_per_share cannot be negative")
 
         self.commission_per_share = commission_per_share
         self.min_per_order = min_per_order
         self.max_rate = max_rate
+        self.slippage_per_share = slippage_per_share
 
     def get_commission(
         self,
@@ -112,6 +121,10 @@ class IBKRCommissionModel(FeeModel):
         # 2. At most max_rate % of order value
         commission_amount = max(self.min_per_order, min(base_commission, max_commission))
 
+        # Add fixed per-share slippage as a deterministic execution cost (on top of
+        # the capped commission, since slippage is not subject to the IBKR cap).
+        commission_amount += quantity * self.slippage_per_share
+
         # Return commission in instrument's quote currency
         return Money(commission_amount, instrument.quote_currency)
 
@@ -121,5 +134,6 @@ class IBKRCommissionModel(FeeModel):
             f"IBKRCommissionModel("
             f"per_share={self.commission_per_share}, "
             f"min={self.min_per_order}, "
-            f"max_rate={self.max_rate})"
+            f"max_rate={self.max_rate}, "
+            f"slippage_per_share={self.slippage_per_share})"
         )

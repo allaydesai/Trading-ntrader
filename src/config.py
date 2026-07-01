@@ -208,6 +208,10 @@ class Settings(BaseSettings):
         default=Decimal("0.005"),
         description="Maximum commission as % of order value (0.005 = 0.5%)",
     )
+    slippage_per_share: Decimal = Field(
+        default=Decimal("0.01"),
+        description="Fixed per-share execution slippage modeled as a P&L drag ($0.01 = 1 cent)",
+    )
 
     # Data settings
     data_directory: Path = Field(default=Path("data"), description="Directory for data files")
