@@ -621,3 +621,344 @@ class TestIdempotentRerun:
             mock_catalog_manager.resolve_catalog.return_value.write_data.call_count
             == baseline_writes + 1
         )
+
+
+# ---------------------------------------------------------------------------
+# Story 2.4 — real-catalog round-trip (parse → isolated Parquet → read back)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def etf_catalog_base(tmp_path: Path) -> Path:
+    """Temp catalog base holding a single isolated ``firstrate-etf`` catalog dir."""
+    base = tmp_path / "catalogs"
+    base.mkdir()
+    (base / "firstrate-etf").mkdir()
+    return base
+
+
+@pytest.fixture()
+def etf_intraday_source(tmp_path: Path) -> Path:
+    """Source tree with 2 ETF tickers of intraday rows carrying decimal prices."""
+    src = tmp_path / "source"
+    s_dir = src / "S"
+    s_dir.mkdir(parents=True)
+    (s_dir / "SPY.txt").write_text(
+        "2024-01-02 09:30:00,100.12,101.55,99.50,100.75,1000\n"
+        "2024-01-02 09:31:00,100.75,102.00,100.00,101.25,2000\n"
+    )
+    q_dir = src / "Q"
+    q_dir.mkdir(parents=True)
+    (q_dir / "QQQ.txt").write_text(
+        "2024-01-02 09:30:00,50.10,51.00,49.90,50.50,500\n"
+        "2024-01-02 09:31:00,50.50,52.00,50.00,51.25,750\n"
+    )
+    return src
+
+
+@pytest.mark.component
+class TestEtfCatalogRoundTrip:
+    """AC1/AC5: real parser + real ParquetDataCatalog write to the isolated catalog."""
+
+    def test_writes_isolated_parquet_with_layout_and_fidelity(
+        self,
+        etf_catalog_base,
+        etf_intraday_source,
+        mock_metadata_service,
+        mock_instrument_mapper,
+    ):
+        from datetime import datetime, timezone
+
+        from src.services.firstrate.catalog_manager import CatalogManager
+
+        catalog_manager = CatalogManager(etf_catalog_base)
+        service = ImportService(
+            catalog_manager=catalog_manager,
+            metadata_service=mock_metadata_service,
+            instrument_mapper=mock_instrument_mapper,
+        )
+
+        results = service.import_directory(
+            source_dir=etf_intraday_source,
+            catalog_name="firstrate-etf",
+            asset_class=AssetClass.ETF,
+            timeframe="1-MINUTE-LAST",
+        )
+
+        assert {r.ticker for r in results} == {"SPY", "QQQ"}
+        assert all(r.status == "success" for r in results)
+        assert all(r.row_count == 2 for r in results)
+
+        # AC1: on-disk leaf layout data/bar/{BAR_TYPE}/*.parquet where BAR_TYPE
+        # begins with the instrument id ({INSTRUMENT_ID}/{BAR_TYPE}).
+        bar_dir = etf_catalog_base / "firstrate-etf" / "data" / "bar"
+        leaf_dirs = sorted(p.name for p in bar_dir.iterdir() if p.is_dir())
+        assert leaf_dirs == [
+            "QQQ.ARCA-1-MINUTE-LAST-EXTERNAL",
+            "SPY.ARCA-1-MINUTE-LAST-EXTERNAL",
+        ]
+        for leaf in leaf_dirs:
+            assert list((bar_dir / leaf).glob("*.parquet")), f"no parquet under {leaf}"
+
+        # AC5: isolation — only the firstrate-etf catalog dir exists under base
+        # (nothing mixed with IBKR/Kraken).
+        assert sorted(p.name for p in etf_catalog_base.iterdir() if p.is_dir()) == ["firstrate-etf"]
+
+        # AC5: decimal precision + UTC normalization preserved on round-trip.
+        catalog = catalog_manager.resolve_catalog("firstrate-etf")
+        spy_bars = catalog.bars(bar_types=["SPY.ARCA-1-MINUTE-LAST-EXTERNAL"])
+        assert len(spy_bars) == 2
+        assert str(spy_bars[0].open) == "100.12"
+        assert str(spy_bars[0].high) == "101.55"
+        # 09:30 ET on 2024-01-02 (EST, UTC-5) == 14:30 UTC.
+        expected_ts = (
+            int(datetime(2024, 1, 2, 14, 30, tzinfo=timezone.utc).timestamp()) * 1_000_000_000
+        )
+        assert spy_bars[0].ts_init == expected_ts
+
+
+# ---------------------------------------------------------------------------
+# Story 2.4 — cache-first metadata resolution wiring (AC4)
+# ---------------------------------------------------------------------------
+
+
+class _FakeMetadataProvider:
+    """In-memory ``MetadataProvider`` that counts calls and never hits a network."""
+
+    PROVIDER_NAME = "FAKE"
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def resolve(self, ticker: str):
+        from src.models.instrument_metadata import (
+            AssetType,
+            InstrumentMetadata,
+            ResolutionStatus,
+        )
+
+        self.calls.append(ticker)
+        return InstrumentMetadata(
+            ticker=ticker,
+            metadata_provider=self.PROVIDER_NAME,
+            venue="ARCA",
+            currency="USD",
+            asset_type=AssetType.ETF,
+            company_name="Fake Co",
+            sector="Funds",
+            industry="ETF",
+            country="US",
+            resolution_status=ResolutionStatus.RESOLVED,
+        )
+
+
+class _FakeMetadataRepo:
+    """In-memory stand-in for ``SyncInstrumentMetadataRepository`` (no DB)."""
+
+    def __init__(self) -> None:
+        self.store: dict = {}
+
+    def get_by_ticker(self, ticker: str):
+        return self.store.get(ticker)
+
+    def upsert(self, orm):
+        self.store[orm.ticker] = orm
+        return orm
+
+
+def _resolved_orm_row(ticker: str):
+    """Build a RESOLVED ORM cache row (no session needed)."""
+    from datetime import datetime, timezone
+
+    from src.db.models.instrument_metadata import InstrumentMetadata as OrmInstrumentMetadata
+    from src.models.instrument_metadata import ResolutionStatus
+
+    return OrmInstrumentMetadata(
+        ticker=ticker,
+        metadata_provider="FAKE",
+        venue="ARCA",
+        currency="USD",
+        asset_type="ETF",
+        company_name="Seeded Co",
+        sector="Funds",
+        industry="ETF",
+        country="US",
+        resolution_status=ResolutionStatus.RESOLVED,
+        resolved_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+    )
+
+
+@pytest.mark.component
+class TestMetadataResolveWiring:
+    """AC4: each parsed ticker resolves cache-first; skips/faults behave correctly."""
+
+    def _service(
+        self, mock_catalog_manager, mock_metadata_service, mock_instrument_mapper, resolver
+    ):
+        return ImportService(
+            catalog_manager=mock_catalog_manager,
+            metadata_service=mock_metadata_service,
+            instrument_mapper=mock_instrument_mapper,
+            metadata_resolver=resolver,
+        )
+
+    def test_resolve_called_once_per_parsed_ticker(
+        self,
+        source_dir,
+        mock_catalog_manager,
+        mock_metadata_service,
+        mock_instrument_mapper,
+        bars_by_ticker,
+    ):
+        resolver = MagicMock()
+        cm, mock_parser = _install_parser_and_readback(mock_catalog_manager, bars_by_ticker)
+
+        with cm as mock_get_parser:
+            mock_get_parser.return_value = mock_parser
+            service = self._service(
+                mock_catalog_manager, mock_metadata_service, mock_instrument_mapper, resolver
+            )
+            service.import_directory(
+                source_dir=source_dir,
+                catalog_name=CATALOG_NAME,
+                asset_class=AssetClass.ETF,
+            )
+
+        resolved = [c.args[0] for c in resolver.resolve.call_args_list]
+        assert sorted(resolved) == ["AAPL", "ARKK", "SPY"]
+
+    def test_resolve_deduped_across_timeframe_passes(
+        self,
+        source_dir,
+        mock_catalog_manager,
+        mock_metadata_service,
+        mock_instrument_mapper,
+        bars_by_ticker,
+    ):
+        """One ImportService reused across timeframe passes resolves each ticker once.
+
+        Mirrors the CLI's per-timeframe loop over a single reused service. The
+        source files here are timeframe-agnostic, so every ticker is discovered
+        on both passes — without dedup that would be 6 resolve() calls.
+        """
+        resolver = MagicMock()
+        cm, mock_parser = _install_parser_and_readback(mock_catalog_manager, bars_by_ticker)
+
+        with cm as mock_get_parser:
+            mock_get_parser.return_value = mock_parser
+            service = self._service(
+                mock_catalog_manager, mock_metadata_service, mock_instrument_mapper, resolver
+            )
+            for tf in ("1-DAY-LAST", "1-HOUR-LAST"):
+                service.import_directory(
+                    source_dir=source_dir,
+                    catalog_name=CATALOG_NAME,
+                    asset_class=AssetClass.ETF,
+                    timeframe=tf,
+                )
+
+        resolved = sorted(c.args[0] for c in resolver.resolve.call_args_list)
+        assert resolved == ["AAPL", "ARKK", "SPY"]  # once each, not 6 calls
+
+    def test_cache_first_resolved_ticker_skips_provider(
+        self,
+        source_dir,
+        mock_catalog_manager,
+        mock_metadata_service,
+        mock_instrument_mapper,
+        bars_by_ticker,
+    ):
+        from typing import cast
+
+        from src.db.repositories.instrument_metadata_repository_sync import (
+            SyncInstrumentMetadataRepository,
+        )
+        from src.services.metadata.instrument_metadata_service import (
+            InstrumentMetadataService,
+        )
+
+        provider = _FakeMetadataProvider()
+        repo = _FakeMetadataRepo()
+        repo.store["AAPL"] = _resolved_orm_row("AAPL")  # pre-cached → cache hit
+        resolver = InstrumentMetadataService(
+            provider=provider,
+            repository=cast(SyncInstrumentMetadataRepository, repo),
+        )
+
+        cm, mock_parser = _install_parser_and_readback(mock_catalog_manager, bars_by_ticker)
+        with cm as mock_get_parser:
+            mock_get_parser.return_value = mock_parser
+            service = self._service(
+                mock_catalog_manager, mock_metadata_service, mock_instrument_mapper, resolver
+            )
+            service.import_directory(
+                source_dir=source_dir,
+                catalog_name=CATALOG_NAME,
+                asset_class=AssetClass.ETF,
+            )
+
+        # AAPL was already RESOLVED → provider NOT hit; the others are upserted.
+        assert provider.calls == ["ARKK", "SPY"]
+        assert set(repo.store) == {"AAPL", "ARKK", "SPY"}
+
+    def test_skipped_ticker_does_not_resolve(
+        self,
+        idempotent_source_dir,
+        mock_catalog_manager,
+        mock_instrument_mapper,
+        stateful_metadata_service,
+        bars_by_ticker,
+    ):
+        resolver = MagicMock()
+        cm, mock_parser = _install_parser_and_readback(mock_catalog_manager, bars_by_ticker)
+        _force_bar_end_to_2025_01_15(bars_by_ticker)
+
+        with cm as mock_get_parser:
+            mock_get_parser.return_value = mock_parser
+            service = self._service(
+                mock_catalog_manager, stateful_metadata_service, mock_instrument_mapper, resolver
+            )
+            service.import_directory(
+                source_dir=idempotent_source_dir,
+                catalog_name=CATALOG_NAME,
+                asset_class=AssetClass.ETF,
+                timeframe="1-DAY-LAST",
+            )
+            resolves_after_first = resolver.resolve.call_count
+
+            # Second run: everything is complete → all skipped → no new resolves.
+            service.import_directory(
+                source_dir=idempotent_source_dir,
+                catalog_name=CATALOG_NAME,
+                asset_class=AssetClass.ETF,
+                timeframe="1-DAY-LAST",
+            )
+
+        assert resolves_after_first == 2  # AAPL + SPY on the first (parsing) run
+        assert resolver.resolve.call_count == resolves_after_first  # no new calls
+
+    def test_resolver_fault_does_not_fail_bar_import(
+        self,
+        source_dir,
+        mock_catalog_manager,
+        mock_metadata_service,
+        mock_instrument_mapper,
+        bars_by_ticker,
+    ):
+        resolver = MagicMock()
+        resolver.resolve.side_effect = RuntimeError("provider exploded")
+        cm, mock_parser = _install_parser_and_readback(mock_catalog_manager, bars_by_ticker)
+
+        with cm as mock_get_parser:
+            mock_get_parser.return_value = mock_parser
+            service = self._service(
+                mock_catalog_manager, mock_metadata_service, mock_instrument_mapper, resolver
+            )
+            results = service.import_directory(
+                source_dir=source_dir,
+                catalog_name=CATALOG_NAME,
+                asset_class=AssetClass.ETF,
+            )
+
+        assert all(r.status == "success" for r in results)
+        assert resolver.resolve.call_count == 3

@@ -129,6 +129,101 @@ class TestParseTimeframes:
         with pytest.raises(click.BadParameter):
             parse_timeframes("weekly")
 
+    @pytest.mark.unit
+    def test_30min_token(self):
+        """Story 2.4 AC3: the 30-minute convention is a valid timeframe token."""
+        from src.cli.commands.import_data import parse_timeframes
+
+        assert parse_timeframes("30min") == ["30-MINUTE-LAST"]
+
+
+# ---------------------------------------------------------------------------
+# Timeframe resolution (Story 2.4 AC2/AC3)
+# ---------------------------------------------------------------------------
+
+
+class TestResolveTimeframes:
+    """ETF imports default to all five native timeframes; explicit choice wins."""
+
+    @pytest.mark.unit
+    def test_etf_default_is_all_five_native(self):
+        from src.cli.commands.import_data import resolve_timeframes
+        from src.models.catalog import AssetClass
+
+        assert resolve_timeframes(None, AssetClass.ETF) == [
+            "1-DAY-LAST",
+            "1-HOUR-LAST",
+            "30-MINUTE-LAST",
+            "5-MINUTE-LAST",
+            "1-MINUTE-LAST",
+        ]
+
+    @pytest.mark.unit
+    def test_non_etf_default_is_daily(self):
+        from src.cli.commands.import_data import resolve_timeframes
+        from src.models.catalog import AssetClass
+
+        assert resolve_timeframes(None, AssetClass.STOCK) == ["1-DAY-LAST"]
+
+    @pytest.mark.unit
+    def test_explicit_timeframe_wins_for_etf(self):
+        from src.cli.commands.import_data import resolve_timeframes
+        from src.models.catalog import AssetClass
+
+        assert resolve_timeframes("30min", AssetClass.ETF) == ["30-MINUTE-LAST"]
+        assert resolve_timeframes("daily,hourly", AssetClass.ETF) == [
+            "1-DAY-LAST",
+            "1-HOUR-LAST",
+        ]
+
+
+# ---------------------------------------------------------------------------
+# Metadata resolver wiring (Story 2.4 AC4)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildMetadataResolver:
+    """ETF imports get a cache-first resolver; non-ETF and unconfigured FMP skip."""
+
+    @staticmethod
+    def _fmp(api_key: str):
+        from src.config import FMPSettings
+
+        return FMPSettings(fmp_api_key=api_key)
+
+    @pytest.mark.unit
+    def test_non_etf_returns_none(self):
+        from unittest.mock import MagicMock
+
+        from src.cli.commands.import_data import _build_metadata_resolver
+        from src.models.catalog import AssetClass
+
+        result = _build_metadata_resolver(MagicMock(), AssetClass.STOCK, self._fmp("present"))
+        assert result is None
+
+    @pytest.mark.unit
+    def test_etf_without_api_key_returns_none(self):
+        from unittest.mock import MagicMock
+
+        from src.cli.commands.import_data import _build_metadata_resolver
+        from src.models.catalog import AssetClass
+
+        result = _build_metadata_resolver(MagicMock(), AssetClass.ETF, self._fmp(""))
+        assert result is None
+
+    @pytest.mark.unit
+    def test_etf_with_api_key_builds_resolver_without_network(self):
+        from unittest.mock import MagicMock
+
+        from src.cli.commands.import_data import _build_metadata_resolver
+        from src.models.catalog import AssetClass
+        from src.services.metadata.instrument_metadata_service import (
+            InstrumentMetadataService,
+        )
+
+        result = _build_metadata_resolver(MagicMock(), AssetClass.ETF, self._fmp("test-key"))
+        assert isinstance(result, InstrumentMetadataService)
+
 
 # ---------------------------------------------------------------------------
 # CLI argument parsing tests (Task 1.1)

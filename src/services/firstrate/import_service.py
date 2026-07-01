@@ -8,17 +8,27 @@ single ticker failure does not abort the batch.
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import structlog
 from nautilus_trader.model.data import Bar, BarType
 
 from src.models.catalog import AssetClass, ImportResult
 from src.services.firstrate.catalog_manager import CatalogManager
+
+# Reuse the pure filename→timeframe inference from the dry-run scanner so the
+# import filter and the dry-run scan agree on which file belongs to which
+# timeframe (single source of truth; no third copy of the suffix map).
+from src.services.firstrate.dry_run import _UNKNOWN_TIMEFRAME, _infer_timeframe
 from src.services.firstrate.instrument_mapper import InstrumentMapper
 from src.services.firstrate.metadata_service import MetadataService
 from src.services.firstrate.parsers.base import get_parser
 from src.services.firstrate.source_probe import compute_source_last_date
+
+if TYPE_CHECKING:
+    from src.services.metadata.instrument_metadata_service import (
+        InstrumentMetadataService,
+    )
 
 logger = structlog.get_logger(__name__)
 
@@ -75,6 +85,10 @@ class ImportService:
         catalog_manager: Resolves named catalogs to ParquetDataCatalog.
         metadata_service: CRUD for catalog instrument metadata.
         instrument_mapper: Resolves tickers to Nautilus InstrumentIds.
+        metadata_resolver: Optional Epic-1 ``InstrumentMetadataService`` used to
+            resolve each parsed ticker's instrument metadata cache-first (Story
+            2.4 AC4). ``None`` (the default) disables resolution — the Phase-1
+            stocks path and existing call sites pass nothing and are unaffected.
     """
 
     def __init__(
@@ -82,10 +96,19 @@ class ImportService:
         catalog_manager: CatalogManager,
         metadata_service: MetadataService,
         instrument_mapper: InstrumentMapper,
+        metadata_resolver: "InstrumentMetadataService | None" = None,
     ) -> None:
         self._catalog_manager = catalog_manager
         self._metadata_service = metadata_service
         self._instrument_mapper = instrument_mapper
+        self._metadata_resolver = metadata_resolver
+        # Tickers whose metadata has already been resolved this instance's
+        # lifetime. The CLI reuses one ImportService across all timeframe passes,
+        # so this dedups resolution to at-most-once per ticker per run — without
+        # it, a ticker present in N timeframes (e.g. the 5-timeframe ETF default)
+        # would re-invoke resolve() N times, re-hitting the provider for every
+        # not-yet-RESOLVED ticker on each pass.
+        self._resolved_tickers: set[str] = set()
 
     def import_directory(
         self,
@@ -118,7 +141,7 @@ class ImportService:
                 "Load company profiles before importing."
             )
 
-        tickers = self._discover_tickers(source_dir)
+        tickers = self._discover_tickers(source_dir, timeframe)
         logger.info(
             "import_directory_start",
             source_dir=str(source_dir),
@@ -225,6 +248,16 @@ class ImportService:
                     error="No bars parsed from file",
                     duration=time.perf_counter() - start,
                 )
+
+            # 3b. Resolve instrument metadata (Story 2.4 AC4). Cache-first via
+            #     the Epic-1 service, which self-upserts into instrument_metadata
+            #     and skips the provider when the ticker is already RESOLVED.
+            #     Runs once per parsed ticker per run — deduped inside the helper
+            #     so the multi-timeframe ETF default does not re-resolve, and the
+            #     "skipped" short-circuit above means an already-complete re-run
+            #     resolves nothing. Faults are isolated inside the helper so a
+            #     metadata hiccup never fails an otherwise-good bar import.
+            self._resolve_metadata(ticker)
 
             # 4. Write to catalog. Delete any existing bars for this exact
             #    bar_type first so a re-import (or an orphan-heal where the
@@ -437,23 +470,53 @@ class ImportService:
             timeframe=timeframe,
         )
 
-    def _discover_tickers(self, source_dir: Path) -> list[tuple[str, Path]]:
+    def _discover_tickers(
+        self, source_dir: Path, timeframe: str | None = None
+    ) -> list[tuple[str, Path]]:
         """Traverse alphabetical subdirectories and discover ticker files.
+
+        FirstRate ETF deliveries mix timeframes in one source tree, with each
+        file's timeframe encoded in its name (``{TICKER}_full_{tf}_…``). When a
+        ``timeframe`` spec is given, only files whose inferred timeframe matches
+        it are returned, so a per-timeframe import pass never re-parses another
+        timeframe's bars under the wrong ``BarType``. Files with no recognizable
+        timeframe token in their name (e.g. plain ``SPY.txt``, or a Phase-1
+        per-timeframe-directory layout) are always included for backward
+        compatibility. ``timeframe=None`` disables filtering entirely.
 
         Args:
             source_dir: Root directory with single-letter subdirectories.
+            timeframe: Nautilus timeframe spec to filter by, or ``None`` for no
+                filtering.
 
         Returns:
-            Sorted list of (ticker, file_path) tuples from .txt files.
+            Sorted list of (ticker, file_path) tuples from matching .txt files.
         """
         tickers: list[tuple[str, Path]] = []
         for subdir in sorted(source_dir.iterdir()):
             if not subdir.is_dir():
                 continue
             for file in sorted(subdir.iterdir()):
-                if file.suffix == ".txt" and file.is_file():
+                if (
+                    file.suffix == ".txt"
+                    and file.is_file()
+                    and self._matches_timeframe(file.name, timeframe)
+                ):
                     tickers.append((self._extract_ticker(file), file))
         return tickers
+
+    @staticmethod
+    def _matches_timeframe(filename: str, timeframe: str | None) -> bool:
+        """True if ``filename`` belongs to the requested ``timeframe``.
+
+        A file matches when no timeframe filter is requested, when its name
+        carries no recognizable timeframe token (treated as timeframe-agnostic),
+        or when its inferred timeframe equals ``timeframe``.
+        """
+        if timeframe is None:
+            return True
+        inferred = _infer_timeframe(filename)
+        return inferred == _UNKNOWN_TIMEFRAME or inferred == timeframe
 
     @staticmethod
     def _extract_ticker(file: Path) -> str:
@@ -551,6 +614,34 @@ class ImportService:
             and a.close == b.close
             and a.volume == b.volume
         )
+
+    def _resolve_metadata(self, ticker: str) -> None:
+        """Resolve a parsed ticker's instrument metadata cache-first (Story 2.4).
+
+        Delegates to the injected Epic-1 :class:`InstrumentMetadataService`,
+        which is cache-first (only a ``RESOLVED`` row short-circuits the
+        provider) and self-upserts into ``instrument_metadata``. A no-op when no
+        resolver is injected (the Phase-1 stocks path).
+
+        The single ``resolve()`` does not isolate provider faults the way
+        ``resolve_batch`` does, so the call is wrapped here: a metadata-
+        resolution failure is logged and swallowed and must never flip a
+        verified bar import to ``failed``.
+
+        Args:
+            ticker: Trading symbol whose metadata should be resolved.
+        """
+        if self._metadata_resolver is None:
+            return
+        if ticker in self._resolved_tickers:
+            return
+        # Mark attempted before the call so a transient fault is not retried on
+        # every subsequent timeframe pass within the same run.
+        self._resolved_tickers.add(ticker)
+        try:
+            self._metadata_resolver.resolve(ticker)
+        except Exception as e:  # noqa: BLE001 — isolate metadata faults from bars
+            logger.warning("metadata_resolution_failed", ticker=ticker, error=str(e))
 
     def _upsert_metadata(
         self,

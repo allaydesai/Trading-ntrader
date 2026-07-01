@@ -2,12 +2,21 @@
 
 from collections.abc import Iterable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import click
 from rich.console import Console
 from rich.table import Table
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
+
+from src.api.models.explorer import ExplorerTimeframe
+
+if TYPE_CHECKING:
+    from src.config import FMPSettings
+    from src.services.metadata.instrument_metadata_service import (
+        InstrumentMetadataService,
+    )
 
 from src.cli.commands.import_reporting import (
     _print_progress_line,
@@ -36,7 +45,13 @@ TIMEFRAME_MAP = {
     "minute": "1-MINUTE-LAST",
     "1min": "1-MINUTE-LAST",
     "5min": "5-MINUTE-LAST",
+    # 30min bar-type literal lives only in the central enum (Story 2.1 guard).
+    "30min": ExplorerTimeframe.THIRTY_MIN.bar_type_spec,
 }
+
+#: The five native FirstRate timeframes imported when the ETF path is given no
+#: ``--timeframe`` restriction (Story 2.4 AC2). Ordered coarse→fine.
+ETF_DEFAULT_TIMEFRAMES = "daily,hourly,30min,5min,1min"
 
 ASSET_CLASS_MAP = {
     "etf": AssetClass.ETF,
@@ -96,6 +111,48 @@ def _open_metadata_session() -> Session | None:
     return session_maker()
 
 
+def _build_metadata_resolver(
+    session: Session,
+    asset_class: AssetClass,
+    fmp_settings: "FMPSettings",
+) -> "InstrumentMetadataService | None":
+    """Build the Epic-1 cache-first metadata resolver for the ETF import path.
+
+    Returns ``None`` (no resolution) when the asset class is not ETF or when FMP
+    is unconfigured (empty ``fmp_api_key``), so a missing key degrades the import
+    gracefully — bars still import, only metadata resolution is skipped (with a
+    warning). Construction is side-effect-free: ``FMPClient`` builds its httpx
+    client lazily, so no network call happens here.
+
+    Args:
+        session: Open sync DB session backing the metadata cache repository.
+        asset_class: Resolved asset class for the import run.
+        fmp_settings: FMP provider settings (provides ``fmp_api_key``).
+
+    Returns:
+        A wired ``InstrumentMetadataService``, or ``None`` to skip resolution.
+    """
+    if asset_class != AssetClass.ETF:
+        return None
+    if not fmp_settings.fmp_api_key:
+        console.print(
+            "[yellow]FMP not configured (FMP_API_KEY empty) — instrument metadata "
+            "resolution skipped; bars will still import.[/yellow]"
+        )
+        return None
+
+    from src.db.repositories.instrument_metadata_repository_sync import (
+        SyncInstrumentMetadataRepository,
+    )
+    from src.services.metadata.fmp_client import FMPClient
+    from src.services.metadata.instrument_metadata_service import InstrumentMetadataService
+    from src.services.metadata.providers.fmp_provider import FMPMetadataProvider
+
+    provider = FMPMetadataProvider(FMPClient(fmp_settings))
+    repository = SyncInstrumentMetadataRepository(session)
+    return InstrumentMetadataService(provider=provider, repository=repository)
+
+
 def _find_profiles_csv(source_path: Path) -> Path | None:
     """Locate the FirstRate company_profiles.csv for a given import source.
 
@@ -142,6 +199,26 @@ def parse_timeframes(timeframe_str: str) -> list[str]:
             seen.add(spec)
             specs.append(spec)
     return specs
+
+
+def resolve_timeframes(timeframe: str | None, asset_class: AssetClass) -> list[str]:
+    """Resolve which timeframe specs an import should cover.
+
+    An explicit ``--timeframe`` always wins (Story 2.4 AC3). With no restriction,
+    the ETF path imports all five native timeframes (AC2); every other asset
+    class keeps the historical ``daily`` default.
+
+    Args:
+        timeframe: The raw ``--timeframe`` value, or ``None`` when unset.
+        asset_class: The resolved asset class for the run.
+
+    Returns:
+        Ordered list of Nautilus timeframe specs to import.
+    """
+    if timeframe:
+        return parse_timeframes(timeframe)
+    default = ETF_DEFAULT_TIMEFRAMES if asset_class == AssetClass.ETF else "daily"
+    return parse_timeframes(default)
 
 
 def _run_import(
@@ -197,8 +274,10 @@ def _run_import(
     # Parse asset class (default to ETF for FirstRate)
     ac = ASSET_CLASS_MAP.get((asset_class or "etf").lower(), AssetClass.ETF)
 
-    # Parse timeframes (default to daily)
-    timeframes = parse_timeframes(timeframe or "daily")
+    # Parse timeframes. With no --timeframe, the ETF path imports all five
+    # native timeframes (Story 2.4 AC2); other asset classes keep the daily
+    # default. An explicit --timeframe always wins (AC3).
+    timeframes = resolve_timeframes(timeframe, ac)
 
     # Wire dependencies
     session = None
@@ -217,7 +296,16 @@ def _run_import(
         sync_repo = SyncCatalogInstrumentRepository(session)
         metadata_service = MetadataService(sync_repo=sync_repo)
         instrument_mapper = InstrumentMapper(sync_repo)
-        import_service = ImportService(catalog_manager, metadata_service, instrument_mapper)
+        # Story 2.4 AC4: ETF imports resolve each parsed ticker's instrument
+        # metadata cache-first via the Epic-1 service. Built lazily (no network
+        # at construction); omitted with a warning if FMP is unconfigured.
+        metadata_resolver = _build_metadata_resolver(session, ac, settings.fmp)
+        import_service = ImportService(
+            catalog_manager,
+            metadata_service,
+            instrument_mapper,
+            metadata_resolver=metadata_resolver,
+        )
 
         # Ensure profiles are loaded
         if not instrument_mapper.is_loaded(catalog):
