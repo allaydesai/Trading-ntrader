@@ -6,9 +6,10 @@ and service instances.
 """
 
 import os
+from pathlib import Path
 from typing import Annotated, AsyncGenerator
 
-from fastapi import Depends
+from fastapi import Depends, Query
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -181,21 +182,39 @@ def get_templates() -> Jinja2Templates:
     return Jinja2Templates(directory="templates")
 
 
-def get_data_catalog_service() -> DataCatalogService:
+def get_data_catalog_service(
+    catalog: str = Query(
+        "",
+        description=(
+            "Catalog name, resolved under CATALOG_BASE_PATH. "
+            "Falls back to NAUTILUS_PATH when omitted."
+        ),
+    ),
+) -> DataCatalogService:
     """
-    Get DataCatalogService instance for Parquet catalog operations.
+    Get DataCatalogService instance scoped to the selected catalog.
 
-    Creates a DataCatalogService using the NAUTILUS_PATH environment variable,
-    or defaults to "./data/catalog" if not set.
+    Resolves the ``catalog`` query param to ``CATALOG_BASE_PATH/<catalog>`` so
+    routes read the catalog the user selected (mirrors the named-catalog
+    resolution in ``src/api/chart_bars.py``). When no catalog is given (e.g. the
+    ``/timeseries`` route) it falls back to the ``NAUTILUS_PATH`` environment
+    variable, or "./data/catalog" if unset.
+
+    Args:
+        catalog: Catalog name from the request query string (optional).
 
     Returns:
-        DataCatalogService instance
+        DataCatalogService instance pointed at the resolved catalog path.
 
     Example:
         >>> @router.get("/")
         ... def route(catalog: DataCatalog):
         ...     bars = catalog.query_bars("AAPL.NASDAQ", start, end)
     """
+    base_path = CatalogSettings().catalog_base_path
+    if catalog and base_path:
+        return DataCatalogService(catalog_path=str(Path(base_path) / catalog))
+    # Reason: preserve prior behavior for callers without a catalog param.
     catalog_path = os.environ.get("NAUTILUS_PATH", "./data/catalog")
     return DataCatalogService(catalog_path=catalog_path)
 
