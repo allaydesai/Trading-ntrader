@@ -134,7 +134,11 @@ def _print_progress_line(result: ImportResult, timeframe: str) -> None:
         timeframe: Timeframe spec used for this import.
     """
     if result.status == "skipped":
-        click.echo(f"{result.ticker} — {timeframe} — skipped (already complete) ⟳")
+        # Idempotent skips carry no error → "already complete". A venue-
+        # unresolved skip (Story 3.1) carries a reason in `error` so the line is
+        # honest rather than falsely claiming the ticker was already imported.
+        reason = result.error or "already complete"
+        click.echo(f"{result.ticker} — {timeframe} — skipped ({reason}) ⟳")
     elif result.status == "success":
         # Append a ⚠ when the import carried non-blocking OHLC-sanity flags
         # (Story 2.5 AC4) so a long run is scannable for verification issues.

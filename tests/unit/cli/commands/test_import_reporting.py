@@ -212,3 +212,26 @@ class TestPrintSummaryVerification:
     def test_smoke_call_with_warnings_does_not_raise(self):
         results = [_success("SPY", warnings=["bar[0] ts=42: high (90.0) < low (95.0)"])]
         import_reporting._print_summary(results)
+
+
+class TestProgressLineSkipReason:
+    """_print_progress_line distinguishes idempotent vs venue-unresolved skips."""
+
+    def test_idempotent_skip_says_already_complete(self, capsys):
+        result = ImportResult(ticker="SPY", status="skipped", outcome="skipped", duration=0.1)
+        import_reporting._print_progress_line(result, "1-DAY-LAST")
+        out = capsys.readouterr().out
+        assert "skipped (already complete)" in out
+
+    def test_unresolved_skip_shows_reason(self, capsys):
+        result = ImportResult(
+            ticker="ZZZ",
+            status="skipped",
+            outcome="skipped",
+            error="venue unresolved — deferred to Story 3.5",
+            duration=0.1,
+        )
+        import_reporting._print_progress_line(result, "1-DAY-LAST")
+        out = capsys.readouterr().out
+        assert "venue unresolved" in out
+        assert "already complete" not in out

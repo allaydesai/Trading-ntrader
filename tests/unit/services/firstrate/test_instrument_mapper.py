@@ -235,6 +235,78 @@ class TestResolveInstrumentId:
 
 
 # ---------------------------------------------------------------------------
+# Story 3.1: Venue qualification (nautilus_id from resolved venue + ADR-3 sync)
+# ---------------------------------------------------------------------------
+
+
+class TestQualification:
+    """Tests for qualified_instrument_id() and sync_qualification()."""
+
+    @pytest.mark.unit
+    def test_qualified_instrument_id_from_venue(self, mapper):
+        """A resolved venue yields a Nautilus-qualified InstrumentId."""
+        assert mapper.qualified_instrument_id("SPY", "ARCA") == InstrumentId.from_str("SPY.ARCA")
+
+    @pytest.mark.unit
+    def test_qualified_instrument_id_none_venue_returns_none(self, mapper):
+        """An unresolved (None) venue fabricates no identity (AC3)."""
+        assert mapper.qualified_instrument_id("SPY", None) is None
+
+    @pytest.mark.unit
+    def test_qualified_instrument_id_blank_venue_returns_none(self, mapper):
+        """A blank venue is treated as unresolved — no identity fabricated."""
+        assert mapper.qualified_instrument_id("SPY", "") is None
+
+    @pytest.mark.unit
+    def test_sync_qualification_writes_nautilus_id_and_exchange(self, mapper, mock_repo):
+        """Resolved venue overwrites the row's nautilus_id/exchange and upserts (ADR-3)."""
+        row = CatalogInstrument(
+            ticker="SPY",
+            nautilus_id="SPY.NYSE",  # provisional CSV exchange
+            exchange="NYSE",
+            asset_class="ETF",
+            catalog_name=CATALOG_NAME,
+        )
+        mock_repo.get_by_ticker.return_value = row
+
+        result = mapper.sync_qualification("SPY", CATALOG_NAME, "ARCA")
+
+        assert result == InstrumentId.from_str("SPY.ARCA")
+        assert row.nautilus_id == "SPY.ARCA"
+        assert row.exchange == "ARCA"
+        mock_repo.upsert.assert_called_once_with(row)
+
+    @pytest.mark.unit
+    def test_sync_qualification_unresolved_leaves_nautilus_id_none(self, mapper, mock_repo):
+        """A None venue leaves nautilus_id None (unqualified, not fabricated — AC3)."""
+        row = CatalogInstrument(
+            ticker="ZZZ",
+            nautilus_id="ZZZ.NYSE",
+            exchange="NYSE",
+            asset_class="ETF",
+            catalog_name=CATALOG_NAME,
+        )
+        mock_repo.get_by_ticker.return_value = row
+
+        result = mapper.sync_qualification("ZZZ", CATALOG_NAME, None)
+
+        assert result is None
+        assert row.nautilus_id is None
+        assert row.exchange is None
+        mock_repo.upsert.assert_called_once_with(row)
+
+    @pytest.mark.unit
+    def test_sync_qualification_missing_row_returns_none_no_upsert(self, mapper, mock_repo):
+        """No catalog_instruments row → defensive no-op (returns None, no upsert)."""
+        mock_repo.get_by_ticker.return_value = None
+
+        result = mapper.sync_qualification("SPY", CATALOG_NAME, "ARCA")
+
+        assert result is None
+        mock_repo.upsert.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # Task 2: is_loaded Tests
 # ---------------------------------------------------------------------------
 

@@ -34,6 +34,11 @@ CREATE TABLE IF NOT EXISTS catalog_instruments (
     state VARCHAR(100),
     date_range_start TIMESTAMP,
     date_range_end TIMESTAMP,
+    date_range_end_daily TIMESTAMP,
+    date_range_end_hourly TIMESTAMP,
+    date_range_end_minute TIMESTAMP,
+    date_range_end_5min TIMESTAMP,
+    date_range_end_30min TIMESTAMP,
     bar_count_daily INTEGER NOT NULL DEFAULT 0,
     bar_count_hourly INTEGER NOT NULL DEFAULT 0,
     bar_count_minute INTEGER NOT NULL DEFAULT 0,
@@ -167,3 +172,36 @@ class TestInstrumentMapperDBRoundTrip:
         for ticker, expected_id in expected.items():
             result = mapper.resolve_instrument_id(ticker, CATALOG_NAME)
             assert result == InstrumentId.from_str(expected_id)
+
+
+class TestQualificationSync:
+    """Story 3.1: ADR-3 qualification sync round-trips through the real repo."""
+
+    @pytest.mark.component
+    def test_sync_overwrites_provisional_exchange_with_resolved_venue(self, mapper, repo, tmp_path):
+        """Resolved venue overwrites the provisional CSV exchange and recomputes id."""
+        # Seed the row with a provisional (wrong) CSV exchange.
+        csv = tmp_path / "profiles.csv"
+        csv.write_text(
+            "SPY,SPDR S&P 500 ETF Trust,US,NY,NYSE,Financial Services,Asset Management,1993-01-22\n"
+        )
+        mapper.load_company_profiles(csv, CATALOG_NAME, ASSET_CLASS)
+        assert repo.get_by_ticker(CATALOG_NAME, "SPY").nautilus_id == "SPY.NYSE"
+
+        result = mapper.sync_qualification("SPY", CATALOG_NAME, "ARCA")
+
+        assert result == InstrumentId.from_str("SPY.ARCA")
+        persisted = repo.get_by_ticker(CATALOG_NAME, "SPY")
+        assert persisted.nautilus_id == "SPY.ARCA"
+        assert persisted.exchange == "ARCA"
+
+    @pytest.mark.component
+    def test_sync_unresolved_persists_null_nautilus_id(self, mapper, repo, company_profiles_csv):
+        """An unresolved (None) venue persists nautilus_id NULL (unqualified, not fabricated)."""
+        mapper.load_company_profiles(company_profiles_csv, CATALOG_NAME, ASSET_CLASS)
+
+        result = mapper.sync_qualification("SPY", CATALOG_NAME, None)
+
+        assert result is None
+        persisted = repo.get_by_ticker(CATALOG_NAME, "SPY")
+        assert persisted.nautilus_id is None

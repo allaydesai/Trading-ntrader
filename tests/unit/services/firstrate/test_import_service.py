@@ -1288,6 +1288,203 @@ class TestResolvedMetadataCollection:
         assert service.resolved_metadata == []
 
 
+# ---------------------------------------------------------------------------
+# Story 3.1: Venue qualification (nautilus_id from resolved venue + ADR-3 sync)
+# ---------------------------------------------------------------------------
+
+
+def _unresolved_metadata(ticker: str):
+    """Build a VENUE_UNRESOLVED domain InstrumentMetadata (venue None)."""
+    from src.models.instrument_metadata import (
+        InstrumentMetadata,
+        ResolutionStatus,
+    )
+
+    return InstrumentMetadata(
+        ticker=ticker,
+        metadata_provider="FAKE",
+        venue=None,
+        resolution_status=ResolutionStatus.VENUE_UNRESOLVED,
+    )
+
+
+@pytest.mark.unit
+class TestVenueQualification:
+    """Story 3.1: identity qualified from the resolved venue, ADR-3 sync."""
+
+    def _service_with_resolver(
+        self, mock_catalog_manager, mock_metadata_service, mock_instrument_mapper, resolver
+    ):
+        return ImportService(
+            catalog_manager=mock_catalog_manager,
+            metadata_service=mock_metadata_service,
+            instrument_mapper=mock_instrument_mapper,
+            metadata_resolver=resolver,
+        )
+
+    def test_qualify_ticker_uses_resolved_venue(
+        self, mock_catalog_manager, mock_metadata_service, mock_instrument_mapper
+    ):
+        """A resolved venue drives sync_qualification; resolve_instrument_id unused (AC1/AC2)."""
+        resolver = MagicMock()
+        resolver.resolve.return_value = _domain_metadata("SPY")  # venue "ARCA"
+        qualified = InstrumentId.from_str("SPY.ARCA")
+        mock_instrument_mapper.sync_qualification.return_value = qualified
+        svc = self._service_with_resolver(
+            mock_catalog_manager, mock_metadata_service, mock_instrument_mapper, resolver
+        )
+
+        svc._resolve_metadata("SPY")
+        result = svc._qualify_ticker("SPY", CATALOG_NAME)
+
+        assert result == qualified
+        mock_instrument_mapper.sync_qualification.assert_called_once_with(
+            "SPY", CATALOG_NAME, "ARCA"
+        )
+        mock_instrument_mapper.resolve_instrument_id.assert_not_called()
+
+    def test_qualify_ticker_unresolved_returns_none(
+        self, mock_catalog_manager, mock_metadata_service, mock_instrument_mapper
+    ):
+        """VENUE_UNRESOLVED venue → sync returns None → ticker left unqualified (AC3)."""
+        resolver = MagicMock()
+        resolver.resolve.return_value = _unresolved_metadata("ZZZ")
+        mock_instrument_mapper.sync_qualification.return_value = None
+        svc = self._service_with_resolver(
+            mock_catalog_manager, mock_metadata_service, mock_instrument_mapper, resolver
+        )
+
+        svc._resolve_metadata("ZZZ")
+        result = svc._qualify_ticker("ZZZ", CATALOG_NAME)
+
+        assert result is None
+        mock_instrument_mapper.sync_qualification.assert_called_once_with("ZZZ", CATALOG_NAME, None)
+
+    def test_qualify_ticker_no_resolver_falls_back_to_db_lookup(
+        self, service, mock_instrument_mapper
+    ):
+        """No resolver (stocks/unconfigured) → existing DB identity lookup, unchanged (AC4)."""
+        expected = InstrumentId.from_str("AAPL.XNAS")
+        mock_instrument_mapper.resolve_instrument_id.return_value = expected
+
+        result = service._qualify_ticker("AAPL", CATALOG_NAME)
+
+        assert result == expected
+        mock_instrument_mapper.resolve_instrument_id.assert_called_once_with("AAPL", CATALOG_NAME)
+        mock_instrument_mapper.sync_qualification.assert_not_called()
+
+    def test_qualify_ticker_resolver_fault_falls_back(
+        self, mock_catalog_manager, mock_metadata_service, mock_instrument_mapper
+    ):
+        """A provider fault captures nothing → fall back to DB identity (fault-tolerant AC4)."""
+        resolver = MagicMock()
+        resolver.resolve.side_effect = RuntimeError("provider down")
+        expected = InstrumentId.from_str("SPY.ARCA")
+        mock_instrument_mapper.resolve_instrument_id.return_value = expected
+        svc = self._service_with_resolver(
+            mock_catalog_manager, mock_metadata_service, mock_instrument_mapper, resolver
+        )
+
+        svc._resolve_metadata("SPY")  # fault swallowed, nothing captured
+        result = svc._qualify_ticker("SPY", CATALOG_NAME)
+
+        assert result == expected
+        mock_instrument_mapper.sync_qualification.assert_not_called()
+
+    def test_unqualified_ticker_skips_bar_write(
+        self,
+        mock_catalog_manager,
+        mock_metadata_service,
+        mock_instrument_mapper,
+        mock_bars,
+        tmp_path,
+    ):
+        """End-to-end: an unresolved-venue ticker is skipped — no write_data, logged (AC3)."""
+        resolver = MagicMock()
+        resolver.resolve.return_value = _unresolved_metadata("ZZZ")
+        mock_instrument_mapper.sync_qualification.return_value = None
+        mock_metadata_service.get_instrument_sync.return_value = _fresh_instrument_row()
+
+        mock_catalog = MagicMock()
+        mock_catalog_manager.resolve_catalog.return_value = mock_catalog
+
+        svc = self._service_with_resolver(
+            mock_catalog_manager, mock_metadata_service, mock_instrument_mapper, resolver
+        )
+
+        (tmp_path / "Z").mkdir()
+        _write_daily_csv(tmp_path / "Z" / "ZZZ.txt", "2025-02-01")
+
+        with (
+            patch("src.services.firstrate.import_service.get_parser") as mock_get_parser,
+            patch("src.services.firstrate.import_service.logger") as mock_logger,
+        ):
+            mock_parser = MagicMock()
+            mock_parser.parse_file.return_value = mock_bars
+            mock_get_parser.return_value = mock_parser
+
+            results = svc.import_directory(
+                source_dir=tmp_path,
+                catalog_name=CATALOG_NAME,
+                asset_class=AssetClass.ETF,
+                timeframe="1-DAY-LAST",
+            )
+
+        assert len(results) == 1
+        assert results[0].status == "skipped"
+        assert results[0].outcome == "skipped"
+        # The skip carries a venue-unresolved reason so the progress line does
+        # not falsely report "already complete" (review EdgeCase #2).
+        assert results[0].error is not None
+        assert "venue unresolved" in results[0].error
+        mock_catalog.write_data.assert_not_called()
+        assert any(
+            call.args and call.args[0] == "ticker_unqualified"
+            for call in mock_logger.info.call_args_list
+        )
+
+    def test_qualification_synced_once_across_timeframes(
+        self, mock_catalog_manager, mock_metadata_service, mock_instrument_mapper
+    ):
+        """Qualification runs at most once per ticker per run (review EdgeCase #3)."""
+        resolver = MagicMock()
+        resolver.resolve.return_value = _domain_metadata("SPY")
+        mock_instrument_mapper.sync_qualification.return_value = InstrumentId.from_str("SPY.ARCA")
+        svc = self._service_with_resolver(
+            mock_catalog_manager, mock_metadata_service, mock_instrument_mapper, resolver
+        )
+
+        svc._resolve_metadata("SPY")
+        first = svc._qualify_ticker("SPY", CATALOG_NAME)
+        second = svc._qualify_ticker("SPY", CATALOG_NAME)  # e.g. another timeframe pass
+
+        assert first == second == InstrumentId.from_str("SPY.ARCA")
+        assert mock_instrument_mapper.sync_qualification.call_count == 1  # deduped
+
+    def test_resolved_venue_missing_row_fails_loudly(
+        self, mock_catalog_manager, mock_metadata_service, mock_instrument_mapper
+    ):
+        """A resolved venue with no catalog_instruments row is NOT mislabeled unresolved.
+
+        Review Blind #1: sync returns None for a missing row too, so a resolved-
+        venue ticker absent from company_profiles must fall back to the loud DB
+        lookup, not be silently skipped as venue-unresolved.
+        """
+        from src.db.exceptions import InstrumentMappingError
+
+        resolver = MagicMock()
+        resolver.resolve.return_value = _domain_metadata("SPY")  # venue "ARCA"
+        mock_instrument_mapper.sync_qualification.return_value = None  # no row
+        mock_instrument_mapper.resolve_instrument_id.side_effect = InstrumentMappingError("no row")
+        svc = self._service_with_resolver(
+            mock_catalog_manager, mock_metadata_service, mock_instrument_mapper, resolver
+        )
+
+        svc._resolve_metadata("SPY")
+        with pytest.raises(InstrumentMappingError):
+            svc._qualify_ticker("SPY", CATALOG_NAME)
+
+
 @pytest.mark.unit
 class TestImportProgressLogging:
     """Story 2.7 AC1: per-ticker progress with running counts via structlog."""

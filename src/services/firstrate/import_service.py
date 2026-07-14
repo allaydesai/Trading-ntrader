@@ -27,6 +27,8 @@ from src.services.firstrate.parsers.base import get_parser
 from src.services.firstrate.source_probe import compute_source_last_date
 
 if TYPE_CHECKING:
+    from nautilus_trader.model.identifiers import InstrumentId
+
     from src.models.instrument_metadata import InstrumentMetadata
     from src.services.metadata.instrument_metadata_service import (
         InstrumentMetadataService,
@@ -139,6 +141,14 @@ class ImportService:
         # unresolved) into the end-of-run summary. Keyed by ticker so a ticker
         # spanning multiple timeframe passes is recorded exactly once.
         self._resolved_metadata: dict[str, "InstrumentMetadata"] = {}
+        # Tickers already venue-qualified this run, mapped to their computed
+        # identity (Story 3.1). The resolved venue is stable within a run
+        # (cache-first), so qualification — a catalog_instruments read+write —
+        # runs at most once per ticker even across the 5 ETF timeframe passes,
+        # mirroring the _resolved_tickers dedup. ``None`` records a deliberately
+        # unqualified (VENUE_UNRESOLVED) ticker so later passes re-skip it
+        # without re-nulling the row every pass.
+        self._qualified_ids: dict[str, "InstrumentId | None"] = {}
 
     @property
     def resolved_metadata(self) -> "list[InstrumentMetadata]":
@@ -294,8 +304,41 @@ class ImportService:
                     duration=time.perf_counter() - start,
                 )
 
-            # 1. Resolve instrument ID
-            instrument_id = self._instrument_mapper.resolve_instrument_id(ticker, catalog_name)
+            # 1a. Resolve instrument metadata (Story 2.4 AC4). Moved ahead of
+            #     identity resolution (Story 3.1): the qualified venue must be
+            #     known before parsing, because bars are stamped with the
+            #     instrument id and written under {INSTRUMENT_ID}/{BAR_TYPE}/ — a
+            #     later venue change would orphan them. Cache-first, deduped, and
+            #     fault-isolated inside the helper (a metadata hiccup never fails
+            #     an otherwise-good bar import).
+            self._resolve_metadata(ticker)
+
+            # 1b. Qualify (Story 3.1): source the venue from the resolved
+            #     instrument_metadata and sync catalog_instruments.nautilus_id
+            #     (ADR-3). A VENUE_UNRESOLVED ticker returns None — left
+            #     unqualified, no nautilus_id fabricated (AC3). Its exclude/flag/
+            #     keep-bars handling is Story 3.5; here it is skipped this run.
+            instrument_id = self._qualify_ticker(ticker, catalog_name)
+            if instrument_id is None:
+                logger.info(
+                    "ticker_unqualified",
+                    ticker=ticker,
+                    catalog=catalog_name,
+                    timeframe=timeframe,
+                    reason="venue unresolved — deferred to Story 3.5",
+                )
+                return ImportResult(
+                    ticker=ticker,
+                    status="skipped",
+                    row_count=0,
+                    outcome="skipped",
+                    # A reason distinguishes this deliberate venue-unresolved skip
+                    # from an idempotent "already complete" skip in the per-ticker
+                    # progress line (error is not surfaced as a failure — the
+                    # summary/exit-code key on status, which stays "skipped").
+                    error="venue unresolved — deferred to Story 3.5",
+                    duration=time.perf_counter() - start,
+                )
 
             # 2. Build BarType
             bar_type = BarType.from_str(f"{instrument_id}-{timeframe}-EXTERNAL")
@@ -340,16 +383,6 @@ class ImportService:
                     invalid_rows=invalid_rows,
                     sample=ohlc_warnings[:3],
                 )
-
-            # 3b. Resolve instrument metadata (Story 2.4 AC4). Cache-first via
-            #     the Epic-1 service, which self-upserts into instrument_metadata
-            #     and skips the provider when the ticker is already RESOLVED.
-            #     Runs once per parsed ticker per run — deduped inside the helper
-            #     so the multi-timeframe ETF default does not re-resolve, and the
-            #     "skipped" short-circuit above means an already-complete re-run
-            #     resolves nothing. Faults are isolated inside the helper so a
-            #     metadata hiccup never fails an otherwise-good bar import.
-            self._resolve_metadata(ticker)
 
             # 4. Write to catalog. Delete any existing bars for this exact
             #    bar_type first so a re-import (or an orphan-heal where the
@@ -714,6 +747,43 @@ class ImportService:
             and a.close == b.close
             and a.volume == b.volume
         )
+
+    def _qualify_ticker(self, ticker: str, catalog_name: str) -> "InstrumentId | None":
+        """Resolve a ticker's Nautilus identity, venue-qualified from metadata (Story 3.1).
+
+        When the Epic-1 resolver ran and captured domain metadata for this ticker, the
+        authoritative resolved ``venue`` drives the qualification: :meth:`InstrumentMapper.
+        sync_qualification` writes ``catalog_instruments.nautilus_id``/``exchange`` (ADR-3)
+        and returns the qualified ``InstrumentId`` — or ``None`` when the venue is
+        ``VENUE_UNRESOLVED`` (``venue is None``), leaving the ticker unqualified (AC3).
+
+        When no resolver is injected (the Phase-1 stocks path / FMP unconfigured) or a
+        provider fault left nothing captured, this falls back to the existing DB identity
+        lookup (:meth:`InstrumentMapper.resolve_instrument_id`) — unchanged behavior (AC4).
+
+        Args:
+            ticker: Trading symbol.
+            catalog_name: Catalog scoping the identity row.
+
+        Returns:
+            The (venue-qualified) ``InstrumentId``, or ``None`` when the venue is unresolved.
+        """
+        metadata = self._resolved_metadata.get(ticker)
+        if self._metadata_resolver is None or metadata is None:
+            return self._instrument_mapper.resolve_instrument_id(ticker, catalog_name)
+        # Qualify at most once per ticker per run (see _qualified_ids).
+        if ticker in self._qualified_ids:
+            return self._qualified_ids[ticker]
+        qualified = self._instrument_mapper.sync_qualification(ticker, catalog_name, metadata.venue)
+        if qualified is None and metadata.venue:
+            # The venue WAS resolved, yet the sync found no catalog_instruments
+            # row — the ticker is absent from company_profiles, not venue-
+            # unresolved. Do not mislabel it as unqualified/deferred: fall back
+            # to resolve_instrument_id so the missing profile fails loudly
+            # (InstrumentMappingError), exactly as on the no-resolver path.
+            return self._instrument_mapper.resolve_instrument_id(ticker, catalog_name)
+        self._qualified_ids[ticker] = qualified
+        return qualified
 
     def _resolve_metadata(self, ticker: str) -> None:
         """Resolve a parsed ticker's instrument metadata cache-first (Story 2.4).

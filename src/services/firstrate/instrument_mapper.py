@@ -117,6 +117,70 @@ class InstrumentMapper:
         )
         return count
 
+    @staticmethod
+    def qualified_instrument_id(ticker: str, venue: Optional[str]) -> Optional[InstrumentId]:
+        """Compute a Nautilus-qualified ``InstrumentId`` from a resolved venue (Story 3.1).
+
+        Pure: the venue is the authoritative code resolved by ``InstrumentMetadataService``
+        (Epic 1) — never a guessed/CSV value. A falsy venue (``None`` or blank, i.e.
+        ``VENUE_UNRESOLVED``) yields ``None`` so no identity is fabricated (AC3). ``venue``
+        is already guaranteed a real code or ``None`` by the domain model's
+        ``venue_never_na_sentinel`` validator, so the ``NA_SENTINEL`` is not re-checked here.
+
+        Args:
+            ticker: Trading symbol (e.g. "SPY").
+            venue: Resolved Nautilus venue code (e.g. "ARCA"), or ``None``/blank.
+
+        Returns:
+            ``InstrumentId`` (e.g. ``SPY.ARCA``), or ``None`` when the venue is unresolved.
+        """
+        if not venue:
+            return None
+        return InstrumentId.from_str(f"{ticker}.{venue}")
+
+    def sync_qualification(
+        self, ticker: str, catalog_name: str, venue: Optional[str]
+    ) -> Optional[InstrumentId]:
+        """Sync the resolved venue onto ``catalog_instruments`` (ADR-3 qualification sync).
+
+        The import pipeline (single writer) calls this after resolving a ticker's metadata:
+        the authoritative resolved ``venue`` overwrites the provisional CSV exchange on the
+        ``catalog_instruments`` identity row and recomputes ``nautilus_id``. ``instrument_metadata``
+        stays the source of truth for resolved metadata; ``catalog_instruments`` for bar
+        counts/date ranges. A ``VENUE_UNRESOLVED`` ticker (``venue is None``) leaves
+        ``nautilus_id`` ``None`` — unqualified, not fabricated (AC3; excludes/flag are Story 3.5).
+
+        Args:
+            ticker: Trading symbol.
+            catalog_name: Catalog scoping the identity row.
+            venue: Resolved Nautilus venue code, or ``None`` when unresolved.
+
+        Returns:
+            The qualified ``InstrumentId``, or ``None`` when the venue is unresolved or no
+            ``catalog_instruments`` row exists (profiles not loaded).
+        """
+        instrument = self._repo.get_by_ticker(catalog_name, ticker)
+        if instrument is None:
+            logger.warning(
+                "qualification_sync_skipped",
+                ticker=ticker,
+                catalog=catalog_name,
+                reason="no catalog_instruments row — company profiles not loaded?",
+            )
+            return None
+
+        qid = self.qualified_instrument_id(ticker, venue)
+        instrument.nautilus_id = str(qid) if qid is not None else None
+        instrument.exchange = venue
+        self._repo.upsert(instrument)
+        logger.debug(
+            "qualification_synced",
+            ticker=ticker,
+            venue=venue,
+            nautilus_id=instrument.nautilus_id,
+        )
+        return qid
+
     def resolve_instrument_id(self, ticker: str, catalog_name: str) -> InstrumentId:
         """Look up ticker in DB and return Nautilus InstrumentId.
 
