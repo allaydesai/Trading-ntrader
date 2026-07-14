@@ -293,6 +293,59 @@ class TestSyncInstrumentMetadataRepository:
         with pytest.raises(DatabaseConnectionError):
             repo.list_by_status(ResolutionStatus.VENUE_UNRESOLVED)
 
+    def test_count_by_status_groups_and_counts(self, sync_session):
+        """count_by_status returns a per-status count map (Story 3.4)."""
+        repo = SyncInstrumentMetadataRepository(sync_session)
+        repo.upsert(
+            InstrumentMetadata(
+                **_make_metadata(ticker="AAA", resolution_status=ResolutionStatus.RESOLVED)
+            )
+        )
+        repo.upsert(
+            InstrumentMetadata(
+                **_make_metadata(ticker="BBB", resolution_status=ResolutionStatus.RESOLVED)
+            )
+        )
+        repo.upsert(
+            InstrumentMetadata(
+                **_make_metadata(
+                    ticker="CCC", venue=None, resolution_status=ResolutionStatus.VENUE_UNRESOLVED
+                )
+            )
+        )
+        repo.upsert(
+            InstrumentMetadata(
+                **_make_metadata(ticker="DDD", resolution_status=ResolutionStatus.UNRESOLVED)
+            )
+        )
+        sync_session.commit()
+
+        assert repo.count_by_status() == {
+            ResolutionStatus.RESOLVED: 2,
+            ResolutionStatus.VENUE_UNRESOLVED: 1,
+            ResolutionStatus.UNRESOLVED: 1,
+        }
+
+    def test_count_by_status_empty_returns_empty_dict(self, sync_session):
+        """count_by_status returns {} when the store is empty."""
+        repo = SyncInstrumentMetadataRepository(sync_session)
+        assert repo.count_by_status() == {}
+
+    def test_count_by_status_translates_operational_error(self):
+        """A DB OperationalError becomes DatabaseConnectionError (mirrors upsert)."""
+        from unittest.mock import MagicMock
+
+        from sqlalchemy.exc import OperationalError
+
+        from src.db.exceptions import DatabaseConnectionError
+
+        session = MagicMock()
+        session.execute.side_effect = OperationalError("SELECT ...", {}, Exception("down"))
+        repo = SyncInstrumentMetadataRepository(session)
+
+        with pytest.raises(DatabaseConnectionError):
+            repo.count_by_status()
+
     def test_apply_venue_override_flips_unresolved_to_resolved(self, sync_session):
         """An override sets venue + RESOLVED on an existing VENUE_UNRESOLVED row (Story 3.3)."""
         from datetime import datetime, timezone

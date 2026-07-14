@@ -11,7 +11,7 @@ same name. ORM↔domain mapping is the Story 1.5 service's responsibility.
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
@@ -109,6 +109,30 @@ class SyncInstrumentMetadataRepository:
             return list(self.session.execute(stmt).scalars().all())
         except OperationalError as e:
             raise DatabaseConnectionError(f"Database connection failed: {e}") from e
+
+    def count_by_status(self) -> dict[ResolutionStatus, int]:
+        """Count rows grouped by resolution status (Story 3.4 coverage gate).
+
+        A single ``COUNT(*) GROUP BY resolution_status`` served by the
+        ``ix_instrument_metadata_resolution_status`` index — O(distinct statuses)
+        w.r.t. row count, not a full-table scan or a Python-side count. Statuses
+        with no rows are simply absent from the map (callers use ``.get(s, 0)``).
+
+        Returns:
+            Map of ``ResolutionStatus`` → row count; ``{}`` when the store is empty.
+
+        Raises:
+            DatabaseConnectionError: If the query fails (mirrors ``upsert``) so CLI
+                callers can degrade gracefully.
+        """
+        stmt = select(InstrumentMetadata.resolution_status, func.count()).group_by(
+            InstrumentMetadata.resolution_status
+        )
+        try:
+            rows = self.session.execute(stmt).all()
+        except OperationalError as e:
+            raise DatabaseConnectionError(f"Database connection failed: {e}") from e
+        return {status: count for status, count in rows}
 
     def apply_venue_override(self, ticker: str, venue: str, resolved_at: datetime) -> str:
         """Apply a manual venue override to an existing row, with precedence (Story 3.3).

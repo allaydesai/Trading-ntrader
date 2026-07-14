@@ -5,6 +5,7 @@ or provider call — the resolved metadata is produced by the Epic-1 resolution
 service and the Story 3.1 import qualification.
 """
 
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from src.db.repositories.instrument_metadata_repository_sync import (
 )
 from src.db.session_sync import get_sync_session
 from src.models.instrument_metadata import ResolutionStatus
+from src.services.metadata.coverage_report import VenueCoverage
 from src.services.metadata.unresolved_report import unresolved_reason
 from src.services.metadata.venue_overrides import (
     VenueOverrideError,
@@ -119,3 +121,70 @@ def _render_override_summary(result: VenueOverrideMergeResult) -> None:
     if result.unmatched:
         joined = ", ".join(escape(t) for t in result.unmatched)
         console.print(f"[yellow]Unmatched (no metadata row): {joined}[/yellow]")
+
+
+@metadata.command("coverage")
+@click.option(
+    "--gate/--no-gate",
+    default=False,
+    help="Exit non-zero unless venue coverage is 100% (for CI/automation).",
+)
+def coverage(gate: bool) -> None:
+    """Report venue coverage and the completeness verdict (Story 3.4).
+
+    Answers "is any ticker missing a venue?" from a single indexed grouped
+    count. A VENUE_UNRESOLVED row fails the gate — no venue is ever guessed to
+    make it pass. With --gate the process exits 1 when INCOMPLETE (and 2 when
+    the DB cannot be evaluated, so CI never mistakes "unreachable" for "passed").
+    """
+    try:
+        with get_sync_session() as session:
+            counts = SyncInstrumentMetadataRepository(session).count_by_status()
+    except (RuntimeError, DatabaseConnectionError, SQLAlchemyError) as exc:
+        # DB unset / unreachable / missing-table — degrade to a warning, never a
+        # traceback. Under --gate an unevaluable gate must NOT read as passing.
+        console.print(f"[yellow]Metadata DB not available — {escape(str(exc))}[/yellow]")
+        if gate:
+            sys.exit(2)
+        return
+    cov = VenueCoverage.from_counts(counts)
+    _render_coverage(cov)
+    if gate and not cov.is_complete:
+        sys.exit(1)
+
+
+def _render_coverage(cov: VenueCoverage) -> None:
+    """Render the venue-coverage breakdown + PASS/FAIL verdict (no exit logic)."""
+    table = Table(title="Venue coverage")
+    table.add_column("Status", style="cyan")
+    table.add_column("Count", justify="right")
+    table.add_row("RESOLVED", str(cov.resolved))
+    table.add_row("VENUE_UNRESOLVED", str(cov.venue_unresolved))
+    table.add_row("UNRESOLVED", str(cov.unresolved))
+    console.print(table)
+    console.print(f"Total metadata rows: {cov.total}")
+    # Clamp the *displayed* percent so it can never read 100.0% while the verdict
+    # is FAIL: f"{x:.1f}" rounds 99.95–99.99…% up to "100.0%". is_complete (the
+    # exact float) drives the exit code; this only keeps the printed line honest.
+    pct = cov.coverage_pct
+    if not cov.is_complete and pct >= 99.95:
+        pct = 99.9
+    console.print(f"Venue coverage: {pct:.1f}% ({cov.resolved}/{cov.decided} decided)")
+    console.print(f"Unresolved venues (VENUE_UNRESOLVED): {cov.venue_unresolved}")
+    if cov.unresolved > 0:
+        console.print(f"Not yet attempted (UNRESOLVED): {cov.unresolved}")
+    if cov.total == 0:
+        console.print("[yellow]No metadata rows yet — nothing to gate (vacuous PASS).[/yellow]")
+    elif cov.decided == 0:
+        # Only never-attempted rows — resolution never ran, so 100%/PASS is vacuous.
+        console.print(
+            "[yellow]No venues decided yet — resolution has not run on any row; "
+            "PASS is vacuous.[/yellow]"
+        )
+    if cov.is_complete:
+        console.print("[green]✓ COMPLETE — venue coverage 100% (gate PASS)[/green]")
+    else:
+        console.print(
+            f"[red]✗ INCOMPLETE — {cov.venue_unresolved} ticker(s) VENUE_UNRESOLVED "
+            f"(gate FAIL)[/red]"
+        )

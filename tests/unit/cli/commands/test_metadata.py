@@ -191,6 +191,152 @@ class TestMetadataApplyOverrides:
 
 
 @pytest.mark.unit
+class TestMetadataCoverage:
+    """`metadata coverage` report + completeness gate (Story 3.4)."""
+
+    def test_complete_no_flag_reports_pass(self, runner):
+        session_patch, repo_patch = _patch_session_and_repo()
+        with session_patch, repo_patch as mock_repo:
+            mock_repo.return_value.count_by_status.return_value = {ResolutionStatus.RESOLVED: 3}
+            result = runner.invoke(metadata, ["coverage"])
+
+        assert result.exit_code == 0
+        assert "100.0%" in result.output
+        assert "COMPLETE" in result.output
+        assert "gate PASS" in result.output
+
+    def test_incomplete_no_flag_reports_fail_but_exits_zero(self, runner):
+        session_patch, repo_patch = _patch_session_and_repo()
+        with session_patch, repo_patch as mock_repo:
+            mock_repo.return_value.count_by_status.return_value = {
+                ResolutionStatus.RESOLVED: 2,
+                ResolutionStatus.VENUE_UNRESOLVED: 1,
+            }
+            result = runner.invoke(metadata, ["coverage"])
+
+        assert result.exit_code == 0  # report-only without --gate
+        assert "INCOMPLETE" in result.output
+        assert "gate FAIL" in result.output
+        assert "66.7%" in result.output
+        assert "1 ticker(s) VENUE_UNRESOLVED" in result.output
+
+    def test_incomplete_gate_exits_one(self, runner):
+        session_patch, repo_patch = _patch_session_and_repo()
+        with session_patch, repo_patch as mock_repo:
+            mock_repo.return_value.count_by_status.return_value = {
+                ResolutionStatus.RESOLVED: 2,
+                ResolutionStatus.VENUE_UNRESOLVED: 1,
+            }
+            result = runner.invoke(metadata, ["coverage", "--gate"])
+
+        assert result.exit_code == 1  # AC2 — scriptable FAIL
+        assert "INCOMPLETE" in result.output
+
+    def test_complete_gate_exits_zero(self, runner):
+        session_patch, repo_patch = _patch_session_and_repo()
+        with session_patch, repo_patch as mock_repo:
+            mock_repo.return_value.count_by_status.return_value = {ResolutionStatus.RESOLVED: 3}
+            result = runner.invoke(metadata, ["coverage", "--gate"])
+
+        assert result.exit_code == 0  # AC3
+        assert "gate PASS" in result.output
+
+    def test_db_unconfigured_no_flag_degrades_gracefully(self, runner):
+        ctx = MagicMock()
+        ctx.__enter__.side_effect = RuntimeError("Database not configured")
+        with patch("src.cli.commands.metadata.get_sync_session", return_value=ctx):
+            result = runner.invoke(metadata, ["coverage"])
+
+        assert result.exit_code == 0
+        assert result.exception is None
+        assert "Metadata DB not available" in result.output
+
+    def test_db_unconfigured_gate_exits_two(self, runner):
+        """Under --gate a DB that cannot be read must NOT be treated as passing (AC4)."""
+        ctx = MagicMock()
+        ctx.__enter__.side_effect = RuntimeError("Database not configured")
+        with patch("src.cli.commands.metadata.get_sync_session", return_value=ctx):
+            result = runner.invoke(metadata, ["coverage", "--gate"])
+
+        assert result.exit_code == 2  # could-not-evaluate ≠ pass
+        assert "Metadata DB not available" in result.output
+
+    def test_db_query_error_gate_exits_two(self, runner):
+        session_patch, repo_patch = _patch_session_and_repo()
+        with session_patch, repo_patch as mock_repo:
+            mock_repo.return_value.count_by_status.side_effect = OperationalError(
+                "SELECT ...", {}, Exception("connection refused")
+            )
+            result = runner.invoke(metadata, ["coverage", "--gate"])
+
+        assert result.exit_code == 2
+        assert "Metadata DB not available" in result.output
+
+
+@pytest.mark.unit
+class TestRenderCoverage:
+    """Direct render-helper tests (no CliRunner)."""
+
+    def test_render_incomplete_shows_counts_pct_and_fail(self, capsys):
+        from src.cli.commands.metadata import _render_coverage
+        from src.services.metadata.coverage_report import VenueCoverage
+
+        cov = VenueCoverage.from_counts(
+            {ResolutionStatus.RESOLVED: 2, ResolutionStatus.VENUE_UNRESOLVED: 1}
+        )
+        _render_coverage(cov)
+        out = capsys.readouterr().out
+        assert "66.7%" in out
+        assert "INCOMPLETE" in out
+        assert "gate FAIL" in out
+
+    def test_render_complete_shows_pass(self, capsys):
+        from src.cli.commands.metadata import _render_coverage
+        from src.services.metadata.coverage_report import VenueCoverage
+
+        _render_coverage(VenueCoverage.from_counts({ResolutionStatus.RESOLVED: 4}))
+        out = capsys.readouterr().out
+        assert "100.0%" in out
+        assert "COMPLETE" in out
+        assert "gate PASS" in out
+
+    def test_render_empty_shows_no_rows_note(self, capsys):
+        from src.cli.commands.metadata import _render_coverage
+        from src.services.metadata.coverage_report import VenueCoverage
+
+        _render_coverage(VenueCoverage.from_counts({}))
+        out = capsys.readouterr().out
+        assert "no metadata rows" in out.lower()
+
+    def test_render_near_complete_never_displays_100pct_while_fail(self, capsys):
+        # Review patch: 9999/10000 rounds to "100.0%" under .1f — the displayed
+        # percent must be clamped so it can't contradict the FAIL verdict.
+        from src.cli.commands.metadata import _render_coverage
+        from src.services.metadata.coverage_report import VenueCoverage
+
+        cov = VenueCoverage.from_counts(
+            {ResolutionStatus.RESOLVED: 9999, ResolutionStatus.VENUE_UNRESOLVED: 1}
+        )
+        _render_coverage(cov)
+        out = capsys.readouterr().out
+        assert "100.0%" not in out
+        assert "99.9%" in out
+        assert "gate FAIL" in out
+
+    def test_render_only_unattempted_flags_vacuous_pass(self, capsys):
+        # Review patch: decided==0 but total>0 (resolution never ran) must carry
+        # the vacuous-PASS caveat, not an un-caveated green COMPLETE.
+        from src.cli.commands.metadata import _render_coverage
+        from src.services.metadata.coverage_report import VenueCoverage
+
+        _render_coverage(VenueCoverage.from_counts({ResolutionStatus.UNRESOLVED: 5}))
+        out = capsys.readouterr().out
+        assert "vacuous" in out.lower()
+        assert "resolution has not run" in out.lower()
+        assert "COMPLETE" in out
+
+
+@pytest.mark.unit
 class TestRegistration:
     """The `metadata` group is wired into the top-level CLI."""
 
@@ -200,6 +346,7 @@ class TestRegistration:
         assert "metadata" in cli.commands
         assert "unresolved" in cli.commands["metadata"].commands
         assert "apply-overrides" in cli.commands["metadata"].commands
+        assert "coverage" in cli.commands["metadata"].commands
 
 
 @pytest.mark.unit
