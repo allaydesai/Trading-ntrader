@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from src.db.exceptions import DatabaseConnectionError, DuplicateRecordError
 from src.db.models.instrument_metadata import InstrumentMetadata
+from src.models.instrument_metadata import ResolutionStatus
 
 
 class SyncInstrumentMetadataRepository:
@@ -81,3 +82,29 @@ class SyncInstrumentMetadataRepository:
         stmt = select(InstrumentMetadata).where(InstrumentMetadata.ticker == ticker)
         result = self.session.execute(stmt)
         return result.scalar_one_or_none()
+
+    def list_by_status(self, status: ResolutionStatus) -> list[InstrumentMetadata]:
+        """List all metadata rows with the given resolution status, ordered by ticker.
+
+        Served by the ``ix_instrument_metadata_resolution_status`` index. Used by
+        the Story 3.2 unresolved-venue report (``VENUE_UNRESOLVED``).
+
+        Args:
+            status: The resolution status to filter on.
+
+        Returns:
+            Metadata rows matching ``status``, ordered by ticker ascending.
+
+        Raises:
+            DatabaseConnectionError: If the query fails (e.g. DB unreachable) —
+                mirrors ``upsert`` so CLI callers can degrade gracefully.
+        """
+        stmt = (
+            select(InstrumentMetadata)
+            .where(InstrumentMetadata.resolution_status == status)
+            .order_by(InstrumentMetadata.ticker)
+        )
+        try:
+            return list(self.session.execute(stmt).scalars().all())
+        except OperationalError as e:
+            raise DatabaseConnectionError(f"Database connection failed: {e}") from e

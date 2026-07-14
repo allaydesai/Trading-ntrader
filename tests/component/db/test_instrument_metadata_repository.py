@@ -232,3 +232,63 @@ class TestSyncInstrumentMetadataRepository:
         result = repo.get_by_ticker("SPY")
         assert result is not None
         assert result.resolution_status == ResolutionStatus.UNRESOLVED
+
+    def test_list_by_status_filters_and_orders(self, sync_session):
+        """list_by_status returns only matching rows, ordered by ticker (Story 3.2)."""
+        repo = SyncInstrumentMetadataRepository(sync_session)
+        repo.upsert(
+            InstrumentMetadata(
+                **_make_metadata(ticker="AAA", resolution_status=ResolutionStatus.RESOLVED)
+            )
+        )
+        repo.upsert(
+            InstrumentMetadata(
+                **_make_metadata(
+                    ticker="CCC", venue=None, resolution_status=ResolutionStatus.VENUE_UNRESOLVED
+                )
+            )
+        )
+        repo.upsert(
+            InstrumentMetadata(
+                **_make_metadata(
+                    ticker="BBB", venue=None, resolution_status=ResolutionStatus.VENUE_UNRESOLVED
+                )
+            )
+        )
+        repo.upsert(
+            InstrumentMetadata(
+                **_make_metadata(ticker="DDD", resolution_status=ResolutionStatus.UNRESOLVED)
+            )
+        )
+        sync_session.commit()
+
+        rows = repo.list_by_status(ResolutionStatus.VENUE_UNRESOLVED)
+
+        assert [r.ticker for r in rows] == ["BBB", "CCC"]
+
+    def test_list_by_status_empty_returns_empty_list(self, sync_session):
+        """list_by_status returns [] when no rows match the status."""
+        repo = SyncInstrumentMetadataRepository(sync_session)
+        repo.upsert(
+            InstrumentMetadata(
+                **_make_metadata(ticker="AAA", resolution_status=ResolutionStatus.RESOLVED)
+            )
+        )
+        sync_session.commit()
+
+        assert repo.list_by_status(ResolutionStatus.VENUE_UNRESOLVED) == []
+
+    def test_list_by_status_translates_operational_error(self):
+        """A DB OperationalError becomes DatabaseConnectionError (mirrors upsert)."""
+        from unittest.mock import MagicMock
+
+        from sqlalchemy.exc import OperationalError
+
+        from src.db.exceptions import DatabaseConnectionError
+
+        session = MagicMock()
+        session.execute.side_effect = OperationalError("SELECT ...", {}, Exception("down"))
+        repo = SyncInstrumentMetadataRepository(session)
+
+        with pytest.raises(DatabaseConnectionError):
+            repo.list_by_status(ResolutionStatus.VENUE_UNRESOLVED)
