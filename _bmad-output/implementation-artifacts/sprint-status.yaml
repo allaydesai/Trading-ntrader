@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-06-17
-last_updated: "2026-07-13"  # Epic 3: Story 3.2 (unresolved-venue report) done
+last_updated: "2026-07-13"  # Epic 3: Story 3.3 (venue_overrides.csv merge with precedence) done
 project: Trading-ntrader
 project_key: NOKEY
 tracking_system: file-system
@@ -74,7 +74,7 @@ development_status:
   epic-3: in-progress
   3-1-ticker-nautilus-qualified-instrumentid-via-resolved-venue: done
   3-2-unresolved-venue-report: done
-  3-3-venue-overrides-csv-merge-with-precedence: backlog
+  3-3-venue-overrides-csv-merge-with-precedence: done
   3-4-venue-coverage-report-and-completeness-gate: backlog
   3-5-exclude-and-flag-non-backtestable-tickers: backlog
   epic-3-retrospective: optional

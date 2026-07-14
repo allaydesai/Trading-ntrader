@@ -8,6 +8,7 @@ Operates on the SQLAlchemy ORM ``InstrumentMetadata``
 same name. ORM↔domain mapping is the Story 1.5 service's responsibility.
 """
 
+from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import select
@@ -106,5 +107,41 @@ class SyncInstrumentMetadataRepository:
         )
         try:
             return list(self.session.execute(stmt).scalars().all())
+        except OperationalError as e:
+            raise DatabaseConnectionError(f"Database connection failed: {e}") from e
+
+    def apply_venue_override(self, ticker: str, venue: str, resolved_at: datetime) -> str:
+        """Apply a manual venue override to an existing row, with precedence (Story 3.3).
+
+        Sets ``venue`` and forces ``resolution_status = RESOLVED`` (the operator's
+        correction wins over absent/ambiguous provider data). Idempotent: a row
+        already at the override target (``venue`` matches and status ``RESOLVED``)
+        is left untouched — no write, no ``resolved_at`` churn. A ticker with no
+        row is reported ``"unmatched"`` (never fabricated). Descriptive fields are
+        never touched.
+
+        Args:
+            ticker: Ticker to correct (must already exist in the store).
+            venue: Operator-supplied Nautilus venue code.
+            resolved_at: Timestamp stamped on a row this call changes.
+
+        Returns:
+            One of ``"applied"`` (row changed), ``"unchanged"`` (already at
+            target), or ``"unmatched"`` (no such row).
+
+        Raises:
+            DatabaseConnectionError: If the query/flush fails (mirrors ``upsert``).
+        """
+        try:
+            row = self.get_by_ticker(ticker)
+            if row is None:
+                return "unmatched"
+            if row.venue == venue and row.resolution_status == ResolutionStatus.RESOLVED:
+                return "unchanged"
+            row.venue = venue
+            row.resolution_status = ResolutionStatus.RESOLVED
+            row.resolved_at = resolved_at
+            self.session.flush()
+            return "applied"
         except OperationalError as e:
             raise DatabaseConnectionError(f"Database connection failed: {e}") from e

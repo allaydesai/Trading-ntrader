@@ -118,6 +118,79 @@ class TestMetadataUnresolved:
 
 
 @pytest.mark.unit
+class TestMetadataApplyOverrides:
+    """`metadata apply-overrides` refresh subcommand (Story 3.3)."""
+
+    def _patch_settings(self, path: str = "venue_overrides.csv"):
+        settings = MagicMock()
+        settings.firstrate.firstrate_venue_overrides_path = path
+        return patch("src.cli.commands.metadata.get_settings", return_value=settings)
+
+    def test_populated_merges_and_prints_summary(self, runner):
+        from src.services.metadata.venue_overrides import VenueOverrideMergeResult
+
+        session_patch, repo_patch = _patch_session_and_repo()
+        with (
+            self._patch_settings(),
+            patch(
+                "src.cli.commands.metadata.load_venue_overrides",
+                return_value={"SPY": "ARCA"},
+            ),
+            patch(
+                "src.cli.commands.metadata.merge_venue_overrides",
+                return_value=VenueOverrideMergeResult(applied=1, unchanged=0, unmatched=["ZZZ"]),
+            ),
+            session_patch,
+            repo_patch,
+        ):
+            result = runner.invoke(metadata, ["apply-overrides"])
+
+        assert result.exit_code == 0
+        assert "1 applied" in result.output
+        assert "ZZZ" in result.output  # unmatched surfaced
+
+    def test_empty_file_is_noop(self, runner):
+        with (
+            self._patch_settings(),
+            patch("src.cli.commands.metadata.load_venue_overrides", return_value={}),
+        ):
+            result = runner.invoke(metadata, ["apply-overrides"])
+
+        assert result.exit_code == 0
+        assert "No venue overrides to apply" in result.output
+
+    def test_malformed_file_degrades_gracefully(self, runner):
+        from src.services.metadata.venue_overrides import VenueOverrideError
+
+        with (
+            self._patch_settings(),
+            patch(
+                "src.cli.commands.metadata.load_venue_overrides",
+                side_effect=VenueOverrideError("header must be exactly 'ticker,venue'"),
+            ),
+        ):
+            result = runner.invoke(metadata, ["apply-overrides"])
+
+        assert result.exit_code == 0
+        assert result.exception is None
+        assert "not applied" in result.output
+
+    def test_db_unconfigured_degrades_gracefully(self, runner):
+        ctx = MagicMock()
+        ctx.__enter__.side_effect = RuntimeError("Database not configured")
+        with (
+            self._patch_settings(),
+            patch("src.cli.commands.metadata.load_venue_overrides", return_value={"SPY": "ARCA"}),
+            patch("src.cli.commands.metadata.get_sync_session", return_value=ctx),
+        ):
+            result = runner.invoke(metadata, ["apply-overrides"])
+
+        assert result.exit_code == 0
+        assert result.exception is None
+        assert "Metadata DB not available" in result.output
+
+
+@pytest.mark.unit
 class TestRegistration:
     """The `metadata` group is wired into the top-level CLI."""
 
@@ -126,6 +199,7 @@ class TestRegistration:
 
         assert "metadata" in cli.commands
         assert "unresolved" in cli.commands["metadata"].commands
+        assert "apply-overrides" in cli.commands["metadata"].commands
 
 
 @pytest.mark.unit

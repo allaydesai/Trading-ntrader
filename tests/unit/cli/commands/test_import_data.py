@@ -1011,3 +1011,87 @@ class TestStory17ProgressAndSummary:
             ),
         ]
         assert determine_exit_code(results) == 1
+
+
+# ---------------------------------------------------------------------------
+# Story 3.3: venue-override merge wiring (_apply_venue_overrides)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestApplyVenueOverrides:
+    """The import-orchestration helper that merges venue_overrides.csv."""
+
+    def _settings(self, path: str):
+        from unittest.mock import MagicMock
+
+        settings = MagicMock()
+        settings.firstrate.firstrate_venue_overrides_path = path
+        return settings
+
+    def test_empty_file_is_silent_noop(self, capsys):
+        from src.cli.commands.import_data import _apply_venue_overrides
+
+        with patch("src.services.metadata.venue_overrides.load_venue_overrides", return_value={}):
+            _apply_venue_overrides(object(), self._settings("venue_overrides.csv"))
+        assert "Venue overrides" not in capsys.readouterr().out
+
+    def test_non_empty_prints_summary(self, capsys):
+        from src.cli.commands.import_data import _apply_venue_overrides
+        from src.services.metadata.venue_overrides import VenueOverrideMergeResult
+
+        with (
+            patch(
+                "src.services.metadata.venue_overrides.load_venue_overrides",
+                return_value={"SPY": "ARCA"},
+            ),
+            patch(
+                "src.services.metadata.venue_overrides.merge_venue_overrides",
+                return_value=VenueOverrideMergeResult(applied=1),
+            ),
+            patch(
+                "src.db.repositories.instrument_metadata_repository_sync."
+                "SyncInstrumentMetadataRepository"
+            ),
+        ):
+            _apply_venue_overrides(object(), self._settings("venue_overrides.csv"))
+        assert "1 applied" in capsys.readouterr().out
+
+    def test_unmatched_tickers_listed(self, capsys):
+        from src.cli.commands.import_data import _apply_venue_overrides
+        from src.services.metadata.venue_overrides import VenueOverrideMergeResult
+
+        with (
+            patch(
+                "src.services.metadata.venue_overrides.load_venue_overrides",
+                return_value={"ZZZ": "ARCA"},
+            ),
+            patch(
+                "src.services.metadata.venue_overrides.merge_venue_overrides",
+                return_value=VenueOverrideMergeResult(unmatched=["ZZZ"]),
+            ),
+            patch(
+                "src.db.repositories.instrument_metadata_repository_sync."
+                "SyncInstrumentMetadataRepository"
+            ),
+        ):
+            _apply_venue_overrides(object(), self._settings("venue_overrides.csv"))
+        out = capsys.readouterr().out
+        assert "1 unmatched" in out
+        assert "ZZZ" in out
+
+    def test_malformed_header_warns_and_skips_without_markup_crash(self, capsys):
+        # The real VenueOverrideError message embeds the header repr, which always
+        # contains '[' / ']'. Without escaping, Rich would raise MarkupError and the
+        # exception would propagate out of _apply_venue_overrides, rolling back the
+        # in-flight import. This exercises the escape() fix (must NOT raise).
+        from src.cli.commands.import_data import _apply_venue_overrides
+        from src.services.metadata.venue_overrides import VenueOverrideError
+
+        msg = "venue_overrides header must be exactly 'ticker,venue' (got: ['symbol', 'exchange'])"
+        with patch(
+            "src.services.metadata.venue_overrides.load_venue_overrides",
+            side_effect=VenueOverrideError(msg),
+        ):
+            _apply_venue_overrides(object(), self._settings("venue_overrides.csv"))
+        assert "not applied" in capsys.readouterr().out

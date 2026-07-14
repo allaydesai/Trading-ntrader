@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from src.api.models.explorer import ExplorerTimeframe
 
 if TYPE_CHECKING:
-    from src.config import FMPSettings
+    from src.config import FMPSettings, Settings
     from src.services.metadata.instrument_metadata_service import (
         InstrumentMetadataService,
     )
@@ -153,6 +153,56 @@ def _build_metadata_resolver(
     provider = FMPMetadataProvider(FMPClient(fmp_settings))
     repository = SyncInstrumentMetadataRepository(session)
     return InstrumentMetadataService(provider=provider, repository=repository)
+
+
+def _apply_venue_overrides(session: Session, settings: "Settings") -> None:
+    """Merge venue_overrides.csv into the metadata store during import (Story 3.3).
+
+    Thin orchestration helper: load the CSV (path via config), and if it carries
+    any corrections, merge them with precedence into ``instrument_metadata`` on
+    the open session (committed by the caller). A header-only/absent file is a
+    silent no-op; a malformed header degrades to a single warning without
+    aborting the in-flight import (bars already imported are preserved).
+
+    Args:
+        session: Open sync DB session (shares the import transaction).
+        settings: Application settings (provides the override path).
+    """
+    from datetime import datetime, timezone
+
+    from rich.markup import escape
+
+    from src.db.repositories.instrument_metadata_repository_sync import (
+        SyncInstrumentMetadataRepository,
+    )
+    from src.services.metadata.venue_overrides import (
+        VenueOverrideError,
+        load_venue_overrides,
+        merge_venue_overrides,
+    )
+
+    path = Path(settings.firstrate.firstrate_venue_overrides_path)
+    try:
+        overrides = load_venue_overrides(path)
+    except VenueOverrideError as exc:
+        # exc text embeds the raw header repr (bracketed) / file path — escape so a
+        # Rich metacharacter can't raise MarkupError and abort the in-flight import.
+        console.print(f"[yellow]Venue overrides not applied — {escape(str(exc))}[/yellow]")
+        return
+    if not overrides:
+        return
+    result = merge_venue_overrides(
+        overrides,
+        SyncInstrumentMetadataRepository(session),
+        datetime.now(timezone.utc),
+    )
+    console.print(
+        f"Venue overrides: {result.applied} applied, "
+        f"{result.unchanged} unchanged, {len(result.unmatched)} unmatched"
+    )
+    if result.unmatched:
+        joined = ", ".join(escape(t) for t in result.unmatched)
+        console.print(f"[yellow]Unmatched (no metadata row): {joined}[/yellow]")
 
 
 def _find_profiles_csv(source_path: Path) -> Path | None:
@@ -356,6 +406,12 @@ def _run_import(
                 _print_progress_line(r, tf)
 
             all_results.extend(results)
+
+        # Story 3.3: merge manual venue corrections (venue_overrides.csv) into the
+        # metadata store with precedence — runs in the import-orchestration step
+        # (not FMPClient), after the FMP-resolved rows are written and before the
+        # single commit, so overrides win over absent/ambiguous provider venues.
+        _apply_venue_overrides(session, settings)
 
         # Commit all profile loads and metadata upserts as a single transaction.
         session.commit()

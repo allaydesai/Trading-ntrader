@@ -5,12 +5,16 @@ or provider call — the resolved metadata is produced by the Epic-1 resolution
 service and the Story 3.1 import qualification.
 """
 
+from datetime import datetime, timezone
+from pathlib import Path
+
 import click
 from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 from sqlalchemy.exc import SQLAlchemyError
 
+from src.config import get_settings
 from src.db.exceptions import DatabaseConnectionError
 from src.db.models.instrument_metadata import InstrumentMetadata
 from src.db.repositories.instrument_metadata_repository_sync import (
@@ -19,6 +23,12 @@ from src.db.repositories.instrument_metadata_repository_sync import (
 from src.db.session_sync import get_sync_session
 from src.models.instrument_metadata import ResolutionStatus
 from src.services.metadata.unresolved_report import unresolved_reason
+from src.services.metadata.venue_overrides import (
+    VenueOverrideError,
+    VenueOverrideMergeResult,
+    load_venue_overrides,
+    merge_venue_overrides,
+)
 
 console = Console()
 
@@ -65,3 +75,47 @@ def _render_unresolved(rows: list[InstrumentMetadata]) -> None:
     console.print(table)
     console.print(f"{len(rows)} ticker(s) with unresolved venue")
     console.print("Add the correct venue for each in venue_overrides.csv (Story 3.3) to resolve.")
+
+
+@metadata.command("apply-overrides")
+def apply_overrides() -> None:
+    """Merge venue_overrides.csv into the metadata store, with precedence (Story 3.3).
+
+    The metadata-refresh path: fill the CSV from the ``metadata unresolved``
+    worklist, then apply the corrections without re-importing bars. Each override
+    flips a matching row to RESOLVED; re-running is idempotent.
+    """
+    path = Path(get_settings().firstrate.firstrate_venue_overrides_path)
+    try:
+        overrides = load_venue_overrides(path)
+    except VenueOverrideError as exc:
+        console.print(f"[yellow]Venue overrides not applied — {escape(str(exc))}[/yellow]")
+        return
+    if not overrides:
+        console.print(
+            f"[green]✓ No venue overrides to apply ({escape(str(path))} is empty/absent).[/green]"
+        )
+        return
+    try:
+        with get_sync_session() as session:
+            result = merge_venue_overrides(
+                overrides,
+                SyncInstrumentMetadataRepository(session),
+                datetime.now(timezone.utc),
+            )
+            session.commit()
+    except (RuntimeError, DatabaseConnectionError, SQLAlchemyError) as exc:
+        console.print(f"[yellow]Metadata DB not available — {escape(str(exc))}[/yellow]")
+        return
+    _render_override_summary(result)
+
+
+def _render_override_summary(result: VenueOverrideMergeResult) -> None:
+    """Print a one-line venue-override merge summary (+ unmatched tickers, if any)."""
+    console.print(
+        f"Venue overrides: {result.applied} applied, "
+        f"{result.unchanged} unchanged, {len(result.unmatched)} unmatched"
+    )
+    if result.unmatched:
+        joined = ", ".join(escape(t) for t in result.unmatched)
+        console.print(f"[yellow]Unmatched (no metadata row): {joined}[/yellow]")

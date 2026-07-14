@@ -292,3 +292,68 @@ class TestSyncInstrumentMetadataRepository:
 
         with pytest.raises(DatabaseConnectionError):
             repo.list_by_status(ResolutionStatus.VENUE_UNRESOLVED)
+
+    def test_apply_venue_override_flips_unresolved_to_resolved(self, sync_session):
+        """An override sets venue + RESOLVED on an existing VENUE_UNRESOLVED row (Story 3.3)."""
+        from datetime import datetime, timezone
+
+        repo = SyncInstrumentMetadataRepository(sync_session)
+        repo.upsert(
+            InstrumentMetadata(
+                **_make_metadata(
+                    ticker="SPY", venue=None, resolution_status=ResolutionStatus.VENUE_UNRESOLVED
+                )
+            )
+        )
+        sync_session.commit()
+
+        ts = datetime(2026, 7, 13, tzinfo=timezone.utc)
+        outcome = repo.apply_venue_override("SPY", "ARCA", ts)
+        sync_session.commit()
+
+        assert outcome == "applied"
+        row = repo.get_by_ticker("SPY")
+        assert row is not None
+        assert row.venue == "ARCA"
+        assert row.resolution_status == ResolutionStatus.RESOLVED
+        # SQLite's TIMESTAMP column round-trips tz-naive; compare the wall value.
+        assert row.resolved_at == ts.replace(tzinfo=None)
+
+    def test_apply_venue_override_is_idempotent(self, sync_session):
+        """Re-applying the same override is a no-op — no resolved_at churn (AC3)."""
+        from datetime import datetime, timezone
+
+        repo = SyncInstrumentMetadataRepository(sync_session)
+        repo.upsert(
+            InstrumentMetadata(
+                **_make_metadata(
+                    ticker="SPY", venue=None, resolution_status=ResolutionStatus.VENUE_UNRESOLVED
+                )
+            )
+        )
+        sync_session.commit()
+
+        ts1 = datetime(2026, 7, 13, tzinfo=timezone.utc)
+        repo.apply_venue_override("SPY", "ARCA", ts1)
+        sync_session.commit()
+
+        ts2 = datetime(2026, 7, 14, tzinfo=timezone.utc)
+        outcome = repo.apply_venue_override("SPY", "ARCA", ts2)
+        sync_session.commit()
+
+        assert outcome == "unchanged"
+        row = repo.get_by_ticker("SPY")
+        assert row is not None
+        assert row.resolved_at == ts1.replace(tzinfo=None)  # not overwritten by 2nd call
+
+    def test_apply_venue_override_unmatched_ticker(self, sync_session):
+        """An override for an absent ticker returns 'unmatched' and creates no row."""
+        from datetime import datetime, timezone
+
+        repo = SyncInstrumentMetadataRepository(sync_session)
+        ts = datetime(2026, 7, 13, tzinfo=timezone.utc)
+
+        outcome = repo.apply_venue_override("NOPE", "ARCA", ts)
+
+        assert outcome == "unmatched"
+        assert repo.get_by_ticker("NOPE") is None
