@@ -8,6 +8,7 @@ from sqlalchemy.exc import OperationalError
 
 from src.cli.commands.metadata import _render_unresolved, metadata
 from src.db.exceptions import DatabaseConnectionError
+from src.db.models.catalog_instrument import CatalogInstrument
 from src.db.models.instrument_metadata import InstrumentMetadata
 from src.models.instrument_metadata import NA_SENTINEL, AssetType, ResolutionStatus
 
@@ -347,6 +348,7 @@ class TestRegistration:
         assert "unresolved" in cli.commands["metadata"].commands
         assert "apply-overrides" in cli.commands["metadata"].commands
         assert "coverage" in cli.commands["metadata"].commands
+        assert "backtestable" in cli.commands["metadata"].commands
 
 
 @pytest.mark.unit
@@ -372,3 +374,154 @@ class TestRenderUnresolved:
         _render_unresolved([])
         out = capsys.readouterr().out
         assert "All venues resolved" in out
+
+
+def _catalog_instrument(ticker: str, minute_bars: int) -> CatalogInstrument:
+    return CatalogInstrument(
+        ticker=ticker,
+        asset_class="ETF",
+        catalog_name="firstrate-etf",
+        nautilus_id=f"{ticker}.NYSE",
+        exchange="NYSE",
+        bar_count_minute=minute_bars,
+    )
+
+
+@pytest.mark.unit
+class TestMetadataBacktestable:
+    """`metadata backtestable` report (Story 3.5)."""
+
+    def _patch_both_repos(self):
+        session_patch, meta_patch = _patch_session_and_repo()
+        cat_patch = patch("src.cli.commands.metadata.SyncCatalogInstrumentRepository")
+        return session_patch, meta_patch, cat_patch
+
+    def test_flagged_lists_tickers_and_retained_bars(self, runner):
+        session_patch, meta_patch, cat_patch = self._patch_both_repos()
+        with session_patch, meta_patch as mock_meta, cat_patch as mock_cat:
+            mock_meta.return_value.count_by_status.return_value = {
+                ResolutionStatus.RESOLVED: 3,
+                ResolutionStatus.VENUE_UNRESOLVED: 1,
+            }
+            mock_meta.return_value.list_by_status.return_value = [_degraded_row("ZZZ")]
+            mock_cat.return_value.get_by_ticker.return_value = _catalog_instrument("ZZZ", 100)
+            result = runner.invoke(metadata, ["backtestable"])
+
+        assert result.exit_code == 0
+        assert "ZZZ" in result.output
+        assert "100" in result.output
+        assert "Non-backtestable (venue unresolved): 1" in result.output
+        assert "bars retained" in result.output
+        assert "venue_overrides.csv" in result.output
+
+    def test_all_resolved_shows_all_clear(self, runner):
+        session_patch, meta_patch, cat_patch = self._patch_both_repos()
+        with session_patch, meta_patch as mock_meta, cat_patch:
+            mock_meta.return_value.count_by_status.return_value = {ResolutionStatus.RESOLVED: 5}
+            mock_meta.return_value.list_by_status.return_value = []
+            result = runner.invoke(metadata, ["backtestable"])
+
+        assert result.exit_code == 0
+        assert "0 non-backtestable" in result.output
+        assert "backtestable universe = 5" in result.output
+
+    def test_never_attempted_surfaced_not_hidden_by_all_clear(self, runner):
+        """UNRESOLVED (never-attempted) rows are reported, not masked by a green banner."""
+        session_patch, meta_patch, cat_patch = self._patch_both_repos()
+        with session_patch, meta_patch as mock_meta, cat_patch:
+            mock_meta.return_value.count_by_status.return_value = {
+                ResolutionStatus.RESOLVED: 2,
+                ResolutionStatus.UNRESOLVED: 3,
+            }
+            mock_meta.return_value.list_by_status.return_value = []
+            result = runner.invoke(metadata, ["backtestable"])
+
+        assert result.exit_code == 0
+        assert "All venue-resolved" not in result.output  # not over-claimed
+        assert "Not yet attempted (UNRESOLVED): 3" in result.output
+
+    def test_empty_db_reports_no_rows(self, runner):
+        session_patch, meta_patch, cat_patch = self._patch_both_repos()
+        with session_patch, meta_patch as mock_meta, cat_patch:
+            mock_meta.return_value.count_by_status.return_value = {}
+            mock_meta.return_value.list_by_status.return_value = []
+            result = runner.invoke(metadata, ["backtestable"])
+
+        assert result.exit_code == 0
+        assert "No metadata rows yet" in result.output
+
+    def test_flagged_ticker_without_catalog_row_reports_zero_bars(self, runner):
+        session_patch, meta_patch, cat_patch = self._patch_both_repos()
+        with session_patch, meta_patch as mock_meta, cat_patch as mock_cat:
+            mock_meta.return_value.count_by_status.return_value = {
+                ResolutionStatus.VENUE_UNRESOLVED: 1
+            }
+            mock_meta.return_value.list_by_status.return_value = [_degraded_row("ZZZ")]
+            mock_cat.return_value.get_by_ticker.return_value = None
+            result = runner.invoke(metadata, ["backtestable"])
+
+        assert result.exit_code == 0
+        assert "ZZZ" in result.output
+        assert "Non-backtestable (venue unresolved): 1" in result.output
+
+    def test_catalog_option_overrides_default(self, runner):
+        session_patch, meta_patch, cat_patch = self._patch_both_repos()
+        with session_patch, meta_patch as mock_meta, cat_patch as mock_cat:
+            mock_meta.return_value.count_by_status.return_value = {
+                ResolutionStatus.VENUE_UNRESOLVED: 1
+            }
+            mock_meta.return_value.list_by_status.return_value = [_degraded_row("ZZZ")]
+            mock_cat.return_value.get_by_ticker.return_value = _catalog_instrument("ZZZ", 10)
+            result = runner.invoke(metadata, ["backtestable", "--catalog", "custom-cat"])
+
+        assert result.exit_code == 0
+        mock_cat.return_value.get_by_ticker.assert_called_once_with("custom-cat", "ZZZ")
+
+    def test_db_unconfigured_degrades_gracefully(self, runner):
+        ctx = MagicMock()
+        ctx.__enter__.side_effect = RuntimeError("Database not configured")
+        with patch("src.cli.commands.metadata.get_sync_session", return_value=ctx):
+            result = runner.invoke(metadata, ["backtestable"])
+
+        assert result.exit_code == 0
+        assert result.exception is None
+        assert "Metadata DB not available" in result.output
+
+
+@pytest.mark.unit
+class TestRenderBacktestable:
+    """Direct render-helper tests (no CliRunner)."""
+
+    def test_render_flagged_shows_bars_and_summary(self, capsys):
+        from src.cli.commands.metadata import _render_backtestable
+        from src.services.metadata.backtestable import NonBacktestableTicker
+
+        _render_backtestable("firstrate-etf", 3, 0, [NonBacktestableTicker("ZZZ", 100)])
+        out = capsys.readouterr().out
+        assert "ZZZ" in out
+        assert "100" in out
+        assert "Non-backtestable (venue unresolved): 1" in out
+        assert "Backtestable: 3" in out
+
+    def test_render_all_clear_when_no_flagged_and_none_unattempted(self, capsys):
+        from src.cli.commands.metadata import _render_backtestable
+
+        _render_backtestable("firstrate-etf", 7, 0, [])
+        out = capsys.readouterr().out
+        assert "0 non-backtestable" in out
+        assert "7" in out
+
+    def test_render_surfaces_never_attempted(self, capsys):
+        from src.cli.commands.metadata import _render_backtestable
+
+        _render_backtestable("firstrate-etf", 2, 3, [])
+        out = capsys.readouterr().out
+        assert "All venue-resolved" not in out
+        assert "Not yet attempted (UNRESOLVED): 3" in out
+
+    def test_render_empty_reports_no_rows(self, capsys):
+        from src.cli.commands.metadata import _render_backtestable
+
+        _render_backtestable("firstrate-etf", 0, 0, [])
+        out = capsys.readouterr().out
+        assert "No metadata rows yet" in out

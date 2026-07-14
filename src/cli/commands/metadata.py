@@ -8,6 +8,7 @@ service and the Story 3.1 import qualification.
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 import click
 from rich.console import Console
@@ -18,11 +19,15 @@ from sqlalchemy.exc import SQLAlchemyError
 from src.config import get_settings
 from src.db.exceptions import DatabaseConnectionError
 from src.db.models.instrument_metadata import InstrumentMetadata
+from src.db.repositories.catalog_instrument_repository import (
+    SyncCatalogInstrumentRepository,
+)
 from src.db.repositories.instrument_metadata_repository_sync import (
     SyncInstrumentMetadataRepository,
 )
 from src.db.session_sync import get_sync_session
 from src.models.instrument_metadata import ResolutionStatus
+from src.services.metadata.backtestable import NonBacktestableTicker, total_bars
 from src.services.metadata.coverage_report import VenueCoverage
 from src.services.metadata.unresolved_report import unresolved_reason
 from src.services.metadata.venue_overrides import (
@@ -187,4 +192,93 @@ def _render_coverage(cov: VenueCoverage) -> None:
         console.print(
             f"[red]✗ INCOMPLETE — {cov.venue_unresolved} ticker(s) VENUE_UNRESOLVED "
             f"(gate FAIL)[/red]"
+        )
+
+
+@metadata.command("backtestable")
+@click.option(
+    "--catalog",
+    default=None,
+    help="Catalog to read bar-retention evidence from (default: firstrate_catalog_name).",
+)
+def backtestable(catalog: Optional[str]) -> None:
+    """Enumerate the backtestable universe and flag non-backtestable tickers (Story 3.5).
+
+    Backtestable ⟺ a RESOLVED venue. Tickers with VENUE_UNRESOLVED are excluded
+    and flagged non-backtestable — but their imported bars are retained (excluded
+    ≠ dropped). Resolving a venue (venue_overrides.csv, Story 3.3) transitions a
+    ticker back in with no re-import.
+    """
+    catalog_name = catalog or get_settings().firstrate.firstrate_catalog_name
+    try:
+        with get_sync_session() as session:
+            meta_repo = SyncInstrumentMetadataRepository(session)
+            cat_repo = SyncCatalogInstrumentRepository(session)
+            counts = meta_repo.count_by_status()
+            unresolved_rows = meta_repo.list_by_status(ResolutionStatus.VENUE_UNRESOLVED)
+            flagged = _collect_non_backtestable(unresolved_rows, cat_repo, catalog_name)
+    except (RuntimeError, DatabaseConnectionError, SQLAlchemyError) as exc:
+        console.print(f"[yellow]Metadata DB not available — {escape(str(exc))}[/yellow]")
+        return
+    _render_backtestable(
+        catalog_name,
+        counts.get(ResolutionStatus.RESOLVED, 0),
+        counts.get(ResolutionStatus.UNRESOLVED, 0),
+        flagged,
+    )
+
+
+def _collect_non_backtestable(
+    rows: list[InstrumentMetadata],
+    cat_repo: SyncCatalogInstrumentRepository,
+    catalog_name: str,
+) -> list[NonBacktestableTicker]:
+    """Pair each unresolved ticker with the bars still retained for it (0 if no row)."""
+    flagged: list[NonBacktestableTicker] = []
+    for row in rows:
+        inst = cat_repo.get_by_ticker(catalog_name, row.ticker)
+        bars = total_bars(inst) if inst is not None else 0
+        flagged.append(NonBacktestableTicker(row.ticker, bars))
+    return flagged
+
+
+def _render_backtestable(
+    catalog_name: str,
+    backtestable_count: int,
+    never_attempted: int,
+    flagged: list[NonBacktestableTicker],
+) -> None:
+    """Render the backtestable count + the flagged non-backtestable set (no exit logic)."""
+    total = backtestable_count + never_attempted + len(flagged)
+    if total == 0:
+        console.print("[yellow]No metadata rows yet — nothing to enumerate.[/yellow]")
+        return
+    if not flagged and never_attempted == 0:
+        console.print(
+            f"[green]✓ All venue-resolved — backtestable universe = {backtestable_count} "
+            f"ticker(s), 0 non-backtestable.[/green]"
+        )
+        return
+    if flagged:
+        table = Table(title="Non-backtestable tickers (venue unresolved)")
+        table.add_column("Ticker", style="cyan")
+        table.add_column(f"Bars retained ({escape(catalog_name)})", justify="right")
+        for t in flagged:
+            table.add_row(escape(t.ticker), str(t.bars_retained))
+        console.print(table)
+    console.print(
+        f"Backtestable: {backtestable_count} · Non-backtestable (venue unresolved): "
+        f"{len(flagged)} (bars retained, not dropped)"
+    )
+    if never_attempted > 0:
+        # UNRESOLVED = resolution never ran; also non-backtestable, but not the
+        # venue-unresolved flagged set (no override fixes a not-yet-attempted row).
+        console.print(
+            f"[yellow]Not yet attempted (UNRESOLVED): {never_attempted} — resolution has "
+            f"not run on these; they are not backtestable either.[/yellow]"
+        )
+    if flagged:
+        console.print(
+            "Bars are kept on disk — resolve each venue in venue_overrides.csv (Story 3.3) "
+            "to make it backtestable."
         )

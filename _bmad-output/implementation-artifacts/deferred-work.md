@@ -9,11 +9,22 @@ Real, non-blocking findings deferred from code reviews. Each entry notes its sou
   provisional/CSV venue on a prior run (no-resolver, fault-fallback, or stocks path) later resolves
   `VENUE_UNRESOLVED`, `sync_qualification` writes `nautilus_id = None` / `exchange = None` while the bars remain on
   disk — leaving a `catalog_instruments` row with `bar_count > 0` but a NULL identity, so the bars are unreachable
-  by the backtest loader / explorer. Nulling the provisional id is *required* by Story 3.1 AC3 for the fresh case
-  (no bars); the reconciliation for already-imported unresolved tickers (keep the bars, flag non-backtestable,
-  don't orphan) is the explicit deliverable of **Story 3.5 — Exclude & Flag Non-Backtestable Tickers**. Story 3.5
-  must not null an identity whose partition still holds bars. (Cache-first resolution means a once-`RESOLVED`
-  ticker stays resolved, so this only bites the narrow mixed-path cross-run sequence.)
+  by the backtest loader / explorer. (Cache-first resolution means a once-`RESOLVED` ticker stays resolved, so
+  this only bites the narrow mixed-path cross-run sequence.)
+
+  **UPDATE (Story 3.5, 2026-07-13): the naive "keep the identity" fix was tried and REJECTED.** Keeping the
+  provisional `nautilus_id` so bars stay reachable was implemented in Story 3.5, then reverted during its code
+  review: `backtest_loader.load_from_catalog` (and `api/rest/explorer.py`, `api/stats_service.py`,
+  `api/chart_bars.py`) gate backtestability **solely on `catalog_instruments.nautilus_id`** — they never consult
+  `resolution_status`. So keeping a provisional id lets an unresolved-venue ticker *run a backtest under a guessed
+  venue*, directly violating Story 3.5 AC1 ("never silently enter a backtest") and ADR-6 (no guessed venues) —
+  strictly worse than the orphan it fixes. Nulling the id is the correct exclusion mechanism the real backtest
+  path honors, and the Parquet is never deleted (Story 3.5 AC2 is satisfied: bars physically present, just
+  unreachable-by-id until the venue resolves). **The true fix — keep bars reachable AND excluded — needs a
+  consumer-honored non-backtestable signal (e.g. a `catalog_instruments.backtestable` flag or a
+  `resolution_status` join threaded through `backtest_loader`/explorer/stats/chart), which is a backtest-
+  integration change and belongs in Epic 5, not Story 3.5.** Also open: re-resolving to a *different* venue than
+  the bars were written under orphans the partition regardless (bar_type path mismatch) — same Epic-5 scope.
 
 ## Deferred from: code review of story 2-7-import-summary-and-progress-reporting (2026-06-29)
 

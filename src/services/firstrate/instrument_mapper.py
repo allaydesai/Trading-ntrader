@@ -148,7 +148,11 @@ class InstrumentMapper:
         ``catalog_instruments`` identity row and recomputes ``nautilus_id``. ``instrument_metadata``
         stays the source of truth for resolved metadata; ``catalog_instruments`` for bar
         counts/date ranges. A ``VENUE_UNRESOLVED`` ticker (``venue is None``) leaves
-        ``nautilus_id`` ``None`` — unqualified, not fabricated (AC3; excludes/flag are Story 3.5).
+        ``nautilus_id`` ``None`` — unqualified, not fabricated (AC3). Nulling the identity is
+        the exclusion mechanism the backtest loader honors (it gates on ``nautilus_id``), so an
+        unresolved-venue ticker is kept out of every backtest; the on-disk Parquet is untouched
+        (Story 3.5 AC2 — bars present, not dropped), just unreachable-by-id until the venue
+        resolves and this re-runs with a real venue. See ``backtest_loader.load_from_catalog``.
 
         Args:
             ticker: Trading symbol.

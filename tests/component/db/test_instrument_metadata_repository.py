@@ -410,3 +410,42 @@ class TestSyncInstrumentMetadataRepository:
 
         assert outcome == "unmatched"
         assert repo.get_by_ticker("NOPE") is None
+
+    def test_venue_override_transitions_ticker_to_backtestable(self, sync_session):
+        """Story 3.5 AC3: an override flips a non-backtestable ticker into the universe."""
+        from datetime import datetime, timezone
+
+        from src.services.metadata.backtestable import is_backtestable
+
+        repo = SyncInstrumentMetadataRepository(sync_session)
+        repo.upsert(
+            InstrumentMetadata(
+                **_make_metadata(
+                    ticker="AAA", venue="XNAS", resolution_status=ResolutionStatus.RESOLVED
+                )
+            )
+        )
+        repo.upsert(
+            InstrumentMetadata(
+                **_make_metadata(
+                    ticker="ZZZ", venue=None, resolution_status=ResolutionStatus.VENUE_UNRESOLVED
+                )
+            )
+        )
+        sync_session.commit()
+
+        # Before: only AAA is backtestable; ZZZ is excluded and flagged.
+        backtestable = repo.list_by_status(ResolutionStatus.RESOLVED)
+        assert [r.ticker for r in backtestable] == ["AAA"]
+        zzz = repo.get_by_ticker("ZZZ")
+        assert is_backtestable(zzz.resolution_status) is False
+
+        # Transition: resolve the venue via the Story 3.3 override (no bar/import op).
+        ts = datetime(2026, 7, 13, tzinfo=timezone.utc)
+        assert repo.apply_venue_override("ZZZ", "ARCA", ts) == "applied"
+        sync_session.commit()
+
+        # After: ZZZ is now in the backtestable universe, derived from the flipped status.
+        backtestable = repo.list_by_status(ResolutionStatus.RESOLVED)
+        assert sorted(r.ticker for r in backtestable) == ["AAA", "ZZZ"]
+        assert is_backtestable(repo.get_by_ticker("ZZZ").resolution_status) is True
