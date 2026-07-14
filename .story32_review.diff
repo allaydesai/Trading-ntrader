@@ -1,0 +1,402 @@
+diff --git a/src/cli/commands/metadata.py b/src/cli/commands/metadata.py
+new file mode 100644
+index 0000000..3dabc03
+--- /dev/null
++++ b/src/cli/commands/metadata.py
+@@ -0,0 +1,61 @@
++"""CLI commands for instrument metadata inspection (Story 3.2+).
++
++Read-only reports over the local ``instrument_metadata`` cache table. No network
++or provider call — the resolved metadata is produced by the Epic-1 resolution
++service and the Story 3.1 import qualification.
++"""
++
++import click
++from rich.console import Console
++from rich.table import Table
++
++from src.db.exceptions import DatabaseConnectionError
++from src.db.models.instrument_metadata import InstrumentMetadata
++from src.db.repositories.instrument_metadata_repository_sync import (
++    SyncInstrumentMetadataRepository,
++)
++from src.db.session_sync import get_sync_session
++from src.models.instrument_metadata import ResolutionStatus
++from src.services.metadata.unresolved_report import unresolved_reason
++
++console = Console()
++
++
++@click.group()
++def metadata() -> None:
++    """Instrument metadata inspection commands."""
++
++
++@metadata.command("unresolved")
++def unresolved() -> None:
++    """List every ticker whose venue is unresolved (VENUE_UNRESOLVED).
++
++    A worklist for driving the ETF universe to 100% venue coverage — each row
++    carries a derived reason and is the basis for filling in venue_overrides.csv
++    (Story 3.3).
++    """
++    try:
++        with get_sync_session() as session:
++            rows = SyncInstrumentMetadataRepository(session).list_by_status(
++                ResolutionStatus.VENUE_UNRESOLVED
++            )
++    except (RuntimeError, DatabaseConnectionError) as exc:
++        console.print(f"[yellow]Metadata DB not available — {exc}[/yellow]")
++        return
++    _render_unresolved(rows)
++
++
++def _render_unresolved(rows: list[InstrumentMetadata]) -> None:
++    """Render the unresolved-venue rows as a Rich table (or an all-clear line)."""
++    if not rows:
++        console.print("[green]✓ All venues resolved — no unresolved-venue tickers.[/green]")
++        return
++    table = Table(title="Unresolved-venue tickers")
++    table.add_column("Ticker", style="cyan")
++    table.add_column("Provider")
++    table.add_column("Reason")
++    for row in rows:
++        table.add_row(row.ticker, row.metadata_provider, unresolved_reason(row))
++    console.print(table)
++    console.print(f"{len(rows)} ticker(s) with unresolved venue")
++    console.print("Add the correct venue for each in venue_overrides.csv (Story 3.3) to resolve.")
+diff --git a/src/cli/main.py b/src/cli/main.py
+index f296f1c..eca9876 100644
+--- a/src/cli/main.py
++++ b/src/cli/main.py
+@@ -7,6 +7,7 @@ from src.cli.commands.backtest import backtest  # noqa: E402
+ from src.cli.commands.data import data  # noqa: E402
+ from src.cli.commands.history import list_backtest_history  # noqa: E402
+ from src.cli.commands.import_data import import_firstrate  # noqa: E402
++from src.cli.commands.metadata import metadata  # noqa: E402
+ from src.cli.commands.report import report  # noqa: E402
+ from src.cli.commands.run import run_simple  # noqa: E402
+ from src.cli.commands.strategy import strategy  # noqa: E402
+@@ -40,6 +41,7 @@ cli.add_command(strategy)
+ cli.add_command(report)
+ cli.add_command(list_backtest_history)
+ cli.add_command(import_firstrate, "import")
++cli.add_command(metadata)
+ 
+ 
+ if __name__ == "__main__":
+diff --git a/src/db/repositories/instrument_metadata_repository_sync.py b/src/db/repositories/instrument_metadata_repository_sync.py
+index c0ec75a..60f55ce 100644
+--- a/src/db/repositories/instrument_metadata_repository_sync.py
++++ b/src/db/repositories/instrument_metadata_repository_sync.py
+@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
+ 
+ from src.db.exceptions import DatabaseConnectionError, DuplicateRecordError
+ from src.db.models.instrument_metadata import InstrumentMetadata
++from src.models.instrument_metadata import ResolutionStatus
+ 
+ 
+ class SyncInstrumentMetadataRepository:
+@@ -81,3 +82,22 @@ class SyncInstrumentMetadataRepository:
+         stmt = select(InstrumentMetadata).where(InstrumentMetadata.ticker == ticker)
+         result = self.session.execute(stmt)
+         return result.scalar_one_or_none()
++
++    def list_by_status(self, status: ResolutionStatus) -> list[InstrumentMetadata]:
++        """List all metadata rows with the given resolution status, ordered by ticker.
++
++        Served by the ``ix_instrument_metadata_resolution_status`` index. Used by
++        the Story 3.2 unresolved-venue report (``VENUE_UNRESOLVED``).
++
++        Args:
++            status: The resolution status to filter on.
++
++        Returns:
++            Metadata rows matching ``status``, ordered by ticker ascending.
++        """
++        stmt = (
++            select(InstrumentMetadata)
++            .where(InstrumentMetadata.resolution_status == status)
++            .order_by(InstrumentMetadata.ticker)
++        )
++        return list(self.session.execute(stmt).scalars().all())
+diff --git a/src/services/metadata/unresolved_report.py b/src/services/metadata/unresolved_report.py
+new file mode 100644
+index 0000000..0d014f1
+--- /dev/null
++++ b/src/services/metadata/unresolved_report.py
+@@ -0,0 +1,32 @@
++"""Derivation for the Story 3.2 unresolved-venue report.
++
++Pure, side-effect-free classification of *why* a ``VENUE_UNRESOLVED`` row lacks
++a venue, derived from the persisted ``instrument_metadata`` row alone. The raw
++FMP ``exchange`` label is never stored (``normalize_venue`` collapses blank,
++ambiguous, and unmapped labels all to ``venue=None``), so the reason is a
++deliberately best-effort two-way classification — see the module docstring in
++``providers/fmp_provider.py`` for the two paths this discriminates.
++"""
++
++from src.db.models.instrument_metadata import InstrumentMetadata
++
++
++def unresolved_reason(md: InstrumentMetadata) -> str:
++    """Return a human-readable reason a ticker's venue is unresolved.
++
++    Discriminates the FMP provider's two ``VENUE_UNRESOLVED`` paths using
++    ``asset_type``: ``_degraded`` (unknown ticker / no profile) leaves it
++    ``None``, while ``_to_domain`` (profile found, exchange label blank or
++    ambiguous) always assigns a concrete ``AssetType``.
++
++    Args:
++        md: A persisted ``VENUE_UNRESOLVED`` metadata row.
++
++    Returns:
++        A best-effort reason string, provider-agnostic via
++        ``md.metadata_provider``.
++    """
++    provider = md.metadata_provider
++    if md.asset_type is None:
++        return f"unknown to {provider} — no profile returned"
++    return f"{provider} venue label blank, ambiguous (e.g. AMEX), or unmapped"
+diff --git a/tests/component/db/test_instrument_metadata_repository.py b/tests/component/db/test_instrument_metadata_repository.py
+index 2fed1c3..8aea592 100644
+--- a/tests/component/db/test_instrument_metadata_repository.py
++++ b/tests/component/db/test_instrument_metadata_repository.py
+@@ -232,3 +232,48 @@ class TestSyncInstrumentMetadataRepository:
+         result = repo.get_by_ticker("SPY")
+         assert result is not None
+         assert result.resolution_status == ResolutionStatus.UNRESOLVED
++
++    def test_list_by_status_filters_and_orders(self, sync_session):
++        """list_by_status returns only matching rows, ordered by ticker (Story 3.2)."""
++        repo = SyncInstrumentMetadataRepository(sync_session)
++        repo.upsert(
++            InstrumentMetadata(
++                **_make_metadata(ticker="AAA", resolution_status=ResolutionStatus.RESOLVED)
++            )
++        )
++        repo.upsert(
++            InstrumentMetadata(
++                **_make_metadata(
++                    ticker="CCC", venue=None, resolution_status=ResolutionStatus.VENUE_UNRESOLVED
++                )
++            )
++        )
++        repo.upsert(
++            InstrumentMetadata(
++                **_make_metadata(
++                    ticker="BBB", venue=None, resolution_status=ResolutionStatus.VENUE_UNRESOLVED
++                )
++            )
++        )
++        repo.upsert(
++            InstrumentMetadata(
++                **_make_metadata(ticker="DDD", resolution_status=ResolutionStatus.UNRESOLVED)
++            )
++        )
++        sync_session.commit()
++
++        rows = repo.list_by_status(ResolutionStatus.VENUE_UNRESOLVED)
++
++        assert [r.ticker for r in rows] == ["BBB", "CCC"]
++
++    def test_list_by_status_empty_returns_empty_list(self, sync_session):
++        """list_by_status returns [] when no rows match the status."""
++        repo = SyncInstrumentMetadataRepository(sync_session)
++        repo.upsert(
++            InstrumentMetadata(
++                **_make_metadata(ticker="AAA", resolution_status=ResolutionStatus.RESOLVED)
++            )
++        )
++        sync_session.commit()
++
++        assert repo.list_by_status(ResolutionStatus.VENUE_UNRESOLVED) == []
+diff --git a/tests/unit/cli/commands/test_metadata.py b/tests/unit/cli/commands/test_metadata.py
+new file mode 100644
+index 0000000..2f2d7c2
+--- /dev/null
++++ b/tests/unit/cli/commands/test_metadata.py
+@@ -0,0 +1,117 @@
++"""Unit tests for the `metadata` CLI group (Story 3.2 unresolved-venue report)."""
++
++from unittest.mock import MagicMock, patch
++
++import pytest
++from click.testing import CliRunner
++
++from src.cli.commands.metadata import _render_unresolved, metadata
++from src.db.models.instrument_metadata import InstrumentMetadata
++from src.models.instrument_metadata import NA_SENTINEL, AssetType, ResolutionStatus
++
++
++@pytest.fixture
++def runner():
++    return CliRunner()
++
++
++def _degraded_row(ticker: str) -> InstrumentMetadata:
++    return InstrumentMetadata(
++        ticker=ticker,
++        metadata_provider="FMP",
++        venue=None,
++        asset_type=None,
++        company_name=NA_SENTINEL,
++        resolution_status=ResolutionStatus.VENUE_UNRESOLVED,
++    )
++
++
++def _found_row(ticker: str) -> InstrumentMetadata:
++    return InstrumentMetadata(
++        ticker=ticker,
++        metadata_provider="FMP",
++        venue=None,
++        asset_type=AssetType.ETF.value,
++        company_name="Example ETF",
++        resolution_status=ResolutionStatus.VENUE_UNRESOLVED,
++    )
++
++
++def _patch_session_and_repo():
++    """Return (session, repo) patchers backed by a fake sync session."""
++    ctx = MagicMock()
++    ctx.__enter__.return_value = MagicMock()
++    ctx.__exit__.return_value = False
++    session_patch = patch("src.cli.commands.metadata.get_sync_session", return_value=ctx)
++    repo_patch = patch("src.cli.commands.metadata.SyncInstrumentMetadataRepository")
++    return session_patch, repo_patch
++
++
++@pytest.mark.unit
++class TestMetadataUnresolved:
++    """`metadata unresolved` CLI subcommand."""
++
++    def test_populated_lists_tickers_reasons_and_hint(self, runner):
++        rows = [_degraded_row("ZZZ"), _found_row("SPY")]
++        session_patch, repo_patch = _patch_session_and_repo()
++        with session_patch, repo_patch as mock_repo:
++            mock_repo.return_value.list_by_status.return_value = rows
++            result = runner.invoke(metadata, ["unresolved"])
++
++        assert result.exit_code == 0
++        assert "ZZZ" in result.output
++        assert "SPY" in result.output
++        assert "unknown to FMP" in result.output
++        assert "ambiguous" in result.output
++        assert "2 ticker" in result.output
++        assert "venue_overrides.csv" in result.output
++
++    def test_empty_prints_all_resolved_message(self, runner):
++        session_patch, repo_patch = _patch_session_and_repo()
++        with session_patch, repo_patch as mock_repo:
++            mock_repo.return_value.list_by_status.return_value = []
++            result = runner.invoke(metadata, ["unresolved"])
++
++        assert result.exit_code == 0
++        assert "All venues resolved" in result.output
++        assert "Ticker" not in result.output  # no table header rendered
++
++    def test_db_unconfigured_degrades_gracefully(self, runner):
++        ctx = MagicMock()
++        ctx.__enter__.side_effect = RuntimeError(
++            "Database not configured. Check DATABASE_URL in .env file"
++        )
++        with patch("src.cli.commands.metadata.get_sync_session", return_value=ctx):
++            result = runner.invoke(metadata, ["unresolved"])
++
++        assert result.exit_code == 0
++        assert result.exception is None
++        assert "not" in result.output.lower()  # a clear warning, no traceback
++
++
++@pytest.mark.unit
++class TestRegistration:
++    """The `metadata` group is wired into the top-level CLI."""
++
++    def test_metadata_group_registered_with_unresolved(self):
++        from src.cli.main import cli
++
++        assert "metadata" in cli.commands
++        assert "unresolved" in cli.commands["metadata"].commands
++
++
++@pytest.mark.unit
++class TestRenderUnresolved:
++    """Direct render-helper tests (no CliRunner)."""
++
++    def test_render_orders_rows_and_shows_reasons(self, capsys):
++        _render_unresolved([_found_row("SPY"), _degraded_row("ZZZ")])
++        out = capsys.readouterr().out
++        assert "SPY" in out and "ZZZ" in out
++        assert "unknown to FMP" in out
++        assert "unmapped" in out
++
++    def test_render_empty(self, capsys):
++        _render_unresolved([])
++        out = capsys.readouterr().out
++        assert "All venues resolved" in out
+diff --git a/tests/unit/services/metadata/test_unresolved_report.py b/tests/unit/services/metadata/test_unresolved_report.py
+new file mode 100644
+index 0000000..e0b2532
+--- /dev/null
++++ b/tests/unit/services/metadata/test_unresolved_report.py
+@@ -0,0 +1,60 @@
++"""Unit tests for the Story 3.2 unresolved-venue reason derivation."""
++
++import pytest
++
++from src.db.models.instrument_metadata import InstrumentMetadata
++from src.models.instrument_metadata import NA_SENTINEL, AssetType, ResolutionStatus
++from src.services.metadata.unresolved_report import unresolved_reason
++
++
++def _degraded_row(ticker: str = "ZZZ", provider: str = "FMP") -> InstrumentMetadata:
++    """An ORM row shaped like the FMP provider's `_degraded` output (unknown ticker)."""
++    return InstrumentMetadata(
++        ticker=ticker,
++        metadata_provider=provider,
++        venue=None,
++        currency=NA_SENTINEL,
++        asset_type=None,
++        company_name=NA_SENTINEL,
++        sector=NA_SENTINEL,
++        industry=NA_SENTINEL,
++        country=NA_SENTINEL,
++        resolution_status=ResolutionStatus.VENUE_UNRESOLVED,
++    )
++
++
++def _found_unmapped_row(ticker: str = "SPY", provider: str = "FMP") -> InstrumentMetadata:
++    """An ORM row shaped like `_to_domain` with a blank/ambiguous exchange label."""
++    return InstrumentMetadata(
++        ticker=ticker,
++        metadata_provider=provider,
++        venue=None,
++        currency="USD",
++        asset_type=AssetType.ETF.value,
++        company_name="SPDR S&P 500 ETF Trust",
++        sector=NA_SENTINEL,
++        industry=NA_SENTINEL,
++        country="US",
++        resolution_status=ResolutionStatus.VENUE_UNRESOLVED,
++    )
++
++
++@pytest.mark.unit
++class TestUnresolvedReason:
++    """Derive a human-readable reason for a VENUE_UNRESOLVED row."""
++
++    def test_degraded_row_is_unknown_to_provider(self):
++        reason = unresolved_reason(_degraded_row())
++        assert "unknown to FMP" in reason
++        assert "no profile" in reason.lower()
++
++    def test_found_but_unmapped_row_is_label_unusable(self):
++        reason = unresolved_reason(_found_unmapped_row())
++        assert "unknown to" not in reason.lower()
++        assert "ambiguous" in reason.lower()
++        assert "unmapped" in reason.lower()
++
++    def test_reason_is_provider_agnostic(self):
++        reason = unresolved_reason(_degraded_row(provider="OTHER"))
++        assert "OTHER" in reason
++        assert "FMP" not in reason

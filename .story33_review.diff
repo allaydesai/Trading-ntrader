@@ -1,0 +1,699 @@
+diff --git a/src/cli/commands/import_data.py b/src/cli/commands/import_data.py
+index 4fbf124..b37f7ec 100644
+--- a/src/cli/commands/import_data.py
++++ b/src/cli/commands/import_data.py
+@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
+ from src.api.models.explorer import ExplorerTimeframe
+ 
+ if TYPE_CHECKING:
+-    from src.config import FMPSettings
++    from src.config import FMPSettings, Settings
+     from src.services.metadata.instrument_metadata_service import (
+         InstrumentMetadataService,
+     )
+@@ -155,6 +155,49 @@ def _build_metadata_resolver(
+     return InstrumentMetadataService(provider=provider, repository=repository)
+ 
+ 
++def _apply_venue_overrides(session: Session, settings: "Settings") -> None:
++    """Merge venue_overrides.csv into the metadata store during import (Story 3.3).
++
++    Thin orchestration helper: load the CSV (path via config), and if it carries
++    any corrections, merge them with precedence into ``instrument_metadata`` on
++    the open session (committed by the caller). A header-only/absent file is a
++    silent no-op; a malformed header degrades to a single warning without
++    aborting the in-flight import (bars already imported are preserved).
++
++    Args:
++        session: Open sync DB session (shares the import transaction).
++        settings: Application settings (provides the override path).
++    """
++    from datetime import datetime, timezone
++
++    from src.db.repositories.instrument_metadata_repository_sync import (
++        SyncInstrumentMetadataRepository,
++    )
++    from src.services.metadata.venue_overrides import (
++        VenueOverrideError,
++        load_venue_overrides,
++        merge_venue_overrides,
++    )
++
++    path = Path(settings.firstrate.firstrate_venue_overrides_path)
++    try:
++        overrides = load_venue_overrides(path)
++    except VenueOverrideError as exc:
++        console.print(f"[yellow]Venue overrides not applied — {exc}[/yellow]")
++        return
++    if not overrides:
++        return
++    result = merge_venue_overrides(
++        overrides,
++        SyncInstrumentMetadataRepository(session),
++        datetime.now(timezone.utc),
++    )
++    console.print(
++        f"Venue overrides: {result.applied} applied, "
++        f"{result.unchanged} unchanged, {len(result.unmatched)} unmatched"
++    )
++
++
+ def _find_profiles_csv(source_path: Path) -> Path | None:
+     """Locate the FirstRate company_profiles.csv for a given import source.
+ 
+@@ -357,6 +400,12 @@ def _run_import(
+ 
+             all_results.extend(results)
+ 
++        # Story 3.3: merge manual venue corrections (venue_overrides.csv) into the
++        # metadata store with precedence — runs in the import-orchestration step
++        # (not FMPClient), after the FMP-resolved rows are written and before the
++        # single commit, so overrides win over absent/ambiguous provider venues.
++        _apply_venue_overrides(session, settings)
++
+         # Commit all profile loads and metadata upserts as a single transaction.
+         session.commit()
+ 
+diff --git a/src/cli/commands/metadata.py b/src/cli/commands/metadata.py
+index 385e822..9926174 100644
+--- a/src/cli/commands/metadata.py
++++ b/src/cli/commands/metadata.py
+@@ -5,12 +5,16 @@ or provider call — the resolved metadata is produced by the Epic-1 resolution
+ service and the Story 3.1 import qualification.
+ """
+ 
++from datetime import datetime, timezone
++from pathlib import Path
++
+ import click
+ from rich.console import Console
+ from rich.markup import escape
+ from rich.table import Table
+ from sqlalchemy.exc import SQLAlchemyError
+ 
++from src.config import get_settings
+ from src.db.exceptions import DatabaseConnectionError
+ from src.db.models.instrument_metadata import InstrumentMetadata
+ from src.db.repositories.instrument_metadata_repository_sync import (
+@@ -19,6 +23,12 @@ from src.db.repositories.instrument_metadata_repository_sync import (
+ from src.db.session_sync import get_sync_session
+ from src.models.instrument_metadata import ResolutionStatus
+ from src.services.metadata.unresolved_report import unresolved_reason
++from src.services.metadata.venue_overrides import (
++    VenueOverrideError,
++    VenueOverrideMergeResult,
++    load_venue_overrides,
++    merge_venue_overrides,
++)
+ 
+ console = Console()
+ 
+@@ -65,3 +75,47 @@ def _render_unresolved(rows: list[InstrumentMetadata]) -> None:
+     console.print(table)
+     console.print(f"{len(rows)} ticker(s) with unresolved venue")
+     console.print("Add the correct venue for each in venue_overrides.csv (Story 3.3) to resolve.")
++
++
++@metadata.command("apply-overrides")
++def apply_overrides() -> None:
++    """Merge venue_overrides.csv into the metadata store, with precedence (Story 3.3).
++
++    The metadata-refresh path: fill the CSV from the ``metadata unresolved``
++    worklist, then apply the corrections without re-importing bars. Each override
++    flips a matching row to RESOLVED; re-running is idempotent.
++    """
++    path = Path(get_settings().firstrate.firstrate_venue_overrides_path)
++    try:
++        overrides = load_venue_overrides(path)
++    except VenueOverrideError as exc:
++        console.print(f"[yellow]Venue overrides not applied — {escape(str(exc))}[/yellow]")
++        return
++    if not overrides:
++        console.print(
++            f"[green]✓ No venue overrides to apply ({escape(str(path))} is empty/absent).[/green]"
++        )
++        return
++    try:
++        with get_sync_session() as session:
++            result = merge_venue_overrides(
++                overrides,
++                SyncInstrumentMetadataRepository(session),
++                datetime.now(timezone.utc),
++            )
++            session.commit()
++    except (RuntimeError, DatabaseConnectionError, SQLAlchemyError) as exc:
++        console.print(f"[yellow]Metadata DB not available — {escape(str(exc))}[/yellow]")
++        return
++    _render_override_summary(result)
++
++
++def _render_override_summary(result: VenueOverrideMergeResult) -> None:
++    """Print a one-line venue-override merge summary (+ unmatched tickers, if any)."""
++    console.print(
++        f"Venue overrides: {result.applied} applied, "
++        f"{result.unchanged} unchanged, {len(result.unmatched)} unmatched"
++    )
++    if result.unmatched:
++        joined = ", ".join(escape(t) for t in result.unmatched)
++        console.print(f"[yellow]Unmatched (no metadata row): {joined}[/yellow]")
+diff --git a/src/config.py b/src/config.py
+index 12bb0a5..37a5b03 100644
+--- a/src/config.py
++++ b/src/config.py
+@@ -154,6 +154,10 @@ class FirstRateSettings(BaseSettings):
+         default="firstrate-etf",
+         description="Default catalog name for FirstRate imports",
+     )
++    firstrate_venue_overrides_path: str = Field(
++        default="venue_overrides.csv",
++        description="Path to the git-tracked venue overrides CSV (header: ticker,venue)",
++    )
+ 
+     model_config = {
+         "env_file": ".env",
+diff --git a/src/db/repositories/instrument_metadata_repository_sync.py b/src/db/repositories/instrument_metadata_repository_sync.py
+index fc3e03b..2aab1db 100644
+--- a/src/db/repositories/instrument_metadata_repository_sync.py
++++ b/src/db/repositories/instrument_metadata_repository_sync.py
+@@ -8,6 +8,7 @@ Operates on the SQLAlchemy ORM ``InstrumentMetadata``
+ same name. ORM↔domain mapping is the Story 1.5 service's responsibility.
+ """
+ 
++from datetime import datetime
+ from typing import Optional
+ 
+ from sqlalchemy import select
+@@ -108,3 +109,39 @@ class SyncInstrumentMetadataRepository:
+             return list(self.session.execute(stmt).scalars().all())
+         except OperationalError as e:
+             raise DatabaseConnectionError(f"Database connection failed: {e}") from e
++
++    def apply_venue_override(self, ticker: str, venue: str, resolved_at: datetime) -> str:
++        """Apply a manual venue override to an existing row, with precedence (Story 3.3).
++
++        Sets ``venue`` and forces ``resolution_status = RESOLVED`` (the operator's
++        correction wins over absent/ambiguous provider data). Idempotent: a row
++        already at the override target (``venue`` matches and status ``RESOLVED``)
++        is left untouched — no write, no ``resolved_at`` churn. A ticker with no
++        row is reported ``"unmatched"`` (never fabricated). Descriptive fields are
++        never touched.
++
++        Args:
++            ticker: Ticker to correct (must already exist in the store).
++            venue: Operator-supplied Nautilus venue code.
++            resolved_at: Timestamp stamped on a row this call changes.
++
++        Returns:
++            One of ``"applied"`` (row changed), ``"unchanged"`` (already at
++            target), or ``"unmatched"`` (no such row).
++
++        Raises:
++            DatabaseConnectionError: If the query/flush fails (mirrors ``upsert``).
++        """
++        try:
++            row = self.get_by_ticker(ticker)
++            if row is None:
++                return "unmatched"
++            if row.venue == venue and row.resolution_status == ResolutionStatus.RESOLVED:
++                return "unchanged"
++            row.venue = venue
++            row.resolution_status = ResolutionStatus.RESOLVED
++            row.resolved_at = resolved_at
++            self.session.flush()
++            return "applied"
++        except OperationalError as e:
++            raise DatabaseConnectionError(f"Database connection failed: {e}") from e
+diff --git a/src/services/metadata/venue_overrides.py b/src/services/metadata/venue_overrides.py
+new file mode 100644
+index 0000000..dd8d6b4
+--- /dev/null
++++ b/src/services/metadata/venue_overrides.py
+@@ -0,0 +1,132 @@
++"""Manual venue corrections: load ``venue_overrides.csv`` and merge with precedence (Story 3.3).
++
++The operator supplies venues the conservative FMP map (ADR-6) could not resolve
++in a git-tracked ``venue_overrides.csv`` (header exactly ``ticker,venue``). This
++module owns the pure CSV parse (``load_venue_overrides``) and the store-merge
++orchestration (``merge_venue_overrides``) that flips matching rows to
++``RESOLVED`` with the override venue taking precedence.
++
++The merge is an import-orchestration concern layered over the persisted metadata
++rows — it never calls ``FMPClient`` / the provider, and the clock is passed in by
++the caller so unchanged rows stay untouched (idempotent re-runs).
++"""
++
++import csv
++from datetime import datetime
++from pathlib import Path
++
++import structlog
++from pydantic import BaseModel
++
++from src.db.repositories.instrument_metadata_repository_sync import (
++    SyncInstrumentMetadataRepository,
++)
++from src.models.instrument_metadata import NA_SENTINEL
++
++logger = structlog.get_logger(__name__)
++
++#: The exact header the override file must carry (cells compared case-insensitively).
++_EXPECTED_HEADER = ["ticker", "venue"]
++
++
++class VenueOverrideError(Exception):
++    """Raised on a malformed override file (header not exactly ``ticker,venue``)."""
++
++
++class VenueOverrideMergeResult(BaseModel):
++    """Outcome tally for a ``merge_venue_overrides`` run.
++
++    Attributes:
++        applied: Rows whose venue/status were changed by an override.
++        unchanged: Rows already at the override target (idempotent no-write).
++        unmatched: Override tickers with no ``instrument_metadata`` row (surfaced,
++            never fabricated).
++    """
++
++    applied: int = 0
++    unchanged: int = 0
++    unmatched: list[str] = []
++
++    @property
++    def total(self) -> int:
++        """Total overrides processed across all three outcomes."""
++        return self.applied + self.unchanged + len(self.unmatched)
++
++
++def load_venue_overrides(path: Path) -> dict[str, str]:
++    """Parse ``venue_overrides.csv`` into a ``{TICKER: VENUE}`` map (pure).
++
++    A missing file returns ``{}`` (overrides are optional; an absent or
++    header-only file must never break an import). The header row must match
++    ``ticker,venue`` exactly (case/whitespace-insensitive) or ``VenueOverrideError``
++    is raised. Data rows are normalized (ticker/venue upper-cased, trimmed); a row
++    with a blank ticker, blank venue, or a venue equal to ``NA_SENTINEL`` is
++    skipped (an unfilled worklist line is not an error). Duplicate tickers:
++    last wins.
++
++    Args:
++        path: Path to the override CSV.
++
++    Returns:
++        Mapping of normalized ticker to normalized venue code.
++
++    Raises:
++        VenueOverrideError: If the header is not exactly ``ticker,venue``.
++    """
++    if not path.exists():
++        return {}
++
++    overrides: dict[str, str] = {}
++    with path.open(encoding="utf-8-sig", newline="") as handle:
++        reader = csv.reader(handle)
++        header = next(reader, None)
++        if header is None or [c.strip().lower() for c in header] != _EXPECTED_HEADER:
++            raise VenueOverrideError(
++                f"venue_overrides header must be exactly 'ticker,venue' (got: {header!r})"
++            )
++        for row in reader:
++            if len(row) < 2:
++                continue
++            ticker = row[0].strip().upper()
++            venue = row[1].strip().upper()
++            if not ticker or not venue or venue == NA_SENTINEL:
++                logger.debug(
++                    "venue_override_row_skipped", ticker=ticker or None, venue=venue or None
++                )
++                continue
++            if ticker in overrides and overrides[ticker] != venue:
++                logger.warning("venue_override_shadowed", ticker=ticker, kept=venue)
++            overrides[ticker] = venue
++    return overrides
++
++
++def merge_venue_overrides(
++    overrides: dict[str, str],
++    repository: SyncInstrumentMetadataRepository,
++    resolved_at: datetime,
++) -> VenueOverrideMergeResult:
++    """Merge overrides into ``instrument_metadata`` with precedence, tallying outcomes.
++
++    Iterates tickers in sorted order (deterministic) and delegates each to
++    ``repository.apply_venue_override`` (which flips a matching row to ``RESOLVED``
++    or reports ``unchanged``/``unmatched``). The clock is threaded in via
++    ``resolved_at`` — the caller stamps it once so unchanged rows never churn.
++
++    Args:
++        overrides: ``{TICKER: VENUE}`` map from ``load_venue_overrides``.
++        repository: Sync metadata repository backing the store.
++        resolved_at: Timestamp recorded on rows the merge changes.
++
++    Returns:
++        The applied/unchanged/unmatched tally.
++    """
++    result = VenueOverrideMergeResult()
++    for ticker, venue in sorted(overrides.items()):
++        outcome = repository.apply_venue_override(ticker, venue, resolved_at)
++        if outcome == "applied":
++            result.applied += 1
++        elif outcome == "unchanged":
++            result.unchanged += 1
++        else:
++            result.unmatched.append(ticker)
++    return result
+diff --git a/tests/component/db/test_instrument_metadata_repository.py b/tests/component/db/test_instrument_metadata_repository.py
+index 7bd6872..2e5bd57 100644
+--- a/tests/component/db/test_instrument_metadata_repository.py
++++ b/tests/component/db/test_instrument_metadata_repository.py
+@@ -292,3 +292,68 @@ class TestSyncInstrumentMetadataRepository:
+ 
+         with pytest.raises(DatabaseConnectionError):
+             repo.list_by_status(ResolutionStatus.VENUE_UNRESOLVED)
++
++    def test_apply_venue_override_flips_unresolved_to_resolved(self, sync_session):
++        """An override sets venue + RESOLVED on an existing VENUE_UNRESOLVED row (Story 3.3)."""
++        from datetime import datetime, timezone
++
++        repo = SyncInstrumentMetadataRepository(sync_session)
++        repo.upsert(
++            InstrumentMetadata(
++                **_make_metadata(
++                    ticker="SPY", venue=None, resolution_status=ResolutionStatus.VENUE_UNRESOLVED
++                )
++            )
++        )
++        sync_session.commit()
++
++        ts = datetime(2026, 7, 13, tzinfo=timezone.utc)
++        outcome = repo.apply_venue_override("SPY", "ARCA", ts)
++        sync_session.commit()
++
++        assert outcome == "applied"
++        row = repo.get_by_ticker("SPY")
++        assert row is not None
++        assert row.venue == "ARCA"
++        assert row.resolution_status == ResolutionStatus.RESOLVED
++        # SQLite's TIMESTAMP column round-trips tz-naive; compare the wall value.
++        assert row.resolved_at == ts.replace(tzinfo=None)
++
++    def test_apply_venue_override_is_idempotent(self, sync_session):
++        """Re-applying the same override is a no-op — no resolved_at churn (AC3)."""
++        from datetime import datetime, timezone
++
++        repo = SyncInstrumentMetadataRepository(sync_session)
++        repo.upsert(
++            InstrumentMetadata(
++                **_make_metadata(
++                    ticker="SPY", venue=None, resolution_status=ResolutionStatus.VENUE_UNRESOLVED
++                )
++            )
++        )
++        sync_session.commit()
++
++        ts1 = datetime(2026, 7, 13, tzinfo=timezone.utc)
++        repo.apply_venue_override("SPY", "ARCA", ts1)
++        sync_session.commit()
++
++        ts2 = datetime(2026, 7, 14, tzinfo=timezone.utc)
++        outcome = repo.apply_venue_override("SPY", "ARCA", ts2)
++        sync_session.commit()
++
++        assert outcome == "unchanged"
++        row = repo.get_by_ticker("SPY")
++        assert row is not None
++        assert row.resolved_at == ts1.replace(tzinfo=None)  # not overwritten by 2nd call
++
++    def test_apply_venue_override_unmatched_ticker(self, sync_session):
++        """An override for an absent ticker returns 'unmatched' and creates no row."""
++        from datetime import datetime, timezone
++
++        repo = SyncInstrumentMetadataRepository(sync_session)
++        ts = datetime(2026, 7, 13, tzinfo=timezone.utc)
++
++        outcome = repo.apply_venue_override("NOPE", "ARCA", ts)
++
++        assert outcome == "unmatched"
++        assert repo.get_by_ticker("NOPE") is None
+diff --git a/tests/unit/cli/commands/test_import_data.py b/tests/unit/cli/commands/test_import_data.py
+index ea97e9f..48369e3 100644
+--- a/tests/unit/cli/commands/test_import_data.py
++++ b/tests/unit/cli/commands/test_import_data.py
+@@ -1011,3 +1011,59 @@ class TestStory17ProgressAndSummary:
+             ),
+         ]
+         assert determine_exit_code(results) == 1
++
++
++# ---------------------------------------------------------------------------
++# Story 3.3: venue-override merge wiring (_apply_venue_overrides)
++# ---------------------------------------------------------------------------
++
++
++@pytest.mark.unit
++class TestApplyVenueOverrides:
++    """The import-orchestration helper that merges venue_overrides.csv."""
++
++    def _settings(self, path: str):
++        from unittest.mock import MagicMock
++
++        settings = MagicMock()
++        settings.firstrate.firstrate_venue_overrides_path = path
++        return settings
++
++    def test_empty_file_is_silent_noop(self, capsys):
++        from src.cli.commands.import_data import _apply_venue_overrides
++
++        with patch("src.services.metadata.venue_overrides.load_venue_overrides", return_value={}):
++            _apply_venue_overrides(object(), self._settings("venue_overrides.csv"))
++        assert "Venue overrides" not in capsys.readouterr().out
++
++    def test_non_empty_prints_summary(self, capsys):
++        from src.cli.commands.import_data import _apply_venue_overrides
++        from src.services.metadata.venue_overrides import VenueOverrideMergeResult
++
++        with (
++            patch(
++                "src.services.metadata.venue_overrides.load_venue_overrides",
++                return_value={"SPY": "ARCA"},
++            ),
++            patch(
++                "src.services.metadata.venue_overrides.merge_venue_overrides",
++                return_value=VenueOverrideMergeResult(applied=1),
++            ),
++            patch(
++                "src.db.repositories.instrument_metadata_repository_sync."
++                "SyncInstrumentMetadataRepository"
++            ),
++        ):
++            _apply_venue_overrides(object(), self._settings("venue_overrides.csv"))
++        assert "1 applied" in capsys.readouterr().out
++
++    def test_malformed_header_warns_and_skips(self, capsys):
++        from src.cli.commands.import_data import _apply_venue_overrides
++        from src.services.metadata.venue_overrides import VenueOverrideError
++
++        with patch(
++            "src.services.metadata.venue_overrides.load_venue_overrides",
++            side_effect=VenueOverrideError("bad header"),
++        ):
++            _apply_venue_overrides(object(), self._settings("venue_overrides.csv"))
++        assert "not applied" in capsys.readouterr().out
+diff --git a/tests/unit/cli/commands/test_metadata.py b/tests/unit/cli/commands/test_metadata.py
+index c51b9c2..1d00ddd 100644
+--- a/tests/unit/cli/commands/test_metadata.py
++++ b/tests/unit/cli/commands/test_metadata.py
+@@ -117,6 +117,79 @@ class TestMetadataUnresolved:
+         assert "Metadata DB not available" in result.output
+ 
+ 
++@pytest.mark.unit
++class TestMetadataApplyOverrides:
++    """`metadata apply-overrides` refresh subcommand (Story 3.3)."""
++
++    def _patch_settings(self, path: str = "venue_overrides.csv"):
++        settings = MagicMock()
++        settings.firstrate.firstrate_venue_overrides_path = path
++        return patch("src.cli.commands.metadata.get_settings", return_value=settings)
++
++    def test_populated_merges_and_prints_summary(self, runner):
++        from src.services.metadata.venue_overrides import VenueOverrideMergeResult
++
++        session_patch, repo_patch = _patch_session_and_repo()
++        with (
++            self._patch_settings(),
++            patch(
++                "src.cli.commands.metadata.load_venue_overrides",
++                return_value={"SPY": "ARCA"},
++            ),
++            patch(
++                "src.cli.commands.metadata.merge_venue_overrides",
++                return_value=VenueOverrideMergeResult(applied=1, unchanged=0, unmatched=["ZZZ"]),
++            ),
++            session_patch,
++            repo_patch,
++        ):
++            result = runner.invoke(metadata, ["apply-overrides"])
++
++        assert result.exit_code == 0
++        assert "1 applied" in result.output
++        assert "ZZZ" in result.output  # unmatched surfaced
++
++    def test_empty_file_is_noop(self, runner):
++        with (
++            self._patch_settings(),
++            patch("src.cli.commands.metadata.load_venue_overrides", return_value={}),
++        ):
++            result = runner.invoke(metadata, ["apply-overrides"])
++
++        assert result.exit_code == 0
++        assert "No venue overrides to apply" in result.output
++
++    def test_malformed_file_degrades_gracefully(self, runner):
++        from src.services.metadata.venue_overrides import VenueOverrideError
++
++        with (
++            self._patch_settings(),
++            patch(
++                "src.cli.commands.metadata.load_venue_overrides",
++                side_effect=VenueOverrideError("header must be exactly 'ticker,venue'"),
++            ),
++        ):
++            result = runner.invoke(metadata, ["apply-overrides"])
++
++        assert result.exit_code == 0
++        assert result.exception is None
++        assert "not applied" in result.output
++
++    def test_db_unconfigured_degrades_gracefully(self, runner):
++        ctx = MagicMock()
++        ctx.__enter__.side_effect = RuntimeError("Database not configured")
++        with (
++            self._patch_settings(),
++            patch("src.cli.commands.metadata.load_venue_overrides", return_value={"SPY": "ARCA"}),
++            patch("src.cli.commands.metadata.get_sync_session", return_value=ctx),
++        ):
++            result = runner.invoke(metadata, ["apply-overrides"])
++
++        assert result.exit_code == 0
++        assert result.exception is None
++        assert "Metadata DB not available" in result.output
++
++
+ @pytest.mark.unit
+ class TestRegistration:
+     """The `metadata` group is wired into the top-level CLI."""
+@@ -126,6 +199,7 @@ class TestRegistration:
+ 
+         assert "metadata" in cli.commands
+         assert "unresolved" in cli.commands["metadata"].commands
++        assert "apply-overrides" in cli.commands["metadata"].commands
+ 
+ 
+ @pytest.mark.unit
+diff --git a/tests/unit/services/metadata/test_venue_overrides.py b/tests/unit/services/metadata/test_venue_overrides.py
+new file mode 100644
+index 0000000..5ce6459
+--- /dev/null
++++ b/tests/unit/services/metadata/test_venue_overrides.py
+@@ -0,0 +1,94 @@
++"""Unit tests for venue_overrides loader + merge core (Story 3.3)."""
++
++from datetime import datetime, timezone
++from unittest.mock import MagicMock
++
++import pytest
++
++from src.services.metadata.venue_overrides import (
++    VenueOverrideError,
++    VenueOverrideMergeResult,
++    load_venue_overrides,
++    merge_venue_overrides,
++)
++
++
++def _write(path, text: str, encoding: str = "utf-8") -> None:
++    path.write_text(text, encoding=encoding)
++
++
++@pytest.mark.unit
++class TestLoadVenueOverrides:
++    """`load_venue_overrides` — pure CSV parse with normalization + skips."""
++
++    def test_valid_file_normalizes_ticker_and_venue(self, tmp_path):
++        f = tmp_path / "venue_overrides.csv"
++        _write(f, "ticker,venue\n spy , arca \nqqq,NASDAQ\n")
++        assert load_venue_overrides(f) == {"SPY": "ARCA", "QQQ": "NASDAQ"}
++
++    def test_missing_file_returns_empty(self, tmp_path):
++        assert load_venue_overrides(tmp_path / "nope.csv") == {}
++
++    def test_header_only_returns_empty(self, tmp_path):
++        f = tmp_path / "venue_overrides.csv"
++        _write(f, "ticker,venue\n")
++        assert load_venue_overrides(f) == {}
++
++    def test_bom_header_is_tolerated(self, tmp_path):
++        f = tmp_path / "venue_overrides.csv"
++        _write(f, "ticker,venue\nSPY,ARCA\n", encoding="utf-8-sig")
++        assert load_venue_overrides(f) == {"SPY": "ARCA"}
++
++    def test_malformed_header_raises(self, tmp_path):
++        f = tmp_path / "venue_overrides.csv"
++        _write(f, "symbol,exchange\nSPY,ARCA\n")
++        with pytest.raises(VenueOverrideError):
++            load_venue_overrides(f)
++
++    def test_blank_ticker_venue_and_na_rows_skipped(self, tmp_path):
++        f = tmp_path / "venue_overrides.csv"
++        _write(f, "ticker,venue\n,ARCA\nSPY,\nQQQ,N/A\nIWM,BATS\n")
++        assert load_venue_overrides(f) == {"IWM": "BATS"}
++
++    def test_duplicate_ticker_last_wins(self, tmp_path):
++        f = tmp_path / "venue_overrides.csv"
++        _write(f, "ticker,venue\nSPY,NYSE\nSPY,ARCA\n")
++        assert load_venue_overrides(f) == {"SPY": "ARCA"}
++
++    def test_ragged_short_row_skipped(self, tmp_path):
++        f = tmp_path / "venue_overrides.csv"
++        _write(f, "ticker,venue\nSPY\nQQQ,NASDAQ\n")
++        assert load_venue_overrides(f) == {"QQQ": "NASDAQ"}
++
++
++@pytest.mark.unit
++class TestMergeVenueOverrides:
++    """`merge_venue_overrides` — tallies repo outcomes, deterministic order."""
++
++    def test_tallies_applied_unchanged_unmatched(self):
++        ts = datetime(2026, 7, 13, tzinfo=timezone.utc)
++        repo = MagicMock()
++        outcomes = {"AAA": "applied", "BBB": "unchanged", "CCC": "unmatched"}
++        repo.apply_venue_override.side_effect = lambda t, v, r: outcomes[t]
++        result = merge_venue_overrides({"BBB": "NYSE", "AAA": "ARCA", "CCC": "IEX"}, repo, ts)
++        assert result.applied == 1
++        assert result.unchanged == 1
++        assert result.unmatched == ["CCC"]
++        assert result.total == 3
++
++    def test_processes_tickers_in_sorted_order_and_threads_clock(self):
++        ts = datetime(2026, 7, 13, tzinfo=timezone.utc)
++        repo = MagicMock()
++        repo.apply_venue_override.return_value = "applied"
++        merge_venue_overrides({"ZZZ": "ARCA", "AAA": "NYSE"}, repo, ts)
++        calls = repo.apply_venue_override.call_args_list
++        assert [c.args[0] for c in calls] == ["AAA", "ZZZ"]
++        # resolved_at threaded through unchanged (clock lives in the caller).
++        assert all(c.args[2] == ts for c in calls)
++
++    def test_empty_overrides_is_noop(self):
++        ts = datetime(2026, 7, 13, tzinfo=timezone.utc)
++        repo = MagicMock()
++        result = merge_venue_overrides({}, repo, ts)
++        assert result == VenueOverrideMergeResult()
++        repo.apply_venue_override.assert_not_called()
+diff --git a/venue_overrides.csv b/venue_overrides.csv
+new file mode 100644
+index 0000000..a97c4e5
+--- /dev/null
++++ b/venue_overrides.csv
+@@ -0,0 +1 @@
++ticker,venue
