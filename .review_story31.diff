@@ -1,0 +1,512 @@
+diff --git a/src/services/firstrate/import_service.py b/src/services/firstrate/import_service.py
+index 75528b3..cbe69ab 100644
+--- a/src/services/firstrate/import_service.py
++++ b/src/services/firstrate/import_service.py
+@@ -27,6 +27,8 @@ from src.services.firstrate.parsers.base import get_parser
+ from src.services.firstrate.source_probe import compute_source_last_date
+ 
+ if TYPE_CHECKING:
++    from nautilus_trader.model.identifiers import InstrumentId
++
+     from src.models.instrument_metadata import InstrumentMetadata
+     from src.services.metadata.instrument_metadata_service import (
+         InstrumentMetadataService,
+@@ -294,8 +296,36 @@ class ImportService:
+                     duration=time.perf_counter() - start,
+                 )
+ 
+-            # 1. Resolve instrument ID
+-            instrument_id = self._instrument_mapper.resolve_instrument_id(ticker, catalog_name)
++            # 1a. Resolve instrument metadata (Story 2.4 AC4). Moved ahead of
++            #     identity resolution (Story 3.1): the qualified venue must be
++            #     known before parsing, because bars are stamped with the
++            #     instrument id and written under {INSTRUMENT_ID}/{BAR_TYPE}/ — a
++            #     later venue change would orphan them. Cache-first, deduped, and
++            #     fault-isolated inside the helper (a metadata hiccup never fails
++            #     an otherwise-good bar import).
++            self._resolve_metadata(ticker)
++
++            # 1b. Qualify (Story 3.1): source the venue from the resolved
++            #     instrument_metadata and sync catalog_instruments.nautilus_id
++            #     (ADR-3). A VENUE_UNRESOLVED ticker returns None — left
++            #     unqualified, no nautilus_id fabricated (AC3). Its exclude/flag/
++            #     keep-bars handling is Story 3.5; here it is skipped this run.
++            instrument_id = self._qualify_ticker(ticker, catalog_name)
++            if instrument_id is None:
++                logger.info(
++                    "ticker_unqualified",
++                    ticker=ticker,
++                    catalog=catalog_name,
++                    timeframe=timeframe,
++                    reason="venue unresolved — deferred to Story 3.5",
++                )
++                return ImportResult(
++                    ticker=ticker,
++                    status="skipped",
++                    row_count=0,
++                    outcome="skipped",
++                    duration=time.perf_counter() - start,
++                )
+ 
+             # 2. Build BarType
+             bar_type = BarType.from_str(f"{instrument_id}-{timeframe}-EXTERNAL")
+@@ -341,16 +371,6 @@ class ImportService:
+                     sample=ohlc_warnings[:3],
+                 )
+ 
+-            # 3b. Resolve instrument metadata (Story 2.4 AC4). Cache-first via
+-            #     the Epic-1 service, which self-upserts into instrument_metadata
+-            #     and skips the provider when the ticker is already RESOLVED.
+-            #     Runs once per parsed ticker per run — deduped inside the helper
+-            #     so the multi-timeframe ETF default does not re-resolve, and the
+-            #     "skipped" short-circuit above means an already-complete re-run
+-            #     resolves nothing. Faults are isolated inside the helper so a
+-            #     metadata hiccup never fails an otherwise-good bar import.
+-            self._resolve_metadata(ticker)
+-
+             # 4. Write to catalog. Delete any existing bars for this exact
+             #    bar_type first so a re-import (or an orphan-heal where the
+             #    metadata row was lost but the Parquet partition survived)
+@@ -715,6 +735,31 @@ class ImportService:
+             and a.volume == b.volume
+         )
+ 
++    def _qualify_ticker(self, ticker: str, catalog_name: str) -> "InstrumentId | None":
++        """Resolve a ticker's Nautilus identity, venue-qualified from metadata (Story 3.1).
++
++        When the Epic-1 resolver ran and captured domain metadata for this ticker, the
++        authoritative resolved ``venue`` drives the qualification: :meth:`InstrumentMapper.
++        sync_qualification` writes ``catalog_instruments.nautilus_id``/``exchange`` (ADR-3)
++        and returns the qualified ``InstrumentId`` — or ``None`` when the venue is
++        ``VENUE_UNRESOLVED`` (``venue is None``), leaving the ticker unqualified (AC3).
++
++        When no resolver is injected (the Phase-1 stocks path / FMP unconfigured) or a
++        provider fault left nothing captured, this falls back to the existing DB identity
++        lookup (:meth:`InstrumentMapper.resolve_instrument_id`) — unchanged behavior (AC4).
++
++        Args:
++            ticker: Trading symbol.
++            catalog_name: Catalog scoping the identity row.
++
++        Returns:
++            The (venue-qualified) ``InstrumentId``, or ``None`` when the venue is unresolved.
++        """
++        metadata = self._resolved_metadata.get(ticker)
++        if self._metadata_resolver is None or metadata is None:
++            return self._instrument_mapper.resolve_instrument_id(ticker, catalog_name)
++        return self._instrument_mapper.sync_qualification(ticker, catalog_name, metadata.venue)
++
+     def _resolve_metadata(self, ticker: str) -> None:
+         """Resolve a parsed ticker's instrument metadata cache-first (Story 2.4).
+ 
+diff --git a/src/services/firstrate/instrument_mapper.py b/src/services/firstrate/instrument_mapper.py
+index efe8912..356832f 100644
+--- a/src/services/firstrate/instrument_mapper.py
++++ b/src/services/firstrate/instrument_mapper.py
+@@ -117,6 +117,70 @@ class InstrumentMapper:
+         )
+         return count
+ 
++    @staticmethod
++    def qualified_instrument_id(ticker: str, venue: Optional[str]) -> Optional[InstrumentId]:
++        """Compute a Nautilus-qualified ``InstrumentId`` from a resolved venue (Story 3.1).
++
++        Pure: the venue is the authoritative code resolved by ``InstrumentMetadataService``
++        (Epic 1) — never a guessed/CSV value. A falsy venue (``None`` or blank, i.e.
++        ``VENUE_UNRESOLVED``) yields ``None`` so no identity is fabricated (AC3). ``venue``
++        is already guaranteed a real code or ``None`` by the domain model's
++        ``venue_never_na_sentinel`` validator, so the ``NA_SENTINEL`` is not re-checked here.
++
++        Args:
++            ticker: Trading symbol (e.g. "SPY").
++            venue: Resolved Nautilus venue code (e.g. "ARCA"), or ``None``/blank.
++
++        Returns:
++            ``InstrumentId`` (e.g. ``SPY.ARCA``), or ``None`` when the venue is unresolved.
++        """
++        if not venue:
++            return None
++        return InstrumentId.from_str(f"{ticker}.{venue}")
++
++    def sync_qualification(
++        self, ticker: str, catalog_name: str, venue: Optional[str]
++    ) -> Optional[InstrumentId]:
++        """Sync the resolved venue onto ``catalog_instruments`` (ADR-3 qualification sync).
++
++        The import pipeline (single writer) calls this after resolving a ticker's metadata:
++        the authoritative resolved ``venue`` overwrites the provisional CSV exchange on the
++        ``catalog_instruments`` identity row and recomputes ``nautilus_id``. ``instrument_metadata``
++        stays the source of truth for resolved metadata; ``catalog_instruments`` for bar
++        counts/date ranges. A ``VENUE_UNRESOLVED`` ticker (``venue is None``) leaves
++        ``nautilus_id`` ``None`` — unqualified, not fabricated (AC3; excludes/flag are Story 3.5).
++
++        Args:
++            ticker: Trading symbol.
++            catalog_name: Catalog scoping the identity row.
++            venue: Resolved Nautilus venue code, or ``None`` when unresolved.
++
++        Returns:
++            The qualified ``InstrumentId``, or ``None`` when the venue is unresolved or no
++            ``catalog_instruments`` row exists (profiles not loaded).
++        """
++        instrument = self._repo.get_by_ticker(catalog_name, ticker)
++        if instrument is None:
++            logger.warning(
++                "qualification_sync_skipped",
++                ticker=ticker,
++                catalog=catalog_name,
++                reason="no catalog_instruments row — company profiles not loaded?",
++            )
++            return None
++
++        qid = self.qualified_instrument_id(ticker, venue)
++        instrument.nautilus_id = str(qid) if qid is not None else None
++        instrument.exchange = venue
++        self._repo.upsert(instrument)
++        logger.debug(
++            "qualification_synced",
++            ticker=ticker,
++            venue=venue,
++            nautilus_id=instrument.nautilus_id,
++        )
++        return qid
++
+     def resolve_instrument_id(self, ticker: str, catalog_name: str) -> InstrumentId:
+         """Look up ticker in DB and return Nautilus InstrumentId.
+ 
+diff --git a/tests/component/services/firstrate/test_import_service.py b/tests/component/services/firstrate/test_import_service.py
+index 47d7119..1cfbb4f 100644
+--- a/tests/component/services/firstrate/test_import_service.py
++++ b/tests/component/services/firstrate/test_import_service.py
+@@ -540,6 +540,10 @@ class TestIdempotentRerun:
+             aapl_row.date_range_end = stateful_metadata_service._datetime(
+                 2024, 12, 31, tzinfo=stateful_metadata_service._tz
+             )
++            # The per-timeframe classifier (commit d75a409) compares the
++            # timeframe's own date_range_end_daily, not the shared
++            # date_range_end — rewind that too so AAPL is genuinely incomplete.
++            aapl_row.date_range_end_daily = aapl_row.date_range_end
+             aapl_row.bar_count_daily = 5
+ 
+             # SPY stays "complete" and must be skipped on re-run; its
+@@ -1175,6 +1179,10 @@ class TestStory26IdempotentRerun:
+             aapl_row.date_range_end = stateful_metadata_service._datetime(
+                 2024, 12, 31, tzinfo=stateful_metadata_service._tz
+             )
++            # The per-timeframe classifier (commit d75a409) compares the
++            # timeframe's own date_range_end_daily, not the shared
++            # date_range_end — rewind that too so AAPL is genuinely incomplete.
++            aapl_row.date_range_end_daily = aapl_row.date_range_end
+             aapl_row.bar_count_daily = 5
+ 
+             writes_before_rerun = mock_catalog.write_data.call_count
+@@ -1228,6 +1236,10 @@ class TestStory26IdempotentRerun:
+             aapl_row.date_range_end = stateful_metadata_service._datetime(
+                 2024, 12, 31, tzinfo=stateful_metadata_service._tz
+             )
++            # The per-timeframe classifier (commit d75a409) compares the
++            # timeframe's own date_range_end_daily, not the shared
++            # date_range_end — rewind that too so AAPL is genuinely incomplete.
++            aapl_row.date_range_end_daily = aapl_row.date_range_end
+             aapl_row.bar_count_daily = 5
+ 
+             # Run 2: a brand-new service (fresh in-run dedup) sharing the SAME
+diff --git a/tests/component/services/firstrate/test_instrument_mapper.py b/tests/component/services/firstrate/test_instrument_mapper.py
+index 87e033c..a43781e 100644
+--- a/tests/component/services/firstrate/test_instrument_mapper.py
++++ b/tests/component/services/firstrate/test_instrument_mapper.py
+@@ -34,6 +34,11 @@ CREATE TABLE IF NOT EXISTS catalog_instruments (
+     state VARCHAR(100),
+     date_range_start TIMESTAMP,
+     date_range_end TIMESTAMP,
++    date_range_end_daily TIMESTAMP,
++    date_range_end_hourly TIMESTAMP,
++    date_range_end_minute TIMESTAMP,
++    date_range_end_5min TIMESTAMP,
++    date_range_end_30min TIMESTAMP,
+     bar_count_daily INTEGER NOT NULL DEFAULT 0,
+     bar_count_hourly INTEGER NOT NULL DEFAULT 0,
+     bar_count_minute INTEGER NOT NULL DEFAULT 0,
+@@ -167,3 +172,36 @@ class TestInstrumentMapperDBRoundTrip:
+         for ticker, expected_id in expected.items():
+             result = mapper.resolve_instrument_id(ticker, CATALOG_NAME)
+             assert result == InstrumentId.from_str(expected_id)
++
++
++class TestQualificationSync:
++    """Story 3.1: ADR-3 qualification sync round-trips through the real repo."""
++
++    @pytest.mark.component
++    def test_sync_overwrites_provisional_exchange_with_resolved_venue(self, mapper, repo, tmp_path):
++        """Resolved venue overwrites the provisional CSV exchange and recomputes id."""
++        # Seed the row with a provisional (wrong) CSV exchange.
++        csv = tmp_path / "profiles.csv"
++        csv.write_text(
++            "SPY,SPDR S&P 500 ETF Trust,US,NY,NYSE,Financial Services,Asset Management,1993-01-22\n"
++        )
++        mapper.load_company_profiles(csv, CATALOG_NAME, ASSET_CLASS)
++        assert repo.get_by_ticker(CATALOG_NAME, "SPY").nautilus_id == "SPY.NYSE"
++
++        result = mapper.sync_qualification("SPY", CATALOG_NAME, "ARCA")
++
++        assert result == InstrumentId.from_str("SPY.ARCA")
++        persisted = repo.get_by_ticker(CATALOG_NAME, "SPY")
++        assert persisted.nautilus_id == "SPY.ARCA"
++        assert persisted.exchange == "ARCA"
++
++    @pytest.mark.component
++    def test_sync_unresolved_persists_null_nautilus_id(self, mapper, repo, company_profiles_csv):
++        """An unresolved (None) venue persists nautilus_id NULL (unqualified, not fabricated)."""
++        mapper.load_company_profiles(company_profiles_csv, CATALOG_NAME, ASSET_CLASS)
++
++        result = mapper.sync_qualification("SPY", CATALOG_NAME, None)
++
++        assert result is None
++        persisted = repo.get_by_ticker(CATALOG_NAME, "SPY")
++        assert persisted.nautilus_id is None
+diff --git a/tests/unit/services/firstrate/test_import_service.py b/tests/unit/services/firstrate/test_import_service.py
+index a3c321d..acec668 100644
+--- a/tests/unit/services/firstrate/test_import_service.py
++++ b/tests/unit/services/firstrate/test_import_service.py
+@@ -1288,6 +1288,158 @@ class TestResolvedMetadataCollection:
+         assert service.resolved_metadata == []
+ 
+ 
++# ---------------------------------------------------------------------------
++# Story 3.1: Venue qualification (nautilus_id from resolved venue + ADR-3 sync)
++# ---------------------------------------------------------------------------
++
++
++def _unresolved_metadata(ticker: str):
++    """Build a VENUE_UNRESOLVED domain InstrumentMetadata (venue None)."""
++    from src.models.instrument_metadata import (
++        InstrumentMetadata,
++        ResolutionStatus,
++    )
++
++    return InstrumentMetadata(
++        ticker=ticker,
++        metadata_provider="FAKE",
++        venue=None,
++        resolution_status=ResolutionStatus.VENUE_UNRESOLVED,
++    )
++
++
++@pytest.mark.unit
++class TestVenueQualification:
++    """Story 3.1: identity qualified from the resolved venue, ADR-3 sync."""
++
++    def _service_with_resolver(
++        self, mock_catalog_manager, mock_metadata_service, mock_instrument_mapper, resolver
++    ):
++        return ImportService(
++            catalog_manager=mock_catalog_manager,
++            metadata_service=mock_metadata_service,
++            instrument_mapper=mock_instrument_mapper,
++            metadata_resolver=resolver,
++        )
++
++    def test_qualify_ticker_uses_resolved_venue(
++        self, mock_catalog_manager, mock_metadata_service, mock_instrument_mapper
++    ):
++        """A resolved venue drives sync_qualification; resolve_instrument_id unused (AC1/AC2)."""
++        resolver = MagicMock()
++        resolver.resolve.return_value = _domain_metadata("SPY")  # venue "ARCA"
++        qualified = InstrumentId.from_str("SPY.ARCA")
++        mock_instrument_mapper.sync_qualification.return_value = qualified
++        svc = self._service_with_resolver(
++            mock_catalog_manager, mock_metadata_service, mock_instrument_mapper, resolver
++        )
++
++        svc._resolve_metadata("SPY")
++        result = svc._qualify_ticker("SPY", CATALOG_NAME)
++
++        assert result == qualified
++        mock_instrument_mapper.sync_qualification.assert_called_once_with(
++            "SPY", CATALOG_NAME, "ARCA"
++        )
++        mock_instrument_mapper.resolve_instrument_id.assert_not_called()
++
++    def test_qualify_ticker_unresolved_returns_none(
++        self, mock_catalog_manager, mock_metadata_service, mock_instrument_mapper
++    ):
++        """VENUE_UNRESOLVED venue → sync returns None → ticker left unqualified (AC3)."""
++        resolver = MagicMock()
++        resolver.resolve.return_value = _unresolved_metadata("ZZZ")
++        mock_instrument_mapper.sync_qualification.return_value = None
++        svc = self._service_with_resolver(
++            mock_catalog_manager, mock_metadata_service, mock_instrument_mapper, resolver
++        )
++
++        svc._resolve_metadata("ZZZ")
++        result = svc._qualify_ticker("ZZZ", CATALOG_NAME)
++
++        assert result is None
++        mock_instrument_mapper.sync_qualification.assert_called_once_with("ZZZ", CATALOG_NAME, None)
++
++    def test_qualify_ticker_no_resolver_falls_back_to_db_lookup(
++        self, service, mock_instrument_mapper
++    ):
++        """No resolver (stocks/unconfigured) → existing DB identity lookup, unchanged (AC4)."""
++        expected = InstrumentId.from_str("AAPL.XNAS")
++        mock_instrument_mapper.resolve_instrument_id.return_value = expected
++
++        result = service._qualify_ticker("AAPL", CATALOG_NAME)
++
++        assert result == expected
++        mock_instrument_mapper.resolve_instrument_id.assert_called_once_with("AAPL", CATALOG_NAME)
++        mock_instrument_mapper.sync_qualification.assert_not_called()
++
++    def test_qualify_ticker_resolver_fault_falls_back(
++        self, mock_catalog_manager, mock_metadata_service, mock_instrument_mapper
++    ):
++        """A provider fault captures nothing → fall back to DB identity (fault-tolerant AC4)."""
++        resolver = MagicMock()
++        resolver.resolve.side_effect = RuntimeError("provider down")
++        expected = InstrumentId.from_str("SPY.ARCA")
++        mock_instrument_mapper.resolve_instrument_id.return_value = expected
++        svc = self._service_with_resolver(
++            mock_catalog_manager, mock_metadata_service, mock_instrument_mapper, resolver
++        )
++
++        svc._resolve_metadata("SPY")  # fault swallowed, nothing captured
++        result = svc._qualify_ticker("SPY", CATALOG_NAME)
++
++        assert result == expected
++        mock_instrument_mapper.sync_qualification.assert_not_called()
++
++    def test_unqualified_ticker_skips_bar_write(
++        self,
++        mock_catalog_manager,
++        mock_metadata_service,
++        mock_instrument_mapper,
++        mock_bars,
++        tmp_path,
++    ):
++        """End-to-end: an unresolved-venue ticker is skipped — no write_data, logged (AC3)."""
++        resolver = MagicMock()
++        resolver.resolve.return_value = _unresolved_metadata("ZZZ")
++        mock_instrument_mapper.sync_qualification.return_value = None
++        mock_metadata_service.get_instrument_sync.return_value = _fresh_instrument_row()
++
++        mock_catalog = MagicMock()
++        mock_catalog_manager.resolve_catalog.return_value = mock_catalog
++
++        svc = self._service_with_resolver(
++            mock_catalog_manager, mock_metadata_service, mock_instrument_mapper, resolver
++        )
++
++        (tmp_path / "Z").mkdir()
++        _write_daily_csv(tmp_path / "Z" / "ZZZ.txt", "2025-02-01")
++
++        with (
++            patch("src.services.firstrate.import_service.get_parser") as mock_get_parser,
++            patch("src.services.firstrate.import_service.logger") as mock_logger,
++        ):
++            mock_parser = MagicMock()
++            mock_parser.parse_file.return_value = mock_bars
++            mock_get_parser.return_value = mock_parser
++
++            results = svc.import_directory(
++                source_dir=tmp_path,
++                catalog_name=CATALOG_NAME,
++                asset_class=AssetClass.ETF,
++                timeframe="1-DAY-LAST",
++            )
++
++        assert len(results) == 1
++        assert results[0].status == "skipped"
++        assert results[0].outcome == "skipped"
++        mock_catalog.write_data.assert_not_called()
++        assert any(
++            call.args and call.args[0] == "ticker_unqualified"
++            for call in mock_logger.info.call_args_list
++        )
++
++
+ @pytest.mark.unit
+ class TestImportProgressLogging:
+     """Story 2.7 AC1: per-ticker progress with running counts via structlog."""
+diff --git a/tests/unit/services/firstrate/test_instrument_mapper.py b/tests/unit/services/firstrate/test_instrument_mapper.py
+index dd36ccb..166a53b 100644
+--- a/tests/unit/services/firstrate/test_instrument_mapper.py
++++ b/tests/unit/services/firstrate/test_instrument_mapper.py
+@@ -234,6 +234,78 @@ class TestResolveInstrumentId:
+             mapper.resolve_instrument_id("ZZZZ", CATALOG_NAME)
+ 
+ 
++# ---------------------------------------------------------------------------
++# Story 3.1: Venue qualification (nautilus_id from resolved venue + ADR-3 sync)
++# ---------------------------------------------------------------------------
++
++
++class TestQualification:
++    """Tests for qualified_instrument_id() and sync_qualification()."""
++
++    @pytest.mark.unit
++    def test_qualified_instrument_id_from_venue(self, mapper):
++        """A resolved venue yields a Nautilus-qualified InstrumentId."""
++        assert mapper.qualified_instrument_id("SPY", "ARCA") == InstrumentId.from_str("SPY.ARCA")
++
++    @pytest.mark.unit
++    def test_qualified_instrument_id_none_venue_returns_none(self, mapper):
++        """An unresolved (None) venue fabricates no identity (AC3)."""
++        assert mapper.qualified_instrument_id("SPY", None) is None
++
++    @pytest.mark.unit
++    def test_qualified_instrument_id_blank_venue_returns_none(self, mapper):
++        """A blank venue is treated as unresolved — no identity fabricated."""
++        assert mapper.qualified_instrument_id("SPY", "") is None
++
++    @pytest.mark.unit
++    def test_sync_qualification_writes_nautilus_id_and_exchange(self, mapper, mock_repo):
++        """Resolved venue overwrites the row's nautilus_id/exchange and upserts (ADR-3)."""
++        row = CatalogInstrument(
++            ticker="SPY",
++            nautilus_id="SPY.NYSE",  # provisional CSV exchange
++            exchange="NYSE",
++            asset_class="ETF",
++            catalog_name=CATALOG_NAME,
++        )
++        mock_repo.get_by_ticker.return_value = row
++
++        result = mapper.sync_qualification("SPY", CATALOG_NAME, "ARCA")
++
++        assert result == InstrumentId.from_str("SPY.ARCA")
++        assert row.nautilus_id == "SPY.ARCA"
++        assert row.exchange == "ARCA"
++        mock_repo.upsert.assert_called_once_with(row)
++
++    @pytest.mark.unit
++    def test_sync_qualification_unresolved_leaves_nautilus_id_none(self, mapper, mock_repo):
++        """A None venue leaves nautilus_id None (unqualified, not fabricated — AC3)."""
++        row = CatalogInstrument(
++            ticker="ZZZ",
++            nautilus_id="ZZZ.NYSE",
++            exchange="NYSE",
++            asset_class="ETF",
++            catalog_name=CATALOG_NAME,
++        )
++        mock_repo.get_by_ticker.return_value = row
++
++        result = mapper.sync_qualification("ZZZ", CATALOG_NAME, None)
++
++        assert result is None
++        assert row.nautilus_id is None
++        assert row.exchange is None
++        mock_repo.upsert.assert_called_once_with(row)
++
++    @pytest.mark.unit
++    def test_sync_qualification_missing_row_returns_none_no_upsert(self, mapper, mock_repo):
++        """No catalog_instruments row → defensive no-op (returns None, no upsert)."""
++        mock_repo.get_by_ticker.return_value = None
++
++        result = mapper.sync_qualification("SPY", CATALOG_NAME, "ARCA")
++
++        assert result is None
++        mock_repo.upsert.assert_not_called()
++
++
+ # ---------------------------------------------------------------------------
+ # Task 2: is_loaded Tests
+ # ---------------------------------------------------------------------------

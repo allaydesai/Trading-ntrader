@@ -154,6 +154,10 @@ class FirstRateSettings(BaseSettings):
         default="firstrate-etf",
         description="Default catalog name for FirstRate imports",
     )
+    firstrate_venue_overrides_path: str = Field(
+        default="venue_overrides.csv",
+        description="Path to the git-tracked venue overrides CSV (header: ticker,venue)",
+    )
 
     model_config = {
         "env_file": ".env",

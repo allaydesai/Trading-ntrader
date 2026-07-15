@@ -540,6 +540,10 @@ class TestIdempotentRerun:
             aapl_row.date_range_end = stateful_metadata_service._datetime(
                 2024, 12, 31, tzinfo=stateful_metadata_service._tz
             )
+            # The per-timeframe classifier (commit d75a409) compares the
+            # timeframe's own date_range_end_daily, not the shared
+            # date_range_end — rewind that too so AAPL is genuinely incomplete.
+            aapl_row.date_range_end_daily = aapl_row.date_range_end
             aapl_row.bar_count_daily = 5
 
             # SPY stays "complete" and must be skipped on re-run; its
@@ -1175,6 +1179,10 @@ class TestStory26IdempotentRerun:
             aapl_row.date_range_end = stateful_metadata_service._datetime(
                 2024, 12, 31, tzinfo=stateful_metadata_service._tz
             )
+            # The per-timeframe classifier (commit d75a409) compares the
+            # timeframe's own date_range_end_daily, not the shared
+            # date_range_end — rewind that too so AAPL is genuinely incomplete.
+            aapl_row.date_range_end_daily = aapl_row.date_range_end
             aapl_row.bar_count_daily = 5
 
             writes_before_rerun = mock_catalog.write_data.call_count
@@ -1228,6 +1236,10 @@ class TestStory26IdempotentRerun:
             aapl_row.date_range_end = stateful_metadata_service._datetime(
                 2024, 12, 31, tzinfo=stateful_metadata_service._tz
             )
+            # The per-timeframe classifier (commit d75a409) compares the
+            # timeframe's own date_range_end_daily, not the shared
+            # date_range_end — rewind that too so AAPL is genuinely incomplete.
+            aapl_row.date_range_end_daily = aapl_row.date_range_end
             aapl_row.bar_count_daily = 5
 
             # Run 2: a brand-new service (fresh in-run dedup) sharing the SAME

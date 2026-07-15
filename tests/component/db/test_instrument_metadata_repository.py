@@ -232,3 +232,220 @@ class TestSyncInstrumentMetadataRepository:
         result = repo.get_by_ticker("SPY")
         assert result is not None
         assert result.resolution_status == ResolutionStatus.UNRESOLVED
+
+    def test_list_by_status_filters_and_orders(self, sync_session):
+        """list_by_status returns only matching rows, ordered by ticker (Story 3.2)."""
+        repo = SyncInstrumentMetadataRepository(sync_session)
+        repo.upsert(
+            InstrumentMetadata(
+                **_make_metadata(ticker="AAA", resolution_status=ResolutionStatus.RESOLVED)
+            )
+        )
+        repo.upsert(
+            InstrumentMetadata(
+                **_make_metadata(
+                    ticker="CCC", venue=None, resolution_status=ResolutionStatus.VENUE_UNRESOLVED
+                )
+            )
+        )
+        repo.upsert(
+            InstrumentMetadata(
+                **_make_metadata(
+                    ticker="BBB", venue=None, resolution_status=ResolutionStatus.VENUE_UNRESOLVED
+                )
+            )
+        )
+        repo.upsert(
+            InstrumentMetadata(
+                **_make_metadata(ticker="DDD", resolution_status=ResolutionStatus.UNRESOLVED)
+            )
+        )
+        sync_session.commit()
+
+        rows = repo.list_by_status(ResolutionStatus.VENUE_UNRESOLVED)
+
+        assert [r.ticker for r in rows] == ["BBB", "CCC"]
+
+    def test_list_by_status_empty_returns_empty_list(self, sync_session):
+        """list_by_status returns [] when no rows match the status."""
+        repo = SyncInstrumentMetadataRepository(sync_session)
+        repo.upsert(
+            InstrumentMetadata(
+                **_make_metadata(ticker="AAA", resolution_status=ResolutionStatus.RESOLVED)
+            )
+        )
+        sync_session.commit()
+
+        assert repo.list_by_status(ResolutionStatus.VENUE_UNRESOLVED) == []
+
+    def test_list_by_status_translates_operational_error(self):
+        """A DB OperationalError becomes DatabaseConnectionError (mirrors upsert)."""
+        from unittest.mock import MagicMock
+
+        from sqlalchemy.exc import OperationalError
+
+        from src.db.exceptions import DatabaseConnectionError
+
+        session = MagicMock()
+        session.execute.side_effect = OperationalError("SELECT ...", {}, Exception("down"))
+        repo = SyncInstrumentMetadataRepository(session)
+
+        with pytest.raises(DatabaseConnectionError):
+            repo.list_by_status(ResolutionStatus.VENUE_UNRESOLVED)
+
+    def test_count_by_status_groups_and_counts(self, sync_session):
+        """count_by_status returns a per-status count map (Story 3.4)."""
+        repo = SyncInstrumentMetadataRepository(sync_session)
+        repo.upsert(
+            InstrumentMetadata(
+                **_make_metadata(ticker="AAA", resolution_status=ResolutionStatus.RESOLVED)
+            )
+        )
+        repo.upsert(
+            InstrumentMetadata(
+                **_make_metadata(ticker="BBB", resolution_status=ResolutionStatus.RESOLVED)
+            )
+        )
+        repo.upsert(
+            InstrumentMetadata(
+                **_make_metadata(
+                    ticker="CCC", venue=None, resolution_status=ResolutionStatus.VENUE_UNRESOLVED
+                )
+            )
+        )
+        repo.upsert(
+            InstrumentMetadata(
+                **_make_metadata(ticker="DDD", resolution_status=ResolutionStatus.UNRESOLVED)
+            )
+        )
+        sync_session.commit()
+
+        assert repo.count_by_status() == {
+            ResolutionStatus.RESOLVED: 2,
+            ResolutionStatus.VENUE_UNRESOLVED: 1,
+            ResolutionStatus.UNRESOLVED: 1,
+        }
+
+    def test_count_by_status_empty_returns_empty_dict(self, sync_session):
+        """count_by_status returns {} when the store is empty."""
+        repo = SyncInstrumentMetadataRepository(sync_session)
+        assert repo.count_by_status() == {}
+
+    def test_count_by_status_translates_operational_error(self):
+        """A DB OperationalError becomes DatabaseConnectionError (mirrors upsert)."""
+        from unittest.mock import MagicMock
+
+        from sqlalchemy.exc import OperationalError
+
+        from src.db.exceptions import DatabaseConnectionError
+
+        session = MagicMock()
+        session.execute.side_effect = OperationalError("SELECT ...", {}, Exception("down"))
+        repo = SyncInstrumentMetadataRepository(session)
+
+        with pytest.raises(DatabaseConnectionError):
+            repo.count_by_status()
+
+    def test_apply_venue_override_flips_unresolved_to_resolved(self, sync_session):
+        """An override sets venue + RESOLVED on an existing VENUE_UNRESOLVED row (Story 3.3)."""
+        from datetime import datetime, timezone
+
+        repo = SyncInstrumentMetadataRepository(sync_session)
+        repo.upsert(
+            InstrumentMetadata(
+                **_make_metadata(
+                    ticker="SPY", venue=None, resolution_status=ResolutionStatus.VENUE_UNRESOLVED
+                )
+            )
+        )
+        sync_session.commit()
+
+        ts = datetime(2026, 7, 13, tzinfo=timezone.utc)
+        outcome = repo.apply_venue_override("SPY", "ARCA", ts)
+        sync_session.commit()
+
+        assert outcome == "applied"
+        row = repo.get_by_ticker("SPY")
+        assert row is not None
+        assert row.venue == "ARCA"
+        assert row.resolution_status == ResolutionStatus.RESOLVED
+        # SQLite's TIMESTAMP column round-trips tz-naive; compare the wall value.
+        assert row.resolved_at == ts.replace(tzinfo=None)
+
+    def test_apply_venue_override_is_idempotent(self, sync_session):
+        """Re-applying the same override is a no-op — no resolved_at churn (AC3)."""
+        from datetime import datetime, timezone
+
+        repo = SyncInstrumentMetadataRepository(sync_session)
+        repo.upsert(
+            InstrumentMetadata(
+                **_make_metadata(
+                    ticker="SPY", venue=None, resolution_status=ResolutionStatus.VENUE_UNRESOLVED
+                )
+            )
+        )
+        sync_session.commit()
+
+        ts1 = datetime(2026, 7, 13, tzinfo=timezone.utc)
+        repo.apply_venue_override("SPY", "ARCA", ts1)
+        sync_session.commit()
+
+        ts2 = datetime(2026, 7, 14, tzinfo=timezone.utc)
+        outcome = repo.apply_venue_override("SPY", "ARCA", ts2)
+        sync_session.commit()
+
+        assert outcome == "unchanged"
+        row = repo.get_by_ticker("SPY")
+        assert row is not None
+        assert row.resolved_at == ts1.replace(tzinfo=None)  # not overwritten by 2nd call
+
+    def test_apply_venue_override_unmatched_ticker(self, sync_session):
+        """An override for an absent ticker returns 'unmatched' and creates no row."""
+        from datetime import datetime, timezone
+
+        repo = SyncInstrumentMetadataRepository(sync_session)
+        ts = datetime(2026, 7, 13, tzinfo=timezone.utc)
+
+        outcome = repo.apply_venue_override("NOPE", "ARCA", ts)
+
+        assert outcome == "unmatched"
+        assert repo.get_by_ticker("NOPE") is None
+
+    def test_venue_override_transitions_ticker_to_backtestable(self, sync_session):
+        """Story 3.5 AC3: an override flips a non-backtestable ticker into the universe."""
+        from datetime import datetime, timezone
+
+        from src.services.metadata.backtestable import is_backtestable
+
+        repo = SyncInstrumentMetadataRepository(sync_session)
+        repo.upsert(
+            InstrumentMetadata(
+                **_make_metadata(
+                    ticker="AAA", venue="XNAS", resolution_status=ResolutionStatus.RESOLVED
+                )
+            )
+        )
+        repo.upsert(
+            InstrumentMetadata(
+                **_make_metadata(
+                    ticker="ZZZ", venue=None, resolution_status=ResolutionStatus.VENUE_UNRESOLVED
+                )
+            )
+        )
+        sync_session.commit()
+
+        # Before: only AAA is backtestable; ZZZ is excluded and flagged.
+        backtestable = repo.list_by_status(ResolutionStatus.RESOLVED)
+        assert [r.ticker for r in backtestable] == ["AAA"]
+        zzz = repo.get_by_ticker("ZZZ")
+        assert is_backtestable(zzz.resolution_status) is False
+
+        # Transition: resolve the venue via the Story 3.3 override (no bar/import op).
+        ts = datetime(2026, 7, 13, tzinfo=timezone.utc)
+        assert repo.apply_venue_override("ZZZ", "ARCA", ts) == "applied"
+        sync_session.commit()
+
+        # After: ZZZ is now in the backtestable universe, derived from the flipped status.
+        backtestable = repo.list_by_status(ResolutionStatus.RESOLVED)
+        assert sorted(r.ticker for r in backtestable) == ["AAA", "ZZZ"]
+        assert is_backtestable(repo.get_by_ticker("ZZZ").resolution_status) is True
