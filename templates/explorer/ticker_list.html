@@ -107,7 +107,7 @@
                        hx-include="#catalog-select, #search-input, [name='asset_class']"
                        hx-vals='{"page": "1", "sort_by": "bar_count_daily"}'
                        hx-push-url="true">
-                        D / 1H / 5m / 1m {% if state.sort_by == 'bar_count_daily' %}&#9650;{% endif %}
+                        D / 1H / 30m / 5m / 1m {% if state.sort_by == 'bar_count_daily' %}&#9650;{% endif %}
                     </button>
                 </th>
             </tr>
@@ -182,7 +182,7 @@
                 <!-- Bar Counts -->
                 <td class="px-3 py-2 text-right hidden xl:table-cell">
                     <span class="font-mono text-xs text-slate-400">
-                        {{ format_bar_count(row.bar_count_daily) }} / {{ format_bar_count(row.bar_count_hourly) }} / {{ format_bar_count(row.bar_count_5min) }} / {{ format_bar_count(row.bar_count_minute) }}
+                        {{ format_bar_count(row.bar_count_daily) }} / {{ format_bar_count(row.bar_count_hourly) }} / {{ format_bar_count(row.bar_count_30min) }} / {{ format_bar_count(row.bar_count_5min) }} / {{ format_bar_count(row.bar_count_minute) }}
                     </span>
                 </td>
             </tr>

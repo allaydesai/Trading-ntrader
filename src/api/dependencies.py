@@ -18,6 +18,7 @@ from src.db.repositories.backtest_repository import BacktestRepository
 from src.db.repositories.catalog_dividend_repository import CatalogDividendRepository
 from src.db.repositories.catalog_instrument_repository import CatalogInstrumentRepository
 from src.db.repositories.catalog_stock_split_repository import CatalogStockSplitRepository
+from src.db.repositories.instrument_metadata_repository import InstrumentMetadataRepository
 from src.db.session import get_session as get_db_session
 from src.services.backtest_query import BacktestQueryService
 from src.services.data_catalog import DataCatalogService
@@ -158,12 +159,29 @@ def get_stock_split_repository(
     return CatalogStockSplitRepository(session)
 
 
+def get_instrument_metadata_repository(
+    session: Annotated[AsyncSession, Depends(get_db)],
+) -> InstrumentMetadataRepository:
+    """Get async instrument-metadata repository instance.
+
+    Args:
+        session: Database session from dependency injection.
+
+    Returns:
+        InstrumentMetadataRepository configured with the session.
+    """
+    return InstrumentMetadataRepository(session)
+
+
 # Type aliases for cleaner route signatures
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 BacktestRepo = Annotated[BacktestRepository, Depends(get_backtest_repository)]
 BacktestService = Annotated[BacktestQueryService, Depends(get_backtest_query_service)]
 DividendRepo = Annotated[CatalogDividendRepository, Depends(get_dividend_repository)]
 SplitRepo = Annotated[CatalogStockSplitRepository, Depends(get_stock_split_repository)]
+InstrumentMetadataRepo = Annotated[
+    InstrumentMetadataRepository, Depends(get_instrument_metadata_repository)
+]
 
 
 def get_templates() -> Jinja2Templates:

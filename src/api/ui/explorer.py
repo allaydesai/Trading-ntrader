@@ -22,9 +22,11 @@ from src.api.dependencies import (  # noqa: F401
     DataCatalog,
     DefaultCatalog,
     DividendRepo,
+    InstrumentMetadataRepo,
     Metadata,
     SplitRepo,
 )
+from src.api.metadata_panel_service import _build_metadata_panel_context
 from src.api.models.chart_timeseries import Candle  # noqa: F401
 from src.api.models.explorer import (
     EXPLORER_PAGE_SIZE,
@@ -132,6 +134,7 @@ def _stats_template_context(stats) -> dict:
         "date_range_end": stats.date_range_end,
         "bar_count_daily": stats.bar_count_daily,
         "bar_count_hourly": stats.bar_count_hourly,
+        "bar_count_30min": stats.bar_count_30min,
         "bar_count_5min": stats.bar_count_5min,
         "bar_count_minute": stats.bar_count_minute,
         "price_min": stats.price_min,
@@ -151,7 +154,7 @@ async def stats_panel_fragment(
     ticker: str = Query(..., description="Ticker symbol"),
     tf: str = Query("D", description="Timeframe label"),
 ) -> HTMLResponse:
-    """Return the stats-panel HTMX fragment (7 stat cards)."""
+    """Return the stats-panel HTMX fragment (8 stat cards)."""
     stats = await _build_ticker_stats(service, catalog_service, catalog, ticker, tf)
     return templates.TemplateResponse(
         "explorer/stats_panel.html",
@@ -178,6 +181,25 @@ async def supplementary_panel_fragment(
     )
     return templates.TemplateResponse(
         "explorer/supplementary_panel.html",
+        {"request": request, **context},
+    )
+
+
+@router.get("/metadata-panel", response_class=HTMLResponse)
+async def metadata_panel_fragment(
+    request: Request,
+    metadata_repo: InstrumentMetadataRepo,
+    ticker: str = Query(..., description="Ticker symbol"),
+) -> HTMLResponse:
+    """Return the ETF metadata-panel HTMX fragment (N/A-aware, Story 4-4).
+
+    FMP-resolved metadata is keyed by ticker alone (catalog-independent) — no
+    ``catalog`` param. Additive: a ticker with no resolved row renders a clear
+    empty-state rather than a 404.
+    """
+    context = await _build_metadata_panel_context(metadata_repo, ticker)
+    return templates.TemplateResponse(
+        "explorer/metadata_panel.html",
         {"request": request, **context},
     )
 
@@ -235,6 +257,7 @@ async def _get_ticker_data(
             date_range_end=inst.date_range_end,
             bar_count_daily=inst.bar_count_daily,
             bar_count_hourly=inst.bar_count_hourly,
+            bar_count_30min=inst.bar_count_30min,
             bar_count_5min=inst.bar_count_5min,
             bar_count_minute=inst.bar_count_minute,
             nautilus_id=inst.nautilus_id,
@@ -418,6 +441,7 @@ async def chart_panel_fragment(
     catalog_service: DataCatalog,
     dividend_repo: DividendRepo,
     split_repo: SplitRepo,
+    metadata_repo: InstrumentMetadataRepo,
     catalog: str = Query(..., description="Catalog name"),
     ticker: str = Query(..., description="Ticker symbol"),
     tf: str = Query("D", description="Timeframe label"),
@@ -434,7 +458,7 @@ async def chart_panel_fragment(
         catalog_service: DataCatalogService dependency.
         catalog: Catalog name.
         ticker: Ticker symbol.
-        tf: Timeframe label (D, 1H, 5m, 1m).
+        tf: Timeframe label (D, 1H, 30m, 5m, 1m).
 
     Returns:
         HTMLResponse with chart_panel.html fragment.
@@ -502,6 +526,7 @@ async def chart_panel_fragment(
     supplementary = await _build_supplementary_context(
         service, dividend_repo, split_repo, catalog, ticker
     )
+    metadata_panel = await _build_metadata_panel_context(metadata_repo, ticker)
 
     explorer_state: dict[str, Any] = {
         "search": search,
@@ -541,5 +566,6 @@ async def chart_panel_fragment(
             "explorer_state_page": page,
             **_stats_template_context(stats),
             **supplementary,
+            **metadata_panel,
         },
     )

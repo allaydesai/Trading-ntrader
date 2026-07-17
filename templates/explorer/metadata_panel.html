@@ -1,0 +1,47 @@
+{#
+  HTMX fragment: ETF metadata panel (Story 4-4). Renders FMP-resolved metadata
+  with N/A-aware display: every descriptive cell reads only `metadata.display_*`
+  (never `x or "—"`); a value equal to `na_sentinel` is muted so an honest gap
+  reads differently from a real value. Venue is rendered distinctly via
+  `metadata.venue_resolved` — never the descriptive N/A sentinel.
+
+  The #metadata-panel wrapper lives in explorer.html (page container) or
+  chart_panel.html (OOB wrapper) — this fragment is the content only.
+#}
+{% macro field(label, value, mono=False) %}
+<div>
+    <dt class="text-xs font-medium text-slate-400 uppercase tracking-wider">{{ label }}</dt>
+    <dd class="text-sm mt-1 {{ 'font-mono ' if mono else '' }}{% if value == na_sentinel %}text-slate-500{% else %}text-slate-100{% endif %}">{{ value }}</dd>
+</div>
+{% endmacro %}
+<div class="mt-6">
+    <div class="bg-slate-900 rounded-lg border border-slate-800 px-4 py-4">
+        <h2 class="text-sm font-semibold text-slate-200 mb-3">Metadata</h2>
+        {% if has_metadata %}
+        <dl class="grid grid-cols-[repeat(auto-fit,minmax(160px,1fr))] gap-3">
+            {{ field("Name", metadata.display_company_name) }}
+
+            {# Venue: distinct state — amber "Unresolved" pill vs a resolved code (AC3) #}
+            <div>
+                <dt class="text-xs font-medium text-slate-400 uppercase tracking-wider">Venue</dt>
+                <dd class="mt-1">
+                    {% if metadata.venue_resolved %}
+                    <span class="inline-flex items-center font-mono text-sm text-slate-100">{{ metadata.display_venue }}</span>
+                    {% else %}
+                    <span class="inline-flex items-center px-2 py-0.5 text-xs font-medium rounded bg-yellow-900 text-amber-400">{{ metadata.display_venue }}</span>
+                    {% endif %}
+                </dd>
+            </div>
+
+            {{ field("Asset Type", metadata.display_asset_type) }}
+            {{ field("Sector", metadata.display_sector) }}
+            {{ field("Industry", metadata.display_industry) }}
+            {{ field("Country", metadata.display_country) }}
+            {{ field("Currency", metadata.display_currency, mono=True) }}
+            {{ field("IPO Date", metadata.display_ipo_date, mono=True) }}
+        </dl>
+        {% else %}
+        <p class="text-sm text-slate-500">No resolved metadata for this ticker yet</p>
+        {% endif %}
+    </div>
+</div>

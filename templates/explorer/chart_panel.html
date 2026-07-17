@@ -78,6 +78,11 @@
     {% include "explorer/stats_panel.html" %}
 </div>
 
+<!-- OOB refresh for ETF metadata panel (Story 4-4) -->
+<div id="metadata-panel" hx-swap-oob="innerHTML">
+    {% include "explorer/metadata_panel.html" %}
+</div>
+
 <!-- OOB refresh for supplementary panel (Story 4-2) -->
 <div id="supplementary-panel" hx-swap-oob="innerHTML">
     {% include "explorer/supplementary_panel.html" %}

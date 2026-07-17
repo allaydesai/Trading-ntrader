@@ -11,6 +11,7 @@ from src.api.dependencies import (
     get_data_catalog_service,
     get_default_catalog,
     get_dividend_repository,
+    get_instrument_metadata_repository,
     get_metadata_service,
     get_stock_split_repository,
 )
@@ -56,6 +57,25 @@ def _make_bar(ts_ns: int, o: float, h: float, lo: float, c: float, vol: float):
     return bar
 
 
+def _toolbar_button_tag(html: str, label: str) -> str:
+    """Return the opening ``<button ...>`` tag markup for the toolbar button
+    whose ``aria-label`` is ``"{label} timeframe"``.
+
+    Lets tests assert attributes (``aria-pressed``, ``disabled``) on the SPECIFIC
+    timeframe button rather than anywhere in the page — the toolbar always emits
+    one ``aria-pressed="true"`` and the arrow-key script always contains the
+    substring ``disabled`` (``button:not([disabled])``), so page-wide substring
+    checks are vacuous.
+    """
+    marker = f'aria-label="{label} timeframe"'
+    idx = html.find(marker)
+    assert idx != -1, f"toolbar button for {label!r} not found"
+    tag_open = html.rfind("<button", 0, idx)
+    tag_close = html.find(">", idx)
+    assert tag_open != -1 and tag_close != -1
+    return html[tag_open : tag_close + 1]
+
+
 @pytest.fixture
 def mock_metadata_service():
     """Create a mock MetadataService."""
@@ -97,7 +117,21 @@ def mock_split_repo():
 
 
 @pytest.fixture
-def client(mock_metadata_service, mock_catalog_service, mock_dividend_repo, mock_split_repo):
+def mock_instrument_metadata_repo():
+    """Mock async instrument-metadata repo — no resolved row by default."""
+    repo = AsyncMock()
+    repo.get_by_ticker = AsyncMock(return_value=None)
+    return repo
+
+
+@pytest.fixture
+def client(
+    mock_metadata_service,
+    mock_catalog_service,
+    mock_dividend_repo,
+    mock_split_repo,
+    mock_instrument_metadata_repo,
+):
     """Get test client with mocked dependencies."""
     app.dependency_overrides[get_metadata_service] = lambda: mock_metadata_service
     app.dependency_overrides[get_data_catalog_service] = lambda: mock_catalog_service
@@ -105,6 +139,9 @@ def client(mock_metadata_service, mock_catalog_service, mock_dividend_repo, mock
     app.dependency_overrides[get_default_catalog] = lambda: "us_stocks"
     app.dependency_overrides[get_dividend_repository] = lambda: mock_dividend_repo
     app.dependency_overrides[get_stock_split_repository] = lambda: mock_split_repo
+    app.dependency_overrides[get_instrument_metadata_repository] = (
+        lambda: mock_instrument_metadata_repo
+    )
 
     try:
         yield TestClient(app)
@@ -115,6 +152,7 @@ def client(mock_metadata_service, mock_catalog_service, mock_dividend_repo, mock
         app.dependency_overrides.pop(get_default_catalog, None)
         app.dependency_overrides.pop(get_dividend_repository, None)
         app.dependency_overrides.pop(get_stock_split_repository, None)
+        app.dependency_overrides.pop(get_instrument_metadata_repository, None)
 
 
 @pytest.mark.component
@@ -143,6 +181,12 @@ class TestChartDataRestEndpoint:
         client.get("/api/chart/catalog/AAPL?catalog=us_stocks&tf=1H")
         call_kwargs = mock_catalog_service.query_bars.call_args_list[0].kwargs
         assert call_kwargs["bar_type_spec"] == "1-HOUR-LAST"
+
+    def test_30min_timeframe_mapping(self, client, mock_catalog_service):
+        """Story 4.3 AC1: `tf=30m` resolves to the 30-MINUTE-LAST bar type."""
+        client.get("/api/chart/catalog/AAPL?catalog=us_stocks&tf=30m")
+        call_kwargs = mock_catalog_service.query_bars.call_args_list[0].kwargs
+        assert call_kwargs["bar_type_spec"] == "30-MINUTE-LAST"
 
     def test_default_timeframe_is_daily(self, client, mock_catalog_service):
         client.get("/api/chart/catalog/AAPL?catalog=us_stocks")
@@ -253,6 +297,13 @@ class TestChartPanelUIRoute:
         assert "Dividend History" in response.text
         assert "Stock Split History" in response.text
 
+    def test_oob_metadata_panel_wrapper_present(self, client):
+        """Chart-panel response carries the ETF metadata OOB block (Story 4-4)."""
+        response = client.get("/explorer/chart-panel?catalog=us_stocks&ticker=AAPL&tf=D")
+        assert 'id="metadata-panel"' in response.text
+        # No resolved row for AAPL in this fixture → additive empty-state, not a 500.
+        assert "No resolved metadata for this ticker yet" in response.text
+
     def test_oob_stats_panel_rendered_with_cards(self, client):
         response = client.get("/explorer/chart-panel?catalog=us_stocks&ticker=AAPL&tf=D")
         text = response.text
@@ -328,6 +379,39 @@ class TestChartPanelUIRoute:
         )
         response = client.get("/explorer/chart-panel?catalog=us_stocks&ticker=AAPL&tf=D")
         assert "disabled" in response.text
+
+    def test_timeframe_toolbar_includes_all_five_buttons(self, client):
+        """Story 4.3 AC2: all five timeframe buttons — incl. 30m — are present as
+        distinct toolbar buttons (matched by aria-label, not page-wide substring)."""
+        response = client.get("/explorer/chart-panel?catalog=us_stocks&ticker=AAPL&tf=D")
+        text = response.text
+        for label in ["D", "1H", "30m", "5m", "1m"]:
+            # Raises if the specific toolbar button is missing.
+            _toolbar_button_tag(text, label)
+
+    def test_30m_button_active_when_selected(self, client):
+        """Story 4.3 AC1/AC2: selecting 30m makes the 30m button (not another) active.
+
+        Pins aria-pressed to the 30m button's own markup so a tf=30m→Daily
+        fallback (which would leave the D button pressed) fails the test.
+        """
+        response = client.get("/explorer/chart-panel?catalog=us_stocks&ticker=AAPL&tf=30m")
+        assert response.status_code == 200
+        tag = _toolbar_button_tag(response.text, "30m")
+        assert 'aria-pressed="true"' in tag
+        # And the Daily button must NOT be the active one.
+        assert 'aria-pressed="true"' not in _toolbar_button_tag(response.text, "D")
+
+    def test_30m_button_disabled_when_no_30min_bars(self, client, mock_metadata_service):
+        """Story 4.3 AC2: when the ETF has no 30min bars, the 30m button is present
+        but disabled (never hidden) — asserted on the 30m button's own markup."""
+        mock_metadata_service.get_instrument.return_value = _make_instrument(bar_count_30min=0)
+        response = client.get("/explorer/chart-panel?catalog=us_stocks&ticker=AAPL&tf=D")
+        tag = _toolbar_button_tag(response.text, "30m")
+        assert "disabled" in tag
+        # A timeframe that still has bars (5m) stays enabled — proves the disabled
+        # state is specific to 30m, not blanket.
+        assert "disabled" not in _toolbar_button_tag(response.text, "5m")
 
 
 @pytest.mark.component
@@ -472,6 +556,19 @@ class TestChartPanelWindowing:
         expected_start = datetime(2025, 12, 31, tzinfo=timezone.utc) - timedelta(days=180)
         assert call_kwargs["start"] == expected_start
 
+    def test_30min_loads_windowed_range(self, client, mock_catalog_service):
+        """Story 4.3 AC3: 30-min timeframe windows to last 90 days from date_range_end.
+
+        Reads a windowed Parquet range (not the full history) with the
+        30-MINUTE-LAST bar type, keeping the payload small (NFR1 < 2s).
+        """
+        client.get("/explorer/chart-panel?catalog=us_stocks&ticker=AAPL&tf=30m")
+        call_kwargs = mock_catalog_service.query_bars.call_args_list[0].kwargs
+        assert call_kwargs["bar_type_spec"] == "30-MINUTE-LAST"
+        assert call_kwargs["end"] == datetime(2025, 12, 31, tzinfo=timezone.utc)
+        expected_start = datetime(2025, 12, 31, tzinfo=timezone.utc) - timedelta(days=90)
+        assert call_kwargs["start"] == expected_start
+
     def test_1min_loads_windowed_range(self, client, mock_catalog_service):
         """1-min timeframe windows to last 7 days."""
         client.get("/explorer/chart-panel?catalog=us_stocks&ticker=AAPL&tf=1m")
@@ -509,3 +606,60 @@ class TestChartPanelWindowing:
         assert stats_call["start"] == datetime(2020, 1, 2, tzinfo=timezone.utc)
         assert stats_call["end"] == datetime(2025, 12, 31, tzinfo=timezone.utc)
         assert chart_call["start"] > stats_call["start"]
+
+
+@pytest.mark.component
+class TestEtfChartAllTimeframes:
+    """Story 4.3: a venue-qualified ETF charts at all five native timeframes."""
+
+    _EXPECTED_SPEC = {
+        "D": "1-DAY-LAST",
+        "1H": "1-HOUR-LAST",
+        "30m": "30-MINUTE-LAST",
+        "5m": "5-MINUTE-LAST",
+        "1m": "1-MINUTE-LAST",
+    }
+
+    @pytest.mark.parametrize("label", ["D", "1H", "30m", "5m", "1m"])
+    def test_etf_charts_each_timeframe(
+        self, client, mock_metadata_service, mock_catalog_service, label
+    ):
+        """AC1/AC4: each timeframe queries the ETF's DB-authoritative nautilus_id
+        with the label's bar_type_spec (30m → 30-MINUTE-LAST)."""
+        mock_metadata_service.get_instrument.return_value = _make_instrument(
+            ticker="SPY",
+            nautilus_id="SPY.ARCA",
+            asset_class="ETF",
+            catalog_name="firstrate-etf",
+        )
+        response = client.get(f"/explorer/chart-panel?catalog=firstrate-etf&ticker=SPY&tf={label}")
+        assert response.status_code == 200
+        chart_call = mock_catalog_service.query_bars.call_args_list[0].kwargs
+        assert chart_call["instrument_id"] == "SPY.ARCA"
+        assert chart_call["bar_type_spec"] == self._EXPECTED_SPEC[label]
+
+    def test_etf_unresolved_venue_returns_404(self, client, mock_metadata_service):
+        """AC4: a venue-unresolved ETF (nautilus_id NULL) is never charted under a
+        guessed venue — the chart route 404s it (Epic 3 / ADR-6 contract)."""
+        mock_metadata_service.get_instrument.return_value = _make_instrument(
+            ticker="SPY", asset_class="ETF", nautilus_id=None
+        )
+        response = client.get("/explorer/chart-panel?catalog=firstrate-etf&ticker=SPY&tf=30m")
+        assert response.status_code == 404
+
+
+@pytest.mark.component
+class TestChartEndpointDocs:
+    """Story 4.3 AC5: the public `tf` param docs enumerate all five labels incl. 30m."""
+
+    def test_chart_endpoint_tf_doc_lists_30m(self, client):
+        schema = client.get("/openapi.json").json()
+        params = schema["paths"]["/api/chart/catalog/{ticker}"]["get"]["parameters"]
+        tf_param = next(p for p in params if p["name"] == "tf")
+        assert "30m" in tf_param["description"]
+
+    def test_stats_endpoint_tf_doc_lists_30m(self, client):
+        schema = client.get("/openapi.json").json()
+        params = schema["paths"]["/api/explorer/ticker/{ticker}/stats"]["get"]["parameters"]
+        tf_param = next(p for p in params if p["name"] == "tf")
+        assert "30m" in tf_param["description"]

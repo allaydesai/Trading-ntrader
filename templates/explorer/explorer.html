@@ -72,7 +72,7 @@
                    hx-get="/explorer/ticker-list"
                    hx-trigger="keyup changed delay:300ms"
                    hx-target="#ticker-list"
-                   hx-include="#catalog-select, [name='sort_by']"
+                   hx-include="#catalog-select, [name='sort_by'], [name='asset_class']"
                    hx-vals='{"page": "1"}'
                    hx-push-url="true"
                    hx-indicator="#loading-bar">
@@ -135,6 +135,17 @@
              hx-swap="innerHTML"
              {% endif %}>
             {% if selected_ticker %}{% include "explorer/stats_panel_skeleton.html" %}{% endif %}
+        </div>
+        <div id="metadata-panel"
+             aria-live="polite"
+             data-ticker="{{ selected_ticker or '' }}"
+             {% if selected_ticker %}
+             hx-get="/explorer/metadata-panel"
+             hx-trigger="load"
+             hx-vals='{"ticker": {{ selected_ticker | tojson }}}'
+             hx-swap="innerHTML"
+             {% endif %}>
+            {% if selected_ticker %}{% include "explorer/metadata_panel_skeleton.html" %}{% endif %}
         </div>
         <div id="supplementary-panel"
              aria-live="polite"

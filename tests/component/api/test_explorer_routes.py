@@ -95,6 +95,12 @@ class TestExplorerRestEndpoint:
         assert row["bar_count_5min"] == 93750
         assert "coverage_pct" in row
 
+    def test_ticker_row_includes_30min(self, client):
+        """Story 4.1 AC4: REST rows carry bar_count_30min (parity with the UI row)."""
+        response = client.get("/api/explorer/tickers?catalog=us_stocks")
+        row = response.json()["tickers"][0]
+        assert row["bar_count_30min"] == 15625
+
     def test_search_param_forwarded(self, client, mock_metadata_service):
         client.get("/api/explorer/tickers?catalog=us_stocks&search=AA")
         call_kwargs = mock_metadata_service.list_instruments_with_search.call_args.kwargs
@@ -158,6 +164,19 @@ class TestExplorerUIPage:
         response = client.get("/explorer")
         assert 'name="search"' in response.text
 
+    def test_search_input_preserves_asset_class_filter(self, client):
+        """Story 4.2 AC1/AC3: the search input's hx-include carries the active
+        asset-class filter, so typing while the ETF pill is active narrows within
+        ETFs instead of resetting to All. The search input is the one ticker-list
+        control that historically omitted [name='asset_class']."""
+        response = client.get("/explorer")
+        # Slice out just the #search-input element (single tag, no '>' until close).
+        start = response.text.index('id="search-input"')
+        tag = response.text[start : response.text.index(">", start)]
+        assert "hx-include" in tag
+        assert "[name='sort_by']" in tag
+        assert "[name='asset_class']" in tag
+
     def test_breadcrumbs_rendered(self, client):
         response = client.get("/explorer")
         assert "Explorer" in response.text
@@ -215,6 +234,48 @@ class TestExplorerTickerListFragment:
         response = client.get("/explorer/ticker-list?catalog=crypto")
         # The OOB breadcrumb should label the newly-selected catalog.
         assert "crypto" in response.text
+
+    def test_30min_column_header_rendered(self, client):
+        """Story 4.1 AC2: the browse table header lists all five native timeframes."""
+        response = client.get("/explorer/ticker-list?catalog=us_stocks")
+        assert "D / 1H / 30m / 5m / 1m" in response.text
+
+    def test_30min_bar_count_value_rendered(self, client, mock_metadata_service):
+        """Story 4.1 AC1/AC2: an ETF row shows its 30min bar count in the row."""
+        mock_metadata_service.list_instruments_with_search.return_value = (
+            [_make_instrument(ticker="SPY", asset_class="ETF", bar_count_30min=333)],
+            1,
+        )
+        response = client.get("/explorer/ticker-list?catalog=us_stocks&asset_class=ETF")
+        assert "SPY" in response.text
+        # 333 formats verbatim (< 1000) — proves the 30min column value is emitted.
+        assert "333" in response.text
+
+    def test_etf_filter_forwarded_to_service(self, client, mock_metadata_service):
+        """Story 4.1 AC1: ETFs are filterable from Stocks via asset_class."""
+        client.get("/explorer/ticker-list?catalog=us_stocks&asset_class=ETF")
+        call_kwargs = mock_metadata_service.list_instruments_with_search.call_args.kwargs
+        assert call_kwargs["asset_class"] == "ETF"
+
+    def test_search_within_etf_filter_forwarded(self, client, mock_metadata_service):
+        """Story 4.2 AC1: searching within the ETF filter forwards BOTH the
+        asset_class and the search term, so the list narrows within ETFs."""
+        client.get("/explorer/ticker-list?catalog=us_stocks&asset_class=ETF&search=SP")
+        call_kwargs = mock_metadata_service.list_instruments_with_search.call_args.kwargs
+        assert call_kwargs["asset_class"] == "ETF"
+        assert call_kwargs["search"] == "SP"
+
+    def test_etf_pill_stays_active_during_search(self, client, mock_metadata_service):
+        """Story 4.2 AC3: the ETF pill stays highlighted while searching (the
+        asset_class state round-trips into the re-rendered fragment)."""
+        mock_metadata_service.count_asset_classes.return_value = {"ETF": 1}
+        mock_metadata_service.list_instruments_with_search.return_value = (
+            [_make_instrument(ticker="SPY", asset_class="ETF")],
+            1,
+        )
+        response = client.get("/explorer/ticker-list?catalog=us_stocks&asset_class=ETF&search=SP")
+        assert 'aria-pressed="true"' in response.text
+        assert "ETF (1)" in response.text
 
     def test_empty_search_message(self, client, mock_metadata_service):
         mock_metadata_service.list_instruments_with_search.return_value = ([], 0)

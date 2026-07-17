@@ -48,7 +48,7 @@ async def get_ticker_stats(
     dividend_repo: DividendRepo,
     split_repo: SplitRepo,
     catalog: str = Query(..., description="Catalog name"),
-    tf: str = Query("D", description="Timeframe label (D, 1H, 5m, 1m)"),
+    tf: str = Query("D", description="Timeframe label (D, 1H, 30m, 5m, 1m)"),
 ) -> TickerStatsResponse:
     """Get ticker statistics, price range, and supplementary availability flags."""
     return await _build_ticker_stats(
@@ -67,7 +67,7 @@ async def get_chart_data(
     service: Metadata,
     catalog_service: DataCatalog,
     catalog: str = Query(..., description="Catalog name"),
-    tf: str = Query("D", description="Timeframe label (D, 1H, 5m, 1m)"),
+    tf: str = Query("D", description="Timeframe label (D, 1H, 30m, 5m, 1m)"),
     start: Optional[date] = Query(None, description="Start date (ISO 8601)"),
     end: Optional[date] = Query(None, description="End date (ISO 8601)"),
 ) -> ChartDataResponse:
@@ -78,7 +78,7 @@ async def get_chart_data(
         service: MetadataService dependency.
         catalog_service: DataCatalogService dependency.
         catalog: Catalog name to query.
-        tf: Timeframe label (D, 1H, 5m, 1m). Defaults to D.
+        tf: Timeframe label (D, 1H, 30m, 5m, 1m). Defaults to D.
         start: Optional start date for time range.
         end: Optional end date for time range.
 
@@ -187,6 +187,7 @@ async def get_explorer_tickers(
             date_range_end=inst.date_range_end,
             bar_count_daily=inst.bar_count_daily,
             bar_count_hourly=inst.bar_count_hourly,
+            bar_count_30min=inst.bar_count_30min,
             bar_count_5min=inst.bar_count_5min,
             bar_count_minute=inst.bar_count_minute,
             nautilus_id=inst.nautilus_id,

@@ -119,6 +119,7 @@ class TestStatsRestEndpoint:
         assert data["nautilus_id"] == "AAPL.XNAS"
         assert data["bar_count_daily"] == 1250
         assert data["bar_count_hourly"] == 8750
+        assert data["bar_count_30min"] == 15625
         assert data["bar_count_5min"] == 93750
         assert data["bar_count_minute"] == 468750
         assert data["price_min"] == 97.10
@@ -217,12 +218,13 @@ class TestStatsPanelUIRoute:
         response = client.get("/explorer/stats-panel?catalog=us_stocks&ticker=AAPL&tf=D")
         assert 'id="stats-panel"' not in response.text
 
-    def test_contains_seven_card_labels(self, client):
+    def test_contains_eight_card_labels(self, client):
         response = client.get("/explorer/stats-panel?catalog=us_stocks&ticker=AAPL&tf=D")
         text = response.text
         assert "Date Range" in text
         assert "Daily Bars" in text
         assert "1-Hour Bars" in text
+        assert "30-Min Bars" in text
         assert "5-Min Bars" in text
         assert "1-Min Bars" in text
         assert "Price Range" in text
@@ -247,6 +249,19 @@ class TestStatsPanelUIRoute:
         response = client.get("/explorer/stats-panel?catalog=us_stocks&ticker=AAPL&tf=1H")
         # Active tf highlight uses ring utility
         assert "ring-blue-500" in response.text
+
+    def test_active_tf_30m_highlighted(self, client):
+        """The new 30m tile carries the active-timeframe ring highlight (Story 4-5)."""
+        response = client.get("/explorer/stats-panel?catalog=us_stocks&ticker=AAPL&tf=30m")
+        text = response.text
+        assert "30-Min Bars" in text
+        # The ring highlight lands on the 30-Min card wrapper: the outer card <div>
+        # carries `bg-slate-900` and the ring class, immediately before the label.
+        label_start = text.index("30-Min Bars")
+        card_open = text.rfind("bg-slate-900", 0, label_start)
+        assert "ring-blue-500" in text[card_open:label_start]
+        # And the Price Range subtitle echoes the 30m timeframe.
+        assert "30m timeframe" in text
 
     def test_ticker_not_found_returns_404(self, client, mock_metadata_service):
         mock_metadata_service.get_instrument.return_value = None
@@ -282,14 +297,14 @@ class TestExplorerPageStatsAutoload:
 
 @pytest.mark.component
 class TestStatsPanelSkeleton:
-    """Tests for the 7-card skeleton rendered on deep-link auto-load (AC #3)."""
+    """Tests for the 8-card skeleton rendered on deep-link auto-load (AC #3)."""
 
     def test_skeleton_rendered_when_ticker_selected(self, client):
-        """Deep-link with ?ticker= must render seven animate-pulse cards inside #stats-panel."""
+        """Deep-link with ?ticker= must render eight animate-pulse cards inside #stats-panel."""
         response = client.get("/explorer/?catalog=us_stocks&ticker=AAPL&tf=D")
         text = response.text
-        # Seven skeleton cards
-        assert text.count("stats-skeleton-card") == 7
+        # Eight skeleton cards (Story 4-5 added the 30-Min tile)
+        assert text.count("stats-skeleton-card") == 8
         # Animate-pulse classes present inside the cards
         assert "animate-pulse bg-slate-800" in text
 
