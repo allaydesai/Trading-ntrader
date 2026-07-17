@@ -11,6 +11,7 @@ from src.api.dependencies import (
     get_data_catalog_service,
     get_default_catalog,
     get_dividend_repository,
+    get_instrument_metadata_repository,
     get_metadata_service,
     get_stock_split_repository,
 )
@@ -97,7 +98,21 @@ def mock_split_repo():
 
 
 @pytest.fixture
-def client(mock_metadata_service, mock_catalog_service, mock_dividend_repo, mock_split_repo):
+def mock_instrument_metadata_repo():
+    """Mock async instrument-metadata repo — no resolved row by default."""
+    repo = AsyncMock()
+    repo.get_by_ticker = AsyncMock(return_value=None)
+    return repo
+
+
+@pytest.fixture
+def client(
+    mock_metadata_service,
+    mock_catalog_service,
+    mock_dividend_repo,
+    mock_split_repo,
+    mock_instrument_metadata_repo,
+):
     """Get test client with mocked dependencies."""
     app.dependency_overrides[get_metadata_service] = lambda: mock_metadata_service
     app.dependency_overrides[get_data_catalog_service] = lambda: mock_catalog_service
@@ -105,6 +120,9 @@ def client(mock_metadata_service, mock_catalog_service, mock_dividend_repo, mock
     app.dependency_overrides[get_default_catalog] = lambda: "us_stocks"
     app.dependency_overrides[get_dividend_repository] = lambda: mock_dividend_repo
     app.dependency_overrides[get_stock_split_repository] = lambda: mock_split_repo
+    app.dependency_overrides[get_instrument_metadata_repository] = (
+        lambda: mock_instrument_metadata_repo
+    )
 
     try:
         yield TestClient(app)
@@ -115,6 +133,7 @@ def client(mock_metadata_service, mock_catalog_service, mock_dividend_repo, mock
         app.dependency_overrides.pop(get_default_catalog, None)
         app.dependency_overrides.pop(get_dividend_repository, None)
         app.dependency_overrides.pop(get_stock_split_repository, None)
+        app.dependency_overrides.pop(get_instrument_metadata_repository, None)
 
 
 @pytest.mark.component
@@ -252,6 +271,13 @@ class TestChartPanelUIRoute:
         assert "Company Profile" in response.text
         assert "Dividend History" in response.text
         assert "Stock Split History" in response.text
+
+    def test_oob_metadata_panel_wrapper_present(self, client):
+        """Chart-panel response carries the ETF metadata OOB block (Story 4-4)."""
+        response = client.get("/explorer/chart-panel?catalog=us_stocks&ticker=AAPL&tf=D")
+        assert 'id="metadata-panel"' in response.text
+        # No resolved row for AAPL in this fixture → additive empty-state, not a 500.
+        assert "No resolved metadata for this ticker yet" in response.text
 
     def test_oob_stats_panel_rendered_with_cards(self, client):
         response = client.get("/explorer/chart-panel?catalog=us_stocks&ticker=AAPL&tf=D")
