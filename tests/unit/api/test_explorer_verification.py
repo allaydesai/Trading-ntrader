@@ -12,12 +12,12 @@ engine. They pin the two accuracy contracts the explorer must honor:
 from unittest.mock import MagicMock
 
 import pytest
+
 from src.api.explorer_verification import (
     MAX_FIDELITY_ISSUES,
     verify_candle_fidelity,
     verify_metadata_na_contract,
 )
-
 from src.api.models.explorer import Candle
 from src.api.models.metadata_panel import VENUE_UNRESOLVED_LABEL, EtfMetadataPanel
 from src.models.instrument_metadata import NA_SENTINEL
