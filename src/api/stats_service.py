@@ -125,6 +125,7 @@ async def _build_ticker_stats(
         date_range_end=instrument.date_range_end,
         bar_count_daily=getattr(instrument, "bar_count_daily", 0) or 0,
         bar_count_hourly=getattr(instrument, "bar_count_hourly", 0) or 0,
+        bar_count_30min=getattr(instrument, "bar_count_30min", 0) or 0,
         bar_count_5min=getattr(instrument, "bar_count_5min", 0) or 0,
         bar_count_minute=getattr(instrument, "bar_count_minute", 0) or 0,
         price_min=price_min,

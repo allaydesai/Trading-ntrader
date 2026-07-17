@@ -197,6 +197,7 @@ class TestTickerStatsResponse:
         assert resp.date_range_end is None
         assert resp.bar_count_daily == 0
         assert resp.bar_count_hourly == 0
+        assert resp.bar_count_30min == 0
         assert resp.bar_count_5min == 0
         assert resp.bar_count_minute == 0
         assert resp.price_min is None
@@ -211,6 +212,7 @@ class TestTickerStatsResponse:
             date_range_end=datetime(2025, 12, 31, tzinfo=timezone.utc),
             bar_count_daily=1250,
             bar_count_hourly=8750,
+            bar_count_30min=15625,
             bar_count_5min=93750,
             bar_count_minute=468750,
             price_min=45.50,
@@ -219,6 +221,7 @@ class TestTickerStatsResponse:
         )
         assert resp.nautilus_id == "AAPL.XNAS"
         assert resp.bar_count_hourly == 8750
+        assert resp.bar_count_30min == 15625
         assert resp.price_min == 45.50
         assert resp.price_max == 198.75
         assert resp.active_tf == "1H"

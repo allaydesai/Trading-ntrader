@@ -132,6 +132,7 @@ def _stats_template_context(stats) -> dict:
         "date_range_end": stats.date_range_end,
         "bar_count_daily": stats.bar_count_daily,
         "bar_count_hourly": stats.bar_count_hourly,
+        "bar_count_30min": stats.bar_count_30min,
         "bar_count_5min": stats.bar_count_5min,
         "bar_count_minute": stats.bar_count_minute,
         "price_min": stats.price_min,
@@ -151,7 +152,7 @@ async def stats_panel_fragment(
     ticker: str = Query(..., description="Ticker symbol"),
     tf: str = Query("D", description="Timeframe label"),
 ) -> HTMLResponse:
-    """Return the stats-panel HTMX fragment (7 stat cards)."""
+    """Return the stats-panel HTMX fragment (8 stat cards)."""
     stats = await _build_ticker_stats(service, catalog_service, catalog, ticker, tf)
     return templates.TemplateResponse(
         "explorer/stats_panel.html",

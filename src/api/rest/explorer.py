@@ -48,7 +48,7 @@ async def get_ticker_stats(
     dividend_repo: DividendRepo,
     split_repo: SplitRepo,
     catalog: str = Query(..., description="Catalog name"),
-    tf: str = Query("D", description="Timeframe label (D, 1H, 5m, 1m)"),
+    tf: str = Query("D", description="Timeframe label (D, 1H, 30m, 5m, 1m)"),
 ) -> TickerStatsResponse:
     """Get ticker statistics, price range, and supplementary availability flags."""
     return await _build_ticker_stats(
