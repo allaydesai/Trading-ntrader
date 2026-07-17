@@ -164,6 +164,19 @@ class TestExplorerUIPage:
         response = client.get("/explorer")
         assert 'name="search"' in response.text
 
+    def test_search_input_preserves_asset_class_filter(self, client):
+        """Story 4.2 AC1/AC3: the search input's hx-include carries the active
+        asset-class filter, so typing while the ETF pill is active narrows within
+        ETFs instead of resetting to All. The search input is the one ticker-list
+        control that historically omitted [name='asset_class']."""
+        response = client.get("/explorer")
+        # Slice out just the #search-input element (single tag, no '>' until close).
+        start = response.text.index('id="search-input"')
+        tag = response.text[start : response.text.index(">", start)]
+        assert "hx-include" in tag
+        assert "[name='sort_by']" in tag
+        assert "[name='asset_class']" in tag
+
     def test_breadcrumbs_rendered(self, client):
         response = client.get("/explorer")
         assert "Explorer" in response.text
@@ -243,6 +256,26 @@ class TestExplorerTickerListFragment:
         client.get("/explorer/ticker-list?catalog=us_stocks&asset_class=ETF")
         call_kwargs = mock_metadata_service.list_instruments_with_search.call_args.kwargs
         assert call_kwargs["asset_class"] == "ETF"
+
+    def test_search_within_etf_filter_forwarded(self, client, mock_metadata_service):
+        """Story 4.2 AC1: searching within the ETF filter forwards BOTH the
+        asset_class and the search term, so the list narrows within ETFs."""
+        client.get("/explorer/ticker-list?catalog=us_stocks&asset_class=ETF&search=SP")
+        call_kwargs = mock_metadata_service.list_instruments_with_search.call_args.kwargs
+        assert call_kwargs["asset_class"] == "ETF"
+        assert call_kwargs["search"] == "SP"
+
+    def test_etf_pill_stays_active_during_search(self, client, mock_metadata_service):
+        """Story 4.2 AC3: the ETF pill stays highlighted while searching (the
+        asset_class state round-trips into the re-rendered fragment)."""
+        mock_metadata_service.count_asset_classes.return_value = {"ETF": 1}
+        mock_metadata_service.list_instruments_with_search.return_value = (
+            [_make_instrument(ticker="SPY", asset_class="ETF")],
+            1,
+        )
+        response = client.get("/explorer/ticker-list?catalog=us_stocks&asset_class=ETF&search=SP")
+        assert 'aria-pressed="true"' in response.text
+        assert "ETF (1)" in response.text
 
     def test_empty_search_message(self, client, mock_metadata_service):
         mock_metadata_service.list_instruments_with_search.return_value = ([], 0)
