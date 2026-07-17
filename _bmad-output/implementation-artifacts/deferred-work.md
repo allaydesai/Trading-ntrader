@@ -44,3 +44,13 @@ Real, non-blocking findings deferred from code reviews. Each entry notes its sou
   tickers actually resolved this run, with no "unresolved" line in the summary table. Pre-existing Epic-1
   aggregation semantics — Story 2.7's import-summary wiring only reads `from_results`. Revisit alongside the
   Epic-3 venue worklist / completeness gate, where unresolved-state reporting is in scope.
+
+## Deferred from: code review of story 4-3-chart-a-selected-etf-at-all-5-timeframes (2026-07-16)
+
+- **Stats panel has no 30-Min bar-count card** [src/api/models/explorer.py:161-164;
+  src/api/stats_service.py:126-129]. `TickerStatsResponse` and `_build_ticker_stats` carry
+  `bar_count_daily/hourly/5min/minute` but not `bar_count_30min`, so the explorer stats panel renders no
+  30-Min bar-count card. The 30m *chart* and *toolbar* work correctly (they read
+  `CatalogInstrument.bar_count_30min` directly); only the stats *display* omits the 30-min row. Pre-existing
+  and explicitly out of Story 4.3's scope ("No stats/metadata-panel work"). Belongs to **Story 4.5**
+  (Per-Timeframe ETF Data Statistics), which adds per-timeframe stats incl. 30min.

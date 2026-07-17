@@ -435,7 +435,7 @@ async def chart_panel_fragment(
         catalog_service: DataCatalogService dependency.
         catalog: Catalog name.
         ticker: Ticker symbol.
-        tf: Timeframe label (D, 1H, 5m, 1m).
+        tf: Timeframe label (D, 1H, 30m, 5m, 1m).
 
     Returns:
         HTMLResponse with chart_panel.html fragment.
