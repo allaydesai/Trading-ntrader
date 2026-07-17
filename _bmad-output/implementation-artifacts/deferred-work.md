@@ -2,6 +2,21 @@
 
 Real, non-blocking findings deferred from code reviews. Each entry notes its source and why it was deferred.
 
+## Deferred from: code review of story 4-2-search-and-filter-the-etf-ticker-list-by-symbol (2026-07-17)
+
+- **Catalog dropdown drops the active asset-class filter on catalog switch**
+  [templates/explorer/explorer.html:38]. The catalog `<select>` uses
+  `hx-include="#search-input, [name='asset_class']:checked"`. The only element named `asset_class` is the
+  `type="hidden"` input at `templates/explorer/ticker_list.html:10`, which can never match a `:checked` selector
+  (the asset-class pills are `<button>` elements, not checkable inputs). So switching catalog forwards **no**
+  `asset_class` and the re-rendered list resets to "All" (the "All" pill becomes `aria-pressed="true"`), even though
+  the same dropdown *does* preserve the typed `search` via `#search-input`. Pre-existing and **explicitly scoped
+  out** of Story 4.2, which fixes only the **search-input** filter-state leak (the story's Dev Notes call catalog-
+  switch reset-to-All a defensible fresh-catalog behavior, since a newly-selected catalog may not contain the same
+  asset classes). If a future story decides catalog-switch should preserve the pill, the fix mirrors 4.2's:
+  replace `[name='asset_class']:checked` with `[name='asset_class']` on the catalog select's `hx-include`. No test
+  currently covers the catalog-switch asset_class path.
+
 ## Deferred from: code review of story 4-1-browse-imported-etf-tickers (2026-07-16)
 
 - **Stats/detail panel omits the 30min tile** [src/api/models/explorer.py:163-166 (`TickerStatsResponse`);

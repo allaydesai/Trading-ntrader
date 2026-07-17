@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-06-17
-last_updated: "2026-07-16"  # Epic 4 started: Story 4.1 (browse imported ETF tickers — surface 30min in browse list) done
+last_updated: "2026-07-17"  # Story 4.2 (search & filter ETF ticker list by symbol — preserve asset-class filter on search) done
 project: Trading-ntrader
 project_key: NOKEY
 tracking_system: file-system
@@ -82,7 +82,7 @@ development_status:
   # Epic 4: Data Explorer — ETF Support
   epic-4: in-progress
   4-1-browse-imported-etf-tickers: done
-  4-2-search-and-filter-the-etf-ticker-list-by-symbol: backlog
+  4-2-search-and-filter-the-etf-ticker-list-by-symbol: done
   4-3-chart-a-selected-etf-at-all-5-timeframes: done
   4-4-etf-metadata-panel-with-na-aware-rendering: done
   4-5-per-timeframe-etf-data-statistics: done
