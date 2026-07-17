@@ -136,6 +136,17 @@
              {% endif %}>
             {% if selected_ticker %}{% include "explorer/stats_panel_skeleton.html" %}{% endif %}
         </div>
+        <div id="metadata-panel"
+             aria-live="polite"
+             data-ticker="{{ selected_ticker or '' }}"
+             {% if selected_ticker %}
+             hx-get="/explorer/metadata-panel"
+             hx-trigger="load"
+             hx-vals='{"ticker": {{ selected_ticker | tojson }}}'
+             hx-swap="innerHTML"
+             {% endif %}>
+            {% if selected_ticker %}{% include "explorer/metadata_panel_skeleton.html" %}{% endif %}
+        </div>
         <div id="supplementary-panel"
              aria-live="polite"
              data-ticker="{{ selected_ticker or '' }}"
