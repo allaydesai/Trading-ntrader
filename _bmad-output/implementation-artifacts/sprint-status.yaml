@@ -85,7 +85,7 @@ development_status:
   4-2-search-and-filter-the-etf-ticker-list-by-symbol: backlog
   4-3-chart-a-selected-etf-at-all-5-timeframes: done
   4-4-etf-metadata-panel-with-na-aware-rendering: done
-  4-5-per-timeframe-etf-data-statistics: backlog
+  4-5-per-timeframe-etf-data-statistics: done
   4-6-explorer-accuracy-verification-vs-external-reference: backlog
   epic-4-retrospective: optional
 
