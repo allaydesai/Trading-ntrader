@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-06-17
-last_updated: "2026-07-13"  # Epic 3 DONE: Story 3.5 (exclude & flag non-backtestable tickers) done → all 5 stories complete
+last_updated: "2026-07-16"  # Epic 4: Story 4.3 (chart ETF at all 5 timeframes incl. 30min) DONE (reviewed); epic-4 in-progress
 project: Trading-ntrader
 project_key: NOKEY
 tracking_system: file-system
@@ -80,10 +80,10 @@ development_status:
   epic-3-retrospective: optional
 
   # Epic 4: Data Explorer — ETF Support
-  epic-4: backlog
+  epic-4: in-progress
   4-1-browse-imported-etf-tickers: backlog
   4-2-search-and-filter-the-etf-ticker-list-by-symbol: backlog
-  4-3-chart-a-selected-etf-at-all-5-timeframes: backlog
+  4-3-chart-a-selected-etf-at-all-5-timeframes: done
   4-4-etf-metadata-panel-with-na-aware-rendering: backlog
   4-5-per-timeframe-etf-data-statistics: backlog
   4-6-explorer-accuracy-verification-vs-external-reference: backlog
