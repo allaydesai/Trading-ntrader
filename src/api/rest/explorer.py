@@ -187,6 +187,7 @@ async def get_explorer_tickers(
             date_range_end=inst.date_range_end,
             bar_count_daily=inst.bar_count_daily,
             bar_count_hourly=inst.bar_count_hourly,
+            bar_count_30min=inst.bar_count_30min,
             bar_count_5min=inst.bar_count_5min,
             bar_count_minute=inst.bar_count_minute,
             nautilus_id=inst.nautilus_id,

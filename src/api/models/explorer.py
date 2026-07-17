@@ -94,6 +94,7 @@ class TickerRow(BaseModel):
         date_range_end: Latest imported data timestamp.
         bar_count_daily: Number of daily bars.
         bar_count_hourly: Number of hourly bars.
+        bar_count_30min: Number of 30-minute bars.
         bar_count_5min: Number of 5-minute bars.
         bar_count_minute: Number of 1-minute bars.
         nautilus_id: Nautilus Trader instrument ID (nullable).
@@ -107,6 +108,7 @@ class TickerRow(BaseModel):
     date_range_end: Optional[datetime] = None
     bar_count_daily: int = 0
     bar_count_hourly: int = 0
+    bar_count_30min: int = 0
     bar_count_5min: int = 0
     bar_count_minute: int = 0
     nautilus_id: Optional[str] = None

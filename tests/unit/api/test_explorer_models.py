@@ -66,6 +66,24 @@ class TestTickerRow:
         assert row.bar_count_5min == 93750
 
     @pytest.mark.unit
+    def test_bar_count_30min_field(self):
+        """Story 4.1: the browse row surfaces the 30min native timeframe."""
+        row = TickerRow(
+            ticker="SPY",
+            asset_class="ETF",
+            bar_count_30min=15625,
+        )
+        assert row.bar_count_30min == 15625
+        # Present in the serialized payload (REST parity with the UI row).
+        assert row.model_dump()["bar_count_30min"] == 15625
+
+    @pytest.mark.unit
+    def test_bar_count_30min_defaults_to_zero(self):
+        """Omitting bar_count_30min keeps existing constructors valid (back-compat)."""
+        row = TickerRow(ticker="AAPL", asset_class="STOCK")
+        assert row.bar_count_30min == 0
+
+    @pytest.mark.unit
     def test_coverage_pct_computed(self):
         row = TickerRow(
             ticker="AAPL",
