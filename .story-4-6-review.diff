@@ -1,0 +1,684 @@
+diff --git a/src/api/explorer_verification.py b/src/api/explorer_verification.py
+new file mode 100644
+index 0000000..55f7165
+--- /dev/null
++++ b/src/api/explorer_verification.py
+@@ -0,0 +1,149 @@
++"""Explorer accuracy-verification primitives (Story 4.6).
++
++Pure, I/O-free helpers that pin the two accuracy contracts the Data Explorer
++must honor before the ETF catalog is trusted for backtesting — no DB, no
++Nautilus engine, no route imports (mirrors the primitive-helper shape of
++``src/services/firstrate/import_verification.py``).
++
++- :func:`verify_candle_fidelity` proves the chart transform is an **exact**
++  identity: the rendered ``Candle`` reproduces the source Nautilus ``Bar``
++  OHLCV with no rounding drift and ``time == int(ts_event / 1e9)``. This is the
++  catalog↔render link of the verification chain (Story 2.5 already proved
++  source↔catalog parity), so "what the operator sees == the external
++  reference" holds end-to-end (Story 4.6 AC1).
++- :func:`verify_metadata_na_contract` proves the ADR-2 three-state N/A rule
++  holds for full / sparse / unresolved-venue rows: no ``display_*`` is ever
++  blank, and venue is never the descriptive ``N/A`` sentinel (Story 4.6 AC2).
++
++Both return human-readable issue strings; an empty list means the contract
++holds. Nothing here mutates state or reaches the network.
++"""
++
++from typing import Any, Mapping, Sequence
++
++from src.api.models.metadata_panel import VENUE_UNRESOLVED_LABEL
++from src.models.instrument_metadata import NA_SENTINEL
++
++#: Cap on returned fidelity issues so a fully-drifted series can't produce a
++#: giant list; once exceeded a single truncation note is appended.
++MAX_FIDELITY_ISSUES = 20
++
++#: The descriptive ``display_*`` props checked for the blank-vs-N/A contract.
++#: ``display_venue`` is intentionally excluded — venue has its own distinct
++#: state (never the descriptive sentinel) and is checked separately.
++_DESCRIPTIVE_DISPLAY_FIELDS = (
++    "display_company_name",
++    "display_currency",
++    "display_asset_type",
++    "display_sector",
++    "display_industry",
++    "display_country",
++    "display_ipo_date",
++)
++
++
++def _as_double(value: Any) -> float:
++    """Coerce a Nautilus ``Price``/``Quantity`` (or a plain number) to float.
++
++    Mirrors ``import_verification`` coercion so this unit-tests with stub bars.
++    """
++    as_double: Any = getattr(value, "as_double", None)
++    if as_double is not None:
++        return float(as_double())
++    return float(value)
++
++
++def _candle_field(candle: Any, name: str) -> Any:
++    """Read a candle field from either a ``Candle`` model or a plain dict.
++
++    The component test parses ``bars_json`` into dicts; unit tests pass models.
++    """
++    if isinstance(candle, Mapping):
++        return candle[name]
++    return getattr(candle, name)
++
++
++def verify_candle_fidelity(
++    source_bars: Sequence[Any],
++    candles: Sequence[Any],
++    *,
++    max_issues: int = MAX_FIDELITY_ISSUES,
++) -> list[str]:
++    """Return mismatch strings between source bars and rendered candles.
++
++    Args:
++        source_bars: The catalog's Nautilus ``Bar`` objects (source of truth).
++        candles: The explorer's rendered candles (``Candle`` models or the
++            dicts parsed out of ``bars_json``), same length and order.
++        max_issues: Hard cap on returned strings; once exceeded the first
++            ``max_issues`` are kept and a truncation note is appended.
++
++    Returns:
++        Human-readable mismatch strings; empty when the render is faithful.
++        A length mismatch (dropped/extra bar) is reported first and alone.
++    """
++    if len(candles) != len(source_bars):
++        return [f"candle count mismatch: {len(candles)} rendered vs {len(source_bars)} source bars"]
++
++    issues: list[str] = []
++    for i, (bar, candle) in enumerate(zip(source_bars, candles)):
++        expected = {
++            "open": _as_double(bar.open),
++            "high": _as_double(bar.high),
++            "low": _as_double(bar.low),
++            "close": _as_double(bar.close),
++        }
++        for field, want in expected.items():
++            got = float(_candle_field(candle, field))
++            if got != want:
++                issues.append(f"bar[{i}] {field} drift: rendered {got} != source {want}")
++
++        want_vol = int(_as_double(bar.volume))
++        got_vol = int(_candle_field(candle, "volume"))
++        if got_vol != want_vol:
++            issues.append(f"bar[{i}] volume drift: rendered {got_vol} != source {want_vol}")
++
++        want_time = int(bar.ts_event / 1e9)
++        got_time = int(_candle_field(candle, "time"))
++        if got_time != want_time:
++            issues.append(f"bar[{i}] time drift: rendered {got_time} != source {want_time}")
++
++        if len(issues) >= max_issues:
++            issues = issues[:max_issues]
++            issues.append(f"... (truncated at {max_issues} fidelity issues)")
++            break
++
++    return issues
++
++
++def verify_metadata_na_contract(panel: Any) -> list[str]:
++    """Return N/A-contract violations for an ``EtfMetadataPanel`` (AC2).
++
++    Flags a blank-vs-N/A ambiguity (any descriptive ``display_*`` that is empty
++    or ``None`` instead of a real value or the ``N/A`` sentinel), a venue
++    mislabeled as the descriptive sentinel, or a ``venue_resolved`` flag that
++    disagrees with ``display_venue``. Empty list == the contract holds.
++    """
++    issues: list[str] = []
++
++    for field in _DESCRIPTIVE_DISPLAY_FIELDS:
++        value = getattr(panel, field)
++        if value is None or value == "":
++            issues.append(f"{field} is blank (blank-vs-N/A ambiguity) — expected a value or N/A")
++
++    display_venue = panel.display_venue
++    if display_venue is None or display_venue == "":
++        issues.append("display_venue is blank — expected a code or the Unresolved label")
++    elif display_venue == NA_SENTINEL:
++        issues.append("venue mislabeled as the descriptive N/A sentinel — venue is never N/A")
++
++    resolved = bool(panel.venue_resolved)
++    if resolved and display_venue == VENUE_UNRESOLVED_LABEL:
++        issues.append("venue_resolved is True but display_venue is the Unresolved label")
++    if not resolved and display_venue != VENUE_UNRESOLVED_LABEL:
++        issues.append(
++            f"venue_resolved is False but display_venue is {display_venue!r} "
++            f"(expected {VENUE_UNRESOLVED_LABEL!r})"
++        )
++
++    return issues
+diff --git a/tests/component/api/test_explorer_accuracy.py b/tests/component/api/test_explorer_accuracy.py
+new file mode 100644
+index 0000000..4099412
+--- /dev/null
++++ b/tests/component/api/test_explorer_accuracy.py
+@@ -0,0 +1,306 @@
++"""Component accuracy verification for the explorer (Story 4.6).
++
++Drives the *real* ``/explorer/chart-panel`` and ``/explorer/metadata-panel``
++routes with dependency-override mocks and runs the Story-4.6 verification
++primitives over their output — so the accuracy ACs are checked end-to-end
++through the actual render path, not a reimplementation:
++
++- **AC1** render fidelity: the chart-panel's embedded ``barsJson`` reproduces
++  the source catalog bars exactly (awkward decimals, no rounding drift,
++  ``time == ts_event / 1e9``).
++- **AC3** 30min: ``tf=30m`` renders the 30m button as active alongside the
++  other four timeframes, and its bars pass fidelity.
++- **AC2** metadata: full rows show real name/venue/sector, sparse rows show a
++  muted ``N/A`` (never blank), and an unresolved venue is a distinct amber
++  ``Unresolved`` pill (never the descriptive sentinel); a DB fault degrades to
++  the empty-state, never a 500.
++"""
++
++import json
++from datetime import date, datetime, timezone
++from unittest.mock import AsyncMock, MagicMock
++
++import pytest
++from fastapi.testclient import TestClient
++
++from src.api.dependencies import (
++    get_catalog_list,
++    get_data_catalog_service,
++    get_default_catalog,
++    get_dividend_repository,
++    get_instrument_metadata_repository,
++    get_metadata_service,
++    get_stock_split_repository,
++)
++from src.api.explorer_verification import (
++    verify_candle_fidelity,
++    verify_metadata_na_contract,
++)
++from src.api.models.metadata_panel import EtfMetadataPanel
++from src.api.web import app
++from src.db.models.catalog_instrument import CatalogInstrument
++from src.db.models.instrument_metadata import InstrumentMetadata as OrmInstrumentMetadata
++from src.models.instrument_metadata import NA_SENTINEL, ResolutionStatus
++
++# Awkward decimals / a large odd volume so a naive round() or ns-vs-s bug fails.
++_SOURCE_ROWS = [
++    (1704067200_000_000_000, 473.257, 475.101, 472.809, 474.503, 45_000_001),
++    (1704153600_000_000_000, 474.503, 476.019, 473.001, 475.809, 42_000_000),
++]
++
++
++def _make_bar(ts_ns: int, o: float, h: float, lo: float, c: float, vol: float):
++    bar = MagicMock()
++    bar.ts_event = ts_ns
++    bar.open.as_double.return_value = o
++    bar.high.as_double.return_value = h
++    bar.low.as_double.return_value = lo
++    bar.close.as_double.return_value = c
++    bar.volume.as_double.return_value = vol
++    return bar
++
++
++def _source_bars():
++    return [_make_bar(*row) for row in _SOURCE_ROWS]
++
++
++def _make_instrument(**overrides) -> CatalogInstrument:
++    defaults = {
++        "id": 1,
++        "ticker": "QQQ",
++        "nautilus_id": "QQQ.XNAS",
++        "asset_class": "ETF",
++        "catalog_name": "us_etfs",
++        "exchange": "XNAS",
++        "name": "Invesco QQQ Trust",
++        "bar_count_daily": 1250,
++        "bar_count_hourly": 8750,
++        "bar_count_30min": 15625,
++        "bar_count_5min": 93750,
++        "bar_count_minute": 468750,
++        "date_range_start": datetime(2020, 1, 2, tzinfo=timezone.utc),
++        "date_range_end": datetime(2025, 12, 31, tzinfo=timezone.utc),
++    }
++    defaults.update(overrides)
++    inst = MagicMock(spec=CatalogInstrument)
++    for k, v in defaults.items():
++        setattr(inst, k, v)
++    return inst
++
++
++def _make_orm_metadata(**overrides) -> OrmInstrumentMetadata:
++    defaults = {
++        "ticker": "QQQ",
++        "metadata_provider": "FMP",
++        "venue": "XNAS",
++        "currency": "USD",
++        "asset_type": "ETF",
++        "company_name": "Invesco QQQ Trust",
++        "sector": "Financial Services",
++        "industry": "Asset Management",
++        "country": "US",
++        "ipo_date": date(1999, 3, 10),
++        "resolution_status": ResolutionStatus.RESOLVED,
++    }
++    defaults.update(overrides)
++    row = MagicMock(spec=OrmInstrumentMetadata)
++    for k, v in defaults.items():
++        setattr(row, k, v)
++    return row
++
++
++def _parse_bars_json(html: str) -> list:
++    """Extract the ``var barsJson = [...];`` array from the chart panel HTML."""
++    assert "var barsJson = " in html, "barsJson not embedded in chart panel"
++    payload = html.split("var barsJson = ", 1)[1].split(";", 1)[0]
++    return json.loads(payload)
++
++
++def _toolbar_button_tag(html: str, label: str) -> str:
++    """Opening ``<button ...>`` tag for the toolbar button labelled ``label``."""
++    marker = f'aria-label="{label} timeframe"'
++    idx = html.find(marker)
++    assert idx != -1, f"toolbar button for {label!r} not found"
++    tag_open = html.rfind("<button", 0, idx)
++    tag_close = html.find(">", idx)
++    assert tag_open != -1 and tag_close != -1
++    return html[tag_open : tag_close + 1]
++
++
++@pytest.fixture
++def mock_metadata_service():
++    service = AsyncMock()
++    service.get_instrument = AsyncMock(return_value=_make_instrument())
++    service.list_instruments_with_search = AsyncMock(return_value=([], 0))
++    service.count_asset_classes = AsyncMock(return_value={})
++    return service
++
++
++@pytest.fixture
++def mock_catalog_service():
++    service = MagicMock()
++    service.query_bars.return_value = _source_bars()
++    return service
++
++
++@pytest.fixture
++def mock_dividend_repo():
++    repo = AsyncMock()
++    repo.list_by_ticker = AsyncMock(return_value=[])
++    repo.has_for_ticker = AsyncMock(return_value=False)
++    return repo
++
++
++@pytest.fixture
++def mock_split_repo():
++    repo = AsyncMock()
++    repo.list_by_ticker = AsyncMock(return_value=[])
++    repo.has_for_ticker = AsyncMock(return_value=False)
++    return repo
++
++
++@pytest.fixture
++def mock_instrument_metadata_repo():
++    repo = AsyncMock()
++    repo.get_by_ticker = AsyncMock(return_value=None)
++    return repo
++
++
++@pytest.fixture
++def client(
++    mock_metadata_service,
++    mock_catalog_service,
++    mock_dividend_repo,
++    mock_split_repo,
++    mock_instrument_metadata_repo,
++):
++    app.dependency_overrides[get_metadata_service] = lambda: mock_metadata_service
++    app.dependency_overrides[get_data_catalog_service] = lambda: mock_catalog_service
++    app.dependency_overrides[get_catalog_list] = lambda: ["us_etfs"]
++    app.dependency_overrides[get_default_catalog] = lambda: "us_etfs"
++    app.dependency_overrides[get_dividend_repository] = lambda: mock_dividend_repo
++    app.dependency_overrides[get_stock_split_repository] = lambda: mock_split_repo
++    app.dependency_overrides[get_instrument_metadata_repository] = (
++        lambda: mock_instrument_metadata_repo
++    )
++    try:
++        yield TestClient(app)
++    finally:
++        for dep in (
++            get_metadata_service,
++            get_data_catalog_service,
++            get_catalog_list,
++            get_default_catalog,
++            get_dividend_repository,
++            get_stock_split_repository,
++            get_instrument_metadata_repository,
++        ):
++            app.dependency_overrides.pop(dep, None)
++
++
++# --- AC1: render fidelity (catalog ↔ explorer) -----------------------------
++
++
++@pytest.mark.component
++class TestChartRenderFidelity:
++    def test_daily_bars_render_faithfully(self, client):
++        """AC1: chart-panel bars reproduce the source catalog bars exactly."""
++        resp = client.get("/explorer/chart-panel?catalog=us_etfs&ticker=QQQ&tf=D")
++        assert resp.status_code == 200
++        candles = _parse_bars_json(resp.text)
++        assert len(candles) == len(_SOURCE_ROWS)
++        assert verify_candle_fidelity(_source_bars(), candles) == []
++
++    def test_awkward_decimals_are_not_rounded(self, client):
++        """The rendered close keeps full source precision (no 474.5 rounding)."""
++        resp = client.get("/explorer/chart-panel?catalog=us_etfs&ticker=QQQ&tf=D")
++        candles = _parse_bars_json(resp.text)
++        assert candles[0]["close"] == 474.503
++        assert candles[0]["volume"] == 45_000_001
++
++    def test_timestamps_are_epoch_seconds(self, client):
++        """time == int(ts_event / 1e9), not raw nanoseconds."""
++        resp = client.get("/explorer/chart-panel?catalog=us_etfs&ticker=QQQ&tf=D")
++        candles = _parse_bars_json(resp.text)
++        assert candles[0]["time"] == 1704067200
++
++
++# --- AC3: 30min renders alongside the other four ---------------------------
++
++
++@pytest.mark.component
++class TestThirtyMinuteRendering:
++    def test_all_five_timeframe_buttons_present(self, client):
++        resp = client.get("/explorer/chart-panel?catalog=us_etfs&ticker=QQQ&tf=30m")
++        assert resp.status_code == 200
++        for label in ["D", "1H", "30m", "5m", "1m"]:
++            _toolbar_button_tag(resp.text, label)  # raises if missing
++
++    def test_30m_button_is_active_and_enabled(self, client):
++        resp = client.get("/explorer/chart-panel?catalog=us_etfs&ticker=QQQ&tf=30m")
++        tag = _toolbar_button_tag(resp.text, "30m")
++        assert 'aria-pressed="true"' in tag
++        # bar_count_30min > 0 in the fixture → the button is not disabled.
++        assert "disabled" not in tag
++
++    def test_30m_bars_render_faithfully(self, client, mock_catalog_service):
++        resp = client.get("/explorer/chart-panel?catalog=us_etfs&ticker=QQQ&tf=30m")
++        # The route queried the 30-MINUTE bar type for this ticker.
++        assert mock_catalog_service.query_bars.call_args.kwargs["bar_type_spec"] == "30-MINUTE-LAST"
++        candles = _parse_bars_json(resp.text)
++        assert verify_candle_fidelity(_source_bars(), candles) == []
++
++
++# --- AC2: metadata N/A rendering (full / sparse / unresolved venue) ---------
++
++
++@pytest.mark.component
++class TestMetadataAccuracy:
++    _URL = "/explorer/metadata-panel?ticker=QQQ"
++
++    def test_full_metadata_shows_real_values_and_holds_contract(
++        self, client, mock_instrument_metadata_repo
++    ):
++        row = _make_orm_metadata()
++        mock_instrument_metadata_repo.get_by_ticker = AsyncMock(return_value=row)
++        text = client.get(self._URL).text
++        assert "Invesco QQQ Trust" in text
++        assert "XNAS" in text
++        assert "Financial Services" in text
++        assert NA_SENTINEL not in text  # nothing missing → no sentinel at all
++        assert verify_metadata_na_contract(EtfMetadataPanel.from_orm_row(row)) == []
++
++    def test_sparse_metadata_renders_muted_na_not_blank(
++        self, client, mock_instrument_metadata_repo
++    ):
++        row = _make_orm_metadata(sector=None, industry=None, country=None)
++        mock_instrument_metadata_repo.get_by_ticker = AsyncMock(return_value=row)
++        text = client.get(self._URL).text
++        assert NA_SENTINEL in text
++        assert "text-slate-500" in text  # muted styling for the honest gap
++        assert "<dd></dd>" not in text  # never a blank cell
++        # Contract still holds: sparse fields collapse to a clean N/A.
++        assert verify_metadata_na_contract(EtfMetadataPanel.from_orm_row(row)) == []
++
++    def test_unresolved_venue_is_distinct_pill_never_sentinel(
++        self, client, mock_instrument_metadata_repo
++    ):
++        row = _make_orm_metadata(venue=None, resolution_status=ResolutionStatus.VENUE_UNRESOLVED)
++        mock_instrument_metadata_repo.get_by_ticker = AsyncMock(return_value=row)
++        text = client.get(self._URL).text
++        assert "Unresolved" in text
++        assert "text-amber-400" in text  # distinct amber pill
++        assert NA_SENTINEL not in text  # descriptive fields all present → no N/A
++        panel = EtfMetadataPanel.from_orm_row(row)
++        assert verify_metadata_na_contract(panel) == []
++        assert panel.display_venue != NA_SENTINEL
++
++    def test_db_fault_degrades_to_empty_state_not_500(self, client, mock_instrument_metadata_repo):
++        from sqlalchemy.exc import SQLAlchemyError
++
++        mock_instrument_metadata_repo.get_by_ticker = AsyncMock(
++            side_effect=SQLAlchemyError("table missing")
++        )
++        resp = client.get(self._URL)
++        assert resp.status_code == 200
++        assert "No resolved metadata for this ticker yet" in resp.text
+diff --git a/tests/unit/api/test_explorer_verification.py b/tests/unit/api/test_explorer_verification.py
+new file mode 100644
+index 0000000..275ae8a
+--- /dev/null
++++ b/tests/unit/api/test_explorer_verification.py
+@@ -0,0 +1,211 @@
++"""Unit tests for the explorer accuracy-verification primitives (Story 4.6).
++
++Pure functions over stub bars / metadata panels — no routes, DB, or Nautilus
++engine. They pin the two accuracy contracts the explorer must honor:
++
++- ``verify_candle_fidelity`` — the chart transform (``bar.<f>.as_double()`` →
++  ``Candle``, ``ts_event / 1e9`` → ``time``) is an *exact* identity (AC1).
++- ``verify_metadata_na_contract`` — the three-state N/A rule holds: no blank
++  ``display_*``, venue never the descriptive sentinel (AC2).
++"""
++
++from unittest.mock import MagicMock
++
++import pytest
++from src.api.explorer_verification import (
++    MAX_FIDELITY_ISSUES,
++    verify_candle_fidelity,
++    verify_metadata_na_contract,
++)
++
++from src.api.models.explorer import Candle
++from src.api.models.metadata_panel import VENUE_UNRESOLVED_LABEL, EtfMetadataPanel
++from src.models.instrument_metadata import NA_SENTINEL
++
++
++def _make_bar(ts_ns: int, o: float, h: float, lo: float, c: float, vol: float):
++    """A mock Nautilus Bar whose Price/Quantity fields expose ``.as_double()``."""
++    bar = MagicMock()
++    bar.ts_event = ts_ns
++    bar.open.as_double.return_value = o
++    bar.high.as_double.return_value = h
++    bar.low.as_double.return_value = lo
++    bar.close.as_double.return_value = c
++    bar.volume.as_double.return_value = vol
++    return bar
++
++
++def _candle_from_bar(bar) -> Candle:
++    """Build the *faithful* Candle the chart route would emit for ``bar``."""
++    return Candle(
++        time=int(bar.ts_event / 1e9),
++        open=bar.open.as_double(),
++        high=bar.high.as_double(),
++        low=bar.low.as_double(),
++        close=bar.close.as_double(),
++        volume=int(bar.volume.as_double()),
++    )
++
++
++# --- verify_candle_fidelity ------------------------------------------------
++
++
++class TestVerifyCandleFidelity:
++    @pytest.mark.unit
++    def test_faithful_render_has_no_issues(self):
++        bars = [
++            _make_bar(1704067200_000_000_000, 473.257, 475.101, 472.809, 474.503, 45_000_001),
++            _make_bar(1704153600_000_000_000, 474.503, 476.000, 473.000, 475.809, 42_000_000),
++        ]
++        candles = [_candle_from_bar(b) for b in bars]
++        assert verify_candle_fidelity(bars, candles) == []
++
++    @pytest.mark.unit
++    def test_faithful_render_accepts_dict_candles(self):
++        """The component test parses ``bars_json`` into dicts — accept those too."""
++        bars = [_make_bar(1704067200_000_000_000, 1.0, 2.0, 0.5, 1.5, 10)]
++        candles = [_candle_from_bar(bars[0]).model_dump()]
++        assert verify_candle_fidelity(bars, candles) == []
++
++    @pytest.mark.unit
++    def test_length_mismatch_is_flagged_first(self):
++        bars = [_make_bar(1704067200_000_000_000, 1.0, 2.0, 0.5, 1.5, 10)]
++        issues = verify_candle_fidelity(bars, [])
++        assert len(issues) == 1
++        assert "count" in issues[0].lower()
++
++    @pytest.mark.unit
++    def test_rounded_close_is_flagged(self):
++        bar = _make_bar(1704067200_000_000_000, 473.257, 475.101, 472.809, 474.503, 45_000_001)
++        candle = _candle_from_bar(bar)
++        candle = candle.model_copy(update={"close": round(candle.close, 1)})  # 474.5 drift
++        issues = verify_candle_fidelity([bar], [candle])
++        assert len(issues) == 1
++        assert "close" in issues[0].lower()
++
++    @pytest.mark.unit
++    def test_wrong_volume_is_flagged(self):
++        bar = _make_bar(1704067200_000_000_000, 1.0, 2.0, 0.5, 1.5, 45_000_001)
++        candle = _candle_from_bar(bar).model_copy(update={"volume": 45_000_000})
++        issues = verify_candle_fidelity([bar], [candle])
++        assert any("volume" in i.lower() for i in issues)
++
++    @pytest.mark.unit
++    def test_off_scale_time_is_flagged(self):
++        """A ns-vs-s timestamp-scaling bug must be caught."""
++        bar = _make_bar(1704067200_000_000_000, 1.0, 2.0, 0.5, 1.5, 10)
++        candle = _candle_from_bar(bar).model_copy(update={"time": bar.ts_event})  # forgot /1e9
++        issues = verify_candle_fidelity([bar], [candle])
++        assert any("time" in i.lower() for i in issues)
++
++    @pytest.mark.unit
++    def test_issue_list_is_capped(self):
++        bars = [_make_bar(i, 1.0, 2.0, 0.5, 1.5, 10) for i in range(MAX_FIDELITY_ISSUES + 10)]
++        # Every candle drifts on close.
++        candles = [_candle_from_bar(b).model_copy(update={"close": 9.9}) for b in bars]
++        issues = verify_candle_fidelity(bars, candles)
++        assert len(issues) <= MAX_FIDELITY_ISSUES + 1  # +1 truncation note allowed
++
++
++# --- verify_metadata_na_contract -------------------------------------------
++
++
++def _panel(
++    *,
++    ticker: str = "QQQ",
++    venue: str | None = "XNAS",
++    currency: str | None = "USD",
++    asset_type: str | None = "ETF",
++    company_name: str | None = "Invesco QQQ Trust",
++    sector: str | None = "Financial Services",
++    industry: str | None = "Asset Management",
++    country: str | None = "US",
++) -> EtfMetadataPanel:
++    return EtfMetadataPanel(
++        ticker=ticker,
++        venue=venue,
++        currency=currency,
++        asset_type=asset_type,
++        company_name=company_name,
++        sector=sector,
++        industry=industry,
++        country=country,
++        ipo_date=None,
++    )
++
++
++class TestVerifyMetadataNaContract:
++    @pytest.mark.unit
++    def test_full_metadata_is_clean(self):
++        assert verify_metadata_na_contract(_panel()) == []
++
++    @pytest.mark.unit
++    def test_sparse_metadata_is_clean_via_na_sentinel(self):
++        """Missing descriptive fields collapse to a clean N/A — still valid."""
++        panel = _panel(sector=None, industry=None, country=None, company_name="")
++        issues = verify_metadata_na_contract(panel)
++        assert issues == []
++        # Sanity: the sparse fields really did render as the sentinel, not blank.
++        assert panel.display_sector == NA_SENTINEL
++        assert panel.display_company_name == NA_SENTINEL
++
++    @pytest.mark.unit
++    def test_unresolved_venue_is_clean_and_distinct(self):
++        panel = _panel(venue=None)
++        assert verify_metadata_na_contract(panel) == []
++        assert panel.display_venue == VENUE_UNRESOLVED_LABEL
++        assert panel.display_venue != NA_SENTINEL
++
++    @pytest.mark.unit
++    def test_blank_display_is_flagged(self):
++        """A display_* that returns '' would be a blank-vs-N/A ambiguity."""
++        # A stub whose display_company_name regressed to a blank string.
++        bad = MagicMock(spec=EtfMetadataPanel)
++        bad.display_company_name = ""
++        bad.display_currency = "USD"
++        bad.display_asset_type = "ETF"
++        bad.display_sector = "X"
++        bad.display_industry = "X"
++        bad.display_country = "US"
++        bad.display_ipo_date = NA_SENTINEL
++        bad.display_venue = "XNAS"
++        bad.venue_resolved = True
++        issues = verify_metadata_na_contract(bad)
++        assert any("blank" in i.lower() or "company" in i.lower() for i in issues)
++
++    @pytest.mark.unit
++    def test_venue_labeled_as_na_sentinel_is_flagged(self):
++        bad = MagicMock(spec=EtfMetadataPanel)
++        for name in (
++            "display_company_name",
++            "display_currency",
++            "display_asset_type",
++            "display_sector",
++            "display_industry",
++            "display_country",
++            "display_ipo_date",
++        ):
++            setattr(bad, name, "X")
++        bad.display_venue = NA_SENTINEL  # venue must NEVER be the descriptive sentinel
++        bad.venue_resolved = True
++        issues = verify_metadata_na_contract(bad)
++        assert any("venue" in i.lower() for i in issues)
++
++    @pytest.mark.unit
++    def test_venue_resolved_disagreement_is_flagged(self):
++        bad = MagicMock(spec=EtfMetadataPanel)
++        for name in (
++            "display_company_name",
++            "display_currency",
++            "display_asset_type",
++            "display_sector",
++            "display_industry",
++            "display_country",
++            "display_ipo_date",
++        ):
++            setattr(bad, name, "X")
++        # Claims resolved but label is the unresolved sentinel — contradiction.
++        bad.display_venue = VENUE_UNRESOLVED_LABEL
++        bad.venue_resolved = True
++        issues = verify_metadata_na_contract(bad)
++        assert any("venue" in i.lower() for i in issues)
