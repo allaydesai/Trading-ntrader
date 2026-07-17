@@ -95,6 +95,12 @@ class TestExplorerRestEndpoint:
         assert row["bar_count_5min"] == 93750
         assert "coverage_pct" in row
 
+    def test_ticker_row_includes_30min(self, client):
+        """Story 4.1 AC4: REST rows carry bar_count_30min (parity with the UI row)."""
+        response = client.get("/api/explorer/tickers?catalog=us_stocks")
+        row = response.json()["tickers"][0]
+        assert row["bar_count_30min"] == 15625
+
     def test_search_param_forwarded(self, client, mock_metadata_service):
         client.get("/api/explorer/tickers?catalog=us_stocks&search=AA")
         call_kwargs = mock_metadata_service.list_instruments_with_search.call_args.kwargs
@@ -215,6 +221,28 @@ class TestExplorerTickerListFragment:
         response = client.get("/explorer/ticker-list?catalog=crypto")
         # The OOB breadcrumb should label the newly-selected catalog.
         assert "crypto" in response.text
+
+    def test_30min_column_header_rendered(self, client):
+        """Story 4.1 AC2: the browse table header lists all five native timeframes."""
+        response = client.get("/explorer/ticker-list?catalog=us_stocks")
+        assert "D / 1H / 30m / 5m / 1m" in response.text
+
+    def test_30min_bar_count_value_rendered(self, client, mock_metadata_service):
+        """Story 4.1 AC1/AC2: an ETF row shows its 30min bar count in the row."""
+        mock_metadata_service.list_instruments_with_search.return_value = (
+            [_make_instrument(ticker="SPY", asset_class="ETF", bar_count_30min=333)],
+            1,
+        )
+        response = client.get("/explorer/ticker-list?catalog=us_stocks&asset_class=ETF")
+        assert "SPY" in response.text
+        # 333 formats verbatim (< 1000) — proves the 30min column value is emitted.
+        assert "333" in response.text
+
+    def test_etf_filter_forwarded_to_service(self, client, mock_metadata_service):
+        """Story 4.1 AC1: ETFs are filterable from Stocks via asset_class."""
+        client.get("/explorer/ticker-list?catalog=us_stocks&asset_class=ETF")
+        call_kwargs = mock_metadata_service.list_instruments_with_search.call_args.kwargs
+        assert call_kwargs["asset_class"] == "ETF"
 
     def test_empty_search_message(self, client, mock_metadata_service):
         mock_metadata_service.list_instruments_with_search.return_value = ([], 0)

@@ -2,7 +2,16 @@
 
 Real, non-blocking findings deferred from code reviews. Each entry notes its source and why it was deferred.
 
-## Deferred from: code review of story 3-1-ticker-nautilus-qualified-instrumentid-via-resolved-venue (2026-07-13)
+## Deferred from: code review of story 4-1-browse-imported-etf-tickers (2026-07-16)
+
+- **Stats/detail panel omits the 30min tile** [src/api/models/explorer.py:163-166 (`TickerStatsResponse`);
+  templates/explorer/stats_panel.html:19-49]. Story 4.1 added a 30m column to the explorer **browse** row, but the
+  ticker **detail/stats** panel still renders only Daily / 1-Hour / 5-Min / 1-Min tiles — `TickerStatsResponse` has
+  no `bar_count_30min` field and `stats_panel.html` has no 30-Min tile. So after 4.1, an ETF's browse row shows a
+  30m bar count, but clicking through to the stats panel silently drops 30m (browse-vs-detail inconsistency). This
+  is the same Story-2.1 "wire 30min by hand everywhere" debt. **Explicitly owned by Story 4.5 (Per-Timeframe ETF
+  Data Statistics)**, which is the story that adds per-timeframe stats — Story 4.1's scope boundary deliberately
+  left `TickerStatsResponse` untouched, so this is a planned follow-up, not a regression.
 
 - **Cross-run orphan: existing bars + newly-`VENUE_UNRESOLVED` venue nulls `nautilus_id`**
   [src/services/firstrate/instrument_mapper.py:sync_qualification]. When a ticker with bars imported under a
