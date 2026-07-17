@@ -162,6 +162,7 @@ class TickerStatsResponse(BaseModel):
     date_range_end: Optional[datetime] = None
     bar_count_daily: int = 0
     bar_count_hourly: int = 0
+    bar_count_30min: int = 0
     bar_count_5min: int = 0
     bar_count_minute: int = 0
     price_min: Optional[float] = None
