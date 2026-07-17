@@ -80,7 +80,7 @@ development_status:
   epic-3-retrospective: optional
 
   # Epic 4: Data Explorer — ETF Support
-  epic-4: done
+  epic-4: in-progress
   4-1-browse-imported-etf-tickers: done
   4-2-search-and-filter-the-etf-ticker-list-by-symbol: backlog
   4-3-chart-a-selected-etf-at-all-5-timeframes: done
