@@ -1,0 +1,56 @@
+{
+  "story": "4-6-explorer-accuracy-verification-vs-external-reference",
+  "captured": "2026-07-17",
+  "verification_chain": {
+    "source_to_catalog": "Story 2.5 (OHLC sanity + row-count parity + sample-point) — trusted here, not re-verified",
+    "catalog_to_render": "Story 4.6 (this story) — exact-identity render fidelity"
+  },
+  "tolerance_note": "Render fidelity is EXACT (zero tolerance): it is a serialization identity (Nautilus Bar -> Candle -> bars_json), not a cross-source comparison. Any drift is a transform bug.",
+  "primitives": [
+    "src/api/explorer_verification.py::verify_candle_fidelity",
+    "src/api/explorer_verification.py::verify_metadata_na_contract"
+  ],
+  "tests": [
+    "tests/unit/api/test_explorer_verification.py",
+    "tests/component/api/test_explorer_accuracy.py"
+  ],
+  "acceptance_criteria": [
+    {
+      "id": "AC1",
+      "summary": "Explorer OHLC bars match the external reference (proven internally as exact catalog->render fidelity)",
+      "verdict": "machine_checked",
+      "evidence": "verify_candle_fidelity over /explorer/chart-panel bars_json; awkward decimals and large odd volume survive round-trip; time == int(ts_event/1e9)"
+    },
+    {
+      "id": "AC2",
+      "summary": "Full vs sparse metadata renders correctly; muted N/A never blank; venue never the descriptive sentinel",
+      "verdict": "machine_checked",
+      "evidence": "verify_metadata_na_contract + /explorer/metadata-panel HTML for full, sparse, unresolved-venue, and DB-fault rows"
+    },
+    {
+      "id": "AC3",
+      "summary": "30-minute timeframe renders correctly alongside the other four",
+      "verdict": "machine_checked",
+      "evidence": "tf=30m -> 30-MINUTE-LAST bars, aria-pressed 30m button, all five toolbar labels present, bars pass fidelity"
+    },
+    {
+      "id": "AC4",
+      "summary": "Durable verification record captures methodology, fixtures, machine-checked results, and operator procedure",
+      "verdict": "machine_checked",
+      "evidence": "this file + explorer-accuracy-verification.md"
+    }
+  ],
+  "operator_step": {
+    "verdict": "operator_pending",
+    "reason": "No live ETF catalog in this worktree (local data/catalog holds 3 stock tickers at 1-DAY only) and external TradingView is out of bounds for the autonomous harness (no external I/O). Live OHLC spot-check + real-ETF screenshots are the operator run this record scripts.",
+    "fixtures": ["QQQ daily", "IWM 30min", "TQQQ/SQQQ 1min", "full-metadata ETF", "sparse-metadata ETF", "unresolved-venue ticker"],
+    "screenshot_slots": [
+      "qqq-daily.png",
+      "iwm-30min.png",
+      "tqqq-1min.png",
+      "metadata-full.png",
+      "metadata-sparse-na.png",
+      "metadata-unresolved-venue.png"
+    ]
+  }
+}
