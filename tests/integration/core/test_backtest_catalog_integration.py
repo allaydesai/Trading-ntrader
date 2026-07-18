@@ -47,12 +47,16 @@ def _make_daily_bars(
 
 
 def _make_instrument_row(
-    ticker: str, nautilus_id: str, catalog_name: str = "e2e-test"
+    ticker: str,
+    nautilus_id: str | None,
+    catalog_name: str = "e2e-test",
+    asset_class: str = "STOCK",
 ) -> CatalogInstrument:
     row = MagicMock(spec=CatalogInstrument)
     row.ticker = ticker
     row.nautilus_id = nautilus_id
     row.catalog_name = catalog_name
+    row.asset_class = asset_class
     row.date_range_start = datetime(2018, 1, 1, tzinfo=timezone.utc)
     row.date_range_end = datetime(2018, 12, 31, tzinfo=timezone.utc)
     return row
@@ -60,7 +64,11 @@ def _make_instrument_row(
 
 @pytest.fixture
 def synthetic_catalog(tmp_path: Path):
-    """Build a tmp_path/catalogs/e2e-test ParquetDataCatalog with AAPL + MSFT daily bars."""
+    """Build a tmp_path/catalogs/e2e-test ParquetDataCatalog with AAPL + MSFT + SPY daily bars.
+
+    SPY.ARCA stands in for an ETF (Story 5.1) — served through the identical Equity
+    path as the stock instruments.
+    """
     base = tmp_path / "catalogs"
     base.mkdir()
     catalog_dir = base / "e2e-test"
@@ -69,6 +77,7 @@ def synthetic_catalog(tmp_path: Path):
 
     cat.write_data(_make_daily_bars("AAPL.NASDAQ"))
     cat.write_data(_make_daily_bars("MSFT.NASDAQ"))
+    cat.write_data(_make_daily_bars("SPY.ARCA"))
     return base
 
 
@@ -138,6 +147,78 @@ class TestNamedCatalogBacktestIntegration:
             assert run_id is None  # persist=False
         finally:
             orchestrator.dispose()
+
+    @pytest.mark.asyncio
+    async def test_named_catalog_etf_single_instrument_run(self, synthetic_catalog: Path):
+        """Story 5.1 AC1/AC4: an ETF (SPY.ARCA) runs to completion via the SAME path.
+
+        No ETF-specific adapter — the loader synthesises a whole-share Equity and the
+        existing BacktestOrchestrator consumes the bars exactly as for a stock.
+        """
+        from nautilus_trader.model.instruments import Equity
+
+        from src.core.backtest_orchestrator import BacktestOrchestrator
+
+        catalog_manager = CatalogManager(synthetic_catalog)
+        metadata_service = MagicMock()
+        metadata_service.get_instrument_sync.return_value = _make_instrument_row(
+            "SPY", "SPY.ARCA", asset_class="ETF"
+        )
+
+        load_result = await load_from_catalog(
+            catalog_name="e2e-test",
+            ticker="SPY",
+            bar_type_spec="1-DAY-LAST",
+            start=datetime(2018, 1, 1, tzinfo=timezone.utc),
+            end=datetime(2018, 1, 11, tzinfo=timezone.utc),
+            catalog_manager=catalog_manager,
+            metadata_service=metadata_service,
+        )
+
+        assert len(load_result.bars) == 10
+        # ETF served by the identical Equity synthesis (whole-share precondition).
+        assert isinstance(load_result.instrument, Equity)
+        assert str(load_result.instrument.id.venue) == "ARCA"
+        assert int(load_result.instrument.lot_size) == 1
+
+        request = _build_sma_request(symbol="SPY")
+        orchestrator = BacktestOrchestrator()
+        try:
+            result, run_id = await orchestrator.execute(
+                request, load_result.bars, load_result.instrument
+            )
+            assert result is not None
+            assert result.total_trades >= 0
+            assert result.final_balance > 0
+            assert run_id is None  # persist=False
+        finally:
+            orchestrator.dispose()
+
+    @pytest.mark.asyncio
+    async def test_named_catalog_unresolved_venue_etf_fails_fast(self, synthetic_catalog: Path):
+        """Story 5.1 AC2: an unresolved-venue ETF (nautilus_id None) is excluded fast.
+
+        The catalog is never read — an unresolved instrument can never silently enter a run.
+        """
+        catalog_manager = CatalogManager(synthetic_catalog)
+        metadata_service = MagicMock()
+        metadata_service.get_instrument_sync.return_value = _make_instrument_row(
+            "SPY", None, asset_class="ETF"
+        )
+
+        with pytest.raises(DataNotFoundError) as exc_info:
+            await load_from_catalog(
+                catalog_name="e2e-test",
+                ticker="SPY",
+                bar_type_spec="1-DAY-LAST",
+                start=datetime(2018, 1, 1, tzinfo=timezone.utc),
+                end=datetime(2018, 1, 11, tzinfo=timezone.utc),
+                catalog_manager=catalog_manager,
+                metadata_service=metadata_service,
+            )
+
+        assert exc_info.value.instrument_id == "SPY"
+        assert exc_info.value.context.get("venue_unresolved") is True
 
     @pytest.mark.asyncio
     async def test_named_catalog_missing_ticker_raises(self, synthetic_catalog: Path):

@@ -43,8 +43,9 @@ class DataNotFoundError(CatalogError):
             end: End date of requested range
             message: Optional custom message. Defaults to a range-formatted string.
             context: Optional dict of diagnostic fields surfaced by callers (e.g.,
-                ``{"missing_from_catalog": "e2e-test"}`` or
-                ``{"metadata_range": (start, end)}``).
+                ``{"missing_from_catalog": "e2e-test"}``,
+                ``{"venue_unresolved": True, "catalog": "etf-full"}`` (Story 5.1
+                unresolved-venue exclusion), or ``{"metadata_range": (start, end)}``).
         """
         self.instrument_id = instrument_id
         self.start = start
