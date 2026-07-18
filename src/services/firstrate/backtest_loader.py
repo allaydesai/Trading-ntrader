@@ -135,15 +135,26 @@ async def load_from_catalog(
 
     nautilus_id = row.nautilus_id
     if not nautilus_id:
+        # Unresolved-venue fail-fast (Story 3.5 exclusion contract, Story 5.1 AC2).
+        # ``InstrumentMapper.sync_qualification`` nulls ``nautilus_id`` for a
+        # ``VENUE_UNRESOLVED`` ticker (ETF or stock) — leaving the on-disk Parquet
+        # intact but the identity unqualified. Nulling the identity IS the exclusion
+        # mechanism this loader honors: a non-backtestable instrument can never
+        # silently enter a run. Raise BEFORE resolving the catalog / reading bars so
+        # the filesystem is never touched for an excluded instrument. The
+        # ``venue_unresolved`` context flag lets callers/tests distinguish this
+        # intentional exclusion from a plain missing-ticker or empty-window miss.
         raise DataNotFoundError(
             instrument_id=ticker,
             start=start,
             end=end,
             message=(
-                f"Ticker '{ticker}' in catalog '{catalog_name}' has no nautilus_id — "
-                "DB metadata is incomplete. Re-import the ticker to repopulate."
+                f"'{ticker}' in catalog '{catalog_name}' has an unresolved venue "
+                "(non-backtestable, Story 3.5) — its nautilus_id is unset, so it is "
+                "excluded from backtests. Resolve its venue (metadata resolution / "
+                "venue_overrides.csv) and re-import to admit it."
             ),
-            context={"missing_from_catalog": catalog_name},
+            context={"venue_unresolved": True, "catalog": catalog_name},
         )
 
     try:

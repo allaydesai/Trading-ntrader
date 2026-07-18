@@ -13,7 +13,8 @@ from src.services.exceptions import DataNotFoundError
 def _make_instrument_row(
     *,
     ticker: str = "AAPL",
-    nautilus_id: str = "AAPL.NASDAQ",
+    nautilus_id: str | None = "AAPL.NASDAQ",
+    asset_class: str = "STOCK",
     date_range_start: datetime = datetime(2018, 1, 1, tzinfo=timezone.utc),
     date_range_end: datetime = datetime(2018, 12, 31, tzinfo=timezone.utc),
 ) -> CatalogInstrument:
@@ -21,6 +22,7 @@ def _make_instrument_row(
     row = MagicMock(spec=CatalogInstrument)
     row.ticker = ticker
     row.nautilus_id = nautilus_id
+    row.asset_class = asset_class
     row.date_range_start = date_range_start
     row.date_range_end = date_range_end
     return row
@@ -256,6 +258,116 @@ class TestLoadFromCatalog:
         )
 
         assert isinstance(result, DataLoadResult)
+
+
+@pytest.mark.component
+class TestEtfRoutingNoAdapter:
+    """Story 5.1 AC1/AC3: ETFs are served by the identical Equity path as Stocks.
+
+    The loader never branches on ``asset_class`` — an ETF flows through the same
+    ``build_equity`` synthesis, proving NFR16 "no runtime adapter". The synthesised
+    instrument is equity-shaped (``Equity``, ``lot_size == 1``, USD), the precondition
+    Story 5.2 whole-share sizing depends on.
+    """
+
+    @pytest.mark.asyncio
+    async def test_etf_served_via_identical_equity_path(self):
+        """An ETF row (asset_class='ETF') resolves to a Nautilus Equity on ARCA."""
+        from nautilus_trader.model.currencies import USD
+        from nautilus_trader.model.instruments import Equity
+
+        from src.services.firstrate.backtest_loader import load_from_catalog
+
+        catalog = MagicMock()
+        catalog.bars.return_value = [_make_bar_for("SPY.ARCA"), _make_bar_for("SPY.ARCA")]
+
+        catalog_manager = MagicMock()
+        catalog_manager.resolve_catalog.return_value = catalog
+
+        metadata_service = MagicMock()
+        metadata_service.get_instrument_sync.return_value = _make_instrument_row(
+            ticker="SPY", nautilus_id="SPY.ARCA", asset_class="ETF"
+        )
+
+        result = await load_from_catalog(
+            catalog_name="etf-full",
+            ticker="SPY",
+            bar_type_spec="1-DAY-LAST",
+            start=datetime(2018, 1, 1, tzinfo=timezone.utc),
+            end=datetime(2018, 6, 30, tzinfo=timezone.utc),
+            catalog_manager=catalog_manager,
+            metadata_service=metadata_service,
+        )
+
+        # Same code path as Stocks: bar_type built off nautilus_id, no ETF branch.
+        assert catalog.bars.call_args.kwargs["bar_types"] == ["SPY.ARCA-1-DAY-LAST-EXTERNAL"]
+
+        instrument = result.instrument
+        assert isinstance(instrument, Equity), "ETF must synthesise a whole-share Equity"
+        assert instrument.id.symbol.value == "SPY"
+        assert str(instrument.id.venue) == "ARCA"
+        # Equity-shape precondition for Story 5.2 whole-share sizing.
+        assert int(instrument.lot_size) == 1
+        assert instrument.quote_currency == USD
+
+    @pytest.mark.asyncio
+    async def test_unresolved_venue_etf_fails_fast_before_catalog_read(self):
+        """Story 5.1 AC2: an unresolved-venue ETF (nautilus_id None) never enters a run."""
+        from src.services.firstrate.backtest_loader import load_from_catalog
+
+        catalog = MagicMock()
+        catalog_manager = MagicMock()
+        catalog_manager.resolve_catalog.return_value = catalog
+
+        metadata_service = MagicMock()
+        metadata_service.get_instrument_sync.return_value = _make_instrument_row(
+            ticker="SPY", nautilus_id=None, asset_class="ETF"
+        )
+
+        with pytest.raises(DataNotFoundError) as exc_info:
+            await load_from_catalog(
+                catalog_name="etf-full",
+                ticker="SPY",
+                bar_type_spec="1-DAY-LAST",
+                start=datetime(2018, 1, 1, tzinfo=timezone.utc),
+                end=datetime(2018, 6, 30, tzinfo=timezone.utc),
+                catalog_manager=catalog_manager,
+                metadata_service=metadata_service,
+            )
+
+        assert exc_info.value.instrument_id == "SPY"
+        assert exc_info.value.context.get("venue_unresolved") is True
+        assert exc_info.value.context.get("catalog") == "etf-full"
+        msg = str(exc_info.value).lower()
+        assert "unresolved venue" in msg and "non-backtestable" in msg
+        # Never touch the filesystem / never enter a run for an excluded instrument.
+        catalog_manager.resolve_catalog.assert_not_called()
+        catalog.bars.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_blank_nautilus_id_also_fails_fast(self):
+        """A blank (empty-string) identity is treated as unresolved, never admitted."""
+        from src.services.firstrate.backtest_loader import load_from_catalog
+
+        catalog_manager = MagicMock()
+        metadata_service = MagicMock()
+        metadata_service.get_instrument_sync.return_value = _make_instrument_row(
+            ticker="SPY", nautilus_id="", asset_class="ETF"
+        )
+
+        with pytest.raises(DataNotFoundError) as exc_info:
+            await load_from_catalog(
+                catalog_name="etf-full",
+                ticker="SPY",
+                bar_type_spec="1-DAY-LAST",
+                start=datetime(2018, 1, 1, tzinfo=timezone.utc),
+                end=datetime(2018, 6, 30, tzinfo=timezone.utc),
+                catalog_manager=catalog_manager,
+                metadata_service=metadata_service,
+            )
+
+        assert exc_info.value.context.get("venue_unresolved") is True
+        catalog_manager.resolve_catalog.assert_not_called()
 
 
 @pytest.mark.component
