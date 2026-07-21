@@ -46,6 +46,38 @@ def _make_daily_bars(
     return bars
 
 
+def _make_zigzag_bars(
+    nautilus_id_str: str = "SPY.ARCA",
+    num_bars: int = 40,
+    start_ns: int = 1_514_764_800_000_000_000,  # 2018-01-01 UTC
+) -> list[Bar]:
+    """Generate zigzag daily bars so the SMA crossover actually fires (real fills).
+
+    Monotonic bars produce at most one crossover; a whole-share fills assertion
+    needs several orders. The saw-tooth reverses every few bars to force repeated
+    fast/slow crossovers within the run window.
+    """
+    bar_type = BarType.from_str(f"{nautilus_id_str}-1-DAY-LAST-EXTERNAL")
+    one_day_ns = 86_400_000_000_000
+    bars = []
+    for i in range(num_bars):
+        # +5 for the first half of each 6-bar cycle, -5 for the second → repeated crossovers.
+        price = 100.0 + (5.0 if i % 6 < 3 else -5.0) + (i * 0.1)
+        bars.append(
+            Bar(
+                bar_type=bar_type,
+                open=Price(price, precision=2),
+                high=Price(price + 1.0, precision=2),
+                low=Price(price - 1.0, precision=2),
+                close=Price(price, precision=2),
+                volume=Quantity(1_000_000, precision=0),
+                ts_event=start_ns + (i * one_day_ns),
+                ts_init=start_ns + (i * one_day_ns),
+            )
+        )
+    return bars
+
+
 def _make_instrument_row(
     ticker: str,
     nautilus_id: str | None,
@@ -77,7 +109,13 @@ def synthetic_catalog(tmp_path: Path):
 
     cat.write_data(_make_daily_bars("AAPL.NASDAQ"))
     cat.write_data(_make_daily_bars("MSFT.NASDAQ"))
+    # SPY.ARCA = plain ETF (Story 5.1, 10-bar monotonic window). IVV.ARCA = plain ETF and
+    # TQQQ.NASDAQ = leveraged (3x) ETF (Story 5.2) — both plain whole-share Equities served
+    # through the identical Stocks path; each gets zigzag bars so the crossover fires
+    # repeatedly and whole-share fills can be asserted across many orders.
     cat.write_data(_make_daily_bars("SPY.ARCA"))
+    cat.write_data(_make_zigzag_bars("IVV.ARCA"))
+    cat.write_data(_make_zigzag_bars("TQQQ.NASDAQ"))
     return base
 
 
@@ -85,6 +123,8 @@ def _build_sma_request(
     *,
     symbol: str = "AAPL",
     catalog_name: str = "e2e-test",
+    start: datetime = datetime(2018, 1, 1, tzinfo=timezone.utc),
+    end: datetime = datetime(2018, 1, 11, tzinfo=timezone.utc),
 ):
     from decimal import Decimal
 
@@ -93,8 +133,8 @@ def _build_sma_request(
     return BacktestRequest.from_cli_args(
         strategy="sma_crossover",
         symbol=symbol,
-        start=datetime(2018, 1, 1, tzinfo=timezone.utc),
-        end=datetime(2018, 1, 11, tzinfo=timezone.utc),
+        start=start,
+        end=end,
         bar_type_spec="1-DAY-LAST",
         persist=False,
         starting_balance=Decimal("100000"),
@@ -219,6 +259,108 @@ class TestNamedCatalogBacktestIntegration:
 
         assert exc_info.value.instrument_id == "SPY"
         assert exc_info.value.context.get("venue_unresolved") is True
+
+    @pytest.mark.asyncio
+    async def test_named_catalog_etf_single_run_sizes_whole_shares(self, synthetic_catalog: Path):
+        """Story 5.2 AC1/AC2: a plain ETF (IVV.ARCA) run completes and fills in whole shares.
+
+        Whole-share sizing is only observable through a real run — every order fill
+        quantity must be a whole number (no fractional part), identical to a Stock.
+        """
+        from src.core.backtest_orchestrator import BacktestOrchestrator
+
+        window_start = datetime(2018, 1, 1, tzinfo=timezone.utc)
+        window_end = datetime(2018, 3, 1, tzinfo=timezone.utc)
+
+        catalog_manager = CatalogManager(synthetic_catalog)
+        metadata_service = MagicMock()
+        metadata_service.get_instrument_sync.return_value = _make_instrument_row(
+            "IVV", "IVV.ARCA", asset_class="ETF"
+        )
+
+        load_result = await load_from_catalog(
+            catalog_name="e2e-test",
+            ticker="IVV",
+            bar_type_spec="1-DAY-LAST",
+            start=window_start,
+            end=window_end,
+            catalog_manager=catalog_manager,
+            metadata_service=metadata_service,
+        )
+
+        request = _build_sma_request(symbol="IVV", start=window_start, end=window_end)
+        orchestrator = BacktestOrchestrator()
+        try:
+            result, run_id = await orchestrator.execute(
+                request, load_result.bars, load_result.instrument
+            )
+            assert result is not None
+            assert result.final_balance > 0
+            assert run_id is None  # persist=False
+
+            assert orchestrator.engine is not None
+            fills = orchestrator.engine.trader.generate_order_fills_report()
+            assert not fills.empty, "expected at least one order fill to verify sizing"
+            for qty in fills["quantity"].tolist():
+                assert float(str(qty)).is_integer(), f"ETF fill not whole-share: {qty}"
+                assert "." not in str(qty)
+        finally:
+            orchestrator.dispose()
+
+    @pytest.mark.asyncio
+    async def test_named_catalog_leveraged_etf_settles_as_ordinary_shares(
+        self, synthetic_catalog: Path
+    ):
+        """Story 5.2 AC3: a leveraged ETF (TQQQ.NASDAQ) settles as ordinary whole shares.
+
+        No leverage/inverse special-casing — TQQQ is a plain Equity (size_precision=0),
+        sized by the identical whole-share branch as SPY/Stocks (not crypto/FX rules).
+        """
+        from nautilus_trader.model.instruments import Equity
+
+        from src.core.backtest_orchestrator import BacktestOrchestrator
+
+        catalog_manager = CatalogManager(synthetic_catalog)
+        metadata_service = MagicMock()
+        metadata_service.get_instrument_sync.return_value = _make_instrument_row(
+            "TQQQ", "TQQQ.NASDAQ", asset_class="ETF"
+        )
+
+        load_result = await load_from_catalog(
+            catalog_name="e2e-test",
+            ticker="TQQQ",
+            bar_type_spec="1-DAY-LAST",
+            start=datetime(2018, 1, 1, tzinfo=timezone.utc),
+            end=datetime(2018, 3, 1, tzinfo=timezone.utc),
+            catalog_manager=catalog_manager,
+            metadata_service=metadata_service,
+        )
+
+        # Ordinary-shares settlement precondition — no crypto/FX fractional precision.
+        assert isinstance(load_result.instrument, Equity)
+        assert load_result.instrument.size_precision == 0
+
+        request = _build_sma_request(
+            symbol="TQQQ",
+            start=datetime(2018, 1, 1, tzinfo=timezone.utc),
+            end=datetime(2018, 3, 1, tzinfo=timezone.utc),
+        )
+        orchestrator = BacktestOrchestrator()
+        try:
+            result, run_id = await orchestrator.execute(
+                request, load_result.bars, load_result.instrument
+            )
+            assert result is not None
+            assert result.final_balance > 0
+            assert run_id is None  # persist=False — no DB write (AC4)
+
+            assert orchestrator.engine is not None
+            fills = orchestrator.engine.trader.generate_order_fills_report()
+            assert not fills.empty, "zigzag bars should trigger multiple crossovers"
+            for qty in fills["quantity"].tolist():
+                assert float(str(qty)).is_integer(), f"leveraged ETF fill not whole-share: {qty}"
+        finally:
+            orchestrator.dispose()
 
     @pytest.mark.asyncio
     async def test_named_catalog_missing_ticker_raises(self, synthetic_catalog: Path):

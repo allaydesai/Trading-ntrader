@@ -370,6 +370,98 @@ class TestEtfRoutingNoAdapter:
         catalog_manager.resolve_catalog.assert_not_called()
 
 
+def _daily_bar_for(nautilus_id: str, close: float = 150.0):
+    """Build one real Nautilus daily Bar (precision=2) for build_equity precision inference."""
+    from nautilus_trader.model.data import Bar, BarType
+    from nautilus_trader.model.objects import Price, Quantity
+
+    bar_type = BarType.from_str(f"{nautilus_id}-1-DAY-LAST-EXTERNAL")
+    return Bar(
+        bar_type=bar_type,
+        open=Price(close, precision=2),
+        high=Price(close + 1.0, precision=2),
+        low=Price(close - 1.0, precision=2),
+        close=Price(close, precision=2),
+        volume=Quantity(1_000_000, precision=0),
+        ts_event=0,
+        ts_init=0,
+    )
+
+
+@pytest.mark.component
+class TestLeveragedInverseEtfWholeShareShape:
+    """Story 5.2 AC #3: leveraged/inverse ETFs are plain whole-share Equities.
+
+    There is no leverage/inverse concept in the pipeline — ``TQQQ``/``SQQQ`` are
+    synthesised as ordinary Nautilus ``Equity`` instruments exactly like ``SPY``:
+    ``size_precision == 0`` and ``size_increment == 1`` (ordinary-shares settlement),
+    with no fractional/crypto precision and no ``asset_class`` branch. This is the
+    instrument-shape precondition for the whole-share sizing verified end-to-end at
+    the integration tier.
+    """
+
+    @pytest.mark.parametrize(
+        "nautilus_id, ticker",
+        [
+            ("SPY.ARCA", "SPY"),  # plain ETF control
+            ("TQQQ.NASDAQ", "TQQQ"),  # leveraged (3x) ETF
+            ("SQQQ.NASDAQ", "SQQQ"),  # inverse (-3x) ETF
+            ("BRK.B.NYSE", "BRK.B"),  # multi-dot control (venue parse)
+        ],
+    )
+    def test_build_equity_settles_as_ordinary_shares(self, nautilus_id: str, ticker: str):
+        """build_equity yields a whole-share Equity — no crypto/FX precision, no leverage branch."""
+        from nautilus_trader.model.currencies import USD
+        from nautilus_trader.model.instruments import Equity
+
+        from src.services.firstrate.backtest_loader import build_equity
+
+        instrument = build_equity(
+            nautilus_id=nautilus_id, ticker=ticker, bars=[_daily_bar_for(nautilus_id)]
+        )
+
+        assert isinstance(instrument, Equity)
+        # Ordinary-shares settlement: whole-share, no fractional/crypto precision.
+        assert instrument.size_precision == 0
+        assert int(instrument.size_increment) == 1
+        assert int(instrument.lot_size) == 1
+        assert instrument.quote_currency == USD
+        assert instrument.id.symbol.value == ticker
+
+    @pytest.mark.asyncio
+    async def test_loader_serves_leveraged_etf_via_identical_path(self):
+        """A leveraged ETF row (asset_class='ETF') flows through the same no-branch loader path."""
+        from nautilus_trader.model.instruments import Equity
+
+        from src.services.firstrate.backtest_loader import load_from_catalog
+
+        catalog = MagicMock()
+        catalog.bars.return_value = [_make_bar_for("TQQQ.NASDAQ"), _make_bar_for("TQQQ.NASDAQ")]
+
+        catalog_manager = MagicMock()
+        catalog_manager.resolve_catalog.return_value = catalog
+
+        metadata_service = MagicMock()
+        metadata_service.get_instrument_sync.return_value = _make_instrument_row(
+            ticker="TQQQ", nautilus_id="TQQQ.NASDAQ", asset_class="ETF"
+        )
+
+        result = await load_from_catalog(
+            catalog_name="etf-full",
+            ticker="TQQQ",
+            bar_type_spec="1-DAY-LAST",
+            start=datetime(2018, 1, 1, tzinfo=timezone.utc),
+            end=datetime(2018, 6, 30, tzinfo=timezone.utc),
+            catalog_manager=catalog_manager,
+            metadata_service=metadata_service,
+        )
+
+        # bar_type built off nautilus_id with no asset_class branch — identical Stocks path.
+        assert catalog.bars.call_args.kwargs["bar_types"] == ["TQQQ.NASDAQ-1-DAY-LAST-EXTERNAL"]
+        assert isinstance(result.instrument, Equity)
+        assert result.instrument.size_precision == 0
+
+
 @pytest.mark.component
 @pytest.mark.skipif(
     os.environ.get("E2E_CATALOG_AVAILABLE") != "1",
