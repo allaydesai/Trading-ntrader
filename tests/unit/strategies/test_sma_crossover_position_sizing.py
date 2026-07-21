@@ -131,3 +131,97 @@ class TestEquityMinimumShareFloor:
 
         with pytest.raises(ValueError, match="without current bar"):
             SMACrossover._calculate_position_size(sizing_self)
+
+
+def _daily_bars(nautilus_id: str, close: float = 150.0):
+    """Build one deterministic daily Bar for the given nautilus_id (precision=2)."""
+    from nautilus_trader.model.data import Bar, BarType
+    from nautilus_trader.model.objects import Price, Quantity
+
+    bar_type = BarType.from_str(f"{nautilus_id}-1-DAY-LAST-EXTERNAL")
+    return [
+        Bar(
+            bar_type=bar_type,
+            open=Price(close, precision=2),
+            high=Price(close + 1.0, precision=2),
+            low=Price(close - 1.0, precision=2),
+            close=Price(close, precision=2),
+            volume=Quantity(1_000_000, precision=0),
+            ts_event=0,
+            ts_init=0,
+        )
+    ]
+
+
+@pytest.mark.unit
+class TestEtfWholeShareSizingMatchesStocks:
+    """Story 5.2 AC #2/#3 — ETFs size in whole shares, identically to Stocks.
+
+    The sizing branch reads only ``instrument.size_precision``; a Nautilus
+    ``Equity`` (Stock OR ETF, incl. leveraged/inverse) is always
+    ``size_precision == 0`` → the whole-share branch. There is no ``asset_class``
+    branch and no crypto/FX fractional path — that asset-class blindness IS the
+    "consistent with Stocks / settles as ordinary shares" guarantee.
+    """
+
+    def test_etf_and_stock_size_identically(self):
+        """A REAL ETF Equity and a REAL Stock Equity size to the SAME whole share count.
+
+        Not a tautology: each side derives its ``size_precision`` from an actual
+        ``build_equity`` instrument (SPY.ARCA ETF vs AAPL.NASDAQ stock) — proving the
+        real ETF instrument drives the identical whole-share branch as a real stock,
+        and that the count matches the exact hand-computed expectation (magnitude, not
+        just integrality).
+        """
+        from src.services.firstrate.backtest_loader import build_equity
+
+        etf = build_equity(nautilus_id="SPY.ARCA", ticker="SPY", bars=_daily_bars("SPY.ARCA"))
+        stock = build_equity(
+            nautilus_id="AAPL.NASDAQ", ticker="AAPL", bars=_daily_bars("AAPL.NASDAQ")
+        )
+
+        etf_self = _build_sizing_self(size_precision=etf.size_precision, close_price=140.0)
+        stock_self = _build_sizing_self(size_precision=stock.size_precision, close_price=140.0)
+
+        etf_qty = SMACrossover._calculate_position_size(etf_self)
+        stock_qty = SMACrossover._calculate_position_size(stock_self)
+
+        assert str(etf_qty) == str(stock_qty)  # identical share count across asset classes
+        assert "." not in str(etf_qty)  # whole shares, no fractional part
+        # $1M * 10% / $140 = 714.28… → int() = 714 whole shares (exact magnitude).
+        assert int(str(etf_qty)) == 714
+
+    @pytest.mark.parametrize(
+        "nautilus_id",
+        [
+            "SPY.ARCA",  # plain ETF
+            "TQQQ.NASDAQ",  # leveraged (3x) ETF
+            "SQQQ.NASDAQ",  # inverse (-3x) ETF
+        ],
+    )
+    def test_real_etf_equity_binds_to_whole_share_branch(self, nautilus_id: str):
+        """A real Equity from build_equity (incl. leveraged/inverse) has size_precision=0.
+
+        Reads size_precision off the actual synthesised instrument and feeds it into
+        the sizing path — proving the loader's ETF Equity settles as ordinary shares
+        (whole-share branch), not crypto/FX fractional rules. No leverage special-casing.
+        """
+        from src.services.firstrate.backtest_loader import build_equity
+
+        ticker = nautilus_id.split(".")[0]
+        instrument = build_equity(
+            nautilus_id=nautilus_id, ticker=ticker, bars=_daily_bars(nautilus_id)
+        )
+
+        # Ordinary-shares settlement — no fractional/crypto precision, no leverage branch.
+        assert instrument.size_precision == 0
+        assert int(instrument.size_increment) == 1
+
+        sizing_self = _build_sizing_self(
+            size_precision=instrument.size_precision, close_price=140.0
+        )
+        qty = SMACrossover._calculate_position_size(sizing_self)
+
+        assert "." not in str(qty)  # whole shares
+        # Exact magnitude ($1M * 10% / $140 = 714.28… → 714), not just a >=1 floor.
+        assert int(str(qty)) == 714
