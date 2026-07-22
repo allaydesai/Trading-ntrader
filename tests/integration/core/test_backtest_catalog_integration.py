@@ -4,6 +4,7 @@ Runs the full flow against a tmp_path-scoped ParquetDataCatalog with synthetic
 bars. Requires --forked (Nautilus C/Rust extension isolation).
 """
 
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -12,7 +13,10 @@ import pytest
 from nautilus_trader.model.data import Bar, BarType
 from nautilus_trader.model.objects import Price, Quantity
 from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from src.db.base import Base
 from src.db.models.catalog_instrument import CatalogInstrument
 from src.services.exceptions import DataNotFoundError
 from src.services.firstrate.backtest_loader import load_from_catalog
@@ -125,6 +129,7 @@ def _build_sma_request(
     catalog_name: str = "e2e-test",
     start: datetime = datetime(2018, 1, 1, tzinfo=timezone.utc),
     end: datetime = datetime(2018, 1, 11, tzinfo=timezone.utc),
+    persist: bool = False,
 ):
     from decimal import Decimal
 
@@ -136,7 +141,7 @@ def _build_sma_request(
         start=start,
         end=end,
         bar_type_spec="1-DAY-LAST",
-        persist=False,
+        persist=persist,
         starting_balance=Decimal("100000"),
         data_source="catalog",
         catalog_name=catalog_name,
@@ -145,6 +150,62 @@ def _build_sma_request(
         fast_period=2,
         slow_period=5,
     )
+
+
+def get_worker_id(request) -> str:
+    """Get pytest-xdist worker ID or 'master' if running without xdist."""
+    return getattr(request.config, "workerinput", {}).get("workerid", "master")
+
+
+def _test_schema_name(request) -> str:
+    """Per-worker isolated schema name for the results DB round-trip (Story 5.4)."""
+    return f"test_{get_worker_id(request)}".replace("-", "_")
+
+
+@pytest.fixture
+async def async_test_engine(request):
+    """Async results-DB engine with per-worker schema isolation (Story 5.4 persistence).
+
+    Creates the existing results-DB tables via ``Base.metadata.create_all`` in a
+    throwaway schema — this is test scaffolding, NOT an Alembic migration or a
+    schema change to the app DB (AC4).
+    """
+    from src.config import get_settings
+
+    settings = get_settings()
+    async_url = settings.database_url.replace("postgresql://", "postgresql+asyncpg://")
+    schema_name = _test_schema_name(request)
+
+    engine = create_async_engine(async_url, echo=False)
+    async with engine.begin() as conn:
+        await conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {schema_name}"))
+        await conn.execute(text(f"SET search_path TO {schema_name}"))
+        await conn.run_sync(Base.metadata.create_all)
+
+    yield engine
+
+    async with engine.begin() as conn:
+        await conn.execute(text(f"DROP SCHEMA IF EXISTS {schema_name} CASCADE"))
+    await engine.dispose()
+
+
+@pytest.fixture
+async def async_session(async_test_engine, request):
+    """Read-back session on the isolated test schema (separate from the write session)."""
+    schema_name = _test_schema_name(request)
+    session_maker = async_sessionmaker(
+        async_test_engine, class_=AsyncSession, expire_on_commit=False
+    )
+    async with session_maker() as session:
+        await session.execute(text(f"SET search_path TO {schema_name}"))
+        yield session
+
+
+def _persisted_columns(run) -> set[str]:
+    """Non-None column names on a persisted BacktestRun, for ETF↔Stock parity comparison."""
+    from src.db.models.backtest import BacktestRun
+
+    return {c.name for c in BacktestRun.__table__.columns if getattr(run, c.name) is not None}
 
 
 @pytest.mark.integration
@@ -596,3 +657,144 @@ class TestNamedCatalogBacktestIntegration:
 
         assert exc_info.value.context.get("catalog") == "e2e-test"
         assert exc_info.value.context.get("metadata_range") is not None
+
+
+@pytest.mark.integration
+class TestNamedCatalogEtfPersistence:
+    """Story 5.4: an ETF run persists via the existing DB path and is web-viewable.
+
+    Verification/lock-in: the persist + display path is asset-class-agnostic (an ETF is
+    erased to a plain Equity + symbol string at load time), so an ETF run is recorded and
+    displayed identically to a Stock. No production code, no migration, no schema change.
+    """
+
+    def _write_session_ctx(self, engine, schema_name):
+        """Build a get_session replacement yielding a session on the isolated test schema.
+
+        ``BacktestOrchestrator._persist_results`` opens its OWN session via
+        ``src.db.session.get_session`` and commits internally; monkeypatching that name to
+        this factory routes the write to the test schema (never the app DB).
+        """
+        maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+        @asynccontextmanager
+        async def _ctx():
+            async with maker() as session:
+                await session.execute(text(f"SET search_path TO {schema_name}"))
+                yield session
+
+        return _ctx
+
+    async def _persist_run(self, catalog_base, symbol, nautilus_id, asset_class, start, end):
+        """Run + persist a single instrument through the existing path; return its run_id."""
+        from src.core.backtest_orchestrator import BacktestOrchestrator
+
+        catalog_manager = CatalogManager(catalog_base)
+        metadata_service = MagicMock()
+        metadata_service.get_instrument_sync.return_value = _make_instrument_row(
+            symbol, nautilus_id, asset_class=asset_class
+        )
+        load_result = await load_from_catalog(
+            catalog_name="e2e-test",
+            ticker=symbol,
+            bar_type_spec="1-DAY-LAST",
+            start=start,
+            end=end,
+            catalog_manager=catalog_manager,
+            metadata_service=metadata_service,
+        )
+        request = _build_sma_request(symbol=symbol, start=start, end=end, persist=True)
+        orchestrator = BacktestOrchestrator()
+        try:
+            _result, run_id = await orchestrator.execute(
+                request, load_result.bars, load_result.instrument
+            )
+            return run_id
+        finally:
+            orchestrator.dispose()
+
+    @pytest.mark.asyncio
+    async def test_named_catalog_etf_run_persists_results(
+        self, synthetic_catalog, async_test_engine, async_session, request, monkeypatch
+    ):
+        """AC1/AC3: a real ETF run persists a backtest_runs + performance_metrics record,
+        identical in shape to a Stock run (no asset_class column anywhere)."""
+        from src.db.repositories.backtest_repository import BacktestRepository
+
+        schema_name = _test_schema_name(request)
+        monkeypatch.setattr(
+            "src.core.backtest_orchestrator.get_session",
+            self._write_session_ctx(async_test_engine, schema_name),
+        )
+
+        etf_start = datetime(2018, 1, 1, tzinfo=timezone.utc)
+        etf_end = datetime(2018, 3, 1, tzinfo=timezone.utc)
+        etf_run_id = await self._persist_run(
+            synthetic_catalog, "IVV", "IVV.ARCA", "ETF", etf_start, etf_end
+        )
+        assert etf_run_id is not None  # persist=True → run_id assigned
+
+        # Read-back is the real proof (persist swallows its own exceptions).
+        etf_run = await BacktestRepository(async_session).find_by_run_id(etf_run_id)
+        assert etf_run is not None, "ETF run was not persisted to the results DB"
+        assert etf_run.instrument_symbol == "IVV"
+        assert etf_run.execution_status == "success"
+        assert etf_run.data_source == "catalog:e2e-test"
+        assert etf_run.strategy_type == "sma_crossover"
+        assert etf_run.metrics is not None  # 1:1 performance_metrics row written
+        assert not hasattr(etf_run, "asset_class")
+        # AC3: the "no asset-class column" guarantee extends to performance_metrics and
+        # trades too — a schema-level tripwire (deterministic, independent of how many
+        # trade rows a given run produces).
+        from src.db.models.backtest import PerformanceMetrics
+        from src.db.models.trade import Trade
+
+        assert "asset_class" not in {c.name for c in PerformanceMetrics.__table__.columns}
+        assert "asset_class" not in {c.name for c in Trade.__table__.columns}
+
+        # Parity: a Stock persists the identical record shape via the identical path (AC3).
+        stock_run_id = await self._persist_run(
+            synthetic_catalog,
+            "AAPL",
+            "AAPL.NASDAQ",
+            "STOCK",
+            datetime(2018, 1, 1, tzinfo=timezone.utc),
+            datetime(2018, 1, 11, tzinfo=timezone.utc),
+        )
+        assert stock_run_id is not None
+        stock_run = await BacktestRepository(async_session).find_by_run_id(stock_run_id)
+        assert stock_run is not None
+        assert not hasattr(stock_run, "asset_class")
+        assert _persisted_columns(etf_run) == _persisted_columns(stock_run)
+
+    @pytest.mark.asyncio
+    async def test_persisted_etf_run_is_viewable_in_web_read_path(
+        self, synthetic_catalog, async_test_engine, async_session, request, monkeypatch
+    ):
+        """AC2: the persisted ETF run is viewable via the exact web read path
+        (BacktestQueryService.get_backtest_by_id → to_detail_view), no asset-class branch."""
+        from src.api.models.backtest_detail import to_detail_view
+        from src.db.repositories.backtest_repository import BacktestRepository
+        from src.services.backtest_query import BacktestQueryService
+
+        schema_name = _test_schema_name(request)
+        monkeypatch.setattr(
+            "src.core.backtest_orchestrator.get_session",
+            self._write_session_ctx(async_test_engine, schema_name),
+        )
+
+        start = datetime(2018, 1, 1, tzinfo=timezone.utc)
+        end = datetime(2018, 3, 1, tzinfo=timezone.utc)
+        run_id = await self._persist_run(synthetic_catalog, "IVV", "IVV.ARCA", "ETF", start, end)
+        assert run_id is not None
+
+        # Exactly what the FastAPI detail route reads.
+        service = BacktestQueryService(BacktestRepository(async_session))
+        run = await service.get_backtest_by_id(run_id)
+        assert run is not None
+        assert run.instrument_symbol == "IVV"
+        assert run.metrics is not None  # eager-loaded — no lazy access in the async test
+
+        view = to_detail_view(run)
+        assert view.configuration.instrument_symbol == "IVV"  # ticker renders plainly (not kraken)
+        assert view.execution_status == "success"
