@@ -12,7 +12,9 @@ from rich.table import Table
 from src.cli.commands._backtest_helpers import (
     display_backtest_results,
     execute_backtest,
+    execute_multi_backtest,
     load_backtest_data,
+    load_many_backtest_data,
     resolve_backtest_request,
 )
 from src.cli.commands.compare import compare_backtests
@@ -414,6 +416,188 @@ def run_backtest(
 
     if not result:
         raise click.ClickException("Backtest failed")
+
+
+@backtest.command("run-multi")
+@click.option(
+    "--symbols",
+    "-sym",
+    required=True,
+    help="Comma-separated ETF symbols, e.g. 'SPY,IVV,TQQQ' (at least two).",
+)
+@click.option(
+    "--strategy",
+    "-s",
+    default="sma_crossover",
+    callback=validate_strategy,
+    help="Strategy to run (applied to every instrument). Default: sma_crossover.",
+)
+@click.option(
+    "--start",
+    "-st",
+    required=True,
+    type=click.DateTime(formats=["%Y-%m-%d", "%Y-%m-%d %H:%M:%S"]),
+    help="Start date (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS)",
+)
+@click.option(
+    "--end",
+    "-e",
+    required=True,
+    type=click.DateTime(formats=["%Y-%m-%d", "%Y-%m-%d %H:%M:%S"]),
+    help="End date (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS)",
+)
+@click.option(
+    "--catalog",
+    "catalog_name",
+    required=True,
+    type=str,
+    help="Named FirstRate catalog holding the ETFs (multi-ETF requires a named catalog).",
+)
+@click.option(
+    "--starting-balance", "-sb", type=float, default=None, help="Starting balance per venue."
+)
+@click.option("--fast-period", "-f", default=None, type=int, help="Fast SMA period (default: 10)")
+@click.option("--slow-period", "-sl", default=None, type=int, help="Slow SMA period (default: 20)")
+@click.option(
+    "--timeframe",
+    "-t",
+    default="1-DAY",
+    type=click.Choice(
+        ["1-MINUTE", "5-MINUTE", "15-MINUTE", "30-MINUTE", "1-HOUR", "4-HOUR", "1-DAY", "1-WEEK"],
+        case_sensitive=False,
+    ),
+    help="Bar timeframe applied to every instrument (default: 1-DAY).",
+)
+def run_multi_backtest(
+    symbols: str,
+    strategy: str,
+    start: datetime,
+    end: datetime,
+    catalog_name: str,
+    starting_balance: float | None,
+    fast_period: int | None,
+    slow_period: int | None,
+    timeframe: str,
+):
+    """Run ONE backtest spanning MULTIPLE ETFs (Story 5.3, multi-ETF).
+
+    Routes several venue-qualified ETFs through the existing BacktestOrchestrator
+    in a single engine run — each instrument keeps its own venue and whole-share
+    sizing (no cross-instrument venue bleed). Results are NOT persisted yet;
+    database persistence for multi-ETF runs lands in Story 5.4.
+
+    \b
+    Example:
+      backtest run-multi --symbols IVV,TQQQ --catalog etf-full \\
+          --start 2018-01-01 --end 2018-12-31 --strategy sma_crossover
+    """
+    from decimal import Decimal
+
+    async def run_multi_async():
+        tickers = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+        if len(tickers) < 2:
+            raise click.UsageError(
+                "run-multi needs at least two --symbols (comma-separated). "
+                "For a single instrument use 'backtest run'."
+            )
+        duplicates = sorted({t for t in tickers if tickers.count(t) > 1})
+        if duplicates:
+            raise click.UsageError(
+                f"Duplicate --symbols not allowed: {', '.join(duplicates)}. "
+                "Each ETF may appear at most once."
+            )
+
+        strategy_params: dict[str, int] = {}
+        if fast_period is not None:
+            strategy_params["fast_period"] = fast_period
+        if slow_period is not None:
+            strategy_params["slow_period"] = slow_period
+
+        from src.models.backtest_request import BacktestRequest
+
+        request = BacktestRequest.from_cli_args(
+            strategy=strategy,
+            symbol=tickers[0],  # representative — the instrument list is passed to execute_multi
+            start=start,
+            end=end,
+            bar_type_spec=f"{timeframe.upper()}-LAST",
+            persist=False,  # multi-ETF persistence lands in Story 5.4
+            starting_balance=Decimal(str(starting_balance))
+            if starting_balance is not None
+            else Decimal("1000000"),
+            data_source="catalog",
+            catalog_name=catalog_name,
+            **strategy_params,
+        )
+
+        console.print(
+            f"🚀 Running {strategy.upper()} multi-ETF backtest for {', '.join(tickers)}",
+            style="cyan bold",
+        )
+        console.print(
+            f"   Period: {request.start_date.strftime('%Y-%m-%d')} to "
+            f"{request.end_date.strftime('%Y-%m-%d')}"
+        )
+        console.print(f"   Catalog: {catalog_name}")
+        console.print(
+            "ℹ️  Multi-ETF results are not persisted yet — coming in Story 5.4.", style="yellow"
+        )
+        console.print()
+
+        try:
+            load_results = await load_many_backtest_data(
+                catalog_name=catalog_name,
+                tickers=tickers,
+                bar_type_spec=request.bar_type,
+                start=request.start_date,
+                end=request.end_date,
+                console=console,
+            )
+        except DataNotFoundError as e:
+            console.print(str(e), style="red")
+            sys.exit(1)
+        except UnknownCatalogError as e:
+            raise click.UsageError(str(e)) from e
+
+        instruments_data = [(r.bars, r.instrument) for r in load_results]
+
+        try:
+            result, run_id = await execute_multi_backtest(
+                request=request,
+                instruments_data=instruments_data,
+                console=console,
+            )
+        except ValueError as e:
+            console.print(f"Multi-ETF backtest failed: {e}", style="red")
+            return False
+
+        strategy_name = strategy.replace("_", " ").title()
+        display_backtest_results(
+            result=result,
+            console=console,
+            run_id=run_id,
+            persist=False,
+            context_rows={
+                "Strategy": strategy_name,
+                "Catalog": catalog_name,
+                "Symbols": ", ".join(tickers),
+                "Instruments": str(len(tickers)),
+                "Period": (
+                    f"{request.start_date.strftime('%Y-%m-%d')} to "
+                    f"{request.end_date.strftime('%Y-%m-%d')}"
+                ),
+            },
+            table_title="Multi-ETF Backtest Results",
+        )
+        return True
+
+    try:
+        ok = asyncio.run(run_multi_async())
+    except click.UsageError:
+        raise
+
+    if not ok:
+        raise click.ClickException("Multi-ETF backtest failed")
 
 
 @backtest.command("list")

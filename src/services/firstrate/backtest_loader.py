@@ -135,15 +135,26 @@ async def load_from_catalog(
 
     nautilus_id = row.nautilus_id
     if not nautilus_id:
+        # Unresolved-venue fail-fast (Story 3.5 exclusion contract, Story 5.1 AC2).
+        # ``InstrumentMapper.sync_qualification`` nulls ``nautilus_id`` for a
+        # ``VENUE_UNRESOLVED`` ticker (ETF or stock) — leaving the on-disk Parquet
+        # intact but the identity unqualified. Nulling the identity IS the exclusion
+        # mechanism this loader honors: a non-backtestable instrument can never
+        # silently enter a run. Raise BEFORE resolving the catalog / reading bars so
+        # the filesystem is never touched for an excluded instrument. The
+        # ``venue_unresolved`` context flag lets callers/tests distinguish this
+        # intentional exclusion from a plain missing-ticker or empty-window miss.
         raise DataNotFoundError(
             instrument_id=ticker,
             start=start,
             end=end,
             message=(
-                f"Ticker '{ticker}' in catalog '{catalog_name}' has no nautilus_id — "
-                "DB metadata is incomplete. Re-import the ticker to repopulate."
+                f"'{ticker}' in catalog '{catalog_name}' has an unresolved venue "
+                "(non-backtestable, Story 3.5) — its nautilus_id is unset, so it is "
+                "excluded from backtests. Resolve its venue (metadata resolution / "
+                "venue_overrides.csv) and re-import to admit it."
             ),
-            context={"missing_from_catalog": catalog_name},
+            context={"venue_unresolved": True, "catalog": catalog_name},
         )
 
     try:
@@ -200,3 +211,49 @@ async def load_from_catalog(
         instrument=instrument,
         data_source_used=f"Catalog: {catalog_name}",
     )
+
+
+async def load_many_from_catalog(
+    *,
+    catalog_name: str,
+    tickers: list[str],
+    bar_type_spec: str,
+    start,
+    end,
+    catalog_manager: CatalogManager,
+    metadata_service: MetadataService,
+) -> list[DataLoadResult]:
+    """Load bars + instrument for several tickers from one named catalog (Story 5.3).
+
+    A thin, order-preserving loop over :func:`load_from_catalog` — one
+    ``DataLoadResult`` per ticker, each carrying its own venue-qualified
+    ``Equity`` (mixed venues supported, e.g. ``IVV.ARCA`` + ``TQQQ.NASDAQ``).
+    No new resolution logic and no runtime adapter: the multi-ETF path reuses
+    the exact single-instrument loader per ticker.
+
+    Any unresolved-venue / missing ticker fails fast (``DataNotFoundError``
+    from ``load_from_catalog``) so no instrument is silently dropped from a
+    multi-ETF run. Ticker order is preserved; the caller's list is authoritative
+    (no dedup — venue dedup is the orchestrator's concern).
+
+    Raises:
+        ValueError: ``tickers`` is empty.
+        DataNotFoundError / UnknownCatalogError: propagated per ticker.
+    """
+    if not tickers:
+        raise ValueError("load_many_from_catalog requires at least one ticker")
+
+    results: list[DataLoadResult] = []
+    for ticker in tickers:
+        results.append(
+            await load_from_catalog(
+                catalog_name=catalog_name,
+                ticker=ticker,
+                bar_type_spec=bar_type_spec,
+                start=start,
+                end=end,
+                catalog_manager=catalog_manager,
+                metadata_service=metadata_service,
+            )
+        )
+    return results

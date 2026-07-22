@@ -13,7 +13,8 @@ from src.services.exceptions import DataNotFoundError
 def _make_instrument_row(
     *,
     ticker: str = "AAPL",
-    nautilus_id: str = "AAPL.NASDAQ",
+    nautilus_id: str | None = "AAPL.NASDAQ",
+    asset_class: str = "STOCK",
     date_range_start: datetime = datetime(2018, 1, 1, tzinfo=timezone.utc),
     date_range_end: datetime = datetime(2018, 12, 31, tzinfo=timezone.utc),
 ) -> CatalogInstrument:
@@ -21,6 +22,7 @@ def _make_instrument_row(
     row = MagicMock(spec=CatalogInstrument)
     row.ticker = ticker
     row.nautilus_id = nautilus_id
+    row.asset_class = asset_class
     row.date_range_start = date_range_start
     row.date_range_end = date_range_end
     return row
@@ -259,6 +261,208 @@ class TestLoadFromCatalog:
 
 
 @pytest.mark.component
+class TestEtfRoutingNoAdapter:
+    """Story 5.1 AC1/AC3: ETFs are served by the identical Equity path as Stocks.
+
+    The loader never branches on ``asset_class`` — an ETF flows through the same
+    ``build_equity`` synthesis, proving NFR16 "no runtime adapter". The synthesised
+    instrument is equity-shaped (``Equity``, ``lot_size == 1``, USD), the precondition
+    Story 5.2 whole-share sizing depends on.
+    """
+
+    @pytest.mark.asyncio
+    async def test_etf_served_via_identical_equity_path(self):
+        """An ETF row (asset_class='ETF') resolves to a Nautilus Equity on ARCA."""
+        from nautilus_trader.model.currencies import USD
+        from nautilus_trader.model.instruments import Equity
+
+        from src.services.firstrate.backtest_loader import load_from_catalog
+
+        catalog = MagicMock()
+        catalog.bars.return_value = [_make_bar_for("SPY.ARCA"), _make_bar_for("SPY.ARCA")]
+
+        catalog_manager = MagicMock()
+        catalog_manager.resolve_catalog.return_value = catalog
+
+        metadata_service = MagicMock()
+        metadata_service.get_instrument_sync.return_value = _make_instrument_row(
+            ticker="SPY", nautilus_id="SPY.ARCA", asset_class="ETF"
+        )
+
+        result = await load_from_catalog(
+            catalog_name="etf-full",
+            ticker="SPY",
+            bar_type_spec="1-DAY-LAST",
+            start=datetime(2018, 1, 1, tzinfo=timezone.utc),
+            end=datetime(2018, 6, 30, tzinfo=timezone.utc),
+            catalog_manager=catalog_manager,
+            metadata_service=metadata_service,
+        )
+
+        # Same code path as Stocks: bar_type built off nautilus_id, no ETF branch.
+        assert catalog.bars.call_args.kwargs["bar_types"] == ["SPY.ARCA-1-DAY-LAST-EXTERNAL"]
+
+        instrument = result.instrument
+        assert isinstance(instrument, Equity), "ETF must synthesise a whole-share Equity"
+        assert instrument.id.symbol.value == "SPY"
+        assert str(instrument.id.venue) == "ARCA"
+        # Equity-shape precondition for Story 5.2 whole-share sizing.
+        assert int(instrument.lot_size) == 1
+        assert instrument.quote_currency == USD
+
+    @pytest.mark.asyncio
+    async def test_unresolved_venue_etf_fails_fast_before_catalog_read(self):
+        """Story 5.1 AC2: an unresolved-venue ETF (nautilus_id None) never enters a run."""
+        from src.services.firstrate.backtest_loader import load_from_catalog
+
+        catalog = MagicMock()
+        catalog_manager = MagicMock()
+        catalog_manager.resolve_catalog.return_value = catalog
+
+        metadata_service = MagicMock()
+        metadata_service.get_instrument_sync.return_value = _make_instrument_row(
+            ticker="SPY", nautilus_id=None, asset_class="ETF"
+        )
+
+        with pytest.raises(DataNotFoundError) as exc_info:
+            await load_from_catalog(
+                catalog_name="etf-full",
+                ticker="SPY",
+                bar_type_spec="1-DAY-LAST",
+                start=datetime(2018, 1, 1, tzinfo=timezone.utc),
+                end=datetime(2018, 6, 30, tzinfo=timezone.utc),
+                catalog_manager=catalog_manager,
+                metadata_service=metadata_service,
+            )
+
+        assert exc_info.value.instrument_id == "SPY"
+        assert exc_info.value.context.get("venue_unresolved") is True
+        assert exc_info.value.context.get("catalog") == "etf-full"
+        msg = str(exc_info.value).lower()
+        assert "unresolved venue" in msg and "non-backtestable" in msg
+        # Never touch the filesystem / never enter a run for an excluded instrument.
+        catalog_manager.resolve_catalog.assert_not_called()
+        catalog.bars.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_blank_nautilus_id_also_fails_fast(self):
+        """A blank (empty-string) identity is treated as unresolved, never admitted."""
+        from src.services.firstrate.backtest_loader import load_from_catalog
+
+        catalog_manager = MagicMock()
+        metadata_service = MagicMock()
+        metadata_service.get_instrument_sync.return_value = _make_instrument_row(
+            ticker="SPY", nautilus_id="", asset_class="ETF"
+        )
+
+        with pytest.raises(DataNotFoundError) as exc_info:
+            await load_from_catalog(
+                catalog_name="etf-full",
+                ticker="SPY",
+                bar_type_spec="1-DAY-LAST",
+                start=datetime(2018, 1, 1, tzinfo=timezone.utc),
+                end=datetime(2018, 6, 30, tzinfo=timezone.utc),
+                catalog_manager=catalog_manager,
+                metadata_service=metadata_service,
+            )
+
+        assert exc_info.value.context.get("venue_unresolved") is True
+        catalog_manager.resolve_catalog.assert_not_called()
+
+
+def _daily_bar_for(nautilus_id: str, close: float = 150.0):
+    """Build one real Nautilus daily Bar (precision=2) for build_equity precision inference."""
+    from nautilus_trader.model.data import Bar, BarType
+    from nautilus_trader.model.objects import Price, Quantity
+
+    bar_type = BarType.from_str(f"{nautilus_id}-1-DAY-LAST-EXTERNAL")
+    return Bar(
+        bar_type=bar_type,
+        open=Price(close, precision=2),
+        high=Price(close + 1.0, precision=2),
+        low=Price(close - 1.0, precision=2),
+        close=Price(close, precision=2),
+        volume=Quantity(1_000_000, precision=0),
+        ts_event=0,
+        ts_init=0,
+    )
+
+
+@pytest.mark.component
+class TestLeveragedInverseEtfWholeShareShape:
+    """Story 5.2 AC #3: leveraged/inverse ETFs are plain whole-share Equities.
+
+    There is no leverage/inverse concept in the pipeline — ``TQQQ``/``SQQQ`` are
+    synthesised as ordinary Nautilus ``Equity`` instruments exactly like ``SPY``:
+    ``size_precision == 0`` and ``size_increment == 1`` (ordinary-shares settlement),
+    with no fractional/crypto precision and no ``asset_class`` branch. This is the
+    instrument-shape precondition for the whole-share sizing verified end-to-end at
+    the integration tier.
+    """
+
+    @pytest.mark.parametrize(
+        "nautilus_id, ticker",
+        [
+            ("SPY.ARCA", "SPY"),  # plain ETF control
+            ("TQQQ.NASDAQ", "TQQQ"),  # leveraged (3x) ETF
+            ("SQQQ.NASDAQ", "SQQQ"),  # inverse (-3x) ETF
+            ("BRK.B.NYSE", "BRK.B"),  # multi-dot control (venue parse)
+        ],
+    )
+    def test_build_equity_settles_as_ordinary_shares(self, nautilus_id: str, ticker: str):
+        """build_equity yields a whole-share Equity — no crypto/FX precision, no leverage branch."""
+        from nautilus_trader.model.currencies import USD
+        from nautilus_trader.model.instruments import Equity
+
+        from src.services.firstrate.backtest_loader import build_equity
+
+        instrument = build_equity(
+            nautilus_id=nautilus_id, ticker=ticker, bars=[_daily_bar_for(nautilus_id)]
+        )
+
+        assert isinstance(instrument, Equity)
+        # Ordinary-shares settlement: whole-share, no fractional/crypto precision.
+        assert instrument.size_precision == 0
+        assert int(instrument.size_increment) == 1
+        assert int(instrument.lot_size) == 1
+        assert instrument.quote_currency == USD
+        assert instrument.id.symbol.value == ticker
+
+    @pytest.mark.asyncio
+    async def test_loader_serves_leveraged_etf_via_identical_path(self):
+        """A leveraged ETF row (asset_class='ETF') flows through the same no-branch loader path."""
+        from nautilus_trader.model.instruments import Equity
+
+        from src.services.firstrate.backtest_loader import load_from_catalog
+
+        catalog = MagicMock()
+        catalog.bars.return_value = [_make_bar_for("TQQQ.NASDAQ"), _make_bar_for("TQQQ.NASDAQ")]
+
+        catalog_manager = MagicMock()
+        catalog_manager.resolve_catalog.return_value = catalog
+
+        metadata_service = MagicMock()
+        metadata_service.get_instrument_sync.return_value = _make_instrument_row(
+            ticker="TQQQ", nautilus_id="TQQQ.NASDAQ", asset_class="ETF"
+        )
+
+        result = await load_from_catalog(
+            catalog_name="etf-full",
+            ticker="TQQQ",
+            bar_type_spec="1-DAY-LAST",
+            start=datetime(2018, 1, 1, tzinfo=timezone.utc),
+            end=datetime(2018, 6, 30, tzinfo=timezone.utc),
+            catalog_manager=catalog_manager,
+            metadata_service=metadata_service,
+        )
+
+        # bar_type built off nautilus_id with no asset_class branch — identical Stocks path.
+        assert catalog.bars.call_args.kwargs["bar_types"] == ["TQQQ.NASDAQ-1-DAY-LAST-EXTERNAL"]
+        assert isinstance(result.instrument, Equity)
+        assert result.instrument.size_precision == 0
+
+
+@pytest.mark.component
 @pytest.mark.skipif(
     os.environ.get("E2E_CATALOG_AVAILABLE") != "1",
     reason="Requires the 21M-bar e2e-test catalog on the local machine.",
@@ -356,3 +560,105 @@ class TestReferenceParity:
                 )
         finally:
             session.close()
+
+
+@pytest.mark.component
+class TestLoadManyFromCatalog:
+    """Story 5.3: resolve several tickers to a list of DataLoadResults (one per ticker).
+
+    A thin, order-preserving loop over ``load_from_catalog`` — the multi-ETF loader.
+    Each result carries its own venue-qualified Equity (mixed venues supported);
+    an unresolved/missing ticker fails fast so no instrument is silently dropped.
+    """
+
+    def _multi_metadata_service(self, rows_by_ticker):
+        """MetadataService mock whose get_instrument_sync maps ticker -> row."""
+        service = MagicMock()
+        service.get_instrument_sync.side_effect = lambda _catalog, ticker: rows_by_ticker.get(
+            ticker
+        )
+        return service
+
+    def _multi_catalog_manager(self):
+        """CatalogManager mock whose catalog.bars returns bars matching the requested id."""
+        catalog = MagicMock()
+
+        def _bars(*, bar_types, start, end):
+            nautilus_id = bar_types[0].rsplit("-", 4)[0]  # strip "-1-DAY-LAST-EXTERNAL"
+            return [_make_bar_for(nautilus_id), _make_bar_for(nautilus_id)]
+
+        catalog.bars.side_effect = _bars
+        catalog_manager = MagicMock()
+        catalog_manager.resolve_catalog.return_value = catalog
+        return catalog_manager
+
+    @pytest.mark.asyncio
+    async def test_returns_one_result_per_ticker_order_preserved_mixed_venues(self):
+        """Two ETFs on different venues → two DataLoadResults, order preserved, own venues."""
+        from nautilus_trader.model.instruments import Equity
+
+        from src.services.firstrate.backtest_loader import load_many_from_catalog
+
+        rows = {
+            "IVV": _make_instrument_row(ticker="IVV", nautilus_id="IVV.ARCA", asset_class="ETF"),
+            "TQQQ": _make_instrument_row(
+                ticker="TQQQ", nautilus_id="TQQQ.NASDAQ", asset_class="ETF"
+            ),
+        }
+
+        results = await load_many_from_catalog(
+            catalog_name="e2e-test",
+            tickers=["IVV", "TQQQ"],
+            bar_type_spec="1-DAY-LAST",
+            start=datetime(2018, 1, 1, tzinfo=timezone.utc),
+            end=datetime(2018, 6, 30, tzinfo=timezone.utc),
+            catalog_manager=self._multi_catalog_manager(),
+            metadata_service=self._multi_metadata_service(rows),
+        )
+
+        assert len(results) == 2
+        # Order preserved, each with its OWN venue-qualified Equity (no venue bleed).
+        assert all(isinstance(r.instrument, Equity) for r in results)
+        assert str(results[0].instrument.id.venue) == "ARCA"
+        assert results[0].instrument.id.symbol.value == "IVV"
+        assert str(results[1].instrument.id.venue) == "NASDAQ"
+        assert results[1].instrument.id.symbol.value == "TQQQ"
+
+    @pytest.mark.asyncio
+    async def test_unresolved_ticker_in_list_fails_fast(self):
+        """A missing/unresolved ticker anywhere in the list raises — never silently dropped."""
+        from src.services.firstrate.backtest_loader import load_many_from_catalog
+
+        rows = {
+            "IVV": _make_instrument_row(ticker="IVV", nautilus_id="IVV.ARCA", asset_class="ETF"),
+            # "NOPE" absent → get_instrument_sync returns None → DataNotFoundError
+        }
+
+        with pytest.raises(DataNotFoundError) as exc_info:
+            await load_many_from_catalog(
+                catalog_name="e2e-test",
+                tickers=["IVV", "NOPE"],
+                bar_type_spec="1-DAY-LAST",
+                start=datetime(2018, 1, 1, tzinfo=timezone.utc),
+                end=datetime(2018, 6, 30, tzinfo=timezone.utc),
+                catalog_manager=self._multi_catalog_manager(),
+                metadata_service=self._multi_metadata_service(rows),
+            )
+
+        assert exc_info.value.instrument_id == "NOPE"
+
+    @pytest.mark.asyncio
+    async def test_empty_tickers_raises_value_error(self):
+        """An empty ticker list is a programming error, not an empty run."""
+        from src.services.firstrate.backtest_loader import load_many_from_catalog
+
+        with pytest.raises(ValueError, match="at least one ticker"):
+            await load_many_from_catalog(
+                catalog_name="e2e-test",
+                tickers=[],
+                bar_type_spec="1-DAY-LAST",
+                start=datetime(2018, 1, 1, tzinfo=timezone.utc),
+                end=datetime(2018, 6, 30, tzinfo=timezone.utc),
+                catalog_manager=self._multi_catalog_manager(),
+                metadata_service=self._multi_metadata_service({}),
+            )
