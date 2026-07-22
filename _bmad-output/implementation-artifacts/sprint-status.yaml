@@ -95,5 +95,5 @@ development_status:
   5-2-run-a-single-etf-backtest-with-whole-share-equity-sizing: done
   5-3-run-a-multi-etf-backtest: done
   5-4-persist-etf-backtest-results-to-the-database: done
-  5-5-reference-consistency-verification: backlog
+  5-5-reference-consistency-verification: done
   epic-5-retrospective: optional

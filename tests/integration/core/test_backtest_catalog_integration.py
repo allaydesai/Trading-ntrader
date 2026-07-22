@@ -120,6 +120,11 @@ def synthetic_catalog(tmp_path: Path):
     cat.write_data(_make_daily_bars("SPY.ARCA"))
     cat.write_data(_make_zigzag_bars("IVV.ARCA"))
     cat.write_data(_make_zigzag_bars("TQQQ.NASDAQ"))
+    # REF.NASDAQ = reference Stock carrying the IDENTICAL zigzag series as IVV.ARCA
+    # (same generator → byte-identical OHLCV; only the instrument id/venue differs).
+    # Story 5.5 compares an ETF run against this Stock reference via the existing
+    # comparison tooling to confirm the ETF catalog path is asset-class-consistent.
+    cat.write_data(_make_zigzag_bars("REF.NASDAQ"))
     return base
 
 
@@ -798,3 +803,159 @@ class TestNamedCatalogEtfPersistence:
         view = to_detail_view(run)
         assert view.configuration.instrument_symbol == "IVV"  # ticker renders plainly (not kraken)
         assert view.execution_status == "success"
+
+
+@pytest.mark.integration
+class TestEtfReferenceConsistency:
+    """Story 5.5: an ETF result is consistent with a Stock reference via the EXISTING tooling.
+
+    Verification/lock-in: the reference-comparison tooling (comparison_report.evaluate_tolerance
+    + comparison_renderer.render_comparison_table, from Story 3.3/3.4) is asset-class-agnostic.
+    An ETF (IVV.ARCA) and a Stock (REF.NASDAQ) fed the byte-identical zigzag bar series through
+    the identical load_from_catalog → BacktestOrchestrator.execute path must compare within the
+    agreed tolerance — confirming the ETF catalog path (closing the Phase 2 verification loop) —
+    and a real deviation must be reported, not silently blessed. No production code, no schema
+    change, no live data (local tmp_path catalog only, persist=False).
+    """
+
+    @staticmethod
+    def _summarise(result, bars, instrument, data_source: str):
+        """Build a BacktestResultSummary from an orchestrator result.
+
+        Mirrors scripts/verify_aapl_2018_reference.py::_execute_and_summarise so the
+        comparison uses the exact summary shape the existing reference harness produces.
+        """
+        from src.models.comparison_report import BacktestResultSummary
+
+        return BacktestResultSummary(
+            total_trades=int(result.total_trades),
+            total_pnl=float(result.total_pnl) if result.total_pnl is not None else 0.0,
+            total_pnl_percentage=(
+                float(result.total_pnl_percentage)
+                if result.total_pnl_percentage is not None
+                else 0.0
+            ),
+            final_balance=float(result.final_balance),
+            bar_count=len(bars),
+            instrument_id=str(instrument.id),
+            data_source=data_source,
+        )
+
+    async def _run_and_summarise(self, catalog_base, symbol, nautilus_id, asset_class, start, end):
+        """Run one instrument through the existing path and summarise it (persist=False)."""
+        from src.core.backtest_orchestrator import BacktestOrchestrator
+
+        catalog_manager = CatalogManager(catalog_base)
+        metadata_service = MagicMock()
+        metadata_service.get_instrument_sync.return_value = _make_instrument_row(
+            symbol, nautilus_id, asset_class=asset_class
+        )
+        load_result = await load_from_catalog(
+            catalog_name="e2e-test",
+            ticker=symbol,
+            bar_type_spec="1-DAY-LAST",
+            start=start,
+            end=end,
+            catalog_manager=catalog_manager,
+            metadata_service=metadata_service,
+        )
+        request = _build_sma_request(symbol=symbol, start=start, end=end)
+        orchestrator = BacktestOrchestrator()
+        try:
+            result, _run_id = await orchestrator.execute(
+                request, load_result.bars, load_result.instrument
+            )
+            return self._summarise(
+                result, load_result.bars, load_result.instrument, f"catalog:{asset_class}"
+            )
+        finally:
+            # Single-use engine — dispose before the next run starts (CLAUDE.md Gotcha #4).
+            orchestrator.dispose()
+
+    @pytest.mark.asyncio
+    async def test_etf_run_matches_stock_reference_within_tolerance(self, synthetic_catalog: Path):
+        """AC2: the ETF catalog path reproduces the Stock reference within tolerance.
+
+        REF.NASDAQ (Stock) and IVV.ARCA (ETF) carry the IDENTICAL zigzag series; run through
+        the identical loader/orchestrator with identical params, they must compare equal —
+        Δbars=0, Δtrades=0, PnL within DEFAULT_PNL_TOL — closing the Phase 2 verification loop.
+        """
+        from src.models.comparison_report import evaluate_tolerance
+
+        window_start = datetime(2018, 1, 1, tzinfo=timezone.utc)
+        window_end = datetime(2018, 3, 1, tzinfo=timezone.utc)
+
+        # Reference path (Stock) first, then candidate (ETF) — sequential engines only.
+        stock_summary = await self._run_and_summarise(
+            synthetic_catalog, "REF", "REF.NASDAQ", "STOCK", window_start, window_end
+        )
+        etf_summary = await self._run_and_summarise(
+            synthetic_catalog, "IVV", "IVV.ARCA", "ETF", window_start, window_end
+        )
+
+        # Non-vacuous: both runs actually traded (evaluate_tolerance fails loudly on both-zero).
+        assert stock_summary.total_trades > 0
+        assert etf_summary.total_trades > 0
+        # The two instruments really are distinct (no accidental same-id comparison).
+        assert stock_summary.instrument_id == "REF.NASDAQ"
+        assert etf_summary.instrument_id == "IVV.ARCA"
+
+        report = evaluate_tolerance(stock_summary, etf_summary, dataset="ETF_IVV_vs_Stock_REF")
+
+        assert report.overall_passed, report.notes
+        assert report.bar_count_delta == 0.0
+        assert report.trade_count_delta == 0
+        assert report.pnl_passed, (
+            f"ETF PnL diverged from Stock reference: stock={stock_summary.total_pnl:.4f} "
+            f"etf={etf_summary.total_pnl:.4f} Δ={report.pnl_delta_pct:.4%}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_reference_comparison_reports_deviation_beyond_tolerance(
+        self, synthetic_catalog: Path
+    ):
+        """AC1: a deviation beyond tolerance IS reported (notes + renderer breach), not blessed.
+
+        Guards against a vacuous pass — proves the SAME tooling that green-lights the consistent
+        ETF↔Stock comparison would flag a real divergence.
+        """
+        from src.models.comparison_report import (
+            DEFAULT_PNL_TOL,
+            DEFAULT_TRADE_COUNT_TOL,
+            evaluate_tolerance,
+        )
+        from src.services.comparison_renderer import render_comparison_table
+
+        window_start = datetime(2018, 1, 1, tzinfo=timezone.utc)
+        window_end = datetime(2018, 3, 1, tzinfo=timezone.utc)
+
+        # A real ETF summary as the reference side.
+        reference = await self._run_and_summarise(
+            synthetic_catalog, "IVV", "IVV.ARCA", "ETF", window_start, window_end
+        )
+        assert reference.total_trades > 0
+
+        # Perturb the candidate past EVERY tolerance: bars off > 0.5%, trades off > ±50,
+        # PnL off > 0.5% (guard PnL magnitude so the percentage breach is unambiguous).
+        breached_pnl = reference.total_pnl * (1 + 10 * DEFAULT_PNL_TOL) + 10_000.0
+        perturbed = reference.model_copy(
+            update={
+                "bar_count": reference.bar_count + max(10, reference.bar_count),
+                "total_trades": reference.total_trades + DEFAULT_TRADE_COUNT_TOL + 25,
+                "total_pnl": breached_pnl,
+                "instrument_id": "PERTURBED.NASDAQ",
+                "data_source": "catalog:PERTURBED",
+            }
+        )
+
+        report = evaluate_tolerance(reference, perturbed, dataset="ETF_deviation_probe")
+
+        assert report.overall_passed is False
+        assert report.bar_count_passed is False
+        assert report.trade_count_passed is False
+        assert report.pnl_passed is False
+        assert report.notes, "a tolerance breach must be reported in notes"
+
+        rendered = render_comparison_table(report)
+        assert "❌ TOLERANCE BREACH" in rendered
+        assert "✅ ALL TOLERANCES PASSED" not in rendered
