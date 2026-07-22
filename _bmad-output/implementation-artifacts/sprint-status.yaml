@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-06-17
-last_updated: "2026-07-17"  # Story 5.1 (serve ETF catalog data to the BacktestEngine) done; epic-5 in-progress
+last_updated: "2026-07-22"  # Story 5.4 (persist ETF backtest results to the database) done; epic-5 in-progress
 project: Trading-ntrader
 project_key: NOKEY
 tracking_system: file-system
@@ -94,6 +94,6 @@ development_status:
   5-1-serve-etf-catalog-data-to-the-backtestengine: done
   5-2-run-a-single-etf-backtest-with-whole-share-equity-sizing: done
   5-3-run-a-multi-etf-backtest: backlog
-  5-4-persist-etf-backtest-results-to-the-database: backlog
+  5-4-persist-etf-backtest-results-to-the-database: done
   5-5-reference-consistency-verification: backlog
   epic-5-retrospective: optional
