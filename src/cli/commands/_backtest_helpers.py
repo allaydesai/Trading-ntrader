@@ -746,6 +746,76 @@ async def execute_backtest(
         orchestrator.dispose()
 
 
+async def load_many_backtest_data(
+    *,
+    catalog_name: str,
+    tickers: list[str],
+    bar_type_spec: str,
+    start: datetime,
+    end: datetime,
+    console: Console,
+) -> list[DataLoadResult]:
+    """Load bars + instrument for several tickers from a named catalog (Story 5.3, multi-ETF).
+
+    Thin CLI wrapper over ``load_many_from_catalog`` that constructs the shared
+    named-catalog dependencies (and guarantees the DB session is closed). Returns
+    one ``DataLoadResult`` per ticker, order preserved.
+    """
+    from src.services.firstrate.backtest_loader import load_many_from_catalog
+
+    catalog_manager, metadata_service, session = _build_named_catalog_dependencies()
+    try:
+        results = await load_many_from_catalog(
+            catalog_name=catalog_name,
+            tickers=tickers,
+            bar_type_spec=bar_type_spec,
+            start=start,
+            end=end,
+            catalog_manager=catalog_manager,
+            metadata_service=metadata_service,
+        )
+    finally:
+        session.close()
+
+    total_bars = sum(len(r.bars) for r in results)
+    console.print(
+        f"   Loaded {total_bars:,} bars for {len(results)} instruments "
+        f"from catalog '{catalog_name}'",
+        style="green",
+    )
+    return results
+
+
+async def execute_multi_backtest(
+    *,
+    request: BacktestRequest,
+    instruments_data: list[tuple[list[Bar], Instrument]],
+    console: Console,
+    progress_message: str = "Running multi-ETF backtest...",
+) -> tuple[BacktestResult, UUID | None]:
+    """Execute a multi-instrument backtest with spinner + guaranteed disposal (Story 5.3).
+
+    Mirrors :func:`execute_backtest` but routes several instruments through the
+    orchestrator's ``execute_multi`` (one engine run). The multi path never
+    persists — ``run_id`` is always ``None`` (Story 5.4 owns ETF persistence).
+    """
+    orchestrator = BacktestOrchestrator()
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            transient=True,
+            console=console,
+        ) as progress:
+            task = progress.add_task(progress_message, total=None)
+            result, run_id = await orchestrator.execute_multi(request, instruments_data)
+            progress.update(task, completed=True)
+
+        return result, run_id
+    finally:
+        orchestrator.dispose()
+
+
 def display_backtest_results(
     *,
     result: BacktestResult,

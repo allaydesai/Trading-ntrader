@@ -560,3 +560,105 @@ class TestReferenceParity:
                 )
         finally:
             session.close()
+
+
+@pytest.mark.component
+class TestLoadManyFromCatalog:
+    """Story 5.3: resolve several tickers to a list of DataLoadResults (one per ticker).
+
+    A thin, order-preserving loop over ``load_from_catalog`` — the multi-ETF loader.
+    Each result carries its own venue-qualified Equity (mixed venues supported);
+    an unresolved/missing ticker fails fast so no instrument is silently dropped.
+    """
+
+    def _multi_metadata_service(self, rows_by_ticker):
+        """MetadataService mock whose get_instrument_sync maps ticker -> row."""
+        service = MagicMock()
+        service.get_instrument_sync.side_effect = lambda _catalog, ticker: rows_by_ticker.get(
+            ticker
+        )
+        return service
+
+    def _multi_catalog_manager(self):
+        """CatalogManager mock whose catalog.bars returns bars matching the requested id."""
+        catalog = MagicMock()
+
+        def _bars(*, bar_types, start, end):
+            nautilus_id = bar_types[0].rsplit("-", 4)[0]  # strip "-1-DAY-LAST-EXTERNAL"
+            return [_make_bar_for(nautilus_id), _make_bar_for(nautilus_id)]
+
+        catalog.bars.side_effect = _bars
+        catalog_manager = MagicMock()
+        catalog_manager.resolve_catalog.return_value = catalog
+        return catalog_manager
+
+    @pytest.mark.asyncio
+    async def test_returns_one_result_per_ticker_order_preserved_mixed_venues(self):
+        """Two ETFs on different venues → two DataLoadResults, order preserved, own venues."""
+        from nautilus_trader.model.instruments import Equity
+
+        from src.services.firstrate.backtest_loader import load_many_from_catalog
+
+        rows = {
+            "IVV": _make_instrument_row(ticker="IVV", nautilus_id="IVV.ARCA", asset_class="ETF"),
+            "TQQQ": _make_instrument_row(
+                ticker="TQQQ", nautilus_id="TQQQ.NASDAQ", asset_class="ETF"
+            ),
+        }
+
+        results = await load_many_from_catalog(
+            catalog_name="e2e-test",
+            tickers=["IVV", "TQQQ"],
+            bar_type_spec="1-DAY-LAST",
+            start=datetime(2018, 1, 1, tzinfo=timezone.utc),
+            end=datetime(2018, 6, 30, tzinfo=timezone.utc),
+            catalog_manager=self._multi_catalog_manager(),
+            metadata_service=self._multi_metadata_service(rows),
+        )
+
+        assert len(results) == 2
+        # Order preserved, each with its OWN venue-qualified Equity (no venue bleed).
+        assert all(isinstance(r.instrument, Equity) for r in results)
+        assert str(results[0].instrument.id.venue) == "ARCA"
+        assert results[0].instrument.id.symbol.value == "IVV"
+        assert str(results[1].instrument.id.venue) == "NASDAQ"
+        assert results[1].instrument.id.symbol.value == "TQQQ"
+
+    @pytest.mark.asyncio
+    async def test_unresolved_ticker_in_list_fails_fast(self):
+        """A missing/unresolved ticker anywhere in the list raises — never silently dropped."""
+        from src.services.firstrate.backtest_loader import load_many_from_catalog
+
+        rows = {
+            "IVV": _make_instrument_row(ticker="IVV", nautilus_id="IVV.ARCA", asset_class="ETF"),
+            # "NOPE" absent → get_instrument_sync returns None → DataNotFoundError
+        }
+
+        with pytest.raises(DataNotFoundError) as exc_info:
+            await load_many_from_catalog(
+                catalog_name="e2e-test",
+                tickers=["IVV", "NOPE"],
+                bar_type_spec="1-DAY-LAST",
+                start=datetime(2018, 1, 1, tzinfo=timezone.utc),
+                end=datetime(2018, 6, 30, tzinfo=timezone.utc),
+                catalog_manager=self._multi_catalog_manager(),
+                metadata_service=self._multi_metadata_service(rows),
+            )
+
+        assert exc_info.value.instrument_id == "NOPE"
+
+    @pytest.mark.asyncio
+    async def test_empty_tickers_raises_value_error(self):
+        """An empty ticker list is a programming error, not an empty run."""
+        from src.services.firstrate.backtest_loader import load_many_from_catalog
+
+        with pytest.raises(ValueError, match="at least one ticker"):
+            await load_many_from_catalog(
+                catalog_name="e2e-test",
+                tickers=[],
+                bar_type_spec="1-DAY-LAST",
+                start=datetime(2018, 1, 1, tzinfo=timezone.utc),
+                end=datetime(2018, 6, 30, tzinfo=timezone.utc),
+                catalog_manager=self._multi_catalog_manager(),
+                metadata_service=self._multi_metadata_service({}),
+            )

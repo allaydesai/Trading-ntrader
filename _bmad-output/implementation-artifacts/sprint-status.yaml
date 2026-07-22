@@ -93,7 +93,7 @@ development_status:
   epic-5: in-progress
   5-1-serve-etf-catalog-data-to-the-backtestengine: done
   5-2-run-a-single-etf-backtest-with-whole-share-equity-sizing: done
-  5-3-run-a-multi-etf-backtest: backlog
+  5-3-run-a-multi-etf-backtest: done
   5-4-persist-etf-backtest-results-to-the-database: backlog
   5-5-reference-consistency-verification: backlog
   epic-5-retrospective: optional

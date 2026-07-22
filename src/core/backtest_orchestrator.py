@@ -163,6 +163,129 @@ class BacktestOrchestrator:
                 )
             raise
 
+    async def execute_multi(
+        self,
+        request: BacktestRequest,
+        instruments_data: list[tuple[list[Bar], Instrument]],
+    ) -> tuple[BacktestResult, UUID | None]:
+        """Execute a single multi-instrument backtest (Story 5.3 — multi-ETF).
+
+        Routes several venue-qualified instruments through **one** engine run:
+        each unique venue is added once, every instrument + its bars are added,
+        and **one strategy instance per instrument** (each with a distinct
+        ``order_id_tag``) is registered before a single ``engine.run()``. This is
+        the same engine path single-instrument runs use — no runtime adapter.
+
+        The multi-ETF path does **not** persist (Story 5.4 owns ETF-results
+        persistence); ``run_id`` is always ``None``. When the instruments span
+        more than one venue (each venue gets its own account seeded with the
+        starting balance), the summary ``BacktestResult`` reports the **portfolio
+        aggregate** balance/return across all venue accounts — consistent with
+        the portfolio-wide trade/PnL stats (see ``_aggregate_multi_venue_balance``).
+
+        Args:
+            request: Shared backtest configuration (strategy, dates, balance).
+            instruments_data: Ordered ``(bars, instrument)`` pairs — the
+                instrument list the run spans. Instrument ids must be unique.
+
+        Returns:
+            Tuple of (BacktestResult, None).
+
+        Raises:
+            ValueError: No instruments, empty bars, duplicate instrument id, or
+                strategy failure.
+        """
+        if not instruments_data:
+            raise ValueError("No instruments provided for multi-instrument backtest")
+        seen_ids: set[str] = set()
+        for bars, instrument in instruments_data:
+            if not bars:
+                raise ValueError(
+                    f"No bars provided for instrument {getattr(instrument, 'id', '?')}"
+                )
+            inst_id = str(instrument.id)
+            if inst_id in seen_ids:
+                raise ValueError(
+                    f"Duplicate instrument '{inst_id}' in multi-instrument backtest — "
+                    "each instrument may appear at most once."
+                )
+            seen_ids.add(inst_id)
+
+        # Setup engine: dedup venues, add all instruments + data.
+        self._setup_engine_multi(request, instruments_data)
+        assert self.engine is not None, "Engine must be initialized"
+
+        # One strategy per instrument, each with a distinct order_id_tag (no id collision).
+        for idx, (bars, instrument) in enumerate(instruments_data):
+            strategy = self._create_strategy(request, bars, instrument, order_id_tag=str(idx))
+            if strategy is None:
+                raise ValueError(f"Failed to create strategy: {request.strategy_type}")
+            self.engine.add_strategy(strategy)
+
+        self._backtest_start_date = request.start_date
+        self._backtest_end_date = request.end_date
+        self._starting_balance = float(request.starting_balance)
+
+        self.engine.run()
+
+        result = self._extract_results(self._starting_balance)
+        result = self._aggregate_multi_venue_balance(result, instruments_data)
+        return result, None
+
+    def _aggregate_multi_venue_balance(
+        self,
+        result: BacktestResult,
+        instruments_data: list[tuple[list[Bar], Instrument]],
+    ) -> BacktestResult:
+        """Make the summary balance/return the portfolio aggregate across all venues.
+
+        ``_extract_results`` reads a single venue's account (``self._venue``), but
+        the trade/PnL stats it reports are portfolio-wide. For a run spanning
+        multiple venues (each with its own account seeded with the starting
+        balance), that single-account balance under-reports the portfolio and is
+        inconsistent with the aggregated trade stats. Here we sum ``final_balance``
+        across every venue account and recompute ``total_return`` against the total
+        deployed capital (unique-venue count × starting balance).
+
+        Single-venue runs (all instruments on one account) are returned unchanged —
+        the extractor's account is already the whole portfolio.
+        """
+        if not self.engine:
+            return result
+
+        venues = {instrument.id.venue for _bars, instrument in instruments_data}
+        if len(venues) <= 1:
+            return result
+
+        starting_balance = float(self._starting_balance or 0.0)
+        total_start = len(venues) * starting_balance
+        total_final = 0.0
+        for venue in venues:
+            account = self.engine.cache.account_for_venue(venue)
+            if account is not None:
+                total_final += float(account.balance_total(USD).as_double())
+
+        result.final_balance = total_final
+        if total_start:
+            result.total_return = (total_final - total_start) / total_start
+        return result
+
+    def _make_fill_model(self) -> FillModel:
+        """Construct the shared fill model (identical for single- and multi-instrument runs)."""
+        return FillModel(
+            prob_fill_on_limit=0.95,
+            prob_fill_on_stop=0.95,
+            prob_slippage=0.01,
+        )
+
+    def _make_fee_model(self) -> IBKRCommissionModel:
+        """Construct the shared IBKR commission model from settings."""
+        return IBKRCommissionModel(
+            commission_per_share=self.settings.commission_per_share,
+            min_per_order=self.settings.commission_min_per_order,
+            max_rate=self.settings.commission_max_rate,
+        )
+
     def _setup_engine(
         self,
         request: BacktestRequest,
@@ -184,21 +307,12 @@ class BacktestOrchestrator:
             trader_id=TraderId("BACKTESTER-001"),
             logging=logging_config,
         )
+
+        # Create fill + commission models (shared construction — see helpers)
+        fill_model = self._make_fill_model()
+        fee_model = self._make_fee_model()
+
         self.engine = BacktestEngine(config=config)
-
-        # Create fill model
-        fill_model = FillModel(
-            prob_fill_on_limit=0.95,
-            prob_fill_on_stop=0.95,
-            prob_slippage=0.01,
-        )
-
-        # Create commission model
-        fee_model = IBKRCommissionModel(
-            commission_per_share=self.settings.commission_per_share,
-            min_per_order=self.settings.commission_min_per_order,
-            max_rate=self.settings.commission_max_rate,
-        )
 
         # Determine venue from instrument or bars
         if hasattr(instrument, "id") and hasattr(instrument.id, "venue"):
@@ -224,11 +338,53 @@ class BacktestOrchestrator:
         self.engine.add_instrument(instrument)
         self.engine.add_data(bars)
 
+    def _setup_engine_multi(
+        self,
+        request: BacktestRequest,
+        instruments_data: list[tuple[list[Bar], Instrument]],
+    ) -> None:
+        """Setup one engine for a multi-instrument run — venue dedup, N instruments + data.
+
+        Each unique venue is added exactly once (Nautilus rejects a duplicate
+        venue and each venue owns its own account — this isolation IS the
+        no-cross-instrument-venue-bleed guarantee). The primary venue (first
+        instrument's) drives summary results extraction.
+        """
+        logging_config = LoggingConfig(bypass_logging=is_logging_initialized())
+        config = BacktestEngineConfig(
+            trader_id=TraderId("BACKTESTER-001"),
+            logging=logging_config,
+        )
+        fill_model = self._make_fill_model()
+        fee_model = self._make_fee_model()
+        engine = BacktestEngine(config=config)
+
+        venues_added: set[Venue] = set()
+        for bars, instrument in instruments_data:
+            venue = instrument.id.venue
+            if venue not in venues_added:
+                engine.add_venue(
+                    venue=venue,
+                    oms_type=OmsType.HEDGING,
+                    account_type=AccountType.MARGIN,
+                    starting_balances=[Money(float(request.starting_balance), USD)],
+                    fill_model=fill_model,
+                    fee_model=fee_model,
+                )
+                venues_added.add(venue)
+            engine.add_instrument(instrument)
+            engine.add_data(bars)
+
+        self.engine = engine
+        # Primary venue for summary results extraction = first instrument's venue.
+        self._venue = instruments_data[0][1].id.venue
+
     def _create_strategy(
         self,
         request: BacktestRequest,
         bars: list[Bar],
         instrument: Instrument,
+        order_id_tag: str | None = None,
     ) -> Strategy:
         """
         Create strategy based on request configuration.
@@ -237,6 +393,10 @@ class BacktestOrchestrator:
             request: Backtest request with strategy configuration
             bars: Bar data (needed for bar_type)
             instrument: Instrument for strategy
+            order_id_tag: Optional distinct Nautilus ``order_id_tag`` so multiple
+                strategy instances of the same class (one per instrument in a
+                multi-instrument run) do not collide on strategy id. ``None``
+                leaves the framework default (single-instrument path unchanged).
 
         Returns:
             Configured strategy instance
@@ -255,6 +415,11 @@ class BacktestOrchestrator:
 
         # Add strategy-specific parameters from request
         config_params.update(request.strategy_config)
+
+        # Distinct strategy id per instrument (multi-instrument runs) — omit when
+        # None so the single-instrument path keeps the default tag unchanged.
+        if order_id_tag is not None:
+            config_params["order_id_tag"] = order_id_tag
 
         # Try to use StrategyFactory for config-based strategies
         if request.strategy_path and request.config_path:
@@ -286,6 +451,8 @@ class BacktestOrchestrator:
                     "bar_type": bar_type,
                 }
             )
+            if order_id_tag is not None:
+                loader_params["order_id_tag"] = order_id_tag
 
             return StrategyLoader.create_strategy(strategy_name, loader_params)
         except Exception as e:
