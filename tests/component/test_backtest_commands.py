@@ -220,6 +220,109 @@ class TestBacktestCommands:
         assert "e2e-test" in result.output
         mock_orchestrator.dispose.assert_called_once()
 
+    @patch("src.cli.commands.backtest.execute_multi_backtest")
+    @patch("src.cli.commands.backtest.load_many_backtest_data")
+    @pytest.mark.component
+    def test_run_multi_wires_multiple_etfs_no_persist(self, mock_load_many, mock_exec_multi):
+        """Story 5.3 AC4: run-multi resolves N tickers and calls execute_multi once, no persist."""
+        from src.cli.commands._backtest_helpers import DataLoadResult
+        from src.cli.commands.backtest import run_multi_backtest
+
+        captured: dict = {}
+
+        async def fake_load(**kwargs):
+            captured.update(kwargs)
+            return [
+                DataLoadResult(
+                    bars=[MagicMock()], instrument=MagicMock(), data_source_used="Catalog: etf-full"
+                ),
+                DataLoadResult(
+                    bars=[MagicMock()], instrument=MagicMock(), data_source_used="Catalog: etf-full"
+                ),
+            ]
+
+        mock_load_many.side_effect = fake_load
+
+        exec_calls: dict = {}
+
+        async def fake_exec(*, request, instruments_data, console, **kw):
+            exec_calls["instruments_data"] = instruments_data
+            exec_calls["request"] = request
+            return MockBacktestResult(), None  # run_id None — multi never persists
+
+        mock_exec_multi.side_effect = fake_exec
+
+        runner = CliRunner()
+        result = runner.invoke(
+            run_multi_backtest,
+            [
+                "--symbols",
+                "IVV,TQQQ",
+                "--catalog",
+                "etf-full",
+                "--start",
+                "2018-01-01",
+                "--end",
+                "2018-12-31",
+                "--strategy",
+                "sma_crossover",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        # Two tickers resolved, order preserved, passed to the multi loader.
+        assert captured["tickers"] == ["IVV", "TQQQ"]
+        assert captured["catalog_name"] == "etf-full"
+        # execute_multi received a 2-instrument list; the request is non-persisting.
+        assert len(exec_calls["instruments_data"]) == 2
+        assert exec_calls["request"].persist is False
+        # Operator is told persistence lands in Story 5.4.
+        assert "5.4" in result.output
+
+    @pytest.mark.component
+    def test_run_multi_rejects_single_symbol(self):
+        """run-multi with one symbol is a usage error (use 'backtest run' instead)."""
+        from src.cli.commands.backtest import run_multi_backtest
+
+        runner = CliRunner()
+        result = runner.invoke(
+            run_multi_backtest,
+            [
+                "--symbols",
+                "IVV",
+                "--catalog",
+                "etf-full",
+                "--start",
+                "2018-01-01",
+                "--end",
+                "2018-12-31",
+            ],
+        )
+        assert result.exit_code != 0
+        assert "at least two" in result.output
+
+    @pytest.mark.component
+    def test_run_multi_rejects_duplicate_symbols(self):
+        """run-multi with a duplicated symbol is a usage error (no double-add)."""
+        from src.cli.commands.backtest import run_multi_backtest
+
+        runner = CliRunner()
+        result = runner.invoke(
+            run_multi_backtest,
+            [
+                "--symbols",
+                "IVV,IVV",
+                "--catalog",
+                "etf-full",
+                "--start",
+                "2018-01-01",
+                "--end",
+                "2018-12-31",
+            ],
+        )
+        assert result.exit_code != 0
+        assert "Duplicate" in result.output
+
     @patch("src.cli.commands._backtest_helpers.DataCatalogService")
     @patch("src.cli.commands._backtest_helpers.BacktestOrchestrator")
     @pytest.mark.component

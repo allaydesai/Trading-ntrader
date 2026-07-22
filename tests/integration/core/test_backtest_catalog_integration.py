@@ -363,6 +363,175 @@ class TestNamedCatalogBacktestIntegration:
             orchestrator.dispose()
 
     @pytest.mark.asyncio
+    async def test_named_catalog_multi_etf_run_no_venue_bleed(self, synthetic_catalog: Path):
+        """Story 5.3 AC1/AC2/AC3: one run spans two ETFs on different venues, no bleed.
+
+        IVV.ARCA + TQQQ.NASDAQ run through load_many_from_catalog → execute_multi in a
+        SINGLE engine. Assert the run completes, both instruments fill, every fill is
+        whole-share and settles on its OWN venue (an ARCA ticker never fills on NASDAQ),
+        two distinct venues/accounts exist, and the two strategies carry distinct ids.
+        """
+        from src.core.backtest_orchestrator import BacktestOrchestrator
+        from src.services.firstrate.backtest_loader import load_many_from_catalog
+
+        window_start = datetime(2018, 1, 1, tzinfo=timezone.utc)
+        window_end = datetime(2018, 3, 1, tzinfo=timezone.utc)
+
+        rows = {
+            "IVV": _make_instrument_row("IVV", "IVV.ARCA", asset_class="ETF"),
+            "TQQQ": _make_instrument_row("TQQQ", "TQQQ.NASDAQ", asset_class="ETF"),
+        }
+        catalog_manager = CatalogManager(synthetic_catalog)
+        metadata_service = MagicMock()
+        metadata_service.get_instrument_sync.side_effect = lambda _catalog, ticker: rows[ticker]
+
+        load_results = await load_many_from_catalog(
+            catalog_name="e2e-test",
+            tickers=["IVV", "TQQQ"],
+            bar_type_spec="1-DAY-LAST",
+            start=window_start,
+            end=window_end,
+            catalog_manager=catalog_manager,
+            metadata_service=metadata_service,
+        )
+        assert len(load_results) == 2
+        instruments_data = [(r.bars, r.instrument) for r in load_results]
+
+        request = _build_sma_request(symbol="IVV", start=window_start, end=window_end)
+        orchestrator = BacktestOrchestrator()
+        try:
+            result, run_id = await orchestrator.execute_multi(request, instruments_data)
+            assert result is not None
+            assert result.final_balance > 0
+            assert run_id is None  # multi path never persists (Story 5.4)
+
+            # Two venues (ARCA + NASDAQ) → two accounts, each seeded with 100k. The
+            # summary must report the PORTFOLIO AGGREGATE (~200k), not one venue's
+            # account (~100k) — proving _aggregate_multi_venue_balance sums accounts.
+            assert result.final_balance > 150_000, (
+                f"multi-venue final_balance under-reported (one account?): {result.final_balance}"
+            )
+
+            assert orchestrator.engine is not None
+            fills = orchestrator.engine.trader.generate_order_fills_report()
+            assert not fills.empty, "expected fills for the multi-ETF run"
+
+            instrument_ids = [str(i) for i in fills["instrument_id"].tolist()]
+            venues_seen = {iid.rsplit(".", 1)[-1] for iid in instrument_ids}
+            # Both ETFs traded, each on its OWN venue — no cross-instrument bleed.
+            assert any(iid.startswith("IVV.ARCA") for iid in instrument_ids), instrument_ids
+            assert any(iid.startswith("TQQQ.NASDAQ") for iid in instrument_ids), instrument_ids
+            assert venues_seen == {"ARCA", "NASDAQ"}, venues_seen
+            # No IVV fill on NASDAQ and no TQQQ fill on ARCA.
+            for iid in instrument_ids:
+                if iid.startswith("IVV"):
+                    assert iid.endswith(".ARCA"), f"IVV bled to wrong venue: {iid}"
+                if iid.startswith("TQQQ"):
+                    assert iid.endswith(".NASDAQ"), f"TQQQ bled to wrong venue: {iid}"
+
+            for qty in fills["quantity"].tolist():
+                assert float(str(qty)).is_integer(), f"multi-ETF fill not whole-share: {qty}"
+                assert "." not in str(qty)
+
+            # One strategy instance per instrument, distinct ids (AC3, order_id_tag).
+            strategy_ids = [str(s) for s in orchestrator.engine.trader.strategy_ids()]
+            assert len(strategy_ids) == 2, strategy_ids
+            assert len(set(strategy_ids)) == 2, f"strategy ids collided: {strategy_ids}"
+        finally:
+            orchestrator.dispose()
+
+    @pytest.mark.asyncio
+    async def test_named_catalog_multi_etf_same_venue_shares_one_account(
+        self, synthetic_catalog: Path
+    ):
+        """Story 5.3 AC2 (dedup): two ETFs on the SAME venue share one account, added once.
+
+        IVV.ARCA + SPY.ARCA both resolve to ARCA — the venue is added exactly once and
+        the two instruments share a single account. The summary reports that one
+        account (~100k), NOT a doubled aggregate, and only one venue appears.
+        """
+        from src.core.backtest_orchestrator import BacktestOrchestrator
+        from src.services.firstrate.backtest_loader import load_many_from_catalog
+
+        window_start = datetime(2018, 1, 1, tzinfo=timezone.utc)
+        window_end = datetime(2018, 3, 1, tzinfo=timezone.utc)
+
+        rows = {
+            "IVV": _make_instrument_row("IVV", "IVV.ARCA", asset_class="ETF"),
+            "SPY": _make_instrument_row("SPY", "SPY.ARCA", asset_class="ETF"),
+        }
+        catalog_manager = CatalogManager(synthetic_catalog)
+        metadata_service = MagicMock()
+        metadata_service.get_instrument_sync.side_effect = lambda _catalog, ticker: rows[ticker]
+
+        load_results = await load_many_from_catalog(
+            catalog_name="e2e-test",
+            tickers=["IVV", "SPY"],
+            bar_type_spec="1-DAY-LAST",
+            start=window_start,
+            end=window_end,
+            catalog_manager=catalog_manager,
+            metadata_service=metadata_service,
+        )
+        instruments_data = [(r.bars, r.instrument) for r in load_results]
+
+        request = _build_sma_request(symbol="IVV", start=window_start, end=window_end)
+        orchestrator = BacktestOrchestrator()
+        try:
+            result, run_id = await orchestrator.execute_multi(request, instruments_data)
+            assert result is not None
+            assert run_id is None
+            # One shared ARCA account — NOT a two-account aggregate.
+            assert 0 < result.final_balance < 150_000, result.final_balance
+
+            assert orchestrator.engine is not None
+            fills = orchestrator.engine.trader.generate_order_fills_report()
+            if not fills.empty:
+                venues = {str(i).rsplit(".", 1)[-1] for i in fills["instrument_id"].tolist()}
+                assert venues <= {"ARCA"}, venues
+            # Two strategies (one per instrument), distinct ids, but one venue/account.
+            strategy_ids = [str(s) for s in orchestrator.engine.trader.strategy_ids()]
+            assert len(set(strategy_ids)) == 2, strategy_ids
+        finally:
+            orchestrator.dispose()
+
+    @pytest.mark.asyncio
+    async def test_named_catalog_multi_etf_rejects_duplicate_instrument(
+        self, synthetic_catalog: Path
+    ):
+        """Story 5.3: a duplicate instrument in the list is rejected (no double-add)."""
+        from src.core.backtest_orchestrator import BacktestOrchestrator
+        from src.services.firstrate.backtest_loader import load_from_catalog
+
+        window_start = datetime(2018, 1, 1, tzinfo=timezone.utc)
+        window_end = datetime(2018, 3, 1, tzinfo=timezone.utc)
+        catalog_manager = CatalogManager(synthetic_catalog)
+        metadata_service = MagicMock()
+        metadata_service.get_instrument_sync.return_value = _make_instrument_row(
+            "IVV", "IVV.ARCA", asset_class="ETF"
+        )
+        load_result = await load_from_catalog(
+            catalog_name="e2e-test",
+            ticker="IVV",
+            bar_type_spec="1-DAY-LAST",
+            start=window_start,
+            end=window_end,
+            catalog_manager=catalog_manager,
+            metadata_service=metadata_service,
+        )
+        dup = [
+            (load_result.bars, load_result.instrument),
+            (load_result.bars, load_result.instrument),
+        ]
+        request = _build_sma_request(symbol="IVV", start=window_start, end=window_end)
+        orchestrator = BacktestOrchestrator()
+        try:
+            with pytest.raises(ValueError, match="Duplicate instrument"):
+                await orchestrator.execute_multi(request, dup)
+        finally:
+            orchestrator.dispose()
+
+    @pytest.mark.asyncio
     async def test_named_catalog_missing_ticker_raises(self, synthetic_catalog: Path):
         """Ticker not in DB metadata → DataNotFoundError with catalog context."""
         catalog_manager = CatalogManager(synthetic_catalog)
