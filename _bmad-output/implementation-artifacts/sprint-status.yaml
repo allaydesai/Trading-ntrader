@@ -90,7 +90,7 @@ development_status:
   epic-4-retrospective: optional
 
   # Epic 5: Backtest Integration & Verification
-  epic-5: in-progress
+  epic-5: done
   5-1-serve-etf-catalog-data-to-the-backtestengine: done
   5-2-run-a-single-etf-backtest-with-whole-share-equity-sizing: done
   5-3-run-a-multi-etf-backtest: done
