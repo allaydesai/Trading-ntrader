@@ -152,6 +152,52 @@ class TestPlanClassification:
 
 
 @pytest.mark.unit
+class TestStagedRollout:
+    """A partial run must stay safe — that is the whole point of running one."""
+
+    def test_only_tickers_scopes_without_orphaning_the_rest(self, tmp_path):
+        """Unlisted tickers are skipped, NOT reclassified as orphans.
+
+        Trimming target_venues instead would make every ticker outside the subset
+        look unaccounted-for, tripping the safety check and forcing --force — which
+        would turn the cautious option into the dangerous one.
+        """
+        _make_bar_dir(tmp_path, "AAA.AMEX-1-DAY-LAST-EXTERNAL")
+        _make_bar_dir(tmp_path, "BBB.CBOE-1-DAY-LAST-EXTERNAL")
+        _make_bar_dir(tmp_path, "CCC.AMEX-1-DAY-LAST-EXTERNAL")
+
+        plan = _plan(
+            tmp_path,
+            {"AAA": "ARCA", "BBB": "BATS", "CCC": "ARCA"},
+            only_tickers=frozenset({"AAA"}),
+        )
+
+        assert plan.is_safe is True
+        assert [a.ticker for a in plan.actions] == ["AAA"]
+        assert plan.orphans == ()
+        assert plan.no_ops == 0
+
+    def test_subset_still_reports_its_own_problems(self, tmp_path):
+        """Scoping must not suppress a real problem inside the subset."""
+        _make_bar_dir(tmp_path, "AAA.AMEX-1-DAY-LAST-EXTERNAL")
+        _make_bar_dir(tmp_path, "AAA.ARCA-1-DAY-LAST-EXTERNAL")
+        _make_bar_dir(tmp_path, "BBB.CBOE-1-DAY-LAST-EXTERNAL")
+
+        plan = _plan(tmp_path, {"AAA": "ARCA", "BBB": "BATS"}, only_tickers=frozenset({"AAA"}))
+
+        assert plan.collisions
+        assert plan.is_safe is False
+
+    def test_no_subset_covers_everything(self, tmp_path):
+        _make_bar_dir(tmp_path, "AAA.AMEX-1-DAY-LAST-EXTERNAL")
+        _make_bar_dir(tmp_path, "BBB.CBOE-1-DAY-LAST-EXTERNAL")
+
+        plan = _plan(tmp_path, {"AAA": "ARCA", "BBB": "BATS"})
+
+        assert len(plan.actions) == 2
+
+
+@pytest.mark.unit
 class TestPlanArithmetic:
     """The numbers the operator reads before approving 39 GB of rewriting."""
 

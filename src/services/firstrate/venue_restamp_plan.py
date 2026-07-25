@@ -158,6 +158,7 @@ def build_restamp_plan(
     catalog_root: Path,
     target_venues: Mapping[str, str],
     excluded_tickers: frozenset[str] = frozenset(),
+    only_tickers: Optional[frozenset[str]] = None,
 ) -> RestampPlan:
     """Decide what must move, without moving anything.
 
@@ -170,6 +171,11 @@ def build_restamp_plan(
         excluded_tickers: Tickers deliberately unqualified via the exclusion
             register. They keep their bars where they are; classified separately so
             they are not mistaken for orphans.
+        only_tickers: Restrict the sweep to these tickers (staged rollout).
+            Directories for other tickers are skipped *before* classification —
+            trimming ``target_venues`` instead would make every unlisted ticker look
+            like an orphan and trip the safety check, which is the opposite of what
+            a cautious partial run should do.
 
     Returns:
         A ``RestampPlan``. Callers must check ``is_safe`` before executing.
@@ -193,6 +199,8 @@ def build_restamp_plan(
             unparsed.append(name)
             continue
         ticker, old_venue, spec = parsed
+        if only_tickers is not None and ticker not in only_tickers:
+            continue
 
         target = target_venues.get(ticker)
         if target is None:

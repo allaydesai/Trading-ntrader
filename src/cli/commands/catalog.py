@@ -192,15 +192,17 @@ def restamp_venues(
         console.print(f"[yellow]Metadata DB not available — {escape(str(exc))}[/yellow]")
         raise SystemExit(2) from exc
 
-    if limit_tickers:
-        wanted = {t.strip().upper() for t in limit_tickers.split(",") if t.strip()}
-        targets = {t: v for t, v in targets.items() if t in wanted}
-
+    only = (
+        frozenset(t.strip().upper() for t in limit_tickers.split(",") if t.strip())
+        if limit_tickers
+        else None
+    )
     plan = build_restamp_plan(
         catalog=name,
         catalog_root=catalog_root,
         target_venues=targets,
         excluded_tickers=excluded,
+        only_tickers=only,
     )
     _render_plan(plan, workers=workers, min_free_gb=min_free_gb)
 
