@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.db.models.catalog_instrument import CatalogInstrument
+from src.models.instrument_metadata import ResolutionStatus
 from src.services.exceptions import DataNotFoundError
 
 
@@ -323,6 +324,7 @@ class TestEtfRoutingNoAdapter:
         metadata_service.get_instrument_sync.return_value = _make_instrument_row(
             ticker="SPY", nautilus_id=None, asset_class="ETF"
         )
+        metadata_service.get_resolution_status_sync.return_value = ResolutionStatus.VENUE_UNRESOLVED
 
         with pytest.raises(DataNotFoundError) as exc_info:
             await load_from_catalog(
@@ -338,11 +340,46 @@ class TestEtfRoutingNoAdapter:
         assert exc_info.value.instrument_id == "SPY"
         assert exc_info.value.context.get("venue_unresolved") is True
         assert exc_info.value.context.get("catalog") == "etf-full"
+        assert exc_info.value.context.get("resolution_status") == "VENUE_UNRESOLVED"
         msg = str(exc_info.value).lower()
-        assert "unresolved venue" in msg and "non-backtestable" in msg
+        assert "unresolved venue" in msg
+        assert "venue_overrides.csv" in msg
         # Never touch the filesystem / never enter a run for an excluded instrument.
         catalog_manager.resolve_catalog.assert_not_called()
         catalog.bars.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_excluded_ticker_gets_its_own_message_not_the_unresolved_one(self):
+        """An adjudicated exclusion must not be reported as a resolvable problem.
+
+        Telling the operator to "resolve its venue" for an instrument already
+        established to have none sends them hunting for something that is not there.
+        """
+        from src.services.firstrate.backtest_loader import load_from_catalog
+
+        catalog_manager = MagicMock()
+        metadata_service = MagicMock()
+        metadata_service.get_instrument_sync.return_value = _make_instrument_row(
+            ticker="DEAD", nautilus_id=None, asset_class="ETF"
+        )
+        metadata_service.get_resolution_status_sync.return_value = ResolutionStatus.EXCLUDED
+
+        with pytest.raises(DataNotFoundError) as exc_info:
+            await load_from_catalog(
+                catalog_name="etf-full",
+                ticker="DEAD",
+                bar_type_spec="1-DAY-LAST",
+                start=datetime(2018, 1, 1, tzinfo=timezone.utc),
+                end=datetime(2018, 6, 30, tzinfo=timezone.utc),
+                catalog_manager=catalog_manager,
+                metadata_service=metadata_service,
+            )
+
+        msg = str(exc_info.value)
+        assert "venue_exclusions.csv" in msg
+        assert "bars are retained" in msg
+        assert exc_info.value.context.get("resolution_status") == "EXCLUDED"
+        catalog_manager.resolve_catalog.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_blank_nautilus_id_also_fails_fast(self):

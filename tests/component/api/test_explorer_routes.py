@@ -177,6 +177,24 @@ class TestExplorerUIPage:
         assert "[name='sort_by']" in tag
         assert "[name='asset_class']" in tag
 
+    def test_catalog_select_preserves_asset_class_and_sort(self, client):
+        """Switching catalog must carry the active filters, not silently reset them.
+
+        The catalog <select> used `[name='asset_class']:checked`, but the pills are
+        <button>s and the state lives in a hidden input, so :checked matched nothing
+        and hx-include forwarded no asset_class at all. The route defaults a missing
+        asset_class to "" — indistinguishable from an explicit "All" click — and
+        hx-push-url wrote the reset into browser history. sort_by was omitted
+        outright, so the sort column reset too.
+        """
+        response = client.get("/explorer")
+        start = response.text.index('id="catalog-select"')
+        tag = response.text[start : response.text.index(">", start)]
+
+        assert "[name='asset_class']" in tag
+        assert "[name='sort_by']" in tag
+        assert ":checked" not in tag, "a :checked selector can never match a hidden input"
+
     def test_breadcrumbs_rendered(self, client):
         response = client.get("/explorer")
         assert "Explorer" in response.text

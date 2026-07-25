@@ -35,7 +35,12 @@
                     class="bg-slate-800 border border-slate-600 text-slate-100 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                     hx-get="/explorer/ticker-list"
                     hx-target="#ticker-list"
-                    hx-include="#search-input, [name='asset_class']:checked"
+                    {# The asset-class pills are <button>s and the state lives in a
+                       hidden input, so a :checked selector matches nothing and the
+                       filter silently resets to "All" on catalog switch — with
+                       hx-push-url writing the reset into history. Plain attribute
+                       selectors, as used by the search box and pagination. #}
+                    hx-include="#search-input, [name='asset_class'], [name='sort_by']"
                     hx-push-url="true"
                     hx-vals='{"page": "1"}'
                     hx-indicator="#loading-bar">

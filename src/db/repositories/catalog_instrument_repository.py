@@ -404,6 +404,31 @@ class SyncCatalogInstrumentRepository:
         except OperationalError as e:
             raise DatabaseConnectionError(f"Database connection failed: {e}") from e
 
+    def get_resolution_status(self, ticker: str) -> Optional[ResolutionStatus]:
+        """Read a ticker's venue verdict, or ``None`` if it has no metadata row.
+
+        Consumers gate on ``nautilus_id`` (already loaded, no extra query) and reach
+        for this only on the failure path, to explain *why* a ticker is excluded.
+        The three non-backtestable states each need a different action from the
+        operator, so collapsing them into one message wastes their time.
+
+        Args:
+            ticker: Ticker symbol (metadata is catalog-independent, keyed by ticker).
+
+        Returns:
+            The ``ResolutionStatus``, or ``None`` when resolution never ran.
+
+        Raises:
+            DatabaseConnectionError: If the query fails (mirrors ``upsert``).
+        """
+        stmt = select(InstrumentMetadata.resolution_status).where(
+            InstrumentMetadata.ticker == ticker
+        )
+        try:
+            return self.session.execute(stmt).scalar_one_or_none()
+        except OperationalError as e:
+            raise DatabaseConnectionError(f"Database connection failed: {e}") from e
+
     def count_unqualified_resolved(self, catalog_name: str) -> int:
         """Count RESOLVED tickers that still lack a ``nautilus_id`` — the gate's gap term.
 

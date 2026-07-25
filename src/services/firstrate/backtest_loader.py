@@ -20,6 +20,7 @@ from src.models.data_load_result import DataLoadResult
 from src.services.exceptions import DataNotFoundError, UnknownCatalogError
 from src.services.firstrate.catalog_manager import CatalogManager
 from src.services.firstrate.metadata_service import MetadataService
+from src.services.metadata.backtestable import non_backtestable_reason
 
 logger = structlog.get_logger(__name__)
 
@@ -135,26 +136,28 @@ async def load_from_catalog(
 
     nautilus_id = row.nautilus_id
     if not nautilus_id:
-        # Unresolved-venue fail-fast (Story 3.5 exclusion contract, Story 5.1 AC2).
-        # ``InstrumentMapper.sync_qualification`` nulls ``nautilus_id`` for a
-        # ``VENUE_UNRESOLVED`` ticker (ETF or stock) — leaving the on-disk Parquet
-        # intact but the identity unqualified. Nulling the identity IS the exclusion
-        # mechanism this loader honors: a non-backtestable instrument can never
-        # silently enter a run. Raise BEFORE resolving the catalog / reading bars so
-        # the filesystem is never touched for an excluded instrument. The
-        # ``venue_unresolved`` context flag lets callers/tests distinguish this
-        # intentional exclusion from a plain missing-ticker or empty-window miss.
+        # Non-backtestable fail-fast (Story 3.5 exclusion contract, Story 5.1 AC2).
+        # ``qualification_sync`` keeps ``nautilus_id`` non-NULL exactly when the venue
+        # is RESOLVED, so a null identity IS the exclusion signal — a non-backtestable
+        # instrument can never silently enter a run. Raise BEFORE resolving the
+        # catalog / reading bars so the filesystem is never touched.
+        #
+        # The status lookup happens only here, on the failure path: it costs one query
+        # that the happy path never pays, and it is what lets the message name the
+        # action that would actually fix this ticker. An excluded instrument told to
+        # "resolve its venue" sends the operator hunting for something already
+        # established not to exist.
+        status = await asyncio.to_thread(metadata_service.get_resolution_status_sync, ticker)
         raise DataNotFoundError(
             instrument_id=ticker,
             start=start,
             end=end,
-            message=(
-                f"'{ticker}' in catalog '{catalog_name}' has an unresolved venue "
-                "(non-backtestable, Story 3.5) — its nautilus_id is unset, so it is "
-                "excluded from backtests. Resolve its venue (metadata resolution / "
-                "venue_overrides.csv) and re-import to admit it."
-            ),
-            context={"venue_unresolved": True, "catalog": catalog_name},
+            message=non_backtestable_reason(status, ticker, catalog_name),
+            context={
+                "venue_unresolved": True,
+                "catalog": catalog_name,
+                "resolution_status": status.value if status else None,
+            },
         )
 
     try:

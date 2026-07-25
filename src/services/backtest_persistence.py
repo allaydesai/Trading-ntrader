@@ -23,6 +23,26 @@ from src.models.config_snapshot import StrategyConfigSnapshot
 logger = structlog.get_logger(__name__)
 
 
+def _to_utc(value) -> datetime:
+    """Normalise a pandas Timestamp or datetime to timezone-aware UTC."""
+    if hasattr(value, "to_pydatetime"):
+        value = value.to_pydatetime()
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value
+
+
+def _optional_str(value) -> Optional[str]:
+    """Stringify, mapping absent values to ``None``.
+
+    ``str(None)`` yields the literal ``"None"``, which then persists as a
+    plausible-looking order id that refers to nothing.
+    """
+    if value is None or pd.isna(value):
+        return None
+    return str(value)
+
+
 class BacktestPersistenceService:
     """
     Service for persisting backtest results to database.
@@ -404,35 +424,24 @@ class BacktestPersistenceService:
             )
 
         trades_to_save = []
-        skipped_count = 0
+        open_count = 0
 
         try:
             # Convert DataFrame rows to Trade models
             for position_id, row in positions_report_df.iterrows():
-                # Skip unclosed positions - trades require both entry and exit
-                if pd.isna(row["ts_closed"]):
-                    logger.debug(
-                        "Skipping unclosed position",
-                        position_id=str(position_id),
-                        instrument_id=str(row.get("instrument_id", "unknown")),
-                    )
-                    skipped_count += 1
-                    continue
+                # An open position is a real trade with an entry and no exit yet.
+                # The trades schema was built for this (exit_price / exit_timestamp
+                # are nullable, with a CHECK that tolerates NULL), so record it
+                # rather than dropping it — previously a run that ended holding a
+                # position persisted its metrics but silently no trades at all.
+                is_open = pd.isna(row["ts_closed"])
+                if is_open:
+                    open_count += 1
 
                 # Convert timestamps to datetime
                 # ts_opened is already pandas Timestamp from positions report
-                entry_timestamp = row["ts_opened"]
-                if hasattr(entry_timestamp, "to_pydatetime"):
-                    entry_timestamp = entry_timestamp.to_pydatetime()
-                if entry_timestamp.tzinfo is None:
-                    entry_timestamp = entry_timestamp.replace(tzinfo=timezone.utc)
-
-                # Convert exit timestamp (ts_closed)
-                exit_timestamp = row["ts_closed"]
-                if hasattr(exit_timestamp, "to_pydatetime"):
-                    exit_timestamp = exit_timestamp.to_pydatetime()
-                if exit_timestamp.tzinfo is None:
-                    exit_timestamp = exit_timestamp.replace(tzinfo=timezone.utc)
+                entry_timestamp = _to_utc(row["ts_opened"])
+                exit_timestamp = None if is_open else _to_utc(row["ts_closed"])
 
                 # Extract commission from commissions list
                 commission_amount = Decimal("0.00")
@@ -459,16 +468,21 @@ class BacktestPersistenceService:
                         elif len(parts) == 1 and parts[0]:
                             commission_amount = Decimal(parts[0])
 
-                # Calculate holding period in seconds from duration_ns
+                # Calculate holding period in seconds from duration_ns.
+                # NOTE: `if row["duration_ns"]` does NOT filter NaN — float('nan')
+                # is truthy, so int(nan) would raise. pandas coerces the column to
+                # float64 as soon as one open position is present.
                 holding_period_seconds = None
-                if "duration_ns" in row and row["duration_ns"]:
-                    holding_period_seconds = int(row["duration_ns"] / 1_000_000_000)
+                duration_ns = row.get("duration_ns")
+                if duration_ns is not None and not pd.isna(duration_ns):
+                    holding_period_seconds = int(duration_ns / 1_000_000_000)
 
-                # Extract realized PnL (format: "-134.66 USD")
+                # Extract realized PnL (format: "-134.66 USD"). Open positions have
+                # no realized PnL; 0.00 is the honest value, not a missing one.
                 profit_loss = Decimal("0.00")
-                if "realized_pnl" in row and row["realized_pnl"]:
-                    pnl_str = str(row["realized_pnl"])
-                    parts = pnl_str.split()
+                realized_pnl = row.get("realized_pnl")
+                if realized_pnl is not None and not pd.isna(realized_pnl):
+                    parts = str(realized_pnl).split()
                     if len(parts) >= 1:
                         profit_loss = Decimal(parts[0])
 
@@ -476,12 +490,20 @@ class BacktestPersistenceService:
                 # from Nautilus C extension float → Decimal conversion
                 max_dp = Decimal("0.00000001")
 
-                # Calculate profit percentage
-                profit_pct = None
                 entry_price = Decimal(str(row["avg_px_open"])).quantize(max_dp)
-                exit_price = Decimal(str(row["avg_px_close"])).quantize(max_dp)
                 quantity = Decimal(str(row["peak_qty"])).quantize(max_dp)
-                if entry_price > 0:
+                # Decimal("NaN").quantize() raises InvalidOperation, so NaN must be
+                # filtered before conversion, not after.
+                avg_px_close = row.get("avg_px_close")
+                exit_price = (
+                    None
+                    if avg_px_close is None or pd.isna(avg_px_close)
+                    else Decimal(str(avg_px_close)).quantize(max_dp)
+                )
+
+                # Undefined until there is an exit to measure against.
+                profit_pct = None
+                if exit_price is not None and entry_price > 0:
                     profit_pct = ((exit_price - entry_price) / entry_price) * Decimal("100")
 
                 # Create TradeCreate model for validation
@@ -490,7 +512,8 @@ class BacktestPersistenceService:
                     instrument_id=str(row["instrument_id"]),
                     trade_id=str(position_id),  # Use position_id as trade_id
                     venue_order_id=str(row["opening_order_id"]),
-                    client_order_id=str(row["closing_order_id"]),
+                    # str(None) would persist the literal string "None".
+                    client_order_id=_optional_str(row.get("closing_order_id")),
                     order_side=str(row["entry"]),  # BUY or SELL
                     quantity=quantity,
                     entry_price=entry_price,
@@ -525,12 +548,14 @@ class BacktestPersistenceService:
 
                 trades_to_save.append(trade_db)
 
-            # Log skipped unclosed positions if any
-            if skipped_count > 0:
+            # Surfaced at info, not debug: a run ending on an open position is a
+            # normal outcome, but "why does this trade have no exit?" should be
+            # answerable from the default-level log.
+            if open_count > 0:
                 logger.info(
-                    "Skipped unclosed positions",
+                    "Recorded still-open positions",
                     backtest_run_id=backtest_run_id,
-                    skipped_count=skipped_count,
+                    open_count=open_count,
                 )
 
             # Bulk insert all trades
@@ -539,7 +564,7 @@ class BacktestPersistenceService:
                     "Calling bulk_create_trades",
                     backtest_run_id=backtest_run_id,
                     trade_count=len(trades_to_save),
-                    skipped_unclosed=skipped_count,
+                    open_positions=open_count,
                 )
                 await self.repository.bulk_create_trades(trades_to_save)
 
@@ -547,13 +572,12 @@ class BacktestPersistenceService:
                     "Trades saved successfully",
                     backtest_run_id=backtest_run_id,
                     trade_count=len(trades_to_save),
-                    skipped_unclosed=skipped_count,
+                    open_positions=open_count,
                 )
             else:
                 logger.warning(
                     "No trades to save after processing positions",
                     backtest_run_id=backtest_run_id,
-                    skipped_unclosed=skipped_count,
                 )
 
             return len(trades_to_save)

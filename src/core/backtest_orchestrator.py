@@ -568,18 +568,24 @@ class BacktestOrchestrator:
                     backtest_result=result,
                 )
 
-                # Capture trades from positions report
+                # Capture trades from positions report. Trade capture is best-effort
+                # — the run and its metrics are the primary record — but the failure
+                # must be contained: if a flush inside bulk_create_trades fails, the
+                # session is left in a failed state, so swallowing the error here and
+                # committing below would raise again and lose the run and metrics
+                # too. The savepoint keeps the trade write's failure local.
                 if self.engine:
                     try:
                         positions_df = self.engine.trader.generate_positions_report()
                         if positions_df is not None and not positions_df.empty:
-                            await service.save_trades_from_positions(
-                                backtest_run_id=backtest_run.id,
-                                positions_report_df=positions_df,
-                            )
+                            async with session.begin_nested():
+                                await service.save_trades_from_positions(
+                                    backtest_run_id=backtest_run.id,
+                                    positions_report_df=positions_df,
+                                )
                     except Exception as e:
                         logger.warning(
-                            f"Failed to capture trades: {e}",
+                            f"Failed to capture trades (run and metrics still persisted): {e}",
                             exc_info=True,
                         )
 

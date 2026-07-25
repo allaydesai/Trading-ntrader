@@ -13,6 +13,7 @@ from src.db.repositories.catalog_instrument_repository import (
     CatalogInstrumentRepository,
     SyncCatalogInstrumentRepository,
 )
+from src.models.instrument_metadata import ResolutionStatus
 
 logger = structlog.get_logger(__name__)
 
@@ -168,6 +169,15 @@ class MetadataService:
         """Sync: Get instrument by catalog name and ticker."""
         repo = self._require_sync()
         return repo.get_by_ticker(catalog_name, ticker)
+
+    def get_resolution_status_sync(self, ticker: str) -> Optional[ResolutionStatus]:
+        """Sync: Read a ticker's venue verdict.
+
+        Used on the not-backtestable path to explain *why*, so the error names the
+        action that would actually fix it.
+        """
+        repo = self._require_sync()
+        return repo.get_resolution_status(ticker)
 
     def list_instruments_sync(
         self,

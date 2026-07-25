@@ -8,7 +8,7 @@ single ticker failure does not abort the batch.
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, Optional
 
 import structlog
 from nautilus_trader.model.data import Bar, BarType
@@ -481,6 +481,17 @@ class ImportService:
     # source-CSV last-date probe — never by scanning the filesystem for
     # orphan Parquet files. See that ADR before touching this method.
 
+    def _resolved_venue_for(self, ticker: str) -> Optional[str]:
+        """The venue this run resolved for a ticker, or ``None`` if it did not resolve one.
+
+        Reads the per-run resolution cache rather than the DB: by the time a ticker is
+        classified, ``_resolve_metadata`` has already populated it, so this costs
+        nothing. ``None`` covers both "no resolver configured" and "venue unresolved",
+        and in both cases there is no corrected venue to drift away from.
+        """
+        metadata = self._resolved_metadata.get(ticker)
+        return metadata.venue if metadata is not None else None
+
     def _classify_ticker(
         self,
         ticker: str,
@@ -536,6 +547,23 @@ class ImportService:
         if existing is None:
             self._log_classification(ticker, "new", None, None, timeframe)
             return "new"
+
+        # Venue drift forces a re-import regardless of dates. Bars are written under
+        # {TICKER}.{VENUE}-..., but every column this classifier compares
+        # (date_range_end_*, bar_count_*) is venue-independent — so a ticker whose
+        # venue was corrected since its last import looks "already complete" and gets
+        # skipped, leaving its bars stranded at the old path with nothing at the new
+        # one. This is how the ETF catalog ended up with 17,255 orphaned partitions.
+        resolved_venue = self._resolved_venue_for(ticker)
+        if resolved_venue is not None and existing.exchange != resolved_venue:
+            logger.warning(
+                "ticker_venue_drift_forces_reimport",
+                ticker=ticker,
+                timeframe=timeframe,
+                stored_venue=existing.exchange,
+                resolved_venue=resolved_venue,
+            )
+            return "reimported"
 
         # Compare against THIS timeframe's own stored end, not the shared
         # date_range_end (which after a full import holds the finest timeframe's

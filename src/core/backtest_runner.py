@@ -181,11 +181,14 @@ class MinimalBacktestRunner:
                                 else "N/A",
                             )
 
-                            # Save trades to database
-                            trade_count = await service.save_trades_from_positions(
-                                backtest_run_id=backtest_run.id,
-                                positions_report_df=positions_report_df,
-                            )
+                            # Savepoint: a failed flush inside bulk_create_trades
+                            # poisons the session, so without this the commit below
+                            # would raise and take the run and metrics down with it.
+                            async with session.begin_nested():
+                                trade_count = await service.save_trades_from_positions(
+                                    backtest_run_id=backtest_run.id,
+                                    positions_report_df=positions_report_df,
+                                )
 
                             logger.info(
                                 "Trades captured from backtest",
@@ -198,7 +201,8 @@ class MinimalBacktestRunner:
                                 run_id=str(run_id),
                             )
                 except Exception as trade_error:
-                    # Log but don't fail the backtest if trade capture fails
+                    # Log but don't fail the backtest if trade capture fails —
+                    # the run and its metrics remain committed below.
                     logger.error(
                         "Failed to capture trades",
                         run_id=str(run_id),

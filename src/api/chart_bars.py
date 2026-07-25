@@ -86,7 +86,17 @@ async def _load_chart_bars(backtest: Any) -> list:
         resolved = await asyncio.to_thread(
             _resolve_named_nautilus_id, catalog_name, backtest.instrument_symbol
         )
-        instrument_id = resolved or backtest.instrument_symbol
+        if resolved is None:
+            # Do NOT fall back to the bare symbol. A named-catalog partition lives
+            # under {TICKER}.{VENUE}-..., so the unqualified symbol matches nothing
+            # and the chart renders empty with no indication why. A missing
+            # nautilus_id means the ticker is not backtestable — say so instead.
+            raise CatalogError(
+                f"'{backtest.instrument_symbol}' has no qualified instrument id in "
+                f"catalog '{catalog_name}', so its bars cannot be located. The ticker "
+                "is not currently backtestable — check `ntrader metadata coverage`."
+            )
+        instrument_id = resolved
     else:
         catalog_service = DataCatalogService()
         instrument_id = backtest.instrument_symbol
