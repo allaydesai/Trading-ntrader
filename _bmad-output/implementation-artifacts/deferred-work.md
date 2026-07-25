@@ -2,7 +2,35 @@
 
 Real, non-blocking findings deferred from code reviews. Each entry notes its source and why it was deferred.
 
+## Status summary (updated 2026-07-25, venue-gate closure)
+
+**Resolved**
+
+| Item | Where |
+|---|---|
+| Catalog switch drops the asset-class filter | fixed — `explorer.html` `hx-include`, + a test that pins the selector |
+| Stats panel omits the 30min tile (two entries) | closed by Story 4.5; never struck from this file |
+| Cross-run orphan / no consumer-honored non-backtestable signal | fixed — see below |
+| Trade rows lost for open-position runs | fixed — migrated here from the Story 5.4 file, where it had no tracker home |
+
+**Still open**
+
+| Item | Note |
+|---|---|
+| `ResolutionSummary` has no bucket for a non-throwing `UNRESOLVED` | unchanged; see entry below |
+| `DataCatalogService` rescans `data/bar/` on every request | never tracked here before — added below |
+| `test_backtest_catalog_integration.py` is 961 lines | from Story 5.5; added below |
+
+---
+
 ## Deferred from: code review of story 4-2-search-and-filter-the-etf-ticker-list-by-symbol (2026-07-17)
+
+**RESOLVED 2026-07-25.** `hx-include` now uses plain attribute selectors
+(`[name='asset_class'], [name='sort_by']`), matching the search box and pagination.
+The sort column was silently resetting too — `sort_by` was omitted from the
+`hx-include` entirely, which the original report did not catch. A test now asserts
+the selector shape, including that no `:checked` appears, since that is the specific
+mistake that can never match a hidden input.
 
 - **Catalog dropdown drops the active asset-class filter on catalog switch**
   [templates/explorer/explorer.html:38]. The catalog `<select>` uses
@@ -18,6 +46,12 @@ Real, non-blocking findings deferred from code reviews. Each entry notes its sou
   currently covers the catalog-switch asset_class path.
 
 ## Deferred from: code review of story 4-1-browse-imported-etf-tickers (2026-07-16)
+
+**Both entries below are RESOLVED.** The 30min tile landed in Story 4.5. The
+cross-run orphan was fixed on 2026-07-25 during the venue-gate closure — details
+immediately after the original text, which is left intact because its analysis of
+*why the naive fix was wrong* is still the reason the eventual fix took the shape
+it did.
 
 - **Stats/detail panel omits the 30min tile** [src/api/models/explorer.py:163-166 (`TickerStatsResponse`);
   templates/explorer/stats_panel.html:19-49]. Story 4.1 added a 30m column to the explorer **browse** row, but the
@@ -50,6 +84,44 @@ Real, non-blocking findings deferred from code reviews. Each entry notes its sou
   integration change and belongs in Epic 5, not Story 3.5.** Also open: re-resolving to a *different* venue than
   the bars were written under orphans the partition regardless (bar_type path mismatch) — same Epic-5 scope.
 
+  **RESOLVED 2026-07-25 (venue-gate closure).** Both halves, and the second half
+  turned out to be the one that mattered: the ETF catalog had accumulated **17,255
+  orphaned partitions** from exactly the venue-change case, not the narrow mixed-path
+  sequence the original entry anticipated.
+
+  The fix is not the flag this entry proposed. `qualification_sync` instead enforces
+  the equivalence the flag would have duplicated —
+
+      nautilus_id is non-NULL  ⟺  resolution_status is RESOLVED
+
+  — in both directions, and `metadata coverage --gate` fails if it is ever violated.
+  A consumer gating on `nautilus_id` is therefore already gating on the status, with
+  no join in the hot path and no second source of truth to drift. Concretely:
+
+  - **Forward.** A newly resolved ticker gets its identity without a re-import, which
+    is what `apply-overrides` could never do before.
+  - **Reverse.** A ticker that loses RESOLVED has its stale identity cleared. This
+    was not hypothetical: the closure run cleared **154** tickers that FMP had
+    resolved and IBKR could not, each of which would otherwise have stayed silently
+    backtestable under a venue nothing vouches for.
+  - **Orphaned partitions.** `catalog restamp-venues` moves the bars onto the
+    corrected venue — directory *and* parquet footer, since `ParquetDataCatalog`
+    finds files by the former and decodes them via the latter.
+  - **Recurrence.** `_classify_ticker` now forces a re-import on venue drift. Every
+    column it compared (`date_range_end_*`, `bar_count_*`) is venue-independent, so a
+    corrected venue previously looked "already complete" and got skipped — which is
+    precisely how 17,255 partitions were stranded.
+
+  What this entry called for — a `backtestable` flag or a threaded `resolution_status`
+  join — was deliberately not built. The status *is* consulted, but only on the
+  failure path, to say which of the three non-backtestable states applies
+  (`non_backtestable_reason`), because telling someone their delisted instrument has
+  "an unresolved venue" sends them to fix something that is not broken.
+
+  Separately, `chart_bars.py` fell back to the bare unqualified symbol when a ticker
+  had no `nautilus_id`. In a named catalog that matches no partition, so the chart
+  rendered empty with no explanation. It now fails with the reason.
+
 ## Deferred from: code review of story 2-7-import-summary-and-progress-reporting (2026-06-29)
 
 - **`ResolutionSummary` has no bucket for a non-throwing `UNRESOLVED` record**
@@ -69,3 +141,53 @@ Real, non-blocking findings deferred from code reviews. Each entry notes its sou
   `CatalogInstrument.bar_count_30min` directly); only the stats *display* omits the 30-min row. Pre-existing
   and explicitly out of Story 4.3's scope ("No stats/metadata-panel work"). Belongs to **Story 4.5**
   (Per-Timeframe ETF Data Statistics), which adds per-timeframe stats incl. 30min.
+
+**RESOLVED** — closed by Story 4.5 (`bar_count_30min` on `TickerStatsResponse`, and
+the 30-Min tile in `stats_panel.html`). Recorded here because the entry was never
+struck when 4.5 landed.
+
+## Migrated from story 5-4-persist-etf-backtest-results-to-the-database (2026-07-22)
+
+This finding lived only inside the Story 5.4 file, so it had no tracker home and was
+invisible to anyone reading this list. Recorded here and **RESOLVED 2026-07-25**.
+
+- **Trade rows silently lost for runs ending on an open position**
+  [src/services/backtest_persistence.py]. A backtest that finished holding a position
+  persisted its run row and its `performance_metrics`, then no trades at all. The
+  positions report carries NaN in every exit field for an open position, and the
+  writer skipped those rows at `logger.debug` — invisible at the default log level.
+  Not ETF-specific; any strategy that ends in the market was affected.
+
+  Fixed by recording open positions with a null exit, which the schema was always
+  built for (`exit_price` / `exit_timestamp` are nullable, with a CHECK that tolerates
+  NULL). Three latent faults behind the skip were repaired at the same time, each of
+  which would have surfaced the moment the skip was removed: `float('nan')` is truthy,
+  so `if row["duration_ns"]` never filtered NaN and `int(nan)` would have raised;
+  `Decimal("NaN").quantize()` likewise raises; and `str(None)` was persisting the
+  literal `"None"` as a closing order id.
+
+  A fourth, more serious fault was found while fixing it: **a failed trade write took
+  the run and its metrics down with it.** `bulk_create_trades` flushes, so a failure
+  there poisons the session — the existing swallow-and-continue then hit a commit that
+  raised, and the outer handler swallowed *that* too. Trade capture is now wrapped in a
+  savepoint in both orchestrator paths, so the failure stays local and the run survives,
+  which is what the original swallow intended.
+
+## Open: added 2026-07-25 (previously untracked)
+
+- **`DataCatalogService` walks the whole `data/bar/` tree on every request**
+  [src/services/data_catalog.py:101 (`__init__` → `_rebuild_availability_cache`);
+  src/api/dependencies.py:232-237]. The service is a per-request FastAPI dependency and
+  rebuilds its availability cache in `__init__`, with no caching of any kind — no
+  `lru_cache`, no `app.state`, no module singleton. Every explorer chart, stats panel,
+  and REST call therefore re-stats the entire tree: cheap for a small catalog, heavy for
+  `firstrate-etf` (23,060 directories) and heavier still for `firstrate-stocks`. Real but
+  non-blocking — deferred to `main` as a follow-up. Likely fix: an `lru_cache`d factory
+  keyed on resolved catalog path with an explicit invalidation hook from `write_bars`.
+
+- **`tests/integration/core/test_backtest_catalog_integration.py` is 961 lines**
+  (guideline: 500). Flagged in Story 5.5. It splits cleanly along its three test
+  classes, with the builders, the `synthetic_catalog` fixture, and the Postgres schema
+  harness moving to a shared `conftest.py`. Only the persistence class needs a live
+  Postgres, so splitting also lets the other two run without DB setup. Deferred to
+  `main`.
