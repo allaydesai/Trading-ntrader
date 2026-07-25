@@ -8,6 +8,7 @@ from typing import Dict
 
 import structlog  # noqa: E402
 from ibapi.common import MarketDataTypeEnum  # type: ignore
+from nautilus_trader.adapters.interactive_brokers.common import IBContract
 from nautilus_trader.adapters.interactive_brokers.historical.client import (
     HistoricInteractiveBrokersClient,
 )
@@ -363,6 +364,51 @@ class IBKRHistoricalClient:
         )
 
         return bars, instrument
+
+    async def fetch_contract_details(self, contract: IBContract) -> list | None:
+        """Raw IBKR contract-details lookup — no Instrument parsing, no cache mutation.
+
+        Deliberately bypasses ``request_instruments`` /
+        ``InteractiveBrokersInstrumentProvider``. That path collapses three
+        distinct outcomes into one empty list:
+
+        - **Ambiguous** — ``get_contract_details`` returning several matches hits
+          ``[qualified] = details``, which raises ValueError and is swallowed.
+        - **Unparseable** — ``_extract_isin`` raises when ``secIdList`` carries no
+          ISIN, and ``_process_contract_details`` catches ValueError and continues.
+        - **Not found** — genuinely no such contract.
+
+        For venue resolution those must stay distinguishable: the first two mean
+        "IBKR knows this instrument, we just could not build a full Instrument from
+        it" — and the venue is right there in the raw details. Discarding them would
+        send resolvable tickers to manual research.
+
+        ``None`` means the request resolved neither way: IBKR error 200 ("no security
+        definition") ends the request without an exception, so Nautilus's 10s
+        ``_await_request`` expires and returns its default. A genuine timeout looks
+        identical; the caller treats both as retryable and downgrades to NOT_FOUND
+        after retries.
+
+        NOT rate-limited here. ``self.rate_limiter`` is the 45/s *bar* budget, which
+        is the wrong pacing for the contract-details endpoint — the caller throttles.
+
+        Args:
+            contract: The IBContract to look up (e.g. ``secType="STK"``,
+                ``exchange="SMART"``, ``currency="USD"``).
+
+        Returns:
+            The raw ``list[IBContractDetails]``, ``[]`` when IBKR knows of no
+            matching contract, or ``None`` on error-200/timeout.
+
+        Raises:
+            ConnectionError: If the client is not connected.
+        """
+        if not self._connected:
+            raise ConnectionError("Not connected to IBKR — call connect() first")
+        inner = getattr(self.client, "_client", None)
+        if inner is None:
+            raise ConnectionError("IBKR inner client is not available")
+        return await inner.get_contract_details(contract)
 
     @property
     def is_connected(self) -> bool:
