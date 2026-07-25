@@ -328,6 +328,25 @@ Deferred Growth and Vision items are enumerated in **[Product Scope](#product-sc
 - **FR24:** System can report current venue coverage and identify whether any ticker in the backtestable universe lacks a venue.
 - **FR25:** System can exclude tickers without a resolved venue from the backtestable universe and flag them, without dropping their imported bars.
 - **FR26:** System can refuse to mark the ETF universe complete while any ticker lacks a venue (no inferred/guessed venues).
+- **FR26a:** System can record an audited exclusion for a ticker no authoritative source can qualify, requiring a written reason and evidence (see *Amendment: exclusion register*).
+- **FR26b:** System can refuse to mark the ETF universe complete while any venue-resolved ticker lacks a catalog identity (`nautilus_id`), i.e. while the resolved universe is not actually loadable.
+
+#### Amendment: exclusion register (2026-07-25)
+
+*The original criterion above stands unchanged: the gate is **0 tickers with an unresolved venue**, and no venue is ever inferred or guessed. This amendment defines the only other way a ticker may leave that state.*
+
+**Why.** Driving the ETF universe to 100% coverage surfaced a category the original criterion has no answer for: an instrument that is delisted, untradeable, or otherwise unqualifiable by *any* authoritative source — FMP, IBKR's contract database, or the issuer. Such a ticker can never resolve. Under the criterion as written, the gate could then never pass, and the only way to make it green would be to invent a venue — precisely the false confidence the PRD forbids (`no guessed venues`, ADR-6). Deleting the bars was considered and rejected: it destroys imported data to satisfy a report.
+
+**The register.** A ticker may move from `VENUE_UNRESOLVED` to `EXCLUDED` only via a row in the git-tracked `venue_exclusions.csv` (header `ticker,reason,evidence`). Both fields are **mandatory and machine-enforced** — a row missing either is refused at load, not defaulted. That requirement is the whole mechanism: it is what makes an exclusion an adjudicated decision with a name attached rather than a quiet way to shrink the problem.
+
+**Constraints.**
+
+- An excluded ticker **keeps its imported bars** and is **never backtestable** (consistent with FR25).
+- Exclusions are **reported on every coverage run** as their own line, never folded into the coverage denominator. The size of the register stays visible to anyone reading the verdict.
+- A ticker appearing in both `venue_overrides.csv` and `venue_exclusions.csv` is contradictory; the **override wins** and the shadowed exclusion is reported.
+- The register is git-tracked, so every exclusion is reviewable in history alongside its justification.
+
+**Sign-off impact.** Phase 2 is complete when `metadata coverage --gate` exits 0 — meaning 0 `VENUE_UNRESOLVED` **and** 0 resolved-but-unqualified tickers — with the exclusion register reviewed and its size recorded in the sign-off evidence.
 
 ### Data Explorer — ETF Support (E4)
 
