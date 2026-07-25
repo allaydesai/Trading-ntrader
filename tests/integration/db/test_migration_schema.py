@@ -30,6 +30,13 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 # ticker's venue is unresolved (src/services/firstrate/instrument_mapper.py).
 _MUST_BE_NULLABLE = ("nautilus_id", "exchange", "name")
 
+_EXPECTED_RESOLUTION_STATUSES = {
+    "UNRESOLVED",
+    "RESOLVED",
+    "VENUE_UNRESOLVED",
+    "EXCLUDED",
+}
+
 
 def _worker_id(request) -> str:
     """pytest-xdist worker id, or 'master' when running single-process."""
@@ -114,4 +121,31 @@ def test_catalog_instruments_identity_columns_are_nullable(migrated_schema, colu
     assert columns[column_name]["nullable"] is True, (
         f"catalog_instruments.{column_name} is NOT NULL after 'alembic upgrade head', "
         f"but the ORM declares it nullable and sync_qualification writes NULL to it."
+    )
+
+
+def test_resolution_status_enum_includes_excluded(migrated_schema):
+    """The resolution_status enum must carry EXCLUDED for the venue exclusion register.
+
+    A ticker leaves VENUE_UNRESOLVED either by resolving a venue or by an audited
+    entry in venue_exclusions.csv. The latter needs a persisted, queryable state so
+    the coverage gate can count it separately instead of hiding it.
+    """
+    engine, schema = migrated_schema
+    with engine.connect() as conn:
+        values = set(
+            conn.execute(
+                text(
+                    "SELECT e.enumlabel FROM pg_enum e "
+                    "JOIN pg_type t ON t.oid = e.enumtypid "
+                    "JOIN pg_namespace n ON n.oid = t.typnamespace "
+                    "WHERE t.typname = 'resolution_status' AND n.nspname = :schema"
+                ),
+                {"schema": schema},
+            ).scalars()
+        )
+
+    assert values == _EXPECTED_RESOLUTION_STATUSES, (
+        f"resolution_status enum is {sorted(values)}, "
+        f"expected {sorted(_EXPECTED_RESOLUTION_STATUSES)}"
     )

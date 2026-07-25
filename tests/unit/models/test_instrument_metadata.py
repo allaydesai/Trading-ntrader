@@ -28,15 +28,21 @@ class TestNASentinel:
 class TestResolutionStatus:
     """Tests for ResolutionStatus enum."""
 
-    def test_has_exactly_three_members(self):
-        """ResolutionStatus has exactly three members."""
-        assert len(ResolutionStatus) == 3
+    def test_has_exactly_four_members(self):
+        """ResolutionStatus has exactly four members.
+
+        A tripwire: the set is mirrored by a Postgres enum type, so adding a member
+        without an ``ALTER TYPE ... ADD VALUE`` migration would fail only at runtime
+        against a real database.
+        """
+        assert len(ResolutionStatus) == 4
 
     def test_member_values(self):
         """Members have name == value (avoids SQLAlchemy values_callable footgun)."""
         assert ResolutionStatus.UNRESOLVED.value == "UNRESOLVED"
         assert ResolutionStatus.RESOLVED.value == "RESOLVED"
         assert ResolutionStatus.VENUE_UNRESOLVED.value == "VENUE_UNRESOLVED"
+        assert ResolutionStatus.EXCLUDED.value == "EXCLUDED"
 
     def test_name_equals_value(self):
         """Every member's name equals its value."""

@@ -39,11 +39,21 @@ class ResolutionStatus(str, Enum):
     Members deliberately use ``name == value`` so the string stored by the
     SQLAlchemy ``Enum`` column matches the value, avoiding the
     ``values_callable`` footgun.
+
+    Only ``RESOLVED`` is backtestable. The other three are distinct kinds of
+    "not backtestable" and must not be collapsed: ``UNRESOLVED`` was never
+    attempted, ``VENUE_UNRESOLVED`` was attempted and failed (the gate blocker),
+    and ``EXCLUDED`` was adjudicated by a human and is a permitted gate exit.
     """
 
     UNRESOLVED = "UNRESOLVED"
     RESOLVED = "RESOLVED"
     VENUE_UNRESOLVED = "VENUE_UNRESOLVED"
+    #: Audited, deliberate exclusion recorded in ``venue_exclusions.csv`` with a
+    #: written reason and evidence — a delisted or untradeable instrument that no
+    #: authoritative source can qualify. Keeps its bars on disk but is never
+    #: backtestable, and is reported separately rather than silently dropped.
+    EXCLUDED = "EXCLUDED"
 
 
 class AssetType(str, Enum):
