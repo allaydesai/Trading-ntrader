@@ -27,9 +27,21 @@ from src.db.repositories.instrument_metadata_repository_sync import (
 )
 from src.db.session_sync import get_sync_session
 from src.models.instrument_metadata import ResolutionStatus
+from src.services.firstrate.instrument_mapper import InstrumentMapper
 from src.services.metadata.backtestable import NonBacktestableTicker, total_bars
-from src.services.metadata.coverage_report import VenueCoverage
+from src.services.metadata.coverage_report import QualificationCoverage, VenueCoverage
+from src.services.metadata.qualification_sync import (
+    QualificationSyncResult,
+    sync_resolved_qualifications,
+)
 from src.services.metadata.unresolved_report import unresolved_reason
+from src.services.metadata.venue_exclusions import (
+    VenueExclusionError,
+    VenueExclusionMergeResult,
+    drop_overridden_exclusions,
+    load_venue_exclusions,
+    merge_venue_exclusions,
+)
 from src.services.metadata.venue_overrides import (
     VenueOverrideError,
     VenueOverrideMergeResult,
@@ -85,36 +97,80 @@ def _render_unresolved(rows: list[InstrumentMetadata]) -> None:
 
 
 @metadata.command("apply-overrides")
-def apply_overrides() -> None:
-    """Merge venue_overrides.csv into the metadata store, with precedence (Story 3.3).
+@click.option(
+    "--sync-catalog/--no-sync-catalog",
+    default=True,
+    help=(
+        "Also converge catalog_instruments.nautilus_id onto the venue verdict "
+        "(default on — without it the coverage gate can pass while every ticker "
+        "is still unloadable by backtest_loader)."
+    ),
+)
+@click.option(
+    "--exclusions/--no-exclusions",
+    default=True,
+    help="Also apply venue_exclusions.csv (default on).",
+)
+@click.option(
+    "--catalog",
+    default=None,
+    help="Catalog whose identity rows are synced (default: firstrate_catalog_name).",
+)
+def apply_overrides(sync_catalog: bool, exclusions: bool, catalog: Optional[str]) -> None:
+    """Apply every venue decision: overrides, exclusions, and qualification sync.
 
-    The metadata-refresh path: fill the CSV from the ``metadata unresolved``
-    worklist, then apply the corrections without re-importing bars. Each override
-    flips a matching row to RESOLVED; re-running is idempotent.
+    The metadata-refresh path: fill venue_overrides.csv from the ``metadata
+    unresolved`` worklist (and venue_exclusions.csv for tickers nothing can
+    qualify), then apply the corrections without re-importing bars.
+
+    All three steps run in one transaction. That coupling is deliberate — a venue
+    written without the matching catalog identity produces a green gate over a
+    universe no backtest can load, which is the exact defect this command exists to
+    prevent. The name is kept for continuity; it applies all venue decisions.
     """
-    path = Path(get_settings().firstrate.firstrate_venue_overrides_path)
+    settings = get_settings().firstrate
+    catalog_name = catalog or settings.firstrate_catalog_name
+    override_path = Path(settings.firstrate_venue_overrides_path)
+    exclusion_path = Path(settings.firstrate_venue_exclusions_path)
+
     try:
-        overrides = load_venue_overrides(path)
-    except VenueOverrideError as exc:
-        console.print(f"[yellow]Venue overrides not applied — {escape(str(exc))}[/yellow]")
+        overrides = load_venue_overrides(override_path)
+        exclusion_records = load_venue_exclusions(exclusion_path) if exclusions else {}
+    except (VenueOverrideError, VenueExclusionError) as exc:
+        console.print(f"[yellow]Venue decisions not applied — {escape(str(exc))}[/yellow]")
         return
-    if not overrides:
+
+    exclusion_records, shadowed = drop_overridden_exclusions(exclusion_records, overrides)
+    if not overrides and not exclusion_records and not sync_catalog:
         console.print(
-            f"[green]✓ No venue overrides to apply ({escape(str(path))} is empty/absent).[/green]"
+            f"[green]✓ No venue decisions to apply ({escape(str(override_path))} "
+            f"is empty/absent).[/green]"
         )
         return
+
     try:
         with get_sync_session() as session:
-            result = merge_venue_overrides(
-                overrides,
-                SyncInstrumentMetadataRepository(session),
-                datetime.now(timezone.utc),
-            )
+            meta_repo = SyncInstrumentMetadataRepository(session)
+            now = datetime.now(timezone.utc)
+            override_result = merge_venue_overrides(overrides, meta_repo, now)
+            exclusion_result = merge_venue_exclusions(exclusion_records, meta_repo, now)
+            sync_result = None
+            if sync_catalog:
+                sync_result = sync_resolved_qualifications(
+                    meta_repo=meta_repo,
+                    catalog_repo=SyncCatalogInstrumentRepository(session),
+                    mapper=InstrumentMapper(SyncCatalogInstrumentRepository(session)),
+                    catalog_name=catalog_name,
+                )
             session.commit()
     except (RuntimeError, DatabaseConnectionError, SQLAlchemyError) as exc:
         console.print(f"[yellow]Metadata DB not available — {escape(str(exc))}[/yellow]")
         return
-    _render_override_summary(result)
+
+    _render_override_summary(override_result)
+    _render_exclusion_summary(exclusion_result, shadowed)
+    if sync_result is not None:
+        _render_qualification_summary(sync_result, catalog_name)
 
 
 def _render_override_summary(result: VenueOverrideMergeResult) -> None:
@@ -128,23 +184,77 @@ def _render_override_summary(result: VenueOverrideMergeResult) -> None:
         console.print(f"[yellow]Unmatched (no metadata row): {joined}[/yellow]")
 
 
+def _render_exclusion_summary(result: VenueExclusionMergeResult, shadowed: list[str]) -> None:
+    """Print the exclusion-register summary, staying silent when the register is empty."""
+    if result.total == 0 and not shadowed:
+        return
+    console.print(
+        f"Venue exclusions: {result.applied} applied, "
+        f"{result.unchanged} unchanged, {len(result.unmatched)} unmatched"
+    )
+    if result.unmatched:
+        joined = ", ".join(escape(t) for t in result.unmatched)
+        console.print(f"[yellow]Unmatched (no metadata row): {joined}[/yellow]")
+    if shadowed:
+        joined = ", ".join(escape(t) for t in shadowed)
+        console.print(
+            f"[yellow]Exclusions overridden by a resolved venue (override wins): {joined}[/yellow]"
+        )
+
+
+def _render_qualification_summary(result: QualificationSyncResult, catalog_name: str) -> None:
+    """Print the catalog-identity sync summary (+ any metadata row lacking a catalog row)."""
+    console.print(
+        f"Catalog qualification ({escape(catalog_name)}): {result.synced} synced, "
+        f"{result.cleared} cleared, {result.unchanged} unchanged"
+    )
+    if result.missing_row:
+        shown = ", ".join(escape(t) for t in result.missing_row[:10])
+        more = f" (+{len(result.missing_row) - 10} more)" if len(result.missing_row) > 10 else ""
+        console.print(
+            f"[yellow]Resolved but no catalog_instruments row: {shown}{more} — "
+            f"company profiles not loaded for this catalog?[/yellow]"
+        )
+
+
 @metadata.command("coverage")
 @click.option(
     "--gate/--no-gate",
     default=False,
-    help="Exit non-zero unless venue coverage is 100% (for CI/automation).",
+    help="Exit non-zero unless venue coverage is 100% and every resolved ticker is qualified.",
 )
-def coverage(gate: bool) -> None:
-    """Report venue coverage and the completeness verdict (Story 3.4).
+@click.option(
+    "--catalog",
+    default=None,
+    help="Catalog to check qualification against (default: firstrate_catalog_name).",
+)
+def coverage(gate: bool, catalog: Optional[str]) -> None:
+    """Report venue coverage, catalog qualification, and the completeness verdict.
 
-    Answers "is any ticker missing a venue?" from a single indexed grouped
-    count. A VENUE_UNRESOLVED row fails the gate — no venue is ever guessed to
-    make it pass. With --gate the process exits 1 when INCOMPLETE (and 2 when
-    the DB cannot be evaluated, so CI never mistakes "unreachable" for "passed").
+    Two terms, both required to pass:
+
+    \b
+    1. Venue coverage — no ticker left VENUE_UNRESOLVED. No venue is ever guessed
+       to make this pass; a ticker nothing can qualify leaves via the audited
+       exclusion register instead.
+    2. Catalog qualification — every RESOLVED ticker carries a nautilus_id. Without
+       this term the gate passed while backtest_loader rejected the whole universe,
+       because the venue and the identity live in different tables.
+
+    With --gate the process exits 1 when INCOMPLETE, and 2 when the DB cannot be
+    evaluated, so CI never mistakes "unreachable" for "passed".
     """
+    catalog_name = catalog or get_settings().firstrate.firstrate_catalog_name
     try:
         with get_sync_session() as session:
-            counts = SyncInstrumentMetadataRepository(session).count_by_status()
+            meta_repo = SyncInstrumentMetadataRepository(session)
+            cat_repo = SyncCatalogInstrumentRepository(session)
+            counts = meta_repo.count_by_status()
+            qual = QualificationCoverage(
+                catalog=catalog_name,
+                resolved=counts.get(ResolutionStatus.RESOLVED, 0),
+                gap=cat_repo.count_unqualified_resolved(catalog_name),
+            )
     except (RuntimeError, DatabaseConnectionError, SQLAlchemyError) as exc:
         # DB unset / unreachable / missing-table — degrade to a warning, never a
         # traceback. Under --gate an unevaluable gate must NOT read as passing.
@@ -154,8 +264,27 @@ def coverage(gate: bool) -> None:
         return
     cov = VenueCoverage.from_counts(counts)
     _render_coverage(cov)
-    if gate and not cov.is_complete:
+    _render_qualification_coverage(qual)
+    if gate and not (cov.is_complete and qual.is_complete):
         sys.exit(1)
+
+
+def _render_qualification_coverage(qual: QualificationCoverage) -> None:
+    """Render the qualification term of the gate (no exit logic)."""
+    if qual.is_complete:
+        console.print(
+            f"[green]✓ QUALIFIED — all {qual.resolved} resolved ticker(s) carry a "
+            f"nautilus_id in '{escape(qual.catalog)}'[/green]"
+        )
+        return
+    console.print(
+        f"[red]✗ UNQUALIFIED — {qual.gap} of {qual.resolved} resolved ticker(s) in "
+        f"'{escape(qual.catalog)}' have no nautilus_id (gate FAIL)[/red]"
+    )
+    console.print(
+        "These tickers have a venue but no catalog identity, so backtest_loader "
+        "will reject them. Run 'metadata apply-overrides' to sync qualification."
+    )
 
 
 def _render_coverage(cov: VenueCoverage) -> None:
@@ -166,6 +295,7 @@ def _render_coverage(cov: VenueCoverage) -> None:
     table.add_row("RESOLVED", str(cov.resolved))
     table.add_row("VENUE_UNRESOLVED", str(cov.venue_unresolved))
     table.add_row("UNRESOLVED", str(cov.unresolved))
+    table.add_row("EXCLUDED", str(cov.excluded))
     console.print(table)
     console.print(f"Total metadata rows: {cov.total}")
     # Clamp the *displayed* percent so it can never read 100.0% while the verdict
@@ -178,6 +308,13 @@ def _render_coverage(cov: VenueCoverage) -> None:
     console.print(f"Unresolved venues (VENUE_UNRESOLVED): {cov.venue_unresolved}")
     if cov.unresolved > 0:
         console.print(f"Not yet attempted (UNRESOLVED): {cov.unresolved}")
+    if cov.excluded > 0:
+        # Always printed when non-zero: an exclusion is a permitted gate exit, so
+        # the register's size must stay in front of whoever reads the verdict.
+        console.print(
+            f"[yellow]Excluded (EXCLUDED): {cov.excluded} — audited in "
+            f"venue_exclusions.csv; bars retained, never backtestable[/yellow]"
+        )
     if cov.total == 0:
         console.print("[yellow]No metadata rows yet — nothing to gate (vacuous PASS).[/yellow]")
     elif cov.decided == 0:

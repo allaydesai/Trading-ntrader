@@ -11,6 +11,7 @@ same name. ORM↔domain mapping is the Story 1.5 service's responsibility.
 from datetime import datetime
 from typing import Optional
 
+import structlog
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
@@ -18,6 +19,8 @@ from sqlalchemy.orm import Session
 from src.db.exceptions import DatabaseConnectionError, DuplicateRecordError
 from src.db.models.instrument_metadata import InstrumentMetadata
 from src.models.instrument_metadata import ResolutionStatus
+
+logger = structlog.get_logger(__name__)
 
 
 class SyncInstrumentMetadataRepository:
@@ -110,6 +113,25 @@ class SyncInstrumentMetadataRepository:
         except OperationalError as e:
             raise DatabaseConnectionError(f"Database connection failed: {e}") from e
 
+    def list_all(self) -> list[InstrumentMetadata]:
+        """Every metadata row, ordered by ticker (qualification-sync input).
+
+        Unpaginated by design: the sync converges the whole catalog in one pass and
+        a truncated read would silently leave rows out of sync. The table is one row
+        per ticker (~5k for the ETF universe), so a full read is a few milliseconds.
+
+        Returns:
+            All metadata rows, ordered by ticker ascending.
+
+        Raises:
+            DatabaseConnectionError: If the query fails (mirrors ``upsert``).
+        """
+        stmt = select(InstrumentMetadata).order_by(InstrumentMetadata.ticker)
+        try:
+            return list(self.session.execute(stmt).scalars().all())
+        except OperationalError as e:
+            raise DatabaseConnectionError(f"Database connection failed: {e}") from e
+
     def count_by_status(self) -> dict[ResolutionStatus, int]:
         """Count rows grouped by resolution status (Story 3.4 coverage gate).
 
@@ -166,6 +188,49 @@ class SyncInstrumentMetadataRepository:
             row.resolution_status = ResolutionStatus.RESOLVED
             row.resolved_at = resolved_at
             self.session.flush()
+            return "applied"
+        except OperationalError as e:
+            raise DatabaseConnectionError(f"Database connection failed: {e}") from e
+
+    def apply_venue_exclusion(self, ticker: str, reason: str, excluded_at: datetime) -> str:
+        """Mark a row EXCLUDED — the audited second exit from VENUE_UNRESOLVED.
+
+        For an instrument no authoritative source can qualify (delisted,
+        untradeable). ``venue`` is deliberately left ``None``: the point of an
+        exclusion is that no venue is known, and writing a placeholder would be the
+        guessed venue ADR-6 forbids. The row keeps its bars and stays
+        non-backtestable, but stops blocking the completeness gate.
+
+        Idempotent: a row already ``EXCLUDED`` is left untouched — no write, no
+        ``resolved_at`` churn. A ticker with no row is reported ``"unmatched"``.
+
+        ``reason`` is accepted for the structured log rather than persisted: the
+        git-tracked ``venue_exclusions.csv`` is the audit record, and duplicating
+        prose into a column would let the two drift. The status flip is what the
+        database needs to know.
+
+        Args:
+            ticker: Ticker to exclude (must already exist in the store).
+            reason: Operator's written justification (logged, not persisted).
+            excluded_at: Timestamp stamped on a row this call changes.
+
+        Returns:
+            One of ``"applied"``, ``"unchanged"``, or ``"unmatched"``.
+
+        Raises:
+            DatabaseConnectionError: If the query/flush fails (mirrors ``upsert``).
+        """
+        try:
+            row = self.get_by_ticker(ticker)
+            if row is None:
+                return "unmatched"
+            if row.resolution_status == ResolutionStatus.EXCLUDED:
+                return "unchanged"
+            row.venue = None
+            row.resolution_status = ResolutionStatus.EXCLUDED
+            row.resolved_at = excluded_at
+            self.session.flush()
+            logger.info("venue_exclusion_applied", ticker=ticker, reason=reason)
             return "applied"
         except OperationalError as e:
             raise DatabaseConnectionError(f"Database connection failed: {e}") from e

@@ -25,11 +25,15 @@ class VenueCoverage:
         venue_unresolved: Rows resolution ran on but could not assign a venue —
             the gate blocker.
         unresolved: Rows resolution has not yet been attempted for (transient).
+        excluded: Rows adjudicated unqualifiable via the exclusion register — an
+            audited gate exit, kept out of the ratio but always reported so the
+            size of the register stays visible.
     """
 
     resolved: int
     venue_unresolved: int
     unresolved: int
+    excluded: int = 0
 
     @classmethod
     def from_counts(cls, counts: dict[ResolutionStatus, int]) -> "VenueCoverage":
@@ -38,6 +42,7 @@ class VenueCoverage:
             resolved=counts.get(ResolutionStatus.RESOLVED, 0),
             venue_unresolved=counts.get(ResolutionStatus.VENUE_UNRESOLVED, 0),
             unresolved=counts.get(ResolutionStatus.UNRESOLVED, 0),
+            excluded=counts.get(ResolutionStatus.EXCLUDED, 0),
         )
 
     @property
@@ -48,7 +53,7 @@ class VenueCoverage:
     @property
     def total(self) -> int:
         """All metadata rows across every status."""
-        return self.resolved + self.venue_unresolved + self.unresolved
+        return self.resolved + self.venue_unresolved + self.unresolved + self.excluded
 
     @property
     def coverage_pct(self) -> float:
@@ -61,3 +66,38 @@ class VenueCoverage:
     def is_complete(self) -> bool:
         """The completeness gate: no ticker left VENUE_UNRESOLVED (no venue guessed)."""
         return self.venue_unresolved == 0
+
+
+@dataclass(frozen=True)
+class QualificationCoverage:
+    """Is the venue-resolved universe actually loadable? (the gate's second term)
+
+    Venue coverage alone was not enough. The venue verdict lives in
+    ``instrument_metadata`` while the identity every consumer loads bars by lives in
+    ``catalog_instruments.nautilus_id`` — and for a long time only the import
+    pipeline wrote the latter. So ``metadata apply-overrides`` could drive venue
+    coverage to 100% while ``backtest_loader`` still refused every ticker for want
+    of a ``nautilus_id``. A gate that passes on an unloadable universe is worse than
+    no gate, because it ends the investigation.
+
+    Attributes:
+        catalog: Catalog these counts were measured over.
+        resolved: RESOLVED tickers present in this catalog.
+        gap: How many of those still lack a ``nautilus_id``. Counts only RESOLVED
+            tickers — EXCLUDED and VENUE_UNRESOLVED rows are *supposed* to have a
+            NULL identity, so including them would flag correct state as broken.
+    """
+
+    catalog: str
+    resolved: int
+    gap: int
+
+    @property
+    def qualified(self) -> int:
+        """RESOLVED tickers that carry a loadable identity."""
+        return self.resolved - self.gap
+
+    @property
+    def is_complete(self) -> bool:
+        """Every resolved ticker is qualified — nothing resolved-but-unloadable."""
+        return self.gap == 0

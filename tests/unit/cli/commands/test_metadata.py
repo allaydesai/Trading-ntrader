@@ -4,13 +4,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from click.testing import CliRunner
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
 from src.cli.commands.metadata import _render_unresolved, metadata
 from src.db.exceptions import DatabaseConnectionError
 from src.db.models.catalog_instrument import CatalogInstrument
 from src.db.models.instrument_metadata import InstrumentMetadata
 from src.models.instrument_metadata import NA_SENTINEL, AssetType, ResolutionStatus
+from src.services.metadata.qualification_sync import QualificationSyncResult
 
 
 @pytest.fixture
@@ -48,6 +49,21 @@ def _patch_session_and_repo():
     session_patch = patch("src.cli.commands.metadata.get_sync_session", return_value=ctx)
     repo_patch = patch("src.cli.commands.metadata.SyncInstrumentMetadataRepository")
     return session_patch, repo_patch
+
+
+@pytest.fixture(autouse=True)
+def stub_catalog_repo():
+    """Neutral catalog repository for every test in this module.
+
+    ``apply-overrides`` and ``coverage`` both reach into catalog_instruments now
+    (for qualification sync and the gate's qualification term). Defaults are the
+    healthy case — no gap, no rows — so tests that are not about qualification stay
+    focused; the ones that are override these explicitly.
+    """
+    with patch("src.cli.commands.metadata.SyncCatalogInstrumentRepository") as cat:
+        cat.return_value.count_unqualified_resolved.return_value = 0
+        cat.return_value.iter_by_catalog.return_value = iter(())
+        yield cat
 
 
 @pytest.mark.unit
@@ -125,6 +141,9 @@ class TestMetadataApplyOverrides:
     def _patch_settings(self, path: str = "venue_overrides.csv"):
         settings = MagicMock()
         settings.firstrate.firstrate_venue_overrides_path = path
+        # Real strings, not MagicMocks: these reach Path() and a SQL parameter.
+        settings.firstrate.firstrate_venue_exclusions_path = "venue_exclusions.csv"
+        settings.firstrate.firstrate_catalog_name = "firstrate-etf"
         return patch("src.cli.commands.metadata.get_settings", return_value=settings)
 
     def test_populated_merges_and_prints_summary(self, runner):
@@ -150,15 +169,44 @@ class TestMetadataApplyOverrides:
         assert "1 applied" in result.output
         assert "ZZZ" in result.output  # unmatched surfaced
 
-    def test_empty_file_is_noop(self, runner):
+    def test_empty_file_with_sync_disabled_is_noop(self, runner):
+        """Nothing to apply and no sync requested — short-circuit before touching the DB."""
         with (
             self._patch_settings(),
             patch("src.cli.commands.metadata.load_venue_overrides", return_value={}),
+            patch("src.cli.commands.metadata.load_venue_exclusions", return_value={}),
+        ):
+            result = runner.invoke(metadata, ["apply-overrides", "--no-sync-catalog"])
+
+        assert result.exit_code == 0
+        assert "No venue decisions to apply" in result.output
+
+    def test_empty_file_still_syncs_qualification_by_default(self, runner):
+        """An empty override file must not skip the sync.
+
+        Qualification drift has causes other than a new override — a prior run that
+        died before syncing, or an import that never qualified. The sweep is
+        convergent, so running it on an empty register is exactly how that drift
+        gets healed.
+        """
+        session_patch, repo_patch = _patch_session_and_repo()
+        with (
+            self._patch_settings(),
+            patch("src.cli.commands.metadata.load_venue_overrides", return_value={}),
+            patch("src.cli.commands.metadata.load_venue_exclusions", return_value={}),
+            patch(
+                "src.cli.commands.metadata.sync_resolved_qualifications",
+                return_value=QualificationSyncResult(synced=7, cleared=1, unchanged=3),
+            ) as mock_sync,
+            session_patch,
+            repo_patch,
         ):
             result = runner.invoke(metadata, ["apply-overrides"])
 
         assert result.exit_code == 0
-        assert "No venue overrides to apply" in result.output
+        mock_sync.assert_called_once()
+        assert "7 synced" in result.output
+        assert "1 cleared" in result.output
 
     def test_malformed_file_degrades_gracefully(self, runner):
         from src.services.metadata.venue_overrides import VenueOverrideError
@@ -189,6 +237,153 @@ class TestMetadataApplyOverrides:
         assert result.exit_code == 0
         assert result.exception is None
         assert "Metadata DB not available" in result.output
+
+    def test_no_sync_catalog_skips_the_sweep(self, runner):
+        session_patch, repo_patch = _patch_session_and_repo()
+        with (
+            self._patch_settings(),
+            patch("src.cli.commands.metadata.load_venue_overrides", return_value={"SPY": "ARCA"}),
+            patch("src.cli.commands.metadata.load_venue_exclusions", return_value={}),
+            patch("src.cli.commands.metadata.merge_venue_overrides"),
+            patch("src.cli.commands.metadata.sync_resolved_qualifications") as mock_sync,
+            session_patch,
+            repo_patch,
+        ):
+            result = runner.invoke(metadata, ["apply-overrides", "--no-sync-catalog"])
+
+        assert result.exit_code == 0
+        mock_sync.assert_not_called()
+
+    def test_catalog_option_is_threaded_into_the_sync(self, runner):
+        session_patch, repo_patch = _patch_session_and_repo()
+        with (
+            self._patch_settings(),
+            patch("src.cli.commands.metadata.load_venue_overrides", return_value={}),
+            patch("src.cli.commands.metadata.load_venue_exclusions", return_value={}),
+            patch(
+                "src.cli.commands.metadata.sync_resolved_qualifications",
+                return_value=QualificationSyncResult(),
+            ) as mock_sync,
+            session_patch,
+            repo_patch,
+        ):
+            runner.invoke(metadata, ["apply-overrides", "--catalog", "firstrate-stocks"])
+
+        assert mock_sync.call_args.kwargs["catalog_name"] == "firstrate-stocks"
+
+    def test_exclusions_are_applied_and_summarised(self, runner):
+        from src.services.metadata.venue_exclusions import (
+            ExclusionRecord,
+            VenueExclusionMergeResult,
+        )
+
+        session_patch, repo_patch = _patch_session_and_repo()
+        record = ExclusionRecord(ticker="ZZZZ", reason="delisted", evidence="url")
+        with (
+            self._patch_settings(),
+            patch("src.cli.commands.metadata.load_venue_overrides", return_value={}),
+            patch("src.cli.commands.metadata.load_venue_exclusions", return_value={"ZZZZ": record}),
+            patch(
+                "src.cli.commands.metadata.merge_venue_exclusions",
+                return_value=VenueExclusionMergeResult(applied=1),
+            ),
+            patch(
+                "src.cli.commands.metadata.sync_resolved_qualifications",
+                return_value=QualificationSyncResult(),
+            ),
+            session_patch,
+            repo_patch,
+        ):
+            result = runner.invoke(metadata, ["apply-overrides"])
+
+        assert result.exit_code == 0
+        assert "Venue exclusions: 1 applied" in result.output
+
+    def test_no_exclusions_flag_skips_the_register(self, runner):
+        session_patch, repo_patch = _patch_session_and_repo()
+        with (
+            self._patch_settings(),
+            patch("src.cli.commands.metadata.load_venue_overrides", return_value={}),
+            patch("src.cli.commands.metadata.load_venue_exclusions") as mock_load,
+            patch(
+                "src.cli.commands.metadata.sync_resolved_qualifications",
+                return_value=QualificationSyncResult(),
+            ),
+            session_patch,
+            repo_patch,
+        ):
+            runner.invoke(metadata, ["apply-overrides", "--no-exclusions"])
+
+        mock_load.assert_not_called()
+
+    def test_override_shadowing_an_exclusion_is_reported(self, runner):
+        """A ticker in both registers is contradictory — the override wins, loudly."""
+        from src.services.metadata.venue_exclusions import ExclusionRecord
+
+        session_patch, repo_patch = _patch_session_and_repo()
+        record = ExclusionRecord(ticker="SPY", reason="delisted", evidence="url")
+        with (
+            self._patch_settings(),
+            patch("src.cli.commands.metadata.load_venue_overrides", return_value={"SPY": "ARCA"}),
+            patch("src.cli.commands.metadata.load_venue_exclusions", return_value={"SPY": record}),
+            patch("src.cli.commands.metadata.merge_venue_overrides"),
+            patch(
+                "src.cli.commands.metadata.sync_resolved_qualifications",
+                return_value=QualificationSyncResult(),
+            ),
+            session_patch,
+            repo_patch,
+        ):
+            result = runner.invoke(metadata, ["apply-overrides"])
+
+        assert "overridden by a resolved venue" in result.output
+        assert "SPY" in result.output
+
+    def test_malformed_exclusion_file_degrades_gracefully(self, runner):
+        from src.services.metadata.venue_exclusions import VenueExclusionError
+
+        with (
+            self._patch_settings(),
+            patch("src.cli.commands.metadata.load_venue_overrides", return_value={}),
+            patch(
+                "src.cli.commands.metadata.load_venue_exclusions",
+                side_effect=VenueExclusionError("header must be exactly 'ticker,reason,evidence'"),
+            ),
+        ):
+            result = runner.invoke(metadata, ["apply-overrides"])
+
+        assert result.exit_code == 0
+        assert result.exception is None
+        assert "not applied" in result.output
+
+    def test_sync_failure_aborts_the_whole_transaction(self, runner):
+        """The override merge must not survive a failed sync.
+
+        Committing the venue without the identity is precisely the half-applied
+        state that produces a green gate over an unloadable universe.
+        """
+        session = MagicMock()
+        ctx = MagicMock()
+        ctx.__enter__.return_value = session
+        ctx.__exit__.return_value = False
+        with (
+            self._patch_settings(),
+            patch("src.cli.commands.metadata.load_venue_overrides", return_value={"SPY": "ARCA"}),
+            patch("src.cli.commands.metadata.load_venue_exclusions", return_value={}),
+            patch("src.cli.commands.metadata.merge_venue_overrides"),
+            patch(
+                "src.cli.commands.metadata.sync_resolved_qualifications",
+                side_effect=SQLAlchemyError("boom"),
+            ),
+            patch("src.cli.commands.metadata.get_sync_session", return_value=ctx),
+            patch("src.cli.commands.metadata.SyncInstrumentMetadataRepository"),
+        ):
+            result = runner.invoke(metadata, ["apply-overrides"])
+
+        assert result.exit_code == 0
+        assert result.exception is None
+        assert "Metadata DB not available" in result.output
+        session.commit.assert_not_called()
 
 
 @pytest.mark.unit
@@ -272,6 +467,61 @@ class TestMetadataCoverage:
 
         assert result.exit_code == 2
         assert "Metadata DB not available" in result.output
+
+
+@pytest.mark.unit
+class TestCoverageQualificationTerm:
+    """The gate's second term: a resolved universe that is actually loadable."""
+
+    def test_qualification_gap_fails_the_gate_despite_full_venue_coverage(
+        self, runner, stub_catalog_repo
+    ):
+        """The exact pre-fix defect: 100% venue coverage, nothing loadable."""
+        session_patch, repo_patch = _patch_session_and_repo()
+        stub_catalog_repo.return_value.count_unqualified_resolved.return_value = 3451
+        with session_patch, repo_patch as mock_repo:
+            mock_repo.return_value.count_by_status.return_value = {ResolutionStatus.RESOLVED: 4612}
+            result = runner.invoke(metadata, ["coverage", "--gate"])
+
+        assert result.exit_code == 1
+        assert "COMPLETE" in result.output  # venue term passes...
+        assert "UNQUALIFIED" in result.output  # ...qualification term does not
+        assert "3451 of 4612" in result.output
+
+    def test_both_terms_clean_passes(self, runner, stub_catalog_repo):
+        session_patch, repo_patch = _patch_session_and_repo()
+        stub_catalog_repo.return_value.count_unqualified_resolved.return_value = 0
+        with session_patch, repo_patch as mock_repo:
+            mock_repo.return_value.count_by_status.return_value = {ResolutionStatus.RESOLVED: 10}
+            result = runner.invoke(metadata, ["coverage", "--gate"])
+
+        assert result.exit_code == 0
+        assert "gate PASS" in result.output
+        assert "QUALIFIED" in result.output
+
+    def test_excluded_rows_are_surfaced_not_hidden(self, runner):
+        session_patch, repo_patch = _patch_session_and_repo()
+        with session_patch, repo_patch as mock_repo:
+            mock_repo.return_value.count_by_status.return_value = {
+                ResolutionStatus.RESOLVED: 8,
+                ResolutionStatus.EXCLUDED: 2,
+            }
+            result = runner.invoke(metadata, ["coverage", "--gate"])
+
+        assert result.exit_code == 0
+        assert "Excluded (EXCLUDED): 2" in result.output
+        assert "venue_exclusions.csv" in result.output
+
+    def test_catalog_option_is_threaded_through(self, runner, stub_catalog_repo):
+        session_patch, repo_patch = _patch_session_and_repo()
+        with session_patch, repo_patch as mock_repo:
+            mock_repo.return_value.count_by_status.return_value = {ResolutionStatus.RESOLVED: 1}
+            result = runner.invoke(metadata, ["coverage", "--catalog", "firstrate-stocks"])
+
+        assert result.exit_code == 0
+        stub_catalog_repo.return_value.count_unqualified_resolved.assert_called_once_with(
+            "firstrate-stocks"
+        )
 
 
 @pytest.mark.unit

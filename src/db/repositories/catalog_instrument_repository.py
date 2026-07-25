@@ -4,6 +4,7 @@ Provides both async (web) and sync (CLI) access to catalog instrument
 metadata, following the project's dual repository pattern.
 """
 
+from collections.abc import Iterator
 from typing import Dict, List, Optional, Tuple
 
 from sqlalchemy import and_, func, select
@@ -13,6 +14,8 @@ from sqlalchemy.orm import Session
 
 from src.db.exceptions import DatabaseConnectionError, DuplicateRecordError
 from src.db.models.catalog_instrument import CatalogInstrument
+from src.db.models.instrument_metadata import InstrumentMetadata
+from src.models.instrument_metadata import ResolutionStatus
 
 
 class CatalogInstrumentRepository:
@@ -372,6 +375,76 @@ class SyncCatalogInstrumentRepository:
         )
         result = self.session.execute(stmt)
         return list(result.scalars().all())
+
+    def iter_by_catalog(self, catalog_name: str) -> Iterator[CatalogInstrument]:
+        """Stream every instrument in a catalog, ordered by ticker.
+
+        Deliberately separate from ``list_by_catalog``, which defaults to
+        ``limit=100`` and would silently truncate a 4,612-row catalog — a sweep that
+        needs every row must not be able to reach for a paginated reader by mistake.
+        Streams in batches of 500 so the whole catalog is never materialised at once.
+
+        Args:
+            catalog_name: Catalog to stream.
+
+        Yields:
+            Each ``CatalogInstrument`` in the catalog, ticker ascending.
+
+        Raises:
+            DatabaseConnectionError: If the query fails (mirrors ``upsert``).
+        """
+        stmt = (
+            select(CatalogInstrument)
+            .where(CatalogInstrument.catalog_name == catalog_name)
+            .order_by(CatalogInstrument.ticker)
+            .execution_options(yield_per=500)
+        )
+        try:
+            yield from self.session.execute(stmt).scalars()
+        except OperationalError as e:
+            raise DatabaseConnectionError(f"Database connection failed: {e}") from e
+
+    def count_unqualified_resolved(self, catalog_name: str) -> int:
+        """Count RESOLVED tickers that still lack a ``nautilus_id`` — the gate's gap term.
+
+        This is the defect the coverage gate could not see: venue coverage can read
+        100% while every ticker is unloadable, because the venue lives in
+        ``instrument_metadata`` and the identity consumers load by lives here. The
+        join is the only honest way to ask "is the resolved universe actually
+        loadable?".
+
+        Deliberately counts only RESOLVED tickers: EXCLUDED and VENUE_UNRESOLVED
+        rows are *supposed* to have a NULL identity, so a blanket NULL count would
+        conflate a correct exclusion with a broken qualification.
+
+        Args:
+            catalog_name: Catalog to check.
+
+        Returns:
+            Number of RESOLVED tickers in this catalog whose ``nautilus_id`` is NULL.
+
+        Raises:
+            DatabaseConnectionError: If the query fails (mirrors ``upsert``).
+        """
+        stmt = (
+            select(func.count())
+            .select_from(CatalogInstrument)
+            .join(
+                InstrumentMetadata,
+                InstrumentMetadata.ticker == CatalogInstrument.ticker,
+            )
+            .where(
+                and_(
+                    CatalogInstrument.catalog_name == catalog_name,
+                    InstrumentMetadata.resolution_status == ResolutionStatus.RESOLVED,
+                    CatalogInstrument.nautilus_id.is_(None),
+                )
+            )
+        )
+        try:
+            return self.session.execute(stmt).scalar_one()
+        except OperationalError as e:
+            raise DatabaseConnectionError(f"Database connection failed: {e}") from e
 
     def search(self, query: str, limit: int = 50) -> List[CatalogInstrument]:
         """Search instruments by partial ticker match.

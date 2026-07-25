@@ -158,6 +158,12 @@ class FirstRateSettings(BaseSettings):
         default="venue_overrides.csv",
         description="Path to the git-tracked venue overrides CSV (header: ticker,venue)",
     )
+    firstrate_venue_exclusions_path: str = Field(
+        default="venue_exclusions.csv",
+        description=(
+            "Path to the git-tracked venue exclusion register (header: ticker,reason,evidence)"
+        ),
+    )
 
     model_config = {
         "env_file": ".env",
