@@ -29,3 +29,12 @@ collide with the next effort's story numbering the same way Phase 1 did.
 `DataCatalogService` per-request cache-scan cost, and a 961-line integration test file
 over the 500-line guideline. Both were explicitly deferred to `main` as follow-ups, not
 resolved — check `deferred-work.md` before assuming they're closed.
+
+## Harness runs
+
+`harness-runs/` — leftover artifacts from an external automation harness run against
+Epic 2 (`harness-story-2.1/2.2/2.3-spec.md`) and Epic 3 (`review_story31/32/33.diff`,
+originally dotfiles at the repo root). Moved here 2026-07-26, same reason as everything
+else in this archive: story numbering is reused across phases, and these referenced
+`_bmad-output/planning-artifacts/epics.md` directly, which would otherwise collide with
+the next phase's Epic 2/3 work.
