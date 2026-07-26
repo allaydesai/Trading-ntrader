@@ -183,6 +183,18 @@ Exit codes: `0` success · `1` partial (some bar files failed) · `2` fatal (bad
 | `report summary <result-id>` | Quick performance summary |
 | `report generate --result-id <id> --format <fmt>` | Generate detailed report |
 
+### Catalog Commands
+
+| Command | Description |
+|---------|-------------|
+| `catalog restamp-venues --catalog <name> --dry-run` | Preview moving a named catalog's bar partitions onto their IBKR-corrected venues (writes a rollback-manifest plan JSON, moves nothing) |
+| `catalog restamp-venues --catalog <name>` | Apply a venue re-stamp plan (partition dirs + parquet footer metadata) |
+| `catalog validate-fmp` | Spot-check the default named catalog's daily ETF closes against FMP's independent historical prices for 8 liquid ETFs (SPY, QQQ, IWM, GLD, XLF, TLT, VTI, ARKK), last 12 months |
+| `catalog validate-fmp --catalog <name> --tickers SPY,QQQ` | Validate a specific catalog and ticker subset |
+| `catalog validate-fmp --months 6 --mean-tol-pct 0.2 --max-tol-pct 2` | Override the lookback window and deviation tolerances |
+
+> `validate-fmp` requires `FMP_API_KEY` (see Configuration below). It prints a per-ticker Rich table plus a JSON evidence file under `logs/fmp-validation/`, and exits non-zero if any ticker's mean/max deviation or matched-day coverage breaches tolerance.
+
 ## Common Workflows
 
 ### 1. Quick Test with Sample Data
@@ -408,6 +420,8 @@ After placing the file in `src/core/strategies/custom/`, the strategy will be au
 | `NAUTILUS_PATH` | Catalog path read by `data list`, backtests, and the explorer | `./data/catalog` |
 | `FIRSTRATE_SOURCE_PATH` | Default FirstRate source directory | - |
 | `FIRSTRATE_CATALOG_NAME` | Default catalog name for FirstRate imports | `firstrate-etf` |
+| `FMP_API_KEY` | Financial Modeling Prep API key (metadata import + `catalog validate-fmp`) | - |
+| `FMP_RATE_LIMIT` | Max FMP requests/min | `300` |
 | `KRAKEN_API_KEY` | Kraken API key | - |
 | `KRAKEN_API_SECRET` | Kraken API secret (base64) | - |
 | `KRAKEN_RATE_LIMIT` | Kraken requests/sec | `10` |

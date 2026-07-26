@@ -15,6 +15,7 @@ dict (``data[0]``) or ``None``; ``None`` covers both the empty-array
 
 import time
 from collections import deque
+from datetime import date
 from typing import Any, Callable
 
 import httpx
@@ -140,6 +141,64 @@ class FMPClient:
                 return self._degraded(ticker, error=str(exc))
             return self._parse_payload(resp, ticker)
         return None
+
+    def fetch_historical_eod(
+        self, ticker: str, start: date, end: date
+    ) -> list[dict[str, Any]] | None:
+        """Fetch daily EOD OHLCV rows for ``[start, end]``; never raises.
+
+        Returns the raw list of FMP row dicts (order as returned by FMP, most
+        recent first). Returns ``[]`` when FMP validly reports zero trading
+        days in the window — unlike ``fetch_profile``, an empty array here is
+        NOT "unknown ticker"; it is a normal result for a window with no
+        overlap with the ticker's trading history. Returns ``None`` only on
+        true degradation: retries exhausted, malformed body, or a
+        non-transient HTTP error.
+        """
+        for attempt in range(self.max_retries + 1):
+            self._rate_limiter.acquire()
+            try:
+                resp = self._get_client().get(
+                    "/historical-price-eod/full",
+                    params={
+                        "symbol": ticker,
+                        "from": start.isoformat(),
+                        "to": end.isoformat(),
+                        "apikey": self._settings.fmp_api_key,
+                    },
+                )
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                status = exc.response.status_code
+                if status == 429 or status >= 500:
+                    if self._retry(attempt):
+                        continue
+                    self._degraded(ticker, status_code=status, error=f"HTTP {status}")
+                    return None
+                self._degraded(ticker, level="error", status_code=status, error=f"HTTP {status}")
+                return None
+            except (httpx.TimeoutException, httpx.TransportError) as exc:
+                if self._retry(attempt):
+                    continue
+                self._degraded(ticker, error=str(exc))
+                return None
+            return self._parse_historical_payload(resp, ticker)
+        return None
+
+    def _parse_historical_payload(
+        self, resp: httpx.Response, ticker: str
+    ) -> list[dict[str, Any]] | None:
+        """Map the FMP historical-EOD JSON body to a row list, or ``None`` on malformed body."""
+        try:
+            data = resp.json()
+        except ValueError:
+            self._degraded(ticker, level="error", error="invalid JSON body")
+            return None
+        if not isinstance(data, list):
+            self._degraded(ticker, level="error", error="unexpected payload shape")
+            return None
+        logger.debug("fmp_historical_eod_fetched", ticker=ticker, row_count=len(data))
+        return data
 
     def _retry(self, attempt: int) -> bool:
         """Sleep with exponential backoff and return True if a retry remains."""
