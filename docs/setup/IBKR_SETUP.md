@@ -42,7 +42,7 @@ Ensure your `.env` file has the correct settings:
 IBKR_HOST=127.0.0.1
 IBKR_PORT=7497              # 7497 for TWS paper trading
 IBKR_CLIENT_ID=10           # Can be any number (1-999)
-TRADING_MODE=paper
+IBKR_TRADING_MODE=paper     # This is the variable the app reads — see note below
 
 # IBKR Credentials
 TWS_USERNAME=your_username
@@ -52,6 +52,12 @@ TWS_ACCOUNT=DU1234567       # Your paper trading account
 # Database
 DATABASE_URL=postgresql://ntrader:ntrader_dev_2025@localhost:5432/trading_ntrader
 ```
+
+> **`IBKR_TRADING_MODE`, not `TRADING_MODE`.** The application reads
+> `IBKR_TRADING_MODE` (the `ibkr_trading_mode` field on `IBKRSettings`). `TRADING_MODE` is the
+> **ib-gateway container's** own variable: under Docker, compose maps it in
+> (`IBKR_TRADING_MODE: ${TRADING_MODE:-paper}`), but in a bare-metal `.env` run there is no such
+> mapping and `TRADING_MODE` never reaches the app. If you run the ib-gateway container, set both.
 
 ## Step 3: Test Connection
 
@@ -147,7 +153,7 @@ Fetch Summary
 **Solutions:**
 1. Verify credentials in `.env` are correct
 2. Ensure you're using paper trading account (DU prefix)
-3. Check TRADING_MODE is set to "paper"
+3. Check `IBKR_TRADING_MODE` is set to "paper" (not `TRADING_MODE` — see Step 2)
 
 ### Market Data Not Available
 

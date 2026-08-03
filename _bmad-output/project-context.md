@@ -146,7 +146,7 @@ _This file contains critical rules and patterns that AI agents must follow when 
 
 #### Security
 - Never commit `.env` files — they contain real API keys
-- Never change `TRADING_MODE` to `live` without explicit user confirmation
+- Never change `IBKR_TRADING_MODE` to `live` without explicit user confirmation. This is the variable `IBKRSettings.ibkr_trading_mode` actually reads — `TRADING_MODE` is the ib-gateway container's own variable, which compose maps in (`docker-compose.yml:86`); on a bare-metal `.env` run it does not reach the app at all
 - Kraken key/secret must always be set as a pair (model validator enforces this)
 
 #### Data Pipeline

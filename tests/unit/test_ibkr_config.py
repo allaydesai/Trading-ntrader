@@ -83,6 +83,74 @@ class TestIBKRConfiguration:
         assert enum_value == MarketDataTypeEnum.DELAYED_FROZEN
 
     @pytest.mark.unit
+    def test_account_id_hidden_in_str_repr(self):
+        """Account identifier must not appear in str() or repr() of settings."""
+        from src.config import IBKRSettings
+
+        # Arrange
+        account = "DU1234567"
+        settings = IBKRSettings(_env_file=None, tws_account=account)
+
+        # Act & Assert
+        assert account not in str(settings)
+        assert account not in repr(settings)
+
+    @pytest.mark.unit
+    def test_password_hidden_in_str_repr(self):
+        """Password must not appear in str() or repr() of settings."""
+        from src.config import IBKRSettings
+
+        # Arrange
+        password = "super-secret-password"
+        settings = IBKRSettings(_env_file=None, tws_password=password)
+
+        # Act & Assert
+        assert password not in str(settings)
+        assert password not in repr(settings)
+
+    @pytest.mark.unit
+    def test_real_money_account_defaults_to_empty(self, monkeypatch):
+        """Real-money declaration defaults to empty (paper only)."""
+        from src.config import IBKRSettings
+
+        # Arrange — clear env vars and skip .env file
+        monkeypatch.delenv("NTRADER_REAL_MONEY_ACCOUNT", raising=False)
+
+        # Act
+        settings = IBKRSettings(_env_file=None)
+
+        # Assert
+        assert settings.ntrader_real_money_account == ""
+
+    @pytest.mark.unit
+    def test_real_money_account_loads_from_env(self, monkeypatch):
+        """Real-money declaration is read from NTRADER_REAL_MONEY_ACCOUNT."""
+        from src.config import IBKRSettings
+
+        # Arrange
+        monkeypatch.setenv("NTRADER_REAL_MONEY_ACCOUNT", "U1234567")
+
+        # Act
+        settings = IBKRSettings(_env_file=None)
+
+        # Assert
+        assert settings.ntrader_real_money_account == "U1234567"
+
+    @pytest.mark.unit
+    def test_real_money_account_hidden_in_str_repr(self, monkeypatch):
+        """Real-money account must not appear in str() or repr() of settings."""
+        from src.config import IBKRSettings
+
+        # Arrange
+        monkeypatch.delenv("NTRADER_REAL_MONEY_ACCOUNT", raising=False)
+        account = "U1234567"
+        settings = IBKRSettings(_env_file=None, ntrader_real_money_account=account)
+
+        # Act & Assert
+        assert account not in str(settings)
+        assert account not in repr(settings)
+
+    @pytest.mark.unit
     def test_market_data_type_enum_all_values(self, monkeypatch):
         """Test all market data type enum conversions."""
         from src.config import IBKRSettings

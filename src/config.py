@@ -29,8 +29,17 @@ class IBKRSettings(BaseSettings):
 
     # Credentials (from environment)
     tws_username: str = Field(default="", description="IBKR username")
-    tws_password: str = Field(default="", description="IBKR password")
-    tws_account: str = Field(default="", description="IBKR account ID")
+    tws_password: str = Field(default="", repr=False, description="IBKR password")
+    tws_account: str = Field(default="", repr=False, description="IBKR account ID")
+    ntrader_real_money_account: str = Field(
+        default="",
+        repr=False,
+        description=(
+            "Exact IBKR account ID the operator has explicitly authorized for real-money "
+            "trading. Empty = paper only. Must be accompanied by the CLI --real-money flag; "
+            "neither declaration alone permits a real-money connection."
+        ),
+    )
 
     # Timeouts
     ibkr_connection_timeout: int = Field(
