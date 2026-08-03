@@ -1,0 +1,142 @@
+# generated: 2026-08-03
+# last_updated: 2026-08-03 (Phase 3 sprint board generated from planning-artifacts/epics.md — Paper Trading. 5 epics, 35 stories, all backlog; no story files created yet. Phase 1 (Stocks) and Phase 2 (ETFs) sprint boards are archived under archive/phase-1-stocks/ and archive/phase-2-etfs/. NOTE: epic-1..epic-5 keys are REUSED for Phase 3 paper-trading work — they are NOT the completed Phase 1/2 epics; those done-records live in the archive + epic-N-retro-*.md files.)
+# project: Trading-ntrader
+# project_key: NOKEY
+# tracking_system: file-system
+# story_location: _bmad-output/implementation-artifacts
+
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+#
+# Epic Status Transitions:
+#   - backlog → in-progress: Automatically when first story is created (via create-story)
+#   - in-progress → done: Manually when all stories reach 'done' status
+#
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - ready-for-dev: Story file created in stories folder
+#   - in-progress: Developer actively working on implementation
+#   - review: Ready for code review (via Dev's code-review workflow)
+#   - done: Story completed
+#
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective has been completed
+#
+# WORKFLOW NOTES:
+# ===============
+# - Epic transitions to 'in-progress' automatically when first story is created
+# - Stories can be worked in parallel if team capacity allows
+# - SM typically creates next story after previous one is 'done' to incorporate learnings
+# - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
+
+generated: 2026-08-03
+last_updated: 2026-08-03
+project: Trading-ntrader
+project_key: NOKEY
+tracking_system: file-system
+story_location: _bmad-output/implementation-artifacts
+
+development_status:
+  # ==========================================================================
+  # PHASE 3 — Paper Trading (Live IBKR paper sessions + backtest comparison)
+  # Source: _bmad-output/planning-artifacts/epics.md
+  # Readiness: READY (implementation-readiness-report-2026-08-03.md — 0 critical, 0 major)
+  #
+  # Dependency chain (strictly linear, forward-only):
+  #   E1 (connect + gate) → E2 (session identity, lifecycle, migration, trader_id)
+  #     → E3 (orders + trade capture) → E4 (reconcile + resume) → E5 (seal + compare)
+  #
+  # Hard cross-epic constraint: E3 CANNOT start before E2 — deterministic client order
+  # IDs (NFR6 duplicate-prevention) derive from the session-stable trader_id that E2's
+  # Redis cache namespace establishes.
+  #
+  # Sequencing principles (do not rearrange): riskiest assumption first (the live IB
+  # adapter is unproven in this repo, so E1 exercises it) and safety before capability
+  # (the real-money gate ships before any order-submitting code path exists).
+  #
+  # Phase gate is MACHINERY-COMPLETE, not sample-complete: ≥1 round trip, 0
+  # reconciliation discrepancy, ≥1 stop/restart with an open position, 1 sealed session
+  # rendering in the existing views. Trade-sample accumulation is post-sign-off ops.
+  #
+  # epic-1..epic-5 keys are REUSED from Phases 1 and 2 but track DIFFERENT work.
+  # ==========================================================================
+
+  # Epic 1: Live Broker Connection & Real-Money Safety Gate
+  # FR1–FR12 · Standalone: connects to IBKR paper, streams real-time RTH bars, refuses a
+  # live account with a distinct exit code. No orders exist yet — that is the point.
+  epic-1: backlog
+  1-1-refuse-a-real-money-account-before-anything-connects: backlog
+  1-2-isolate-the-live-client-id-from-the-historical-data-client: backlog
+  1-3-assemble-and-start-a-tradingnode-against-ibkr-paper: backlog
+  1-4-verify-the-connected-account-is-a-paper-account-before-trading-starts: backlog
+  1-5-receive-real-time-rth-bars-for-a-configured-instrument: backlog
+  1-6-detect-connection-loss-and-withhold-trading-permission: backlog
+  1-7-check-broker-connectivity-and-the-gate-from-the-cli: backlog
+  epic-1-retrospective: optional
+
+  # Epic 2: Paper Trading Sessions That Outlive the Process
+  # FR13–FR22, FR48–FR53 · Standalone: a named session runs, observes bars, stops, and
+  # restarts under the same identity. Still no orders.
+  # Owns the SINGLE Alembic migration for the whole phase (Story 2.2): trading_sessions
+  # (incl. G1 heartbeat cols), backtest_runs.run_type, trades.session_id,
+  # trades.backtest_run_id → nullable + CHECK. run_type/session_id aren't consumed until
+  # E5/E3 — deliberate, self-justified exception to epic-scoped schema change.
+  epic-2: backlog
+  2-1-define-a-session-as-a-list-of-strategy-specifications: backlog
+  2-2-create-a-named-session-with-an-immutable-specification: backlog
+  2-3-move-a-session-between-states-through-one-guarded-path: backlog
+  2-4-give-each-session-its-own-durable-engine-cache: backlog
+  2-5-start-a-session-in-the-foreground-with-an-ordered-startup-sequence: backlog
+  2-6-stop-a-session-without-ending-it-and-without-touching-positions: backlog
+  2-7-keep-one-failing-strategy-from-taking-down-the-session: backlog
+  2-8-see-what-a-session-is-doing-without-reading-logs: backlog
+  epic-2-retrospective: optional
+
+  # Epic 3: Live Order Execution & Trade Capture
+  # FR23–FR31 · Standalone: the first complete round trip — entry submitted → filled →
+  # position opened → exit filled → trade persisted with real fills and real commission.
+  # BLOCKED ON E2's trader_id (deterministic client order IDs). Story 3.1 removes
+  # close_all_positions() from on_stop() — must land before E4's stop/restart cycle, or
+  # every daily stop manufactures a fake round trip.
+  epic-3: backlog
+  3-1-stop-trading-without-manufacturing-an-exit: backlog
+  3-2-submit-a-strategys-orders-to-the-broker: backlog
+  3-3-track-every-order-through-its-full-lifecycle: backlog
+  3-4-never-resubmit-an-order-that-is-already-working: backlog
+  3-5-aggregate-partial-fills-into-one-position: backlog
+  3-6-persist-each-trade-the-moment-it-closes: backlog
+  3-7-keep-trading-after-a-rejection: backlog
+  epic-3-retrospective: optional
+
+  # Epic 4: Stop, Restart & Resume Mid-Position
+  # FR32–FR39 · Standalone: a session survives a full process stop/restart WHILE holding
+  # an open position and resumes mid-position with warm indicators and broker-confirmed
+  # state, no artificial exit. The phase's truth-test (external-authority check).
+  epic-4: backlog
+  4-1-read-the-brokers-authoritative-view-of-positions-and-cash: backlog
+  4-2-reconcile-against-the-broker-before-any-strategy-trades: backlog
+  4-3-keep-runtime-state-aligned-with-the-broker: backlog
+  4-4-warm-indicators-from-history-before-the-live-stream-starts: backlog
+  4-5-resume-a-strategy-mid-position: backlog
+  4-6-check-positions-and-cash-against-ibkr-on-demand: backlog
+  4-7-absorb-corporate-actions-through-broker-authoritative-state: backlog
+  epic-4-retrospective: optional
+
+  # Epic 5: Seal a Session & Compare It Against Its Backtest
+  # FR40–FR47 · Standalone: a sealed paper session sits next to its backtest in the same
+  # table, comparable at a glance, with ZERO UI changes — a success criterion, not an
+  # omission. Scope discipline: any new metrics table/model/view invented for paper
+  # results is an FR42 violation and must be rejected in review.
+  epic-5: backlog
+  5-1-compute-metrics-for-a-live-host-through-the-existing-extractor: backlog
+  5-2-reconstruct-a-sealed-sessions-equity-curve-from-its-trades: backlog
+  5-3-seal-a-stopped-session-into-a-comparable-run-record: backlog
+  5-4-record-the-conditions-the-session-actually-ran-under: backlog
+  5-5-handle-open-positions-at-seal-time-explicitly: backlog
+  5-6-read-a-paper-session-beside-its-backtest-in-the-existing-views: backlog
+  epic-5-retrospective: optional
