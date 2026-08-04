@@ -56,3 +56,28 @@ it was not actioned at the time. Archived with the phase; a fresh file opens wit
   produce — passes the prefix check while the configuration also names a real-money account. No delimiter
   rejection, no length bound, no test covering a non-atomic value. Speculative: depends on whether any
   downstream consumer accepts a list, which no current code does.
+
+## Deferred from: story-1.2 (2026-08-04)
+
+- **`DataCatalogService.ibkr_client` reads client settings from `os.environ` directly, not from typed
+  settings** — `src/services/data_catalog.py:135-141` builds host/port/client_id out of
+  `os.environ.get(...)` with hardcoded string fallbacks and its own inline-comment stripping, bypassing
+  `IBKRSettings` entirely. Two consequences: CLAUDE.md's "never hardcode IBKR connection details" rule is
+  violated in the one place that actually opens a historical connection, and the new
+  `validate_client_ids_distinct` model validator (`src/config.py`) cannot see this path at all — it
+  compares settings fields, and this code never constructs settings. A stale `IBKR_CLIENT_ID=10` exported
+  in a shell would still put the catalog fetcher on the live session's reserved ID with no error raised.
+  Story 1.2 changed the one fallback literal `"10"` → `"1"` to align the unset-env case (AC #5) and
+  stopped there: routing this through `settings.ibkr.ibkr_client_id` changes the catalog import path's
+  configuration source, which is outside FR5's footprint. The port fallback (`7497`) has the same shape
+  and is equally stale — `.env` and `docker-compose.yml` both use `4002` for Gateway. Fix both together.
+
+- **The equality validator cannot see the historical client's rotation range** —
+  `validate_client_ids_distinct` compares configured bases only, but `IBKRHistoricalClient.connect()`
+  rotates `base + 1 .. base + 5` on connect timeouts (`src/services/ibkr_client.py:188-219`), so
+  `IBKR_CLIENT_ID=8` with `IBKR_LIVE_CLIENT_ID=10` passes validation while its effective range 8–13
+  swallows both the live ID and reconcile's `+ 1`. Story 1.2's AC #2 specifies equality and nothing else,
+  and the scope note explicitly forbids widening it here, so the gap is documented in
+  `docs/setup/IBKR_SETUP.md` instead. Open question for Allay: should the validator reject
+  `ibkr_client_id <= ibkr_live_client_id + 1 <= ibkr_client_id + 5` (range overlap) rather than bare
+  equality, and should either field carry `ge=1, le=999` bounds? Both were deliberately left out.

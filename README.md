@@ -409,7 +409,8 @@ After placing the file in `src/core/strategies/custom/`, the strategy will be au
 | `DATABASE_URL` | PostgreSQL connection string | Required |
 | `IBKR_HOST` | IBKR TWS/Gateway host | `127.0.0.1` |
 | `IBKR_PORT` | IBKR port (7497=paper, 7496=live) | `7497` |
-| `IBKR_CLIENT_ID` | Client ID for IBKR connection | `1` |
+| `IBKR_CLIENT_ID` | Client ID for historical data fetch (rotates `1`–`6` on connect retry) | `1` |
+| `IBKR_LIVE_CLIENT_ID` | Client ID for the live trading session; reconcile uses `+ 1`. Must differ from `IBKR_CLIENT_ID` | `10` |
 | `TWS_USERNAME` | IBKR username | - |
 | `TWS_PASSWORD` | IBKR password | - |
 | `TWS_ACCOUNT` | IBKR account ID | - |

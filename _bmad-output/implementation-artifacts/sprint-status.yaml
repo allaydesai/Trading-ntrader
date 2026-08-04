@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-08-03
-last_updated: 2026-08-03 (Story 1.1 code-reviewed and closed → done; 3 decisions resolved, all 13 patches applied, 5 items deferred to deferred-work.md; unit suite 1539 passed, live_gate.py 100%)
+last_updated: 2026-08-04 (Story 1.2 implemented → review. Task 0's blocking prerequisite was resolved first: .env:11 IBKR_CLIENT_ID 10 → 1, approved by Allay as a one-off shell write since .env* is hook-protected; its origin was traced to docs/setup/IBKR_SETUP.md:44, which is now corrected so the value cannot be reintroduced. Delivered: ibkr_live_client_id field + validate_client_ids_distinct model validator, 8 new unit tests (1547 total, baseline was 1539), reservation propagated to .env.example / docker-compose.yml / IBKR_SETUP.md / README.md, and the DataCatalogService unset-env fallback aligned to 1. Two items deferred under "Deferred from: story-1.2" — the os.environ-vs-typed-settings gap in DataCatalogService, and the fact that the validator compares configured bases only and so cannot see the historical client's 1-6 rotation range.)
 project: Trading-ntrader
 project_key: NOKEY
 tracking_system: file-system
@@ -71,7 +71,7 @@ development_status:
   # live account with a distinct exit code. No orders exist yet — that is the point.
   epic-1: in-progress
   1-1-refuse-a-real-money-account-before-anything-connects: done
-  1-2-isolate-the-live-client-id-from-the-historical-data-client: backlog
+  1-2-isolate-the-live-client-id-from-the-historical-data-client: review
   1-3-assemble-and-start-a-tradingnode-against-ibkr-paper: backlog
   1-4-verify-the-connected-account-is-a-paper-account-before-trading-starts: backlog
   1-5-receive-real-time-rth-bars-for-a-configured-instrument: backlog

@@ -17,7 +17,24 @@ class IBKRSettings(BaseSettings):
     # Connection settings
     ibkr_host: str = Field(default="127.0.0.1", description="IB Gateway/TWS host address")
     ibkr_port: int = Field(default=7497, description="Connection port (7497=TWS paper)")
-    ibkr_client_id: int = Field(default=1, description="Unique client identifier")
+    ibkr_client_id: int = Field(
+        default=1,
+        description=(
+            "Client ID for the historical data client (catalog fetch). Reservation: "
+            "historical = ibkr_client_id, which rotates through ibkr_client_id + 1 .. "
+            "ibkr_client_id + 5 on connect retries, so its effective range is 1-6 at the "
+            "default. Must differ from ibkr_live_client_id."
+        ),
+    )
+    ibkr_live_client_id: int = Field(
+        default=10,
+        description=(
+            "Client ID for the live trading session's IBKR data + execution clients. "
+            "Reservation: historical fetch = ibkr_client_id (which rotates up to "
+            "ibkr_client_id + 5 on connect retries), live session = ibkr_live_client_id, "
+            "on-demand reconcile = ibkr_live_client_id + 1. Must differ from ibkr_client_id."
+        ),
+    )
 
     # Gateway mode
     ibkr_trading_mode: Literal["paper", "live"] = Field(
@@ -78,6 +95,23 @@ class IBKRSettings(BaseSettings):
         return market_data_map.get(
             self.ibkr_market_data_type.upper(), MarketDataTypeEnum.DELAYED_FROZEN
         )
+
+    @model_validator(mode="after")
+    def validate_client_ids_distinct(self) -> "IBKRSettings":
+        """Live and historical clients must not share an IBKR client ID.
+
+        IBKR evicts the older connection when two clients present the same ID, so a
+        shared ID would silently drop either the running session or an in-flight
+        historical import (FR5).
+        """
+        if self.ibkr_live_client_id == self.ibkr_client_id:
+            raise ValueError(
+                f"ibkr_client_id and ibkr_live_client_id must differ "
+                f"(both are {self.ibkr_client_id}). Reservation: historical="
+                f"ibkr_client_id, live session=ibkr_live_client_id, "
+                f"reconcile=ibkr_live_client_id + 1."
+            )
+        return self
 
     model_config = {
         "env_file": ".env",

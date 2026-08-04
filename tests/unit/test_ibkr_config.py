@@ -172,3 +172,130 @@ class TestIBKRConfiguration:
         for string_value, expected_enum in test_cases.items():
             settings = IBKRSettings(ibkr_market_data_type=string_value)
             assert settings.get_market_data_type_enum() == expected_enum
+
+
+class TestIBKRClientIdIsolation:
+    """Test suite for live/historical IBKR client ID isolation (FR5, AR18).
+
+    IBKR evicts the incumbent when a second connection presents an ID already in
+    use, so a live session sharing the catalog fetcher's ID would be knocked off
+    its socket mid-position by an ordinary historical import.
+    """
+
+    @staticmethod
+    def _clear_client_id_env(monkeypatch):
+        """Clear both casings of both client-ID env vars.
+
+        `case_sensitive: False` (src/config.py) makes the lowercase spelling an
+        equally valid alias, so clearing only the upper-case name leaves the test
+        dependent on the developer's shell.
+        """
+        for name in ("IBKR_CLIENT_ID", "IBKR_LIVE_CLIENT_ID"):
+            monkeypatch.delenv(name, raising=False)
+            monkeypatch.delenv(name.lower(), raising=False)
+
+    @pytest.mark.unit
+    def test_client_id_defaults_are_distinct(self, monkeypatch):
+        """Historical defaults to 1 and live to 10 — the pair is the contract."""
+        from src.config import IBKRSettings
+
+        # Arrange
+        self._clear_client_id_env(monkeypatch)
+
+        # Act
+        settings = IBKRSettings(_env_file=None)
+
+        # Assert
+        assert settings.ibkr_client_id == 1
+        assert settings.ibkr_live_client_id == 10
+
+    @pytest.mark.unit
+    def test_live_client_id_loads_from_env(self, monkeypatch):
+        """IBKR_LIVE_CLIENT_ID overrides the default (no env_prefix in play)."""
+        from src.config import IBKRSettings
+
+        # Arrange
+        self._clear_client_id_env(monkeypatch)
+        monkeypatch.setenv("IBKR_LIVE_CLIENT_ID", "20")
+
+        # Act
+        settings = IBKRSettings(_env_file=None)
+
+        # Assert
+        assert settings.ibkr_live_client_id == 20
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize(
+        "overrides",
+        [
+            pytest.param({"ibkr_live_client_id": 1}, id="live-collides-with-default-historical"),
+            pytest.param({"ibkr_client_id": 10}, id="historical-collides-with-default-live"),
+            pytest.param(
+                {"ibkr_client_id": 7, "ibkr_live_client_id": 7}, id="both-overridden-equal"
+            ),
+        ],
+    )
+    def test_equal_client_ids_are_rejected(self, monkeypatch, overrides):
+        """Equality is rejected from either override direction (model, not field, validator)."""
+        from pydantic import ValidationError
+
+        from src.config import IBKRSettings
+
+        # Arrange
+        self._clear_client_id_env(monkeypatch)
+
+        # Act
+        with pytest.raises(ValidationError) as excinfo:
+            IBKRSettings(_env_file=None, **overrides)
+
+        # Assert — an operator reading the traceback needs both setting names
+        message = str(excinfo.value)
+        assert "ibkr_client_id" in message
+        assert "ibkr_live_client_id" in message
+
+    @pytest.mark.unit
+    def test_distinct_client_ids_are_permitted(self, monkeypatch):
+        """Non-equal IDs construct without error."""
+        from src.config import IBKRSettings
+
+        # Arrange
+        self._clear_client_id_env(monkeypatch)
+
+        # Act
+        settings = IBKRSettings(_env_file=None, ibkr_client_id=1, ibkr_live_client_id=10)
+
+        # Assert
+        assert settings.ibkr_client_id == 1
+        assert settings.ibkr_live_client_id == 10
+
+    @pytest.mark.unit
+    def test_env_driven_collision_is_rejected(self, monkeypatch):
+        """A stale IBKR_CLIENT_ID=10 in the environment is rejected — the real-world shape."""
+        from pydantic import ValidationError
+
+        from src.config import IBKRSettings
+
+        # Arrange
+        self._clear_client_id_env(monkeypatch)
+        monkeypatch.setenv("IBKR_CLIENT_ID", "10")
+
+        # Act & Assert
+        with pytest.raises(ValidationError) as excinfo:
+            IBKRSettings(_env_file=None)
+
+        message = str(excinfo.value)
+        assert "ibkr_client_id" in message
+        assert "ibkr_live_client_id" in message
+
+    @pytest.mark.unit
+    def test_reservation_is_documented_in_field_metadata(self):
+        """The client-ID reservation is machine-readable, so it cannot rot silently."""
+        from src.config import IBKRSettings
+
+        # Act
+        description = IBKRSettings.model_fields["ibkr_live_client_id"].description
+
+        # Assert — loose substrings survive rewording but fail if the reservation is dropped
+        assert description is not None
+        assert "ibkr_client_id" in description
+        assert "+ 1" in description

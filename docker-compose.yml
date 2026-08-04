@@ -84,6 +84,11 @@ services:
       IBKR_PORT: 4002
       IBKR_TRADING_MODE: ${TRADING_MODE:-paper}
       IBKR_CLIENT_ID: ${IBKR_CLIENT_ID:-1}
+      # Live session's client ID, kept clear of the historical fetcher's rotation
+      # range (1-6). Reconcile takes +1. Passed through so the reservation holds
+      # under Docker as well as on bare metal — without this line the setting is
+      # unreachable in a container regardless of what .env says.
+      IBKR_LIVE_CLIENT_ID: ${IBKR_LIVE_CLIENT_ID:-10}
       TWS_USERNAME: ${TWS_USERNAME}
       TWS_PASSWORD: ${TWS_PASSWORD}
       TWS_ACCOUNT: ${TWS_ACCOUNT}
