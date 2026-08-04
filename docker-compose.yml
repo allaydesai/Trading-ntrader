@@ -82,11 +82,16 @@ services:
       # IBKR configuration
       IBKR_HOST: ib-gateway
       IBKR_PORT: 4002
-      IBKR_CLIENT_ID: ${IBKR_CLIENT_ID:-1}
       IBKR_TRADING_MODE: ${TRADING_MODE:-paper}
+      IBKR_CLIENT_ID: ${IBKR_CLIENT_ID:-1}
       TWS_USERNAME: ${TWS_USERNAME}
       TWS_PASSWORD: ${TWS_PASSWORD}
       TWS_ACCOUNT: ${TWS_ACCOUNT}
+      # Real-money authorization. Defaults to empty, which is what keeps the
+      # safety gate on the paper path. Passed through so the gate sees the same
+      # value under Docker as on bare metal — without this line the real-money
+      # crossing is unreachable in a container regardless of what .env says.
+      NTRADER_REAL_MONEY_ACCOUNT: ${NTRADER_REAL_MONEY_ACCOUNT:-}
 
       # Application settings
       DEBUG: ${DEBUG:-false}

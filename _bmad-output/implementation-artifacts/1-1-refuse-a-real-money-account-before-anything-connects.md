@@ -1,6 +1,6 @@
 # Story 1.1: Refuse a Real-Money Account Before Anything Connects
 
-Status: in-progress
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -150,14 +150,14 @@ _Code review 2026-08-03 — 3 layers (Blind Hunter, Edge Case Hunter, Acceptance
 - [x] [Review][Decision] **Real-money crossing permits a `DU`/`DF` paper account and never checks mode/port** → **(a) ACCEPTED — no change.** `_evaluate_real_money_crossing` (`src/core/live_gate.py:160-169`) receives only the two declarations, so `--real-money` + `NTRADER_REAL_MONEY_ACCOUNT=DU1234567` + matching `TWS_ACCOUNT` permits with `mode=REAL_MONEY` against a demo account on a paper port. **Reason for deferring:** Layer 2 catches it post-connection. Logged to `deferred-work.md` so Story 1.4 inherits it as a required post-connection check.
 - [x] [Review][Decision] **`GateDecision.mode` on a refusal is misleading in both directions** → **(a) `mode: GateMode | None = None`.** The branch that produced the refusal was hard-coded as the `mode` argument (`src/core/live_gate.py:146,154,162` all `REAL_MONEY`; `:176,185,194` all `PAPER`), so a stale env var with no `--real-money` yielded `mode=REAL_MONEY` for an operator trying to run paper. **Resolution:** refusals set `mode=None`; permits keep their `GateMode`. No information is lost — `refusal.reason` already distinguishes the branch (`REAL_MONEY_*` vs `NON_PAPER_*`). No existing test asserts `mode` on a refusal, so nothing breaks. Carries one patch.
 
-**Patches — 11 applied 2026-08-03, 2 still open:**
+**Patches — all 13 applied 2026-08-03:**
 
 - [x] [Review][Patch] `GateDecision.mode` → `GateMode | None`, refusals set `None`; `_assert_consistent` now pins `permitted is (mode is not None)` on every parametrized row [src/core/live_gate.py]
 - [x] [Review][Patch] Amended the Dev Note "AND of three independent conditions" — on bare metal with an unset account Layer 1 is the port alone; Layer 2 stated as load-bearing [this file, Dev Notes ⚠️ section]
 - [x] [Review][Patch] Purity check rewritten as a whitelist over `ast.walk` — now catches `import src.*`, function/method-level, try-wrapped, nested, and relative imports; 12 meta-test cases prove the guard can actually fail [tests/unit/core/test_live_gate.py]
 - [x] [Review][Patch] `GateFlags.real_money` compared by identity (`is True`) — `"false"` / `"0"` / `["x"]` no longer read as consent [src/core/live_gate.py]
-- [ ] [Review][Patch] **OPEN** — "Set both" guidance is wrong under Docker, where compose's `environment:` block outranks `.env`. The `docs/setup/IBKR_SETUP.md` half is FIXED; the `.env.example` half is blocked by `.claude/hooks/protect-files.sh` and needs the same one-off escalation Task 2 used [.env.example:8-13]
-- [ ] [Review][Patch] **OPEN** — `NTRADER_REAL_MONEY_ACCOUNT` is absent from the `ntrader-app` `environment:` block, so the real-money crossing is unreachable under Docker while `.env.example` describes it as a live control. Deliberately skipped: `docker-compose.yml` is outside this story's footprint [docker-compose.yml:82-93; .env.example:20-22]
+- [x] [Review][Patch] `.env.example` now states which variable each launch path reads, that compose's `environment:` entry outranks the file under Docker (no `env_file:` on `ntrader-app`, `.env` never copied into the image), and names the different-values trap. Written via a shell heredoc — `.claude/hooks/protect-files.sh` blocks `.env*` by basename and catches this secret-free tracked template collaterally; the hook is unchanged [.env.example:7-32]
+- [x] [Review][Patch] `NTRADER_REAL_MONEY_ACCOUNT: ${NTRADER_REAL_MONEY_ACCOUNT:-}` added to the `ntrader-app` `environment:` block, so the real-money crossing is reachable under Docker and the gate sees the same value there as on bare metal. Verified via `docker compose config` → `NTRADER_REAL_MONEY_ACCOUNT: ""` resolves into the app service [docker-compose.yml:82-95]
 - [x] [Review][Patch] `project-context.md` security rule now names **both** `IBKR_TRADING_MODE` and `TRADING_MODE`, with the Docker/bare-metal split spelled out [_bmad-output/project-context.md:149]
 - [x] [Review][Patch] `IBKR_SETUP.md` Step 2 block restores `TRADING_MODE` alongside `IBKR_TRADING_MODE`; the note now states which variable wins under each launch path and names the different-values trap [docs/setup/IBKR_SETUP.md:40-73]
 - [x] [Review][Patch] File List now includes `docs/setup/IBKR_SETUP.md`, `_bmad-output/project-context.md`, and `deferred-work.md` [this file, File List]
@@ -169,6 +169,8 @@ _Code review 2026-08-03 — 3 layers (Blind Hunter, Edge Case Hunter, Acceptance
 **Verification after patches:** `test_live_gate.py` + `test_ibkr_config.py` → **69 passed** (was 38). `make test-unit` → **1539 passed**, 0 failed (was 1518; +21 tests, no regressions). `make format` / `make lint` / `make typecheck` → clean. Coverage on `src/core/live_gate.py` → **64 statements, 0 missed, 100%**.
 
 **Residual, not patched:** when two *different* accounts both mask to `***` (each ≤6 chars) the mismatch message shows the same redacted value twice. Real IBKR account IDs are 8–9 characters, so this is unreachable in practice; the `(unset)` case that was concrete is fixed.
+
+**Second pass (2026-08-03), closing the last two:** `docs/setup/IBKR_SETUP.md`, `.env.example`, and `docker-compose.yml` now tell one consistent story about the two trading-mode variables and about where the real-money declaration reaches the app. Re-verified: `make test-unit` → 1539 passed; `make lint` → clean; `docker compose config` → valid, with `IBKR_TRADING_MODE: paper` and `NTRADER_REAL_MONEY_ACCOUNT: ""` resolving into `ntrader-app`; `IBKRSettings(_env_file='.env.example')` → `trading_mode='paper'`, `port=7497`, `real_money=''` (the new comment blocks do not break dotenv parsing).
 
 **Deferred (real, pre-existing, or out of this story's scope):**
 
@@ -336,6 +338,10 @@ claude-opus-5[1m] (Opus 5, 1M context)
   the repo's governing AI-rules file, so an unlisted edit to it propagates silently
 - `_bmad-output/implementation-artifacts/sprint-status.yaml` — story status transitions
 - `_bmad-output/implementation-artifacts/1-1-refuse-a-real-money-account-before-anything-connects.md` — this file
+- `docker-compose.yml` — `NTRADER_REAL_MONEY_ACCOUNT` passed through to `ntrader-app`.
+  **Added by code review 2026-08-03**, outside the story's original footprint: without it the
+  real-money crossing this story builds is unreachable in a container, while `.env.example`
+  described it as a working control
 - `_bmad-output/implementation-artifacts/deferred-work.md` — **NEW**, opened by code review
   2026-08-03 for Phase 3's non-blocking findings
 
@@ -348,4 +354,5 @@ strategy file, `pyproject.toml`, `uv.lock`.
 | ---------- | --------------------------------------------------------------------------- |
 | 2026-08-03 | Story created — comprehensive developer context assembled. Status → ready-for-dev. |
 | 2026-08-03 | Implemented Tasks 1–5: `ntrader_real_money_account` setting, `.env.example` documentation, `src/core/live_gate.py` (pure Layer 1 gate), and 35 unit tests covering the full truth table. 100% coverage on the new module; unit suite 1518 passed. Status → review. |
-| 2026-08-03 | Code review (3 adversarial layers). 3 decisions resolved by Allay: empty-account permit ACCEPTED (Layer 2 is load-bearing), paper-account real-money crossing ACCEPTED (deferred to Story 1.4), `GateDecision.mode` → `GateMode \| None` on refusals. 11 of 13 patches applied; 2 remain open (both `.env.example` / `docker-compose.yml`). 5 items deferred to `deferred-work.md`. Unit suite 1539 passed, gate module still 100%. Status → in-progress. |
+| 2026-08-03 | Code review (3 adversarial layers). 3 decisions resolved by Allay: empty-account permit ACCEPTED (Layer 2 is load-bearing), paper-account real-money crossing ACCEPTED (deferred to Story 1.4), `GateDecision.mode` → `GateMode \| None` on refusals. 11 of 13 patches applied; 2 held for the `.env.example` hook escalation and the `docker-compose.yml` scope call. 5 items deferred to `deferred-work.md`. Unit suite 1539 passed, gate module still 100%. Status → in-progress. |
+| 2026-08-03 | Closed the last two review patches: `.env.example` Docker-precedence note corrected (shell write; `protect-files.sh` unchanged), and `NTRADER_REAL_MONEY_ACCOUNT` passed through to `ntrader-app` in `docker-compose.yml` so the crossing is reachable in a container. All 13 patches applied, all 3 decisions resolved. Unit suite 1539 passed; `docker compose config` valid. Status → done. |
