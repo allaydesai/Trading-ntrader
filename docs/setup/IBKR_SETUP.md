@@ -42,7 +42,8 @@ Ensure your `.env` file has the correct settings:
 IBKR_HOST=127.0.0.1
 IBKR_PORT=7497              # 7497 for TWS paper trading
 IBKR_CLIENT_ID=10           # Can be any number (1-999)
-IBKR_TRADING_MODE=paper     # This is the variable the app reads — see note below
+TRADING_MODE=paper          # Read under Docker (see note below)
+IBKR_TRADING_MODE=paper     # Read on bare metal (see note below)
 
 # IBKR Credentials
 TWS_USERNAME=your_username
@@ -53,11 +54,23 @@ TWS_ACCOUNT=DU1234567       # Your paper trading account
 DATABASE_URL=postgresql://ntrader:ntrader_dev_2025@localhost:5432/trading_ntrader
 ```
 
-> **`IBKR_TRADING_MODE`, not `TRADING_MODE`.** The application reads
-> `IBKR_TRADING_MODE` (the `ibkr_trading_mode` field on `IBKRSettings`). `TRADING_MODE` is the
-> **ib-gateway container's** own variable: under Docker, compose maps it in
-> (`IBKR_TRADING_MODE: ${TRADING_MODE:-paper}`), but in a bare-metal `.env` run there is no such
-> mapping and `TRADING_MODE` never reaches the app. If you run the ib-gateway container, set both.
+> **Two variables, and which one the app reads depends on how you launch it.** Set both to the
+> same value and you can ignore the rest of this note.
+>
+> - **Bare metal** (`uv run python -m src.cli.main`, `make web`): the app reads
+>   **`IBKR_TRADING_MODE`** from `.env` — the `ibkr_trading_mode` field on `IBKRSettings`.
+>   `TRADING_MODE` never reaches the app.
+> - **Docker** (`docker compose up`): the reverse. Compose interpolates the host's
+>   **`TRADING_MODE`** into the app container (`IBKR_TRADING_MODE: ${TRADING_MODE:-paper}`,
+>   `docker-compose.yml:86`), and because that lands in the service's `environment:` block it
+>   **outranks anything in `.env`** — the `ntrader-app` service has no `env_file:` directive and
+>   the image never copies `.env`, so an `IBKR_TRADING_MODE` line in `.env` is inert there.
+>   `TRADING_MODE` is also the ib-gateway container's own variable (`docker-compose.yml:50`), so
+>   under Docker it is the single switch that flips both the gateway and the app.
+>
+> Setting them to *different* values is the trap: `TRADING_MODE=live` with
+> `IBKR_TRADING_MODE=paper` gives you a **live** app under Docker and a **paper** app on bare
+> metal, from the identical file.
 
 ## Step 3: Test Connection
 

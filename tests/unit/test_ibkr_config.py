@@ -113,8 +113,12 @@ class TestIBKRConfiguration:
         """Real-money declaration defaults to empty (paper only)."""
         from src.config import IBKRSettings
 
-        # Arrange — clear env vars and skip .env file
+        # Arrange — clear env vars and skip .env file. `case_sensitive: False`
+        # (src/config.py) means the lowercase spelling is an equally valid env
+        # alias, so clearing only the upper-case name leaves the test dependent
+        # on the developer's shell.
         monkeypatch.delenv("NTRADER_REAL_MONEY_ACCOUNT", raising=False)
+        monkeypatch.delenv("ntrader_real_money_account", raising=False)
 
         # Act
         settings = IBKRSettings(_env_file=None)
@@ -143,6 +147,7 @@ class TestIBKRConfiguration:
 
         # Arrange
         monkeypatch.delenv("NTRADER_REAL_MONEY_ACCOUNT", raising=False)
+        monkeypatch.delenv("ntrader_real_money_account", raising=False)
         account = "U1234567"
         settings = IBKRSettings(_env_file=None, ntrader_real_money_account=account)
 

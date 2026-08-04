@@ -31,8 +31,12 @@ def _settings(
 ) -> IBKRSettings:
     """Build settings with all four gate-relevant fields passed explicitly.
 
-    Init kwargs outrank environment variables in pydantic-settings, so a
-    developer's real environment can never leak into a test.
+    Init kwargs outrank environment variables in pydantic-settings, so none of
+    these four fields can pick up a developer's real environment. Note the limit
+    of that guarantee: ``_env_file=None`` disables the dotenv file but NOT
+    ``os.environ``, so isolation holds only for fields listed here. Any future
+    field the gate starts reading must be added to this signature, or the
+    developer's shell silently becomes test input.
     """
     return IBKRSettings(
         _env_file=None,
@@ -44,8 +48,9 @@ def _settings(
 
 
 def _assert_consistent(decision: GateDecision) -> None:
-    """A decision is never half-refused."""
+    """A decision is never half-refused, and only a permit establishes a mode."""
     assert decision.permitted is (decision.refusal is None)
+    assert decision.permitted is (decision.mode is not None)
 
 
 class TestPaperPermits:
@@ -327,36 +332,170 @@ class TestMaskAccount:
         """Masking is last-3-characters, with short values fully masked."""
         assert mask_account(account) == expected
 
+    @pytest.mark.unit
+    @pytest.mark.parametrize(
+        ("account", "expected"),
+        [
+            ("ABCD", "***"),
+            ("ABCDE", "***"),
+            ("ABCDEF", "***"),
+            ("ABCDEFG", "***EFG"),
+        ],
+        ids=["length-4", "length-5", "length-6-last-fully-masked", "length-7-first-revealing"],
+    )
+    def test_short_accounts_are_fully_masked_up_to_the_disclosure_boundary(self, account, expected):
+        """The tail is revealed only once it is a minority of the identifier.
+
+        Pins the boundary the masking contract is actually defined by: at length
+        4 a last-3 reveal would disclose 75% of the value.
+        """
+        assert mask_account(account) == expected
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize(
+        ("account", "expected"),
+        [
+            ("  U7654321  ", "***321"),
+            ("U1234567\n", "***567"),
+            ("   ", ""),
+            ("\n\t", ""),
+        ],
+        ids=["surrounding-spaces", "trailing-newline", "spaces-only", "whitespace-only"],
+    )
+    def test_mask_account_normalizes_its_own_input(self, account, expected):
+        """Story 1.4 masks gateway-reported values that never pass through evaluate_gate.
+
+        A trailing newline would otherwise be injected verbatim into a log line.
+        """
+        assert mask_account(account) == expected
+
+
+ALLOWED_RUNTIME_IMPORTS = frozenset({"dataclasses", "enum", "typing"})
+RELATIVE_IMPORT_ROOT = "."
+
+
+def _is_type_checking_test(node: ast.expr) -> bool:
+    """True for the `TYPE_CHECKING` / `typing.TYPE_CHECKING` guard expression."""
+    if isinstance(node, ast.Name):
+        return node.id == "TYPE_CHECKING"
+    if isinstance(node, ast.Attribute):
+        return node.attr == "TYPE_CHECKING"
+    return False
+
+
+def _runtime_import_roots(tree: ast.Module) -> list[str]:
+    """Every root package imported at runtime, anywhere in the tree.
+
+    Walks the WHOLE tree, not just `tree.body` — a function-level, try-wrapped,
+    or otherwise nested import is precisely how I/O gets added back while the
+    top-level import block stays clean. Only imports inside an `if
+    TYPE_CHECKING:` block are excluded, since those never execute.
+
+    A relative import yields ``"."``, which no whitelist contains: `node.module`
+    is None for `from . import x`, so treating it as an empty root would let it
+    slip past a name-based check.
+    """
+    guarded = {
+        id(descendant)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.If) and _is_type_checking_test(node.test)
+        for descendant in ast.walk(node)
+    }
+
+    roots: list[str] = []
+    for node in ast.walk(tree):
+        if id(node) in guarded:
+            continue
+        if isinstance(node, ast.Import):
+            roots.extend(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                roots.append(RELATIVE_IMPORT_ROOT)
+            else:
+                roots.append((node.module or "").split(".")[0])
+    return roots
+
 
 class TestGatePurity:
     """The gate's import graph contains no I/O-capable library."""
 
     @pytest.mark.unit
     def test_module_imports_nothing_that_can_perform_io(self):
-        """Parse the module source — sys.modules is polluted by pytest itself."""
+        """Parse the module source — sys.modules is polluted by pytest itself.
+
+        Asserted as a WHITELIST rather than a blacklist: a forbidden-name list
+        only catches the libraries someone thought to enumerate, and would wave
+        through `os`, `subprocess`, `urllib`, `importlib`, `pathlib`, `aiohttp`,
+        and every `src.*` module reachable through `ast.Import`.
+        """
         # Arrange
-        forbidden = {
-            "nautilus_trader",
-            "sqlalchemy",
-            "ibapi",
-            "httpx",
-            "requests",
-            "redis",
-            "psycopg2",
-            "asyncpg",
-            "socket",
-        }
         tree = ast.parse(Path(live_gate.__file__).read_text())
 
-        # Act & Assert — top-level nodes only, which skips `if TYPE_CHECKING:`
-        for node in tree.body:
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    assert alias.name.split(".")[0] not in forbidden
-            elif isinstance(node, ast.ImportFrom):
-                root = (node.module or "").split(".")[0]
-                assert root not in forbidden
-                assert root != "src"  # the gate needs NO runtime src.* import
+        # Act
+        roots = _runtime_import_roots(tree)
+
+        # Assert — no runtime src.* import, so no transitive path to a broker library
+        assert roots, "expected the gate to import something"
+        unexpected = sorted(set(roots) - ALLOWED_RUNTIME_IMPORTS)
+        assert not unexpected, f"gate gained runtime imports: {unexpected}"
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "import socket",
+            "import src.db.session",
+            "import src.services.ibkr_client",
+            "from src.config import IBKRSettings",
+            "from .config import IBKRSettings",
+            "from . import config",
+            "import os",
+            "import importlib",
+            "def evaluate_gate():\n    import socket\n",
+            "try:\n    import redis\nexcept ImportError:\n    redis = None\n",
+            "if True:\n    import httpx\n",
+            "class C:\n    def m(self):\n        import asyncpg\n",
+        ],
+        ids=[
+            "top-level-socket",
+            "import-src-db",
+            "import-src-services",
+            "from-src-config",
+            "relative-from-config",
+            "relative-bare",
+            "os-not-in-any-blacklist",
+            "importlib-indirection",
+            "function-level-import",
+            "try-wrapped-import",
+            "nested-in-if",
+            "method-level-import",
+        ],
+    )
+    def test_the_purity_check_actually_rejects_impure_sources(self, source):
+        """The guard must be able to fail — each case defeated the original check.
+
+        Without this, a purity test that silently passes everything is
+        indistinguishable from one that works.
+        """
+        # Arrange & Act
+        roots = _runtime_import_roots(ast.parse(source))
+
+        # Assert
+        assert set(roots) - ALLOWED_RUNTIME_IMPORTS, f"{source!r} slipped through the check"
+
+    @pytest.mark.unit
+    def test_the_purity_check_still_ignores_the_type_checking_guard(self):
+        """The TYPE_CHECKING import of IBKRSettings must not count as runtime."""
+        # Arrange
+        source = (
+            "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    from src.config import X\n"
+        )
+
+        # Act
+        roots = _runtime_import_roots(ast.parse(source))
+
+        # Assert
+        assert roots == ["typing"]
 
     @pytest.mark.unit
     def test_gate_reads_no_environment_variables(self):

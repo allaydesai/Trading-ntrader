@@ -1,6 +1,6 @@
 # Story 1.1: Refuse a Real-Money Account Before Anything Connects
 
-Status: review
+Status: in-progress
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -140,6 +140,45 @@ so that a port typo or a stale environment variable can never reach a real-money
   - [x] `make test-coverage` — `src/core/live_gate.py` should sit at or near 100%; it must not drag the >80% `src/core` threshold down.
   - [x] Grep check: `grep -rn "os.environ\|getenv" src/core/live_gate.py` returns nothing.
 
+### Review Findings
+
+_Code review 2026-08-03 — 3 layers (Blind Hunter, Edge Case Hunter, Acceptance Auditor). 3 decision-needed (resolved), 13 patch, 6 deferred, 4 dismissed as noise._
+
+**Decisions — resolved by Allay 2026-08-03:**
+
+- [x] [Review][Decision] **Empty `TWS_ACCOUNT` permits PAPER with zero account evidence** → **(a) ACCEPTED.** `if account and not account.upper().startswith(...)` (`src/core/live_gate.py:191`) short-circuits on `""`, which is the field default (`src/config.py:33`) and what `docker-compose.yml:89` passes when the host var is unset. Layer 1 then rests on two weak conditions: `ibkr_trading_mode` is self-declared and pinned to its `"paper"` default on bare metal (the `TRADING_MODE` gap), and `ibkr_port` is a convention TWS lets the operator edit. Worst case reachable from this repo's own documented setup: bare metal, `IBKR_TRADING_MODE` never set, `TWS_ACCOUNT` unset, TWS logged into a live account on port 7497 → `permitted=True, mode=PAPER`. AC #2 explicitly mandates this behaviour, and the tests lock it in, so the code is spec-compliant. **Resolution:** behaviour stands; Layer 2 (Story 1.4) is load-bearing, not belt-and-braces. Carries one patch — the Dev Note claim "the gate is an AND of three independent conditions" must be amended, since with an unset account on bare metal Layer 1 is one condition (the port).
+- [x] [Review][Decision] **Real-money crossing permits a `DU`/`DF` paper account and never checks mode/port** → **(a) ACCEPTED — no change.** `_evaluate_real_money_crossing` (`src/core/live_gate.py:160-169`) receives only the two declarations, so `--real-money` + `NTRADER_REAL_MONEY_ACCOUNT=DU1234567` + matching `TWS_ACCOUNT` permits with `mode=REAL_MONEY` against a demo account on a paper port. **Reason for deferring:** Layer 2 catches it post-connection. Logged to `deferred-work.md` so Story 1.4 inherits it as a required post-connection check.
+- [x] [Review][Decision] **`GateDecision.mode` on a refusal is misleading in both directions** → **(a) `mode: GateMode | None = None`.** The branch that produced the refusal was hard-coded as the `mode` argument (`src/core/live_gate.py:146,154,162` all `REAL_MONEY`; `:176,185,194` all `PAPER`), so a stale env var with no `--real-money` yielded `mode=REAL_MONEY` for an operator trying to run paper. **Resolution:** refusals set `mode=None`; permits keep their `GateMode`. No information is lost — `refusal.reason` already distinguishes the branch (`REAL_MONEY_*` vs `NON_PAPER_*`). No existing test asserts `mode` on a refusal, so nothing breaks. Carries one patch.
+
+**Patches — 11 applied 2026-08-03, 2 still open:**
+
+- [x] [Review][Patch] `GateDecision.mode` → `GateMode | None`, refusals set `None`; `_assert_consistent` now pins `permitted is (mode is not None)` on every parametrized row [src/core/live_gate.py]
+- [x] [Review][Patch] Amended the Dev Note "AND of three independent conditions" — on bare metal with an unset account Layer 1 is the port alone; Layer 2 stated as load-bearing [this file, Dev Notes ⚠️ section]
+- [x] [Review][Patch] Purity check rewritten as a whitelist over `ast.walk` — now catches `import src.*`, function/method-level, try-wrapped, nested, and relative imports; 12 meta-test cases prove the guard can actually fail [tests/unit/core/test_live_gate.py]
+- [x] [Review][Patch] `GateFlags.real_money` compared by identity (`is True`) — `"false"` / `"0"` / `["x"]` no longer read as consent [src/core/live_gate.py]
+- [ ] [Review][Patch] **OPEN** — "Set both" guidance is wrong under Docker, where compose's `environment:` block outranks `.env`. The `docs/setup/IBKR_SETUP.md` half is FIXED; the `.env.example` half is blocked by `.claude/hooks/protect-files.sh` and needs the same one-off escalation Task 2 used [.env.example:8-13]
+- [ ] [Review][Patch] **OPEN** — `NTRADER_REAL_MONEY_ACCOUNT` is absent from the `ntrader-app` `environment:` block, so the real-money crossing is unreachable under Docker while `.env.example` describes it as a live control. Deliberately skipped: `docker-compose.yml` is outside this story's footprint [docker-compose.yml:82-93; .env.example:20-22]
+- [x] [Review][Patch] `project-context.md` security rule now names **both** `IBKR_TRADING_MODE` and `TRADING_MODE`, with the Docker/bare-metal split spelled out [_bmad-output/project-context.md:149]
+- [x] [Review][Patch] `IBKR_SETUP.md` Step 2 block restores `TRADING_MODE` alongside `IBKR_TRADING_MODE`; the note now states which variable wins under each launch path and names the different-values trap [docs/setup/IBKR_SETUP.md:40-73]
+- [x] [Review][Patch] File List now includes `docs/setup/IBKR_SETUP.md`, `_bmad-output/project-context.md`, and `deferred-work.md` [this file, File List]
+- [x] [Review][Patch] Mismatch branch split into "TWS_ACCOUNT not set" and "declarations disagree"; both dead `or '(unset)'` fallbacks removed [src/core/live_gate.py]
+- [x] [Review][Patch] `mask_account` now strips its own input and withholds the tail until the value exceeds `2 * ACCOUNT_MASK_VISIBLE_CHARS`; boundary (len 4/5/6/7) and whitespace/newline cases tested [src/core/live_gate.py]
+- [x] [Review][Patch] Both `ntrader_real_money_account` tests clear the lowercase env alias too (`case_sensitive: False`) [tests/unit/test_ibkr_config.py]
+- [x] [Review][Patch] `_settings()` docstring now states the limit of its isolation: `_env_file=None` does not disable `os.environ`, so the guarantee covers only the fields in the signature [tests/unit/core/test_live_gate.py]
+
+**Verification after patches:** `test_live_gate.py` + `test_ibkr_config.py` → **69 passed** (was 38). `make test-unit` → **1539 passed**, 0 failed (was 1518; +21 tests, no regressions). `make format` / `make lint` / `make typecheck` → clean. Coverage on `src/core/live_gate.py` → **64 statements, 0 missed, 100%**.
+
+**Residual, not patched:** when two *different* accounts both mask to `***` (each ≤6 chars) the mismatch message shows the same redacted value twice. Real IBKR account IDs are 8–9 characters, so this is unreachable in practice; the `(unset)` case that was concrete is fixed.
+
+**Deferred (real, pre-existing, or out of this story's scope):**
+
+- [x] [Review][Defer] Invalid `IBKR_TRADING_MODE` (`"Paper"`, `" paper"`) dies with a pydantic traceback instead of a gate refusal [src/config.py:23-25] — deferred, pre-existing
+- [x] [Review][Defer] `ENV=dev/qa/prod` env-file selection never reaches nested `IBKRSettings`; the gate always reads `.env` [src/config.py:268-270,305-325] — deferred, pre-existing
+- [x] [Review][Defer] `model_dump()` still returns raw account/password — `repr=False` is display-only [src/config.py:32-42] — deferred, pre-existing
+- [x] [Review][Defer] `(str, Enum)` makes `str(GateMode.PAPER)` render `"GateMode.PAPER"`, not `"paper"` [src/core/live_gate.py:132-147] — deferred, spec-mandated house style
+- [x] [Review][Defer] Multi-account `TWS_ACCOUNT="DU123,U765"` passes the `startswith` prefix check [src/core/live_gate.py:191] — deferred, pre-existing
+- [x] [Review][Defer] Real-money crossing permits a `DU`/`DF` paper account [src/core/live_gate.py:160-169] — deferred by decision, Layer 2 catches it post-connection (Story 1.4)
+
 ## Dev Notes
 
 ### Why this story is first, and what "first" means here
@@ -149,7 +188,11 @@ Phase 3 is a brownfield continuation on branch `015-paper-trading`. **There is n
 `NTRADER_REAL_MONEY_ACCOUNT` set **without** `--real-money` refuses, even when mode, port, and account are all perfectly paper. This is deliberate and is what AC #4 states ("every one of those combinations refuses"). The gate cannot distinguish "operator intends real money but forgot the flag" from "leftover env var" — they are the same input — so it fails closed on both. The operational consequence is that an operator who once authorized a real-money account must unset the variable to run paper again; that friction is the feature. [Source: epics.md#Story-1.1; architecture.md#D3]
 
 ### ⚠️ `TRADING_MODE` is not the variable the gate reads
-`IBKRSettings.ibkr_trading_mode` is populated from **`IBKR_TRADING_MODE`** (field name → UPPER_SNAKE, no `env_prefix`). `.env.example:8` documents `TRADING_MODE=paper`, and the local `.env` sets `TRADING_MODE` — neither reaches `ibkr_trading_mode`. Under Docker the gap is bridged (`docker-compose.yml:86` maps `IBKR_TRADING_MODE: ${TRADING_MODE:-paper}`), but on a bare-metal `.env` run **setting `TRADING_MODE=live` leaves the gate seeing `"paper"`**. The gate's other two conditions (port ∈ paper ports, `DU`/`DF` prefix) still catch a real live account, which is precisely why the gate is an AND of three independent conditions rather than one flag — but the documentation gap is real and Task 2 closes it. Do not "fix" it by renaming the field or adding an `env_prefix`; that would break every other `ibkr_*` setting.
+`IBKRSettings.ibkr_trading_mode` is populated from **`IBKR_TRADING_MODE`** (field name → UPPER_SNAKE, no `env_prefix`). `.env.example:8` documents `TRADING_MODE=paper`, and the local `.env` sets `TRADING_MODE` — neither reaches `ibkr_trading_mode`. Under Docker the gap is bridged (`docker-compose.yml:86` maps `IBKR_TRADING_MODE: ${TRADING_MODE:-paper}`), but on a bare-metal `.env` run **setting `TRADING_MODE=live` leaves the gate seeing `"paper"`**. The documentation gap is real and Task 2 closes it. Do not "fix" it by renaming the field or adding an `env_prefix`; that would break every other `ibkr_*` setting.
+
+**Amended after code review (2026-08-03) — do not restore the earlier claim.** This note previously argued that "the gate's other two conditions still catch a real live account, which is precisely why the gate is an AND of three independent conditions rather than one flag." That overstates Layer 1's coverage in exactly the scenario it was defending. On a bare-metal run the mode condition **cannot fail** (`ibkr_trading_mode` is pinned to its `"paper"` default because `IBKR_TRADING_MODE` is unset), and the prefix condition is **skipped entirely** when `tws_account` is empty — which is the field's default, and what `docker-compose.yml:89` passes when the host variable is unset. In that configuration Layer 1 reduces to a single condition: the port. And the port is a convention TWS lets the operator change in Global Configuration, not an enforcement.
+
+So the honest statement is: **Layer 1 is an AND of up to three conditions, and Layer 2 (Story 1.4) is load-bearing, not belt-and-braces.** Reviewed and accepted by Allay on 2026-08-03 — AC #2 mandates permitting an empty account, and the behaviour stands — but Story 1.4's post-connection account verification is the control that closes this, and it must not be descoped or deferred on the assumption that Layer 1 already covers it.
 
 ### Never read `ibkr_read_only` as the safety control
 `ibkr_read_only` defaults to `True` today but is set to `False` for any trading session (Story 1.3) — it is deliberately off during operation. **The gate is the load-bearing control; `read_only` is not.** Reading it as a safety condition is an explicitly listed review-rejection anti-pattern. It plays no part in `evaluate_gate()`. [Source: architecture.md#Enforcement-Guidelines AR43; prd.md:507-509]
@@ -285,8 +328,16 @@ claude-opus-5[1m] (Opus 5, 1M context)
 - `tests/unit/test_ibkr_config.py` — 3 tests for the new field (plus 2 pre-existing repr tests)
 - `.env.example` — `IBKR_TRADING_MODE` documented next to `TRADING_MODE`; commented
   `NTRADER_REAL_MONEY_ACCOUNT` with its no-op-without-`--real-money` warning
+- `docs/setup/IBKR_SETUP.md` — Step 2 `.env` block and the `TRADING_MODE` vs `IBKR_TRADING_MODE`
+  note. **Added to this list by code review 2026-08-03** — it shipped in commit `f1a8a0b` but was
+  disclosed only as prose in the Completion Notes, never listed here
+- `_bmad-output/project-context.md` — the `#### Security` rule on changing the trading mode.
+  **Added to this list by code review 2026-08-03** — undisclosed at implementation time. This is
+  the repo's governing AI-rules file, so an unlisted edit to it propagates silently
 - `_bmad-output/implementation-artifacts/sprint-status.yaml` — story status transitions
 - `_bmad-output/implementation-artifacts/1-1-refuse-a-real-money-account-before-anything-connects.md` — this file
+- `_bmad-output/implementation-artifacts/deferred-work.md` — **NEW**, opened by code review
+  2026-08-03 for Phase 3's non-blocking findings
 
 **Untouched by construction:** `src/api/**`, `templates/**`, `src/db/**`, `src/services/**`, every
 strategy file, `pyproject.toml`, `uv.lock`.
@@ -297,3 +348,4 @@ strategy file, `pyproject.toml`, `uv.lock`.
 | ---------- | --------------------------------------------------------------------------- |
 | 2026-08-03 | Story created — comprehensive developer context assembled. Status → ready-for-dev. |
 | 2026-08-03 | Implemented Tasks 1–5: `ntrader_real_money_account` setting, `.env.example` documentation, `src/core/live_gate.py` (pure Layer 1 gate), and 35 unit tests covering the full truth table. 100% coverage on the new module; unit suite 1518 passed. Status → review. |
+| 2026-08-03 | Code review (3 adversarial layers). 3 decisions resolved by Allay: empty-account permit ACCEPTED (Layer 2 is load-bearing), paper-account real-money crossing ACCEPTED (deferred to Story 1.4), `GateDecision.mode` → `GateMode \| None` on refusals. 11 of 13 patches applied; 2 remain open (both `.env.example` / `docker-compose.yml`). 5 items deferred to `deferred-work.md`. Unit suite 1539 passed, gate module still 100%. Status → in-progress. |

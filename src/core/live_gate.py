@@ -46,7 +46,11 @@ class GateFlags:
     """Operator declarations that arrive from the command line.
 
     Attributes:
-        real_money: True when the operator passed ``--real-money``.
+        real_money: True when the operator passed ``--real-money``. Compared by
+            identity against ``True`` everywhere it is read, so a non-bool that
+            merely happens to be truthy — the string ``"false"``, say, arriving
+            from a config file or a Click option missing ``is_flag=True`` — can
+            never be mistaken for consent.
     """
 
     real_money: bool = False
@@ -74,31 +78,43 @@ class GateDecision:
 
     Attributes:
         permitted: True when the connection may proceed.
-        mode: The kind of connection that was evaluated.
+        mode: The kind of connection that was permitted, or None on a refusal.
+            A refused attempt has no established mode: the branch that rejected
+            it says nothing about what the operator intended, so reporting one
+            would misdescribe the attempt in whichever direction it failed.
+            ``refusal.reason`` already identifies the branch unambiguously.
         refusal: The refusal detail, or None when permitted.
     """
 
     permitted: bool
-    mode: GateMode
+    mode: GateMode | None
     refusal: GateRefusal | None = None
 
 
 def mask_account(account: str) -> str:
     """Mask an account identifier down to its last few characters.
 
+    Normalizes its own input rather than trusting the caller to have done it:
+    the helper is public and is reused for identifiers the gateway reports,
+    which do not pass through ``evaluate_gate``'s stripping and may carry
+    trailing whitespace or newlines into a log line.
+
     Args:
-        account: Raw account identifier, possibly empty.
+        account: Raw account identifier, possibly empty or padded.
 
     Returns:
-        An empty string for an empty account, ``"***"`` for an account too
-        short to reveal anything, otherwise ``"***"`` plus the last three
-        characters.
+        An empty string for an empty account, ``"***"`` for an account short
+        enough that revealing three characters would disclose most of it,
+        otherwise ``"***"`` plus the last three characters.
     """
-    if not account:
+    normalized = account.strip()
+    if not normalized:
         return ""
-    if len(account) <= ACCOUNT_MASK_VISIBLE_CHARS:
+    # Reveal the tail only when it stays a minority of the value: at length 4,
+    # showing three characters would disclose 75% of the identifier.
+    if len(normalized) <= 2 * ACCOUNT_MASK_VISIBLE_CHARS:
         return "***"
-    return f"***{account[-ACCOUNT_MASK_VISIBLE_CHARS:]}"
+    return f"***{normalized[-ACCOUNT_MASK_VISIBLE_CHARS:]}"
 
 
 def evaluate_gate(settings: "IBKRSettings", cli_flags: GateFlags) -> GateDecision:
@@ -118,10 +134,12 @@ def evaluate_gate(settings: "IBKRSettings", cli_flags: GateFlags) -> GateDecisio
     """
     env_account = settings.ntrader_real_money_account.strip()
     account = settings.tws_account.strip()
+    # Identity, not truthiness: only a genuine bool True is consent.
+    real_money_flag = cli_flags.real_money is True
 
-    if cli_flags.real_money or env_account:
+    if real_money_flag or env_account:
         return _evaluate_real_money_crossing(
-            real_money_flag=cli_flags.real_money,
+            real_money_flag=real_money_flag,
             env_account=env_account,
             account=account,
         )
@@ -143,7 +161,6 @@ def _evaluate_real_money_crossing(
     """
     if not env_account:
         return _refuse(
-            GateMode.REAL_MONEY,
             GateRefusalReason.REAL_MONEY_FLAG_WITHOUT_ENV,
             "Real-money trading was requested with --real-money, but "
             "NTRADER_REAL_MONEY_ACCOUNT is not set. Both declarations are required.",
@@ -151,19 +168,27 @@ def _evaluate_real_money_crossing(
 
     if not real_money_flag:
         return _refuse(
-            GateMode.REAL_MONEY,
             GateRefusalReason.REAL_MONEY_ENV_WITHOUT_FLAG,
             f"NTRADER_REAL_MONEY_ACCOUNT authorizes account {mask_account(env_account)}, "
             "but --real-money was not passed. Unset the variable to run paper trading.",
         )
 
-    if not account or env_account != account:
+    # Split from the mismatch case below: an absent TWS_ACCOUNT is a different
+    # operator error from two declarations that disagree, and rendering it as a
+    # comparison would print a mask against nothing.
+    if not account:
         return _refuse(
-            GateMode.REAL_MONEY,
             GateRefusalReason.REAL_MONEY_ACCOUNT_MISMATCH,
-            f"Authorized real-money account {mask_account(env_account) or '(unset)'} does not "
-            f"match the configured TWS_ACCOUNT {mask_account(account) or '(unset)'}. The two "
-            "declarations must name the same account exactly.",
+            f"NTRADER_REAL_MONEY_ACCOUNT authorizes account {mask_account(env_account)}, but "
+            "TWS_ACCOUNT is not set. The two declarations must name the same account exactly.",
+        )
+
+    if env_account != account:
+        return _refuse(
+            GateRefusalReason.REAL_MONEY_ACCOUNT_MISMATCH,
+            f"Authorized real-money account {mask_account(env_account)} does not match the "
+            f"configured TWS_ACCOUNT {mask_account(account)}. The two declarations must name "
+            "the same account exactly.",
         )
 
     return GateDecision(permitted=True, mode=GateMode.REAL_MONEY)
@@ -173,7 +198,6 @@ def _evaluate_paper(*, trading_mode: str, port: int, account: str) -> GateDecisi
     """Require all three paper conditions; an unrecognised port fails closed."""
     if trading_mode != "paper":
         return _refuse(
-            GateMode.PAPER,
             GateRefusalReason.NON_PAPER_TRADING_MODE,
             f"IBKR_TRADING_MODE is '{trading_mode}', not 'paper'. Paper trading is the only "
             "permitted mode without an explicit real-money authorization.",
@@ -182,7 +206,6 @@ def _evaluate_paper(*, trading_mode: str, port: int, account: str) -> GateDecisi
     if port not in PAPER_PORTS:
         permitted_ports = ", ".join(str(known) for known in sorted(PAPER_PORTS))
         return _refuse(
-            GateMode.PAPER,
             GateRefusalReason.NON_PAPER_PORT,
             f"IBKR_PORT {port} is not a known paper port ({permitted_ports}). Any other port "
             "is refused, including unrecognised ones.",
@@ -191,7 +214,6 @@ def _evaluate_paper(*, trading_mode: str, port: int, account: str) -> GateDecisi
     if account and not account.upper().startswith(PAPER_ACCOUNT_PREFIXES):
         paper_prefixes = "/".join(PAPER_ACCOUNT_PREFIXES)
         return _refuse(
-            GateMode.PAPER,
             GateRefusalReason.NON_PAPER_ACCOUNT_PREFIX,
             f"TWS_ACCOUNT {mask_account(account)} does not start with a paper account prefix "
             f"({paper_prefixes}), so it may be a real-money account.",
@@ -200,10 +222,13 @@ def _evaluate_paper(*, trading_mode: str, port: int, account: str) -> GateDecisi
     return GateDecision(permitted=True, mode=GateMode.PAPER)
 
 
-def _refuse(mode: GateMode, reason: GateRefusalReason, message: str) -> GateDecision:
-    """Build a refusal decision, keeping the permitted/refusal invariant intact."""
+def _refuse(reason: GateRefusalReason, message: str) -> GateDecision:
+    """Build a refusal decision, keeping the permitted/refusal invariant intact.
+
+    Refusals carry no mode: see :class:`GateDecision`.
+    """
     return GateDecision(
         permitted=False,
-        mode=mode,
+        mode=None,
         refusal=GateRefusal(reason=reason, message=message),
     )
