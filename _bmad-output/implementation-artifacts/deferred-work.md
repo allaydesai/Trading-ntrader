@@ -72,12 +72,62 @@ it was not actioned at the time. Archived with the phase; a fresh file opens wit
   configuration source, which is outside FR5's footprint. The port fallback (`7497`) has the same shape
   and is equally stale — `.env` and `docker-compose.yml` both use `4002` for Gateway. Fix both together.
 
-- **The equality validator cannot see the historical client's rotation range** —
-  `validate_client_ids_distinct` compares configured bases only, but `IBKRHistoricalClient.connect()`
-  rotates `base + 1 .. base + 5` on connect timeouts (`src/services/ibkr_client.py:188-219`), so
-  `IBKR_CLIENT_ID=8` with `IBKR_LIVE_CLIENT_ID=10` passes validation while its effective range 8–13
-  swallows both the live ID and reconcile's `+ 1`. Story 1.2's AC #2 specifies equality and nothing else,
-  and the scope note explicitly forbids widening it here, so the gap is documented in
-  `docs/setup/IBKR_SETUP.md` instead. Open question for Allay: should the validator reject
-  `ibkr_client_id <= ibkr_live_client_id + 1 <= ibkr_client_id + 5` (range overlap) rather than bare
-  equality, and should either field carry `ge=1, le=999` bounds? Both were deliberately left out.
+- ~~**The equality validator cannot see the historical client's rotation range**~~ — **RESOLVED in
+  code review, 2026-08-04.** Allay ruled to widen rather than document around it.
+  `validate_client_ids_distinct` now rejects any intersection between the historical rotation range
+  `[base, base + HISTORICAL_CLIENT_ID_ROTATION_SPAN]` and the reserved pair
+  `{ibkr_live_client_id, ibkr_live_client_id + 1}`, in both directions, and `ge=1` was added to both
+  fields (client ID `0` is IBKR's master client, which binds manually-entered TWS orders). Verified:
+  with the default live ID of `10`, bases `5`–`11` are now rejected and `1`–`4` accepted. Note the
+  predicate originally recorded here was wrong — `ibkr_client_id <= ibkr_live_client_id + 1 <=
+  ibkr_client_id + 5` tests only whether *reconcile* lands in the window and would have let
+  `IBKR_CLIENT_ID=5` through while its range `5–10` swallowed the live ID. `le=999` was deliberately
+  **not** added: it was repo convention with no basis in IBKR's limits, and enforces nothing real.
+  One coupling to watch — `HISTORICAL_CLIENT_ID_ROTATION_SPAN` in `src/config.py` duplicates
+  `IBKRHistoricalClient.connect(max_id_rotations=5)`, because `ibkr_client.py` imports `config.py`
+  and the dependency cannot be inverted. If that default ever changes, change both.
+
+## Deferred from: code review of story-1.2 (2026-08-04)
+
+- **`ENV=dev|qa|prod` does not propagate into nested `IBKRSettings`, and `.env.dev` / `.env.qa` still
+  set `IBKR_CLIENT_ID=10`** — `Settings(_env_file=".env.dev")` (`src/config.py:353`) does not reach
+  `ibkr: IBKRSettings = Field(default_factory=IBKRSettings)` (`src/config.py:302-304`); the factory
+  runs with no arguments and falls back to the class's own `env_file: ".env"`. Verified: with
+  `ENV=dev`, `get_settings().ibkr.ibkr_client_id` returns `1`, not the `10` in `.env.dev:15`. The
+  root cause was already recorded from Story 1.1 and is unchanged; what is new is that `.env.dev:15`
+  and `.env.qa:15` now hold a value that *would* be rejected by `validate_client_ids_distinct` if it
+  were ever read. Today the collision is invisible because the file is silently ignored — so fixing
+  the propagation gap without first correcting these two files will break dev and qa at startup.
+  Both files are untracked and local to this machine, so this cannot be fixed in the repo; it is an
+  operator action. Docker compounds it: compose interpolation reads only `./.env`, so `ENV=qa` on
+  bare metal and `docker compose up` resolve different client IDs from the same checkout.
+
+- **`--client-id 0` is silently swallowed, and two call sites disagree on the idiom** —
+  `src/cli/commands/data.py:463` uses `client_id or settings.ibkr.ibkr_client_id`, so an explicit
+  `--client-id 0` is falsy, falls back to the configured value, and the confirmation table at
+  `data.py:498` then prints the fallback rather than what the operator asked for. No error, no
+  warning. `scripts/venue/resolve_venues_ibkr.py:143` uses `is not None` for the same option, so the
+  two paths behave differently for the same input. Pre-existing and untouched by Story 1.2. Note
+  that adding `ge=1` to the settings fields does **not** fix this: the CLI passes its override
+  straight to `IBKRHistoricalClient(client_id=...)` without routing it through `IBKRSettings`, so
+  field bounds never see it. The fix is `client_id if client_id is not None else ...` at the call
+  site, matching the `resolve_venues_ibkr.py` idiom.
+
+- **`IBKR_CLIENT_ID=` (present but empty) crashes the catalog path with an unattributed
+  `ValueError`** — `src/services/data_catalog.py:139-142` calls `os.environ.get("IBKR_CLIENT_ID",
+  "1")`, whose default applies only when the variable is *unset*; a set-but-empty value returns `""`
+  and `int("")` raises `ValueError: invalid literal for int() with base 10: ''` from inside the
+  `ibkr_client` property, naming no variable. The docstring's "default: 1" does not hold for this
+  case. `tests/unit/services/test_data_catalog.py:338-355` covers unset (`patch.dict(os.environ, {},
+  clear=True)`) but not set-empty. Same shape applies to the `IBKR_HOST` and `IBKR_PORT` fallbacks
+  on the adjacent lines. Fold into the `DataCatalogService` typed-settings refactor above rather
+  than patching the three literals individually.
+
+- **Configuration errors reach the operator as raw pydantic tracebacks** — `src/cli/main.py:19` and
+  `src/db/session.py:11` both call `get_settings()` at module scope, so any settings validation
+  failure terminates the process with an uncaught `ValidationError` before argument parsing. Verified
+  that even `python -m src.cli.main --help` is unreachable when a client-ID collision is configured.
+  Pre-existing structure, newly reachable now that `IBKRSettings` has a raising validator. A single
+  try/except at each entry point that prints the validator's message without the traceback would
+  cover it — and would also contain the secret-leak exposure noted in the Story 1.2 review, since
+  the leak is in pydantic's `input_value=` rendering rather than in the message itself.

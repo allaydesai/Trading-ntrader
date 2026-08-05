@@ -1,6 +1,6 @@
 # Story 1.2: Isolate the Live Client ID from the Historical Data Client
 
-Status: review
+Status: in-progress
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -230,6 +230,146 @@ other.
   - [x] `docker compose config` — valid, with `IBKR_CLIENT_ID: "1"` and `IBKR_LIVE_CLIENT_ID: "10"`
         both resolving into `ntrader-app`.
   - [x] Confirm `pyproject.toml` and `uv.lock` are unchanged (AR3 — zero new dependencies).
+
+### Review Findings
+
+_Code review 2026-08-04 — three adversarial layers (Blind Hunter, Edge Case Hunter, Acceptance
+Auditor). All findings below were re-verified empirically against the working tree before being
+recorded; two subagent claims were disproved and dropped._
+
+**Resolution:** both decisions were ruled on by Allay (widen the validator; add `ge=1`, skip
+`le=999`) and applied TDD Red→Green, along with every patch except the `.env.example` rewrite,
+which `protect-files.sh` blocks pending explicit approval. Post-change verification: **1561 unit
+tests pass** (baseline 1547 + 14 new), `make format` / `make lint` / `make typecheck` clean,
+`get_settings().ibkr` → `1 10`, CLI help normal, `docker compose config` resolves `1`/`10`,
+`pyproject.toml` and `uv.lock` unchanged. Boundary sweep confirms bases `5`–`11` are now rejected
+and `1`–`4` accepted at the default live ID.
+
+**Decision needed** — both are the open questions Task 2's scope note deliberately left for Allay.
+They are recorded here because the review independently reached the same two gaps from three
+directions, which raises their priority above "someday".
+
+- [x] [Review][Decision] **The validator rejects equality only, so the rotation range still walks
+      over both reserved IDs** — `IBKRHistoricalClient.connect()` rotates `base..base+5`
+      (`src/services/ibkr_client.py:218-219`), so with the default `ibkr_live_client_id=10` every
+      base in `5..11` passes `validate_client_ids_distinct` and still collides: `5..10` reaches the
+      live ID, `6..11` reaches reconcile's `11`. Verified — `IBKRSettings(_env_file=None,
+      ibkr_client_id=5)` constructs cleanly, as does `ibkr_client_id=11`. The reverse direction is
+      equally open: `ibkr_client_id=1` with `ibkr_live_client_id=3` also constructs, putting the
+      live ID inside the historical rotation window. The equality check rejects exactly one of the
+      seven colliding values. Options: (a) widen the validator to reject range intersection,
+      (b) leave as-is and rely on documentation, (c) defer to Story 1.3 when the live ID gains its
+      first consumer. [src/config.py:107]
+- [x] [Review][Decision] **Neither field has bounds; `0` is IBKR's master client ID** — verified
+      constructing successfully: `ibkr_client_id=0`, `-5`, `2147483648`, and
+      `ibkr_live_client_id=0`. Client ID `0` binds to orders placed manually in TWS, which is the
+      exact cross-talk this story exists to prevent; `-5` additionally makes rotation walk `-5..0`
+      through it. The change also *removed* the only stated bound (the old `IBKR_SETUP.md:44`
+      "any number (1-999)") without replacing it with an enforced one. Note `kraken_rate_limit`
+      already uses `ge=1, le=20` as in-file precedent (`src/config.py:129-131`). Options:
+      (a) add `ge=1, le=999` to both fields, (b) bound in documentation only, (c) accept.
+      [src/config.py:20-37]
+
+**Patch**
+
+- [x] [Review][Patch] **The new validator leaks secrets into every traceback it produces** — the
+      first `model_validator` on `IBKRSettings`, so this vector is introduced by this change.
+      pydantic-settings feeds the *entire* environment in as the model input (`extra: "ignore"`),
+      and pydantic renders `input_value={...}` on a model-validator failure. Verified with
+      `IBKR_CLIENT_ID=10`: the message ends `...LKQos12kfQvNNLxhw7Tvk0'}`, which is the last 22 of
+      the 32 characters of `FMP_API_KEY`. `repr=False` on `tws_password`/`tws_account` does not
+      help — the leak is in the raw input dict, not the model repr. This fires precisely when an
+      operator is misconfigured and most likely to paste the traceback into an issue, a chat, or
+      CI output. Fix: add `"hide_input_in_errors": True` to `model_config`.
+      [src/config.py:116-121]
+- [x] [Review][Patch] **Two script entry points still default the client ID to `10`** — the same
+      stale fallback AC #5 fixed in `data_catalog.py`, left in place elsewhere. Both read
+      `os.environ` directly and never construct `IBKRSettings`, so the validator is structurally
+      blind to them, and both then rotate `10→15`, swallowing reconcile's `11` too. The reconnect
+      probe is the worse of the two: its modes are `no-stop` and `fetch-then-hang`, i.e. it is
+      designed to hold the ID without releasing it. Fix: `10` → `1`, matching
+      `data_catalog.py:139`. [scripts/diagnostics/ibkr_reconnect_probe.py:139,
+      scripts/venue/resolve_venues_ibkr.py:143]
+- [x] [Review][Patch] **`IBKR_SETUP.md` contradicts itself three ways on the safe range** — `:92`
+      says raising the base to `8` "would silently swallow both reserved IDs"; `:96-97` then lands
+      on the rule "Keep `IBKR_CLIENT_ID` below the live reservation", which permits that very `8`
+      (and `5`–`9`); `:181` says "stay at `4` or lower"; and the table at `:85` presents `1–6` as
+      the historical reservation while `:181` authorizes base `4`, whose range reaches `9`. An
+      operator gets a different answer depending on which line they read. Fix: state one rule —
+      `1`–`4`, i.e. at least 6 below `IBKR_LIVE_CLIENT_ID` — everywhere.
+      [docs/setup/IBKR_SETUP.md:85,92,96-97,181]
+- [ ] [Review][Patch] **PARTIAL — `.env.example` still says "must differ"** — `README.md:412-413`
+      and both field descriptions (`src/config.py`) are done: they now state the 1–4 bound and that
+      the ranges must not overlap in either direction. `.env.example:25-29` is **not** done —
+      `.claude/hooks/protect-files.sh` blocks `.env*` through Edit/Write, and this needs the same
+      one-off approval Task 0 and Story 1.1 used. It is the file that gets copied to `.env`, and it
+      still hardcodes "effective range 1-6" as though fixed rather than `base..base+5`, so it gives
+      no signal that changing the base moves the range. Verified the current values (`1`/`10`) do
+      construct successfully, so this is wording only, not a broken example.
+      [.env.example:25-29]
+- [x] [Review][Patch] **The range predicate recorded in `deferred-work.md` is wrong** — it proposes
+      rejecting `ibkr_client_id <= ibkr_live_client_id + 1 <= ibkr_client_id + 5`, which tests only
+      whether *reconcile* lands in the rotation window. With `ibkr_client_id=5,
+      ibkr_live_client_id=10` it evaluates `5 <= 11 <= 10` → false, so it would not reject, even
+      though the range `5..10` swallows the live ID. Since this is the exact question Allay is
+      being asked to rule on, the predicate must be correct: it needs to test the live ID too
+      (`base <= live <= base+5 or base <= live+1 <= base+5`).
+      [_bmad-output/implementation-artifacts/deferred-work.md:81-83]
+- [x] [Review][Patch] **No upgrade note for operators the old docs told to use `10`** — the
+      pre-change `IBKR_SETUP.md:44` instructed `IBKR_CLIENT_ID=10  # Can be any number (1-999)`.
+      Anyone who followed it now gets an uncaught `ValidationError` from `get_settings()` at module
+      scope, making *every* command unreachable including `--help` (verified via
+      `src/cli/main.py:19` and `src/db/session.py:11`). The troubleshooting section was edited in
+      this same change and still does not mention it. Fix: one line in the Error-326 /
+      troubleshooting block. [docs/setup/IBKR_SETUP.md]
+- [x] [Review][Patch] **The new docstring hardcodes `10`/`11` although both derive from a
+      configurable setting** — "10 and 11 belong to the live session and reconcile" becomes false
+      the moment `IBKR_LIVE_CLIENT_ID` is set to anything else, which `test_live_client_id_loads_
+      from_env` proves is supported by setting it to `20`. Fix: name the setting, not its current
+      default. [src/services/data_catalog.py:129-130]
+- [x] [Review][Patch] **The validator docstring and the reference doc state opposite failure
+      modes** — `src/config.py:103` asserts "IBKR evicts the older connection", while
+      `docs/setup/IBKR_SETUP.md:78` says a duplicate ID "either gets error 326 or evicts the
+      incumbent". These are materially different outcomes: error 326 refuses the *newcomer* (loud,
+      safe), eviction kills the live session mid-position (silent, severe). The justification for
+      hard-failing at construction rests on the severe reading. Fix: state one, with the condition
+      under which each occurs. [src/config.py:101-106, docs/setup/IBKR_SETUP.md:78]
+
+**Deferred** — pre-existing, not caused by this change. Recorded in `deferred-work.md`.
+
+- [x] [Review][Defer] **`DataCatalogService` bypasses typed settings entirely** — already recorded
+      by the dev under `## Deferred from: story-1.2`; the review independently confirmed it from
+      two layers. No new entry needed. [src/services/data_catalog.py:135-141]
+- [x] [Review][Defer] **`ENV=dev|qa` does not propagate to nested `IBKRSettings`, and `.env.dev` /
+      `.env.qa` still hold `IBKR_CLIENT_ID=10`** — deferred, pre-existing (recorded from Story
+      1.1). Verified inert *today*: `ENV=dev` yields `ibkr_client_id=1`, because the nested
+      `default_factory=IBKRSettings` reads `.env` regardless. That inertness is the hazard — the
+      day propagation is fixed, dev and qa fail at startup. Both files are untracked and local.
+      [src/config.py:302-304, .env.dev:15, .env.qa:15]
+- [x] [Review][Defer] **`--client-id 0` is silently swallowed** — `client_id or
+      settings.ibkr.ibkr_client_id` treats `0` as unset and prints the fallback in the confirmation
+      table. `scripts/venue/resolve_venues_ibkr.py:143` uses `is not None` for the same option, so
+      the two paths disagree. Untouched by this change. [src/cli/commands/data.py:463]
+- [x] [Review][Defer] **`IBKR_CLIENT_ID=` (set but empty) crashes with a bare `ValueError`** — the
+      `os.environ.get(..., "1")` default applies only when *unset*, so `int("")` raises with no
+      mention of which variable is at fault, and the docstring's "default: 1" does not hold. The
+      existing test covers unset, not set-empty. Pre-existing pattern.
+      [src/services/data_catalog.py:139-142]
+- [x] [Review][Defer] **Entry points surface raw pydantic tracebacks for config errors** — no
+      readable config-error path at `src/cli/main.py` or the web app. Pre-existing; interacts with
+      the upgrade-breakage patch above. [src/cli/main.py:19, src/db/session.py:11]
+
+**Dismissed (4)** — recorded so they are not re-raised next review.
+
+- `test_data_catalog.py:355` "has no environment isolation" — **false**. It runs under
+  `patch.dict(os.environ, {}, clear=True)`; the whole environment is cleared.
+- "`model_validator` import may be missing (F821)" — **false**. Already imported at
+  `src/config.py:10`; lint and typecheck pass.
+- "`ibkr_live_client_id` has no consumer and `+ 1` is unenforced" — **by design**. Story 1.3 wires
+  the consumer, Story 4.6 uses `+ 1`; this story's scope note forbids adding either here.
+- "`test_reservation_is_documented_in_field_metadata` asserts prose, not behavior" — **working as
+  specified**. Task 1 deliberately designed it as a loose-substring anti-rot guard on the field
+  metadata, and it does exactly that.
 
 ## Dev Notes
 
@@ -496,3 +636,4 @@ $ uv run python -c "from src.config import IBKRSettings; print(IBKRSettings().ib
 | 2026-08-04 | Tasks 1–2: `ibkr_live_client_id` field + `validate_client_ids_distinct` model validator, TDD Red → Green (8 new unit tests). |
 | 2026-08-04 | Tasks 3–4: reservation propagated to `.env.example`, `docker-compose.yml`, `IBKR_SETUP.md`, `README.md`; `DataCatalogService` unset-env fallback aligned to `1`. |
 | 2026-08-04 | Task 5: verified — 1547 unit tests pass (baseline 1539 + 8), lint/format/typecheck clean, compose resolves both IDs, zero new dependencies. Status → review. |
+| 2026-08-04 | Code review (3 adversarial layers): 2 decisions, 8 patches, 5 deferred, 4 dismissed. Both decisions ruled on and applied — validator widened from equality to rotation-range intersection, `ge=1` added to both fields, `hide_input_in_errors` added to stop the new validator echoing secrets into tracebacks. 7 of 8 patches applied; `.env.example` wording blocked on hook approval. 1561 unit tests pass (1547 + 14). Status → in-progress. |

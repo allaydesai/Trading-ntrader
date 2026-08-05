@@ -10,6 +10,12 @@ from ibapi.common import MarketDataTypeEnum  # type: ignore
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings
 
+# How far above its configured base the historical client may rotate when a connect
+# attempt times out. Source of truth is IBKRHistoricalClient.connect(max_id_rotations=5)
+# in src/services/ibkr_client.py; it cannot be imported here (that module imports this
+# one), so the two must be kept in step by hand.
+HISTORICAL_CLIENT_ID_ROTATION_SPAN = 5
+
 
 class IBKRSettings(BaseSettings):
     """Interactive Brokers configuration settings."""
@@ -19,20 +25,24 @@ class IBKRSettings(BaseSettings):
     ibkr_port: int = Field(default=7497, description="Connection port (7497=TWS paper)")
     ibkr_client_id: int = Field(
         default=1,
+        ge=1,
         description=(
             "Client ID for the historical data client (catalog fetch). Reservation: "
-            "historical = ibkr_client_id, which rotates through ibkr_client_id + 1 .. "
+            "historical = ibkr_client_id, which rotates through ibkr_client_id .. "
             "ibkr_client_id + 5 on connect retries, so its effective range is 1-6 at the "
-            "default. Must differ from ibkr_live_client_id."
+            "default. That whole range must stay clear of ibkr_live_client_id and "
+            "ibkr_live_client_id + 1 — at the default live ID, keep this at 4 or below."
         ),
     )
     ibkr_live_client_id: int = Field(
         default=10,
+        ge=1,
         description=(
             "Client ID for the live trading session's IBKR data + execution clients. "
             "Reservation: historical fetch = ibkr_client_id (which rotates up to "
             "ibkr_client_id + 5 on connect retries), live session = ibkr_live_client_id, "
-            "on-demand reconcile = ibkr_live_client_id + 1. Must differ from ibkr_client_id."
+            "on-demand reconcile = ibkr_live_client_id + 1. Both reserved IDs must sit "
+            "outside the historical client's rotation range."
         ),
     )
 
@@ -98,18 +108,35 @@ class IBKRSettings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_client_ids_distinct(self) -> "IBKRSettings":
-        """Live and historical clients must not share an IBKR client ID.
+        """The historical client's rotation range must not touch either reserved live ID.
 
-        IBKR evicts the older connection when two clients present the same ID, so a
-        shared ID would silently drop either the running session or an in-flight
-        historical import (FR5).
+        A second connection presenting a client ID already in use is refused with
+        error 326 when the incumbent is still live on it, and takes the ID over when
+        the incumbent's socket is stale (a SIGKILL'd run leaves the Gateway holding
+        an ID for tens of seconds). Either outcome breaks a running session or an
+        in-flight import, so the two allocations must not overlap at all (FR5).
+
+        Equality is not sufficient: IBKRHistoricalClient.connect() rotates
+        ibkr_client_id .. ibkr_client_id + 5 on connect timeouts, and the live
+        session reserves both ibkr_live_client_id and ibkr_live_client_id + 1 (for
+        on-demand reconcile). This rejects any intersection of the two.
         """
-        if self.ibkr_live_client_id == self.ibkr_client_id:
+        historical_last = self.ibkr_client_id + HISTORICAL_CLIENT_ID_ROTATION_SPAN
+        reconcile_id = self.ibkr_live_client_id + 1
+
+        if self.ibkr_client_id <= reconcile_id and self.ibkr_live_client_id <= historical_last:
+            safe_ceiling = self.ibkr_live_client_id - HISTORICAL_CLIENT_ID_ROTATION_SPAN - 1
+            remedy = (
+                f"set ibkr_client_id to {safe_ceiling} or below"
+                if safe_ceiling >= 1
+                else f"set ibkr_live_client_id to {historical_last + 1} or above"
+            )
             raise ValueError(
-                f"ibkr_client_id and ibkr_live_client_id must differ "
-                f"(both are {self.ibkr_client_id}). Reservation: historical="
-                f"ibkr_client_id, live session=ibkr_live_client_id, "
-                f"reconcile=ibkr_live_client_id + 1."
+                f"ibkr_client_id and ibkr_live_client_id overlap: historical client "
+                f"{self.ibkr_client_id} rotates {self.ibkr_client_id}-{historical_last} on "
+                f"connect retries, which reaches the live session's reserved IDs "
+                f"{self.ibkr_live_client_id} (live) and {reconcile_id} (reconcile). "
+                f"To fix, {remedy}."
             )
         return self
 
@@ -118,6 +145,9 @@ class IBKRSettings(BaseSettings):
         "env_file_encoding": "utf-8",
         "case_sensitive": False,
         "extra": "ignore",
+        # pydantic-settings passes the entire environment in as the model input, so
+        # without this a config error renders unrelated secrets into the traceback.
+        "hide_input_in_errors": True,
     }
 
 

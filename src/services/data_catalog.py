@@ -127,7 +127,10 @@ class DataCatalogService:
             - IBKR_HOST (default: 127.0.0.1)
             - IBKR_PORT (default: 7497, but typically set to 4002 for Gateway paper)
             - IBKR_CLIENT_ID (default: 1 — the historical half of the client-ID
-              reservation; 10 and 11 belong to the live session and reconcile)
+              reservation. The live session reserves IBKR_LIVE_CLIENT_ID and
+              IBKR_LIVE_CLIENT_ID + 1; see IBKRSettings for the allocation. Note
+              this path reads os.environ directly and so is not covered by that
+              class's validation.)
 
             The .env file should be loaded before this service is initialized.
         """

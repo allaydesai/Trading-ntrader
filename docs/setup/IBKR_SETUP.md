@@ -41,8 +41,8 @@ Ensure your `.env` file has the correct settings:
 # IBKR Connection Settings
 IBKR_HOST=127.0.0.1
 IBKR_PORT=7497              # 7497 for TWS paper trading
-IBKR_CLIENT_ID=1            # Historical fetch. Rotates 1-6 on connect retry.
-IBKR_LIVE_CLIENT_ID=10      # Live trading session. Must differ from IBKR_CLIENT_ID.
+IBKR_CLIENT_ID=1            # Historical fetch. Rotates 1-6 on retry, so keep it 1-4.
+IBKR_LIVE_CLIENT_ID=10      # Live session; also reserves 11 for reconcile.
 TRADING_MODE=paper          # Read under Docker (see note below)
 IBKR_TRADING_MODE=paper     # Read on bare metal (see note below)
 
@@ -75,10 +75,11 @@ DATABASE_URL=postgresql://ntrader:ntrader_dev_2025@localhost:5432/trading_ntrade
 
 ### Client ID reservation
 
-IBKR does not multiplex a client ID: a second connection presenting an ID already in use either
-gets error 326 or **evicts the incumbent**. A live session sharing the catalog fetcher's ID would
-be knocked off its socket mid-position by an ordinary historical import. The IDs are therefore
-allocated, not picked at random:
+IBKR does not multiplex a client ID. A second connection presenting an ID already in use is
+refused with **error 326** while the incumbent is still live on it, and **takes the ID over** when
+the incumbent's socket is stale — a SIGKILL'd run leaves the Gateway holding an ID for tens of
+seconds. Either way something breaks: the import fails, or a live session is knocked off its
+socket mid-position. The IDs are therefore allocated, not picked at random:
 
 | Consumer | Setting | ID | Effective range |
 |---|---|---|---|
@@ -87,14 +88,33 @@ allocated, not picked at random:
 | On-demand reconcile | `IBKR_LIVE_CLIENT_ID + 1` | `11` | 11 |
 
 The historical client's range is wider than its configured ID because
-`IBKRHistoricalClient.connect()` rotates through `base + 1 .. base + 5` when a connect attempt
-times out (a SIGKILL'd run leaves the Gateway holding an ID for tens of seconds). **That rotation
-is why the gap between 6 and 10 exists** — and why raising `IBKR_CLIENT_ID` to, say, `8` would
-silently swallow both reserved IDs even though the two settings are not equal.
+`IBKRHistoricalClient.connect()` rotates through `base .. base + 5` when a connect attempt times
+out. **That rotation is why the gap between 6 and 10 exists.**
 
-`IBKRSettings` rejects `IBKR_CLIENT_ID == IBKR_LIVE_CLIENT_ID` at construction, but it compares
-configured bases only — it cannot see the rotation range. Keep `IBKR_CLIENT_ID` below the live
-reservation.
+#### The rule
+
+> **Keep `IBKR_CLIENT_ID` between `1` and `4`.**
+
+Four, not nine: a base of `5` already rotates onto `10`, and anything from `5` to `11` reaches one
+of the two reserved IDs. `IBKRSettings` enforces this — it rejects any configuration whose
+historical rotation range intersects `IBKR_LIVE_CLIENT_ID` or `IBKR_LIVE_CLIENT_ID + 1`, and the
+error names the safe ceiling for your configuration. The check is symmetric, so lowering
+`IBKR_LIVE_CLIENT_ID` into the historical range is rejected too. If you raise
+`IBKR_LIVE_CLIENT_ID`, the safe ceiling for `IBKR_CLIENT_ID` moves with it — it is always
+`IBKR_LIVE_CLIENT_ID - 6`.
+
+Both settings must also be `>= 1`. Client ID `0` is IBKR's **master client**, which receives order
+status for orders placed by every other client — including ones entered by hand in TWS. Do not use
+it for either consumer. (This is unrelated to the Gateway's own "Master API client ID" setting in
+[Step 1](#step-1-configure-tws--ib-gateway), which stays at `0`.)
+
+#### Upgrading from an earlier setup
+
+Before this reservation existed, this guide told you to set `IBKR_CLIENT_ID=10` and described it as
+"any number (1-999)". That value is now rejected at startup — it *is* the live session's ID — and
+because settings load at import time, every command fails, including `--help`. If you see a
+`ValidationError` mentioning `ibkr_client_id` after pulling, set `IBKR_CLIENT_ID=1` in your `.env`
+and add `IBKR_LIVE_CLIENT_ID=10`. Check `.env.dev` and `.env.qa` too if you keep them.
 
 ## Step 3: Test Connection
 
@@ -176,9 +196,9 @@ Fetch Summary
 ```
 
 **Solutions:**
-1. Change `IBKR_CLIENT_ID` in `.env` to a different number **below the live reservation** — `10`
-   and `11` are taken (see [Client ID reservation](#client-id-reservation)), and the historical
-   client auto-rotates five IDs above whatever base you choose, so stay at `4` or lower
+1. Change `IBKR_CLIENT_ID` in `.env` to another value **between `1` and `4`** (see
+   [Client ID reservation](#client-id-reservation)). Anything from `5` up reaches the live
+   session's reserved IDs once the historical client rotates, and is rejected at startup
 2. Close any other API clients connected to TWS
 3. Restart TWS
 

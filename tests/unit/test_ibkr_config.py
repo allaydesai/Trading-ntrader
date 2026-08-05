@@ -299,3 +299,124 @@ class TestIBKRClientIdIsolation:
         assert description is not None
         assert "ibkr_client_id" in description
         assert "+ 1" in description
+
+    # -- Rotation-range isolation (code review 2026-08-04) --------------------
+    #
+    # Equality alone is not the contract. IBKRHistoricalClient.connect() rotates
+    # base..base+5 on connect timeouts (src/services/ibkr_client.py), so the
+    # historical client's *effective* range must not touch either reserved live
+    # ID. With the default live ID of 10, every base in 5..11 collides.
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize(
+        "historical",
+        [
+            pytest.param(5, id="rotation-ceiling-reaches-live-id"),
+            pytest.param(6, id="rotation-covers-live-and-reconcile"),
+            pytest.param(9, id="base-just-below-live"),
+            pytest.param(11, id="base-is-the-reconcile-id"),
+        ],
+    )
+    def test_historical_rotation_range_may_not_reach_the_reserved_ids(
+        self, monkeypatch, historical
+    ):
+        """A base that is merely unequal is not safe if its rotation range collides."""
+        from pydantic import ValidationError
+
+        from src.config import IBKRSettings
+
+        # Arrange
+        self._clear_client_id_env(monkeypatch)
+
+        # Act & Assert — live defaults to 10, so reconcile is 11
+        with pytest.raises(ValidationError) as excinfo:
+            IBKRSettings(_env_file=None, ibkr_client_id=historical)
+
+        message = str(excinfo.value)
+        assert "ibkr_client_id" in message
+        assert "ibkr_live_client_id" in message
+
+    @pytest.mark.unit
+    def test_live_id_may_not_sit_inside_the_historical_rotation_range(self, monkeypatch):
+        """The collision is symmetric — lowering the live ID is as fatal as raising the base."""
+        from pydantic import ValidationError
+
+        from src.config import IBKRSettings
+
+        # Arrange
+        self._clear_client_id_env(monkeypatch)
+
+        # Act & Assert — historical 1 rotates 1..6, so a live ID of 3 sits inside it
+        with pytest.raises(ValidationError):
+            IBKRSettings(_env_file=None, ibkr_client_id=1, ibkr_live_client_id=3)
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize(
+        ("historical", "live"),
+        [
+            pytest.param(1, 10, id="repo-defaults"),
+            pytest.param(4, 10, id="highest-safe-base"),
+            pytest.param(1, 20, id="live-raised"),
+            pytest.param(20, 1, id="historical-far-above-live"),
+        ],
+    )
+    def test_non_overlapping_ranges_are_permitted(self, monkeypatch, historical, live):
+        """Configurations with genuine clearance still construct."""
+        from src.config import IBKRSettings
+
+        # Arrange
+        self._clear_client_id_env(monkeypatch)
+
+        # Act
+        settings = IBKRSettings(_env_file=None, ibkr_client_id=historical, ibkr_live_client_id=live)
+
+        # Assert
+        assert settings.ibkr_client_id == historical
+        assert settings.ibkr_live_client_id == live
+
+    # -- Bounds ---------------------------------------------------------------
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize("field", ["ibkr_client_id", "ibkr_live_client_id"])
+    @pytest.mark.parametrize("value", [0, -5])
+    def test_client_ids_below_one_are_rejected(self, monkeypatch, field, value):
+        """Client ID 0 is IBKR's master client (binds manual TWS orders); negatives are invalid."""
+        from pydantic import ValidationError
+
+        from src.config import IBKRSettings
+
+        # Arrange
+        self._clear_client_id_env(monkeypatch)
+
+        # Act & Assert
+        with pytest.raises(ValidationError):
+            IBKRSettings(_env_file=None, **{field: value})
+
+    # -- Error output hygiene -------------------------------------------------
+
+    @pytest.mark.unit
+    def test_validation_error_does_not_echo_the_environment(self, monkeypatch):
+        """A collision must not print unrelated env values into the traceback.
+
+        pydantic-settings passes the whole environment in as the model input, so
+        without hide_input_in_errors a config mistake renders secrets held in
+        other variables (e.g. FMP_API_KEY) into logs and CI output.
+        """
+        from pydantic import ValidationError
+
+        from src.config import IBKRSettings
+
+        # Arrange
+        self._clear_client_id_env(monkeypatch)
+        monkeypatch.setenv("FMP_API_KEY", "super-secret-key-value")
+        monkeypatch.setenv("IBKR_CLIENT_ID", "10")
+
+        # Act
+        with pytest.raises(ValidationError) as excinfo:
+            IBKRSettings(_env_file=None)
+
+        # Assert — the message explains the problem without quoting the input
+        message = str(excinfo.value)
+        assert "super-secret-key-value" not in message
+        assert "input_value=" not in message
+        assert "ibkr_live_client_id" in message
