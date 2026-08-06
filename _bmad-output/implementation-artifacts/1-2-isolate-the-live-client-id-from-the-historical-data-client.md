@@ -1,6 +1,6 @@
 # Story 1.2: Isolate the Live Client ID from the Historical Data Client
 
-Status: in-progress
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -298,15 +298,20 @@ directions, which raises their priority above "someday".
       operator gets a different answer depending on which line they read. Fix: state one rule —
       `1`–`4`, i.e. at least 6 below `IBKR_LIVE_CLIENT_ID` — everywhere.
       [docs/setup/IBKR_SETUP.md:85,92,96-97,181]
-- [ ] [Review][Patch] **PARTIAL — `.env.example` still says "must differ"** — `README.md:412-413`
-      and both field descriptions (`src/config.py`) are done: they now state the 1–4 bound and that
-      the ranges must not overlap in either direction. `.env.example:25-29` is **not** done —
-      `.claude/hooks/protect-files.sh` blocks `.env*` through Edit/Write, and this needs the same
-      one-off approval Task 0 and Story 1.1 used. It is the file that gets copied to `.env`, and it
-      still hardcodes "effective range 1-6" as though fixed rather than `base..base+5`, so it gives
-      no signal that changing the base moves the range. Verified the current values (`1`/`10`) do
-      construct successfully, so this is wording only, not a broken example.
-      [.env.example:25-29]
+- [x] [Review][Patch] **DONE 2026-08-05 — `.env.example` wording rewritten** — `README.md:412-413`
+      and both field descriptions (`src/config.py`) were already done: they state the 1–4 bound and
+      that the ranges must not overlap in either direction. `.env.example:25-29` was the last
+      holdout — `.claude/hooks/protect-files.sh` blocks `.env*` through Edit/Write, so it needed
+      the same one-off approval Task 0 and Story 1.1 used. Allay approved it; written via Bash, the
+      hook left unchanged, matching that precedent. The block now states the rotation range as
+      `base..base+5` and says explicitly that the window **moves with the base** (`1-6` is what
+      base `1` happens to give, not a fixed range), replaces "must differ" with the actual
+      non-overlap rule in both directions, names `validate_client_ids_distinct` as the enforcement
+      point, and records the `>= 1` floor because client ID `0` is IBKR's master client. Every
+      claim in the new text was verified empirically rather than asserted: `.env.example` still
+      constructs (`1`/`10`); base `5` — the example the comment now gives — is genuinely rejected;
+      bases `1`–`4` are all genuinely accepted; and client ID `0` is genuinely rejected.
+      [.env.example:25-35]
 - [x] [Review][Patch] **The range predicate recorded in `deferred-work.md` is wrong** — it proposes
       rejecting `ibkr_client_id <= ibkr_live_client_id + 1 <= ibkr_client_id + 5`, which tests only
       whether *reconcile* lands in the rotation window. With `ibkr_client_id=5,
@@ -636,4 +641,5 @@ $ uv run python -c "from src.config import IBKRSettings; print(IBKRSettings().ib
 | 2026-08-04 | Tasks 1–2: `ibkr_live_client_id` field + `validate_client_ids_distinct` model validator, TDD Red → Green (8 new unit tests). |
 | 2026-08-04 | Tasks 3–4: reservation propagated to `.env.example`, `docker-compose.yml`, `IBKR_SETUP.md`, `README.md`; `DataCatalogService` unset-env fallback aligned to `1`. |
 | 2026-08-04 | Task 5: verified — 1547 unit tests pass (baseline 1539 + 8), lint/format/typecheck clean, compose resolves both IDs, zero new dependencies. Status → review. |
+| 2026-08-05 | Closed out. The last outstanding item -- the `.env.example` client-ID wording -- was rewritten under a one-off approved Bash write (`.env*` is Edit/Write-protected; the hook was left unchanged, per Story 1.1's precedent). It now states the rotation range as `base..base+5` and that the window moves with the base, replaces the superseded "must differ" rule with the actual non-overlap-in-either-direction rule, names `validate_client_ids_distinct` as the enforcement point, and records the `>= 1` floor. All four claims in the new text verified empirically against `IBKRSettings`. AC #4 now genuinely met across all four documented-configuration files. Status -> done. |
 | 2026-08-04 | Code review (3 adversarial layers): 2 decisions, 8 patches, 5 deferred, 4 dismissed. Both decisions ruled on and applied — validator widened from equality to rotation-range intersection, `ge=1` added to both fields, `hide_input_in_errors` added to stop the new validator echoing secrets into tracebacks. 7 of 8 patches applied; `.env.example` wording blocked on hook approval. 1561 unit tests pass (1547 + 14). Status → in-progress. |

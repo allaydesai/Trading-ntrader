@@ -36,7 +36,17 @@
 
 generated: 2026-08-03
 last_updated: >-
-  2026-08-05 (Story 1.3 implemented → code-reviewed → done. src/core/live_node_builder.py delivers
+  2026-08-05 (Story 1.2 CLOSED -> done. Its last outstanding item, the .env.example
+  client-ID wording, was rewritten under a one-off approved Bash write (.env* is Edit/Write-
+  protected; the hook was left unchanged, per Story 1.1's precedent). The block now states the
+  rotation range as base..base+5 and that the window MOVES WITH THE BASE (1-6 is what base 1
+  happens to give, not a fixed range), replaces the superseded "must differ" rule with the real
+  non-overlap-in-either-direction rule, names validate_client_ids_distinct as the enforcement
+  point, and records the >= 1 floor (client ID 0 is IBKR's master client). All four claims in the
+  new text were verified empirically against IBKRSettings rather than asserted: the file still
+  constructs (1/10), base 5 is genuinely rejected, bases 1-4 are genuinely accepted, and client
+  ID 0 is genuinely rejected. AC #4 now met across all four documented-configuration files.
+  Epic 1 remains in-progress: 1.1/1.2/1.3 done, 1.4-1.7 backlog. Previously: Story 1.3 implemented → code-reviewed → done. src/core/live_node_builder.py delivers
   build_trading_node_config() and build_trading_node() exactly as designed: gate-first ordering
   (AC #2) proven by a monkeypatch sentinel test, not just "it raised"; both IB client configs
   carry ibkr_live_client_id never ibkr_client_id (AC #5); ibkr_read_only=False is a derived
@@ -127,7 +137,7 @@ development_status:
   # live account with a distinct exit code. No orders exist yet — that is the point.
   epic-1: in-progress
   1-1-refuse-a-real-money-account-before-anything-connects: done
-  1-2-isolate-the-live-client-id-from-the-historical-data-client: in-progress
+  1-2-isolate-the-live-client-id-from-the-historical-data-client: done
   1-3-assemble-and-start-a-tradingnode-against-ibkr-paper: done
   1-4-verify-the-connected-account-is-a-paper-account-before-trading-starts: backlog
   1-5-receive-real-time-rth-bars-for-a-configured-instrument: backlog
