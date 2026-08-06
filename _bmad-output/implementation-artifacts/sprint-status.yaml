@@ -36,7 +36,62 @@
 
 generated: 2026-08-03
 last_updated: >-
-  2026-08-04 (Story 1.2 code-reviewed → in-progress. Three adversarial review layers produced 2 decisions / 8 patches / 5 deferred / 4 dismissed. Allay ruled on both decisions and they were applied TDD Red→Green: validate_client_ids_distinct was widened from bare equality to rotation-range intersection — it now rejects any overlap between the historical client's [base, base+5] and the reserved pair {live, live+1}, in both directions — and ge=1 was added to both fields because client ID 0 is IBKR's master client. le=999 was deliberately NOT added (repo convention, no basis in IBKR limits). A separate security finding was fixed: the new validator was rendering the entire environment into its traceback via pydantic's input_value=, leaking 22 of the 32 characters of FMP_API_KEY on every firing — closed with hide_input_in_errors. Two stale client-ID 10 defaults in scripts/ were also corrected, and the IBKR_SETUP.md guidance was self-contradictory across four places (a table saying 1–6, prose permitting 5–9, and a troubleshooting step saying ≤4) — now one rule, 1–4, plus an upgrade note for operators the old docs told to use 10. 1561 unit tests pass (1547 + 14 new). ONE ITEM OUTSTANDING: the .env.example wording rewrite is blocked by protect-files.sh and needs the same one-off approval Task 0 used; its current values 1/10 are verified valid, so this is wording only. Previously: Story 1.2 implemented → review. Task 0's blocking prerequisite was resolved first: .env:11 IBKR_CLIENT_ID 10 → 1, approved by Allay as a one-off shell write since .env* is hook-protected; its origin was traced to docs/setup/IBKR_SETUP.md:44, which is now corrected so the value cannot be reintroduced. Delivered: ibkr_live_client_id field + validate_client_ids_distinct model validator, 8 new unit tests (1547 total, baseline was 1539), reservation propagated to .env.example / docker-compose.yml / IBKR_SETUP.md / README.md, and the DataCatalogService unset-env fallback aligned to 1. Two items deferred under "Deferred from: story-1.2" — the os.environ-vs-typed-settings gap in DataCatalogService, and the fact that the validator compares configured bases only and so cannot see the historical client's 1-6 rotation range.)
+  2026-08-05 (Story 1.3 implemented → code-reviewed → done. src/core/live_node_builder.py delivers
+  build_trading_node_config() and build_trading_node() exactly as designed: gate-first ordering
+  (AC #2) proven by a monkeypatch sentinel test, not just "it raised"; both IB client configs
+  carry ibkr_live_client_id never ibkr_client_id (AC #5); ibkr_read_only=False is a derived
+  in-process view, proven never-branched-on by an AST check with its own meta-test (AC #3); the
+  LogGuard registration/coexistence behaviour predicted by the story's pre-verification held
+  exactly — BacktestEngine-then-TradingNode returns log_guard=None, TradingNode-first returns a
+  real guard that set_nautilus_log_guard exposes (AC #4). 38 component tests (11 as delivered,
+  27 more added by code review) and 2 integration tests, all TDD Red→Green. AC #7 clean (no dependency change). AC #6 IS verified
+  live: a Gateway became available mid-session and Procedure P1 was run for real (see
+  docs/qa/phase3-live-verification.md's Result Log), which surfaced and fixed a genuine
+  loop-management bug in the probe script — two clean runs afterwards, exit 0, the second being
+  the "no single-use carryover" evidence. One finding recorded in deferred-work.md rather than
+  fixed (out of this story's scope): a pre-existing src/api/web.py module-import-time
+  init_logging() side effect crashes this story's 2 integration tests with SIGTRAP, but only when
+  tests/integration/api/test_trades_api.py is collected in the same pytest --forked run —
+  confirmed by bisection across 7+ full runs to be a pre-existing test-infra hazard unrelated to
+  live_node_builder.py's correctness (both tests pass 100% of the time in isolation and in every
+  other file combination); Allay reviewed this finding directly and chose to document-and-proceed
+  rather than fix src/api/web.py (off-limits for this story) or attempt a test-infra workaround.
+  A second finding claiming the Task 6 test-count baselines were stale has been RETRACTED — it
+  compared passed counts against collected baselines; 815 component and 169 integration were
+  correct as collected counts (re-verified: 826 collected − 11 new = 815; 171 − 2 = 169).
+  Code-reviewed 2026-08-05 → done: three adversarial layers produced 3 decisions / 26
+  patches / 7 deferred / 5 dismissed. All three decisions ruled by Allay and applied. Highest-value
+  catch was a Critical the story missed: an unvalidated trader_id containing no '-' panics in Rust
+  and ABORTS the process (exit 134, uncatchable even by except BaseException), and it was
+  reachable from the component tier — a bad parametrisation killed the pytest worker rather than
+  failing a test. Now guarded with a legible LiveNodeConfigError, mirroring the TWS_ACCOUNT guard.
+  Also fixed: build_trading_node now accepts and forwards an explicit event loop (it was silently
+  binding to an ambient or auto-created one); a lowercase TWS_ACCOUNT passed the gate but reached
+  the exec client un-normalised, which would have mismatched Story 1.4's Layer 2 check; non-positive
+  IBKR timeouts flowed straight into both live clients; and the probe reported RESULT: ok without
+  ever verifying the node connected (kernel.start_async does not raise on connection failure) while
+  sleeping 5s against a 60s connection timeout. Previously: Story 1.3 created
+  → ready-for-dev. First story that imports Nautilus. Its context was
+  built by verifying the live surface against the installed nautilus-trader 1.220.0 wheel rather
+  than from docs, which settled five things the epic could not: (1) TradingNodeConfig + IB client
+  config assembly does NOT initialise the C logging subsystem, so config assembly is component-tier
+  and only TradingNode construction needs --forked integration; (2) NautilusKernel already guards
+  its own logging init and returns log_guard=None when a BacktestEngine got there first — verified
+  BacktestEngine-then-TradingNode in one process with no panic, which is exactly AC #4's test;
+  (3) get_cached_ib_client is keyed on (host, port, client_id), so the data and exec clients
+  sharing ibkr_live_client_id share ONE socket by design — not the collision FR5 forbids;
+  (4) the IB exec factory asserts on config.account_id or os.environ["TWS_ACCOUNT"], and .env never
+  reaches os.environ, so account_id must be passed explicitly and an empty TWS_ACCOUNT — which the
+  gate legitimately permits — must fail early with a legible error instead of a third-party
+  AssertionError; (5) Nautilus has NO read-only knob for an operator-run gateway (read_only_api is
+  DockerizedIBGatewayConfig-only), which confirms rather than contradicts NFR27/AR43: ibkr_read_only
+  is a declaration of intent and the gate is the control. Two traps recorded that would each have
+  cost a day: Environment.SANDBOX would silently replace IBKR execution with a local simulator, and
+  a malformed trader_id panics in Rust rather than raising. One item flagged forward for Epic 3 —
+  docker-compose.yml:51 hardcodes READ_ONLY_API "yes" on ib-gateway, harmless while no orders exist.
+  Story 1.2 remains in-progress with one documentation-only item outstanding (the .env.example
+  wording rewrite, blocked on hook approval); its values are already correct so it does not block
+  1.3. Previously: Story 1.2 code-reviewed → in-progress. Three adversarial review layers produced 2 decisions / 8 patches / 5 deferred / 4 dismissed. Allay ruled on both decisions and they were applied TDD Red→Green: validate_client_ids_distinct was widened from bare equality to rotation-range intersection — it now rejects any overlap between the historical client's [base, base+5] and the reserved pair {live, live+1}, in both directions — and ge=1 was added to both fields because client ID 0 is IBKR's master client. le=999 was deliberately NOT added (repo convention, no basis in IBKR limits). A separate security finding was fixed: the new validator was rendering the entire environment into its traceback via pydantic's input_value=, leaking 22 of the 32 characters of FMP_API_KEY on every firing — closed with hide_input_in_errors. Two stale client-ID 10 defaults in scripts/ were also corrected, and the IBKR_SETUP.md guidance was self-contradictory across four places (a table saying 1–6, prose permitting 5–9, and a troubleshooting step saying ≤4) — now one rule, 1–4, plus an upgrade note for operators the old docs told to use 10. 1561 unit tests pass (1547 + 14 new). ONE ITEM OUTSTANDING: the .env.example wording rewrite is blocked by protect-files.sh and needs the same one-off approval Task 0 used; its current values 1/10 are verified valid, so this is wording only. Previously: Story 1.2 implemented → review. Task 0's blocking prerequisite was resolved first: .env:11 IBKR_CLIENT_ID 10 → 1, approved by Allay as a one-off shell write since .env* is hook-protected; its origin was traced to docs/setup/IBKR_SETUP.md:44, which is now corrected so the value cannot be reintroduced. Delivered: ibkr_live_client_id field + validate_client_ids_distinct model validator, 8 new unit tests (1547 total, baseline was 1539), reservation propagated to .env.example / docker-compose.yml / IBKR_SETUP.md / README.md, and the DataCatalogService unset-env fallback aligned to 1. Two items deferred under "Deferred from: story-1.2" — the os.environ-vs-typed-settings gap in DataCatalogService, and the fact that the validator compares configured bases only and so cannot see the historical client's 1-6 rotation range.)
 project: Trading-ntrader
 project_key: NOKEY
 tracking_system: file-system
@@ -73,7 +128,7 @@ development_status:
   epic-1: in-progress
   1-1-refuse-a-real-money-account-before-anything-connects: done
   1-2-isolate-the-live-client-id-from-the-historical-data-client: in-progress
-  1-3-assemble-and-start-a-tradingnode-against-ibkr-paper: backlog
+  1-3-assemble-and-start-a-tradingnode-against-ibkr-paper: done
   1-4-verify-the-connected-account-is-a-paper-account-before-trading-starts: backlog
   1-5-receive-real-time-rth-bars-for-a-configured-instrument: backlog
   1-6-detect-connection-loss-and-withhold-trading-permission: backlog
