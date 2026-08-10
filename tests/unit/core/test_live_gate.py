@@ -17,6 +17,7 @@ from src.core.live_gate import (
     GateFlags,
     GateMode,
     GateRefusalReason,
+    evaluate_account_gate,
     evaluate_gate,
     mask_account,
 )
@@ -311,6 +312,314 @@ class TestAccountMasking:
         assert "***567" in decision.refusal.message
         assert "U1234567" not in decision.refusal.message
         assert "U1234567" not in repr(decision)
+
+
+class TestAccountGateLayerOneDominance:
+    """Layer 2 is Layer 1 AND more; it can never rescue a refused configuration."""
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize(
+        ("mode", "port", "account", "real_money_account", "real_money_flag"),
+        [
+            ("live", 7497, "DU4076626", "", False),
+            ("paper", 7496, "DU4076626", "", False),
+            ("paper", 7497, "U1234567", "", False),
+            ("paper", 7497, "DU4076626", "", True),
+            ("paper", 7497, "DU4076626", "U1234567", False),
+            ("paper", 7497, "DU1234567", "U1234567", True),
+        ],
+        ids=[
+            "live-trading-mode",
+            "non-paper-port",
+            "non-paper-configured-prefix",
+            "flag-without-env",
+            "env-without-flag",
+            "declarations-disagree",
+        ],
+    )
+    def test_layer_one_refusal_is_returned_unchanged(
+        self, mode, port, account, real_money_account, real_money_flag
+    ):
+        """A spotless reported account cannot overturn a static-gate refusal."""
+        # Arrange — the reported set is deliberately perfect paper
+        settings = _settings(
+            mode=mode, port=port, account=account, real_money_account=real_money_account
+        )
+        flags = GateFlags(real_money=real_money_flag)
+        layer_one = evaluate_gate(settings, flags)
+
+        # Act
+        decision = evaluate_account_gate(settings, flags, frozenset({"DU4076626"}))
+
+        # Assert
+        assert layer_one.permitted is False
+        assert decision.permitted is False
+        assert decision.refusal is not None
+        assert layer_one.refusal is not None
+        assert decision.refusal.reason is layer_one.refusal.reason
+        assert decision.refusal.message == layer_one.refusal.message
+        _assert_consistent(decision)
+
+
+class TestAccountGatePaperPath:
+    """On the paper path every account the gateway names must be a paper account."""
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize(
+        "reported",
+        [
+            frozenset({"DU4076626"}),
+            frozenset({"DF1234567"}),
+            frozenset({"DU4076626", "DU1234567"}),
+            frozenset({"  DU4076626  ", ""}),
+        ],
+        ids=["single-du", "single-df", "two-paper-accounts", "whitespace-and-blank-ignored"],
+    )
+    def test_all_paper_accounts_permit(self, reported):
+        """A reported set that is entirely paper permits, in PAPER mode."""
+        # Arrange
+        settings = _settings(account="DU4076626")
+
+        # Act
+        decision = evaluate_account_gate(settings, GateFlags(), reported)
+
+        # Assert
+        assert decision.permitted is True
+        assert decision.mode is GateMode.PAPER
+        _assert_consistent(decision)
+
+    @pytest.mark.unit
+    def test_one_non_paper_account_refuses_the_whole_connection(self):
+        """The configured account is clean; the gateway also manages a real one."""
+        # Arrange — exactly the hole Layer 1 and the adapter's own check both miss
+        settings = _settings(account="DU4076626")
+
+        # Act
+        decision = evaluate_account_gate(
+            settings, GateFlags(), frozenset({"DU4076626", "U1234567"})
+        )
+
+        # Assert
+        assert decision.permitted is False
+        assert decision.refusal is not None
+        assert decision.refusal.reason is GateRefusalReason.REPORTED_ACCOUNT_NOT_PAPER
+        _assert_consistent(decision)
+
+    @pytest.mark.unit
+    def test_lowercase_paper_prefix_is_permitted_exactly_as_layer_one_does(self):
+        """The prefix test upper-cases, mirroring `_evaluate_paper`."""
+        # Arrange
+        settings = _settings(account="DU4076626")
+
+        # Act
+        decision = evaluate_account_gate(settings, GateFlags(), frozenset({"du4076626"}))
+
+        # Assert
+        assert decision.permitted is True
+        assert decision.mode is GateMode.PAPER
+        _assert_consistent(decision)
+
+
+class TestAccountGateFailsClosedWithoutEvidence:
+    """No evidence is a refusal, never a permit."""
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize(
+        "reported",
+        [frozenset(), frozenset({""}), frozenset({"   ", ""})],
+        ids=["empty-set", "one-blank", "only-whitespace"],
+    )
+    def test_absent_or_blank_accounts_refuse(self, reported):
+        """An empty reported set cannot establish that the account is paper."""
+        # Arrange
+        settings = _settings(account="DU4076626")
+
+        # Act
+        decision = evaluate_account_gate(settings, GateFlags(), reported)
+
+        # Assert
+        assert decision.permitted is False
+        assert decision.refusal is not None
+        assert decision.refusal.reason is GateRefusalReason.ACCOUNT_NOT_REPORTED
+        _assert_consistent(decision)
+
+    @pytest.mark.unit
+    def test_absent_accounts_refuse_on_the_real_money_path_too(self):
+        """The crossing is not exempt from needing evidence."""
+        # Arrange
+        settings = _settings(account="U1234567", real_money_account="U1234567")
+
+        # Act
+        decision = evaluate_account_gate(settings, GateFlags(real_money=True), frozenset())
+
+        # Assert
+        assert decision.permitted is False
+        assert decision.refusal is not None
+        assert decision.refusal.reason is GateRefusalReason.ACCOUNT_NOT_REPORTED
+        _assert_consistent(decision)
+
+
+class TestAccountGateRealMoneyCrossing:
+    """The crossing is checked against what the broker says, not against config."""
+
+    @pytest.mark.unit
+    def test_authorized_account_reported_by_the_gateway_permits(self):
+        """Both declarations agree AND the gateway confirms the account exists."""
+        # Arrange
+        settings = _settings(account="U1234567", real_money_account="U1234567")
+
+        # Act
+        decision = evaluate_account_gate(
+            settings, GateFlags(real_money=True), frozenset({"U1234567"})
+        )
+
+        # Assert
+        assert decision.permitted is True
+        assert decision.mode is GateMode.REAL_MONEY
+        _assert_consistent(decision)
+
+    @pytest.mark.unit
+    def test_authorized_account_absent_from_the_reported_set_refuses(self):
+        """Two config values can agree with each other and disagree with the world."""
+        # Arrange
+        settings = _settings(account="U1234567", real_money_account="U1234567")
+
+        # Act
+        decision = evaluate_account_gate(
+            settings, GateFlags(real_money=True), frozenset({"U7654321"})
+        )
+
+        # Assert
+        assert decision.permitted is False
+        assert decision.refusal is not None
+        assert decision.refusal.reason is GateRefusalReason.REPORTED_ACCOUNT_NOT_AUTHORIZED
+        _assert_consistent(decision)
+
+    @pytest.mark.unit
+    def test_paper_prefixed_authorization_refuses(self):
+        """`--real-money` against a demo account: orders the operator thinks are real."""
+        # Arrange — closes the deferred finding recorded against Story 1.1
+        settings = _settings(account="DU1234567", real_money_account="DU1234567")
+
+        # Act
+        decision = evaluate_account_gate(
+            settings, GateFlags(real_money=True), frozenset({"DU1234567"})
+        )
+
+        # Assert
+        assert decision.permitted is False
+        assert decision.refusal is not None
+        assert decision.refusal.reason is GateRefusalReason.REPORTED_ACCOUNT_IS_PAPER
+        _assert_consistent(decision)
+
+    @pytest.mark.unit
+    def test_identity_match_is_case_sensitive_so_folding_cannot_widen_it(self):
+        """Case folding here would make MORE accounts match — on this path, permit more."""
+        # Arrange
+        settings = _settings(account="U1234567", real_money_account="U1234567")
+
+        # Act
+        decision = evaluate_account_gate(
+            settings, GateFlags(real_money=True), frozenset({"u1234567"})
+        )
+
+        # Assert
+        assert decision.permitted is False
+        assert decision.refusal is not None
+        assert decision.refusal.reason is GateRefusalReason.REPORTED_ACCOUNT_NOT_AUTHORIZED
+        _assert_consistent(decision)
+
+    @pytest.mark.unit
+    def test_a_real_money_gateway_may_also_manage_paper_accounts(self):
+        """Only the authorized account is judged on the crossing path."""
+        # Arrange
+        settings = _settings(account="U1234567", real_money_account="U1234567")
+
+        # Act
+        decision = evaluate_account_gate(
+            settings, GateFlags(real_money=True), frozenset({"U1234567", "DU4076626"})
+        )
+
+        # Assert
+        assert decision.permitted is True
+        assert decision.mode is GateMode.REAL_MONEY
+        _assert_consistent(decision)
+
+
+class TestAccountGateMasking:
+    """No Layer 2 refusal ever carries a raw account identifier (NFR26)."""
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize(
+        ("account", "real_money_account", "real_money_flag", "reported"),
+        [
+            ("DU4076626", "", False, frozenset({"DU4076626", "U1234567"})),
+            ("U1234567", "U1234567", True, frozenset({"U7654321"})),
+            ("DU1234567", "DU1234567", True, frozenset({"DU1234567"})),
+            ("DU4076626", "", False, frozenset()),
+        ],
+        ids=[
+            "reported-not-paper",
+            "not-authorized",
+            "authorization-is-paper",
+            "nothing-reported",
+        ],
+    )
+    def test_no_layer_two_refusal_leaks_a_full_account(
+        self, account, real_money_account, real_money_flag, reported
+    ):
+        """Every account named in a refusal appears masked, and never in full."""
+        # Arrange
+        settings = _settings(account=account, real_money_account=real_money_account)
+        raw_accounts = {account, real_money_account, *reported} - {""}
+
+        # Act
+        decision = evaluate_account_gate(settings, GateFlags(real_money=real_money_flag), reported)
+
+        # Assert
+        assert decision.refusal is not None
+        message = decision.refusal.message
+        assert message
+        for raw in raw_accounts:
+            assert raw not in message, f"{raw!r} leaked into {message!r}"
+            assert raw not in repr(decision)
+
+    @pytest.mark.unit
+    def test_refusal_message_renders_masked_accounts_in_sorted_order(self):
+        """A frozenset has no stable iteration order; the message must anyway.
+
+        Asserted as *sorted order*, not as "two calls agree". Two frozensets
+        built from the same strings in different insertion orders iterate
+        identically within one process — string hashes are fixed — so comparing
+        two such calls would pass with the ``sorted()`` removed and pin nothing.
+        """
+        # Arrange — masks: ***567, ***321, ***999. Sorted: ***321, ***567, ***999
+        settings = _settings(account="DU4076626")
+        reported = frozenset({"U1234567", "U7654321", "U1230999", "DU4076626"})
+
+        # Act
+        decision = evaluate_account_gate(settings, GateFlags(), reported)
+
+        # Assert
+        assert decision.refusal is not None
+        message = decision.refusal.message
+        positions = [message.index(mask) for mask in ("***321", "***567", "***999")]
+        assert positions == sorted(positions), f"masked accounts are unsorted in {message!r}"
+
+    @pytest.mark.unit
+    def test_accounts_sharing_a_masked_suffix_are_rendered_once(self):
+        """Distinct accounts can collide under masking; ``***567, ***567`` helps nobody."""
+        # Arrange
+        settings = _settings(account="DU4076626")
+
+        # Act
+        decision = evaluate_account_gate(
+            settings, GateFlags(), frozenset({"U1234567", "X7654567", "DU4076626"})
+        )
+
+        # Assert
+        assert decision.refusal is not None
+        assert decision.refusal.message.count("***567") == 1
 
 
 class TestMaskAccount:
