@@ -36,7 +36,57 @@
 
 generated: 2026-08-03
 last_updated: >-
-  2026-08-05 (Story 1.2 CLOSED -> done. Its last outstanding item, the .env.example
+  2026-08-09 (Story 1.4 implemented -> code-reviewed -> done. Layer 2 of the two-layer safety gate
+  now exists, split along the purity line Story 1.1 established: the DECISION is
+  evaluate_account_gate() in src/core/live_gate.py, still pure and still passing TestGatePurity's
+  unchanged import whitelist; the ENFORCEMENT is a new src/core/live_account_gate.py that reads what
+  the gateway actually reported, and on a refusal stops the node and raises the SAME GateRefusedError
+  the static gate raises, so Story 1.7's exit-code-3 mapping already covers both layers. The safety
+  property is structural rather than asserted: evaluate_account_gate STARTS by calling evaluate_gate
+  and returns its refusal object unchanged, so Layer 2 can only ever be Layer-1-AND-more — six
+  parametrised cases assert the propagated reason AND message are identical to Layer 1's. Three real
+  holes closed: (1) a gateway that manages a real-money account ALONGSIDE the configured paper one
+  passed both Layer 1 and the IB exec client's own membership check — Layer 2 now requires EVERY
+  reported account to carry DU/DF; (2) the real-money crossing was previously compared config-to-config
+  (NTRADER_REAL_MONEY_ACCOUNT vs TWS_ACCOUNT), two values that can agree with each other and disagree
+  with the broker — it is now checked against what the gateway reports; (3) --real-money against a
+  DU/DF demo account permitted mode=REAL_MONEY, which is the deferred-work item Story 1.1's review
+  assigned to this story by name and is now struck through as RESOLVED. Case folding is deliberately
+  ASYMMETRIC and commented as such: the paper-prefix test upper-cases (mirroring _evaluate_paper,
+  which already permits a lowercase du...), the real-money identity test does not, because folding
+  there would make more accounts match and on that path matching more means PERMITTING more.
+  verify_connected_account is a coroutine and that is load-bearing — verified against the 1.220.0
+  wheel that TradingNode.stop() merely SCHEDULES stop_async when the loop is running, and that
+  dispose() busy-waits on a synchronous time.sleep that blocks the very loop the stop task needs
+  (the deadlock Story 1.3's probe hit live on 2026-08-05); the seam awaits stop_async() and nothing
+  else, leaving disposal and loop ownership with the caller per AR38. AR39's ordering is enforced at
+  runtime rather than documented: with no runner in Epic 1, the seam refuses NODE_NOT_CONNECTED and
+  STRATEGY_STARTED_BEFORE_ACCOUNT_GATE, the latter using an ALLOWLIST of not-yet-started states so a
+  state Nautilus adds later reads as started and refuses. Code review by three adversarial layers
+  produced 0 decisions / 17 patches / 8 deferred / 4 dismissed; all 8 ACs were confirmed satisfied and
+  every figure in the Dev Agent Record was independently reproduced. The patches closed FOUR fail-open
+  paths that lived inside satisfied ACs — an unguarded third-party attribute chain (node.kernel,
+  node.trader, IB_CLIENTS, client.accounts()) whose AttributeError escaped with the node still up and
+  connected; ExecutionEngine.check_connected() returning True vacuously on a node whose build() never
+  ran; asyncio.CancelledError being a BaseException and so escaping except Exception to abort before
+  the refusal was raised; and an unbounded post-refusal stop_async() that could withhold the verdict
+  indefinitely. Also fixed: a case-folding comment that cited a rationale true only of the opposite
+  branch, a log line rendering the UNSTRIPPED account set (IBKR's trailing-comma managedAccounts
+  payload printed "accounts=, ***626"), masked duplicates rendering as "***567, ***567", third-party
+  exception text reaching a log record (NFR26), AR41's gate.refused event name, AR36's gate-not-guard
+  vocabulary, and four tests that asserted less than they claimed — including a determinism test that
+  would have passed with sorted() deleted. Final: 1588 unit + 884 component collected, 2648 passed
+  across unit/component/api/ui, 100% coverage on both changed modules, ruff/format/mypy clean,
+  pyproject.toml and uv.lock byte-identical. ONE ITEM OUTSTANDING and recorded as non-blocking:
+  Procedure P2 is fully documented but was NOT run against a live gateway — this worktree has no .env
+  (gitignored and hook-protected) and the sandbox declined the invocations that would have supplied
+  the settings another way, so per the QA doc's own policy the Result log says "not yet run" rather
+  than claiming a pass. Eight items deferred, two of which Epic 2 must read before Story 2.5: the
+  NautilusKernel.start_async() coroutine offers NO hook between "engines connected" and
+  "trader started", so gate:account cannot be placed by polling once strategies exist (invisible in
+  Epic 1 only because it configures zero strategies), and READY is reachable after a reset so the
+  ordering guard has a blind spot across in-process session restarts. Epic 1 remains in-progress:
+  1.1/1.2/1.3/1.4 done, 1.5-1.7 backlog. Previously: 2026-08-05 (Story 1.2 CLOSED -> done. Its last outstanding item, the .env.example
   client-ID wording, was rewritten under a one-off approved Bash write (.env* is Edit/Write-
   protected; the hook was left unchanged, per Story 1.1's precedent). The block now states the
   rotation range as base..base+5 and that the window MOVES WITH THE BASE (1-6 is what base 1
@@ -139,7 +189,7 @@ development_status:
   1-1-refuse-a-real-money-account-before-anything-connects: done
   1-2-isolate-the-live-client-id-from-the-historical-data-client: done
   1-3-assemble-and-start-a-tradingnode-against-ibkr-paper: done
-  1-4-verify-the-connected-account-is-a-paper-account-before-trading-starts: backlog
+  1-4-verify-the-connected-account-is-a-paper-account-before-trading-starts: done
   1-5-receive-real-time-rth-bars-for-a-configured-instrument: backlog
   1-6-detect-connection-loss-and-withhold-trading-permission: backlog
   1-7-check-broker-connectivity-and-the-gate-from-the-cli: backlog

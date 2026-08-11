@@ -16,9 +16,15 @@ This is a diagnostic, not the runner: it does not own a session's lifecycle.
 ``live_session_runner.py`` (Epic 2, Story 2.5) does. Do not mistake one for
 the other.
 
+``--verify-account`` additionally runs Story 1.4's Layer 2 ``gate:account``
+phase in the position AR39 puts it in — after connect, before anything that
+looks like trading — and reports what the gateway said the account is. It is
+opt-in so that Procedure P1, which this probe is the tool for, keeps exactly the
+behaviour it was verified with.
+
 Usage::
 
-    uv run python scripts/diagnostics/live_node_probe.py [--run-seconds 5]
+    uv run python scripts/diagnostics/live_node_probe.py [--run-seconds 5] [--verify-account]
 
 Preconditions:
     - IB Gateway or TWS running on the configured paper port (see .env)
@@ -44,7 +50,12 @@ from dotenv import load_dotenv
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 from src.config import IBKRSettings  # noqa: E402
-from src.core.live_gate import GateFlags  # noqa: E402
+from src.core.live_account_gate import (  # noqa: E402
+    gateway_reported_accounts,
+    masked_accounts,
+    verify_connected_account,
+)
+from src.core.live_gate import GateFlags, GateRefusal  # noqa: E402
 from src.core.live_node_builder import (  # noqa: E402
     GateRefusedError,
     LiveNodeConfigError,
@@ -62,6 +73,20 @@ _CONNECT_POLL_SECONDS = 0.25
 
 class ProbeError(RuntimeError):
     """The probe reached the gateway path but the node did not come up."""
+
+
+class AccountGateRefused(RuntimeError):
+    """Layer 2 refused the connected account.
+
+    Distinct from ``GateRefusedError`` — which both layers raise — purely so the
+    ``RESULT:`` line can tell an operator *which* layer refused. Layer 1 fires
+    before a socket is opened; Layer 2 fires after the gateway has named an
+    account, and the two want very different next actions.
+    """
+
+    def __init__(self, refusal: GateRefusal) -> None:
+        super().__init__(refusal.message)
+        self.refusal = refusal
 
 
 async def _await_connected(node, run_task: asyncio.Task, timeout: float) -> None:
@@ -128,7 +153,36 @@ def _shutdown(node, run_task: asyncio.Task, loop: asyncio.AbstractEventLoop) -> 
     return problems
 
 
-def _run(run_seconds: int) -> str:
+def _verify_account(node, settings: IBKRSettings, loop: asyncio.AbstractEventLoop) -> str:
+    """Run the ``gate:account`` phase in the position AR39 puts it in.
+
+    After ``node:connect``, before anything resembling trading. Driven through
+    ``run_until_complete`` because ``verify_connected_account`` is a coroutine —
+    on a refusal it awaits ``node.stop_async()``, which is the only way to
+    actually bring the node down from inside a running loop.
+    """
+    print("[probe] verifying connected account (phase=gate:account)...", flush=True)
+    # Read once and hand the same set to the gate. Reading again after the gate
+    # returned would print a set the gate never judged: the adapter clears
+    # `_account_ids` on degrade/disconnect, so a blip between the two calls would
+    # put `accounts=` (empty, or changed) next to a `gate_account=paper` verdict
+    # reached on different evidence.
+    reported = gateway_reported_accounts(settings)
+    try:
+        decision = loop.run_until_complete(
+            verify_connected_account(
+                node, settings, cli_flags=GateFlags(), reported_accounts=reported
+            )
+        )
+    except GateRefusedError as exc:
+        raise AccountGateRefused(exc.refusal) from exc
+
+    mode = decision.mode.value if decision.mode else "unknown"
+    print(f"[probe] gate:account ok mode={mode} accounts={masked_accounts(reported)}", flush=True)
+    return mode
+
+
+def _run(run_seconds: int, *, verify_account: bool) -> str:
     """Drive the node's lifecycle on a loop this function owns end to end.
 
     ``TradingNode.dispose()`` calls ``loop.stop()`` synchronously whenever it
@@ -165,6 +219,7 @@ def _run(run_seconds: int) -> str:
 
     print("[probe] starting node...", flush=True)
     run_task = loop.create_task(node.run_async())
+    gate_account: str | None = None
 
     try:
         print(
@@ -175,6 +230,8 @@ def _run(run_seconds: int) -> str:
             _await_connected(node, run_task, float(settings.ibkr_connection_timeout))
         )
         print("[probe] connected (data + exec)", flush=True)
+
+        gate_account = _verify_account(node, settings, loop) if verify_account else None
 
         print(f"[probe] running for {run_seconds}s...", flush=True)
         loop.run_until_complete(asyncio.sleep(run_seconds))
@@ -191,7 +248,13 @@ def _run(run_seconds: int) -> str:
 
     if problems:
         raise ProbeError(f"unclean shutdown: {'; '.join(problems)}")
-    return f"loop_closed={loop.is_closed()}"
+
+    detail = f"loop_closed={loop.is_closed()}"
+    # Only appended when --verify-account was passed, so P1's documented RESULT
+    # line is byte-for-byte what it was before this flag existed.
+    if gate_account is not None:
+        detail += f" gate_account={gate_account}"
+    return detail
 
 
 def _positive_seconds(raw: str) -> int:
@@ -212,6 +275,14 @@ def main() -> int:
         default=5,
         help="How long to leave the node running once connected (default: 5, minimum: 1)",
     )
+    parser.add_argument(
+        "--verify-account",
+        action="store_true",
+        help=(
+            "Run the Layer 2 gate:account phase after connecting (Procedure P2). "
+            "Off by default so Procedure P1's behaviour is unchanged."
+        ),
+    )
     args = parser.parse_args()
 
     # Loaded here, not at import time: load_dotenv() mutates os.environ
@@ -222,12 +293,24 @@ def main() -> int:
 
     t0 = time.monotonic()
     try:
-        detail = _run(args.run_seconds)
+        detail = _run(args.run_seconds, verify_account=args.verify_account)
         print(
             f"RESULT: ok mode=build-connect-run-stop {detail} elapsed={time.monotonic() - t0:.2f}",
             flush=True,
         )
         return 0
+    except AccountGateRefused as e:
+        # A sibling of the handler below, not a subclass of it — `_verify_account`
+        # converts every Layer 2 `GateRefusedError` into this type precisely so
+        # the two are distinguishable here. Keeping them separate is what tells
+        # the operator whether a socket was ever opened; the handler *order* is
+        # not what does that, and must not be relied on for it.
+        print(
+            f"RESULT: fail reason=account_gate_refused refusal={e.refusal.reason.value} "
+            f"elapsed={time.monotonic() - t0:.2f}",
+            flush=True,
+        )
+        return 1
     except GateRefusedError as e:
         print(
             f"RESULT: fail reason=gate_refused refusal={e.refusal.reason.value} "

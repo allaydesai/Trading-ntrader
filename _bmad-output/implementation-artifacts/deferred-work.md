@@ -5,17 +5,17 @@ it was not actioned at the time. Archived with the phase; a fresh file opens wit
 
 ## Deferred from: code review of story-1.1 (2026-08-03)
 
-- **Real-money crossing permits a `DU`/`DF` paper account** — *deferred by decision; Layer 2 catches it
-  post-connection.* `_evaluate_real_money_crossing` (`src/core/live_gate.py:160-169`) receives only the two
-  declarations, so `--real-money` + `NTRADER_REAL_MONEY_ACCOUNT=DU1234567` + a matching `TWS_ACCOUNT`
-  returns `permitted=True, mode=REAL_MONEY` against a demo account on a paper port. The spec correctly
-  forbids ANDing the paper conditions into this branch — that would make the crossing unreachable — but a
-  paper-prefix check *on the authorized account* is a distinct check the spec never considered. Failure
-  mode: the operator believes real orders are going out; they are silently landing on paper.
-  **Action for Story 1.4:** the post-connection account check must compare the account the gateway
-  actually reports against the authorized account AND reject a paper prefix on a `REAL_MONEY` decision.
-  `test_real_money_crossing_does_not_evaluate_paper_conditions` deliberately locks the mode/port omission
-  in; the paper-prefix case is untested in either direction.
+- ~~**Real-money crossing permits a `DU`/`DF` paper account**~~ — **RESOLVED in story-1.4, 2026-08-07.**
+  `_evaluate_real_money_crossing` still receives only the two declarations, and deliberately so — ANDing
+  the paper conditions into that branch would make the crossing unreachable. The check moved to Layer 2
+  instead, exactly as this item's action line specified: `_evaluate_reported_real_money`
+  (`src/core/live_gate.py`) refuses `REPORTED_ACCOUNT_IS_PAPER` when the authorized account carries a
+  `DU`/`DF` prefix, and refuses `REPORTED_ACCOUNT_NOT_AUTHORIZED` when the connected gateway does not
+  name that account at all. Both directions are now tested
+  (`tests/unit/core/test_live_gate.py::TestAccountGateRealMoneyCrossing`), and the enforcement seam
+  stops the node on either (`tests/component/core/test_live_account_gate.py`).
+  `test_real_money_crossing_does_not_evaluate_paper_conditions` is unchanged and still locks in the
+  Layer 1 omission it was written for.
 
 - **Invalid `IBKR_TRADING_MODE` dies with a traceback instead of a gate refusal** —
   `ibkr_trading_mode` is `Literal["paper", "live"]` (`src/config.py:23-25`), so `"Paper"`, `"PAPER"`,
@@ -225,6 +225,12 @@ Non-blocking findings from the three-layer adversarial code review of Story 1.3.
   the guard even on partial construction failure, or document that a failed construction disturbs
   process logging state.
 
+- **PARTIALLY RESOLVED in story-1.4** (2026-08-09): Layer 2 refusals *are* now logged, at ERROR,
+  with AR41's `gate.refused` event name and the `GateRefusalReason` value
+  (`src/core/live_account_gate.py`). The item below still stands for **Layer 1** refusals raised by
+  `live_node_builder.build_trading_node_config`, which remain unlogged; Story 1.7 is still the
+  natural place to log those as it maps `GateRefusedError` → exit code 3.
+
 - **A gate refusal is logged nowhere in the codebase.** `src/core/live_gate.py` contains **zero**
   logging calls (verified by grep), and Story 1.3's spec deliberately capped that module's logging
   surface at one debug event on success — so the single most operationally interesting event the
@@ -265,3 +271,88 @@ Non-blocking findings from the three-layer adversarial code review of Story 1.3.
   tested is `tws_account=""`, whose error message echoes no account at all — so the requirement is
   met by construction rather than by assertion. Not a leak; the checkbox simply claims more than
   the test demonstrates.
+
+## Deferred from: code review of story-1.4 (2026-08-09)
+
+- **Procedure P2 was never run against a live gateway.** `docs/qa/phase3-live-verification.md`
+  defines P2 in full but its Result log records `⏳ not yet run`: the story was implemented in a
+  detached git worktree with no `.env` (gitignored and hook-protected), and the session's command
+  sandbox declined the invocations that would have supplied the connection settings another way.
+  Layer 2's logic is covered by 28 unit cases and 31 component tests, but **nothing in the suite
+  proves that a real IBKR gateway's `managedAccounts` message reaches
+  `InteractiveBrokersClient.accounts()` where `gateway_reported_accounts` reads it** — the whole
+  chain was verified by reading the installed 1.220.0 wheel, not by executing it. Same shape as the
+  Story 1.3 P1 entry above. **Action:** run P2 from a checkout that has `.env` the next time a paper
+  Gateway is available, and record the result. Non-blocking for the story by its own AC wording
+  ("when its position is **inspected**"), but it is the only end-to-end evidence that exists.
+
+- **⚠️ Epic 2 blocker: `NautilusKernel.start_async()` offers no hook between "engines connected" and
+  "trader started", so AR39's `gate:account` phase cannot be placed by polling.**
+  `system/kernel.py` awaits engines-connected → reconciliation → portfolio init → `self._trader.start()`
+  inside **one coroutine**. A runner that polls `exec_engine.check_connected()` (the way
+  `scripts/diagnostics/live_node_probe.py` does) observes `True` partway through that coroutine and
+  then races its continuation. With zero strategies configured — Epic 1's only situation — the race
+  is invisible, because `strategy_states()` is `{}` and the ordering guard is vacuously satisfied
+  *even when `_trader.start()` has already run*. **The moment Epic 2's runner configures a strategy,
+  `STRATEGY_STARTED_BEFORE_ACCOUNT_GATE` will fire nondeterministically** depending on how long
+  reconciliation takes. **Action for Story 2.5:** do not call `verify_connected_account` from a
+  poll loop. Drive the phase from a real hook — an `on_start`-style kernel callback, a custom
+  `Controller`, or by starting the node with no strategies and adding them after the gate returns.
+  This is a real finding, not a hypothetical: the guard is correct and fail-closed; the *placement
+  mechanism* Epic 1 could offer is not sufficient for a node that has strategies.
+
+- **`READY` does not mean "never started" after a reset, so the ordering guard has a blind spot.**
+  `NOT_YET_STARTED_STATES` admits `READY`, but the component FSM allows
+  `STOPPED --RESET--> RESETTING --RESET_COMPLETED--> READY` (`common/component.pyx`), and
+  `Trader._reset()` resets every strategy. A runner that stops and resets a trader between sessions
+  in one process — exactly the "session ≠ process run" model Phase 3 is built on — could therefore
+  re-run the gate against strategies that have already traded on the previous, unverified
+  connection. Not fixable from the state name alone; it needs the runner to track whether a start
+  has occurred. **Action for Story 2.5**, alongside the item above.
+
+- **The ordering guard inspects strategies only, not actors or execution algorithms.**
+  `Trader._start()` starts **actors first**, then strategies, then exec algorithms
+  (`trading/trader.py`). A running actor subscribing to and acting on live data from an unverified
+  account is invisible to `_placement_refusal`. Deliberately not widened in this story: AC #6 is
+  worded "before any **strategy** is started", Epic 1 configures neither actors nor exec algorithms,
+  and widening the guard would compound the Epic 2 placement problem above. **Action for Story 2.5:**
+  decide whether the guard should read "before anything is running" and extend it to
+  `actor_states()` / `exec_algorithm_states()` if so.
+
+- **Nautilus prints the raw account identifier to stdout, outside NFR26's reach.**
+  `adapters/interactive_brokers/execution.py` logs ``Account `DU…` found in the connected
+  TWS/Gateway`` and `client/account.py` logs `Managed accounts set: {…}`, both through the Nautilus
+  C logger on every successful connection. This codebase masks everything it renders itself, but a
+  full session transcript still contains the account in clear — P1's own 2026-08-05 result-log entry
+  quotes it. Pre-existing and third-party. **Action:** a later story should decide whether to route
+  Nautilus logging to a file, raise its level, or accept the exposure; P2's pass criterion 3 is
+  scoped to `[probe]` lines in the meantime so it is achievable.
+
+- **The paper path does not check that `TWS_ACCOUNT` is among the reported accounts.**
+  `_evaluate_reported_paper` verifies every reported account carries a paper prefix but never that
+  the *configured* account is one of them; the real-money path does require that membership. The
+  gap is closed in practice by the IB execution client, which faults and raises when its configured
+  `account_id` is not in `client.accounts()` (`execution.py`) — verified by reading the wheel, but
+  not pinned by any test here, so the gate's completeness rests on unverified third-party behaviour.
+  Deliberately not added: the two sides normalise differently (Layer 1 permits a lowercase `du…`
+  while `live_node_builder._resolve_account` upper-cases), so a naive membership check would refuse
+  configurations Layer 1 permits. **Action:** settle the normalisation question first, then decide.
+
+- **`tests/unit/core/test_live_gate.py` is 833 lines, over CLAUDE.md's 500-line file limit.**
+  It was already 508 lines before this story. The limit has no stated test-file exemption, but the
+  repo has clear precedent against applying it to tests (`tests/component/test_ibkr_client.py` is
+  712 lines, `tests/component/core/test_live_node_builder.py` 512). Splitting the Layer 2 decision
+  table into its own file was explicitly rejected when the story was written — the Layer 1 and
+  Layer 2 truth tables must stay readable side by side, since Layer 2's first act is to run Layer 1.
+  **Action:** settle whether the size limit applies to test files at all, project-wide, rather than
+  per story.
+
+- **The probe's `if problems: raise ProbeError(...)` is unreachable when an exception propagates.**
+  `scripts/diagnostics/live_node_probe.py` computes `problems` inside a `finally` but checks it
+  after the `try/finally`, so on any failure path — including the new Layer 2 refusal — a genuine
+  unclean shutdown is reported only as a `[probe] shutdown problems: …` line on **stderr**, never in
+  the parseable `RESULT:` line. Pre-existing from Story 1.3; the information is not lost, only
+  demoted. A Layer 2 refusal also stops the node twice (once in the gate, once in the probe's
+  `finally`), which is harmless but produces `InvalidStateTrigger` noise from already-stopped
+  components. **Action:** fold the shutdown-problem check into the `RESULT:` line whenever the probe
+  is next touched.
