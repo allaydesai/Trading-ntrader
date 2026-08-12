@@ -20,16 +20,21 @@ which opens a socket to the gateway. Broker-dependent behaviour is
 operator-verified instead (NFR32/NFR33) in
 ``docs/qa/phase3-live-verification.md``.
 
-Known pre-existing collection-order hazard (see deferred-work.md, "Deferred
+Collection-order hazard, RESOLVED 2026-08-11 (see deferred-work.md, "Deferred
 from: story-1.3"): running the whole ``tests/integration`` tree in one
-``pytest -n auto --forked`` invocation crashes these two tests with SIGTRAP
-if ``tests/integration/api/test_trades_api.py`` lands in the same xdist
-worker — that file's ``from src.api.web import app`` runs Nautilus
-``init_logging()`` as an import-time side effect (``src/api/web.py:22``) in
-the shared worker process, before any per-test fork, corrupting the native
-logging/async state every later ``--forked`` child inherits. Unrelated to
-this module's correctness: both tests pass reliably alone, and in every
-subset of ``tests/integration`` that excludes ``test_trades_api.py``.
+``pytest -n auto --forked`` invocation used to crash these two tests with
+SIGTRAP if ``tests/integration/api/test_trades_api.py`` landed in the same
+xdist worker — that file's ``from src.api.web import app`` ran Nautilus
+``init_logging()`` as an import-time side effect in the shared worker process,
+before any per-test fork, corrupting the native logging/async state every
+later ``--forked`` child inherited. The same mechanism was also crashing 21
+``BacktestEngine`` tests elsewhere in the tier, which earlier triage had
+misread as an unrelated "pre-existing baseline".
+
+``src/api/web.py`` now claims logging in a FastAPI ``lifespan`` hook instead,
+so importing it is inert and these two tests run for real rather than
+skipping. ``tests/component/api/test_web_app_logging.py`` guards the
+regression.
 """
 
 import pytest

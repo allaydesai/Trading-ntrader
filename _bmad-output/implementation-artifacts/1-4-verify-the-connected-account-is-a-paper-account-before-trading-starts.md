@@ -664,10 +664,39 @@ layers rather than being re-spelled by hand in a second module.
 `src/core/live_node_builder.py`, `src/api/**`, `templates/**`, `alembic/**`, every strategy file,
 `.env*`, and the reconnect/kill diagnostic scripts.
 
+## Traceability
+
+Every acceptance criterion below maps to named, currently-passing tests. Re-verified
+2026-08-11 against the tree at `09296ec`: 1588 unit passed, 868 component passed (16 skipped,
+all pre-existing and unrelated), 18 integration passed (2 skipped — `IBKR_AVAILABLE=1` not set),
+`ruff check` clean, `mypy src/core src/services` clean.
+
+| AC | Requirement | Verified by | Tier | Status |
+| --- | --- | --- | --- | --- |
+| 1 | Every reported account must carry a `DU`/`DF` prefix; one non-paper account refuses the whole connection (FR8, AR14) | `TestAccountGatePaperPath`; `TestVerifyConnectedAccountRefuses::test_non_paper_reported_account_stops_the_node_and_raises`; `TestVerifyConnectedAccountPermits::test_paper_accounts_permit_and_leave_the_node_running` | unit + component | PASS |
+| 2 | Layer 1's refusal is returned unchanged — Layer 2 can never permit what Layer 1 refused (FR9) | `TestAccountGateLayerOneDominance` (6 parametrised cases asserting propagated reason *and* message are identical to Layer 1's); `TestVerifyConnectedAccountRefuses::test_layer_one_refusal_reaches_the_caller_unchanged` | unit + component | PASS |
+| 3 | A `REAL_MONEY` authorization must appear in the gateway's reported set **and** must not carry a paper prefix (FR10) | `TestAccountGateRealMoneyCrossing::{test_authorized_account_reported_by_the_gateway_permits, test_authorized_account_absent_from_the_reported_set_refuses, test_paper_prefixed_authorization_refuses, test_identity_match_is_case_sensitive_so_folding_cannot_widen_it, test_a_real_money_gateway_may_also_manage_paper_accounts}`; `TestVerifyConnectedAccountRealMoney` | unit + component | PASS |
+| 4 | No evidence — node not connected, or gateway named no account — is a refusal, never a permit (fail-closed) | `TestAccountGateFailsClosedWithoutEvidence`; `TestVerifyConnectedAccountRefuses::{test_unconnected_node_refuses_without_reading_any_account, test_gateway_reporting_nothing_refuses, test_a_raising_adapter_refuses_rather_than_escaping, test_a_raising_trader_refuses_rather_than_escaping, test_an_unbuilt_node_is_not_connected_despite_check_connected_saying_so}`; `TestGatewayReportedAccounts::test_no_registered_client_yields_an_empty_set_rather_than_raising` | unit + component | PASS |
+| 5 | Any Layer 2 refusal stops the node before returning, starts no strategy, and raises the *same* `GateRefusedError` the static gate raises (FR9, AR14, AR28) | `TestVerifyConnectedAccountRefuses::{test_non_paper_reported_account_stops_the_node_and_raises, test_no_strategy_is_started_on_any_path, test_a_cancelled_shutdown_still_delivers_the_refusal, test_a_hanging_shutdown_does_not_withhold_the_refusal, test_a_failing_shutdown_does_not_mask_the_refusal}` | component | PASS |
+| 6 | A strategy already started when verification runs causes a refusal, enforcing AR39's ordering at runtime (AR39) | `TestVerifyConnectedAccountRefuses::test_a_started_strategy_refuses_before_the_account_is_even_read` (5 cases: running, starting, stopping, degraded, unknown-state-fails-closed); `TestNotYetStartedStates::test_the_allowlist_names_real_component_states`; `TestVerifyConnectedAccountPermits::test_added_but_unstarted_strategies_do_not_trip_the_ordering_guard` | component | PASS |
+| 7 | Log records carry `phase="gate:account"` and `status="started"\|"ok"\|"failed"` (AR39); every account identifier in a log record *or* refusal message is masked via `mask_account()` (NFR26) | `TestAccountGatePhaseLogging` (6 tests, incl. `test_no_log_record_ever_carries_a_full_account[permit\|refusal]`); `TestAccountGateMasking` (incl. `test_no_layer_two_refusal_leaks_a_full_account`, 4 cases); `TestMaskAccount` | unit + component | PASS |
+| 8 | No order-submission path, session runner, CLI command or new dependency; `pyproject.toml` and `uv.lock` byte-identical (AR3) | `git diff 6530b53 76e2c2b -- pyproject.toml uv.lock` returns empty; neither file appears in `76e2c2b`'s diffstat (9 files changed, none of them a manifest) | git | PASS |
+
+**Test files.** `tests/unit/core/test_live_gate.py` (83 collected) and
+`tests/component/core/test_live_account_gate.py` (31 collected). Both modules changed by this
+story — `src/core/live_gate.py` and `src/core/live_account_gate.py` — are at 100% coverage.
+
+**One item outstanding, non-blocking and unchanged:** Procedure P2 in
+`docs/qa/phase3-live-verification.md` is fully documented but has **not** been run against a live
+gateway (no `.env` in this worktree; `.env*` is hook-protected). Per that document's own policy its
+Result Log records "not yet run" rather than claiming a pass. This is a live-hardware verification
+gap, not an unmet acceptance criterion — no AC above depends on it.
+
 ## Change Log
 
 | Date | Change |
 | --- | --- |
 | 2026-08-07 | Story created from `epics.md` Story 1.4, status `ready-for-dev`. |
 | 2026-08-07 | Layer 2 implemented TDD Red→Green across two tiers: pure `evaluate_account_gate` in `src/core/live_gate.py` (+4 account refusal reasons, +2 placement reasons, `_refuse` → public `build_refusal`), enforcement seam `src/core/live_account_gate.py`, 26 new unit cases, 22 new component tests, opt-in `--verify-account` probe flag, Procedure P2 documented. Closed the Story 1.1 deferred real-money/paper-prefix finding. Status → `review`, with Task 6's live run outstanding and recorded as non-blocking. |
+| 2026-08-11 | Added the `## Traceability` section: an explicit AC → test mapping for all 8 ACs, re-verified against the tree at `09296ec`. Documentation only — no source, test or configuration change. |
 | 2026-08-09 | Code-reviewed by three adversarial layers → 0 decision-needed, 17 patches applied, 8 deferred, 4 dismissed. All 8 ACs confirmed satisfied. Patches closed four fail-open paths inside satisfied ACs — an unguarded third-party attribute chain that escaped with the node still up, a vacuously-`True` connection check on an unbuilt node, `CancelledError` aborting before the refusal was raised, and an unbounded post-refusal `stop_async()` — plus an inverted case-folding rationale, an unstripped/undeduplicated account rendering, third-party exception text reaching a log record, AR41/AR36 naming, and four tests that asserted less than they claimed. Added `ACCOUNT_VERIFICATION_ERROR` and `normalize_reported_accounts()`. Status → `done`. |

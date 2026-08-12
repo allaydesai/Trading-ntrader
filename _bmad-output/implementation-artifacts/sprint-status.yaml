@@ -36,7 +36,28 @@
 
 generated: 2026-08-03
 last_updated: >-
-  2026-08-09 (Story 1.4 implemented -> code-reviewed -> done. Layer 2 of the two-layer safety gate
+  2026-08-11 (Test-infra fix, no story scope: the integration tier is deterministic again.
+  `make test-integration` was reporting 23 failures out of 167 with a failing set that CHANGED
+  between identical runs; every failure was "CRASHED with signal 5" (SIGTRAP). Root cause was the
+  story-1.3 deferred item, and fixing it confirmed that entry was wrong twice over: the blast
+  radius was not limited to TradingNode tests (all 23 crashes were BacktestEngine tests), and the
+  "pre-existing 23-test baseline, unrelated to this mechanism" was in fact the same mechanism.
+  `src/api/web.py` ran Nautilus `init_logging()` at MODULE IMPORT time; under `pytest -n auto
+  --forked`, imports happen once per persistent xdist worker during COLLECTION, before any
+  per-test fork, and `--forked` isolates only the test call — so every later forked child in a
+  worker that had collected any `from src.api.web import app` test inherited a process image with
+  logging already claimed, while the native threads the subsystem needs do not survive fork().
+  Which tests crashed depended on how xdist distributed modules, hence the instability. Moved into
+  a FastAPI `lifespan` hook guarded by `is_logging_initialized()` (never panics on re-entry, never
+  overwrites an earlier caller's guard). Result: 169 passed / 2 skipped, identical across six
+  consecutive runs; skips dropped 4 -> 2 because the two test_live_node_lifecycle.py tests now run
+  instead of skipping. Verified the real server still works — uvicorn startup complete and GET /
+  -> 200 — since lifespan, unlike import, only runs in the serving process. Regression guard:
+  tests/component/api/test_web_app_logging.py (fresh-subprocess probe + a meta-test so it cannot
+  pass vacuously). Also added an explicit AC -> test traceability table to story 1.4; all 8 ACs
+  confirmed still satisfied, no source change to either gate module. Full suite green: 1588 unit,
+  870 component, 169 integration, 192 api/ui, 1 e2e; ruff check + format + mypy clean.
+  Epic 1 unchanged: 1.1/1.2/1.3/1.4 done, 1.5-1.7 backlog. Previously: 2026-08-09 (Story 1.4 implemented -> code-reviewed -> done. Layer 2 of the two-layer safety gate
   now exists, split along the purity line Story 1.1 established: the DECISION is
   evaluate_account_gate() in src/core/live_gate.py, still pure and still passing TestGatePurity's
   unchanged import whitelist; the ENFORCEMENT is a new src/core/live_account_gate.py that reads what

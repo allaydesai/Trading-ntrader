@@ -142,9 +142,33 @@ it was not actioned at the time. Archived with the phase; a fresh file opens wit
   **Action for Epic 3:** either make the compose value configurable per environment or document that
   the compose gateway cannot be used once order submission ships.
 
-- **Collecting `tests/integration/api/test_trades_api.py` alongside any test that builds a real
-  `TradingNode` crashes the latter with `SIGTRAP`, in the same `pytest -n auto --forked` run** —
-  root cause: `test_trades_api.py` does `from src.api.web import app`, and `src/api/web.py:22-23`
+- ~~**Collecting `tests/integration/api/test_trades_api.py` alongside any test that builds a real
+  `TradingNode` crashes the latter with `SIGTRAP`, in the same `pytest -n auto --forked` run**~~ —
+  **RESOLVED 2026-08-11.** Fixed exactly as this entry's action item prescribed: the module-level
+  `init_logging()` call moved out of import time into a FastAPI `lifespan` hook
+  (`src/api/web.py`), guarded by `is_logging_initialized()` so it neither panics on re-entry nor
+  overwrites a guard a legitimate earlier caller already stored. Importing `src.api.web` is now
+  inert; logging is claimed only in the process that actually serves.
+
+  **Two corrections to the analysis below, both established by measurement while fixing it:**
+
+  1. **The blast radius was much larger than "any test that builds a real `TradingNode`."** The
+     claim that "a `BacktestEngine` built afterwards is unaffected — a backtest is synchronous and
+     never touches the broken channel" is **wrong**. Every one of the 23 failures was a
+     `BacktestEngine` test dying with the same `SIGTRAP` (signal 5), in
+     `test_backtest_catalog_integration.py`, `test_backtest_runner_integration.py`,
+     `test_backtest_runner_yaml.py` and `test_kraken_backtest.py`.
+  2. **The "pre-existing 23-test failure baseline … is unrelated to this mechanism" is therefore
+     also wrong** — it *was* this mechanism, and it is gone. `make test-integration` now reports
+     **169 passed, 2 skipped**, identical across four consecutive runs (was: 144 passed / 23
+     failed, with a failing set that *changed between runs* because it depended on how xdist
+     happened to distribute modules across workers — that nondeterminism was the tell).
+
+  The skip count also dropped 4 → 2: the two `test_live_node_lifecycle.py` tests that used to
+  skip with "requires a process where Nautilus logging is not yet initialised" now genuinely run.
+
+  Original analysis, retained because the mechanism description is accurate and worth keeping:
+  `test_trades_api.py` does `from src.api.web import app`, and `src/api/web.py:22-23`
   runs Nautilus `init_logging()` as a **module-import-time side effect**. Under `pytest-xdist` +
   `pytest-forked`, module imports happen once in the persistent worker process during collection,
   before any per-test fork; `--forked` only isolates the *test call*, not collection. Every later
@@ -159,15 +183,24 @@ it was not actioned at the time. Archived with the phase; a fresh file opens wit
   assembly only, never touches `TradingNode`) and `tests/integration/core/test_live_node_lifecycle.py`
   (2 tests) both pass **every** time in isolation and in every file combination that excludes
   `test_trades_api.py`; combined with it, the two integration tests crash deterministically,
-  100% reproducible across 7+ runs. The pre-existing 23-test failure baseline in
+  100% reproducible across 7+ runs. ~~The pre-existing 23-test failure baseline in
   `tests/integration` (present before this story, in `test_backtest_catalog_integration.py`,
   `test_backtest_runner_integration.py`, `test_backtest_runner_yaml.py`,
-  `test_kraken_backtest.py`) is unrelated to this mechanism and unaffected by it either way.
-  Not fixed here: the story's Dev Notes explicitly forbid touching `src/api/**`. **Action for
-  whoever next touches `src/api/web.py` or adds another `TradingNode`-building integration test:**
-  move the module-level `init_logging()` call out of import-time (e.g. into an app factory or
-  FastAPI lifespan hook) so importing `src.api.web` for its FastAPI `app` object stops being a
-  process-global side effect.
+  `test_kraken_backtest.py`) is unrelated to this mechanism and unaffected by it either way.~~
+  — struck: see correction 2 above, it was the same mechanism.
+  ~~Not fixed here: the story's Dev Notes explicitly forbid touching `src/api/**`.~~ — fixed
+  2026-08-11, outside that story's scope bar.
+
+  **Regression guard:** `tests/component/api/test_web_app_logging.py` asserts in a fresh
+  subprocess that importing `src.api.web` leaves `is_logging_initialized()` `False`, plus a
+  meta-test proving the probe still detects a real `init_logging()` call so it cannot pass
+  vacuously. Anyone reintroducing an import-time initialization gets a named failure instead of
+  23 unrelated `SIGTRAP` crashes.
+
+  **Lesson worth keeping:** a *changing* failure set across identical runs is the signature of
+  collection-order/process-state contamination, not of 23 independent broken tests. The original
+  triage read the instability as a stable "pre-existing baseline" and set it aside; re-running
+  the tier twice and diffing the failure lists would have surfaced the shared cause immediately.
 
 - ~~**`make test-component`'s documented baseline of 815 and `make test-integration`'s documented
   169 do not match the actual collected counts**~~ — **RETRACTED 2026-08-05 by code review; this
