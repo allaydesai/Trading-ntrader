@@ -265,3 +265,97 @@ Non-blocking findings from the three-layer adversarial code review of Story 1.3.
   tested is `tws_account=""`, whose error message echoes no account at all — so the requirement is
   met by construction rather than by assertion. Not a leak; the checkbox simply claims more than
   the test demonstrates.
+
+## Deferred from: story-1.6 (2026-08-07)
+
+- **Connection-loss detection depends on two *private* attributes of a third-party class.**
+  `read_ibkr_connection_status()` (`src/core/live_node_builder.py`) reads
+  `InteractiveBrokersClient._is_ib_connected` and `._is_client_ready`. This is not a shortcut — at
+  nautilus-trader 1.220.0 there is no public alternative: a socket drop publishes no message-bus
+  event (the adapter's watchdog calls the `_degrade` *hook* directly rather than the `degrade()`
+  FSM transition, so `is_degraded` stays `False` and no `ComponentStateChanged` is emitted —
+  verified by execution), and `is_connected` / `DataEngine.check_connected()` only move on the
+  `connect()`/`disconnect()` lifecycle, so they read `True` straight through a dead socket. The
+  dependency is mitigated three ways: the read is `getattr`-based and fail-closed, a canary test
+  constructs a real client and fails *by name* if either flag moves, and the failure direction is
+  "withhold trading permission". **Action:** re-check on every nautilus-trader upgrade, and if the
+  adapter ever gains a public connection-status surface or publishes a state-change event, migrate
+  to it and delete the canary. Epic 4 should know this before it wires reconciliation into the
+  recovery path.
+
+- **`confirm_state_reestablished()` has no caller in production yet.** It is the seam by which
+  trading permission is granted, and the whole NFR10 guarantee ("never on reconnect alone") rests
+  on the runner calling it only *after* state is genuinely re-established. Today it is called by
+  tests and by the P2 probe. **Action for Epic 2's runner (AR38/AR39)** — it belongs at the
+  `trading` phase of the startup sequence — **and for Epic 4**, which owns the reconciliation that
+  makes the confirmation truthful after a reconnect. A runner that calls it straight after
+  observing a live socket would satisfy the type signature while defeating the design.
+
+- **Nothing polls the monitor yet, and the halt deadline is only evaluated inside `observe()`.**
+  A monitor that is polled only on state *change* can never notice an outage that simply persists,
+  so NFR20's halt would never fire. This is documented in the class docstring rather than enforced.
+  **Action for Epic 2's runner:** poll on a fixed interval (the same heartbeat AR32's
+  `last_heartbeat_at` uses is the natural carrier), and consider asserting a maximum age on the
+  last observation before `trading_permitted` is honoured.
+
+- **Two log event names are not in AR41's enumeration.** `connection.halted` and
+  `connection.recovery_refused` were added because NFR20 requires the halt to be *reported* and a
+  refused permission grant must be visible; both follow AR41's stated convention (dotted lowercase,
+  past tense, session-scoped). **Action at the Epic 1 retrospective:** amend AR41's list rather
+  than leaving two production events undocumented in the architecture.
+
+- **`src/core/live_connection_monitor.py` is absent from the architecture's Delta Project Tree.**
+  The tree folds connection concerns into `live_session_runner.py`, but AR38 gives the runner
+  lifecycle ownership and Epic 2 owns the runner, so the state machine had to precede it — the same
+  relationship `live_gate.py` has to the CLI that calls it. **Action:** add the file when
+  `architecture.md` is next revised (the post-implementation `docs/agent/` refresh is the natural
+  moment).
+
+- **Procedure P2 has no live result.** `docs/qa/phase3-live-verification.md` records it as
+  `⛔ not run`: no IB Gateway was listening on any of the four IB ports, and the implementation
+  worktree has no `.env` (gitignored, and `.env*` is hook-protected). **Action:** run
+  `uv run python scripts/diagnostics/live_connection_probe.py` once a Gateway and a populated
+  `.env` are both available and record the result. Non-blocking — AC #1–#5 are proven by 31 unit
+  and 12 component tests that require no broker (NFR32/NFR34). Note this sits alongside P1's own
+  outstanding `⚠️ re-run required` row from Story 1.3's review, so one Gateway session can clear
+  both.
+
+- **The reconnect window is not observable from outside the monitor.** `reconnect_window_seconds`
+  is a constructor default (60.0, NFR4) with no accessor; it appears in log lines but a caller
+  cannot read it back to, say, size its own poll interval or render it in `ntrader live status`.
+  Deliberate — the story declined to add a setting for it — but worth revisiting when Epic 2 builds
+  the `health` derivation (AR32), which needs to distinguish `degraded` from `stale`.
+
+## Deferred from: code review of story-1.6 (2026-08-09)
+
+- **IB error code 1101 re-sets `_is_ib_connected` without any resubscription, so
+  `read_ibkr_connection_status()` can report a healthy connection on a link whose market data is
+  dead.** TWS emits 1100 ("connectivity lost") → `_process_error` clears `_is_ib_connected`
+  (`adapters/interactive_brokers/client/error.py:110-116`). The socket to TWS itself stays up, so
+  `_eclient.isConnected()` remains `True`. TWS then emits **1101** ("restored — *data lost*")
+  before the watchdog's next 1-second tick (`client/client.py:370-375`) and `_process_error` sets
+  the flag again — so `_handle_disconnection` never runs, `_degrade()` never clears
+  `_is_client_ready`, and `_resubscribe_all()` (reachable only via `_handle_reconnect`) is never
+  called. The adapter treats 1101 and 1102 identically even though only 1102 means "data
+  maintained". Result: both flags set, reader says `connected=True, "ib socket connected, client
+  ready"`, and every subscription has been silently dropped by IB. **Action:** this needs a third
+  observable — subscription state — that Epic 1 does not have and does not own. Natural home is
+  **Story 1.5** (which owns subscriptions) or **Epic 4** (broker-authoritative state). Until then,
+  the two-flag reading is the best available signal and its limit is documented here.
+
+- **`scripts/diagnostics/live_node_probe.py` (Story 1.3) builds the node outside its `try/finally`
+  and can hang indefinitely against an unreachable Gateway.** Same shape as the defect patched in
+  `live_connection_probe.py`: `node.build()` → `get_cached_ib_client` → `client.start()` →
+  `Component.start()` calls `_start()` synchronously, which (loop not yet running) runs
+  `run_until_complete(_start_async())`; with `_indefinite_reconnect` on by default
+  (`IB_MAX_CONNECTION_ATTEMPTS` unset → `_max_connection_attempts == 0`) that loop retries forever
+  and never consults `IBKR_CONNECTION_TIMEOUT`. A Ctrl-C out of it skips `_shutdown` entirely.
+  **Action:** apply the same fix to `live_node_probe.py` — not done here because it is another
+  story's artifact and Procedure P1's evidence is recorded against its current form.
+
+- **AR41's normative event list omits two events this story ships.** `connection.halted` and
+  `connection.recovery_refused` are emitted by `src/core/live_connection_monitor.py` and are not in
+  `epics.md:241` / `architecture.md#Communication-Patterns`. Both follow AR41's stated convention.
+  **Action at the Epic 1 retrospective:** amend the list. (Recorded twice deliberately — once as a
+  story judgment call, once as a review finding — because it is the architecture document, not the
+  code, that needs the edit.)
