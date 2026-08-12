@@ -10,9 +10,11 @@ integration tier instead (tests/integration/core/test_live_node_lifecycle.py).
 """
 
 import ast
+import importlib
 from pathlib import Path
 
 import pytest
+from ibapi.common import MarketDataTypeEnum  # type: ignore[import-untyped]
 from nautilus_trader.adapters.interactive_brokers.common import IB
 from nautilus_trader.adapters.interactive_brokers.config import (
     InteractiveBrokersDataClientConfig,
@@ -20,10 +22,17 @@ from nautilus_trader.adapters.interactive_brokers.config import (
 )
 from nautilus_trader.common.component import is_logging_initialized
 from nautilus_trader.config import TradingNodeConfig
+from nautilus_trader.model.data import BarType
 
 from src.config import IBKRSettings
 from src.core import live_node_builder
+from src.core.live_bar_observer import (
+    LiveBarObserver,
+    LiveBarObserverConfig,
+    build_bar_observer_config,
+)
 from src.core.live_gate import GateRefusalReason
+from src.core.live_market_data import LiveMarketDataError
 from src.core.live_node_builder import (
     GateRefusedError,
     LiveNodeConfigError,
@@ -31,6 +40,8 @@ from src.core.live_node_builder import (
 )
 
 TRADER_ID = "PAPER-a1b2c3d4"
+AAPL_1MIN = "AAPL.NASDAQ-1-MINUTE-LAST-EXTERNAL"
+MSFT_1MIN = "MSFT.NASDAQ-1-MINUTE-LAST-EXTERNAL"
 
 
 @pytest.fixture(autouse=True)
@@ -61,6 +72,21 @@ def _assert_c_logging_state_is_unchanged():
     )
 
 
+@pytest.fixture(autouse=True)
+def _isolate_market_data_env(monkeypatch):
+    """Keep the shell out of the fields whose *set-ness* the builder reads.
+
+    ``_env_file=None`` disables the dotenv file but not ``os.environ``, and
+    ``resolve_live_market_data_type`` branches on ``model_fields_set`` — so an
+    exported ``IBKR_MARKET_DATA_TYPE`` marks the field set and turns every
+    ``market_data_type=None`` build in this file into a refusal. Both casings are
+    cleared; ``case_sensitive: False`` makes them equal aliases.
+    """
+    for name in ("IBKR_MARKET_DATA_TYPE", "IBKR_USE_RTH", "IBKR_MARKET_DATA_LINES"):
+        monkeypatch.delenv(name, raising=False)
+        monkeypatch.delenv(name.lower(), raising=False)
+
+
 def _settings(
     *,
     mode: str = "paper",
@@ -73,13 +99,24 @@ def _settings(
     read_only: bool = True,
     connection_timeout: int = 300,
     request_timeout: int = 60,
+    market_data_type: str | None = None,
+    use_rth: bool = True,
+    market_data_lines: int = 100,
 ) -> IBKRSettings:
     """Build settings with every field this module reads, passed explicitly.
 
     Init kwargs outrank the environment in pydantic-settings, so the
     developer's shell cannot become test input (mirrors
     tests/unit/core/test_live_gate.py:26-46).
+
+    ``market_data_type`` is the one deliberate exception, and defaults to
+    ``None`` = *leave the field unset*. That is not laziness: the live path
+    distinguishes "unset, so override the DELAYED_FROZEN fetch default" from
+    "explicitly configured", and it reads ``model_fields_set`` to do it. Passing
+    the string ``"DELAYED_FROZEN"`` here would mark the field set and turn every
+    build in this file into a refusal.
     """
+    overrides = {} if market_data_type is None else {"ibkr_market_data_type": market_data_type}
     return IBKRSettings(
         _env_file=None,
         ibkr_trading_mode=mode,
@@ -92,6 +129,9 @@ def _settings(
         ibkr_read_only=read_only,
         ibkr_connection_timeout=connection_timeout,
         ibkr_request_timeout=request_timeout,
+        ibkr_use_rth=use_rth,
+        ibkr_market_data_lines=market_data_lines,
+        **overrides,
     )
 
 
@@ -510,3 +550,357 @@ class TestMissingAccount:
 
         # Assert — legible error naming the missing variable, nothing to leak
         assert "TWS_ACCOUNT" in str(exc_info.value)
+
+
+class TestMarketDataConfiguration:
+    """Story 1.5 AC #1/#2 — REALTIME and RTH reach the data client explicitly."""
+
+    @pytest.mark.component
+    def test_data_client_requests_realtime_not_the_fetch_default(self):
+        """The DELAYED_FROZEN default belongs to catalog fetching, not to a session."""
+        # Arrange
+        settings = _settings()
+        assert settings.ibkr_market_data_type == "DELAYED_FROZEN"
+
+        # Act
+        cfg = build_trading_node_config(settings, trader_id=TRADER_ID)
+
+        # Assert
+        assert cfg.data_clients[IB].market_data_type == MarketDataTypeEnum.REALTIME
+
+    @pytest.mark.component
+    def test_data_client_restricts_bars_to_regular_trading_hours(self):
+        # Act
+        cfg = build_trading_node_config(_settings(), trader_id=TRADER_ID)
+
+        # Assert
+        assert cfg.data_clients[IB].use_regular_trading_hours is True
+
+    @pytest.mark.component
+    def test_both_fields_are_passed_explicitly_not_left_to_adapter_defaults(self):
+        """The adapter's own defaults agree today — relying on them is the risk.
+
+        ``InteractiveBrokersDataClientConfig`` already defaults
+        ``market_data_type`` to REALTIME and ``use_regular_trading_hours`` to
+        True (config.py:228-229), so the two assertions above would stay green if
+        the builder passed neither and a future adapter release flipped either
+        one. This assertion would not.
+        """
+        # Arrange
+        tree = ast.parse(Path(live_node_builder.__file__).read_text(encoding="utf-8"))
+
+        # Act
+        keywords = _data_client_call_keywords(tree)
+
+        # Assert
+        assert "market_data_type" in keywords
+        assert "use_regular_trading_hours" in keywords
+
+    @pytest.mark.component
+    def test_the_explicitness_guard_can_fail(self):
+        """A guard that cannot fail is worse than no guard (Story 1.3's lesson)."""
+        # Arrange — a call site that leaves both to the adapter's defaults
+        tree = ast.parse(
+            "InteractiveBrokersDataClientConfig(ibg_host=host, ibg_port=port)\n",
+        )
+
+        # Act
+        keywords = _data_client_call_keywords(tree)
+
+        # Assert
+        assert "market_data_type" not in keywords
+        assert "use_regular_trading_hours" not in keywords
+
+    @pytest.mark.component
+    def test_an_explicit_delayed_configuration_is_refused(self):
+        # Arrange
+        settings = _settings(market_data_type="DELAYED_FROZEN")
+
+        # Act / Assert
+        with pytest.raises(LiveMarketDataError) as exc_info:
+            build_trading_node_config(settings, trader_id=TRADER_ID)
+
+        assert "REALTIME" in str(exc_info.value)
+
+    @pytest.mark.component
+    def test_disabling_rth_is_refused(self):
+        # Arrange
+        settings = _settings(use_rth=False)
+
+        # Act / Assert
+        with pytest.raises(LiveMarketDataError) as exc_info:
+            build_trading_node_config(settings, trader_id=TRADER_ID)
+
+        assert "IBKR_USE_RTH" in str(exc_info.value)
+
+    @pytest.mark.component
+    def test_market_data_resolution_runs_before_any_client_config_is_constructed(self, monkeypatch):
+        """Ordering is the contract, not merely the outcome (mirrors AC #2 of Story 1.3)."""
+
+        # Arrange
+        def _boom(*args, **kwargs):
+            raise AssertionError("client config constructed despite an unusable market-data config")
+
+        monkeypatch.setattr(live_node_builder, "InteractiveBrokersDataClientConfig", _boom)
+        monkeypatch.setattr(live_node_builder, "InteractiveBrokersExecClientConfig", _boom)
+
+        # Act / Assert
+        with pytest.raises(LiveMarketDataError):
+            build_trading_node_config(_settings(market_data_type="DELAYED"), trader_id=TRADER_ID)
+
+
+class TestInstrumentLoading:
+    """Bars never arrive for a contract the instrument provider did not load."""
+
+    @pytest.mark.component
+    def test_no_bar_types_leaves_load_ids_empty(self):
+        """Story 1.3's callers build a node with no subscriptions; that stays legal."""
+        # Act
+        cfg = build_trading_node_config(_settings(), trader_id=TRADER_ID)
+
+        # Assert
+        assert not cfg.data_clients[IB].instrument_provider.load_ids
+
+    @pytest.mark.component
+    def test_bar_types_become_distinct_instrument_load_ids(self):
+        """Without load_ids the adapter logs "instrument not found" and returns.
+
+        No exception, no retry, no bars — see
+        adapters/interactive_brokers/data.py:248-254.
+        """
+        # Act
+        cfg = build_trading_node_config(
+            _settings(),
+            trader_id=TRADER_ID,
+            bar_types=[AAPL_1MIN, "AAPL.NASDAQ-5-MINUTE-LAST-EXTERNAL", MSFT_1MIN],
+        )
+
+        # Assert
+        assert cfg.data_clients[IB].instrument_provider.load_ids == frozenset(
+            {"AAPL.NASDAQ", "MSFT.NASDAQ"}
+        )
+
+    @pytest.mark.component
+    def test_an_unparseable_bar_type_is_refused(self):
+        # Act / Assert
+        with pytest.raises(LiveMarketDataError):
+            build_trading_node_config(_settings(), trader_id=TRADER_ID, bar_types=["nonsense"])
+
+
+class TestMarketDataLineBudgetAtStartup:
+    """Story 1.5 AC #4 — refuse before a socket opens, naming the limit."""
+
+    @pytest.mark.component
+    def test_a_session_within_budget_builds(self):
+        # Act
+        cfg = build_trading_node_config(
+            _settings(market_data_lines=2),
+            trader_id=TRADER_ID,
+            bar_types=[AAPL_1MIN, MSFT_1MIN],
+        )
+
+        # Assert
+        assert isinstance(cfg, TradingNodeConfig)
+
+    @pytest.mark.component
+    def test_exceeding_the_budget_fails_at_startup_naming_limit_and_count(self):
+        # Act / Assert
+        with pytest.raises(LiveMarketDataError) as exc_info:
+            build_trading_node_config(
+                _settings(market_data_lines=1),
+                trader_id=TRADER_ID,
+                bar_types=[AAPL_1MIN, MSFT_1MIN],
+            )
+
+        message = str(exc_info.value)
+        assert "2 streaming subscription" in message
+        assert "1 concurrent market-data line" in message
+
+    @pytest.mark.component
+    def test_the_budget_check_runs_before_any_client_config_is_constructed(self, monkeypatch):
+        """A refusal must precede anything that could open a connection."""
+
+        # Arrange
+        def _boom(*args, **kwargs):
+            raise AssertionError("client config constructed despite an over-budget session")
+
+        monkeypatch.setattr(live_node_builder, "InteractiveBrokersDataClientConfig", _boom)
+        monkeypatch.setattr(live_node_builder, "InteractiveBrokersExecClientConfig", _boom)
+
+        # Act / Assert
+        with pytest.raises(LiveMarketDataError):
+            build_trading_node_config(
+                _settings(market_data_lines=1),
+                trader_id=TRADER_ID,
+                bar_types=[AAPL_1MIN, MSFT_1MIN],
+            )
+
+    @pytest.mark.component
+    def test_the_gate_still_runs_first(self):
+        """Safety ordering is unchanged: a refused connection never reaches this story."""
+        # Arrange — over budget AND a non-paper port
+        settings = _settings(port=7496, market_data_lines=1)
+
+        # Act / Assert — the gate's refusal, not the budget's
+        with pytest.raises(GateRefusedError) as exc_info:
+            build_trading_node_config(
+                settings, trader_id=TRADER_ID, bar_types=[AAPL_1MIN, MSFT_1MIN]
+            )
+
+        assert exc_info.value.refusal.reason is GateRefusalReason.NON_PAPER_PORT
+
+
+class TestBarObserverWiring:
+    """Story 1.5 AC #3 — the observer reaches the node declaratively."""
+
+    @pytest.mark.component
+    def test_no_observer_config_leaves_the_node_without_actors(self):
+        # Act
+        cfg = build_trading_node_config(_settings(), trader_id=TRADER_ID)
+
+        # Assert
+        assert cfg.actors == []
+
+    @pytest.mark.component
+    def test_an_observer_config_becomes_an_importable_actor_config(self):
+        # Arrange
+        observer = build_bar_observer_config(_settings(), [AAPL_1MIN])
+
+        # Act
+        cfg = build_trading_node_config(
+            _settings(), trader_id=TRADER_ID, bar_types=[AAPL_1MIN], bar_observer=observer
+        )
+
+        # Assert
+        assert len(cfg.actors) == 1
+        importable = cfg.actors[0]
+        assert importable.actor_path == "src.core.live_bar_observer:LiveBarObserver"
+        assert importable.config_path == "src.core.live_bar_observer:LiveBarObserverConfig"
+        assert importable.config["bar_types"] == (AAPL_1MIN,)
+        assert importable.config["requests_per_second"] == 45
+
+    @pytest.mark.component
+    def test_the_importable_paths_actually_resolve(self):
+        """A typo'd dotted path only surfaces when the kernel builds the node."""
+        # Arrange
+        observer = build_bar_observer_config(_settings(), [AAPL_1MIN])
+        cfg = build_trading_node_config(
+            _settings(), trader_id=TRADER_ID, bar_types=[AAPL_1MIN], bar_observer=observer
+        )
+        importable = cfg.actors[0]
+
+        # Act
+        actor_cls = _resolve_dotted(importable.actor_path)
+        config_cls = _resolve_dotted(importable.config_path)
+
+        # Assert
+        assert actor_cls is LiveBarObserver
+        assert config_cls is LiveBarObserverConfig
+
+    @pytest.mark.component
+    def test_an_observer_alone_supplies_the_subscription_set(self):
+        """Naming the subscriptions once must be enough, and must still be checked."""
+        # Arrange — bar_types omitted entirely
+        observer = build_bar_observer_config(_settings(), [AAPL_1MIN, MSFT_1MIN])
+
+        # Act
+        cfg = build_trading_node_config(_settings(), trader_id=TRADER_ID, bar_observer=observer)
+
+        # Assert — the observer's set drove load_ids, so nothing is silently unloaded
+        assert cfg.data_clients[IB].instrument_provider.load_ids == frozenset(
+            {"AAPL.NASDAQ", "MSFT.NASDAQ"}
+        )
+
+    @pytest.mark.component
+    def test_an_observer_alone_is_still_checked_against_the_line_budget(self):
+        """Otherwise the budget is bypassable by naming subscriptions only on the actor."""
+        # Arrange
+        observer = build_bar_observer_config(_settings(), [AAPL_1MIN, MSFT_1MIN])
+
+        # Act / Assert
+        with pytest.raises(LiveMarketDataError) as exc_info:
+            build_trading_node_config(
+                _settings(market_data_lines=1), trader_id=TRADER_ID, bar_observer=observer
+            )
+
+        assert "2 streaming subscription" in str(exc_info.value)
+
+    @pytest.mark.component
+    def test_disagreeing_bar_types_and_observer_are_refused(self):
+        """The worst outcome this module can produce is a session that sees nothing.
+
+        A subscription whose instrument was never loaded is dropped by the IBKR
+        adapter with a log line and no error, so the node would connect, report
+        healthy, and never receive a bar.
+        """
+        # Arrange
+        observer = build_bar_observer_config(_settings(), [MSFT_1MIN])
+
+        # Act / Assert
+        with pytest.raises(LiveMarketDataError) as exc_info:
+            build_trading_node_config(
+                _settings(),
+                trader_id=TRADER_ID,
+                bar_types=[AAPL_1MIN],
+                bar_observer=observer,
+            )
+
+        message = str(exc_info.value)
+        assert AAPL_1MIN in message
+        assert MSFT_1MIN in message
+
+    @pytest.mark.component
+    def test_matching_bar_types_and_observer_are_accepted_regardless_of_order(self):
+        # Arrange
+        observer = build_bar_observer_config(_settings(), [MSFT_1MIN, AAPL_1MIN])
+
+        # Act
+        cfg = build_trading_node_config(
+            _settings(),
+            trader_id=TRADER_ID,
+            bar_types=[AAPL_1MIN, MSFT_1MIN],
+            bar_observer=observer,
+        )
+
+        # Assert
+        assert cfg.data_clients[IB].instrument_provider.load_ids == frozenset(
+            {"AAPL.NASDAQ", "MSFT.NASDAQ"}
+        )
+
+    @pytest.mark.component
+    def test_the_observer_subscribes_to_the_instruments_the_node_loads(self):
+        """A mismatch here is a session that connects and then sees nothing."""
+        # Arrange
+        bar_types = [AAPL_1MIN, MSFT_1MIN]
+        observer = build_bar_observer_config(_settings(), bar_types)
+
+        # Act
+        cfg = build_trading_node_config(
+            _settings(), trader_id=TRADER_ID, bar_types=bar_types, bar_observer=observer
+        )
+
+        # Assert
+        subscribed = {
+            str(BarType.from_str(entry).instrument_id)
+            for entry in cfg.actors[0].config["bar_types"]
+        }
+        assert subscribed == set(cfg.data_clients[IB].instrument_provider.load_ids)
+
+
+def _resolve_dotted(path: str):
+    """Resolve a Nautilus ``module:Attribute`` path the way the kernel does."""
+    module_name, _, attribute = path.partition(":")
+    return getattr(importlib.import_module(module_name), attribute)
+
+
+def _data_client_call_keywords(tree: ast.Module) -> set[str]:
+    """Keyword names passed to the single InteractiveBrokersDataClientConfig call."""
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "InteractiveBrokersDataClientConfig"
+    ]
+    assert len(calls) == 1, f"expected exactly one data-client construction, found {len(calls)}"
+    return {keyword.arg for keyword in calls[0].keywords if keyword.arg is not None}

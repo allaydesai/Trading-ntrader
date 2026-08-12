@@ -420,3 +420,76 @@ class TestIBKRClientIdIsolation:
         assert "super-secret-key-value" not in message
         assert "input_value=" not in message
         assert "ibkr_live_client_id" in message
+
+
+class TestMarketDataLineBudget:
+    """Test suite for the account's concurrent market-data line allocation (NFR16, NFR30).
+
+    A live session burns one IBKR market-data line per streaming subscription.
+    Exceeding the account's allocation makes IBKR drop subscriptions silently, so
+    the count has to be a typed setting the session can check against before it
+    opens a socket.
+    """
+
+    @staticmethod
+    def _clear_env(monkeypatch):
+        """Clear both casings — `case_sensitive: False` makes them equal aliases."""
+        for name in ("IBKR_MARKET_DATA_LINES",):
+            monkeypatch.delenv(name, raising=False)
+            monkeypatch.delenv(name.lower(), raising=False)
+
+    @pytest.mark.unit
+    def test_defaults_to_the_standard_ibkr_allocation(self, monkeypatch):
+        """100 is IBKR's standard allocation for an account with no booster packs."""
+        from src.config import IBKRSettings
+
+        # Arrange
+        self._clear_env(monkeypatch)
+
+        # Act
+        settings = IBKRSettings(_env_file=None)
+
+        # Assert
+        assert settings.ibkr_market_data_lines == 100
+
+    @pytest.mark.unit
+    def test_loads_from_env(self, monkeypatch):
+        """An account with quote booster packs raises the ceiling via env."""
+        from src.config import IBKRSettings
+
+        # Arrange
+        self._clear_env(monkeypatch)
+        monkeypatch.setenv("IBKR_MARKET_DATA_LINES", "300")
+
+        # Act
+        settings = IBKRSettings(_env_file=None)
+
+        # Assert
+        assert settings.ibkr_market_data_lines == 300
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize("value", [0, -1])
+    def test_non_positive_allocations_are_rejected(self, monkeypatch, value):
+        """A budget of zero would refuse every session; it is a typo, not a config."""
+        from pydantic import ValidationError
+
+        from src.config import IBKRSettings
+
+        # Arrange
+        self._clear_env(monkeypatch)
+
+        # Act / Assert
+        with pytest.raises(ValidationError):
+            IBKRSettings(_env_file=None, ibkr_market_data_lines=value)
+
+    @pytest.mark.unit
+    def test_field_description_states_what_consumes_a_line(self):
+        """The reservation only holds if the next reader knows what counts as one."""
+        from src.config import IBKRSettings
+
+        # Act
+        description = IBKRSettings.model_fields["ibkr_market_data_lines"].description or ""
+
+        # Assert
+        assert "line" in description.lower()
+        assert "subscription" in description.lower()

@@ -5,29 +5,52 @@ behind the Layer 1 safety gate, constructing the node, and registering the
 Nautilus LogGuard when node construction is the one that claims the C
 logging subsystem.
 
+Also owns the market-data half of that assembly (Story 1.5): the REALTIME
+override, the RTH restriction, the instruments the provider must load, and the
+market-data line budget check. The policy those rest on lives in
+``live_market_data``; this module is where it reaches the client config.
+
 Does not own: the node's lifecycle (build/run/stop/dispose — the runner does,
 AR38), the session's ``trader_id`` (Epic 2 derives it), Redis caching
-(Epic 2), or REALTIME/RTH market-data settings (Story 1.5).
+(Epic 2), or indicator warm-up from history (Epic 4).
 """
 
 import asyncio
+from collections.abc import Sequence
 
 import structlog
 from nautilus_trader.adapters.interactive_brokers.common import IB
 from nautilus_trader.adapters.interactive_brokers.config import (
     InteractiveBrokersDataClientConfig,
     InteractiveBrokersExecClientConfig,
+    InteractiveBrokersInstrumentProviderConfig,
 )
 from nautilus_trader.adapters.interactive_brokers.factories import (
     InteractiveBrokersLiveDataClientFactory,
     InteractiveBrokersLiveExecClientFactory,
 )
-from nautilus_trader.config import TradingNodeConfig
+from nautilus_trader.config import ImportableActorConfig, TradingNodeConfig
 from nautilus_trader.live.node import TradingNode
+from nautilus_trader.model.data import BarType
 
 from src.config import IBKRSettings
+from src.core.live_bar_observer import LiveBarObserverConfig
 from src.core.live_gate import GateFlags, GateRefusal, evaluate_gate, mask_account
+from src.core.live_market_data import (
+    LiveMarketDataError,
+    instrument_ids_for,
+    resolve_live_bar_types,
+    resolve_live_market_data_type,
+    resolve_live_use_rth,
+    validate_market_data_line_budget,
+)
 from src.utils.logging import set_nautilus_log_guard
+
+# Dotted paths the Nautilus kernel resolves when it instantiates the observer.
+# Kept as constants so the component tier can assert they still import, rather
+# than discovering a typo when a node is being built against a live gateway.
+BAR_OBSERVER_ACTOR_PATH = "src.core.live_bar_observer:LiveBarObserver"
+BAR_OBSERVER_CONFIG_PATH = "src.core.live_bar_observer:LiveBarObserverConfig"
 
 logger = structlog.get_logger(__name__)
 
@@ -117,6 +140,8 @@ def build_trading_node_config(
     settings: IBKRSettings,
     *,
     trader_id: str,
+    bar_types: Sequence[str] = (),
+    bar_observer: LiveBarObserverConfig | None = None,
     cli_flags: GateFlags | None = None,
 ) -> TradingNodeConfig:
     """Assemble a TradingNodeConfig for IBKR paper trading.
@@ -124,13 +149,23 @@ def build_trading_node_config(
     Runs the Layer 1 safety gate before constructing any client config —
     ordering is the contract (AC #2, FR9), not merely the outcome: a refusal
     raises before ``InteractiveBrokersDataClientConfig`` or
-    ``InteractiveBrokersExecClientConfig`` is ever instantiated.
+    ``InteractiveBrokersExecClientConfig`` is ever instantiated. Every later
+    check keeps that property: nothing that can fail runs after a client config
+    exists, so a bad configuration never reaches connecting code.
 
     Args:
         settings: Loaded IBKR settings. Injected, never fetched — this module
             never calls ``get_settings()``.
         trader_id: Required, no default. Epic 2 owns deriving it from the
             session; this function does not invent one.
+        bar_types: Bar types the session will subscribe to. Their instruments
+            become the provider's ``load_ids`` — without which the adapter
+            silently never delivers a bar — and their count is checked against
+            the account's market-data line budget (Story 1.5, NFR16/NFR30).
+            Empty is legal: a node with no subscriptions still builds.
+        bar_observer: Observer configuration. When given, it is carried onto the
+            node declaratively as an ``ImportableActorConfig`` so the kernel owns
+            the actor's lifetime.
         cli_flags: Operator declarations from the command line.
 
     Returns:
@@ -142,6 +177,9 @@ def build_trading_node_config(
         LiveNodeConfigError: The configuration cannot produce a usable node —
             a malformed ``trader_id``, an empty ``TWS_ACCOUNT``, or a
             non-positive timeout.
+        LiveMarketDataError: The market-data configuration cannot be honoured —
+            a non-REALTIME type, RTH disabled, an unusable bar type, or more
+            subscriptions than the account has market-data lines.
     """
     decision = evaluate_gate(settings, GateFlags() if cli_flags is None else cli_flags)
     if not decision.permitted:
@@ -163,6 +201,15 @@ def build_trading_node_config(
     account = _resolve_account(settings)
     _validate_timeouts(settings)
 
+    # Market data resolves before any client config too. Both of these refuse
+    # rather than degrade: a live session that quietly ran on delayed or
+    # extended-hours bars would report prices it never actually traded on.
+    market_data_type = resolve_live_market_data_type(settings)
+    use_regular_trading_hours = resolve_live_use_rth(settings)
+
+    resolved_bar_types = _reconcile_bar_types(bar_types, bar_observer)
+    validate_market_data_line_budget(resolved_bar_types, budget=settings.ibkr_market_data_lines)
+
     # Declares the intent to trade on this in-process view only. Nothing
     # enforces against this flag elsewhere: the gate above is the load-bearing
     # control (NFR27, AR43) — see "The ibkr_read_only truth" in the story.
@@ -179,6 +226,19 @@ def build_trading_node_config(
         ibg_client_id=trading_settings.ibkr_live_client_id,
         connection_timeout=trading_settings.ibkr_connection_timeout,
         request_timeout=trading_settings.ibkr_request_timeout,
+        # Both passed explicitly even though the adapter's own defaults happen to
+        # agree today. A data-integrity property that depends on a third-party
+        # default is one upgrade away from changing silently, and these two are
+        # the difference between a session trading live RTH bars and one trading
+        # 15-minute-old extended-hours bars while reporting them as live.
+        market_data_type=market_data_type,
+        use_regular_trading_hours=use_regular_trading_hours,
+        # Contracts the session will subscribe to. A missing entry is not an
+        # error at the adapter — `_subscribe_bars` logs "instrument not found"
+        # and returns (data.py:248-254), so the subscription is silently dead.
+        instrument_provider=InteractiveBrokersInstrumentProviderConfig(
+            load_ids=frozenset(instrument_ids_for(resolved_bar_types)),
+        ),
     )
     exec_client_config = InteractiveBrokersExecClientConfig(
         ibg_host=trading_settings.ibkr_host,
@@ -193,19 +253,83 @@ def build_trading_node_config(
         client_id=trading_settings.ibkr_live_client_id,
         account=mask_account(account),
         trader_id=resolved_trader_id,
+        bar_types=[str(bar_type) for bar_type in resolved_bar_types],
     )
 
     return TradingNodeConfig(
         trader_id=resolved_trader_id,
         data_clients={IB: data_client_config},
         exec_clients={IB: exec_client_config},
+        actors=_actor_configs(bar_observer),
     )
+
+
+def _reconcile_bar_types(
+    bar_types: Sequence[str],
+    bar_observer: LiveBarObserverConfig | None,
+) -> tuple[BarType, ...]:
+    """Return the one subscription set the node and the observer both act on.
+
+    The observer is what actually calls ``subscribe_bars``; ``bar_types`` is what
+    sizes the line-budget check and fills the instrument provider's
+    ``load_ids``. Letting the two disagree produces the worst failure this module
+    can produce: a session that connects, reports healthy, and never receives a
+    bar, because ``_subscribe_bars`` logs ``instrument not found`` and returns
+    for a contract nobody loaded (``data.py:248-254``). It would also let a
+    caller slip past the market-data line budget entirely by naming its
+    subscriptions only on the observer.
+
+    So: an observer with no ``bar_types`` argument supplies the set; both
+    supplied must name the same set; and a disagreement is refused rather than
+    silently resolved in either direction.
+    """
+    if bar_observer is None:
+        return resolve_live_bar_types(bar_types)
+
+    observer_bar_types = resolve_live_bar_types(bar_observer.bar_types)
+    if not bar_types:
+        return observer_bar_types
+
+    resolved = resolve_live_bar_types(bar_types)
+    if {str(bar_type) for bar_type in resolved} != {
+        str(bar_type) for bar_type in observer_bar_types
+    }:
+        raise LiveMarketDataError(
+            "The bar types the node loads instruments for and the bar types the observer "
+            "subscribes to must be the same set. "
+            f"bar_types={sorted(str(bar_type) for bar_type in resolved)}, "
+            f"observer={sorted(str(bar_type) for bar_type in observer_bar_types)}. "
+            "A subscription whose instrument was never loaded is dropped by the IBKR adapter "
+            "with a log line and no error, so the session would run and never see a bar."
+        )
+    return resolved
+
+
+def _actor_configs(bar_observer: LiveBarObserverConfig | None) -> list[ImportableActorConfig]:
+    """Carry the observer onto the node declaratively, or carry nothing.
+
+    Declarative rather than ``node.trader.add_actor()``: the kernel then owns the
+    actor's lifetime alongside every other component, and the whole node config
+    stays serialisable. The dotted paths are resolved by Nautilus at build time,
+    which is why the component tier asserts they still import.
+    """
+    if bar_observer is None:
+        return []
+    return [
+        ImportableActorConfig(
+            actor_path=BAR_OBSERVER_ACTOR_PATH,
+            config_path=BAR_OBSERVER_CONFIG_PATH,
+            config=bar_observer.dict(),
+        )
+    ]
 
 
 def build_trading_node(
     settings: IBKRSettings,
     *,
     trader_id: str,
+    bar_types: Sequence[str] = (),
+    bar_observer: LiveBarObserverConfig | None = None,
     cli_flags: GateFlags | None = None,
     loop: asyncio.AbstractEventLoop | None = None,
 ) -> TradingNode:
@@ -222,6 +346,9 @@ def build_trading_node(
     Args:
         settings: Loaded IBKR settings. Injected, never fetched.
         trader_id: Required, no default. Epic 2 owns deriving it.
+        bar_types: Bar types the session subscribes to; see
+            ``build_trading_node_config``.
+        bar_observer: Observer configuration, attached declaratively.
         cli_flags: Operator declarations from the command line.
         loop: The event loop to bind the node to. Passed straight through to
             ``TradingNode``, which otherwise falls back to
@@ -233,8 +360,15 @@ def build_trading_node(
     Raises:
         GateRefusedError: The gate refused the connection.
         LiveNodeConfigError: The configuration cannot produce a usable node.
+        LiveMarketDataError: The market-data configuration cannot be honoured.
     """
-    config = build_trading_node_config(settings, trader_id=trader_id, cli_flags=cli_flags)
+    config = build_trading_node_config(
+        settings,
+        trader_id=trader_id,
+        bar_types=bar_types,
+        bar_observer=bar_observer,
+        cli_flags=cli_flags,
+    )
     node = TradingNode(config=config, loop=loop)
 
     # When a BacktestEngine already claimed the C logging subsystem in this

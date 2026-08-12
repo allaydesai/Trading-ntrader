@@ -43,7 +43,8 @@ from nautilus_trader.common.component import is_logging_initialized
 from nautilus_trader.config import BacktestEngineConfig, LoggingConfig
 
 from src.config import IBKRSettings
-from src.core.live_node_builder import build_trading_node
+from src.core.live_bar_observer import LiveBarObserver, build_bar_observer_config
+from src.core.live_node_builder import build_trading_node, build_trading_node_config
 from src.utils.logging import get_nautilus_log_guard
 
 TRADER_ID = "PAPER-a1b2c3d4"
@@ -148,5 +149,57 @@ class TestLogGuardRegistrationOnNodeFirst:
         guard = node.kernel.get_log_guard()
         assert guard is not None
         assert get_nautilus_log_guard() is guard
+
+        _assert_factories_registered(node)
+
+
+class TestBarObserverReachesTheNode:
+    """Story 1.5 AC #3 — the declarative actor wiring survives kernel construction.
+
+    ``ImportableActorConfig`` is resolved by the kernel, not by the builder, so a
+    typo'd dotted path or a config field the actor cannot accept only surfaces
+    when a node is actually constructed. That is this test's whole reason to
+    exist at the integration tier; nothing here contacts a broker.
+    """
+
+    @pytest.mark.integration
+    @pytest.mark.asyncio
+    async def test_a_configured_observer_is_instantiated_and_registered_on_the_trader(self):
+        # Arrange
+        if is_logging_initialized():
+            pytest.skip("requires a process where Nautilus logging is not yet initialised")
+
+        settings = _settings()
+        bar_types = ["AAPL.NASDAQ-1-MINUTE-LAST-EXTERNAL"]
+        observer_config = build_bar_observer_config(settings, bar_types)
+
+        # Act
+        node = build_trading_node(
+            settings,
+            trader_id=TRADER_ID,
+            bar_types=bar_types,
+            bar_observer=observer_config,
+        )
+
+        # Assert — the kernel resolved the dotted paths and built the actor
+        actors = node.trader.actors()
+        assert len(actors) == 1
+        observer = actors[0]
+        assert isinstance(observer, LiveBarObserver)
+        assert [str(bar_type) for bar_type in observer.bar_types] == bar_types
+
+        # The observer subscribes to exactly the instruments the data client was
+        # told to load. Asserted against the config rather than the node —
+        # ``TradingNode`` exposes no accessor for the config it was built from,
+        # and reaching into a private attribute would test Nautilus internals
+        # rather than this wiring.
+        config = build_trading_node_config(
+            settings,
+            trader_id=TRADER_ID,
+            bar_types=bar_types,
+            bar_observer=observer_config,
+        )
+        load_ids = config.data_clients[IB].instrument_provider.load_ids
+        assert set(load_ids) == {str(bar_type.instrument_id) for bar_type in observer.bar_types}
 
         _assert_factories_registered(node)
