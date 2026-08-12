@@ -55,18 +55,34 @@ def _config(tmp_path: Path, **kwargs) -> BackfillConfig:
 
 
 class ScriptedQualifier:
-    """Returns a scripted outcome per ticker, recording call order."""
+    """Returns a scripted outcome per ticker, recording call order.
+
+    Also records *observed concurrency* — how many qualify() calls were in flight
+    at once, and the order in which they completed. Overlap is a property of the
+    scheduler, so it is asserted from these counters rather than from wall-clock
+    elapsed time: a timing bound cheap enough to be meaningful is also tight
+    enough to flake under `pytest -n auto`, where many workers compete for CPU.
+    """
 
     def __init__(self, script: dict, *, delay: dict | None = None):
         self.script = script
         self.delay = delay or {}
         self.calls: list[str] = []
+        self.completed: list[str] = []
+        self.in_flight = 0
+        self.max_in_flight = 0
 
     async def qualify(self, ticker: str) -> VenueQualification:
         self.calls.append(ticker)
-        if ticker in self.delay:
-            await asyncio.sleep(self.delay[ticker])
-        return self.script.get(ticker, _qual(ticker, VenueOutcome.NOT_FOUND))
+        self.in_flight += 1
+        self.max_in_flight = max(self.max_in_flight, self.in_flight)
+        try:
+            if ticker in self.delay:
+                await asyncio.sleep(self.delay[ticker])
+            return self.script.get(ticker, _qual(ticker, VenueOutcome.NOT_FOUND))
+        finally:
+            self.in_flight -= 1
+            self.completed.append(ticker)
 
 
 @pytest.mark.unit
@@ -278,18 +294,27 @@ class TestRunBackfill:
         """The load-bearing property: 4 lanes turn 8 stalls into ~2 stall-periods.
 
         Sequentially this would be 8 x 0.05s; chunked-gather would also serialise
-        badly. With independent lanes it must land near 2 periods.
+        badly. With independent lanes all four must be stalled *simultaneously*.
+
+        Asserted from observed concurrency, not elapsed time. Every ticker sleeps
+        here, so a lane that has claimed one cannot progress until that sleep
+        resolves — if all 4 lanes overlap, the peak is exactly the configured
+        concurrency. That holds on a single-threaded event loop no matter how
+        contended the machine is, whereas the wall-clock bound this replaced
+        (< 0.2s against a ~0.1s ideal) flaked under `pytest -n auto`.
         """
         tickers = [f"T{i}" for i in range(8)]
         qualifier = ScriptedQualifier(
             {t: _qual(t, VenueOutcome.NOT_FOUND) for t in tickers},
             delay={t: 0.05 for t in tickers},
         )
-        started = asyncio.get_event_loop().time()
         await self._run(tickers, qualifier, tmp_path, concurrency=4)
-        elapsed = asyncio.get_event_loop().time() - started
 
-        assert elapsed < 0.05 * 4, f"took {elapsed:.3f}s — lanes are not overlapping"
+        assert qualifier.max_in_flight == 4, (
+            f"peak concurrency was {qualifier.max_in_flight}, expected 4 — "
+            "lanes are not overlapping"
+        )
+        assert len(qualifier.completed) == 8
 
     async def test_uneven_stalls_do_not_block_other_lanes(self, tmp_path):
         """One slow ticker must not hold up the fast ones behind it."""
@@ -298,12 +323,16 @@ class TestRunBackfill:
             {t: _qual(t, VenueOutcome.RESOLVED, "ARCA") for t in tickers},
             delay={"SLOW": 0.2},
         )
-        started = asyncio.get_event_loop().time()
         await self._run(tickers, qualifier, tmp_path, concurrency=3)
-        elapsed = asyncio.get_event_loop().time() - started
 
-        # Bounded by the single slow request, not by slow + everything after it.
-        assert elapsed < 0.35, f"took {elapsed:.3f}s — a stall blocked its lane-mates"
+        # Bounded by the single slow request, not by slow + everything after it:
+        # SLOW is claimed first and sleeps, so if its lane-mates are independent
+        # every fast ticker resolves while SLOW is still in flight, leaving SLOW
+        # last to complete. Ordering is deterministic; elapsed time is not.
+        assert qualifier.completed[-1] == "SLOW", (
+            f"completion order was {qualifier.completed} — a stall blocked its lane-mates"
+        )
+        assert set(qualifier.completed[:-1]) == {f"F{i}" for i in range(6)}
 
     async def test_reconnect_fires_after_five_consecutive_errors(self, tmp_path):
         tickers = [f"E{i}" for i in range(6)]
