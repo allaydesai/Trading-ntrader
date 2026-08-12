@@ -8,6 +8,10 @@ Test Doubles Provided:
     - TestOrder: Simplified order representation
     - TestPosition: Simplified position representation
     - TestTradingEngine: Lightweight trading engine simulator
+    - TestIBConnection: Interactive Brokers client connection flags
+    - TestIBConnectionWithoutFlags: A cached client missing those flags
+    - TestIBConnectionWithPlainFlags: Flags refactored to bare booleans
+    - TestIBConnectionWithRaisingFlags: Flag reads that raise
 
 Usage:
     >>> from tests.component.doubles import TestTradingEngine, TestOrder
@@ -19,10 +23,20 @@ Reference: design.md Section 2.3 - Test Double Design
 """
 
 from .test_engine import TestTradingEngine
+from .test_ib_connection import (
+    TestIBConnection,
+    TestIBConnectionWithoutFlags,
+    TestIBConnectionWithPlainFlags,
+    TestIBConnectionWithRaisingFlags,
+)
 from .test_order import TestOrder
 from .test_position import TestPosition
 
 __all__ = [
+    "TestIBConnection",
+    "TestIBConnectionWithPlainFlags",
+    "TestIBConnectionWithRaisingFlags",
+    "TestIBConnectionWithoutFlags",
     "TestOrder",
     "TestPosition",
     "TestTradingEngine",

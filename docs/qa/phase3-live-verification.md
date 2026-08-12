@@ -300,3 +300,105 @@ Failure modes and their exit codes:
 | Date | Operator | Result | Notes |
 | ---- | -------- | ------ | ----- |
 | 2026-08-09 | Story 1.5 dev session | ⚠️ **partial — precondition not met (market closed)** | Run against the live paper Gateway on `127.0.0.1:4002`, account `DU4076626`, `--run-seconds 12` and `20`. **Pass criteria 1 and 2 met live**: the gate passed, both engines connected, `Setting Market DataType to REALTIME` was logged, `AAPL.NASDAQ` was qualified (`ConId=265598`) and `Loaded 1 instruments`, the observer dispatched its paced subscription (`live_bars.subscribed count=1 remaining=0`) and the data client reported `Subscribed AAPL.NASDAQ-1-MINUTE-LAST-EXTERNAL bars`. No 10167 and no delayed-data warning appeared, so the account's real-time entitlement is genuine. **Pass criterion 3 not met, for a precondition reason**: 2026-08-09 is a Sunday and the contract's own `tradingHours` came back `20260809:CLOSED`, so no bar could close. The probe reported this correctly rather than printing `ok` — `RESULT: fail reason=ProbeError msg=no bars received in 20s …`, exit 1 — which is itself the evidence that the zero-bar path is not silently green. Shutdown was clean both runs (`loop.is_running=False loop.is_closed=True`, no shutdown problems). Also observed and unrelated to this story: startup reconciliation found a pre-existing residual `AAPL.NASDAQ` position of 4 shares at the paper account from earlier manual activity (the same residual Story 1.3's P1 run noted) and generated an inferred fill for it; nothing in this story trades. **Re-run during RTH to close pass criterion 3.** |
+
+## Procedure P4: observe a real disconnect and watch trading permission be withheld
+
+**Introduced by**: Story 1.6 — Detect Connection Loss and Withhold Trading Permission
+**Verifies**: AC #1 and AC #2 — a live socket alone does *not* grant trading permission, confirming
+re-established state does, and a genuine disconnect withdraws it while emitting `connection.lost`.
+**Tool**: `scripts/diagnostics/live_connection_probe.py`
+
+> **Numbering note.** Story 1.6 drafted this procedure as "P2" while Stories 1.4 and 1.5 were in
+> flight on parallel branches. Story 1.4's account-gate procedure holds the P2 slot and Story 1.5's
+> bars procedure holds P3, so this one became **P4** on merge into the Epic 1 integration branch.
+> Any Story 1.6 artifact that says "Procedure P2" — the story file, `deferred-work.md`, the
+> sprint-status entry — means this section.
+
+**This procedure is informational evidence, not a gate.** AC #1–#5 are proven by the automated
+unit tests (`tests/unit/core/test_live_connection_monitor.py`) and component tests
+(`tests/component/core/test_live_connection_probe.py`), which is what NFR32/NFR34 require. P4
+exists to show the same behaviour against a real Gateway, through the same reader a running
+session would poll.
+
+### Preconditions
+
+- IB Gateway or TWS is running and logged into a **paper** account, listening on the port
+  configured by `IBKR_PORT` in `.env` (Gateway paper = `4002`, TWS paper = `7497`).
+- `.env` exists at the repository root and has `TWS_ACCOUNT`, `IBKR_HOST`, `IBKR_PORT`,
+  `IBKR_TRADING_MODE=paper` and `IBKR_LIVE_CLIENT_ID` set to values that pass the Layer 1 gate
+  (`src/core/live_gate.py`). Without them the probe fails *before opening any socket* — an empty
+  `TWS_ACCOUNT` reports `RESULT: fail reason=config_error ...`, and a non-paper configuration
+  reports `RESULT: fail reason=gate_refused ...`.
+- No other process is currently holding `IBKR_LIVE_CLIENT_ID` on the Gateway.
+
+### What it does — and does not — do
+
+The disconnect in step 3 is produced by **stopping the node**, which is a real, clean broker
+disconnect observed through the production reader. Nothing is killed, no process is signalled, no
+order is submitted, and no market-data subscription is made. Epic 1 has no order path at all.
+
+### Command
+
+```bash
+uv run python scripts/diagnostics/live_connection_probe.py --hold-seconds 3
+```
+
+The probe puts the repository root on `sys.path` itself, so it runs identically from any working
+directory and needs no `PYTHONPATH` prefix.
+
+### Expected output
+
+```
+[probe] building node host=127.0.0.1 port=4002 client_id=10 trader_id=PAPER-PROBE0001
+[probe] node built (config + LogGuard); building clients...
+[probe] starting node...
+[probe] waiting up to 300s for engines to connect...
+[probe] status connected=True detail=ib socket connected, client ready
+[probe] observed -> state=recovering permitted=False
+[probe] confirmed -> state=connected permitted=True
+[probe] holding the connection for 3s...
+[probe] stopping node to produce a real disconnect...
+[probe] status connected=False detail=ib socket not connected
+<TIMESTAMP> [warning  ] connection.lost   detail='ib socket not connected' session_id=probe-connection-0001 state=lost
+[probe] observed -> state=lost permitted=False downtime=0.00s
+[probe] disposing node...
+[probe] disposed loop.is_closed=True
+RESULT: ok mode=connect-permit-drop final_state=lost permitted=False elapsed=<N>.NN
+```
+
+The `connection.lost` line is emitted by the monitor through `structlog`, interleaved with the
+probe's own `[probe]` lines on stdout. It is Pass criterion 3's evidence, so it belongs in the
+transcript rather than being left implicit.
+
+The process exits with code `0`.
+
+The two lines that carry the evidence are `observed -> state=recovering permitted=False` — a live
+socket did **not** grant permission (NFR10) — and `observed -> state=lost permitted=False` after a
+real disconnect (FR6). A `connection.lost` structlog event is emitted between them, carrying the
+bound `session_id`.
+
+Failure modes and their exit codes:
+
+| Output | Meaning | Exit |
+| --- | --- | --- |
+| `RESULT: fail reason=gate_refused refusal=<reason>` | Layer 1 gate refused; no socket was opened | 1 |
+| `RESULT: fail reason=config_error msg=...` | Unusable configuration (missing `.env`, empty `TWS_ACCOUNT`, bad `trader_id`, non-positive timeout) | 1 |
+| `RESULT: fail reason=ProbeError msg=engines did not connect...` | Gateway not reachable on the configured port, or not logged in | 1 |
+| `RESULT: fail reason=ProbeError msg=the ib socket flag was still set...` | The adapter's socket flag never cleared after `node.stop()` — investigate before trusting the reading | 1 |
+| `RESULT: fail reason=interrupted` | Operator pressed Ctrl-C | 130 |
+| `RESULT: fail reason=<Type> msg=...` | Anything else; full traceback on stderr | 1 |
+
+### Pass criteria
+
+1. **Permission is not granted by connectivity alone** — the first `observed ->` line shows
+   `state=recovering permitted=False` while the reader reported `connected=True`.
+2. **Confirmation grants it** — `confirmed -> state=connected permitted=True`.
+3. **A real disconnect withdraws it** — the second `observed ->` line shows `state=lost
+   permitted=False`, and a `connection.lost` event appears in the log with the session bound.
+
+### Result log
+
+| Date | Operator | Result | Notes |
+| ---- | -------- | ------ | ----- |
+| 2026-08-09 (post-review) | — | ⛔ **still not run** | Code review hardened the probe after this procedure was written: the node build moved inside the `try/finally` (a failure there previously skipped shutdown entirely), `node.build()` now runs under a bounded connection-retry budget (the adapter reconnects *indefinitely* by default and never consults `IBKR_CONNECTION_TIMEOUT`, so an unreachable Gateway hung the probe forever with no `RESULT:` line), the run-task join is bounded, and the disconnect wait now polls the **socket** flag specifically rather than `ConnectionStatus.connected` — which cleared as soon as the *readiness* flag dropped and would have certified that as a genuine disconnect. The `confirm_state_reestablished(status)` call was also updated for the new signature. Re-verified as a dry run only: `RESULT: fail reason=config_error ...`, exit 1, and the `finally` now demonstrably runs (`[probe] disposing node...`, `loop.is_closed=True`). |
+| 2026-08-07 | — | ⛔ **not run** | No live evidence available in this session, for two independent reasons: (1) no IB Gateway or TWS was listening — all four IB ports (`4002`, `7497`, `4001`, `7496`) refused a TCP connection when probed; (2) this story was implemented in a git worktree that has no `.env` (it is gitignored, so it is not carried into a worktree), and `.env` is Edit/Write-protected by `.claude/hooks/protect-files.sh` — creating one was neither attempted nor appropriate. **Tooling evidence only** (explicitly *not* a pass, per this file's own policy): the probe was executed as a dry run and behaved correctly on the fail-closed path — it reported `RESULT: fail reason=config_error msg=Cannot build an IBKR execution client: TWS_ACCOUNT is not set ...`, exit 1, **before opening any socket**, and `--hold-seconds 0` was rejected by argument validation. AC #1–#5 are covered by 31 unit tests and 12 component tests that require no broker (NFR32). Re-run this procedure once a Gateway and a populated `.env` are both available, and record the result here. |
