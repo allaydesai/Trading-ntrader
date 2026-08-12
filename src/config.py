@@ -84,6 +84,16 @@ class IBKRSettings(BaseSettings):
     ibkr_market_data_type: str = Field(
         default="DELAYED_FROZEN", description="Market data type for paper trading"
     )
+    ibkr_market_data_lines: int = Field(
+        default=100,
+        ge=1,
+        description=(
+            "Concurrent IBKR market-data lines this account allows. Each streaming bar "
+            "subscription a live session opens consumes one line, and IBKR drops the excess "
+            "silently rather than reporting it. 100 is the standard allocation; raise this "
+            "only to a figure the account actually holds (quote booster packs / commission tier)."
+        ),
+    )
 
     def get_market_data_type_enum(self) -> MarketDataTypeEnum:
         """

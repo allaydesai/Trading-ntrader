@@ -389,3 +389,110 @@ Non-blocking findings from the three-layer adversarial code review of Story 1.3.
   `finally`), which is harmless but produces `InvalidStateTrigger` noise from already-stopped
   components. **Action:** fold the shutdown-problem check into the `RESULT:` line whenever the probe
   is next touched.
+
+## Deferred from: story-1.5 (2026-08-09)
+
+- **The execution client's instrument provider carries no `load_ids`.** The IB adapter builds a
+  *separate* `InteractiveBrokersInstrumentProvider` per client, and this story wired `load_ids`
+  onto the data client's only — deliberately, since Epic 1 has no order path that needs a
+  contract resolved for execution. Observed live on 2026-08-09: `[WARN]
+  InteractiveBrokersInstrumentProvider: No loading configured: ensure either 'load_all=True' or
+  there are 'load_ids'` is emitted once, alongside the data provider's successful
+  `Loaded 1 instruments`. Harmless today and documented in Procedure P3's "Known benign log
+  lines" (this story drafted that procedure as "P2"; it was renumbered to P3 on merge, because
+  Story 1.4's account-gate procedure landed on P2 first). **Action for Epic 3**, whose first submitted order is the point at which the exec
+  client's provider stops being decorative: give it the same `load_ids`, or confirm the adapter
+  resolves the contract on demand and drop the warning from the benign list.
+
+- **The delayed-data freshness guard cannot separate real-time from delayed for bar intervals
+  above roughly 13 minutes.** The guard trips when a delivered bar's `ts_init - ts_event` exceeds
+  `bar_interval + delayed_data_grace_seconds` (default 120s). IBKR's delayed feed runs ~15 minutes
+  (900s) behind, so detection holds only while `900 > interval + grace`. For hourly bars the feed
+  delay is smaller than one bar period and no lag threshold can distinguish them. Stated in the
+  `LiveBarObserver` docstring rather than hidden, and the configuration-level REALTIME requirement
+  plus the operator's log check for IB code 10167 remains the control for those timeframes.
+  **Action if a session ever runs on hourly bars:** find a different signal (Nautilus exposes none
+  today — `process_market_data_type` and error 10167 are both log-only, verified against 1.220.0),
+  or accept the configuration check alone and say so explicitly.
+
+- **`IBKR_MARKET_DATA_LINES` is undocumented in `.env.example`.** The new setting defaults to 100
+  (IBKR's standard allocation) and is only discoverable from the field description in
+  `src/config.py`. `.env` and `.env.example` are Write/Edit-protected by
+  `.claude/hooks/protect-files.sh`, and Stories 1.1 and 1.2 each needed a one-off human approval
+  to touch them, so no write was attempted here. **Action:** add the key with its default and a
+  one-line note that each streaming bar subscription consumes one line, next time those files are
+  opened under approval.
+
+- **Procedure P3's third pass criterion is not closed.** (Drafted as "P2" by this story; renumbered
+  to P3 on merge.) The procedure ran against the live paper
+  Gateway on 2026-08-09 and met pass criteria 1 and 2 (REALTIME requested and confirmed in the
+  gateway log, contract qualified and loaded, subscription accepted, no 10167). Criterion 3 — a
+  bar actually delivered and logged — could not be met because 2026-08-09 is a Sunday and the
+  contract's own `tradingHours` returned `20260809:CLOSED`; with `use_rth=True` no bar can close.
+  The probe reported this correctly rather than printing `ok`. **Action:** re-run
+  `scripts/diagnostics/live_bars_probe.py` during regular trading hours and record the result in
+  that file's P3 Result Log. Not a blocker for the story's automated coverage, which exercises the
+  delivery and logging path against Nautilus test doubles.
+
+- **The three tests in `tests/integration/core/test_live_node_lifecycle.py` SKIP under
+  `make test-integration`.** Each guards on `if is_logging_initialized(): pytest.skip(...)` — a
+  deliberate Story 1.3 decision so that running the file unforked does not fail the second test on
+  a bare assertion — but under `-n auto --forked` the xdist worker has usually already claimed C
+  logging by the time they run, so all three skip in the full tier. They pass when the file is run
+  on its own (verified this session: 3 passed). The practical effect is that this story's new
+  observer-wiring test, like the two before it, contributes no signal to a full-tier run.
+  **Action:** either give this file a dedicated make target / xdist group so it lands first in a
+  clean worker, or replace the skip with a fixture that forces its own process. Not attempted here
+  — it changes Story 1.3's tests and its own risk profile deserves a decision, not a drive-by.
+
+## Deferred from: code review of story-1.5 (2026-08-11)
+
+Non-blocking findings from the three-layer adversarial review. Blocking items (2 Critical, 3 High,
+10 Medium/Low — all fixed) live in that story's `### Review Findings` section instead.
+
+- **Four symbols exceed CLAUDE.md's per-symbol size limits.** Files are all now under 500 lines —
+  the module was split into `live_market_data.py` (policy, 278) and `live_bar_observer.py` (actor,
+  498), and `_SubscriptionPacer` / `evaluate_bar_freshness` were extracted as cohesive units, taking
+  `LiveBarObserver` from 193 to ~150 lines of body. What remains, measured by AST span:
+  `LiveBarObserver` 215 (>100), `build_trading_node_config` 126 (>50, pre-existing at 87 and
+  worsened by this story's checks), `build_trading_node` 58 (>50), `resolve_live_bar_types` 82
+  (>50), the probe's `_run` 95 and `main` 69, and the pre-existing `IBKRSettings` 142 (>100). All
+  are docstring-and-comment dominated rather than dense logic. **Action:** decide as a codebase
+  whether the limits count docstrings; if they do, the honest fix for `LiveBarObserver` is to move
+  the lifecycle methods behind a thinner facade rather than to delete the explanations, and
+  `build_trading_node_config` wants its validation block extracted wholesale.
+
+- **The observer is silent when *no* bar is delivered at all.** The freshness guard reports a *late*
+  feed, not an absent one: a session whose subscription is accepted but never delivers (market
+  closed, no entitlement, a contract that would not qualify) runs indefinitely with nothing louder
+  than an INFO `live_bars.subscribed`. `scripts/diagnostics/live_bars_probe.py` catches it and exits
+  non-zero, but the *runner* — what Epic 2 and Story 1.7 will consume — does not. **Action for Story
+  1.6**, which owns connection-loss detection and the trading-permission flag and is the natural
+  home for a first-bar / staleness watchdog.
+
+- **`LiveClock` fires timer callbacks from a Rust thread, so the observer touches state from two.**
+  Verified: a time-alert callback executes on a Rust timer thread, not the main thread. So pacing
+  batches 2+ call `subscribe_bars()` and append to `_subscribed` from that thread while `on_stop()`
+  drains the same list from the kernel's thread, and `_SubscriptionPacer.cancel` is a check-then-act
+  across the same boundary. Not reproduced — it is a timing race, and `ThrottledEnqueuer.enqueue`
+  uses `call_soon_threadsafe` for the common path — but the ordering is real. **Action for Epic 2's
+  runner (AR38)**, which owns the threading model: either confine dispatch to the loop thread or
+  state the single-threaded precondition explicitly.
+
+- **The market-data line budget cannot detect the failure it describes.** It checks a list the
+  operator typed against a number the operator typed; IBKR silently dropping subscriptions past the
+  account's real allocation is not observable from our side. That is exactly what NFR16/NFR30 ask
+  for, so this is recorded as a known limit rather than a defect — but nobody should read the check
+  as protection against the broker's behaviour, only against the operator's arithmetic.
+
+- **`load_ids` narrows the silent-no-bars hole rather than closing it.**
+  `InteractiveBrokersInstrumentProvider.load_with_return_async` returns `None` on failure and
+  `load_ids_with_return_async` skips it (`providers.py:243-265`) — nothing raises and nothing reports
+  a partial load, so an id IBKR cannot qualify still yields a connected session with zero bars for
+  that subscription. The docstrings now say so. **Action for Story 1.7**, whose `ntrader live check`
+  is the natural place to compare loaded instruments against requested ones and report the shortfall.
+
+- **`ntrader live check` should log the gate refusal.** Carried forward unchanged from Story 1.3's
+  review: `src/core/live_gate.py` contains zero logging calls, so the most operationally interesting
+  event the safety gate produces leaves no trace beyond what a caller emits. Still true after this
+  story. **Action for Story 1.7.**

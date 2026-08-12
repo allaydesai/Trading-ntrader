@@ -36,7 +36,44 @@
 
 generated: 2026-08-03
 last_updated: >-
-  2026-08-11 (Test-infra fix, no story scope: the integration tier is deterministic again.
+  2026-08-11 (Story 1.5 merged into the Epic 1 integration branch, joining Story 1.4. The two
+  stories were developed on parallel branches and their artifacts were reconciled on merge: the
+  sprint board now carries BOTH 1-4 and 1-5 as done, deferred-work.md carries both stories'
+  sections, and Story 1.5's live-verification procedure — drafted as "P2" while Story 1.4 was in
+  flight drafting its own "P2" — was renumbered to Procedure P3 in
+  docs/qa/phase3-live-verification.md, since Story 1.4's account-gate procedure landed on P2 first.
+  Story 1.5 artifacts that still say "Procedure P2" mean P3; the QA doc records the renumbering
+  inline. Story 1.5 implemented -> code-reviewed -> done. Delivers REALTIME/RTH market-data
+  configuration, the market-data line budget check, and the LiveBarObserver actor that subscribes,
+  logs every bar with its instrument and timestamp, paces its subscriptions at the existing 45 req/s
+  discipline, and notices a delayed feed. Split across src/core/live_market_data.py (pure policy) and
+  src/core/live_bar_observer.py (the actor); live_node_builder.py gained bar_types/bar_observer and now
+  passes market_data_type + use_regular_trading_hours explicitly with an AST guard proving it, since
+  the adapter's own defaults happen to agree today and would otherwise mask a missing kwarg.
+  93 new component tests, 5 unit, 1 integration; ruff + mypy clean. The three-layer adversarial
+  review earned its keep twice over.
+  (1) CRITICAL: the delayed-data guard would have shut down a HEALTHY session every RTH re-open — the
+  IB adapter republishes the previous bar stamped with the current wall clock, so the first bar after
+  an overnight gap looks ~17.5 hours late against a 180s threshold, and a multi-day paper session (the
+  point of this phase) would have killed itself every morning. Fixed at the root by discarding
+  republished bars, plus a consecutive-offender requirement as defence in depth. (2) CRITICAL: paced
+  dispatch died silently after batch 2 on a real LiveClock — a fired one-shot timer is still listed
+  while its callback runs, so re-arming the same name raised a KeyError that Nautilus swallows, while
+  TestClock pops the timer first and kept all four pacing tests green. Fixed with a fresh timer name
+  per batch and verified against a real LiveClock. Also found: ts_event is the bar's OPEN not its
+  close, which made the documented "blind spot above ~13-minute intervals" simply false (the interval
+  cancels; the guard works on hourly bars) — the story's own retraction is recorded rather than
+  quietly corrected. Live evidence: the bars procedure ran against the paper Gateway on
+  127.0.0.1:4002 and
+  met pass criteria 1 and 2 (REALTIME confirmed in the gateway log, AAPL.NASDAQ qualified and loaded,
+  subscription accepted, no IB 10167); criterion 3 (a bar actually delivered) is NOT met because the
+  market was closed, and the probe reported that as a failure rather than printing ok — a re-run
+  during RTH is logged as the outstanding item. Six items deferred, incl. the zero-delivery blind spot
+  (-> Story 1.6, which owns the trading-permission flag) and LiveClock's cross-thread callbacks
+  (-> Epic 2's runner). Note the story's own "the pre-existing 23-failure integration baseline is
+  unchanged" line is superseded by the test-infra fix recorded below, which eliminated that baseline
+  entirely. Epic 1: 1.1/1.2/1.3/1.4/1.5 done, 1.6/1.7 remain.
+  Previously: 2026-08-11 (Test-infra fix, no story scope: the integration tier is deterministic again.
   `make test-integration` was reporting 23 failures out of 167 with a failing set that CHANGED
   between identical runs; every failure was "CRASHED with signal 5" (SIGTRAP). Root cause was the
   story-1.3 deferred item, and fixing it confirmed that entry was wrong twice over: the blast
@@ -211,7 +248,7 @@ development_status:
   1-2-isolate-the-live-client-id-from-the-historical-data-client: done
   1-3-assemble-and-start-a-tradingnode-against-ibkr-paper: done
   1-4-verify-the-connected-account-is-a-paper-account-before-trading-starts: done
-  1-5-receive-real-time-rth-bars-for-a-configured-instrument: backlog
+  1-5-receive-real-time-rth-bars-for-a-configured-instrument: done
   1-6-detect-connection-loss-and-withhold-trading-permission: backlog
   1-7-check-broker-connectivity-and-the-gate-from-the-cli: backlog
   epic-1-retrospective: optional
