@@ -316,7 +316,7 @@ development_status:
   1-4-verify-the-connected-account-is-a-paper-account-before-trading-starts: done
   1-5-receive-real-time-rth-bars-for-a-configured-instrument: done
   1-6-detect-connection-loss-and-withhold-trading-permission: done
-  1-7-check-broker-connectivity-and-the-gate-from-the-cli: backlog
+  1-7-check-broker-connectivity-and-the-gate-from-the-cli: done
   epic-1-retrospective: optional
 
   # Epic 2: Paper Trading Sessions That Outlive the Process

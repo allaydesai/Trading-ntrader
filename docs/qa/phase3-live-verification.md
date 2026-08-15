@@ -402,3 +402,117 @@ Failure modes and their exit codes:
 | ---- | -------- | ------ | ----- |
 | 2026-08-09 (post-review) | — | ⛔ **still not run** | Code review hardened the probe after this procedure was written: the node build moved inside the `try/finally` (a failure there previously skipped shutdown entirely), `node.build()` now runs under a bounded connection-retry budget (the adapter reconnects *indefinitely* by default and never consults `IBKR_CONNECTION_TIMEOUT`, so an unreachable Gateway hung the probe forever with no `RESULT:` line), the run-task join is bounded, and the disconnect wait now polls the **socket** flag specifically rather than `ConnectionStatus.connected` — which cleared as soon as the *readiness* flag dropped and would have certified that as a genuine disconnect. The `confirm_state_reestablished(status)` call was also updated for the new signature. Re-verified as a dry run only: `RESULT: fail reason=config_error ...`, exit 1, and the `finally` now demonstrably runs (`[probe] disposing node...`, `loop.is_closed=True`). |
 | 2026-08-07 | — | ⛔ **not run** | No live evidence available in this session, for two independent reasons: (1) no IB Gateway or TWS was listening — all four IB ports (`4002`, `7497`, `4001`, `7496`) refused a TCP connection when probed; (2) this story was implemented in a git worktree that has no `.env` (it is gitignored, so it is not carried into a worktree), and `.env` is Edit/Write-protected by `.claude/hooks/protect-files.sh` — creating one was neither attempted nor appropriate. **Tooling evidence only** (explicitly *not* a pass, per this file's own policy): the probe was executed as a dry run and behaved correctly on the fail-closed path — it reported `RESULT: fail reason=config_error msg=Cannot build an IBKR execution client: TWS_ACCOUNT is not set ...`, exit 1, **before opening any socket**, and `--hold-seconds 0` was rejected by argument validation. AC #1–#5 are covered by 31 unit tests and 12 component tests that require no broker (NFR32). Re-run this procedure once a Gateway and a populated `.env` are both available, and record the result here. |
+
+## Procedure P5: check broker connectivity and the gate from the CLI
+
+**Introduced by**: Story 1.7 — Check Broker Connectivity and the Gate from the CLI
+**Verifies**: AC #1 (the command evaluates the gate, connects, verifies the account, subscribes,
+reports bars, disconnects cleanly, exits `0`), AC #2 (a refused configuration exits **3** with no
+connection attempted) and AC #3 (a permitted configuration that cannot reach the broker exits **4**).
+**Tool**: the CLI itself — `ntrader live check`. There is no diagnostic script for this story; the
+command *is* the artifact under test.
+
+**This procedure is informational evidence, not a gate.** AC #1–#6 are proven by the automated unit
+tests (`tests/unit/core/test_live_check.py`, `tests/unit/cli/commands/test_live_cli.py`) and
+component tests (`tests/component/core/test_live_check_driver.py`), which is what NFR32/NFR34
+require. P5 exists to show the same exit codes against a real Gateway.
+
+### Preconditions
+
+- IB Gateway or TWS running and **logged into a paper account**, with "Enable ActiveX and Socket
+  EClients" on and the API socket accepting connections from `127.0.0.1`. Note that an open TCP
+  port is *not* sufficient: a Gateway sitting at its login screen accepts the socket and then never
+  sends `managedAccounts`, which the check correctly reports as exit **4** (see the result log).
+- Connection settings reach `IBKRSettings` — from `.env` at the repository root, or as environment
+  variables on the command line. `live check` deliberately has **no** `--host` / `--port` /
+  `--account` flags: connection settings live only in `IBKRSettings` (FR52, NFR25).
+- No other process is holding `IBKR_LIVE_CLIENT_ID` on the Gateway.
+- For pass criterion 3, run **during regular trading hours**. With `use_rth=True` no bar closes
+  outside RTH, so zero bars outside the session is a precondition failure, not an AC failure — and
+  the command says so and still exits `0`.
+
+### What it does — and does not — do
+
+It evaluates the Layer 1 gate, builds and starts a node, waits for both engines to report
+connected, runs Layer 2's `gate:account` verification against what the gateway actually reports,
+subscribes to one instrument, watches for bars, then stops and disposes. **It submits no order** —
+Epic 1 has no order path at all — starts no strategy, writes no database row, and creates no
+session. It never reads or writes `.env`, and it has no `--real-money` flag.
+
+### Command
+
+```bash
+# From a checkout with a populated .env:
+uv run python -m src.cli.main live check --observe-seconds 90
+
+# From a checkout without one (a git worktree, for instance — .env is gitignored):
+IBKR_HOST=127.0.0.1 IBKR_PORT=4002 IBKR_TRADING_MODE=paper TWS_ACCOUNT=DU0000000 \
+  IBKR_LIVE_CLIENT_ID=10 IBKR_CLIENT_ID=1 \
+  uv run python -m src.cli.main live check --observe-seconds 90
+```
+
+The two negative runs need neither a market nor a Gateway, and are the cheapest evidence for FR11:
+
+```bash
+# Gate refusal -> exit 3, with no socket opened
+IBKR_PORT=4001 ... uv run python -m src.cli.main live check --observe-seconds 0
+
+# Gate passes, broker unreachable -> exit 4
+IBKR_PORT=4002 ... uv run python -m src.cli.main live check --observe-seconds 0   # Gateway stopped
+```
+
+### Expected output
+
+```
+<TIMESTAMP> [info     ] gate.static   mode=paper phase=gate:static status=ok
+<TIMESTAMP> [info     ] live_check.building   client_id=10 host=127.0.0.1 port=4002 trader_id=PAPER-LIVECHECK
+<TIMESTAMP> [info     ] live_check.connected  endpoint=127.0.0.1:4002 (client_id=10)
+<TIMESTAMP> [info     ] gate.account  accounts=***626 mode=paper phase=gate:account status=ok
+<TIMESTAMP> [info     ] live_check.observing  seconds=90.0
+<TIMESTAMP> [info     ] live_bars.received    bar_type=AAPL.NASDAQ-1-MINUTE-LAST-EXTERNAL close=... count=1
+live check: ok (exit code 0)
+  gate passed, account verified, 1 bar(s) received on 1 subscription(s), disconnected cleanly
+  mode: paper
+  accounts: ***626
+  subscriptions: AAPL.NASDAQ-1-MINUTE-LAST-EXTERNAL
+  bars received: 1 (AAPL.NASDAQ-1-MINUTE-LAST-EXTERNAL=1)
+  elapsed: 95.12s
+```
+
+A gate refusal instead prints, before any socket exists:
+
+```
+<TIMESTAMP> [error    ] gate.refused  message='IBKR_PORT 4001 is not a known paper port (4002, 7497). ...' phase=gate:static reason=non_paper_port status=failed
+live check: gate_refused (exit code 3)
+  IBKR_PORT 4001 is not a known paper port (4002, 7497). Any other port is refused, including unrecognised ones.
+  refusal reason: non_paper_port
+  elapsed: 0.00s
+```
+
+Exit codes (AR28):
+
+| Outcome | Meaning | Exit |
+| --- | --- | --- |
+| `ok` | The whole sequence completed. Zero bars outside RTH still lands here, with the shortfall named | 0 |
+| `config_error` | Unusable configuration — empty `TWS_ACCOUNT`, a non-REALTIME market-data type, an unparseable bar type | 1 |
+| `error` | A delayed feed was suspected, `--require-bars` was set and none arrived, or an unexpected failure | 1 |
+| `interrupted` | Operator pressed Ctrl-C. Deliberately `1`, not `130`: AR28's table has no `130` | 1 |
+| (usage) | Click rejected the arguments | 2 |
+| `gate_refused` | Either gate layer refused. **No socket is opened on Layer 1** | 3 |
+| `broker_unreachable` | The gate passed but both engines never reported connected | 4 |
+
+### Pass criteria
+
+1. **A refused configuration exits 3 and connects to nothing** — the `gate.refused` line appears
+   with `phase=gate:static`, no `live_check.building` line follows it, and the process exits `3`.
+2. **An unreachable broker exits 4** — distinct from criterion 1, so a script can tell "refused to
+   trade a live account" from "failed to connect".
+3. **A reachable paper gateway exits 0** — `gate.account` reports a masked `DU`/`DF` account,
+   at least one `live_bars.received` line appears (inside RTH), and the node disposes cleanly
+   (`loop.is_closed=True`, no `shutdown problems:` line in the summary).
+
+### Result log
+
+| Date | Operator | Result | Notes |
+| ---- | -------- | ------ | ----- |
+| 2026-08-11 | Story 1.7 dev session | ⚠️ **partial — criteria 1 and 2 met live, criterion 3 not met (precondition)** | Run from a worktree with no `.env`, settings supplied as environment variables. **Criterion 1 met live**: `IBKR_PORT=4001` produced `gate.refused ... phase=gate:static reason=non_paper_port`, the summary `live check: gate_refused (exit code 3)`, `elapsed: 0.00s`, and **exit code 3** — no `live_check.building` line, so no node was constructed and no socket opened. **Criterion 2 met live, twice, in both of its shapes**: against `IBKR_PORT=7497` with nothing listening (exit **4**), and — the more interesting case — against the **running** paper Gateway on `127.0.0.1:4002`, whose TCP port accepts a connection but whose API handshake never completes (IB error 502 `Couldn't connect to TWS...`, then `Client failed to initialize; connection timeout`). The check reported `broker_unreachable (exit code 4)` rather than hanging or reporting `ok`, which is precisely the failure mode exit 4 exists for. Retried with a fresh `IBKR_LIVE_CLIENT_ID=17` to rule out a client id the Gateway was still holding: identical result, so this is the Gateway's own state (not logged in / API not accepting), not a stale id. **Criterion 3 not met, for that precondition reason** — no API handshake ever completed, so `gate:account` was never reached and no bar could arrive. Two things worth recording from these runs: the connect deadline was honoured to the millisecond (`elapsed: 45.04s` for `--connect-timeout 45`, `30.04s` for `30`), which is what the shared build+connect budget was changed to guarantee — an earlier additive version took **115s** to report an unreachable gateway; and shutdown was clean on every run (`loop.is_running=False`, `loop.is_closed=True`, `DISPOSED`, no shutdown problems reported). **Re-run criterion 3 against a logged-in paper Gateway during RTH.** |

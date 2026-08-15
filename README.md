@@ -195,6 +195,20 @@ Exit codes: `0` success · `1` partial (some bar files failed) · `2` fatal (bad
 
 > `validate-fmp` requires `FMP_API_KEY` (see Configuration below). It prints a per-ticker Rich table plus a JSON evidence file under `logs/fmp-validation/`, and exits non-zero if any ticker's mean/max deviation or matched-day coverage breaches tolerance.
 
+### Live Trading Commands
+
+| Command | Description |
+|---------|-------------|
+| `live check` | Verify the setup end to end: evaluate the paper-trading safety gate, connect to IB Gateway/TWS, verify the account the gateway actually reports, subscribe to one instrument, report the bars received, and disconnect |
+| `live check --bar-type SPY.ARCA-1-MINUTE-LAST-EXTERNAL` | Check a different instrument; repeat the option for several |
+| `live check --observe-seconds 0` | Skip the observation window — checks the gate, connection and account only (no bar can close in zero seconds) |
+| `live check --connect-timeout 10` | Fail faster when the gateway is not listening |
+| `live check --require-bars` | Also fail (exit 1) if no bar closes during the window. Only meaningful inside regular trading hours |
+
+> `live check` reads connection settings from `IBKRSettings` only — `IBKR_HOST`, `IBKR_PORT`, `IBKR_LIVE_CLIENT_ID`, `IBKR_TRADING_MODE`, `TWS_ACCOUNT` (see Configuration below). It has no host/port/account flags, and no real-money flag: it refuses any non-paper configuration before opening a socket.
+>
+> **Exit codes** — `0` the check completed · `1` configuration or runtime failure · `2` usage error · `3` **the safety gate refused** (scriptably distinct from every other failure) · `4` the broker was unreachable. Zero bars outside regular trading hours is expected and still exits `0`; the summary says so.
+
 ## Common Workflows
 
 ### 1. Quick Test with Sample Data

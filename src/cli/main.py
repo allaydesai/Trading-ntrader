@@ -8,6 +8,7 @@ from src.cli.commands.catalog import catalog  # noqa: E402
 from src.cli.commands.data import data  # noqa: E402
 from src.cli.commands.history import list_backtest_history  # noqa: E402
 from src.cli.commands.import_data import import_firstrate  # noqa: E402
+from src.cli.commands.live import live  # noqa: E402
 from src.cli.commands.metadata import metadata  # noqa: E402
 from src.cli.commands.report import report  # noqa: E402
 from src.cli.commands.run import run_simple  # noqa: E402
@@ -44,6 +45,7 @@ cli.add_command(list_backtest_history)
 cli.add_command(import_firstrate, "import")
 cli.add_command(metadata)
 cli.add_command(catalog)
+cli.add_command(live)
 
 
 if __name__ == "__main__":
