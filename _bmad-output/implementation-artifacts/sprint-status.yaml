@@ -309,7 +309,7 @@ development_status:
   # Epic 1: Live Broker Connection & Real-Money Safety Gate
   # FR1–FR12 · Standalone: connects to IBKR paper, streams real-time RTH bars, refuses a
   # live account with a distinct exit code. No orders exist yet — that is the point.
-  epic-1: in-progress
+  epic-1: done
   1-1-refuse-a-real-money-account-before-anything-connects: done
   1-2-isolate-the-live-client-id-from-the-historical-data-client: done
   1-3-assemble-and-start-a-tradingnode-against-ibkr-paper: done
