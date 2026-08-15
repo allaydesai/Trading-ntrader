@@ -263,6 +263,14 @@ Non-blocking findings from the three-layer adversarial code review of Story 1.3.
   (`src/core/live_account_gate.py`). The item below still stands for **Layer 1** refusals raised by
   `live_node_builder.build_trading_node_config`, which remain unlogged; Story 1.7 is still the
   natural place to log those as it maps `GateRefusedError` → exit code 3.
+  **RESOLVED in story-1.7** (2026-08-11): `live_check.preflight_gate` emits `gate.refused` at
+  **ERROR** with `phase="gate:static"`, the `GateRefusalReason` value and the refusal message, on
+  the CLI's own path — before any node exists. ERROR rather than the WARNING suggested below,
+  deliberately: Layer 2 already emits that event name at ERROR, and one event at two levels is
+  worse than either level. Note the residual: a refusal raised by `build_trading_node_config` on a
+  path that does **not** go through `preflight_gate` (a future caller, or the diagnostic probes) is
+  still unlogged by `live_gate` itself. Closing that properly means logging inside the builder,
+  which Story 1.3's spec deliberately declined.
 
 - **A gate refusal is logged nowhere in the codebase.** `src/core/live_gate.py` contains **zero**
   logging calls (verified by grep), and Story 1.3's spec deliberately capped that module's logging
@@ -496,11 +504,18 @@ Non-blocking findings from the three-layer adversarial review. Blocking items (2
   a partial load, so an id IBKR cannot qualify still yields a connected session with zero bars for
   that subscription. The docstrings now say so. **Action for Story 1.7**, whose `ntrader live check`
   is the natural place to compare loaded instruments against requested ones and report the shortfall.
+  **RESOLVED in story-1.7** (2026-08-11): the check compares `instrument_ids_for(bar_types)` against
+  `node.cache.instruments()`, logs `live_check.instruments` at WARNING when any are missing, and
+  names them in the operator summary. Scope of the fix: it makes the shortfall *visible to an
+  operator running the check*. A **session** (Epic 2's runner) still has no such comparison, and the
+  provider still reports nothing — so the underlying adapter behaviour is unchanged.
 
 - **`ntrader live check` should log the gate refusal.** Carried forward unchanged from Story 1.3's
   review: `src/core/live_gate.py` contains zero logging calls, so the most operationally interesting
   event the safety gate produces leaves no trace beyond what a caller emits. Still true after this
   story. **Action for Story 1.7.**
+  **RESOLVED in story-1.7** (2026-08-11) — see the story-1.3 review section above for the detail and
+  the residual.
 
 ## Deferred from: story-1.6 (2026-08-07)
 
@@ -605,3 +620,48 @@ Non-blocking findings from the three-layer adversarial review. Blocking items (2
   **Action at the Epic 1 retrospective:** amend the list. (Recorded twice deliberately — once as a
   story judgment call, once as a review finding — because it is the architecture document, not the
   code, that needs the edit.)
+
+## Deferred from: story-1.7 (2026-08-11)
+
+- **`--connect-timeout` cannot bound the part of the connect that happens inside `node.build()`.**
+  The check starts its deadline *before* the build precisely so the two budgets are not additive
+  (an unreachable gateway took 115s to say so when they were), but `client.start()` drives the
+  adapter's connect through `run_until_complete` on a loop that is not yet running, and nothing
+  interrupts it. So `--connect-timeout 5` against a gateway whose API handshake hangs still costs
+  the adapter's own ~15s `managedAccounts` wait before the deadline is even consulted. The check
+  mitigates it with `IB_MAX_CONNECTION_ATTEMPTS=1` (one attempt, not the probes' three).
+  **Action:** genuinely bounding it means running `build()` in a thread or reworking the adapter's
+  synchronous start path — neither belongs in a story that adds a CLI command. Worth revisiting in
+  **Epic 2's runner (AR38)**, which owns lifecycle and will want the same bound for a session start.
+
+- **`live_check.classify_failure` couples exit codes to exception class *names*, not classes.**
+  Deliberate — importing `GateRefusedError` or `LiveMarketDataError` would make `live_check.py`
+  Nautilus-dependent and collapse the pure/impure split that lets AR28's exit-code table be
+  unit-tested with no broker. The coupling is pinned by a component test that asserts the real class
+  names, so a rename fails loudly. But it is still a string, and a *new* exception type added to
+  `live_node_builder` or `live_market_data` will silently classify as a generic error (exit 1) until
+  someone adds it to the map. **Action:** if Epic 2 grows more typed failures on this path, consider
+  a shared marker protocol (an `exit_outcome` attribute on the exception) instead of a name map.
+
+- **Zero bars is reported, not failed, and the two causes are indistinguishable.** Outside RTH no
+  bar can close, so the check exits 0 with the shortfall named; `--require-bars` makes it fail for a
+  script that knows it is inside RTH. What the check still cannot tell apart is "market closed" from
+  "connected, subscribed, and the feed is dead" — it has no session calendar. The instrument-load
+  comparison narrows it (a contract IBKR never qualified is now named), but a qualified contract on
+  a dead feed still looks like a quiet market. **Action for Epic 2's runner**, which owns the poll
+  loop a first-bar watchdog would hang off — the same gap "the observer is silent when *no* bar is
+  delivered" and the IB-1101 item meet from their own sides.
+
+- **`os.environ.setdefault("IB_MAX_CONNECTION_ATTEMPTS", ...)` mutates process-wide state from a
+  library module.** It is the only lever the adapter exposes (the value is read once in
+  `InteractiveBrokersClient.__init__`), `setdefault` leaves an operator's own choice alone, and the
+  alternative is an unbounded hang — so it ships. It is still a global side effect of calling
+  `run_live_check`, which matters if a future caller runs the check in the same process as something
+  else that builds an IB client. **Action:** revisit if Nautilus ever accepts the budget as config.
+
+- **The check's `live_check.*` log events are not in AR41's normative list.** `live_check.building`,
+  `live_check.connected`, `live_check.observing` and `live_check.instruments` are this command's own
+  progress vocabulary, deliberately *not* a claim on AR39's startup-phase sequence (Epic 2's
+  contract). `gate.static` is likewise a new event name alongside AR41's `gate.refused`.
+  **Action at the Epic 1 retrospective:** decide whether AR41's list should enumerate command-scoped
+  events at all, or only session-scoped ones. (Third entry of this shape — Story 1.6 added two.)
