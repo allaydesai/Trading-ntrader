@@ -12,6 +12,7 @@ import asyncio
 import pytest
 from nautilus_trader.adapters.interactive_brokers.factories import IB_CLIENTS
 from nautilus_trader.common.component import is_logging_initialized
+from structlog.testing import capture_logs
 
 from src.config import IBKRSettings
 from src.core.live_account_gate import verify_connected_account
@@ -21,6 +22,7 @@ from src.core.live_check_driver import (
     LiveCheckError,
     run_live_check,
 )
+from src.core.live_check_node import current_event_loop
 from src.core.live_gate import GateDecision, GateFlags, GateMode, GateRefusalReason, build_refusal
 from src.core.live_market_data import LiveMarketDataError
 from src.core.live_node_builder import GateRefusedError, LiveNodeConfigError
@@ -436,16 +438,52 @@ class TestShutdownDiscipline:
         assert node.disposed is True
 
     def test_the_event_loop_is_always_closed(self):
+        """Story 1.3's shutdown AC: no running loop is left behind, even on failure.
+
+        Asserted against the loop the driver actually created — captured from the
+        ``loop=`` keyword it hands its factory — because that is the object whose
+        leak would matter. The previous form of this test asserted
+        ``get_event_loop().is_closed() or True``, a tautology that passed no
+        matter what the driver did, so the AC was unevidenced.
+        """
+        calls: list = []
         node = TestLiveNode(
             actors=[TestBarObserver([AAPL_1MIN])],
             raise_on_build=LiveNodeConfigError("boom"),
         )
 
-        _run(node)
+        _run(factory=_node_factory(node, calls=calls))
 
-        assert asyncio.get_event_loop_policy().get_event_loop().is_closed() or True
-        # The driver owns and closes its own loop; asserting on the *node* is the
-        # observable that matters, and a leaked loop would surface as a warning.
+        driver_loop = calls[0]["loop"]
+        assert isinstance(driver_loop, asyncio.AbstractEventLoop)
+        assert driver_loop.is_closed(), (
+            "the driver left its own event loop open after a failed build. The kernel's "
+            "non-daemon ThreadPoolExecutor is then joined at interpreter exit, which hangs "
+            "the process rather than failing it"
+        )
+        assert not driver_loop.is_running()
+        # And the thread is not left holding that closed loop: the next
+        # `build_trading_node(loop=None)` in this process would otherwise adopt it.
+        assert current_event_loop() is not driver_loop
+        assert node.disposed is True
+
+    def test_the_event_loop_is_closed_on_the_success_path_too(self, registered_accounts):
+        """ "Always" includes the path where nothing went wrong."""
+        settings = _settings()
+        registered_accounts(settings)
+        calls: list = []
+        node = TestLiveNode(
+            actors=[TestBarObserver([AAPL_1MIN])],
+            instrument_ids=["AAPL.NASDAQ"],
+            connects_after=1,
+        )
+
+        report = _run(settings=settings, factory=_node_factory(node, calls=calls))
+
+        assert report.outcome is LiveCheckOutcome.OK
+        driver_loop = calls[0]["loop"]
+        assert driver_loop.is_closed()
+        assert current_event_loop() is not driver_loop
         assert node.disposed is True
 
     def test_a_dirty_dispose_is_reported_not_raised(self, registered_accounts):
@@ -476,6 +514,76 @@ class TestShutdownDiscipline:
         assert report.outcome is LiveCheckOutcome.OK
         assert any("stop" in problem for problem in report.shutdown_problems)
         assert node.disposed is True
+
+
+class TestStructuredLogging:
+    """AC #4 — the check streams structured ``structlog`` events, not prose.
+
+    The rendered *report* is Rich (the CLI prints it), consistent with the other
+    command groups; what streams while the check runs is structlog. This asserts
+    the streaming half, which is the half FR48 is about.
+    """
+
+    def test_the_check_emits_structured_events_with_separate_fields(self, registered_accounts):
+        settings = _settings()
+        registered_accounts(settings)
+        node = TestLiveNode(
+            actors=[TestBarObserver([AAPL_1MIN], counts={AAPL_1MIN: 2})],
+            instrument_ids=["AAPL.NASDAQ"],
+            connects_after=1,
+        )
+
+        with capture_logs() as captured:
+            report = _run(node, settings=settings)
+
+        assert report.outcome is LiveCheckOutcome.OK
+        events = {entry["event"]: entry for entry in captured}
+        assert {"gate.static", "live_check.building", "live_check.observing"} <= set(events)
+
+        # Structured means the values are fields, not interpolated into the
+        # message — a prose logger would render one string and nothing to filter on.
+        building = events["live_check.building"]
+        assert building["host"] == settings.ibkr_host
+        assert building["port"] == settings.ibkr_port
+        assert building["client_id"] == settings.ibkr_live_client_id
+        assert building["trader_id"] == CHECK_TRADER_ID
+        assert building["log_level"] == "info"
+
+        assert events["gate.static"]["phase"] == "gate:static"
+        assert events["gate.static"]["status"] == "ok"
+
+    def test_the_live_client_id_is_the_one_that_reaches_the_logs(self, registered_accounts):
+        """Story 1.2's isolation, observable where an operator would check it."""
+        settings = _settings()
+        registered_accounts(settings)
+        node = TestLiveNode(actors=[TestBarObserver([AAPL_1MIN])], connects_after=1)
+
+        with capture_logs() as captured:
+            _run(node, settings=settings)
+
+        building = next(e for e in captured if e["event"] == "live_check.building")
+        assert building["client_id"] == 10
+        assert building["client_id"] != settings.ibkr_client_id
+
+    def test_no_streamed_event_carries_a_full_account_identifier(self, registered_accounts):
+        """NFR26 holds for the structured stream, not just the rendered report."""
+        settings = _settings()
+        registered_accounts(settings)
+        node = TestLiveNode(
+            actors=[TestBarObserver([AAPL_1MIN])],
+            instrument_ids=["AAPL.NASDAQ"],
+            connects_after=1,
+        )
+
+        with capture_logs() as captured:
+            _run(node, settings=settings)
+
+        assert captured, "nothing was captured, so this proves nothing"
+        for entry in captured:
+            rendered = repr(entry)
+            assert PAPER_ACCOUNT not in rendered, (
+                f"a streamed event leaked the full account identifier: {entry}"
+            )
 
 
 class TestBarsAndInstruments:

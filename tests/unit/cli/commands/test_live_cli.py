@@ -59,6 +59,67 @@ class TestGroupRegistration:
             assert option in result.output
 
 
+class TestConsoleOutputIsConsistentWithTheOtherGroups:
+    """AC #4 — structured structlog console output, wired the same way (FR48).
+
+    ``live`` gets its logging from the CLI root, exactly as ``backtest``,
+    ``data`` and the rest do — it configures nothing of its own. Asserted by
+    identity rather than by reading source: a second, divergent ``configure_logging``
+    is precisely the drift this guards against, and a text match would not see it.
+    The events themselves are asserted in the driver's component suite, where a
+    real check can be run against doubles.
+    """
+
+    def test_the_root_cli_configures_structlog_for_every_group(self):
+        import src.cli.main as main
+        import src.utils.logging as logging_utils
+
+        assert main.configure_logging is logging_utils.configure_logging
+
+    def test_the_live_group_installs_no_logging_of_its_own(self):
+        import src.cli.commands.live as live_module
+
+        assert not hasattr(live_module, "configure_logging"), (
+            "the live group configures logging itself; it must inherit the root's "
+            "configuration so its output matches the other command groups"
+        )
+
+    def test_every_logging_live_module_binds_a_structlog_logger(self):
+        """Not ``print`` or a bare ``logging.getLogger`` — the stream is structured."""
+        import logging
+
+        import structlog
+
+        import src.core.live_account_gate as account_gate
+        import src.core.live_bar_observer as bar_observer
+        import src.core.live_check as check
+        import src.core.live_check_driver as driver
+
+        reference = structlog.get_logger("reference")
+        for module in (driver, check, account_gate, bar_observer):
+            logger = module.logger
+            assert logger is not None, f"{module.__name__} has no logger"
+            # Same type structlog hands out here, so a swap to `logging.getLogger`
+            # or a hand-rolled shim fails rather than passing on duck-typing.
+            assert type(logger) is type(reference), (
+                f"{module.__name__}.logger is not a structlog logger ({type(logger)!r})"
+            )
+            assert not isinstance(logger, logging.Logger)
+
+    def test_the_gate_itself_stays_out_of_the_logging_stack(self):
+        """Story 1.1's purity AC, restated from this side: the gate imports no logger.
+
+        Worth pinning next to the tests above, because "make the live modules log
+        consistently" is exactly the change that would reach for a logger in
+        ``live_gate`` and break its no-I/O guarantee. The refusal is logged by
+        ``live_check``, which is where the structured ``gate.static`` event comes from.
+        """
+        import src.core.live_gate as gate
+
+        assert not hasattr(gate, "logger")
+        assert "structlog" not in gate.__dict__
+
+
 class TestExitCodes:
     """AR28's table, as the operator's scripts will observe it."""
 

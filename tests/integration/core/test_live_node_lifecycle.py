@@ -37,6 +37,9 @@ skipping. ``tests/component/api/test_web_app_logging.py`` guards the
 regression.
 """
 
+import subprocess
+import sys
+
 import pytest
 from nautilus_trader.adapters.interactive_brokers.common import IB
 from nautilus_trader.adapters.interactive_brokers.factories import (
@@ -156,6 +159,122 @@ class TestLogGuardRegistrationOnNodeFirst:
         assert get_nautilus_log_guard() is guard
 
         _assert_factories_registered(node)
+
+
+#: Builds a node, disposes it, then builds a *second* one — all in one fresh
+#: interpreter. Run as a child process on purpose: the claim is about what a
+#: process is left holding after shutdown, and by the time this module executes,
+#: the pytest worker has already built nodes for the tests above. Only a new
+#: interpreter can answer it.
+#:
+#: The loop is created and owned explicitly rather than via ``asyncio.run()``,
+#: mirroring ``live_check_driver._drive``. That is not stylistic:
+#: ``TradingNode.dispose()`` calls ``loop.stop()`` whenever it finds the loop
+#: running (``live/node.py:451-458``), so disposing from *inside* a coroutine
+#: kills the loop under ``asyncio.run()``'s own cleanup and the child dies with
+#: ``RuntimeError: Event loop stopped before Future completed``. Verified.
+_SECOND_NODE_PROBE = """
+import asyncio
+
+from src.config import IBKRSettings
+from src.core.live_node_builder import build_trading_node
+
+
+def settings():
+    return IBKRSettings(
+        _env_file=None,
+        ibkr_trading_mode="paper",
+        ibkr_port=4002,
+        ibkr_host="127.0.0.1",
+        tws_account="DU4076626",
+        ntrader_real_money_account="",
+        ibkr_live_client_id=10,
+        ibkr_client_id=1,
+        ibkr_read_only=True,
+        ibkr_connection_timeout=300,
+        ibkr_request_timeout=60,
+    )
+
+
+def build_and_dispose(trader_id):
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        node = build_trading_node(settings(), trader_id=trader_id, loop=loop)
+        node.dispose()
+    finally:
+        loop.close()
+        asyncio.set_event_loop(None)
+    return loop
+
+
+first = build_and_dispose("PAPER-first001")
+second = build_and_dispose("PAPER-second02")
+
+assert first is not second, "the second build reused the first loop"
+assert first.is_closed(), "the first node's event loop was left open"
+assert second.is_closed(), "the second node's event loop was left open"
+assert not first.is_running() and not second.is_running()
+
+print("SECOND_NODE_BUILT")
+"""
+
+
+class TestShutdownLeavesNothingBehind:
+    """AC #6 — clean shutdown, and a second node is buildable in a fresh process.
+
+    ``BacktestEngine`` is single-use: it cannot be reused after a run. This test
+    pins the corresponding claim for the live path — that the constraint is not
+    inherited, so a process can build a node, shut it down, and build another.
+
+    Nothing here contacts a broker: ``build_trading_node`` returns the node
+    *unbuilt*, and it is ``node.build()`` — not construction — that runs the IB
+    factories and opens a socket (NFR32/NFR33).
+    """
+
+    @pytest.mark.integration
+    def test_a_second_node_is_buildable_after_the_first_shuts_down(self):
+        result = subprocess.run(
+            [sys.executable, "-c", _SECOND_NODE_PROBE],
+            capture_output=True,
+            text=True,
+            # A leaked non-daemon ThreadPoolExecutor or an unclosed loop hangs at
+            # interpreter exit rather than raising, so the timeout *is* the
+            # assertion for "the process exits".
+            timeout=180,
+        )
+
+        assert result.returncode == 0, (
+            f"the probe process did not exit cleanly (rc={result.returncode})\n"
+            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
+        assert "SECOND_NODE_BUILT" in result.stdout, (
+            "a second TradingNode could not be built after the first was disposed\n"
+            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
+
+    @pytest.mark.integration
+    def test_the_probe_can_actually_fail(self):
+        """Meta-test: a probe that stopped proving anything must not pass silently.
+
+        Mirrors ``tests/component/api/test_web_app_logging.py``. Without this, a
+        probe whose assertions were deleted would keep this AC green forever.
+        """
+        broken = _SECOND_NODE_PROBE.replace(
+            'assert first.is_closed(), "the first node\'s event loop was left open"',
+            'assert not first.is_closed(), "inverted on purpose"',
+        )
+        assert broken != _SECOND_NODE_PROBE, "the meta-test no longer patches the probe"
+
+        result = subprocess.run(
+            [sys.executable, "-c", broken],
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+
+        assert result.returncode != 0
+        assert "SECOND_NODE_BUILT" not in result.stdout
 
 
 class TestBarObserverReachesTheNode:
