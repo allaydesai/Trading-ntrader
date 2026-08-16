@@ -4,24 +4,48 @@ Maps every acceptance criterion in
 [`_bmad-output/planning-artifacts/prd-epic1-scope.md`](../../_bmad-output/planning-artifacts/prd-epic1-scope.md)
 to the automated test that evidences it.
 
-**Why this file exists.** Epic 1's coverage is spread across three test tiers, and
-the tiers run under three different commands (`make test-unit`,
-`make test-component`, `make test-integration`). A verification run that executes
-only one of them sees only that tier's output, and the criteria proven in the
-other two look unevidenced. This is the index that makes the mapping checkable
-without running everything and reading 483 test names.
+**Start here: the mapping is machine-checked.** Run
 
-**Reproducing the whole set:**
+```bash
+uv run pytest tests/integration/core -n auto --forked
+```
+
+and the run ends with a criterion-by-criterion table — one row per AC id, each
+`PASS`/`FAIL`/`SKIP` derived from the result of the test that claims it:
+
+```
+======================= acceptance criteria (40/40 PASS) =======================
+Story 1.1
+  1.1a PASS  evaluate_gate decides with no socket/file/db I/O
+  ...
+40/40 acceptance criteria evidenced by a passing test in this run
+```
+
+That table is produced by the acceptance conformance suite
+(`tests/integration/core/test_epic1_ac_*.py`), which states each criterion in the
+PRD's own terms and asserts it against the real modules. Its ids come from one
+manifest, `tests/integration/core/epic1_criteria.py`; `test_epic1_ac_manifest.py`
+holds the manifest and the suite in bijection, so a criterion cannot quietly lose
+its evidence — deleting a test turns the table red rather than shortening it. The
+reporting hooks are generic and live in `tests/conftest.py`.
+
+**Why the per-tier index below still exists.** The conformance suite proves each
+criterion is *met*; the depth that proves the code is *right* — 483 tests, whole
+truth tables, meta-tests — lives in the tier suites, and this index is what maps
+a criterion to that depth. The two are complementary: nothing here should be
+collapsed into the conformance suite, and no truth table should grow inside it.
+
+Reproducing the whole set:
 
 ```bash
 make test-unit          # Stories 1.1, 1.2, 1.6, 1.7
 make test-component     # Stories 1.3, 1.4, 1.5, 1.7
-make test-integration   # Story 1.3 (--forked is mandatory)
+make test-integration   # Story 1.3 + the conformance suite (--forked is mandatory)
 ```
 
-483 tests cover the criteria below. No test contacts a broker, a network or a
-database (NFR32/NFR34); the broker-dependent behaviour that cannot be automated
-is operator-verified in [`phase3-live-verification.md`](phase3-live-verification.md).
+No test contacts a broker, a network or a database (NFR32/NFR34); the
+broker-dependent behaviour that cannot be automated is operator-verified in
+[`phase3-live-verification.md`](phase3-live-verification.md).
 
 ---
 
