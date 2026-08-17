@@ -36,7 +36,53 @@
 
 generated: 2026-08-03
 last_updated: >-
-  2026-08-11 (Story 1.6 merged into the Epic 1 integration branch, joining Stories 1.4 and 1.5.
+  2026-08-17 (Epic 1 retrospective completed — documentation-driven per Allay's direction: synthesized
+  from deferred-work.md and all 7 stories' Dev Agent Records rather than a live interview. Full
+  writeup at _bmad-output/implementation-artifacts/epic-1-retro-2026-08-17.md. Headline finding: the
+  three-layer adversarial code review has a 7-for-7 hit rate this epic on catching a real, load-bearing
+  safety bug the story's own TDD missed (e.g. 1.3's uncatchable Rust panic on a malformed trader_id,
+  1.5's delayed-data guard that would have killed every healthy session at RTH re-open, 1.6's halt
+  clock defeated by a flapping connection for 2.8 simulated hours) — recommendation is to keep it
+  mandatory for every remaining epic. Two items multiple stories flagged as "action at the Epic 1
+  retro" were resolved directly in epics.md rather than re-deferred again: AR20 (described a LogGuard
+  registration ordering the Nautilus API cannot expose; reworded to "earliest point reachable from
+  calling code") and AR41 (added connection.halted / connection.recovery_refused, shipped by Story 1.6
+  but missing from the enumeration; recorded that command-scoped events like gate.static and
+  live_check.* are deliberately outside this session-scoped list). One significant, evidenced
+  discovery flagged for Epic 2's Story 2.5 — no AC rewrite needed, but a concrete implementation
+  constraint to plan around rather than rediscover: NautilusKernel.start_async() has no hook between
+  "engines connected" and "trader started", so gate:account cannot be placed by polling once a
+  strategy exists (Epic 1 never hit this — it configures zero strategies). Readiness note: live
+  verification is real but incomplete — of five procedures (P1-P5), only P1 fully passed; no procedure
+  has ever observed a complete connect -> stream -> strategies-would-start round trip live, start to
+  finish. epic-1-retrospective: optional -> done.
+
+  This entry also closes a gap in this file's own history below, which never recorded Story 1.7's
+  completion or Epic 1's closure. Story 1.7 implemented -> code-reviewed -> done, closing Epic 1 (all
+  7 stories done, epic-1: in-progress -> done). Delivers `ntrader live check`: src/core/live_check.py
+  (pure classification, unit-tier) and live_check_driver.py (the impure seam that builds, connects and
+  observes via preflight_gate then build_trading_node, mapping outcomes to AR28's exit codes 0/1/3/4)
+  plus the `ntrader live` CLI group. The scheduled code-review step was never reached on the first
+  pass — that session died on an API drop before commit/review, leaving an uncommitted worktree; a
+  2026-08-15 salvage session re-derived and re-verified everything rather than trust the recorded
+  "Final" numbers, and a manual diff audit (not just a test re-run) surfaced two undocumented defects
+  that had crept into the uncommitted state: an overly broad `except OSError` classification (would
+  have misfiled a local log-directory permission error as BROKER_UNREACHABLE, exit 4), narrowed to the
+  named exceptions that actually mean unreachable-broker; and a wrong import path in
+  tests/component/core/test_live_check_driver.py that silently broke that file's collection entirely.
+  A manual review substituted for the missed code-review step, concluding no further issues. The live
+  runs found and fixed the story's most consequential bug: the first unreachable-gateway run took 115
+  seconds to report failure because --connect-timeout's deadline and node.build()'s own
+  IB_MAX_CONNECTION_ATTEMPTS retry budget were being spent in series rather than as one bounded window;
+  fixed by starting the deadline before node.build() and dropping the build's own retry budget to 1
+  attempt. Procedure P5 is recorded as "partial", not a pass: gate-refusal and broker-unreachable paths
+  were verified live, but the full happy-path criterion was never observed — the available paper
+  Gateway accepts a TCP connection but never completes the IB API handshake (error 502), reproduced
+  with a fresh IBKR_LIVE_CLIENT_ID to rule out a stale-client-id cause. Final counts after the salvage:
+  unit 1714 passed (one fewer than the pre-salvage 1715, since a stale bare-OSError test
+  parametrization was removed), component 1020 passed / 16 skipped (matching the pre-salvage figure
+  once the import-path break was fixed), integration 170 passed / 2 skipped / 0 failed, ruff/mypy
+  clean. Previously: 2026-08-11 (Story 1.6 merged into the Epic 1 integration branch, joining Stories 1.4 and 1.5.
   Like 1.5, it was developed on a parallel branch and its artifacts were reconciled on merge: the
   sprint board now carries 1-4, 1-5 AND 1-6 as done, deferred-work.md carries all three stories'
   sections, and Story 1.6's live-verification procedure — drafted as "P2" while 1.4 and 1.5 were
@@ -317,7 +363,7 @@ development_status:
   1-5-receive-real-time-rth-bars-for-a-configured-instrument: done
   1-6-detect-connection-loss-and-withhold-trading-permission: done
   1-7-check-broker-connectivity-and-the-gate-from-the-cli: done
-  epic-1-retrospective: optional
+  epic-1-retrospective: done
 
   # Epic 2: Paper Trading Sessions That Outlive the Process
   # FR13–FR22, FR48–FR53 · Standalone: a named session runs, observes bars, stops, and
