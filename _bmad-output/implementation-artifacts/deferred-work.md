@@ -665,3 +665,15 @@ Non-blocking findings from the three-layer adversarial review. Blocking items (2
   contract). `gate.static` is likewise a new event name alongside AR41's `gate.refused`.
   **Action at the Epic 1 retrospective:** decide whether AR41's list should enumerate command-scoped
   events at all, or only session-scoped ones. (Third entry of this shape — Story 1.6 added two.)
+
+## Deferred from: story-2.1 (2026-08-17)
+
+- **`StrategyLoader.build_strategy_params` silently drops an override key that is not a field of the
+  strategy's param model.** `src/core/strategy_factory.py:296-380` iterates
+  `param_model_cls.model_fields`, so `overrides={"fast_perios": 12}` (a typo) produces a spec built
+  from the default `fast_period` with no error anywhere — `StrategySpec.from_overrides` inherits this
+  unchanged, since it calls the chain rather than reimplementing it. Pre-existing, and affects the
+  backtest path identically; widening it is a change to a function shared well outside this story's
+  footprint. **Action for Story 2.2's CLI:** decide whether to validate override keys against the
+  param model's field set before calling `from_overrides`, so a typo'd `--param` flag fails loudly
+  instead of silently taking the default.

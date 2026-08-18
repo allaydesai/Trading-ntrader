@@ -9,6 +9,7 @@ from .instrument_metadata import (
     ResolutionStatus,
     ResolutionSummary,
 )
+from .session import SessionSpec, SessionStatus, StrategySpec
 from .strategy import SMAParameters, StrategyStatus, TradingStrategy
 
 __all__ = [
@@ -22,6 +23,9 @@ __all__ = [
     "ResolutionStatus",
     "ResolutionSummary",
     "SMAParameters",
+    "SessionSpec",
+    "SessionStatus",
+    "StrategySpec",
     "StrategyStatus",
     "TradingStrategy",
     "ValidationResult",

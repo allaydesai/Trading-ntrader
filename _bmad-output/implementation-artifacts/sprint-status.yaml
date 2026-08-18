@@ -36,6 +36,53 @@
 
 generated: 2026-08-03
 last_updated: >-
+  2026-08-17 (Story 2.1 implemented -> review. ready-for-dev -> in-progress -> review, same session as
+  drafting. Built exactly to the Dev Notes' pre-verified design with no deviation: src/models/session.py
+  (SessionSpec, StrategySpec, SessionStatus, three lazy-import helpers) plus
+  tests/unit/models/test_session_spec.py (25 tests, one per AC-level behaviour). TDD Red confirmed
+  first (ModuleNotFoundError before the module existed), then Green on the first implementation
+  attempt — no iteration needed. Baseline was 1718 unit tests collected before any edit; final count
+  1743 passed (1718 + 25 new), zero regressions; format/lint clean; a standalone mypy run against the
+  new file (outside make typecheck's src/core + src/services scope) reports no issues; import-purity
+  confirmed both by the story's own AST-based test and by running
+  `python -c "import sys, src.models; print('nautilus_trader' in sys.modules)"`, which prints False.
+  The one load-bearing new guard (strategies: tuple, not list, defeating frozen=True's shallow
+  mutability hole) was mutation-tested per the Epic 1 retro's Action Item #3: swapped to list[...],
+  watched the append-guard test fail, reverted. One cosmetic fix made after Green: from_overrides'
+  docstring originally said "never calls get_settings()", which tripped Task 4's own grep gate
+  (grep -n "get_settings\|os.environ\|getenv" — it does not distinguish code from prose); reworded to
+  clear the gate. Recorded the one item Dev Notes flagged in advance for deferral —
+  StrategyLoader.build_strategy_params silently drops an override key that is not a param-model field,
+  pre-existing and shared with the backtest path — as a new "Deferred from: story-2.1" section in
+  deferred-work.md, for Story 2.2's CLI to decide whether to validate override keys before calling.
+  Scope discipline held: no migration, no ORM model, no repositories, no SessionService, no trader_id
+  derivation, no CLI, no runner — confirmed by git status showing only the five files this story
+  touches. epic-2 remains in-progress: 2.1 done pending review, 2.2-2.8 backlog.
+  Previously: 2026-08-17 (Epic 2 opened. Story 2.1 created: backlog -> ready-for-dev; epic-2: backlog ->
+  in-progress. File: 2-1-define-a-session-as-a-list-of-strategy-specifications.md. Pure domain-model
+  story — src/models/session.py (SessionSpec, StrategySpec, SessionStatus) plus
+  tests/unit/models/test_session_spec.py, nothing else; no migration, no service, no CLI, no runner.
+  Five design findings were verified by execution against pydantic 2.11.9 and the live
+  StrategyRegistry before the story was written, and are recorded in its Dev Notes rather than left
+  to be rediscovered: (1) pydantic frozen=True is SHALLOW — a list field on a frozen model still
+  accepts .append(), which would defeat FR14, so strategies/bar_types are tuples; (2) Decimal
+  parameters do NOT survive a naive JSON round trip (Decimal -> "1000000" -> str), so AC #5's
+  losslessness depends on re-coercing parameters through the strategy's registered param_model in a
+  mode="before" validator; (3) a KeyError raised inside a pydantic validator ESCAPES rather than
+  becoming a ValidationError, and both StrategyRegistry.get() (KeyError) and resolve_live_bar_types()
+  (LiveMarketDataError) must be converted to ValueError; (4) resolve_live_bar_types correctly rejects
+  duplicate bar types WITHIN one strategy but that is wrong ACROSS strategies, so SessionSpec grew a
+  subscription_bar_types property that dedupes case-insensitively before anything reaches
+  build_trading_node_config; (5) epics.md line 744 names StrategyFactory.build_strategy_params(),
+  which does not exist — the real symbol is StrategyLoader.build_strategy_params() in the same
+  module. Five judgment calls are flagged in the story for the Epic 2 retro (tuple-not-list,
+  bar-type validation folded in, schema_version on SessionSpec, from_overrides classmethod,
+  subscription_bar_types). AC #4 also closes the deferred-work item that flagged
+  IBKRSettings.model_dump()'s credential leak as going live "the moment Epic 2 persists session
+  configuration" — closed by construction (the spec has no field those values could occupy); the
+  settings-side behaviour itself remains deferred. Epic 1 retro action items 4-10 are Story 2.5
+  constraints, not 2.1 ones, and travel forward.)
+
   2026-08-17 (Epic 1 retrospective completed — documentation-driven per Allay's direction: synthesized
   from deferred-work.md and all 7 stories' Dev Agent Records rather than a live interview. Full
   writeup at _bmad-output/implementation-artifacts/epic-1-retro-2026-08-17.md. Headline finding: the
@@ -372,8 +419,8 @@ development_status:
   # (incl. G1 heartbeat cols), backtest_runs.run_type, trades.session_id,
   # trades.backtest_run_id → nullable + CHECK. run_type/session_id aren't consumed until
   # E5/E3 — deliberate, self-justified exception to epic-scoped schema change.
-  epic-2: backlog
-  2-1-define-a-session-as-a-list-of-strategy-specifications: backlog
+  epic-2: in-progress
+  2-1-define-a-session-as-a-list-of-strategy-specifications: review
   2-2-create-a-named-session-with-an-immutable-specification: backlog
   2-3-move-a-session-between-states-through-one-guarded-path: backlog
   2-4-give-each-session-its-own-durable-engine-cache: backlog
