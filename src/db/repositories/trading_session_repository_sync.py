@@ -83,18 +83,29 @@ class SyncTradingSessionRepository:
 
         Args:
             session_id: The session's UUID business key.
-            for_update: When True, lock the row with ``SELECT ... FOR UPDATE``.
-                ``SessionService.transition()``'s reclaim decision reads and
-                writes across a window in which another process may attempt
-                the same reclaim (Story 2.3 AC #6) — the lock is what makes
-                exactly one of them win.
+            for_update: When True, lock the row with ``SELECT ... FOR UPDATE``
+                and overwrite any copy already loaded in this session's
+                identity map. ``SessionService.transition()``'s reclaim decision
+                reads and writes across a window in which another process may
+                attempt the same reclaim (Story 2.3 AC #6). The lock alone is
+                not enough for exactly one of them to win: it must be paired
+                with the reclaim's ``last_heartbeat_at`` stamp, so the loser
+                re-reads a fresh heartbeat and takes the ordinary refusal.
+
+                ``populate_existing`` is load-bearing, not decoration. Without
+                it the ORM returns the instance already in the identity map and
+                discards the freshly locked row's column values, so a caller
+                that had already loaded this row — via ``resolve()``, the shape
+                AR36 prescribes — would decide on **pre-lock** state. Verified:
+                two processes both reclaimed one session, and a ``sealed``
+                session was moved back to ``running``.
 
         Returns:
             The TradingSession, or None if not found.
         """
         stmt = select(TradingSession).where(TradingSession.session_id == session_id)
         if for_update:
-            stmt = stmt.with_for_update()
+            stmt = stmt.with_for_update().execution_options(populate_existing=True)
         result = self.session.execute(stmt)
         return result.scalar_one_or_none()
 

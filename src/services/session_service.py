@@ -43,6 +43,12 @@ DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 30.0
 # after a SIGKILL (merely annoying) — so the number is generous by design.
 DEFAULT_HEARTBEAT_STALE_AFTER_SECONDS = 3 * DEFAULT_HEARTBEAT_INTERVAL_SECONDS
 
+# An upper bound, because ``math.isfinite`` alone is not enough: ``1e300`` is
+# finite and positive, and would disable the reclaim just as completely as
+# ``nan`` would — the very failure this validation exists to prevent. A day is
+# far beyond any plausible cadence and still fails loudly.
+MAX_HEARTBEAT_STALE_AFTER_SECONDS = 24 * 60 * 60.0
+
 
 def _utc_now() -> datetime:
     """The repo's house clock idiom (31 occurrences of ``datetime.now(timezone.utc)``)."""
@@ -50,18 +56,59 @@ def _utc_now() -> datetime:
 
 
 def _require_positive_threshold(value: float) -> float:
-    """Reject a non-finite or non-positive threshold at construction time.
+    """Reject a threshold that would silently disable the reclaim.
 
     Mirrors ``live_connection_monitor.py``'s ``_require_positive``: a ``nan``
-    threshold makes every ``>`` comparison ``False``, which would silently
-    disable the reclaim forever rather than failing loudly.
+    threshold makes every ``>`` comparison ``False``, which would disable the
+    reclaim forever rather than failing loudly. A huge finite value does the
+    same thing, so it is bounded too, and a non-numeric value raises the
+    documented ``ValueError`` rather than a bare ``TypeError`` from ``math``.
+    ``bool`` is excluded explicitly: ``True`` is an ``int`` and would otherwise
+    be accepted as a one-second threshold.
     """
-    if not math.isfinite(value) or value <= 0:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(
             f"heartbeat_stale_after_seconds must be a finite positive number of seconds, "
             f"got {value!r}."
         )
-    return value
+    if not math.isfinite(value) or not 0 < value <= MAX_HEARTBEAT_STALE_AFTER_SECONDS:
+        raise ValueError(
+            f"heartbeat_stale_after_seconds must be a finite positive number of seconds "
+            f"no greater than {MAX_HEARTBEAT_STALE_AFTER_SECONDS:.0f}, got {value!r}."
+        )
+    return float(value)
+
+
+def _as_status(value: object, subject: str) -> SessionStatus:
+    """Coerce a status to its enum member, or raise ``InvalidSessionTransition``.
+
+    Two distinct holes close here. ``SessionStatus`` is a ``StrEnum``, so a bare
+    ``"running"`` is *equal* to ``SessionStatus.RUNNING`` under ``in`` but is not
+    the same object under ``is`` — a caller passing the raw string would slip
+    past the reclaim guard's identity check entirely and then fail on ``.value``.
+    And a stored status that is no member at all (the ORM's ``default=`` is
+    Python-side and applies only at flush, so an unattached row has
+    ``status is None``) would raise ``AttributeError`` from the refusal message
+    rather than the documented exception.
+
+    Args:
+        value: The status to coerce — an enum member, or its ``str`` label.
+        subject: What ``value`` is, for the error message.
+
+    Returns:
+        The corresponding ``SessionStatus`` member.
+
+    Raises:
+        InvalidSessionTransition: If ``value`` is not a valid session status.
+    """
+    if isinstance(value, SessionStatus):
+        return value
+    if isinstance(value, str):
+        try:
+            return SessionStatus(value)
+        except ValueError:
+            pass
+    raise InvalidSessionTransition(f"{subject} is not a valid session status: {value!r}.")
 
 
 #: AC #2's four legal edges. ``RUNNING -> RUNNING`` is deliberately absent:
@@ -90,10 +137,14 @@ _TIMESTAMPS_BY_TARGET: Mapping[SessionStatus, tuple[str, ...]] = {
 def _heartbeat_age_seconds(last_heartbeat_at: datetime | None, now: datetime) -> float | None:
     """Seconds since the last heartbeat, clamped at zero, or None if never set.
 
-    Clamping absorbs clock skew between the process that wrote the heartbeat
-    and this one: a heartbeat that reads as being in the future must read as
-    *fresh* (age 0), never as a negative number that some other comparison
-    could mistake for stale.
+    The clamp absorbs clock skew in **one** direction only: a heartbeat that
+    reads as being in the future reads as *fresh* (age 0), never as a negative
+    number some other comparison could mistake for stale. It does nothing about
+    the opposite and more dangerous direction — a reader whose clock runs ahead
+    of the writer's inflates the age and can reclaim a genuinely live session.
+    Both timestamps come from application clocks on possibly different hosts;
+    only a database-side ``now()`` would remove that, which this module
+    deliberately does not reach for.
     """
     if last_heartbeat_at is None:
         return None
@@ -116,15 +167,31 @@ def _is_heartbeat_stale(
 
 
 def _reclaim_or_refuse(trading_session: TradingSession, now: datetime, threshold: float) -> None:
-    """AC #4/#5: the one sanctioned ``running -> running`` path.
+    """AC #4/#5: decide the one sanctioned ``running -> running`` path.
 
-    A stale (or absent) heartbeat reclaims the session as a start; a fresh
-    one refuses, naming the session and the heartbeat's age so another
-    process appears live rather than silently overlapping it (NFR6).
+    A stale (or absent) heartbeat is allowed through as a start; a fresh one
+    refuses, naming the session and the heartbeat's age so that another live
+    process is reported rather than silently overlapped (NFR6). This function
+    only *decides* and logs — the caller performs the mutation.
+
+    Both log events are emitted at decision time, which is necessarily before
+    the caller commits. A reclaim that is later rolled back therefore still
+    leaves a ``session.reclaimed`` line; treat these events as attempts that
+    passed validation, not as proof of a durable state change.
     """
     last_heartbeat_at = trading_session.last_heartbeat_at
+    age = _heartbeat_age_seconds(last_heartbeat_at, now)
     if not _is_heartbeat_stale(last_heartbeat_at, now, threshold):
-        age = _heartbeat_age_seconds(last_heartbeat_at, now)
+        # A second process trying to take over a live session is exactly the
+        # signal an operator needs, and raising alone drops it entirely if the
+        # caller swallows the exception. Hence warning, not info.
+        logger.warning(
+            "session.reclaim_refused",
+            session_id=str(trading_session.session_id),
+            name=trading_session.name,
+            heartbeat_age_seconds=age,
+            stale_after_seconds=threshold,
+        )
         raise InvalidSessionTransition(
             f"Session {trading_session.name!r} is already running and its heartbeat is "
             f"{age:.0f}s old (stale after {threshold:.0f}s) — another process appears live."
@@ -133,7 +200,7 @@ def _reclaim_or_refuse(trading_session: TradingSession, now: datetime, threshold
         "session.reclaimed",
         session_id=str(trading_session.session_id),
         name=trading_session.name,
-        heartbeat_age_seconds=_heartbeat_age_seconds(last_heartbeat_at, now),
+        heartbeat_age_seconds=age,
     )
 
 
@@ -177,7 +244,10 @@ class SessionService:
         """
         try:
             session_id = UUID(identifier)
-        except ValueError:
+        except (ValueError, TypeError, AttributeError):
+            # UUID() raises TypeError for None and bytes, and AttributeError for
+            # an int or an already-parsed UUID — all of which must fall through
+            # to the name lookup and end at the documented RecordNotFoundError.
             session_id = None
         if session_id is not None:
             found = self._repository.find_by_session_id(session_id)
@@ -191,8 +261,10 @@ class SessionService:
     def transition(self, session_id: UUID, *, to: SessionStatus) -> TradingSession:
         """Move a session to ``to``, or raise — the only path that may (AR37).
 
-        Validates before mutating, so a refusal never depends on the caller
-        rolling back: the row is unchanged on any raised exception.
+        Validates before mutating, so no column is changed on any raised
+        exception. Note this is a guarantee about *column values only*: the
+        locked read has already taken an exclusive row lock, which is held
+        until the caller ends its transaction either way.
 
         Args:
             session_id: The session's UUID business key.
@@ -203,15 +275,19 @@ class SessionService:
 
         Raises:
             RecordNotFoundError: If no session matches ``session_id``.
-            InvalidSessionTransition: If the edge is illegal, or ``to`` is
-                ``running`` while already ``running`` with a fresh heartbeat.
+            InvalidSessionTransition: If the edge is illegal, if either status
+                is not a valid ``SessionStatus``, or if ``to`` is ``running``
+                while already ``running`` with a fresh heartbeat.
         """
+        to = _as_status(to, "The requested target")
         trading_session = self._repository.find_by_session_id(session_id, for_update=True)
         if trading_session is None:
             raise RecordNotFoundError(f"No trading session found with id {session_id}")
 
         now = self._time_source()
-        current = trading_session.status
+        current = _as_status(
+            trading_session.status, f"The stored status of session {trading_session.name!r}"
+        )
 
         if to is SessionStatus.RUNNING and current is SessionStatus.RUNNING:
             _reclaim_or_refuse(trading_session, now, self._heartbeat_stale_after_seconds)

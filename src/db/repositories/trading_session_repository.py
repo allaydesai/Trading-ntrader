@@ -84,18 +84,30 @@ class TradingSessionRepository:
 
         Args:
             session_id: The session's UUID business key.
-            for_update: When True, lock the row with ``SELECT ... FOR UPDATE``.
-                ``SessionService.transition()``'s reclaim decision reads and
-                writes across a window in which another process may attempt
-                the same reclaim (Story 2.3 AC #6) — the lock is what makes
-                exactly one of them win.
+            for_update: When True, lock the row with ``SELECT ... FOR UPDATE``
+                and overwrite any copy already loaded in this session's
+                identity map — the async half of AR9's both-twins rule.
+
+                No caller exists yet: ``SessionService`` is sync-only, so the
+                reclaim path this option was added for (Story 2.3 AC #6) reaches
+                only the sync twin. It ships here so the two repositories keep
+                the identical surface AR9 requires, and so Story 2.5's asyncio
+                runner has it if it ever reads this row directly rather than
+                bridging to the sync service via ``asyncio.to_thread``.
+
+                ``populate_existing`` is load-bearing wherever this is used:
+                without it the ORM returns the instance already in the identity
+                map and discards the freshly locked row's column values, so a
+                caller that had already loaded the row would decide on pre-lock
+                state — demonstrated on the sync twin as two processes both
+                reclaiming one session.
 
         Returns:
             The TradingSession, or None if not found.
         """
         stmt = select(TradingSession).where(TradingSession.session_id == session_id)
         if for_update:
-            stmt = stmt.with_for_update()
+            stmt = stmt.with_for_update().execution_options(populate_existing=True)
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 

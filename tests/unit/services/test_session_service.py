@@ -326,29 +326,203 @@ class TestResolve:
         assert found is row
 
 
+class TestTheLockedReadIsActuallyRequested:
+    """AC #6: the safety-critical half that lives in *this* module.
+
+    ``for_update=True`` is what makes the reclaim decision serialisable. Before
+    this test the argument had no unit-tier coverage at all: deleting it from
+    ``transition()`` left every unit test green, and the only test that would
+    have noticed sits in ``tests/integration/db/``, which CI ``--ignore``s.
+    """
+
+    def test_transition_reads_the_row_with_the_lock_requested(self):
+        row = _session_row(SessionStatus.CREATED)
+        repository = _repository(row)
+        service = SessionService(repository, time_source=FakeClock())
+
+        service.transition(SESSION_ID, to=SessionStatus.RUNNING)
+
+        repository.find_by_session_id.assert_called_once_with(SESSION_ID, for_update=True)
+
+    def test_resolve_reads_without_the_lock(self):
+        """``resolve()`` is a plain lookup — it must not hold rows for writers."""
+        row = _session_row(SessionStatus.CREATED)
+        repository = _repository(row)
+
+        SessionService(repository).resolve(str(SESSION_ID))
+
+        repository.find_by_session_id.assert_called_once_with(SESSION_ID)
+
+
+class TestTheTransitionTableIsComplete:
+    """Every ``SessionStatus`` must appear as a key, or it is silently terminal.
+
+    ``_LEGAL_TRANSITIONS.get(current, frozenset())`` turns a missing key into a
+    session that can never move again — a stuck state NFR11 forbids — and does
+    it without raising. A fifth status member added later would strand sessions
+    with no test going red; this is that test.
+    """
+
+    def test_every_session_status_is_a_key_in_the_legal_transition_table(self):
+        assert set(service_module._LEGAL_TRANSITIONS) == set(SessionStatus)
+
+    def test_every_target_in_the_table_is_a_real_session_status(self):
+        for targets in service_module._LEGAL_TRANSITIONS.values():
+            assert targets <= set(SessionStatus)
+
+
+class TestStatusValuesAreNormalisedBeforeAnyDecision:
+    """``SessionStatus`` is a ``StrEnum``, so equality and identity disagree.
+
+    ``"running" in frozenset({SessionStatus.RUNNING})`` is ``True`` while
+    ``"running" is SessionStatus.RUNNING`` is ``False``. The reclaim guard uses
+    identity and the legality check uses membership, so an un-normalised raw
+    string took a *different path through the same decision* — skipping the
+    heartbeat guard entirely.
+    """
+
+    def test_a_raw_string_target_still_reaches_the_reclaim_guard(self):
+        clock = FakeClock()
+        row = _session_row(SessionStatus.RUNNING, last_heartbeat_at=clock.now)
+        service = SessionService(_repository(row), time_source=clock)
+
+        with pytest.raises(InvalidSessionTransition, match="another process appears live"):
+            service.transition(SESSION_ID, to="running")
+
+    def test_a_raw_string_target_stores_a_real_enum_member_not_a_string(self):
+        row = _session_row(SessionStatus.CREATED)
+        service = SessionService(_repository(row), time_source=FakeClock())
+
+        result = service.transition(SESSION_ID, to="running")
+
+        assert result.status is SessionStatus.RUNNING
+
+    def test_an_unknown_target_raises_the_documented_exception(self):
+        row = _session_row(SessionStatus.CREATED)
+        service = SessionService(_repository(row), time_source=FakeClock())
+
+        with pytest.raises(InvalidSessionTransition, match="not a valid session status"):
+            service.transition(SESSION_ID, to="paused")
+
+    def test_a_row_whose_stored_status_is_none_raises_instead_of_attributeerror(self):
+        """The module docstring documents this state; the code must survive it.
+
+        An unattached row has ``status is None`` because the ORM default is
+        applied at flush. Interpolating ``current.value`` into the refusal
+        message raised ``AttributeError``, escaping every
+        ``except InvalidSessionTransition`` handler.
+        """
+        row = TradingSession(session_id=SESSION_ID, name="alpha-session", spec={})
+        assert row.status is None
+        service = SessionService(_repository(row), time_source=FakeClock())
+
+        with pytest.raises(InvalidSessionTransition, match="not a valid session status"):
+            service.transition(SESSION_ID, to=SessionStatus.RUNNING)
+
+
+class TestResolveSurvivesNonStringIdentifiers:
+    """AC #8: ``resolve()`` raises ``RecordNotFoundError``, and only that.
+
+    ``UUID()`` raises ``TypeError`` for ``None`` and ``bytes`` and
+    ``AttributeError`` for an ``int`` or an already-parsed ``UUID`` — none of
+    which the original ``except ValueError`` caught, so each escaped as a raw
+    traceback and broke the documented ``Raises:`` contract.
+    """
+
+    @pytest.mark.parametrize(
+        "identifier",
+        [None, 123, b"not-a-uuid", uuid4()],
+        ids=["none", "int", "bytes", "uuid_object"],
+    )
+    def test_a_non_string_identifier_raises_record_not_found(self, identifier):
+        service = SessionService(_repository(None))
+
+        with pytest.raises(RecordNotFoundError):
+            service.resolve(identifier)
+
+
+class TestTheThresholdCannotSilentlyDisableTheReclaim:
+    """A threshold that no heartbeat can ever exceed is the failure the
+    constructor's validation exists to prevent — ``math.isfinite`` alone
+    catches ``nan`` and ``inf`` but not ``1e300``, which disables the reclaim
+    just as completely.
+    """
+
+    @pytest.mark.parametrize(
+        "threshold",
+        [1e300, True, "90", None],
+        ids=["huge_but_finite", "bool_true", "numeric_string", "none"],
+    )
+    def test_a_threshold_that_would_disable_the_reclaim_is_rejected(self, threshold):
+        with pytest.raises(ValueError, match="heartbeat_stale_after_seconds"):
+            SessionService(_repository(None), heartbeat_stale_after_seconds=threshold)
+
+    def test_the_upper_bound_is_accepted_and_one_second_past_it_is_not(self):
+        limit = service_module.MAX_HEARTBEAT_STALE_AFTER_SECONDS
+
+        SessionService(_repository(None), heartbeat_stale_after_seconds=limit)
+
+        with pytest.raises(ValueError, match="heartbeat_stale_after_seconds"):
+            SessionService(_repository(None), heartbeat_stale_after_seconds=limit + 1)
+
+
+class TestARefusedReclaimIsLogged:
+    """A second process attempting to take over a live session is exactly the
+    signal an operator needs (AR41). Raising alone drops it entirely whenever
+    the caller swallows the exception.
+    """
+
+    def test_a_refused_reclaim_logs_a_warning_naming_the_session(self):
+        clock = FakeClock()
+        row = _session_row(SessionStatus.RUNNING, last_heartbeat_at=clock.now)
+        service = SessionService(_repository(row), time_source=clock)
+
+        with capture_logs() as logs:
+            with pytest.raises(InvalidSessionTransition):
+                service.transition(SESSION_ID, to=SessionStatus.RUNNING)
+
+        refusals = [entry for entry in logs if entry["event"] == "session.reclaim_refused"]
+        assert len(refusals) == 1
+        assert refusals[0]["log_level"] == "warning"
+        assert refusals[0]["name"] == "alpha-session"
+        assert refusals[0]["session_id"] == str(SESSION_ID)
+        assert refusals[0]["heartbeat_age_seconds"] == 0.0
+
+
 class TestTheAR37StatusAssignmentGuard:
     """AC #1: only ``session_service.py`` may assign ``TradingSession.status``.
 
-    A structural AST scan restricted to modules that import ``TradingSession``
-    — immune to docstrings, comments, structlog kwargs like ``status="failed"``,
-    and local variables named ``status``, unlike a bare grep, which the Dev
-    Notes measured at 20 pre-existing ``status = `` hits and 5 ``.status = ``
-    hits, none of them a ``trading_sessions`` write (Pre-verified finding 8).
+    A structural AST scan across **every** module under ``src/`` — immune to
+    docstrings, comments, structlog kwargs like ``status="failed"`` and local
+    variables named ``status``, unlike a bare grep, which the Dev Notes measured
+    at 20 pre-existing ``status = `` hits (Pre-verified finding 8).
+
+    The scan deliberately carries **no import filter**. An earlier form
+    inspected only modules whose ``from ... import TradingSession`` ended in
+    ``trading_session``; measured, that examined 4 of 192 files and was blind to
+    the ``src.db.models`` re-export, to any module that receives a row as a
+    parameter without importing the class, and to ``src/cli/commands/live.py``
+    — the one CLI module that actually holds live ``TradingSession`` objects. A
+    planted probe using the re-export passed it. Widening costs an allowlist of
+    two pre-existing Pydantic models whose ``self.status`` is a wholly unrelated
+    field, which is a far better trade than a guard that does not look.
+
+    Known limits, stated rather than implied (the Epic 1 retro's rule about not
+    overstating what a guard protects): this sees *attribute assignment* only.
+    ``setattr(row, "status", x)``, ``update().values(status=...)``, a bulk
+    ``query.update({...})`` and raw SQL are not assignments and would not be
+    caught. AR37 is enforced here for the form a developer would actually
+    reach for, not proven for every conceivable one.
     """
 
     ALLOWED_ASSIGNER = "src/services/session_service.py"
 
-    @staticmethod
-    def _imports_trading_session(tree: ast.Module) -> bool:
-        for node in ast.walk(tree):
-            if (
-                isinstance(node, ast.ImportFrom)
-                and node.module
-                and node.module.endswith("trading_session")
-                and any(alias.name == "TradingSession" for alias in node.names)
-            ):
-                return True
-        return False
+    #: Pre-existing ``self.status =`` writes on Pydantic models — catalog
+    #: metadata and strategy definitions. Neither is a ``trading_sessions`` row,
+    #: and neither is this story's to change (Pre-verified finding 8).
+    UNRELATED_STATUS_MODELS = frozenset(
+        {"src/models/catalog_metadata.py", "src/models/strategy.py"}
+    )
 
     @staticmethod
     def _assigns_a_status_attribute(tree: ast.Module) -> bool:
@@ -363,14 +537,18 @@ class TestTheAR37StatusAssignmentGuard:
                 return True
         return False
 
-    def test_only_session_service_assigns_status_on_a_trading_session_importer(self, project_root):
-        offenders = []
+    def test_only_session_service_assigns_a_status_attribute_anywhere_under_src(self, project_root):
+        scanned = 0
+        offenders = set()
         for path in sorted((project_root / "src").rglob("*.py")):
-            tree = ast.parse(path.read_text())
-            if self._imports_trading_session(tree) and self._assigns_a_status_attribute(tree):
-                offenders.append(str(path.relative_to(project_root)))
+            scanned += 1
+            if self._assigns_a_status_attribute(ast.parse(path.read_text())):
+                offenders.add(str(path.relative_to(project_root)))
 
-        assert offenders == [self.ALLOWED_ASSIGNER]
+        # Without this, a scan that walked nothing — a moved fixture, an
+        # uninitialised submodule, a renamed tree — would pass vacuously.
+        assert scanned > 100, f"the guard only walked {scanned} files; it is not scanning src/"
+        assert offenders == {self.ALLOWED_ASSIGNER} | set(self.UNRELATED_STATUS_MODELS)
 
 
 class TestImportPurity:
@@ -426,17 +604,33 @@ class TestScopedGrepGates:
                     break
         return offenders
 
-    def test_no_bare_assignment_of_a_sessionstatus_member_outside_this_module(self, project_root):
+    def test_no_bare_assignment_of_a_sessionstatus_member_anywhere_under_src(self, project_root):
+        """Expected offenders: **none**, including this module.
+
+        ``transition()`` assigns the validated ``to`` parameter, never a
+        ``SessionStatus.`` literal, so the correct expectation is the empty set
+        — not "only ``session_service.py``", which is what the story predicted
+        and what an earlier ``<=`` (subset) assertion quietly accommodated. A
+        subset assertion is satisfied by the empty set, so it would also have
+        passed if the scan had silently stopped matching anything.
+        """
         pattern = re.compile(r"\.status\s*=\s*SessionStatus\.")
         offenders = self._offenders(project_root / "src", project_root, pattern)
-        assert offenders <= {"src/services/session_service.py"}
+        assert offenders == set()
 
-    def test_no_bare_status_assignment_outside_this_module_across_the_live_path(self, project_root):
+    def test_no_bare_status_assignment_outside_this_module_anywhere_under_src(self, project_root):
+        """Scans all of ``src/``, not a hard-coded five directories.
+
+        The earlier form listed ``services``/``cli``/``core``/``db``/``api``,
+        leaving ``src/models`` and ``src/utils`` — and any package added later —
+        outside both this gate and the AST guard simultaneously.
+        """
         pattern = re.compile(r"\.status\s*=[^=]")
-        offenders: set[str] = set()
-        for directory in ("services", "cli", "core", "db", "api"):
-            offenders |= self._offenders(project_root / "src" / directory, project_root, pattern)
-        assert offenders == {"src/services/session_service.py"}
+        offenders = self._offenders(project_root / "src", project_root, pattern)
+        assert offenders == {
+            "src/services/session_service.py",
+            *TestTheAR37StatusAssignmentGuard.UNRELATED_STATUS_MODELS,
+        }
 
     def test_this_module_never_commits_or_rolls_back_the_transaction(self):
         source = Path(service_module.__file__).read_text()
