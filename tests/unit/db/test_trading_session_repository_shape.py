@@ -78,6 +78,28 @@ def test_no_method_can_write_the_spec_column(repository_class):
     [TradingSessionRepository, SyncTradingSessionRepository],
     ids=["async", "sync"],
 )
+def test_find_by_session_id_can_lock_the_row_for_update(repository_class):
+    """Story 2.3 AC #6: the reclaim decision reads the row locked.
+
+    A structural check, not a behavioural one — locking only matters under
+    real concurrent transactions, which is what
+    ``tests/integration/db/test_session_service.py``'s race test proves. This
+    guard only proves the *capability* exists on both twins (AR9), so
+    ``SessionService.transition()`` can ask for it.
+    """
+    import inspect
+
+    source = inspect.getsource(repository_class.find_by_session_id)
+
+    assert "with_for_update(" in source
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "repository_class",
+    [TradingSessionRepository, SyncTradingSessionRepository],
+    ids=["async", "sync"],
+)
 def test_find_all_orders_deterministically(repository_class):
     """Story 2.8's `live list` renders whatever `find_all` returns.
 

@@ -77,16 +77,25 @@ class TradingSessionRepository:
         except OperationalError as e:
             raise DatabaseConnectionError(f"Database connection failed: {e}") from e
 
-    async def find_by_session_id(self, session_id: UUID) -> Optional[TradingSession]:
+    async def find_by_session_id(
+        self, session_id: UUID, *, for_update: bool = False
+    ) -> Optional[TradingSession]:
         """Find a trading session by its business identifier.
 
         Args:
             session_id: The session's UUID business key.
+            for_update: When True, lock the row with ``SELECT ... FOR UPDATE``.
+                ``SessionService.transition()``'s reclaim decision reads and
+                writes across a window in which another process may attempt
+                the same reclaim (Story 2.3 AC #6) — the lock is what makes
+                exactly one of them win.
 
         Returns:
             The TradingSession, or None if not found.
         """
         stmt = select(TradingSession).where(TradingSession.session_id == session_id)
+        if for_update:
+            stmt = stmt.with_for_update()
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 

@@ -70,3 +70,18 @@ class InstrumentMappingError(Exception):
     """Raised when a ticker cannot be mapped to a Nautilus InstrumentId."""
 
     pass
+
+
+class InvalidSessionTransition(BacktestStorageError):
+    """
+    Raised when a trading-session status change cannot proceed.
+
+    Examples:
+        - An illegal edge, such as ``created`` directly to ``sealed``, or any
+          transition attempted out of the terminal ``sealed`` state.
+        - A refused reclaim: a transition to ``running`` requested against a
+          session whose ``last_heartbeat_at`` is still fresh, meaning another
+          process appears to be live on it.
+    """
+
+    pass
