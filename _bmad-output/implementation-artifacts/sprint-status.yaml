@@ -36,7 +36,64 @@
 
 generated: 2026-08-03
 last_updated: >-
-  2026-08-19 (Story 2.3 code-reviewed -> done, closing it. epic-2 remains in-progress: 2.1 done,
+  2026-08-19 (Story 2.4 implemented -> review. ready-for-dev -> in-progress -> review, same session
+  as creation. epic-2 stays in-progress: 2.1/2.2/2.3 done, 2.4 review, 2.5-2.8 backlog. Delivered
+  TDD Red->Green: RedisSettings (host/port/db, refusing a non-zero db rather than ignoring it),
+  src/core/live_trader_id.py (deterministic PAPER-<8 hex>, framework-free), src/core/live_cache.py
+  (CacheConfig with the three namespace-deciding fields pinned explicitly + a stdlib-socket
+  reachability preflight), and a cache= seam on both live_node_builder entry points with the
+  preflight strictly before TradingNode(...). 35 new tests; 1950 unit / 1055 component / 68
+  integration-core / 115 e2e+api all pass; mypy clean; 40/40 Epic 1 acceptance criteria still pass.
+  THREE DEVIATIONS FROM THE STORY, all in the completion notes. (1) check_redis_reachable takes
+  host/port rather than RedisSettings -- build_trading_node holds IBKRSettings, and more importantly
+  a settings-shaped preflight can check a different Redis than the node connects to; it now reads
+  cache.database.host/port so the two cannot drift. (2) read_ibkr_connection_status was EXTRACTED to
+  a new src/core/live_connection_probe.py: adding the cache seam took live_node_builder.py to 515
+  lines against the repo's 500-line cap -- the exact risk the story's Judgment call #1 flagged. Pure
+  move, no behaviour change, no production importer (only its own suite, already named for it);
+  builder now 416 lines. A Story 1.6 surface touched by a 2.4 task -- flag at review if unwanted.
+  (3) The existing Epic 1 guard test_no_new_dependency_was_added_for_the_live_path correctly failed
+  on the new socket import; socket was added to its hand-curated stdlib allowlist WITH the reason
+  inline rather than switching the guard to sys.stdlib_module_names, because an auto-derived
+  allowlist would wave future imports through silently. Mutation testing per Epic 1 retro Action
+  Item #3 was done twice: .hex->str() in derive_trader_id failed 5 tests as designed, and the
+  use_instance_id proof is encoded as a permanent integration test rather than a one-off procedure.
+  Two live-Redis discoveries for Epics 3/4: cache writes are ASYNCHRONOUS (add() then keys() on the
+  same open adapter returns []; close() is what makes a write readable) and
+  CacheDatabaseAdapter.flush() is FLUSHDB, clearing the whole database rather than the trader
+  namespace -- so the tests derive trader ids from a fresh uuid4() instead of flushing. Story 2.2's
+  deferred model_copy item, pointed at this story, is resolved as NOT-TRIGGERED and re-pointed at
+  Story 2.5. NOT DONE deliberately: .env.example gained no REDIS_HOST/REDIS_PORT -- the file is
+  hook-protected and needs the one-off approval Story 1.2 used; defaults are correct without it, so
+  it is a documentation gap only, recorded in deferred-work.md.
+  Previously: 2026-08-19 (Story 2.4 created: backlog -> ready-for-dev. epic-2 stays in-progress:
+  2.1/2.2/2.3 done, 2.4 ready-for-dev, 2.5-2.8 backlog. File:
+  2-4-give-each-session-its-own-durable-engine-cache.md. Delivers the session-derived Nautilus
+  trader_id and the Redis-backed engine cache -- the phase's one hard cross-epic dependency, since
+  AR23's session-stable client order IDs are what E3 needs from it. Drafting executed the installed
+  nautilus-trader 1.220.0 rather than reading its docs, and four findings changed the story's shape.
+  (1) CacheDatabaseAdapter.__init__ HANGS FOREVER against an unreachable Redis -- exit 124 after 45s,
+  no exception, and DatabaseConfig(timeout=2) does not bound it. NautilusKernel builds that adapter
+  eagerly, so TradingNode(config=...) with Redis down would produce a silent unkillable-looking
+  start. Added AC #6 (a bounded stdlib-socket preflight before node construction); it is Epic 1 retro
+  Action Item #10's defect one layer down. (2) The whole of "a restarted process rejoins its own
+  state" rests on two silent third-party CacheConfig defaults, use_instance_id=False and
+  flush_on_start=False -- either flipping makes AC #4 false with no error anywhere. Added AC #7
+  (pin all three namespace-deciding fields explicitly, assert each by name), the same treatment
+  live_node_builder.py:235-241 already gives market_data_type. (3) TraderId.get_tag() splits on the
+  LAST hyphen and ClientOrderIdGenerator embeds that tag, so the short session id must use uuid.hex,
+  never str(uuid) -- a str() slip yields a VALID TraderId with a wrong 12-char tag and raises
+  nothing. (4) DatabaseConfig has no db/database-index field at 1.220.0, so AR11's REDIS_DB has
+  nowhere to go; the field ships but a non-zero value is refused rather than silently ignored.
+  Two structural constraints also fixed the file layout: live_node_builder.py is 493 lines against
+  the repo's 500-line cap, forcing the cache into its own module, and AR38's Nautilus-free rule for
+  the service layer forces the trader_id derivation into a second, framework-free one
+  (src/core/live_trader_id.py + src/core/live_cache.py). BLOCKERS the dev must clear first: Redis is
+  not running here (6379 closed, Docker daemon down, no brew redis) and Task 5 cannot be written
+  without it; .env.example is hook-protected, so any REDIS_HOST line there needs the same one-off
+  approval Story 1.2 used. Deferred-work item "model_copy bypasses validation", which Story 2.2
+  pointed at this story, is resolved as NOT-TRIGGERED here and re-pointed at Story 2.5.
+  Previously: 2026-08-19 (Story 2.3 code-reviewed -> done, closing it. epic-2 remains in-progress: 2.1 done,
   2.2 done, 2.3 done, 2.4-2.8 backlog. Three adversarial layers produced 42 raw findings, 26 after
   dedupe: 3 decisions / 15 patches / 7 deferred / 4 dismissed. ONE CRITICAL DEFECT SURVIVED THE
   STORY'S OWN MUTATION TESTING and was found here: transition()'s SELECT ... FOR UPDATE took the row
@@ -682,7 +739,7 @@ development_status:
   2-1-define-a-session-as-a-list-of-strategy-specifications: done
   2-2-create-a-named-session-with-an-immutable-specification: done
   2-3-move-a-session-between-states-through-one-guarded-path: done
-  2-4-give-each-session-its-own-durable-engine-cache: backlog
+  2-4-give-each-session-its-own-durable-engine-cache: review
   2-5-start-a-session-in-the-foreground-with-an-ordered-startup-sequence: backlog
   2-6-stop-a-session-without-ending-it-and-without-touching-positions: backlog
   2-7-keep-one-failing-strategy-from-taking-down-the-session: backlog

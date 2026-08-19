@@ -967,3 +967,69 @@ deferred. The five items below were deferred.
   narrows the gap but does not close it. The code review also found that the race test as written
   could not have caught the Critical defect anyway, because its loser uses a fresh `Session` whose
   identity map has never seen the row. Owner stays the Epic 2 retro.
+
+## Deferred from: story-2.4 (2026-08-19)
+
+**Resolves one item pointed at this story.** `deferred-work.md`, "Deferred from: story-2.2" —
+**`SessionSpec.model_copy(update=...)` bypasses `frozen=True` and the before-validator**, re-pointed
+here with the prediction that *"the durable engine cache gives a second code path that reads a
+`SessionSpec` back into memory."* **It does not.** This story reads a `UUID` and `RedisSettings` and
+constructs no `SessionSpec` anywhere; the Redis cache stores Nautilus's own engine objects, not the
+session spec. The predicted second path is **Story 2.5's runner**, which materialises the stored spec
+to build strategies. Re-pointed there, unchanged otherwise.
+
+New items:
+
+- **`REDIS_DB` cannot be honoured, and is refused rather than ignored.** `DatabaseConfig` at
+  nautilus-trader 1.220.0 exposes only `type, host, port, username, password, ssl, timeout` — no
+  database-index field — and the config is msgpack-encoded straight into the Rust
+  `RedisCacheDatabase`, so there is no side channel either. `RedisSettings.validate_database_index_is_reachable`
+  therefore raises on any non-zero value. Sessions are still isolated from each other by the
+  `trader_id` key namespace, so nothing is lost functionally; what is lost is the ability to run two
+  *unrelated* deployments against one Redis on different db indexes. **Action:** if a later Nautilus
+  version adds the field, relax the validator and pass it through. Until then the workaround is a
+  separate Redis instance on a different `REDIS_PORT`.
+
+- **The 8-hex `trader_id` tag is a truncation, and the collision bound is disclosed rather than
+  engineered away.** `derive_trader_id` takes `session_id.hex[:8]` per AR10's `PAPER-<short-session-id>`.
+  That is 2**32 values: birthday bound ~1 in 10**7 at 100 sessions, ~1 in 10**4 at 1000. A collision
+  would put two sessions in one Redis namespace — the exact contamination this story prevents —
+  and nothing detects it, because the derivation is pure and has no view of other sessions.
+  `TraderId` accepts the full 32-character hex, so the fix is a one-line change plus a namespace
+  migration. **Action for a future high-volume story:** either widen to the full hex, or add a
+  uniqueness check at `live create` against existing sessions' derived tags. Not worth either today.
+
+- **The `msgpack` cache encoding is now load-bearing and unversioned.** `build_cache_config` pins
+  `encoding="msgpack"`. Changing it later makes every key already written unreadable, with no
+  migration path and no version marker in the namespace to detect the mismatch. **Action:** if the
+  encoding is ever changed, treat it as a namespace-breaking change — bump something in the
+  `trader_id` derivation so old and new state cannot be confused.
+
+- **`REDIS_URL` remains in `.env.example` and `docker-compose.yml`, read by nothing.** It predates
+  this phase; a repo-wide grep for `redis` across `src/` and `tests/` found zero consumers before
+  this story. `RedisSettings` uses `REDIS_HOST`/`REDIS_PORT` instead, and `docker-compose.yml` now
+  sets both. `REDIS_URL` was left in place because removing it from `.env.example` requires the
+  one-off approval that hook-protected file needs. **Action:** remove it, or teach `RedisSettings`
+  to parse it, next time `.env.example` is legitimately edited. Two spellings of one setting is a
+  trap for whoever changes the port.
+
+- **`.env.example` documents no Redis host/port.** Same cause: `.claude/hooks/protect-files.sh:21`
+  blocks every `.env*` path. The defaults (`127.0.0.1:6379`) are correct for a local run, so this is
+  a documentation gap, not a functional one. **Action:** add `REDIS_HOST` / `REDIS_PORT` next to the
+  existing `REDIS_URL` when an approved `.env.example` edit is happening anyway.
+
+- **`read_ibkr_connection_status` moved to `src/core/live_connection_probe.py`.** Not deferred work —
+  recorded here because it is a Story 1.6 surface that moved during a Story 2.4 task. Adding the
+  cache seam took `live_node_builder.py` to 515 lines against this repo's 500-line limit, and the
+  connection reader was the part least about assembling a node. Pure move, no behaviour change; its
+  suite (`tests/component/core/test_live_connection_probe.py`) was already named for it and needed
+  one import line changed. The `(host, port, client_id)` coupling to `live_node_builder` that
+  originally justified their sharing a module is now a comment in both docstrings rather than an
+  adjacency. **Action:** none, unless a reviewer disagrees with the split.
+
+- **Nothing enforces Redis's disposability yet (AC #5 is documentation only).** `live_cache.py` and
+  `docs/agent/nautilus.md` both state that Redis is a rebuildable cache and IBKR is authoritative on
+  conflict, but no code detects or resolves a divergence between cached and broker state. This is by
+  design — AC #5 asks only that the design be inspectable, and startup reconciliation is Epic 4
+  (FR35, AR25). **Action for Epic 4:** the claim in those two docstrings becomes false-by-omission if
+  Epic 4 ships without it; check them when the reconcile path lands.
