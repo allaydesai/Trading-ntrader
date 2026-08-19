@@ -38,7 +38,10 @@ class Trade(Base):
 
     Attributes:
         id: Internal database primary key
-        backtest_run_id: Foreign key to backtest_runs table
+        backtest_run_id: Foreign key to backtest_runs table (nullable — a
+            session-owned trade has none until the session is sealed)
+        session_id: Foreign key to trading_sessions.id (nullable — a
+            backtest-owned trade has none)
         instrument_id: Trading symbol (e.g., "AAPL", "EURUSD")
         trade_id: Nautilus Trader trade ID
         venue_order_id: Exchange-assigned order ID
@@ -78,11 +81,24 @@ class Trade(Base):
     # Primary key
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
 
-    # Foreign key to backtest_runs
-    backtest_run_id: Mapped[int] = mapped_column(
+    # Foreign key to backtest_runs — nullable since Story 2.2: a session-owned
+    # trade has no backtest run until the session is sealed (Epic 5).
+    backtest_run_id: Mapped[Optional[int]] = mapped_column(
         BigInteger,
         ForeignKey("backtest_runs.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
+        index=True,
+    )
+
+    # Foreign key to trading_sessions.id (BigInteger), NOT trading_sessions.session_id
+    # (UUID) — mirrors backtest_run_id -> backtest_runs.id and is half the width on
+    # this table's largest column. No ondelete: nothing deletes a session this phase,
+    # and a cascade would let a session delete destroy trade history that is the
+    # system of record; Postgres' default NO ACTION refuses the delete instead.
+    session_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger,
+        ForeignKey("trading_sessions.id"),
+        nullable=True,
         index=True,
     )
 
@@ -123,13 +139,18 @@ class Trade(Base):
     )
 
     # Relationships
-    backtest_run: Mapped["BacktestRun"] = relationship("BacktestRun", back_populates="trades")
+    backtest_run: Mapped[Optional["BacktestRun"]] = relationship(
+        "BacktestRun", back_populates="trades"
+    )
 
     # Table constraints
     __table_args__ = (
         CheckConstraint("quantity > 0", name="positive_quantity"),
         CheckConstraint("entry_price > 0", name="positive_entry_price"),
         CheckConstraint("exit_price IS NULL OR exit_price > 0", name="positive_exit_price"),
+        CheckConstraint(
+            "backtest_run_id IS NOT NULL OR session_id IS NOT NULL", name="chk_trades_owner"
+        ),
         Index("idx_trades_backtest_time", "backtest_run_id", "entry_timestamp"),
     )
 

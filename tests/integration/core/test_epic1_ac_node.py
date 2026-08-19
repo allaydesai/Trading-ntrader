@@ -56,8 +56,15 @@ HISTORICAL_CLIENT_ID = 1
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 #: Every third-party top-level module the live core is allowed to import. AR3's
-#: "no new dependency" is this set staying closed.
-PERMITTED_THIRD_PARTY = frozenset({"nautilus_trader", "structlog", "ibapi"})
+#: "no new dependency" is this set staying closed to *undeclared* packages —
+#: not to packages the project already depends on. Story 2.2 widened it: `ntrader
+#: live create` persists a session through the same SQLAlchemy repository stack
+#: `src/db` already uses, and validates its spec through the same Pydantic
+#: models `src/models` already uses — both already-declared dependencies
+#: (`pyproject.toml`), neither a new one.
+PERMITTED_THIRD_PARTY = frozenset(
+    {"nautilus_trader", "structlog", "ibapi", "pydantic", "sqlalchemy"}
+)
 
 #: The settings the subprocess probes below build a node from, inlined into the
 #: probe source so a child interpreter needs nothing from this module.
@@ -418,7 +425,7 @@ def test_no_new_dependency_was_added_for_the_live_path():
     # `ibapi` has no requirement of its own and must not acquire one: it arrives
     # through that extra, which is exactly what "no new dependency" means here.
     assert "ibapi" not in distributions
-    for distribution in ("structlog", "click", "rich"):
+    for distribution in ("structlog", "click", "rich", "pydantic", "sqlalchemy"):
         assert distribution in distributions, f"{distribution} is not a declared dependency"
 
 
@@ -435,5 +442,6 @@ _STDLIB_AND_FIRST_PARTY = frozenset(
         "src",
         "time",
         "typing",
+        "uuid",
     }
 )

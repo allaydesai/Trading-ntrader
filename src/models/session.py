@@ -28,9 +28,11 @@ and none of them is a guarantee this module makes:
 3. The specs are **not hashable**. ``frozen=True`` generates a ``__hash__``
    over the field values, and the ``parameters`` dict makes it raise
    ``TypeError``, so a spec cannot go in a ``set`` or serve as a dict key.
-4. ``schema_version`` is *recorded, not enforced*. Nothing branches on it and
-   no reader exists yet; it is written so a future reader can. The gate itself
-   belongs with the read path in Story 2.2.
+4. ``schema_version`` is enforced on the way *in*, not on the way out.
+   ``from_stored`` refuses a payload whose version is newer than
+   ``SPEC_SCHEMA_VERSION`` or is not an integer, but nothing downstream branches
+   on the version to reinterpret an *older* payload — there is only one version
+   so far. A future v2 must add that branch itself.
 
 "JSON-losslessly round-trippable" above means the
 ``model_dump_json()``/``model_validate_json()`` pair specifically.
@@ -40,8 +42,13 @@ and none of them is a guarantee this module makes:
 
 What none of the above threatens is the persisted record: the immutability
 FR14 needs is enforced by there being no write-back path to a stored spec's
-JSONB column. That path does not exist yet — Story 2.2 owns it, and owns
-keeping it write-once.
+JSONB column. Story 2.2 added the write path (``TradingSessionRepository`` and
+its sync twin) and kept it write-once — those repositories expose ``create``
+and three finders, and no setter of any kind.
+
+The stored form is ``SessionSpec.to_stored()`` / ``SessionSpec.from_stored()``:
+one sanctioned serialiser and one sanctioned reader, so the ``mode="json"`` rule
+and the version gate each live in exactly one greppable function.
 """
 
 from collections.abc import Sequence
@@ -53,6 +60,12 @@ from pydantic import ValidationError as PydanticValidationError
 
 if TYPE_CHECKING:
     from src.core.strategy_registry import StrategyDefinition
+
+
+#: Written once into a session's stored JSONB payload and read forever. Lets a
+#: future field addition tell old rows from new. See ``SessionSpec.from_stored``
+#: for the refusal this constant gates.
+SPEC_SCHEMA_VERSION = 1
 
 
 class SessionStatus(StrEnum):
@@ -327,7 +340,9 @@ class SessionSpec(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: int = Field(default=1, ge=1, description="Spec schema version")
+    schema_version: int = Field(
+        default=SPEC_SCHEMA_VERSION, ge=1, description="Spec schema version"
+    )
     strategies: tuple[StrategySpec, ...] = Field(
         ..., min_length=1, description="Ordered, non-empty collection of strategy specs"
     )
@@ -384,3 +399,66 @@ class SessionSpec(BaseModel):
                     seen.add(key)
                     ordered.append(key)
         return tuple(ordered)
+
+    def to_stored(self) -> dict[str, Any]:
+        """Serialise for the ``spec`` JSONB column — the one sanctioned writer.
+
+        JSON-mode dumping and nothing else. A bare ``model_dump()`` is
+        python-mode and preserves ``Decimal``, which a JSONB column cannot
+        accept (``TypeError: Object of type Decimal is not JSON serializable``
+        — verified against this repo's live Postgres). JSON mode stringifies
+        it instead, and ``from_stored`` restores the ``Decimal`` by re-running
+        ``StrategySpec``'s ``mode="before"`` validator, which re-coerces every
+        parameter through the strategy's own param model.
+
+        Returns:
+            A JSON-safe dict, ready for ``json.dumps`` or a JSONB column.
+        """
+        return self.model_dump(mode="json")
+
+    @classmethod
+    def from_stored(cls, payload: dict[str, Any]) -> "SessionSpec":
+        """Reconstruct from a stored JSONB payload, refusing an unreadable version.
+
+        Args:
+            payload: The raw dict read back from the ``spec`` column.
+
+        Returns:
+            The reconstructed, fully re-validated ``SessionSpec``.
+
+        Raises:
+            ValueError: ``payload`` is not a dict, or its ``schema_version`` is
+                not an integer, or it is newer than this build understands. A
+                session spec is frozen for the life of a multi-week forward
+                test; reading it wrong and continuing would corrupt the sample
+                undetectably, so this refuses loudly instead of guessing.
+                Every one of those three refusals is a ``ValueError`` by
+                design: a hand-edited JSONB row is the case this gate exists
+                for, and it must never surface as a bare ``KeyError`` (hence
+                ``payload.get(...)``, never ``payload[...]``) or as a bare
+                ``TypeError`` (hence the ``isinstance`` check before ``>``).
+            ValidationError: The payload fails ``SessionSpec``'s own
+                validation once the version gate passes.
+        """
+        if not isinstance(payload, dict):
+            raise ValueError(
+                f"Expected a dict read from the spec column, got {type(payload).__name__}."
+            )
+        version = payload.get("schema_version", SPEC_SCHEMA_VERSION)
+        # `>` against a str/None/float raises TypeError — the same illegible
+        # failure the `.get(...)` default above exists to prevent, and equally
+        # reachable from a hand-edited JSONB row. `bool` is excluded explicitly
+        # because it is an int subclass, so `True` would otherwise sail through
+        # as version 1.
+        if not isinstance(version, int) or isinstance(version, bool):
+            raise ValueError(
+                f"Stored spec has a non-integer schema_version={version!r}. Refusing to "
+                "read a payload whose version cannot be compared."
+            )
+        if version > SPEC_SCHEMA_VERSION:
+            raise ValueError(
+                f"Stored spec has schema_version={version}, but this build only "
+                f"understands up to schema_version={SPEC_SCHEMA_VERSION}. Refusing to "
+                "guess at a newer schema rather than silently mis-reading it."
+            )
+        return cls.model_validate(payload)

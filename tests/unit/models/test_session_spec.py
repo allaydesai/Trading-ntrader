@@ -776,3 +776,152 @@ class TestKnownLimits:
         assert SessionSpec(strategies=(_spec(),)).schema_version == 1
         with pytest.raises(ValidationError):
             SessionSpec(strategies=(_spec(),), schema_version=0)
+
+
+class TestStoredForm:
+    """Story 2.2, AC #6 and #10: the to_stored()/from_stored() persistence pair."""
+
+    @pytest.mark.unit
+    def test_from_stored_of_to_stored_round_trips_equal(self):
+        # Arrange
+        spec = SessionSpec(strategies=(_spec(overrides={"fast_period": 12}),))
+
+        # Act
+        restored = SessionSpec.from_stored(spec.to_stored())
+
+        # Assert
+        assert restored == spec
+
+    @pytest.mark.unit
+    def test_decimal_survives_the_stored_round_trip(self):
+        # Arrange
+        spec = SessionSpec(strategies=(_spec(overrides={"fast_period": 12}),))
+
+        # Act
+        restored = SessionSpec.from_stored(spec.to_stored())
+
+        # Assert
+        assert type(restored.strategies[0].parameters["portfolio_value"]) is Decimal
+        assert restored.strategies[0].parameters["portfolio_value"] == Decimal("1000000")
+
+    @pytest.mark.unit
+    def test_to_stored_is_json_dumpable_without_raising(self):
+        """The guard that the serialiser is mode="json", not a bare model_dump()."""
+        import json
+
+        # Arrange
+        spec = SessionSpec(strategies=(_spec(),))
+
+        # Act & Assert — must not raise TypeError on Decimal.
+        json.dumps(spec.to_stored())
+
+    @pytest.mark.unit
+    def test_to_stored_bare_model_dump_would_raise_on_decimal(self):
+        """Documents *why* to_stored exists: bare model_dump() cannot be JSON-dumped."""
+        import json
+
+        # Arrange
+        spec = SessionSpec(strategies=(_spec(),))
+
+        # Act & Assert
+        with pytest.raises(TypeError):
+            json.dumps(spec.model_dump())
+
+    @pytest.mark.unit
+    def test_from_stored_refuses_a_too_new_schema_version(self):
+        # Arrange
+        spec = SessionSpec(strategies=(_spec(),))
+        payload = spec.to_stored()
+        payload["schema_version"] = 999
+
+        # Act & Assert
+        with pytest.raises(ValueError, match="schema_version"):
+            SessionSpec.from_stored(payload)
+
+    @pytest.mark.unit
+    def test_from_stored_accepts_a_payload_with_no_schema_version_key(self):
+        """A hand-written or pre-versioning row must not raise a bare KeyError."""
+        # Arrange
+        spec = SessionSpec(strategies=(_spec(),))
+        payload = spec.to_stored()
+        del payload["schema_version"]
+
+        # Act
+        restored = SessionSpec.from_stored(payload)
+
+        # Assert
+        assert restored.schema_version == 1
+
+    @pytest.mark.unit
+    def test_from_stored_rejects_a_non_dict_payload(self):
+        # Act & Assert
+        with pytest.raises(ValueError):
+            SessionSpec.from_stored("not-a-dict")
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize("version", ["2", "1", None, 1.5, [1]])
+    def test_from_stored_refuses_a_non_integer_schema_version_legibly(self, version):
+        """A hand-edited JSONB row must refuse with ValueError, never a bare TypeError.
+
+        ``>`` against a str/None/float raises ``TypeError``, which is the same
+        class of illegible failure the ``payload.get(...)`` default exists to
+        prevent. The gate must name the offending value instead.
+        """
+        # Arrange
+        payload = SessionSpec(strategies=(_spec(),)).to_stored()
+        payload["schema_version"] = version
+
+        # Act & Assert
+        with pytest.raises(ValueError, match="schema_version") as excinfo:
+            SessionSpec.from_stored(payload)
+        assert not isinstance(excinfo.value, TypeError)
+
+    @pytest.mark.unit
+    def test_from_stored_refuses_a_boolean_schema_version(self):
+        """``True`` is an ``int`` subclass and would otherwise pass as version 1."""
+        # Arrange
+        payload = SessionSpec(strategies=(_spec(),)).to_stored()
+        payload["schema_version"] = True
+
+        # Act & Assert
+        with pytest.raises(ValueError, match="schema_version"):
+            SessionSpec.from_stored(payload)
+
+    @pytest.mark.unit
+    def test_written_schema_version_is_sourced_from_the_module_constant(self):
+        """The writer and the read gate must not be able to drift.
+
+        ``SPEC_SCHEMA_VERSION`` gates reads; the field default is what every
+        written row carries. Two independent literals would let a future bump
+        stamp new rows with a stale version the gate then never fires on.
+        """
+        # Act
+        spec = SessionSpec(strategies=(_spec(),))
+
+        # Assert
+        assert spec.schema_version == session_module.SPEC_SCHEMA_VERSION
+        assert spec.to_stored()["schema_version"] == session_module.SPEC_SCHEMA_VERSION
+
+        # The two assertions above are necessary but NOT sufficient: while
+        # SPEC_SCHEMA_VERSION == 1, they pass identically against a hard-coded
+        # `default=1` — verified by mutation. The coupling is a structural
+        # property, so assert it structurally, on the source.
+        module = ast.parse(Path(session_module.__file__).read_text(encoding="utf-8"))
+        session_spec_class = next(
+            node
+            for node in module.body
+            if isinstance(node, ast.ClassDef) and node.name == "SessionSpec"
+        )
+        field_call = next(
+            node.value
+            for node in session_spec_class.body
+            if isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == "schema_version"
+        )
+        default = next(kw.value for kw in field_call.keywords if kw.arg == "default")
+        assert isinstance(default, ast.Name) and default.id == "SPEC_SCHEMA_VERSION", (
+            "SessionSpec.schema_version must default to the SPEC_SCHEMA_VERSION constant, not a "
+            "second literal — otherwise a future bump stamps rows with a version the gate in "
+            "from_stored() never fires on."
+        )
