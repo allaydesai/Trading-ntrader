@@ -677,3 +677,95 @@ Non-blocking findings from the three-layer adversarial review. Blocking items (2
   footprint. **Action for Story 2.2's CLI:** decide whether to validate override keys against the
   param model's field set before calling `from_overrides`, so a typo'd `--param` flag fails loudly
   instead of silently taking the default.
+
+## Deferred from: code review of story-2.1 (2026-08-17)
+
+Three adversarial layers (Blind Hunter, Edge Case Hunter, Acceptance Auditor); 53 raw findings → 35
+after dedup. Every item below was re-verified by execution before being recorded here.
+
+- **`resolve_live_bar_types` accepts a lowercase instrument id.** `src/core/live_market_data.py:205`
+  dedups on `str(bar_type).upper()` but appends the original `BarType`, and `BarType.from_str`
+  upper-cases only the aggregation — so `aapl.nasdaq-1-minute-last-external` survives resolution
+  intact and `instrument_ids_for` yields `frozenset({'aapl.nasdaq'})`. The module's own comment at
+  `:199-204` names the consequence: "a lowercase id IBKR will not resolve — a silently dead
+  subscription". Pre-existing, and reachable today with a single strategy. Story 2.1's
+  `subscription_bar_types` sits directly on top of it. **Action:** decide where the canonical form is
+  established — in `resolve_live_bar_types` (fixes every caller at once) or per-caller.
+
+- **`StrategyRegistry.clear()` empties the registry permanently for the life of the process.**
+  `src/core/strategy_registry.py:271-288` — `clear()` resets `_discovered=False`, so `get()` re-runs
+  `discover()`, but `importlib.import_module` returns the already-cached modules and no
+  `@register_strategy` decorator re-fires. Every subsequent lookup of a perfectly valid strategy then
+  fails with the actively misleading `Unknown strategy 'sma_crossover'. Registered strategies: .`
+  No current test calls `clear()`, but `make test-unit` runs xdist-parallel with shared workers, so
+  one future registry-isolating test would poison every co-located test in that worker.
+  **Action:** make `clear()` re-register from a retained snapshot, or drop the `_discovered` reset.
+
+- **A strategy module failing to import with anything other than `ImportError` escapes uncaught.**
+  `discover()` catches only `ImportError` (`src/core/strategy_registry.py:271-288`) and
+  `_lookup_strategy` catches only `KeyError` (`src/models/session.py:69`), so a `SyntaxError` or
+  `RuntimeError` at import time propagates out of a pydantic constructor unconverted. 4 of the 7
+  registered param models live in `src/core/strategies/custom/`, a git submodule this repo does not
+  control, which makes a broken checkout the realistic trigger. **Action for Story 2.2:** decide
+  whether spec construction should surface submodule breakage as a `ValidationError`.
+
+- **Re-validating a persisted spec against today's param model is lossy and brittle.**
+  `src/models/session.py:103` re-coerces every stored row through the current `param_model` with
+  pydantic's default `extra="ignore"`. Consequences, all verified: a param field removed in a later
+  build is silently dropped when a **sealed** session's record is read back; tightening any param
+  constraint makes previously-sealed sessions unloadable (`fast_period=250` row vs a later `le=200`);
+  and renaming or removing a strategy makes every referencing row permanently unloadable.
+  `schema_version` cannot mediate any of this — nothing branches on it. **Action for Story 2.2/2.4:**
+  decide whether a sealed session's spec is re-validated on read at all, or read as stored.
+
+- **`json.dumps(spec.model_dump())` raises on `Decimal`.** Verified: `TypeError: Object of type
+  Decimal is not JSON serializable`. `model_dump()` is python-mode and preserves `Decimal`, so the
+  module's "JSON-losslessly round-trippable" property holds only through the
+  `model_dump_json()`/`model_validate_json()` pair. **Action for Story 2.2:** persist via
+  `model_dump_json()` or `model_dump(mode="json")` — never bare `model_dump()` into a JSONB column.
+
+- **Validator errors carry an empty `loc`.** `src/models/session.py:160` is a model-level
+  `mode="before"` validator, so pydantic attaches its errors to the model root: an unknown
+  `strategy_id`, an invalid `parameters` value, and a refused `bar_types` entry are indistinguishable
+  by location. A CLI mapping `err["loc"][0]` to the offending flag gets `IndexError` on an empty
+  tuple. Note `bar_types=()` *does* produce a properly located `too_short`, so the error shape is
+  inconsistent depending on which rule rejected the input. Splitting into field validators is not the
+  answer — the Dev Notes rejected it for sound reasons. **Action for Story 2.2's CLI:** map on message
+  content, or have the model raise with an explicit `loc`. **Related, from the same review:** the CLI
+  must catch `(ValidationError, ValueError)`, not `ValidationError` alone — `StrategySpec.from_overrides`
+  is a factory that runs `build_strategy_params` before pydantic, so resolution failures surface as a
+  plain `ValueError` by design (decided 2026-08-18).
+
+- **`SessionStatus` has no terminal failure state.** `src/models/session.py:46-50` — a session whose
+  node died on a Gateway drop records the same `stopped` as one the operator halted deliberately, so
+  any Epic 5 comparison filtering on `stopped` silently mixes complete runs with truncated ones, and
+  a truncated run is not comparable to a backtest. AC #6 mandates exactly these four values, so this
+  is not a Story 2.1 defect. **Action at the Epic 2 retro / Story 2.3:** decide whether the failure
+  information lives in a fifth status value or a separate nullable column.
+
+- **Unit-tier tests transitively load Nautilus.** Every `StrategySpec` construction in
+  `tests/unit/models/test_session_spec.py` triggers the lazy `src.core.live_market_data` import, which
+  pulls in `nautilus_trader` — contradicting the documented "unit = parallel, no Nautilus" tier rule,
+  in the same file whose `TestImportPurity` exists to assert the module does not do this. The tests
+  pass in 0.82s and need no broker, network, or DB, so AC #9 is satisfied. **Action:** a project-level
+  call on whether the unit tier's "no Nautilus" rule means "no top-level import" or "no import at
+  all"; the answer also settles how `TestImportPurity` should be written.
+
+- **Override `SessionSpec.model_copy` to re-validate.** Verified: `sp.model_copy(update={"strategies":
+  ()})` yields a `SessionSpec` with **zero** strategies, violating AC #1's non-empty invariant, and the
+  same trick sets an unregistered `strategy_id` — `model_copy(update=)` skips both `frozen=True` and the
+  `mode="before"` validator. Deferred by decision on 2026-08-18: the hole is now disclosed in the module
+  docstring and pinned by a test, and overriding `model_copy` in this model alone would diverge from
+  every other pydantic model in `src/models/`. No consumer derives a modified spec today.
+  **Action for Story 2.2:** decide alongside the repository write path, where a real mutation path first
+  exists and FR14's "immutable for the session's whole life" becomes enforceable rather than advisory.
+
+- **Add a `schema_version` read gate.** `src/models/session.py:227` records the field but nothing branches
+  on it, there is no upper bound (`schema_version=99` loads clean), and pydantic's default
+  `extra="ignore"` means a row written by a newer build has its unknown fields silently dropped — so the
+  field cannot do the job its docstring claimed. Deferred by decision on 2026-08-18: the docstring is
+  narrowed to "recorded so a future reader can branch on it", because a gate written now would guess at a
+  read path Story 2.2 has not defined. Note the same review's `extra="forbid"` patch supplies most of the
+  intended behaviour for free — a newer row's unknown fields then fail loudly instead of vanishing.
+  **Action for Story 2.2:** define the gate when the read path lands, and decide whether an unrecognised
+  version is a hard refusal or a best-effort read.

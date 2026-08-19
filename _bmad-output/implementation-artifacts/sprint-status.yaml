@@ -36,7 +36,48 @@
 
 generated: 2026-08-03
 last_updated: >-
-  2026-08-17 (Story 2.1 implemented -> review. ready-for-dev -> in-progress -> review, same session as
+  2026-08-18 (Story 2.1 code-reviewed -> done. Three adversarial layers (Blind Hunter, Edge Case
+  Hunter, Acceptance Auditor); 53 raw findings -> 35 after dedup: 6 decisions, 17 patches, 11
+  deferred, 5 dismissed. Every finding was re-verified by execution before triage, and two agent
+  claims were refuted and dropped (the tuple-has-no-append tests ARE load-bearing — a list field
+  makes them fail; and StrategyRegistry.get raises only KeyError on the miss path, with no alias
+  shadowing a canonical name across all 28 entries). Allay ruled on all 6 decisions in one batch.
+  The two load-bearing behaviour changes: (1) bar types are now stored in canonical UPPER-CASE by
+  _resolve_bar_types, because BarType.from_str preserves instrument-id case and
+  subscription_bar_types appended the caller's original string — so a lowercase entry won the
+  cross-strategy dedup and reached load_ids as an id IBKR cannot resolve, which
+  live_market_data.py:199-204 names in its own comment as "a silently dead subscription"; verified
+  before (frozenset({'aapl.nasdaq'})) and after (frozenset({'AAPL.NASDAQ'})). Canonicalising follows
+  the same store-canonical rule AC #2 already sets for strategy_id. (2) SessionSpec now refuses two
+  entries naming one strategy — they share Nautilus' order_id_tag and Trader.add_strategy raises
+  RuntimeError at node start; refusing at config time is reversible where the alternative
+  (a per-entry instance tag on a frozen, persisted model) is a Story 2.5 guess. Six further code
+  holes closed: a whitespace-only strategy_id constructed a fully unvalidated spec (no registry, no
+  params, no bar types); _resolve_bar_types' list(raw) exploded a bare string into one bar type per
+  character and destroyed the purpose-built message live_market_data.py:147-153 exists to give;
+  non-sequence bar_types escaped as raw TypeError; extra="forbid" now rejects a mistyped model-level
+  key that used to yield a silent all-defaults spec; "or {}" no longer swallows falsy non-dict
+  parameters; and from_overrides resolves the identifier once through _lookup_strategy, fixing a
+  fuzzy-id divergence (sma-crossover worked via the constructor, failed via from_overrides) and
+  pre-checking param_model is None so its remediation message is reachable instead of an
+  AttributeError from strategy_factory.py:344. Seven test-strength gaps closed, each of which
+  previously could not fail: bar-type refusals now assert the resolver's own message; the round trip
+  asserts byte-identical JSON (Decimal("10.0") == Decimal("10") made the old check blind to exponent
+  loss); the credential test uses a sentinel instead of live env behind "if value:" (vacuous in CI)
+  and adds username plus a parameters-key scan; import purity is measured in a subprocess (the AST
+  proxy passes for a src.* import that transitively loads nautilus); the _settings_map link is now
+  falsifiable via injected settings that differ from the param-model defaults (the repo's real
+  settings equal them, so the old assertion passed even if that step were deleted); AC #3's
+  never-calls-get_settings clause is a test rather than a one-off grep; and param_model is None has
+  coverage. Docs corrected in the safety-relevant direction per the Epic 1 retro: the module
+  docstring now discloses four limits (in-place parameters mutation, model_copy(update=) bypassing
+  validation, specs not being hashable, schema_version recorded-not-enforced) each pinned by a test,
+  and no longer states a Story 2.2 guarantee in the present tense. Baseline 1743 -> 1780 passed
+  (+37), zero regressions; format/lint clean; import purity re-confirmed ([] leaked). Deferred: 11
+  items in deferred-work.md, notably the pre-existing root of the casing bug —
+  resolve_live_bar_types itself returns the un-canonicalised BarType, so a single-strategy lowercase
+  entry still yields a lowercase load_id for every other caller. Previously: 2026-08-17 (Story 2.1
+  implemented -> review. ready-for-dev -> in-progress -> review, same session as
   drafting. Built exactly to the Dev Notes' pre-verified design with no deviation: src/models/session.py
   (SessionSpec, StrategySpec, SessionStatus, three lazy-import helpers) plus
   tests/unit/models/test_session_spec.py (25 tests, one per AC-level behaviour). TDD Red confirmed
@@ -77,10 +118,12 @@ last_updated: >-
   which does not exist — the real symbol is StrategyLoader.build_strategy_params() in the same
   module. Five judgment calls are flagged in the story for the Epic 2 retro (tuple-not-list,
   bar-type validation folded in, schema_version on SessionSpec, from_overrides classmethod,
-  subscription_bar_types). AC #4 also closes the deferred-work item that flagged
-  IBKRSettings.model_dump()'s credential leak as going live "the moment Epic 2 persists session
-  configuration" — closed by construction (the spec has no field those values could occupy); the
-  settings-side behaviour itself remains deferred. Epic 1 retro action items 4-10 are Story 2.5
+  subscription_bar_types). AC #4 does NOT close the deferred-work item that flagged
+  IBKRSettings.model_dump()'s credential leak: that item's trigger — "the moment Epic 2 persists
+  session configuration" — has not arrived, because nothing persists anything until Story 2.2. What
+  AC #4 establishes is narrower and forward-looking: the spec has no field those values could
+  occupy, so when persistence does land it cannot leak them through this model. The item at
+  deferred-work.md:38-43 remains open and untouched. Epic 1 retro action items 4-10 are Story 2.5
   constraints, not 2.1 ones, and travel forward.)
 
   2026-08-17 (Epic 1 retrospective completed — documentation-driven per Allay's direction: synthesized
@@ -420,7 +463,7 @@ development_status:
   # trades.backtest_run_id → nullable + CHECK. run_type/session_id aren't consumed until
   # E5/E3 — deliberate, self-justified exception to epic-scoped schema change.
   epic-2: in-progress
-  2-1-define-a-session-as-a-list-of-strategy-specifications: review
+  2-1-define-a-session-as-a-list-of-strategy-specifications: done
   2-2-create-a-named-session-with-an-immutable-specification: backlog
   2-3-move-a-session-between-states-through-one-guarded-path: backlog
   2-4-give-each-session-its-own-durable-engine-cache: backlog
