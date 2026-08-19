@@ -769,3 +769,84 @@ after dedup. Every item below was re-verified by execution before being recorded
   intended behaviour for free — a newer row's unknown fields then fail loudly instead of vanishing.
   **Action for Story 2.2:** define the gate when the read path lands, and decide whether an unrecognised
   version is a hard refusal or a best-effort read.
+
+## Deferred from: story-2.2 (2026-08-19)
+
+- **`src/models/trade.py`'s Pydantic `Trade`/`TradeCreate` still declare `backtest_run_id: int`
+  (required).** The ORM (`src/db/models/trade.py`) now allows a NULL `backtest_run_id` for a
+  session-owned trade (this story's migration and CHECK constraint), but the domain model was
+  deliberately left untouched — nothing writes a session-owned trade until Epic 3, and
+  `src/api/rest/trades.py` only ever queries `WHERE backtest_run_id == <id>`, so a NULL row can
+  never reach this Pydantic model this phase. Widening it now would be Epic 3's change made blind,
+  before the shape a session-owned trade actually needs is known. **Action for Epic 3:** widen
+  `backtest_run_id` to `Optional[int]` and add `session_id` alongside it when the order-execution
+  path starts writing session-owned trades (Story 3.6).
+
+- **`SessionSpec.model_copy(update=...)` still bypasses `frozen=True` and the `mode="before"`
+  validator.** Re-recorded from the Story 2.1 review, which pointed the decision at this story's
+  repository write path. That path now exists (`SyncTradingSessionRepository.create` /
+  `TradingSessionRepository.create`) and takes a `SessionSpec.to_stored()` dict, immediately
+  serialised — so a `model_copy`-derived spec still has no way to reach a stored row without
+  passing `SessionSpec`'s own validation again on the way through `from_overrides`/construction.
+  The hole stays open and disclosed in the module docstring, pinned by
+  `TestKnownLimits::test_model_copy_update_bypasses_validation`. **Action for Story 2.4:** revisit
+  once the durable engine cache gives a second code path that reads a `SessionSpec` back into
+  memory — that is the first place a `model_copy`-derived spec could plausibly originate from.
+
+- **`resolve_live_bar_types` still returns the un-canonicalised `BarType`.** Re-verified against
+  the current `src/core/live_market_data.py:154-208`: the dedup key at line ~198
+  (`key = str(bar_type).upper()`) is canonical, but `resolved.append(bar_type)` two lines later
+  appends the *original* `BarType` — so a single-strategy lowercase entry (e.g.
+  `aapl.nasdaq-1-minute-last-external`) still parses, dedups against itself correctly, and is
+  returned lowercase. `StrategySpec._resolve_bar_types` (Story 2.1) papers over this for every spec
+  built through pydantic by upper-casing the *string form* after the fact, and this story's CLI
+  passes `--bar-type` values through that same path — so `ntrader live create` is not exposed to
+  it. The root cause is still open for any future caller that calls
+  `resolve_live_bar_types` directly rather than through `StrategySpec`. **Action:** unchanged from
+  the Story 2.1 review — decide whether to fix it at the root (`resolve_live_bar_types` itself) so
+  every caller is covered at once, or continue relying on each caller's own canonicalisation.
+
+## Deferred from: code review of story-2.2 (2026-08-19)
+
+Three adversarial layers produced 40 raw findings; 10 independent skeptics refuted 24 and confirmed
+14. No critical, high or medium finding survived verification. The three items below are real but
+were judged not actionable inside this story.
+
+- **Both new repository classes have zero CI-gating test coverage.** Every test of
+  `TradingSessionRepository` and `SyncTradingSessionRepository` lives in `tests/integration/db/`,
+  which `.github/workflows/ci.yml` `--ignore`s on *both* the integration job (:168) and the coverage
+  job (:238); the unit-tier CLI tests replace `SyncTradingSessionRepository` with a `MagicMock`, so
+  neither repository body nor the `live.py`→repository call contract is verified on a PR. `live.py`'s
+  `create()` itself *is* unit-covered, and the uncovered surface is ~44 executable statements, so the
+  effect on the `--cov-fail-under=64` gate is negligible. The root cause — the repo-wide `--ignore` —
+  is pre-existing and not this story's doing. The story's own Testing Standards are internally
+  inconsistent here: they state "anything that must gate a PR belongs in the unit tier" (which is why
+  AC #13 forces the migration guard into `tests/unit/db/`), then route all repository tests to the
+  ignored directory. **Action:** the repo already has the precedent — four `tests/component/db/`
+  in-memory-SQLite repository test files that the CI component job *does* run. Decide whether to add
+  component-tier repository tests for the two new classes, or to stop `--ignore`ing
+  `tests/integration/db` and give CI a Postgres service for it. Owner: Epic 2 retro.
+
+- **`--compare-to` accepts a failed or metric-less backtest run.** `SyncBacktestRepository
+  .find_by_run_id` (`backtest_repository_sync.py:220-239`) filters on `run_id` only, and
+  `src/services/backtest_persistence.py:201-213` does persist runs with `execution_status='failed'`
+  and no `PerformanceMetrics` row. So `ntrader live create --compare-to <failed-run-id>` succeeds and
+  freezes, for the life of a multi-week forward test, a comparison target that Epic 5's
+  distributional comparison cannot compute against. AC #12 asks only for existence ("naming a
+  `run_id` that does not exist"), so this is not an unmet AC. **Action:** decide in Epic 5, when the
+  comparison actually runs, whether `--compare-to` should additionally require
+  `execution_status == 'success'` and the presence of metrics — and whether that check belongs at
+  `create` (fail early, but the operator may legitimately link a run they intend to re-run) or at
+  seal.
+
+- **ORM↔migration agreement is guarded by no test.** The test fixtures build schemas from
+  `Base.metadata.create_all`, never from the migration chain, so the two can disagree silently —
+  stated verbatim in `tests/integration/db/test_migration_schema.py`'s own docstring, which exists
+  because that drift already happened once. For this story the two *do* agree (verified by hand
+  against the live database: index names, uniqueness flags, column set, enum labels and the CHECK all
+  match the ORM), but nothing keeps them agreeing. This is the acknowledged repo-wide blind spot the
+  story's Dev Notes call out, not a defect introduced here. **Action:** consider a single test that
+  diffs `Base.metadata` against a freshly-migrated scratch schema via alembic's `compare_metadata`,
+  seeded with an allowlist for the two known pre-existing drifts
+  (`idx_trades_backtest_run_id` vs `ix_trades_backtest_run_id`, and the two ORM-only
+  `backtest_runs` indexes). Owner: Epic 2 retro.
