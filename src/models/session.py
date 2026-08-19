@@ -14,18 +14,39 @@ at the top level — every framework touch below is a lazy import inside the
 function that needs it, so importing ``src.models`` stays cheap for callers
 that never build a live session.
 
-Known, accepted limit: ``frozen=True`` blocks attribute rebinding, not
-mutation of a field's contents. ``StrategySpec.parameters`` is a plain
-``dict[str, Any]`` and can still be mutated in place after construction. The
-immutability guarantee this story's callers actually need is on the
-persisted record: no code path writes back to a stored spec's JSONB column
-(Story 2.2), so mutating an in-memory copy loaded from the database corrupts
-nothing on disk.
+Known, accepted limits. Each is pinned by a test in
+``tests/unit/models/test_session_spec.py::TestKnownLimits`` so it stays true,
+and none of them is a guarantee this module makes:
+
+1. ``frozen=True`` blocks attribute rebinding, not mutation of a field's
+   contents. ``StrategySpec.parameters`` is a plain ``dict[str, Any]`` and can
+   still be mutated in place after construction.
+2. ``model_copy(update=...)`` bypasses both ``frozen=True`` and the
+   before-validator, so it can mint a ``SessionSpec`` with zero strategies or
+   an unregistered ``strategy_id``. Pydantic behaves this way for every model;
+   it is not closed here.
+3. The specs are **not hashable**. ``frozen=True`` generates a ``__hash__``
+   over the field values, and the ``parameters`` dict makes it raise
+   ``TypeError``, so a spec cannot go in a ``set`` or serve as a dict key.
+4. ``schema_version`` is *recorded, not enforced*. Nothing branches on it and
+   no reader exists yet; it is written so a future reader can. The gate itself
+   belongs with the read path in Story 2.2.
+
+"JSON-losslessly round-trippable" above means the
+``model_dump_json()``/``model_validate_json()`` pair specifically.
+``model_dump()`` is python-mode and preserves ``Decimal``, so
+``json.dumps(spec.model_dump())`` raises ``TypeError`` — persist via
+``model_dump_json()`` or ``model_dump(mode="json")``.
+
+What none of the above threatens is the persisted record: the immutability
+FR14 needs is enforced by there being no write-back path to a stored spec's
+JSONB column. That path does not exist yet — Story 2.2 owns it, and owns
+keeping it write-once.
 """
 
 from collections.abc import Sequence
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic import ValidationError as PydanticValidationError
@@ -74,16 +95,21 @@ def _lookup_strategy(strategy_id: str) -> "StrategyDefinition":
         ) from None
 
 
-def _normalise_parameters(
-    definition: "StrategyDefinition", parameters: dict[str, Any]
-) -> dict[str, Any]:
+_NO_PARAM_MODEL = (
+    "Strategy {name!r} registers no parameter model, so its parameters cannot be validated "
+    "or stored losslessly. Add StrategyRegistry.set_param_model() at the bottom of its module."
+)
+
+
+def _normalise_parameters(definition: "StrategyDefinition", parameters: Any) -> dict[str, Any]:
     """Validate and normalise parameters through the strategy's own param model.
 
     Args:
         definition: The resolved strategy definition.
         parameters: Raw parameter values, e.g. from CLI overrides or a JSON
             round trip (where a prior serialisation may have stringified a
-            ``Decimal``).
+            ``Decimal``). Not necessarily a dict — a wrong-typed value must
+            surface as a validation failure, not a crash.
 
     Returns:
         The parameters re-coerced through ``definition.param_model``, so
@@ -94,36 +120,64 @@ def _normalise_parameters(
             parameters fail that model's validation.
     """
     if definition.param_model is None:
-        raise ValueError(
-            f"Strategy {definition.name!r} registers no parameter model, so its parameters "
-            "cannot be validated or stored losslessly. Add "
-            "StrategyRegistry.set_param_model() at the bottom of its module."
-        )
+        raise ValueError(_NO_PARAM_MODEL.format(name=definition.name))
     try:
         return definition.param_model.model_validate(parameters).model_dump()
     except PydanticValidationError as exc:
-        raise ValueError(f"Invalid parameters for {definition.name!r}: {exc}") from exc
+        # Interpolating ``exc`` whole would embed pydantic's full multi-line
+        # block — header, ``input_value=``, docs URL — inside a message pydantic
+        # then wraps and re-renders with a second header and second URL. Reduce
+        # it to the one line per error that an operator can act on.
+        detail = "; ".join(
+            f"{'.'.join(str(part) for part in error['loc']) or '(root)'}: {error['msg']}"
+            for error in exc.errors()
+        )
+        raise ValueError(f"Invalid parameters for {definition.name!r}: {detail}") from exc
 
 
-def _resolve_bar_types(raw: Sequence[str]) -> tuple[str, ...]:
-    """Validate bar-type strings through the live market-data policy.
+def _resolve_bar_types(raw: Any) -> tuple[str, ...]:
+    """Validate bar-type strings and store them in canonical upper-case form.
 
     Args:
-        raw: Bar-type strings, e.g. ``["AAPL.NASDAQ-1-MINUTE-LAST-EXTERNAL"]``.
+        raw: A list or tuple of bar-type strings, e.g.
+            ``["AAPL.NASDAQ-1-MINUTE-LAST-EXTERNAL"]``. Typed ``Any`` rather
+            than ``Sequence[str]`` because the value arrives unvalidated and a
+            wrong shape has to become a ``ValidationError``, not a ``TypeError``.
 
     Returns:
-        The same bar types as strings, in the order given.
+        The bar types, upper-cased, in the order given.
+
+        ``BarType.from_str`` upper-cases the aggregation but preserves the
+        instrument-id case, so ``aapl.nasdaq-...`` survives parsing intact and
+        would reach ``load_ids`` as a lowercase id IBKR cannot resolve — a
+        silently dead subscription (``live_market_data.py:199-204``).
+        Canonicalising here is the same rule ``strategy_id`` already follows:
+        store the canonical form, so two specs describing one thing compare
+        equal and a later comparison is not reading noise.
 
     Raises:
-        ValueError: An entry does not parse, is INTERNAL-aggregated, is
-            composite, is not time-aggregated, or repeats an earlier entry
-            (case-insensitively). ``resolve_live_bar_types`` raises a plain
-            ``LiveMarketDataError``, which pydantic would not convert.
+        ValueError: ``raw`` is not an ordered sequence, or an entry does not
+            parse, is INTERNAL-aggregated, is composite, is not time-aggregated,
+            or repeats an earlier entry (case-insensitively).
+            ``resolve_live_bar_types`` raises a plain ``LiveMarketDataError``,
+            which pydantic would not convert.
     """
     from src.core.live_market_data import LiveMarketDataError, resolve_live_bar_types
 
+    if not isinstance(raw, (str, list, tuple)):
+        # A set or dict has no stable order, and a non-iterable would raise
+        # TypeError from inside the loop below — neither of which pydantic
+        # converts into a ValidationError. A bare str is deliberately allowed
+        # through: `resolve_live_bar_types` has its own purpose-built message
+        # for that case, and pre-converting with `list()` would explode it into
+        # one bar type per character and destroy that message.
+        raise ValueError(
+            f"Expected a list or tuple of bar-type strings, got {type(raw).__name__}. "
+            "An unordered or non-sequence collection has no order to store."
+        )
+
     try:
-        return tuple(str(bar_type) for bar_type in resolve_live_bar_types(list(raw)))
+        return tuple(str(bar_type).upper() for bar_type in resolve_live_bar_types(raw))
     except LiveMarketDataError as exc:
         raise ValueError(str(exc)) from exc
 
@@ -147,7 +201,7 @@ class StrategySpec(BaseModel):
             contains an entry ``resolve_live_bar_types`` refuses.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     strategy_id: str = Field(..., min_length=1, description="Canonical StrategyRegistry name")
     parameters: dict[str, Any] = Field(
@@ -172,13 +226,28 @@ class StrategySpec(BaseModel):
         if not isinstance(data, dict):
             return data
         raw_id = data.get("strategy_id")
-        if not isinstance(raw_id, str) or not raw_id.strip():
-            return data  # let the field constraint report the real problem
+        if not isinstance(raw_id, str):
+            return data  # let the field's type constraint report the real problem
+        if not raw_id:
+            return data  # let min_length report `string_too_short`
+        if not raw_id.strip():
+            # `min_length=1` counts characters, so a whitespace-only id satisfies
+            # it. Returning here would skip the registry, the parameter model and
+            # the bar-type policy alike, yielding a fully unvalidated spec.
+            raise ValueError(
+                "strategy_id is blank. Give a registered StrategyRegistry name, "
+                "e.g. 'sma_crossover'."
+            )
 
         definition = _lookup_strategy(raw_id.strip())
         resolved = dict(data)
         resolved["strategy_id"] = definition.name
-        resolved["parameters"] = _normalise_parameters(definition, data.get("parameters") or {})
+        raw_parameters = data.get("parameters")
+        if raw_parameters is None:
+            # `or {}` would also swallow `[]`, `0`, `""` and `False`, turning a
+            # wrong-typed value into a silent all-defaults spec.
+            raw_parameters = {}
+        resolved["parameters"] = _normalise_parameters(definition, raw_parameters)
         if data.get("bar_types") is not None:
             resolved["bar_types"] = _resolve_bar_types(data["bar_types"])
         return resolved
@@ -204,11 +273,45 @@ class StrategySpec(BaseModel):
 
         Returns:
             A fully resolved, frozen ``StrategySpec``.
+
+        Raises:
+            ValueError: ``strategy_id`` does not resolve, or the strategy
+                registers no parameter model. This runs *before* pydantic, so
+                these surface as a plain ``ValueError`` — a factory is not a
+                constructor. Callers that accept operator input should catch
+                ``(ValidationError, ValueError)``.
+            ValidationError: The resolved values fail the model's own
+                validation, e.g. an unusable ``bar_types`` entry.
         """
         from src.core.strategy_factory import StrategyLoader
 
-        parameters = StrategyLoader.build_strategy_params(strategy_id, dict(overrides), settings)
-        return cls(strategy_id=strategy_id, parameters=parameters, bar_types=tuple(bar_types))
+        # Resolve once, here, and hand the canonical name to both the parameter
+        # chain and the constructor. `build_strategy_params` gates on
+        # `StrategyRegistry.exists()`, which lacks the hyphen/underscore-stripping
+        # branch `StrategyRegistry.get()` has — so without this the two disagree
+        # about which identifiers are valid, and a fuzzy id that the constructor
+        # accepts is refused here.
+        definition = _lookup_strategy(strategy_id)
+        if definition.param_model is None:
+            # `build_strategy_params` would reach `param_model_cls.model_fields`
+            # and die with `AttributeError: 'NoneType' has no attribute ...`,
+            # putting `_normalise_parameters`' remediation message out of reach
+            # on the primary construction path.
+            raise ValueError(_NO_PARAM_MODEL.format(name=definition.name))
+
+        parameters = StrategyLoader.build_strategy_params(
+            definition.name, dict(overrides), settings
+        )
+        # `bar_types` is passed through unconverted: `tuple(bar_types)` on a bare
+        # string would split it into one entry per character before the validator
+        # could report the real mistake. The before-validator normalises any
+        # ordered sequence into the declared tuple and refuses everything else,
+        # so the cast narrows for the type checker only.
+        return cls(
+            strategy_id=definition.name,
+            parameters=parameters,
+            bar_types=cast("tuple[str, ...]", bar_types),
+        )
 
 
 class SessionSpec(BaseModel):
@@ -222,12 +325,38 @@ class SessionSpec(BaseModel):
             ``frozen=True`` being shallow.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     schema_version: int = Field(default=1, ge=1, description="Spec schema version")
     strategies: tuple[StrategySpec, ...] = Field(
         ..., min_length=1, description="Ordered, non-empty collection of strategy specs"
     )
+
+    @model_validator(mode="after")
+    def _reject_duplicate_strategies(self) -> "SessionSpec":
+        """Refuse two entries naming one strategy, at config time.
+
+        Nautilus builds a ``StrategyId`` as ``f"{component_id}-{order_id_tag}"``
+        and ``Trader.add_strategy`` raises ``RuntimeError`` on a repeat, so a
+        session listing one strategy twice validates, persists, and then dies at
+        node start — exactly the deferred failure this module exists to prevent.
+
+        Two entries for one strategy with *different* parameters is a legitimate
+        want; it needs a per-entry instance tag, which this phase does not model.
+        Refusing now is the reversible choice: widening validation later is
+        backward-compatible, narrowing it is not.
+        """
+        seen: set[str] = set()
+        for strategy in self.strategies:
+            if strategy.strategy_id in seen:
+                raise ValueError(
+                    f"Strategy {strategy.strategy_id!r} appears more than once. Nautilus derives "
+                    "a StrategyId from the strategy's own order_id_tag, so two entries for one "
+                    "strategy collide when the node starts. Distinct instance tags are not "
+                    "modelled in this phase — see Story 2.5."
+                )
+            seen.add(strategy.strategy_id)
+        return self
 
     @property
     def subscription_bar_types(self) -> tuple[str, ...]:
@@ -239,6 +368,12 @@ class SessionSpec(BaseModel):
         keyed the same way ``resolve_live_bar_types`` keys its own dedup, and
         preserves first-seen order. This is what Story 2.5 hands to
         ``build_trading_node_config(bar_types=...)``.
+
+        The **canonical** form is emitted, never the caller's casing. Appending
+        the original string would let a lowercase entry win the dedup and reach
+        ``load_ids`` as an id IBKR cannot resolve. ``_resolve_bar_types`` already
+        stores the canonical form, so this is belt-and-braces for a spec
+        deserialised from a row written before that rule existed.
         """
         ordered: list[str] = []
         seen: set[str] = set()
@@ -247,5 +382,5 @@ class SessionSpec(BaseModel):
                 key = bar_type.upper()
                 if key not in seen:
                     seen.add(key)
-                    ordered.append(bar_type)
+                    ordered.append(key)
         return tuple(ordered)
