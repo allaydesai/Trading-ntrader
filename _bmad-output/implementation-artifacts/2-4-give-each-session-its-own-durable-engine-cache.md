@@ -1,6 +1,6 @@
 # Story 2.4: Give Each Session Its Own Durable Engine Cache
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -162,6 +162,128 @@ mechanism — see *Pre-verified findings* #6 — and this story does not change 
         at this story.
   - [x] Run `make lint`, `make typecheck`, `make test-unit`, `make test-component` clean before
         marking any task complete.
+
+### Review Findings
+
+Adversarial code review, 2026-08-19. Three layers (Blind Hunter, Edge Case Hunter, Acceptance
+Auditor) over commit `a8fa04a`, each finding then put to an independent verifier instructed to
+refute it against the running code. 33 raised, 20 refuted as noise, 13 survived.
+
+- [x] [Review][Patch] **The preflight accepts endpoints that are not usable Redis, reinstating
+      the hang AC #6 exists to bound** — `check_redis_reachable` returns *success* on two paths that
+      only log: a `PING` send/recv failure (`live_cache.py:189-196`, and `socket.timeout` is an
+      `OSError`) and a non-`+PONG` reply (`:206-213`). Reproduced end to end: against a listener
+      that accepts TCP and never answers, the preflight passed and `CacheDatabaseAdapter` then hung
+      until killed at 40s with no output — exactly the failure AC #6 names. Same result for an
+      HTTP-speaking listener. Reachable via a wedged/SIGSTOP'd redis, a stale `ssh -L` or
+      `kubectl port-forward`, or a proxy with no live backend. The module docstring (`:146-150`)
+      argues accepting is safer than refusing "because refusing to start a session because a proxy
+      answered unusually would be a worse failure" — the measured alternative is a silent forever
+      hang, so that premise does not hold. Counter-evidence for the narrower branch: a real
+      `requirepass` Redis answers `-NOAUTH` and the adapter then fails fast in under a second, so
+      refusing on non-`+PONG` would trade a clear `NOAUTH: Authentication required` for a less
+      specific preflight refusal. **Decided 2026-08-19:** raise `RedisUnreachableError` on *both*
+      paths. Losing the adapter's more specific `NOAUTH` message is an accepted cost; a preflight
+      that reports success and then hangs forever is the worse failure. The docstring's
+      accept-with-a-warning rationale at `:146-150` must be rewritten, not merely amended — its
+      premise was measured false.
+- [x] [Review][Patch] **AC #4 / FR19 — the story's central guarantee — is proven by tests CI
+      never runs** — `tests/integration/core/test_live_cache_namespace.py:44-57` skips the whole
+      module when Redis is unreachable, and `.github/workflows/ci.yml:112-125` gives the
+      integration job a `postgres` service and no `redis` one, while running all of
+      `tests/integration` bar `tests/integration/db`. The four tests that prove a restart rejoins
+      its own namespace, that two sessions cannot see each other, and the `use_instance_id`
+      mutation guard therefore always skip in CI; they pass locally (verified, 4 passed). The skip
+      is deliberate and documented, but it means the namespace guarantee could break and every
+      build would stay green. **Decided 2026-08-19:** add a `redis:7-alpine` service to the
+      integration job so the AC #4 tests actually execute in CI. The skip fixture stays — it keeps
+      a developer without Redis from seeing spurious red.
+- [x] [Review][Patch] **The `live_connection_probe` extraction is outside the story's authorised
+      surface, and its name now collides** — the story's Files table (`:406-421`) authorises six
+      paths; `src/core/live_connection_probe.py` and the `live_connection_monitor.py` docstring edit
+      appear only in the after-the-fact File List (`:692-694`). The move itself is justified —
+      `live_node_builder` was over the 500-line limit and is now 416 — and the AC-1.3h guard still
+      covers the new module because `_live_module_sources()` globs `src/core/live_*.py`. But
+      `src/core/live_connection_probe.py` and `scripts/diagnostics/live_connection_probe.py` now
+      share a basename with unrelated contents. **Decided 2026-08-19:** rename one. Renaming the
+      *script* to `scripts/diagnostics/live_reconnect_probe.py` — it verifies reconnect behaviour
+      (NFR32/NFR34), it sits beside `live_node_probe.py` and `live_bars_probe.py`, and the
+      production `src/core/live_*` naming family is referenced from several docstrings that would
+      otherwise all need editing. Blast radius: the script itself plus
+      `docs/qa/phase3-live-verification.md:309,343`.
+- [x] [Review][Patch] Stale import of the moved `read_ibkr_connection_status` — the Phase 3
+      reconnect diagnostic dies at import with `ImportError` (reproduced); it is the tool
+      `docs/qa/phase3-live-verification.md:309,343` names for NFR32/NFR34, and Completion Note #2's
+      "no production module imported it" missed it [scripts/diagnostics/live_connection_probe.py:64]
+- [x] [Review][Patch] The test asserting config assembly never probes Redis patches
+      `src.core.live_cache` while `live_node_builder` binds the symbol at import, so the guard can
+      never fire; its two siblings patch the right module
+      [tests/component/core/test_live_node_builder.py:989]
+- [x] [Review][Patch] `UnicodeError` from the IDNA codec escapes uncaught — an over-63-character DNS
+      label raises `UnicodeError`, which is not an `OSError`, so callers see a raw codec error
+      instead of `RedisUnreachableError`, contradicting the contract asserted at
+      `tests/component/core/test_live_cache.py:181-184` [src/core/live_cache.py:197]
+- [x] [Review][Patch] "Bounds the whole call, which is the entire point of the function" is not
+      true — `getaddrinfo` runs outside the timeout and `create_connection` applies it per resolved
+      address, so worst case is (addresses × timeout) + send + recv plus unbounded resolution; the
+      timing test uses a refused loopback port and would pass with no timeout at all
+      [src/core/live_cache.py:161; tests/component/core/test_live_cache.py:154-169]
+- [x] [Review][Patch] `build_trading_node`'s docstring omits the new `cache` argument and the new
+      `RedisUnreachableError` it can now raise; the sibling `build_trading_node_config` documents
+      its `cache` parameter [src/core/live_node_builder.py:368-385]
+- [x] [Review][Patch] The 1000-draw distinctness test asserts an exact count and fails ~1 run in
+      8,600 by birthday collision; separately the "~1 in 10**7 at 100 sessions" figure is ~1 in
+      10**6 — an order of magnitude optimistic in the number that justifies the 8-char truncation
+      [tests/unit/core/test_live_trader_id.py:72-83; src/core/live_trader_id.py:36;
+      deferred-work.md:996]
+- [x] [Review][Patch] The Environment Variables table gained no `REDIS_HOST` / `REDIS_PORT` /
+      `REDIS_DB` row, against CLAUDE.md's keep-README-in-sync rule, while `.env.example` still
+      advertises a `REDIS_URL` that nothing reads (the `.env.example` half is already deferred at
+      `deferred-work.md:1008-1019`) [README.md:423]
+- [x] [Review][Patch] Nothing pins the property the `check_redis_reachable(host, port)` signature
+      deviation was invented for — that the preflight targets the same Redis the node will. All
+      three tests reaching it through the builder install arg-ignoring stubs, so an edit reading
+      host/port from settings instead of from the `CacheConfig` passes the whole tier
+      [tests/component/core/test_live_node_builder.py:1012-1058]
+- [x] [Review][Defer] A Redis-only setting hard-fails every entry point — `REDIS_DB=1` makes
+      `python -m src.cli.main --help` die with an uncaught `ValidationError` (reproduced), taking
+      down backtest, catalog and web UI [src/config.py:456] — deferred, pre-existing: the
+      module-scope `get_settings()` blast radius is already logged at `deferred-work.md:126-133`
+      and the IBKR client-id validator behaves identically; this change adds an instance, not the
+      pattern
+- [x] [Review][Defer] `src/config.py` is at 493 lines against the 500-line limit — the next
+      settings block pushes it over [src/config.py] — deferred, pre-existing: hygiene, not caused by
+      this story alone
+
+#### Review resolution (2026-08-19)
+
+All 11 patches applied; both deferrals recorded in `deferred-work.md`. Gates re-run clean:
+`make format`, `make lint`, `make typecheck` (93 files), `make test-unit` (1950 passed),
+`make test-component` (1061 passed, 16 skipped), `pytest tests/integration/core --forked`
+(68 passed, 2 skipped — the IBKR parity gate, unrelated), and 40/40 Epic 1 ACs still evidenced.
+
+What changed beyond the finding text:
+
+- **`check_redis_reachable` now refuses everything that is not a confirmed `+PONG`.** Both
+  warn-and-return branches raise. Five new component tests cover it, including a silent listener
+  (the endpoint class that reproduced the 40-second hang) and an HTTP-speaking one; the
+  silent-listener test also exercises the timeout for real, which the closed-port timing test
+  structurally could not. `RedisUnreachableError` messages are now built by one `_unreachable()`
+  helper so every path names host, port, cause and remedy.
+- **The rename target changed mid-fix.** `live_reconnect_probe.py` was the first choice, then
+  rejected: `scripts/diagnostics/ibkr_reconnect_probe.py` (Story 3.4) already owns "reconnect
+  probe", so it would have traded one basename collision for another. Landed as
+  `scripts/diagnostics/live_connection_loss_probe.py`, matching the script's own docstring.
+  `docs/qa/phase3-live-verification.md:309,343` and two live `deferred-work.md` action items were
+  repointed. Closed story records (1.6, 1.7) were left alone — they record what was true then.
+- **Redis was added to *two* CI jobs**, not one: `coverage-report` re-runs `tests/integration`, so
+  without it the engine-cache lines would have been reported uncovered rather than passing.
+- **The new preflight-target pin was mutation-checked.** Rewriting line 402 to read
+  `get_settings().redis.*` makes it fail with `the preflight probed {'host': '127.0.0.1', 'port':
+  6379}, but the node will connect to cache-config-only.test:6399`. The mutation was reverted.
+- **The distinctness test is now seeded** (`random.Random(20260819)`) rather than `uuid4()`-driven,
+  so its outcome is a property of the derivation instead of a ~1-in-8,600 coin flip. Verified
+  identical across three consecutive runs.
 
 ## Dev Notes
 

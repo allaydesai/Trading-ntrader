@@ -36,7 +36,36 @@
 
 generated: 2026-08-03
 last_updated: >-
-  2026-08-19 (Story 2.4 implemented -> review. ready-for-dev -> in-progress -> review, same session
+  2026-08-19 (Story 2.4 code review -> done. review -> done. epic-2 stays in-progress: 2.1/2.2/2.3/2.4
+  done, 2.5-2.8 backlog. Three adversarial layers (Blind Hunter, Edge Case Hunter, Acceptance
+  Auditor) over a8fa04a, every finding then put to an independent verifier told to refute it against
+  running code: 33 raised, 20 refuted as noise, 13 survived. 3 needed a human call, all resolved by
+  the operator; 11 patches applied, 2 deferred. TWO REAL DEFECTS, both reproduced by execution
+  rather than argued. (1) check_redis_reachable REPORTED SUCCESS for any endpoint that completed a
+  TCP handshake without answering +PONG -- against a listener that accepts and never speaks, the
+  preflight passed and CacheDatabaseAdapter was still blocked, silently, when killed at 40s: the
+  exact hang AC #6 exists to bound, reinstated by the two warn-and-return branches. Both now raise.
+  The module docstring had argued the opposite ("refusing because a proxy answered unusually would be
+  a worse failure"); that premise was measured false and the docstring rewritten. Cost accepted: a
+  requirepass Redis is now refused here rather than failing fast inside the adapter with NOAUTH.
+  (2) scripts/diagnostics/live_connection_probe.py DIED AT IMPORT -- Story 2.4's extraction moved
+  read_ibkr_connection_status and this caller was missed, so the tool docs/qa/phase3-live-verification
+  .md names for the NFR32/NFR34 reconnect verification was unrunnable. Completion Note #2's "no
+  production module imported it (verified by grep)" was wrong. Repointed, and renamed to
+  live_connection_loss_probe.py to clear the basename collision with src/core/live_connection_probe.py
+  (NOT live_reconnect_probe.py -- ibkr_reconnect_probe.py already owns that name). ALSO: CI had no
+  redis service, so the four integration tests proving AC #4/FR19 -- the story's central guarantee --
+  always skipped in CI and could have broken with every build green; redis:7-alpine added to the
+  integration-tests AND coverage-report jobs. A test that claimed to prove config assembly never
+  probes Redis patched the wrong module and could never fire. Nothing pinned the check_redis_reachable
+  signature deviation's whole point (preflight reads cache.database.*, not settings); that pin now
+  exists and was mutation-checked. The 1000-draw distinctness test was a ~1-in-8,600 flake and is now
+  seeded; the 8-hex collision bound was stated an order of magnitude low (10**7 -> 1.2 in 10**6 at 100
+  sessions) in both live_trader_id.py and deferred-work.md. README gained the three REDIS_* rows.
+  Deferred: REDIS_DB=1 takes down every CLI entry point (pre-existing module-scope get_settings blast
+  radius, deferred-work.md:126-133) and src/config.py at 493/500 lines. Gates re-run clean: format,
+  lint, mypy 93 files, 1950 unit, 1061 component, 68 integration-core --forked, 40/40 Epic 1 ACs.
+  Previously: 2026-08-19 (Story 2.4 implemented -> review. ready-for-dev -> in-progress -> review, same session
   as creation. epic-2 stays in-progress: 2.1/2.2/2.3 done, 2.4 review, 2.5-2.8 backlog. Delivered
   TDD Red->Green: RedisSettings (host/port/db, refusing a non-zero db rather than ignoring it),
   src/core/live_trader_id.py (deterministic PAPER-<8 hex>, framework-free), src/core/live_cache.py
@@ -739,7 +768,7 @@ development_status:
   2-1-define-a-session-as-a-list-of-strategy-specifications: done
   2-2-create-a-named-session-with-an-immutable-specification: done
   2-3-move-a-session-between-states-through-one-guarded-path: done
-  2-4-give-each-session-its-own-durable-engine-cache: review
+  2-4-give-each-session-its-own-durable-engine-cache: done
   2-5-start-a-session-in-the-foreground-with-an-ordered-startup-sequence: backlog
   2-6-stop-a-session-without-ending-it-and-without-touching-positions: backlog
   2-7-keep-one-failing-strategy-from-taking-down-the-session: backlog

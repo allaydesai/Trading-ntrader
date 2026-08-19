@@ -570,7 +570,7 @@ Non-blocking findings from the three-layer adversarial review. Blocking items (2
 - **Procedure P4 has no live result.** `docs/qa/phase3-live-verification.md` records it as
   `⛔ not run`: no IB Gateway was listening on any of the four IB ports, and the implementation
   worktree has no `.env` (gitignored, and `.env*` is hook-protected). **Action:** run
-  `uv run python scripts/diagnostics/live_connection_probe.py` once a Gateway and a populated
+  `uv run python scripts/diagnostics/live_connection_loss_probe.py` once a Gateway and a populated
   `.env` are both available and record the result. Non-blocking — AC #1–#5 are proven by 31 unit
   and 12 component tests that require no broker (NFR32/NFR34). Note this sits alongside P1's own
   outstanding `⚠️ re-run required` row from Story 1.3's review, so one Gateway session can clear
@@ -606,7 +606,7 @@ Non-blocking findings from the three-layer adversarial review. Blocking items (2
 
 - **`scripts/diagnostics/live_node_probe.py` (Story 1.3) builds the node outside its `try/finally`
   and can hang indefinitely against an unreachable Gateway.** Same shape as the defect patched in
-  `live_connection_probe.py`: `node.build()` → `get_cached_ib_client` → `client.start()` →
+  `live_connection_loss_probe.py`: `node.build()` → `get_cached_ib_client` → `client.start()` →
   `Component.start()` calls `_start()` synchronously, which (loop not yet running) runs
   `run_until_complete(_start_async())`; with `_indefinite_reconnect` on by default
   (`IB_MAX_CONNECTION_ATTEMPTS` unset → `_max_connection_attempts == 0`) that loop retries forever
@@ -992,7 +992,9 @@ New items:
 
 - **The 8-hex `trader_id` tag is a truncation, and the collision bound is disclosed rather than
   engineered away.** `derive_trader_id` takes `session_id.hex[:8]` per AR10's `PAPER-<short-session-id>`.
-  That is 2**32 values: birthday bound ~1 in 10**7 at 100 sessions, ~1 in 10**4 at 1000. A collision
+  That is 2**32 values: birthday bound n(n-1)/2N — ~1.2 in 10**6 at 100 sessions, ~1.2 in 10**4 at
+  1000. (Stated as 10**7 at the 100-session end until the Story 2.4 review recomputed it; the figure
+  matters because it is what the truncation is justified by.) A collision
   would put two sessions in one Redis namespace — the exact contamination this story prevents —
   and nothing detects it, because the derivation is pure and has no view of other sessions.
   `TraderId` accepts the full 32-character hex, so the fix is a one-line change plus a namespace
@@ -1033,3 +1035,24 @@ New items:
   design — AC #5 asks only that the design be inspectable, and startup reconciliation is Epic 4
   (FR35, AR25). **Action for Epic 4:** the claim in those two docstrings becomes false-by-omission if
   Epic 4 ships without it; check them when the reconcile path lands.
+
+## Deferred from: code review of story-2.4 (2026-08-19)
+
+- **A Redis-only setting hard-fails every entry point.** `Settings.redis` is a
+  `default_factory=RedisSettings` field (`src/config.py:456-457`), so
+  `validate_database_index_is_reachable` (`src/config.py:326-333`) runs on every `Settings()`
+  construction. Reproduced: `REDIS_DB=1 uv run python -m src.cli.main --help` dies with an uncaught
+  `pydantic_core.ValidationError` raised from `src/db/session.py:11`, taking down backtest, catalog,
+  data import and the web UI for a value the validator's own message concedes affects nothing but
+  the live-session cache. **Deferred as pre-existing:** the cause is the module-scope
+  `get_settings()` blast radius already recorded at `deferred-work.md:126-133` (`src/cli/main.py:19`,
+  `src/db/session.py:11`), and the IBKR client-id validator already behaves the same way. Story 2.4
+  adds one more instance rather than creating the pattern; the message is precise and recovery is a
+  one-line env edit. **Action:** fold into whatever fixes the module-scope settings load — not worth
+  a scoped workaround on its own.
+
+- **`src/config.py` is at 493 lines against the repo's 500-line file limit.** `RedisSettings` (+94)
+  took it within seven lines of the cap, so the next settings block crosses it. Same class of
+  overflow that forced `live_connection_probe.py` out of `live_node_builder.py` during this story.
+  **Action for whoever adds the next settings class:** split by domain (IBKR / Kraken / Redis /
+  database) rather than trimming prose, and do it before the edit rather than during it.
