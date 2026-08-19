@@ -256,6 +256,95 @@ class FirstRateSettings(BaseSettings):
     }
 
 
+class RedisSettings(BaseSettings):
+    """Redis connection settings for the live session's Nautilus engine cache.
+
+    Owns: where a live paper-trading session's ``CacheConfig`` points (AR11).
+    The provisioned service is ``redis:7-alpine`` in ``docker-compose.yml``.
+
+    Does not own: what is stored there, or the key namespace — Nautilus derives
+    that from the session's ``trader_id`` (``src/core/live_trader_id.py``), and
+    ``src/core/live_cache.py`` is what translates these fields into a
+    ``CacheConfig``. Nothing in this module imports Nautilus.
+
+    Redis holds **cache** state only. It is rebuildable from IBKR, and IBKR is
+    authoritative on any conflict — but nothing enforces that yet; startup
+    reconciliation is Epic 4 (FR35, AR25).
+    """
+
+    redis_host: str = Field(
+        default="127.0.0.1",
+        description=(
+            "Redis host for the live session engine cache. Inside a container this must be "
+            "the compose service name ('redis'), not loopback — loopback there is the app "
+            "container itself."
+        ),
+    )
+    redis_port: int = Field(
+        default=6379,
+        ge=1,
+        le=65535,
+        description="Redis port. 0 is excluded: it means 'any free port' to bind, not connect.",
+    )
+    redis_db: int = Field(
+        default=0,
+        description=(
+            "Redis logical database index. Only 0 is accepted — see the validator. Present "
+            "because AR11 names it, not because it can currently be varied."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def validate_host_is_not_blank(self) -> "RedisSettings":
+        """Reject a whitespace-only host, which would connect to nothing.
+
+        ``min_length=1`` counts characters, so ``"   "`` satisfies it and then
+        fails much later inside a socket call with an opaque message.
+        """
+        if not self.redis_host.strip():
+            raise ValueError(
+                "redis_host is blank. Set REDIS_HOST to a hostname or IP address, "
+                "e.g. '127.0.0.1' locally or 'redis' inside docker-compose."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_database_index_is_reachable(self) -> "RedisSettings":
+        """Refuse a database index Nautilus cannot be told about.
+
+        ``nautilus_trader.config.DatabaseConfig`` at 1.220.0 exposes only
+        ``type, host, port, username, password, ssl, timeout`` — there is no
+        database-index field, and the config is msgpack-encoded straight into
+        the Rust ``RedisCacheDatabase``, so there is no side channel either.
+
+        A silently dropped value is the wrong failure mode here. An operator
+        setting ``REDIS_DB=1`` is reaching for isolation, and would get none
+        from it. Sessions *are* isolated — by the ``trader_id`` key namespace,
+        which is what actually delivers that guarantee — so this refusal
+        protects an expectation rather than a live guarantee, and says so.
+        """
+        if self.redis_db != 0:
+            raise ValueError(
+                f"redis_db is {self.redis_db}, but nautilus-trader 1.220.0 cannot be told which "
+                "Redis database to use: DatabaseConfig has no database-index field, so the value "
+                "would be silently ignored rather than isolating anything. Sessions are already "
+                "isolated from each other by the trader_id key namespace. Set REDIS_DB=0, or use "
+                "a separate Redis instance (REDIS_PORT) if you need true separation."
+            )
+        return self
+
+    model_config = {
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "case_sensitive": False,
+        "extra": "ignore",
+        # pydantic-settings passes the entire environment in as the model input, so
+        # without this a config error renders unrelated secrets into the traceback.
+        # Both validators above can fire, so this is reachable here.
+        "hide_input_in_errors": True,
+    }
+
+
 class CatalogSettings(BaseSettings):
     """Catalog configuration settings.
 
@@ -361,6 +450,11 @@ class Settings(BaseSettings):
     # Catalog settings
     catalog: CatalogSettings = Field(
         default_factory=CatalogSettings, description="Named catalog settings"
+    )
+
+    # Redis settings (live session engine cache)
+    redis: RedisSettings = Field(
+        default_factory=RedisSettings, description="Redis engine-cache settings"
     )
 
     @property

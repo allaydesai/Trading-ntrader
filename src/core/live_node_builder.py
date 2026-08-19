@@ -1,22 +1,28 @@
 """TradingNode assembly for IBKR paper trading.
 
 Owns: building a ``TradingNodeConfig`` carrying IB data/exec client configs
-behind the Layer 1 safety gate, constructing the node, registering the
+behind the Layer 1 safety gate, constructing the node, and registering the
 Nautilus LogGuard when node construction is the one that claims the C
-logging subsystem, and reading the resulting client's connection status
-(``read_ibkr_connection_status`` — it lives here because the adapter's cache
-key is the exact ``(host, port, client_id)`` triple this module configures).
+logging subsystem.
 
 Also owns the market-data half of that assembly (Story 1.5): the REALTIME
 override, the RTH restriction, the instruments the provider must load, and the
 market-data line budget check. The policy those rest on lives in
 ``live_market_data``; this module is where it reaches the client config.
 
+Story 2.4 added the Redis engine cache seam: an optional ``cache`` config
+reaches ``TradingNodeConfig``, and ``build_trading_node`` refuses an
+unreachable Redis *before* constructing a node — that constructor blocks
+forever otherwise. What a cache config contains, and the ``trader_id`` that
+names its key namespace, live in ``src/core/live_cache.py`` and
+``src/core/live_trader_id.py``.
+
 Does not own: the node's lifecycle (build/run/stop/dispose — the runner does,
-AR38), the session's ``trader_id`` (Epic 2 derives it), Redis caching
-(Epic 2), indicator warm-up from history (Epic 4), or what a connection
-status *means* — ``src/core/live_connection_monitor.py`` owns the state
-machine and the trading-permission flag it derives.
+AR38), deriving the session's ``trader_id``, indicator warm-up from history
+(Epic 4), reading the client's connection status
+(``src/core/live_connection_probe.py``, extracted from here by Story 2.4), or
+what a connection status *means* — ``src/core/live_connection_monitor.py``
+owns the state machine and the trading-permission flag it derives.
 """
 
 import asyncio
@@ -30,17 +36,16 @@ from nautilus_trader.adapters.interactive_brokers.config import (
     InteractiveBrokersInstrumentProviderConfig,
 )
 from nautilus_trader.adapters.interactive_brokers.factories import (
-    IB_CLIENTS,
     InteractiveBrokersLiveDataClientFactory,
     InteractiveBrokersLiveExecClientFactory,
 )
-from nautilus_trader.config import ImportableActorConfig, TradingNodeConfig
+from nautilus_trader.config import CacheConfig, ImportableActorConfig, TradingNodeConfig
 from nautilus_trader.live.node import TradingNode
 from nautilus_trader.model.data import BarType
 
 from src.config import IBKRSettings
 from src.core.live_bar_observer import LiveBarObserverConfig
-from src.core.live_connection_monitor import ConnectionStatus
+from src.core.live_cache import check_redis_reachable
 from src.core.live_gate import GateFlags, GateRefusal, evaluate_gate, mask_account
 from src.core.live_market_data import (
     LiveMarketDataError,
@@ -149,6 +154,7 @@ def build_trading_node_config(
     bar_types: Sequence[str] = (),
     bar_observer: LiveBarObserverConfig | None = None,
     cli_flags: GateFlags | None = None,
+    cache: CacheConfig | None = None,
 ) -> TradingNodeConfig:
     """Assemble a TradingNodeConfig for IBKR paper trading.
 
@@ -173,6 +179,11 @@ def build_trading_node_config(
             node declaratively as an ``ImportableActorConfig`` so the kernel owns
             the actor's lifetime.
         cli_flags: Operator declarations from the command line.
+        cache: Engine-cache configuration from ``live_cache.build_cache_config``.
+            ``None`` (the default) leaves the node's cache in memory, which is
+            what ``ntrader live check`` wants — a broker diagnostic must not
+            require Redis. Building a config never contacts Redis either way;
+            only ``build_trading_node`` does.
 
     Returns:
         A configured ``TradingNodeConfig`` with one IB data client and one IB
@@ -267,6 +278,10 @@ def build_trading_node_config(
         data_clients={IB: data_client_config},
         exec_clients={IB: exec_client_config},
         actors=_actor_configs(bar_observer),
+        # Nautilus reads the Redis key namespace from `trader_id` above, not
+        # from `cache` — `CacheConfig` carries no trader id (kernel.py:303-311).
+        # That is what makes the namespace per-session (AR10).
+        cache=cache,
     )
 
 
@@ -337,6 +352,7 @@ def build_trading_node(
     bar_types: Sequence[str] = (),
     bar_observer: LiveBarObserverConfig | None = None,
     cli_flags: GateFlags | None = None,
+    cache: CacheConfig | None = None,
     loop: asyncio.AbstractEventLoop | None = None,
 ) -> TradingNode:
     """Build an unbuilt, unstarted TradingNode configured for IBKR paper trading.
@@ -374,7 +390,17 @@ def build_trading_node(
         bar_types=bar_types,
         bar_observer=bar_observer,
         cli_flags=cli_flags,
+        cache=cache,
     )
+
+    # Strictly before TradingNode(...), because that constructor is the thing
+    # that hangs: NautilusKernel builds a CacheDatabaseAdapter eagerly whenever
+    # cache.database is set (kernel.py:300-312), and that adapter blocks forever
+    # against an unreachable Redis — DatabaseConfig(timeout=) does not bound it.
+    # After the gate, so a refused connection still reports as a gate refusal.
+    if cache is not None and cache.database is not None:
+        check_redis_reachable(cache.database.host, cache.database.port)
+
     node = TradingNode(config=config, loop=loop)
 
     # When a BacktestEngine already claimed the C logging subsystem in this
@@ -388,106 +414,3 @@ def build_trading_node(
     node.add_exec_client_factory(IB, InteractiveBrokersLiveExecClientFactory)
 
     return node
-
-
-def _flag_is_set(client: object, name: str) -> bool:
-    """Read one of the adapter's private connection flags, fail-closed.
-
-    The whole read — attribute access included — sits inside the guard, because
-    the two flags this depends on are private to a third-party adapter and
-    ``getattr``'s own default only swallows ``AttributeError``: a cache entry
-    exposing ``_is_ib_connected`` as a *property that raises* would otherwise
-    propagate straight into the caller's poll loop. If a Nautilus upgrade
-    renames or retypes either flag, the correct outcome is "disconnected" —
-    trading permission withheld — never an exception.
-    ``tests/component/core/test_live_connection_probe.py`` carries a canary that
-    fails by name when either flag moves, so the degradation is never silent.
-    """
-    try:
-        flag = getattr(client, name, None)
-        if flag is None:
-            return False
-        return bool(flag.is_set())
-    except Exception:  # noqa: BLE001 - a hostile cache entry must not raise here
-        return False
-
-
-def _client_is_unusable(client: object) -> bool:
-    """Whether a cached client is a corpse left behind by a previous node.
-
-    ``IB_CLIENTS`` is never purged — grep the whole wheel and there is one
-    assignment, a ``get`` and an ``in``, and no deletion anywhere. Worse,
-    ``TradingNode.dispose()`` closes the loop without ``cancel_all_tasks()``
-    (``live/node.py:449-458``), so a pending ``_stop_async`` may never run and
-    both connection flags can be left *set* on a client whose node is gone. A
-    later read under the same key would then report a healthy connection for a
-    node that no longer exists — fail-open on the one path that must fail
-    closed. Absent attributes mean "cannot tell", which is treated as disposed.
-    """
-    try:
-        if bool(getattr(client, "is_disposed", False)):
-            return True
-        return not bool(getattr(client, "is_running", False))
-    except Exception:  # noqa: BLE001 - a hostile cache entry must not raise here
-        return True
-
-
-def read_ibkr_connection_status(settings: IBKRSettings) -> ConnectionStatus:
-    """Take one reading of the live session's broker connection.
-
-    Polled, not subscribed. At nautilus-trader 1.220.0 an IBKR socket drop
-    publishes no message-bus event and changes no public connection property:
-    the adapter's watchdog calls the ``_degrade`` *hook* directly rather than
-    the ``degrade()`` FSM transition (``client/client.py:384``), and
-    ``is_connected`` — hence ``DataEngine.check_connected()`` — only moves on
-    the ``connect()``/``disconnect()`` lifecycle (``live/data_client.py:229,243``).
-    Using ``check_connected()`` here would yield a permission flag that is
-    permanently ``True`` through a dead socket, which is the blind trading NFR10
-    forbids. The adapter's own two flags are the truth.
-
-    Purely a read: it never mutates the client, never starts or stops it, and
-    never awaits — so it is safe to call from a synchronous poll and cannot
-    influence the connection it is measuring.
-
-    Args:
-        settings: Loaded IBKR settings. Injected, never fetched. The lookup key
-            is the same ``(host, port, client_id)`` triple
-            ``build_trading_node_config`` hands to both client configs, which is
-            why this function lives in this module — the key cannot drift from
-            the configured one.
-
-    Returns:
-        A ``ConnectionStatus``. Fail-closed on every uncertainty: an absent
-        client, a missing flag, or an unrecognisable cache entry all report
-        ``connected=False`` with a ``detail`` naming what was wrong.
-    """
-    client_key = (settings.ibkr_host, settings.ibkr_port, settings.ibkr_live_client_id)
-    # IB_CLIENTS (adapters/interactive_brokers/factories.py:42) is the adapter's
-    # own process-global cache — the same dict `get_cached_ib_client` populates,
-    # so this finds the very client both of our configs are bound to. It also
-    # holds the historical data client on `ibkr_client_id`, which is why the key
-    # is exact rather than a search (FR5).
-    client = IB_CLIENTS.get(client_key)
-    if client is None:
-        return ConnectionStatus(
-            connected=False,
-            detail=f"no ib client registered for client_id={settings.ibkr_live_client_id}",
-        )
-
-    if _client_is_unusable(client):
-        return ConnectionStatus(connected=False, detail="ib client is stopped or disposed")
-
-    if not _flag_is_set(client, "_is_ib_connected"):
-        return ConnectionStatus(connected=False, detail="ib socket not connected")
-
-    if not _flag_is_set(client, "_is_client_ready"):
-        # Cleared by the adapter's `_degrade()` on connection loss and set again
-        # by `_start_async()` once the reconnect handshake completes. Note what
-        # it does NOT mean: `_resume_async` waits on this flag and only *then*
-        # runs `_resubscribe_all()` (`client/client.py:204,304`), so both flags
-        # are set throughout the resubscription window. This is the best signal
-        # the adapter exposes, not a guarantee that subscriptions are live —
-        # see the IB error-1101 note in deferred-work.md.
-        return ConnectionStatus(connected=False, detail="ib client not ready")
-
-    return ConnectionStatus(connected=True, detail="ib socket connected, client ready")

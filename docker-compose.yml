@@ -77,7 +77,15 @@ services:
       DATABASE_MAX_OVERFLOW: ${DATABASE_MAX_OVERFLOW:-20}
 
       # Redis configuration
+      # REDIS_URL predates the live-session cache and is read by nothing; kept
+      # because removing it would mean editing the hook-protected .env.example
+      # for no functional gain. RedisSettings is what the engine cache reads.
       REDIS_URL: redis://redis:6379
+      # Without this the app container resolves the 127.0.0.1 default to
+      # itself, not to the redis service, and every live session start hangs
+      # on an unreachable cache.
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      REDIS_PORT: ${REDIS_PORT:-6379}
 
       # IBKR configuration
       IBKR_HOST: ib-gateway

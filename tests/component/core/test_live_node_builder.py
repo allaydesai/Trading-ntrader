@@ -904,3 +904,180 @@ def _data_client_call_keywords(tree: ast.Module) -> set[str]:
     ]
     assert len(calls) == 1, f"expected exactly one data-client construction, found {len(calls)}"
     return {keyword.arg for keyword in calls[0].keywords if keyword.arg is not None}
+
+
+class TestRedisCacheWiring:
+    """Story 2.4, AC #3/#6 — the cache reaches the node, and never hangs it.
+
+    ``cache`` is keyword-only and defaults to ``None`` deliberately. A ``None``
+    cache means an in-memory Nautilus cache, which is what ``ntrader live check``
+    wants: a diagnostic answering "can I reach the broker?" must not start
+    requiring Redis. It also keeps ``NodeFactory``
+    (``live_check_driver.py:85``, ``Callable[..., TradingNode]``) satisfied and
+    every pre-existing call site in this file working unmodified.
+    """
+
+    @pytest.mark.component
+    def test_omitting_the_cache_leaves_the_node_in_memory(self):
+        """Every existing caller keeps its current behaviour."""
+        # Act
+        config = build_trading_node_config(_settings(), trader_id=TRADER_ID)
+
+        # Assert
+        assert config.cache is None
+
+    @pytest.mark.component
+    def test_a_supplied_cache_reaches_the_node_config(self):
+        """AC #3 — the config Nautilus branches on in kernel.py:300."""
+        # Arrange
+        from src.config import RedisSettings
+        from src.core.live_cache import build_cache_config
+
+        cache = build_cache_config(RedisSettings(_env_file=None))
+
+        # Act
+        config = build_trading_node_config(_settings(), trader_id=TRADER_ID, cache=cache)
+
+        # Assert
+        assert config.cache is cache
+        assert config.cache.database.type == "redis"
+
+    @pytest.mark.component
+    def test_the_namespace_is_the_trader_id_the_config_carries(self):
+        """AC #3's "namespaced by trader_id".
+
+        Nautilus takes the namespace from ``TradingNodeConfig.trader_id`` and
+        hands it to ``CacheDatabaseAdapter`` itself (``kernel.py:303-311``) —
+        the ``CacheConfig`` carries no trader id of its own. So the property
+        this story needs is that the node config's ``trader_id`` is the derived
+        one, which is what a session-scoped namespace reduces to.
+        """
+        # Arrange
+        from uuid import UUID
+
+        from src.config import RedisSettings
+        from src.core.live_cache import build_cache_config
+        from src.core.live_trader_id import derive_trader_id
+
+        session_id = UUID("0e8f1c2a-3b4d-4e6f-8081-920304050607")
+        derived = derive_trader_id(session_id)
+
+        # Act
+        config = build_trading_node_config(
+            _settings(),
+            trader_id=derived,
+            cache=build_cache_config(RedisSettings(_env_file=None)),
+        )
+
+        # Assert
+        assert config.trader_id.value == "PAPER-0e8f1c2a"
+
+    @pytest.mark.component
+    def test_building_the_config_alone_never_touches_redis(self, monkeypatch):
+        """Config assembly is pure; only node construction needs a live Redis.
+
+        This is what keeps this whole file in the parallel component tier with
+        no Redis service anywhere near it.
+        """
+        # Arrange
+        from src.config import RedisSettings
+        from src.core import live_cache
+
+        def _boom(*args, **kwargs):
+            raise AssertionError("config assembly performed a Redis reachability check")
+
+        monkeypatch.setattr(live_cache, "check_redis_reachable", _boom)
+
+        # Act / Assert — must not raise
+        build_trading_node_config(
+            _settings(),
+            trader_id=TRADER_ID,
+            cache=live_cache.build_cache_config(RedisSettings(_env_file=None)),
+        )
+
+    @pytest.mark.component
+    def test_an_unreachable_redis_is_refused_before_a_node_is_constructed(self, monkeypatch):
+        """AC #6 — ordering is the contract.
+
+        ``TradingNode(config=...)`` is the call that hangs forever against an
+        unreachable Redis (``CacheDatabaseAdapter.__init__`` blocks and
+        ``DatabaseConfig(timeout=...)`` does not bound it). So the preflight
+        must raise strictly before that constructor is reached, and asserting
+        the exception type alone would not prove it.
+        """
+        # Arrange
+        from src.config import RedisSettings
+        from src.core.live_cache import RedisUnreachableError, build_cache_config
+
+        def _refuse(*args, **kwargs):
+            raise RedisUnreachableError("redis is down")
+
+        def _boom(*args, **kwargs):
+            raise AssertionError("TradingNode constructed despite an unreachable Redis")
+
+        monkeypatch.setattr(live_node_builder, "check_redis_reachable", _refuse)
+        monkeypatch.setattr(live_node_builder, "TradingNode", _boom)
+
+        # Act / Assert
+        with pytest.raises(RedisUnreachableError):
+            live_node_builder.build_trading_node(
+                _settings(),
+                trader_id=TRADER_ID,
+                cache=build_cache_config(RedisSettings(_env_file=None)),
+            )
+
+    @pytest.mark.component
+    def test_no_preflight_runs_when_no_cache_is_configured(self, monkeypatch):
+        """A node with an in-memory cache must never require Redis."""
+
+        # Arrange
+        def _boom(*args, **kwargs):
+            raise AssertionError("Redis preflight ran for an in-memory cache")
+
+        monkeypatch.setattr(live_node_builder, "check_redis_reachable", _boom)
+        monkeypatch.setattr(live_node_builder, "TradingNode", lambda **kwargs: _StubNode())
+
+        # Act / Assert — must not raise
+        live_node_builder.build_trading_node(_settings(), trader_id=TRADER_ID)
+
+    @pytest.mark.component
+    def test_the_gate_still_runs_before_the_redis_preflight(self, monkeypatch):
+        """A refused connection must not first announce that Redis is down.
+
+        The gate is the safety-critical control (FR9). A gate refusal has to
+        surface as a gate refusal, with its own exit code, regardless of what
+        else is misconfigured.
+        """
+        # Arrange
+        from src.config import RedisSettings
+        from src.core.live_cache import build_cache_config
+
+        def _boom(*args, **kwargs):
+            raise AssertionError("Redis preflight ran before the safety gate")
+
+        monkeypatch.setattr(live_node_builder, "check_redis_reachable", _boom)
+
+        # Act / Assert
+        with pytest.raises(GateRefusedError):
+            live_node_builder.build_trading_node(
+                _settings(port=7496),
+                trader_id=TRADER_ID,
+                cache=build_cache_config(RedisSettings(_env_file=None)),
+            )
+
+
+class _StubNode:
+    """Stands in for a TradingNode so no kernel is constructed in this tier."""
+
+    class _Kernel:
+        def get_log_guard(self):
+            return None
+
+    def __init__(self) -> None:
+        self.kernel = _StubNode._Kernel()
+
+    def add_data_client_factory(self, *args, **kwargs) -> None:
+        return None
+
+    def add_exec_client_factory(self, *args, **kwargs) -> None:
+        return None

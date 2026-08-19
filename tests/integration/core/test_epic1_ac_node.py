@@ -439,6 +439,13 @@ _STDLIB_AND_FIRST_PARTY = frozenset(
         "enum",
         "math",
         "os",
+        # Story 2.4's Redis reachability preflight (`src/core/live_cache.py`).
+        # Deliberately stdlib: nautilus-trader's Redis client is Rust-side and
+        # exposes no reachability probe, and there is no Python Redis client in
+        # this project — so a raw socket is what keeps AR3 ("zero new
+        # dependencies") true while still bounding a connect that otherwise
+        # hangs forever.
+        "socket",
         "src",
         "time",
         "typing",

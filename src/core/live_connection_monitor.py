@@ -6,8 +6,9 @@ four events that make a connection's life legible in the log —
 ``connection.recovery_refused``.
 
 Does not own: *taking* the reading (``read_ibkr_connection_status`` in
-``src/core/live_node_builder.py`` does, because the adapter's client cache key
-is the triple that module configures), the poll schedule (Epic 2's runner —
+``src/core/live_connection_probe.py`` does; its lookup key is the exact
+``(host, port, client_id)`` triple ``live_node_builder`` configures, so the two
+must be kept in step by hand), the poll schedule (Epic 2's runner —
 AR38), re-establishing state after a reconnect (Epic 4's reconciliation), or
 consuming the flag on an order path (Epic 3 — Epic 1 has no order path at all,
 which is the point: the control ships before the capability it constrains).

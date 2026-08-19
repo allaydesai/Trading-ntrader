@@ -23,7 +23,7 @@ from nautilus_trader.model.identifiers import TraderId
 
 from src.config import IBKRSettings
 from src.core.live_connection_monitor import ConnectionMonitor, ConnectionState, ConnectionStatus
-from src.core.live_node_builder import read_ibkr_connection_status
+from src.core.live_connection_probe import read_ibkr_connection_status
 from tests.component.doubles import (
     TestIBConnection,
     TestIBConnectionWithoutFlags,

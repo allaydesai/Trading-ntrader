@@ -144,3 +144,38 @@ overrides → settings map → Pydantic defaults.
 Config and parameter validation happen separately — a strategy can be registered without a config class.
 
 For data sources and exchange clients, see `docs/agent/data-pipeline.md`.
+
+## Live Session Cache (Redis)
+
+A live paper-trading session's engine state lives in Redis, namespaced per
+session. `src/core/live_cache.py` builds the `CacheConfig`;
+`src/core/live_trader_id.py` derives the `trader_id` that names the namespace
+(`PAPER-<8 hex of session UUID>`). Keys land as
+`trader-PAPER-a1b2c3d4:general:<key>`.
+
+**Redis is a disposable cache. IBKR is authoritative.** It holds engine cache
+state — orders, positions, accounts, instruments — all of which is rebuildable
+from the broker. Flushing it loses no system of record: closed trades are in
+PostgreSQL and session identity is in `trading_sessions`. Nothing currently
+*detects or resolves* a conflict between cached state and broker state;
+startup reconciliation is Epic 4 (FR35, AR25).
+
+Four things that bite:
+
+1. **An unreachable Redis hangs forever, it does not raise.**
+   `CacheDatabaseAdapter.__init__` blocks indefinitely and
+   `DatabaseConfig(timeout=...)` does not bound it. `NautilusKernel` builds that
+   adapter eagerly, so `TradingNode(config=...)` inherits the hang. Always call
+   `check_redis_reachable()` first — `build_trading_node()` already does.
+2. **Three `CacheConfig` fields decide the namespace, and all three are silent
+   defaults**: `use_trader_prefix=True`, `use_instance_id=False`,
+   `flush_on_start=False`. `use_instance_id=True` sends every restart to a new
+   namespace (it is a fresh UUID4 per process); `flush_on_start=True` wipes it.
+   `build_cache_config()` passes all three explicitly — do not "tidy" them away.
+3. **Writes are asynchronous.** `add()` then `keys()` on the same open adapter
+   returns `[]`. `close()` is what makes a write readable.
+4. **`flush()` is `FLUSHDB`** — it clears the whole database, not the trader's
+   namespace. Never call it in a test against a developer's Redis.
+
+`DatabaseConfig` at 1.220.0 has no database-index field, so `REDIS_DB` cannot be
+honoured; `RedisSettings` refuses any non-zero value rather than ignoring it.
