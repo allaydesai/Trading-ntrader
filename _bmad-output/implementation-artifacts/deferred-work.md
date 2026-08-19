@@ -740,8 +740,13 @@ after dedup. Every item below was re-verified by execution before being recorded
   node died on a Gateway drop records the same `stopped` as one the operator halted deliberately, so
   any Epic 5 comparison filtering on `stopped` silently mixes complete runs with truncated ones, and
   a truncated run is not comparable to a backtest. AC #6 mandates exactly these four values, so this
-  is not a Story 2.1 defect. **Action at the Epic 2 retro / Story 2.3:** decide whether the failure
-  information lives in a fifth status value or a separate nullable column.
+  is not a Story 2.1 defect. **Decided by Story 2.3 (2026-08-19), not closed:** not a fifth status
+  value — Story 2.1's AC #6 pins the enum at exactly four, the `session_status` PG type is created
+  with exactly four labels, and this phase's single migration (Story 2.2) is spent, so a fifth value
+  now costs a second migration the epic does not have. The decision does not by itself deliver the
+  operator-facing "why did it stop" answer, so the item stays open. **Action, re-pointed at Story
+  2.8:** Story 2.7 makes a strategy failure visible and Story 2.8 derives `stale` from the heartbeat
+  — decide there whether that is sufficient or a separate nullable column is still warranted.
 
 - **Unit-tier tests transitively load Nautilus.** Every `StrategySpec` construction in
   `tests/unit/models/test_session_spec.py` triggers the lazy `src.core.live_market_data` import, which
@@ -850,3 +855,115 @@ were judged not actionable inside this story.
   seeded with an allowlist for the two known pre-existing drifts
   (`idx_trades_backtest_run_id` vs `ix_trades_backtest_run_id`, and the two ORM-only
   `backtest_runs` indexes). Owner: Epic 2 retro.
+
+## Deferred from: story-2.3 (2026-08-19)
+
+Closes none outright — the `SessionStatus` terminal-failure item above is *decided* (not a fifth
+status value) but not closed, since the decision does not by itself deliver the operator-facing
+answer; it stays open, re-pointed at Story 2.8.
+
+- **`live_check.classify_failure` (deferred-work.md, "Deferred from: story-1.7") will classify
+  `InvalidSessionTransition` generically until a CLI story maps it.** This story's new exception is a
+  typed failure on the live path, and the classifier keys on exception class *name*, so a `stopped`
+  session refused for `running` currently maps to no exit code at all — nothing on the live path
+  calls `transition()` yet. Harmless today. **Action for Story 2.5/2.6:** map
+  `InvalidSessionTransition` deliberately, at exit code **1** — AR28 reserves 3 for gate refusal and
+  4 for connectivity, and a session-state conflict is neither.
+
+- **Re-validating a persisted spec against today's param model (deferred-work.md, "Deferred from:
+  story-2.1") is not triggered by this story, and stays that way.** `transition()` and `resolve()`
+  return the ORM row and never call `SessionSpec.from_stored()`. Keeping it that way matters: the
+  moment this service starts materialising typed specs, it inherits the brittleness the original item
+  describes. Re-pointed at Epic 5 by Story 2.2; unchanged here.
+
+- **`SessionSpec.model_copy(update=...)` still bypasses validation (deferred-work.md, "Deferred
+  from: story-2.2").** Untouched — no spec is constructed anywhere in `session_service.py`.
+  Re-pointed at Story 2.4 by Story 2.2; unchanged here.
+
+- **Both trading-session repositories still have zero CI-gating coverage (deferred-work.md,
+  "Deferred from: code review of story-2.2").** This story adds one unit-tier structural guard
+  (`test_find_by_session_id_can_lock_the_row_for_update`) for the new `for_update` read, which
+  narrows the gap slightly but does not close it — the behavioural proof of `for_update` under real
+  concurrency still lives only in `tests/integration/db/test_session_service.py`, which CI
+  `--ignore`s. Owner stays the Epic 2 retro.
+
+- **Judgment calls flagged for the Epic 2 retro (7 total, per the story's Dev Notes):** the 90s
+  heartbeat-staleness threshold (derived as 3× AR32's ~30s write cadence, no number fixed anywhere
+  else); `SessionService` is sync-only, bridged to Story 2.5's asyncio runner via
+  `asyncio.to_thread`; one exception class rather than a `SessionAlreadyRunning` subclass, since
+  nothing branches on the distinction; no fifth `SessionStatus` value (see above); `resolve()`
+  returns the row, not just the UUID; UUID-first-then-name resolution order; and AC #6 (the
+  concurrent-reclaim criterion) was added to the epic's own AC list, since AC #4/#5 are individually
+  correct but jointly racy.
+
+## Deferred from: code review of story-2.3 (2026-08-19)
+
+Three adversarial layers produced 42 raw findings, 26 after dedupe. The Critical finding (the
+`FOR UPDATE` re-read returning stale identity-mapped attributes, which let two processes both
+reclaim one session and let a `sealed` session move back to `running`) was fixed in-story, not
+deferred. The five items below were deferred.
+
+- **⚠️ BLOCKING CONSTRAINT ON STORY 2.5 — the reclaim's liveness signal has no producer.** Nothing
+  in `src/` writes `last_heartbeat_at` except `SessionService.transition()`'s single stamp on entry
+  to `running` (verified by grep: the only other hits are the ORM column and the staleness helpers).
+  Story 2.5 owns AR32's ~30s writer. Until it exists, **every session becomes reclaimable 90 seconds
+  after it starts** and AC #5's fresh-heartbeat refusal — the only thing standing between an operator
+  typo and two processes on one broker account — is dead for the life of a forward test. *Decision
+  2026-08-19 (Allay): accept for Story 2.3, which scoped the writer out deliberately, and record it
+  here as a hard constraint.* **Story 2.5 must not ship the runner without the heartbeat writer.**
+  Related, and deeper: a stale heartbeat is not evidence a process is dead (DB failover, GC pause,
+  throttled container), and there is no fencing token or ownership column, so a reclaimed process
+  keeps trading and keeps heartbeating — each side would then refuse the other. The story calls NFR29
+  "a policy, not a mechanism", which is accurate; an owner/epoch column was considered and rejected
+  for now because the phase's single migration is already spent. Revisit at the Epic 2 retro.
+
+- **`InvalidSessionTransition` inherits `BacktestStorageError` — a live-trading refusal is catchable
+  as a backtest-storage error.** Story 2.3's Judgment call #3 chose one exception class deliberately,
+  and *Decision 2026-08-19 (Allay): that stands.* Recorded because the risk lands downstream, not
+  here: nothing catches `BacktestStorageError` broadly today (verified, 0 hits in `src/`), but
+  Story 2.5/2.6 add the first CLI handlers on this path. "Another process appears live on this
+  session" must be surfaced to a human and **never retried** — an `except BacktestStorageError:
+  retry()` would spin until the incumbent's heartbeat went stale and then reclaim a live session.
+  **Action for Story 2.5/2.6:** map `InvalidSessionTransition` explicitly at exit code **1** (AR28
+  reserves 3 for gate refusal and 4 for connectivity), and never fold it into a storage-error retry.
+  This supersedes the narrower `classify_failure` note carried from story-2.3's own section above.
+
+- **`stopped → running` performs no liveness check at all.** Only the `running → running` self-edge
+  consults `last_heartbeat_at`; `stopped → running` goes straight through `_LEGAL_TRANSITIONS` with
+  no heartbeat consultation. A process that has committed `stopped` but is still flattening or
+  cancelling working orders can therefore be joined by a second process through a door the guard
+  does not watch — the same two-processes-on-one-account outcome NFR6 forbids, reached by a
+  different route. The information needed to catch it is already on the row. **Action for Story
+  2.6:** the runner must complete the broker disconnect *before* committing `stopped`, or this edge
+  needs the same heartbeat check the self-edge has.
+
+- **No `lock_timeout` or `statement_timeout` is configured anywhere in `src/` or `alembic/`.**
+  `transition()` takes an exclusive row lock via `SELECT ... FOR UPDATE` and, by design, never
+  commits or rolls back — the caller owns the transaction. A caller that catches
+  `InvalidSessionTransition`, prints a friendly message and lingers (an interactive prompt, a retry
+  loop, a long-lived session scope) holds that lock, and every peer blocks **indefinitely** with no
+  output. Confirmed by execution: a second connection with `lock_timeout='800ms'` got Postgres
+  `55P03` on the same row. Repo-wide infrastructure concern, broader than this story.
+
+- **Transaction isolation level is neither pinned nor documented.** The whole lock-then-re-read
+  mechanism assumes READ COMMITTED. Under REPEATABLE READ or SERIALIZABLE, Postgres aborts the
+  loser's `SELECT ... FOR UPDATE` with `could not serialize access due to concurrent update` — a
+  `DBAPIError`, not the designed `InvalidSessionTransition` — which the integration race test's
+  `except` clause would not catch and which no caller is prepared for. Worth pinning explicitly on
+  the engine before Story 2.5 puts this path under real load.
+
+- **`resolve()`'s UUID-before-name precedence can silently shadow.** If row B is *named* row A's
+  `session_id` string, `resolve()` returns **A**, with no ambiguity error. This is deliberate and
+  documented (Story 2.3 Judgment call #6), and the benign case (a UUID matching no row falling
+  through to the name lookup) is tested — but the dangerous case, where the UUID matches A *and*
+  the name matches B, is not. In a system where the resolved identifier selects which live session
+  gets stopped or sealed, resolving to the wrong session silently is a real hazard. Either test the
+  precedence explicitly or reject UUID-shaped `--name` values at creation.
+
+- **Both trading-session repositories still have zero CI-gating coverage.** Carried forward from
+  the story-2.2 code review, and now load-bearing: `tests/integration/db/` is `--ignore`d by CI
+  (`ci.yml:168`, `:238`), so AC #6's only behavioural evidence — the two-connection reclaim race —
+  never gates a PR. Story 2.3 adds one unit-tier structural guard for the `for_update` read, which
+  narrows the gap but does not close it. The code review also found that the race test as written
+  could not have caught the Critical defect anyway, because its loser uses a fresh `Session` whose
+  identity map has never seen the row. Owner stays the Epic 2 retro.

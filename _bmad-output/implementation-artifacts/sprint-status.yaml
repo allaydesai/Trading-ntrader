@@ -36,7 +36,108 @@
 
 generated: 2026-08-03
 last_updated: >-
-  2026-08-19 (Story 2.2 code-reviewed -> done, closing it. epic-2 remains in-progress: 2.1 done,
+  2026-08-19 (Story 2.3 code-reviewed -> done, closing it. epic-2 remains in-progress: 2.1 done,
+  2.2 done, 2.3 done, 2.4-2.8 backlog. Three adversarial layers produced 42 raw findings, 26 after
+  dedupe: 3 decisions / 15 patches / 7 deferred / 4 dismissed. ONE CRITICAL DEFECT SURVIVED THE
+  STORY'S OWN MUTATION TESTING and was found here: transition()'s SELECT ... FOR UPDATE took the row
+  lock correctly but SQLAlchemy returned the identity-mapped instance and DISCARDED the freshly
+  locked row's column values, because no populate_existing was set anywhere in src/. A caller that
+  had already resolve()d the row -- the shape AR36 prescribes -- therefore validated and decided on
+  PRE-LOCK state. Reproduced twice against the live database: two processes both reclaimed one
+  session (AC #6 violated, the outcome the story calls the worst this phase can produce), and a
+  SEALED session was moved back to RUNNING (AC #3's terminality violated). Neither the unit tier
+  (repository fully mocked, no identity map) nor the shipped race test could catch it -- the race
+  test's loser uses a brand-new Session whose identity map has never seen the row, the one
+  arrangement in which the ORM does return fresh data. Closed with
+  .execution_options(populate_existing=True) on both repository twins (AR9) plus an integration
+  regression test that reproduces the resolve()-then-transition() shape and goes red without the fix.
+  Second-most-serious find: SessionStatus is a StrEnum, so `"running" in frozenset({RUNNING})` is
+  True while `is` is False -- a raw-string target skipped the reclaim guard ENTIRELY rather than
+  being evaluated by it; closed by normalising `to` through _as_status() before any decision.
+  Allay ruled on all three decisions: (1) widen the AR37 AST guard -- it examined 4 of 192 files and
+  a planted probe using the src.db.models re-export passed it, with src/cli/commands/live.py never
+  scanned; now scans all of src/ with a 2-file allowlist and a non-vacuity assertion; (2) keep
+  InvalidSessionTransition's BacktestStorageError base, with the never-retry constraint recorded for
+  Stories 2.5/2.6; (3) accept that the heartbeat has no producer until Story 2.5, recorded as a
+  BLOCKING constraint on that story -- until AR32's writer exists, every session is reclaimable 90s
+  after it starts and the AC #5 refusal is inert. All 7 new/changed guards were mutation-tested and
+  every one went red as predicted. AC #6 was reviewed on its merits, as the story invited, and KEPT:
+  it is correct and it caught a real defect. Final: unit 1919 passed (+18), component 1031 passed /
+  16 skipped, integration/db 70 passed, Epic 1 sweep 40/40. format/lint/typecheck clean.
+  Previously: 2026-08-19 (Story 2.3 implemented -> review. ready-for-dev -> in-progress -> review, same session
+  as drafting. Delivers SessionService.transition() and .resolve() in src/services/session_service.py
+  (227 lines, class 88 — under the story's own tightest limit): the single validated path through
+  which a trading session's status changes (AR37) and the shared name-or-UUID resolver (AR36). All 9
+  tasks complete, all 13 ACs satisfied including AC #6 (the concurrent-reclaim criterion the story
+  itself added, not in epics.md), demonstrated live against real Postgres with a genuine
+  two-connection race (winner holds its FOR UPDATE lock open via a deliberate 0.4s delay so the loser
+  actually blocks, then re-reads the heartbeat the winner just stamped and refuses) rather than
+  simulated with mocks. Task 7's mutation testing confirmed all four load-bearing guards actually
+  fail when broken: dropping with_for_update() failed the sync repository's structural guard; a
+  throwaway status= assignment in a repository method failed the AR37 AST scan, naming that file;
+  loosening the staleness comparison from > to >= failed the exactly-at-threshold boundary test; and
+  removing the reclaim's last_heartbeat_at stamp failed the unit-tier property test pinning it (the
+  story names an integration test for this mutation that had not been written yet at that point in
+  the sequence -- the equivalent unit-tier test already covers the same fact, and the integration
+  race test exercises it again under real concurrency once built). One self-inflicted trap caught
+  during Task 6: session_service.py's own module docstring originally said "no nautilus_trader" and
+  "never calls commit() or rollback()", which would have tripped the very grep gates Task 6 requires
+  to return zero hits -- the same class of trap Story 2.1's review found in from_overrides'
+  docstring; reworded before writing the guard tests. deferred-work.md gained a "Deferred from:
+  story-2.3" section: closes nothing outright, decides (but does not close) the SessionStatus
+  terminal-failure item from Judgment call #4 -- not a fifth status value, since the enum and its PG
+  type are both pinned at four and this phase's single migration is spent -- re-pointed at Story 2.8;
+  and reads three other stories' still-open items without touching them (re-validate-on-read ->
+  Epic 5, model_copy bypass -> Story 2.4, repository CI-gating coverage -> Epic 2 retro), plus flags
+  that InvalidSessionTransition is a new typed failure live_check.classify_failure will need mapping
+  for a future CLI story (2.5/2.6, exit code 1). Final counts: baseline (collected, matching the
+  story's own recorded figures exactly) unit 1856 / component 1047 / integration 239; final (passed)
+  unit 1901 (+45) / component 1031 passed + 16 skipped (unchanged) / integration 240 passed + 2
+  skipped (+3) -- zero regressions. format/lint/typecheck clean (session_service.py is inside
+  make typecheck's src/services scope). Re-ran the FULL Epic 1 acceptance sweep across all six
+  test_epic1_ac_*.py files (the story names only test_epic1_ac_node.py, which alone covers just 8 of
+  the 40 criteria) -- 40/40 still pass, untouched by this story. epic-2 remains in-progress: 2.1/2.2
+  done, 2.3 review, 2.4-2.8 backlog.
+  Previously: 2026-08-19 (Story 2.3 created: backlog -> ready-for-dev. epic-2 stays in-progress: 2.1/2.2 done,
+  2.3 ready-for-dev, 2.4-2.8 backlog. File:
+  2-3-move-a-session-between-states-through-one-guarded-path.md. Owns SessionService.transition()
+  (the single validated state machine), InvalidSessionTransition, a stale-heartbeat reclaim, and the
+  shared name-or-UUID resolver. NO migration, NO CLI, NO runner — every column it writes already
+  exists from 2.2's migration (re-verified against the live DB: head d08dfbd393f0 single, all five
+  lifecycle timestamps timestamptz/nullable, pg_enum labels lowercase, trading_sessions 0 rows /
+  backtest_runs 133 / trades 14982). Its context was built by executing against the live database
+  rather than reading docs, which settled six things the epic could not. (1) THE RECLAIM IS A RACE,
+  demonstrated both ways: two threads reading the same stale heartbeat with no row lock BOTH
+  reclaim ("two processes on one session", the worst outcome this phase can produce); with
+  .with_for_update() on the read AND the reclaim stamping last_heartbeat_at, the loser blocks 0.46s,
+  re-reads a 0.5s-old heartbeat and is refused. Neither half works alone — drop the stamp and the
+  loser re-reads a still-stale value and reclaims anyway. This is added as AC #6, which is NOT in
+  epics.md, and flagged as such. (2) AC #1's grep is unsatisfiable as written: `grep -rn "status = "
+  src/` matches 20 pre-existing lines and `\.status = ` matches 5, none touching trading_sessions —
+  same wall Story 2.2 hit. Replaced with two scoped greps (both verified at 0 hits today) plus an
+  AST scan restricted to modules that import TradingSession, which finds 0 offenders across exactly
+  3 importers and cannot false-positive on the Pydantic self.status= lines in catalog_metadata.py /
+  strategy.py. (3) psycopg2 returns timestamptz in the DB SESSION timezone (America/Toronto,
+  -04:00), NOT UTC — a test asserting tzinfo is timezone.utc on a read-back value FAILS, and
+  datetime.utcnow() minus that value raises TypeError. (4) last_heartbeat_at is nullable and
+  `now - None` raises; NULL must count as STALE, matching ConnectionMonitor's own `age is None ->
+  stale` rule, because the opposite reading manufactures exactly the stuck state NFR11 forbids.
+  (5) TimestampMixin gives created_at ONLY — no updated_at, no onupdate — so every lifecycle
+  timestamp must be written explicitly; the story supplies the edge->column map the epic never
+  wrote, and flags that Story 5.3 must NOT also stamp sealed_at. (6) An unattached TradingSession
+  built without status= has status is None (the ORM default applies at flush), a direct trap for the
+  mocked unit tests. The load-bearing design call: the status assignment lives in
+  SessionService.transition(), NOT in a new repository method — which satisfies AR37 literally,
+  leaves both repositories' capability allowlist and the 2.2 shape guards passing UNMODIFIED (the
+  repos gain only a for_update kwarg, invisible to dir()), and is a strictly stronger guarantee,
+  since no repository method can write status at all. Seven judgment calls flagged for the Epic 2
+  retro, the largest being the heartbeat staleness threshold — no number exists anywhere in the PRD,
+  architecture or epics, only AR32's ~30s write cadence — set to 90s expressed as 3x the interval
+  constant so Stories 2.5 and 2.8 import one value instead of inventing three. The deferred item
+  routed to this story by name (SessionStatus has no terminal failure state) is DECIDED, not closed:
+  not a fifth status value, because 2.1's AC pins four, the pg enum has four labels, and this
+  phase's single migration is spent — re-pointed at Story 2.8 with that reasoning recorded.
+  Previously: 2026-08-19 (Story 2.2 code-reviewed -> done, closing it. epic-2 remains in-progress: 2.1 done,
   2.2 done, 2.3-2.8 backlog. Three adversarial layers produced 40 raw findings (38 after dedupe);
   10 independent skeptics with repo access refuted 24 and confirmed 14, merging to 11 distinct
   items, plus 2 the reviewer found directly. NO critical, high or medium finding survived
@@ -580,7 +681,7 @@ development_status:
   epic-2: in-progress
   2-1-define-a-session-as-a-list-of-strategy-specifications: done
   2-2-create-a-named-session-with-an-immutable-specification: done
-  2-3-move-a-session-between-states-through-one-guarded-path: backlog
+  2-3-move-a-session-between-states-through-one-guarded-path: done
   2-4-give-each-session-its-own-durable-engine-cache: backlog
   2-5-start-a-session-in-the-foreground-with-an-ordered-startup-sequence: backlog
   2-6-stop-a-session-without-ending-it-and-without-touching-positions: backlog
