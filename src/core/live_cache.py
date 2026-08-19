@@ -30,7 +30,10 @@ installed 1.220.0 rather than read from documentation:
    Redis down produces a process that prints nothing and never returns.
    ``RedisCacheDatabase`` is Rust-side and exposes no reachability probe, and
    there is no Python Redis client in this project (AR3: zero new dependencies),
-   so the preflight is a stdlib socket.
+   so the preflight is a stdlib socket. Note that "unreachable" is wider than
+   "nothing is listening": an endpoint that completes the TCP handshake and then
+   never answers hangs the adapter identically, so ``check_redis_reachable``
+   requires a ``+PONG`` and refuses everything else.
 2. **Three ``CacheConfig`` fields decide the key namespace, and all three are
    defaults.** ``use_trader_prefix=True``, ``use_instance_id=False``,
    ``flush_on_start=False``. FR19's "a restarted process rejoins its own state"
@@ -60,7 +63,28 @@ DEFAULT_REACHABILITY_TIMEOUT_SECONDS = 2.0
 
 
 class RedisUnreachableError(Exception):
-    """The engine cache's Redis could not be reached; no node was constructed."""
+    """The engine cache's Redis could not be used; no node was constructed.
+
+    Covers "nothing is listening" and "something is listening but it is not a
+    Redis that answers" alike — from a caller's point of view both mean the same
+    thing, because both hang ``CacheDatabaseAdapter.__init__`` forever.
+    """
+
+
+def _unreachable(host: str, port: int, detail: str) -> RedisUnreachableError:
+    """Build the single refusal this module raises, however the check failed.
+
+    One message shape for every failure path, so an operator gets the host, the
+    port, what actually went wrong, and the two remedies regardless of which
+    branch refused.
+    """
+    return RedisUnreachableError(
+        f"Cannot use the engine cache's Redis at {host}:{port} — {detail}. "
+        "A live session cannot start without it: constructing a Nautilus node against "
+        "an unusable Redis blocks forever rather than failing. Start the service "
+        "('docker compose up -d redis', or 'brew services start redis'), or set "
+        "REDIS_HOST / REDIS_PORT to the instance you intend to use."
+    )
 
 
 def _validate_timeout(timeout: float) -> float:
@@ -142,11 +166,24 @@ def check_redis_reachable(
 
     Uses ``socket`` from the standard library, not a Redis client: AR3 forbids
     new dependencies and none is installed. A TCP connection is opened, an
-    inline ``PING`` is sent, and the reply is read. A successful connect that
-    does not answer ``+PONG`` is *accepted* with a warning rather than refused —
-    something is listening, and refusing to start a session because a proxy
-    answered unusually would be a worse failure than the one being prevented.
-    The connect itself is the load-bearing half.
+    inline ``PING`` is sent, and the reply is read. **Only a confirmed ``+PONG``
+    is accepted.** Anything else refuses: nothing listening, a listener that
+    accepts and then stays silent, or a listener that answers something else.
+
+    That last part is a reversal, and the reason is measured rather than
+    argued. This originally accepted a non-``+PONG`` reply with a warning, on
+    the grounds that something was listening and that refusing over an unusual
+    proxy answer would be worse than the failure being prevented. It is not:
+    pointed at a listener that accepts and never speaks, the preflight passed
+    and ``CacheDatabaseAdapter.__init__`` was still blocked, silently, when it
+    was killed at 40 seconds — the exact hang AC #6 exists to bound. An
+    HTTP-speaking listener behaved the same way. A completed TCP handshake
+    proves nothing about whether the Rust client can proceed.
+
+    The one thing given up: a password-protected Redis answers ``-NOAUTH`` and
+    *would* have failed fast inside the adapter with ``NOAUTH: Authentication
+    required``. It is now refused here instead, with a less specific message.
+    That is the accepted cost of refusing every endpoint that hangs.
 
     Takes host and port rather than a settings object so that callers can pass
     the values the node will *actually* connect to — ``cache.database.host`` and
@@ -158,12 +195,20 @@ def check_redis_reachable(
         host: Redis host. ``None`` means Nautilus's own "typical default",
             which for its Redis backing is loopback.
         port: Redis port. ``None`` means Redis's default, 6379.
-        timeout: Seconds to allow for the connection and the reply. Bounds the
-            whole call, which is the entire point of the function.
+        timeout: Seconds to allow for the connect, the send, and the reply —
+            **each**, not the sum. It does not bound the whole call: CPython's
+            ``socket.create_connection`` resolves the name outside the timeout
+            and then applies it per resolved address, so a multi-address host
+            whose SYNs are dropped costs (addresses x ``timeout``), and a wedged
+            resolver blocks in ``getaddrinfo`` for the OS resolver's own budget
+            first. Every path still terminates, which is what the hang this
+            function prevents actually requires; do not size a caller's own
+            deadline off this argument alone.
 
     Raises:
-        RedisUnreachableError: Nothing is listening, the host does not resolve,
-            or the connection could not be completed within ``timeout``.
+        RedisUnreachableError: Nothing is listening, the host does not resolve
+            or cannot be encoded, the connection could not be completed, or the
+            endpoint did not answer ``+PONG``.
         ValueError: ``timeout`` cannot bound a wait, or ``host`` is blank.
     """
     bounded = _validate_timeout(timeout)
@@ -182,34 +227,28 @@ def check_redis_reachable(
             connection.settimeout(bounded)
             try:
                 # Inline command form: Redis accepts a bare `PING\r\n` on a
-                # fresh connection and answers `+PONG\r\n`. Anything else is
-                # logged, not raised — see the docstring.
+                # fresh connection and answers `+PONG\r\n`.
                 connection.sendall(b"PING\r\n")
                 reply = connection.recv(64)
             except OSError as exc:
-                logger.warning(
-                    "redis.ping_failed",
-                    host=host,
-                    port=port,
-                    detail=str(exc),
-                )
-                return
-    except (OSError, socket.gaierror) as exc:
-        raise RedisUnreachableError(
-            f"Cannot reach the engine cache's Redis at {host}:{port} ({exc}). "
-            "A live session cannot start without it: constructing a Nautilus node against "
-            "an unreachable Redis blocks forever rather than failing. Start the service "
-            "('docker compose up -d redis', or 'brew services start redis'), or set "
-            "REDIS_HOST / REDIS_PORT to the instance you intend to use."
-        ) from exc
+                # `socket.timeout` is an `OSError`, so this is the branch a
+                # wedged endpoint arrives on. It must raise: see the docstring.
+                raise _unreachable(
+                    host, port, f"it accepted the connection but never answered PING ({exc})"
+                ) from exc
+    # `socket.gaierror` is itself an `OSError` and needs no separate entry.
+    # `UnicodeError` is *not* — `create_connection` runs the host through the
+    # `idna` codec, which raises it for a DNS label over 63 characters or
+    # non-encodable text, and `redis_host` is a free-form env string.
+    except (OSError, UnicodeError) as exc:
+        raise _unreachable(host, port, str(exc)) from exc
 
     if not reply.startswith(b"+PONG"):
-        logger.warning(
-            "redis.unexpected_ping_reply",
-            host=host,
-            port=port,
-            reply=reply[:32].decode("utf-8", errors="replace"),
+        answered = reply[:32].decode("utf-8", errors="replace") if reply else "nothing"
+        raise _unreachable(
+            host,
+            port,
+            f"it answered {answered!r} rather than '+PONG', so it is not a usable Redis",
         )
-        return
 
     logger.debug("redis.reachable", host=host, port=port)

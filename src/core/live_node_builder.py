@@ -372,6 +372,12 @@ def build_trading_node(
             ``build_trading_node_config``.
         bar_observer: Observer configuration, attached declaratively.
         cli_flags: Operator declarations from the command line.
+        cache: Engine-cache configuration from ``live_cache.build_cache_config``.
+            Supplying it is what turns the Redis preflight on: with a cache
+            whose ``database`` is set, this function contacts Redis before
+            constructing anything, and refuses if it cannot. ``None`` (the
+            default) leaves the node's cache in memory and touches no network —
+            which is what ``ntrader live check`` relies on.
         loop: The event loop to bind the node to. Passed straight through to
             ``TradingNode``, which otherwise falls back to
             ``asyncio.get_event_loop()`` — quietly manufacturing an orphan loop
@@ -383,6 +389,13 @@ def build_trading_node(
         GateRefusedError: The gate refused the connection.
         LiveNodeConfigError: The configuration cannot produce a usable node.
         LiveMarketDataError: The market-data configuration cannot be honoured.
+        RedisUnreachableError: A ``cache`` with a ``database`` was supplied and
+            its Redis could not be used. Raised only on that path, and only
+            before any node exists. Callers that map exceptions to exit codes
+            must handle it explicitly: ``live_check.classify_failure`` keys on
+            the exception's class *name*, so an unmapped type falls through to a
+            generic error and its message — which names the host, the port, and
+            the remedy — is withheld from the operator.
     """
     config = build_trading_node_config(
         settings,

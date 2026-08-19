@@ -428,6 +428,9 @@ After placing the file in `src/core/strategies/custom/`, the strategy will be au
 | `TWS_USERNAME` | IBKR username | - |
 | `TWS_PASSWORD` | IBKR password | - |
 | `TWS_ACCOUNT` | IBKR account ID | - |
+| `REDIS_HOST` | Redis host for the live session's engine cache. Inside `docker compose` this must be the service name `redis`, not loopback | `127.0.0.1` |
+| `REDIS_PORT` | Redis port for the engine cache | `6379` |
+| `REDIS_DB` | Redis logical database index. Only `0` is accepted — nautilus-trader 1.220.0 has no database-index field, so any other value would isolate nothing. Sessions are isolated by `trader_id` instead | `0` |
 | `DEFAULT_BALANCE` | Starting balance for backtests | `1000000` |
 | `TRADE_SIZE` | Default trade size | `1000000` |
 | `CATALOG_BASE_PATH` | Base dir holding named catalog subdirectories (import target) | - |
@@ -442,6 +445,10 @@ After placing the file in `src/core/strategies/custom/`, the strategy will be au
 | `KRAKEN_RATE_LIMIT` | Kraken requests/sec | `10` |
 | `KRAKEN_DEFAULT_MAKER_FEE` | Maker fee rate | `0.0016` |
 | `KRAKEN_DEFAULT_TAKER_FEE` | Taker fee rate | `0.0026` |
+
+> **Redis.** The engine cache reads `REDIS_HOST` / `REDIS_PORT` / `REDIS_DB` only. The
+> `REDIS_URL` still present in `.env.example` predates them and is read by nothing —
+> setting it has no effect. `docker compose up -d redis` starts the provisioned instance.
 
 > **Catalog paths.** `import --catalog <name>` writes to `<CATALOG_BASE_PATH>/<name>`.
 > Reading tools (`data list`, backtests, the explorer) use `NAUTILUS_PATH`, so set it

@@ -8,6 +8,7 @@ tier instead (``tests/component/core/test_live_cache.py``), so this module can
 stay framework-free.
 """
 
+import random
 import subprocess
 import sys
 from uuid import UUID, uuid4
@@ -69,15 +70,24 @@ class TestDistinctness:
 
         assert first != second
 
-    def test_a_thousand_random_sessions_derive_a_thousand_distinct_ids(self):
+    def test_a_thousand_sessions_derive_a_thousand_distinct_ids(self):
         """A smoke bound on the truncation, not a proof of injectivity.
 
-        8 hex characters is 2**32 values, so this is expected to pass
-        essentially always at n=1000 (birthday bound ~1 in 10**4) and is
-        here to catch a derivation that ignores most of its input — a
-        constant, a version byte, or a slice taken from the wrong end.
+        Here to catch a derivation that ignores most of its input — a constant,
+        a version byte, or a slice taken from the wrong end.
+
+        The UUIDs are drawn from a **seeded** generator rather than ``uuid4()``.
+        8 hex characters is 2**32 values, so the birthday bound at n=1000 is
+        ~1.2 in 10**4: an unseeded version of this test asserting an exact count
+        fails roughly once every 8,600 runs with no defect present, which is how
+        an intermittent red build gets written off as flake and then ignored.
+        Seeding makes the outcome a property of the derivation alone — it passes
+        every time or it fails every time.
         """
-        derived = {derive_trader_id(uuid4()) for _ in range(1000)}
+        rng = random.Random(20260819)
+        sessions = [UUID(int=rng.getrandbits(128), version=4) for _ in range(1000)]
+
+        derived = {derive_trader_id(session_id) for session_id in sessions}
 
         assert len(derived) == 1000
 

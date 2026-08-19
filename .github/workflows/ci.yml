@@ -124,6 +124,21 @@ jobs:
         ports:
           - 5432:5432
 
+      # Without this, tests/integration/core/test_live_cache_namespace.py skips
+      # itself and Story 2.4's AC #4 / FR19 — a restarted session rejoins its own
+      # Redis namespace, and two sessions never see each other's state — is
+      # proven by nothing CI runs. The skip fixture stays for developers who have
+      # no Redis; here the tests must actually execute.
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
     strategy:
       matrix:
         python-version: ['3.11', '3.12']
@@ -198,6 +213,19 @@ jobs:
           --health-retries 5
         ports:
           - 5432:5432
+
+      # This job re-runs tests/integration too, so it needs the same Redis the
+      # integration job does — otherwise the engine-cache tests skip here and
+      # their lines are reported as uncovered rather than as passing.
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
 
     steps:
       - name: Checkout code

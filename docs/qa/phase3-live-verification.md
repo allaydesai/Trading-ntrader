@@ -306,7 +306,9 @@ Failure modes and their exit codes:
 **Introduced by**: Story 1.6 — Detect Connection Loss and Withhold Trading Permission
 **Verifies**: AC #1 and AC #2 — a live socket alone does *not* grant trading permission, confirming
 re-established state does, and a genuine disconnect withdraws it while emitting `connection.lost`.
-**Tool**: `scripts/diagnostics/live_connection_probe.py`
+**Tool**: `scripts/diagnostics/live_connection_loss_probe.py` (renamed from
+`live_connection_probe.py` by the Story 2.4 review, once `src/core/live_connection_probe.py` took
+that basename)
 
 > **Numbering note.** Story 1.6 drafted this procedure as "P2" while Stories 1.4 and 1.5 were in
 > flight on parallel branches. Story 1.4's account-gate procedure holds the P2 slot and Story 1.5's
@@ -340,7 +342,7 @@ order is submitted, and no market-data subscription is made. Epic 1 has no order
 ### Command
 
 ```bash
-uv run python scripts/diagnostics/live_connection_probe.py --hold-seconds 3
+uv run python scripts/diagnostics/live_connection_loss_probe.py --hold-seconds 3
 ```
 
 The probe puts the repository root on `sys.path` itself, so it runs identically from any working

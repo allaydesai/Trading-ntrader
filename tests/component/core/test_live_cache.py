@@ -11,7 +11,9 @@ instead.
 """
 
 import socket
+import threading
 import time
+from contextlib import contextmanager
 
 import pytest
 from nautilus_trader.common.component import is_logging_initialized
@@ -69,6 +71,60 @@ def _closed_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         probe.bind(("127.0.0.1", 0))
         return probe.getsockname()[1]
+
+
+@contextmanager
+def _silent_listener():
+    """A port that completes the TCP handshake and then never says anything.
+
+    No ``accept()`` is needed and none is done: the kernel completes the
+    handshake from the listen backlog, so ``create_connection`` succeeds and
+    ``sendall`` buffers, while ``recv`` blocks until the timeout expires. That
+    is exactly the shape of a wedged or SIGSTOP'd Redis, a stale ``ssh -L`` or
+    ``kubectl port-forward``, and a proxy whose backend is gone — the class of
+    endpoint that used to pass this preflight and then hang
+    ``CacheDatabaseAdapter.__init__`` forever.
+    """
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        server.bind(("127.0.0.1", 0))
+        server.listen(1)
+        yield server.getsockname()[1]
+    finally:
+        server.close()
+
+
+@contextmanager
+def _listener_answering(reply: bytes):
+    """A port that accepts and answers ``reply`` — something that is not Redis.
+
+    An HTTP service, a health-check endpoint, or a port-forward to the wrong
+    container. It answers, so the connect and the ``recv`` both succeed; what it
+    never answers is ``+PONG``.
+    """
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+
+    def _serve():
+        try:
+            connection, _ = server.accept()
+        except OSError:
+            return
+        with connection:
+            try:
+                connection.recv(64)
+                connection.sendall(reply)
+            except OSError:
+                pass
+
+    thread = threading.Thread(target=_serve, daemon=True)
+    thread.start()
+    try:
+        yield server.getsockname()[1]
+    finally:
+        server.close()
+        thread.join(timeout=2.0)
 
 
 @pytest.mark.component
@@ -182,6 +238,80 @@ class TestRedisReachabilityPreflight:
         """DNS failure is a different exception underneath; callers see one type."""
         with pytest.raises(RedisUnreachableError):
             check_redis_reachable("redis.invalid.nonexistent.test", 6379, timeout=1.0)
+
+    def test_an_unencodable_hostname_raises_the_same_named_error(self):
+        """A DNS label over 63 characters raises ``UnicodeError``, not ``OSError``.
+
+        ``socket.create_connection`` runs the host through the ``idna`` codec,
+        which raises ``UnicodeError`` — whose MRO is ``(UnicodeError, ValueError,
+        Exception)`` and therefore misses an ``except OSError``. ``redis_host``
+        is a free-form env string whose only validation is the non-blank check,
+        so a pasted or mistyped value reaches this. Callers must still see the
+        one named type this module documents.
+        """
+        with pytest.raises(RedisUnreachableError):
+            check_redis_reachable("a" * 64 + ".example.test", 6379, timeout=1.0)
+
+    def test_an_endpoint_that_accepts_but_never_answers_is_refused(self):
+        """The failure that used to pass this preflight and then hang forever.
+
+        Measured before this was fixed: the preflight logged ``redis.ping_failed``
+        and returned *success*, and ``CacheDatabaseAdapter`` against the same
+        endpoint was still blocked with no output when it was killed at 40s. A
+        ``socket.timeout`` is an ``OSError``, so swallowing ``OSError`` here
+        reinstated precisely the unbounded hang AC #6 exists to bound.
+        """
+        with _silent_listener() as port:
+            with pytest.raises(RedisUnreachableError):
+                check_redis_reachable("127.0.0.1", port, timeout=1.0)
+
+    def test_an_endpoint_that_is_not_redis_is_refused(self):
+        """Something is listening, but it cannot serve as an engine cache.
+
+        Also measured: an HTTP-speaking listener was accepted by the old
+        warn-and-continue branch, and the adapter then hung on it identically.
+        Accepting a non-``+PONG`` reply was documented as the safer choice
+        because "refusing to start a session because a proxy answered unusually
+        would be a worse failure" — the alternative turned out to be a silent
+        forever-hang, so the premise did not hold.
+        """
+        with _listener_answering(b"HTTP/1.1 400 Bad Request\r\n\r\n") as port:
+            with pytest.raises(RedisUnreachableError):
+                check_redis_reachable("127.0.0.1", port, timeout=1.0)
+
+    def test_the_refusal_message_says_what_answered(self):
+        """An operator pointed at the wrong port needs to know it was wrong.
+
+        "Cannot reach Redis" against a port that is plainly open reads as a lie
+        and sends the operator looking at the network. The reply is what tells
+        them they are talking to the wrong service.
+        """
+        with _listener_answering(b"HTTP/1.1 400 Bad Request\r\n\r\n") as port:
+            with pytest.raises(RedisUnreachableError) as exc_info:
+                check_redis_reachable("127.0.0.1", port, timeout=1.0)
+
+        assert "HTTP" in str(exc_info.value)
+
+    def test_the_timeout_actually_bounds_the_wait_on_a_live_socket(self):
+        """The bound, exercised — which the closed-port tests cannot do.
+
+        A refused connection returns ``ECONNREFUSED`` in microseconds no matter
+        what timeout is passed, so the timing test above passes identically
+        against an implementation with no timeout at all. Only an endpoint that
+        accepts and then stays silent makes the timeout load-bearing: the wait
+        ends because ``recv`` expires, and nothing else.
+        """
+        with _silent_listener() as port:
+            started = time.monotonic()
+            with pytest.raises(RedisUnreachableError):
+                check_redis_reachable("127.0.0.1", port, timeout=1.0)
+            elapsed = time.monotonic() - started
+
+        assert 0.5 < elapsed < 4.0, (
+            f"preflight took {elapsed:.2f}s against a silent listener with timeout=1.0 — "
+            "under 0.5s means the recv is not actually waiting, over 4.0s means the "
+            "timeout is not bounding it"
+        )
 
     @pytest.mark.parametrize("bad_timeout", [0, -1.0, float("nan"), float("inf")])
     def test_a_timeout_that_cannot_bound_a_wait_is_refused(self, bad_timeout):

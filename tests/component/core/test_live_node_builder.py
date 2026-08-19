@@ -986,7 +986,13 @@ class TestRedisCacheWiring:
         def _boom(*args, **kwargs):
             raise AssertionError("config assembly performed a Redis reachability check")
 
-        monkeypatch.setattr(live_cache, "check_redis_reachable", _boom)
+        # Patched on `live_node_builder`, not on `live_cache`: this module does
+        # `from src.core.live_cache import check_redis_reachable`, which binds the
+        # function into its own globals at import. Rebinding the attribute on
+        # `live_cache` leaves that binding untouched, so the guard could never
+        # fire and the test was green by construction — the two sibling tests
+        # below always patched the right target.
+        monkeypatch.setattr(live_node_builder, "check_redis_reachable", _boom)
 
         # Act / Assert — must not raise
         build_trading_node_config(
@@ -1039,6 +1045,46 @@ class TestRedisCacheWiring:
 
         # Act / Assert — must not raise
         live_node_builder.build_trading_node(_settings(), trader_id=TRADER_ID)
+
+    @pytest.mark.component
+    def test_the_preflight_probes_the_redis_the_node_will_actually_use(self, monkeypatch):
+        """The whole reason ``check_redis_reachable`` takes host and port.
+
+        It could have taken ``RedisSettings`` and been shorter. It does not,
+        because a preflight that checks a *different* Redis than the node then
+        connects to is worse than no preflight at all: it reports success and
+        the node hangs anyway. The values must come off the ``CacheConfig``
+        being passed in, never from process settings.
+
+        Without this assertion, an edit to
+        ``check_redis_reachable(get_settings().redis.redis_host, ...)`` passes
+        every other test in this class, because they all install stubs that
+        ignore their arguments.
+        """
+        # Arrange — a cache config deliberately unlike anything in the env
+        from src.config import RedisSettings
+        from src.core.live_cache import build_cache_config
+
+        cache = build_cache_config(
+            RedisSettings(_env_file=None, redis_host="cache-config-only.test", redis_port=6399)
+        )
+        probed: dict[str, object] = {}
+
+        def _record(host, port, **kwargs):
+            probed["host"] = host
+            probed["port"] = port
+
+        monkeypatch.setattr(live_node_builder, "check_redis_reachable", _record)
+        monkeypatch.setattr(live_node_builder, "TradingNode", lambda **kwargs: _StubNode())
+
+        # Act
+        live_node_builder.build_trading_node(_settings(), trader_id=TRADER_ID, cache=cache)
+
+        # Assert — the CacheConfig's values, not RedisSettings' 127.0.0.1:6379
+        assert probed == {"host": "cache-config-only.test", "port": 6399}, (
+            f"the preflight probed {probed}, but the node will connect to "
+            f"{cache.database.host}:{cache.database.port}"
+        )
 
     @pytest.mark.component
     def test_the_gate_still_runs_before_the_redis_preflight(self, monkeypatch):

@@ -19,7 +19,7 @@ This is a diagnostic, not the runner: it does not own a session's lifecycle.
 
 Usage::
 
-    uv run python scripts/diagnostics/live_connection_probe.py [--hold-seconds 3]
+    uv run python scripts/diagnostics/live_connection_loss_probe.py [--hold-seconds 3]
 
 Preconditions:
     - IB Gateway or TWS running on the configured paper port (see .env)
@@ -56,12 +56,12 @@ from src.core.live_connection_monitor import (  # noqa: E402
     ConnectionMonitor,
     ConnectionState,
 )
+from src.core.live_connection_probe import read_ibkr_connection_status  # noqa: E402
 from src.core.live_gate import GateFlags  # noqa: E402
 from src.core.live_node_builder import (  # noqa: E402
     GateRefusedError,
     LiveNodeConfigError,
     build_trading_node,
-    read_ibkr_connection_status,
 )
 
 # A fixed diagnostic identity — not a derivation pattern. The real

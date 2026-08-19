@@ -32,8 +32,11 @@ Why the exact shape matters, beyond looking tidy:
    (NFR6, AR23).
 
 Known, accepted limit: eight hex characters is 2**32 values, so distinctness
-across sessions is overwhelmingly likely rather than guaranteed by construction
-(~1 in 10**7 at 100 sessions, ~1 in 10**4 at 1000). ``TraderId`` would accept the
+across sessions is overwhelmingly likely rather than guaranteed by construction.
+By the birthday bound n(n-1)/2N: ~1.2 in 10**6 at 100 sessions and ~1.2 in 10**4
+at 1000. (Both figures were previously stated an order of magnitude low at the
+100-session end; corrected by the Story 2.4 review, which recomputed them,
+because this is the number the truncation is justified by.) ``TraderId`` would accept the
 full 32-character hex, but AR10 specifies ``PAPER-<short-session-id>`` and the
 tag is read by operators in TWS. Recorded in ``deferred-work.md`` with the
 arithmetic rather than left to be rediscovered.
