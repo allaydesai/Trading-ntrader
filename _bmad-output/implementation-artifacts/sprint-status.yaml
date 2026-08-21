@@ -36,7 +36,120 @@
 
 generated: 2026-08-03
 last_updated: >-
-  2026-08-19 (Story 2.4 code review -> done. review -> done. epic-2 stays in-progress: 2.1/2.2/2.3/2.4
+  2026-08-21 (Story 2.5 code-reviewed -> done, closing it. epic-2 remains in-progress:
+  2.1/2.2/2.3/2.4/2.5 done, 2.6-2.8 backlog. Three adversarial layers (Blind Hunter, Edge Case
+  Hunter, Acceptance Auditor) produced 30 raw / 25 deduplicated findings: 2 decisions, 13 patches,
+  3 deferred, 7 dismissed. BOTH DECISIONS WERE HIGHs FOUND INDEPENDENTLY BY TWO LAYERS, both in the
+  reclaim design, and Allay ruled fix-now on both. (1) The stop path had NO ownership guard:
+  mark_stopped -> transition(to=STOPPED) never compared last_started_at, so a dispossessed
+  incumbent exiting inside the detection window would have transitioned the SUCCESSOR'S running row
+  to stopped -- and the successor would then kill itself at its next heartbeat. Fixed by arming the
+  same reclaim guard the heartbeat uses (a shared _refuse_if_reclaimed, an optional started_at on
+  transition() -- a deliberate widening of Story 2.3's surface, flagged for the retro), translated
+  to SessionReclaimedError by the adapter and honoured by release_record and _release_quietly.
+  (2) Legitimate startup silence EXCEEDED the 90s staleness threshold: the claim stamps
+  last_heartbeat_at once, and the first steady write landed only after all eight phases (the 120s
+  connect budget alone) plus a leading 30s sleep -- so a parallel `live start` could LEGITIMATELY
+  reclaim a healthy, still-starting session, the exact NFR6 two-processes shape. Fixed with
+  StartupHeartbeat, a bounded-join daemon THREAD (the long phases run while the runner's loop is
+  not running, so an asyncio task would not tick through exactly the window that matters), writing
+  every interval from the top of run(), handed over to the steady loop at _serve, and its observed
+  reclaim raised before any strategy starts -- deviating from the story's
+  created-after-the-trading-phase placement, flagged for the retro. Patches worth naming: a reclaim
+  swallowed by gather(return_exceptions=True) at cancellation is now folded into the ownership flag
+  (join_heartbeat); `start` renders first-party failure text (pydantic spec errors, Postgres-layer
+  errors) instead of withholding it as "the check"; the record constructor moved inside the AC #10
+  guard window; asyncio.CancelledError joined the except tuples; the teardown-order test now
+  injects each typed failure at its own phase (GateRefusedError previously had no order assertion
+  at all); the spec-order test uses two strategies (vacuous with one); the placeholder no-call test
+  records every node access via a proxy. Three deferred to deferred-work.md (unbounded teardown
+  join on a wedged DB, clean-run release failure still exits 0, two timing-raced tests). Final:
+  unit 2063 (+13), component 1221/16 skipped (+21), integration/core --forked 73/2 skipped,
+  format/lint/typecheck clean, every file back under its size limit (runner 498).
+  Previously: 2026-08-21 (Story 2.5 implemented -> review. ready-for-dev -> in-progress -> review. epic-2 stays
+  in-progress: 2.1/2.2/2.3/2.4 done, 2.5 review, 2.6-2.8 backlog. Delivers `ntrader live start`: the
+  eight-phase AR39 startup sequence, AR32's ~30s heartbeat writer, AR32's record port plus its
+  SQLAlchemy adapter, the inert SessionController, and explicit logging/controller/six-timeout node
+  configuration. All 11 tasks and every subtask complete; all 10 ACs satisfied.
+  A REAL PAPER GATEWAY WAS LISTENING, so the command was run for real rather than only against
+  doubles -- and this is the first complete connect -> gate -> subscribe -> trading round trip the
+  phase has observed, which Epic 1's retro records as never having happened. Evidence: all sixteen
+  phase records in PHASE_SEQUENCE order; gate:account verifying a masked ***626 paper account;
+  strategies started; session.started carrying trader_id=PAPER-c697f850; 181 seconds of
+  last_heartbeat_at advance (~6 beats), so AR32's producer is live and not merely tested; a Redis
+  namespace of trader-PAPER-c697f850:* with NO instance-id segment, confirming Story 2.4's
+  use_instance_id=False end to end on a real node; the row left `stopped`, not `running`, so the
+  teardown ran on SIGTERM; and NO ORDER PLACED -- the three cached order events are all
+  strategy_id=EXTERNAL and flagged reconciliation, a pre-existing 4-share AAPL position Nautilus
+  discovered in the paper account. This is NOT a P6 pass: that procedure needs 6.5 hours and is
+  written and recorded as not run, because AC #7's automated tests are proxies and the story says so.
+  SEVEN MUTATIONS, SEVEN KILLS. Three are encoded as tests that re-run every build, including a
+  real-`Trader` integration test proving `add_strategy` registers ZERO strategies without a
+  controller (with one: one) -- the single fact the whole zero-strategies-then-add design rests on,
+  and one a TestLiveNode double cannot prove because it does not implement the guard.
+  FOUR DEVIATIONS, all in the completion notes. (1) SessionService was at 97 of the 100-line class
+  limit, so `transition()`'s body moved to a module-level `_apply_transition` alongside the new
+  `_stamp_activity` -- AR37 is enforced per FILE by an AST scan and a scoped grep, so
+  session_service.py is still the only module that assigns status and all of Story 2.3's tests pass
+  UNMODIFIED; the class is now 99. (2) The runner needed a SECOND module split beyond the
+  pre-agreed live_session_steady_state.py: live_session_node.py, mirroring live_check_node's
+  relationship to live_check_driver. The phase sequence and the `finally` stayed whole, as Story 2.6
+  requires. Final sizes: runner 496, node 248, steady state 258, live_node_builder 496, live.py 468
+  -- all under 500, several uncomfortably close, and recorded as a budget constraint on 2.6. (3) The
+  record port WIDENS the story's literal rule: any InvalidSessionTransition from record_activity is
+  treated as loss of ownership, not only the last_started_at reclaim, because a row that became
+  `stopped` out of band means the same thing to a runner and the alternative logs an error every 30s
+  forever against a row that will never accept another write. The runner cannot catch the DB
+  exception at all (AR38), so a pure SessionReclaimedError lives in the port's module and the
+  adapter translates. (4) SessionReclaimedError is a FOURTH name in _SAFE_MESSAGE_EXCEPTION_NAMES
+  where only three go into _OUTCOME_BY_EXCEPTION_NAME -- the two answer different questions, and
+  Judgment call #8 says a fourth typed failure is the moment to revisit the marker protocol.
+  ONE TEST COULD NOT FAIL and was caught before review: the contextvars assertion passed standalone
+  and silently observed NOTHING under -n auto, because this repo sets
+  cache_logger_on_first_use=True and an earlier test in the worker had already bound live_check's
+  module logger against the old processor chain. Fixed by rebinding a fresh UNBOUND logger after
+  reconfiguring (which preserves the test's meaning -- contextvars is still the only route a
+  session_id can take) plus a permanent negative control asserting the same capture yields no
+  session_id without the binding. deferred-work.md: nine items STRUCK (the gate-placement blocker and
+  the heartbeat-writer blocker both close, the latter only in half -- there is still no fencing
+  token), five re-annotated, and a new story-2.5 section. Final: unit 2050 (+100), component 1200
+  passed / 16 skipped (+123), integration/core --forked 73 passed / 2 skipped, integration/db 70,
+  e2e+api+ui 193, zero regressions; format/lint/typecheck (100 files) clean; 40/40 Epic 1 acceptance
+  criteria still pass. NOTE: the smoke test left a real trading_sessions row, smoke-1787319225
+  (c697f850-...), now `stopped` -- the repositories are write-once and expose no delete, so it is
+  named here rather than removed with raw SQL.
+  Previously: 2026-08-19 (Story 2.5 created -> ready-for-dev. epic-2 stays in-progress: 2.1/2.2/2.3/2.4 done,
+  2.5 ready-for-dev, 2.6-2.8 backlog. The story was drafted from a 10-agent parallel artifact sweep
+  plus direct verification against the installed nautilus-trader 1.220.0, and it settles the one
+  finding the Epic 1 retrospective flagged as a blocking design constraint: NautilusKernel's
+  start_async() offers no hook between "engines connected" and "trader started", so AR39's
+  gate:account phase cannot be placed by polling exec_engine.check_connected(). The design takes the
+  third mechanism the retro named -- build the node with ZERO strategies and no declaratively
+  attached bar observer, run gate:account, then register and start the observer (subscribe phase)
+  and the strategies (trading phase). That requires a Controller, because Trader.add_strategy and
+  add_actor SILENTLY no-op on a running trader unless has_controller is set (trader.py:395-397,
+  kernel.py:480) -- a failure mode that would have produced a session trading nothing with no
+  exception and one ERROR log line. Verified in the wheel: Component.start() runs START (transitory,
+  action=_start) then START_COMPLETED, so trader.is_running is a genuine post-condition of
+  Trader._start() and is the correct connect-completion signal, where check_connected() turns True
+  partway through a single coroutine and races it. Three ACs were added beyond the epic's seven, all
+  traceable to Epic 1 retro Action Items 4-6 and 10: structural (not racy) gate:account placement
+  plus a runner-owned has-started fact; explicit LoggingConfig/timeouts/controller on
+  TradingNodeConfig asserted by name; and a bounded-failure AC covering exit codes, the teardown-
+  before-stopped ordering, and never retrying a BacktestStorageError. Two blocking deferred items
+  close here (the heartbeat writer with no producer, and the gate-placement blocker); four fragmented
+  no-bars-watchdog entries close together as visibility-only, with the broker-authoritative fix left
+  to Epic 4. Measured during drafting and folded into the story: LiveClock timer callbacks run on a
+  foreign Rust thread with empty contextvars, silently swallow exceptions and fire catch-up bursts,
+  so the ~30s heartbeat is an asyncio task bridged with asyncio.to_thread, not a Clock timer; and
+  structlog.testing.capture_logs strips contextvars, so the runner binds session_id BOTH via a bound
+  logger (testable) and via bind_contextvars (blanket coverage). Eight judgment calls flagged for the
+  Epic 2 retro, the two largest being that the runner owns an explicit event loop rather than
+  asyncio.run -- architecture.md:311 says otherwise, but TradingNode.dispose() calls loop.stop() and
+  Story 1.3 lost a live run to exactly that -- and that last_bar_at is observed per bar but persisted
+  on the heartbeat tick, because a per-bar DB round trip on the event-loop thread is the accumulating
+  backlog NFR2 forbids in the same story that has NFR2 as an AC. Previously: Story 2.4 code review
+  -> done. review -> done. epic-2 stays in-progress: 2.1/2.2/2.3/2.4
   done, 2.5-2.8 backlog. Three adversarial layers (Blind Hunter, Edge Case Hunter, Acceptance
   Auditor) over a8fa04a, every finding then put to an independent verifier told to refute it against
   running code: 33 raised, 20 refuted as noise, 13 survived. 3 needed a human call, all resolved by
@@ -769,7 +882,7 @@ development_status:
   2-2-create-a-named-session-with-an-immutable-specification: done
   2-3-move-a-session-between-states-through-one-guarded-path: done
   2-4-give-each-session-its-own-durable-engine-cache: done
-  2-5-start-a-session-in-the-foreground-with-an-ordered-startup-sequence: backlog
+  2-5-start-a-session-in-the-foreground-with-an-ordered-startup-sequence: done
   2-6-stop-a-session-without-ending-it-and-without-touching-positions: backlog
   2-7-keep-one-failing-strategy-from-taking-down-the-session: backlog
   2-8-see-what-a-session-is-doing-without-reading-logs: backlog

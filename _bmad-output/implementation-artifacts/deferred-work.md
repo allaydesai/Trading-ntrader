@@ -279,7 +279,15 @@ Non-blocking findings from the three-layer adversarial code review of Story 1.3.
   exception. **Action for Story 1.7**, which maps `GateRefusedError` → exit code 3 and is the
   natural place to log the refusal at WARNING with its `GateRefusalReason`.
 
-- **`TradingNodeConfig` is built with no `LoggingConfig` and no explicit timeouts.** Log level,
+- ~~**`TradingNodeConfig` is built with no `LoggingConfig` and no explicit timeouts.**~~ —
+  **RESOLVED in story-2.5, 2026-08-21.** `build_trading_node_config` now takes keyword-only
+  `logging=` and `controller=` and passes **all six** inherited timeouts unconditionally from
+  named `NODE_TIMEOUT_*` constants, each asserted by name in
+  `tests/component/core/test_live_node_builder.py`. The six values are today's Nautilus defaults
+  deliberately — a zero-behaviour-change guard against a silent upgrade, with a test that fails
+  if Nautilus ever moves one. `ntrader live check` passes `None` for both new arguments and is
+  unaffected; the session passes `SESSION_LOGGING` (stdout at INFO, **no** Nautilus file sink,
+  because this repo's file logging is structlog's). The original text follows. Log level,
   file output and stdout behaviour for a live trading session are left entirely to Nautilus
   defaults and are invisible at the call site — in a module whose headline concern is which
   component claims the C logging subsystem. `timeout_connection` (default **60.0s**),
@@ -327,8 +335,17 @@ Non-blocking findings from the three-layer adversarial code review of Story 1.3.
   Gateway is available, and record the result. Non-blocking for the story by its own AC wording
   ("when its position is **inspected**"), but it is the only end-to-end evidence that exists.
 
-- **⚠️ Epic 2 blocker: `NautilusKernel.start_async()` offers no hook between "engines connected" and
-  "trader started", so AR39's `gate:account` phase cannot be placed by polling.**
+- ~~**⚠️ Epic 2 blocker: `NautilusKernel.start_async()` offers no hook between "engines connected"
+  and "trader started", so AR39's `gate:account` phase cannot be placed by polling.**~~ —
+  **RESOLVED in story-2.5, 2026-08-21.** Closed by the third mechanism this item itself names:
+  the node is built with **zero** strategies and no declaratively-attached bar observer, so when
+  `gate:account` decides the trader holds nothing but the controller; the observer and the
+  strategies are registered afterwards, at `subscribe` and `trading`. The ordering is therefore a
+  property of the control flow, not of a poll that can race. It requires a `Controller`
+  (`src/core/live_session_controller.py`), because `Trader.add_strategy`/`add_actor` **silently
+  return** on a running trader without one — proven against a real `Trader` in
+  `tests/integration/core/test_session_controller_unlocks_registration.py`, which is also the
+  permanent mutation proof. The original text follows.
   `system/kernel.py` awaits engines-connected → reconciliation → portfolio init → `self._trader.start()`
   inside **one coroutine**. A runner that polls `exec_engine.check_connected()` (the way
   `scripts/diagnostics/live_node_probe.py` does) observes `True` partway through that coroutine and
@@ -351,6 +368,20 @@ Non-blocking findings from the three-layer adversarial code review of Story 1.3.
   connection. Not fixable from the state name alone; it needs the runner to track whether a start
   has occurred. **Action for Story 2.5**, alongside the item above.
 
+  **Story 2.5 update (2026-08-21) — STILL OPEN, re-pointed at Story 2.6.** The half this story
+  owed is done: the runner tracks `trader_started` as its own boolean, set exactly once at the
+  `trading` phase, and infers nothing from any `ComponentState` name — pinned by a test that
+  fails if any of five state names (`PRE_INITIALIZED`, `STARTING`, `RUNNING`, `RESETTING`,
+  `DEGRADED`) appears as a quoted literal in the runner's source. Deliberately **not** all of
+  them: `READY` appears in the runner's own docstring (the prose-trips-grep trap Stories 2.1 and
+  2.3 both recorded), so the test pins the names a poll would actually compare against, not the
+  vocabulary. (Wording corrected at the 2026-08-21 code review — the original note claimed "a
+  state name", overstating the guard.) The **underlying** blind spot in
+  `NOT_YET_STARTED_STATES` is unchanged. Its real trigger is reusing one `Trader` across
+  sessions in a single process, which Story 2.5 forbids by precondition (one process, one
+  session, a fresh node each time); Story 2.6, which owns stop, is where that could first stop
+  being true.
+
 - **The ordering guard inspects strategies only, not actors or execution algorithms.**
   `Trader._start()` starts **actors first**, then strategies, then exec algorithms
   (`trading/trader.py`). A running actor subscribing to and acting on live data from an unverified
@@ -359,6 +390,17 @@ Non-blocking findings from the three-layer adversarial code review of Story 1.3.
   and widening the guard would compound the Epic 2 placement problem above. **Action for Story 2.5:**
   decide whether the guard should read "before anything is running" and extend it to
   `actor_states()` / `exec_algorithm_states()` if so.
+
+  **Story 2.5 decision (2026-08-21) — DECIDED, deliberately NOT widened.** The guard is left
+  exactly as Epic 1 wrote it, because the runner's design makes the question moot rather than
+  answering it: nothing but the controller is registered when `gate:account` decides, so there
+  is no actor and no exec algorithm for a widened guard to inspect. That is a stronger
+  guarantee than the widening would have bought, and it is asserted directly
+  (`test_no_strategy_is_registered_when_the_account_gate_decides` reads both `strategies()` and
+  `actors()` at the moment the verifier is invoked). ⚠️ **A future story that attaches an actor
+  declaratively via `TradingNodeConfig.actors` must revisit this** — the kernel adds config
+  actors before `trader.start()`, so the guarantee is a property of *this* runner's choices, not
+  of the guard.
 
 - **Nautilus prints the raw account identifier to stdout, outside NFR26's reach.**
   `adapters/interactive_brokers/execution.py` logs ``Account `DU…` found in the connected
@@ -483,6 +525,17 @@ Non-blocking findings from the three-layer adversarial review. Blocking items (2
   "code review of story-1.6" below). **Action now falls to Epic 2's runner**, which owns the poll
   loop both watchdogs would hang off.
 
+  **Story 2.5 update (2026-08-21) — PARTIALLY closed, and only the visibility half.** The
+  session's heartbeat tick now runs a first-bar watchdog: a started session that has never seen
+  a bar logs `session.no_bars_observed` at WARNING **once**, after
+  `DEFAULT_NO_BARS_AFTER_SECONDS` (300s). The `subscribe` phase separately logs
+  `session.instruments` at WARNING for any requested contract IBKR did not qualify, which is
+  the shortfall comparison a *session* previously lacked. Both are visibility only: nothing
+  changes state, nothing stops, and neither gives **broker-authoritative subscription state**,
+  which is what would actually distinguish a dead feed from a quiet market and remains
+  **Epic 4's**. This note is repeated verbatim on all four entries that describe this one gap;
+  they close together or not at all.
+
 - **`LiveClock` fires timer callbacks from a Rust thread, so the observer touches state from two.**
   Verified: a time-alert callback executes on a Rust timer thread, not the main thread. So pacing
   batches 2+ call `subscribe_bars()` and append to `_subscribed` from that thread while `on_stop()`
@@ -509,6 +562,17 @@ Non-blocking findings from the three-layer adversarial review. Blocking items (2
   names them in the operator summary. Scope of the fix: it makes the shortfall *visible to an
   operator running the check*. A **session** (Epic 2's runner) still has no such comparison, and the
   provider still reports nothing — so the underlying adapter behaviour is unchanged.
+
+  **Story 2.5 update (2026-08-21) — PARTIALLY closed, and only the visibility half.** The
+  session's heartbeat tick now runs a first-bar watchdog: a started session that has never seen
+  a bar logs `session.no_bars_observed` at WARNING **once**, after
+  `DEFAULT_NO_BARS_AFTER_SECONDS` (300s). The `subscribe` phase separately logs
+  `session.instruments` at WARNING for any requested contract IBKR did not qualify, which is
+  the shortfall comparison a *session* previously lacked. Both are visibility only: nothing
+  changes state, nothing stops, and neither gives **broker-authoritative subscription state**,
+  which is what would actually distinguish a dead feed from a quiet market and remains
+  **Epic 4's**. This note is repeated verbatim on all four entries that describe this one gap;
+  they close together or not at all.
 
 - **`ntrader live check` should log the gate refusal.** Carried forward unchanged from Story 1.3's
   review: `src/core/live_gate.py` contains zero logging calls, so the most operationally interesting
@@ -547,7 +611,15 @@ Non-blocking findings from the three-layer adversarial review. Blocking items (2
   makes the confirmation truthful after a reconnect. A runner that calls it straight after
   observing a live socket would satisfy the type signature while defeating the design.
 
-- **Nothing polls the monitor yet, and the halt deadline is only evaluated inside `observe()`.**
+- ~~**Nothing polls the monitor yet, and the halt deadline is only evaluated inside `observe()`.**~~
+  — **RESOLVED in story-2.5, 2026-08-21**, by exactly the carrier this item recommends: the
+  session's ~30s heartbeat tick calls `monitor.observe(read_ibkr_connection_status(settings))`
+  every time (`src/core/live_session_steady_state.py`). The maximum-observation-age half was
+  already closed by Story 1.6's review (`trading_permitted` expires on a stale reading). Note
+  what is **not** closed: nothing in Story 2.5 *acts* on the monitor's verdict —
+  `confirm_state_reestablished` is deliberately never called, because `reconcile` is a no-op
+  placeholder here and granting permission without a real reconciliation is the failure the
+  entry below this one warns about. Acting on it is Epic 4's. The original text follows.
   A monitor that is polled only on state *change* can never notice an outage that simply persists,
   so NFR20's halt would never fire. This is documented in the class docstring rather than enforced.
   **Action for Epic 2's runner:** poll on a fixed interval (the same heartbeat AR32's
@@ -604,6 +676,17 @@ Non-blocking findings from the three-layer adversarial review. Blocking items (2
   meets from the connection side). So the home is **Epic 4**, or Epic 2's runner if it wants an
   interim first-bar watchdog.
 
+  **Story 2.5 update (2026-08-21) — PARTIALLY closed, and only the visibility half.** The
+  session's heartbeat tick now runs a first-bar watchdog: a started session that has never seen
+  a bar logs `session.no_bars_observed` at WARNING **once**, after
+  `DEFAULT_NO_BARS_AFTER_SECONDS` (300s). The `subscribe` phase separately logs
+  `session.instruments` at WARNING for any requested contract IBKR did not qualify, which is
+  the shortfall comparison a *session* previously lacked. Both are visibility only: nothing
+  changes state, nothing stops, and neither gives **broker-authoritative subscription state**,
+  which is what would actually distinguish a dead feed from a quiet market and remains
+  **Epic 4's**. This note is repeated verbatim on all four entries that describe this one gap;
+  they close together or not at all.
+
 - **`scripts/diagnostics/live_node_probe.py` (Story 1.3) builds the node outside its `try/finally`
   and can hang indefinitely against an unreachable Gateway.** Same shape as the defect patched in
   `live_connection_loss_probe.py`: `node.build()` → `get_cached_ib_client` → `client.start()` →
@@ -634,6 +717,15 @@ Non-blocking findings from the three-layer adversarial review. Blocking items (2
   synchronous start path — neither belongs in a story that adds a CLI command. Worth revisiting in
   **Epic 2's runner (AR38)**, which owns lifecycle and will want the same bound for a session start.
 
+  **Story 2.5 update (2026-08-21) — STILL OPEN; the runner now inherits it.**
+  `LiveSessionRunner` takes its deadline before the node factory call and installs a bounded
+  retry budget (`SESSION_CONNECTION_ATTEMPTS = "3"`, deliberately more than the check's `"1"`,
+  because a session should outlast a gateway restart where a check should not) — the same
+  mitigation, not a fix. `build()` still runs synchronously and uninterruptibly, so
+  `--connect-timeout 5` against a hanging handshake still costs the adapter's own
+  `managedAccounts` wait first, now up to three times. The component test asserts the *bound* in
+  wall clock rather than only the exception, so the size of the overshoot is at least measured.
+
 - **`live_check.classify_failure` couples exit codes to exception class *names*, not classes.**
   Deliberate — importing `GateRefusedError` or `LiveMarketDataError` would make `live_check.py`
   Nautilus-dependent and collapse the pure/impure split that lets AR28's exit-code table be
@@ -651,6 +743,17 @@ Non-blocking findings from the three-layer adversarial review. Blocking items (2
   a dead feed still looks like a quiet market. **Action for Epic 2's runner**, which owns the poll
   loop a first-bar watchdog would hang off — the same gap "the observer is silent when *no* bar is
   delivered" and the IB-1101 item meet from their own sides.
+
+  **Story 2.5 update (2026-08-21) — PARTIALLY closed, and only the visibility half.** The
+  session's heartbeat tick now runs a first-bar watchdog: a started session that has never seen
+  a bar logs `session.no_bars_observed` at WARNING **once**, after
+  `DEFAULT_NO_BARS_AFTER_SECONDS` (300s). The `subscribe` phase separately logs
+  `session.instruments` at WARNING for any requested contract IBKR did not qualify, which is
+  the shortfall comparison a *session* previously lacked. Both are visibility only: nothing
+  changes state, nothing stops, and neither gives **broker-authoritative subscription state**,
+  which is what would actually distinguish a dead feed from a quiet market and remains
+  **Epic 4's**. This note is repeated verbatim on all four entries that describe this one gap;
+  they close together or not at all.
 
 - **`os.environ.setdefault("IB_MAX_CONNECTION_ATTEMPTS", ...)` mutates process-wide state from a
   library module.** It is the only lever the adapter exposes (the value is read once in
@@ -765,7 +868,12 @@ after dedup. Every item below was re-verified by execution before being recorded
   **Action for Story 2.2:** decide alongside the repository write path, where a real mutation path first
   exists and FR14's "immutable for the session's whole life" becomes enforceable rather than advisory.
 
-- **Add a `schema_version` read gate.** `src/models/session.py:227` records the field but nothing branches
+- ~~**Add a `schema_version` read gate.**~~ — **RESOLVED in story-2.2** (struck 2026-08-21 by
+  story-2.5, which read this item and found the work already done rather than re-implementing
+  it). `SessionSpec.from_stored` refuses a payload whose `schema_version` is newer than
+  `SPEC_SCHEMA_VERSION` or is not an integer, and `extra="forbid"` makes a newer row's unknown
+  fields fail loudly. Credit is Story 2.2's; only the strike is Story 2.5's. The original text
+  follows. `src/models/session.py:227` records the field but nothing branches
   on it, there is no upper bound (`schema_version=99` loads clean), and pydantic's default
   `extra="ignore"` means a row written by a newer build has its unknown fields silently dropped — so the
   field cannot do the job its docstring claimed. Deferred by decision on 2026-08-18: the docstring is
@@ -862,8 +970,10 @@ Closes none outright — the `SessionStatus` terminal-failure item above is *dec
 status value) but not closed, since the decision does not by itself deliver the operator-facing
 answer; it stays open, re-pointed at Story 2.8.
 
-- **`live_check.classify_failure` (deferred-work.md, "Deferred from: story-1.7") will classify
-  `InvalidSessionTransition` generically until a CLI story maps it.** This story's new exception is a
+- ~~**`live_check.classify_failure` (deferred-work.md, "Deferred from: story-1.7") will classify
+  `InvalidSessionTransition` generically until a CLI story maps it.**~~ — **RESOLVED in
+  story-2.5, 2026-08-21**, together with the broader entry in story-2.4's section, which
+  supersedes this one. The original text follows. This story's new exception is a
   typed failure on the live path, and the classifier keys on exception class *name*, so a `stopped`
   session refused for `running` currently maps to no exit code at all — nothing on the live path
   calls `transition()` yet. Harmless today. **Action for Story 2.5/2.6:** map
@@ -903,7 +1013,18 @@ Three adversarial layers produced 42 raw findings, 26 after dedupe. The Critical
 reclaim one session and let a `sealed` session move back to `running`) was fixed in-story, not
 deferred. The five items below were deferred.
 
-- **⚠️ BLOCKING CONSTRAINT ON STORY 2.5 — the reclaim's liveness signal has no producer.** Nothing
+- ~~**⚠️ BLOCKING CONSTRAINT ON STORY 2.5 — the reclaim's liveness signal has no producer.**~~ —
+  **FIRST HALF RESOLVED in story-2.5, 2026-08-21.** AR32's writer ships:
+  `SessionSteadyState.run()` writes `last_heartbeat_at` every
+  `DEFAULT_HEARTBEAT_INTERVAL_SECONDS` (30.0) through the record port, and a session is no
+  longer reclaimable 90 seconds after it starts.
+  ⚠️ **The second half does NOT close and is re-pointed at the Epic 2 retro:** a stale heartbeat
+  is still not evidence a process is dead, and there is still no fencing token or ownership
+  column — the migration-budget reasoning below is unchanged. Story 2.5 adds a *detection* only:
+  the record port is bound to the `started_at` its own transition stamped, and a write is
+  refused once the row's `last_started_at` moves past it, at which point the incumbent stops and
+  leaves the successor's row alone. The window between the reclaim and the incumbent's next tick
+  is up to one interval of two live processes. The original text follows. Nothing
   in `src/` writes `last_heartbeat_at` except `SessionService.transition()`'s single stamp on entry
   to `running` (verified by grep: the only other hits are the ORM column and the staleness helpers).
   Story 2.5 owns AR32's ~30s writer. Until it exists, **every session becomes reclaimable 90 seconds
@@ -917,8 +1038,15 @@ deferred. The five items below were deferred.
   "a policy, not a mechanism", which is accurate; an owner/epoch column was considered and rejected
   for now because the phase's single migration is already spent. Revisit at the Epic 2 retro.
 
-- **`InvalidSessionTransition` inherits `BacktestStorageError` — a live-trading refusal is catchable
-  as a backtest-storage error.** Story 2.3's Judgment call #3 chose one exception class deliberately,
+- ~~**`InvalidSessionTransition` inherits `BacktestStorageError` — a live-trading refusal is
+  catchable as a backtest-storage error.**~~ — **RESOLVED in story-2.5, 2026-08-21.** Both halves
+  of the action are done: `"InvalidSessionTransition"` is mapped explicitly to `CONFIG_ERROR`
+  (exit **1**) in `live_check._OUTCOME_BY_EXCEPTION_NAME`, its message is added to
+  `_SAFE_MESSAGE_EXCEPTION_NAMES` so the session name and heartbeat age reach the operator, and
+  `ntrader live start` contains no retry of any kind — pinned by
+  `TestStartNeverRetries` in `tests/unit/cli/commands/test_live_cli.py`. This also supersedes and
+  closes the narrower `classify_failure` note in story-2.3's section above. The original text
+  follows. Story 2.3's Judgment call #3 chose one exception class deliberately,
   and *Decision 2026-08-19 (Allay): that stands.* Recorded because the risk lands downstream, not
   here: nothing catches `BacktestStorageError` broadly today (verified, 0 hits in `src/`), but
   Story 2.5/2.6 add the first CLI handlers on this path. "Another process appears live on this
@@ -1056,3 +1184,179 @@ New items:
   overflow that forced `live_connection_probe.py` out of `live_node_builder.py` during this story.
   **Action for whoever adds the next settings class:** split by domain (IBKR / Kraken / Redis /
   database) rather than trimming prose, and do it before the edit rather than during it.
+
+## Deferred from: story-2.5 (2026-08-21)
+
+Story 2.5 shipped `ntrader live start`: the eight-phase startup sequence, the AR32 heartbeat, the
+record port and its adapter, the inert `SessionController`, and explicit node configuration. Nine
+items were **struck** above (six resolved outright, one resolved-in-half, one credited to Story 2.2,
+one superseded) and five were read and left open with updated notes. The items below are new.
+
+- **`SessionService` is at 99 of CLAUDE.md's 100-line class limit, and `transition()` was split to
+  get there.** Adding `record_activity` needed ~17 lines against three of headroom, so
+  `transition()`'s decision-and-mutation body moved to a module-level `_apply_transition`, and the
+  row read to `_load_or_raise` — the same shape `_reclaim_or_refuse` already models in that file.
+  Nothing an operator or a guard can observe changed: AR37's enforcement is *per file* (an AST scan
+  and a scoped grep over all of `src/`), so `session_service.py` is still the only module that
+  assigns `TradingSession.status`, and all 74 of Story 2.3's tests pass unmodified. But the next
+  method added to that class does not fit either. **Action for Story 2.8**, which adds the health
+  derivation and will want to read from this service: decide then whether the class splits or the
+  limit is the wrong measure for a class whose bulk is docstring. Worth noting for the retro that
+  the repo's own largest classes are 1746, 1179 and 793 lines, so the limit is plainly not measured
+  on raw lines today.
+
+- **`live_node_builder.py` is at 496 of the 500-line file limit, and `live_session_runner.py` at
+  498.** Story 2.4 already carved `live_connection_probe.py` out of the builder once; Story 2.5
+  added the six timeouts and two arguments and had to compress comments to stay under. The runner
+  needed two splits of its own to fit — `live_session_node.py` (the connect wait, strategy
+  materialisation, the spec check, the shortfall report) and `live_session_steady_state.py` (the
+  heartbeat tick, the watchdog, the bar observation), both of which are cohesive modules rather
+  than arbitrary halves. **Action for Story 2.6**, which attaches signal handling to the runner's
+  run loop and its `finally`: budget for a further split before writing, not after. The pre-agreed
+  line is *not* the phase sequence and *not* the `finally` — Story 2.5's own instructions were
+  explicit that 2.6 attaches to both.
+
+- **`SessionReclaimedError` is a fourth name in `_SAFE_MESSAGE_EXCEPTION_NAMES` where only three
+  went into `_OUTCOME_BY_EXCEPTION_NAME`.** The two collections answer different questions — which
+  exit code describes the failure, and whether the message text is ours to show — and a reclaim
+  needs the second without needing the first (AR28 has no better code for it than the generic 1).
+  Story 2.5's own Judgment call #8 says a fourth typed failure is *"the moment to revisit"* the
+  marker-protocol idea (`deferred-work.md`, story-1.7 section: an `exit_outcome` attribute on the
+  exception rather than two name-keyed collections). **Action for the Epic 2 retro:** decide whether
+  Story 2.6's `stop` — which will add at least one more typed failure — is where that lands.
+
+- **The record port widens Story 2.5's literal rule: *every* `InvalidSessionTransition` from
+  `record_activity` is treated as loss of ownership, not only the reclaim.** The story names only
+  the `last_started_at` case as fatal and says *"every other exception still follows AR42"*. Read
+  strictly, a row that had become `stopped` out of band would then log an error every 30 seconds
+  forever against a row that will never accept another write. Both refusals mean the same thing to
+  a runner — this process no longer owns this session — so `SqlSessionRecord` translates both into
+  the port's own `SessionReclaimedError`. **Flagged for the Epic 2 retro** as a deliberate widening,
+  not an oversight; it is strictly safer in the direction that matters, because the alternative is a
+  session that keeps trading after something else took its row.
+
+- **`session.no_bars_observed`'s 300-second window is invented, and nothing validates it.** No
+  number for a first-bar watchdog exists in the PRD, the architecture or the epics. Five minutes is
+  defensible (a 1-minute subscription has had several chances; a 5-minute one has had one) and the
+  cost of being wrong is low in both directions, because the watchdog is visibility only. But it
+  has never been observed against a real market open, where the first bar's arrival is exactly the
+  thing being measured. **Action:** record what Procedure P6 actually shows, and adjust or delete
+  the constant on evidence rather than on argument.
+
+- **Nothing in this story ever reads `ConnectionMonitor.trading_permitted`.** The monitor is
+  constructed at `node:connect` and fed on every heartbeat tick, so its state is correct and
+  observable — but no code path consults it, and `confirm_state_reestablished` is deliberately never
+  called (*Judgment call #6*: `reconcile` is a no-op placeholder, so there is no genuine
+  reconciliation for the confirmation to follow). A reader could reasonably assume feeding the
+  monitor means acting on it. **Action for Epic 4**, which owns reconciliation and is the only place
+  the confirmation can be truthful.
+
+- **The heartbeat's `asyncio.to_thread` runs on the kernel's own thread pool.**
+  `TradingNode.__init__` installs the kernel's `ThreadPoolExecutor` as the loop's default
+  (`kernel.py:268-270`), and `dispose()` shuts it down with `wait=True, cancel_futures=True`
+  (`live/node.py:445-447`). At one write per 30 seconds the exposure is negligible, and the runner's
+  `finally` cancels *and awaits* the heartbeat before `shutdown()` precisely so an in-flight write
+  cannot block disposal. **Recorded rather than actioned**, because it becomes interesting the
+  moment anything else on this path uses `to_thread` at a higher rate — Epic 3's trade persistence
+  being the obvious candidate.
+
+- **`live_session_runner` imports `NodeFactory` and `AccountVerifier` from `live_check_driver`.**
+  Story 2.5 was instructed to reuse the aliases rather than define a second pair that could drift,
+  which is right — but it means a *session* module now imports a *check* module, and a Story 2.6 or
+  2.7 change to the driver's aliases reaches the runner. **Action for the Epic 2 retro:** consider
+  moving both aliases to a neutral module (`live_session_node` or `live_check`) that neither
+  command's driver owns.
+
+- **Transaction isolation is still not pinned, and this story is what puts the path under load.**
+  `deferred-work.md` (story-2.4 review) records that nothing sets an isolation level on the sync
+  engine, so it is whatever Postgres defaults to (READ COMMITTED). Story 2.5 **deliberately does not
+  pin it**: the one place isolation matters here is `transition()`'s `SELECT … FOR UPDATE`, which
+  Story 2.3 already proved correct under a genuine two-connection race at the default level, and
+  changing an engine-wide setting to protect a path that is already correct would affect every
+  backtest write for no measured benefit. The heartbeat writes one column per 30 seconds in its own
+  transaction and takes no lock at all. **Recorded as a deliberate refusal**, not an omission.
+  Similarly, no `lock_timeout` or `statement_timeout` is set anywhere; one-transaction-per-heartbeat
+  is the mitigation, and a genuinely wedged write surfaces as a logged
+  `session.heartbeat_write_failed` rather than a stuck session.
+
+- **Re-validating a persisted spec against today's param model is lossy, and the trigger has now
+  fired.** `LiveSessionRunner` is the first production caller of `SessionSpec.from_stored()`, which
+  re-runs every parameter through the strategy's *current* registered param model. A model whose
+  fields changed since the session was created would silently reinterpret a frozen spec — the exact
+  failure FR14 exists to prevent, arriving through the read path rather than the write path.
+  Nothing in this story can fix it (the spec must be read to be run). **Ownership stays Epic 5's**,
+  alongside the comparison that would notice; recorded here only because the trigger condition this
+  item was waiting on is now met.
+
+- **`SessionSpec.model_copy(update=…)` bypasses validation — still untriggered.** Story 2.2's review
+  re-pointed this at Story 2.4, which found it not triggered and re-pointed it here as *"the second
+  code path that reads a `SessionSpec` back into memory"*. It now is that path, and the answer is
+  still **not triggered**: the runner reads through `from_stored` and never derives a modified spec
+  from an existing one (verified — `model_copy` appears nowhere in `src/core/live_session_*.py`).
+  **Re-pointed at Epic 5** alongside the item above, rather than left with a third stale owner.
+
+- **`IBKRSettings.model_dump()` leaks the account and password in clear, and the runner holds one.**
+  The trigger condition is met — a long-running process now holds an `IBKRSettings` for hours — but
+  nothing in this story dumps it: the runner logs `endpoint(settings)` (host, port, client id) and
+  nothing else. **Recorded as a standing constraint on this path**: never log a
+  `Settings`/`IBKRSettings` dump from the runner or the steady state.
+
+- **`live start` is another CLI entry point on the module-scope `get_settings()` blast radius.**
+  A settings validation error still kills the whole CLI before argument parsing, so
+  `ntrader live start --help` fails when, say, `REDIS_DB=1` is exported. Pre-existing and not caused
+  here; noted because the number of affected entry points grew again.
+
+- **A live run emits two command-scoped `live_check.*` records.** A session start logs
+  `live_check.building` (from `build_clients`) and `gate.static` (from `preflight_gate`), because it
+  reuses Story 1.7's plumbing. AR41 deliberately keeps command-scoped vocabulary separate from
+  session-scoped vocabulary, so these read oddly in a session's log. **Deliberately not renamed
+  here** — both modules are shared with `ntrader live check`, whose tests pin their record names,
+  and renaming them is not this story's to do. **Action for the Epic 2 retro:** decide whether the
+  shared plumbing should take its event prefix from its caller.
+
+- **AR41's event enumeration needs four amendments.** This story ships `session.started` (enumerated
+  but previously unowned — now emitted at the `trading` phase) plus three names that are **not** in
+  the enumeration: `session.heartbeat_write_failed`, `session.no_bars_observed` and
+  `session.reclaimed_by_another_process`. It also emits `session.phase`, `session.connected`,
+  `session.instruments`, `session.shutdown_problems`, `session.connection_read_failed`,
+  `session.heartbeat_join_failed` and `session.mark_stopped_failed`, none of which are enumerated
+  either. **Action for the Epic 2 retro:** amend AR41 in `epics.md`, following the Epic 1 retro's
+  own precedent — it amended the list for `connection.halted` / `connection.recovery_refused`
+  rather than leaving the question open a third time.
+
+- **`tests/component/core/test_live_check_node.py` is a NEW file where Story 2.5's Files table says
+  MOD.** `live_check_node.py` never had a suite of its own; its behaviour was covered indirectly
+  through `test_live_check_driver.py`. The new `max_connection_attempts` parameter exists precisely
+  so a session and a check choose different budgets, and that difference deserved a test that names
+  it. Recorded as a deviation from the story's own file list, not a scope addition.
+
+- **CLAUDE.md still says "14 migrations… single head (`a436f35f525c`)".** Story 2.2 added
+  `d08dfbd393f0` and the head moved. Carried forward from Story 2.5's own Project Structure Notes,
+  which flagged it as a drive-by observation rather than a task. **Action for the Epic 2 retro.**
+
+## Deferred from: code review of story-2.5 (2026-08-21)
+
+- **Teardown can block indefinitely on an in-flight heartbeat write.** `task.cancel()` cannot
+  interrupt an `asyncio.to_thread` call whose worker is already running; the runner's
+  `_stop_heartbeat` then waits on it without a bound, `node.dispose()` afterwards joins the same
+  executor `wait=True`, and the sync engine (`src/db/session_sync.py:53-60`) sets no
+  connect/statement timeout — so a Postgres TCP stall at teardown hangs the process while it still
+  holds the IBKR live client id. The root cause is the already-open "no `lock_timeout` /
+  `statement_timeout` anywhere" item (story-2.3 section, `:940-946`); this adds the concrete
+  teardown consequence to it. **Action:** when that item is picked up, pin a `statement_timeout`
+  (or `connect_args` timeout) on the sync engine and bound `_stop_heartbeat`'s join.
+
+- **A clean run whose final `→ stopped` write fails still exits 0.** `_finish_record` swallows a
+  `mark_stopped` failure by design ("must never replace the primary outcome"), but on the *clean*
+  path there is no primary failure to protect: the CLI prints "Session stopped" and exits 0 while
+  the row stays `running` for the full 90-second threshold, with only a
+  `session.mark_stopped_failed` structlog ERROR explaining why the next `live start` is refused.
+  **Action for Story 2.6/2.8**, which own stop semantics and status surfacing: decide whether a
+  failed final release should change the exit code or print a console warning.
+
+- **Two timing-raced component tests may flake on a saturated worker.**
+  `test_an_ordinary_write_failure_does_not_stop_the_session` asserts `> 1` heartbeat writes inside
+  a 0.05s node run with each write a real `asyncio.to_thread` round trip, and the connect-wait
+  bound tests assert real elapsed time (`< 3.0` / `< 2.0`) in a suite run `-n auto`. Generous, but
+  host-load-dependent. **Action:** none until CI flakes; if one does, drive it deterministically
+  (inject the sleeper/clock) rather than loosening the bound.
