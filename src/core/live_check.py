@@ -112,6 +112,19 @@ _OUTCOME_BY_EXCEPTION_NAME: Mapping[str, LiveCheckOutcome] = {
     "GateRefusedError": LiveCheckOutcome.GATE_REFUSED,
     "LiveNodeConfigError": LiveCheckOutcome.CONFIG_ERROR,
     "LiveMarketDataError": LiveCheckOutcome.CONFIG_ERROR,
+    # Story 2.5's three, for `ntrader live start`. All CONFIG_ERROR (exit 1),
+    # each for its own reason: AR28 defines 4 as *broker* connectivity and
+    # Redis is not the broker — 4 must stay scriptably specific to IBKR; a
+    # session-state conflict is neither a gate refusal nor a connectivity
+    # failure; and an unknown session name is an operator error, where 2 is
+    # Click's own code for misuse of the command line itself.
+    #
+    # `InvalidSessionTransition` inherits `BacktestStorageError`, and the MRO
+    # walk in `classify_failure` matches the specific name first — so a future
+    # entry for the base would not silently reclassify this one.
+    "RedisUnreachableError": LiveCheckOutcome.CONFIG_ERROR,
+    "InvalidSessionTransition": LiveCheckOutcome.CONFIG_ERROR,
+    "RecordNotFoundError": LiveCheckOutcome.CONFIG_ERROR,
     "KeyboardInterrupt": LiveCheckOutcome.INTERRUPTED,
     # The socket-level failures, named individually rather than through their
     # shared `OSError` base. Keying on `OSError` was tried and is wrong: it also
@@ -145,6 +158,23 @@ _SAFE_MESSAGE_EXCEPTION_NAMES: frozenset[str] = frozenset(
         "GateRefusedError",
         "LiveNodeConfigError",
         "LiveMarketDataError",
+        # Story 2.5's, for `ntrader live start`. Each was written to be
+        # actionable — the Redis host/port and the two remedies; the session's
+        # name and its heartbeat's age; the identifier that matched nothing;
+        # the two start instants that prove another process took the session —
+        # and every one of those strings is this codebase's own, carrying no
+        # adapter or broker text. Withholding them would leave the operator a
+        # bare type name and make writing them pointless.
+        #
+        # `SessionReclaimedError` is a **fourth** name here where only three go
+        # into the outcome map above: the map is about which exit code
+        # describes the failure (a reclaim is a generic error, exit 1, and AR28
+        # has no better code), while this set is only about whether the text is
+        # ours to show. It is. Flagged for the Epic 2 retro.
+        "RedisUnreachableError",
+        "InvalidSessionTransition",
+        "RecordNotFoundError",
+        "SessionReclaimedError",
     }
 )
 
@@ -347,7 +377,7 @@ def failure_message(exc: BaseException) -> str:
         if klass.__name__ in _SAFE_MESSAGE_EXCEPTION_NAMES:
             return str(exc) or klass.__name__
     return (
-        f"{type(exc).__name__} was raised while running the check. Its message is not shown "
+        f"{type(exc).__name__} was raised while running the command. Its message is not shown "
         "because third-party error text can carry the account identifier; see the logs for "
         "the full trace."
     )

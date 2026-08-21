@@ -1127,3 +1127,168 @@ class _StubNode:
 
     def add_exec_client_factory(self, *args, **kwargs) -> None:
         return None
+
+
+class TestExplicitLoggingAndControllerAndTimeouts:
+    """Story 2.5 AC #9 — nothing load-bearing is left to a Nautilus default.
+
+    ``TradingNodeConfig`` inherits six timeouts and a ``logging`` field from
+    ``NautilusKernelConfig`` (``system/config.py:106-132``) and, before this
+    story, this repo set none of them. The six values below are **today's
+    Nautilus defaults, deliberately**: this is a zero-behaviour-change guard
+    against a silent upgrade, exactly as ``live_cache``'s three
+    namespace-deciding fields are. ``ntrader live check`` must behave
+    identically after it.
+
+    Asserted one field at a time and by name. A single ``==`` against a tuple
+    would still pass if two of them were transposed.
+    """
+
+    @pytest.mark.component
+    def test_omitting_both_new_arguments_leaves_them_none(self):
+        """``ntrader live check`` passes neither, and must be unaffected."""
+        cfg = build_trading_node_config(_settings(), trader_id=TRADER_ID)
+
+        assert cfg.logging is None
+        assert cfg.controller is None
+
+    @pytest.mark.component
+    def test_the_logging_config_passed_in_is_the_one_on_the_config(self):
+        from nautilus_trader.config import LoggingConfig
+
+        logging_config = LoggingConfig(log_level="INFO", log_level_file=None, log_colors=True)
+
+        cfg = build_trading_node_config(_settings(), trader_id=TRADER_ID, logging=logging_config)
+
+        assert cfg.logging == logging_config
+
+    @pytest.mark.component
+    def test_the_controller_config_passed_in_is_the_one_on_the_config(self):
+        from src.core.live_session_controller import build_session_controller_config
+
+        controller = build_session_controller_config()
+
+        cfg = build_trading_node_config(_settings(), trader_id=TRADER_ID, controller=controller)
+
+        assert cfg.controller == controller
+
+    @pytest.mark.component
+    def test_timeout_connection_is_the_modules_own_constant(self):
+        cfg = build_trading_node_config(_settings(), trader_id=TRADER_ID)
+        assert cfg.timeout_connection == live_node_builder.NODE_TIMEOUT_CONNECTION
+
+    @pytest.mark.component
+    def test_timeout_reconciliation_is_the_modules_own_constant(self):
+        cfg = build_trading_node_config(_settings(), trader_id=TRADER_ID)
+        assert cfg.timeout_reconciliation == live_node_builder.NODE_TIMEOUT_RECONCILIATION
+
+    @pytest.mark.component
+    def test_timeout_portfolio_is_the_modules_own_constant(self):
+        """Its expiry is a fail-quiet ``return`` at ``kernel.py:1024``, *before*
+        ``trader.start()`` — the direct cause of the "connected, but the trader
+        never started" shape the ``node:connect`` wait exists to catch.
+        """
+        cfg = build_trading_node_config(_settings(), trader_id=TRADER_ID)
+        assert cfg.timeout_portfolio == live_node_builder.NODE_TIMEOUT_PORTFOLIO
+
+    @pytest.mark.component
+    def test_timeout_disconnection_is_the_modules_own_constant(self):
+        cfg = build_trading_node_config(_settings(), trader_id=TRADER_ID)
+        assert cfg.timeout_disconnection == live_node_builder.NODE_TIMEOUT_DISCONNECTION
+
+    @pytest.mark.component
+    def test_timeout_post_stop_is_the_modules_own_constant(self):
+        cfg = build_trading_node_config(_settings(), trader_id=TRADER_ID)
+        assert cfg.timeout_post_stop == live_node_builder.NODE_TIMEOUT_POST_STOP
+
+    @pytest.mark.component
+    def test_timeout_shutdown_is_the_modules_own_constant(self):
+        cfg = build_trading_node_config(_settings(), trader_id=TRADER_ID)
+        assert cfg.timeout_shutdown == live_node_builder.NODE_TIMEOUT_SHUTDOWN
+
+    @pytest.mark.component
+    def test_the_six_constants_are_todays_nautilus_defaults(self):
+        """The guard is only zero-behaviour-change while this holds.
+
+        If a Nautilus upgrade changes one of these, this test fails and the
+        change becomes a deliberate decision instead of a silent one — which is
+        the entire reason the fields are passed explicitly.
+        """
+        bare = TradingNodeConfig()
+
+        defaults = {
+            field: getattr(bare, field)
+            for field in (
+                "timeout_connection",
+                "timeout_reconciliation",
+                "timeout_portfolio",
+                "timeout_disconnection",
+                "timeout_post_stop",
+                "timeout_shutdown",
+            )
+        }
+
+        assert defaults == {
+            "timeout_connection": live_node_builder.NODE_TIMEOUT_CONNECTION,
+            "timeout_reconciliation": live_node_builder.NODE_TIMEOUT_RECONCILIATION,
+            "timeout_portfolio": live_node_builder.NODE_TIMEOUT_PORTFOLIO,
+            "timeout_disconnection": live_node_builder.NODE_TIMEOUT_DISCONNECTION,
+            "timeout_post_stop": live_node_builder.NODE_TIMEOUT_POST_STOP,
+            "timeout_shutdown": live_node_builder.NODE_TIMEOUT_SHUTDOWN,
+        }
+
+    @pytest.mark.component
+    def test_the_six_timeouts_are_named_explicitly_in_the_source(self):
+        """Structural, so "passed explicitly" cannot become "happens to match".
+
+        The value assertions above would all still pass if every keyword were
+        deleted, because the constants were chosen to equal the defaults. This
+        is the assertion that cannot.
+        """
+        source = Path(live_node_builder.__file__).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        keywords: set[str] = set()
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "TradingNodeConfig"
+            ):
+                keywords.update(k.arg for k in node.keywords if k.arg)
+
+        assert {
+            "timeout_connection",
+            "timeout_reconciliation",
+            "timeout_portfolio",
+            "timeout_disconnection",
+            "timeout_post_stop",
+            "timeout_shutdown",
+            "logging",
+            "controller",
+        } <= keywords
+
+
+class TestTheNewArgumentsAreKeywordOnlyAndDefaulted:
+    """``NodeFactory`` is ``Callable[..., TradingNode]``; a required parameter
+    would break every existing call site at runtime without changing the alias.
+    """
+
+    @pytest.mark.component
+    @pytest.mark.parametrize("function_name", ["build_trading_node_config", "build_trading_node"])
+    @pytest.mark.parametrize("parameter", ["logging", "controller"])
+    def test_the_parameter_is_keyword_only_and_defaults_to_none(self, function_name, parameter):
+        import inspect
+
+        signature = inspect.signature(getattr(live_node_builder, function_name))
+        found = signature.parameters[parameter]
+
+        assert found.kind is inspect.Parameter.KEYWORD_ONLY
+        assert found.default is None
+
+    @pytest.mark.component
+    @pytest.mark.parametrize("parameter", ["logging", "controller"])
+    def test_both_entry_points_document_the_new_argument(self, parameter):
+        """Story 2.4 shipped ``cache=`` undocumented on one of the two."""
+        for function_name in ("build_trading_node_config", "build_trading_node"):
+            doc = getattr(live_node_builder, function_name).__doc__ or ""
+            assert f"{parameter}:" in doc, f"{function_name} does not document {parameter}"

@@ -74,8 +74,14 @@ def restore_event_loop(previous: asyncio.AbstractEventLoop | None) -> None:
     asyncio.set_event_loop(previous if previous is not None and not previous.is_closed() else None)
 
 
-def bounded_connection_attempts() -> str:
+def bounded_connection_attempts(*, fallback: str = BUILD_CONNECTION_ATTEMPTS) -> str:
     """The retry budget to install, honouring an operator's own valid choice.
+
+    ``fallback`` is what to install when the environment says nothing usable.
+    It is a parameter rather than the constant because a *session* and a
+    *check* want different answers: Story 2.5's runner should outlast a gateway
+    restart where a check deliberately should not. An operator's own positive
+    value still outranks both.
 
     ``os.environ.setdefault`` is *not* enough here, and the difference is a hang.
     The adapter reads ``int(os.getenv("IB_MAX_CONNECTION_ATTEMPTS", 0))`` and then
@@ -93,17 +99,36 @@ def bounded_connection_attempts() -> str:
             return configured
     except ValueError:
         pass
-    return BUILD_CONNECTION_ATTEMPTS
+    return fallback
 
 
-def build_clients(node: TradingNode, settings: IBKRSettings, *, trader_id: str) -> None:
+def build_clients(
+    node: TradingNode,
+    settings: IBKRSettings,
+    *,
+    trader_id: str,
+    max_connection_attempts: str = BUILD_CONNECTION_ATTEMPTS,
+) -> None:
     """Build the node's clients under a bounded connection-retry budget.
 
     ``node.build()`` runs the IB factories, and ``get_cached_ib_client`` calls
     ``client.start()``, which — with the loop not yet running — drives the
     adapter's reconnect loop synchronously through ``run_until_complete``.
+
+    Args:
+        node: The unbuilt node.
+        settings: Loaded IBKR settings. Injected, never fetched.
+        trader_id: For the log line only; the node already carries it.
+        max_connection_attempts: The retry budget to install when the
+            environment names none. Keyword-only and defaulted to the *check's*
+            budget, so ``live_check_driver`` is untouched; Story 2.5's session
+            runner passes its own, longer one. An operator's own positive
+            ``IB_MAX_CONNECTION_ATTEMPTS`` still outranks whatever is passed
+            here.
     """
-    os.environ["IB_MAX_CONNECTION_ATTEMPTS"] = bounded_connection_attempts()
+    os.environ["IB_MAX_CONNECTION_ATTEMPTS"] = bounded_connection_attempts(
+        fallback=max_connection_attempts
+    )
     logger.info(
         "live_check.building",
         host=settings.ibkr_host,

@@ -58,6 +58,8 @@ def _session_row(
     session_id: UUID = SESSION_ID,
     name: str = "alpha-session",
     last_heartbeat_at: datetime | None = None,
+    last_started_at: datetime | None = None,
+    last_bar_at: datetime | None = None,
 ) -> TradingSession:
     """A detached ``TradingSession`` with every column the service reads set explicitly."""
     return TradingSession(
@@ -66,6 +68,8 @@ def _session_row(
         status=status,
         spec={},
         last_heartbeat_at=last_heartbeat_at,
+        last_started_at=last_started_at,
+        last_bar_at=last_bar_at,
     )
 
 
@@ -636,3 +640,285 @@ class TestScopedGrepGates:
         source = Path(service_module.__file__).read_text()
         assert "commit()" not in source
         assert "rollback()" not in source
+
+
+class TestRecordActivity:
+    """AR32's liveness write (Story 2.5, AC #5): the runner's heartbeat path."""
+
+    def _service(self, row, clock: FakeClock) -> tuple[SessionService, MagicMock]:
+        repository = _repository(row)
+        return SessionService(repository, time_source=clock), repository
+
+    def test_an_explicit_at_is_what_lands_in_last_heartbeat_at(self):
+        """The runner's own clock must reach the column.
+
+        Without this the ``time_source`` seam on the adapter is decorative and
+        Tasks 6 and 8 cannot drive the cadence deterministically.
+        """
+        clock = FakeClock()
+        started = clock.now
+        stamped = clock.now.replace(microsecond=123456)
+        row = _session_row(SessionStatus.RUNNING, last_started_at=started)
+        service, _ = self._service(row, clock)
+
+        service.record_activity(SESSION_ID, started_at=started, at=stamped)
+
+        assert row.last_heartbeat_at == stamped
+
+    def test_without_at_the_injected_time_source_is_used(self):
+        clock = FakeClock()
+        started = clock.now
+        row = _session_row(SessionStatus.RUNNING, last_started_at=started)
+        service, _ = self._service(row, clock)
+        clock.advance(45)
+
+        service.record_activity(SESSION_ID, started_at=started)
+
+        assert row.last_heartbeat_at == clock.now
+
+    def test_bar_seen_at_is_the_bars_observed_time_not_now(self):
+        clock = FakeClock()
+        started = clock.now
+        row = _session_row(SessionStatus.RUNNING, last_started_at=started)
+        service, _ = self._service(row, clock)
+        observed = clock.now + timedelta(seconds=7)
+        clock.advance(30)
+
+        service.record_activity(SESSION_ID, started_at=started, bar_seen_at=observed)
+
+        assert row.last_bar_at == observed
+        assert row.last_heartbeat_at == clock.now
+
+    def test_no_bar_leaves_last_bar_at_completely_alone(self):
+        """A quiet interval must not overwrite the last real bar's timestamp."""
+        clock = FakeClock()
+        started = clock.now
+        previous_bar = clock.now - timedelta(minutes=5)
+        row = _session_row(SessionStatus.RUNNING, last_started_at=started, last_bar_at=previous_bar)
+        service, _ = self._service(row, clock)
+        clock.advance(30)
+
+        service.record_activity(SESSION_ID, started_at=started)
+
+        assert row.last_bar_at == previous_bar
+
+    def test_it_returns_the_row_it_stamped(self):
+        clock = FakeClock()
+        row = _session_row(SessionStatus.RUNNING, last_started_at=clock.now)
+        service, _ = self._service(row, clock)
+
+        assert service.record_activity(SESSION_ID, started_at=clock.now) is row
+
+    def test_an_unknown_session_raises_record_not_found(self):
+        clock = FakeClock()
+        service, _ = self._service(None, clock)
+
+        with pytest.raises(RecordNotFoundError, match=str(SESSION_ID)):
+            service.record_activity(SESSION_ID, started_at=clock.now)
+
+    def test_the_read_does_not_take_the_row_lock(self):
+        """A heartbeat every 30s must never block ``live status``.
+
+        Mirrors ``test_resolve_reads_without_the_lock``: ``transition`` needs
+        ``FOR UPDATE`` because it decides across a read-then-write window; a
+        heartbeat writes one column and has no such window.
+        """
+        clock = FakeClock()
+        row = _session_row(SessionStatus.RUNNING, last_started_at=clock.now)
+        service, repository = self._service(row, clock)
+
+        service.record_activity(SESSION_ID, started_at=clock.now)
+
+        assert repository.find_by_session_id.call_args.kwargs.get("for_update") in (None, False)
+
+    @pytest.mark.parametrize(
+        "status", [SessionStatus.CREATED, SessionStatus.STOPPED, SessionStatus.SEALED]
+    )
+    def test_a_session_that_is_not_running_refuses_the_heartbeat(self, status):
+        """A heartbeat for a stopped session resurrects the liveness signal the
+        reclaim depends on, making the row permanently un-reclaimable.
+        """
+        clock = FakeClock()
+        row = _session_row(status, last_started_at=clock.now)
+        service, _ = self._service(row, clock)
+
+        with pytest.raises(InvalidSessionTransition, match="not running"):
+            service.record_activity(SESSION_ID, started_at=clock.now)
+
+        assert row.last_heartbeat_at is None
+
+    def test_a_row_whose_last_started_at_moved_forward_refuses(self):
+        """The mid-run reclaim guard: another process now owns this session."""
+        clock = FakeClock()
+        mine = clock.now
+        theirs = clock.now + timedelta(seconds=120)
+        row = _session_row(SessionStatus.RUNNING, last_started_at=theirs)
+        service, _ = self._service(row, clock)
+
+        with pytest.raises(InvalidSessionTransition, match="reclaimed"):
+            service.record_activity(SESSION_ID, started_at=mine)
+
+        assert row.last_heartbeat_at is None
+
+    def test_a_row_whose_last_started_at_matches_is_accepted(self):
+        """Equal, not merely older — this is the ordinary happy path."""
+        clock = FakeClock()
+        started = clock.now
+        row = _session_row(SessionStatus.RUNNING, last_started_at=started)
+        service, _ = self._service(row, clock)
+
+        service.record_activity(SESSION_ID, started_at=started)
+
+        assert row.last_heartbeat_at == started
+
+    def test_a_null_last_started_at_is_accepted_rather_than_treated_as_a_reclaim(self):
+        """``transition(to=RUNNING)`` always stamps it, so ``None`` means a row
+        written by something older — refusing would strand it, and there is no
+        evidence of a competitor.
+        """
+        clock = FakeClock()
+        row = _session_row(SessionStatus.RUNNING, last_started_at=None)
+        service, _ = self._service(row, clock)
+
+        service.record_activity(SESSION_ID, started_at=clock.now)
+
+        assert row.last_heartbeat_at == clock.now
+
+    def test_the_reclaim_refusal_is_logged_with_both_instants(self):
+        clock = FakeClock()
+        theirs = clock.now + timedelta(seconds=120)
+        row = _session_row(SessionStatus.RUNNING, last_started_at=theirs)
+        service, _ = self._service(row, clock)
+
+        with capture_logs() as logs:
+            with pytest.raises(InvalidSessionTransition):
+                service.record_activity(SESSION_ID, started_at=clock.now)
+
+        events = [e for e in logs if e["event"] == "session.activity_refused"]
+        assert len(events) == 1
+        assert events[0]["log_level"] == "error"
+        assert events[0]["session_id"] == str(SESSION_ID)
+
+
+class TestTheHeartbeatIntervalConstantIsShareable:
+    """*Judgment call #2*: the runner cannot import a SQLAlchemy-importing module.
+
+    ``DEFAULT_HEARTBEAT_INTERVAL_SECONDS`` is declared in the framework-free
+    ``src/models/session.py`` and re-exported here, so Story 2.3's callers and
+    Story 2.5's runner read one number. Both are asserted, so removing either
+    half fails.
+    """
+
+    def test_the_two_import_paths_yield_the_same_object(self):
+        from src.models.session import DEFAULT_HEARTBEAT_INTERVAL_SECONDS as from_models
+        from src.services.session_service import DEFAULT_HEARTBEAT_INTERVAL_SECONDS as from_service
+
+        assert from_models == 30.0
+        assert from_service is from_models
+
+    def test_the_framework_free_module_really_is_importable_without_sqlalchemy(self):
+        code = (
+            "import sys, src.models.session;"
+            "print(','.join(sorted(m for m in ('sqlalchemy', 'nautilus_trader') "
+            "if m in sys.modules)))"
+        )
+
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=Path(service_module.__file__).parents[2],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+        assert result.stdout.strip() == ""
+
+
+class TestTransitionOwnershipGuard:
+    """Review fix (2026-08-21): the stop path arms the same reclaim guard the
+    heartbeat uses. Without it, a dispossessed incumbent exiting inside the
+    one-interval detection window would transition the **successor's** running
+    row to ``stopped`` — and the successor would then kill itself at its next
+    heartbeat.
+    """
+
+    def _service(self, row, clock: FakeClock) -> SessionService:
+        return SessionService(_repository(row), time_source=clock)
+
+    def test_a_stop_with_a_stale_started_at_refuses_as_reclaimed(self):
+        clock = FakeClock()
+        mine = clock.now
+        theirs = clock.now + timedelta(seconds=120)
+        row = _session_row(SessionStatus.RUNNING, last_started_at=theirs)
+        service = self._service(row, clock)
+
+        with pytest.raises(InvalidSessionTransition, match="reclaimed"):
+            service.transition(SESSION_ID, to=SessionStatus.STOPPED, started_at=mine)
+
+        assert row.status is SessionStatus.RUNNING, "the successor's row must not move"
+        assert row.last_stopped_at is None
+
+    def test_a_matching_started_at_is_accepted(self):
+        """Equal, not merely older — the ordinary single-process teardown."""
+        clock = FakeClock()
+        started = clock.now
+        row = _session_row(SessionStatus.RUNNING, last_started_at=started)
+        service = self._service(row, clock)
+
+        service.transition(SESSION_ID, to=SessionStatus.STOPPED, started_at=started)
+
+        assert row.status is SessionStatus.STOPPED
+
+    def test_a_null_row_started_at_is_accepted(self):
+        """A row written by something older carries no evidence of a competitor."""
+        clock = FakeClock()
+        row = _session_row(SessionStatus.RUNNING, last_started_at=None)
+        service = self._service(row, clock)
+
+        service.transition(SESSION_ID, to=SessionStatus.STOPPED, started_at=clock.now)
+
+        assert row.status is SessionStatus.STOPPED
+
+    def test_omitting_started_at_preserves_story_23_behaviour(self):
+        """The claim path and operator tooling pass no ``started_at`` and are
+        allowed to move a row whose ``last_started_at`` is newer — a claim is
+        exactly the operation that takes a stale session.
+        """
+        clock = FakeClock()
+        row = _session_row(
+            SessionStatus.RUNNING, last_started_at=clock.now + timedelta(seconds=120)
+        )
+        service = self._service(row, clock)
+
+        service.transition(SESSION_ID, to=SessionStatus.STOPPED)
+
+        assert row.status is SessionStatus.STOPPED
+
+    def test_the_ownership_refusal_outranks_the_edge_refusal(self):
+        """A caller that lost the session must hear "reclaimed", not "cannot
+        move from stopped to stopped" — the remedies differ (walk away versus
+        investigate).
+        """
+        clock = FakeClock()
+        mine = clock.now
+        row = _session_row(
+            SessionStatus.STOPPED, last_started_at=clock.now + timedelta(seconds=120)
+        )
+        service = self._service(row, clock)
+
+        with pytest.raises(InvalidSessionTransition, match="reclaimed"):
+            service.transition(SESSION_ID, to=SessionStatus.STOPPED, started_at=mine)
+
+    def test_the_refusal_is_logged_with_both_instants(self):
+        clock = FakeClock()
+        theirs = clock.now + timedelta(seconds=120)
+        row = _session_row(SessionStatus.RUNNING, last_started_at=theirs)
+        service = self._service(row, clock)
+
+        with capture_logs() as logs:
+            with pytest.raises(InvalidSessionTransition):
+                service.transition(SESSION_ID, to=SessionStatus.STOPPED, started_at=clock.now)
+
+        events = [e for e in logs if e["event"] == "session.activity_refused"]
+        assert len(events) == 1
+        assert events[0]["row_started_at"] == theirs.isoformat()

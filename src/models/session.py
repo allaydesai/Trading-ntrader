@@ -67,6 +67,16 @@ if TYPE_CHECKING:
 #: for the refusal this constant gates.
 SPEC_SCHEMA_VERSION = 1
 
+#: AR32's heartbeat write cadence ("~every 30s"). Declared *here*, in the one
+#: session module that imports no framework at all, because three layers need
+#: the same number and they cannot all reach the same place: Story 2.3's
+#: ``session_service`` derives its staleness threshold from it (and imports
+#: SQLAlchemy), Story 2.5's ``live_session_runner`` drives its heartbeat from it
+#: (and may not import SQLAlchemy, AR38), and Story 2.8's health derivation will
+#: read it too. ``session_service`` re-exports it, so Story 2.3's callers and
+#: tests are unaffected by where it lives.
+DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 30.0
+
 
 class SessionStatus(StrEnum):
     """The four states a paper-trading session moves through (FR20, AR36).

@@ -204,10 +204,21 @@ Exit codes: `0` success · `1` partial (some bar files failed) · `2` fatal (bad
 | `live check --observe-seconds 0` | Skip the observation window — checks the gate, connection and account only (no bar can close in zero seconds) |
 | `live check --connect-timeout 10` | Fail faster when the gateway is not listening |
 | `live check --require-bars` | Also fail (exit 1) if no bar closes during the window. Only meaningful inside regular trading hours |
+| `live create --name <name> --strategy sma_crossover --bar-type AAPL.NASDAQ-1-MINUTE-LAST-EXTERNAL` | Define a paper-trading session once. Its specification is validated here and **frozen for the session's whole life** |
+| `live create ... --param fast_period=5 --param slow_period=20` | Override strategy parameters at creation time; repeat for several |
+| `live create ... --compare-to <backtest run_id>` | Record which backtest this session is intended to be compared against |
+| `live start <name-or-id>` | Run the session in the foreground until it stops, using its stored specification |
+| `live start <name> --connect-timeout 60` | Give the session less time to connect and start trading before exit code 4 |
 
 > `live check` reads connection settings from `IBKRSettings` only — `IBKR_HOST`, `IBKR_PORT`, `IBKR_LIVE_CLIENT_ID`, `IBKR_TRADING_MODE`, `TWS_ACCOUNT` (see Configuration below). It has no host/port/account flags, and no real-money flag: it refuses any non-paper configuration before opening a socket.
 >
 > **Exit codes** — `0` the check completed · `1` configuration or runtime failure · `2` usage error · `3` **the safety gate refused** (scriptably distinct from every other failure) · `4` the broker was unreachable. Zero bars outside regular trading hours is expected and still exits `0`; the summary says so.
+>
+> `live start` takes **no** strategy, bar-type or parameter option, deliberately: everything it runs comes from the specification `live create` froze, so a typo at start time can never silently change what a multi-week forward test is running. It needs PostgreSQL (`alembic upgrade head` applied) **and Redis** — a live session always runs with the Redis-backed engine cache, and refuses at exit `1` with the host, the port and the remedy if Redis is unreachable.
+>
+> **Startup is an ordered, logged sequence** — `gate:static → node:build → node:connect → gate:account → reconcile → warmup → subscribe → trading` — with each phase emitting `phase=<name> status=started|ok|failed` and every record carrying the session's id. A failure in any phase stops the sequence and no later phase runs. `reconcile` and `warmup` are explicit no-op placeholders until Epic 4; a clean phase log is **not** evidence that anything was reconciled. `live start` shares `check`'s exit-code table, with `4` also covering "connected, but the trader never started".
+
+> ⚠️ **Stopping a session does not yet leave positions alone.** The bundled `sma_crossover` still flattens its positions in `on_stop()`. Ctrl-C handling is not implemented either — ending a run today means stopping the gateway or killing the process.
 
 ## Common Workflows
 

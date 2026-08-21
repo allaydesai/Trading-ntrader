@@ -1,15 +1,22 @@
-"""CLI command group: live paper-trading operations (Stories 1.7, 2.2).
+"""CLI command group: live paper-trading operations (Stories 1.7, 2.2, 2.5).
 
-Ships `ntrader live check` and `ntrader live create`. Epic 2 adds
-`start`/`status`/`list`/`reconcile`/`seal` to this same group (architecture D8);
-this story deliberately stubs none of them.
+Ships `ntrader live check`, `create` and `start`. Epic 2 adds
+`stop`/`status`/`list` and Epic 4/5 add `reconcile`/`seal` to this same group
+(architecture D8); this module deliberately stubs none of them.
 
-Thin by contract: parse options, hand typed settings to the driver or
-repository, render the result, exit on its code. Every decision for `check`
-lives in `src/core/live_check.py` and `src/core/live_check_driver.py`; for
-`create`, the spec is built and validated entirely by `src.models.session`, and
-persisted through `SyncTradingSessionRepository` — this module owns none of
-that logic, only the option surface and the exit-code mapping.
+Thin by contract: parse options, hand typed settings to the driver, the
+repository or the runner, render the result, exit on its code. Every decision
+for `check` lives in `src/core/live_check.py` and `src/core/live_check_driver.py`;
+for `create`, the spec is built and validated entirely by `src.models.session`
+and persisted through `SyncTradingSessionRepository`; for `start`, the sequence
+is `src/core/live_session_runner.py`'s. This module owns none of that logic —
+only the option surface, the composition, and the exit-code mapping.
+
+**`start` is the composition root.** It is the only place that holds both a
+database session and a `Settings`, and it is where the two are narrowed: the
+runner gets `settings.ibkr` and an already-built `CacheConfig`, never the whole
+object, because AR38 keeps SQLAlchemy out of the runner and the runner has no
+business reaching `settings.redis`.
 
 **No `--real-money` option exists here, and none may be added.** The two-factor
 crossing (`--real-money` *and* `NTRADER_REAL_MONEY_ACCOUNT`) is not something a
@@ -18,7 +25,9 @@ authorization sitting in the environment refuses at Layer 1 with exit code 3,
 which is the correct outcome.
 """
 
-from typing import Optional
+import asyncio
+from datetime import datetime
+from typing import NoReturn, Optional
 from uuid import UUID
 
 import click
@@ -29,14 +38,28 @@ from rich.markup import escape
 from sqlalchemy.exc import SQLAlchemyError
 
 from src.config import get_settings
-from src.core.live_check import EXIT_ERROR, render_report
+from src.core.live_cache import build_cache_config
+from src.core.live_check import (
+    EXIT_CODES,
+    EXIT_ERROR,
+    classify_failure,
+    failure_message,
+    render_report,
+)
 from src.core.live_check_driver import run_live_check
+from src.core.live_session_record import SessionReclaimedError
+from src.core.live_session_runner import (
+    DEFAULT_SESSION_CONNECT_TIMEOUT_SECONDS,
+    LiveSessionRunner,
+)
 from src.core.strategy_registry import StrategyRegistry
 from src.db.exceptions import DatabaseConnectionError, DuplicateRecordError
 from src.db.repositories.backtest_repository_sync import SyncBacktestRepository
 from src.db.repositories.trading_session_repository_sync import SyncTradingSessionRepository
 from src.db.session_sync import get_sync_session
-from src.models.session import SessionSpec, StrategySpec
+from src.models.session import SessionSpec, SessionStatus, StrategySpec
+from src.services.session_record import SqlSessionRecord
+from src.services.session_service import SessionService
 
 console = Console()
 logger = structlog.get_logger(__name__)
@@ -311,3 +334,164 @@ def create(
     console.print(
         f"Session created: [bold]{escape(name)}[/bold] (session_id={trading_session.session_id})"
     )
+
+
+def _claim_session(identifier: str) -> tuple[UUID, dict, datetime]:
+    """Resolve the identifier and move the session to ``running``, atomically.
+
+    Everything happens inside **one** short-lived ``get_sync_session()`` block
+    that closes before the runner exists. Story 2.3's forward constraint is
+    explicit about why: the ``-> running`` transition takes an exclusive row
+    lock (it is the reclaim-or-refuse decision), and holding that lock for the
+    life of a 6.5-hour session would block every ``live status``.
+
+    Returns:
+        The session's UUID, its stored spec payload, and the instant this
+        transition stamped into ``last_started_at`` — the value the runner's
+        record port is bound to, and the one the mid-run reclaim guard reads.
+
+    Raises:
+        RecordNotFoundError: No session matches ``identifier``.
+        InvalidSessionTransition: The session is already running with a fresh
+            heartbeat, or is sealed.
+    """
+    with get_sync_session() as db_session:
+        service = SessionService(SyncTradingSessionRepository(db_session))
+        trading_session = service.resolve(identifier)
+        started = service.transition(trading_session.session_id, to=SessionStatus.RUNNING)
+        return started.session_id, started.spec, started.last_started_at
+
+
+def _exit_with(exc: BaseException) -> NoReturn:
+    """Render the failure and exit on AR28's code for it.
+
+    Reuses ``live_check``'s table rather than inventing a second one: Story 1.7
+    recorded that *"a CLI that invents an exit code outside its own documented
+    table is worse than one that reports a generic failure"*. ``markup=False``
+    because parts of this text can arrive from third-party exception strings,
+    and a stray ``[...]`` would otherwise be eaten as Rich markup — silently
+    dropping the operator's most important line.
+
+    **Never retries.** ``InvalidSessionTransition`` inherits
+    ``BacktestStorageError``, and an ``except BacktestStorageError: retry()``
+    would spin until the incumbent's heartbeat went stale and then reclaim a
+    live session — two processes on one broker account, which is the
+    catastrophic failure NFR6 exists to prevent.
+    """
+    console.print(f"live start failed: {failure_message(exc)}", markup=False, highlight=False)
+    raise SystemExit(EXIT_CODES[classify_failure(exc)])
+
+
+def _release_quietly(record: SqlSessionRecord) -> None:
+    """Put the row back to ``stopped`` after a failure the runner never saw.
+
+    The runner's own ``finally`` does this for anything raised inside
+    ``run()``. This covers the window AC #10 names explicitly — between the
+    ``-> running`` transition and the runner existing — where a raise would
+    otherwise leave the row ``running`` and the session unstartable for the
+    full 90-second staleness threshold.
+
+    Guarded, because the failure already in flight is the one the operator
+    needs; a second failure here must not replace it.
+    """
+    try:
+        record.mark_stopped()
+    except SessionReclaimedError:
+        # The stop-path ownership guard refused (review fix, 2026-08-21):
+        # another process took the session; its row is not ours to release.
+        logger.error(
+            "session.reclaimed_by_another_process",
+            detail="release skipped; the row belongs to another process now",
+        )
+    except Exception as exc:  # noqa: BLE001 - must never replace the primary failure
+        logger.error("session.release_failed", error_type=type(exc).__name__)
+
+
+@live.command("start")
+@click.argument("session")
+@click.option(
+    "--connect-timeout",
+    type=click.FloatRange(min=0, min_open=True),
+    default=DEFAULT_SESSION_CONNECT_TIMEOUT_SECONDS,
+    show_default=True,
+    help="How long the session has to connect and start trading before exit code 4.",
+)
+def start(session: str, connect_timeout: float) -> None:
+    """Run a session in the foreground until it stops.
+
+    Loads the session's frozen specification by name or id and starts it — no
+    option here re-specifies a strategy, a bar type or a parameter, because a
+    typo at start time must never silently change what a multi-week forward
+    test is running (FR16, FR14).
+
+    \b
+    Startup runs in this order, each phase logging `phase=<name> status=...`:
+      gate:static -> node:build -> node:connect -> gate:account
+      -> reconcile -> warmup -> subscribe -> trading
+    `reconcile` and `warmup` are no-op placeholders until Epic 4.
+
+    \b
+    Exit codes:
+      0  the session ran and stopped cleanly
+      1  a configuration, state or database failure
+      2  usage error
+      3  the safety gate refused the connection (scriptably distinct)
+      4  the broker was unreachable, or the trader never started
+
+    Connection settings come from `IBKRSettings` and the engine cache from
+    `RedisSettings` — via `.env` or the environment. There are deliberately no
+    host/port/account flags.
+    """
+    settings = get_settings()
+    try:
+        session_id, spec_payload, started_at = _claim_session(session)
+    except (RuntimeError, DatabaseConnectionError, SQLAlchemyError) as exc:
+        # Postgres-layer failures carry this codebase's own actionable text
+        # ("Database not configured…", the connection detail) that the AR28
+        # renderer would withhold as third-party — mirror `create` instead
+        # (review fix, 2026-08-21).
+        console.print(f"live start failed: {exc}", markup=False, highlight=False)
+        raise SystemExit(EXIT_ERROR) from exc
+    except (Exception, KeyboardInterrupt, asyncio.CancelledError) as exc:
+        _exit_with(exc)
+
+    # Everything after the `→ running` transition is guarded — including the
+    # record's own construction (review fix, 2026-08-21): reading the spec
+    # back and building the cache config can both fail, and a failure anywhere
+    # in this window must still put the row back to `stopped` (AC #10). The
+    # excepts rebuild the release adapter because its constructor is pure
+    # attribute assignment and cannot itself be mid-failure.
+    try:
+        record = SqlSessionRecord(session_id, started_at=started_at)
+        runner = LiveSessionRunner(
+            settings.ibkr,
+            session_id=session_id,
+            spec=SessionSpec.from_stored(spec_payload),
+            record=record,
+            started_at=started_at,
+            cache=build_cache_config(settings.redis),
+            connect_timeout=connect_timeout,
+        )
+    except ValidationError as exc:
+        # The stored spec no longer materialises — e.g. a strategy id that is
+        # no longer registered. The messages are pydantic's, naming the field
+        # and the registered strategies; render them as `create` does rather
+        # than withholding a bare type name (review fix, 2026-08-21).
+        messages = "; ".join(err.get("msg", "") for err in exc.errors())
+        messages = messages.replace("Value error, ", "") or str(exc)
+        _release_quietly(SqlSessionRecord(session_id, started_at=started_at))
+        console.print(f"live start failed: {messages}", markup=False, highlight=False)
+        raise SystemExit(EXIT_ERROR) from exc
+    except (Exception, KeyboardInterrupt, asyncio.CancelledError) as exc:
+        _release_quietly(SqlSessionRecord(session_id, started_at=started_at))
+        _exit_with(exc)
+
+    try:
+        runner.run()
+    except (Exception, KeyboardInterrupt, asyncio.CancelledError) as exc:
+        # No `_release_quietly` here: the runner's own `finally` has already
+        # marked the row stopped, and a second `transition(to=STOPPED)` would
+        # raise `InvalidSessionTransition` from inside the error handler.
+        _exit_with(exc)
+
+    console.print(f"Session stopped: [bold]{escape(session)}[/bold]")

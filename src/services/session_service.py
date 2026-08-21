@@ -28,14 +28,19 @@ import structlog
 from src.db.exceptions import InvalidSessionTransition, RecordNotFoundError
 from src.db.models.trading_session import TradingSession
 from src.db.repositories.trading_session_repository_sync import SyncTradingSessionRepository
-from src.models.session import SessionStatus
+from src.models.session import (  # noqa: F401  # re-export: Story 2.3's tests and callers
+    DEFAULT_HEARTBEAT_INTERVAL_SECONDS,  # import it from here
+    SessionStatus,
+)
 
 logger = structlog.get_logger(__name__)
 
-# AR32's write cadence ("~every 30s"), declared here so Story 2.5's runner and
-# Story 2.8's `stale` health derivation import one constant instead of each
-# inventing their own literal.
-DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 30.0
+# AR32's write cadence ("~every 30s") now lives in `src/models/session.py`, the
+# one session module that imports no framework, because Story 2.5's runner may
+# not import SQLAlchemy (AR38) and so cannot reach this module. Re-exported
+# above so the callers and tests Story 2.3 wrote are unaffected by the move —
+# two constants that can silently drift is the exact failure declaring one
+# constant was meant to prevent.
 
 # Three missed heartbeats. The costs of getting this wrong are asymmetric:
 # too short and a live session gets reclaimed, putting two processes on one
@@ -204,6 +209,191 @@ def _reclaim_or_refuse(trading_session: TradingSession, now: datetime, threshold
     )
 
 
+def _load_or_raise(
+    repository: SyncTradingSessionRepository, session_id: UUID, *, for_update: bool = False
+) -> TradingSession:
+    """Read one row by its business key, or raise the documented failure.
+
+    ``for_update`` is the caller's decision and not a default anyone should
+    change casually. ``transition()`` needs the lock because it *decides*
+    across a read-then-write window another process may enter (Story 2.3
+    AC #6); ``record_activity()`` must not take it, because a heartbeat every
+    30 seconds that held an exclusive row lock would block every ``live
+    status`` for the life of the session.
+    """
+    trading_session = repository.find_by_session_id(session_id, for_update=for_update)
+    if trading_session is None:
+        raise RecordNotFoundError(f"No trading session found with id {session_id}")
+    return trading_session
+
+
+def _refuse_if_reclaimed(trading_session: TradingSession, *, started_at: datetime) -> None:
+    """Refuse when the row's ``last_started_at`` moved past the caller's own.
+
+    There is no fencing token on this table (an owner/epoch column was
+    considered and rejected: the phase's single migration is spent), but every
+    ``-> running`` transition stamps ``last_started_at``, so a value newer than
+    the one the caller's own transition wrote means a *second* process has
+    taken this session. Shared by the heartbeat (``_stamp_activity``) and the
+    stop path (``_apply_transition``): without the second, a dispossessed
+    incumbent's teardown would transition the **successor's** session to
+    ``stopped`` (review finding, 2026-08-21).
+
+    Known, accepted limit: the comparison trusts two *application* clocks
+    stamped by different processes. Skew between hosts that exceeds the real
+    gap between the two claims makes the reclaim undetectable — the staleness
+    math above clamps skew in one direction, but nothing can clamp it here
+    without the fencing column this phase cannot add. Stated, not solved.
+
+    Raises:
+        InvalidSessionTransition: The row was reclaimed by another process.
+    """
+    last_started_at = trading_session.last_started_at
+    if last_started_at is not None and last_started_at > started_at:
+        logger.error(
+            "session.activity_refused",
+            session_id=str(trading_session.session_id),
+            name=trading_session.name,
+            own_started_at=started_at.isoformat(),
+            row_started_at=last_started_at.isoformat(),
+        )
+        raise InvalidSessionTransition(
+            f"Session {trading_session.name!r} was reclaimed by another process: the row "
+            f"started at {last_started_at.isoformat()}, after this process's own start at "
+            f"{started_at.isoformat()}. This process no longer owns the session."
+        )
+
+
+def _apply_transition(
+    trading_session: TradingSession,
+    *,
+    to: SessionStatus,
+    now: datetime,
+    stale_after_seconds: float,
+    started_at: datetime | None = None,
+) -> TradingSession:
+    """Validate the requested edge and, only then, move the row (AR37).
+
+    Lives at module scope rather than inside :class:`SessionService` for two
+    reasons, in that order. The load-bearing one is that the *whole* of AR37 is
+    "one module may assign ``TradingSession.status``" — the guards that enforce
+    it (an AST scan and a scoped grep, both in
+    ``tests/unit/services/test_session_service.py``) are per-file, so this
+    function is exactly as compliant here as it was as a method, and moving it
+    changes nothing an operator or a reviewer can observe. The second is
+    CLAUDE.md's 100-line class limit: ``SessionService`` was at 97 of it before
+    Story 2.5 added ``record_activity``, and this is the same split
+    ``_reclaim_or_refuse`` above already models.
+
+    Validates before mutating, so no column changes on any raised exception.
+    That is a guarantee about *column values only*: the caller's locked read has
+    already taken an exclusive row lock, held until the caller's transaction
+    ends either way.
+
+    ``started_at``, when given, is the instant the caller's own ``-> running``
+    transition stamped, and arms :func:`_refuse_if_reclaimed` **before** the
+    edge is even considered: a caller that has lost the session must hear
+    "reclaimed", not "cannot move from stopped to stopped", because the remedy
+    is different (walk away versus investigate). The stop path passes it; the
+    claim path does not, because a claim is allowed to take a stale session.
+
+    Raises:
+        InvalidSessionTransition: The edge is illegal, either status is not a
+            valid ``SessionStatus``, ``to`` is ``running`` while the row is
+            already ``running`` with a fresh heartbeat, or ``started_at`` is
+            given and the row was reclaimed by another process.
+    """
+    if started_at is not None:
+        _refuse_if_reclaimed(trading_session, started_at=started_at)
+    to = _as_status(to, "The requested target")
+    current = _as_status(
+        trading_session.status, f"The stored status of session {trading_session.name!r}"
+    )
+
+    if to is SessionStatus.RUNNING and current is SessionStatus.RUNNING:
+        _reclaim_or_refuse(trading_session, now, stale_after_seconds)
+    elif to not in _LEGAL_TRANSITIONS.get(current, frozenset()):
+        raise InvalidSessionTransition(
+            f"Session {trading_session.name!r} cannot move from {current.value!r} to {to.value!r}."
+        )
+
+    trading_session.status = to
+    for column in _TIMESTAMPS_BY_TARGET.get(to, ()):
+        setattr(trading_session, column, now)
+    return trading_session
+
+
+def _stamp_activity(
+    trading_session: TradingSession,
+    *,
+    started_at: datetime,
+    at: datetime,
+    bar_seen_at: datetime | None,
+) -> TradingSession:
+    """Write AR32's liveness columns, or refuse — the heartbeat's whole contract.
+
+    Two guards, and both of them exist because getting either wrong puts two
+    processes on one broker account, which is the catastrophic failure NFR6
+    exists to prevent.
+
+    1. **The row must be ``running``.** A heartbeat for a ``stopped`` or
+       ``sealed`` session would refresh the very liveness signal the AR33
+       reclaim reads, making an abandoned row permanently un-reclaimable — the
+       stuck state NFR11 forbids, manufactured by the mechanism meant to
+       prevent it.
+    2. **The row's ``last_started_at`` must not have moved past the caller's
+       own.** There is no fencing token on this table (an owner/epoch column
+       was considered and rejected: the phase's single migration is spent), but
+       every ``-> running`` transition stamps ``last_started_at``, so a value
+       newer than the one the caller's own transition wrote means a *second*
+       process has taken this session. Without this the incumbent would keep
+       refreshing a row it no longer owns and, on the way out, transition the
+       **successor's** session to ``stopped``.
+
+    ``last_bar_at`` is written **only** when ``bar_seen_at`` is given, and is
+    never cleared: a quiet interval is not evidence that the last bar never
+    happened. The value is the instant the bar was *observed*, not ``now`` —
+    the write is batched onto the heartbeat tick but the timestamp is not.
+
+    Known, accepted limit: guard 2 is a *detection*, not a cure. The window
+    between another process reclaiming this session and this process's next
+    tick is up to one heartbeat interval of two live processes. Closing it
+    needs the fencing column this phase cannot add.
+
+    Args:
+        trading_session: The row to stamp, already loaded (unlocked).
+        started_at: The instant this caller's own ``-> running`` transition
+            stamped. Bound into the adapter at construction, so a runner cannot
+            forge its own claim to ownership.
+        at: The heartbeat instant to write. Resolved by the caller, so the
+            runner's injected clock is what lands in the column.
+        bar_seen_at: When a bar was last observed since the previous tick, or
+            ``None``.
+
+    Returns:
+        The same ``TradingSession``, mutated in place.
+
+    Raises:
+        InvalidSessionTransition: Either guard refused.
+    """
+    current = _as_status(
+        trading_session.status, f"The stored status of session {trading_session.name!r}"
+    )
+    if current is not SessionStatus.RUNNING:
+        raise InvalidSessionTransition(
+            f"Session {trading_session.name!r} is {current.value!r}, not running, so its "
+            "activity cannot be recorded — a heartbeat for a session that is not running "
+            "would make the row un-reclaimable."
+        )
+
+    _refuse_if_reclaimed(trading_session, started_at=started_at)
+
+    trading_session.last_heartbeat_at = at
+    if bar_seen_at is not None:
+        trading_session.last_bar_at = bar_seen_at
+    return trading_session
+
+
 class SessionService:
     """The single validated path through which a session's status changes.
 
@@ -258,46 +448,32 @@ class SessionService:
             raise RecordNotFoundError(f"No trading session matches {identifier!r}")
         return found
 
-    def transition(self, session_id: UUID, *, to: SessionStatus) -> TradingSession:
-        """Move a session to ``to``, or raise — the only path that may (AR37).
-
-        Validates before mutating, so no column is changed on any raised
-        exception. Note this is a guarantee about *column values only*: the
-        locked read has already taken an exclusive row lock, which is held
-        until the caller ends its transaction either way.
-
-        Args:
-            session_id: The session's UUID business key.
-            to: The requested target status.
-
-        Returns:
-            The same ``TradingSession``, mutated in place.
-
-        Raises:
-            RecordNotFoundError: If no session matches ``session_id``.
-            InvalidSessionTransition: If the edge is illegal, if either status
-                is not a valid ``SessionStatus``, or if ``to`` is ``running``
-                while already ``running`` with a fresh heartbeat.
-        """
-        to = _as_status(to, "The requested target")
-        trading_session = self._repository.find_by_session_id(session_id, for_update=True)
-        if trading_session is None:
-            raise RecordNotFoundError(f"No trading session found with id {session_id}")
-
-        now = self._time_source()
-        current = _as_status(
-            trading_session.status, f"The stored status of session {trading_session.name!r}"
+    def transition(
+        self, session_id: UUID, *, to: SessionStatus, started_at: datetime | None = None
+    ) -> TradingSession:
+        """Move a session to ``to``, or raise; the rules are in :func:`_apply_transition`."""
+        trading_session = _load_or_raise(self._repository, session_id, for_update=True)
+        return _apply_transition(
+            trading_session,
+            to=to,
+            now=self._time_source(),
+            stale_after_seconds=self._heartbeat_stale_after_seconds,
+            started_at=started_at,
         )
 
-        if to is SessionStatus.RUNNING and current is SessionStatus.RUNNING:
-            _reclaim_or_refuse(trading_session, now, self._heartbeat_stale_after_seconds)
-        elif to not in _LEGAL_TRANSITIONS.get(current, frozenset()):
-            raise InvalidSessionTransition(
-                f"Session {trading_session.name!r} cannot move from {current.value!r} to "
-                f"{to.value!r}."
-            )
-
-        trading_session.status = to
-        for column in _TIMESTAMPS_BY_TARGET.get(to, ()):
-            setattr(trading_session, column, now)
-        return trading_session
+    def record_activity(
+        self,
+        session_id: UUID,
+        *,
+        started_at: datetime,
+        at: datetime | None = None,
+        bar_seen_at: datetime | None = None,
+    ) -> TradingSession:
+        """Stamp AR32's liveness columns; the rules are in :func:`_stamp_activity`."""
+        trading_session = _load_or_raise(self._repository, session_id)
+        return _stamp_activity(
+            trading_session,
+            started_at=started_at,
+            at=self._time_source() if at is None else at,
+            bar_seen_at=bar_seen_at,
+        )

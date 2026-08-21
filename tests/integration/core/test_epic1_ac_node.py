@@ -434,6 +434,18 @@ _STDLIB_AND_FIRST_PARTY = frozenset(
     {
         "asyncio",
         "collections",
+        # Story 2.5's `src/core/live_session_phases.py`. AR39's phase pair
+        # (`status=started` then `ok`/`failed`, or `failed` and re-raise) is a
+        # `@contextlib.contextmanager`, which is what makes "a failure stops
+        # the sequence" a property of the language rather than of eight
+        # try/except blocks a later edit could get wrong in one place.
+        "contextlib",
+        # Story 2.5 code review (2026-08-21): `StartupHeartbeat` in
+        # `live_session_steady_state.py` is a thread because the long startup
+        # phases run while the runner's loop is not running — an asyncio task
+        # would not tick through exactly the staleness window it exists to
+        # cover.
+        "threading",
         "dataclasses",
         "datetime",
         "enum",

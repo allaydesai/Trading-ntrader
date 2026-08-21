@@ -27,6 +27,7 @@ from src.core.live_check import (
     LiveCheckOutcome,
     LiveCheckReport,
     classify_failure,
+    failure_message,
     preflight_gate,
     render_report,
 )
@@ -408,3 +409,70 @@ class TestModulePurity:
         offenders = [name for name in imported if name.startswith(forbidden)]
 
         assert offenders == [], f"live_check must stay framework-free, found: {offenders}"
+
+
+class TestStoryTwoFiveClassifications:
+    """Three names ``ntrader live start`` needs, added as **string literals**.
+
+    Importing the real classes would drag ``sqlalchemy`` (``InvalidSessionTransition``,
+    ``RecordNotFoundError``) and ``nautilus_trader`` (``RedisUnreachableError``,
+    transitively) into this module and destroy the purity the split exists for.
+    ``TestTheStoryTwoFiveNamesStillExist`` in
+    ``tests/component/core/test_session_runner_phases.py``'s sibling suites pins
+    the real classes against these names.
+    """
+
+    @pytest.mark.parametrize(
+        "exception_name",
+        ["RedisUnreachableError", "InvalidSessionTransition", "RecordNotFoundError"],
+    )
+    def test_they_classify_as_config_error_which_is_exit_one(self, exception_name):
+        """AR28 reserves 3 for a gate refusal and 4 for *broker* connectivity.
+
+        Redis is not the broker and 4 must stay scriptably specific to IBKR; a
+        session-state conflict is neither; and an unknown session name is an
+        operator error, while 2 is Click's own.
+        """
+        stand_in = type(exception_name, (Exception,), {})
+
+        outcome = classify_failure(stand_in("boom"))
+
+        assert outcome is LiveCheckOutcome.CONFIG_ERROR
+        assert EXIT_CODES[outcome] == EXIT_ERROR
+
+    @pytest.mark.parametrize(
+        "exception_name",
+        [
+            "RedisUnreachableError",
+            "InvalidSessionTransition",
+            "RecordNotFoundError",
+            "SessionReclaimedError",
+        ],
+    )
+    def test_their_messages_reach_the_operator(self, exception_name):
+        """Each was written to be actionable — host/port/remedy, the session
+        name and its heartbeat age — and all are first-party text carrying no
+        third-party string, so NFR26 does not withhold them.
+        """
+        stand_in = type(exception_name, (Exception,), {})
+
+        assert failure_message(stand_in("the actionable detail")) == "the actionable detail"
+
+    def test_a_subclass_of_backtest_storage_error_still_classifies_by_its_own_name(self):
+        """``InvalidSessionTransition`` inherits ``BacktestStorageError``; the
+        MRO walk must match the specific name first.
+        """
+        base = type("BacktestStorageError", (Exception,), {})
+        derived = type("InvalidSessionTransition", (base,), {})
+
+        assert classify_failure(derived("boom")) is LiveCheckOutcome.CONFIG_ERROR
+
+    def test_a_reclaimed_session_is_a_generic_error_not_a_broker_failure(self):
+        """Deliberately unmapped in the outcome table: AR28's five codes are the
+        contract, and *"a CLI that invents an exit code outside its own
+        documented table is worse than one that reports a generic failure"*.
+        """
+        stand_in = type("SessionReclaimedError", (Exception,), {})
+
+        assert classify_failure(stand_in("boom")) is LiveCheckOutcome.ERROR
+        assert EXIT_CODES[LiveCheckOutcome.ERROR] == EXIT_ERROR

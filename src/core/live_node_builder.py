@@ -39,7 +39,13 @@ from nautilus_trader.adapters.interactive_brokers.factories import (
     InteractiveBrokersLiveDataClientFactory,
     InteractiveBrokersLiveExecClientFactory,
 )
-from nautilus_trader.config import CacheConfig, ImportableActorConfig, TradingNodeConfig
+from nautilus_trader.config import (
+    CacheConfig,
+    ImportableActorConfig,
+    ImportableControllerConfig,
+    LoggingConfig,
+    TradingNodeConfig,
+)
 from nautilus_trader.live.node import TradingNode
 from nautilus_trader.model.data import BarType
 
@@ -62,6 +68,32 @@ from src.utils.logging import set_nautilus_log_guard
 # than discovering a typo when a node is being built against a live gateway.
 BAR_OBSERVER_ACTOR_PATH = "src.core.live_bar_observer:LiveBarObserver"
 BAR_OBSERVER_CONFIG_PATH = "src.core.live_bar_observer:LiveBarObserverConfig"
+
+# `TradingNodeConfig` inherits six timeouts from `NautilusKernelConfig`
+# (`system/config.py:106-132`) and, before Story 2.5, this repo set none of
+# them. The six below are **today's Nautilus defaults, deliberately**: passing
+# them explicitly is a zero-behaviour-change guard against a silent upgrade,
+# exactly as `live_cache`'s three namespace-deciding fields are and as
+# `market_data_type`/`use_regular_trading_hours` already are below.
+# `tests/component/core/test_live_node_builder.py` asserts each by name AND
+# that they still equal Nautilus's own defaults, so an upgrade that moves one
+# becomes a decision rather than a surprise.
+
+#: How long both engines have to report connected inside `start_async`.
+NODE_TIMEOUT_CONNECTION = 60.0
+#: How long Nautilus's own execution reconciliation may take.
+NODE_TIMEOUT_RECONCILIATION = 30.0
+#: In the set for a specific reason: its expiry is a **fail-quiet `return`** at
+#: `kernel.py:1024`, before `trader.start()` is reached — so a session can be
+#: connected, both engines healthy, and never start trading, with nothing
+#: raised. That is the shape Story 2.5's `node:connect` wait exists to catch.
+NODE_TIMEOUT_PORTFOLIO = 10.0
+#: How long a disconnect may take during shutdown.
+NODE_TIMEOUT_DISCONNECTION = 10.0
+#: How long post-stop cleanup may take.
+NODE_TIMEOUT_POST_STOP = 10.0
+#: How long the final shutdown may take.
+NODE_TIMEOUT_SHUTDOWN = 5.0
 
 logger = structlog.get_logger(__name__)
 
@@ -155,6 +187,8 @@ def build_trading_node_config(
     bar_observer: LiveBarObserverConfig | None = None,
     cli_flags: GateFlags | None = None,
     cache: CacheConfig | None = None,
+    logging: LoggingConfig | None = None,
+    controller: ImportableControllerConfig | None = None,
 ) -> TradingNodeConfig:
     """Assemble a TradingNodeConfig for IBKR paper trading.
 
@@ -184,6 +218,18 @@ def build_trading_node_config(
             what ``ntrader live check`` wants — a broker diagnostic must not
             require Redis. Building a config never contacts Redis either way;
             only ``build_trading_node`` does.
+        logging: Nautilus's own logging configuration. ``None`` (the default)
+            inherits the framework's, which is what ``ntrader live check``
+            does; a session passes one explicitly (Story 2.5 AC #9). Note
+            ``LoggingConfig(bypass_logging=True)`` raises
+            ``InvalidConfiguration`` in a LIVE environment
+            (``kernel.py:253-257``) — it is not a way to silence the node.
+        controller: A controller to register on the trader. ``None`` (the
+            default) means ``Trader.add_strategy``/``add_actor`` **silently
+            return** once the trader is running (``trader.py:331-333``,
+            ``:395-397``), so any caller that registers components after
+            ``node.run_async()`` has started must pass one — see
+            ``src/core/live_session_controller.py``.
 
     Returns:
         A configured ``TradingNodeConfig`` with one IB data client and one IB
@@ -282,6 +328,16 @@ def build_trading_node_config(
         # from `cache` — `CacheConfig` carries no trader id (kernel.py:303-311).
         # That is what makes the namespace per-session (AR10).
         cache=cache,
+        logging=logging,
+        controller=controller,
+        # Passed unconditionally, including when they equal today's defaults.
+        # See the NODE_TIMEOUT_* constants above for why that is the point.
+        timeout_connection=NODE_TIMEOUT_CONNECTION,
+        timeout_reconciliation=NODE_TIMEOUT_RECONCILIATION,
+        timeout_portfolio=NODE_TIMEOUT_PORTFOLIO,
+        timeout_disconnection=NODE_TIMEOUT_DISCONNECTION,
+        timeout_post_stop=NODE_TIMEOUT_POST_STOP,
+        timeout_shutdown=NODE_TIMEOUT_SHUTDOWN,
     )
 
 
@@ -353,6 +409,8 @@ def build_trading_node(
     bar_observer: LiveBarObserverConfig | None = None,
     cli_flags: GateFlags | None = None,
     cache: CacheConfig | None = None,
+    logging: LoggingConfig | None = None,
+    controller: ImportableControllerConfig | None = None,
     loop: asyncio.AbstractEventLoop | None = None,
 ) -> TradingNode:
     """Build an unbuilt, unstarted TradingNode configured for IBKR paper trading.
@@ -378,6 +436,13 @@ def build_trading_node(
             constructing anything, and refuses if it cannot. ``None`` (the
             default) leaves the node's cache in memory and touches no network —
             which is what ``ntrader live check`` relies on.
+        logging: Nautilus's own logging configuration, passed straight through
+            to ``build_trading_node_config``. See it for the ``bypass_logging``
+            trap.
+        controller: A controller to register on the trader, passed straight
+            through to ``build_trading_node_config``. Required by any caller
+            that registers strategies or actors *after* the node is running —
+            without one those calls silently no-op.
         loop: The event loop to bind the node to. Passed straight through to
             ``TradingNode``, which otherwise falls back to
             ``asyncio.get_event_loop()`` — quietly manufacturing an orphan loop
@@ -404,6 +469,8 @@ def build_trading_node(
         bar_observer=bar_observer,
         cli_flags=cli_flags,
         cache=cache,
+        logging=logging,
+        controller=controller,
     )
 
     # Strictly before TradingNode(...), because that constructor is the thing

@@ -827,3 +827,411 @@ class TestCreateStateConflicts:
             )
 
         assert result.exit_code == EXIT_ERROR
+
+
+_RUNNER = "src.cli.commands.live.LiveSessionRunner"
+_RECORD = "src.cli.commands.live.SqlSessionRecord"
+_SERVICE = "src.cli.commands.live.SessionService"
+_CACHE = "src.cli.commands.live.build_cache_config"
+
+
+def _trading_session_row(**overrides):
+    """A ``TradingSession``-shaped stand-in with everything ``start`` reads."""
+    from datetime import datetime, timezone
+    from uuid import UUID
+
+    row = MagicMock()
+    row.session_id = overrides.get("session_id", UUID("44444444-4444-4444-4444-444444444444"))
+    row.name = overrides.get("name", "alpha-session")
+    row.spec = overrides.get("spec", {"schema_version": 1, "strategies": []})
+    row.last_started_at = overrides.get(
+        "last_started_at", datetime(2026, 8, 19, 15, 0, 0, tzinfo=timezone.utc)
+    )
+    return row
+
+
+@contextmanager
+def _start_harness(
+    *,
+    row=None,
+    resolve_error=None,
+    transition_error=None,
+    runner_error=None,
+    construct_error=None,
+):
+    """Patch every collaborator ``live start`` composes, and hand back the spies."""
+    row = _trading_session_row() if row is None else row
+    service = MagicMock()
+    service.resolve.side_effect = resolve_error
+    if resolve_error is None:
+        service.resolve.return_value = row
+    service.transition.side_effect = transition_error
+    if transition_error is None:
+        service.transition.return_value = row
+
+    runner = MagicMock()
+    runner.run.side_effect = runner_error
+    record = MagicMock()
+
+    with (
+        patch(_GET_SYNC_SESSION, _fake_session_cm()),
+        patch(_SESSION_REPO),
+        patch(_SERVICE, return_value=service),
+        patch(_RECORD, return_value=record) as record_cls,
+        patch(_CACHE, return_value="a-cache-config"),
+        patch("src.cli.commands.live.SessionSpec") as spec_cls,
+        patch(_RUNNER, side_effect=construct_error, return_value=runner) as runner_cls,
+    ):
+        yield {
+            "service": service,
+            "spec_cls": spec_cls,
+            "runner": runner,
+            "runner_cls": runner_cls,
+            "record": record,
+            "record_cls": record_cls,
+            "row": row,
+        }
+
+
+class TestStartCommandRegistration:
+    """AC #1 — ``start`` exists, and re-specifies nothing (FR16)."""
+
+    def test_live_help_lists_start(self, runner):
+        result = runner.invoke(live, ["--help"])
+
+        assert result.exit_code == 0
+        assert "start" in result.output
+
+    def test_start_takes_exactly_a_session_and_a_connect_timeout(self):
+        """An **exact** set, so any added option fails here and forces a
+        deliberate decision. A three-name negative assertion (``"strategy" not
+        in names``) would be satisfied by ``--fast-period``.
+        """
+        from src.cli.commands.live import start
+
+        assert {param.name for param in start.params} == {"session", "connect_timeout"}
+
+    def test_the_session_is_a_positional_argument(self):
+        import click
+
+        from src.cli.commands.live import start
+
+        positional = [p for p in start.params if isinstance(p, click.Argument)]
+        assert [p.name for p in positional] == ["session"]
+
+    def test_start_has_no_json_option(self):
+        """Architecture D8 scopes ``--json`` to ``status``/``list`` (Story 2.8)."""
+        from src.cli.commands.live import start
+
+        opts = {opt for param in start.params for opt in getattr(param, "opts", [])}
+        assert "--json" not in opts
+
+    def test_the_connect_timeout_default_is_the_runners_not_the_checks(self):
+        """The two wait for different post-conditions and must not share a number."""
+        from src.cli.commands.live import DEFAULT_CONNECT_TIMEOUT_SECONDS, start
+        from src.core.live_session_runner import DEFAULT_SESSION_CONNECT_TIMEOUT_SECONDS
+
+        default = next(p for p in start.params if p.name == "connect_timeout").default
+
+        assert default == DEFAULT_SESSION_CONNECT_TIMEOUT_SECONDS
+        assert default != DEFAULT_CONNECT_TIMEOUT_SECONDS
+
+
+class TestStartComposesTheRunner:
+    """``start`` is the composition root: it builds what the runner may not."""
+
+    def test_it_resolves_the_identifier_and_transitions_to_running(self, runner):
+        from src.models.session import SessionStatus
+
+        with _start_harness() as spies:
+            runner.invoke(live, ["start", "alpha-session"])
+
+        spies["service"].resolve.assert_called_once_with("alpha-session")
+        spies["service"].transition.assert_called_once_with(
+            spies["row"].session_id, to=SessionStatus.RUNNING
+        )
+
+    def test_the_runner_is_constructed_with_the_stored_spec(self, runner):
+        """FR16: the *stored* spec, never anything the command line supplied."""
+        with _start_harness() as spies:
+            runner.invoke(live, ["start", "alpha-session"])
+            spies["spec_cls"].from_stored.assert_called_once_with(spies["row"].spec)
+
+    def test_the_runner_is_given_a_redis_backed_cache_config(self, runner):
+        """A ``cache=None`` session silently runs on an in-memory Nautilus cache
+        and throws away the whole of Story 2.4 — AR10's per-session namespace
+        and FR19's "a restarted process rejoins its own state" — with no error.
+        """
+        with _start_harness() as spies:
+            runner.invoke(live, ["start", "alpha-session"])
+
+        assert spies["runner_cls"].call_args.kwargs["cache"] == "a-cache-config"
+
+    def test_the_cache_config_is_built_from_redis_settings(self, runner):
+        from src.config import RedisSettings
+
+        with _start_harness():
+            with patch(_CACHE, return_value="a-cache-config") as build_cache:
+                runner.invoke(live, ["start", "alpha-session"])
+
+        assert isinstance(build_cache.call_args.args[0], RedisSettings)
+
+    def test_the_runner_receives_ibkr_settings_not_the_whole_settings_object(self, runner):
+        from src.config import IBKRSettings
+
+        with _start_harness() as spies:
+            runner.invoke(live, ["start", "alpha-session"])
+
+        assert isinstance(spies["runner_cls"].call_args.args[0], IBKRSettings)
+
+    def test_the_record_is_bound_to_the_row_and_the_transitions_own_instant(self, runner):
+        """So the runner can never write to the wrong row, and cannot forge its
+        own claim to ownership — ``started_at`` is what the reclaim guard reads.
+        """
+        with _start_harness() as spies:
+            runner.invoke(live, ["start", "alpha-session"])
+
+        assert spies["record_cls"].call_args.args[0] == spies["row"].session_id
+        assert spies["record_cls"].call_args.kwargs["started_at"] == (spies["row"].last_started_at)
+
+    def test_the_connect_timeout_reaches_the_runner(self, runner):
+        with _start_harness() as spies:
+            runner.invoke(live, ["start", "alpha-session", "--connect-timeout", "45"])
+
+        assert spies["runner_cls"].call_args.kwargs["connect_timeout"] == 45.0
+
+    def test_a_clean_run_exits_zero(self, runner):
+        with _start_harness():
+            result = runner.invoke(live, ["start", "alpha-session"])
+
+        assert result.exit_code == 0
+
+
+class TestStartExitCodes:
+    """AR28's table, and the messages that make each code actionable."""
+
+    def test_a_gate_refusal_exits_three(self, runner):
+        from src.core.live_gate import GateRefusalReason, build_refusal
+        from src.core.live_node_builder import GateRefusedError
+
+        refusal = build_refusal(GateRefusalReason.NON_PAPER_PORT, "port 7496 is not paper")
+        with _start_harness(runner_error=GateRefusedError(refusal.refusal)):
+            result = runner.invoke(live, ["start", "alpha-session"])
+
+        assert result.exit_code == 3
+
+    def test_an_unreachable_broker_exits_four(self, runner):
+        from src.core.live_check import BrokerUnreachableError
+
+        with _start_harness(runner_error=BrokerUnreachableError("gateway silent")):
+            result = runner.invoke(live, ["start", "alpha-session"])
+
+        assert result.exit_code == 4
+
+    @pytest.mark.parametrize(
+        "exception_factory",
+        [
+            lambda: __import__(
+                "src.core.live_cache", fromlist=["RedisUnreachableError"]
+            ).RedisUnreachableError("Cannot use the engine cache's Redis at h:1 — down"),
+            lambda: __import__(
+                "src.db.exceptions", fromlist=["InvalidSessionTransition"]
+            ).InvalidSessionTransition("Session 'alpha' is already running"),
+            lambda: __import__(
+                "src.core.live_node_builder", fromlist=["LiveNodeConfigError"]
+            ).LiveNodeConfigError("trader_id is empty"),
+            lambda: __import__(
+                "src.core.live_market_data", fromlist=["LiveMarketDataError"]
+            ).LiveMarketDataError("bar type is unusable"),
+        ],
+    )
+    def test_the_other_typed_failures_exit_one(self, runner, exception_factory):
+        with _start_harness(runner_error=exception_factory()):
+            result = runner.invoke(live, ["start", "alpha-session"])
+
+        assert result.exit_code == 1
+
+    def test_an_unknown_session_exits_one_and_names_the_identifier(self, runner):
+        from src.db.exceptions import RecordNotFoundError
+
+        with _start_harness(resolve_error=RecordNotFoundError("No trading session matches 'zz'")):
+            result = runner.invoke(live, ["start", "zz"])
+
+        assert result.exit_code == 1
+        assert "zz" in result.output
+
+    def test_a_redis_failure_prints_its_own_actionable_message(self, runner):
+        """host/port/remedy — suppressed to a bare type name without the entry
+        in ``_SAFE_MESSAGE_EXCEPTION_NAMES``.
+        """
+        from src.core.live_cache import RedisUnreachableError
+
+        message = "Cannot use the engine cache's Redis at 127.0.0.1:6399 — connection refused"
+        with _start_harness(runner_error=RedisUnreachableError(message)):
+            result = runner.invoke(live, ["start", "alpha-session"])
+
+        assert "6399" in result.output
+
+    def test_a_state_conflict_prints_the_session_name_and_the_heartbeat_age(self, runner):
+        from src.db.exceptions import InvalidSessionTransition
+
+        message = "Session 'alpha-session' is already running and its heartbeat is 4s old"
+        with _start_harness(transition_error=InvalidSessionTransition(message)):
+            result = runner.invoke(live, ["start", "alpha-session"])
+
+        assert result.exit_code == 1
+        assert "alpha-session" in result.output
+        assert "4s old" in result.output
+
+
+class TestStartNeverRetries:
+    """``deferred-work.md:920-929``: *"an ``except BacktestStorageError:
+    retry()`` would spin until the incumbent's heartbeat went stale and then
+    reclaim a live session"* — two processes on one broker account, the
+    catastrophic failure NFR6 exists to prevent.
+    """
+
+    def test_a_state_conflict_produces_exactly_one_attempt(self, runner):
+        from src.db.exceptions import InvalidSessionTransition
+
+        with _start_harness(transition_error=InvalidSessionTransition("already running")) as spies:
+            runner.invoke(live, ["start", "alpha-session"])
+
+        assert spies["service"].transition.call_count == 1
+
+    def test_a_failed_run_is_never_re_run(self, runner):
+        from src.core.live_check import BrokerUnreachableError
+
+        with _start_harness(runner_error=BrokerUnreachableError("silent")) as spies:
+            runner.invoke(live, ["start", "alpha-session"])
+
+        assert spies["runner"].run.call_count == 1
+
+
+class TestTheRunningWindowIsAlwaysClosed:
+    """AC #10 — a failure anywhere after ``→ running`` still leaves a startable
+    session. Without this the row stays ``running`` and the session is
+    unstartable for the full 90-second staleness threshold, which is the
+    opposite of what AC #10 promises.
+    """
+
+    def test_a_raise_in_the_runners_constructor_still_marks_the_row_stopped(self, runner):
+        with _start_harness(construct_error=RuntimeError("boom in __init__")) as spies:
+            result = runner.invoke(live, ["start", "alpha-session"])
+
+        spies["record"].mark_stopped.assert_called_once_with()
+        assert result.exit_code == 1
+
+    def test_a_failure_in_the_run_itself_does_not_double_mark(self, runner):
+        """The runner's own ``finally`` already did it; a second call would
+        raise ``InvalidSessionTransition`` from inside the error handler.
+        """
+        from src.core.live_check import BrokerUnreachableError
+
+        with _start_harness(runner_error=BrokerUnreachableError("silent")) as spies:
+            runner.invoke(live, ["start", "alpha-session"])
+
+        spies["record"].mark_stopped.assert_not_called()
+
+    def test_the_transition_happens_before_the_runner_is_constructed(self, runner):
+        """Story 2.3's forward constraint: the ``get_sync_session`` block must
+        close before the runner starts, or the row lock is held for hours and
+        blocks every ``live status``.
+        """
+        order: list[str] = []
+        with _start_harness() as spies:
+            spies["service"].transition.side_effect = lambda *a, **k: (
+                order.append("transition"),
+                spies["row"],
+            )[1]
+            spies["runner_cls"].side_effect = lambda *a, **k: (
+                order.append("construct"),
+                spies["runner"],
+            )[1]
+            runner.invoke(live, ["start", "alpha-session"])
+
+        assert order == ["transition", "construct"]
+
+
+class TestStartRendersFirstPartyFailures:
+    """Review fixes (2026-08-21): `start` must not funnel this codebase's own
+    actionable text through the AR28 renderer's withholding fallback, and its
+    except tuples must cover ``asyncio.CancelledError`` (a ``BaseException``
+    since Python 3.8).
+    """
+
+    def test_a_database_failure_at_claim_prints_its_own_message(self, runner):
+        """`create` already renders these (its `except (RuntimeError,
+        DatabaseConnectionError, SQLAlchemyError)` arm); `start` must match.
+        """
+        from src.db.exceptions import DatabaseConnectionError
+
+        error = DatabaseConnectionError("Cannot connect to PostgreSQL at localhost:5432")
+        with _start_harness(resolve_error=error):
+            result = runner.invoke(live, ["start", "alpha-session"])
+
+        assert result.exit_code == 1
+        assert "localhost:5432" in result.output
+
+    def test_an_unconfigured_database_prints_the_remedy(self, runner):
+        error = RuntimeError("Database not configured. Check DATABASE_URL in your environment")
+        with _start_harness(resolve_error=error):
+            result = runner.invoke(live, ["start", "alpha-session"])
+
+        assert result.exit_code == 1
+        assert "DATABASE_URL" in result.output
+
+    def test_a_spec_that_no_longer_materialises_names_the_strategy(self, runner):
+        """An unregistered ``strategy_id`` surfaces as a pydantic
+        ``ValidationError`` from ``SessionSpec.from_stored`` — its message
+        names the strategy and the registered list, and must reach the
+        operator instead of a withheld bare type name.
+        """
+        from pydantic import ValidationError as PydanticValidationError
+
+        error = PydanticValidationError.from_exception_data(
+            "SessionSpec",
+            [
+                {
+                    "type": "value_error",
+                    "loc": ("strategies",),
+                    "input": {},
+                    "ctx": {
+                        "error": ValueError(
+                            "Unknown strategy 'ghost'. Registered strategies: "
+                            "momentum, sma_crossover"
+                        )
+                    },
+                }
+            ],
+        )
+        with _start_harness() as spies:
+            spies["spec_cls"].from_stored.side_effect = error
+            result = runner.invoke(live, ["start", "alpha-session"])
+
+        assert result.exit_code == 1
+        assert "ghost" in result.output
+        spies["record"].mark_stopped.assert_called_once_with()
+
+    def test_a_cancelled_error_is_rendered_through_the_exit_table(self, runner):
+        """Uncaught, a ``CancelledError`` would bypass the AR28 rendering
+        entirely and exit 1 only by interpreter default.
+        """
+        import asyncio
+
+        with _start_harness(runner_error=asyncio.CancelledError("cancelled mid-run")):
+            result = runner.invoke(live, ["start", "alpha-session"])
+
+        assert result.exit_code == 1
+        assert "live start failed" in result.output
+
+    def test_a_failing_record_construction_still_releases_the_row(self, runner):
+        """The record's own constructor sits inside the guarded window now —
+        a raise there must still put the row back to ``stopped`` (AC #10).
+        """
+        with _start_harness() as spies:
+            spies["record_cls"].side_effect = [RuntimeError("boom"), spies["record"]]
+            result = runner.invoke(live, ["start", "alpha-session"])
+
+        assert result.exit_code == 1
+        spies["record"].mark_stopped.assert_called_once_with()

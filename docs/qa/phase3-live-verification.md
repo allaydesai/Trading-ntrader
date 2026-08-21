@@ -518,3 +518,108 @@ Exit codes (AR28):
 | Date | Operator | Result | Notes |
 | ---- | -------- | ------ | ----- |
 | 2026-08-11 | Story 1.7 dev session | ⚠️ **partial — criteria 1 and 2 met live, criterion 3 not met (precondition)** | Run from a worktree with no `.env`, settings supplied as environment variables. **Criterion 1 met live**: `IBKR_PORT=4001` produced `gate.refused ... phase=gate:static reason=non_paper_port`, the summary `live check: gate_refused (exit code 3)`, `elapsed: 0.00s`, and **exit code 3** — no `live_check.building` line, so no node was constructed and no socket opened. **Criterion 2 met live, twice, in both of its shapes**: against `IBKR_PORT=7497` with nothing listening (exit **4**), and — the more interesting case — against the **running** paper Gateway on `127.0.0.1:4002`, whose TCP port accepts a connection but whose API handshake never completes (IB error 502 `Couldn't connect to TWS...`, then `Client failed to initialize; connection timeout`). The check reported `broker_unreachable (exit code 4)` rather than hanging or reporting `ok`, which is precisely the failure mode exit 4 exists for. Retried with a fresh `IBKR_LIVE_CLIENT_ID=17` to rule out a client id the Gateway was still holding: identical result, so this is the Gateway's own state (not logged in / API not accepting), not a stale id. **Criterion 3 not met, for that precondition reason** — no API handshake ever completed, so `gate:account` was never reached and no bar could arrive. Two things worth recording from these runs: the connect deadline was honoured to the millisecond (`elapsed: 45.04s` for `--connect-timeout 45`, `30.04s` for `30`), which is what the shared build+connect budget was changed to guarantee — an earlier additive version took **115s** to report an unreachable gateway; and shutdown was clean on every run (`loop.is_running=False`, `loop.is_closed=True`, `DISPOSED`, no shutdown problems reported). **Re-run criterion 3 against a logged-in paper Gateway during RTH.** |
+
+## Procedure P6: run a session unattended for a full RTH day
+
+**Introduced by**: Story 2.5 — Start a Session in the Foreground with an Ordered Startup Sequence
+**Verifies**: AC #7 (a session started and left alone sustains 6.5 hours without operator
+intervention and without accumulating a bar-processing backlog — NFR7, NFR2), and observes AC #2's
+phase ordering and AC #5's heartbeat cadence against a real gateway rather than a double.
+**Tool**: the CLI itself — `ntrader live start`. There is no diagnostic script for this story; the
+command *is* the artifact under test.
+
+**The automated tests are proxies, and this procedure is what closes AC #7.**
+`tests/component/core/test_session_steady_state.py::TestSixAndAHalfHoursWithoutWaitingForThem`
+drives 390 synthesized bars and 780 heartbeat ticks through an injected clock and sleeper. That
+proves the *shape* — O(1) per bar, one bounded write per interval, no container that grows — and it
+is what NFR32/NFR34 require of the suite. It cannot prove a real trading day: it does not exercise
+the IB adapter's own reconnect behaviour, the Rust logger, Redis under six hours of writes, or a
+Postgres connection that has been idle between heartbeats. Only this procedure does.
+
+### Preconditions
+
+- Everything Procedure P5 requires: IB Gateway or TWS **logged into a paper account**, API socket
+  accepting connections from `127.0.0.1`, connection settings reaching `IBKRSettings`, and no other
+  process holding `IBKR_LIVE_CLIENT_ID`.
+- **Redis running and reachable** at `REDIS_HOST`/`REDIS_PORT`. A live session always runs with the
+  Redis-backed engine cache (AR10). If it is down the session refuses at `node:build` with
+  `RedisUnreachableError` and exit **1** — worth provoking once deliberately (`REDIS_PORT=6399`)
+  before the real run, because the alternative shape (no preflight) is a process that prints
+  nothing and never returns.
+- **Postgres running**, `alembic upgrade head` applied, and a session already created:
+  `ntrader live create --name rth-day-1 --strategy sma_crossover --bar-type AAPL.NASDAQ-1-MINUTE-LAST-EXTERNAL`
+- Start **before 09:30 ET** and leave it until after 16:00 ET. Starting mid-session is still useful
+  evidence but does not satisfy the 6.5-hour criterion.
+
+### What it does — and does not — do
+
+It runs the eight AR39 phases, registers the bar observer and the strategies *after* the account
+gate has passed, and then serves the session until the node stops. It **does** submit orders if the
+strategy's logic fires — `sma_crossover` is a real strategy and this is a real paper account. It
+writes `last_heartbeat_at` and `last_bar_at` to `trading_sessions`, and nothing else: no `trades`
+row is written by this story (Epic 3 owns that).
+
+⚠️ **Stopping does not yet leave positions alone.** `sma_crossover.on_stop()` still calls
+`close_all_positions()` (Story 3.1's to remove), so do **not** read this procedure as evidence about
+position handling on stop.
+
+⚠️ **Reconciliation did not happen.** `reconcile` and `warmup` log `started`/`ok` and do nothing at
+all in this epic. A clean phase log is not evidence that any state was reconciled.
+
+### Command
+
+```bash
+# Foreground, in a terminal you can leave open. Ctrl-C is Story 2.6's; until then
+# the way to end the run is to stop the Gateway or `kill <pid>` (SIGTERM — the
+# kernel's own handler runs the teardown, proven in the Story 2.5 smoke run).
+# NEVER `kill -9`: nothing runs, and the row stays `running` for the full
+# 90-second staleness threshold — pass criterion 5 cannot be met that way.
+uv run python -m src.cli.main live start rth-day-1 2>&1 | tee logs/rth-day-1.log
+```
+
+### Expected output
+
+Sixteen phase records, in this order, each with the session's id bound:
+
+```
+<TS> [info ] session.phase  phase=gate:static  session_id=<uuid> status=started
+<TS> [info ] gate.static    phase=gate:static  session_id=<uuid> status=ok mode=paper
+<TS> [info ] session.phase  phase=node:build   session_id=<uuid> status=started
+<TS> [info ] session.phase  phase=node:build   session_id=<uuid> status=ok
+<TS> [info ] session.phase  phase=node:connect session_id=<uuid> status=started
+<TS> [info ] session.connected  endpoint=127.0.0.1:4002 (client_id=10)
+<TS> [info ] session.phase  phase=node:connect session_id=<uuid> status=ok
+<TS> [info ] gate.account   phase=gate:account session_id=<uuid> status=started
+<TS> [info ] gate.account   phase=gate:account session_id=<uuid> status=ok accounts=***626
+... reconcile, warmup, subscribe, trading — each started then ok ...
+<TS> [info ] session.started  trader_id=PAPER-<8 hex> strategies=['sma_crossover']
+```
+
+Note what `session_id` does **not** reach: Nautilus's own `TRADER_ID.COMPONENT_ID` stdout lines.
+That logger is Rust-side and never passes through structlog. On that half the correlation is the
+`PAPER-<8 hex>` prefix, which is derived from the same session id.
+
+### Pass criteria
+
+1. **The sixteen phase records appear in `PHASE_SEQUENCE` order**, and nothing after a `failed`.
+2. **The session is still running 6.5 hours later** with no operator intervention — no restart, no
+   Ctrl-C, no manual reconnect.
+3. **`last_heartbeat_at` advanced roughly every 30 seconds throughout**, including across any
+   connection loss. Count it afterwards; ~780 distinct values over a full day is the expectation,
+   and a long flat stretch is the finding worth reporting:
+   ```sql
+   SELECT name, status, last_started_at, last_heartbeat_at, last_bar_at,
+          EXTRACT(EPOCH FROM (now() - last_heartbeat_at)) AS heartbeat_age_seconds
+     FROM trading_sessions WHERE name = 'rth-day-1';
+   ```
+4. **No bar-processing backlog.** `last_bar_at` stays within about a minute of the most recent bar
+   for a 1-minute subscription throughout, and the process's RSS is flat between the first and last
+   hour (`ps -o rss= -p <pid>` at both ends; a few MB of drift is noise, a monotonic climb is not).
+5. **The row ends `stopped`, not `running`**, once the process exits — that is what makes the
+   session startable again the next morning.
+
+### Result log
+
+| Date | Operator | Result | Notes |
+| ---- | -------- | ------ | ----- |
+| — | — | ⛔ **not run** | Written with Story 2.5. Epic 1's retrospective records that **no live procedure has ever completed a full end-to-end run**, and 2 of 5 never ran at all; P6 is longer than any of them. Do not treat the green automated suite as evidence for AC #7 — see the note above this procedure's preconditions for exactly what the proxies do and do not prove. |
