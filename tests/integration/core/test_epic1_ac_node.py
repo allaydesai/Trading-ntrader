@@ -150,9 +150,17 @@ def _run_probe(body: str, *, timeout: int = 180) -> subprocess.CompletedProcess:
 
 
 def _live_module_sources() -> dict[Path, str]:
-    """Every module Epic 1 added to the live path."""
+    """Every module Epic 1 added to the live path.
+
+    ``src/cli/commands/`` is globbed rather than naming ``live.py`` alone
+    (review fix, 2026-08-22). Story 2.6 split ``live_start.py`` out of
+    ``live.py`` for the file-size cap, and the hand-named path silently stopped
+    covering the code that moved — so a new third-party import there would have
+    been invisible to the guard whose entire job is to notice one. A glob
+    cannot be outrun by the next split.
+    """
     paths = sorted((PROJECT_ROOT / "src" / "core").glob("live_*.py"))
-    paths.append(PROJECT_ROOT / "src" / "cli" / "commands" / "live.py")
+    paths.extend(sorted((PROJECT_ROOT / "src" / "cli" / "commands").glob("live*.py")))
     return {path: path.read_text() for path in paths}
 
 
@@ -458,6 +466,36 @@ _STDLIB_AND_FIRST_PARTY = frozenset(
         # dependencies") true while still bounding a connect that otherwise
         # hangs forever.
         "socket",
+        # Story 2.6's `src/core/live_session_signals.py`: the process's own
+        # signal disposition (SIGINT/SIGTERM/SIGABRT) and the uncatchable
+        # force exit on a second stop signal. Both stdlib; neither was
+        # imported anywhere on the live path before this story.
+        "signal",
+        "sys",
+        # Story 2.6 review (2026-08-22), same module. `itertools.count` is how
+        # the signal handler claims its branch atomically — a `self._count += 1`
+        # read-modify-write can be re-entered by a second signal between its
+        # load and its store, which turned the operator's force-exit Ctrl-C into
+        # a second graceful stop. `logging.shutdown()` flushes the stdlib
+        # `RotatingFileHandler` behind structlog before `os._exit` bypasses
+        # every handler, so the `session.force_exit` record actually reaches
+        # `logs/ntrader.log`. Both stdlib; added by hand, with the reason, for
+        # the same discipline Story 2.4 applied to `socket` — do NOT swap this
+        # allowlist for `sys.stdlib_module_names`, which would wave the next
+        # import through in silence.
+        "itertools",
+        "logging",
+        # Story 2.6 review (2026-08-23), decision D2, in
+        # `src/core/live_session_steady_state.py`: the heartbeat's record write
+        # runs on that object's OWN `concurrent.futures.ThreadPoolExecutor`
+        # rather than through `asyncio.to_thread`, which resolves to the loop's
+        # default executor — the one `TradingNode.__init__` replaces with the
+        # kernel's and `dispose()` joins with `wait=True`. Measured: that join
+        # blocked the teardown 59.81s on a wedged write; on a private pool,
+        # 0.00s. `functools.partial` binds the write's keyword arguments, which
+        # `run_in_executor` (unlike `to_thread`) does not accept. Both stdlib.
+        "concurrent",
+        "functools",
         "src",
         "time",
         "typing",

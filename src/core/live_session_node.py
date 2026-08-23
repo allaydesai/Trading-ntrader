@@ -23,6 +23,7 @@ import asyncio
 import time
 from typing import Any
 
+from nautilus_trader.config import LoggingConfig
 from nautilus_trader.live.node import TradingNode
 
 from src.config import IBKRSettings
@@ -40,6 +41,44 @@ from src.core.live_node_builder import (
     NODE_TIMEOUT_RECONCILIATION,
 )
 from src.models.session import SessionSpec, StrategySpec
+
+#: How long the whole of `node:build` + `node:connect` may take. Strictly
+#: greater than Nautilus's own three pre-`trader.start()` waits
+#: (60 + 30 + 10), because `node:connect` now waits for a post-condition of all
+#: three. **Deliberately not** the check's `DEFAULT_CONNECT_TIMEOUT_SECONDS`
+#: (60.0): a check waits only for `check_connected()`, so a node that connects
+#: in 40s and reconciles in 25s would be called unreachable on a perfectly
+#: healthy gateway. That constant also cannot be imported — it lives in
+#: `src/cli/commands/live.py`, which imports the runner (circular) and imports
+#: SQLAlchemy (fails this module's own purity guard).
+#:
+#: Relocated from `live_session_runner.py` (Story 2.6): the runner's own file
+#: was at the 500-line budget and this module already owns "how a session's
+#: node is configured". No re-export shim is kept — importers use this module.
+DEFAULT_SESSION_CONNECT_TIMEOUT_SECONDS = 120.0
+
+#: The IB reconnect budget a *session* installs, where a *check* installs "1".
+#: `live_check_node` documents its own value as "a check policy, explicitly not
+#: a session policy: a check exists to report what it found, not to outlast a
+#: gateway restart." A 6.5-hour session started while the gateway is coming
+#: back up should not be defeated by that; three attempts costs about 60s of
+#: the 120s budget above and is spent only when the first attempt fails.
+SESSION_CONNECTION_ATTEMPTS = "3"
+
+#: Nautilus's own logging, passed explicitly rather than inherited (AC #9).
+#: `log_level_file=None` means **no Nautilus file sink**: this repo's file
+#: logging is structlog's (`logs/ntrader.log`), and a second Rust-side writer
+#: would duplicate every line. `bypass_logging` stays False —
+#: `kernel.py:253-257` raises `InvalidConfiguration` for True in a LIVE
+#: environment, so it is not a way to silence the node.
+SESSION_LOGGING = LoggingConfig(
+    log_level="INFO", log_level_file=None, log_colors=True, use_pyo3=False
+)
+
+#: The message-bus topic every bar is published to (`data/engine.pyx:2327`
+#: builds `f"data.bars.{bar_type}"`). The `*` glob matches every bar topic and
+#: correctly excludes `data.quotes.*` — executed, not assumed.
+BAR_TOPIC = "data.bars.*"
 
 #: Used only when an account verifier *returns* a refusal carrying no reason —
 #: unreachable via ``live_gate``'s own producers, which always populate it. A
@@ -223,6 +262,55 @@ def materialise_strategy(strategy_spec: StrategySpec) -> Any:
         "bar_type": bar_type,
     }
     return StrategyLoader.create_strategy(strategy_spec.strategy_id, params)
+
+
+def request_node_stop(
+    node: TradingNode | None,
+    loop: asyncio.AbstractEventLoop | None,
+    log: Any,
+    *,
+    signal_name: str,
+    trader_started: bool,
+) -> None:
+    """Log the stop, then ask the node to stop — never call ``node.stop()``
+    directly from a signal handler (Story 2.6).
+
+    This is ``SessionStopSignals``'s ``on_stop`` callback, run on the main
+    thread, synchronously, inside its ``_handle`` — between two arbitrary
+    bytecodes. Kept to the two things that module's docstring permits: one
+    structlog record, and handing off through ``loop.call_soon_threadsafe``,
+    which is safe to call from a handler where re-entering ``node.stop()``'s
+    own ``create_task``/``run_until_complete`` branch is not
+    (``live/node.py:374-388``).
+
+    Guarded against both a node that does not exist yet (a signal during
+    ``gate:static`` or the start of ``node:build``) and a loop already closed
+    (the narrow window after ``shutdown()`` but before ``restore()``).
+    """
+    log.info("session.stopped", signal=signal_name, trader_started=trader_started)
+    if node is not None and loop is not None and not loop.is_closed():
+        loop.call_soon_threadsafe(node.stop)
+
+
+def unsubscribe_bar_topic(node: TradingNode | None, steady_state: Any, log: Any) -> None:
+    """Cancel the runner's own bar-topic subscription on the stop path.
+
+    ``LiveBarObserver.on_stop()`` already unsubscribes exactly the bar types
+    it dispatched, and ``Trader._stop()`` runs actors before strategies —
+    both already handled. What nothing cancels today is the runner's *own*
+    message-bus subscription (``node.trader.subscribe(BAR_TOPIC, ...)`` in
+    ``_phase_subscribe``).
+
+    Guarded: a raising ``unsubscribe`` must not pre-empt the node teardown
+    behind it. A no-op when ``subscribe`` never ran (a stop before that
+    phase) — there is nothing to cancel.
+    """
+    if node is None or steady_state is None:
+        return
+    try:
+        node.trader.unsubscribe(BAR_TOPIC, steady_state.note_bar)
+    except Exception as exc:  # noqa: BLE001 - must never pre-empt the teardown behind it
+        log.error("session.unsubscribe_failed", error_type=type(exc).__name__)
 
 
 def report_instrument_shortfall(node: TradingNode, bar_types: tuple[str, ...], log: Any) -> None:

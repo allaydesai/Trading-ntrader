@@ -129,7 +129,9 @@ class _TestTrader:
         self.added_strategies: list[object] = []
         self.started_strategies: list[object] = []
         self.subscriptions: list[tuple[str, object]] = []
+        self.unsubscriptions: list[tuple[str, object]] = []
         self.strategy_state_override: dict[str, str] = {}
+        self.raise_on_unsubscribe: BaseException | None = None
 
     @property
     def is_running(self) -> bool:
@@ -177,6 +179,11 @@ class _TestTrader:
 
     def subscribe(self, topic: str, handler: object) -> None:
         self.subscriptions.append((topic, handler))
+
+    def unsubscribe(self, topic: str, handler: object) -> None:
+        self.unsubscriptions.append((topic, handler))
+        if self.raise_on_unsubscribe is not None:
+            raise self.raise_on_unsubscribe
 
 
 class _TestCache:
@@ -251,6 +258,11 @@ class TestLiveNode:
         self.built = False
         self.stopped = False
         self.disposed = False
+        # Story 2.6: `stop()` must release `run_async()`, the way a real
+        # node's `stop()` ends `_serve()`'s wait (Pre-verified finding #6) —
+        # without this, a runner that calls `node.stop()` from its signal
+        # handler would hang forever waiting for the run task to finish.
+        self._stop_event = asyncio.Event()
 
     def build(self) -> None:
         self.built = True
@@ -265,9 +277,19 @@ class TestLiveNode:
             if not self._run_forever:
                 return
             if self._run_seconds is not None:
-                await asyncio.sleep(self._run_seconds)
+                # Races the stop event (review fix, 2026-08-22). This used to
+                # be a bare `asyncio.sleep(self._run_seconds)`, which ignored
+                # `stop()` completely — so `run_seconds` could not be used as a
+                # hang-guard in a test whose subject IS the stop: the node ran
+                # the full duration whether or not it was ever asked to stop.
+                # "Ends after N seconds OR when stopped" is also what a real
+                # node does; `run_async` returns once the kernel stops it.
+                try:
+                    await asyncio.wait_for(self._stop_event.wait(), timeout=self._run_seconds)
+                except asyncio.TimeoutError:
+                    pass
                 return
-            await asyncio.Event().wait()
+            await self._stop_event.wait()
         finally:
             self._running = False
 
@@ -276,6 +298,7 @@ class TestLiveNode:
 
     def stop(self) -> None:
         self.stopped = True
+        self._stop_event.set()
         if self._raise_on_stop is not None:
             raise self._raise_on_stop
 

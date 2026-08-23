@@ -623,3 +623,132 @@ That logger is Rust-side and never passes through structlog. On that half the co
 | Date | Operator | Result | Notes |
 | ---- | -------- | ------ | ----- |
 | — | — | ⛔ **not run** | Written with Story 2.5. Epic 1's retrospective records that **no live procedure has ever completed a full end-to-end run**, and 2 of 5 never ran at all; P6 is longer than any of them. Do not treat the green automated suite as evidence for AC #7 — see the note above this procedure's preconditions for exactly what the proxies do and do not prove. |
+
+## Procedure P7: stop a running session with Ctrl-C, and force-exit with a second
+
+**Introduced by**: Story 2.6 — Stop a Session Without Ending It and Without Touching Positions
+**Verifies**: AC #1, #2 (the runner half), #4, #5, #6 against a real gateway.
+**Tool**: the CLI itself — `ntrader live start`, stopped with a real signal. There is no diagnostic
+script for this story; the command *is* the artifact under test.
+
+**The automated tests are proxies, and this procedure is what closes the gap they cannot.**
+`tests/integration/core/test_live_session_signal_ownership.py` sends real OS signals to a real
+`TradingNode` and proves the process-level mechanics — re-arm survives node construction, a signal in
+the synchronous window is not lost, two signals force-exit with code 1. What it cannot prove is
+identity across a *broker* connection: whether a real IBKR paper session, stopped and restarted
+against a live gateway, actually resumes trading under the same `trader_id` and rejoins its own Redis
+namespace, and what the operator actually sees on the terminal.
+
+### What it does not do
+
+It does **not** prove FR18 end to end — see the ⚠️ under Story 2.6's AC #2. A session that traded
+will have been flattened by `sma_crossover.on_stop()` (Story 3.1 removes that). Run this procedure
+once with a position open and once without, and report both.
+
+### Preconditions
+
+Everything Procedure P6 requires: IB Gateway or TWS logged into a paper account, Redis running, and a
+session already created:
+`ntrader live create --name stop-test-1 --strategy sma_crossover --bar-type AAPL.NASDAQ-1-MINUTE-LAST-EXTERNAL`
+
+### Command
+
+```bash
+uv run python -m src.cli.main live start stop-test-1 2>&1 | tee logs/stop-test-1.log
+# Watch the phase log reach `trading`, then:
+#   first Ctrl-C  -> should print the stop line and exit 0
+#   (start it again, then within ~1s send two Ctrl-Cs rapidly) -> should force-exit with code 1
+```
+
+### Expected output
+
+A graceful stop, once the sequence has started serving:
+
+```
+<TS> [info ] session.stopped  session_id=<uuid>  signal=SIGINT  trader_started=True
+Session stopped: stop-test-1 (SIGINT)
+Positions were left at the broker by the runner. ⚠️  sma_crossover.on_stop() still flattens its own
+positions (Story 3.1 removes this) — check the broker before assuming a position survived the stop.
+```
+
+Exit code `0` (`echo $?`).
+
+A forced exit, two rapid signals:
+
+```
+<TS> [error] session.force_exit  exit_code=1  reason=...
+Force exit: a second stop signal arrived; abandoning the teardown (exit 1).
+```
+
+Exit code `1`.
+
+### Pass criteria
+
+1. **First Ctrl-C**: the phase log ends, `session.stopped` appears with `signal=SIGINT`, the process
+   exits **0**, and the row reads `stopped` with `last_stopped_at` set.
+2. **Broker state before and after are identical** except for whatever `on_stop()` flattened — record
+   the IBKR positions page (or `reconcile` output, once Epic 4 has one) at both ends.
+3. **Ctrl-C during `node:build`** (start with the Gateway down or slow so the phase is genuinely slow)
+   is **noticed** — the regression this story exists for; before it, the signal was lost for the whole
+   of that phase.
+4. **Two rapid Ctrl-Cs force-exit with code 1** and print the force-exit line before the process dies.
+5. **Restarting the same session by name** reuses the same `session_id` and the same `PAPER-<8 hex>`
+   `trader_id`, and the Redis namespace has no new prefix (`redis-cli --scan --pattern 'trader-PAPER-*'`).
+6. **`kill -9` leaves the row `running`**; the next `live start` logs `session.reclaimed` and comes up
+   — this half is already covered by Story 2.3's own reclaim suite (`tests/integration/db/test_session_service.py`),
+   re-run here only to confirm it still holds against a session that this story's stop path touched.
+
+### Result log
+
+| Date | Operator | Result | Notes |
+| ---- | -------- | ------ | ----- |
+| — | — | ⛔ **not run** | Written with Story 2.6. Nothing in this story's automated suite requires IB Gateway/TWS or Redis — see the story's Dev Notes, "Blockers and preconditions". `⛔ not run` is an acceptable and expected entry; a dry run is not a pass, per this file's own policy at the top. |
+| 2026-08-23 | Allay | ⚠️ **5 of 6 pass, 1 partial** | Run against a real IB Gateway on the paper port (4002), account `***626`, Redis and Postgres up, after the Story 2.6 code review's fixes. Session `p7-stop-test`, `session_id=6ffd1556-a854-4a2f-9b0c-7b2f14958a6c`, `trader_id=PAPER-6ffd1556`. Logs: `logs/p7-c1-graceful.log`, `logs/p7-c3-build.log`, `logs/p7-c4-force.log`, `logs/p7-c5-restart.log`. Signals were delivered with `proc.send_signal` to the CLI process directly (not through `uv run`, which does not forward them). **Criterion 3 is a partial pass and is the one thing to read.** Detail below. |
+
+#### Result detail — 2026-08-23
+
+1. **First Ctrl-C — ✅ PASS.** `session.stopped session_id=6ffd1556-… signal=SIGINT trader_started=True`,
+   console `Session stopped: p7-stop-test (SIGINT)` plus the Story 3.1 residual warning, exit **0**.
+   Row read `stopped` with `last_stopped_at=2026-08-23 11:19:19.822510-04:00`. Neither of the review's
+   two new warnings fired, correctly: a signal *did* end it and the teardown reported no problems.
+2. **Broker state identical — ✅ PASS.** A pre-existing `LONG 4 AAPL.NASDAQ` position, `id=AAPL.NASDAQ-EXTERNAL`,
+   was present before and logged again as `Residual Position(LONG 4 AAPL.NASDAQ, id=AAPL.NASDAQ-EXTERNAL)`
+   at the teardown of the *second* run — so it survived both stops. `NetLiquidation 32470.14` /
+   `GrossPositionValue 1238.4` identical across runs. Zero orders submitted (the single order-shaped
+   record is an *inferred* `OrderFilled` generated by reconciliation for that same EXTERNAL position).
+   ⚠️ **This is not the "with a position open" variant the procedure asks for.** It was **Sunday**, the
+   market was closed, `use_rth=True` means no bar closes, so no session could open a position of its
+   own and `sma_crossover.on_stop()`'s `close_all_positions()` had nothing of its own to flatten — it
+   filters by `strategy_id`, and this position is `EXTERNAL`. **The position-open half of criterion 2
+   remains unverified** and must be re-run inside RTH.
+3. **Ctrl-C during `node:build` — ⚠️ PARTIAL.** Forced slow by pointing `IBKR_HOST` at a non-routable
+   address with the port left at 4002 so the static gate still passed. **The signal is now noticed**:
+   `session.stopped … signal=SIGINT trader_started=False` was logged 6.0s into the phase
+   (`node:build status=started` 15:20:08.212 → `session.stopped` 15:20:14.217). Before the review's
+   D1 fix it was discarded entirely, so the regression this story exists for **is closed**.
+   **But the process does not then stop.** It ran on through the adapter's remaining reconnect
+   attempts and had not exited 200s after the signal, when the harness killed it. Cause:
+   `request_node_stop` hands off with `loop.call_soon_threadsafe(node.stop)`, and the loop is *not
+   running* during `build_clients`' synchronous connect, so the callback sits queued; the stop can
+   only take effect at the next phase boundary, which is after all three attempts (~4 minutes).
+   Mitigation, verified in the same window: **the operator's second Ctrl-C force-exits immediately**
+   (criterion 4 below was run *during* a slow build precisely to prove this). Recorded in
+   `deferred-work.md`.
+4. **Two rapid Ctrl-Cs — ✅ PASS.** Exit **1**, **0.0s** after the second signal, with both the console
+   `Force exit: a second stop signal arrived; abandoning the teardown (exit 1).` and the
+   `session.force_exit` log record. Run in the hardest case — mid-`node:build` against an unreachable
+   gateway — so it doubles as the escape hatch for criterion 3.
+5. **Restart reuses identity — ✅ PASS.** Same `session_id=6ffd1556-a854-4a2f-9b0c-7b2f14958a6c`,
+   same `trader_id=PAPER-6ffd1556`, `gate:account` re-verified `accounts=***626 mode=paper`.
+   Distinct `trader-PAPER-*` prefixes in Redis: **70 before, 70 after**, with exactly **1** matching
+   this session — no new namespace.
+6. **`kill -9` leaves the row `running`, next start reclaims — ✅ PASS.** The killed criterion-3 run
+   left `status=running` with a 60s-old heartbeat (which also proves AR32's *startup* heartbeat writes
+   against a real database — it had ticked twice during a phase that never reached the steady loop).
+   The next `live start` logged
+   `session.reclaimed heartbeat_age_seconds=128.881652 name=p7-stop-test` and came up.
+
+**Housekeeping:** this run left a real `trading_sessions` row, `p7-stop-test`
+(`6ffd1556-a854-4a2f-9b0c-7b2f14958a6c`), now `stopped`, and one `trader-PAPER-6ffd1556` Redis
+namespace. The repositories are write-once and expose no delete, so both are named here rather than
+removed with raw SQL — the same posture Story 2.5 took with `smoke-1787319225`.

@@ -36,6 +36,13 @@ _GET_SYNC_SESSION = "src.cli.commands.live.get_sync_session"
 _SESSION_REPO = "src.cli.commands.live.SyncTradingSessionRepository"
 _BACKTEST_REPO = "src.cli.commands.live.SyncBacktestRepository"
 
+# `start`'s `claim_session`/`exit_with`/`release_quietly` moved to
+# `live_start.py` (Story 2.6, file-size budget) — these patch that module,
+# not `live.py`, even though the ``create`` command above patches the same
+# names on `live.py` itself.
+_START_GET_SYNC_SESSION = "src.cli.commands.live_start.get_sync_session"
+_START_SESSION_REPO = "src.cli.commands.live_start.SyncTradingSessionRepository"
+
 
 @pytest.fixture
 def runner():
@@ -831,7 +838,7 @@ class TestCreateStateConflicts:
 
 _RUNNER = "src.cli.commands.live.LiveSessionRunner"
 _RECORD = "src.cli.commands.live.SqlSessionRecord"
-_SERVICE = "src.cli.commands.live.SessionService"
+_SERVICE = "src.cli.commands.live_start.SessionService"
 _CACHE = "src.cli.commands.live.build_cache_config"
 
 
@@ -871,11 +878,23 @@ def _start_harness(
 
     runner = MagicMock()
     runner.run.side_effect = runner_error
+    # A clean stop's shape: a signal ended it and the release wrote fine —
+    # explicit rather than a MagicMock's own truthy auto-attributes, so the
+    # clean-stop console text this harness's callers do not assert on today
+    # does not silently start containing a `<MagicMock ...>` repr.
+    runner.stop_signal = "SIGINT"
+    runner.record_release_failed = False
+    # Review fix, 2026-08-22 (decision D4): both are explicit for the same
+    # reason as the two above — a bare MagicMock attribute is truthy, so an
+    # unset `shutdown_problems` would make every clean-stop test print the
+    # teardown warning with a `<MagicMock ...>` repr inside it.
+    runner.shutdown_problems = []
+    runner.stopped_by_signal = True
     record = MagicMock()
 
     with (
-        patch(_GET_SYNC_SESSION, _fake_session_cm()),
-        patch(_SESSION_REPO),
+        patch(_START_GET_SYNC_SESSION, _fake_session_cm()),
+        patch(_START_SESSION_REPO),
         patch(_SERVICE, return_value=service),
         patch(_RECORD, return_value=record) as record_cls,
         patch(_CACHE, return_value="a-cache-config"),
@@ -1005,6 +1024,131 @@ class TestStartComposesTheRunner:
             result = runner.invoke(live, ["start", "alpha-session"])
 
         assert result.exit_code == 0
+
+
+class TestStopOutput:
+    """Story 2.6, Task 10 — a graceful stop's console text and exit code."""
+
+    def test_a_stop_exits_zero_and_prints_the_stop_line(self, runner):
+        with _start_harness() as spies:
+            spies["runner"].stop_signal = "SIGINT"
+            result = runner.invoke(live, ["start", "alpha-session"])
+
+        assert result.exit_code == 0
+        assert "Session stopped: alpha-session (SIGINT)" in result.output
+
+    def test_the_stop_message_names_the_story_31_residual(self, runner):
+        """Positions may have been closed by the strategy's own ``on_stop()``
+        until Story 3.1 lands — the operator must not read a clean stop as
+        proof positions survived it (Story 2.6's AC #2 ⚠️).
+        """
+        with _start_harness():
+            result = runner.invoke(live, ["start", "alpha-session"])
+
+        assert "sma_crossover.on_stop()" in result.output
+        assert "Story 3.1" in result.output
+
+    def test_a_keyboard_interrupt_escaping_run_is_unchanged_at_exit_one(self, runner):
+        """The table still has to be honest: a graceful stop raises nothing,
+        so no new exit-code mapping is added for it — only the pre-existing
+        ``KeyboardInterrupt`` arm, unchanged.
+        """
+        with _start_harness(runner_error=KeyboardInterrupt()):
+            result = runner.invoke(live, ["start", "alpha-session"])
+
+        assert result.exit_code == EXIT_ERROR
+
+    def test_a_failed_release_prints_the_operator_warning(self, runner):
+        """AC #9 — a structlog ERROR alone is not a report an operator
+        watching the terminal ever sees; exit code stays 0.
+        """
+        with _start_harness() as spies:
+            spies["runner"].record_release_failed = True
+            result = runner.invoke(live, ["start", "alpha-session"])
+
+        assert result.exit_code == 0
+        assert "could not be marked stopped" in result.output
+        # Review fix, 2026-08-22: `assert "90" in result.output` was satisfied
+        # by any two adjacent digits anywhere in the output. Assert the actual
+        # operator-relevant fact — the staleness window, with its unit.
+        flat = " ".join(result.output.split())
+        assert "90s" in flat
+        assert "still reads `running`" in flat
+
+    def test_a_clean_release_prints_no_warning(self, runner):
+        with _start_harness() as spies:
+            spies["runner"].record_release_failed = False
+            result = runner.invoke(live, ["start", "alpha-session"])
+
+        assert "could not be marked stopped" not in result.output
+
+    def test_no_signal_name_omits_the_parenthetical(self, runner):
+        """A stop noticed at a phase boundary before any node existed still
+        carries a signal name in production (Task 2/3's design) — but the
+        rendering itself must not assume one, so ``None`` is exercised too.
+        """
+        with _start_harness() as spies:
+            spies["runner"].stop_signal = None
+            spies["runner"].stopped_by_signal = False
+            result = runner.invoke(live, ["start", "alpha-session"])
+
+        # Review fix, 2026-08-22: the old `A in output or output.startswith(A)`
+        # was unfalsifiable with respect to the suffix it claimed to test —
+        # the "(SIGINT)" rendering satisfies the `startswith` arm too. Assert
+        # the rendered line exactly.
+        assert "Session stopped: alpha-session\n" in result.output
+        assert "(None)" not in result.output
+
+
+class TestTheStopWasNotRequested:
+    """Decision D4 — `run()` returning is not proof a signal ended it."""
+
+    def test_a_stop_with_no_signal_warns_that_the_session_ended_on_its_own(self, runner):
+        """``run_async`` swallows cancellation, so a node that died on its own
+        also returns cleanly. Printing the same reassuring line for both made a
+        crash indistinguishable from a deliberate Ctrl-C.
+        """
+        with _start_harness() as spies:
+            spies["runner"].stop_signal = None
+            spies["runner"].stopped_by_signal = False
+            result = runner.invoke(live, ["start", "alpha-session"])
+
+        flat = " ".join(result.output.split())
+        assert result.exit_code == 0
+        assert "No stop signal was received" in flat
+        assert "ended on its own" in flat
+
+    def test_a_signalled_stop_prints_no_such_warning(self, runner):
+        with _start_harness() as spies:
+            spies["runner"].stopped_by_signal = True
+            result = runner.invoke(live, ["start", "alpha-session"])
+
+        assert "No stop signal was received" not in result.output
+
+
+class TestTeardownProblemsAreVisible:
+    """Decision D4 — a teardown that did not complete must not read as clean."""
+
+    def test_shutdown_problems_are_printed_and_the_exit_code_stays_zero(self, runner):
+        with _start_harness() as spies:
+            spies["runner"].shutdown_problems = ["stop: RuntimeError", "dispose: TimeoutError"]
+            result = runner.invoke(live, ["start", "alpha-session"])
+
+        # Rich hard-wraps at the console width, so a phrase can be split across
+        # lines mid-word. Collapse whitespace before asserting on content.
+        flat = " ".join(result.output.split())
+        assert result.exit_code == 0, "AR28 has no code for this; Story 1.7 forbids inventing one"
+        assert "teardown did not complete cleanly" in flat
+        assert "stop: RuntimeError" in flat
+        assert "dispose: TimeoutError" in flat
+        assert "live client id" in flat
+
+    def test_a_clean_teardown_prints_no_warning(self, runner):
+        with _start_harness() as spies:
+            spies["runner"].shutdown_problems = []
+            result = runner.invoke(live, ["start", "alpha-session"])
+
+        assert "teardown did not complete cleanly" not in result.output
 
 
 class TestStartExitCodes:

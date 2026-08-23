@@ -11,7 +11,10 @@ milliseconds instead of 6.5 hours.
 """
 
 import asyncio
+import contextlib
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -656,6 +659,83 @@ class TestStartupHeartbeat:
         assert not writer.running
 
 
+class TestTheWriteStaysOffTheKernelsExecutor:
+    """Decision D2 — the record write runs on this object's OWN thread pool.
+
+    Review fix, 2026-08-23. The write used to go through ``asyncio.to_thread``,
+    which resolves to the loop's **default** executor — the one
+    ``TradingNode.__init__`` replaces with the kernel's and ``dispose()`` joins
+    with ``wait=True``. That made AC #9's bound inert end to end: cancelling the
+    task completes it instantly (``CancelledError`` is not caught), so
+    ``join_heartbeat`` returned in 0.00s and its timeout branch never ran, and
+    the teardown then blocked **59.8s** inside ``dispose()`` on the very write
+    the bound existed to escape. Measured before and after.
+    """
+
+    async def test_the_write_does_not_run_on_the_loops_default_executor(self):
+        """The load-bearing fact, asserted directly rather than by timing.
+
+        Mutation that must fail this: put ``asyncio.to_thread`` back.
+        """
+        default_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="kernel-default")
+        asyncio.get_running_loop().set_default_executor(default_pool)
+        seen: list[str] = []
+
+        class _ThreadNamingRecord(SpyRecord):
+            def record_activity(self, *, at, bar_seen_at=None):
+                seen.append(threading.current_thread().name)
+                super().record_activity(at=at, bar_seen_at=bar_seen_at)
+
+        clock, log = FakeClock(), CapturingLog()
+        state = _steady_state(clock, _ThreadNamingRecord(), log)
+        try:
+            await _run_ticks(state, 1)
+        finally:
+            state.release_executor()
+            default_pool.shutdown(wait=False)
+
+        assert seen, "the tick never wrote"
+        assert not any(name.startswith("kernel-default") for name in seen), (
+            f"the record write ran on the loop's default executor ({seen}) — `dispose()` joins "
+            "that pool with wait=True, which is what made AC #9's bound inert"
+        )
+        assert all("session-heartbeat-write" in name for name in seen), seen
+
+    async def test_release_executor_does_not_wait_for_an_in_flight_write(self):
+        """`wait=False` is the whole point: a wedged write must not hold the
+        teardown open. Bounded generously (2s) against a write that blocks for
+        far longer, so the assertion is about *not waiting*, not about speed.
+        """
+        entered, release = threading.Event(), threading.Event()
+
+        class _WedgedRecord(SpyRecord):
+            def record_activity(self, *, at, bar_seen_at=None):
+                entered.set()
+                release.wait(30)  # uninterruptible by Task.cancel()
+
+        clock, log = FakeClock(), CapturingLog()
+        state = _steady_state(clock, _WedgedRecord(), log)
+        task = asyncio.create_task(state.run())
+        try:
+            await asyncio.to_thread(entered.wait, 5)
+            assert entered.is_set(), "the write never started"
+
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+            started = time.monotonic()
+            state.release_executor()
+            elapsed = time.monotonic() - started
+        finally:
+            release.set()
+
+        assert elapsed < 2.0, (
+            f"release_executor() waited {elapsed:.1f}s for an in-flight write — it must not, or a "
+            "wedged Postgres holds the node teardown and the `-> stopped` transition behind it"
+        )
+
+
 class TestJoinHeartbeat:
     """Review fix (2026-08-21): ``gather(return_exceptions=True)`` swallows an
     in-flight reclaim — the join must report it, or the final release touches a
@@ -712,6 +792,56 @@ class TestJoinHeartbeat:
         assert join_heartbeat(None, loop, log) is False
         assert join_heartbeat(None, asyncio.new_event_loop(), log) is False
 
+    def test_a_task_that_cannot_be_cancelled_returns_within_the_bound(self):
+        """Story 2.6, AC #9: the measured shape is ``asyncio.to_thread`` stuck
+        inside a socket read, which ``Task.cancel()`` cannot interrupt at all.
+        Driven with an injected, deterministic stand-in — not wall-clock luck.
+        """
+        log = CapturingLog()
+        loop = asyncio.new_event_loop()
+        try:
+
+            async def _immune_to_cancellation():
+                while True:
+                    try:
+                        await asyncio.sleep(1000)
+                    except asyncio.CancelledError:
+                        continue  # a blocking thread join would ignore this too
+
+            task = loop.create_task(_immune_to_cancellation())
+            loop.run_until_complete(asyncio.sleep(0.01))
+
+            started = time.monotonic()
+            result = join_heartbeat(task, loop, log, timeout=0.05)
+            elapsed = time.monotonic() - started
+
+            assert result is False
+            assert elapsed < 2.0, f"the join took {elapsed:.2f}s against a 0.05s bound"
+            assert log.level_of("session.heartbeat_join_timeout") == "error"
+        finally:
+            # The task is, by construction, immune to cancellation — do not
+            # await it here, or this cleanup hangs exactly as the bug this
+            # test exists to catch would. Closing the loop with it still
+            # pending is enough; nothing keeps a reference to it afterwards.
+            with contextlib.suppress(RuntimeError):
+                loop.close()
+
+    def test_a_cleanly_cancelled_task_logs_nothing(self):
+        log = CapturingLog()
+        loop = asyncio.new_event_loop()
+        try:
+
+            async def _waits_forever():
+                await asyncio.Event().wait()
+
+            task = loop.create_task(_waits_forever())
+            loop.run_until_complete(asyncio.sleep(0.01))
+
+            assert join_heartbeat(task, loop, log) is False
+            assert log.records == []
+        finally:
+            loop.close()
+
 
 class TestReleaseRecord:
     """The stop-path policy in one place: skip when dispossessed, survive a
@@ -721,10 +851,11 @@ class TestReleaseRecord:
     def test_ownership_lost_skips_the_write_entirely_and_logs_reclaimed(self):
         record, log = SpyRecord(), CapturingLog()
 
-        release_record(record, log, trader_id="PAPER-c697f850", ownership_lost=True)
+        failed = release_record(record, log, trader_id="PAPER-c697f850", ownership_lost=True)
 
         assert record.stopped == 0
         assert log.level_of("session.reclaimed_by_another_process") == "error"
+        assert failed is False, "a reclaim is not the AC #9 failure the caller warns about"
 
     def test_a_stop_refused_by_the_ownership_guard_is_logged_not_raised(self):
         """The reclaim happened inside the detection window — the guard on the
@@ -737,9 +868,10 @@ class TestReleaseRecord:
                 super().mark_stopped()
                 raise SessionReclaimedError("the row belongs to someone else")
 
-        release_record(_Refusing(), log, trader_id="PAPER-c697f850", ownership_lost=False)
+        failed = release_record(_Refusing(), log, trader_id="PAPER-c697f850", ownership_lost=False)
 
         assert log.level_of("session.reclaimed_by_another_process") == "error"
+        assert failed is False, "a reclaim discovered on write is not the AC #9 failure either"
 
     def test_an_ordinary_failure_is_logged_as_mark_stopped_failed(self):
         log = CapturingLog()
@@ -748,15 +880,17 @@ class TestReleaseRecord:
             def mark_stopped(self) -> None:
                 raise RuntimeError("db went away")
 
-        release_record(_Failing(), log, trader_id="PAPER-c697f850", ownership_lost=False)
+        failed = release_record(_Failing(), log, trader_id="PAPER-c697f850", ownership_lost=False)
 
         events = log.events("session.mark_stopped_failed")
         assert events and events[0]["error_type"] == "RuntimeError"
+        assert failed is True, "AC #9: this is exactly the shape the CLI must warn about"
 
     def test_the_clean_path_writes_exactly_once(self):
         record, log = SpyRecord(), CapturingLog()
 
-        release_record(record, log, trader_id="PAPER-c697f850", ownership_lost=False)
+        failed = release_record(record, log, trader_id="PAPER-c697f850", ownership_lost=False)
 
         assert record.stopped == 1
         assert log.records == []
+        assert failed is False

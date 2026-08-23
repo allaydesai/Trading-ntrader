@@ -382,6 +382,15 @@ Non-blocking findings from the three-layer adversarial code review of Story 1.3.
   session, a fresh node each time); Story 2.6, which owns stop, is where that could first stop
   being true.
 
+  **Story 2.6 update (2026-08-21) — STILL OPEN, precondition re-confirmed, not re-pointed.** A
+  stop always ends the process: `SessionStopSignals`'s first-signal callback requests
+  `node.stop()`, which ends `_serve()` and falls through to `run()`'s `finally` and then to
+  `run()` returning normally — there is no code path in this story that resets a `Trader` and
+  starts a second session inside the same process. Re-confirmed rather than assumed: nothing
+  added here calls `Trader.reset()`, `Component.reset()` or constructs a second
+  `LiveSessionRunner` in one process. The blind spot itself remains untouched, open for whichever
+  story first reuses a node.
+
 - **The ordering guard inspects strategies only, not actors or execution algorithms.**
   `Trader._start()` starts **actors first**, then strategies, then exec algorithms
   (`trading/trader.py`). A running actor subscribing to and acting on live data from an unverified
@@ -1056,14 +1065,24 @@ deferred. The five items below were deferred.
   reserves 3 for gate refusal and 4 for connectivity), and never fold it into a storage-error retry.
   This supersedes the narrower `classify_failure` note carried from story-2.3's own section above.
 
-- **`stopped → running` performs no liveness check at all.** Only the `running → running` self-edge
-  consults `last_heartbeat_at`; `stopped → running` goes straight through `_LEGAL_TRANSITIONS` with
-  no heartbeat consultation. A process that has committed `stopped` but is still flattening or
+- ~~**`stopped → running` performs no liveness check at all.**~~ — **RESOLVED in story-2.6,
+  2026-08-21.** The first branch this item's own action named was already satisfied and is now
+  pinned, not merely argued: `release_record` (`live_session_steady_state.py`) runs from the
+  runner's `finally` *after* `shutdown()` has returned — by construction, the ordering the module
+  docstring calls its second load-bearing guarantee — so the broker disconnect always completes
+  before `stopped` commits. `tests/integration/db/test_session_stop_start_cycles.py` asserts the
+  ordered outcome across three real stop/start cycles against Postgres:
+  `created → running → stopped → running → stopped → running → stopped` leaves one row, identity
+  unchanged throughout. **No heartbeat check was added to `stopped → running`** — the original
+  text's second option — because that would refuse a legitimate restart of a session that stopped
+  cleanly seconds ago, which is exactly the swing-strategy-across-days use case Story 2.6 exists
+  for. The original text follows for context. Only the `running → running` self-edge consults
+  `last_heartbeat_at`; `stopped → running` goes straight through `_LEGAL_TRANSITIONS` with no
+  heartbeat consultation. A process that has committed `stopped` but is still flattening or
   cancelling working orders can therefore be joined by a second process through a door the guard
   does not watch — the same two-processes-on-one-account outcome NFR6 forbids, reached by a
-  different route. The information needed to catch it is already on the row. **Action for Story
-  2.6:** the runner must complete the broker disconnect *before* committing `stopped`, or this edge
-  needs the same heartbeat check the self-edge has.
+  different route. **Action for Story 2.6:** the runner must complete the broker disconnect
+  *before* committing `stopped`, or this edge needs the same heartbeat check the self-edge has.
 
 - **No `lock_timeout` or `statement_timeout` is configured anywhere in `src/` or `alembic/`.**
   `transition()` takes an exclusive row lock via `SELECT ... FOR UPDATE` and, by design, never
@@ -1205,16 +1224,29 @@ one superseded) and five were read and left open with updated notes. The items b
   the repo's own largest classes are 1746, 1179 and 793 lines, so the limit is plainly not measured
   on raw lines today.
 
-- **`live_node_builder.py` is at 496 of the 500-line file limit, and `live_session_runner.py` at
-  498.** Story 2.4 already carved `live_connection_probe.py` out of the builder once; Story 2.5
-  added the six timeouts and two arguments and had to compress comments to stay under. The runner
-  needed two splits of its own to fit — `live_session_node.py` (the connect wait, strategy
-  materialisation, the spec check, the shortfall report) and `live_session_steady_state.py` (the
-  heartbeat tick, the watchdog, the bar observation), both of which are cohesive modules rather
-  than arbitrary halves. **Action for Story 2.6**, which attaches signal handling to the runner's
-  run loop and its `finally`: budget for a further split before writing, not after. The pre-agreed
-  line is *not* the phase sequence and *not* the `finally` — Story 2.5's own instructions were
-  explicit that 2.6 attaches to both.
+- ~~**`live_node_builder.py` is at 496 of the 500-line file limit, and `live_session_runner.py` at
+  498.**~~ — **Story 2.6 update (2026-08-21).** The runner's half is addressed: before adding any
+  stop-signal code, four constants (`DEFAULT_SESSION_CONNECT_TIMEOUT_SECONDS`,
+  `SESSION_CONNECTION_ATTEMPTS`, `SESSION_LOGGING`, `BAR_TOPIC`) and their comments relocated to
+  `live_session_node.py` verbatim, freeing ~29 lines before a single new line was written — the
+  budget-before-writing move the original action asked for. Two more free functions
+  (`request_node_stop`, `unsubscribe_bar_topic`) followed the same constants there once the stop
+  wiring itself needed room, keeping the runner at the *wiring*, not the policy (Judgment call #8).
+  Current sizes for Story 2.7 to inherit as a number: `live_session_runner.py` **499** of 500,
+  `live_session_node.py` **336**, `live_session_signals.py` (new) **210**,
+  `live_session_steady_state.py` **472**, `src/cli/commands/live.py` **444** (after splitting
+  `claim_session`/`exit_with`/`release_quietly` into the new `src/cli/commands/live_start.py`,
+  **99** lines). `live_node_builder.py` itself is untouched by this story and remains at 496 — its
+  own headroom is still Story 2.7's to budget for. The original text follows for context. Story 2.4
+  already carved `live_connection_probe.py` out of the builder once; Story 2.5 added the six
+  timeouts and two arguments and had to compress comments to stay under. The runner needed two
+  splits of its own to fit — `live_session_node.py` (the connect wait, strategy materialisation,
+  the spec check, the shortfall report) and `live_session_steady_state.py` (the heartbeat tick, the
+  watchdog, the bar observation), both of which are cohesive modules rather than arbitrary halves.
+  **Action for Story 2.6**, which attaches signal handling to the runner's run loop and its
+  `finally`: budget for a further split before writing, not after. The pre-agreed line is *not* the
+  phase sequence and *not* the `finally` — Story 2.5's own instructions were explicit that 2.6
+  attaches to both.
 
 - **`SessionReclaimedError` is a fourth name in `_SAFE_MESSAGE_EXCEPTION_NAMES` where only three
   went into `_OUTCOME_BY_EXCEPTION_NAME`.** The two collections answer different questions — which
@@ -1224,6 +1256,13 @@ one superseded) and five were read and left open with updated notes. The items b
   marker-protocol idea (`deferred-work.md`, story-1.7 section: an `exit_outcome` attribute on the
   exception rather than two name-keyed collections). **Action for the Epic 2 retro:** decide whether
   Story 2.6's `stop` — which will add at least one more typed failure — is where that lands.
+
+  **Story 2.6 answer (2026-08-21): no, and recorded as an answer, not left open a second time.**
+  This story adds `SessionStopRequested`, but it never reaches `classify_failure` at all — `run()`
+  catches it internally (`except SessionStopRequested: pass`) precisely because a stop is a
+  success, not a failure with an exit code to classify. The count of exit-code-mapped typed
+  failures does not grow, so this story is not the moment the marker-protocol question was waiting
+  for. The question itself stays open for the Epic 2 retro on its own merits.
 
 - **The record port widens Story 2.5's literal rule: *every* `InvalidSessionTransition` from
   `record_activity` is treated as loss of ownership, not only the reclaim.** The story names only
@@ -1242,6 +1281,10 @@ one superseded) and five were read and left open with updated notes. The items b
   has never been observed against a real market open, where the first bar's arrival is exactly the
   thing being measured. **Action:** record what Procedure P6 actually shows, and adjust or delete
   the constant on evidence rather than on argument.
+
+  **Story 2.6 note (2026-08-21):** untouched by this story — the watchdog and its window are Story
+  2.5's, not read or modified here. Procedure P7 (this story's own) is **not** the procedure that
+  validates this; P6 remains the owner.
 
 - **Nothing in this story ever reads `ConnectionMonitor.trading_permitted`.** The monitor is
   constructed at `node:connect` and fed on every heartbeat tick, so its state is correct and
@@ -1324,6 +1367,14 @@ one superseded) and five were read and left open with updated notes. The items b
   own precedent — it amended the list for `connection.halted` / `connection.recovery_refused`
   rather than leaving the question open a third time.
 
+  **Story 2.6 update (2026-08-21) — the list grows again, added here rather than starting a
+  second one.** `session.stopped` is enumerated at `epics.md:241` but was previously unowned —
+  this story is the first to emit it, from the runner's stop-signal callback, carrying `signal` and
+  `trader_started`. Four more are **not** in the enumeration: `session.force_exit` (the second
+  signal), `session.heartbeat_join_timeout` (Task 6's bounded join), `session.unsubscribe_failed`
+  (a guarded, non-fatal teardown step), and `session.shutdown_problems` was already unenumerated
+  per the note above and remains so. Same action, same owner: the Epic 2 retro.
+
 - **`tests/component/core/test_live_check_node.py` is a NEW file where Story 2.5's Files table says
   MOD.** `live_check_node.py` never had a suite of its own; its behaviour was covered indirectly
   through `test_live_check_driver.py`. The new `max_connection_attempts` parameter exists precisely
@@ -1336,23 +1387,40 @@ one superseded) and five were read and left open with updated notes. The items b
 
 ## Deferred from: code review of story-2.5 (2026-08-21)
 
-- **Teardown can block indefinitely on an in-flight heartbeat write.** `task.cancel()` cannot
-  interrupt an `asyncio.to_thread` call whose worker is already running; the runner's
+- ~~**Teardown can block indefinitely on an in-flight heartbeat write.**~~ — **HALF RESOLVED in
+  story-2.6, 2026-08-21.** `join_heartbeat` (`live_session_steady_state.py`) is now bounded:
+  `HEARTBEAT_JOIN_TIMEOUT_SECONDS` (10.0s) via `asyncio.wait({task}, timeout=...)` rather than an
+  unbounded `gather`, chosen over `asyncio.wait_for` specifically because the measured failure mode
+  — an `asyncio.to_thread` worker stuck in a blocking socket read — does not respond to
+  cancellation at all, and `wait` returns on the deadline regardless of whether the task ever
+  finishes. On timeout it logs `session.heartbeat_join_timeout` naming what was abandoned and
+  continues the teardown. **The other half stays open, re-pointed at the same story-2.3 item this
+  entry already names** (no `lock_timeout`/`statement_timeout` anywhere): pinning a
+  `statement_timeout` on the sync engine is repo-wide and moves every backtest write, which this
+  story's scope (stop) does not license. The original text follows for context. `task.cancel()`
+  cannot interrupt an `asyncio.to_thread` call whose worker is already running; the runner's
   `_stop_heartbeat` then waits on it without a bound, `node.dispose()` afterwards joins the same
   executor `wait=True`, and the sync engine (`src/db/session_sync.py:53-60`) sets no
   connect/statement timeout — so a Postgres TCP stall at teardown hangs the process while it still
-  holds the IBKR live client id. The root cause is the already-open "no `lock_timeout` /
-  `statement_timeout` anywhere" item (story-2.3 section, `:940-946`); this adds the concrete
-  teardown consequence to it. **Action:** when that item is picked up, pin a `statement_timeout`
-  (or `connect_args` timeout) on the sync engine and bound `_stop_heartbeat`'s join.
+  holds the IBKR live client id. **Action:** when the statement-timeout item is picked up, pin a
+  `statement_timeout` (or `connect_args` timeout) on the sync engine — `_stop_heartbeat`'s join no
+  longer needs it.
 
-- **A clean run whose final `→ stopped` write fails still exits 0.** `_finish_record` swallows a
-  `mark_stopped` failure by design ("must never replace the primary outcome"), but on the *clean*
-  path there is no primary failure to protect: the CLI prints "Session stopped" and exits 0 while
-  the row stays `running` for the full 90-second threshold, with only a
-  `session.mark_stopped_failed` structlog ERROR explaining why the next `live start` is refused.
-  **Action for Story 2.6/2.8**, which own stop semantics and status surfacing: decide whether a
-  failed final release should change the exit code or print a console warning.
+- ~~**A clean run whose final `→ stopped` write fails still exits 0.**~~ — **RESOLVED in
+  story-2.6, 2026-08-21, per its Judgment call #7.** Decided: exit code stays **0**, and a console
+  warning names the consequence. `release_record` now returns `True` only for this shape (a write
+  failure that is not a reclaim), the runner surfaces it as `record_release_failed`, and
+  `ntrader live start`'s clean-stop path prints *"The session stopped cleanly but its record could
+  not be marked stopped. The row still reads `running`; the next `live start` will be refused
+  until its heartbeat goes stale (90s)."* before returning. The `session.mark_stopped_failed`
+  structlog ERROR this item names is unchanged — this adds the operator-visible half rather than
+  removing the machine-readable one. Rationale: the broker-side outcome was correct and the row is
+  reclaimable in 90 seconds, so a non-zero exit would misreport a successful stop as a failure. The
+  original text follows for context. `_finish_record` swallows a `mark_stopped` failure by design
+  ("must never replace the primary outcome"), but on the *clean* path there is no primary failure
+  to protect: the CLI printed "Session stopped" and exited 0 while the row stayed `running` for the
+  full 90-second threshold, with only a `session.mark_stopped_failed` structlog ERROR explaining
+  why the next `live start` was refused.
 
 - **Two timing-raced component tests may flake on a saturated worker.**
   `test_an_ordinary_write_failure_does_not_stop_the_session` asserts `> 1` heartbeat writes inside
@@ -1360,3 +1428,138 @@ one superseded) and five were read and left open with updated notes. The items b
   bound tests assert real elapsed time (`< 3.0` / `< 2.0`) in a suite run `-n auto`. Generous, but
   host-load-dependent. **Action:** none until CI flakes; if one does, drive it deterministically
   (inject the sleeper/clock) rather than loosening the bound.
+
+## Deferred from: story-2.6 (2026-08-21)
+
+Story 2.6 shipped signal handling: `SessionStopSignals` (new module), the runner's arm/re-arm/
+phase-boundary wiring, subscription cancellation on stop, a bounded heartbeat join, and the
+operator-visible failed-release warning. Six items above were **struck** (three resolved outright,
+one half-resolved, one answered, one precondition re-confirmed) and four were read and left open
+with updated notes. The items below are new.
+
+- **`SessionStopSignals` is at ~109 lines, over CLAUDE.md's 100-line class guideline.** Trimmed
+  once already — per-method docstrings were cut and their content folded into the module docstring,
+  which does not count against the class — and the remainder is deliberate: this is the one class
+  in the live path where nearly every line of prose records a fact measured against the installed
+  `nautilus-trader` wheel rather than argued from documentation (the two-mechanism arming, the
+  order dependency, the `SIGABRT` handoff), and cutting further would delete the reasoning a future
+  reviewer needs to trust a signal handler without re-deriving it from scratch. No repo-wide
+  enforcement of this guideline was found (grep of `pyproject.toml`/`ruff.toml` for a class-length
+  rule returns nothing) — `session_service.py`'s own "99 of 100" note (story-2.5 section) is itself
+  a manually-tracked observation, not evidence of a gate. **Recorded as a disclosed, deliberate
+  overage**, not an oversight. **Action:** if the Epic 2 retro decides the guideline should bind
+  here, the class splits along its own two concerns — the arm/restore/handle state machine, and the
+  default `force_exit` announcement — which the module docstring already treats as separable ideas.
+
+- **AC #2's epic clause is knowingly not met end to end, pinned by a test rather than fixed.**
+  `sma_crossover.on_stop()` still calls `close_all_positions()`, and `node.stop()` reaches it
+  through real Nautilus machinery (`Trader._stop()` → `Strategy.on_stop()`) this story does not
+  touch. `tests/unit/core/test_live_stop_path_is_inert.py::test_the_known_limit_is_pinned_...`
+  documents this and instructs Story 3.1 to delete both the call and the test. Not a new item —
+  the epic's own FR coverage map (`epics.md:283`) already names Story 3.1 as the fix — recorded
+  here only so a reader of this file's index sees it without opening the story. **Owner: Story
+  3.1**, unchanged.
+
+- **Procedure P7 (this story's own) has not been run against a live gateway.** No automated test
+  in this story's suite requires IB Gateway/TWS or Redis — every signal fact was established with a
+  bare `TradingNodeConfig` and no broker (Dev Notes, "Blockers and preconditions"). What P7 alone
+  can still show — identity surviving a stop/restart against a *real* IBKR paper connection, and
+  the Redis namespace genuinely unchanged — remains unverified. **Action:** run P7 once with a
+  position open and once without, per its own preconditions, and record both.
+
+- **`tests/integration/db/test_session_stop_start_cycles.py` is not CI-gated**, for the same
+  structural reason every file in that directory is not: no `__init__.py`, `--ignore`d by both the
+  integration job and `coverage-report` (`ci.yml:168`, `:238`). It is evidence, not a gate — the
+  same posture `test_session_service.py` beside it already documents. Not a new gap; recorded so
+  Story 2.6's identity claim (AC #5) is not mistaken for CI-enforced.
+
+---
+
+## Deferred from: code review of story-2.6 (2026-08-22)
+
+Adversarial review, three parallel layers. 53 raw / 31 deduplicated: 5 decisions, 21 patches,
+3 deferred (below), 2 dismissed. Two of the decisions invalidate claims in Story 2.6's own
+Completion Notes and were reproduced by execution, not argued — they are **not** deferred and are
+tracked in that story's `### Review Findings` section, not here.
+
+- **An abandoned heartbeat worker can write after the row is marked `stopped`.** When
+  `join_heartbeat` gives up on a wedged write, the `asyncio.to_thread` worker keeps running; if
+  Postgres recovers after `release_record` has committed `stopped`, its `record_activity` lands on
+  a stopped row — a session that looks freshly heartbeating to `live status`, or an unhandled
+  exception on a thread nobody watches. **There is no fencing token on `trading_sessions`**, which
+  `release_record`'s own detail string already says in as many words
+  (`src/core/live_session_steady_state.py:459-460`). Pre-existing; the correct fix is a fencing
+  token or a `last_started_at`-qualified UPDATE on the activity write, not a wider join bound.
+  **Action:** decide the fencing-token question when Story 2.8 (`live status`) makes a stale-but-
+  fresh-looking row operator-visible.
+
+- **Class-size limit violations on Story 2.6's touched files.** Measured by AST against the current
+  tree: `LiveSessionRunner` = **379** lines, `SessionSteadyState` = **171**, `SessionStopSignals` =
+  **109**, against CLAUDE.md's <100-line class guideline. Only the 109 is disclosed anywhere in the
+  story. Both larger classes shipped in Story 2.5, so this is pre-existing rather than introduced
+  here — but Task 11's "Confirm ... every class under 100" subtask is marked `[x]` while three
+  classes violate it, and that false claim *is* patched by this review. The guideline is documented
+  in CLAUDE.md and `project-context.md` and enforced by nothing in the repo (no ruff rule, no test),
+  which is why it drifted silently across two stories. **Action:** either enforce it (a unit-tier
+  AST guard, the shape this repo already uses for AR37) or amend the guideline to say what is
+  actually intended for orchestration classes. Flag for the Epic 2 retro.
+
+- **`unsubscribe_bar_topic` uses `steady_state is not None` as its proxy for "subscribe ran".**
+  `_phase_subscribe` assigns `self._steady_state = self._build_steady_state()` one line *before*
+  `self._node.trader.subscribe(BAR_TOPIC, ...)` (`src/core/live_session_runner.py:413-414`), so a
+  raise between the two leaves the teardown unsubscribing a handler that was never registered. Today
+  the two coincide and the surrounding `except Exception` contains the consequence to a spurious
+  message-bus warning on an already-failing stop; `test_no_unsubscribe_attempted_when_subscribe_never_ran`
+  would keep passing right through a refactor that moved steady-state construction earlier (e.g. to
+  `node:connect`, where the `ConnectionMonitor` already lives). **Action:** track the fact of the
+  subscription rather than inferring it, whenever that phase is next touched.
+
+- **`src/core/live_session_runner.py` is 576 lines, over CLAUDE.md's 500-line cap.** Accepted by
+  Allay at the Story 2.6 review (2026-08-23) rather than resolved. The review's signal-window fixes
+  had to land in `run()` and `_phase_node_build`, and the story's own file-size budget section states
+  the pre-agreed split line is *"**not** the phase sequence and **not** the `finally`"* — the two
+  places the fixes belong. Even with minimal comments the necessary code lands ~545. The file has
+  been at the cap for two consecutive stories, so this is structural rather than incidental.
+  **Action for Story 2.7 or the Epic 2 retro:** either agree a new split line (the strongest
+  candidate is the class's construction surface — `__init__` plus the class docstring's Args block
+  is ~80 lines — since it is neither the sequence nor the `finally`), or record the runner as a
+  sanctioned exception the way `src/cli/commands/catalog.py` (732) already is. Note the cap is
+  documented but enforced by nothing — no ruff rule, no test — which is how it drifted silently.
+
+- **The heartbeat write is bounded against a wedged Postgres only up to interpreter exit.**
+  Decision D2 (2026-08-23) moved the write onto `SessionSteadyState`'s own one-worker pool, so
+  `node.dispose()`'s `executor.shutdown(wait=True)` can no longer join it — the measured teardown
+  block went from 59.81s to 0.00s, and the `-> stopped` transition and operator report now complete
+  on time. What remains: CPython joins thread-pool workers at interpreter exit, so a worker still
+  stuck in a socket read can delay the *process* from exiting after all meaningful work is done.
+  **Action:** bound the write at the database with a `statement_timeout`, scoped with `SET LOCAL`
+  inside the session-record transaction — **not** on the engine or via `connect_args`, because
+  `get_sync_engine()` (`src/db/session_sync.py:52`) is a single global engine shared with backtest
+  persistence, where an aggressive timeout would start aborting large trade-batch inserts.
+
+- **A stop requested during a *synchronous* phase is noticed but not acted on until that phase ends.**
+  Found by running Procedure P7 against a real gateway on 2026-08-23, after the Story 2.6 review's
+  D1 fix. The fix works as far as it claims: with `node:build` made genuinely slow, `session.stopped
+  … signal=SIGINT` is now logged 6.0s into the phase, where before the signal was discarded outright.
+  But the handler's only action is `loop.call_soon_threadsafe(node.stop)`, and the loop is **not
+  running** during `build_clients`' synchronous 3-attempt connect — so the callback sits queued and
+  the stop can only take effect at the next `raise_if_requested()` boundary, which is after all three
+  attempts (~4 minutes; measured >200s still running). The operator sees Ctrl-C acknowledged in the
+  log and nothing happen. **Mitigation that exists today:** a second Ctrl-C force-exits immediately
+  (verified in that exact window — exit 1, 0.0s), so there is an escape hatch; before this story
+  there was neither notice nor escape. **Action:** make the stop actionable inside the phase rather
+  than only at its boundary. The retry loop belongs to Nautilus's IB adapter, so the practical
+  options are (a) check `signals.requested` between connection attempts by lowering
+  `SESSION_CONNECTION_ATTEMPTS` and looping in our own code, (b) run `build_clients` on a thread the
+  runner can abandon, or (c) document the two-Ctrl-C answer in the CLI's own help and P7. Do **not**
+  "fix" this by shortening the connect budget — that trades a stop delay for a spurious
+  broker-unreachable failure on a slow-but-healthy gateway.
+
+- **P7's "with a position open" half is still unverified.** The 2026-08-23 run was on a **Sunday**
+  with the market closed and `use_rth=True`, so no session could open a position of its own. The
+  4-share `AAPL.NASDAQ-EXTERNAL` position in the paper account did survive both stops — good evidence
+  that the runner touches nothing — but it is `EXTERNAL`, and `sma_crossover.on_stop()`'s
+  `close_all_positions()` filters by `strategy_id`, so it was never a candidate for flattening. The
+  case that actually matters — a session that opened its **own** position, stopped, and had it
+  flattened by `on_stop()` — has still never been observed. **Action:** re-run P7 inside RTH before
+  Story 3.1 claims to remove that call, so there is a before/after pair rather than only an after.

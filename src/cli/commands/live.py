@@ -26,8 +26,7 @@ which is the correct outcome.
 """
 
 import asyncio
-from datetime import datetime
-from typing import NoReturn, Optional
+from typing import Optional
 from uuid import UUID
 
 import click
@@ -37,29 +36,20 @@ from rich.console import Console
 from rich.markup import escape
 from sqlalchemy.exc import SQLAlchemyError
 
+from src.cli.commands.live_start import claim_session, exit_with, release_quietly
 from src.config import get_settings
 from src.core.live_cache import build_cache_config
-from src.core.live_check import (
-    EXIT_CODES,
-    EXIT_ERROR,
-    classify_failure,
-    failure_message,
-    render_report,
-)
+from src.core.live_check import EXIT_ERROR, render_report
 from src.core.live_check_driver import run_live_check
-from src.core.live_session_record import SessionReclaimedError
-from src.core.live_session_runner import (
-    DEFAULT_SESSION_CONNECT_TIMEOUT_SECONDS,
-    LiveSessionRunner,
-)
+from src.core.live_session_node import DEFAULT_SESSION_CONNECT_TIMEOUT_SECONDS
+from src.core.live_session_runner import LiveSessionRunner
 from src.core.strategy_registry import StrategyRegistry
 from src.db.exceptions import DatabaseConnectionError, DuplicateRecordError
 from src.db.repositories.backtest_repository_sync import SyncBacktestRepository
 from src.db.repositories.trading_session_repository_sync import SyncTradingSessionRepository
 from src.db.session_sync import get_sync_session
-from src.models.session import SessionSpec, SessionStatus, StrategySpec
+from src.models.session import SessionSpec, StrategySpec
 from src.services.session_record import SqlSessionRecord
-from src.services.session_service import SessionService
 
 console = Console()
 logger = structlog.get_logger(__name__)
@@ -336,77 +326,6 @@ def create(
     )
 
 
-def _claim_session(identifier: str) -> tuple[UUID, dict, datetime]:
-    """Resolve the identifier and move the session to ``running``, atomically.
-
-    Everything happens inside **one** short-lived ``get_sync_session()`` block
-    that closes before the runner exists. Story 2.3's forward constraint is
-    explicit about why: the ``-> running`` transition takes an exclusive row
-    lock (it is the reclaim-or-refuse decision), and holding that lock for the
-    life of a 6.5-hour session would block every ``live status``.
-
-    Returns:
-        The session's UUID, its stored spec payload, and the instant this
-        transition stamped into ``last_started_at`` — the value the runner's
-        record port is bound to, and the one the mid-run reclaim guard reads.
-
-    Raises:
-        RecordNotFoundError: No session matches ``identifier``.
-        InvalidSessionTransition: The session is already running with a fresh
-            heartbeat, or is sealed.
-    """
-    with get_sync_session() as db_session:
-        service = SessionService(SyncTradingSessionRepository(db_session))
-        trading_session = service.resolve(identifier)
-        started = service.transition(trading_session.session_id, to=SessionStatus.RUNNING)
-        return started.session_id, started.spec, started.last_started_at
-
-
-def _exit_with(exc: BaseException) -> NoReturn:
-    """Render the failure and exit on AR28's code for it.
-
-    Reuses ``live_check``'s table rather than inventing a second one: Story 1.7
-    recorded that *"a CLI that invents an exit code outside its own documented
-    table is worse than one that reports a generic failure"*. ``markup=False``
-    because parts of this text can arrive from third-party exception strings,
-    and a stray ``[...]`` would otherwise be eaten as Rich markup — silently
-    dropping the operator's most important line.
-
-    **Never retries.** ``InvalidSessionTransition`` inherits
-    ``BacktestStorageError``, and an ``except BacktestStorageError: retry()``
-    would spin until the incumbent's heartbeat went stale and then reclaim a
-    live session — two processes on one broker account, which is the
-    catastrophic failure NFR6 exists to prevent.
-    """
-    console.print(f"live start failed: {failure_message(exc)}", markup=False, highlight=False)
-    raise SystemExit(EXIT_CODES[classify_failure(exc)])
-
-
-def _release_quietly(record: SqlSessionRecord) -> None:
-    """Put the row back to ``stopped`` after a failure the runner never saw.
-
-    The runner's own ``finally`` does this for anything raised inside
-    ``run()``. This covers the window AC #10 names explicitly — between the
-    ``-> running`` transition and the runner existing — where a raise would
-    otherwise leave the row ``running`` and the session unstartable for the
-    full 90-second staleness threshold.
-
-    Guarded, because the failure already in flight is the one the operator
-    needs; a second failure here must not replace it.
-    """
-    try:
-        record.mark_stopped()
-    except SessionReclaimedError:
-        # The stop-path ownership guard refused (review fix, 2026-08-21):
-        # another process took the session; its row is not ours to release.
-        logger.error(
-            "session.reclaimed_by_another_process",
-            detail="release skipped; the row belongs to another process now",
-        )
-    except Exception as exc:  # noqa: BLE001 - must never replace the primary failure
-        logger.error("session.release_failed", error_type=type(exc).__name__)
-
-
 @live.command("start")
 @click.argument("session")
 @click.option(
@@ -444,7 +363,7 @@ def start(session: str, connect_timeout: float) -> None:
     """
     settings = get_settings()
     try:
-        session_id, spec_payload, started_at = _claim_session(session)
+        session_id, spec_payload, started_at = claim_session(session)
     except (RuntimeError, DatabaseConnectionError, SQLAlchemyError) as exc:
         # Postgres-layer failures carry this codebase's own actionable text
         # ("Database not configured…", the connection detail) that the AR28
@@ -453,7 +372,7 @@ def start(session: str, connect_timeout: float) -> None:
         console.print(f"live start failed: {exc}", markup=False, highlight=False)
         raise SystemExit(EXIT_ERROR) from exc
     except (Exception, KeyboardInterrupt, asyncio.CancelledError) as exc:
-        _exit_with(exc)
+        exit_with(exc)
 
     # Everything after the `→ running` transition is guarded — including the
     # record's own construction (review fix, 2026-08-21): reading the spec
@@ -479,19 +398,74 @@ def start(session: str, connect_timeout: float) -> None:
         # than withholding a bare type name (review fix, 2026-08-21).
         messages = "; ".join(err.get("msg", "") for err in exc.errors())
         messages = messages.replace("Value error, ", "") or str(exc)
-        _release_quietly(SqlSessionRecord(session_id, started_at=started_at))
+        release_quietly(SqlSessionRecord(session_id, started_at=started_at))
         console.print(f"live start failed: {messages}", markup=False, highlight=False)
         raise SystemExit(EXIT_ERROR) from exc
     except (Exception, KeyboardInterrupt, asyncio.CancelledError) as exc:
-        _release_quietly(SqlSessionRecord(session_id, started_at=started_at))
-        _exit_with(exc)
+        release_quietly(SqlSessionRecord(session_id, started_at=started_at))
+        exit_with(exc)
 
     try:
         runner.run()
     except (Exception, KeyboardInterrupt, asyncio.CancelledError) as exc:
-        # No `_release_quietly` here: the runner's own `finally` has already
+        # No `release_quietly` here: the runner's own `finally` has already
         # marked the row stopped, and a second `transition(to=STOPPED)` would
         # raise `InvalidSessionTransition` from inside the error handler.
-        _exit_with(exc)
+        exit_with(exc)
 
-    console.print(f"Session stopped: [bold]{escape(session)}[/bold]")
+    _print_stop_result(session, runner)
+
+
+def _print_stop_result(session: str, runner: LiveSessionRunner) -> None:
+    """The clean-stop console text (Story 2.6, Task 10 and AC #9).
+
+    Names the residual until Story 3.1 lands: a session that opened a
+    position will have been flattened by the strategy's own ``on_stop()`` —
+    see the ⚠️ under Story 2.6's AC #2. And, on a failed final release, the
+    console warning ``release_record`` alone (a structlog ``ERROR``) never
+    surfaced to an operator watching the terminal.
+    """
+    suffix = f" ({runner.stop_signal})" if runner.stop_signal else ""
+    console.print(f"Session stopped: [bold]{escape(session)}[/bold]{suffix}", highlight=False)
+    if not runner.stopped_by_signal:
+        # Review fix, 2026-08-22 (decision D4): `run()` returning is NOT proof
+        # that a signal ended it. `run_async` swallows cancellation, so a node
+        # that died on its own returns cleanly too — and printing the same
+        # reassuring line for both made a crash indistinguishable from a
+        # deliberate Ctrl-C, to an operator and to a supervising script alike.
+        console.print(
+            "⚠️  No stop signal was received — the session ended on its own (the node stopped, "
+            "or its run task completed). This was not an operator-requested stop; check the log "
+            "above for why it ended.",
+            markup=False,
+            highlight=False,
+        )
+    console.print(
+        "Positions were left at the broker by the runner. ⚠️  sma_crossover.on_stop() still "
+        "flattens its own positions (Story 3.1 removes this) — check the broker before assuming "
+        "a position survived the stop.",
+        markup=False,
+        highlight=False,
+    )
+    if runner.shutdown_problems:
+        # Review fix, 2026-08-22 (decision D4): these were logged at WARNING
+        # and otherwise discarded, so an operator reading the terminal saw an
+        # unqualified "Session stopped" while the node might still hold the
+        # broker socket and the live client id. Exit code stays 0 — AR28's
+        # table has no code for this and Story 1.7 forbids inventing one.
+        console.print(
+            "⚠️  The teardown did not complete cleanly: "
+            f"{'; '.join(runner.shutdown_problems)}. The node may still hold the broker "
+            "connection and its live client id — verify at the broker before starting another "
+            "session on this account.",
+            markup=False,
+            highlight=False,
+        )
+    if runner.record_release_failed:
+        console.print(
+            "⚠️  The session stopped cleanly but its record could not be marked stopped. The "
+            "row still reads `running`; the next `live start` will be refused until its "
+            "heartbeat goes stale (90s).",
+            markup=False,
+            highlight=False,
+        )

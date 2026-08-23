@@ -67,8 +67,10 @@ Known, accepted limits, stated rather than implied:
 """
 
 import asyncio
+import functools
 import threading
 from collections.abc import Awaitable, Callable
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Any
 
@@ -145,11 +147,37 @@ class SessionSteadyState:
         self._silence_reported = False
         self._started_at: datetime | None = None
         self.ticks = 0
+        #: This loop's **own** thread pool for the record write — deliberately
+        #: not the loop's default one, which `TradingNode` replaces with the
+        #: kernel's and `dispose()` joins with `wait=True`. One worker: the
+        #: writes are serial by construction, one per interval. See
+        #: :meth:`_write_activity` (decision D2).
+        self._executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="session-heartbeat-write"
+        )
 
     @property
     def bars_seen(self) -> int:
         """How many bars the message bus has delivered. Never persisted."""
         return self._bars_seen
+
+    def release_executor(self) -> None:
+        """Let the write pool go **without waiting for it** (decision D2).
+
+        ``wait=False`` is the whole point: a worker wedged in a socket read
+        against a hung Postgres must not hold the teardown open, which is the
+        failure this executor exists to escape. ``cancel_futures=True`` drops
+        anything queued behind it; there is never more than one.
+
+        Known residual, stated rather than implied: CPython joins thread-pool
+        workers at interpreter exit, so a genuinely wedged write can still delay
+        the *process* from exiting. What it can no longer delay is any of the
+        work that matters — the node teardown, the ``-> stopped`` transition and
+        the operator's report all complete first, where previously all three sat
+        behind it. Closing that last gap needs the write bounded at the database
+        (a ``statement_timeout``), which stays in ``deferred-work.md``.
+        """
+        self._executor.shutdown(wait=False, cancel_futures=True)
 
     def note_bar(self, message: object) -> None:
         """Message-bus handler for ``data.bars.*``. Does exactly one thing.
@@ -200,18 +228,25 @@ class SessionSteadyState:
     async def _write_activity(self, now: datetime) -> None:
         """Persist the tick, surviving anything but a loss of ownership.
 
-        ``asyncio.to_thread`` is this repo's established sync-from-async bridge.
-        ⚠️ It resolves to the loop's **default** executor, and
-        ``TradingNode.__init__`` installs the kernel's own ``ThreadPoolExecutor``
-        as that default (``kernel.py:268-270``), which ``dispose()`` then shuts
-        down with ``wait=True, cancel_futures=True`` (``live/node.py:445-447``).
-        An in-flight write blocks that shutdown — which is exactly why the
-        runner's ``finally`` cancels *and awaits* this task before tearing the
-        node down. At one write per 30s the exposure is negligible.
+        ⚠️ **Runs on this object's own executor, never ``asyncio.to_thread``**
+        (review fix, 2026-08-23, decision D2). ``to_thread`` resolves to the
+        loop's **default** executor, and ``TradingNode.__init__`` installs the
+        kernel's own ``ThreadPoolExecutor`` as that default
+        (``kernel.py:268-270``), which ``dispose()`` then joins with
+        ``wait=True, cancel_futures=True`` (``live/node.py:445-447``).
+
+        That made AC #9's bounded teardown inert, measured end to end: cancelling
+        the heartbeat task completes it *immediately* (``CancelledError`` is not
+        caught below), so ``join_heartbeat`` returned in 0.00s and its timeout
+        branch never ran — and the teardown then blocked **59.8s** inside
+        ``dispose()`` on the very write the bound existed to escape. A private
+        pool takes the write off the kernel's, so the node teardown, the
+        ``-> stopped`` transition and the CLI's report all complete on time.
         """
         bar_seen_at = self.take_bar_seen()
+        write = functools.partial(self._record.record_activity, at=now, bar_seen_at=bar_seen_at)
         try:
-            await asyncio.to_thread(self._record.record_activity, at=now, bar_seen_at=bar_seen_at)
+            await asyncio.get_running_loop().run_in_executor(self._executor, write)
         except SessionReclaimedError:
             raise
         except Exception as exc:  # noqa: BLE001 - AR42: a DB hiccup must not kill a session
@@ -368,36 +403,75 @@ class StartupHeartbeat:
                 )
 
 
-def join_heartbeat(task: asyncio.Task | None, loop: asyncio.AbstractEventLoop, log: Any) -> bool:
-    """Cancel and *await* the steady heartbeat task; report a surfaced reclaim.
+#: The bound on `join_heartbeat`'s wait, so an in-flight heartbeat write
+#: against a wedged Postgres cannot hold the teardown open indefinitely
+#: (Story 2.6, AC #9; `deferred-work.md`, story-2.5 review). No smaller than
+#: `TradingNode`'s own `timeout_disconnection` (10.0s,
+#: `live_node_builder.NODE_TIMEOUT_DISCONNECTION`) — this join runs *before*
+#: that disconnect wait, and the two budgets are meant to feel the same order
+#: of magnitude to an operator watching a stop, not race each other.
+HEARTBEAT_JOIN_TIMEOUT_SECONDS: float = 10.0
 
-    Called from the runner's ``finally`` **before** ``shutdown``, because
-    ``asyncio.to_thread`` resolves to the loop's default executor — which
-    ``TradingNode.__init__`` replaces with the kernel's own pool and
-    ``dispose()`` joins with ``wait=True``. Guarded throughout: anything
-    raised here would skip the node teardown behind it.
+
+def join_heartbeat(
+    task: asyncio.Task | None,
+    loop: asyncio.AbstractEventLoop,
+    log: Any,
+    *,
+    timeout: float = HEARTBEAT_JOIN_TIMEOUT_SECONDS,
+) -> bool:
+    """Cancel the steady heartbeat task and wait for it, boundedly.
+
+    Called from the runner's ``finally`` **before** ``shutdown``. The write
+    itself no longer runs on the loop's default executor — see
+    :meth:`SessionSteadyState._write_activity` — so ``dispose()`` can no longer
+    be held open by an in-flight heartbeat; this join is what stops the *task*.
+    Guarded throughout: anything raised here would skip the teardown behind it.
+
+    Bounded with :func:`asyncio.wait` rather than :func:`asyncio.wait_for`:
+    the task this cancels may be stuck inside an ``asyncio.to_thread`` worker
+    already in a blocking socket read, which does not respond to
+    ``Task.cancel()`` at all — ``wait`` simply returns once ``timeout``
+    elapses regardless of whether the task ever finishes, where
+    ``wait_for``'s own cancel-and-wait dance has no such guarantee.
 
     Returns:
         ``True`` when the task's outcome was a
-        :class:`~src.core.live_session_record.SessionReclaimedError` — which
-        ``gather(return_exceptions=True)`` would otherwise silently discard
-        (review fix, 2026-08-21). The caller folds it into its ownership flag
-        so the final release leaves the successor's row alone.
+        :class:`~src.core.live_session_record.SessionReclaimedError` (review
+        fix, 2026-08-21) — which a bare ``gather(return_exceptions=True))``
+        would otherwise let a caller discard. The caller folds this into its
+        ownership flag so the final release leaves the successor's row alone.
+        ``False`` on a timeout: the task's true outcome is now unknowable, and
+        treating "abandoned" as "reclaimed" would wrongly skip the final
+        release on a session nobody actually took.
     """
     if task is None or loop.is_closed():
         return False
     task.cancel()
     try:
-        results = loop.run_until_complete(asyncio.gather(task, return_exceptions=True))
+        _done, pending = loop.run_until_complete(asyncio.wait({task}, timeout=timeout))
     except BaseException as exc:  # noqa: BLE001 - must never pre-empt shutdown
         log.error("session.heartbeat_join_failed", error_type=type(exc).__name__)
         return False
-    return any(isinstance(result, SessionReclaimedError) for result in results)
+    if pending:
+        log.error(
+            "session.heartbeat_join_timeout",
+            timeout_seconds=timeout,
+            detail=(
+                "the heartbeat task did not finish within the bound — likely blocked inside a "
+                "socket read that cancellation cannot interrupt; abandoning the join and "
+                "continuing the teardown rather than blocking it forever"
+            ),
+        )
+        return False
+    if task.cancelled():
+        return False
+    return isinstance(task.exception(), SessionReclaimedError)
 
 
 def release_record(
     record: SessionRecordPort, log: Any, *, trader_id: str, ownership_lost: bool
-) -> None:
+) -> bool:
     """Mark the session ``stopped`` — unless it is no longer ours to mark.
 
     Runs **after** ``shutdown()`` returned, never before: committing
@@ -410,15 +484,24 @@ def release_record(
       2026-08-21): the reclaim happened inside the detection window and this
       is the first this process hears of it. Leave the row to its new owner.
     - Anything else: log ``session.mark_stopped_failed`` and move on.
+
+    Returns:
+        ``True`` only for the third shape — a write that failed for a reason
+        other than a reclaim (AC #9). The caller uses this to print an
+        operator-visible warning on an otherwise-clean stop; a reclaim is not
+        a failure of *this* process's stop, so it does not count.
     """
     detail = "the row belongs to another process now and is left untouched; up to one heartbeat "
     detail += "interval of overlap is possible — there is no fencing token on trading_sessions."
     if ownership_lost:
         log.error("session.reclaimed_by_another_process", trader_id=trader_id, detail=detail)
-        return
+        return False
     try:
         record.mark_stopped()
     except SessionReclaimedError:
         log.error("session.reclaimed_by_another_process", trader_id=trader_id, detail=detail)
+        return False
     except Exception as exc:  # noqa: BLE001 - must never replace the primary outcome
         log.error("session.mark_stopped_failed", error_type=type(exc).__name__)
+        return True
+    return False

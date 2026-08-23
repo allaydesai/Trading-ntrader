@@ -36,7 +36,220 @@
 
 generated: 2026-08-03
 last_updated: >-
-  2026-08-21 (Story 2.5 code-reviewed -> done, closing it. epic-2 remains in-progress:
+  2026-08-23 (Story 2.6 CLOSED -> done, after Procedure P7 was run against a real IB Gateway.
+  epic-2 stays in-progress: 2.1-2.6 done, 2.7-2.8 backlog. P7 result: 5 of 6 criteria pass, 1
+  partial; recorded in full in docs/qa/phase3-live-verification.md with log paths and timestamps.
+  Paper port 4002, account ***626, session p7-stop-test / 6ffd1556-a854-4a2f-9b0c-7b2f14958a6c /
+  trader_id PAPER-6ffd1556. THE REVIEW'S D1 FIX IS CONFIRMED LIVE: with node:build deliberately
+  slowed (IBKR_HOST pointed at a non-routable address, port left at 4002 so the static gate still
+  passed), session.stopped signal=SIGINT is logged 6.0s into the phase, where before the fix the
+  signal was discarded outright -- the regression this story exists for is closed against a real
+  gateway, not only against doubles. CRITERION 3 IS A PARTIAL, and it is the one thing to read:
+  being noticed is not being acted on. request_node_stop's only action is
+  loop.call_soon_threadsafe(node.stop), and the loop is NOT running during build_clients'
+  synchronous 3-attempt connect, so the callback sits queued and the stop can only take effect at
+  the next raise_if_requested() boundary -- after all three attempts (~4 minutes; measured still
+  running 200s after the signal). The operator sees Ctrl-C acknowledged in the log and nothing
+  happen. Escape hatch verified in that exact window: a second Ctrl-C force-exits in 0.0s with exit
+  1, printing both the console line and session.force_exit -- so there is now notice AND escape
+  where before there was neither. Deferred with three concrete options and an explicit warning not
+  to "fix" it by shortening the connect budget, which would trade a stop delay for spurious
+  broker-unreachable failures on a slow-but-healthy gateway. Other criteria: first Ctrl-C -> exit 0,
+  row stopped with last_stopped_at, neither of the review's new warnings firing (correctly);
+  identity across a restart held exactly (same session_id, same trader_id, Redis trader-PAPER-*
+  prefixes 70 before and 70 after with exactly 1 matching this session); a kill -9 left the row
+  running and the next start reclaimed it at heartbeat_age 128.9s -- which also proved AR32's
+  STARTUP heartbeat writes against a real database, since it ticked twice during a phase that never
+  reached the steady loop. NOT VERIFIED, and recorded rather than glossed: the position-open half of
+  criterion 2. It was a SUNDAY, the market was closed and use_rth=True, so no session could open a
+  position of its own; the 4-share AAPL.NASDAQ-EXTERNAL position that survived both stops (with
+  NetLiquidation 32470.14 and GrossPositionValue 1238.4 identical across runs) is EXTERNAL, and
+  sma_crossover.on_stop()'s close_all_positions() filters by strategy_id, so it was never a
+  flattening candidate. The case that actually matters -- a session that opened its OWN position,
+  stopped, and had it flattened -- has still never been observed, and Story 3.1 needs a before/after
+  pair. Deferred. Housekeeping: the run left a real trading_sessions row p7-stop-test (now stopped)
+  and one trader-PAPER-6ffd1556 Redis namespace; the repositories are write-once and expose no
+  delete, so both are named rather than removed with raw SQL, the same posture Story 2.5 took with
+  smoke-1787319225.
+  Previously:   2026-08-22 (Story 2.6 code-reviewed -> in-progress, NOT done. epic-2 stays in-progress:
+  2.1/2.2/2.3/2.4/2.5 done, 2.6 in-progress, 2.7-2.8 backlog. Three adversarial layers produced 53
+  raw / 31 deduplicated findings: 5 decisions, 21 patches, 3 deferred, 2 dismissed. THREE FINDINGS
+  WERE REPRODUCED BY EXECUTION, and TWO OF THEM INVALIDATE CENTRAL CLAIMS OF THE STORY'S OWN
+  COMPLETION NOTES. (1) THE REGRESSION THE STORY EXISTS FOR WAS STILL PRESENT: a Ctrl-C during
+  node:build was silently lost. NautilusKernel._setup_loop clobbers the disposition INSIDE
+  _phase_node_build (it runs in TradingNode.__init__), while the re-arm sat AFTER the phase -- so the
+  whole slow stretch, above all build_clients' synchronous 3-attempt connect, stayed kernel-owned,
+  and the re-arm then drained the pending wakeup to _noop itself. Probe replaying _setup_loop
+  verbatim measured requested=False, signal_name=None, count=0 after the loop ran. Fixed (decision
+  D1) by re-arming in a `finally` immediately after the node factory returns, plus a second re-arm in
+  a `finally` around the phase so a build that RAISES no longer hands a ~40s failure teardown to the
+  kernel. (2) AC #9's BOUNDED TEARDOWN WAS INERT: _write_activity catches SessionReclaimedError and
+  Exception but never CancelledError, so task.cancel() completes the task immediately and
+  join_heartbeat's `if pending:` branch -- the entire point of the 10s bound -- is unreachable for
+  the production shape. Measured: join_heartbeat returned False in 0.00s, then dispose()'s
+  executor.shutdown(wait=True) blocked 59.81s on the same wedged write. Its one test hand-builds a
+  coroutine that swallows CancelledError and installs no default executor, proving the bound for a
+  shape production never produces. NOT FIXED -- decision D2 (statement_timeout, SET LOCAL-scoped) is
+  the ruling but is unapplied; flagged because get_sync_engine() is one global engine shared with
+  backtest persistence, and because statement_timeout is server-side and so bounds lock waits, not a
+  wedged network. (3) A stop inside node:connect surfaced as BrokerUnreachableError -- exit 4, "the
+  gateway refused or dropped the connection" -- on an operator Ctrl-C against a healthy gateway, where
+  AC #1 requires 0; reproduced end to end. Fixed: run() demotes any Exception to a stop when
+  signals.requested is set, logging session.stop_superseded_failure; a failure with no stop requested
+  still propagates. Other production fixes: the teardown tail was unprotected because closing the
+  loop un-installs every handler it registered (new rearm_process_handlers, so _finish_record()'s
+  Postgres round trip is covered); restore() moved into its own `finally`; arm() moved inside the
+  try; the handler's `self._count += 1` read-modify-write replaced with next(itertools.count()) --
+  a second signal delivered between its load and store re-entered the handler and performed a SECOND
+  GRACEFUL STOP instead of the force exit; _on_stop guarded; os._exit moved into a `finally` with
+  logging.shutdown() ahead of it (a BrokenPipeError under the documented `| tee` used to skip the
+  exit entirely, permanently, since _count was already >= 2); SIGHUP added as a stop signal
+  (decision D5 -- an SSH drop killed a 6.5-hour session outright, row left running); and the CLI now
+  warns when the teardown reported problems and when NO signal ended the run (decision D4, exit 0
+  either way -- AR28 has no code and Story 1.7 forbids inventing one). GUARD COVERAGE: live_start.py
+  had escaped BOTH the AC #2/#3 AST scan and Epic 1's dependency guard as a side effect of this
+  story's own file-size split -- both restored, the latter now globbing src/cli/commands/live*.py so
+  the next split cannot outrun it. AC #2's "and no flatten" clause was DEAD CODE (collected into a
+  set it was never intersected with); now a real identifier scan, deliberately not textual because
+  the CLI's own warning says "flattens". Non-vacuity is now proved by planted probes for all six
+  forbidden names plus flatten, so it survives Story 3.1 deleting the sma_crossover call -- previously
+  the non-vacuity test and the Story 3.1 pin were byte-identical and would have died together,
+  leaving the scan with no guard at all. D3 restored `close` to the AR36 word list (the one word the
+  AC and epics.md name verbatim, silently dropped) scoped to operator-facing strings only.
+  FIVE TESTS THAT COULD NOT FAIL were fixed and mutation-checked, and AC #1's ACTUAL SCENARIO -- a
+  signal arriving while the session is SERVING -- had no test at any tier (every stop test fired at a
+  phase boundary, so run() always raised before reaching _serve; a repo-wide grep for
+  request_node_stop/call_soon_threadsafe in tests/ returned zero hits). Now covered and
+  mutation-killed. The TestLiveNode double's run_seconds path was fixed to race the stop event; it
+  ignored stop() entirely. Two false claims corrected in the story and here: "all five Task 11
+  mutations" (four were run; the Debug Log says (a) was not a manual break-revert) and Task 11's
+  "every class under 100" (LiveSessionRunner is 379, SessionSteadyState 171; pre-existing from 2.5,
+  now in deferred-work.md). Final: unit 2101 -> 2126 (+25), component 1241 -> 1244 (+3), integration
+  /core --forked 79 passed / 2 skipped, 40/40 Epic 1 acceptance criteria still pass, format/lint
+  clean, mypy 101 files clean. TWO ITEMS OPEN, which is why this is in-progress and not done:
+  decision D2 is unapplied, and src/core/live_session_runner.py is 576 lines against the 500 cap --
+  the necessary fixes land it ~545 even with minimal comments, and the story's own file-size budget
+  says the pre-agreed split line is "not the phase sequence and not the finally", which is exactly
+  where they had to go. Left oversized and disclosed rather than resolved by a forbidden structural
+  change.
+  FOLLOW-UP 2026-08-23: both open items closed out. D2 was RE-DECIDED by Allay from
+  statement_timeout to the private-executor option, after the review surfaced two caveats on the
+  original ruling: get_sync_engine() is a single global engine shared with backtest persistence (so
+  an engine-level or connect_args timeout would start aborting 15k-row trade inserts), and
+  statement_timeout is server-side, so it bounds lock waits and busy servers but not a wedged
+  network. As applied: SessionSteadyState owns a one-worker ThreadPoolExecutor and writes through
+  run_in_executor on it, never asyncio.to_thread; the runner's finally calls the new
+  release_executor() with wait=False, cancel_futures=True right after join_heartbeat. The probe that
+  measured the original block re-measured 59.81s -> 0.00s for dispose()'s
+  executor.shutdown(wait=True), and a mutation restoring asyncio.to_thread fails the new guard by
+  thread name. Residual disclosed in release_executor's own docstring and in deferred-work.md:
+  CPython joins pool workers at interpreter exit, so a wedged write can still delay the PROCESS
+  exiting -- but the node teardown, the -> stopped transition and the operator report all complete
+  first, where all three previously sat behind it; statement_timeout (SET LOCAL-scoped) stays
+  deferred as the fix for that residual. The runner's 576-line file size was ACCEPTED as recorded
+  debt rather than resolved, with a concrete next-split candidate written into deferred-work.md (the
+  __init__ plus class-docstring Args block, ~80 lines -- neither the phase sequence nor the finally,
+  so it respects the story's own pre-agreed constraint) and the observation that the 500-line cap is
+  documented but enforced by nothing, which is how it drifted across two stories. The Epic 1
+  dependency guard fired TWICE unprompted during this review -- on itertools/logging, then on
+  concurrent/functools -- and both were added by hand with the reason inline, per the story's
+  instruction not to switch to sys.stdlib_module_names. Final after D2: unit 2126, component 1246,
+  integration/core --forked 79 passed / 2 skipped, 40/40 Epic 1 acceptance criteria, format/lint
+  clean, mypy 101 files clean.
+  Previously:   2026-08-21 (Story 2.6 implemented -> review. ready-for-dev -> in-progress -> review, same session
+  as creation. epic-2 stays in-progress: 2.1/2.2/2.3/2.4/2.5 done, 2.6 review, 2.7-2.8 backlog.
+  Delivers `src/core/live_session_signals.py` (new): SessionStopSignals arms SIGINT/SIGTERM via BOTH
+  loop.add_signal_handler and signal.signal (order load-bearing), hands SIGABRT back to SIG_DFL, and
+  force-exits (os._exit(1)) on a second signal. Wired into LiveSessionRunner: armed before
+  gate:static, re-armed after node:build (node construction clobbers whatever was armed before it),
+  checked at all eight phase boundaries via raise_if_requested(), the runner's own bar-topic
+  subscription cancelled (guarded) before shutdown, and join_heartbeat bounded at 10s via
+  asyncio.wait (not wait_for -- the measured failure is an asyncio.to_thread worker stuck in a
+  blocking socket read, which does not respond to cancellation at all). AC #2's epic clause is
+  knowingly not met end to end and is PINNED, not silently satisfied: an AST scan over the five
+  stop-path modules (non-vacuity proved against a planted probe) finds zero order/position calls
+  and zero seal vocabulary, and a dedicated test asserts sma_crossover.on_stop() still calls
+  close_all_positions() today, with a docstring instructing Story 3.1 to delete both the call and
+  the test. The CLI prints the stop line (session name, signal, the Story 3.1 residual warning) and,
+  on AC #9, a console warning if the final release write failed -- exit code stays 0 either way.
+  src/cli/commands/live.py (497 lines) was split into live.py (444) + the new live_start.py (99,
+  claim_session/exit_with/release_quietly) to make room, exactly the fallback the story's own
+  file-size budget section named. Three real-signal integration proofs against a genuine
+  TradingNode (not a double, which cannot construct a kernel and therefore cannot clobber a
+  handler): re-arm ownership survives node construction, a signal in the synchronous
+  loop-stopped window is not lost, and two real SIGINTs force-exit a subprocess with code 1 --
+  the last one found and fixed two test-harness bugs along the way (a false-positive "READY"
+  substring match on Nautilus's own component-readiness log lines, and a subprocess.PIPE deadlock
+  from an undrained pipe). Three stop/start cycles proven identity-stable (same session_id, name,
+  byte-identical spec) against real Postgres. All five of Task 11's mutations were broken, observed
+  red, and reverted. Test counts: unit 2063 -> 2101 (+38), component 1221 -> 1241 (+20), integration
+  251 -> 259 (+8, local full run including tests/integration/db). All 40 Epic 1 acceptance criteria
+  still pass. make format/lint/typecheck clean. Three deferred-work.md items closed (stopped->running
+  liveness -- pinned by the three-cycle Postgres test; the unbounded heartbeat join, in half, the
+  statement_timeout half stays open; the silent failed final release -- console warning, exit 0 per
+  Judgment call #7), one answered (SessionReclaimedError is not where the marker-protocol idea
+  lands -- SessionStopRequested never reaches classify_failure), one re-confirmed and left open
+  (READY-after-reset's real trigger, reusing one Trader in-process, does not become true here -- a
+  stop always ends the process), and a new story-2.6 section added for what this story leaves open:
+  AR41 needs four more amendments, SessionStopSignals is ~109 of the 100-line class guideline
+  (disclosed, not enforced anywhere in the repo), Procedure P7 was written but not run (no live
+  gateway available), and the new db-tier identity test is not CI-gated for the same structural
+  reason its siblings in that directory are not.
+  Previously: 2026-08-21 (Story 2.6 created: backlog -> ready-for-dev. epic-2 stays in-progress: 2.1/2.2/2.3/2.4/2.5
+  done, 2.6 ready-for-dev, 2.7-2.8 backlog. File:
+  2-6-stop-a-session-without-ending-it-and-without-touching-positions.md. Owns SIGINT/SIGTERM
+  handling, the double-signal force exit, subscription cancellation on the stop path, a bounded
+  teardown join, and the guarantee that nothing the runner owns touches a position. NO migration, NO
+  new CLI command (AR27 is explicit that stop IS Ctrl-C/SIGTERM, so a `live stop` subcommand would
+  need the PID file the PRD refuses), NO strategy edits. Its context was built by EXECUTING against
+  the installed nautilus-trader 1.220.0 rather than reading its docs, and five findings changed the
+  story's shape -- three of them are live defects the epic's ACs assume away. (1) THE PROCESS RUNS ON
+  UVLOOP: kernel.py:92 sets uvloop's EventLoopPolicy at import, so the runner's own
+  asyncio.new_event_loop() returns a uvloop.Loop and every stdlib signal behaviour differs from what
+  the asyncio docs describe (loop._signal_handlers does not even exist). (2) A SIGNAL DELIVERED WHILE
+  THE LOOP IS STOPPED IS SILENTLY LOST -- measured: no KeyboardInterrupt during the synchronous
+  stretch and no callback when the loop resumed. node:build carries the whole 120s connect budget, so
+  today Ctrl-C during the phase where a session is least responsive does NOTHING. (3) THE SECOND
+  SIGNAL IS BROKEN AND ASYMMETRIC: kernel.py:565-573's handler removes the SIGTERM handler and rebinds
+  SIGINT to `lambda: None`, so a second SIGINT is provably a no-op (process ran to completion) while a
+  second SIGTERM kills the process outright with no log line and no ownership release -- AC #4 is
+  violated for Ctrl-C and satisfied for SIGTERM only by accident. (4) NODE CONSTRUCTION CLOBBERS ANY
+  HANDLER ARMED BEFORE IT (measured: ours -> uvloop.Loop.__sighandler), so arming once is not enough
+  and the re-arm after node:build is the story's most forgettable requirement -- pinned as a
+  mutation-proved integration test, because a TestLiveNode double constructs no kernel and cannot fail
+  that way. (5) SIGABRT IS SWALLOWED by Nautilus's registration (exit 0 where SIG_DFL gives 134), and
+  loop.remove_signal_handler does NOT undo it on uvloop -- only an explicit
+  signal.signal(SIGABRT, SIG_DFL) does. The load-bearing design call: TWO mechanisms and TWO arming
+  points. loop.add_signal_handler alone loses every signal delivered with the loop stopped;
+  signal.signal alone is stolen back by Nautilus on the first signal (its handler re-installs uvloop's
+  Python handler). Both together, armed before gate:static and again after node:build, were measured
+  green in all four delivery windows. Three ACs were added beyond the epic's six, each traceable to a
+  measured finding or a deferred-work item naming Story 2.6: signal ownership in every window, a stop
+  during startup stopping the sequence (AR39, mirroring 2.5's AC #2), and a bounded teardown plus an
+  operator-visible failed release. ONE EPIC CLAUSE IS KNOWINGLY NOT MET IN FULL and is recorded as
+  such rather than quietly satisfied: AC #2's "no position is closed on the stop path" cannot be true
+  end to end while sma_crossover.on_stop() still calls close_all_positions() (verified reachable:
+  kernel.stop_async -> Trader._stop -> Component.stop -> on_stop; close_all_positions filters by
+  strategy_id, so a reconciled EXTERNAL position is safe but the session's own is not). epics.md's own
+  FR coverage map says that fix "lands in E3" and Story 3.1 is the story whose entire subject it is,
+  so 2.6 scopes the AC to what it owns, proves it with an AST scan over the five stop-path modules
+  (with a non-vacuity assertion, after Story 2.3's guard was found examining 4 of 192 files), and PINS
+  the residual with a test whose docstring tells Story 3.1 to delete both the call and the test.
+  Three deferred items close (the stopped->running liveness question -- already satisfied, since
+  release_record runs after shutdown() by construction; the unbounded _stop_heartbeat join, in half;
+  and the silent failed final release, decided as console-warning-and-still-exit-0). Eight judgment
+  calls flagged for the Epic 2 retro, the largest being os._exit(1) rather than sys.exit(130) -- the
+  first because live_check_node.shutdown catches BaseException at every step and would swallow a
+  SystemExit raised from a handler that fired inside the teardown, the second because AR28's table has
+  no 130 and Story 1.7 recorded that inventing a code is worse than a generic failure -- and putting
+  the signal policy in a NEW src/core/live_session_signals.py rather than in the runner, which
+  architecture.md:508 names but which sits at 498 of the 500-line cap with live.py at 497. The story
+  budgets the split in advance, as deferred-work.md instructed, and names the constants to relocate.
+  Also flagged: the new module trips Epic 1's live-path dependency guard, because `signal` and `sys`
+  are not in its hand-curated stdlib allowlist and _live_module_sources() globs src/core/live_*.py --
+  add both with the reason inline, as Story 2.4 did for `socket`, and do not switch to
+  sys.stdlib_module_names.
+  Previously: 2026-08-21 (Story 2.5 code-reviewed -> done, closing it. epic-2 remains in-progress:
   2.1/2.2/2.3/2.4/2.5 done, 2.6-2.8 backlog. Three adversarial layers (Blind Hunter, Edge Case
   Hunter, Acceptance Auditor) produced 30 raw / 25 deduplicated findings: 2 decisions, 13 patches,
   3 deferred, 7 dismissed. BOTH DECISIONS WERE HIGHs FOUND INDEPENDENTLY BY TWO LAYERS, both in the
@@ -883,7 +1096,7 @@ development_status:
   2-3-move-a-session-between-states-through-one-guarded-path: done
   2-4-give-each-session-its-own-durable-engine-cache: done
   2-5-start-a-session-in-the-foreground-with-an-ordered-startup-sequence: done
-  2-6-stop-a-session-without-ending-it-and-without-touching-positions: backlog
+  2-6-stop-a-session-without-ending-it-and-without-touching-positions: done
   2-7-keep-one-failing-strategy-from-taking-down-the-session: backlog
   2-8-see-what-a-session-is-doing-without-reading-logs: backlog
   epic-2-retrospective: optional
