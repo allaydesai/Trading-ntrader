@@ -51,9 +51,16 @@ class SessionReclaimedError(Exception):
     Known, accepted limit: this is a **detection**, not a cure. The window
     between another process reclaiming the session and this process's next
     heartbeat is up to one interval of two live processes on one broker
-    account. Closing it needs a fencing token the schema does not have — an
-    owner/epoch column was considered and rejected, because this phase's single
-    migration is spent.
+    account — the NFR6 catastrophe, narrowed rather than closed. Closing it
+    needs a fencing token the schema does not have.
+
+    ⚠️ **The reason that column was rejected no longer holds** (Story 2.7,
+    2026-08-23). It was rejected *"because this phase's single migration is
+    spent"*; Story 2.7's ``runtime_flags`` migration falsified that, so the
+    cost argument against an owner/epoch column is gone while the hazard is
+    unchanged. Re-opened in ``deferred-work.md`` under ``story-2.7`` rather than
+    taken here: a fencing token changes the meaning of every write on this port
+    and is not a bystander to a containment story.
     """
 
 
@@ -88,5 +95,48 @@ class SessionRecordPort(Protocol):
         Called from the runner's ``finally``, **after** the node has been torn
         down — committing ``stopped`` while the broker link is still up opens a
         door the AR33 reclaim guard does not watch.
+        """
+        ...
+
+    def record_strategy_failure(
+        self,
+        *,
+        strategy_id: str,
+        spec_strategy_id: str,
+        error_type: str,
+        handler: str,
+        at: datetime,
+        detail: str | None = None,
+        all_failed: bool = False,
+    ) -> None:
+        """Record that a strategy was contained, so another process can see it
+        (Story 2.7, FR49, NFR23).
+
+        Called from ``SessionSteadyState``'s tick, **never** from the wrapped
+        handler that caught the failure: ``handle_*`` runs inline on the
+        event-loop thread inside ``MessageBus.publish_c``, and a Postgres round
+        trip there stalls the loop and delays the bar for every later-subscribed
+        strategy. The guard queues; the tick drains and writes on its own
+        executor.
+
+        Every argument is a standard-library primitive. AR38 permits nothing
+        else across this boundary, so the runner translates at the catch site —
+        ``type(exc).__name__``, ``str(strategy.id)``, a redacted first line — and
+        no ``Strategy``, no ``StrategyId`` and no exception object travels here.
+
+        Args:
+            strategy_id: The Nautilus id at failure time, or ``""`` when the
+                strategy never started.
+            spec_strategy_id: The spec's own id — what the operator wrote.
+            error_type: The exception's class name.
+            handler: ``"handle_bar"``, ``"handle_event"`` or ``"start"``.
+            at: When the failure was contained, from the runner's clock.
+            detail: One line of the message, **already redacted** (NFR26). The
+                redaction happens at the catch site because that is the only
+                place the raw text exists. No traceback: that belongs in the log
+                sink, and a column carrying one would be the least redacted
+                place in the system.
+            all_failed: Whether every strategy in this session has now failed.
+                Never downgraded by a later call.
         """
         ...

@@ -43,6 +43,9 @@ from nautilus_trader.config import (
     CacheConfig,
     ImportableActorConfig,
     ImportableControllerConfig,
+    LiveDataEngineConfig,
+    LiveExecEngineConfig,
+    LiveRiskEngineConfig,
     LoggingConfig,
     TradingNodeConfig,
 )
@@ -94,6 +97,30 @@ NODE_TIMEOUT_DISCONNECTION = 10.0
 NODE_TIMEOUT_POST_STOP = 10.0
 #: How long the final shutdown may take.
 NODE_TIMEOUT_SHUTDOWN = 5.0
+
+# Story 2.7 (AC #6). All three live engines default this to `False`, and the
+# `False` branch of `_handle_queue_exception` is a literal `os._exit(1)`
+# (`live/data_engine.py:347-365`; identical at `live/execution_engine.py:380-398`
+# and `live/risk_engine.py:212-230`) — no `except`, no `finally`, no `atexit`, so
+# the runner's teardown never runs and the session's row is stranded at
+# `running`. Measured in a fresh interpreter: rc=1 with ZERO bytes of output, the
+# explanatory ERROR line surviving 4 runs in 20.
+#
+# ⚠️ This flag fixes NEITHER AC #1 NOR AC #2, and must not be read as
+# containment. Measured with `True`: exactly one `ShutdownSystem` is published,
+# which `kernel.py:603-625` turns into `stop_async()` — a graceful stop of the
+# WHOLE node, so the session ends. And with two co-subscribed strategies the
+# sibling still saw `{'A': 3, 'B': 0}`, because `MessageBus.publish_c`'s
+# dispatch abort is upstream of this flag and completely untouched by it. It is
+# defence in depth BEHIND `live_strategy_guard`'s per-strategy containment: what
+# covers the runner's own `note_bar` handler and the `LiveBarObserver`, neither
+# of which the guard wraps.
+#
+# Passed unconditionally for the same reason the timeouts are — a safety
+# property resting on a third-party default is one upgrade from silently
+# changing. `tests/component/core/test_live_node_builder.py` pins both halves:
+# that we set `True`, and that Nautilus still defaults `False`.
+ENGINE_GRACEFUL_SHUTDOWN_ON_EXCEPTION = True
 
 logger = structlog.get_logger(__name__)
 
@@ -330,6 +357,19 @@ def build_trading_node_config(
         cache=cache,
         logging=logging,
         controller=controller,
+        # Story 2.7 (AC #6): graceful shutdown instead of `os._exit(1)` when an
+        # exception reaches a live engine's queue loop. Defence in depth behind
+        # the per-strategy guard — see ENGINE_GRACEFUL_SHUTDOWN_ON_EXCEPTION for
+        # why it is neither containment nor a substitute for it.
+        data_engine=LiveDataEngineConfig(
+            graceful_shutdown_on_exception=ENGINE_GRACEFUL_SHUTDOWN_ON_EXCEPTION
+        ),
+        exec_engine=LiveExecEngineConfig(
+            graceful_shutdown_on_exception=ENGINE_GRACEFUL_SHUTDOWN_ON_EXCEPTION
+        ),
+        risk_engine=LiveRiskEngineConfig(
+            graceful_shutdown_on_exception=ENGINE_GRACEFUL_SHUTDOWN_ON_EXCEPTION
+        ),
         # Passed unconditionally, including when they equal today's defaults.
         # See the NODE_TIMEOUT_* constants above for why that is the point.
         timeout_connection=NODE_TIMEOUT_CONNECTION,

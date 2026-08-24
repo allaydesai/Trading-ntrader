@@ -151,3 +151,62 @@ class SqlSessionRecord:
                 )
             except InvalidSessionTransition as exc:
                 raise SessionReclaimedError(str(exc)) from exc
+
+    def record_strategy_failure(
+        self,
+        *,
+        strategy_id: str,
+        spec_strategy_id: str,
+        error_type: str,
+        handler: str,
+        at: datetime,
+        detail: str | None = None,
+        all_failed: bool = False,
+    ) -> None:
+        """Append a contained strategy failure to ``runtime_flags`` (Story 2.7).
+
+        One short-lived transaction, like its two siblings, and for the same
+        reason: a 6.5-hour session must never hold a row lock. This one is
+        rarer still — at most one write per strategy per process run, because
+        the guard latches.
+
+        Never assigns ``status`` itself — AR37 admits exactly one assigner and
+        it is not this module. A strategy failure is not a session lifecycle
+        event: the session stays ``running``.
+
+        Every ``InvalidSessionTransition`` is translated to
+        :class:`~src.core.live_session_record.SessionReclaimedError` for the two
+        reasons ``record_activity`` documents — the runner may not import
+        ``src.db`` (AR38), and both refusals that produce one (the row is not
+        ``running``, or its ``last_started_at`` moved past this process's own)
+        mean the same thing: this session is no longer ours to write to.
+
+        ⚠️ The **caller's** policy differs here, and deliberately. For the
+        heartbeat a reclaim is fatal and re-raised; for this write the
+        steady-state tick folds it into the same ``_ownership_lost`` route
+        rather than letting it escape a bar handler, because a raise out of a
+        wrapped ``handle_*`` re-enters ``publish_c`` and dies at ``os._exit(1)``
+        with no output (*Judgment call #10*). That policy lives in the caller,
+        not here.
+
+        Raises:
+            RecordNotFoundError: The session's row is gone.
+            SessionReclaimedError: This process no longer owns the session.
+        """
+        with self._session_factory() as db_session:
+            repository = SyncTradingSessionRepository(db_session)  # type: ignore[arg-type]
+            service = SessionService(repository, time_source=lambda: at)
+            try:
+                service.record_strategy_failure(
+                    self._session_id,
+                    started_at=self._started_at,
+                    strategy_id=strategy_id,
+                    spec_strategy_id=spec_strategy_id,
+                    error_type=error_type,
+                    handler=handler,
+                    at=at,
+                    detail=detail,
+                    all_failed=all_failed,
+                )
+            except InvalidSessionTransition as exc:
+                raise SessionReclaimedError(str(exc)) from exc

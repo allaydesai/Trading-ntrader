@@ -36,7 +36,209 @@
 
 generated: 2026-08-03
 last_updated: >-
-  2026-08-23 (Story 2.6 CLOSED -> done, after Procedure P7 was run against a real IB Gateway.
+  2026-08-24 (Story 2.7 code-reviewed -> done, closing it. epic-2 remains in-progress: 2.1-2.7 done,
+  2.8 backlog. Three-layer adversarial review (Blind Hunter with the diff only / Edge Case Hunter
+  with repo access / Acceptance Auditor against the story's 10 ACs): 26 raw findings deduplicated to
+  22, ZERO dismissed as noise — every finding survived verification against the working tree. SIX
+  went to Allay as decisions and every recommended option was taken; all six plus the 14 patches
+  were applied same-session. THE SIX DECISIONS: (1) a drained failure whose DB write hit a transient
+  error was DROPPED FOREVER ("deliberately not re-queued" — whose "unbounded state" rationale was
+  FALSE, the guard latches so the backlog is bounded by strategy count) -> StrategyGuard.requeue +
+  next-tick retry; (2) a failure contained within the last ~30s tick before a stop, or on the
+  all-failed NoStrategyStartedError start path, NEVER reached runtime_flags and the stopped-row
+  refusal made that permanent while the CLI pointed operators at the column -> the runner's finally
+  now flushes the queue synchronously BEFORE mark_stopped (_flush_contained_failures); (3) a
+  BaseException from strategy code (sys.exit() in on_bar) escaped the guard's `except Exception`
+  straight into the exact os._exit(1) the story exists to prevent — found independently by TWO
+  layers -> the wrapper now catches BaseException, re-raising only KeyboardInterrupt/CancelledError;
+  (4) the strategy-failure write was an UNLOCKED read-modify-write, so a dispossessed incumbent
+  passing _refuse_if_reclaimed on a stale read could stamp a pre-reclaim doc that survives the
+  successor's ENTIRE run and erases its entries -> FOR UPDATE, the pinned no-lock test inverted;
+  (5) redact_accounts dropped AC #8's pinned "plus the configured TWS_ACCOUNT when set" clause — a
+  unilateral narrowing the auditor caught — and was case-sensitive -> account threaded in as a
+  plain string, matched case-insensitively; (6) the unwrapped handler surface (handle_bars,
+  handle_historical_data, ticks — sma_momentum already drives the request path) was understated by
+  disclosed limit #1 -> disclosure widened, GUARDED_HANDLERS stays pinned, deferral recorded.
+  PATCHES WORTH NAMING: every strategy-failure write REBUILT runtime_flags from a fixed key set,
+  silently erasing keys it did not own — Story 2.8's planned connection_lost_at would have been
+  destroyed by the first contained failure (now **existing carries forward, pinned); the CLI's
+  trailer said "the other strategies were unaffected" UNCONDITIONALLY — false for single-strategy
+  sessions (the only kind the CLI can start) and an affirmative lie when ALL failed (now branches
+  on all_strategies_failed); the CLI-side AR36 vocabulary test checked 3 past-tense words where the
+  canonical list is 5 word-boundary stems INCLUDING close — the word that had already been dropped
+  silently once (now the same 5-stem scan, both branches); AC #7's teardown-skip pin test DID NOT
+  EXIST while deferred-work.md claimed "Pinned by a test whose docstring says exactly this" (now
+  TestADegradedStrategyIsSkippedAtTeardown against a real Trader — measured: stop_strategy AND
+  trader.stop() both leave DEGRADED untouched, on_stop never runs); finding #12's dispatch-order
+  pin was never written (now two halves: the runner's subscribe-before-add_strategy timeline plus a
+  real-MessageBus equal-priority dispatch-order pin); contained failures were invisible when run()
+  ended by RAISING — exactly the reclaim path whose writes are refused (now printed on the
+  exception path too); _fault_quietly's docstring cited fault() from PRE_INITIALIZED while the
+  common state is STARTING (measured this session: fault() from STARTING SUCCEEDS -> FAULTED —
+  docstring now carries both measured states); drain_pending's copy-then-clear -> atomic swap;
+  GUARD_FAILED_EVENT mislabeled the spec id as strategy_id (mixed identifier semantics on the
+  machinery-broke event); a guard test asserted `_guard().failures == ()` on a FRESH guard —
+  trivially green forever; the migration head-count test used substring-in-joined-string membership;
+  the integration probe synchronized on bare sleep(0.3)/sleep(0.2) (now deadline-polled wait_for);
+  the graceful_shutdown AST test collected keywords module-wide so the flag could be dropped from
+  any one engine undetected (now bound per constructor); and the disclosed size numbers were
+  internally inconsistent (567-vs-574, 312-vs-320 — corrected, and post-fix sizes re-measured:
+  runner 734/class 605, guard 634/class 346, steady state 581/class 278, SessionService trimmed
+  back to 98 of 100). TWO DEFERRED, in deferred-work.md under "code review of 2-7": infra
+  exceptions inside the per-spec start loop are misattributed as spec failures (design question for
+  the story that adds error classification), and AC #1's heartbeat-advance clause is proxied not
+  proven — it lives in P8, which REMAINS NOT RUN and is still the gate before Epic 2 closes.
+  FINAL: unit 2266, component 1289/16 skipped, survives-file 6 (incl. the 2 new pins), Epic 1 sweep
+  40/40, format/lint/mypy clean. Review artifacts: findings + resolutions in the story's Review
+  Findings section; deferred-work.md entries updated where fixes closed or corrected them,
+  including striking the CLOSED redact_accounts narrowing and naming the once-false pin-test
+  claim.)
+  Previously: 2026-08-23 (Story 2.7 implemented -> review. ready-for-dev -> in-progress -> review, same session as
+  creation. epic-2 stays in-progress: 2.1-2.6 done, 2.7 review, 2.8 backlog. All 11 tasks and every
+  subtask complete; all 10 ACs satisfied. Delivers src/core/live_strategy_guard.py (new): an
+  INSTANCE-LEVEL wrapper on handle_bar/handle_event, installed by the runner between
+  materialise_strategy and add_strategy, which latches per strategy, logs a REDACTED traceback,
+  queues the failure and calls degrade() -- with the whole containment body inside its own except, so
+  NOTHING propagates out of a wrapped handler, including SessionReclaimedError. TASK 1 RE-CONFIRMED
+  THE DEFECT BEFORE ANY CODE WAS WRITTEN and it reproduced exactly: uncontained -> rc=1 with an
+  output file of ZERO BYTES; guarded -> rc=0, seen={'A': 1, 'B': 3}, raiser DEGRADED (state 11),
+  sibling RUNNING, data-queue task alive. Every baseline in the story matched to the number (unit
+  2126 / component 1262 / integration 261 / e2e 1; every file-size row exact).
+  THE CENTRAL CLAIM IS PROVED BY RETURN CODE, NOT BY A LOG ASSERTION.
+  tests/integration/core/test_live_strategy_failure_survives.py builds a real LiveDataEngine in a
+  fresh interpreter with a real sma_crossover fed a 0.00 close (a genuine decimal.DivisionByZero at
+  sma_crossover.py:150, not a monkeypatched raise): guarded rc=0, sibling gets all five bars, raiser
+  DEGRADED, queue task alive -- and the INVERTED meta-test ships alongside it as the permanent
+  mutation proof, exiting 1 when guard.wrap is removed. That probe deliberately uses
+  LiveDataEngineConfig()'s DEFAULTS (graceful_shutdown_on_exception=False), which is load-bearing:
+  with AC #6's True the uncontained run would publish ShutdownSystem into a bus with no kernel
+  subscribed and exit 0 anyway, so the inverted test would pass vacuously. The proof isolates the
+  guard from its own backstop.
+  AC #2's NEGATIVE CONTROL IS ORDER-DEPENDENT, AS MEASURED, and that is what makes the positive test
+  non-vacuous: unguarded on a real MessageBus, raiser-FIRST leaves the sibling with 4 of 5 bars,
+  raiser-LAST with 5 of 5. Both orders are parametrised and the control is pinned on bus.pub_count
+  (which does not advance when a subscriber raises), never on the sibling's count. The story's
+  warnings held: pub_count reads 6 before the first bar, so no delta is pinned; and momentum needs
+  the instrument seeded into the Cache or on_start calls self.stop() and never subscribes.
+  ALL 11 NAMED MUTATIONS BROKEN, OBSERVED RED, REVERTED (tree re-scanned for leftover markers: zero).
+  Two are worth naming. #6 (redact_accounts as mask_account(text)) killed 11 tests with
+  `assert '***626' in '***ged'` -- while the naive "DU4076626 absent" assertion stayed GREEN
+  throughout, exactly the vacuous test the story predicted. #8 (latch short-circuits before the base
+  handler) was killed by EXACTLY ONE test, the indicator-warmth assertion (`assert 1 == 8`). #9
+  (letting SessionReclaimedError escape) and #3 (re-raise after logging) both drove the integration
+  probe to rc=1 -- the silent death the story exists to close.
+  ALSO DELIVERED: per-spec start containment using fault() (degrade() is illegal from STARTING and is
+  silently swallowed; stop() would run sma_crossover.on_stop()'s close_all_positions()), with a new
+  NoStrategyStartedError when NO strategy starts -- AR28's generic exit 1 via classify_failure's MRO
+  walk, inventing no code; the phase's SECOND migration b7c419e2a3d8 adding nullable runtime_flags
+  JSONB, round-tripped for real against the live database (upgrade -> downgrade -1 -> upgrade, both
+  trading_sessions rows preserved, single head throughout, 13 -> 14 columns); a THIRD
+  SessionRecordPort method written from the steady-state tick on that object's OWN ThreadPoolExecutor
+  (never asyncio.to_thread -- asserted by THREAD NAME, so decision D2's 59.81s regression cannot
+  return silently); graceful_shutdown_on_exception=True on all three live engines plus a canary
+  pinning Nautilus's False default so an upgrade becomes a decision; and the contained-failure block
+  in _print_stop_result, exit code still 0.
+  THREE THINGS THE STORY DID NOT PREDICT. (1) Epic 1's dependency guard rejected `re` as well as the
+  predicted `traceback` -- redact_accounts needs a pattern because mask_account is a whole-value
+  masker; both stdlib, both added by hand with the reason inline, and explicitly NOT by switching to
+  sys.stdlib_module_names, which Story 2.4's review rejected. (2) Two of the dev's own assertions
+  were wrong, not the code: str(ComponentState.DEGRADED) renders '11' not 'DEGRADED' (use .name), and
+  a degraded strategy does NOT keep reaching on_bar -- handle_bar's `if state == RUNNING` gate closes
+  it, which is what the story means by "calling through is cheap after degrade()". The corrected test
+  is stronger: two counters at two levels now assert BOTH halves, that the boundary still calls
+  through to handle_bar and that on_bar is not re-entered. (3) A registry snapshot/restore fixture
+  took its snapshot BEFORE lazy discovery ran, so restoring wiped the real registrations for every
+  later test in the worker -- the inverse of the leak the story warns about; fixed by forcing
+  discover() first.
+  session.started NOW NAMES ONLY THE STRATEGIES THAT ACTUALLY STARTED -- a small deliberate behaviour
+  change falling out of AC #5, since reporting a contained spec as started is the same false green
+  AC #4 exists to prevent. Single-strategy sessions unaffected, so no existing test changed.
+  tests/component/doubles/test_live_node.py was NOT modified (budgeted "if needed"; failure injection
+  patches the double's bound methods on the instance inside the test file instead, leaving the double
+  shared with three other suites untouched). AR9's dual-repository rule is NOT triggered: this is a
+  service-level mutation on a loaded ORM object, the same shape as _stamp_activity.
+  FINAL: unit 2126 -> 2254 (+128), component 1262 -> 1283 passed / 16 skipped (+37), integration/core
+  --forked 79 -> 84 passed / 2 skipped (+5), integration/db 72, e2e+api+ui 193, 40/40 Epic 1
+  acceptance criteria still pass, format/lint clean, mypy clean on 102 files, zero regressions.
+  TWO ITEMS DISCLOSED RATHER THAN RESOLVED, both recorded in deferred-work.md with split candidates
+  and the reasons they were declined. (a) SIX FILES ARE OVER THE 500-LINE CAP: live_strategy_guard.py
+  ships NEW at 574 (~180 lines of code; the rest is the measured Nautilus reasoning the story required
+  in-module -- ~17 lines of genuine duplication were trimmed, and the one clean split, the redaction
+  trio into live_redaction.py landing it at ~485, was NOT taken because AC #8 pins redact_accounts to
+  this file and moving it needs an AC amendment); runner 581 -> 667 (sanctioned); steady state 507 ->
+  574; live_node_builder 496 -> 536 (the offered extraction declined -- it would move node-assembly
+  helpers out of the node-assembly module to satisfy a cap nothing enforces, and each new live_*
+  module must be hand-added to three guard lists, the exact rot vector this repo has been bitten by);
+  live.py 471 -> 514; session_service.py 479 -> 600. (b) StrategyGuard the CLASS is 312 against the
+  100-line guideline and says so in its own module docstring -- NO "every class under 100" claim is
+  made anywhere, the false claim Story 2.6's review had to patch. SessionService is now 94 of 100, up
+  from 83: the module-level-body split was the right call and the headroom is nearly spent.
+  NOT VERIFIED, recorded rather than glossed: PROCEDURE P8 IS WRITTEN AND NOT RUN. It needs IB
+  Gateway/TWS on the paper port, Redis, Postgres AND RTH, and it is the only thing that can check the
+  three BROKER-FACING criteria -- that runtime_flags is readable from a second terminal while the
+  session runs (AC #4's whole point), that the IBKR positions/orders page is IDENTICAL across a
+  contained failure (NFR14/AR43), and that a degraded strategy stays registered and subscribed. The
+  process-level claim IS covered automatically and by return code. Also unexercised: the runtime
+  session.all_strategies_failed path against a live gateway (the start-path half is covered), and
+  handle_event containment has no order events to carry until Epic 3. NEW DEFERRED ITEMS worth
+  flagging: the owner/epoch FENCING COLUMN is re-opened, because its only stated cost argument ("this
+  phase's single migration is spent") was falsified by this story's own migration -- the
+  SessionReclaimedError docstring citing it has been restated rather than left lying; and
+  NoStrategyStartedError is the FIFTH name in _SAFE_MESSAGE_EXCEPTION_NAMES where only three go into
+  the outcome map, so Story 2.5's Judgment call #8 (revisit the marker protocol at the FOURTH) is now
+  overdue.
+  Previously: 2026-08-23 (Story 2.7 created: backlog -> ready-for-dev. epic-2 stays in-progress: 2.1-2.6 done,
+  2.7 ready-for-dev, 2.8 backlog. File:
+  2-7-keep-one-failing-strategy-from-taking-down-the-session.md. Owns per-strategy failure
+  containment, the start-path containment, a new nullable runtime_flags column, a third
+  SessionRecordPort method, and engine-level defence in depth. NO strategy-file edits (AR40; the
+  sma_crossover DivisionByZero is this story's TEST FIXTURE, not its bug -- Story 3.1 owns the
+  on_stop flatten, Story 4.4 the on_start indicator warm-up), NO live status/list (Story 2.8), NO
+  fifth SessionStatus value. Context was built by EXECUTING against the installed nautilus-trader
+  1.220.0 rather than reading its docs, and it OVERTURNED TWO OF THE EPIC'S FOUR ACs. (1) AC #1's
+  "caught at the runner boundary" IS STRUCTURALLY IMPOSSIBLE: Actor.handle_bar re-raises
+  (actor.pyx:3743-3748), MessageBus.publish_c has no per-handler try (component.pyx:2754-2757), and
+  LiveDataEngine._handle_queue_exception calls os._exit(1) because graceful_shutdown_on_exception
+  defaults to False on all three live engines and build_trading_node never sets it. Measured in a
+  fresh interpreter: uncontained -> rc=1 with ZERO bytes of output (the explanatory Rust log line
+  survived 4 of 20 runs; os._exit skips atexit, every finally, and the async log flush). So no
+  finally runs, mark_stopped() never fires, and the row is stranded at running. The AC is re-read as
+  "the boundary the RUNNER INSTALLS around each strategy" -- an instance-level wrapper on
+  handle_bar/handle_event applied at materialise time, measured working end to end on a real
+  LiveDataEngine: rc=0, bad strategy DEGRADED, sibling got all 3 bars. (2) AC #2 is FALSE under raw
+  Nautilus regardless of where the runner catches, because publish_c aborts the subscriber loop --
+  a raiser starves every strategy subscribed after it, order-dependently. SIX ACs added beyond the
+  epic's four. TWO DECISIONS TAKEN WITH ALLAY. (a) A SECOND PHASE-3 MIGRATION adds a nullable
+  runtime_flags JSONB column, departing from deferred-work.md's action that re-pointed the question
+  at Story 2.8: containment WITHOUT persistence is a REGRESSION, because today's os._exit leaves the
+  row running with a frozen heartbeat (2.8 renders that `stale`), while after containment the
+  session heartbeats normally and note_bar keeps advancing last_bar_at -- so 2.8 would render
+  `trading` for a session where every strategy is dead. Story 2.8 needs the column anyway (AR32's
+  `degraded` has nowhere to live), the table holds 2 rows, and src/api + templates hold zero
+  references to it. alembic/versions is hook-protected; the sanction is recorded in the story so the
+  dev agent can cite it. (b) live_session_runner.py (581) is RECORDED AS A SANCTIONED OVER-CAP
+  EXCEPTION rather than split; live_session_steady_state.py (507) is disclosed for the first time.
+  THE STORY WAS THEN ADVERSARIALLY VALIDATED by three independent fresh-context lenses that
+  re-executed its own claims. The design HELD under attack (wrapper survives change_id, register()
+  binds the wrapped handle_event, re-entrant degrade() does not deadlock), but SIX DEFECTS WERE
+  FOUND AND FIXED, three of them would have shipped broken code. (i) AC #4 originally MANDATED
+  re-raising SessionReclaimedError from inside the guard -- measured rc=1 with zero output, the exact
+  silent death the story exists to close. New AC #10: nothing propagates out of a wrapped handler,
+  and the record write is QUEUED and drained on the steady-state tick through its own executor
+  rather than performed inline on the loop thread (decision D2's measured 59.81s block is the
+  precedent). (ii) mask_account is a WHOLE-VALUE masker -- mask_account("Error 321: account
+  DU4076626 is not managed") returns '***ged' -- so AC #8's test passed vacuously against an
+  implementation that destroyed the payload; replaced with a redact_accounts substring redactor and
+  a three-part assertion. (iii) AC #9's latch short-circuited before the base handler, which FREEZES
+  registered indicators (measured ema.count 1 vs 8) and contradicts the warm-resume property
+  findings #7 and #8 both rest on; the latch now suppresses side effects only. (iv) momentum never
+  subscribes without a seeded Cache (on_start calls self.stop()), making AC #2's sibling assertion
+  untestable. (v) bus.pub_count == 1 is impossible -- cumulative, reads 6 before the first bar. (vi)
+  Two contradictory guard_strategy signatures plus an undefined StrategyGuard.__init__ were replaced
+  by one pinned contract. Also corrected two numbers inherited from deferred-work.md: SessionService
+  is 83 lines not 99, and the 732-line sanctioned exception is import_data.py, not catalog.py (263).
+  11 tasks, 11 named mutations, 13 pre-verified findings, Procedure P8 skeleton. 1601 lines.
+  Previously: 2026-08-23 (Story 2.6 CLOSED -> done, after Procedure P7 was run against a real IB Gateway.
   epic-2 stays in-progress: 2.1-2.6 done, 2.7-2.8 backlog. P7 result: 5 of 6 criteria pass, 1
   partial; recorded in full in docs/qa/phase3-live-verification.md with log paths and timestamps.
   Paper port 4002, account ***626, session p7-stop-test / 6ffd1556-a854-4a2f-9b0c-7b2f14958a6c /
@@ -1097,7 +1299,7 @@ development_status:
   2-4-give-each-session-its-own-durable-engine-cache: done
   2-5-start-a-session-in-the-foreground-with-an-ordered-startup-sequence: done
   2-6-stop-a-session-without-ending-it-and-without-touching-positions: done
-  2-7-keep-one-failing-strategy-from-taking-down-the-session: backlog
+  2-7-keep-one-failing-strategy-from-taking-down-the-session: done
   2-8-see-what-a-session-is-doing-without-reading-logs: backlog
   epic-2-retrospective: optional
 

@@ -10,6 +10,7 @@ What is under test is the exit-code contract (AR28/FR11) and the option surface,
 not the driver — the driver has its own component suite.
 """
 
+import re
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
@@ -890,6 +891,14 @@ def _start_harness(
     # teardown warning with a `<MagicMock ...>` repr inside it.
     runner.shutdown_problems = []
     runner.stopped_by_signal = True
+    # Story 2.7, and explicit for the third time for the same reason: a bare
+    # MagicMock attribute is truthy AND iterable-looking, so an unset
+    # `contained_failures` would make every clean-stop test print the
+    # contained-strategy warning with a `<MagicMock ...>` repr inside it.
+    runner.contained_failures = ()
+    # And a fourth time: a truthy `all_strategies_failed` would flip every
+    # contained-failure test into the every-strategy-failed branch.
+    runner.all_strategies_failed = False
     record = MagicMock()
 
     with (
@@ -1149,6 +1158,156 @@ class TestTeardownProblemsAreVisible:
             result = runner.invoke(live, ["start", "alpha-session"])
 
         assert "teardown did not complete cleanly" not in result.output
+
+
+class TestContainedStrategyFailuresAreVisible:
+    """Story 2.7, Task 10 — an operator watching a stop is told which
+    strategies stopped trading, and when.
+
+    The in-process half of the visibility ``runtime_flags`` gives across
+    processes. Exit code stays **0**: the session ran and it stopped. AR28's
+    table has no code for "a strategy failed", and Story 1.7 recorded that a
+    CLI inventing a code outside its own documented table is worse than one
+    reporting a generic failure.
+    """
+
+    @staticmethod
+    def _failure(spec_strategy_id="sma_crossover", **overrides):
+        from datetime import datetime, timezone
+
+        from src.core.live_strategy_guard import StrategyFailure
+
+        fields = {
+            "strategy_id": "SMACrossover-000",
+            "spec_strategy_id": spec_strategy_id,
+            "error_type": "DivisionByZero",
+            "handler": "handle_bar",
+            "at": datetime(2026, 8, 23, 14, 3, 11, tzinfo=timezone.utc),
+            "detail": "[<class 'decimal.DivisionByZero'>]",
+        }
+        fields.update(overrides)
+        return StrategyFailure(**fields)
+
+    def test_a_contained_failure_is_named_and_the_exit_code_stays_zero(self, runner):
+        with _start_harness() as spies:
+            spies["runner"].contained_failures = (self._failure(),)
+            result = runner.invoke(live, ["start", "alpha-session"])
+
+        # Rich hard-wraps at the console width, so a phrase can be split across
+        # lines mid-word. Collapse whitespace before asserting on content.
+        flat = " ".join(result.output.split())
+        assert result.exit_code == 0
+        assert "sma_crossover" in flat
+        assert "SMACrossover-000" in flat
+        assert "DivisionByZero" in flat
+        assert "handle_bar" in flat
+
+    def test_the_operator_is_told_where_the_traceback_is(self, runner):
+        with _start_harness() as spies:
+            spies["runner"].contained_failures = (self._failure(),)
+            result = runner.invoke(live, ["start", "alpha-session"])
+
+        assert "strategy.failed" in " ".join(result.output.split())
+
+    def test_two_failures_are_both_named(self, runner):
+        with _start_harness() as spies:
+            spies["runner"].contained_failures = (
+                self._failure(),
+                self._failure("momentum", strategy_id="SMAMomentum-001"),
+            )
+            result = runner.invoke(live, ["start", "alpha-session"])
+
+        flat = " ".join(result.output.split())
+        assert "sma_crossover" in flat
+        assert "momentum" in flat
+        assert "2 strategies" in flat
+
+    def test_one_failure_reads_as_singular(self, runner):
+        with _start_harness() as spies:
+            spies["runner"].contained_failures = (self._failure(),)
+            result = runner.invoke(live, ["start", "alpha-session"])
+
+        flat = " ".join(result.output.split())
+        assert "1 strategy was contained" in flat
+
+    def test_a_clean_run_prints_nothing_extra(self, runner):
+        with _start_harness() as spies:
+            spies["runner"].contained_failures = ()
+            result = runner.invoke(live, ["start", "alpha-session"])
+
+        assert "contained" not in result.output
+        assert result.exit_code == 0
+
+    def test_contained_failures_are_printed_even_when_the_run_ends_by_raising(self, runner):
+        """Review fix, 2026-08-23: ``_print_contained_failures`` was reached
+        only on a normal return. A run that ends by raising — a reclaim above
+        all — may be exactly the run whose failures never reached
+        ``runtime_flags`` (the write is refused once the row leaves
+        ``running``), so this report is the operator's only in-process trace.
+        """
+        with _start_harness(runner_error=RuntimeError("the node died")) as spies:
+            spies["runner"].contained_failures = (self._failure(),)
+            spies["runner"].all_strategies_failed = False
+            result = runner.invoke(live, ["start", "alpha-session"])
+
+        flat = " ".join(result.output.split())
+        assert result.exit_code != 0
+        assert "sma_crossover" in flat
+        assert "contained" in flat
+
+    def test_a_partial_failure_says_the_unaffected_strategies_kept_running(self, runner):
+        with _start_harness() as spies:
+            spies["runner"].contained_failures = (self._failure(),)
+            spies["runner"].all_strategies_failed = False
+            result = runner.invoke(live, ["start", "alpha-session"])
+
+        flat = " ".join(result.output.split())
+        assert "not named above were unaffected" in flat
+
+    def test_when_every_strategy_failed_the_cli_does_not_claim_survivors(self, runner):
+        """Review fix, 2026-08-23: the old unconditional trailer said "the
+        other strategies were unaffected" even when every strategy failed —
+        and for a single-strategy session, where there are no other
+        strategies at all. A safety report must not assert a falsehood in its
+        most common trigger.
+        """
+        with _start_harness() as spies:
+            spies["runner"].contained_failures = (self._failure(),)
+            spies["runner"].all_strategies_failed = True
+            result = runner.invoke(live, ["start", "alpha-session"])
+
+        flat = " ".join(result.output.split())
+        assert "Every strategy in this session was contained" in flat
+        assert "unaffected" not in flat
+        assert "can no longer trade" in flat
+        # Still exit 0: the session ran and it stopped (AR28 has no code for this).
+        assert result.exit_code == 0
+
+    @pytest.mark.parametrize("all_failed", [False, True])
+    def test_the_wording_respects_ar36s_vocabulary(self, runner, all_failed):
+        """``tests/unit/core/test_live_stop_path_is_inert.py`` word-boundary
+        matches ``pause|halt|kill|close|finalize`` against operator-facing
+        strings in the runner and the signal policy. This text lives in the CLI,
+        which that scan does not cover — so the rule is asserted here directly,
+        with the **same** five-stem word-boundary list the canonical scan uses
+        (review fix, 2026-08-23: this used to check three past-tense words,
+        omitting ``close`` — the one word AR36's list already lost silently
+        once — so "positions were closed" would have passed). Both trailer
+        branches are covered.
+        """
+        with _start_harness() as spies:
+            spies["runner"].contained_failures = (self._failure(),)
+            spies["runner"].all_strategies_failed = all_failed
+            result = runner.invoke(live, ["start", "alpha-session"])
+
+        flat = " ".join(result.output.split()).lower()
+        contained_line = [
+            part for part in flat.split("⚠️") if "contained" in part and "sma_crossover" in part
+        ]
+        assert contained_line, flat
+        for forbidden in ("pause", "halt", "kill", "close", "finalize"):
+            hits = re.findall(rf"\b{forbidden}\w*\b", contained_line[0])
+            assert not hits, f"AR36 forbidden vocabulary {hits} in: {contained_line[0]}"
 
 
 class TestStartExitCodes:

@@ -60,6 +60,7 @@ def _session_row(
     last_heartbeat_at: datetime | None = None,
     last_started_at: datetime | None = None,
     last_bar_at: datetime | None = None,
+    runtime_flags: dict | None = None,
 ) -> TradingSession:
     """A detached ``TradingSession`` with every column the service reads set explicitly."""
     return TradingSession(
@@ -70,6 +71,7 @@ def _session_row(
         last_heartbeat_at=last_heartbeat_at,
         last_started_at=last_started_at,
         last_bar_at=last_bar_at,
+        runtime_flags=runtime_flags,
     )
 
 
@@ -922,3 +924,292 @@ class TestTransitionOwnershipGuard:
         events = [e for e in logs if e["event"] == "session.activity_refused"]
         assert len(events) == 1
         assert events[0]["row_started_at"] == theirs.isoformat()
+
+
+class TestRuntimeFlagsAreClearedOnEveryRunningEdge:
+    """Story 2.7, AC #4 — a failure from a previous process run is never
+    reported against the current one.
+
+    Without this, ``live status`` shows a strategy that failed three process
+    runs ago against a session that is currently healthy — a stale fact
+    presented as a live one, which is worse than no fact at all. Mutation #11.
+    """
+
+    @staticmethod
+    def _service(row, clock):
+        return SessionService(_repository(row), time_source=clock)
+
+    @pytest.mark.parametrize("current", [SessionStatus.CREATED, SessionStatus.STOPPED])
+    def test_a_transition_to_running_clears_runtime_flags(self, current):
+        clock = FakeClock()
+        row = _session_row(current, runtime_flags={"v": 1, "failed_strategies": [{"a": 1}]})
+
+        self._service(row, clock).transition(SESSION_ID, to=SessionStatus.RUNNING)
+
+        assert row.runtime_flags is None
+
+    def test_a_reclaim_of_a_stale_running_session_also_clears_them(self):
+        """The reclaim path reaches ``running`` too, and a successor must not
+        inherit its predecessor's failures.
+        """
+        clock = FakeClock()
+        stale = clock.now - timedelta(seconds=DEFAULT_HEARTBEAT_STALE_AFTER_SECONDS + 1)
+        row = _session_row(
+            SessionStatus.RUNNING,
+            last_heartbeat_at=stale,
+            runtime_flags={"v": 1, "failed_strategies": [{"a": 1}]},
+        )
+
+        self._service(row, clock).transition(SESSION_ID, to=SessionStatus.RUNNING)
+
+        assert row.runtime_flags is None
+
+    @pytest.mark.parametrize(
+        "current, target",
+        [
+            (SessionStatus.RUNNING, SessionStatus.STOPPED),
+            (SessionStatus.STOPPED, SessionStatus.SEALED),
+        ],
+    )
+    def test_no_other_edge_touches_runtime_flags(self, current, target):
+        """Only ``-> running`` clears. A stop must leave the run's failures
+        readable, or an operator investigating why a session stopped trading
+        loses the evidence at exactly the moment they need it.
+        """
+        clock = FakeClock()
+        flags = {"v": 1, "failed_strategies": [{"a": 1}]}
+        row = _session_row(current, runtime_flags=flags, last_heartbeat_at=clock.now)
+
+        self._service(row, clock).transition(SESSION_ID, to=target)
+
+        assert row.runtime_flags == flags
+
+    def test_clearing_is_harmless_when_there_was_nothing_to_clear(self):
+        clock = FakeClock()
+        row = _session_row(SessionStatus.CREATED)
+
+        self._service(row, clock).transition(SESSION_ID, to=SessionStatus.RUNNING)
+
+        assert row.runtime_flags is None
+
+
+class TestRecordStrategyFailure:
+    """Story 2.7, AC #4 — the third write a running session may make.
+
+    It never assigns ``status`` (AR37's AST guard matches only
+    ``t.attr == "status"``, so this is invisible to it) and it goes through the
+    same ownership guard the heartbeat uses, because a dispossessed process
+    writing a failure into its successor's row is the same defect as a
+    dispossessed process stamping its heartbeat.
+    """
+
+    @staticmethod
+    def _service(row, clock):
+        return SessionService(_repository(row), time_source=clock)
+
+    @staticmethod
+    def _failure(clock, **overrides):
+        fields = {
+            "strategy_id": "SMACrossover-000",
+            "spec_strategy_id": "sma_crossover",
+            "error_type": "DivisionByZero",
+            "handler": "handle_bar",
+            "at": clock.now,
+            "detail": "[<class 'decimal.DivisionByZero'>]",
+        }
+        fields.update(overrides)
+        return fields
+
+    def test_the_first_failure_creates_the_versioned_document(self):
+        clock = FakeClock()
+        row = _session_row(SessionStatus.RUNNING, last_started_at=clock.now)
+
+        self._service(row, clock).record_strategy_failure(
+            SESSION_ID, started_at=clock.now, **self._failure(clock)
+        )
+
+        assert row.runtime_flags["v"] == 1
+        assert row.runtime_flags["all_failed"] is False
+        (entry,) = row.runtime_flags["failed_strategies"]
+        assert entry["strategy_id"] == "SMACrossover-000"
+        assert entry["spec_strategy_id"] == "sma_crossover"
+        assert entry["error_type"] == "DivisionByZero"
+        assert entry["handler"] == "handle_bar"
+        assert entry["at"] == clock.now.isoformat()
+        assert entry["detail"] == "[<class 'decimal.DivisionByZero'>]"
+
+    def test_no_traceback_reaches_the_column(self):
+        """The traceback belongs in the structlog sink. A column that carried
+        one would grow without bound and would be the least redacted place in
+        the system.
+        """
+        clock = FakeClock()
+        row = _session_row(SessionStatus.RUNNING, last_started_at=clock.now)
+
+        self._service(row, clock).record_strategy_failure(
+            SESSION_ID, started_at=clock.now, **self._failure(clock)
+        )
+
+        assert "traceback" not in row.runtime_flags["failed_strategies"][0]
+
+    def test_a_second_failure_appends_rather_than_replacing(self):
+        clock = FakeClock()
+        row = _session_row(SessionStatus.RUNNING, last_started_at=clock.now)
+        service = self._service(row, clock)
+
+        service.record_strategy_failure(SESSION_ID, started_at=clock.now, **self._failure(clock))
+        service.record_strategy_failure(
+            SESSION_ID,
+            started_at=clock.now,
+            **self._failure(clock, spec_strategy_id="momentum", strategy_id="SMAMomentum-001"),
+        )
+
+        assert [e["spec_strategy_id"] for e in row.runtime_flags["failed_strategies"]] == [
+            "sma_crossover",
+            "momentum",
+        ]
+
+    def test_the_document_is_reassigned_not_mutated_in_place(self):
+        """⚠️ SQLAlchemy does not track in-place mutation of a plain ``JSONB``
+        column: ``row.runtime_flags["failed_strategies"].append(...)`` silently
+        never persists. This asserts the object identity actually changes, which
+        is the only thing that makes the write reach Postgres.
+        """
+        clock = FakeClock()
+        row = _session_row(SessionStatus.RUNNING, last_started_at=clock.now)
+        service = self._service(row, clock)
+        service.record_strategy_failure(SESSION_ID, started_at=clock.now, **self._failure(clock))
+        first_document = row.runtime_flags
+        first_list = row.runtime_flags["failed_strategies"]
+
+        service.record_strategy_failure(
+            SESSION_ID, started_at=clock.now, **self._failure(clock, spec_strategy_id="momentum")
+        )
+
+        assert row.runtime_flags is not first_document
+        assert row.runtime_flags["failed_strategies"] is not first_list
+
+    def test_all_failed_is_carried_when_the_caller_says_so(self):
+        clock = FakeClock()
+        row = _session_row(SessionStatus.RUNNING, last_started_at=clock.now)
+
+        self._service(row, clock).record_strategy_failure(
+            SESSION_ID, started_at=clock.now, all_failed=True, **self._failure(clock)
+        )
+
+        assert row.runtime_flags["all_failed"] is True
+
+    def test_all_failed_is_never_downgraded_by_a_later_write(self):
+        """Once every strategy has failed, a subsequent write must not report
+        the session as partially alive again.
+        """
+        clock = FakeClock()
+        row = _session_row(SessionStatus.RUNNING, last_started_at=clock.now)
+        service = self._service(row, clock)
+        service.record_strategy_failure(
+            SESSION_ID, started_at=clock.now, all_failed=True, **self._failure(clock)
+        )
+
+        service.record_strategy_failure(
+            SESSION_ID,
+            started_at=clock.now,
+            all_failed=False,
+            **self._failure(clock, spec_strategy_id="momentum"),
+        )
+
+        assert row.runtime_flags["all_failed"] is True
+
+    def test_a_reclaimed_row_refuses_the_write(self):
+        clock = FakeClock()
+        mine = clock.now
+        row = _session_row(
+            SessionStatus.RUNNING, last_started_at=clock.now + timedelta(seconds=120)
+        )
+
+        with pytest.raises(InvalidSessionTransition, match="reclaimed"):
+            self._service(row, clock).record_strategy_failure(
+                SESSION_ID, started_at=mine, **self._failure(clock)
+            )
+
+        assert row.runtime_flags is None
+
+    @pytest.mark.parametrize(
+        "status", [SessionStatus.CREATED, SessionStatus.STOPPED, SessionStatus.SEALED]
+    )
+    def test_a_row_that_is_not_running_refuses_the_write(self, status):
+        clock = FakeClock()
+        row = _session_row(status, last_started_at=clock.now)
+
+        with pytest.raises(InvalidSessionTransition):
+            self._service(row, clock).record_strategy_failure(
+                SESSION_ID, started_at=clock.now, **self._failure(clock)
+            )
+
+        assert row.runtime_flags is None
+
+    def test_an_unknown_session_raises_record_not_found(self):
+        clock = FakeClock()
+        service = SessionService(_repository(None), time_source=clock)
+
+        with pytest.raises(RecordNotFoundError):
+            service.record_strategy_failure(
+                SESSION_ID, started_at=clock.now, **self._failure(clock)
+            )
+
+    def test_the_write_never_assigns_status(self):
+        """AR37 is per-module, and this module is the one assigner — but this
+        particular write has no business touching ``status`` at all, and a
+        session whose strategy failed is still ``running`` (AC #1's letter).
+        """
+        clock = FakeClock()
+        row = _session_row(SessionStatus.RUNNING, last_started_at=clock.now)
+
+        self._service(row, clock).record_strategy_failure(
+            SESSION_ID, started_at=clock.now, **self._failure(clock)
+        )
+
+        assert row.status is SessionStatus.RUNNING
+
+    def test_keys_this_write_does_not_own_survive_the_rebuild(self):
+        """Story 2.8's ``connection_lost_at`` is already planned as an addition
+        to this document. A rebuild that kept only the keys this function knows
+        about would silently erase it on every strategy failure — "append,
+        never replace" must hold for the whole document, not just the two keys
+        named here (review fix, 2026-08-23).
+        """
+        clock = FakeClock()
+        row = _session_row(
+            SessionStatus.RUNNING,
+            last_started_at=clock.now,
+            runtime_flags={"v": 1, "connection_lost_at": "2026-08-23T14:00:00+00:00"},
+        )
+
+        self._service(row, clock).record_strategy_failure(
+            SESSION_ID, started_at=clock.now, **self._failure(clock)
+        )
+
+        assert row.runtime_flags["connection_lost_at"] == "2026-08-23T14:00:00+00:00"
+        assert len(row.runtime_flags["failed_strategies"]) == 1
+
+    def test_the_read_is_locked_because_the_write_rebuilds_the_document(self):
+        """Unlike ``record_activity``, this write takes ``FOR UPDATE`` (review
+        fix, 2026-08-23 — reversing the earlier pinned no-lock decision): it is
+        a read-modify-write of the whole ``runtime_flags`` document, so an
+        unlocked read lets a dispossessed incumbent rebuild the doc from a
+        pre-reclaim snapshot — stamping stale failures into the successor's
+        entire run and erasing entries the successor already recorded. The lock
+        serialises the reclaim guard with the ``-> running`` transition that
+        clears the column. The heartbeat's no-lock rationale does not carry
+        over: that write is two scalar stamps every 30 seconds; this one is
+        rare, because the guard latches per strategy.
+        """
+        clock = FakeClock()
+        row = _session_row(SessionStatus.RUNNING, last_started_at=clock.now)
+        repository = _repository(row)
+
+        SessionService(repository, time_source=clock).record_strategy_failure(
+            SESSION_ID, started_at=clock.now, **self._failure(clock)
+        )
+
+        (_args, kwargs) = repository.find_by_session_id.call_args
+        assert kwargs.get("for_update", False) is True

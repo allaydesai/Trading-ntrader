@@ -141,6 +141,7 @@ class SpyRecord:
     def __init__(self) -> None:
         self.calls: list[str] = []
         self.activity: list[tuple[datetime, datetime | None]] = []
+        self.failures: list[str] = []
         self.raises: BaseException | None = None
 
     def record_activity(self, *, at: datetime, bar_seen_at: datetime | None = None) -> None:
@@ -151,6 +152,24 @@ class SpyRecord:
 
     def mark_stopped(self) -> None:
         self.calls.append("mark_stopped")
+
+    def record_strategy_failure(
+        self,
+        *,
+        strategy_id: str,
+        spec_strategy_id: str,
+        error_type: str,
+        handler: str,
+        at: datetime,
+        detail: str | None = None,
+        all_failed: bool = False,
+    ) -> None:
+        """Story 2.7's third port method. Duck-typed here, but kept complete so
+        the double stays an honest `SessionRecordPort` rather than one that
+        happens to satisfy the calls this file makes today.
+        """
+        self.calls.append("record_strategy_failure")
+        self.failures.append(spec_strategy_id)
 
 
 def _permitting_verifier(mode: GateMode = GateMode.PAPER):
@@ -838,6 +857,60 @@ class TestSubscribeAndTradingRegisterRealThings:
         topics = [topic for topic, _ in node.trader.subscriptions]
         assert topics == ["data.bars.*"]
 
+    def test_note_bar_is_subscribed_before_any_strategy_is_added(self, registered_accounts):
+        """Pre-verified finding #12's ordering, pinned (review fix, 2026-08-23).
+
+        ``last_bar_at`` keeps advancing even when every strategy is dead
+        *because* the runner's ``note_bar`` subscribes at the ``subscribe``
+        phase — before any strategy subscribes at ``trading``, and the bus
+        dispatches equal-priority subscribers in subscription order. The named
+        mutation is moving the ``subscribe`` call into ``_phase_trading`` after
+        ``add_strategy``; this interleaved timeline goes red on exactly that.
+        The bus-side half (dispatch order == subscription order) is pinned
+        against a real ``MessageBus`` in the test below.
+        """
+        settings = _settings()
+        registered_accounts(settings)
+        node = TestLiveNode(run_seconds=0.01)
+        timeline: list[str] = []
+        trader = node.trader
+        original_subscribe, original_add = trader.subscribe, trader.add_strategy
+        trader.subscribe = lambda topic, handler: (
+            timeline.append("subscribe"),
+            original_subscribe(topic, handler),
+        )[-1]
+        trader.add_strategy = lambda strategy: (
+            timeline.append("add_strategy"),
+            original_add(strategy),
+        )[-1]
+
+        _runner(node, settings=settings).run()
+
+        assert "subscribe" in timeline and "add_strategy" in timeline
+        assert timeline.index("subscribe") < timeline.index("add_strategy")
+
+    def test_a_real_bus_dispatches_equal_priority_subscribers_in_subscription_order(self):
+        """The bus-side half of finding #12, against a real ``MessageBus``:
+        the measured dispatch order is ``['observer', 'note_bar',
+        <strategies in registration order>]`` because ``publish_c`` walks
+        equal-priority subscribers in the order they subscribed. A Nautilus
+        upgrade that changes this silently breaks AC #4's rationale — this is
+        where the repo finds out. (Constructing a ``MessageBus`` does not
+        initialise C logging — the same measured fact
+        ``test_session_runner_strategy_failure.py`` rests on.)
+        """
+        from nautilus_trader.common.component import MessageBus, TestClock
+        from nautilus_trader.model.identifiers import TraderId
+
+        msgbus = MessageBus(trader_id=TraderId("TESTER-000"), clock=TestClock())
+        order: list[str] = []
+        for name in ("observer", "note_bar", "sma_crossover", "momentum"):
+            msgbus.subscribe("data.bars.*", lambda _msg, name=name: order.append(name))
+
+        msgbus.publish("data.bars.AAPL", object())
+
+        assert order == ["observer", "note_bar", "sma_crossover", "momentum"]
+
     def test_an_unqualified_contract_is_reported_at_warning(self, registered_accounts):
         """IBKR *skips* a contract it will not qualify; nothing raises."""
         settings = _settings()
@@ -1139,6 +1212,12 @@ class TestImportPurity:
         "src.core.live_session_runner",
         "src.core.live_session_node",
         "src.core.live_session_steady_state",
+        # Story 2.7. The guard is `src/core`, is reached from the runner, and
+        # builds the record that crosses into `src/services` — so it is exactly
+        # the shape AR38 governs. Added here in the same commit that created it,
+        # because this list is hand-maintained: Story 2.6's file-size split moved
+        # `live_start.py` out of `live.py` and it silently escaped two guards.
+        "src.core.live_strategy_guard",
     )
 
     @pytest.mark.parametrize("module_name", MODULES)

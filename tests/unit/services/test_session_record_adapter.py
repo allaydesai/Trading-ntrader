@@ -345,3 +345,81 @@ class TestItReadsAndWritesARealRowShape:
 
         with pytest.raises(SessionReclaimedError):
             record.mark_stopped()
+
+
+class TestRecordStrategyFailure:
+    """Story 2.7's third port method, through the same one-transaction adapter."""
+
+    @staticmethod
+    def _fields(**overrides):
+        fields = {
+            "strategy_id": "SMACrossover-000",
+            "spec_strategy_id": "sma_crossover",
+            "error_type": "DivisionByZero",
+            "handler": "handle_bar",
+            "at": STARTED_AT + timedelta(seconds=90),
+            "detail": "[<class 'decimal.DivisionByZero'>]",
+        }
+        fields.update(overrides)
+        return fields
+
+    def test_it_opens_and_closes_exactly_one_session(self, patched):
+        factory = _RecordingFactory()
+        record = SqlSessionRecord(SESSION_ID, started_at=STARTED_AT, session_factory=factory)
+
+        record.record_strategy_failure(**self._fields())
+
+        assert (factory.entered, factory.exited) == (1, 1)
+
+    def test_the_failure_reaches_runtime_flags(self, monkeypatch):
+        from src.services import session_record as adapter_module
+
+        row = _row(SessionStatus.RUNNING)
+        repository = MagicMock()
+        repository.find_by_session_id.return_value = row
+        monkeypatch.setattr(adapter_module, "SyncTradingSessionRepository", lambda s: repository)
+        record = SqlSessionRecord(
+            SESSION_ID, started_at=STARTED_AT, session_factory=_RecordingFactory()
+        )
+
+        record.record_strategy_failure(**self._fields())
+
+        (entry,) = row.runtime_flags["failed_strategies"]
+        assert entry["spec_strategy_id"] == "sma_crossover"
+        assert entry["error_type"] == "DivisionByZero"
+        assert row.status is SessionStatus.RUNNING
+
+    def test_a_reclaimed_row_raises_the_ports_own_error(self, monkeypatch):
+        """The runner may not import ``src.db``, so the database exception is
+        translated at this boundary exactly as its two siblings do.
+        """
+        from src.core.live_session_record import SessionReclaimedError
+        from src.services import session_record as adapter_module
+
+        row = _row(SessionStatus.RUNNING, last_started_at=STARTED_AT + timedelta(seconds=120))
+        repository = MagicMock()
+        repository.find_by_session_id.return_value = row
+        monkeypatch.setattr(adapter_module, "SyncTradingSessionRepository", lambda s: repository)
+        record = SqlSessionRecord(
+            SESSION_ID, started_at=STARTED_AT, session_factory=_RecordingFactory()
+        )
+
+        with pytest.raises(SessionReclaimedError, match="reclaimed"):
+            record.record_strategy_failure(**self._fields())
+
+        assert row.runtime_flags is None
+
+    def test_a_row_that_is_no_longer_running_is_translated_the_same_way(self, monkeypatch):
+        from src.core.live_session_record import SessionReclaimedError
+        from src.services import session_record as adapter_module
+
+        row = _row(SessionStatus.STOPPED)
+        repository = MagicMock()
+        repository.find_by_session_id.return_value = row
+        monkeypatch.setattr(adapter_module, "SyncTradingSessionRepository", lambda s: repository)
+        record = SqlSessionRecord(
+            SESSION_ID, started_at=STARTED_AT, session_factory=_RecordingFactory()
+        )
+
+        with pytest.raises(SessionReclaimedError):
+            record.record_strategy_failure(**self._fields())

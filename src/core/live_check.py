@@ -175,6 +175,20 @@ _SAFE_MESSAGE_EXCEPTION_NAMES: frozenset[str] = frozenset(
         "InvalidSessionTransition",
         "RecordNotFoundError",
         "SessionReclaimedError",
+        # Story 2.7's, for `ntrader live start`. Its message names the specs
+        # that failed and points at the `strategy.start_failed` records; every
+        # word is this codebase's own, and the *third-party* text — whatever the
+        # strategy actually raised — is deliberately not in it. Withholding it
+        # would leave the operator a bare type name for a failure whose remedy
+        # is entirely in their own spec.
+        #
+        # This is the **fifth** name here where only three go into the outcome
+        # map above, so Story 2.5's Judgment call #8 (*"a fourth typed failure
+        # is the moment to revisit the marker protocol"*) is now overdue rather
+        # than approaching. Recorded in `deferred-work.md` for the Epic 2 retro;
+        # not changed here, because inventing a protocol mid-story is exactly
+        # the move that story warned against.
+        "NoStrategyStartedError",
     }
 )
 

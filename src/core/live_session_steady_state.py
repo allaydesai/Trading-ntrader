@@ -118,6 +118,12 @@ class SessionSteadyState:
         no_bars_after_seconds: The watchdog window.
         connection_reader: Injected only so the component tier can drive the
             monitor without an adapter in ``IB_CLIENTS``.
+        guard: Story 2.7's ``StrategyGuard``, whose queue this tick drains.
+            Optional and defaulting to ``None`` so Story 2.5's and 2.6's
+            construction sites keep working unmodified; a session without one
+            simply has nothing to drain. Duck-typed to two members
+            (``drain_pending()`` and ``all_failed``) rather than imported for a
+            type, which keeps this module's dependency direction unchanged.
     """
 
     def __init__(
@@ -132,7 +138,9 @@ class SessionSteadyState:
         interval_seconds: float = DEFAULT_HEARTBEAT_INTERVAL_SECONDS,
         no_bars_after_seconds: float = DEFAULT_NO_BARS_AFTER_SECONDS,
         connection_reader: ConnectionReader = read_ibkr_connection_status,
+        guard: Any = None,
     ) -> None:
+        self._guard = guard
         self._record = record
         self._settings = settings
         self._monitor = monitor
@@ -222,8 +230,74 @@ class SessionSteadyState:
             now = self._time_source()
             self.ticks += 1
             await self._write_activity(now)
+            await self._write_strategy_failures()
             self._observe_connection()
             self._warn_if_no_bars(now)
+
+    async def _write_strategy_failures(self) -> None:
+        """Drain the strategy guard's queue and persist it (Story 2.7, AC #10).
+
+        This is the *only* place a contained strategy failure reaches Postgres.
+        The guard itself queues and returns, because ``handle_*`` runs inline on
+        the event-loop thread inside ``MessageBus.publish_c`` — a round trip
+        there stalls the loop and delays the bar for every later-subscribed
+        strategy, which is a slower version of the starvation the guard exists
+        to fix.
+
+        Runs on the **same private executor** as :meth:`_write_activity` and for
+        the same measured reason (decision D2): ``asyncio.to_thread`` resolves to
+        the loop's default executor, which ``TradingNode.__init__`` replaces with
+        the kernel's and ``dispose()`` joins with ``wait=True`` — 59.81s of
+        blocked teardown on a wedged write. One worker, so this write and the
+        heartbeat's are serial rather than racing for the same row.
+
+        Bounded by construction: the guard latches, so this is at most one write
+        per strategy per process run, not one per bar.
+
+        Raises:
+            SessionReclaimedError: Another process owns this session now — the
+                one failure AR42 does not survive, surfaced *here* because there
+                is a boundary here and none inside a wrapped ``handle_*``
+                (*Judgment call #10*).
+        """
+        if self._guard is None:
+            return
+        pending = self._guard.drain_pending()
+        if not pending:
+            return
+        all_failed = bool(self._guard.all_failed)
+        loop = asyncio.get_running_loop()
+        unwritten = []
+        for failure in pending:
+            write = functools.partial(
+                self._record.record_strategy_failure,
+                strategy_id=failure.strategy_id,
+                spec_strategy_id=failure.spec_strategy_id,
+                error_type=failure.error_type,
+                handler=failure.handler,
+                at=failure.at,
+                detail=failure.detail,
+                all_failed=all_failed,
+            )
+            try:
+                await loop.run_in_executor(self._executor, write)
+            except SessionReclaimedError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - AR42: a DB hiccup must not kill a session
+                # Re-queued for the next tick (review fix, 2026-08-23): the
+                # guard latches per strategy, so the retry backlog is bounded
+                # by the session's strategy count — not the unbounded state
+                # NFR2 forbids — and dropping the record would blind AC #4's
+                # cross-process visibility for the rest of a multi-week run
+                # over a one-tick Postgres hiccup.
+                unwritten.append(failure)
+                self._log.error(
+                    "session.strategy_record_failed",
+                    spec_strategy_id=failure.spec_strategy_id,
+                    error_type=type(exc).__name__,
+                )
+        if unwritten:
+            self._guard.requeue(unwritten)
 
     async def _write_activity(self, now: datetime) -> None:
         """Persist the tick, surviving anything but a loss of ownership.

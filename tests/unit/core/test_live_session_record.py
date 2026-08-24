@@ -28,12 +28,26 @@ class _HandWrittenRecord:
     def __init__(self) -> None:
         self.activity: list[tuple[datetime, datetime | None]] = []
         self.stopped = 0
+        self.failures: list[str] = []
 
     def record_activity(self, *, at: datetime, bar_seen_at: datetime | None = None) -> None:
         self.activity.append((at, bar_seen_at))
 
     def mark_stopped(self) -> None:
         self.stopped += 1
+
+    def record_strategy_failure(
+        self,
+        *,
+        strategy_id: str,
+        spec_strategy_id: str,
+        error_type: str,
+        handler: str,
+        at: datetime,
+        detail: str | None = None,
+        all_failed: bool = False,
+    ) -> None:
+        self.failures.append(spec_strategy_id)
 
 
 class _MissingMarkStopped:
@@ -44,12 +58,15 @@ class _MissingMarkStopped:
 class TestTheProtocolShape:
     """AR32's *"record port"*, in the narrowest shape that satisfies AR38."""
 
-    def test_the_port_declares_exactly_two_methods(self):
-        """An exact set, not a subset: a third method would be a design change
+    def test_the_port_declares_exactly_three_methods(self):
+        """An exact set, not a subset: a further method would be a design change
         the runner and every adapter would silently inherit.
+
+        ``record_strategy_failure`` is Story 2.7's — the third and, so far, last
+        thing a *running* session needs from its own row.
         """
         declared = {name for name in vars(SessionRecordPort) if not name.startswith("_")}
-        assert declared == {"record_activity", "mark_stopped"}
+        assert declared == {"record_activity", "mark_stopped", "record_strategy_failure"}
         # `Protocol` synthesises `__init__` and `_is_protocol`; the public
         # surface is what a caller and an adapter have to agree on.
         assert SessionRecordPort._is_protocol is True

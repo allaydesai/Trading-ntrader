@@ -411,6 +411,11 @@ def start(session: str, connect_timeout: float) -> None:
         # No `release_quietly` here: the runner's own `finally` has already
         # marked the row stopped, and a second `transition(to=STOPPED)` would
         # raise `InvalidSessionTransition` from inside the error handler.
+        # Contained failures are printed even on this path (review fix,
+        # 2026-08-23): a run that ended by raising — a reclaim above all — may
+        # be exactly the run whose failures never reached `runtime_flags`, so
+        # this report is the operator's only in-process trace of them.
+        _print_contained_failures(runner)
         exit_with(exc)
 
     _print_stop_result(session, runner)
@@ -461,11 +466,68 @@ def _print_stop_result(session: str, runner: LiveSessionRunner) -> None:
             markup=False,
             highlight=False,
         )
+    _print_contained_failures(runner)
     if runner.record_release_failed:
         console.print(
             "⚠️  The session stopped cleanly but its record could not be marked stopped. The "
             "row still reads `running`; the next `live start` will be refused until its "
             "heartbeat goes stale (90s).",
+            markup=False,
+            highlight=False,
+        )
+
+
+def _print_contained_failures(runner: LiveSessionRunner) -> None:
+    """Name the strategies that stopped trading during this run (Story 2.7).
+
+    Prints nothing at all on a clean run, which is the common case. Exit code
+    stays **0** either way: the session ran and it stopped. AR28's table has no
+    code for "a strategy failed", and Story 1.7 recorded that a CLI inventing
+    one outside its own documented table is worse than reporting a generic
+    failure.
+
+    ⚠️ AR36's vocabulary: *contained*, *failed*, *degraded* — never *halted*,
+    *killed* or *paused*. ``tests/unit/core/test_live_stop_path_is_inert.py``
+    enforces that word list against the runner and the signal policy, which do
+    not cover this module, so ``test_live_cli.py`` asserts it here directly.
+    """
+    failures = runner.contained_failures
+    if not failures:
+        return
+    plural = "strategy was" if len(failures) == 1 else "strategies were"
+    console.print(
+        f"⚠️  {len(failures)} {plural} contained during this run and stopped trading:",
+        markup=False,
+        highlight=False,
+    )
+    for failure in failures:
+        # The Nautilus id is empty when the strategy never started, so it is
+        # rendered only when there is one rather than as a bare "()".
+        identity = f" ({failure.strategy_id})" if failure.strategy_id else ""
+        console.print(
+            f"      {failure.spec_strategy_id}{identity} — {failure.error_type} in "
+            f"{failure.handler} at {failure.at:%H:%M:%SZ}",
+            markup=False,
+            highlight=False,
+        )
+    # Branch on the runner's own fact (review fix, 2026-08-23): the old
+    # unconditional "the other strategies were unaffected" was false in the
+    # most common trigger — a single-strategy session has no other strategies,
+    # and when every strategy failed the claim was an affirmative lie.
+    if runner.all_strategies_failed:
+        console.print(
+            "    Every strategy in this session was contained. The session kept running and "
+            "still holds its broker connection, but it can no longer trade. See "
+            "`strategy.failed` in the log for each traceback, and `runtime_flags` on the "
+            "session's row for the same facts from another process.",
+            markup=False,
+            highlight=False,
+        )
+    else:
+        console.print(
+            "    The session kept running; the strategies not named above were unaffected. See "
+            "`strategy.failed` in the log for the traceback, and `runtime_flags` on the "
+            "session's row for the same facts from another process.",
             markup=False,
             highlight=False,
         )

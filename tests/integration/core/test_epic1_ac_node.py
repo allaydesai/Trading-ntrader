@@ -496,6 +496,28 @@ _STDLIB_AND_FIRST_PARTY = frozenset(
         # `run_in_executor` (unlike `to_thread`) does not accept. Both stdlib.
         "concurrent",
         "functools",
+        # Story 2.7's `src/core/live_strategy_guard.py`, both stdlib and both
+        # added by hand with the reason, the same discipline Story 2.4 applied
+        # to `socket` and Story 2.6 to `signal`/`sys` — do NOT swap this
+        # allowlist for `sys.stdlib_module_names`, which Story 2.4's review
+        # rejected explicitly because an auto-derived list waves the next
+        # import through in silence.
+        #
+        # `traceback`: AC #1 requires the contained failure's traceback in the
+        # log, and it must be an EXPLICIT rendered field rather than
+        # `exc_info=True` — measured, `structlog.testing.capture_logs` records
+        # only `exc_info: True` and never a string, so the redaction NFR26
+        # needs could be neither applied nor asserted.
+        #
+        # `re`: AC #8's `redact_accounts`. `live_gate.mask_account` is a
+        # WHOLE-VALUE masker (measured:
+        # `mask_account("Error 321: account DU4076626 is not managed")` ->
+        # `'***ged'`), so redacting free text in place needs a per-token
+        # substitution, which needs a pattern. The story anticipated
+        # `traceback` only; `re` is the second name this guard caught, which is
+        # the guard doing its job.
+        "re",
+        "traceback",
         "src",
         "time",
         "typing",

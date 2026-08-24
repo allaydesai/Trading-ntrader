@@ -52,6 +52,12 @@ class SpyRecord:
         self.activity: list[tuple[datetime, datetime | None]] = []
         self.raises: BaseException | None = None
         self.stopped = 0
+        #: Story 2.7's third port method. `(spec_strategy_id, all_failed)` per
+        #: call, plus the thread each ran on — AC #10 requires the write to
+        #: leave the event-loop thread, and a name is how that is asserted.
+        self.failures: list[tuple[str, bool]] = []
+        self.failure_threads: list[str] = []
+        self.failure_raises: BaseException | None = None
 
     def record_activity(self, *, at: datetime, bar_seen_at: datetime | None = None) -> None:
         self.activity.append((at, bar_seen_at))
@@ -60,6 +66,22 @@ class SpyRecord:
 
     def mark_stopped(self) -> None:
         self.stopped += 1
+
+    def record_strategy_failure(
+        self,
+        *,
+        strategy_id: str,
+        spec_strategy_id: str,
+        error_type: str,
+        handler: str,
+        at: datetime,
+        detail: str | None = None,
+        all_failed: bool = False,
+    ) -> None:
+        self.failures.append((spec_strategy_id, all_failed))
+        self.failure_threads.append(threading.current_thread().name)
+        if self.failure_raises is not None:
+            raise self.failure_raises
 
 
 class CapturingLog:
@@ -894,3 +916,174 @@ class TestReleaseRecord:
         assert record.stopped == 1
         assert log.records == []
         assert failed is False
+
+
+class _FakeGuard:
+    """A ``StrategyGuard``-shaped double: the tick only needs two members."""
+
+    def __init__(self, pending=(), all_failed=False) -> None:
+        self._pending = list(pending)
+        self.all_failed = all_failed
+        self.drains = 0
+
+    def drain_pending(self):
+        self.drains += 1
+        drained = tuple(self._pending)
+        self._pending.clear()
+        return drained
+
+    def requeue(self, failures):
+        self._pending[:0] = failures
+
+    def queue(self, *failures):
+        self._pending.extend(failures)
+
+
+def _failure(spec_strategy_id="sma_crossover", **overrides):
+    from src.core.live_strategy_guard import StrategyFailure
+
+    fields = {
+        "strategy_id": "SMACrossover-000",
+        "spec_strategy_id": spec_strategy_id,
+        "error_type": "DivisionByZero",
+        "handler": "handle_bar",
+        "at": STARTED_AT,
+        "detail": "[<class 'decimal.DivisionByZero'>]",
+    }
+    fields.update(overrides)
+    return StrategyFailure(**fields)
+
+
+class TestTheTickDrainsTheStrategyGuard:
+    """Story 2.7, AC #10 — the write happens *here*, not in the bar handler.
+
+    ``handle_*`` runs inline on the event-loop thread inside
+    ``MessageBus.publish_c``. A Postgres round trip there stalls the loop and
+    delays the bar for every later-subscribed strategy — partially recreating
+    the AC #2 starvation the guard exists to fix — and this repo has already
+    measured that class of write blocking the node for **59.81s** (decision D2).
+    So the guard queues and this tick drains.
+    """
+
+    async def test_a_queued_failure_is_written_on_the_tick(self):
+        clock, record, log = FakeClock(), SpyRecord(), CapturingLog()
+        guard = _FakeGuard([_failure()])
+        state = _steady_state(clock, record, log, guard=guard)
+
+        await _run_ticks(state, 1)
+
+        assert record.failures == [("sma_crossover", False)]
+
+    async def test_the_write_runs_on_the_objects_own_executor_never_the_loop(self):
+        """⚠️ Never ``asyncio.to_thread``, whose default executor is the
+        kernel's — the one ``TradingNode.dispose()`` joins with ``wait=True``.
+        Asserted by **thread name**, so a mutation back to ``to_thread`` fails
+        rather than merely being slower.
+        """
+        clock, record, log = FakeClock(), SpyRecord(), CapturingLog()
+        state = _steady_state(clock, record, log, guard=_FakeGuard([_failure()]))
+
+        await _run_ticks(state, 1)
+
+        assert record.failure_threads
+        assert all(name.startswith("session-heartbeat-write") for name in record.failure_threads), (
+            record.failure_threads
+        )
+
+    async def test_an_empty_queue_costs_no_write_at_all(self):
+        clock, record, log = FakeClock(), SpyRecord(), CapturingLog()
+        guard = _FakeGuard()
+        state = _steady_state(clock, record, log, guard=guard)
+
+        await _run_ticks(state, 3)
+
+        assert record.failures == []
+        assert guard.drains == 3
+
+    async def test_two_queued_failures_are_both_written(self):
+        clock, record, log = FakeClock(), SpyRecord(), CapturingLog()
+        guard = _FakeGuard([_failure(), _failure("momentum")], all_failed=True)
+        state = _steady_state(clock, record, log, guard=guard)
+
+        await _run_ticks(state, 1)
+
+        assert record.failures == [("sma_crossover", True), ("momentum", True)]
+
+    async def test_a_failure_queued_after_the_first_tick_is_written_on_the_next(self):
+        clock, record, log = FakeClock(), SpyRecord(), CapturingLog()
+        guard = _FakeGuard()
+        state = _steady_state(clock, record, log, guard=guard)
+        guard.queue(_failure())
+
+        await _run_ticks(state, 2)
+
+        assert record.failures == [("sma_crossover", False)]
+
+    async def test_a_write_failure_is_logged_and_the_session_continues(self):
+        """AR42: a database hiccup must never kill a trading session."""
+        clock, record, log = FakeClock(), SpyRecord(), CapturingLog()
+        record.failure_raises = RuntimeError("postgres is down")
+        state = _steady_state(clock, record, log, guard=_FakeGuard([_failure()]))
+
+        await _run_ticks(state, 2)
+
+        assert ("error", "session.strategy_record_failed") in [
+            (level, event) for level, event, _ in log.records
+        ]
+        assert state.ticks == 2
+
+    async def test_a_failed_write_is_retried_on_the_next_tick_and_lands(self):
+        """Review fix, 2026-08-23: a drained failure whose write hit a
+        transient DB error used to be dropped forever — blinding AC #4's
+        cross-process visibility for the rest of a multi-week run over a
+        one-tick hiccup. The guard latches per strategy, so the retry backlog
+        is bounded by the session's strategy count, not the unbounded state
+        NFR2 forbids. Tick 1: the write raises and the failure is re-queued.
+        Tick 2: Postgres is back, and the record lands.
+        """
+        clock, record, log = FakeClock(), SpyRecord(), CapturingLog()
+        attempts = {"n": 0}
+        original = record.record_strategy_failure
+
+        def flaky_once(**kwargs):
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                raise RuntimeError("postgres is down")
+            original(**kwargs)
+
+        record.record_strategy_failure = flaky_once
+        guard = _FakeGuard([_failure()])
+        state = _steady_state(clock, record, log, guard=guard)
+
+        await _run_ticks(state, 2)
+
+        assert attempts["n"] == 2
+        assert record.failures == [("sma_crossover", False)]
+        assert guard.drains == 2
+
+    async def test_a_reclaim_on_the_failure_write_ends_the_loop(self):
+        """The one exception AR42 does not survive, on this path as on the
+        heartbeat's: two processes on one broker account is NFR6's catastrophe.
+
+        It reaches a boundary *here* — the tick — rather than propagating out of
+        a wrapped ``handle_*``, where the measured outcome is ``rc=1`` with zero
+        bytes of output (*Judgment call #10*).
+        """
+        clock, record, log = FakeClock(), SpyRecord(), CapturingLog()
+        record.failure_raises = SessionReclaimedError("taken by another process")
+        state = _steady_state(clock, record, log, guard=_FakeGuard([_failure()]))
+
+        with pytest.raises(SessionReclaimedError):
+            await _run_ticks(state, 3)
+
+    async def test_a_session_with_no_guard_ticks_exactly_as_before(self):
+        """The guard is optional, so Story 2.5's and 2.6's construction sites
+        and every existing test keep working unmodified.
+        """
+        clock, record, log = FakeClock(), SpyRecord(), CapturingLog()
+        state = _steady_state(clock, record, log)
+
+        await _run_ticks(state, 2)
+
+        assert state.ticks == 2
+        assert record.failures == []

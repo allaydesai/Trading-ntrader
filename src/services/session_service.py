@@ -217,9 +217,10 @@ def _load_or_raise(
     ``for_update`` is the caller's decision and not a default anyone should
     change casually. ``transition()`` needs the lock because it *decides*
     across a read-then-write window another process may enter (Story 2.3
-    AC #6); ``record_activity()`` must not take it, because a heartbeat every
-    30 seconds that held an exclusive row lock would block every ``live
-    status`` for the life of the session.
+    AC #6); ``record_strategy_failure()`` needs it because it read-modify-writes
+    a whole document (review fix, 2026-08-23); ``record_activity()`` must not
+    take it, because a heartbeat every 30 seconds that held an exclusive row
+    lock would block every ``live status`` for the life of the session.
     """
     trading_session = repository.find_by_session_id(session_id, for_update=for_update)
     if trading_session is None:
@@ -320,6 +321,15 @@ def _apply_transition(
     trading_session.status = to
     for column in _TIMESTAMPS_BY_TARGET.get(to, ()):
         setattr(trading_session, column, now)
+    if to is SessionStatus.RUNNING:
+        # Story 2.7 (AC #4). Every `-> running` edge starts a new process run,
+        # and `runtime_flags` records facts about *one* run. Without this clear,
+        # `live status` reports a strategy that failed three runs ago against a
+        # session that is currently healthy — a stale fact presented as a live
+        # one. Deliberately only this edge: a stop must leave the failures
+        # readable, or an operator investigating why a session stopped trading
+        # loses the evidence at the moment they need it.
+        trading_session.runtime_flags = None
     return trading_session
 
 
@@ -391,6 +401,122 @@ def _stamp_activity(
     trading_session.last_heartbeat_at = at
     if bar_seen_at is not None:
         trading_session.last_bar_at = bar_seen_at
+    return trading_session
+
+
+#: The ``runtime_flags`` document's schema version. Bumped only when a key's
+#: *meaning* changes; Story 2.8 adding ``connection_lost_at`` is an addition,
+#: not a bump.
+RUNTIME_FLAGS_VERSION = 1
+
+
+def _record_strategy_failure(
+    trading_session: TradingSession,
+    *,
+    started_at: datetime,
+    strategy_id: str,
+    spec_strategy_id: str,
+    error_type: str,
+    handler: str,
+    at: datetime,
+    detail: str | None = None,
+    all_failed: bool = False,
+) -> TradingSession:
+    """Append one contained strategy failure to ``runtime_flags`` (Story 2.7).
+
+    At module scope for the same two reasons :func:`_apply_transition` is: AR37
+    is enforced **per file**, so this is exactly as compliant here as it would
+    be as a method, and ``SessionService`` is held to CLAUDE.md's 100-line class
+    limit. (It had 17 lines of headroom, measured by AST — enough for a plain
+    method — but the module-level body plus a thin delegator is the shape the
+    other two writes already use, and matching them beats saving a level of
+    indirection.)
+
+    **Never assigns ``status``.** A session whose strategy failed is still
+    ``running`` — that is AC #1's letter, and Judgment call #7's named
+    trade-off. AR37's AST guard matches only ``t.attr == "status"``, so this
+    write is invisible to it, which is correct rather than a loophole.
+
+    Two guards, the same two the heartbeat has and for the same reason: writing
+    a failure into a row this process no longer owns puts a stale fact in a
+    successor's record, and a row that is not ``running`` has no current run to
+    record anything about.
+
+    **The row is loaded ``FOR UPDATE``** (review fix, 2026-08-23), unlike the
+    heartbeat's: this is a read-modify-write of the whole ``runtime_flags``
+    document, so an unlocked read lets a dispossessed incumbent rebuild the doc
+    from a pre-reclaim snapshot — stamping stale failures into the successor's
+    entire run and erasing entries the successor already recorded. The lock
+    serialises the reclaim guard with the ``-> running`` transition that clears
+    the column. The heartbeat's no-lock rationale does not carry over: that
+    write is two scalar stamps every 30 seconds; this one is rare, because the
+    guard latches per strategy.
+
+    ⚠️ **The document is rebuilt and reassigned, never mutated in place.**
+    SQLAlchemy does not track in-place mutation of a plain ``JSONB`` column, so
+    ``trading_session.runtime_flags["failed_strategies"].append(...)`` silently
+    never persists — the write appears to succeed, the test passes against the
+    in-memory object, and the column never changes. Both the outer dict and the
+    inner list are new objects.
+
+    Args:
+        trading_session: The row to append to, already loaded ``FOR UPDATE`` by
+            the caller — see :meth:`SessionService.record_strategy_failure` for
+            why this write locks where the heartbeat does not.
+        started_at: This process's own ``-> running`` instant, for the ownership
+            guard.
+        strategy_id: The Nautilus id, or ``""`` for a strategy that never
+            started.
+        spec_strategy_id: The spec's own id — what the operator wrote.
+        error_type: The exception's class name. Never the exception.
+        handler: ``"handle_bar"``, ``"handle_event"`` or ``"start"``.
+        at: When the failure was contained.
+        detail: One **already-redacted** line of the message (NFR26 is applied
+            at the catch site, in ``live_strategy_guard``, because that is where
+            the raw text exists). No traceback: that belongs in the log sink.
+        all_failed: Whether every strategy in the session has now failed. Never
+            downgraded — once true it stays true, because a later write must not
+            report a dead session as partially alive again.
+
+    Returns:
+        The same ``TradingSession``, mutated in place.
+
+    Raises:
+        InvalidSessionTransition: Either guard refused.
+    """
+    current = _as_status(
+        trading_session.status, f"The stored status of session {trading_session.name!r}"
+    )
+    if current is not SessionStatus.RUNNING:
+        raise InvalidSessionTransition(
+            f"Session {trading_session.name!r} is {current.value!r}, not running, so a strategy "
+            "failure cannot be recorded against it — the run it would describe is over."
+        )
+
+    _refuse_if_reclaimed(trading_session, started_at=started_at)
+
+    existing = trading_session.runtime_flags or {}
+    entries = list(existing.get("failed_strategies", ()))
+    entries.append(
+        {
+            "strategy_id": strategy_id,
+            "spec_strategy_id": spec_strategy_id,
+            "error_type": error_type,
+            "handler": handler,
+            "at": at.isoformat(),
+            "detail": detail or "",
+        }
+    )
+    # `**existing` first (review fix, 2026-08-23): keys this function does not
+    # know about — Story 2.8's `connection_lost_at` is already planned — must
+    # survive the rebuild, or "append, never replace" holds only for the keys
+    # named below.
+    trading_session.runtime_flags = {
+        **existing,
+        "v": RUNTIME_FLAGS_VERSION,
+        "all_failed": bool(existing.get("all_failed", False)) or all_failed,
+        "failed_strategies": entries,
+    }
     return trading_session
 
 
@@ -476,4 +602,19 @@ class SessionService:
             started_at=started_at,
             at=self._time_source() if at is None else at,
             bar_seen_at=bar_seen_at,
+        )
+
+    def record_strategy_failure(
+        self, session_id: UUID, *, started_at: datetime, **failure: object
+    ) -> TradingSession:
+        """Append a contained strategy failure; rules in :func:`_record_strategy_failure`.
+
+        Loads **``FOR UPDATE``**, unlike the heartbeat — the why lives with
+        the rules, in :func:`_record_strategy_failure`.
+        """
+        trading_session = _load_or_raise(self._repository, session_id, for_update=True)
+        return _record_strategy_failure(
+            trading_session,
+            started_at=started_at,
+            **failure,  # type: ignore[arg-type]
         )

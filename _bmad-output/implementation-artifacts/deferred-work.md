@@ -860,6 +860,19 @@ after dedup. Every item below was re-verified by execution before being recorded
   2.8:** Story 2.7 makes a strategy failure visible and Story 2.8 derives `stale` from the heartbeat
   — decide there whether that is sufficient or a separate nullable column is still warranted.
 
+  **~~Answered by Story 2.7 (2026-08-23), one half closed.~~** The column question is settled and was
+  settled *here* rather than at 2.8: `trading_sessions.runtime_flags` (nullable JSONB, migration
+  `b7c419e2a3d8`) ships with the story that writes it. The reasoning, decided with Allay, is that
+  containment **without** persistence is a regression rather than a neutral omission — today
+  `os._exit(1)` leaves the row `running` with a frozen heartbeat, which 2.8 renders `stale`; after
+  containment the session heartbeats normally and `note_bar` keeps advancing `last_bar_at`, so 2.8
+  would render `trading` for a session where every strategy is dead. The cost argument in the
+  paragraph above — *"this phase's single migration is spent"* — is therefore **no longer true**, and
+  anywhere else it is cited as a reason (see the `SessionReclaimedError` fencing-token item below) it
+  must be re-argued on its own merits. **The no-fifth-status half stands unchanged**: a failed
+  *strategy* is not a session lifecycle state. What remains open is only Story 2.8's own question of
+  how `degraded` covers both senses AR32 names.
+
 - **Unit-tier tests transitively load Nautilus.** Every `StrategySpec` construction in
   `tests/unit/models/test_session_spec.py` triggers the lazy `src.core.live_market_data` import, which
   pulls in `nautilus_trader` — contradicting the documented "unit = parallel, no Nautilus" tier rule,
@@ -1237,7 +1250,14 @@ one superseded) and five were read and left open with updated notes. The items b
   `live_session_steady_state.py` **472**, `src/cli/commands/live.py` **444** (after splitting
   `claim_session`/`exit_with`/`release_quietly` into the new `src/cli/commands/live_start.py`,
   **99** lines). `live_node_builder.py` itself is untouched by this story and remains at 496 — its
-  own headroom is still Story 2.7's to budget for. The original text follows for context. Story 2.4
+  own headroom is still Story 2.7's to budget for. **Budgeted and spent (Story 2.7, 2026-08-23):**
+  the three engine configs took it to **536**. Going over was the sanctioned option provided it is
+  disclosed, and it is disclosed here; the alternative the story offered — extracting
+  `_reconcile_bar_types` + `_actor_configs` (~60 lines) into a new module — was **declined**, because
+  it would move node-assembly helpers out of the module whose entire job is node assembly purely to
+  satisfy a cap nothing enforces, and every new `live_*` module has to be hand-added to three
+  separate guard lists (this file already records that coverage shrinking through exactly that
+  omission). **Partially closes, not closes.** The original text follows for context. Story 2.4
   already carved `live_connection_probe.py` out of the builder once; Story 2.5 added the six
   timeouts and two arguments and had to compress comments to stay under. The runner needed two
   splits of its own to fit — `live_session_node.py` (the connect wait, strategy materialisation,
@@ -1375,6 +1395,19 @@ one superseded) and five were read and left open with updated notes. The items b
   (a guarded, non-fatal teardown step), and `session.shutdown_problems` was already unenumerated
   per the note above and remains so. Same action, same owner: the Epic 2 retro.
 
+  **Story 2.7 update (2026-08-23) — appended to this same item, still not a second one.** Six more,
+  none of them in AR41's enumeration, and the first four open a **new `strategy.*` namespace**
+  (unused before this story, and analogous to the enumerated `order.*` / `connection.*` families —
+  the retro should decide whether AR41 enumerates the namespace or the individual names):
+  `strategy.failed` (ERROR — `strategy_id`, `spec_strategy_id`, `error_type`, `handler`, a **redacted**
+  `traceback`), `strategy.degraded` (WARNING), `strategy.start_failed` (ERROR),
+  `session.all_strategies_failed` (ERROR) and `session.strategy_record_failed` (ERROR, AR42's
+  "the DB write failed and the session continues" event, emitted from both the guard and the
+  steady-state tick). ⚠️ Note for whoever amends AR41: AR36's vocabulary scan word-matches
+  `pause|halt|kill|close|finalize` against operator-facing strings, so `strategy.halted` — the
+  obvious name — would fail the build. *Contained*, *failed*, *degraded* are the sanctioned words.
+  Same action, same owner: the Epic 2 retro.
+
 - **`tests/component/core/test_live_check_node.py` is a NEW file where Story 2.5's Files table says
   MOD.** `live_check_node.py` never had a suite of its own; its behaviour was covered indirectly
   through `test_live_check_driver.py`. The new `max_connection_attempts` parameter exists precisely
@@ -1500,7 +1533,11 @@ tracked in that story's `### Review Findings` section, not here.
   here — but Task 11's "Confirm ... every class under 100" subtask is marked `[x]` while three
   classes violate it, and that false claim *is* patched by this review. The guideline is documented
   in CLAUDE.md and `project-context.md` and enforced by nothing in the repo (no ruff rule, no test),
-  which is why it drifted silently across two stories. **Action:** either enforce it (a unit-tier
+  which is why it drifted silently across two stories. **Re-measured by Story 2.7 (2026-08-23), all
+  larger than when this item was written and one of them new:** `LiveSessionRunner` = **537**,
+  `StrategyGuard` = **320** (new, Story 2.7), `LiveBarObserver` = **215**, `SessionSteadyState` =
+  **240**, `SessionStopSignals` = **195**. Story 2.7 discloses its own 320 in the module docstring
+  rather than repeating Story 2.6's false "every class under 100" claim. **Action:** either enforce it (a unit-tier
   AST guard, the shape this repo already uses for AR37) or amend the guideline to say what is
   actually intended for orchestration classes. Flag for the Epic 2 retro.
 
@@ -1525,6 +1562,33 @@ tracked in that story's `### Review Findings` section, not here.
   is ~80 lines — since it is neither the sequence nor the `finally`), or record the runner as a
   sanctioned exception the way `src/cli/commands/catalog.py` (732) already is. Note the cap is
   documented but enforced by nothing — no ruff rule, no test — which is how it drifted silently.
+
+  ⚠️ **Two numbers above are wrong and are corrected here.** The runner was **581** at `107ee14`, not
+  576. And the 732-line sanctioned exception is **`src/cli/commands/import_data.py`**, not
+  `catalog.py` — `catalog.py` is **263** lines. Both errors have been carried forward unchallenged.
+
+  **~~Answered by Story 2.7 (2026-08-23): recorded as a sanctioned exception, not split.~~** Decided
+  with Allay. The runner's `run()`/`finally` ordering is load-bearing and hard-won across three
+  stories, and the pre-agreed split line explicitly excludes the two places it would have to be cut.
+  Story 2.7 adds ~85 lines of wiring and per-spec containment, taking it to **666** — and the
+  2026-08-23 code-review fixes (the teardown flush, `all_strategies_failed`, the corrected
+  `_fault_quietly` measurements) take it to **734, measured**. The `__init__`
+  candidate above stays on the table for whoever next needs room, and the underlying observation —
+  that the cap is enforced by nothing — is what the class-size item below is for.
+
+  **Two more files to record while here.** `src/core/live_session_steady_state.py` was **507** before
+  this story and **574** after the guard-queue drain (the 567 first recorded here was a stale
+  pre-format measurement — caught by the 2026-08-23 code review), then **581** after that review's
+  retry-requeue fix.
+  `src/core/live_strategy_guard.py` shipped **new at 574**, now **634** after the review fixes
+  (the `BaseException` boundary, `requeue`, the configured-account redaction):
+  roughly 180 lines of code and the rest the
+  measured Nautilus findings the story required be written down in the module rather than only in the
+  story file. Its one clean split candidate is the redaction trio (`redact_accounts`,
+  `_one_redacted_line`, `_redacted_traceback` and their pattern — ~90 lines) into a
+  `live_redaction.py`, which would land the guard at ~485. **Not taken**, because Story 2.7's AC #8
+  names `redact_accounts` as living *in* `live_strategy_guard.py`; moving it needs an AC amendment,
+  not a dev-time decision.
 
 - **The heartbeat write is bounded against a wedged Postgres only up to interpreter exit.**
   Decision D2 (2026-08-23) moved the write onto `SessionSteadyState`'s own one-worker pool, so
@@ -1563,3 +1627,143 @@ tracked in that story's `### Review Findings` section, not here.
   case that actually matters — a session that opened its **own** position, stopped, and had it
   flattened by `on_stop()` — has still never been observed. **Action:** re-run P7 inside RTH before
   Story 3.1 claims to remove that call, so there is a before/after pair rather than only an after.
+
+## Deferred from: story-2.7 (2026-08-23)
+
+- **The owner/epoch fencing column is re-opened, and its one cost argument is gone.**
+  `SessionReclaimedError`'s docstring (`src/core/live_session_record.py`) rejected a fencing token
+  *"because this phase's single migration is spent"* — a reason **Story 2.7's own migration
+  falsified**. The hazard it names is unchanged and is the worst thing this phase can produce: up to
+  one heartbeat interval (~30s) of **two live processes on one broker account**, NFR6's catastrophe,
+  detected rather than prevented. The docstring has been restated to say so rather than left citing a
+  dead reason. **Action:** decide the fencing column on its merits — it changes the meaning of every
+  write on `SessionRecordPort`, so it belongs to a story that owns that port, not to a bystander.
+  Story 2.8 (`live status`) is the natural place, since it is what makes a stale-but-fresh-looking
+  row operator-visible.
+
+- **~~`redact_accounts` reads no configuration, so a non-standard account id is not redacted.~~**
+  **CLOSED by the 2026-08-23 code review (decision with Allay):** the Acceptance Auditor flagged the
+  omission as a unilateral narrowing of AC #8's pinned contract (*"plus the configured `TWS_ACCOUNT`
+  when set"* was part of the pinned surface, not a comment). Implemented as the cheap version this
+  entry proposed: `redact_accounts(text, *, account=None)` and `StrategyGuard(..., account=...)`
+  take the already-loaded **string** — no settings import, no I/O on the event-loop thread — and the
+  configured value is redacted case-insensitively, closing the lowercased-identifier leak too. The
+  residual is unchanged in kind but smaller: an account id that is neither token-shaped nor the
+  configured value is still not redacted (e.g. the second entry of a multi-account
+  `TWS_ACCOUNT="DU…,U…"` — the guard receives the raw string and matches it whole).
+
+- **`NoStrategyStartedError` is the FIFTH name in `live_check._SAFE_MESSAGE_EXCEPTION_NAMES` where
+  only three go into `_OUTCOME_BY_EXCEPTION_NAME`.** Story 2.5's *Judgment call #8* said a **fourth**
+  typed failure was the moment to revisit the marker-protocol idea; `SessionReclaimedError` made four
+  and this makes five, so the question is now overdue rather than approaching. The two sets answer
+  genuinely different questions (*"is this text ours to show?"* versus *"which exit code describes
+  it?"*), which is why the divergence keeps growing. **Action for the Epic 2 retro:** a marker base
+  class or a protocol, decided once, rather than a sixth hand-maintained string.
+
+- **The `order_id_tag` collision is a latent startup failure that nothing prevents at create time.**
+  Measured against a real `Trader`: `Trader.add_strategy` assigns `order_id_tag = f"{len(existing):03d}"`
+  to any strategy whose tag is `None`, rewrites the `StrategyId`, then raises if the tag is taken —
+  so `mean_reversion, sma_crossover` raises `RuntimeError: order_id_tag conflict for '001'` while
+  `sma_crossover, mean_reversion` is fine. A `SessionSpec` that validated perfectly at create time
+  can therefore fail at `trading` for an operator's **choice of strategy order**. Story 2.7's per-spec
+  `except` *contains* it (the session starts with the other strategies and the failure is recorded),
+  which is strictly better than the crash it used to be, but the operator still learns about it at
+  start time rather than at create time. **Action:** a create-time validator, or an explicit
+  `order_id_tag` per spec — the latter is probably right, since it also makes client order IDs
+  stable across a re-ordered spec, which Epic 3 cares about.
+
+- **A `DEGRADED` strategy's `on_stop()` never runs at session teardown.** `Trader.stop_strategy()`
+  and `Trader._stop()` both guard on `is_running`, which means `state == RUNNING` **exactly**
+  (`common/component.pyx:1757-1767`); measured, `Trader.stop_strategy(a.id)` left a degraded strategy
+  at `DEGRADED`. Today that is strictly **safer**, because `sma_crossover.on_stop()` still calls
+  `close_all_positions()` and skipping it is what stops an unrelated `on_bar` bug from manufacturing
+  an exit. **After Story 3.1 removes that flatten it inverts into a leak** — no `unsubscribe_bars`,
+  no strategy-owned cleanup. **Action for Story 3.1:** revisit whether the runner should explicitly
+  `stop()` degraded strategies at teardown once doing so is safe. Pinned by a test whose docstring
+  says exactly this: `tests/integration/core/test_live_strategy_failure_survives.py::`
+  `TestADegradedStrategyIsSkippedAtTeardown` (written by the 2026-08-23 code review — this entry
+  claimed the test existed before it did; the Acceptance Auditor caught the false claim).
+
+- **`SessionSteadyState.note_bar` and `LiveBarObserver` are covered only by AC #6's engine flag.**
+  A deliberate choice (Story 2.7, Task 7), not an oversight. Neither is wrapped by the per-strategy
+  guard, and `note_bar` deliberately did **not** get a `try` of its own: its body is two statements
+  that cannot raise with the production clock, its docstring (a Story 2.5 review artefact) states
+  that **no test may inject a raising clock here**, so the RED test could not be written without
+  breaking an explicit in-code prohibition, and the guard would be unreachable code in a file already
+  over the size cap. What covers them is `graceful_shutdown_on_exception=True` — which is a graceful
+  stop of the **whole node**, not containment. **Action:** if a future story does add the guard,
+  `tests/component/core/test_session_steady_state.py` (13 `note_bar` call sites) and that docstring
+  both need updating in the same edit.
+
+- **Timer/`TimeEvent` failures are contained but invisible.** EXECUTED: a raise inside a `LiveClock`
+  timer callback is silently swallowed at the pyo3 boundary — process survives, exit 0, nothing
+  printed, no traceback. No repo strategy uses timers today, so this is latent. Story 2.7 does not
+  wrap them (there is no `handle_*` seam to wrap). **Action:** whenever a strategy first uses a timer.
+
+- **`Actor.handle_bar` runs `_handle_indicators_for_bar` OUTSIDE its `try`.** A `handle_*` wrapper
+  contains a raising registered indicator; an `on_*` wrapper would not (`actor.pyx:3735-3744`). Story
+  2.7 chose `handle_*` for exactly this forward reason. **Relevant to Story 4.4**, which rewrites
+  `on_start` to register indicators and is the first story where this stops being hypothetical —
+  `grep -rn register_indicator src/core/strategies/` returns zero today.
+
+- **`StrategyRegistry.discover()` catches only `ImportError`.** `src/core/strategy_registry.py:271-275`
+  swallows it into `warnings.warn`; any *other* exception at strategy-module import time aborts
+  discovery for every remaining strategy. Also why no test may depend on a `custom/` submodule
+  strategy: CI without the submodule checked out silently drops 5 of the 7 registrations and the
+  suite still goes green. **Action for the Epic 2 retro.**
+
+- **An exception in one strategy's order-event handler silently drops that fill's pending position
+  events.** `execution/engine.pyx:1170-1187` clears `_pending_position_events` **before** publishing
+  the order event, so a raise in `handle_event` loses the `PositionOpened`/`Changed`/`Closed` that
+  would have followed. Wrapping `handle_event` (which Story 2.7 does now, rather than in Epic 3)
+  closes this — **recorded so Epic 3's trade recorder knows why the wrapper is already there** and
+  does not "tidy" it away as premature.
+
+- **A session whose strategies have all failed keeps running.** *Judgment call #7*, and a real cost:
+  such a session holds an IBKR client id and a market-data line while being incapable of placing an
+  order. AC #1's letter requires it, and stopping instead would reproduce the "stopped means two
+  different things" defect this file already logs. `session.all_strategies_failed` plus
+  `runtime_flags.all_failed` make it visible. **Action for the Epic 2 retro:** decide whether it
+  should instead stop — and if so, what status it stops into, which loops back to the fifth-status
+  question above.
+
+- **`SessionReclaimedError` is not fatal on the bar path, breaking the symmetry with
+  `record_activity`.** *Judgment call #10.* Every other caller re-raises a reclaim; the guard cannot,
+  because a raise out of a wrapped `handle_*` re-enters `MessageBus.publish_c` and dies at
+  `os._exit(1)` with **zero bytes of output** — measured, and the exact silent death the story exists
+  to close. It is surfaced one steady-state tick later instead. The cost is up to ~30s of a
+  dispossessed process still running. **Action:** restoring the symmetry needs a boundary inside
+  `handle_bar` that does not exist, so this is really the fencing-token item above wearing a
+  different hat.
+
+## Deferred from: code review of 2-7-keep-one-failing-strategy-from-taking-down-the-session (2026-08-23)
+
+- **Any infrastructure exception inside the per-spec start loop is misattributed as a spec
+  failure.** `_start_strategy`'s per-spec `except Exception` cannot distinguish "this spec is bad"
+  from "the trader/node is broken" (`src/core/live_session_runner.py:562-570`): a trader-level
+  fault raised for every spec is recorded as N `strategy.start_failed` events with
+  `handler="start"` and surfaced as `NoStrategyStartedError("Every specification failed: ...")` —
+  pointing the operator at their specs for a failure no spec caused. Under `python -O` the
+  `assert self._node is not None` is stripped, turning a missing node into an `AttributeError`
+  attributed the same way. **Reason deferred:** distinguishing infra from spec faults is a design
+  question (error classification, or letting non-spec exceptions propagate) for a later story;
+  the containment itself is what Story 2.7 sanctioned.
+
+- **AC #1's heartbeat-advance clause has no automated proof.** The integration probe
+  (`tests/integration/core/test_live_strategy_failure_survives.py`) drives a bare
+  `LiveDataEngine` — no runner, no `SessionSteadyState`, no heartbeat — so "`last_heartbeat_at`
+  continues to advance" is proxied, not proven; it lives in P8 criterion 1, which is ⛔ not run
+  (`docs/qa/phase3-live-verification.md`). **Reason deferred:** sanctioned by the story's own
+  P8-not-run-at-review policy; **action:** run P8 live verification before Epic 2 closes.
+
+- **The guard wraps `handle_bar`/`handle_event` only; the rest of the handler surface is
+  uncontained.** `handle_bars` and `handle_historical_data` (the `request_bars` response path —
+  `sma_momentum` already drives it at warm-up), `handle_quote_tick`, `handle_trade_tick` and
+  `handle_data` all dispatch outside the boundary: a custom-submodule strategy overriding one of
+  those and raising gets AC #6's whole-node graceful shutdown, not containment. **Decision with
+  Allay (2026-08-23): disclose now, widen later** — `GUARDED_HANDLERS` is a pinned surface
+  (`test_live_strategy_guard.py` asserts the exact tuple), and each additional handler needs its
+  own dispatch-path measurement before wrapping it is honest. The module docstring's disclosed
+  limit #1 now names the full unwrapped surface. **Action:** widen `GUARDED_HANDLERS` in the story
+  that first ships a strategy overriding one of these handlers, with a per-handler containment
+  test.

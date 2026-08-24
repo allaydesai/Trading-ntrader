@@ -108,12 +108,31 @@ class SpyRecord:
 
     def __init__(self) -> None:
         self.calls: list[str] = []
+        self.failures: list[str] = []
 
     def record_activity(self, *, at: datetime, bar_seen_at: datetime | None = None) -> None:
         self.calls.append("record_activity")
 
     def mark_stopped(self) -> None:
         self.calls.append("mark_stopped")
+
+    def record_strategy_failure(
+        self,
+        *,
+        strategy_id: str,
+        spec_strategy_id: str,
+        error_type: str,
+        handler: str,
+        at: datetime,
+        detail: str | None = None,
+        all_failed: bool = False,
+    ) -> None:
+        """Story 2.7's third port method. Duck-typed here, but kept complete so
+        the double stays an honest ``SessionRecordPort`` rather than one that
+        happens to satisfy the calls this file makes today.
+        """
+        self.calls.append("record_strategy_failure")
+        self.failures.append(spec_strategy_id)
 
 
 async def _never_sleeps(seconds: float) -> None:

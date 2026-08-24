@@ -27,11 +27,18 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 #: `live.py` and therefore covered until this story's file-size split moved
 #: them out. The guard's coverage shrank as a side effect of a refactor, which
 #: is exactly how a structural guarantee rots.
+#: ``src/core/live_strategy_guard.py`` joined at Story 2.7 (AC #7). Its
+#: containment path runs *while positions are open*, and its whole design turns
+#: on `degrade()` rather than `stop()` precisely because `stop()` would reach
+#: `sma_crossover.on_stop()`'s `close_all_positions()` — so if any module needs
+#: this scan, it is that one. This list is hand-maintained and its own comment
+#: below records that it already shrank once through the omission.
 STOP_PATH_MODULES = (
     "src/core/live_session_runner.py",
     "src/core/live_session_signals.py",
     "src/core/live_session_steady_state.py",
     "src/core/live_session_node.py",
+    "src/core/live_strategy_guard.py",
     "src/cli/commands/live.py",
     "src/cli/commands/live_start.py",
 )
@@ -221,6 +228,12 @@ class TestTheVocabularyRuleAr36:
     NEW_OR_MODIFIED_FOR_STOP = (
         "src/core/live_session_signals.py",
         "src/core/live_session_runner.py",
+        # Story 2.7's new module writes operator-facing prose of its own —
+        # `strategy.failed`, `strategy.degraded`, `session.all_strategies_failed`
+        # and their `detail=` text. AR36's vocabulary applies to it for the same
+        # reason: an operator reading a contained failure must not see it
+        # described as a kill or a halt. (`strategy.halted` would fail here.)
+        "src/core/live_strategy_guard.py",
     )
     #: AR36's list, with ``close`` **restored** (review fix, 2026-08-22,
     #: decision D3). It had been dropped silently — and it is the one word

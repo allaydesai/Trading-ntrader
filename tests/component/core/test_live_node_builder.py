@@ -1292,3 +1292,77 @@ class TestTheNewArgumentsAreKeywordOnlyAndDefaulted:
         for function_name in ("build_trading_node_config", "build_trading_node"):
             doc = getattr(live_node_builder, function_name).__doc__ or ""
             assert f"{parameter}:" in doc, f"{function_name} does not document {parameter}"
+
+
+class TestEngineGracefulShutdownOnException:
+    """Story 2.7, AC #6 — the uncontained path is closed at the engine too.
+
+    ``LiveDataEngine._handle_queue_exception``'s default branch is
+    ``os._exit(1)`` (``live/data_engine.py:347-365``), with identical code at
+    ``live/execution_engine.py:380-398`` and ``live/risk_engine.py:212-230``.
+    This flag replaces that with a published ``ShutdownSystem`` and a graceful
+    ``kernel.stop_async()``.
+
+    ⚠️ It satisfies **neither AC #1 nor AC #2**, and the tests below say so
+    rather than leaving a reader to assume otherwise. Measured with ``True``:
+    exactly one ``ShutdownSystem`` published, which ends the session; and with
+    two co-subscribed strategies the sibling still saw ``{'A': 3, 'B': 0}``,
+    because ``publish_c``'s dispatch abort is upstream of the flag and untouched
+    by it. It is defence in depth **behind** per-strategy containment — what
+    covers the runner's own ``note_bar`` and the ``LiveBarObserver``, neither of
+    which the guard wraps.
+    """
+
+    @pytest.mark.component
+    @pytest.mark.parametrize("engine", ["data_engine", "exec_engine", "risk_engine"])
+    def test_the_engine_is_configured_to_shut_down_gracefully(self, engine):
+        cfg = build_trading_node_config(_settings(), trader_id=TRADER_ID)
+
+        assert getattr(cfg, engine).graceful_shutdown_on_exception is True
+
+    @pytest.mark.component
+    @pytest.mark.parametrize(
+        "config_name",
+        ["LiveDataEngineConfig", "LiveExecEngineConfig", "LiveRiskEngineConfig"],
+    )
+    def test_the_nautilus_default_is_still_false(self, config_name):
+        """The canary. All three default ``False`` at 1.220.0, which is why this
+        repo inherited ``os._exit(1)`` for the whole of Epics 1 and 2. If an
+        upgrade flips a default, this fails **by name** and the change becomes a
+        decision instead of a silent behaviour change — including the reverse
+        direction, where our explicit ``True`` would stop being load-bearing.
+        """
+        import nautilus_trader.live.config as live_config
+
+        config_class = getattr(live_config, config_name)
+
+        assert config_class().graceful_shutdown_on_exception is False
+
+    @pytest.mark.component
+    def test_the_builder_passes_the_flag_explicitly_rather_than_relying_on_a_default(self):
+        """A safety property resting on a third-party default is one upgrade
+        from silently changing — the same rationale the ``NODE_TIMEOUT_*``
+        constants carry, asserted structurally so the argument cannot be
+        dropped while the config still happens to be right.
+
+        Bound per constructor (review fix, 2026-08-23): the old module-wide
+        keyword sweep passed as long as the flag appeared in *any* call, so it
+        could be dropped from any one engine undetected. Each of the three
+        engine-config constructors must pass it explicitly.
+        """
+        source = Path(live_node_builder.__file__).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        engine_configs = {"LiveDataEngineConfig", "LiveExecEngineConfig", "LiveRiskEngineConfig"}
+        flagged = {
+            node.func.id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in engine_configs
+            and any(k.arg == "graceful_shutdown_on_exception" for k in node.keywords)
+        }
+
+        assert flagged == engine_configs, (
+            f"engines missing an explicit graceful_shutdown_on_exception: "
+            f"{sorted(engine_configs - flagged)}"
+        )

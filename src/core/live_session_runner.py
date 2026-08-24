@@ -110,6 +110,12 @@ from src.core.live_session_steady_state import (
     join_heartbeat,
     release_record,
 )
+from src.core.live_strategy_guard import (
+    GUARD_FAILED_EVENT,
+    NoStrategyStartedError,
+    StrategyFailure,
+    StrategyGuard,
+)
 from src.core.live_trader_id import derive_trader_id
 from src.models.session import DEFAULT_HEARTBEAT_INTERVAL_SECONDS, SessionSpec
 
@@ -187,6 +193,14 @@ class LiveSessionRunner:
         self._connection_reader = connection_reader
         self._trader_id = derive_trader_id(session_id)
         self._log = structlog.get_logger(__name__).bind(session_id=str(session_id))
+        # Story 2.7. The runner *wires* the containment; the policy is the
+        # guard's (see `live_strategy_guard`). It is built here rather than in
+        # `_phase_trading` so the CLI can read `contained_failures` off a runner
+        # whose trading phase never ran. The account string arms AC #8's
+        # configured-value redaction without the guard reading settings.
+        self._guard = StrategyGuard(
+            log=self._log, time_source=self._time_source, account=settings.tws_account
+        )
         self._signals = (
             stop_signals
             if stop_signals is not None
@@ -249,6 +263,28 @@ class LiveSessionRunner:
         other than a reclaim — the CLI's cue to print an operator warning.
         """
         return self._record_release_failed
+
+    @property
+    def contained_failures(self) -> tuple[StrategyFailure, ...]:
+        """Every strategy failure contained during this run (Story 2.7).
+
+        Read by the CLI after ``run()`` returns, so an operator watching a stop
+        is told which strategies stopped trading and when — the in-process half
+        of the visibility ``runtime_flags`` provides across processes. Empty on
+        a clean run, which is the common case and prints nothing.
+        """
+        return self._guard.failures
+
+    @property
+    def all_strategies_failed(self) -> bool:
+        """Whether every strategy this session started with was contained.
+
+        The CLI branches its report on this (review fix, 2026-08-23): telling
+        an operator "the other strategies were unaffected" when every strategy
+        failed — or when the session only ever had one — is an affirmative
+        falsehood in a safety report.
+        """
+        return bool(self._guard.all_failed)
 
     def run(self) -> None:
         """Start the session and serve it until the node stops. Blocking.
@@ -341,6 +377,7 @@ class LiveSessionRunner:
                 # Closing the loop un-installed every handler it registered,
                 # leaving `_finish_record()`'s Postgres round trip unprotected.
                 self._signals.rearm_process_handlers()
+                self._flush_contained_failures()
                 self._finish_record()
                 restore_event_loop(previous_loop)
             finally:
@@ -499,16 +536,85 @@ class LiveSessionRunner:
             # A session reclaimed during the earlier phases must never trade.
             if self._startup_heartbeat is not None and self._startup_heartbeat.reclaim is not None:
                 raise self._startup_heartbeat.reclaim
-            for strategy_spec in self._spec.strategies:
-                strategy = materialise_strategy(strategy_spec)
-                self._node.trader.add_strategy(strategy)
-                self._node.trader.start_strategy(strategy.id)
+            self._guard.expect(len(self._spec.strategies))
+            started = [spec for spec in self._spec.strategies if self._start_strategy(spec)]
+            if not started:
+                names = ", ".join(s.strategy_id for s in self._spec.strategies)
+                raise NoStrategyStartedError(
+                    "No strategy in this session started, so it cannot trade. Every "
+                    f"specification failed: {names}. See the `strategy.start_failed` records "
+                    "for each one's error and traceback."
+                )
             self._trader_started = True
             self._log.info(
                 "session.started",
                 trader_id=self._trader_id,
-                strategies=[s.strategy_id for s in self._spec.strategies],
+                strategies=[s.strategy_id for s in started],
                 started_at=self._started_at.isoformat(),
+            )
+
+    def _start_strategy(self, strategy_spec) -> bool:
+        """Materialise, guard, register and start one spec — contained (AC #5).
+
+        The ``try`` is **per spec and inside** ``with phase(...)``, never around
+        the phase: wrapping the phase would defeat AR39's *"a failure in any
+        phase stops the sequence"* for genuine phase failures, which is a
+        property the whole startup sequence rests on.
+
+        ``guard.wrap`` comes before ``add_strategy``, always: ``register()``
+        subscribes the bound ``handle_event`` during that call, and
+        ``subscribe_bars`` binds ``handle_bar`` during ``on_start``. Wrapping
+        here is before both; wrapping after would leave ``handle_event``
+        unguarded forever (finding #5).
+
+        Returns:
+            ``True`` when the strategy is live. ``False`` when it was contained
+            — the caller counts these, because a session where *none* returned
+            ``True`` cannot trade and must not report itself started.
+        """
+        strategy = None
+        try:
+            strategy = materialise_strategy(strategy_spec)
+            self._guard.wrap(strategy, spec_strategy_id=strategy_spec.strategy_id)
+            assert self._node is not None
+            self._node.trader.add_strategy(strategy)
+            self._node.trader.start_strategy(strategy.id)
+            return True
+        except Exception as exc:  # noqa: BLE001 - AC #5: one bad spec is not the session
+            self._guard.record_start_failure(spec_strategy_id=strategy_spec.strategy_id, exc=exc)
+            self._fault_quietly(strategy, strategy_spec.strategy_id)
+            return False
+
+    def _fault_quietly(self, strategy: object | None, spec_strategy_id: str) -> None:
+        """Isolate a strategy that failed to start. ``fault()``, not the others.
+
+        ``degrade()`` is **illegal** from ``STARTING`` and is *silently
+        swallowed* (``common/component.pyx:2130-2134``), so it would leave a
+        strategy that looks contained and is not. ``stop()`` would run
+        ``on_stop()``, which for ``sma_crossover`` still calls
+        ``close_all_positions()`` — an exit the strategy never requested, over
+        an unrelated startup bug (NFR14, AR43). Two verbs across the two paths
+        rather than one, deliberately (*Judgment call #4*).
+
+        Guarded because this runs on the containment path: a raise here would
+        become the thing that stopped the loop it exists to keep going. Both
+        states this path can arrive in are measured (review fix, 2026-08-23,
+        against the installed 1.220.0): a spec that failed in ``on_start`` is
+        left at **``STARTING``**, from which ``fault()`` *succeeds* and lands
+        the strategy at ``FAULTED`` — isolated, exactly as intended; a spec
+        that failed before registration is at ``PRE_INITIALIZED``, from which
+        Nautilus swallows the illegal trigger itself, state unchanged, nothing
+        raised.
+        """
+        if strategy is None:
+            return
+        try:
+            strategy.fault()  # type: ignore[attr-defined]
+        except Exception as exc:  # noqa: BLE001 - AR42
+            self._log.error(
+                GUARD_FAILED_EVENT,
+                spec_strategy_id=spec_strategy_id,
+                error_type=type(exc).__name__,
             )
 
     # ------------------------------------------------------------------
@@ -554,6 +660,7 @@ class LiveSessionRunner:
             interval_seconds=self._heartbeat_interval_seconds,
             no_bars_after_seconds=self._no_bars_after_seconds,
             connection_reader=self._connection_reader,
+            guard=self._guard,
         )
 
     def _stop_heartbeat(self, loop: asyncio.AbstractEventLoop) -> None:
@@ -570,6 +677,52 @@ class LiveSessionRunner:
             # Released without waiting, so a wedged write cannot hold the node
             # teardown behind it (decision D2).
             self._steady_state.release_executor()
+
+    def _flush_contained_failures(self) -> None:
+        """Persist any contained failure still queued, while the row is still ours.
+
+        Closes the end-of-run window (review fix, 2026-08-23): the steady-state
+        tick is the *routine* path to ``runtime_flags``, but a failure contained
+        within the last interval before a stop — or queued by the all-failed
+        start path, where ``run()`` raises before the tick loop ever starts —
+        would otherwise never be written, and the ``-> stopped`` transition
+        makes that permanent because the service refuses writes against a
+        non-``running`` row by design. Runs in the ``finally``, **before**
+        :meth:`_finish_record`, so the row still reads ``running``; after
+        :meth:`_stop_heartbeat`, so the steady-state executor cannot race this
+        write on the same row. The call is synchronous — the loop has already
+        stopped, so there is nothing left to block.
+
+        Guarded per failure, AR42: a DB hiccup here must not replace the run's
+        primary outcome. A reclaim stops the flush entirely — the remaining
+        facts belong in the successor's log, not its row.
+        """
+        if self._ownership_lost:
+            return
+        pending = self._guard.drain_pending()
+        if not pending:
+            return
+        all_failed = bool(self._guard.all_failed)
+        for failure in pending:
+            try:
+                self._record.record_strategy_failure(
+                    strategy_id=failure.strategy_id,
+                    spec_strategy_id=failure.spec_strategy_id,
+                    error_type=failure.error_type,
+                    handler=failure.handler,
+                    at=failure.at,
+                    detail=failure.detail,
+                    all_failed=all_failed,
+                )
+            except SessionReclaimedError:
+                self._ownership_lost = True
+                return
+            except Exception as exc:  # noqa: BLE001 - AR42: must not replace the outcome
+                self._log.error(
+                    GUARD_FAILED_EVENT,
+                    spec_strategy_id=failure.spec_strategy_id,
+                    error_type=type(exc).__name__,
+                )
 
     def _finish_record(self) -> None:
         """Mark the session ``stopped`` after ``shutdown()``; policy in :func:`release_record`."""

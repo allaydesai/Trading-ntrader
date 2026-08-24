@@ -752,3 +752,131 @@ Exit code `1`.
 (`6ffd1556-a854-4a2f-9b0c-7b2f14958a6c`), now `stopped`, and one `trader-PAPER-6ffd1556` Redis
 namespace. The repositories are write-once and expose no delete, so both are named here rather than
 removed with raw SQL — the same posture Story 2.5 took with `smoke-1787319225`.
+
+---
+
+## Procedure P8: contain a failing strategy without losing the session
+
+**Introduced by**: Story 2.7 — Keep One Failing Strategy from Taking Down the Session
+**Verifies**: AC #1, #2, #4, #5 and #7 against a real gateway.
+**Tool**: the CLI itself — `ntrader live start` with a two-strategy session, one of which is fed a
+bar it cannot survive. There is no diagnostic script for this story; the command *is* the artifact
+under test, plus one `psql` query run from a **second terminal**.
+
+**The automated tests are proxies, and this procedure is what closes the gap they cannot.**
+`tests/integration/core/test_live_strategy_failure_survives.py` builds a real `LiveDataEngine` in a
+fresh interpreter and proves the process-level mechanic by return code — guarded `rc=0`, unguarded
+`rc=1` — and `tests/component/core/test_session_runner_strategy_failure.py` proves sibling delivery
+on a real `MessageBus` in both registration orders. What none of them touch is a **broker**: whether
+a contained failure leaves an IBKR paper account's positions and orders untouched, whether the
+session keeps heartbeating and receiving real market data afterwards, and whether the failure is
+readable from another process while the session is still running.
+
+### What it does — and does not — do
+
+It does **not** prove NFR12 for every handler. Only `handle_bar` and `handle_event` are wrapped; a
+raising `LiveClock` timer callback is contained by Nautilus itself but **invisibly** (measured:
+swallowed at the pyo3 boundary, exit 0, nothing printed), and no repo strategy uses timers today.
+
+It **cannot** prove AC #6's engine-level backstop without deliberately breaking something the guard
+does not cover — the runner's own `note_bar` or the `LiveBarObserver`. That is out of scope here;
+AC #6 is pinned by a config assertion and a Nautilus-default canary instead.
+
+It does **not** reach the "all strategies failed" path unless both strategies are made to fail.
+Criterion 5 covers the start-path half; the runtime half (`session.all_strategies_failed`) is
+optional and should be reported as not run if it was not attempted.
+
+### Preconditions
+
+Everything Procedure P7 requires — IB Gateway or TWS logged into a **paper** account, Redis and
+Postgres running — plus `alembic upgrade head` (this story adds the second Phase-3 migration,
+`b7c419e2a3d8`, so a database still at `d08dfbd393f0` has no `runtime_flags` column and criterion 2
+cannot be run at all).
+
+⚠️ **Run inside RTH.** `use_rth=True` means no bar closes outside regular trading hours, and this
+procedure needs bars to arrive: with the market closed neither the failure nor the sibling's
+continued delivery can be observed. Procedure P7's criterion 2 was left partially unverified for
+exactly this reason.
+
+⚠️ **The CLI cannot express a two-strategy session today** (`src/cli/commands/live.py`'s `--strategy`
+is singular — Story 2.7 deliberately does not add `multiple=True`). Create the two-strategy spec
+in-process, the same way `tests/component/core/test_session_runner_strategy_failure.py` does, or run
+the single-strategy variant and report criterion 1's sibling half as not run.
+
+### Command
+
+```bash
+# Terminal 1 — the session under test.
+uv run python -m src.cli.main live start contain-test-1 2>&1 | tee logs/contain-test-1.log
+
+# Terminal 2 — while it is still running. This is AC #4's whole point.
+psql "$DATABASE_URL" -c "SELECT name, status, last_heartbeat_at, last_bar_at, runtime_flags \
+  FROM trading_sessions WHERE name = 'contain-test-1';"
+```
+
+The raiser is a real `sma_crossover` fed a `0.00` close, which divides by it at
+`sma_crossover.py:150` and raises `decimal.DivisionByZero` — a genuine failure through the real
+`Actor.handle_bar` re-raise, not a monkeypatched `raise`. Nautilus accepts a zero-priced `Bar`
+(measured). If a contrived bar cannot be injected against a live feed, point the session at a probe
+strategy that raises on its first bar instead, and say which was used.
+
+### Expected output
+
+```
+<TS> [error] strategy.failed  session_id=<uuid>  strategy_id=SMACrossover-000
+             spec_strategy_id=sma_crossover  error_type=DivisionByZero  handler=handle_bar
+             traceback=...
+<TS> [warning] strategy.degraded  strategy_id=SMACrossover-000  state=degraded
+... the session keeps logging, `momentum` keeps receiving bars, the heartbeat keeps advancing ...
+```
+
+and, on Ctrl-C:
+
+```
+Session stopped: contain-test-1 (SIGINT).
+⚠️  1 strategy was contained during this run and stopped trading:
+      sma_crossover (SMACrossover-000) — DivisionByZero in handle_bar at 14:03:11Z
+    The session kept running; the other strategies were unaffected. See `strategy.failed` in the
+    log for the traceback, and `runtime_flags` on the session's row for the same facts from
+    another process.
+```
+
+Exit code **0** (`echo $?`) — the session ran and it stopped. AR28's table has no code for "a
+strategy failed" and Story 1.7 recorded that inventing one is worse than a generic failure.
+
+### Pass criteria
+
+1. **The session survives and the sibling keeps trading.** `strategy.failed` appears **exactly
+   once**, the process stays up, `momentum` keeps logging bars *after* the failure, and
+   `last_heartbeat_at` keeps advancing. A per-bar repeat of `strategy.failed` is a **fail** — the
+   latch is broken.
+2. **The failure is readable from a second process while the session is still running.**
+   The `psql` query above returns `runtime_flags` carrying `{"v": 1, "all_failed": false,
+   "failed_strategies": [{"spec_strategy_id": "sma_crossover", "error_type": "DivisionByZero", …}]}`.
+   Note that it appears on the **next heartbeat tick** (~30s), not instantly: the write is queued by
+   the guard and drained by the steady-state tick, deliberately (AC #10). ⚠️ Check the `detail` field
+   carries **no** unmasked account identifier and **no** traceback.
+3. **The IBKR positions and orders page is identical before and after the contained failure.**
+   Nothing closed, nothing cancelled, nothing submitted. Record the account's positions, open orders
+   and `NetLiquidation` at both ends. This is NFR14 and AR43, and it is the criterion that matters
+   most: the isolation verb is `degrade()` precisely *because* `stop()` would run
+   `sma_crossover.on_stop()`'s `close_all_positions()`.
+4. **Restarting clears the flag.** Stop the session, start it again, and confirm `runtime_flags` is
+   back to `NULL` — a failure from a previous process run must never be reported against the current
+   one.
+5. **A strategy that fails in `on_start` does not stop the others starting.** Run a session whose
+   first spec raises during `on_start` (an unqualified instrument, or a deliberately invalid
+   parameter): the second strategy still starts, the phase log reaches `trading status=ok`, and
+   `session.started` names only the strategies that actually started. Then make **every** spec fail
+   and confirm the `trading` phase logs `failed`, the sequence stops, and the CLI exits **1** with
+   the `NoStrategyStartedError` message naming the specs.
+6. **The degraded strategy stays registered and warm.** `Trader.strategy_states()` still lists it as
+   `DEGRADED` (not removed), and it is still subscribed to its bar type. ⚠️ Known and accepted: its
+   `on_stop()` will **not** run at teardown, because `Trader._stop()` guards on `is_running`. Today
+   that is strictly safer; Story 3.1 must revisit it once the flatten is gone.
+
+### Result log
+
+| Date | Operator | Result | Notes |
+| ---- | -------- | ------ | ----- |
+| — | — | ⛔ **not run** | Written with Story 2.7. Nothing in this story's automated suite requires IB Gateway/TWS, Redis or RTH — see the story's Dev Notes, "Blockers and preconditions". `⛔ not run` is an acceptable and expected entry; a dry run is not a pass, per this file's own policy at the top. The process-level claim (AC #1/#3) **is** covered automatically and by return code, in `tests/integration/core/test_live_strategy_failure_survives.py`, including the inverted `rc=1` proof — so what remains unverified here is specifically the *broker-facing* half: criteria 2, 3 and 6. |

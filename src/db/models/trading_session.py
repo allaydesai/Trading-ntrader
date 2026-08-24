@@ -47,6 +47,12 @@ class TradingSession(Base, TimestampMixin):
         sealed_at: When the session was sealed, or None.
         last_heartbeat_at: Most recent liveness heartbeat, or None.
         last_bar_at: Most recent bar the session observed, or None.
+        runtime_flags: Facts about *this* process run that outlive it, or None
+            (Story 2.7): the strategies contained during the run, and whether
+            all of them were. Versioned (``{"v": 1, ...}``) so a later story can
+            add a key without guessing. Written only by
+            ``session_service._record_strategy_failure``; cleared on every
+            ``-> running`` transition.
         created_at: When the row was created (via ``TimestampMixin``).
     """
 
@@ -94,6 +100,19 @@ class TradingSession(Base, TimestampMixin):
         TIMESTAMP(timezone=True), nullable=True
     )
     last_bar_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+
+    # Story 2.7 (AC #4). NULL means "nothing to report", so every healthy
+    # session and every pre-existing row costs nothing — deliberately no
+    # server_default, which is also what keeps the migration metadata-only.
+    #
+    # ⚠️ SQLAlchemy does not track **in-place** mutation of a plain JSONB
+    # column: `row.runtime_flags["failed_strategies"].append(...)` silently
+    # never persists. Build a new dict and assign it — see
+    # `session_service._record_strategy_failure`, the only writer.
+    #
+    # Cleared to NULL on every `-> running` transition, so a failure from a
+    # previous process run is never reported against the current one.
+    runtime_flags: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
 
     __table_args__ = (Index("ix_trading_sessions_status", "status"),)
 
