@@ -32,8 +32,11 @@ PYPROJECT = REPO_ROOT / "pyproject.toml"
 
 #: The modules Epic 1 added or owns. Globbed rather than listed so a new
 #: ``src/core/live_*.py`` is covered the day it appears, not the day someone
-#: remembers to add it here.
-LIVE_MODULE_GLOBS = ("src/core/live_*.py", "src/cli/commands/live.py")
+#: remembers to add it here. ``src/cli/commands/live*.py`` (Story 2.8) widens
+#: the CLI half beyond the single ``live.py`` file it used to name — closing a
+#: disclosed gap that already left ``live_start.py`` unswept since Story 2.6's
+#: split, and covering the new ``live_status.py`` from day one.
+LIVE_MODULE_GLOBS = ("src/core/live_*.py", "src/cli/commands/live*.py")
 
 #: Nautilus is pinned by AR3's reasoning: the IB adapter and the Redis cache
 #: backend ship *inside* this distribution, which is why no adapter dependency

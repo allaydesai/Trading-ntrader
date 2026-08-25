@@ -3,14 +3,15 @@
 For async operations (future API endpoints), use trading_session_repository.py.
 """
 
-from typing import List, Optional
+from typing import List, Optional, Sequence
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from src.db.exceptions import DatabaseConnectionError, DuplicateRecordError
+from src.db.models.trade import Trade
 from src.db.models.trading_session import TradingSession
 
 
@@ -140,3 +141,51 @@ class SyncTradingSessionRepository:
         )
         result = self.session.execute(stmt)
         return list(result.scalars().all())
+
+    def trade_counts_by_session(
+        self, session_ids: Optional[Sequence[int]] = None
+    ) -> dict[int, tuple[int, int]]:
+        """Closed and open trade counts per session (Story 2.8, AC #8).
+
+        Joined on the **typed key**: ``trades.session_id`` is a ``BigInteger``
+        FK to ``trading_sessions.id`` (the internal PK), never the UUID
+        business key — "same name, different types", the hazard Story 2.3
+        flagged. ``closed_trade_count`` is rows with a non-``NULL``
+        ``exit_timestamp``; ``open_positions`` is rows with a ``NULL`` one.
+
+        A ``LEFT OUTER JOIN`` from ``trading_sessions``, so a session with no
+        trades at all still appears with ``(0, 0)`` rather than being absent
+        from the result — Epic 3 owns live trade persistence, so every
+        session honestly reports zero today.
+
+        ⚠️ ``func.count(Trade.id).filter(...)``, not
+        ``func.count(case(...))``: for a session with **no** trades, the outer
+        join still produces one phantom row with every ``Trade`` column
+        ``NULL`` — including ``exit_timestamp``. ``exit_timestamp IS NULL``
+        is then trivially true for that phantom row, so a plain
+        ``count(case(exit_timestamp IS NULL, 1))`` counts it as one open
+        position that does not exist. Filtering ``count(Trade.id)`` — a
+        column that is itself ``NULL`` on the phantom row — is what makes
+        the aggregate ignore it (measured: ``(0, 1)`` instead of ``(0, 0)``
+        before this fix).
+
+        Args:
+            session_ids: Internal ``TradingSession.id`` values to restrict the
+                query to, or ``None`` for every session (no perf target is set
+                for listing).
+
+        Returns:
+            A mapping of ``TradingSession.id`` to ``(closed_count, open_count)``.
+        """
+        closed = func.count(Trade.id).filter(Trade.exit_timestamp.is_not(None))
+        open_ = func.count(Trade.id).filter(Trade.exit_timestamp.is_(None))
+        stmt = (
+            select(TradingSession.id, closed, open_)
+            .select_from(TradingSession)
+            .outerjoin(Trade, Trade.session_id == TradingSession.id)
+            .group_by(TradingSession.id)
+        )
+        if session_ids is not None:
+            stmt = stmt.where(TradingSession.id.in_(session_ids))
+        result = self.session.execute(stmt)
+        return {row[0]: (row[1], row[2]) for row in result}

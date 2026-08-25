@@ -522,5 +522,11 @@ _STDLIB_AND_FIRST_PARTY = frozenset(
         "time",
         "typing",
         "uuid",
+        # Story 2.8's `src/cli/commands/live_status.py`: `--json` on both
+        # `status`/`list` is built with the stdlib serializer, the same
+        # discipline Story 2.4 applied to `socket` and Story 2.7 to
+        # `re`/`traceback` — added by hand with the reason, never via
+        # `sys.stdlib_module_names`.
+        "json",
     }
 )

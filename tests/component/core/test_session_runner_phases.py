@@ -1218,6 +1218,12 @@ class TestImportPurity:
         # because this list is hand-maintained: Story 2.6's file-size split moved
         # `live_start.py` out of `live.py` and it silently escaped two guards.
         "src.core.live_strategy_guard",
+        # Story 2.8. Not reached from the runner at all — the opposite
+        # direction, the CLI's read side — but it lives in the `live_*` family
+        # AR38's discipline covers, and staying provably free of `src.db`/
+        # `src.services` is exactly what lets it be unit-tested with no
+        # database (AC #9).
+        "src.core.live_session_health",
     )
 
     @pytest.mark.parametrize("module_name", MODULES)

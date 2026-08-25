@@ -67,14 +67,18 @@ NODE_FACING_MODULES = (
 #: ``BaseException`` at every step and would swallow a ``SystemExit`` raised
 #: from a handler that fired inside the teardown.
 #:
-#: ``src/cli/commands/live.py`` and ``live_start.py`` — the CLI boundary. AR28
-#: gives ``ntrader live`` an exit-code table, and ``raise SystemExit(code)`` is
-#: how a Click command reports one. Ending the *process* is exactly this
-#: layer's job; the rule is that nothing **below** it may.
+#: ``src/cli/commands/live.py``, ``live_start.py`` and ``live_status.py`` — the
+#: CLI boundary. AR28 gives ``ntrader live`` an exit-code table, and
+#: ``raise SystemExit(code)`` is how a Click command reports one. Ending the
+#: *process* is exactly this layer's job; the rule is that nothing **below**
+#: it may. ``live_status.py`` (Story 2.8) joined at creation: `status`/`list`
+#: exit through the same ``EXIT_CODES``-derived ``SystemExit`` `live_start.py`
+#: does, for the same reason.
 EXEMPT_MODULES = (
     "src/core/live_session_signals.py",
     "src/cli/commands/live.py",
     "src/cli/commands/live_start.py",
+    "src/cli/commands/live_status.py",
 )
 
 

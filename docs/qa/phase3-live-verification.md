@@ -880,3 +880,106 @@ strategy failed" and Story 1.7 recorded that inventing one is worse than a gener
 | Date | Operator | Result | Notes |
 | ---- | -------- | ------ | ----- |
 | — | — | ⛔ **not run** | Written with Story 2.7. Nothing in this story's automated suite requires IB Gateway/TWS, Redis or RTH — see the story's Dev Notes, "Blockers and preconditions". `⛔ not run` is an acceptable and expected entry; a dry run is not a pass, per this file's own policy at the top. The process-level claim (AC #1/#3) **is** covered automatically and by return code, in `tests/integration/core/test_live_strategy_failure_survives.py`, including the inverted `rc=1` proof — so what remains unverified here is specifically the *broker-facing* half: criteria 2, 3 and 6. |
+
+## Procedure P9: `live status` against a genuinely running session, then a `kill -9`
+
+**Introduced by**: Story 2.8 — See What a Session Is Doing Without Reading Logs
+**Verifies**: AC #1, #2, #3 against a real running process — that `status` answers from the
+database alone, from a **different process** than the runner, and that it tells a quiet session
+from a dead one.
+**Tool**: the CLI itself — `ntrader live start` in one terminal, `ntrader live status` in a
+second, and `kill -9` on the runner's PID. No diagnostic script; the two commands are the
+artifact under test.
+
+### What it does — and does not — do
+
+It does **not** re-verify anything Procedure P8 covers (contained-strategy visibility,
+`runtime_flags`, broker-side position identity) — `⛔ not run` there is unrelated to this
+procedure's result, and this one does not replace it: P8 remains the gate before Epic 2 closes.
+It does **not** exercise `degraded` from a real connection loss — that sense's writer is Epic 4's,
+and this story's `connection_lost_at` reader is proven dormant by a unit test instead (see the
+story's Dev Notes on the false-green trap).
+
+### Preconditions
+
+Everything Procedure P7/P8 require — IB Gateway or TWS logged into a **paper** account, Redis and
+Postgres running, `alembic upgrade head`. Run inside RTH so the session actually observes bars
+(`trading` is otherwise unreachable — outside RTH the honest answer is `idle`, which is also worth
+recording once).
+
+### Command
+
+```bash
+# Terminal 1 — start a session and note its PID.
+#
+# NOT `... | tee logfile &` with `$!`: in a backgrounded pipeline `$!` is the PID
+# of the LAST command, so it would name `tee`, and the `kill -9` below would kill
+# the log writer while the runner survived (or died later and nondeterministically
+# on SIGPIPE) — a false negative on pass criterion 3, for a reason unrelated to
+# the code. Redirect straight to the file so `$!` really is the runner.
+uv run python -m src.cli.main live start p9-status-test > logs/p9-status-test.log 2>&1 &
+RUNNER_PID=$!
+echo "runner pid: $RUNNER_PID"
+
+# Sanity-check before trusting it: this must print the `live start` process.
+ps -p "$RUNNER_PID" -o pid=,command=
+
+# Terminal 2 — while it is running, and again ~35s later (past one heartbeat tick).
+uv run python -m src.cli.main live status p9-status-test
+uv run python -m src.cli.main live status p9-status-test --json
+
+# Then, back in Terminal 1, kill the runner hard — no SIGTERM/SIGINT, no teardown.
+# (Terminal 1, because $RUNNER_PID is a shell variable of that shell. From
+# Terminal 2, use the numeric PID printed above.)
+kill -9 "$RUNNER_PID"
+
+# Wait past the 90s staleness threshold (three missed heartbeats), then query again.
+sleep 95
+uv run python -m src.cli.main live status p9-status-test
+```
+
+### Expected output
+
+While running, inside RTH, after at least one bar has closed:
+
+```
+session: p9-status-test (<uuid>)
+  state: running
+  health: trading
+  closed trades: 0, open positions: 0
+  heartbeat: <N>s ago
+  last started: <iso-8601>
+  trader_id: PAPER-<hex8>
+  last activity: <iso-8601>
+```
+
+After `kill -9` and the 90s wait:
+
+```
+session: p9-status-test (<uuid>)
+  state: running
+  health: stale
+  ...
+```
+
+### Pass criteria
+
+1. **`status` answers with the runner alive, from a different process.** The command in Terminal 2
+   never blocks on or waits for Terminal 1; it returns immediately from the database alone (AC #1).
+2. **`health` reads `trading` once a bar has closed inside RTH**, and `idle` if queried before the
+   first bar or outside RTH — both are legitimate, distinguishable answers, never the same word
+   (AC #3, the "silence is distinguishable from death" half).
+3. **After `kill -9`, `health` reads `stale` — never `idle` and never `trading`** — once the
+   heartbeat's age exceeds 90s. This is AC #3's other half, the one an automated test cannot touch
+   for real: nothing but a genuinely dead process proves the heartbeat actually stops advancing.
+4. **The row is untouched by the query.** `status` triggers no reclaim, no transition and no write
+   — confirm `last_started_at` is unchanged across every query in this procedure, including the
+   one after `kill -9` (AR33: only `start` may reclaim a stale session).
+5. **`--json` parses** and carries exactly the seven pinned keys, matching the human output's
+   `state`/`health` values.
+
+### Result log
+
+| Date | Operator | Result | Notes |
+| ---- | -------- | ------ | ----- |
+| — | — | ⛔ **not run** | Written with Story 2.8. `⛔ not run` is an acceptable and expected entry, per this file's own policy at the top — a dry run is not a pass. The health-derivation logic (AC #2) is fully covered by `tests/unit/core/test_live_session_health.py`'s truth table and by the mutation sweep (Story 2.8, Task 10); what this procedure alone can show is the two facts no unit test can fabricate — a real heartbeat actually advancing while a session trades, and a real process actually going silent under `kill -9`. **Procedure P8 remains the gate before Epic 2 closes; this procedure does not replace it or narrow its scope.** |

@@ -873,6 +873,19 @@ after dedup. Every item below was re-verified by execution before being recorded
   *strategy* is not a session lifecycle state. What remains open is only Story 2.8's own question of
   how `degraded` covers both senses AR32 names.
 
+  **~~Answered by Story 2.8 (2026-08-24), item fully closed.~~** One derivation, `_is_degraded` in
+  `src/core/live_session_health.py`, covers both senses (Judgment call #1). Sense (a) — contained
+  strategies — reads the live writer Story 2.7 shipped: `all_failed` or a non-empty
+  `failed_strategies`. Sense (b) — connection lost — is a **dormant** reader on the pre-planned
+  `connection_lost_at` key; no writer exists yet and none was added, because writing it means
+  consulting `ConnectionMonitor`, which stays Epic 4's (the current reader is known to lie under IB
+  error 1101). The dormant branch is pinned by a unit test whose docstring says Epic 4 supplies the
+  writer, so the day that writer lands, `degraded` lights up with zero changes to this module. The
+  precedence question the derivation also had to answer — `stale` outranks `degraded` (Judgment
+  call #8: a stale heartbeat means the process is likely dead, and reporting "running but impaired"
+  on the strength of flags from a dead run would be the more misleading answer) — is new and not
+  something this item asked, recorded here because it is the same derivation.
+
 - **Unit-tier tests transitively load Nautilus.** Every `StrategySpec` construction in
   `tests/unit/models/test_session_spec.py` triggers the lazy `src.core.live_market_data` import, which
   pulls in `nautilus_trader` — contradicting the documented "unit = parallel, no Nautilus" tier rule,
@@ -1237,6 +1250,18 @@ one superseded) and five were read and left open with updated notes. The items b
   the repo's own largest classes are 1746, 1179 and 793 lines, so the limit is plainly not measured
   on raw lines today.
 
+  **~~Resolved by Story 2.8 (2026-08-24) — by not needing to happen (Judgment call #4).~~** The
+  question this item asked was whether the class splits or the limit gets re-argued once Story 2.8
+  needed to read from it. It never came up: the health derivation lives entirely in the new
+  `src/core/live_session_health.py`, over primitives (`SessionStatus`, timestamps, `runtime_flags`
+  as a plain dict) that `live_status.py` reads off the ORM row and passes in — `SessionService`
+  gained no new method, no new import, no new line. `resolve()` is reused exactly as Story 2.3 left
+  it. The class stays at 98/100 (measured this session, one line freed since the 99 above), so
+  neither the split nor the limit-is-the-wrong-measure question needed deciding. The broader
+  question — whether the 100-line class guideline is enforced by anything, or measured against the
+  right thing for orchestration classes — stands as recorded two entries below, still the Epic 2
+  retro's to answer.
+
 - ~~**`live_node_builder.py` is at 496 of the 500-line file limit, and `live_session_runner.py` at
   498.**~~ — **Story 2.6 update (2026-08-21).** The runner's half is addressed: before adding any
   stop-signal code, four constants (`DEFAULT_SESSION_CONNECT_TIMEOUT_SECONDS`,
@@ -1408,6 +1433,13 @@ one superseded) and five were read and left open with updated notes. The items b
   obvious name — would fail the build. *Contained*, *failed*, *degraded* are the sanctioned words.
   Same action, same owner: the Epic 2 retro.
 
+  **Story 2.8 note (2026-08-24) — no growth this time, recorded so the list is not silently
+  believed complete.** `status`/`list` emit zero structlog events by design (Judgment call #7):
+  they are pure readers whose console output *is* the product, and AR41's command-scoped carve-out
+  already treats that vocabulary as separate from the session-lifecycle enumeration above. Nothing
+  to amend here — the item is appended to rather than left unmentioned, so a future reader does not
+  have to re-derive that this story was considered and found to add nothing.
+
 - **`tests/component/core/test_live_check_node.py` is a NEW file where Story 2.5's Files table says
   MOD.** `live_check_node.py` never had a suite of its own; its behaviour was covered indirectly
   through `test_live_check_driver.py`. The new `max_connection_attempts` parameter exists precisely
@@ -1506,6 +1538,24 @@ with updated notes. The items below are new.
   same posture `test_session_service.py` beside it already documents. Not a new gap; recorded so
   Story 2.6's identity claim (AC #5) is not mistaken for CI-enforced.
 
+- **Story 2.8's `trade_counts_by_session` tests are not CI-gated either, for the same reason
+  (fifth entry).** The typed-key join proof (AC #8: closed/open counts, the join-on-UUID mutation
+  check) and the `create → status → list` round trip (`test_live_status_e2e.py`) both live in
+  `tests/integration/db/`, which `--ignore`s the same way every sibling in this thread does. The
+  behavioural gap is narrower than it looks: `tests/unit/cli/commands/test_live_status_cli.py`
+  mocks the repository and carries the gated coverage for `status`/`list`'s own wiring (option
+  surface, exit codes, `--json` shape, AR36 vocabulary), and
+  `tests/unit/db/test_trading_session_repository_shape.py` gates the capability-set and
+  deterministic-ordering guards. What stays uncovered on a PR is specifically the SQL itself —
+  the `LEFT OUTER JOIN`/`FILTER` phantom-row bug this story's own TDD cycle caught (a session with
+  zero trades counted itself as one open position until the aggregate was rewritten to
+  `count(Trade.id).filter(...)` instead of `count(case(...))`) is exactly the class of defect this
+  gap would let back in silently. **Action, still the Epic 2 retro's to decide:** the two options
+  named in the first entry above (component-tier repository tests against in-memory SQLite, or
+  stop `--ignore`ing this directory with a CI Postgres service) apply unchanged; five stories
+  independently hitting the same `--ignore` is the strongest signal yet that the root cause, not
+  another workaround, is what the retro should spend its time on.
+
 ---
 
 ## Deferred from: code review of story-2.6 (2026-08-22)
@@ -1525,6 +1575,17 @@ tracked in that story's `### Review Findings` section, not here.
   token or a `last_started_at`-qualified UPDATE on the activity write, not a wider join bound.
   **Action:** decide the fencing-token question when Story 2.8 (`live status`) makes a stale-but-
   fresh-looking row operator-visible.
+
+  **~~Disposition recorded by Story 2.8 (2026-08-24) — deferred again, on its merits, not
+  resolved.~~** Judgment call #3. This story owns **no** `SessionRecordPort` writes — it is the
+  phase's one pure reader — and the item below (story-2.7's re-opening) is explicit that the
+  column "changes the meaning of every write on `SessionRecordPort`, so it belongs to a story that
+  owns that port, not to a bystander." Adding it here would be exactly that bystander move. What
+  this story *can* do without owning a write, it does: `status` renders `last_started_at` alongside
+  the heartbeat's age, the two facts an operator needs to notice a row that is stale-but-recently-
+  claimed. The decision moves to the first Epic 3/Epic 4 story that touches `SessionRecordPort`
+  write semantics, where NFR6's two-processes hazard becomes order-adjacent to whatever that story
+  is already doing. **Ratified by Allay, 2026-08-24.**
 
 - **Class-size limit violations on Story 2.6's touched files.** Measured by AST against the current
   tree: `LiveSessionRunner` = **379** lines, `SessionSteadyState` = **171**, `SessionStopSignals` =
@@ -1640,6 +1701,13 @@ tracked in that story's `### Review Findings` section, not here.
   write on `SessionRecordPort`, so it belongs to a story that owns that port, not to a bystander.
   Story 2.8 (`live status`) is the natural place, since it is what makes a stale-but-fresh-looking
   row operator-visible.
+
+  **~~Re-argued and deferred again by Story 2.8 (2026-08-24) — see the full disposition on the
+  code-review-of-2.6 entry above.~~** Not taken here after all: 2.8 turned out to be the phase's one
+  pure reader, owning no `SessionRecordPort` writes, which is precisely the "bystander" shape this
+  item's own action text warns against. `status` renders `last_started_at` next to the heartbeat's
+  age instead, and the column itself moves to the first Epic 3/Epic 4 story that owns a write on
+  that port. Ratified by Allay, 2026-08-24.
 
 - **~~`redact_accounts` reads no configuration, so a non-standard account id is not redacted.~~**
   **CLOSED by the 2026-08-23 code review (decision with Allay):** the Acceptance Auditor flagged the
@@ -1767,3 +1835,33 @@ tracked in that story's `### Review Findings` section, not here.
   limit #1 now names the full unwrapped surface. **Action:** widen `GUARDED_HANDLERS` in the story
   that first ships a strategy overriding one of these handlers, with a per-handler containment
   test.
+
+## Deferred from: code review of 2-8-see-what-a-session-is-doing-without-reading-logs (2026-08-24)
+
+Two of 24 surviving findings. The other 22 (3 decisions, 19 patches) are tracked in that story's
+`### Review Findings` section, not here.
+
+- **Two functions in the new health module exceed CLAUDE.md's 50-line function cap.**
+  `derive_health` is 63 lines and `build_status_report` 76 (`src/core/live_session_health.py:94`,
+  `:225`), both docstring-dominated — roughly 12 and 20 executable statements respectively. Files
+  (376 and 205) and classes (`StatusReport` 41, `SessionHealth` 6) are all inside their caps.
+  **Reason deferred:** pre-existing and project-wide — 195 functions under `src/` already exceed 50
+  raw lines, and this file already records that the limit "is plainly not measured on raw lines
+  today". Story 2.8 disclosed `live.py`'s file-level over-cap (533 → 538) but said nothing about
+  the function cap, so the disclosure is incomplete on its face. **Action:** no code change until
+  the Epic 2 retro settles whether the cap is measured on raw lines or on executable statements;
+  whichever it picks, apply it to this module in the same sweep as the other 195.
+
+- **`_age_seconds`'s clamp is documented with a rationale the code does not need, and its real
+  consequence is undocumented.** The docstring justifies clamping a future-dated timestamp to age 0
+  as protection against "a negative number some comparison could mistake for stale"
+  (`src/core/live_session_health.py:57-68`) — but neither consumer would misread one: a negative
+  age already compares fresh under `>` and trading under `<=`. What the clamp actually does is
+  suppress a negative age in the human output and, more importantly, mask clock skew between the
+  runner host and the querying host for the duration of the skew — a genuinely dead session can
+  read fresh. **Reason deferred:** the function deliberately mirrors
+  `session_service._heartbeat_age_seconds` (`session_service.py:142-156`), which carries the same
+  clamp, the same rationale and the same unstated skew behaviour; correcting one without the other
+  would break a symmetry Story 2.8 established on purpose. **Action:** fix both docstrings together
+  in the first story that touches heartbeat-age semantics, and decide there whether skew masking
+  deserves an operator-visible warning.

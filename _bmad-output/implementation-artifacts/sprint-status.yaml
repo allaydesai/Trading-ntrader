@@ -36,7 +36,146 @@
 
 generated: 2026-08-03
 last_updated: >-
-  2026-08-24 (Story 2.7 code-reviewed -> done, closing it. epic-2 remains in-progress: 2.1-2.7 done,
+  2026-08-24 (Story 2.8 code-reviewed -> done. review -> done. ALL EIGHT EPIC-2 STORIES ARE NOW
+  DONE, but epic-2 is deliberately left in-progress: Procedure P8 remains ⛔ not run and is still
+  the gate before Epic 2 closes (P9, added by this story, does not replace or narrow it), and
+  epic-2-retrospective is still `optional`. Flip epic-2 to done only after P8 runs.
+  Three adversarial layers (Blind Hunter with the diff alone / Edge Case Hunter with project read
+  access / Acceptance Auditor with the story) produced 33 raw findings, 25 after dedup, 1
+  dismissed. 17 of the 24 surviving findings were tests and docs, not behaviour — the production
+  code was very nearly right. The theme was guards that cannot fail, and it held despite the
+  story's own ten-mutation Debug Log: THREE properties the ACs single out were provably unguarded,
+  each confirmed by mutation rather than asserted. (1) The
+  `DEFAULT_HEARTBEAT_STALE_AFTER_SECONDS` pin the story explicitly claimed to have written did not
+  exist — setting the threshold to `9000.0` left all 2335 unit tests green, and the new health
+  tests restated the literal `90.0` in eight places, the exact thing AC #2 calls out as "never a
+  new literal". (2) Transposing closed/open trade counts passed all 67 tests, because the
+  assertion was `"3" in output` against output already full of digits from a UUID and an ISO
+  timestamp. (3) `stale` — the health value AC #3 exists for — appeared ZERO times in the CLI and
+  e2e test files; the only null-heartbeat rows were paired with CREATED, which short-circuits to
+  `stopped`. All three now pinned, the count assertion by whole rendered line and the threshold by
+  object IDENTITY (a restated `90.0` is a different float object, so `is` catches what `==` waves
+  through). Three decisions resolved with Allay: exit-4-on-DB-failure ACCEPTED and documented in
+  both `--help` tables rather than remapped (`sqlalchemy.exc.TimeoutError` collides by NAME with
+  AR28's socket entry; every fix violated a constraint — residual flagged for the retro, a script
+  branching on 4 still cannot tell a dead Gateway from a dead database); the exact seven-key
+  `--json` contract UPHELD over the "print twice" Dev Note, recorded as Judgment call #9; and every
+  `degraded` sense now renders a cause via a new `_render_degradation` with a catch-all fallback,
+  so no degraded report can render without an explanation. 21 patches applied, including behaviour
+  fixes beyond tests: `_as_utc` normalisation at the builder boundary, tolerant `runtime_flags`
+  parsing (a malformed JSONB document was tracebacking past AR28's exit table because rendering ran
+  outside the try), per-command failure prefixes (`live list` was reporting "live status failed"),
+  `--json` failures routed to stderr so stdout stays parseable for `| jq`, `!=` instead of identity
+  on the status comparison, and `overflow="fold"` so a 100-character name is not silently cropped
+  out of `live list`. THE REVIEW'S OWN FIXES WERE MUTATION-PROVEN: 12 mutations scripted, TWO
+  SURVIVED the first pass and were fixed before closeout — the degraded-fallback test never
+  exercised the fallback (every flag set hit a named branch) and the name-cropping fix shipped with
+  no test at all — the same defect class the review was convened over, caught in the reviewer's own
+  work. All 12 killed after. P9's `kill -9` step was also corrected: `$!` after a backgrounded
+  pipeline captures `tee`'s PID, so the gating procedure would have killed the log writer and
+  recorded a false negative. Final: unit 2377 (+42), component 1290 / 16 skipped (unchanged),
+  integration `--forked` 278 / 2 skipped (unchanged), DB tier 85, e2e 1, Epic 1 acceptance sweep
+  40/40, format/lint/typecheck clean, zero regressions. Two items deferred (function-size cap
+  measurement; the `_age_seconds` clamp docstring and its undocumented clock-skew masking, which
+  `session_service._heartbeat_age_seconds` shares). Previously: Story 2.8 implemented -> review.
+  ready-for-dev -> in-progress -> review, same session
+  as creation. epic-2 stays in-progress: 2.1-2.7 done, 2.8 review — the epic's last story, awaiting
+  code review. Delivers `ntrader live status <session>` and `ntrader live list`, both pure readers
+  answering from `trading_sessions` alone: no TradingNode, no import of live_session_runner, no
+  transition, no port write. All 11 tasks, all 10 ACs. NEW `src/core/live_session_health.py`
+  (376 lines): the five-value SessionHealth vocabulary, derive_health()'s pinned precedence
+  (stopped -> stale -> degraded -> trading -> idle), and the StatusReport/render_status/
+  status_json_payload trio — the render_report split live_check.py already models. `degraded`
+  covers BOTH AR32 senses from one derivation, closing the one question deferred-work.md left open
+  for this story: contained strategies (Story 2.7's live writer) and a DORMANT connection_lost_at
+  reader with no writer added (Epic 4's, per Judgment call #1) — pinned by a test whose docstring
+  says so. The false-green trap Story 2.7 documented (every strategy dead but note_bar keeps the
+  heartbeat/last_bar_at advancing) is closed by precedence alone and is named the single most
+  load-bearing test in the story. Both trading-session repositories gain trade_counts_by_session
+  (typed-key LEFT OUTER JOIN, both twins, AR9). NEW `src/cli/commands/live_status.py` (205 lines,
+  kept out of live.py which stays at its disclosed 533/500-over-cap plus two add_command lines,
+  538). trader_id renders in human output only (AR29's --json key set stays the exact pinned
+  seven). Degraded-strategy visibility (AC #5/#7) renders in the core renderer; AR36 vocabulary
+  scan extended with the closed_trade_count carve-out made explicit. Guard-list integration:
+  LIVE_MODULE_GLOBS widened to live*.py (closing a disclosed gap that already left live_start.py
+  unswept since Story 2.6), live_status.py into EXEMPT_MODULES, live_session_health.py into
+  TestImportPurity.MODULES, neither new module into STOP_PATH_MODULES (a status renderer
+  legitimately names sealed_at). Resolve-precedence pinned: a row named another row's session_id
+  string resolves to the UUID match, closing deferred-work's "silently shadow" item. TEN NAMED
+  MUTATIONS, TEN OBSERVED RED, TEN REVERTED — mutation #7 (drop the list ordering) passed
+  VACUOUSLY on its first attempt because the test fixture's names happened to alphabetize the same
+  as find_all()'s intended order; caught and fixed before the sweep closed by renaming the
+  fixtures so the two orders disagree. ONE REAL BUG FOUND BY TDD, NOT A PLANNED MUTATION: the
+  first trade_counts_by_session draft used count(case(exit_timestamp IS NULL, 1)) for open
+  positions, which counts a LEFT JOIN's phantom NULL row for a trade-less session as one open
+  position that does not exist — caught by the very first real-DB test run, fixed by switching to
+  count(Trade.id).filter(...), which ignores the phantom row because Trade.id itself is NULL on
+  it. Also found running the full integration sweep: test_epic1_ac_node.py's OWN (older, separate
+  from the story's named guards) dependency-purity test fired on the story's `json` import in
+  live_status.py -- added to that file's _STDLIB_AND_FIRST_PARTY by hand, the same
+  socket/signal/re/traceback precedent every prior live story hit once. End-to-end lands in
+  tests/integration/db/test_live_status_e2e.py, NOT tests/e2e/ (basename collision with the
+  existing unit test_live_cli.py, and the e2e tier has no Postgres fixture at all) -- disclosed
+  per the story's own instruction, mirrors test_cli_live_create.py's get_sync_session patch idiom
+  at both live.py and live_status.py. Procedure P9 appended to phase3-live-verification.md
+  (kill -9 -> stale observed at the next query past the 90s threshold); logged not-run, and
+  explicitly notes Procedure P8 remains not run and is still the Epic 2 close gate -- P9 does not
+  replace it. deferred-work.md: the degraded-both-senses item struck closed; the fencing/epoch
+  column deferred again ON ITS MERITS at both places that raised it (ratified by Allay -- this
+  story owns no SessionRecordPort writes, so adding the column here would be the exact "bystander"
+  move the item's own caveat warns against; status renders last_started_at alongside heartbeat age
+  instead, decision moves to the first Epic 3/4 story that owns a port write); the SessionService
+  class-size action struck (the health derivation needed no new method on the class at all, still
+  98/100); the repository CI-gating item gained a fifth entry; the AR41 running item gained a
+  zero-new-events note (Judgment call #7). FINAL: unit 2266 -> 2335 (+69), component 1289 -> 1290
+  / 16 skipped (+1), integration (whole dir, --forked) 265 -> 278 / 2 skipped (+13), e2e 1
+  (unchanged), Epic 1 acceptance sweep still 40/40, format/lint/typecheck clean, zero regressions.
+  Previously: 2026-08-24 (Story 2.8 created: backlog -> ready-for-dev. epic-2 stays in-progress: 2.1-2.7 done,
+  2.8 ready-for-dev — the epic's last story. File:
+  2-8-see-what-a-session-is-doing-without-reading-logs.md. Owns `live status` / `live list` with
+  `--json` (AR29's seven keys pinned by SET EQUALITY, not membership), the five-value health
+  derivation (AR32/G1) as a pure function in a NEW src/core/live_session_health.py, and a
+  read-only trade-count method on BOTH repository twins joined on the TYPED key —
+  trades.session_id is a BigInteger FK to trading_sessions.id, NOT the UUID business key, the
+  same-name-different-types hazard Story 2.3 flagged, re-verified in code this session. NO
+  migration (every column read already exists; head stays b7c419e2a3d8, single), NO port writes,
+  NO transition calls from the new commands, NO connection_lost_at WRITER (ConnectionMonitor
+  stays unread — Epic 4), no fifth status. Ten ACs: the epic's six plus strategy-failure
+  visibility (Story 2.7's handed-off epic AC, FR49), the degraded-both-senses resolution, a
+  pure-reader guard AC, and an AR28 exit-code AC (RecordNotFoundError verified ALREADY MAPPED to
+  exit 1 with a safe message, so zero new exception names — the overdue marker-protocol question
+  stays with the Epic 2 retro). EIGHT JUDGMENT CALLS recorded in Dev Notes, the three largest:
+  (1) `degraded` covers BOTH AR32 senses from one derivation — failed_strategies/all_failed (live
+  writer today) OR the pre-planned connection_lost_at key read DORMANT, pinned by a test whose
+  docstring says Epic 4 supplies the writer — closing deferred-work's one remaining open half;
+  precedence puts stale ABOVE degraded (flags from a likely-dead process must not render "running
+  but impaired"); and the false-green pin — all_failed set while the runner's own note_bar keeps
+  last_bar_at fresh must render degraded, NEVER trading — is named the most load-bearing test in
+  the story. (2) The trading/idle bar-recency split REUSES 300s = DEFAULT_NO_BARS_AFTER_SECONDS
+  with a drift pin instead of inventing a second number; that constant is already on record as
+  invented-awaiting-P6/P8-evidence, so one future correction fixes both. (3) The FENCING COLUMN is
+  deferred AGAIN, re-argued on its merits without the dead "migration is spent" argument: 2.8 is
+  the phase's one pure reader and owns no SessionRecordPort writes, and deferred-work's own caveat
+  says the column belongs to a story that owns that port — re-pointed at the first E3/E4 story
+  touching port write semantics, with status rendering last_started_at + heartbeat AGE so a
+  stale-but-fresh-looking row is at least operator-visible. FLAGGED as the one call Allay may want
+  to override before dev starts. Also settled by placement: SessionService untouched at 98/100
+  (the routed class-size action closes because health never enters the class); live.py (533, over
+  cap) gains only add_command lines, command bodies in a NEW src/cli/commands/live_status.py per
+  the live_start split precedent; the AR36 vocabulary-scan extension gets an EXPLICIT
+  closed_trade_count carve-out (the `close` stem is AR29's own mandated key — ban scoped to
+  lifecycle synonyms per the Story 1.2 precedent) rather than a silent weakening; the
+  architecture-named tests/e2e/test_live_cli.py collides with the existing unit basename and is
+  renamed; trader_id renders in HUMAN output only, derived via the framework-free live_trader_id
+  (Story 2.4's breadcrumb honoured), never in --json. Guard-list deltas enumerated per file:
+  LIVE_MODULE_GLOBS widened to live*.py (closing the disclosed gap that already leaves
+  live_start.py unswept), live_status.py into EXEMPT_MODULES, the health module into
+  TestImportPurity.MODULES, and explicitly NOT into STOP_PATH_MODULES — a status renderer
+  legitimately names sealed_at, which FORBIDDEN_SEAL_NAMES would trip. Ten named mutations
+  specified with the break/observe-red/revert discipline. Procedure P9 (live status from a second
+  terminal, then kill -9 -> stale) is specified; P8 REMAINS NOT RUN and is still the gate before
+  Epic 2 closes — P9 does not replace it.)
+  Previously: 2026-08-24 (Story 2.7 code-reviewed -> done, closing it. epic-2 remains in-progress: 2.1-2.7 done,
   2.8 backlog. Three-layer adversarial review (Blind Hunter with the diff only / Edge Case Hunter
   with repo access / Acceptance Auditor against the story's 10 ACs): 26 raw findings deduplicated to
   22, ZERO dismissed as noise — every finding survived verification against the working tree. SIX
@@ -1300,7 +1439,7 @@ development_status:
   2-5-start-a-session-in-the-foreground-with-an-ordered-startup-sequence: done
   2-6-stop-a-session-without-ending-it-and-without-touching-positions: done
   2-7-keep-one-failing-strategy-from-taking-down-the-session: done
-  2-8-see-what-a-session-is-doing-without-reading-logs: backlog
+  2-8-see-what-a-session-is-doing-without-reading-logs: done
   epic-2-retrospective: optional
 
   # Epic 3: Live Order Execution & Trade Capture

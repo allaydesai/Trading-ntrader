@@ -6,6 +6,7 @@ this directory's house style for async coverage (``test_backtest_repository.py``
 rather than the shared conftest, which only offers a sync fixture for this pattern.
 """
 
+from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import uuid4
 
@@ -15,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from src.db.base import Base
 from src.db.exceptions import DuplicateRecordError
+from src.db.models.trade import Trade
 from src.db.repositories.backtest_repository_sync import SyncBacktestRepository
 from src.db.repositories.trading_session_repository import TradingSessionRepository
 from src.db.repositories.trading_session_repository_sync import SyncTradingSessionRepository
@@ -37,8 +39,6 @@ def _spec(strategy_id="sma_crossover", overrides=None, bar_types=None):
 
 
 def _backtest_run(repository: SyncBacktestRepository):
-    from datetime import datetime, timezone
-
     return repository.create_backtest_run(
         run_id=uuid4(),
         strategy_name="SMA Crossover",
@@ -173,6 +173,145 @@ class TestSyncTradingSessionRepository:
         assert repository.find_by_name("uncommitted-session") is None
 
 
+def _trade(session_id: int, *, exit_timestamp=None, trade_id: str) -> Trade:
+    """A minimal ``Trade`` row owned by a session (Story 2.8, AC #8)."""
+    return Trade(
+        session_id=session_id,
+        instrument_id="AAPL",
+        trade_id=trade_id,
+        venue_order_id=f"order-{trade_id}",
+        order_side="BUY",
+        quantity=Decimal("10"),
+        entry_price=Decimal("100.00"),
+        exit_price=Decimal("110.00") if exit_timestamp is not None else None,
+        entry_timestamp=datetime(2026, 8, 24, 10, 0, 0, tzinfo=timezone.utc),
+        exit_timestamp=exit_timestamp,
+    )
+
+
+@pytest.mark.integration
+class TestSyncTradeCountsBySession:
+    """AC #8: closed/open trade counts, joined on the typed BigInteger key."""
+
+    def test_counts_closed_and_open_trades_separately(self, sync_db_session):
+        repository = SyncTradingSessionRepository(sync_db_session)
+        session = repository.create(name="counts-session", spec=_spec().to_stored())
+        sync_db_session.flush()
+
+        closed_at = datetime(2026, 8, 24, 11, 0, 0, tzinfo=timezone.utc)
+        sync_db_session.add_all(
+            [
+                _trade(session.id, trade_id="t1", exit_timestamp=closed_at),
+                _trade(session.id, trade_id="t2", exit_timestamp=closed_at),
+                _trade(session.id, trade_id="t3", exit_timestamp=None),
+            ]
+        )
+        sync_db_session.commit()
+
+        counts = repository.trade_counts_by_session([session.id])
+
+        assert counts[session.id] == (2, 1)
+
+    def test_a_session_with_no_trades_reports_zero_and_zero(self, sync_db_session):
+        repository = SyncTradingSessionRepository(sync_db_session)
+        session = repository.create(name="empty-counts-session", spec=_spec().to_stored())
+        sync_db_session.commit()
+
+        counts = repository.trade_counts_by_session([session.id])
+
+        assert counts[session.id] == (0, 0)
+
+    def test_counts_do_not_leak_across_sessions(self, sync_db_session):
+        """The join is per-session — one session's trades must not bleed into another's."""
+        repository = SyncTradingSessionRepository(sync_db_session)
+        first = repository.create(name="counts-session-a", spec=_spec().to_stored())
+        second = repository.create(name="counts-session-b", spec=_spec().to_stored())
+        sync_db_session.flush()
+
+        closed_at = datetime(2026, 8, 24, 11, 0, 0, tzinfo=timezone.utc)
+        sync_db_session.add_all(
+            [
+                _trade(first.id, trade_id="a1", exit_timestamp=closed_at),
+                _trade(second.id, trade_id="b1", exit_timestamp=None),
+                _trade(second.id, trade_id="b2", exit_timestamp=None),
+            ]
+        )
+        sync_db_session.commit()
+
+        counts = repository.trade_counts_by_session([first.id, second.id])
+
+        assert counts[first.id] == (1, 0)
+        assert counts[second.id] == (0, 2)
+
+    def test_no_argument_covers_every_session(self, sync_db_session):
+        repository = SyncTradingSessionRepository(sync_db_session)
+        session = repository.create(name="all-sessions-counts", spec=_spec().to_stored())
+        sync_db_session.flush()
+        sync_db_session.add(
+            _trade(
+                session.id,
+                trade_id="all1",
+                exit_timestamp=datetime(2026, 8, 24, 11, 0, 0, tzinfo=timezone.utc),
+            )
+        )
+        sync_db_session.commit()
+
+        counts = repository.trade_counts_by_session()
+
+        assert counts[session.id] == (1, 0)
+
+    def test_the_join_is_on_the_internal_id_not_the_business_uuid(self, sync_db_session):
+        """AC #8's typed-key check, in two halves — the first of which was
+        missing.
+
+        1. **The repository's own query returns the right counts.** The first
+           version of this test built its own deliberately-wrong ``select()``
+           and asserted Postgres refused it, without ever calling
+           ``trade_counts_by_session`` or asserting any count — so it would
+           have passed unchanged had the repository joined on the UUID. It
+           tested the database, filed under a name that claimed to test the
+           code.
+        2. **The wrong join cannot silently return a wrong answer.**
+           ``trades.session_id`` is a ``BigInteger`` FK to
+           ``trading_sessions.id``; the UUID business key shares its name but
+           not its type, so Postgres rejects the comparison outright rather
+           than quietly matching nothing.
+        """
+        from sqlalchemy import select
+        from sqlalchemy.exc import DBAPIError
+
+        from src.db.models.trading_session import TradingSession
+
+        repository = SyncTradingSessionRepository(sync_db_session)
+        session = repository.create(name="typed-key-session", spec=_spec().to_stored())
+        sync_db_session.flush()
+        sync_db_session.add_all(
+            [
+                _trade(
+                    session.id,
+                    trade_id="typed1",
+                    exit_timestamp=datetime(2026, 8, 24, 11, 0, 0, tzinfo=timezone.utc),
+                ),
+                _trade(session.id, trade_id="typed2", exit_timestamp=None),
+            ]
+        )
+        sync_db_session.commit()
+
+        # Half 1: the production query, exercised.
+        counts = repository.trade_counts_by_session([session.id])
+        assert counts[session.id] == (1, 1)
+
+        # Half 2: the alternative join is a type error, not a silent zero.
+        wrong_join = (
+            select(Trade.id)
+            .select_from(Trade)
+            .join(TradingSession, Trade.session_id == TradingSession.session_id)
+        )
+        with pytest.raises(DBAPIError):
+            sync_db_session.execute(wrong_join)
+        sync_db_session.rollback()
+
+
 def _worker_id(request):
     return getattr(request.config, "workerinput", {}).get("workerid", "master")
 
@@ -277,3 +416,37 @@ class TestAsyncTradingSessionRepository:
     # AC #7/#8 shape guards moved to
     # tests/unit/db/test_trading_session_repository_shape.py — see the note in
     # the sync class above.
+
+
+@pytest.mark.integration
+class TestAsyncTradeCountsBySession:
+    """AC #8, AR9's async twin: same behaviour, same typed-key join."""
+
+    async def test_counts_closed_and_open_trades_separately(self, async_session):
+        repository = TradingSessionRepository(async_session)
+        session = await repository.create(name="async-counts-session", spec=_spec().to_stored())
+        await async_session.flush()
+
+        closed_at = datetime(2026, 8, 24, 11, 0, 0, tzinfo=timezone.utc)
+        async_session.add_all(
+            [
+                _trade(session.id, trade_id="async-t1", exit_timestamp=closed_at),
+                _trade(session.id, trade_id="async-t2", exit_timestamp=None),
+            ]
+        )
+        await async_session.commit()
+
+        counts = await repository.trade_counts_by_session([session.id])
+
+        assert counts[session.id] == (1, 1)
+
+    async def test_a_session_with_no_trades_reports_zero_and_zero(self, async_session):
+        repository = TradingSessionRepository(async_session)
+        session = await repository.create(
+            name="async-empty-counts-session", spec=_spec().to_stored()
+        )
+        await async_session.commit()
+
+        counts = await repository.trade_counts_by_session([session.id])
+
+        assert counts[session.id] == (0, 0)

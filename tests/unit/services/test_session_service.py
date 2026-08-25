@@ -331,6 +331,28 @@ class TestResolve:
 
         assert found is row
 
+    def test_a_row_named_another_rows_session_id_resolves_to_the_uuid_match(self):
+        """Story 2.8's resolve-precedence pin: ``find_by_session_id`` before
+        ``find_by_name``, deliberately and without an ambiguity error
+        (deferred-work.md, "resolve()'s UUID-before-name precedence can
+        silently shadow" — Story 2.3 Judgment call #6). Row A's ``session_id``
+        and row B's ``name`` collide on the same string; ``resolve()`` must
+        return A, the UUID match, and never even ask the name lookup.
+        Rejecting UUID-shaped ``--name`` values at creation stays open for the
+        Epic 2 retro.
+        """
+        row_a = _session_row(SessionStatus.CREATED, session_id=SESSION_ID, name="row-a")
+        row_b_shadowed_by_the_uuid = _session_row(
+            SessionStatus.CREATED, session_id=uuid4(), name=str(SESSION_ID)
+        )
+        repository = _repository(row_a, by_name=row_b_shadowed_by_the_uuid)
+        service = SessionService(repository)
+
+        found = service.resolve(str(SESSION_ID))
+
+        assert found is row_a
+        repository.find_by_name.assert_not_called()
+
 
 class TestTheLockedReadIsActuallyRequested:
     """AC #6: the safety-critical half that lives in *this* module.

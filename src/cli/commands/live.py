@@ -37,6 +37,7 @@ from rich.markup import escape
 from sqlalchemy.exc import SQLAlchemyError
 
 from src.cli.commands.live_start import claim_session, exit_with, release_quietly
+from src.cli.commands.live_status import list_sessions, status
 from src.config import get_settings
 from src.core.live_cache import build_cache_config
 from src.core.live_check import EXIT_ERROR, render_report
@@ -78,6 +79,10 @@ DEFAULT_CONNECT_TIMEOUT_SECONDS = 60.0
 @click.group("live")
 def live() -> None:
     """Live paper-trading commands."""
+
+
+live.add_command(status)
+live.add_command(list_sessions)
 
 
 def _validate_strategy(ctx: click.Context, param: click.Parameter, value: str) -> str:

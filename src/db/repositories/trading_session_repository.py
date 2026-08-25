@@ -3,14 +3,15 @@
 For sync operations (CLI use), use trading_session_repository_sync.py.
 """
 
-from typing import List, Optional
+from typing import List, Optional, Sequence
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.exceptions import DatabaseConnectionError, DuplicateRecordError
+from src.db.models.trade import Trade
 from src.db.models.trading_session import TradingSession
 
 
@@ -142,3 +143,32 @@ class TradingSessionRepository:
         )
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
+
+    async def trade_counts_by_session(
+        self, session_ids: Optional[Sequence[int]] = None
+    ) -> dict[int, tuple[int, int]]:
+        """Closed and open trade counts per session (Story 2.8, AC #8).
+
+        The async twin of the sync repository's method of the same name —
+        see there for the full rationale (typed-key join, ``LEFT OUTER
+        JOIN`` so a trade-less session still reports ``(0, 0)``).
+
+        Args:
+            session_ids: Internal ``TradingSession.id`` values to restrict the
+                query to, or ``None`` for every session.
+
+        Returns:
+            A mapping of ``TradingSession.id`` to ``(closed_count, open_count)``.
+        """
+        closed = func.count(Trade.id).filter(Trade.exit_timestamp.is_not(None))
+        open_ = func.count(Trade.id).filter(Trade.exit_timestamp.is_(None))
+        stmt = (
+            select(TradingSession.id, closed, open_)
+            .select_from(TradingSession)
+            .outerjoin(Trade, Trade.session_id == TradingSession.id)
+            .group_by(TradingSession.id)
+        )
+        if session_ids is not None:
+            stmt = stmt.where(TradingSession.id.in_(session_ids))
+        result = await self.session.execute(stmt)
+        return {row[0]: (row[1], row[2]) for row in result}
