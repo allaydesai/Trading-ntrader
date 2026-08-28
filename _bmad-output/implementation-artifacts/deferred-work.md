@@ -1865,3 +1865,152 @@ Two of 24 surviving findings. The other 22 (3 decisions, 19 patches) are tracked
   would break a symmetry Story 2.8 established on purpose. **Action:** fix both docstrings together
   in the first story that touches heartbeat-age semantics, and decide there whether skew masking
   deserves an operator-visible warning.
+
+## Deferred from: live-verification session of 2026-08-28 (Procedures P1–P9)
+
+Two findings surfaced by running the live procedures against a real paper Gateway inside RTH, rather
+than by code review. Both come from the same run of Procedure P5 and are recorded in that procedure's
+result log in `docs/qa/phase3-live-verification.md`.
+
+- **A transient IB data-farm drop at subscribe time kills a bar subscription permanently, and nothing
+  retries it.** MEASURED, `logs/p5-check-20260828.log`: 324 ms after the data client reported
+  `Subscribed AAPL.NASDAQ-1-MINUTE-LAST-EXTERNAL bars` for request id 10007, IB sent
+  `HMDS data farm connection is broken:ushmds` (code 2105) followed by
+  `Failed to request live updates (disconnected). (code: 10182, req_id=10007)`. The farm recovered
+  514 ms later (2106) and the market-data farm flapped and recovered too (2103 → 2104), but the
+  live-update stream for req 10007 was never re-requested. Zero bars arrived for the remaining 90
+  seconds, and teardown closed with `No historical data query found for ticker id:10007` (366). An
+  identical run minutes later, with no farm codes, took 5 bars — so this is the blip, not the code.
+  **Reason deferred:** it is an adapter-level reconnect concern discovered during verification, not a
+  defect in any story's acceptance criteria, and no Epic 2 story owns market-data resubscription.
+  **Action:** decide who owns resubscription-after-10182 before Procedure **P6** is treated as
+  meaningful. P6 runs unattended for 6.5 hours and its criterion 4 asks that `last_bar_at` stay
+  within about a minute of the most recent bar; a session that takes this blip keeps heartbeating and
+  keeps its row looking healthy while receiving nothing, so P6 would be measuring a dead stream
+  without saying so. `scripts/diagnostics/run_p6_rth_day.sh` greps the transcript for codes
+  10182/2103/2105/366 and warns, which is a detector, not a fix.
+
+- **`live check` reports `ok` and exit 0 for a dead subscription, and blames regular trading hours.**
+  When the above run received zero bars, the summary read *"no bars closed during the observation
+  window. Outside regular trading hours this is expected (use_rth=True means no bar closes)"* — at
+  10:14 ET on a Friday, with the market open. The command has no RTH awareness, so its zero-bar
+  explanation is asserted rather than determined, and it is asserted most confidently in exactly the
+  case where something is actually wrong. `--require-bars` turns the same run into exit 1 and is the
+  right flag for scripted use, but the default is misleading. **Reason deferred:** AR28's exit-code
+  table has no outcome for "connected and subscribed but received nothing", and Story 1.7 already
+  recorded that inventing one is worse than a generic failure — so this needs a decision, not a
+  patch. **Action:** either soften the message to name both possibilities without choosing between
+  them, or give the command a real RTH calendar so it can tell them apart. Procedure P5's pass
+  criterion 3 should not be read as covering this: the procedure passes on the bars it did receive.
+
+- **Procedure P4's probe cannot pass its own final assertion, by construction.**
+  `live_connection_loss_probe.py:341-343` requires the string `socket` in `status.detail` before it
+  will certify the disconnect, but `read_connection_status` tests `_client_is_unusable` *before* the
+  socket flag (`src/core/live_connection_probe.py:114-118`) and the probe produces its disconnect by
+  calling `node.stop()` — which makes the client unusable. The earlier branch therefore always wins
+  and the detail reads `ib client is stopped or disposed`, never `ib socket not connected`. MEASURED
+  2026-08-28 against a real paper Gateway: all three of P4's pass criteria appeared in the transcript
+  (`recovering permitted=False` on a live socket, `confirmed … permitted=True`, then `lost
+  permitted=False` with a session-bound `connection.lost`), and the run still ended
+  `RESULT: fail reason=ProbeError …`, exit 1. The socket drop was independently confirmed in the same
+  run — `_await_socket_disconnect` polls `_is_ib_connected` directly and returned normally, and would
+  otherwise have raised its own distinct error — so the assertion is redundant as well as unreachable.
+  **Reason deferred:** the production reader's branch order is deliberate and fail-closed, and
+  changing it to satisfy a diagnostic script would be the wrong direction; this is the script's
+  assertion and the procedure's documented expected output that are wrong. **Action:** either relax
+  the assertion to accept the stopped/disposed detail (the socket poll already proves the drop), or
+  drive the disconnect by stopping the **Gateway** instead of the node so the client stays usable and
+  the socket branch can report; then correct the `detail=ib socket not connected` line in P4's
+  "Expected output" block, which is unreachable via `node.stop()` on nautilus-trader 1.220.0.
+
+- **🚨 BLOCKER — a live session cannot submit any order: the IB execution client is never given a
+  default route.** `InteractiveBrokersExecClientConfig` is constructed without a `routing=`
+  argument (`src/core/live_node_builder.py:333-339`), so it takes Nautilus's default
+  `RoutingConfig(default=False)` and serves only its own `INTERACTIVE_BROKERS` venue. Every
+  instrument this codebase trades carries the *exchange* as its venue — `AAPL.NASDAQ`,
+  `NVDA.NASDAQ`, `MSFT.NASDAQ` — so no order can ever be routed to it. MEASURED 2026-08-28 against
+  the live paper Gateway, twice, while attempting Procedure P7's criterion 2: a real
+  `sma_crossover` produced a real signal and a real `MarketOrder`, and `ExecEngine` refused it with
+  `Cannot execute command: no execution client configured for NASDAQ or 'client_id' None,
+  SubmitOrder(order=MarketOrder(SELL 22 NVDA.NASDAQ MARKET GTC …))`. The order stops at
+  `OrderInitialized`: there is no `OrderSubmitted`, `OrderAccepted`, `OrderFilled`, `OrderDenied`,
+  `OrderRejected` or `PositionOpened` anywhere in either transcript. The likely one-line fix is
+  `routing=RoutingConfig(default=True)` on that config, which is what the adapter's own examples
+  use, but it must be **verified live** rather than assumed — and it deserves a test that fails
+  today, because nothing in the suite currently notices.
+  **Reason deferred:** it is a live-verification finding, not a code-review one, and it is larger
+  than any single story — no Epic 1 or Epic 2 acceptance criterion asserts that an order reaches
+  the broker (Epic 1 deliberately has no order path, and Epic 2's stories are about session
+  lifecycle), so nothing that has been marked done is actually wrong. It is nonetheless the most
+  consequential thing found on 2026-08-28.
+  **Action, and what it invalidates:** fix and re-verify before Epic 3, which owns trades and would
+  otherwise be built on a path that has never once executed. Two statements already written into
+  `docs/qa/phase3-live-verification.md` are false until it is fixed and must be corrected then —
+  Procedure P6's "It **does** submit orders if the strategy's logic fires", and Procedure P7's "A
+  session that traded will have been flattened by `sma_crossover.on_stop()`". **No session has ever
+  traded.** Procedure P7's criterion 2 position-open half is unreachable by any means until this is
+  resolved, and the `sma_crossover.on_stop()` flatten warning that P6, P7 and P8 all carry has
+  never been exercised against a session-owned position. Story 3.1, which is scheduled to remove
+  that flatten, should re-read those warnings in this light.
+
+  **✅ RESOLVED 2026-08-28, same session.** `routing=RoutingConfig(default=True)` now passed
+  explicitly on that config. The mechanism, confirmed against the installed 1.220.0 source rather
+  than assumed: Nautilus registers a client as the engine's default only when the config asks
+  (`live/node_builder.py:252-254`), and its own fallback — adopt the first client registered —
+  fires **only** for a client constructed with `venue=None` (`execution/engine.pyx:421-429`). The
+  IB *exec* client passes `venue=IB_VENUE` (`execution.py:157`) so it never qualified; the IB
+  *data* client passes `venue=None` (`data.py:115`) so it did, which is precisely why market data
+  worked and hid this for two epics. Regression coverage added in
+  `tests/component/core/test_live_node_builder.py`: `TestExecutionRouting` drives Nautilus's real
+  `TradingNodeBuilder.build_exec_clients` and asserts a `SubmitOrder` for `NVDA.NASDAQ` reaches the
+  client, with an anti-tautology twin proving the same harness counts **zero** under the stock
+  `RoutingConfig` and a control proving an `INTERACTIVE_BROKERS`-venued order routed even before
+  the fix. Plus the config/canary/structural guards in `TestExecClientDefaultRouting`.
+  Verified live: `ExecClient-INTERACTIVE_BROKERS: Submit MarketOrder(SELL 22 NVDA.NASDAQ …)` —
+  a line that had never appeared in any transcript before.
+
+- **🚨 BLOCKER (second, found behind the first) — the execution client's instrument provider is
+  never loaded, so a routed order dies inside the adapter.** Found immediately after the routing
+  fix above let an order reach the client for the first time; it had been unreachable until then.
+  `InteractiveBrokersExecClientConfig` was constructed with no `instrument_provider=`, leaving
+  `load_ids=None`, while `_transform_order_to_ib_order` dereferences
+  `self.instrument_provider.find(order.instrument_id).is_inverse` with **no `None` check**
+  (`adapters/interactive_brokers/execution.py:525`). MEASURED live 2026-08-28
+  (`logs/p7-position-20260828-153506.log`): `[ERROR] ExecClient-INTERACTIVE_BROKERS: Error on
+  'submit_order: SubmitOrder(order=MarketOrder(SELL 22 NVDA.NASDAQ MARKET GTC …))':
+  AttributeError("'NoneType' object has no attribute 'is_inverse'")`. Note the failure shape: it is
+  an exception raised *inside the adapter's own* `submit_order`, so the strategy sees no rejection
+  and no `OrderDenied` — the order simply stops.
+  **✅ RESOLVED 2026-08-28**: the exec client now carries the same
+  `InteractiveBrokersInstrumentProviderConfig(load_ids=…)` as the data client — a session can only
+  trade what it subscribed to. Covered by
+  `TestInstrumentLoading::test_the_exec_client_loads_the_same_instruments_as_the_data_client`.
+  **What this invalidates:** Procedure P3's "Known benign log lines" listed
+  `InteractiveBrokersInstrumentProvider: No loading configured` as benign, reasoning that "the
+  execution client constructs its own instrument provider, which this story deliberately leaves at
+  its default — Epic 1 has no order path that would need it". That reasoning was sound for Epic 1
+  and expired when Epic 2 started strategies. The entry is struck through in
+  `docs/qa/phase3-live-verification.md` with the measurement above.
+  **Lesson worth carrying:** two independent defects sat in series on the order path, and the
+  first completely masked the second. Neither was visible to the automated suite, and neither was
+  visible to any procedure that stopped short of submitting a real order. "Market data arrives" is
+  not evidence about orders; only an order reaching the broker is.
+
+- **A third instance of "an IB subscription error permanently kills the stream and nothing retries
+  it" — this time IB code 162.** The first entry in this section recorded code 10182 after a
+  data-farm blip. On 2026-08-28, while trying to close P7's criterion 2 after the two order-path
+  fixes, four consecutive sessions received **zero bars** because IB answered each subscription's
+  request id with `Historical Market Data Service error message:Trading TWS session is connected
+  from a different IP address (code: 162)`. Ruled out as causes, by experiment: a stale client id
+  (reproduced with `IBKR_LIVE_CLIENT_ID=17`), and anything contract-specific (reproduced on
+  `MSFT.NASDAQ` and `NVDA.NASDAQ`). It began mid-session at ~15:39 UTC after runs in the same hour
+  had taken bars normally, so the trigger is account-side — a competing IBKR login. Logs:
+  `logs/p7-position-20260828-{153949,154259,154402,154527}.log`.
+  **Reason deferred:** the trigger is environmental and not ours to fix. The *response* is ours,
+  and it is the same gap as 10182: the session keeps heartbeating, keeps its row looking healthy,
+  and reports nothing wrong while receiving nothing at all.
+  **Action:** whoever owns resubscription-after-10182 should own this too — the two want one
+  mechanism, not two special cases. Until then, treat "zero bars inside RTH" as a red flag rather
+  than a quiet outcome, and note that this now bites **P6** hardest, whose criterion 4 would
+  measure a dead stream and read as a pass. The three known killers to grep a transcript for are
+  **162**, **10182** and **366**.
