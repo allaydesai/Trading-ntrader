@@ -48,29 +48,44 @@ last_updated: >-
   from partial to pass. P4's three criteria are evidenced but its probe still exits 1 on an
   assertion that cannot pass by the route it takes. P6 did not run (it needs a pre-09:30 start) and
   is prepared for the next pre-open window with a session and scripts/diagnostics/run_p6_rth_day.sh.
-  ⚠️ TWO BLOCKERS FOUND ON THE ORDER PATH, SITTING IN SERIES — BOTH NOW FIXED, see deferred-work.md.
-  (1) A live session could not submit any order: InteractiveBrokersExecClientConfig was built with
-  no `routing=`, so it served only the INTERACTIVE_BROKERS venue while every instrument is
-  SYMBOL.EXCHANGE; a real signal produced a real MarketOrder and ExecEngine refused it ("no
-  execution client configured for NASDAQ"). (2) Fixing that revealed the next one immediately: the
-  exec client's own instrument_provider was never loaded, and the adapter dereferences
+  TWO ORDER-PATH DEFECTS FOUND AND FIXED WHILE PROBING P7 — **Epic 3 groundwork, not Epic 2 work**,
+  and they do not qualify this closure. Neither epic asserts an order reaches the broker; Epic 2's
+  own board comment reads "Still no orders", and the only order language in its stories is negative
+  (Story 2.6: "no order is submitted on the stop path") or reporting (Story 2.8: "a session that is
+  running but has not traded"). Nothing Epic 2 promised was broken. What was happening is that
+  Story 2.5 starts REAL strategies, so `sma_crossover` was ATTEMPTING orders as a side effect of a
+  feature that never claimed them, and those attempts failed silently. Detail: (1)
+  InteractiveBrokersExecClientConfig was built with no `routing=`, so it served only the
+  INTERACTIVE_BROKERS venue while every instrument is SYMBOL.EXCHANGE, and ExecEngine refused every
+  order ("no execution client configured for NASDAQ"); (2) fixing that immediately revealed the
+  next — the exec client's own instrument_provider was never loaded, and the adapter dereferences
   `instrument_provider.find(...).is_inverse` with no None check
-  (adapters/interactive_brokers/execution.py:525), so the first order that ever reached the client
-  died as AttributeError INSIDE the adapter, invisible to the strategy. Both fixed in
+  (adapters/interactive_brokers/execution.py:525), so the first order ever to reach the client died
+  as AttributeError INSIDE the adapter, invisible to the strategy. Both fixed in
   src/core/live_node_builder.py with regression tests (TestExecutionRouting drives Nautilus's real
-  TradingNodeBuilder; TestInstrumentLoading pins the exec provider). Neither invalidates any Epic 1
-  or Epic 2 acceptance criterion — neither epic asserts an order reaches the broker — which is why
-  epic-2 still closes. Both DID block Procedure P7's criterion 2 position-open half. Two claims in
-  the verification doc were false until 2026-08-28 and are now corrected in place: P6's "It does
-  submit orders if the strategy's logic fires" and P7's "A session that traded will have been
-  flattened by sma_crossover.on_stop()". Before 2026-08-28, NO SESSION HAD EVER TRADED.
-  ⚠️ STILL OPEN: P7 criterion 2 is not yet closed. The fixes are proven to the point of order
-  submission live (the line `ExecClient-INTERACTIVE_BROKERS: Submit MarketOrder(SELL 22
-  NVDA.NASDAQ ...)` had never appeared in any transcript before), but a FILL has not been observed:
+  TradingNodeBuilder; TestInstrumentLoading pins the exec provider); unit 2377 / component 1297 /
+  integration 278 all pass. **Ownership: Story 3.2 (submit-a-strategys-orders-to-the-broker)
+  inherits these as already-landed groundwork and owns their live verification.** Two claims in the
+  verification doc were false until 2026-08-28 and are corrected in place: P6's "It does submit
+  orders if the strategy's logic fires" and P7's "A session that traded will have been flattened by
+  sma_crossover.on_stop()". Before 2026-08-28, no session had ever traded — true, and unremarkable,
+  because nothing before Epic 3 was meant to.
+  ⚠️ DEFERRED TO EPIC 3: Procedure P7's criterion 2 **position-open half** is not closed and no
+  longer gates anything in Epic 2 — the criterion's no-position half passed on 2026-08-23, and the
+  position-open half needs an order path that is Epic 3's subject. The fixes are proven live as far
+  as submission (`ExecClient-INTERACTIVE_BROKERS: Submit MarketOrder(SELL 22 NVDA.NASDAQ ...)`, a
+  line that had never appeared in any transcript), but no FILL has been observed:
   repeated attempts hit IB error 162 ("Trading TWS session is connected from a different IP
   address") on the bar subscription's request id, which kills the stream at birth exactly as the
   10182 farm-blip does — the third instance now of a subscription-killing IB error that nothing
-  retries. Re-run P7 criterion 2 inside RTH on a clean Gateway.)
+  retries. Cause confirmed by Allay: an IBKR mobile-app login mid-session; IBKR permits one active
+  session per account, so it evicted the Gateway's market-data entitlement while leaving the API
+  socket up. Re-run under Story 3.2 inside RTH with no other IBKR login active.
+  NET: Epic 2 is closed on its own terms. Every Epic 2 acceptance criterion is met, all eight
+  stories are done, and its verification tier (P6-P9) is complete except P6, which needs a
+  pre-09:30 start and is prepared. epic-2-retrospective remains `optional` and was NOT run.
+  NEXT: Epic 3 (Live Order Execution & Trade Capture), which now starts from a working submit
+  path rather than a broken one.)
   Previously: 2026-08-24 (Story 2.8 code-reviewed -> done. review -> done. ALL EIGHT EPIC-2 STORIES
   ARE NOW DONE, but epic-2 is deliberately left in-progress: Procedure P8 remains ⛔ not run and is
   still the gate before Epic 2 closes (P9, added by this story, does not replace or narrow it), and
@@ -1483,6 +1498,18 @@ development_status:
   # BLOCKED ON E2's trader_id (deterministic client order IDs). Story 3.1 removes
   # close_all_positions() from on_stop() — must land before E4's stop/restart cycle, or
   # every daily stop manufactures a fake round trip.
+  #
+  # GROUNDWORK ALREADY LANDED (2026-08-28, found while probing P7, fixed in
+  # src/core/live_node_builder.py — commit 90337eb): two defects sat in series on the order
+  # path and are both fixed, so 3.2 starts from a working submit path rather than a broken
+  # one. (a) the IB exec client had no default route, so ExecEngine dropped every order for a
+  # SYMBOL.EXCHANGE instrument; (b) its instrument provider was never loaded, so the adapter
+  # raised AttributeError while translating the first order that reached it. Story 3.2 OWNS
+  # the live verification of both — proven to submission, never to a fill.
+  # ⚠️ 3.2 also inherits Procedure P7's criterion 2 position-open half, deferred out of Epic 2.
+  # ⚠️ 3.1 note: because no session had ever traded, the sma_crossover.on_stop() flatten that
+  # 3.1 removes has NEVER been exercised against a session-owned position. The warnings P6/P7/P8
+  # carry about it are untested assumptions, not observations.
   epic-3: backlog
   3-1-stop-trading-without-manufacturing-an-exit: backlog
   3-2-submit-a-strategys-orders-to-the-broker: backlog
