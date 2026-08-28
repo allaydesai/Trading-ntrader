@@ -36,7 +36,157 @@
 
 generated: 2026-08-03
 last_updated: >-
-  2026-08-28 (EPIC 2 CLOSED: in-progress -> done, on Allay's call. The gate the 2026-08-24 entry
+  2026-08-28 (EPIC 2 RETROSPECTIVE COMPLETED — epic-2-retrospective: optional -> done. Full writeup
+  at _bmad-output/implementation-artifacts/epic-2-retro-2026-08-28.md. Documentation-driven per
+  Allay's standing direction from the Epic 1 retro: synthesized from all 8 story Dev Agent Records
+  (~752 KB), deferred-work.md (2023 lines), this file's narrative, phase3-live-verification.md,
+  epics.md, and direct measurement of the repo at 0602f1f — 13 parallel extraction agents, then
+  synthesis. HEADLINE: the defect class of this epic is A TEST THAT CANNOT FAIL, it appeared in all
+  eight stories, and NO SINGLE VERIFICATION LAYER CATCHES IT. Measured ordering of what catches what:
+  TDD Red-first misses a fixture-satisfied assertion; mutation of PREDICTED guards misses any
+  property the author did not predict (2.8 killed all ten of its mutations and still left three
+  AC-named properties provably unguarded — setting DEFAULT_HEARTBEAT_STALE_AFTER_SECONDS to 9000.0
+  left all 2335 unit tests green); the 3-layer adversarial review misses its OWN new tests (2.8
+  mutation-tested the review's fixes: 12 scripted, TWO SURVIVED); and none of them can see a code
+  path that has never executed, which is what the live tier is for. Review ran 8/8 stories, 7/8
+  produced a load-bearing find (~310 raw findings, 124 patches, 29 decisions to Allay) — matching
+  Epic 1's 7/7, no diminishing returns, and the practice ESCALATED UNPROMPTED TWICE (an independent
+  refuter layer at 2.2/2.4 refuting 61-63% as noise, and mutation-testing the review's own fixes at
+  2.8). SECOND FINDING: "build context by executing the installed wheel" stopped being a technique
+  and became the drafting method — and it OVERTURNED TWO OF EPIC 2'S OWN ACs at Story 2.7 (AC #1's
+  "caught at the runner boundary" describes a place that does not exist; AC #2 is false under raw
+  Nautilus because publish_c aborts the subscriber loop), with Nautilus's own docstring at
+  live/config.py:48-50 measured factually wrong. EPIC 1 RETRO FOLLOW-THROUGH: the DIRECTED numbered
+  items were followed at a near-perfect rate (6/7 technical DONE, 1 partial by design; AI-3/AI-7/
+  AI-9/AI-10 cited BY NUMBER inside production docstrings; commitment #1 honoured verbatim — items
+  4-10 folded into Story 2.5's dev notes). AI-4 is the clearest single win: 2.5 was PLANNED around
+  the NautilusKernel hook gap and that planning surfaced a second trap the retro did not predict
+  (Trader.add_strategy SILENTLY no-ops on a running trader without a controller). Every failure was
+  in the UNDIRECTED "non-blocking, lower priority" bucket: 6 of 7 never addressed, two of them
+  demonstrably cost Epic 2 real work (classify_failure's name-coupling bit Story 2.8; the IB-1101
+  resubscription gap is now the THIRD instance of its class), and a third — exec-client load_ids —
+  was mislabelled low priority and turned out to be one of two blockers meaning no session had ever
+  traded. ACTION: give each such item a named owning story, not a priority label.
+  SIX DECISIONS ROUTED TO ALLAY (D1-D6 in the retro doc), five of them deferred 3-5 times already:
+  D1 the owner/epoch FENCING COLUMN (5 deferrals; the only unmitigated NFR6 hazard, ~30s of two live
+  processes on one broker account; its cost argument died with 2.7's second migration; recommend
+  assigning to the first Epic 3 story owning a SessionRecordPort write, i.e. 3.6); D2 CI's
+  --ignore=tests/integration/db (5 deferrals, self-identified; recommend the Postgres service over
+  SQLite component tests, because the tables use JSONB/PG_UUID/sa.Enum so SQLite cannot exercise the
+  SQL that actually broke); D3 the AR28 marker protocol (4 deferrals, now overdue at five names vs
+  three; name-keyed matching already produced a real cross-domain false positive); D4 what the size
+  caps mean (recommend keeping them, re-expressing on executable statements, and adding an AST guard
+  in the AR37 shape); D5 all-strategies-failed sessions (recommend leaving as-is); D6 who owns
+  resubscription after a subscription-killing IB error (recommend Epic 4).
+  TWO DOCS AMENDED AT THE RETRO, per the Epic 1 precedent. (1) epics.md AR41 — MECHANISM CHANGED
+  from enumeration to namespace. The exhaustive list fell behind five times across two epics; a
+  measurement of src/ found 20 session-scoped events and a whole new strategy.* namespace absent
+  from it. AR41 now governs the naming rule + the sanctioned namespaces, keeps a normative list of
+  LIFECYCLE MILESTONES only, and declares diagnostic/operational events within a sanctioned
+  namespace conformant by construction. This is the namespace-vs-names call Story 2.7 asked the
+  retro to make; the AR36 hazard (strategy.halted would fail the vocabulary scan) is recorded
+  inline. ⚠️ FLAGGED FOR ALLAY as a change of mechanism, not content — override if the exhaustive
+  list is wanted back. (2) CLAUDE.md corrected: "14 migrations, single head a436f35f525c" ->
+  16 migrations, single head b7c419e2a3d8 (a436f35f525c is now two revisions behind).
+  NOT amended, deliberately: epics.md's Epic 2 AC text, despite EIGHT recorded amendments living in
+  story files (2.2's repository name deviation; 2.3's grep->AST instrument change and added AC #6;
+  2.6's knowingly-unmet AC #2 plus three added ACs; 2.7's re-reading of AC #1/#2 plus six added ACs
+  and the second migration; 2.8's upheld --json contract and accepted exit-4-on-DB-failure). Those
+  are a substantive re-litigation, not a factual correction, and folding them in silently would
+  erase the record of why each was re-read — they are Action Item 7 instead, to be done BEFORE Epic
+  3's stories are drafted, since a story drafted from epics.md alone would inherit wording Epic 2
+  already proved wrong (including the "phase's single migration is spent" argument that has been
+  used to defer D1 three times). architecture.md's Delta Project Tree also left alone — it is now
+  missing all ten modules Epic 2 created plus the three Epic 1 left behind, and belongs to the
+  docs/agent/ refresh.
+  MEASURED STRUCTURAL DEBT (from the repo, not the docs): 6 Epic 2 files over the 500-line cap and
+  FOUR OF THEM WERE BORN OVER IT (live_session_runner 734, live_strategy_guard 635, session_service
+  620, live_session_steady_state 581, live_node_builder 577, live.py 538); 7 classes over 100
+  (LiveSessionRunner 605 = 6.0x); 15 functions over 50 (build_trading_node_config 213); repo-wide
+  21 files over 500 and 195 functions over 50; NOTHING ENFORCES ANY OF IT (ruff selects E/F/I,
+  line-length 100 is the only size rule). The cap interacts destructively with the guard lists:
+  Story 2.6's file-size split of live.py -> live_start.py made the new module SILENTLY ESCAPE TWO
+  STRUCTURAL GUARDS, and a measurement today finds 7 live_* modules in NEITHER NODE_FACING_MODULES
+  NOR EXEMPT_MODULES, with nothing asserting the union is complete. Diff volume for the epic: 97
+  files, +36859/-178, src 6876 / tests 16366 (2.38:1), ~793 new test definitions = 21% of the
+  repo's 3779. 21 story commits; the shape shifted mid-epic from 2-4 commits per story (2.1-2.5) to
+  ONE commit each for 2.6-2.8 (bde142e is 6969 insertions across 30 files with a 1-line body).
+  16 ACTION ITEMS, the process ones being: keep the 3-layer review mandatory; keep both unprompted
+  escalations (independent refuter + mutation-test the review's own fixes, scripted not hand-run);
+  SELECT MUTATIONS FROM THE AC LIST, not from the developer's model of what is fragile; when a
+  mutation goes green inspect the FIXTURE before concluding the guard is missing (2.8 mutation #7
+  passed because two fixture names happened to alphabetize in the intended order); any claim of the
+  form "pinned by a test" must CITE THE TEST'S PATH AND NAME (three false pin-claims were caught by
+  review this epic, none involving a lost session — Epic 1's AI-2 scoped this too narrowly to
+  session death); and make "is a Gateway up right now?" a STANDING check, running each story's live
+  procedure before the story closes rather than banking the tier for the epic's last day. That last
+  one is the epic's sequencing finding: every live procedure that could have found the order-path
+  blockers ran on the closing day, after all eight stories were done, whereas Story 2.5's
+  OPPORTUNISTIC live smoke run on 2026-08-21 produced the phase's first-ever full round trip
+  mid-epic from a Gateway that simply happened to be listening.
+  READINESS: Epic 2 complete and safe to build on; 7 of 9 live procedures pass; no blockers on
+  starting Epic 3. Two things want a deliberate decision BEFORE Story 3.1 is created rather than
+  during it — D1 (Epic 3 will own SessionRecordPort writes, so the fencing column finally has a
+  legitimate owner) and D2 (whether Epic 3's trade-persistence SQL gets gated on a PR, or repeats
+  Epic 2's pattern of finding join bugs by hand on the first real-DB run).
+  POST-RETRO, SAME SESSION — Action Item 7 and the deferred-work hygiene are DONE, so the only thing
+  now standing between here and Epic 3 drafting is Allay's answer on D1-D6. epics.md was amended in
+  five places: (1) the Epic 2 list entry's "single Alembic migration for the whole phase" claim
+  corrected to two (d08dfbd393f0 + b7c419e2a3d8) with an explicit instruction that "this phase's
+  single migration is spent" must never be reused as an argument, since it deferred D1 three times
+  and 2.7's own migration falsified it; (2) an AMENDMENT INDEX added under the Epic 2 section — a
+  dated table naming all eight amendments, their nature (knowingly-unmet / instrument-changed /
+  AC-added / epic-AC-overturned) and where the reasoning lives, with the AC TEXT LEFT INTACT on
+  purpose, because rewriting it would erase why each was re-read; plus the warning that Nautilus's
+  live/config.py:48-50 docstring is measurably wrong on the 2.7 AC #1 point and must not be cited in
+  review; (3) Epic 3's `Covers:` line now declares AR8/AR38/AR40/NFR10/NFR24/NFR32, all cited by its
+  own stories and all previously missing; (4) a read-before-drafting block on the Epic 3 list entry
+  covering the landed order-path groundwork, the Story 3.4 -> Epic 4 backwards dependency, why the
+  handle_event wrapper must not be tidied away (execution/engine.pyx:1170-1187 clears
+  _pending_position_events BEFORE publishing, so a raise there loses the PositionOpened/Changed/Closed
+  that are Epic 3's trade-recorder input), and the unowned IB subscription-killer; (5) three story-
+  level fixes — Story 3.1's grep AC SCOPED TO EXCLUDE THE custom/ SUBMODULE (verified by measurement:
+  close_all_positions is called at sma_crossover.py:85 AND custom/sma_crossover_long_only.py:86, and
+  custom/ is an unversioned git submodule, so the AC was literally unsatisfiable — same "change the
+  instrument, preserve the property" treatment Story 2.3 gave its own), plus the exact pin test 3.1
+  must delete (test_live_stop_path_is_inert.py::TestTheStopPathSubmitsNothing::
+  test_the_known_limit_is_pinned_sma_crossover_still_flattens_today, line 186) AND the two non-vacuity
+  guards that must SURVIVE it, plus the DEGRADED-strategy teardown inversion; Story 3.2's inherited
+  groundwork, its "no fill has ever been observed" gap and the no-competing-IBKR-login precondition;
+  and Story 3.4's AR25 flag with two named ways out. Every test name written into epics.md was
+  verified to exist in the tree first, per the retro's own Action Item 5 (one class name was wrong on
+  the first pass and was corrected). deferred-work.md gained a closing "Dispositions from the Epic 2
+  retrospective" section — two items struck as RESOLVED in place (AR41, the CLAUDE.md migration
+  count), D1-D6 tabulated with deferral counts and recommendations so none of them bounces a sixth
+  time, and the rest RE-POINTED AT NAMED OWNING STORIES rather than a priority label, which is the
+  remedy for the epic's clearest cross-epic finding.
+  ALL SIX DECISIONS RULED BY ALLAY, 2026-08-28, same session — every recommendation accepted, so no
+  item bounces a sixth time. D1 fencing column -> STORY 3.6 (written into epics.md with the hazard
+  stated precisely, plus the two Epic 2 findings that fold into the same column: an abandoned
+  heartbeat worker writing AFTER the row is marked stopped, and SessionReclaimedError being
+  non-fatal on the bar path, which Story 2.7 called "the fencing-token item wearing a different
+  hat"; and with the dead migration-budget argument explicitly retired). D2 -> DROP CI's
+  --ignore=tests/integration/db AND ADD A POSTGRES SERVICE. D3 -> BUILD THE exit_outcome MARKER
+  ATTRIBUTE NOW, before a sixth hand-maintained string; it must also fix the
+  sqlalchemy.exc.TimeoutError -> exit 4 collision and must not change any already-documented exit
+  code. D4 -> KEEP the caps but MEASURE ON EXECUTABLE STATEMENTS, enforced by a unit-tier AST guard
+  in the AR37 shape with a sanctioned-exception allowlist. D5 -> an all-strategies-failed session
+  KEEPS RUNNING, closed on its merits, no change. D6 -> resubscription-after-IB-error goes to EPIC 4;
+  interim rule stands (zero bars inside RTH is a red flag; grep every transcript for 162/10182/366).
+  ⚠️ THREE OF THE SIX ARE DECIDED BUT NOT YET BUILT and are deliberately NOT done drive-by, because
+  each wants a real TDD cycle: D2's ci.yml change (expect fallout — those 85 DB-tier tests have never
+  run in CI, so migrations, env vars and fixture scoping are unproven there), D3's live_check.py
+  refactor, and D4's AST guard (whose allowlist starts with Epic 2's six over-cap files, which is the
+  point — an overage becomes a recorded decision). NONE of the three blocks DRAFTING Story 3.1; D2
+  and D3 should land before STORY 3.6, which owns both the trade-persistence SQL those tests would
+  gate and the fencing column. CLAUDE.md also updated for D4 (size limits now say "measured on
+  executable statements, not raw lines", disclose-and-record an overage, budget the split before the
+  edit) and gained a new ANTI-PATTERN naming the guard-list rot explicitly: never split a live_*
+  module without re-checking NODE_FACING_MODULES / EXEMPT_MODULES / STOP_PATH_MODULES /
+  TestImportPurity.MODULES in the same commit, since nothing asserts those lists are complete and
+  Story 2.6's split already made live_start.py escape two of them invisibly.
+  NEXT: create Story 3.1.
+  Previously: 2026-08-28 (EPIC 2 CLOSED: in-progress -> done, on Allay's call. The gate the 2026-08-24 entry
   set — "Flip epic-2 to done only after P8 runs" — is met. Procedure P8 ran against a live IBKR
   paper Gateway inside RTH and passed ALL SIX criteria, including the three the file had named as
   the specifically unverified broker-facing half (2, 3, 6). Evidence and deviations are in
@@ -1490,7 +1640,7 @@ development_status:
   2-6-stop-a-session-without-ending-it-and-without-touching-positions: done
   2-7-keep-one-failing-strategy-from-taking-down-the-session: done
   2-8-see-what-a-session-is-doing-without-reading-logs: done
-  epic-2-retrospective: optional
+  epic-2-retrospective: done
 
   # Epic 3: Live Order Execution & Trade Capture
   # FR23–FR31 · Standalone: the first complete round trip — entry submitted → filled →

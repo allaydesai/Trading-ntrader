@@ -39,7 +39,13 @@ make web                                # Web UI (http://127.0.0.1:8000)
 - **TDD is non-negotiable** — every feature starts with a failing test (Red-Green-Refactor)
 - **UV only** for dependencies — `uv add`, `uv remove`, `uv sync`
 - **IBKR/Kraken env vars** — all connection settings via `IBKRSettings`/`KrakenSettings`. Never hardcode
-- **Size limits** — files <500 lines, functions <50 lines, classes <100 lines, line length 100 chars
+- **Size limits** — files <500 lines, functions <50 lines, classes <100 lines, line length 100 chars.
+  **Measured on executable statements, not raw lines** (decided 2026-08-28, Epic 2 retro D4): a module
+  whose bulk is a docstring recording measured framework behaviour is not the problem these caps exist
+  for. Line length is the only one ruff enforces today; a unit-tier AST guard for the other three is
+  pending, with an explicit allowlist for sanctioned exceptions. **Disclose and record an overage
+  rather than silently exceeding it** — and budget a split *before* the edit, not during it, because
+  a split that moves a module also moves it out of the hand-maintained guard lists (see Anti-Patterns)
 - **context7 MCP** — always use for library documentation lookups
 - **Keep README.md in sync** — validate before modifying, update if instructions change
 
@@ -49,7 +55,7 @@ make web                                # Web UI (http://127.0.0.1:8000)
 2. **`--forked` tests** — integration tests need `--forked` because Nautilus C/Rust extensions corrupt state across `fork()`. Already configured in `make test-integration`
 3. **Strategies submodule** — `src/core/strategies/custom/` is a git submodule. Update: `git submodule update --remote`
 4. **BacktestEngine is single-use** — cannot be reused after a run; create a new instance each time
-5. **Alembic migrations** — run `alembic upgrade head` before first use. 14 migrations in `alembic/versions/`, single head (`a436f35f525c`)
+5. **Alembic migrations** — run `alembic upgrade head` before first use. 16 migrations in `alembic/versions/`, single head (`b7c419e2a3d8`)
 
 ## Anti-Patterns (things that break)
 
@@ -58,6 +64,13 @@ make web                                # Web UI (http://127.0.0.1:8000)
 - Never import from `src.core.strategies.custom.*` in core code — custom/ is a git submodule
 - Never run integration tests without `--forked` — C extensions corrupt shared state
 - Never hardcode IBKR/Kraken connection details — use env var settings classes
+- Never split a `src/core/live_*.py` or `src/cli/commands/live*.py` module without re-checking the
+  **hand-maintained guard lists** in the same commit — `NODE_FACING_MODULES` / `EXEMPT_MODULES`
+  (`tests/unit/core/test_live_node_never_exits.py`), `STOP_PATH_MODULES`
+  (`tests/unit/core/test_live_stop_path_is_inert.py`), `TestImportPurity.MODULES`
+  (`tests/component/core/test_session_runner_phases.py`). Story 2.6's file-size split made
+  `live_start.py` silently escape two of them, and nothing asserts the lists are complete, so an
+  omission is invisible. `LIVE_MODULE_GLOBS` is globbed and needs no action
 
 ## Editing with Auto-Linter
 

@@ -238,7 +238,9 @@ AR37: **Session lifecycle is one state machine in one place** — transitions va
 AR38: **The runner owns the node; the service owns the record.** `LiveSessionRunner` never imports SQLAlchemy; `SessionService`/repositories never import Nautilus. `live_trade_recorder` is the single sanctioned bridge where Nautilus objects meet the DB.
 AR39: **Startup sequence is explicit, ordered, and logged as phases:** `gate:static → node:build → node:connect → gate:account → reconcile → warmup → subscribe → trading`. Each phase logs `phase=<name> status=started|ok|failed`. Agents must not reorder, merge, or skip phases; a failure in any phase stops the sequence.
 AR40: **Mode-agnostic strategies.** The two sanctioned strategy edits (indicator warm-up in `on_start()`, removing flatten from `on_stop()`) use only mode-agnostic Nautilus APIs (`register_indicator_for_bars`, `request_bars`, `subscribe_bars`). Grep-enforceable: `is_live` count = 0 in `src/core/strategies/`.
-AR41: **Log event naming** — dotted lowercase past-tense, session-scoped: `session.created`, `session.started`, `session.stopped`, `session.sealed`, `session.reclaimed`, `gate.refused`, `order.submitted`, `order.accepted`, `order.rejected` (+`venue_reason`), `order.filled` (+`fill_qty`, `cum_qty`), `trade.persisted`, `reconcile.ok`, `reconcile.discrepancy`, `connection.lost`, `connection.restored`, `connection.halted`, `connection.recovery_refused`, `warmup.completed`. Order events also carry `client_order_id` and `instrument_id`. **Amended 2026-08-17 at the Epic 1 retrospective:** added `connection.halted`/`connection.recovery_refused` (shipped by Story 1.6, following this convention, but missing from the enumeration). Command-scoped events that are not part of a session's lifecycle — `gate.static`, `live_check.building`/`connected`/`observing`/`instruments` (Story 1.7's CLI check) — are a deliberately separate, unenumerated vocabulary; this list governs session-scoped events only.
+AR41: **Log event naming** — dotted lowercase past-tense, in a sanctioned namespace. **Sanctioned session-scoped namespaces:** `session.*`, `strategy.*`, `gate.*`, `order.*`, `trade.*`, `reconcile.*`, `connection.*`, `warmup.*`. An event in one of these namespaces, named in dotted lowercase past tense, is conformant by construction — a new diagnostic or operational event does **not** require an amendment here. **Normative lifecycle milestones** (each must exist, and must keep its name): `session.created`, `session.started`, `session.stopped`, `session.sealed`, `session.reclaimed`, `gate.refused`, `order.submitted`, `order.accepted`, `order.rejected` (+`venue_reason`), `order.filled` (+`fill_qty`, `cum_qty`), `trade.persisted`, `reconcile.ok`, `reconcile.discrepancy`, `connection.lost`, `connection.restored`, `connection.halted`, `connection.recovery_refused`, `warmup.completed`. Session-scoped records carry the bound `session_id`; order events also carry `client_order_id` and `instrument_id`. **Vocabulary constraint (AR36):** event names are subject to the same normative vocabulary — `strategy.halted` would fail the build; *contained*, *failed* and *degraded* are the sanctioned words. **Command-scoped** events — `gate.static`, and the whole `live_check.*` namespace (Story 1.7's CLI check) — are deliberately separate; this requirement governs session-scoped events only.
+  **Amended 2026-08-17 at the Epic 1 retrospective:** added `connection.halted`/`connection.recovery_refused` (shipped by Story 1.6, following this convention, but missing from the enumeration).
+  **Amended 2026-08-28 at the Epic 2 retrospective — mechanism changed from enumeration to namespace.** The exhaustive list fell behind five times across two epics; a measurement of `src/` at `0602f1f` found 20 session-scoped events and an entire new `strategy.*` namespace absent from it (`session.activity_refused`, `session.all_strategies_failed`, `session.connected`, `session.connection_read_failed`, `session.force_exit`, `session.heartbeat_join_failed`, `session.heartbeat_join_timeout`, `session.heartbeat_write_failed`, `session.instruments`, `session.mark_stopped_failed`, `session.no_bars_observed`, `session.phase`, `session.reclaim_refused`, `session.reclaimed_by_another_process`, `session.release_failed`, `session.shutdown_problems`, `session.stop_callback_failed`, `session.stop_superseded_failure`, `session.strategy_record_failed`, `session.unsubscribe_failed`, plus `strategy.failed`/`strategy.degraded`/`strategy.start_failed` and the session-phase `gate.account`). Enumerating every diagnostic event is a mechanism that has now failed once per epic; enumerating the *namespaces* plus the lifecycle milestones keeps the normative content — a milestone cannot be silently renamed or dropped — without requiring an amendment for each new operational log line. Story 2.7 asked the retrospective to decide namespace-vs-names; this is that decision.
 AR42: **DB write failures during trading never kill the node** — trade-persist errors are logged and retried on the next event (savepoint discipline from the Phase 2 fix).
 AR43: **Anti-patterns to reject in review:** a second results vocabulary (any new metrics table/model for paper); pre-creating `backtest_runs` rows before seal; `close_all_positions()` in any lifecycle hook; retry-on-timeout around order submission; reading `ibkr_read_only` as the safety control.
 AR44: **Explicitly untouched (zero-change success criteria):** `src/api/**`, `templates/**`, `src/services/backtest_query.py`, comparison views, `BacktestOrchestrator`, all import/catalog commands.
@@ -364,13 +366,21 @@ FR51, FR52, FR53
 **Standalone deliverable:** a named session runs, observes bars, stops, and restarts under the same
 identity. Still no orders.
 
-**Note on the migration:** this epic owns the **single** Alembic migration for the whole phase —
-`trading_sessions` (incl. the G1 heartbeat columns), `backtest_runs.run_type`, `trades.session_id`,
-and `trades.backtest_run_id` → nullable + CHECK. Two of those columns aren't consumed until E3 and
-E5. Splitting them across three migrations to keep each epic "pure" would be worse: three
-migrations, three chances to get the CHECK constraint's ordering wrong, on a table the backtest path
-actively uses. Deliberate exception to epic-scoped schema change, taken from the Architecture's
-delta tree.
+**Note on the migration:** this epic owns the **structural** Alembic migration for the phase
+(`d08dfbd393f0`, Story 2.2) — `trading_sessions` (incl. the G1 heartbeat columns),
+`backtest_runs.run_type`, `trades.session_id`, and `trades.backtest_run_id` → nullable + CHECK. Two
+of those columns aren't consumed until E3 and E5. Splitting them across three migrations to keep each
+epic "pure" would be worse: three migrations, three chances to get the CHECK constraint's ordering
+wrong, on a table the backtest path actively uses. Deliberate exception to epic-scoped schema change,
+taken from the Architecture's delta tree.
+
+> **Corrected 2026-08-28 at the Epic 2 retrospective — this was written as the phase's *single*
+> migration and that is no longer true.** Story 2.7 shipped a second, `b7c419e2a3d8` (nullable
+> `runtime_flags` JSONB), because containment without persistence is a regression. Head is
+> `b7c419e2a3d8`, single. **The "this phase's single migration is spent" argument must not be reused:**
+> it was used three times to defer the owner/epoch fencing column (`deferred-work.md`) and Story 2.7's
+> own migration falsified it. Any later story needing a column argues migration budget on its own
+> merits — a schema change is cheap; an undecided NFR6 hazard is not.
 
 ### Epic 3: Live Order Execution & Trade Capture
 
@@ -392,6 +402,41 @@ manufacture a fake round trip.
 **Depends on E2's `trader_id`:** deterministic client order IDs derive from the session-stable
 `trader_id` established by E2's Redis cache namespace. This is the one hard cross-epic ordering
 constraint in the phase.
+
+> **Added 2026-08-28 at the Epic 2 retrospective — read before drafting any Epic 3 story.**
+>
+> **1. The submit path is already fixed, and is proven only as far as submission.** Two defects sat
+> in series on the order path for two epics, each masking the next, and were found on 2026-08-28 by
+> attempting P7 rather than by any test: `InteractiveBrokersExecClientConfig` was built with no
+> `routing=` (so `ExecEngine` refused every `SYMBOL.EXCHANGE` order — *"no execution client configured
+> for NASDAQ"*), and behind it the exec client's `instrument_provider` was never loaded (so the first
+> order to reach the adapter died as `AttributeError` **inside** its own `submit_order`, invisible to
+> the strategy). Both are fixed in `src/core/live_node_builder.py` (`90337eb`) with regression tests
+> that drive Nautilus's real `TradingNodeBuilder`. **Story 3.2 inherits both as landed groundwork and
+> owns their live verification. `ExecClient-INTERACTIVE_BROKERS: Submit MarketOrder(...)` has been
+> observed live; no `OrderFilled`, `PositionOpened` or commission value ever has.** Epic 3 therefore
+> begins with zero live evidence for the second half of a round trip.
+>
+> **2. Story 3.4 has a backwards dependency on Epic 4.** Its AC requires a working order to be loaded
+> into the cache before strategies start (AR25), but Story 2.5 shipped `reconcile` as a declared
+> no-op placeholder and that machinery is Story 4.2's. The phase is documented as strictly linear and
+> forward-only; this is the one edge that is not. Resolve it when 3.4 is drafted — either scope 3.4's
+> AC to what the cache can prove without reconciliation, or accept the ordering exception explicitly.
+>
+> **3. Order and fill events pass through Epic 2's containment wrapper, which must not be removed.**
+> Story 2.7 wraps `handle_event` as well as `handle_bar`, deliberately ahead of need, because
+> `execution/engine.pyx:1170-1187` clears `_pending_position_events` *before* publishing the order
+> event — so a raise in `handle_event` silently loses the `PositionOpened`/`Changed`/`Closed` that
+> would have followed. That is Epic 3's trade recorder's input. Do not "tidy it away" as premature.
+>
+> **4. `**Covers:**` under-declares this epic's own dependencies.** `AR8` and `AR38` (Story 3.6),
+> `AR40` (Story 3.1), and `NFR10` / `NFR24` / `NFR32` are cited by Epic 3 stories but absent from the
+> list below. Corrected in the epic section's `**Covers:**` line.
+>
+> **5. A subscription-killing IB error has no owner in any epic** — three instances now (code 10182
+> twice, code 162 once). The session keeps heartbeating and its row reads healthy while receiving
+> nothing at all, so round-trip verification will be blocked by it intermittently and silently. Grep
+> every live transcript for **162**, **10182** and **366** before recording any result.
 
 ### Epic 4: Stop, Restart & Resume Mid-Position
 
@@ -719,6 +764,27 @@ terminal, and a dead session distinguishable from a quiet one.
 **Covers:** FR13–FR22, FR48–FR53 · NFR7, NFR11, NFR12, NFR22, NFR23, NFR24, NFR25, NFR28, NFR29,
 NFR31 · AR4–AR11, AR19, AR27, AR29, AR32, AR33, AR36–AR39, AR41
 
+> **Amended 2026-08-28 at the Epic 2 retrospective — what this epic actually shipped, where it
+> differs from the acceptance criteria below.** Eight amendments were made during implementation and
+> recorded only in the story files. The AC text below is left as written, because each amendment was
+> a reasoned re-reading and rewriting it here would erase *why*; this block is the index. Full
+> reasoning is in each story's Dev Notes and in `epic-2-retro-2026-08-28.md`.
+>
+> | Story / AC | What changed | Status |
+> |---|---|---|
+> | **2.2 AC** (dual repositories) | Ships `TradingSessionRepository` / **`SyncTradingSessionRepository`**, not `TradingSessionRepositorySync` — all five existing sync repositories use the `Sync…` prefix. | Knowingly unmet on the **name**, met on the **substance** |
+> | **2.3 AC #1** (grep for `status =`) | Unsatisfiable as written: `grep -rn "status = " src/` matches 20 pre-existing unrelated lines. Discharged by two scoped greps **plus an AST scan over all of `src/`** with a two-file allowlist and a non-vacuity assertion. | **Instrument changed, property preserved** (and strictly stronger) |
+> | **2.3** | Added an AC not in this document: the **concurrent-reclaim criterion**, because AC #4 and AC #5 are individually correct but jointly a TOCTOU race — demonstrated live, two processes both reclaiming one session. | AC **added** |
+> | **2.6 AC #2** ("no position is closed on the stop path") | Not true end to end, and deliberately **pinned rather than silently satisfied**: `sma_crossover.on_stop()` still calls `close_all_positions()`. Proved by an AST scan over the five stop-path modules; the residual is pinned by a test whose docstring instructs **Story 3.1 to delete both the call and the test**. | Knowingly unmet clause, **handed to Story 3.1** |
+> | **2.6** | Three ACs added: signal ownership in every delivery window, stop-during-startup, bounded teardown + operator-visible failed release. | ACs **added** |
+> | **2.7 AC #1** ("caught at the runner boundary") | Describes a place that **does not exist**: `Actor.handle_bar` re-raises, `MessageBus.publish_c` has no per-handler `try`, and `LiveDataEngine._handle_queue_exception` calls `os._exit(1)` — measured `rc=1` with zero bytes of output. Re-read as *the boundary the runner installs around each strategy*. | **Epic AC overturned and re-read** |
+> | **2.7 AC #2** ("the others continue unaffected") | False under raw Nautilus regardless of where the runner catches, because `publish_c` aborts the subscriber loop — a raiser starves every strategy subscribed *after* it. Strengthened to hold in **both** registration orders; a one-order test passes vacuously. | **Epic AC overturned and strengthened** |
+> | **2.8** | `--json`'s exact seven-key contract upheld over a contradicting Dev Note; a database failure exiting `4` accepted and documented rather than remapped, because `sqlalchemy.exc.TimeoutError` collides **by name** with AR28's socket entry. | Upheld / accepted with disclosure |
+>
+> ⚠️ **Nautilus's own docstring is wrong on the AC #1 point** (`live/config.py:48-50` claims
+> `graceful_shutdown_on_exception` "does not include user actor/strategy exceptions"; the measured
+> traceback disproves it). Do not design against it and do not let a review cite it.
+
 ### Story 2.1: Define a Session as a List of Strategy Specifications
 
 As the operator,
@@ -1042,7 +1108,10 @@ A strategy signal becomes a real order at IBKR, fills at a price nobody modelled
 database the moment it closes — with real commission, rejections carrying the venue's reason, and no
 path that can ever resubmit a working order.
 
-**Covers:** FR23–FR31 · NFR1, NFR6, NFR8, NFR13, NFR14, NFR21 · AR23–AR26, AR41, AR42, AR43
+**Covers:** FR23–FR31 · NFR1, NFR6, NFR8, NFR10, NFR13, NFR14, NFR21, NFR24, NFR32 · AR8, AR23–AR26,
+AR38, AR40, AR41, AR42, AR43
+*(`AR8`/`AR38` added 2026-08-28 — cited by Story 3.6; `AR40` by Story 3.1; `NFR10`/`NFR24`/`NFR32` by
+Stories 3.2/3.7/3.5. They were cited by the stories below and missing from this line.)*
 
 ### Story 3.1: Stop Trading Without Manufacturing an Exit
 
@@ -1063,10 +1132,41 @@ behaviour I am trying to measure.
 **Then** the difference in results is confined to how a position still open at the end of the data is
 recorded, and no other metric changes — the edit behaves identically in both engines (AR40).
 
-**Given** any strategy lifecycle hook in `src/core/strategies/`
+**Given** any strategy lifecycle hook in `src/core/strategies/`, **excluding the `custom/` git
+submodule**
 **When** the tree is grepped
 **Then** `close_all_positions` appears in no lifecycle hook (AR43)
 **And** `is_live` appears zero times anywhere under `src/core/strategies/` (AR40).
+
+> **Amended 2026-08-28 at the Epic 2 retrospective — the original wording could not pass.** Measured:
+> `close_all_positions` is called at `src/core/strategies/sma_crossover.py:85` **and**
+> `src/core/strategies/custom/sma_crossover_long_only.py:86`. `custom/` is a git submodule this repo
+> does not version and which CLAUDE.md forbids core code from importing, so a literal tree-wide grep
+> cannot reach zero without editing another repository. The scope is narrowed to what this repo owns;
+> the property is unchanged. This is the same treatment Story 2.3 gave its own unsatisfiable grep AC —
+> change the instrument, preserve the property, say so. (`is_live` already measures **0** across the
+> whole tree, submodule included, so that half passes today.)
+>
+> **Also required of this story, and not in the ACs above:**
+> - **Delete Story 2.6's pinning test in the same edit** —
+>   `tests/unit/core/test_live_stop_path_is_inert.py::TestTheStopPathSubmitsNothing::`
+>   `test_the_known_limit_is_pinned_sma_crossover_still_flattens_today` (line 186) asserts the flatten
+>   still happens *today*, and its docstring instructs this story to remove both it and the call.
+>   **Its non-vacuity guards are separate tests and must survive** —
+>   `test_the_scan_detects_every_forbidden_name_it_claims_to` (planted probes, all six names) and
+>   `test_the_flatten_scan_is_not_vacuous`. Story 2.6's review split them apart precisely for this
+>   moment: they were previously the *same* assertion as the pin, so deleting the pin would have left
+>   the whole scan unguarded.
+> - **Revisit whether the runner explicitly stops DEGRADED strategies at teardown.**
+>   `Trader.stop_strategy()` and `Trader._stop()` both guard on `is_running`, which means
+>   `state == RUNNING` exactly — measured, a degraded strategy's `on_stop()` never runs. That is
+>   *safer* today because it skips the flatten, and **inverts into a leak the moment this story
+>   removes the flatten** (no `unsubscribe_bars`, no strategy-owned cleanup). Pinned by
+>   `tests/integration/core/test_live_strategy_failure_survives.py::TestADegradedStrategyIsSkippedAtTeardown`.
+> - **Read P6/P7/P8's `on_stop()` flatten warnings in the knowledge that none of them was ever
+>   exercised.** No session had traded before 2026-08-28, so the flatten has never run against a
+>   session-owned position. This story's before/after backtest comparison is the only evidence path
+>   that will exist for the edit.
 
 **Given** a strategy holding an open position
 **When** the strategy is stopped
@@ -1111,6 +1211,36 @@ guarantee.
 **Given** an order is submitted
 **When** the event is logged
 **Then** `order.submitted` carries `session_id`, `client_order_id`, and `instrument_id` (AR41).
+
+> **Added 2026-08-28 at the Epic 2 retrospective — this story starts from landed groundwork and owns
+> its live verification.** The two order-path defects described in the Epic 3 list entry above were
+> found and fixed on 2026-08-28 (`90337eb`), *before* this story exists, because they were blocking
+> Procedure P7. This story does not re-fix them; it **proves them**, and it inherits the one open
+> criterion they were blocking.
+>
+> **What is already true and covered by regression tests:** `routing=RoutingConfig(default=True)` on
+> `InteractiveBrokersExecClientConfig`, and the exec client loading the same
+> `InteractiveBrokersInstrumentProviderConfig(load_ids=…)` as the data client. `TestExecutionRouting`
+> drives Nautilus's real `TradingNodeBuilder` with an anti-tautology twin that counts **zero** under
+> the stock `RoutingConfig`; `TestInstrumentLoading` pins the provider.
+>
+> **What is not true yet, and is this story's to establish:** *a fill has never been observed.*
+> `ExecClient-INTERACTIVE_BROKERS: Submit MarketOrder(SELL 22 NVDA.NASDAQ …)` has appeared live; no
+> `OrderSubmitted → OrderAccepted → OrderFilled → PositionOpened` sequence and no real commission
+> value ever has. **Procedure P7's criterion 2 (position-open half) is deferred into this story** —
+> re-run `scripts/diagnostics/run_p7_position.sh` inside RTH and record a **fill**, not a submission.
+>
+> ⚠️ **Before running it: no other IBKR login may be active.** IBKR permits one session per account;
+> an operator signing into the mobile app mid-session evicted the Gateway's market-data entitlement
+> while leaving its API socket up, and four consecutive verification runs took zero bars under error
+> **162** while still connecting, passing both gate layers, logging `Subscribed … bars` and
+> heartbeating normally. No bars → no crossover → no order → no fill, with nothing in the session
+> saying so.
+>
+> **Lesson this story exists downstream of:** *"Market data arrives" is not evidence about orders;
+> only an order reaching the broker is.* The IB **data** client is built `venue=None`, so Nautilus's
+> default-client fallback adopted it; the **exec** client is built `venue=IB_VENUE`, so it never
+> qualified. Working market data actively concealed a dead execution path for two epics.
 
 ### Story 3.3: Track Every Order Through Its Full Lifecycle
 
@@ -1175,6 +1305,26 @@ sees its own open order rather than placing a second one (FR27, AR25).
 **When** submitted orders are counted
 **Then** the count of duplicate orders is **exactly 0** (NFR6)
 **And** this is covered by explicit tests for each of the three paths, not left to careful coding.
+
+> **⚠️ Flagged 2026-08-28 at the Epic 2 retrospective — the third criterion above is a backwards
+> dependency onto Epic 4, and must be resolved before this story is drafted.** It requires the working
+> order to be *"loaded into the cache before strategies start"* (AR25). Story 2.5 shipped `reconcile`
+> and `warmup` as **explicit no-op placeholders** by design, and the machinery that fills the
+> `reconcile` slot is Story 4.2's (*"startup reconciliation is enabled through framework
+> configuration"*). The phase's dependency structure declares itself strictly linear and
+> forward-only; this is the one edge that is not, and it is unacknowledged there.
+>
+> Two ways out, to be decided when 3.4 is drafted rather than discovered mid-implementation:
+> (a) scope this criterion to what Nautilus's own Redis cache restores without a reconciliation pass —
+> Story 2.4 proved a restarted process rejoins its own `trader_id` namespace, so the working order may
+> already be there; or (b) accept the ordering exception explicitly and state that 3.4's third
+> criterion is closed by Story 4.2, keeping the other three criteria in Epic 3.
+>
+> **Related, and also unresolved:** the NFR6 hazard this story exists for is only *detected*, not
+> *prevented*, at the session-record layer. There is still no owner/epoch fencing column on
+> `trading_sessions`, so a reclaimed process keeps trading for up to one heartbeat interval (~30 s) —
+> two live processes on one broker account. It was deferred five times across Epic 2 because no story
+> owned a `SessionRecordPort` write; **Epic 3 does**. See decision D1 in `epic-2-retro-2026-08-28.md`.
 
 ### Story 3.5: Aggregate Partial Fills into One Position
 
@@ -1247,6 +1397,32 @@ models at the boundary so repositories never see Nautilus types (AR38).
 **Given** a trade is persisted
 **When** the event is logged
 **Then** `trade.persisted` is emitted with the session identifier bound (AR41).
+
+> **Added 2026-08-28 — this story now owns the owner/epoch fencing column (retrospective decision D1,
+> ruled by Allay).** It was deferred **five times** across Epic 2, every time for the same structural
+> reason: the column *"changes the meaning of every write on `SessionRecordPort`, so it belongs to a
+> story that owns that port, not to a bystander"* — and no Epic 2 story did. Story 2.8, the natural
+> candidate, turned out to be the phase's one pure reader. **This story is the first that owns
+> `SessionRecordPort` writes, so the deferral chain ends here.**
+>
+> **The hazard, stated precisely:** a stale heartbeat is not evidence a process is dead (DB failover,
+> GC pause, throttled container). Today a reclaimed incumbent keeps trading and keeps heartbeating
+> until its next tick refuses — **up to one heartbeat interval (~30 s) of two live processes on one
+> broker account**, which is NFR6's catastrophe, *detected* rather than *prevented*. Story 2.5 added
+> detection only: the record port is bound to the `started_at` its own transition stamped, and writes
+> are refused once `last_started_at` moves past it.
+>
+> **Two further Epic 2 findings fold into this one column, and should be closed with it:**
+> an abandoned heartbeat worker can write **after** the row is marked `stopped` if Postgres recovers
+> post-`release_record` (making a dead session look freshly heartbeating to `live status`); and
+> `SessionReclaimedError` cannot be made fatal on the bar path, because a raise out of a wrapped
+> `handle_*` re-enters `MessageBus.publish_c` and dies at `os._exit(1)` with zero output — Story 2.7
+> called that item *"really the fencing-token item wearing a different hat."*
+>
+> **The "this phase's single migration is spent" argument does not apply** and must not be revived:
+> Story 2.7's `b7c419e2a3d8` already falsified it. This is a third migration, argued on its merits.
+> The write itself becomes a `last_started_at`-qualified UPDATE (or an explicit epoch column) rather
+> than a wider join bound.
 
 ### Story 3.7: Keep Trading After a Rejection
 

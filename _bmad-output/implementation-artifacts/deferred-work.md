@@ -1402,7 +1402,21 @@ one superseded) and five were read and left open with updated notes. The items b
   and renaming them is not this story's to do. **Action for the Epic 2 retro:** decide whether the
   shared plumbing should take its event prefix from its caller.
 
-- **AR41's event enumeration needs four amendments.** This story ships `session.started` (enumerated
+- **~~AR41's event enumeration needs four amendments.~~** — **RESOLVED at the Epic 2 retrospective,
+  2026-08-28, by changing the MECHANISM rather than the list.** This item and its three appended
+  updates below record the enumeration falling behind five times across two epics; a measurement of
+  `src/` at `0602f1f` found **20 session-scoped events plus an entire `strategy.*` namespace** absent
+  from it. AR41 now governs the **naming rule and the sanctioned namespaces** (`session.*`,
+  `strategy.*`, `gate.*`, `order.*`, `trade.*`, `reconcile.*`, `connection.*`, `warmup.*`), keeps a
+  normative list of **lifecycle milestones only** — which cannot be silently renamed or dropped — and
+  declares diagnostic and operational events inside a sanctioned namespace conformant by
+  construction. This is the namespace-vs-names decision Story 2.7's update below asked the retro to
+  make. The `strategy.*` namespace is sanctioned, and the AR36 hazard that update flagged
+  (`strategy.halted` would fail the vocabulary scan; *contained*, *failed*, *degraded* are the
+  sanctioned words) is recorded inline in AR41 itself. ⚠️ **Flagged for Allay as a change of mechanism,
+  not of content** — reversible to an exhaustive list if that is preferred. The original text and all
+  three appended updates follow, unaltered, as the record of why the mechanism changed.
+  This story ships `session.started` (enumerated
   but previously unowned — now emitted at the `trading` phase) plus three names that are **not** in
   the enumeration: `session.heartbeat_write_failed`, `session.no_bars_observed` and
   `session.reclaimed_by_another_process`. It also emits `session.phase`, `session.connected`,
@@ -1446,7 +1460,10 @@ one superseded) and five were read and left open with updated notes. The items b
   so a session and a check choose different budgets, and that difference deserved a test that names
   it. Recorded as a deviation from the story's own file list, not a scope addition.
 
-- **CLAUDE.md still says "14 migrations… single head (`a436f35f525c`)".** Story 2.2 added
+- **~~CLAUDE.md still says "14 migrations… single head (`a436f35f525c`)".~~** — **RESOLVED at the
+  Epic 2 retrospective, 2026-08-28.** Corrected to **16 migrations, single head `b7c419e2a3d8`**
+  (`a436f35f525c` is now two revisions behind; `d08dfbd393f0` from Story 2.2 and `b7c419e2a3d8` from
+  Story 2.7 both landed since). The original text follows. Story 2.2 added
   `d08dfbd393f0` and the head moved. Carried forward from Story 2.5's own Project Structure Notes,
   which flagged it as a drive-by observation rather than a task. **Action for the Epic 2 retro.**
 
@@ -2021,3 +2038,61 @@ result log in `docs/qa/phase3-live-verification.md`.
   than a quiet outcome, and note that this now bites **P6** hardest, whose criterion 4 would
   measure a dead stream and read as a pass. The three known killers to grep a transcript for are
   **162**, **10182** and **366**.
+
+## Dispositions from the Epic 2 retrospective (2026-08-28)
+
+Full writeup: `epic-2-retro-2026-08-28.md`. ~30 items in this file carried an explicit "Action for
+the Epic 2 retro". They fall into three buckets, recorded here so no future reader re-derives them.
+
+### Resolved outright at the retrospective (struck in place above)
+
+- **AR41's event enumeration** — resolved by changing the mechanism from enumeration to namespace.
+  See the struck item in the story-2.5 section for the reasoning and the flag for Allay.
+- **`CLAUDE.md`'s migration count** — corrected to 16 migrations, head `b7c419e2a3d8`.
+
+### Escalated as decisions (D1–D6) — **ALL SIX RULED BY ALLAY, 2026-08-28**
+
+These are **not deferred again**; they are the retrospective's actual output, and five of the six had
+already been re-argued between three and five times. Every recommendation was accepted.
+
+| # | Item | Deferrals | **Ruling** | Implementation |
+|---|---|---|---|---|
+| **D1** | Owner/epoch **fencing column** on `trading_sessions` | **5** | **Story 3.6** — the first story owning a `SessionRecordPort` write. Epic 2 never had a legitimate owner (2.8, the natural candidate, was the phase's one pure reader). | ✅ Written into `epics.md` under Story 3.6, with the hazard, the two folded-in findings (post-`stopped` heartbeat write; `SessionReclaimedError` non-fatal on the bar path) and the retired cost argument |
+| **D2** | CI `--ignore=tests/integration/db` | **5** | **Drop the `--ignore`, add a Postgres service.** The SQLite component route cannot exercise the SQL that actually broke — the tables use `JSONB`, `PG_UUID`, `sa.Enum`. | ⏳ `.github/workflows/ci.yml` (both the integration job and `coverage-report`) — **not yet made** |
+| **D3** | AR28 exit-code **marker protocol** | **4** | **`exit_outcome` marker attribute, now**, before a sixth hand-maintained string. | ⏳ `src/core/live_check.py` — **not yet built**. Must fix the `sqlalchemy.exc.TimeoutError` → exit 4 collision and change no already-documented exit code |
+| **D4** | What the size caps mean | — | **Keep them, measure on executable statements**, enforce with a unit-tier AST guard in the AR37 shape + a sanctioned-exception allowlist. | ◑ `CLAUDE.md` wording updated; the **AST guard is not yet written**. Its allowlist starts with Epic 2's six over-cap files |
+| **D5** | Should an all-strategies-failed session stop? | — | **Leave as-is.** `session.all_strategies_failed` + `runtime_flags.all_failed` make it visible and 2.8 renders it `degraded`. | ✅ Closed on its merits — no change. Revisit only if observed in practice |
+| **D6** | Resubscription after a subscription-killing IB error | 3 instances | **Epic 4**, with the broker-authoritative reconciliation work. | ✅ Routed. Interim rule stands: "zero bars inside RTH" is a red flag, not a quiet outcome; grep every transcript for **162**, **10182**, **366** |
+
+**Note for readers of the older entries above.** D1's original item text still reads "moves to the
+first Epic 3/Epic 4 story that owns a write on that port" and D2's still offers two options. Those are
+superseded by this table — the ruling is made and the owner is named. Do not re-open either as an
+open question.
+
+### Re-pointed at a named owning story rather than left at a priority label
+
+The retrospective's clearest cross-epic finding is that Epic 1's *directed, numbered* action items
+were followed through at a near-perfect rate while its *undirected* "non-blocking, lower priority"
+bucket went 6-of-7 unaddressed — and one of those, `load_ids` on the exec client's instrument
+provider, turned out to be one of two blockers meaning **no session had ever traded**. The remedy
+adopted: **give each item a named owning story, not a priority label.** Items re-pointed accordingly
+(all already recorded in their own sections above; listed here as the index):
+
+- `close_all_positions()` in `on_stop()`, and the DEGRADED-strategy teardown leak it inverts into →
+  **Story 3.1** (both now written into `epics.md` under that story).
+- The two order-path fixes' live verification, and P7 criterion 2's position-open half →
+  **Story 3.2** (written into `epics.md`).
+- Explicit `order_id_tag` per `StrategySpec`, or a create-time validator → **Story 3.2**, which is
+  where client-order-ID stability across a re-ordered spec first matters.
+- The `handle_event` wrapper's rationale (`_pending_position_events` cleared before publish) →
+  recorded in `epics.md` under Epic 3 so it is not tidied away as premature.
+- Widening `GUARDED_HANDLERS` → the first story shipping a strategy that overrides an unwrapped
+  handler, with a per-handler containment test.
+- `Actor.handle_bar` running `_handle_indicators_for_bar` outside its `try` → **Story 4.4**, the
+  first story to register indicators.
+- Re-validating a persisted spec on read, and `model_copy(update=…)` → **Epic 5**, unchanged.
+- P4's unreachable probe assertion → a diagnostics fix, unowned by any story; see Action Item 15.
+- `StrategyRegistry.discover()` swallowing only `ImportError`, the `live_check.*` prefix question,
+  the `NodeFactory`/`AccountVerifier` alias coupling, the `_age_seconds` clock-skew masking, and
+  `architecture.md`'s Delta Project Tree → still unowned, and explicitly named as such rather than
+  labelled low priority.
