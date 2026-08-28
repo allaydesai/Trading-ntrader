@@ -47,6 +47,7 @@ from nautilus_trader.config import (
     LiveExecEngineConfig,
     LiveRiskEngineConfig,
     LoggingConfig,
+    RoutingConfig,
     TradingNodeConfig,
 )
 from nautilus_trader.live.node import TradingNode
@@ -336,6 +337,46 @@ def build_trading_node_config(
         ibg_client_id=trading_settings.ibkr_live_client_id,
         connection_timeout=trading_settings.ibkr_connection_timeout,
         account_id=account,
+        # The execution client has its OWN instrument provider, and an order
+        # cannot be translated without it: `_transform_order_to_ib_order`
+        # dereferences `self.instrument_provider.find(...).is_inverse` with no
+        # None check (`adapters/interactive_brokers/execution.py:525`), so an
+        # unloaded provider surfaces as an `AttributeError: 'NoneType' object
+        # has no attribute 'is_inverse'` raised inside the adapter's own
+        # `submit_order` — not as a rejection the strategy can observe.
+        #
+        # Epic 1 left this at its default on purpose ("no order path that would
+        # need it", recorded against P3's benign `No loading configured`
+        # warning). That expired the moment Epic 2 started strategies. MEASURED
+        # live 2026-08-28, in the same run in which the routing fix below first
+        # let an order reach the client.
+        #
+        # Same set as the data client's: a session can only trade what it
+        # subscribed to.
+        instrument_provider=InteractiveBrokersInstrumentProviderConfig(
+            load_ids=frozenset(instrument_ids_for(resolved_bar_types)),
+        ),
+        # Without this the session cannot place an order at all. Nautilus makes
+        # a client the engine's default only when its config asks
+        # (`live/node_builder.py:252-254`); the engine's own fallback — adopt
+        # the first client registered — fires only for a client constructed
+        # with `venue=None` (`execution/engine.pyx:421-429`), and the IB
+        # execution client is constructed with `venue=IB_VENUE`
+        # (`adapters/interactive_brokers/execution.py:157`). So by default it is
+        # filed under `_routing_map[INTERACTIVE_BROKERS]` alone, while every
+        # instrument this codebase trades carries the *exchange* as its venue —
+        # `AAPL.NASDAQ`, `NVDA.NASDAQ`. `ExecutionEngine.execute` resolves
+        # `_routing_map.get(NASDAQ, default)` (`engine.pyx:966`), finds nothing
+        # and drops the order.
+        #
+        # MEASURED live 2026-08-28: a real `sma_crossover` signal produced a
+        # real MarketOrder and the engine logged "Cannot execute command: no
+        # execution client configured for NASDAQ". No session had ever traded,
+        # for the whole of Epics 1 and 2. The data client is why that went
+        # unnoticed: it *is* constructed `venue=None` (`data.py:115`), so bars
+        # route by that same fallback. Market data arriving proves nothing
+        # about orders leaving.
+        routing=RoutingConfig(default=True),
     )
 
     logger.debug(

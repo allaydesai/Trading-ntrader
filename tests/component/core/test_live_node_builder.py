@@ -686,6 +686,43 @@ class TestInstrumentLoading:
         with pytest.raises(LiveMarketDataError):
             build_trading_node_config(_settings(), trader_id=TRADER_ID, bar_types=["nonsense"])
 
+    @pytest.mark.component
+    def test_the_exec_client_loads_the_same_instruments_as_the_data_client(self):
+        """The execution client has its *own* provider, and orders die without it.
+
+        ``_transform_order_to_ib_order`` dereferences
+        ``self.instrument_provider.find(order.instrument_id).is_inverse``
+        (``adapters/interactive_brokers/execution.py:525``) with no ``None``
+        check, so an unloaded provider is an ``AttributeError`` inside the
+        adapter's own ``submit_order``, not a rejection the strategy can see.
+
+        MEASURED live 2026-08-28, immediately after the default-routing fix let
+        an order reach the client for the first time::
+
+            [ERROR] ExecClient-INTERACTIVE_BROKERS: Error on 'submit_order: ...':
+            AttributeError("'NoneType' object has no attribute 'is_inverse'")
+
+        Epic 1 left this provider at its default deliberately — it had no order
+        path to need it — and that assumption expired the moment Epic 2 started
+        strategies. The two providers are asserted *equal* rather than merely
+        non-empty: a session can only trade what it subscribed to.
+        """
+        # Act
+        cfg = build_trading_node_config(
+            _settings(),
+            trader_id=TRADER_ID,
+            bar_types=[AAPL_1MIN, MSFT_1MIN],
+        )
+
+        # Assert
+        assert cfg.exec_clients[IB].instrument_provider.load_ids == frozenset(
+            {"AAPL.NASDAQ", "MSFT.NASDAQ"}
+        )
+        assert (
+            cfg.exec_clients[IB].instrument_provider.load_ids
+            == cfg.data_clients[IB].instrument_provider.load_ids
+        )
+
 
 class TestMarketDataLineBudgetAtStartup:
     """Story 1.5 AC #4 — refuse before a socket opens, naming the limit."""
@@ -895,14 +932,19 @@ def _resolve_dotted(path: str):
 
 def _data_client_call_keywords(tree: ast.Module) -> set[str]:
     """Keyword names passed to the single InteractiveBrokersDataClientConfig call."""
+    return _client_call_keywords(tree, "InteractiveBrokersDataClientConfig")
+
+
+def _client_call_keywords(tree: ast.Module, class_name: str) -> set[str]:
+    """Keyword names passed to the module's single ``class_name`` construction."""
     calls = [
         node
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Name)
-        and node.func.id == "InteractiveBrokersDataClientConfig"
+        and node.func.id == class_name
     ]
-    assert len(calls) == 1, f"expected exactly one data-client construction, found {len(calls)}"
+    assert len(calls) == 1, f"expected exactly one {class_name} construction, found {len(calls)}"
     return {keyword.arg for keyword in calls[0].keywords if keyword.arg is not None}
 
 
@@ -1366,3 +1408,302 @@ class TestEngineGracefulShutdownOnException:
             f"engines missing an explicit graceful_shutdown_on_exception: "
             f"{sorted(engine_configs - flagged)}"
         )
+
+
+class TestExecClientDefaultRouting:
+    """The exec client must be reachable for instruments venued elsewhere.
+
+    MEASURED live 2026-08-28 (``logs/p7-position-20260828-104431.log``): every
+    ``SubmitOrder`` died at ``OrderInitialized`` with ``Cannot execute command:
+    no execution client configured for NASDAQ or `client_id` None``. Nothing
+    raised — ``execution/engine.pyx:966-973`` logs and ``return``\\ s.
+
+    The asymmetry that hid it: the IB **data** client passes ``venue=None``
+    (``data.py:115``) so ``register_client`` auto-adopts it as the data default
+    and bars arrived normally; the IB **exec** client passes ``venue=IB_VENUE``
+    (``execution.py:157``) so it is filed under ``INTERACTIVE_BROKERS`` only
+    (``engine.pyx:421-438``). Every instrument this project trades is venued
+    ``NASDAQ``/``NYSE``, and ``_routing_map.get(venue, self._default_client)``
+    then resolves to ``None``.
+
+    These are the config-level guards. The *behavioural* proof — that a
+    ``SubmitOrder`` for ``NVDA.NASDAQ`` actually reaches the client — is
+    ``TestExecutionRouting`` at the end of this file, which drives a real
+    ``ExecutionEngine`` rather than inspecting a config.
+    """
+
+    @pytest.mark.component
+    def test_the_exec_client_asks_to_be_the_default_routing_client(self):
+        # Act
+        cfg = build_trading_node_config(_settings(), trader_id=TRADER_ID)
+
+        # Assert — the single field `live/node_builder.py:253` branches on
+        assert cfg.exec_clients[IB].routing.default is True
+
+    @pytest.mark.component
+    def test_the_nautilus_default_is_still_no_default_routing(self):
+        """The canary, in the shape this file already uses for
+        ``graceful_shutdown_on_exception``. ``RoutingConfig`` defaults
+        ``default=False`` at 1.220.0 (``live/config.py:190-205``), which is why
+        the explicit ``True`` is load-bearing rather than decorative. If an
+        upgrade flips it, this fails by name and the change becomes a decision.
+        """
+        from nautilus_trader.config import RoutingConfig
+
+        assert RoutingConfig().default is False
+        assert (
+            InteractiveBrokersExecClientConfig(
+                ibg_host="127.0.0.1", ibg_port=4002, account_id="DU4076626"
+            ).routing.default
+            is False
+        )
+
+    @pytest.mark.component
+    def test_routing_is_passed_explicitly_rather_than_left_to_the_adapter_default(self):
+        """The value assertion above would go green again the moment Nautilus
+        changed its default, while the argument sat deleted. This one cannot.
+        """
+        # Arrange
+        tree = ast.parse(Path(live_node_builder.__file__).read_text(encoding="utf-8"))
+
+        # Act
+        keywords = _client_call_keywords(tree, "InteractiveBrokersExecClientConfig")
+
+        # Assert
+        assert "routing" in keywords
+
+    @pytest.mark.component
+    def test_the_data_client_is_left_alone(self):
+        """Market data was never broken, and must not be "fixed" by copying this.
+
+        The data client reaches default routing through ``venue=None`` inside
+        the adapter, not through a ``routing`` argument. Adding one here would
+        be cargo cult; this pins the asymmetry as intentional.
+        """
+        # Act
+        cfg = build_trading_node_config(_settings(), trader_id=TRADER_ID)
+
+        # Assert
+        assert cfg.data_clients[IB].routing.default is False
+
+
+class _CapturingLog:
+    """Stand-in for the ``Logger`` ``TradingNodeBuilder`` writes to.
+
+    The real one initialises Nautilus C logging, which this file's tier
+    placement forbids. Errors are captured rather than discarded because
+    ``build_exec_clients`` reports a missing factory by *logging* and carrying
+    on (``live/node_builder.py:233-235``) — a harness that ignored that would
+    build no client at all and still look like the defect under test.
+    """
+
+    def __init__(self) -> None:
+        self.errors: list[str] = []
+
+    def info(self, *args, **kwargs) -> None:
+        pass
+
+    def debug(self, *args, **kwargs) -> None:
+        pass
+
+    def warning(self, *args, **kwargs) -> None:
+        pass
+
+    def error(self, message, *args, **kwargs) -> None:
+        self.errors.append(str(message))
+
+
+def _route_an_order(exec_config, venue: str = "NASDAQ") -> tuple[int, object, list[str]]:
+    """Register ``exec_config`` the way Nautilus does, then submit an order.
+
+    Deliberately drives the real ``TradingNodeBuilder.build_exec_clients``
+    rather than re-implementing its registration rules: the claim under test is
+    that *our* config makes *Nautilus* install a default route, so replicating
+    Nautilus's half here would let the test agree with a copy of itself.
+
+    The double is the framework's own ``MockExecutionClient``, constructed with
+    ``venue=IB_VENUE`` exactly as the real IB client is
+    (``adapters/interactive_brokers/execution.py:157``) — that argument is the
+    entire mechanism, so a double omitting it would prove nothing. The factory
+    is named ``InteractiveBrokersLiveExecClientFactory`` because
+    ``build_exec_clients`` branches on that class name
+    (``live/node_builder.py:264-267``).
+
+    Returns ``(orders_reaching_the_client, default_client, builder_errors)``.
+    Starts no engine and builds no ``TradingNode``, so C logging stays untouched.
+    """
+    import asyncio
+
+    from nautilus_trader.adapters.interactive_brokers.common import (
+        IB_CLIENT_ID,
+        IB_VENUE,
+    )
+    from nautilus_trader.cache.cache import Cache
+    from nautilus_trader.common.component import LiveClock, MessageBus
+    from nautilus_trader.execution.engine import ExecutionEngine
+    from nautilus_trader.live.factories import LiveExecClientFactory
+    from nautilus_trader.live.node_builder import TradingNodeBuilder
+    from nautilus_trader.model.currencies import USD
+    from nautilus_trader.model.enums import AccountType, OrderSide
+    from nautilus_trader.model.identifiers import TraderId
+    from nautilus_trader.test_kit.mocks.exec_clients import MockExecutionClient
+    from nautilus_trader.test_kit.providers import TestInstrumentProvider
+    from nautilus_trader.test_kit.stubs.commands import TestCommandStubs
+    from nautilus_trader.test_kit.stubs.execution import TestExecStubs
+
+    created: dict = {}
+
+    class InteractiveBrokersLiveExecClientFactory(LiveExecClientFactory):
+        @staticmethod
+        def create(loop, name, config, msgbus, cache, clock):
+            client = MockExecutionClient(
+                client_id=IB_CLIENT_ID,
+                venue=IB_VENUE,
+                account_type=AccountType.MARGIN,
+                base_currency=USD,
+                msgbus=msgbus,
+                cache=cache,
+                clock=clock,
+            )
+            created["client"] = client
+            return client
+
+    clock = LiveClock()
+    msgbus = MessageBus(trader_id=TraderId(TRADER_ID), clock=clock)
+    cache = Cache(database=None)
+    engine = ExecutionEngine(msgbus=msgbus, cache=cache, clock=clock)
+    log = _CapturingLog()
+
+    loop = asyncio.new_event_loop()
+    try:
+        builder = TradingNodeBuilder(
+            loop=loop,
+            data_engine=None,
+            exec_engine=engine,
+            portfolio=None,
+            msgbus=msgbus,
+            cache=cache,
+            clock=clock,
+            logger=log,
+        )
+        builder.add_exec_client_factory(IB, InteractiveBrokersLiveExecClientFactory)
+        builder.build_exec_clients({IB: exec_config})
+
+        instrument = TestInstrumentProvider.equity(symbol="NVDA", venue=venue)
+        cache.add_instrument(instrument)
+        engine.execute(
+            TestCommandStubs.submit_order_command(
+                TestExecStubs.market_order(
+                    instrument=instrument,
+                    order_side=OrderSide.SELL,
+                    quantity=instrument.make_qty(22),
+                )
+            )
+        )
+    finally:
+        loop.close()
+
+    client = created.get("client")
+    return (
+        len(client.commands) if client is not None else 0,
+        engine.default_client,
+        log.errors,
+    )
+
+
+class TestExecutionRouting:
+    """Without an explicit default route, no order can ever reach the broker.
+
+    Nautilus registers an execution client as the engine's default only when the
+    client config asks for it (``live/node_builder.py:252-254``). Its own
+    fallback — adopt the first client registered — fires *only* for a client
+    constructed with ``venue=None`` (``execution/engine.pyx:421-429``), and the
+    IB execution client is constructed with ``venue=IB_VENUE``
+    (``adapters/interactive_brokers/execution.py:157``). So by default that
+    client is filed under ``_routing_map[INTERACTIVE_BROKERS]`` and nothing
+    else, while every instrument this codebase trades carries the *exchange* as
+    its venue — ``AAPL.NASDAQ``, ``NVDA.NASDAQ``. ``ExecutionEngine.execute``
+    then resolves ``_routing_map.get(NASDAQ, self._default_client)``
+    (``engine.pyx:966``), gets ``None``, and drops the order with
+    ``Cannot execute command: no execution client configured for NASDAQ``.
+
+    MEASURED live 2026-08-28 against the paper Gateway, twice, while attempting
+    Procedure P7's criterion 2: a real ``sma_crossover`` signal produced a real
+    ``MarketOrder`` and the engine logged exactly that. The order never left
+    ``OrderInitialized`` — no session had ever traded, for the whole of Epics 1
+    and 2.
+
+    The *data* client is why it went unnoticed that long: it is constructed
+    ``venue=None`` (``adapters/interactive_brokers/data.py:115``), so the data
+    engine's auto-adopt branch does fire (``data/engine.pyx:376-378``) and bars
+    route normally. Market data arriving proves nothing about orders leaving.
+    """
+
+    @pytest.mark.component
+    def test_a_nasdaq_order_reaches_the_execution_client(self):
+        """The regression, end to end through Nautilus's own registration.
+
+        Driven by the routing config *the builder actually produces*, not a
+        hand-written flag, so it fails if the builder stops asking for one.
+        """
+        cfg = build_trading_node_config(_settings(), trader_id=TRADER_ID)
+
+        submitted, default_client, errors = _route_an_order(cfg.exec_clients[IB])
+
+        assert errors == [], f"the harness failed to build a client: {errors}"
+        assert default_client is not None, (
+            "no default execution client was registered — a SubmitOrder for any "
+            "exchange venue (NVDA.NASDAQ, AAPL.NASDAQ) will be dropped"
+        )
+        assert submitted == 1, (
+            "a SubmitOrder for NVDA.NASDAQ did not reach the execution client — "
+            "the session cannot trade"
+        )
+
+    @pytest.mark.component
+    def test_the_harness_detects_the_defect_it_was_written_for(self):
+        """The anti-tautology guard, in this file's established idiom.
+
+        The same harness, handed Nautilus's stock ``RoutingConfig``, must count
+        **zero** and register no default — reproducing what actually shipped.
+        Without this, the test above would pass no matter what the builder did.
+        """
+        import nautilus_trader.live.config as live_config
+
+        cfg = build_trading_node_config(_settings(), trader_id=TRADER_ID)
+        unrouted = cfg.exec_clients[IB].dict()
+        unrouted["routing"] = live_config.RoutingConfig()
+
+        submitted, default_client, errors = _route_an_order(
+            InteractiveBrokersExecClientConfig(**unrouted)
+        )
+
+        assert errors == [], f"the harness failed to build a client: {errors}"
+        assert default_client is None
+        assert submitted == 0
+
+    @pytest.mark.component
+    def test_an_interactive_brokers_venued_order_always_routed(self):
+        """The discriminating control: the defect was never "registration is
+        broken", it was "the venue does not match".
+
+        With the *unrouted* config — the one that shipped — an order venued
+        ``INTERACTIVE_BROKERS`` still reaches the client, because that is the
+        one key ``_routing_map`` holds. Nothing this project trades is venued
+        that way, which is exactly why the gap was invisible until an order was
+        finally submitted against a real gateway.
+        """
+        import nautilus_trader.live.config as live_config
+
+        cfg = build_trading_node_config(_settings(), trader_id=TRADER_ID)
+        unrouted = cfg.exec_clients[IB].dict()
+        unrouted["routing"] = live_config.RoutingConfig()
+
+        submitted, default_client, errors = _route_an_order(
+            InteractiveBrokersExecClientConfig(**unrouted),
+            venue="INTERACTIVE_BROKERS",
+        )
+
+        assert errors == []
+        assert default_client is None, "the control stopped isolating default routing"
+        assert submitted == 1
