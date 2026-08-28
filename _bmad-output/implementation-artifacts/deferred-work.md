@@ -2004,8 +2004,15 @@ result log in `docs/qa/phase3-live-verification.md`.
   from a different IP address (code: 162)`. Ruled out as causes, by experiment: a stale client id
   (reproduced with `IBKR_LIVE_CLIENT_ID=17`), and anything contract-specific (reproduced on
   `MSFT.NASDAQ` and `NVDA.NASDAQ`). It began mid-session at ~15:39 UTC after runs in the same hour
-  had taken bars normally, so the trigger is account-side — a competing IBKR login. Logs:
+  had taken bars normally, so the trigger is account-side — a competing IBKR login. **Confirmed by
+  the operator: they signed into IBKR on their mobile device mid-session.** IBKR permits one active
+  session per account; the mobile login evicted the Gateway's market-data entitlement while leaving
+  its API socket up, which is why the session connected, passed both gate layers, logged
+  `Subscribed … bars` and kept heartbeating while receiving nothing at all. Logs:
   `logs/p7-position-20260828-{153949,154259,154402,154527}.log`.
+  **Operational note for every live procedure:** do not use the IBKR mobile app or client portal
+  while a session is running. It is silent from the session's side, and it looks exactly like a
+  healthy session with a quiet market.
   **Reason deferred:** the trigger is environmental and not ours to fix. The *response* is ours,
   and it is the same gap as 10182: the session keeps heartbeating, keeps its row looking healthy,
   and reports nothing wrong while receiving nothing at all.
