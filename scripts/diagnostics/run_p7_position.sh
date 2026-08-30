@@ -9,10 +9,10 @@
 # actually opened a position at the broker, records the account state, stops it
 # with a real SIGINT, and records the state again.
 #
-# Expect the position to be FLATTENED, not preserved. `sma_crossover.on_stop()`
-# still calls `close_all_positions()` — Story 3.1's to remove — and P7's own
-# text says so. The criterion is that broker state is identical *except* for
-# what `on_stop()` flattened, so the run has to show which of the two happened.
+# Expect the position to be PRESERVED, not flattened. Story 3.1 removed
+# `sma_crossover.on_stop()`'s `close_all_positions()` call. The criterion is
+# that broker state is identical before and after the stop — the run has to
+# show that it is.
 #
 # Usage:  ./scripts/diagnostics/run_p7_position.sh [session-name] [max-wait-seconds]
 

@@ -36,6 +36,7 @@ import subprocess
 import sys
 
 import pytest
+import structlog
 
 pytestmark = pytest.mark.integration
 
@@ -290,19 +291,20 @@ class TestTheProbeCanActuallyFail:
 
 
 class TestADegradedStrategyIsSkippedAtTeardown:
-    """AC #7's disclosed consequence, pinned: a ``DEGRADED`` strategy is
-    skipped at session teardown and its ``on_stop()`` never runs — Story 3.1
-    must revisit this once it removes ``sma_crossover.on_stop()``'s flatten.
+    """AC #7's disclosed consequence, pinned: ``Trader.stop_strategy()`` /
+    ``Trader._stop()`` never reaches a ``DEGRADED`` strategy's ``on_stop()``
+    — Nautilus's own FSM guard on ``is_running`` (``state == RUNNING``
+    **exactly**, ``common/component.pyx:1757-1767``), unchanged by Story
+    3.1. ``degrade()`` leaves the strategy at ``DEGRADED`` where
+    ``is_running`` is ``False``.
 
-    Today the skip is strictly **safer**: ``on_stop()`` still calls
-    ``close_all_positions()``, and skipping it is what stops an unrelated
-    ``on_bar`` bug from manufacturing an exit (NFR14, AR43). After Story 3.1
-    the same skip inverts into a leak — no ``unsubscribe_bars``, no
-    strategy-owned cleanup — and this test is the tripwire that says so. The
-    mechanism is ``Trader.stop_strategy()`` / ``Trader._stop()`` guarding on
-    ``is_running``, which means ``state == RUNNING`` **exactly**
-    (``common/component.pyx:1757-1767``), and ``degrade()`` leaves the
-    strategy at ``DEGRADED`` where ``is_running`` is ``False``.
+    Story 3.1 compensates for this skip rather than removing it: the
+    runner's teardown now calls ``live_session_runner.stop_degraded_strategies``
+    explicitly, so degraded strategies still get their ``on_stop()`` and a
+    terminal ``STOPPED`` state — see
+    ``TestStopDegradedStrategiesAgainstARealTrader`` below, which pins the
+    compensating call against the same real-``Trader`` mechanism this class
+    pins the underlying skip against.
 
     A real ``Trader`` (via ``BacktestEngine``, this tier's cheapest source of
     one — fine here because the fact under pin is ``Trader``'s FSM guard, not
@@ -336,3 +338,53 @@ class TestADegradedStrategyIsSkippedAtTeardown:
 
         assert stopped == [], "teardown reached a DEGRADED strategy's on_stop()"
         assert strategy.state.name == "DEGRADED"
+
+
+class TestStopDegradedStrategiesAgainstARealTrader:
+    """Story 3.1, AC #6 — integration proof for
+    ``live_session_runner.stop_degraded_strategies`` against a REAL
+    ``Trader`` (via ``BacktestEngine``, this tier's cheapest source of one —
+    the pin above's own precedent). The component tier
+    (``test_session_runner_stop.py::TestStopDegradedStrategies``) proves the
+    containment logic against a stub trader; this proves the FSM facts a
+    stub cannot fake — does ``on_stop()`` actually run, does the state
+    actually end ``STOPPED``.
+
+    Does NOT assert live-engine delivery of the unsubscribe: on the
+    dominant (signal) stop path the engines are already stopped by the time
+    the runner's ``finally`` calls this helper. The contract under test is
+    the contained ``on_stop()`` and the terminal state, matching the class
+    above's own disclosed scope.
+    """
+
+    def test_the_helper_stops_a_degraded_strategy_and_leaves_a_running_sibling_alone(self):
+        from nautilus_trader.backtest.engine import BacktestEngine, BacktestEngineConfig
+        from nautilus_trader.config import LoggingConfig, StrategyConfig
+        from nautilus_trader.trading.strategy import Strategy
+
+        from src.core.live_session_runner import stop_degraded_strategies
+
+        stopped = []
+
+        class Recording(Strategy):
+            def on_stop(self):
+                stopped.append(str(self.id))
+
+        engine = BacktestEngine(BacktestEngineConfig(logging=LoggingConfig(bypass_logging=True)))
+        degraded_strategy = Recording(StrategyConfig(order_id_tag="D"))
+        sibling_strategy = Recording(StrategyConfig(order_id_tag="S"))
+        engine.add_strategy(degraded_strategy)
+        engine.add_strategy(sibling_strategy)
+        engine.trader.start()
+        assert degraded_strategy.is_running
+        assert sibling_strategy.is_running
+
+        degraded_strategy.degrade()
+        assert degraded_strategy.state.name == "DEGRADED"
+
+        problems = stop_degraded_strategies(engine.trader, structlog.get_logger("test"))
+
+        assert problems == []
+        assert stopped == [str(degraded_strategy.id)], "the sibling's on_stop() ran too"
+        assert degraded_strategy.state.name == "STOPPED"
+        assert sibling_strategy.state.name == "RUNNING", "the helper touched the sibling"

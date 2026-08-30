@@ -76,11 +76,12 @@ Known, accepted limits:
    here. They are covered by the three engines'
    ``graceful_shutdown_on_exception=True`` (AC #6) — a graceful stop of the whole
    node rather than containment, so defence in depth, never a substitute.
-3. A ``DEGRADED`` strategy is skipped at session teardown, because
-   ``Trader._stop()`` guards on ``is_running`` (``component.pyx:1757-1767``), so
-   its ``on_stop()`` never runs. Today that is strictly *safer* —
-   ``sma_crossover.on_stop()`` still flattens. After Story 3.1 removes that
-   flatten it becomes a leak, and this is the note that says so.
+3. A ``DEGRADED`` strategy is skipped by ``Trader._stop()``, which guards on
+   ``is_running`` (``component.pyx:1757-1767``), so its ``on_stop()`` never
+   runs there. Story 3.1 compensates rather than relying on Nautilus for it:
+   the runner's teardown explicitly stops each ``DEGRADED`` strategy via
+   ``live_session_runner.stop_degraded_strategies``, so its own ``on_stop()``
+   still runs.
 4. This class is **346 lines against CLAUDE.md's 100-line guideline** (measured
    2026-08-23, after the review fixes), joining ``LiveSessionRunner`` (605),
    ``SessionSteadyState`` (278) and ``LiveBarObserver`` (215) in
@@ -533,12 +534,14 @@ class StrategyGuard:
     def _degrade(self, strategy: Any, failure: StrategyFailure) -> None:
         """Isolate the strategy without touching a position (AC #7, NFR14).
 
-        Not ``stop()``: ``Trader.stop_strategy()`` would reach
-        ``sma_crossover.on_stop()``'s ``close_all_positions()``
-        (``sma_crossover.py:83-86``), manufacturing an exit the strategy never
-        requested over an unrelated ``on_bar`` bug — the AR43 anti-pattern
-        exactly. Not ``remove_strategy()``: measured, it does not unsubscribe
-        the handlers (``bar_subs 2 -> 2``) and it deletes the strategy from
+        Not ``stop()``: ``Trader.stop_strategy()`` would run the strategy's
+        own ``on_stop()`` mid-containment, over an unrelated ``on_bar`` bug —
+        the wrong time for any strategy-owned side effect to run, regardless
+        of what that hook does today (Story 3.1 removed ``sma_crossover``'s
+        flatten, but the AR43 anti-pattern this avoids is about the verb, not
+        one strategy's current body). Not ``remove_strategy()``: measured, it
+        does not unsubscribe the handlers (``bar_subs 2 -> 2``) and it deletes
+        the strategy from
         ``Trader.strategy_states()``, destroying the in-process half of AC #4's
         visibility. ``degrade()`` also keeps the strategy **warm** — indicators
         keep updating, ``resume()`` is legal — which is what makes latching on

@@ -74,8 +74,17 @@ class <StrategyName>(Strategy):
         self.subscribe_bars(self.bar_type)
 
     def on_stop(self) -> None:
-        """Close all positions and unsubscribe on strategy stop."""
-        self.close_all_positions(self.instrument_id)
+        """Unsubscribe on strategy stop. Do NOT close positions here.
+
+        Subscription teardown only. A lifecycle hook that submits an order —
+        ``close_all_positions()``, ``submit_order()``, ``cancel_all_orders()``
+        or any of the six forbidden names — manufactures a round trip the
+        strategy never requested, which corrupts the trade record every daily
+        restart (NFR14, AR43). Story 3.1 removed exactly this call from
+        ``sma_crossover``. It is a reject-in-review anti-pattern and an AST
+        scan enforces it:
+        ``tests/unit/core/test_live_stop_path_is_inert.py::TestStrategyLifecycleHooksAreInert``.
+        """
         self.unsubscribe_bars(self.bar_type)
 
     def on_bar(self, bar: Bar) -> None:

@@ -70,7 +70,12 @@ make web                                # Web UI (http://127.0.0.1:8000)
   (`tests/unit/core/test_live_stop_path_is_inert.py`), `TestImportPurity.MODULES`
   (`tests/component/core/test_session_runner_phases.py`). Story 2.6's file-size split made
   `live_start.py` silently escape two of them, and nothing asserts the lists are complete, so an
-  omission is invisible. `LIVE_MODULE_GLOBS` is globbed and needs no action
+  omission is invisible. `LIVE_MODULE_GLOBS` and `STRATEGY_MODULES` are globbed and need no action
+- **Membership-pinned lists** (added 2026-08-29): `FORBIDDEN_ORDER_METHODS` and `LIFECYCLE_HOOKS`
+  (`tests/unit/core/test_live_stop_path_is_inert.py`) are asserted as exact sets, because every
+  other consumer only *intersects* with them — dropping a name weakened a scan or deleted a
+  parametrized probe's own case without anything going red. Change either deliberately, in the
+  membership test and the constant together
 
 ## Editing with Auto-Linter
 

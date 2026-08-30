@@ -17,6 +17,7 @@ need no subprocess.
 import asyncio
 import signal
 from datetime import datetime, timedelta, timezone
+from unittest.mock import MagicMock
 from uuid import UUID
 
 import pytest
@@ -28,7 +29,7 @@ from src.config import IBKRSettings
 from src.core.live_gate import GateDecision, GateMode
 from src.core.live_session_node import BAR_TOPIC
 from src.core.live_session_phases import PHASE_SEQUENCE
-from src.core.live_session_runner import LiveSessionRunner
+from src.core.live_session_runner import LiveSessionRunner, stop_degraded_strategies
 from src.core.live_session_signals import FORCE_EXIT_CODE, SessionStopSignals
 from src.core.live_trader_id import derive_trader_id
 from src.models.session import SessionSpec, StrategySpec
@@ -546,3 +547,203 @@ class TestForceExitSeam:
         # signal's `on_stop` ran against it — so a `mark_stopped()` added to
         # `_default_force_exit` or to the second-signal branch would fail this.
         assert record.calls == [], f"the force-exit path touched the record: {record.calls}"
+
+
+class StubTrader:
+    """Exposes ``strategies()`` as a CALLABLE, matching the real
+    ``Trader.strategies()`` method shape (``trading/trader.py:160``) — a list
+    ATTRIBUTE here would make this test pass against production code that
+    crashes on the real method-vs-property distinction.
+    """
+
+    def __init__(self, strategies: list) -> None:
+        self._strategies = strategies
+
+    def strategies(self) -> list:
+        return self._strategies
+
+
+class TestStopDegradedStrategies:
+    """Story 3.1, AC #6 — component tier for :func:`stop_degraded_strategies`'s
+    containment logic against a stub trader. FSM/teardown facts (does
+    ``on_stop()`` actually run, does the state end ``STOPPED``) need a real
+    ``Trader`` — see the integration counterpart in
+    ``test_live_strategy_failure_survives.py``.
+    """
+
+    def test_each_degraded_strategy_is_stopped_once_and_the_raiser_is_contained(self):
+        # Bare MagicMock attributes are truthy — every stub sets `is_degraded`
+        # explicitly (the standing trap this repo has been bitten by before).
+        running = MagicMock()
+        running.is_degraded = False
+
+        clean_degraded = MagicMock()
+        clean_degraded.is_degraded = True
+
+        raising_degraded = MagicMock()
+        raising_degraded.is_degraded = True
+        raising_degraded.stop.side_effect = RuntimeError("boom")
+
+        trader = StubTrader([running, clean_degraded, raising_degraded])
+        log = MagicMock()
+
+        problems = stop_degraded_strategies(trader, log)
+
+        running.stop.assert_not_called()
+        clean_degraded.stop.assert_called_once()
+        raising_degraded.stop.assert_called_once()
+        assert problems == ["strategy_stop: RuntimeError"]
+
+    def test_a_raise_does_not_prevent_the_remaining_degraded_strategies_stopping(self):
+        """AC #6's containment clause, which the test above cannot reach.
+
+        Review fix, 2026-08-29. The ordering above puts the raiser **last**,
+        so hoisting the ``try/except`` out of the ``for`` loop — loop-level
+        containment instead of per-strategy — keeps every assertion green:
+        the clean strategy has already been stopped by the time the raise
+        happens. Mutation run during review and it survived. Here the raiser
+        goes **first**, which is the only arrangement that distinguishes the
+        two shapes, and both survivors are checked so a single-survivor
+        version cannot pass either.
+        """
+        raising_first = MagicMock()
+        raising_first.is_degraded = True
+        raising_first.stop.side_effect = RuntimeError("boom")
+
+        second_raiser = MagicMock()
+        second_raiser.is_degraded = True
+        second_raiser.stop.side_effect = ValueError("also boom")
+
+        survivor = MagicMock()
+        survivor.is_degraded = True
+
+        problems = stop_degraded_strategies(
+            StubTrader([raising_first, second_raiser, survivor]), MagicMock()
+        )
+
+        raising_first.stop.assert_called_once()
+        second_raiser.stop.assert_called_once()
+        assert survivor.stop.call_count == 1, "a raise aborted the rest of the teardown"
+        # Both failures reported, in order, each carrying only its type (NFR26).
+        assert problems == ["strategy_stop: RuntimeError", "strategy_stop: ValueError"]
+
+    def test_no_degraded_strategies_stops_nothing_and_reports_no_problems(self):
+        running = MagicMock()
+        running.is_degraded = False
+
+        problems = stop_degraded_strategies(StubTrader([running]), MagicMock())
+
+        running.stop.assert_not_called()
+        assert problems == []
+
+    def test_the_runner_reaches_the_helper_on_the_stop_path(self):
+        """AC #6's **call site**, which nothing else pins (review fix,
+        2026-08-29).
+
+        Every other test of this helper — here and in
+        ``test_live_strategy_failure_survives.py`` — invokes
+        ``stop_degraded_strategies`` directly. None constructs a
+        ``LiveSessionRunner``, so during review the entire wiring block in
+        ``run()``'s ``finally`` was deleted and **904 tests across the unit,
+        component and integration tiers stayed green**. The helper was fully
+        tested and called by nothing that any test observed.
+
+        This drives the real runner to a clean stop and asserts the degraded
+        strategy was stopped as a consequence. Per the Story 2.7 precedent the
+        double is not modified: ``strategies`` is patched on the instance.
+        """
+        node = TestLiveNode(run_seconds=5.0)
+
+        degraded = MagicMock()
+        degraded.is_degraded = True
+        running = MagicMock()
+        running.is_degraded = False
+        node.trader.strategies = lambda: [degraded, running]  # type: ignore[method-assign]
+
+        runner = _runner(node)
+        TestAStopWhileTheSessionIsServing._signal_once_serving(runner)
+
+        runner.run()
+
+        assert degraded.stop.call_count == 1, (
+            "the runner's teardown never reached stop_degraded_strategies — "
+            "AC #6's call site is unwired"
+        )
+        running.stop.assert_not_called()
+        assert runner.shutdown_problems == []
+
+    def test_a_degraded_stop_failure_surfaces_in_the_runners_shutdown_problems(self):
+        """The other half of the wiring: the helper's return value must reach
+        ``shutdown_problems``, which is what the CLI reports to the operator.
+
+        Distinct prefix asserted deliberately — see the helper's own docstring.
+        A bare ``"stop: ..."`` was indistinguishable from ``shutdown()``'s
+        node-stop failure, which makes the CLI imply the broker socket may
+        still be held when in fact only a strategy's teardown raised.
+        """
+        node = TestLiveNode(run_seconds=5.0)
+
+        degraded = MagicMock()
+        degraded.is_degraded = True
+        degraded.stop.side_effect = RuntimeError("boom")
+        node.trader.strategies = lambda: [degraded]  # type: ignore[method-assign]
+
+        runner = _runner(node)
+        TestAStopWhileTheSessionIsServing._signal_once_serving(runner)
+
+        runner.run()
+
+        assert runner.shutdown_problems == ["strategy_stop: RuntimeError"]
+
+    def test_a_helper_level_explosion_does_not_abort_session_teardown(self):
+        """AC #6's "neither aborts session teardown" clause, at the level the
+        helper itself fails rather than one strategy inside it.
+
+        Review fix, 2026-08-29 (second pass). The runner wraps the helper call
+        in its own ``except BaseException`` so teardown can never abort, and
+        that branch had no test: an AC #6 clause-by-clause mutation matrix
+        narrowed it to ``except ValueError`` and **nothing went red**.
+
+        Reachable, not hypothetical: ``trader.strategies()`` is evaluated by
+        the ``for`` statement itself, *outside* the helper's per-strategy
+        ``try``, so anything it raises propagates straight out of the helper.
+        ``self._node.trader`` is likewise a property (``live/node.py:134``,
+        ``return self.kernel.trader``) that can raise on a half-built node.
+
+        Asserts the whole teardown still completed — not merely that ``run()``
+        did not raise — because the point of the guard is that everything
+        *after* it still happens.
+        """
+        node = TestLiveNode(run_seconds=5.0)
+
+        def _explode():
+            raise RuntimeError("the trader is gone")
+
+        node.trader.strategies = _explode  # type: ignore[method-assign]
+
+        record = SpyRecord()
+        runner = _runner(node, record=record)
+        TestAStopWhileTheSessionIsServing._signal_once_serving(runner)
+
+        runner.run()  # must not raise — this IS half the assertion
+
+        assert runner.shutdown_problems == ["stop_degraded_strategies: RuntimeError"], (
+            f"the helper's explosion was not contained or not reported: {runner.shutdown_problems}"
+        )
+        # Only the exception TYPE, never the message (NFR26) — the equality
+        # above pins this: "the trader is gone" must not appear.
+        assert "mark_stopped" in record.calls, (
+            "teardown aborted at the helper — the record was never finished"
+        )
+
+    def test_all_degraded_strategies_stop_cleanly_reports_no_problems(self):
+        first = MagicMock()
+        first.is_degraded = True
+        second = MagicMock()
+        second.is_degraded = True
+
+        problems = stop_degraded_strategies(StubTrader([first, second]), MagicMock())
+
+        first.stop.assert_called_once()
+        second.stop.assert_called_once()
+        assert problems == []

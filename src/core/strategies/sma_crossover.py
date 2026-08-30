@@ -82,7 +82,6 @@ class SMACrossover(Strategy):
 
     def on_stop(self) -> None:
         """Actions to be performed on strategy stop."""
-        self.close_all_positions(self.instrument_id)
         self.unsubscribe_bars(self.bar_type)
 
     def on_bar(self, bar: Bar) -> None:

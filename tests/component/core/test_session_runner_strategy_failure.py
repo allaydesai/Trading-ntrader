@@ -426,10 +426,9 @@ def _fail_starts_for(node, failures):
 def _spy_recovery_verbs(node):
     """Record which lifecycle verb the runner calls on a failed strategy.
 
-    The spies deliberately do **not** call through. ``stop()`` would reach
-    ``sma_crossover.on_stop()``'s ``close_all_positions()`` on an unregistered
-    strategy, and the point of the assertion is *which verb was chosen*, not
-    what Nautilus does with it.
+    The spies deliberately do **not** call through: the point of the
+    assertion is *which verb was chosen*, not what Nautilus does with it on
+    an unregistered strategy.
     """
     verbs: list[str] = []
     add_strategy = node.trader.add_strategy
@@ -515,10 +514,11 @@ class TestAFailedStartDoesNotStopTheOthers:
         ``degrade()`` is **illegal** from ``STARTING`` and is *silently
         swallowed* (``_trigger_fsm`` catches ``InvalidStateTrigger``, logs and
         returns — ``common/component.pyx:2130-2134``), so a strategy isolated
-        with it would look contained and not be. ``stop()`` would run
-        ``on_stop()``, which for ``sma_crossover`` still calls
-        ``close_all_positions()`` — manufacturing an exit the strategy never
-        requested over an unrelated startup bug (NFR14, AR43).
+        with it would look contained and not be. ``stop()`` remains the wrong
+        verb regardless of what ``on_stop()`` does for any given strategy
+        today (Story 3.1): it runs strategy-owned teardown code over an
+        unrelated startup bug — the wrong time for any such side effect to
+        run (NFR14, AR43).
         """
         settings = _settings()
         registered_accounts(settings)

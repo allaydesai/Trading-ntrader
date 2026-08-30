@@ -36,7 +36,133 @@
 
 generated: 2026-08-03
 last_updated: >-
-  2026-08-28 (EPIC 2 RETROSPECTIVE COMPLETED — epic-2-retrospective: optional -> done. Full writeup
+  2026-08-30 (STORY 3.1 AC #6 RE-VERIFIED CLAUSE BY CLAUSE, still done. Follow-up to the 2026-08-29
+  review, prompted by the question of how much confidence the AC #6 fix actually earned. Method: AC
+  #6 carries EIGHT distinct obligations, so each was mutated in isolation and the whole plausible
+  guard surface (both component runner suites, the unit scan file, the --forked integration file)
+  run against it, recording which named tests fire. FIRST PASS 7/8 — clause (d), "a raise neither
+  aborts session teardown", SURVIVED: the runner's own except BaseException around the helper call
+  was narrowed to except ValueError and NOTHING WENT RED. Reachable, not hypothetical:
+  trader.strategies() is evaluated by the for statement itself, outside the helper's per-strategy
+  try, and self._node.trader is a property (live/node.py:134 -> return self.kernel.trader) that can
+  raise on a half-built node. Closed by test_a_helper_level_explosion_does_not_abort_session_teardown;
+  both its assertions then shown load-bearing independently (skipping _finish_record while still
+  containing the explosion fails it on the mark_stopped assertion specifically). SECOND PASS 8/8.
+  The matrix is recorded in the story file under "AC #6 clause-by-clause verification matrix" so the
+  evidence outlives the session. RESIDUAL LIMIT, stated not implied: no test composes the runner with
+  a REAL TradingNode — component drives the double, integration drives a real Trader but calls the
+  helper directly; the seam is verified only by reading installed Nautilus source, and closing it
+  needs a broker, so it belongs to P8 live verification, not CI. Component 1304->1305 (+1), unit 2397
+  and integration 281 unchanged, Epic 1 sweep 40/40, format/lint/typecheck clean. Lesson worth
+  carrying into Epic 3: a single test per AC is a coverage claim, not a proof — the clause matrix
+  found in ten minutes what a whole four-layer review pass did not. Previously:
+  2026-08-29 (STORY 3.1 CODE-REVIEWED -> done. review -> done. epic-3 stays in-progress: 3.1 done,
+  3.2-3.7 backlog. Four finder layers (Blind Hunter / Edge Case Hunter / Acceptance Auditor / Test
+  Efficacy) plus an independent refuter and a completeness critic, per the Epic 2 retro's standing
+  action items: 41 raw findings, 29 REFUTED AS NOISE (71%, in line with the 61-63% the refuter
+  layer historically kills), 19 actioned — 3 decisions resolved with Allay, 16 patches applied, 1
+  deferred to the submodule. NO CRITICAL SURVIVED, but the headline finding is severe for a story
+  that was marked all-ACs-satisfied: AC #6's ENTIRE RUNNER WIRING WAS PINNED BY NOTHING. Deleting
+  the call site from run()'s finally left 904 tests green across three tiers — confirmed by
+  mutation, and reached independently by all four finder layers. Both of the story's new tests
+  called the helper directly; neither ever constructed a LiveSessionRunner. Three more AC-level
+  properties were provably unguarded: AC #6's containment clause (the stub list put the raiser
+  LAST, so loop-level containment passed — mutation survived), AC #2's trade-for-trade loop (ran
+  ZERO iterations, measured: clean_closed is empty in the open-at-end scenario), and
+  FORBIDDEN_ORDER_METHODS/LIFECYCLE_HOOKS membership (nothing asserted it; the story's own M5a
+  disclosed a vanishing test and argued it was adequate signal — it was not). Two operator-facing
+  falsehoods fixed: the new stop trailer claimed unconditionally that no exit order was submitted,
+  false for custom/sma_crossover_long_only which still flattens and is registered and selectable —
+  the same defect class Task 3.4 existed to fix, inverted; and docs/qa flipped "does not prove FR18
+  end to end" into "proven end to end" on backtest-only evidence. The completeness critic found
+  what the hand-enumerated prose sweep could not: the project's OWN strategy-development skill and
+  template still teach close_all_positions() in on_stop, so the next strategy written the sanctioned
+  way reintroduces the banned call — and STRATEGY_MODULES was hand-listed rather than globbed as
+  Task 2.2 specified, so the new scan would not have caught it. Both fixed. The three decisions all
+  resolved as SCOPE CORRECTIONS rather than code changes: AC #6 delivers a contained on_stop() and
+  a terminal STOPPED state, NOT live unsubscribe delivery on the dominant signal path (three
+  artifacts had declared the leak fully RESOLVED); AC #2 is proven at engine-cache level only, not
+  against BacktestResult/ResultsExtractor/reproduce; and the helper stops DEGRADED strategies of any
+  class, so a custom/ flattener now flattens where Nautilus's is_running skip previously suppressed
+  it. NINE MUTATIONS SCRIPTED AGAINST THE REVIEW'S OWN FIXES, ALL NINE KILLED — the retro's AI-3
+  discipline, and none survived this time. Unit 2393->2397 (+4), component 1301->1304 (+3),
+  integration 281 unchanged, Epic 1 acceptance sweep 40/40, format/lint/typecheck clean. One
+  process note worth carrying: the first review run's subagents began MUTATING THE UNCOMMITTED
+  WORKING TREE to test their own hypotheses; the run was killed, the tree restored byte-exact, and
+  the review re-run under an explicit read-only mandate with mutation testing routed through the
+  orchestrator against a snapshot. Previously:
+  2026-08-28 (STORY 3.1 IMPLEMENTED: ready-for-dev -> in-progress -> review, same session as
+  creation. All 7 tasks / 36 subtasks complete; all 6 ACs satisfied. sma_crossover.on_stop() no
+  longer calls close_all_positions() (AC #1/#4); Story 2.6's single-purpose pin test deleted in the
+  same edit, replaced by TestStrategyLifecycleHooksAreInert — a scan of every built-in strategy's
+  lifecycle hooks (excluding the custom/ submodule) for all six FORBIDDEN_ORDER_METHODS names plus
+  is_live, driven from the frozenset itself rather than hardcoded pairs, so it survives future
+  strategies the way the old pin could not (AC #3, AC #5). AC #2 proven by a permanent
+  FlattenOnStop(SMACrossover) comparison against a real BacktestEngine: MEASURED, not assumed, that
+  the end-of-data flatten actually FILLS (closes the position, does not leave a null-exit open
+  trade) — the equivalence test asserts both the extra-order and extra-closed-trade observables. A
+  new module-level stop_degraded_strategies(trader, log) helper in live_session_runner.py, called
+  from run()'s finally between _stop_heartbeat and shutdown(), explicitly stops every DEGRADED
+  strategy with per-strategy BaseException containment, RESOLVING the DEGRADED-teardown leak the
+  retro's amendment flagged rather than leaving it open (AC #6) — pinned by both a stub-trader
+  component test and a real-Trader integration test. Six-mutation sweep (one per AC) all killed,
+  zero MUTATION markers left in the tree.
+  ENVIRONMENT HAZARD FOUND AND WORKED AROUND, not a story-code defect: a full BacktestEngine.run()
+  for an Equity instrument, run from any process descended from pytest (in-process under --forked,
+  or via subprocess.run launched from within a pytest test), reliably crashed with SIGABRT whenever
+  bars carried epoch-zero (1970) timestamps — reproduced with Nautilus's own TestInstrumentProvider,
+  independent of account type, fill/fee models or logging config, and matching why this repo's
+  test_backtest_engine.py.skip / test_strategy_execution.py.skip were abandoned years ago. Fix:
+  realistic (datetime.now()-based) bar timestamps; confirmed reliable across repeated runs under
+  make test-integration's actual invocation. Also found and worked around: the story's own Task 1.2
+  instruction to reuse conftest.py's setup_backtest_venue (NETTING/CASH, crypto-flavoured) is
+  unstable with Equity instruments in the installed Nautilus version (crashes even without
+  --forked) — the equivalence harness instead matches the project's OWN established production
+  equity path (HEDGING/MARGIN + IBKRCommissionModel, already used by backtest_orchestrator.py and
+  backtest_runner.py), disclosed as a deviation from the story's literal instruction.
+  Operator-facing stop trailer (live.py) and every stale close_all_positions/flatten doc reference
+  (phase3-live-verification.md, run_p7_position.sh, deferred-work.md's two owned items) corrected
+  in place, dated. FINAL: unit 2377 -> 2393 (+16, exactly the new scan class net the deleted pin),
+  component 1298 -> 1301 (+3), integration 278 -> 281 (+3), e2e unchanged (1), Epic 1 acceptance
+  sweep still 40/40, format/lint/typecheck clean. File List: 15 files (5 src, 8 tests, 2 docs) plus
+  this file and deferred-work.md. NEXT: code-review of 3.1, then Story 3.2 (submit-a-strategys-
+  orders-to-the-broker), which inherits the order-path groundwork from 90337eb and owns the
+  live verification of both the routing fix and this story's flatten removal against a real
+  session-owned position.
+  Previously: 2026-08-28 (STORY 3.1 CREATED: backlog -> ready-for-dev; epic-3: backlog -> in-progress — Epic 3
+  begins. File: 3-1-stop-trading-without-manufacturing-an-exit.md. Drafted from the amended
+  epics.md (1116-1176) with the retro's two mandates promoted to first-class ACs: AC #5 deletes
+  Story 2.6's pin test in the same edit as the call removal (both non-vacuity guards named as
+  must-survive), and AC #6 RESOLVES the DEGRADED-teardown "revisit" BY MEASUREMENT rather than
+  leaving it open — measured against installed 1.220.0: (DEGRADED, STOP) -> STOPPING is a legal
+  FSM transition (component.pyx:1594), an explicit strategy.stop() runs on_stop() and ends
+  STOPPED, and a raise inside on_stop() during that stop PROPAGATES and strands the strategy in
+  STOPPING — hence the story specifies a module-level stop_degraded_strategies(trader) helper in
+  the runner's finally with per-strategy BaseException containment, shutdown()-shaped problems
+  list. AC #3 scoped per the epics amendment (both scan halves exclude custom/, disclosed in the
+  test docstring; is_live measured 0 tree-wide including the submodule). AC #2 operationalized as
+  a permanent FlattenOnStop(SMACrossover)-subclass comparison whose LOAD-BEARING OBSERVABLE IS THE
+  ORDER RECORD (close_all_positions submits exactly one extra MarketOrder per open position
+  whether or not it fills at end-of-data — whether it fills is Task 1.2's measurement, not an
+  assumption). Story validated by three fresh-context agents (citation fact-check / checklist
+  re-derivation / dev-agent simulation); 4 CRITICAL + 5 lesser findings, ALL APPLIED. The four
+  criticals, worth remembering: (1) Trader.strategies is a METHOD, not a property — the
+  story-as-first-drafted would have had the component stub shaped to the wrong API and the
+  TypeError silently swallowed by teardown's BaseException discipline; (2) mutation M5's named
+  detector (test_the_scan_detects_every_forbidden_name_it_claims_to) is parametrized over
+  HARDCODED probe pairs and never consults FORBIDDEN_ORDER_METHODS, so the story now requires
+  Task 2.2's new probes to be DRIVEN FROM THE FROZENSET, one per name, making membership removal
+  killable; (3) tests/integration/test_sma_strategy_nautilus.py has NO engine harness (all ten
+  tests are mocks) — the equivalence harness is built fresh from
+  tests/integration/conftest.py::setup_backtest_venue + the bar pattern in
+  test_live_strategy_failure_survives.py:83-94; (4) src/cli/commands/live.py:453-456 prints
+  "sma_crossover.on_stop() still flattens..." on EVERY clean stop — an affirmative falsehood about
+  broker state the moment the call is removed; added to the sweep with a grep for any test pinning
+  the trailer. Story's own live tier: none required (the before/after backtest comparison is the
+  only evidence path per the amendment); Task 1.3 offers an OPTIONAL opportunistic P7-position
+  before-capture strictly gated on Gateway-up + RTH + no competing IBKR login. NEXT: dev-story
+  3.1.
+  Previously: 2026-08-28 (EPIC 2 RETROSPECTIVE COMPLETED — epic-2-retrospective: optional -> done. Full writeup
   at _bmad-output/implementation-artifacts/epic-2-retro-2026-08-28.md. Documentation-driven per
   Allay's standing direction from the Epic 1 retro: synthesized from all 8 story Dev Agent Records
   (~752 KB), deferred-work.md (2023 lines), this file's narrative, phase3-live-verification.md,
@@ -1660,8 +1786,8 @@ development_status:
   # ⚠️ 3.1 note: because no session had ever traded, the sma_crossover.on_stop() flatten that
   # 3.1 removes has NEVER been exercised against a session-owned position. The warnings P6/P7/P8
   # carry about it are untested assumptions, not observations.
-  epic-3: backlog
-  3-1-stop-trading-without-manufacturing-an-exit: backlog
+  epic-3: in-progress
+  3-1-stop-trading-without-manufacturing-an-exit: done
   3-2-submit-a-strategys-orders-to-the-broker: backlog
   3-3-track-every-order-through-its-full-lifecycle: backlog
   3-4-never-resubmit-an-order-that-is-already-working: backlog

@@ -1533,14 +1533,14 @@ with updated notes. The items below are new.
   here, the class splits along its own two concerns — the arm/restore/handle state machine, and the
   default `force_exit` announcement — which the module docstring already treats as separable ideas.
 
-- **AC #2's epic clause is knowingly not met end to end, pinned by a test rather than fixed.**
-  `sma_crossover.on_stop()` still calls `close_all_positions()`, and `node.stop()` reaches it
-  through real Nautilus machinery (`Trader._stop()` → `Strategy.on_stop()`) this story does not
-  touch. `tests/unit/core/test_live_stop_path_is_inert.py::test_the_known_limit_is_pinned_...`
-  documents this and instructs Story 3.1 to delete both the call and the test. Not a new item —
-  the epic's own FR coverage map (`epics.md:283`) already names Story 3.1 as the fix — recorded
-  here only so a reader of this file's index sees it without opening the story. **Owner: Story
-  3.1**, unchanged.
+- ~~**AC #2's epic clause is knowingly not met end to end, pinned by a test rather than fixed.**~~
+  — **RESOLVED in story-3.1, 2026-08-28.** `sma_crossover.on_stop()`'s `close_all_positions()` call
+  is deleted; the pin test (`test_the_known_limit_is_pinned_sma_crossover_still_flattens_today`)
+  is deleted in the same edit, replaced by
+  `tests/unit/core/test_live_stop_path_is_inert.py::TestStrategyLifecycleHooksAreInert`, which
+  scans every built-in strategy's lifecycle hooks (not just `sma_crossover`'s one known call) for
+  all six `FORBIDDEN_ORDER_METHODS` names. AC #2 is proven end to end by the backtest equivalence
+  test, `tests/integration/test_sma_strategy_nautilus.py::TestOnStopEquivalenceAcrossVariants`.
 
 - **Procedure P7 (this story's own) has not been run against a live gateway.** No automated test
   in this story's suite requires IB Gateway/TWS or Redis — every signal fact was established with a
@@ -1757,17 +1757,37 @@ tracked in that story's `### Review Findings` section, not here.
   `order_id_tag` per spec — the latter is probably right, since it also makes client order IDs
   stable across a re-ordered spec, which Epic 3 cares about.
 
-- **A `DEGRADED` strategy's `on_stop()` never runs at session teardown.** `Trader.stop_strategy()`
-  and `Trader._stop()` both guard on `is_running`, which means `state == RUNNING` **exactly**
-  (`common/component.pyx:1757-1767`); measured, `Trader.stop_strategy(a.id)` left a degraded strategy
-  at `DEGRADED`. Today that is strictly **safer**, because `sma_crossover.on_stop()` still calls
-  `close_all_positions()` and skipping it is what stops an unrelated `on_bar` bug from manufacturing
-  an exit. **After Story 3.1 removes that flatten it inverts into a leak** — no `unsubscribe_bars`,
-  no strategy-owned cleanup. **Action for Story 3.1:** revisit whether the runner should explicitly
-  `stop()` degraded strategies at teardown once doing so is safe. Pinned by a test whose docstring
-  says exactly this: `tests/integration/core/test_live_strategy_failure_survives.py::`
-  `TestADegradedStrategyIsSkippedAtTeardown` (written by the 2026-08-23 code review — this entry
-  claimed the test existed before it did; the Acceptance Auditor caught the false claim).
+- ~~**A `DEGRADED` strategy's `on_stop()` never runs at session teardown.**~~ — **RESOLVED in
+  story-3.1, 2026-08-28.** `Trader.stop_strategy()` / `Trader._stop()` still guard on `is_running`
+  (unchanged Nautilus behaviour), but the runner's teardown now compensates: a new module-level
+  `live_session_runner.stop_degraded_strategies(trader, log)` helper, called from `run()`'s
+  `finally` between `_stop_heartbeat` and `shutdown()`, explicitly calls `strategy.stop()` on every
+  `DEGRADED` strategy, per-strategy `BaseException`-contained (measured: `(DEGRADED, STOP) ->
+  STOPPING` is legal, but a raise inside that `on_stop()` propagates and strands the strategy in
+  `STOPPING`). Pinned by
+  `tests/integration/core/test_live_strategy_failure_survives.py::TestStopDegradedStrategiesAgainstARealTrader`
+  (real `Trader`, FSM facts) and
+  `tests/component/core/test_session_runner_stop.py::TestStopDegradedStrategies` (stub trader,
+  containment logic). `TestADegradedStrategyIsSkippedAtTeardown`'s own pin is unchanged — Nautilus's
+  skip is still real — only its docstring now records the compensation.
+
+  **Scope corrected at code review, 2026-08-29 — this is resolved in part, not in full.** The
+  original leak was stated as "no `unsubscribe_bars`, no strategy-owned cleanup". The
+  strategy-owned-cleanup half is closed: `on_stop()` runs, contained, and the strategy reaches a
+  terminal `STOPPED`. The `unsubscribe_bars` half is **not** closed on the dominant path. On a
+  signal stop, `request_node_stop` has already driven `node.stop()` before `run()`'s `finally`
+  reaches the helper, so the unsubscribe is issued against stopped engines and never reaches the
+  broker; it flows through a running data engine only on the phase-failure paths where the node is
+  still up. The call site cannot be moved earlier without running strategy teardown before the node
+  stop sequence, so this is accepted scope rather than a pending fix. **Action:** none required —
+  but do not cite this item as evidence that a live unsubscribe is delivered at teardown. Two
+  further review findings ride on the same helper and were resolved as accepted-and-recorded: it
+  stops `DEGRADED` strategies of **any** class (so a `custom/` strategy that flattens will flatten
+  where Nautilus's skip previously suppressed it), and its failure entries now carry a
+  `strategy_stop:` prefix so they are distinguishable from `shutdown()`'s own `stop:` entries in
+  `_shutdown_problems`. The runner's call site is now itself pinned, by
+  `tests/component/core/test_session_runner_stop.py::TestStopDegradedStrategies::test_the_runner_reaches_the_helper_on_the_stop_path`
+  — during review the whole wiring block was deleted and 904 tests stayed green.
 
 - **`SessionSteadyState.note_bar` and `LiveBarObserver` are covered only by AC #6's engine flag.**
   A deliberate choice (Story 2.7, Task 7), not an oversight. Neither is wrapped by the per-strategy
@@ -2096,3 +2116,7 @@ adopted: **give each item a named owning story, not a priority label.** Items re
   the `NodeFactory`/`AccountVerifier` alias coupling, the `_age_seconds` clock-skew masking, and
   `architecture.md`'s Delta Project Tree → still unowned, and explicitly named as such rather than
   labelled low priority.
+
+## Deferred from: code review of story-3.1 (2026-08-29)
+
+- `custom/sma_crossover_long_only.py:86` still calls `close_all_positions(self.instrument_id)` in its `on_stop()`, so a live session running `sma_crossover_long_only` (registered, aliased `sma_long`/`sma_long_only`, and selectable through `ntrader live create --strategy`) still manufactures an exit on every stop — the exact NFR14/AR43 behaviour Story 3.1 removes from the built-in. Not actionable from this repo: `src/core/strategies/custom/` is an unversioned git submodule, which is why the 2026-08-28 retro amendment scoped AC #3 to exclude it. Two consequences ride on this and are tracked as Story 3.1 review patches rather than here: the new stop trailer in `src/cli/commands/live.py` asserts unconditionally that no exit order was submitted, and `stop_degraded_strategies` now explicitly stops degraded strategies of any class. Fix belongs in the submodule repo.

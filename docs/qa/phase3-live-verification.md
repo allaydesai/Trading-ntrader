@@ -586,7 +586,9 @@ row is written by this story (Epic 3 owns that).
 
 ⚠️ **Stopping does not yet leave positions alone.** `sma_crossover.on_stop()` still calls
 `close_all_positions()` (Story 3.1's to remove), so do **not** read this procedure as evidence about
-position handling on stop.
+position handling on stop. **[Corrected 2026-08-28]** Story 3.1 removed the call; stopping now
+leaves positions untouched. This procedure's live "before" (a session-owned position flattened by
+`on_stop()`) was never captured — see the entries below.
 
 ⚠️ **Reconciliation did not happen.** `reconcile` and `warmup` log `started`/`ok` and do nothing at
 all in this epic. A clean phase log is not evidence that any state was reconciled.
@@ -671,6 +673,16 @@ It does **not** prove FR18 end to end — see the ⚠️ under Story 2.6's AC #2
 will have been flattened by `sma_crossover.on_stop()` (Story 3.1 removes that). Run this procedure
 once with a position open and once without, and report both.
 
+> **[Corrected 2026-08-28, amended 2026-08-29 at code review]** Story 3.1 landed and removed the
+> flatten. FR18 is proven **in a backtest** by
+> `tests/integration/test_sma_strategy_nautilus.py::TestOnStopEquivalenceAcrossVariants` (the
+> story's evidence path per the retro amendment, `epics.md:1166–1169`). It is **not** proven end to
+> end: no live session has ever been stopped while holding a session-owned position, so this
+> procedure's own "before" was never captured (see the note below) and neither was its "after". The
+> first version of this correction said "proven end to end" — that overstated backtest evidence as
+> live evidence, inside the section that exists to name exactly this gap. The live half remains
+> open and belongs to Story 3.2's order-path work.
+
 > ⚠️ **"A session that traded" described nothing that had ever happened, until 2026-08-28.** The
 > 2026-08-23 run read that sentence as merely blocked by the market being closed; it was blocked by
 > two defects on the order path as well (see this procedure's 2026-08-28 entries). So the flatten
@@ -701,9 +713,12 @@ A graceful stop, once the sequence has started serving:
 ```
 <TS> [info ] session.stopped  session_id=<uuid>  signal=SIGINT  trader_started=True
 Session stopped: stop-test-1 (SIGINT)
-Positions were left at the broker by the runner. ⚠️  sma_crossover.on_stop() still flattens its own
-positions (Story 3.1 removes this) — check the broker before assuming a position survived the stop.
+Positions were left untouched by the stop — the strategy did not submit any exit order on your
+behalf.
 ```
+
+**[Corrected 2026-08-28]** the console text above is Story 3.1's wording (`src/cli/commands/live.py`);
+the pre-3.1 text warned that `sma_crossover.on_stop()` still flattened.
 
 Exit code `0` (`echo $?`).
 
@@ -720,8 +735,9 @@ Exit code `1`.
 
 1. **First Ctrl-C**: the phase log ends, `session.stopped` appears with `signal=SIGINT`, the process
    exits **0**, and the row reads `stopped` with `last_stopped_at` set.
-2. **Broker state before and after are identical** except for whatever `on_stop()` flattened — record
-   the IBKR positions page (or `reconcile` output, once Epic 4 has one) at both ends.
+2. **Broker state before and after are identical, full stop** (Story 3.1: `on_stop()` no longer
+   flattens anything) — record the IBKR positions page (or `reconcile` output, once Epic 4 has one)
+   at both ends.
 3. **Ctrl-C during `node:build`** (start with the Gateway down or slow so the phase is genuinely slow)
    is **noticed** — the regression this story exists for; before it, the signal was lost for the whole
    of that phase.
@@ -744,7 +760,8 @@ Exit code `1`.
 #### Result detail — 2026-08-23
 
 1. **First Ctrl-C — ✅ PASS.** `session.stopped session_id=6ffd1556-… signal=SIGINT trader_started=True`,
-   console `Session stopped: p7-stop-test (SIGINT)` plus the Story 3.1 residual warning, exit **0**.
+   console `Session stopped: p7-stop-test (SIGINT)` plus the Story 3.1 residual warning (the
+   warning printed on that date; Story 3.1 has since replaced that trailer), exit **0**.
    Row read `stopped` with `last_stopped_at=2026-08-23 11:19:19.822510-04:00`. Neither of the review's
    two new warnings fired, correctly: a signal *did* end it and the teardown reported no problems.
 2. **Broker state identical — ✅ PASS.** A pre-existing `LONG 4 AAPL.NASDAQ` position, `id=AAPL.NASDAQ-EXTERNAL`,
@@ -895,8 +912,10 @@ strategy failed" and Story 1.7 recorded that inventing one is worse than a gener
 3. **The IBKR positions and orders page is identical before and after the contained failure.**
    Nothing closed, nothing cancelled, nothing submitted. Record the account's positions, open orders
    and `NetLiquidation` at both ends. This is NFR14 and AR43, and it is the criterion that matters
-   most: the isolation verb is `degrade()` precisely *because* `stop()` would run
-   `sma_crossover.on_stop()`'s `close_all_positions()`.
+   most: the isolation verb is `degrade()` precisely *because* `stop()` would run the strategy's own
+   `on_stop()` mid-containment — the wrong time for any strategy-owned side effect to run, regardless
+   of what that hook does today (Story 3.1 removed `sma_crossover`'s flatten, but the reasoning is
+   about the verb, not one strategy's current body).
 4. **Restarting clears the flag.** Stop the session, start it again, and confirm `runtime_flags` is
    back to `NULL` — a failure from a previous process run must never be reported against the current
    one.
@@ -907,9 +926,22 @@ strategy failed" and Story 1.7 recorded that inventing one is worse than a gener
    and confirm the `trading` phase logs `failed`, the sequence stops, and the CLI exits **1** with
    the `NoStrategyStartedError` message naming the specs.
 6. **The degraded strategy stays registered and warm.** `Trader.strategy_states()` still lists it as
-   `DEGRADED` (not removed), and it is still subscribed to its bar type. ⚠️ Known and accepted: its
-   `on_stop()` will **not** run at teardown, because `Trader._stop()` guards on `is_running`. Today
-   that is strictly safer; Story 3.1 must revisit it once the flatten is gone.
+   `DEGRADED` (not removed), and it is still subscribed to its bar type. `Trader._stop()` itself still
+   guards on `is_running` and skips a `DEGRADED` strategy's `on_stop()` — unchanged Nautilus behaviour
+   — but **[Partly resolved 2026-08-28, Story 3.1 AC #6; scope corrected 2026-08-29 at code
+   review]** the runner's teardown now explicitly calls
+   `live_session_runner.stop_degraded_strategies`, so the degraded strategy's own `on_stop()` still
+   runs (contained per-strategy) and it ends `STOPPED`, not stuck `DEGRADED`. **What is not
+   resolved:** on the dominant *signal* stop path the node has already been stopped before the
+   runner's `finally` reaches the helper, so `on_stop()`'s `unsubscribe_bars` does not reach a live
+   data engine — the subscription is not torn down against the broker, it simply stops mattering
+   because the engines are down. The unsubscribe flows through a running engine only on the
+   phase-failure paths. Verify the terminal `STOPPED` state and that `on_stop()` ran; do **not**
+   read this criterion as evidence that a live unsubscribe was delivered. Pinned by
+   `tests/integration/core/test_live_strategy_failure_survives.py::TestStopDegradedStrategiesAgainstARealTrader`
+   and `tests/component/core/test_session_runner_stop.py::TestStopDegradedStrategies`, with the
+   runner's own call site pinned by
+   `tests/component/core/test_session_runner_stop.py::TestStopDegradedStrategies::test_the_runner_reaches_the_helper_on_the_stop_path`.
 
 ### Result log
 

@@ -429,11 +429,23 @@ def start(session: str, connect_timeout: float) -> None:
 def _print_stop_result(session: str, runner: LiveSessionRunner) -> None:
     """The clean-stop console text (Story 2.6, Task 10 and AC #9).
 
-    Names the residual until Story 3.1 lands: a session that opened a
-    position will have been flattened by the strategy's own ``on_stop()`` —
-    see the ⚠️ under Story 2.6's AC #2. And, on a failed final release, the
-    console warning ``release_record`` alone (a structlog ``ERROR``) never
-    surfaced to an operator watching the terminal.
+    Since Story 3.1 the **built-in** strategies leave positions untouched on
+    stop: ``sma_crossover.on_stop()`` no longer submits an exit order (AC
+    #1/#4) — Story 2.6's AC #2 residual, now closed for everything AC #3's
+    lifecycle scan can reach.
+
+    The message stays qualified rather than absolute (review fix,
+    2026-08-29). ``src/core/strategies/custom/`` is an unversioned submodule
+    the scan excludes by design, and ``custom/sma_crossover_long_only.py:86``
+    still flattens in its ``on_stop()`` — it is registered, aliased and
+    selectable through ``--strategy``. An unconditional "no exit order was
+    submitted" would be an affirmative falsehood about broker state for those
+    sessions, which is the same defect this story removed from the old
+    trailer, only inverted.
+
+    And, on a failed final release, the console warning ``release_record``
+    alone (a structlog ``ERROR``) never surfaced to an operator watching the
+    terminal.
     """
     suffix = f" ({runner.stop_signal})" if runner.stop_signal else ""
     console.print(f"Session stopped: [bold]{escape(session)}[/bold]{suffix}", highlight=False)
@@ -451,9 +463,9 @@ def _print_stop_result(session: str, runner: LiveSessionRunner) -> None:
             highlight=False,
         )
     console.print(
-        "Positions were left at the broker by the runner. ⚠️  sma_crossover.on_stop() still "
-        "flattens its own positions (Story 3.1 removes this) — check the broker before assuming "
-        "a position survived the stop.",
+        "Positions were left at the broker by the runner, and the built-in strategies submit "
+        "no exit order when they stop. A strategy from the custom/ set may still flatten its "
+        "own positions on stop — check the broker if you are running one.",
         markup=False,
         highlight=False,
     )

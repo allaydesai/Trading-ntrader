@@ -29,10 +29,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 #: is exactly how a structural guarantee rots.
 #: ``src/core/live_strategy_guard.py`` joined at Story 2.7 (AC #7). Its
 #: containment path runs *while positions are open*, and its whole design turns
-#: on `degrade()` rather than `stop()` precisely because `stop()` would reach
-#: `sma_crossover.on_stop()`'s `close_all_positions()` — so if any module needs
-#: this scan, it is that one. This list is hand-maintained and its own comment
-#: below records that it already shrank once through the omission.
+#: on `degrade()` rather than `stop()` — because `stop()` runs strategy-owned
+#: teardown code mid-containment, whatever that hook's body happens to be
+#: (Story 3.1 removed `sma_crossover`'s flatten; the verb argument is about
+#: *when* strategy code runs, not about one strategy's current body). So if any
+#: module needs this scan, it is that one. This list is hand-maintained and its
+#: own comment below records that it already shrank once through the omission.
 STOP_PATH_MODULES = (
     "src/core/live_session_runner.py",
     "src/core/live_session_signals.py",
@@ -65,21 +67,53 @@ FORBIDDEN_ORDER_METHODS = frozenset(
 #: contain it — so the clause was dead code that could never produce a hit,
 #: while the scan cheerfully reported `flatten` present in `live.py` every run.
 #: Matched on *identifiers* (any callee or attribute whose name contains
-#: `flatten`), never on raw source text: the CLI's own operator warning says
-#: "still flattens its own positions", and a substring check over the file
-#: would fire on that prose — which is why the dead form was tolerable and the
-#: live form must not be textual.
+#: `flatten`), never on raw source text: prose in these modules discusses
+#: flattening (this file's own probes do too, and `live.py`'s operator warning
+#: did until Story 3.1 rewrote it), and a substring check over the file would
+#: fire on that prose — which is why the dead form was tolerable and the live
+#: form must not be textual.
 FORBIDDEN_FLATTEN_FRAGMENT = "flatten"
 
 #: AC #3 — the stop path shares no code with the seal path.
 FORBIDDEN_SEAL_NAMES = frozenset({"SEALED", "sealed_at", "sealed_run_id"})
 
-#: The known, disclosed exception: `sma_crossover.on_stop` still flattens its
-#: own positions today. `node.stop()` reaches it through
-#: `Trader._stop() -> Strategy.on_stop()`, which is real Nautilus machinery
-#: this story does not touch — see the ⚠️ under Story 2.6's AC #2. Story 3.1
-#: removes the call; this test is the tripwire that proves when it has.
-KNOWN_RESIDUAL_MODULE = "src/core/strategies/sma_crossover.py"
+#: Story 3.1, AC #3 — every non-submodule strategy file. `custom/` is an
+#: unversioned git submodule this repo cannot pin or scan; both scans below
+#: exclude it (disclosed here per the story's clarification of the amended AC).
+#:
+#: **Globbed, not listed** (review fix, 2026-08-29): the first implementation
+#: hand-listed the two built-ins, which recreated exactly the failure mode
+#: CLAUDE.md's Anti-Patterns section names — a guard list that rots invisibly
+#: because nothing asserts its completeness. A new `src/core/strategies/*.py`
+#: is now scanned the day it appears, not the day someone remembers to add it.
+#: The sibling `LIVE_MODULE_GLOBS` (`test_live_dependency_invariance.py:39`)
+#: is globbed for the same reason and says so.
+STRATEGY_MODULES = tuple(
+    sorted(
+        str(path.relative_to(PROJECT_ROOT))
+        for path in (PROJECT_ROOT / "src" / "core" / "strategies").glob("*.py")
+        if path.name != "__init__.py"
+    )
+)
+
+#: The lifecycle hooks AC #3 scans. Deliberately excludes `on_bar`: it
+#: legitimately submits orders, and scanning it would make the guard
+#: unsatisfiable by design, not by accident.
+#:
+#: Membership is pinned by :meth:`TestStrategyLifecycleHooksAreInert
+#: .test_the_lifecycle_hook_list_is_complete` (review fix, 2026-08-29):
+#: previously only ``on_stop``'s presence and ``on_bar``'s absence were
+#: asserted anywhere, so six of the seven could be dropped and the AC #3 scan
+#: would quietly stop covering them.
+LIFECYCLE_HOOKS = (
+    "on_start",
+    "on_stop",
+    "on_resume",
+    "on_reset",
+    "on_dispose",
+    "on_degrade",
+    "on_fault",
+)
 
 
 def _source(relative_path: str) -> str:
@@ -104,6 +138,34 @@ def _called_names(source: str) -> set[str]:
         elif isinstance(func, ast.Name):
             names.add(func.id)
     return names
+
+
+def _lifecycle_hook_bodies(source: str) -> list[tuple[str, str]]:
+    """``(hook_name, unparsed_source)`` for every lifecycle-hook method in the module.
+
+    Scope is direct-hook-body only: each hook's own ``FunctionDef`` node is
+    unparsed and fed through :func:`_called_names` / :func:`_referenced_names`
+    independently of the rest of the module, so a call in ``on_bar`` (which
+    legitimately submits orders) can never leak into an ``on_stop`` scan and
+    vice versa. A hook that delegated the flatten to a private helper method
+    would evade this — disclosed limitation, matches AR43's letter rather
+    than a call-graph analysis this repo does not have.
+
+    Both ``ast.FunctionDef`` and ``ast.AsyncFunctionDef`` are matched (review
+    fix, 2026-08-29): the first implementation matched the sync form only, so
+    an ``async def on_stop`` was invisible to the scan — a second evasion path
+    beside the private-helper one, and undisclosed. Nautilus's own hooks are
+    sync, which is what kept it from mattering, not the guard.
+    """
+    tree = ast.parse(source)
+    hooks: list[tuple[str, str]] = []
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+            and node.name in LIFECYCLE_HOOKS
+        ):
+            hooks.append((node.name, ast.unparse(node)))
+    return hooks
 
 
 def _referenced_names(source: str) -> set[str]:
@@ -177,26 +239,148 @@ class TestTheStopPathSubmitsNothing:
         assert any(FORBIDDEN_FLATTEN_FRAGMENT in name for name in called)
 
     def test_the_flatten_scan_does_not_fire_on_prose(self):
-        """The reason it is an identifier scan: `live.py` says "flattens" in
-        its own operator warning, and a textual check would trip on it.
+        """The reason it is an identifier scan: prose in the scanned modules
+        discusses flattening, and a textual check would trip on it. `live.py`
+        said "flattens" in its own operator warning until Story 3.1 rewrote
+        that text; the docstrings that explain *why* the flatten was removed
+        remain, so the hazard this control covers outlives the warning.
         """
-        prose = 'x = "sma_crossover.on_stop() still flattens its own positions"'
+        prose = 'x = "sma_crossover.on_stop() no longer flattens its own positions"'
         assert not {n for n in _called_names(prose) if FORBIDDEN_FLATTEN_FRAGMENT in n}
 
-    def test_the_known_limit_is_pinned_sma_crossover_still_flattens_today(self):
-        """The known-limit pin (Task 7's fourth RED bullet).
 
-        A RED here means Story 3.1 landed and deleted the call — **delete
-        this test, do not weaken it.** Until then, this assertion documents
-        the gap rather than hiding it: AC #2's ⚠️ says this story does not
-        make the epic's clause true end to end, and this test is how that
-        stays true in code, not only in prose.
-        """
-        called = _called_names(_source(KNOWN_RESIDUAL_MODULE))
-        assert "close_all_positions" in called, (
-            "sma_crossover.on_stop() no longer calls close_all_positions() — if Story 3.1 "
-            "removed it, DELETE this test (do not weaken it); Story 2.6's AC #2 residual is closed."
+class TestStrategyLifecycleHooksAreInert:
+    """Story 3.1, AC #3 — no strategy lifecycle hook may flatten positions,
+    submit/cancel orders, or branch on live-vs-backtest mode, in any
+    built-in strategy under ``src/core/strategies/`` (``custom/`` excluded —
+    see :data:`STRATEGY_MODULES`).
+
+    Replaces the deleted
+    ``test_the_known_limit_is_pinned_sma_crossover_still_flattens_today`` pin
+    in spirit: that pin asserted the defect *existed*; this scan asserts it
+    can never return, in any lifecycle hook, for all six
+    :data:`FORBIDDEN_ORDER_METHODS` names — not just the one call Story 3.1
+    happens to remove today.
+    """
+
+    @pytest.mark.parametrize("relative_path", STRATEGY_MODULES)
+    def test_no_forbidden_order_method_is_called_in_a_lifecycle_hook(self, relative_path):
+        source = _source(relative_path)
+        offenders = [
+            (hook_name, hits)
+            for hook_name, hook_source in _lifecycle_hook_bodies(source)
+            if (hits := _called_names(hook_source) & FORBIDDEN_ORDER_METHODS)
+        ]
+        assert not offenders, (
+            f"{relative_path} calls forbidden order/position method(s) in a lifecycle hook: "
+            f"{offenders}"
         )
+
+    @pytest.mark.parametrize("relative_path", STRATEGY_MODULES)
+    def test_is_live_is_never_referenced(self, relative_path):
+        """AR40 — strategies are mode-agnostic; ``is_live`` = 0 everywhere."""
+        referenced = _referenced_names(_source(relative_path))
+        assert "is_live" not in referenced, (
+            f"{relative_path} references `is_live` — strategies must be mode-agnostic (AR40)"
+        )
+
+    @pytest.mark.parametrize("forbidden_name", sorted(FORBIDDEN_ORDER_METHODS))
+    def test_the_scan_catches_every_forbidden_name_planted_in_on_stop(self, forbidden_name):
+        """Non-vacuity, driven from the frozenset itself — not hardcoded
+        probe/expected pairs (unlike
+        :meth:`TestTheStopPathSubmitsNothing.test_the_scan_detects_every_forbidden_name_it_claims_to`,
+        which never consults :data:`FORBIDDEN_ORDER_METHODS`). Removing a name
+        from the frozenset weakens this probe — but only by *deleting its own
+        test case*, which is a silent shrink, not a red. That is what
+        :meth:`test_the_forbidden_method_list_is_complete` is for; this probe
+        proves detection, that one proves membership. Neither alone kills
+        mutation M5.
+        """
+        probe = f"class Probe:\n    def on_stop(self):\n        self.{forbidden_name}()\n"
+        hooks = _lifecycle_hook_bodies(probe)
+        assert [name for name, _ in hooks] == ["on_stop"]
+        hits = _called_names(hooks[0][1]) & FORBIDDEN_ORDER_METHODS
+        assert forbidden_name in hits
+
+    @pytest.mark.parametrize("forbidden_name", sorted(FORBIDDEN_ORDER_METHODS))
+    def test_the_scan_does_not_fire_on_the_same_call_in_on_bar(self, forbidden_name):
+        """Scope negative control: ``on_bar`` legitimately submits orders and
+        is not in :data:`LIFECYCLE_HOOKS`, so a call planted there must never
+        be flagged.
+        """
+        probe = f"class Probe:\n    def on_bar(self, bar):\n        self.{forbidden_name}()\n"
+        assert _lifecycle_hook_bodies(probe) == []
+
+    def test_the_is_live_scan_catches_a_planted_reference(self):
+        probe = (
+            "class Probe:\n    def on_start(self):\n        if self.is_live:\n            pass\n"
+        )
+        assert "is_live" in _referenced_names(probe)
+
+    def test_the_scan_catches_a_forbidden_call_in_an_async_hook(self):
+        """Review fix, 2026-08-29 — the scan matched ``ast.FunctionDef`` only,
+        so ``async def on_stop`` was an undisclosed evasion path beside the
+        private-helper one. Nautilus's hooks are sync, which is what kept this
+        from mattering; nothing in the guard did.
+        """
+        probe = "class Probe:\n    async def on_stop(self):\n        self.close_all_positions(1)\n"
+        hooks = _lifecycle_hook_bodies(probe)
+        assert [name for name, _ in hooks] == ["on_stop"]
+        assert "close_all_positions" in _called_names(hooks[0][1]) & FORBIDDEN_ORDER_METHODS
+
+    def test_the_forbidden_method_list_is_complete(self):
+        """Membership pin — what actually kills mutation M5 (review fix,
+        2026-08-29).
+
+        Every other consumer of :data:`FORBIDDEN_ORDER_METHODS` *intersects*
+        with it, so dropping a name only ever weakens a scan or deletes a
+        parametrized probe's own case. Nothing went red and no count was
+        asserted, which made the guard silently disableable — the precise
+        defect class this file exists to prevent. Asserted as an exact set:
+        adding a name deliberately is a one-line edit here, and removing one
+        accidentally is now impossible.
+        """
+        assert FORBIDDEN_ORDER_METHODS == frozenset(
+            {
+                "close_all_positions",
+                "close_position",
+                "cancel_all_orders",
+                "cancel_order",
+                "submit_order",
+                "submit_order_list",
+            }
+        )
+
+    def test_the_lifecycle_hook_list_is_complete(self):
+        """Membership pin for :data:`LIFECYCLE_HOOKS` (review fix,
+        2026-08-29): only ``on_stop``'s presence and ``on_bar``'s absence were
+        asserted anywhere, so six of the seven could be dropped and the AC #3
+        scan would quietly stop covering them. ``on_bar``'s exclusion is
+        load-bearing and asserted here too — it legitimately submits orders.
+        """
+        assert LIFECYCLE_HOOKS == (
+            "on_start",
+            "on_stop",
+            "on_resume",
+            "on_reset",
+            "on_dispose",
+            "on_degrade",
+            "on_fault",
+        )
+        assert "on_bar" not in LIFECYCLE_HOOKS
+
+    def test_the_strategy_module_glob_finds_the_known_built_ins(self):
+        """Non-vacuity for the glob (review fix, 2026-08-29). Every scan in
+        this class is parametrized over :data:`STRATEGY_MODULES`; if the glob
+        ever returned empty — a moved package, a renamed directory — every one
+        of them would silently vanish rather than fail. Pins the two built-ins
+        that exist today and the ``custom/`` exclusion, without pinning the
+        list to exactly those two (that is what the glob is for).
+        """
+        assert "src/core/strategies/sma_crossover.py" in STRATEGY_MODULES
+        assert "src/core/strategies/sma_momentum.py" in STRATEGY_MODULES
+        assert not [path for path in STRATEGY_MODULES if "custom/" in path]
+        assert not [path for path in STRATEGY_MODULES if path.endswith("__init__.py")]
 
 
 class TestTheStopPathNeverSeals:

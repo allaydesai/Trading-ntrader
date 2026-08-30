@@ -218,7 +218,9 @@ Exit codes: `0` success · `1` partial (some bar files failed) · `2` fatal (bad
 >
 > **Startup is an ordered, logged sequence** — `gate:static → node:build → node:connect → gate:account → reconcile → warmup → subscribe → trading` — with each phase emitting `phase=<name> status=started|ok|failed` and every record carrying the session's id. A failure in any phase stops the sequence and no later phase runs. `reconcile` and `warmup` are explicit no-op placeholders until Epic 4; a clean phase log is **not** evidence that anything was reconciled. `live start` shares `check`'s exit-code table, with `4` also covering "connected, but the trader never started".
 
-> ⚠️ **Stopping a session does not yet leave positions alone.** The bundled `sma_crossover` still flattens its positions in `on_stop()`. Ctrl-C handling is not implemented either — ending a run today means stopping the gateway or killing the process.
+> **Stopping a session leaves positions alone.** The bundled `sma_crossover` no longer flattens its positions in `on_stop()` (Story 3.1) — a stop tears down subscriptions and nothing else, so a daily restart cannot fabricate a round trip the strategy never asked for. Ctrl-C is handled: one `SIGINT`/`SIGTERM` stops the session cleanly, a second forces exit.
+>
+> ⚠️ A strategy from the unversioned `src/core/strategies/custom/` submodule may still flatten on stop — `sma_crossover_long_only` does. The AST guard that forbids order calls in lifecycle hooks cannot reach that submodule, so check the broker after stopping a session that ran one.
 
 ## Common Workflows
 

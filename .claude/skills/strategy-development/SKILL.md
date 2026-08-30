@@ -43,7 +43,11 @@ class MyStrategy(Strategy):
         self.subscribe_bars(self.bar_type)
 
     def on_stop(self) -> None:
-        self.close_all_positions(self.instrument_id)
+        # Subscription teardown ONLY. Never close_all_positions() or any other
+        # order/position call here — a lifecycle hook that submits an order
+        # manufactures a round trip the strategy never asked for (NFR14, AR43),
+        # and it is rejected in review. Enforced by an AST scan:
+        # tests/unit/core/test_live_stop_path_is_inert.py::TestStrategyLifecycleHooksAreInert
         self.unsubscribe_bars(self.bar_type)
 
     def on_bar(self, bar: Bar) -> None:

@@ -1046,16 +1046,25 @@ class TestStopOutput:
         assert result.exit_code == 0
         assert "Session stopped: alpha-session (SIGINT)" in result.output
 
-    def test_the_stop_message_names_the_story_31_residual(self, runner):
-        """Positions may have been closed by the strategy's own ``on_stop()``
-        until Story 3.1 lands — the operator must not read a clean stop as
-        proof positions survived it (Story 2.6's AC #2 ⚠️).
+    def test_the_stop_message_says_positions_are_untouched(self, runner):
+        """Since Story 3.1 the built-in strategies leave positions untouched —
+        ``sma_crossover.on_stop()`` no longer submits an exit order (AC #1/#4;
+        Story 2.6's AC #2 residual is closed).
+
+        Both halves are asserted (review fix, 2026-08-29). The first version
+        of this trailer claimed unconditionally that no exit order was
+        submitted, which is false for ``custom/sma_crossover_long_only``: it
+        still flattens in ``on_stop()``, AC #3's scan excludes the submodule by
+        design, and the strategy is registered and selectable. Pinning only the
+        reassuring half would let the qualification be dropped silently.
         """
         with _start_harness():
             result = runner.invoke(live, ["start", "alpha-session"])
 
-        assert "sma_crossover.on_stop()" in result.output
-        assert "Story 3.1" in result.output
+        assert "Positions were left at the broker by the runner" in result.output
+        assert "custom/" in result.output, (
+            "the trailer no longer qualifies its claim for custom/ strategies that still flatten"
+        )
 
     def test_a_keyboard_interrupt_escaping_run_is_unchanged_at_exit_one(self, runner):
         """The table still has to be honest: a graceful stop raises nothing,
