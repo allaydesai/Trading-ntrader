@@ -36,6 +36,110 @@
 
 generated: 2026-08-03
 last_updated: >-
+  2026-08-30 (STORY 3.2 IMPLEMENTED: ready-for-dev -> in-progress -> review, same session as
+  creation. epic-3 stays in-progress: 3.1 done, 3.2 review, 3.3-3.7 backlog. Tasks 1-7 and 9 of 9
+  complete; Task 8 (AC #7, the live fill) is the one deliberately unrun item — checked, not
+  skipped: the session ran on a Sunday, market closed, so the RTH precondition could not be
+  satisfied regardless of Gateway/Redis state (both reachable on 127.0.0.1:4002/6379; docker ps
+  found no daemon, consistent with — but not independently confirming — the listening Gateway
+  being the required bare one rather than the forbidden READ_ONLY_API compose one). Per the
+  story's own Task 8.4 and the Epic 2 retro's standing rule, this gates the story into review
+  without blocking on it; the story explicitly may NOT move to done until AC #7 records a real
+  OrderSubmitted -> OrderAccepted -> OrderFilled -> PositionOpened sequence inside RTH. NEW
+  src/core/live_order_path.py (256 lines): install_order_path(strategy, monitor, log) wraps the
+  four order-creating strategy methods (submit_order, submit_order_list, close_position,
+  close_all_positions -- cancels deliberately excluded) at the instance level, installed by the
+  runner between materialise_strategy and add_strategy; OrderEventObserver logs order.submitted
+  with client_order_id/instrument_id/session_id and a bar-close-to-submit latency anchored on
+  bar.ts_event, silent on every event type but OrderSubmitted (which doubles as AC #3's
+  OrderRejected containment, since submit_order publishes OrderInitialized on the SAME topic
+  first -- measured, not assumed). NEW ConnectionMonitor.submission_withheld predicate
+  (live_connection_monitor.py) -- deliberately NOT trading_permitted, which stays False for the
+  life of every session by design; the new predicate withholds on {LOST, HALTED,
+  AWAITING_CONNECTION, stale} and is healthy through RECOVERING-with-a-fresh-observation, today's
+  permanent steady state. Runner wiring: install_order_path at strategy materialisation (adjacent
+  to guard.wrap, before add_strategy), the observer's two subscriptions in _phase_subscribe, and
+  one synchronous observe() call so AWAITING_CONNECTION never overlaps the trading phase --
+  live_session_runner.py 833 -> 871 raw lines / 284 -> 298 executable statements (AST stmt count),
+  disclosed per CLAUDE.md's D4 convention, not split (guard-list-rot Anti-Pattern). NEW
+  SessionSpec._reject_order_id_tag_collision validator (src/models/session.py) closes a
+  2026-08-23 deferred-work.md item: walks a spec's strategies in registration order, SIMULATING
+  Trader.add_strategy's own resolution (trading/trader.py:406-412) rather than a naive
+  "explicit duplicates only" design that fact-checking showed could never fire against today's
+  built-ins (only MomentumParameters declares order_id_tag; _normalise_parameters materialises
+  every param model's defaults via model_dump(), so explicit-vs-defaulted is not a distinction
+  that exists at the spec layer) -- refuses a create-time collision instead of letting it surface
+  as a start-time RuntimeError for an operator's choice of strategy order. TWO PRE-MEASUREMENT
+  ASSUMPTIONS IN THE STORY'S OWN DEV NOTES CORRECTED BY DIRECT MEASUREMENT rather than propagated:
+  (1) Cython's cpdef self-calls inside close_position DO honour a Python-level instance
+  attribute override -- close_position's own internal self.submit_order(...) call reached a
+  wrapped submit_order in a built-by-hand real-Order-lifecycle probe, contradicting the Dev
+  Notes' "C-level dispatch bypasses an instance attribute" hypothesis (the mechanism decision is
+  unchanged regardless -- close_position is still wrapped as its own entry); (2)
+  use_hyphens_in_client_order_ids defaults True, not False -- the real observed live client
+  order ID already has hyphens, so this is the wanted default, not a gap. GUARD-LIST DISCIPLINE:
+  live_order_path.py added to NODE_FACING_MODULES and TestImportPurity.MODULES; deliberately kept
+  OUT of STOP_PATH_MODULES (it legitimately calls the wrapped order methods) and
+  NEW_OR_MODIFIED_FOR_STOP, both reasons recorded inline where the lists live, following the
+  Story 2.6/2.7 precedent of disclosing exclusions rather than leaving them silent.
+  ORDER_CREATING_METHODS joins CLAUDE.md's membership-pinned-lists entry alongside
+  FORBIDDEN_ORDER_METHODS/LIFECYCLE_HOOKS. NINE MUTATIONS, ONE PER AC MINIMUM, ALL KILLED ON THE
+  FIRST ATTEMPT (Epic 2 retro's AI-3 discipline) -- three of them (M6 on derive_trader_id, M8
+  planting a forbidden call in sma_crossover.on_stop, M9 on the whole-share sizing branch) killed
+  by suites this story did not write (test_live_trader_id.py, test_live_stop_path_is_inert.py,
+  test_sma_crossover_position_sizing.py), demonstrating the new behaviour is caught by the repo's
+  EXISTING discipline and not merely by tests invented alongside the code they test. Clause
+  matrix recorded in the story file per AC, same method as Story 3.1. FINAL: unit 2397 -> 2417
+  (+20), component 1305 -> 1334 / 16 skipped (+29), integration --forked 281 / 2 skipped
+  (unchanged), e2e 1 (unchanged), Epic 1 acceptance sweep still 40/40, format/lint/typecheck
+  clean, zero regressions, git diff --stat src/core/strategies/ empty (AC #1's zero-diff evidence
+  contract, re-verified after the full sweep). File List: 4 new files, 11 modified (5 src/test
+  production+guard-list files, CLAUDE.md, deferred-work.md, sprint-status.yaml, this file) --
+  scope fences held: no diffs under src/core/strategies/, src/cli/**, src/db/**, src/services/**,
+  or alembic/**; head stays b7c419e2a3d8. NEXT: re-run Task 8 (scripts/diagnostics/run_p7_position.sh)
+  on the next trading day, inside RTH, with no competing IBKR login (mobile app or client
+  portal), against the bare non-compose Gateway with sma_crossover (never
+  sma_crossover_long_only). Only after AC #7 records a fill does 3.2 move to done; until then it
+  stays in review with that one item outstanding.
+  Previously:
+  2026-08-30 (STORY 3.2 CREATED: backlog -> ready-for-dev. File:
+  3-2-submit-a-strategys-orders-to-the-broker.md. epic-3 stays in-progress (3.1 done, 3.2
+  ready-for-dev, 3.3-3.7 backlog). Drafted from the amended epics.md (1178-1243) with the retro
+  block promoted to a first-class AC #7: re-run run_p7_position.sh inside RTH with no competing
+  IBKR login and record a FILL, not a submission — P7 criterion 2's position-open half plus FR18's
+  live half, both deferred out of Epic 2 into this story. THE DRAFT'S CENTRAL PRE-RESOLVED
+  DECISION (found by measurement; would have burned a cold dev agent):
+  ConnectionMonitor.trading_permitted is False for the ENTIRE LIFE of every session today —
+  confirm_state_reestablished() is deliberately never called until Epic 4
+  (live_session_steady_state.py:345-348), so a healthy session sits permanently in RECOVERING and
+  gating submit_order on the flag would suppress every order, including the story's own target
+  fill. AC #4 is therefore scoped to the connection-loss half of NFR10 (gate on known loss, not on
+  absent grant; the predicate's closed form is pinned in the story), with the
+  reconciliation-incomplete half recorded as Epic 4's by phase design. Mechanism decided: a new
+  src/core/live_order_path.py — instance-level wrap of the four order-creating strategy methods
+  (the 2.7 guard mechanism, measured first per Task 1) plus the repo's FIRST order-event observer,
+  emitting order.submitted with bar-close->submit latency anchored at bar.ts_event. A new module
+  because live_strategy_guard.py and the runner are both in STOP_PATH_MODULES, whose scan forbids
+  calls to submit_order module-wide; kept OUT of that list deliberately and added by hand to
+  NODE_FACING_MODULES + TestImportPurity.MODULES. Measured-absent list driving the tasks: zero
+  consumers of trading_permitted, zero order-event subscribers (one prose comment), zero latency
+  measurement anywhere in src/. Story validated by two fresh-context agents (citation fact-check /
+  checklist+dev-simulation): 10 critical findings between them, ALL APPLIED — the two worth
+  remembering: (1) Task 6's order_id_tag validator premise was factually wrong (same-strategy dups
+  are ALREADY refused at create by SessionSpec._reject_duplicate_strategies, and explicit-vs-
+  defaulted tags are indistinguishable after _normalise_parameters' model_dump), so the validator
+  now simulates Nautilus's own resolution — explicit tag else positional auto f"{len(taken):03d}"
+  per trader.py:406-419 — and refuses duplicate RESOLVED tags, with a RED test constructible from
+  today's built-ins; (2) the stop-path scan is call-callee-only (_called_names), not "identifier
+  anywhere" — the error was in the conservative direction, the new-module decision survives. Also
+  corrected: live_session_runner.py measures 833 raw lines, not the 795 Story 3.1's File List
+  recorded. Scope fences written in: no lifecycle events beyond order.submitted (3.3), no retry
+  machinery (3.4/AR24), no trade recorder (3.5/3.6), no rejection surfacing (3.7), no grant path
+  (4.2), no fencing column (D1 -> 3.6), and zero diffs under src/core/strategies/ as AC #1's
+  evidence contract. Live preconditions hard-coded into Task 8: inside RTH; no IBKR mobile/portal
+  login (the error-162 eviction); NOT the compose gateway (docker-compose.yml:51 hardcodes
+  READ_ONLY_API "yes" — the Gateway itself would refuse the first order); sma_crossover, never
+  sma_crossover_long_only (custom/ still flattens on stop). NEXT: dev-story 3.2. Previously:
   2026-08-30 (STORY 3.1 AC #6 RE-VERIFIED CLAUSE BY CLAUSE, still done. Follow-up to the 2026-08-29
   review, prompted by the question of how much confidence the AC #6 fix actually earned. Method: AC
   #6 carries EIGHT distinct obligations, so each was mutated in isolation and the whole plausible
@@ -1788,7 +1892,7 @@ development_status:
   # carry about it are untested assumptions, not observations.
   epic-3: in-progress
   3-1-stop-trading-without-manufacturing-an-exit: done
-  3-2-submit-a-strategys-orders-to-the-broker: backlog
+  3-2-submit-a-strategys-orders-to-the-broker: review
   3-3-track-every-order-through-its-full-lifecycle: backlog
   3-4-never-resubmit-an-order-that-is-already-working: backlog
   3-5-aggregate-partial-fills-into-one-position: backlog

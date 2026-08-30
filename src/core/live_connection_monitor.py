@@ -186,6 +186,36 @@ class ConnectionMonitor:
         return self._state is ConnectionState.CONNECTED and not self.observation_is_stale
 
     @property
+    def submission_withheld(self) -> bool:
+        """Whether Story 3.2's order path should suppress submission right now.
+
+        **Not** :attr:`trading_permitted`, and the difference is the whole
+        point (Story 3.2, AC #4). That flag is ``False`` for the entire life
+        of every session today, by design: its only grant path,
+        ``confirm_state_reestablished()``, is deliberately never called in
+        production until Epic 4 has a real reconciliation to follow
+        (``live_session_steady_state.py:345-348``). Gating order submission
+        on it would suppress every order this phase ever proves, including
+        this story's own target fill.
+
+        This predicate answers a narrower question instead: is the
+        connection *known lost or unobserved*? It is derived, never stored,
+        from the same two facts as ``trading_permitted`` — state and
+        staleness — but draws the line one state earlier: ``RECOVERING`` with
+        a fresh observation does **not** withhold, because that is this
+        phase's permanent healthy steady state (Epic 1 retro Action Item #7
+        keeps the grant Epic 4's). NFR10's other half — no orders while
+        reconciliation is incomplete — is therefore not enforced by this
+        property; it is Epic 4's by phase design.
+
+        Closed form: ``(state not in {CONNECTED, RECOVERING}) or
+        observation_is_stale``.
+        """
+        return (
+            self._state not in (ConnectionState.CONNECTED, ConnectionState.RECOVERING)
+        ) or self.observation_is_stale
+
+    @property
     def observation_is_stale(self) -> bool:
         """Whether the last reading is too old to act on (or absent entirely)."""
         age = self.observation_age_seconds

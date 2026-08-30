@@ -89,6 +89,7 @@ from src.core.live_check_node import (
 from src.core.live_connection_monitor import ConnectionMonitor
 from src.core.live_connection_probe import read_ibkr_connection_status
 from src.core.live_node_builder import GateRefusedError, build_trading_node
+from src.core.live_order_path import ORDER_EVENTS_TOPIC, OrderEventObserver, install_order_path
 from src.core.live_session_controller import build_session_controller_config
 from src.core.live_session_node import (
     BAR_TOPIC,
@@ -221,6 +222,7 @@ class LiveSessionRunner:
         self._startup_heartbeat: StartupHeartbeat | None = None
         self._steady_state: SessionSteadyState | None = None
         self._monitor: ConnectionMonitor | None = None
+        self._order_observer: OrderEventObserver | None = None
         self._deadline, self._trader_started, self._ownership_lost = 0.0, False, False
         self._record_release_failed = False
         self._shutdown_problems: list[str] = []
@@ -545,7 +547,36 @@ class LiveSessionRunner:
             self._node.trader.start_actor(observer.id)
             self._steady_state = self._build_steady_state()
             self._node.trader.subscribe(BAR_TOPIC, self._steady_state.note_bar)
+            self._observe_connection_once()
+            self._order_observer = OrderEventObserver(self._log)
+            self._node.trader.subscribe(BAR_TOPIC, self._order_observer.note_bar)
+            self._node.trader.subscribe(ORDER_EVENTS_TOPIC, self._order_observer.handle_order_event)
             report_instrument_shortfall(self._node, bar_types, self._log)
+
+    def _observe_connection_once(self) -> None:
+        """One synchronous connection reading before `trading` starts (Story
+        3.2, AC #4, Task 2.3).
+
+        The heartbeat's own tick would eventually observe the connection too,
+        but its first firing is up to one ``heartbeat_interval_seconds`` away
+        — a signal cannot mathematically fire before ~3 bars, but this does
+        not rely on that arithmetic. Without this call the monitor sits in
+        ``AWAITING_CONNECTION`` (submission withheld) through the entire
+        ``trading`` phase and the start of the serve loop, on a node that has
+        already passed both gates. Guarded the same way
+        ``SessionSteadyState._observe_connection`` guards its own tick: the
+        reader is fail-closed by construction, but "by contract" is not "by
+        test" for a third-party adapter's private flags, and a raise here
+        must not abort a startup that has already cleared both gates. A
+        failed read leaves the monitor unobserved, which is the safe
+        direction — :attr:`ConnectionMonitor.submission_withheld` stays
+        ``True`` until the next tick succeeds.
+        """
+        assert self._monitor is not None
+        try:
+            self._monitor.observe(self._connection_reader(self._settings))
+        except Exception as exc:  # noqa: BLE001 - AR42: must not abort startup
+            self._log.error("session.connection_read_failed", error_type=type(exc).__name__)
 
     def _phase_trading(self) -> None:
         """Materialise and start the strategies, then declare the trader started."""
@@ -585,6 +616,11 @@ class LiveSessionRunner:
         here is before both; wrapping after would leave ``handle_event``
         unguarded forever (finding #5).
 
+        ``install_order_path`` (Story 3.2) is wired here too, for the same
+        reason: the strategy's own order-creating calls are plain instance
+        attributes Nautilus reads directly, with no later re-binding to
+        intercept.
+
         Returns:
             ``True`` when the strategy is live. ``False`` when it was contained
             — the caller counts these, because a session where *none* returned
@@ -594,6 +630,8 @@ class LiveSessionRunner:
         try:
             strategy = materialise_strategy(strategy_spec)
             self._guard.wrap(strategy, spec_strategy_id=strategy_spec.strategy_id)
+            assert self._monitor is not None
+            install_order_path(strategy, self._monitor, self._log)
             assert self._node is not None
             self._node.trader.add_strategy(strategy)
             self._node.trader.start_strategy(strategy.id)

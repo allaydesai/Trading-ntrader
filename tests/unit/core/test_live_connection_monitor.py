@@ -764,6 +764,99 @@ class TestHalt:
         assert monitor.trading_permitted is False
 
 
+class TestSubmissionWithheld:
+    """Story 3.2, AC #4 — the order-path suppression predicate.
+
+    Deliberately **not** ``trading_permitted``: that flag is False for the
+    entire life of every session today (``confirm_state_reestablished`` is
+    never called in production until Epic 4), so gating submission on it
+    would suppress every order this phase ever proves. ``submission_withheld``
+    answers a narrower question — "is the connection *known lost or
+    unobserved*?" — and is False through the permanently-healthy
+    ``RECOVERING``-with-fresh-observation steady state.
+
+    Closed form, adopted verbatim so no cell is arguable:
+    ``withheld = (state not in {CONNECTED, RECOVERING}) or observation_is_stale``.
+    """
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize(
+        "state",
+        [ConnectionState.AWAITING_CONNECTION, ConnectionState.LOST, ConnectionState.HALTED],
+    )
+    def test_withheld_for_every_not_connected_or_recovering_state(self, state):
+        monitor = _drive_to(state, FakeClock())
+        assert monitor.submission_withheld is True
+
+    @pytest.mark.unit
+    def test_not_withheld_while_connected_with_a_fresh_observation(self):
+        clock = FakeClock()
+        monitor = _connected(clock)
+
+        assert monitor.submission_withheld is False
+
+    @pytest.mark.unit
+    def test_not_withheld_while_recovering_with_a_fresh_observation(self):
+        """Today's permanent healthy steady state (Dev Notes "AC #4 trap"):
+        ``confirm_state_reestablished()`` is never called in production, so a
+        healthy session sits in ``RECOVERING`` for its whole life. If this
+        state withheld, no order would ever be submitted at all.
+        """
+        clock = FakeClock()
+        monitor = _monitor(clock)
+        monitor.observe(UP)
+        assert monitor.state is ConnectionState.RECOVERING
+
+        assert monitor.submission_withheld is False
+
+    @pytest.mark.unit
+    def test_withheld_once_a_connected_observation_goes_stale(self):
+        clock = FakeClock()
+        monitor = _connected(clock)
+        clock.advance(DEFAULT_MAX_OBSERVATION_AGE_SECONDS + 0.1)
+
+        assert monitor.submission_withheld is True
+
+    @pytest.mark.unit
+    def test_withheld_once_a_recovering_observation_goes_stale(self):
+        clock = FakeClock()
+        monitor = _monitor(clock)
+        monitor.observe(UP)
+        clock.advance(DEFAULT_MAX_OBSERVATION_AGE_SECONDS + 0.1)
+        assert monitor.state is ConnectionState.RECOVERING
+
+        assert monitor.submission_withheld is True
+
+    @pytest.mark.unit
+    def test_withheld_before_any_observation_has_arrived(self):
+        monitor = _monitor(FakeClock())
+
+        assert monitor.state is ConnectionState.AWAITING_CONNECTION
+        assert monitor.submission_withheld is True
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize("state", list(ConnectionState))
+    def test_matches_the_pinned_closed_form_for_every_state(self, state):
+        """Non-vacuity for the whole enum, computed independently of the
+        property under test so this cannot pass by tautology.
+        """
+        monitor = _drive_to(state, FakeClock())
+
+        expected = (
+            monitor.state not in (ConnectionState.CONNECTED, ConnectionState.RECOVERING)
+        ) or monitor.observation_is_stale
+
+        assert monitor.submission_withheld is expected
+
+    @pytest.mark.unit
+    def test_submission_withheld_has_no_setter(self):
+        """Derived, never stored — same discipline as `trading_permitted`."""
+        monitor = _monitor(FakeClock())
+
+        with pytest.raises(AttributeError):
+            monitor.submission_withheld = False  # type: ignore[misc]
+
+
 class TestModulePurity:
     """The monitor stays framework-free — that is what keeps it unit-tier."""
 

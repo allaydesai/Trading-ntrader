@@ -84,6 +84,93 @@ class TestSessionSpecShape:
         assert "more than once" in message
 
 
+class TestOrderIdTagCollision:
+    """Task 6.4 (Story 3.2) — a create-time validator closing
+    ``deferred-work.md:1748-1757``: ``Trader.add_strategy`` assigns
+    ``order_id_tag = f"{len(existing):03d}"`` to any strategy whose tag is
+    unset, then raises ``RuntimeError`` if the resolved tag is already taken
+    — a failure that used to surface only at ``trading``, for an operator's
+    *choice of strategy order*, on a spec that had validated perfectly at
+    create time.
+
+    ``sma_crossover`` has no ``order_id_tag`` field at all (resolves
+    positionally); ``momentum``'s own parameter model declares one with
+    default ``"002"`` (always explicit, once ``_normalise_parameters``
+    dumps it) — the only two built-in strategies, so every case here is
+    built from them.
+    """
+
+    @pytest.mark.unit
+    def test_an_explicit_tag_colliding_with_an_auto_assigned_one_is_refused(self):
+        """The exact shape deferred-work.md names: an explicit-tag strategy
+        colliding with an auto-positional one, order-dependent.
+        """
+        first = _spec(
+            strategy_id="sma_crossover", bar_types=("AAPL.NASDAQ-1-MINUTE-LAST-EXTERNAL",)
+        )
+        second = _spec(
+            strategy_id="momentum",
+            overrides={"order_id_tag": "000"},
+            bar_types=("MSFT.NASDAQ-1-MINUTE-LAST-EXTERNAL",),
+        )
+
+        with pytest.raises(ValidationError) as exc_info:
+            SessionSpec(strategies=(first, second))
+
+        message = str(exc_info.value)
+        assert "000" in message
+        assert "momentum" in message
+
+    @pytest.mark.unit
+    def test_reordering_the_same_two_strategies_avoids_the_collision(self):
+        """Proves the simulation walks in **spec order**, matching
+        ``Trader.add_strategy``'s own registration-order dependence: with
+        ``momentum`` first, its explicit ``"000"`` is taken before
+        ``sma_crossover`` resolves positionally — to ``"001"``, not ``"000"``.
+        """
+        first = _spec(
+            strategy_id="momentum",
+            overrides={"order_id_tag": "000"},
+            bar_types=("MSFT.NASDAQ-1-MINUTE-LAST-EXTERNAL",),
+        )
+        second = _spec(
+            strategy_id="sma_crossover", bar_types=("AAPL.NASDAQ-1-MINUTE-LAST-EXTERNAL",)
+        )
+
+        spec = SessionSpec(strategies=(first, second))
+
+        assert len(spec.strategies) == 2
+
+    @pytest.mark.unit
+    def test_the_ordinary_default_construction_never_collides(self):
+        """Sanity: crossover's positional "000" and momentum's default
+        "002" never collide, so the common case is unaffected.
+        """
+        first = _spec(bar_types=("AAPL.NASDAQ-1-MINUTE-LAST-EXTERNAL",))
+        second = _spec(strategy_id="momentum", bar_types=("MSFT.NASDAQ-1-MINUTE-LAST-EXTERNAL",))
+
+        spec = SessionSpec(strategies=(first, second))
+
+        assert len(spec.strategies) == 2
+
+    @pytest.mark.unit
+    def test_the_collision_message_names_the_tag_and_the_colliding_strategy(self):
+        first = _spec(
+            strategy_id="sma_crossover", bar_types=("AAPL.NASDAQ-1-MINUTE-LAST-EXTERNAL",)
+        )
+        second = _spec(
+            strategy_id="momentum",
+            overrides={"order_id_tag": "000"},
+            bar_types=("MSFT.NASDAQ-1-MINUTE-LAST-EXTERNAL",),
+        )
+
+        with pytest.raises(ValidationError) as exc_info:
+            SessionSpec(strategies=(first, second))
+
+        errors = exc_info.value.errors()
+        assert any(error["type"] == "value_error" for error in errors)
+
+
 class TestStrategyCanonicalisation:
     """AC #2: strategy identifiers resolve through StrategyRegistry to canonical form."""
 

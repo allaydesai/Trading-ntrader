@@ -45,6 +45,18 @@ STOP_PATH_MODULES = (
     "src/cli/commands/live_start.py",
 )
 
+#: Story 3.2's ``src/core/live_order_path.py`` is deliberately **NOT** in the
+#: list above, and the reason is structural rather than an oversight: this
+#: scan is call-callee-only (``_called_names`` below), so it forbids any
+#: **call** to a forbidden order method anywhere in a scanned module — and
+#: that module's whole job is to call the wrapped originals
+#: (``base(*args, **kwargs)`` inside its suppression wrapper) when the
+#: connection is healthy. Adding it here would make the module's own
+#: legitimate pass-through path an automatic scan failure. Its callers (the
+#: runner, the CLI) call only ``install_order_path(...)`` — a name this scan
+#: does not forbid — so their own membership stays clean without needing the
+#: module itself on the list.
+
 #: The order/position-mutating methods AC #2 forbids on the stop path. Any
 #: call whose *attribute or function name* matches one of these is a hit,
 #: regardless of what object it is called on (`self.close_all_positions(...)`,
@@ -418,6 +430,16 @@ class TestTheVocabularyRuleAr36:
         # reason: an operator reading a contained failure must not see it
         # described as a kill or a halt. (`strategy.halted` would fail here.)
         "src/core/live_strategy_guard.py",
+        # Story 3.2's `src/core/live_order_path.py` is deliberately **NOT**
+        # added here — it is not a stop-path module (see the STOP_PATH_MODULES
+        # comment above for why it is excluded from that list too). Hygiene
+        # regardless, stated rather than enforced: this scan's word-boundary
+        # regex (`\b{word}\w*\b`) matches the literal string `"close_position"`
+        # (underscore is `\w`), so a raw method-name literal inside a log call
+        # would trip it if the module ever joined the list. Today it never
+        # appears as a literal — `log.warning(SUPPRESSED_EVENT, method=method_name,
+        # ...)` passes the name through a variable, which this scan does not see
+        # at all (it only walks `ast.Constant` string nodes).
     )
     #: AR36's list, with ``close`` **restored** (review fix, 2026-08-22,
     #: decision D3). It had been dropped silently — and it is the one word

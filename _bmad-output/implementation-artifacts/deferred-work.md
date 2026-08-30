@@ -1745,17 +1745,27 @@ tracked in that story's `### Review Findings` section, not here.
   it?"*), which is why the divergence keeps growing. **Action for the Epic 2 retro:** a marker base
   class or a protocol, decided once, rather than a sixth hand-maintained string.
 
-- **The `order_id_tag` collision is a latent startup failure that nothing prevents at create time.**
-  Measured against a real `Trader`: `Trader.add_strategy` assigns `order_id_tag = f"{len(existing):03d}"`
-  to any strategy whose tag is `None`, rewrites the `StrategyId`, then raises if the tag is taken —
-  so `mean_reversion, sma_crossover` raises `RuntimeError: order_id_tag conflict for '001'` while
-  `sma_crossover, mean_reversion` is fine. A `SessionSpec` that validated perfectly at create time
-  can therefore fail at `trading` for an operator's **choice of strategy order**. Story 2.7's per-spec
-  `except` *contains* it (the session starts with the other strategies and the failure is recorded),
-  which is strictly better than the crash it used to be, but the operator still learns about it at
-  start time rather than at create time. **Action:** a create-time validator, or an explicit
-  `order_id_tag` per spec — the latter is probably right, since it also makes client order IDs
-  stable across a re-ordered spec, which Epic 3 cares about.
+- ~~**The `order_id_tag` collision is a latent startup failure that nothing prevents at create
+  time.**~~ — **RESOLVED in story-3.2, 2026-08-30.** `SessionSpec._reject_order_id_tag_collision`
+  (`src/models/session.py`) now refuses a colliding spec at **create** time, walking the spec in
+  registration order and simulating `Trader.add_strategy`'s own resolution
+  (`trading/trader.py:406-412`, measured against the installed 1.220.0 wheel) rather than the naive
+  "explicit duplicates only" design this item's original wording implied: same-strategy duplicates
+  were already refused by `_reject_duplicate_strategies`, only `MomentumParameters` declares
+  `order_id_tag` at all, and `_normalise_parameters` materialises every param model's defaults via
+  `model_dump()`, so "explicit vs. defaulted" is not a distinction that exists at the spec layer —
+  an explicit-duplicates-only validator could never have fired against today's built-ins. Pinned by
+  `tests/unit/models/test_session_spec.py::TestOrderIdTagCollision` (the exact
+  `sma_crossover`/`momentum`-with-explicit-`"000"` shape, plus the reordering case proving the walk
+  is registration-order-dependent like Nautilus's own). A **mandatory** explicit-tag field per spec
+  — this item's original "probably right" second option — was deliberately **not** imposed: `ntrader
+  live create --strategy` is singular today, so no spec can reach the multi-strategy shape this
+  guards against except by hand-editing a stored payload, and a mandatory field would be friction
+  with no live consumer yet. Revisit if/when session creation grows a multi-strategy CLI surface.
+  Original finding, for the record: measured against a real `Trader`, `Trader.add_strategy` assigns
+  `order_id_tag = f"{len(existing):03d}"` to any strategy whose tag is `None`, rewrites the
+  `StrategyId`, then raises if the tag is taken — so `mean_reversion, sma_crossover` raised
+  `RuntimeError: order_id_tag conflict for '001'` while `sma_crossover, mean_reversion` did not.
 
 - ~~**A `DEGRADED` strategy's `on_stop()` never runs at session teardown.**~~ — **RESOLVED in
   story-3.1, 2026-08-28.** `Trader.stop_strategy()` / `Trader._stop()` still guard on `is_running`
@@ -2102,8 +2112,8 @@ adopted: **give each item a named owning story, not a priority label.** Items re
   **Story 3.1** (both now written into `epics.md` under that story).
 - The two order-path fixes' live verification, and P7 criterion 2's position-open half →
   **Story 3.2** (written into `epics.md`).
-- Explicit `order_id_tag` per `StrategySpec`, or a create-time validator → **Story 3.2**, which is
-  where client-order-ID stability across a re-ordered spec first matters.
+- ~~Explicit `order_id_tag` per `StrategySpec`, or a create-time validator → **Story 3.2**~~ —
+  **DONE**, 2026-08-30 (create-time validator; see the resolved item above, `deferred-work.md:1748`).
 - The `handle_event` wrapper's rationale (`_pending_position_events` cleared before publish) →
   recorded in `epics.md` under Epic 3 so it is not tidied away as premature.
 - Widening `GUARDED_HANDLERS` → the first story shipping a strategy that overrides an unwrapped

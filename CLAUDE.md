@@ -75,7 +75,11 @@ make web                                # Web UI (http://127.0.0.1:8000)
   (`tests/unit/core/test_live_stop_path_is_inert.py`) are asserted as exact sets, because every
   other consumer only *intersects* with them — dropping a name weakened a scan or deleted a
   parametrized probe's own case without anything going red. Change either deliberately, in the
-  membership test and the constant together
+  membership test and the constant together. `ORDER_CREATING_METHODS`
+  (`src/core/live_order_path.py`, added 2026-08-30) joins this discipline: pinned as an exact set in
+  `tests/component/core/test_live_order_path.py`, and separately asserted a *subset* of
+  `FORBIDDEN_ORDER_METHODS` against a duplicated literal there — production code cannot import from
+  `tests/`, so the relationship is checked against a copy, not a shared reference
 
 ## Editing with Auto-Linter
 

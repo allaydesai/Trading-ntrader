@@ -848,14 +848,24 @@ class TestSubscribeAndTradingRegisterRealThings:
         assert observer.config.bar_types == (AAPL_1MIN,)
 
     def test_subscribe_watches_the_bar_topic_on_the_message_bus(self, registered_accounts):
+        """Extended by Story 3.2, Task 5.1: the order path adds its own bar
+        subscription (latency anchoring) and an order-events subscription,
+        both alongside — never instead of — the steady state's original one.
+        """
         settings = _settings()
         registered_accounts(settings)
         node = TestLiveNode(run_seconds=0.01)
 
-        _runner(node, settings=settings).run()
+        runner = _runner(node, settings=settings)
+        runner.run()
 
         topics = [topic for topic, _ in node.trader.subscriptions]
-        assert topics == ["data.bars.*"]
+        assert topics == ["data.bars.*", "data.bars.*", "events.order*"]
+        assert runner._order_observer is not None
+        handlers = [handler for _, handler in node.trader.subscriptions]
+        assert handlers[0] == runner._steady_state.note_bar
+        assert handlers[1] == runner._order_observer.note_bar
+        assert handlers[2] == runner._order_observer.handle_order_event
 
     def test_note_bar_is_subscribed_before_any_strategy_is_added(self, registered_accounts):
         """Pre-verified finding #12's ordering, pinned (review fix, 2026-08-23).
@@ -888,6 +898,13 @@ class TestSubscribeAndTradingRegisterRealThings:
 
         assert "subscribe" in timeline and "add_strategy" in timeline
         assert timeline.index("subscribe") < timeline.index("add_strategy")
+        # Story 3.2: not just the FIRST subscribe — every subscribe call the
+        # runner makes (steady state's bar topic, the order path's bar topic,
+        # the order path's events.order* topic) must land before the first
+        # `add_strategy`. A weaker check would miss a bug that put the new
+        # order-path subscriptions AFTER trading started.
+        first_add_strategy = timeline.index("add_strategy")
+        assert timeline[:first_add_strategy].count("subscribe") == 3, timeline
 
     def test_a_real_bus_dispatches_equal_priority_subscribers_in_subscription_order(self):
         """The bus-side half of finding #12, against a real ``MessageBus``:
@@ -1224,6 +1241,12 @@ class TestImportPurity:
         # `src.services` is exactly what lets it be unit-tested with no
         # database (AC #9).
         "src.core.live_session_health",
+        # Story 3.2. Reached from the runner (installed on every started
+        # strategy, subscribed in `_phase_subscribe`) and, like the guard,
+        # framework-free by design — no `src.db`/`src.services` to stay clear
+        # of in the first place, but the same hand-maintained-list discipline
+        # applies: add on creation, not on next discovery.
+        "src.core.live_order_path",
     )
 
     @pytest.mark.parametrize("module_name", MODULES)

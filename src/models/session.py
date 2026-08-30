@@ -205,6 +205,31 @@ def _resolve_bar_types(raw: Any) -> tuple[str, ...]:
         raise ValueError(str(exc)) from exc
 
 
+def _resolve_order_id_tag(parameters: dict[str, Any], position: int) -> str:
+    """Nautilus's own resolution, replicated exactly (Story 3.2, Task 6.4).
+
+    Measured against the installed wheel (``trading/trader.py:406-412``): an
+    explicit ``order_id_tag`` wins; otherwise the positional auto-assign
+    ``f"{count:03d}"``, where ``count`` is the number of *already-resolved*
+    entries — not the number lacking an explicit tag. ``str(None)`` is
+    checked alongside ``None`` because a spec round-tripped through JSON can
+    carry the literal string, and Nautilus's own comparison
+    (``strategy.order_id_tag in (None, str(None))``) does too.
+
+    ⚠️ Drift-pin: if Nautilus changes this shape, the component pins in
+    ``tests/component/core/test_client_order_id_determinism.py`` (format and
+    positional-assignment) go red first.
+
+    Args:
+        parameters: One strategy spec's resolved parameters.
+        position: How many entries have already been resolved in this walk.
+    """
+    explicit = parameters.get("order_id_tag")
+    if explicit is None or explicit == "None":
+        return f"{position:03d}"
+    return str(explicit)
+
+
 class StrategySpec(BaseModel):
     """One strategy's identity, resolved parameters, and target instruments.
 
@@ -381,6 +406,46 @@ class SessionSpec(BaseModel):
                     "modelled in this phase — see Story 2.5."
                 )
             seen.add(strategy.strategy_id)
+        return self
+
+    @model_validator(mode="after")
+    def _reject_order_id_tag_collision(self) -> "SessionSpec":
+        """Refuse a create-time ``order_id_tag`` collision (Story 3.2, Task 6.4).
+
+        Closes ``deferred-work.md:1748-1757``: measured against a real
+        ``Trader``, ``Trader.add_strategy`` assigns
+        ``order_id_tag = f"{len(existing):03d}"`` to any strategy whose own
+        tag is unset, then raises ``RuntimeError`` if the resolved tag is
+        already taken — a failure that used to surface only at the
+        ``trading`` phase, for an operator's *choice of strategy order*, on a
+        spec that had validated perfectly at create time.
+
+        **Why this simulates resolution rather than refusing explicit
+        duplicates only**: same-strategy duplicates are already refused by
+        :meth:`_reject_duplicate_strategies` above; only
+        ``MomentumParameters`` declares ``order_id_tag`` at all
+        (``src/models/strategy.py:72``); and ``_normalise_parameters``
+        materialises every param model's defaults via ``model_dump()``
+        (module docstring), so an "explicit vs. defaulted" distinction does
+        not exist at this layer — an "explicit duplicates only" validator
+        could never fire against today's built-ins. The measured failure is
+        the *explicit-vs-auto* collision instead, so this walks the spec in
+        order exactly as ``Trader.add_strategy`` does.
+        """
+        taken: list[str] = []
+        for strategy in self.strategies:
+            resolved = _resolve_order_id_tag(strategy.parameters, len(taken))
+            if resolved in taken:
+                raise ValueError(
+                    f"Strategy {strategy.strategy_id!r} resolves to order_id_tag {resolved!r}, "
+                    "which an earlier entry already holds. Nautilus assigns positional tags "
+                    "(f'{count:03d}') to any strategy whose own order_id_tag is unset, in "
+                    "registration order — so this session would validate here and then raise "
+                    "RuntimeError('order_id_tag conflict') when the node starts. Give the "
+                    "colliding strategy an explicit, distinct order_id_tag, or reorder the "
+                    "strategies."
+                )
+            taken.append(resolved)
         return self
 
     @property

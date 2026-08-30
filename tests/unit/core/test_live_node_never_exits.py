@@ -53,6 +53,10 @@ NODE_FACING_MODULES = (
     "src/core/live_connection_monitor.py",
     "src/core/live_connection_probe.py",
     "src/core/live_cache.py",
+    # Story 3.2. The suppression wrap and order-event observer run inline
+    # inside strategy calls and MessageBus.publish_c respectively — exactly
+    # the shape this list exists to cover.
+    "src/core/live_order_path.py",
     "src/services/session_record.py",
     "src/services/session_service.py",
 )
