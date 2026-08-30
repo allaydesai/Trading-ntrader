@@ -528,5 +528,10 @@ _STDLIB_AND_FIRST_PARTY = frozenset(
         # `re`/`traceback` — added by hand with the reason, never via
         # `sys.stdlib_module_names`.
         "json",
+        # Story 3.3's `src/core/live_order_path.py`: `OrderFilled` carries no
+        # cumulative quantity, so the fill-completion accumulator derives
+        # `cum_qty` from `Quantity.as_decimal()` and sums it in Python —
+        # stdlib, the same discipline Story 2.4 applied to `socket`.
+        "decimal",
     }
 )

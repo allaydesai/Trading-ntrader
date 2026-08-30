@@ -84,7 +84,11 @@ make web                                # Web UI (http://127.0.0.1:8000)
   assertion passing while meaning nothing. Production code genuinely cannot import from `tests/`, but
   a test file can — `tests/__init__.py` exists — so the copy is now asserted equal to the real
   constant by import. Keep the copy (it forces a deliberate, visible edit in both files) **and** the
-  equality pin
+  equality pin. `EMITTED_ORDER_EVENTS` (`src/core/live_order_path.py`, added 2026-08-30) joins the
+  discipline too: every event name `OrderEventObserver` can emit, pinned as an exact set in
+  `tests/component/core/test_live_order_path.py`, with the NFR26 anti-field scan parametrized from
+  it — a dropped or silently-added name would otherwise exempt that event type from the scan without
+  anything going red
 
 ## Editing with Auto-Linter
 

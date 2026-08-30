@@ -36,6 +36,93 @@
 
 generated: 2026-08-03
 last_updated: >-
+  2026-08-30 (STORY 3.3 IMPLEMENTED: ready-for-dev -> in-progress -> review, same session as
+  creation. epic-3 stays in-progress: 3.1 done, 3.2 in-progress (AC #7's live fill still the gate),
+  3.3 review, 3.4-3.7 backlog. All 7 tasks / 34 subtasks complete, all 5 ACs satisfied on the
+  automated tiers. `handle_order_event`'s single-name filter became a class-name dispatch map
+  covering `OrderInitialized` (silent harvest into a new per-`client_order_id` accumulator) plus
+  `OrderAccepted`/`OrderRejected`/`OrderFilled`/`OrderCanceled`/`OrderExpired`/`OrderDenied`
+  (logged). The accumulator derives `cum_qty` by summing `last_qty.as_decimal()`, harvests
+  `order_qty` from `OrderInitialized` so fill-path finality (`cum_qty == order_qty`) is readable
+  from the transcript, and prunes exactly per the pre-resolved design: always on rejected/denied,
+  on fill-completion, and on canceled/expired ONLY when no fills were accumulated (a late fill can
+  cross the cancel ack — pruning unconditionally would log a false `cum_qty`). Six new event-name
+  constants plus an exported, membership-pinned `EMITTED_ORDER_EVENTS` tuple (CLAUDE.md's
+  Membership-pinned-lists entry extended same commit) drive an NFR26 anti-field scan proving no
+  record ever carries `account_id`. ELEVEN SCRIPTED MUTATIONS (one++ per AC), ALL KILLED — but M3
+  (misspelling `order.canceled` as `order.cancelled`) SURVIVED THE FIRST PASS: every existing test
+  compared a captured record against the imported constant rather than a literal string, so the
+  mutated constant and the assertion drifted together and nothing went red — an AC #2 property
+  ("uses the dotted past-tense event names") had no test that could actually fail on a wrong
+  spelling. Fixed by adding a dedicated literal-string pin test for all six new constants at once;
+  re-verified red under the mutation, then kept. ONE INTEGRATION TEST NOT ANTICIPATED BY THE STORY
+  needed a fix: `test_epic1_ac_node.py::test_no_new_dependency_was_added_for_the_live_path` scans
+  every live-path module's imports against a hand-maintained stdlib allowlist (deliberately not
+  `sys.stdlib_module_names`) — `live_order_path.py`'s new `from decimal import Decimal` (needed
+  because `OrderFilled` carries no cumulative quantity) is stdlib but undeclared there; added
+  `"decimal"` by hand with the same discipline the file already documents for `socket`/`re`/`json`.
+  SIZE DISCLOSED PER CLAUDE.md D4, NOT HIDDEN: `live_order_path.py` is now 556 raw lines / 166
+  executable statements (was 361/96; budgeted ~480-530/~145 pre-edit) — raw lines landed above the
+  500-line figure the cap names, executable statements landed close to budget and well under any
+  class/function cap (`OrderEventObserver` itself is 94 statements). NOT split, per the
+  guard-list-rot Anti-Pattern: the module is already on two hand-maintained guard lists and
+  excluded-with-reasons from two more, and Story 2.6's precedent is exactly what a split would
+  silently break. Gates: format 491 unchanged, lint clean, mypy clean 104 files, unit 2419
+  unchanged, component 1353 -> 1378/16 skipped (+25: 24 new dispatch/reconstruction/membership
+  tests plus the M3-driven literal-pin test), integration --forked 281/2 skipped unchanged, e2e 1
+  unchanged, Epic 1 sweep 40/40 (the story's own baseline note cited both 40/40 and, after 3.2's
+  review, 43/43, for this same sweep; today's measured complete run is 40/40, matching 3.2's own
+  dev-story-session figure — reported as measured, not reconciled, since nothing in this diff
+  touches it), `git diff --stat` empty for `live_session_runner.py`, `src/core/strategies/`, and
+  all four guard-list test files' contents (verified, not assumed, per Task 5.1's evidence
+  contract). STORY IS NOT DONE: Task 6 (live verification) did not run — 2026-08-30 is a Sunday,
+  market closed, the identical precondition Story 3.2's Task 8 hit. Per Task 6.3 and the Epic 2
+  retro's standing rule (the same sanctioned path as 3.2's own Task 8.4), the story stays in
+  `review` until a `scripts/diagnostics/run_p7_position.sh` re-run inside RTH (no competing IBKR
+  login, the bare non-compose Gateway, `sma_crossover`) records `order.accepted`/`order.filled` in
+  a real transcript with the real commission — the SAME run 3.2's still-open AC #7 is waiting on;
+  landing 3.3 first means one RTH window closes both stories' live items, as designed. NEXT: that
+  RTH re-run (closes 3.2 AC #7 and 3.3 Task 6 together), then code-review of 3.3, then Story 3.4.
+  Previously:
+  2026-08-30 (STORY 3.3 CREATED: backlog -> ready-for-dev. File:
+  3-3-track-every-order-through-its-full-lifecycle.md. epic-3 stays in-progress: 3.1 done, 3.2
+  in-progress (AC #7's live fill still the gate), 3.3 ready-for-dev, 3.4-3.7 backlog. Drafted from
+  epics.md:1245-1278 against the post-3.2-review tree (head 7131afb, clean). THE STORY IS AN
+  EXTENSION, NOT A BUILD: every order event — denied included — publishes on
+  events.order.{strategy_id} (execution/engine.pyx:911/1176/1248, measured) and the runner's
+  existing events.order* subscription already delivers all of them to OrderEventObserver, so the
+  story carries three evidence contracts: ZERO new subscriptions, ZERO diffs to
+  live_session_runner.py, ZERO guard-list edits. The whole surface is live_order_path.py's
+  handle_order_event filter (:321-322) plus its test file. CENTRAL PRE-RESOLVED DECISIONS, all
+  from wheel measurement: (1) no OrderPartiallyFilled event exists at 1.220.0 — partial fill is an
+  ordinary OrderFilled distinguished only in the Order FSM (base.pyx:1116-1120), so the
+  AR41-mandated fill_qty/cum_qty pair IS the partial-fill representation and no
+  order.partially_filled name is wanted; (2) no event carries cumulative quantity (OrderFilled has
+  last_qty/last_px only, no .order accessor), so cum_qty is derived in-observer as Decimal and
+  EMITTED AS STR — a raw Decimal reaches the JSON transcript as the literal "Decimal('30')"
+  (JSONRenderer fallback), a defect no component test can see because capture_logs hands tests raw
+  objects; (3) OrderInitialized.quantity is harvested into observer state, never logged (the
+  :417-428 silence pin survives), so order.filled carries order_qty and fill-path finality
+  (cum_qty == order_qty) is readable from the transcript — without the harvest, AC #5's "final
+  state" clause is UNSATISFIABLE on the fill path, since a completed order and one still working
+  emit identical records; (4) pruning fully decided: rejected/denied always, completion when
+  order_qty known, canceled/expired ONLY entries with no fills — a fill-bearing entry is retained
+  because IBKR can deliver a late fill across the cancel ack and pruning would log a false cum_qty;
+  (5) OrderDenied is logged with field `reason`, deliberately NOT `venue_reason` (no venue
+  involved), per the 3.2 review's dismissal-with-ownership; (6) order.canceled pinned single-l to
+  the Nautilus class name; (7) account_id rides every venue-sourced event and is fenced by an
+  exact-set anti-field scan parametrized from a new exported EMITTED_ORDER_EVENTS
+  (membership-pinned-lists discipline, CLAUDE.md entry extended same commit). Live tier RIDES THE
+  SAME P7 RE-RUN as 3.2's open AC #7 — land 3.3's automated tiers first so one RTH window closes
+  both stories' live items. Story validated by two fresh-context agents (citation fact-check /
+  checklist+dev-simulation): 118 citations checked with 7 corrected, and 6 criticals all applied —
+  the two worth remembering: TestEventStubs.order_rejected HARDCODES reason="ORDER_REJECTED" with
+  no override (both rejection fixtures now build events directly, ctor order.pyx:1971-1983 — the
+  same trap the draft had already solved for OrderDenied one stub over), and the Decimal-rendering
+  defect is the exact passes-CI/fails-live shape, pinned by asserting string forms in the
+  component tier. Baselines: unit 2419, component 1353/16 skipped, integration 281/2 skipped, e2e
+  1, Epic 1 sweep 43/43. NEXT: dev-story 3.3; re-run 3.2's Task 8 (the fill) on the next trading
+  day AFTER 3.3 lands so the transcript carries the lifecycle records too.) Previously:
   2026-08-30 (STORY 3.2 CODE-REVIEWED -> in-progress, NOT done. review -> in-progress. epic-3 stays
   in-progress: 3.1 done, 3.2 in-progress, 3.3-3.7 backlog. Three adversarial layers (Blind Hunter
   diff-only / Edge Case Hunter with wheel access / Acceptance Auditor with spec) produced 56 raw
@@ -1937,7 +2024,7 @@ development_status:
   epic-3: in-progress
   3-1-stop-trading-without-manufacturing-an-exit: done
   3-2-submit-a-strategys-orders-to-the-broker: in-progress
-  3-3-track-every-order-through-its-full-lifecycle: backlog
+  3-3-track-every-order-through-its-full-lifecycle: review
   3-4-never-resubmit-an-order-that-is-already-working: backlog
   3-5-aggregate-partial-fills-into-one-position: backlog
   3-6-persist-each-trade-the-moment-it-closes: backlog

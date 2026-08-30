@@ -13,15 +13,22 @@ from nautilus_trader.cache.cache import Cache
 from nautilus_trader.common.component import LiveClock, MessageBus, is_logging_initialized
 from nautilus_trader.core.uuid import UUID4
 from nautilus_trader.model.data import Bar, BarType
-from nautilus_trader.model.enums import OmsType, OrderSide
-from nautilus_trader.model.events.order import OrderSubmitted
+from nautilus_trader.model.enums import LiquiditySide, OmsType, OrderSide, OrderType
+from nautilus_trader.model.events.order import (
+    OrderDenied,
+    OrderFilled,
+    OrderRejected,
+    OrderSubmitted,
+)
 from nautilus_trader.model.identifiers import (
     AccountId,
     ClientOrderId,
     InstrumentId,
     PositionId,
     StrategyId,
+    TradeId,
     TraderId,
+    VenueOrderId,
 )
 from nautilus_trader.model.objects import Price, Quantity
 from nautilus_trader.model.position import Position
@@ -32,13 +39,22 @@ from nautilus_trader.test_kit.stubs.execution import TestExecStubs
 from structlog.testing import capture_logs
 
 from src.core.live_order_path import (
+    ACCEPTED_EVENT,
+    CANCELED_EVENT,
+    DENIED_EVENT,
+    EMITTED_ORDER_EVENTS,
+    EXPIRED_EVENT,
+    FILLED_EVENT,
     ORDER_CREATING_METHODS,
+    REJECTED_EVENT,
     SUBMITTED_EVENT,
     OrderEventObserver,
     install_order_path,
 )
 from src.core.live_session_node import materialise_strategy
 from src.models.session import StrategySpec
+
+AAPL_EQUITY = TestInstrumentProvider.equity(symbol="AAPL", venue="NASDAQ")
 
 pytestmark = pytest.mark.component
 
@@ -51,8 +67,9 @@ BAR_TYPE = BarType.from_str(AAPL_1MIN)
 #:
 #: ⚠️ Review fix, 2026-08-30. The original comment justified the copy with
 #: "production code cannot import from `tests/`" — true, but a non-sequitur
-#: here: this is a *test* file, `tests/__init__.py` exists, and this very
-#: module already does `from tests.component.doubles import TestLiveNode`.
+#: here: this is a *test* file, `tests/__init__.py` exists, and a sibling
+#: module already does `from tests.component.doubles import TestLiveNode`
+#: (`test_session_runner_order_path.py:24`).
 #: With nothing tying the copy to its source, a *shrinking* of the real set —
 #: exactly the failure mode CLAUDE.md's "Membership-pinned lists" entry was
 #: written for — would leave the removed name here and the subset assertion
@@ -365,6 +382,40 @@ def _order_submitted(*, instrument_id, client_order_id, strategy_id, ts_event, t
     )
 
 
+def _order_rejected(order, *, reason: str, due_post_only: bool = False) -> OrderRejected:
+    """`TestEventStubs.order_rejected` hardcodes `reason="ORDER_REJECTED"`
+    with no override (`test_kit/stubs/events.py:238`) — build directly
+    whenever the reason must be distinctive.
+    """
+    return OrderRejected(
+        trader_id=order.trader_id,
+        strategy_id=order.strategy_id,
+        instrument_id=order.instrument_id,
+        client_order_id=order.client_order_id,
+        account_id=AccountId("SIM-001"),
+        reason=reason,
+        event_id=UUID4(),
+        ts_event=0,
+        ts_init=0,
+        due_post_only=due_post_only,
+    )
+
+
+def _order_denied(order, *, reason: str) -> OrderDenied:
+    """No `order_denied` stub exists (Dev Notes) — the ctor takes `ts_init`
+    only, no separate `ts_event`.
+    """
+    return OrderDenied(
+        trader_id=order.trader_id,
+        strategy_id=order.strategy_id,
+        instrument_id=order.instrument_id,
+        client_order_id=order.client_order_id,
+        reason=reason,
+        event_id=UUID4(),
+        ts_init=0,
+    )
+
+
 class TestOrderEventObserver:
     """Task 4 — the first order-event consumer, plus the latency it anchors
     on the venue bar close (Task 4.3).
@@ -427,16 +478,34 @@ class TestOrderEventObserver:
 
         assert logs == []
 
-    def test_an_order_rejected_is_contained_without_crashing_or_logging(self):
-        """AC #3's rejection-tolerance guard, doubled up with this scan."""
-        observer = OrderEventObserver(structlog.get_logger("test"))
+    def test_an_order_rejected_is_logged_with_the_venue_reason_and_never_raises(self):
+        """AC #3's rejection-tolerance guard, inverted (Story 3.3 Task 2.1):
+        3.2 dropped rejections silently; this story requires exactly one
+        `order.rejected` record carrying the venue's reason verbatim, with
+        containment preserved. `TestEventStubs.order_rejected` hardcodes
+        `reason="ORDER_REJECTED"` with no override
+        (`test_kit/stubs/events.py:238`), so a swallow-and-reword mutation
+        needs a distinctive reason to be catchable — build the event
+        directly.
+        """
+        observer = OrderEventObserver(structlog.get_logger("test").bind(session_id="s1"))
         order = _make_order()
-        rejected = TestEventStubs.order_rejected(order)
+        rejected = _order_rejected(order, reason="INSUFFICIENT_BUYING_POWER_DISTINCTIVE")
 
         with capture_logs() as logs:
             observer.handle_order_event(rejected)  # must not raise
 
-        assert logs == []
+        records = [entry for entry in logs if entry["event"] == REJECTED_EVENT]
+        assert len(records) == 1
+        record = records[0]
+        assert record["venue_reason"] == "INSUFFICIENT_BUYING_POWER_DISTINCTIVE"
+        assert record["client_order_id"] == str(order.client_order_id)
+        assert record["instrument_id"] == str(order.instrument_id)
+        assert record["strategy_id"] == str(order.strategy_id)
+        assert record["due_post_only"] is False
+        assert record["session_id"] == "s1"
+        assert record["log_level"] == "warning"
+        assert [entry for entry in logs if entry["event"] == "order.observer_failed"] == []
 
     def test_note_bar_never_raises_on_a_malformed_bar(self):
         observer = OrderEventObserver(structlog.get_logger("test"))
@@ -596,3 +665,457 @@ def _make_order():
         instrument=TestInstrumentProvider.equity(symbol="AAPL", venue="NASDAQ"),
         strategy_id=StrategyId("SMACrossover-000"),
     )
+
+
+class TestOrderAcceptedDispatch:
+    def test_order_accepted_logs_the_acknowledgement_identity(self):
+        """AC #5's "acknowledgement" — the first moment a venue-side
+        identity exists (`OrderSubmitted.venue_order_id` is hardcoded
+        `None`).
+        """
+        observer = OrderEventObserver(structlog.get_logger("test").bind(session_id="s1"))
+        order = _make_order()
+        accepted = TestEventStubs.order_accepted(order, venue_order_id=VenueOrderId("V-77"))
+
+        with capture_logs() as logs:
+            observer.handle_order_event(accepted)
+
+        records = [entry for entry in logs if entry["event"] == ACCEPTED_EVENT]
+        assert len(records) == 1
+        record = records[0]
+        assert record["session_id"] == "s1"
+        assert record["client_order_id"] == str(order.client_order_id)
+        assert record["instrument_id"] == str(order.instrument_id)
+        assert record["strategy_id"] == str(order.strategy_id)
+        assert record["venue_order_id"] == "V-77"
+
+
+class TestOrderCanceledAndExpiredDispatch:
+    """`OrderCanceled`/`OrderExpired` share an identical 10-field shape;
+    `venue_order_id` is nullable on both — log what exists, never invent.
+    """
+
+    def test_order_canceled_omits_venue_order_id_when_absent(self):
+        observer = OrderEventObserver(structlog.get_logger("test"))
+        order = _make_order()
+        canceled = TestEventStubs.order_canceled(order)
+
+        with capture_logs() as logs:
+            observer.handle_order_event(canceled)
+
+        records = [entry for entry in logs if entry["event"] == CANCELED_EVENT]
+        assert len(records) == 1
+        assert "venue_order_id" not in records[0]
+        assert records[0]["client_order_id"] == str(order.client_order_id)
+        assert records[0]["strategy_id"] == str(order.strategy_id)
+
+    def test_order_canceled_logs_venue_order_id_when_present(self):
+        observer = OrderEventObserver(structlog.get_logger("test"))
+        order = _make_order()
+        order.apply(TestEventStubs.order_submitted(order))
+        order.apply(TestEventStubs.order_accepted(order, venue_order_id=VenueOrderId("V-42")))
+        canceled = TestEventStubs.order_canceled(order)
+
+        with capture_logs() as logs:
+            observer.handle_order_event(canceled)
+
+        records = [entry for entry in logs if entry["event"] == CANCELED_EVENT]
+        assert records[0]["venue_order_id"] == "V-42"
+
+    def test_order_expired_omits_venue_order_id_when_absent(self):
+        observer = OrderEventObserver(structlog.get_logger("test"))
+        order = _make_order()
+        expired = TestEventStubs.order_expired(order)
+
+        with capture_logs() as logs:
+            observer.handle_order_event(expired)
+
+        records = [entry for entry in logs if entry["event"] == EXPIRED_EVENT]
+        assert len(records) == 1
+        assert "venue_order_id" not in records[0]
+
+
+class TestOrderFilledDispatch:
+    def test_order_filled_logs_the_full_field_contract(self):
+        observer = OrderEventObserver(structlog.get_logger("test").bind(session_id="s1"))
+        order = _make_order()
+        filled = TestEventStubs.order_filled(
+            order,
+            AAPL_EQUITY,
+            last_qty=Quantity.from_int(100),
+            position_id=PositionId(f"P-{order.client_order_id}"),
+        )
+
+        with capture_logs() as logs:
+            observer.handle_order_event(filled)
+
+        records = [entry for entry in logs if entry["event"] == FILLED_EVENT]
+        assert len(records) == 1
+        record = records[0]
+        assert record["session_id"] == "s1"
+        assert record["client_order_id"] == str(order.client_order_id)
+        assert record["instrument_id"] == str(order.instrument_id)
+        assert record["strategy_id"] == str(order.strategy_id)
+        assert record["fill_qty"] == "100"
+        assert record["cum_qty"] == "100"
+        assert record["last_px"] == str(filled.last_px)
+        assert record["commission"] == str(filled.commission)
+        assert record["currency"] == str(filled.currency)
+        assert record["trade_id"] == str(filled.trade_id)
+        assert record["venue_order_id"] == str(filled.venue_order_id)
+        assert record["position_id"] == str(filled.position_id)
+        assert "order_qty" not in record, "no OrderInitialized was ever observed for this order"
+
+
+class TestOrderDeniedDispatch:
+    def test_order_denied_logs_reason_not_venue_reason(self):
+        """`reason`, deliberately not `venue_reason` — a denial is local
+        (risk/exec engine), no venue was involved.
+        """
+        observer = OrderEventObserver(structlog.get_logger("test").bind(session_id="s1"))
+        order = _make_order()
+        denied = _order_denied(order, reason="RISK_LIMIT_EXCEEDED_DISTINCTIVE")
+
+        with capture_logs() as logs:
+            observer.handle_order_event(denied)
+
+        records = [entry for entry in logs if entry["event"] == DENIED_EVENT]
+        assert len(records) == 1
+        record = records[0]
+        assert record["reason"] == "RISK_LIMIT_EXCEEDED_DISTINCTIVE"
+        assert "venue_reason" not in record
+        assert record["client_order_id"] == str(order.client_order_id)
+        assert record["instrument_id"] == str(order.instrument_id)
+        assert record["strategy_id"] == str(order.strategy_id)
+        assert record["log_level"] == "warning"
+
+
+class TestUnknownEventTypesAreASilentClosedSet:
+    """Story 3.3 owns exactly the six lifecycle states plus denied — the
+    dispatch is a closed set, not a default-log, since no modify or
+    cancel-request path exists in this repo to make the others meaningful.
+    """
+
+    def test_an_order_updated_event_produces_no_record(self):
+        observer = OrderEventObserver(structlog.get_logger("test"))
+        order = _make_order()
+        updated = TestEventStubs.order_updated(order)
+
+        with capture_logs() as logs:
+            observer.handle_order_event(updated)
+
+        assert logs == []
+
+    def test_an_order_pending_cancel_event_produces_no_record(self):
+        observer = OrderEventObserver(structlog.get_logger("test"))
+        order = _make_order()
+        pending_cancel = TestEventStubs.order_pending_cancel(order)
+
+        with capture_logs() as logs:
+            observer.handle_order_event(pending_cancel)
+
+        assert logs == []
+
+
+class TestContainmentExtendsToEveryNewDispatchBranch:
+    """A raise from a msgbus handler ends the process with zero output —
+    every new dispatch branch must live inside the existing containment.
+    """
+
+    def test_a_malformed_filled_event_is_contained(self):
+        class _FakeFilled:
+            """Duck-shaped as `OrderFilled` by name only — no attributes."""
+
+        observer = OrderEventObserver(structlog.get_logger("test"))
+        fake = _FakeFilled()
+        fake.__class__.__name__ = "OrderFilled"
+
+        with capture_logs() as logs:
+            observer.handle_order_event(fake)  # must not raise
+
+        failed = [entry for entry in logs if entry["event"] == "order.observer_failed"]
+        assert len(failed) == 1
+        assert failed[0]["stage"] == "handle_order_event"
+
+    def test_a_malformed_rejected_event_is_contained(self):
+        class _FakeRejected:
+            """Duck-shaped as `OrderRejected` by name only — no attributes."""
+
+        observer = OrderEventObserver(structlog.get_logger("test"))
+        fake = _FakeRejected()
+        fake.__class__.__name__ = "OrderRejected"
+
+        with capture_logs() as logs:
+            observer.handle_order_event(fake)  # must not raise
+
+        failed = [entry for entry in logs if entry["event"] == "order.observer_failed"]
+        assert len(failed) == 1
+        assert failed[0]["stage"] == "handle_order_event"
+
+
+class TestPartialFillSeries:
+    """AC #1's representation: a partial fill is an ordinary `OrderFilled`
+    whose `cum_qty` is below the order's quantity — no dedicated event.
+    """
+
+    def test_a_partial_fill_series_produces_a_rising_cum_qty(self):
+        observer = OrderEventObserver(structlog.get_logger("test"))
+        order = _make_order()
+        fill_a = TestEventStubs.order_filled(order, AAPL_EQUITY, last_qty=Quantity.from_int(30))
+        fill_b = TestEventStubs.order_filled(order, AAPL_EQUITY, last_qty=Quantity.from_int(70))
+
+        with capture_logs() as logs:
+            observer.handle_order_event(fill_a)
+            observer.handle_order_event(fill_b)
+
+        records = [entry for entry in logs if entry["event"] == FILLED_EVENT]
+        assert len(records) == 2
+        assert records[0]["fill_qty"] == "30"
+        assert records[0]["cum_qty"] == "30"
+        assert records[1]["fill_qty"] == "70"
+        assert records[1]["cum_qty"] == "100"
+
+    def test_a_different_client_order_id_accumulates_independently(self):
+        """Fixture trap: two `TestExecStubs.market_order(...)` calls yield
+        the SAME frozen `client_order_id` — an explicit override is
+        required or the "independent" order is the same order.
+        """
+        observer = OrderEventObserver(structlog.get_logger("test"))
+        order_a = _make_order()
+        order_b = TestExecStubs.market_order(
+            instrument=AAPL_EQUITY,
+            strategy_id=StrategyId("SMACrossover-000"),
+            client_order_id=ClientOrderId("O-OTHER-1"),
+        )
+        fill_a = TestEventStubs.order_filled(order_a, AAPL_EQUITY, last_qty=Quantity.from_int(30))
+        fill_b = TestEventStubs.order_filled(order_b, AAPL_EQUITY, last_qty=Quantity.from_int(15))
+
+        with capture_logs() as logs:
+            observer.handle_order_event(fill_a)
+            observer.handle_order_event(fill_b)
+
+        records = [entry for entry in logs if entry["event"] == FILLED_EVENT]
+        assert records[0]["cum_qty"] == "30"
+        assert records[1]["cum_qty"] == "15"
+
+
+class TestPartialFillThenCancel:
+    def test_a_late_fill_across_the_cancel_ack_still_accumulates(self):
+        """A real venue sequence: `OrderFilled(30) -> OrderCanceled` leaves
+        the prior fill record standing; a late fill crossing the cancel ack
+        logs `cum_qty` "50", not "20" — the entry is retained, not reset,
+        because pruning on cancel would log a false `cum_qty` counting the
+        late fill alone.
+        """
+        observer = OrderEventObserver(structlog.get_logger("test"))
+        order = _make_order()
+        first_fill = TestEventStubs.order_filled(order, AAPL_EQUITY, last_qty=Quantity.from_int(30))
+        canceled = TestEventStubs.order_canceled(order)
+        late_fill = TestEventStubs.order_filled(order, AAPL_EQUITY, last_qty=Quantity.from_int(20))
+
+        with capture_logs() as logs:
+            observer.handle_order_event(first_fill)
+            observer.handle_order_event(canceled)
+            observer.handle_order_event(late_fill)
+
+        filled = [entry for entry in logs if entry["event"] == FILLED_EVENT]
+        canceled_records = [entry for entry in logs if entry["event"] == CANCELED_EVENT]
+        assert len(canceled_records) == 1
+        assert len(filled) == 2
+        assert filled[0]["cum_qty"] == "30"
+        assert filled[1]["cum_qty"] == "50"
+
+
+def _build_submitted_event():
+    return TestEventStubs.order_submitted(_make_order())
+
+
+def _build_accepted_event():
+    return TestEventStubs.order_accepted(_make_order())
+
+
+def _build_rejected_event():
+    return _order_rejected(_make_order(), reason="SCAN")
+
+
+def _build_filled_event():
+    return TestEventStubs.order_filled(_make_order(), AAPL_EQUITY)
+
+
+def _build_canceled_event():
+    return TestEventStubs.order_canceled(_make_order())
+
+
+def _build_expired_event():
+    return TestEventStubs.order_expired(_make_order())
+
+
+def _build_denied_event():
+    return _order_denied(_make_order(), reason="SCAN")
+
+
+#: Every emitted event name, mapped to a zero-arg builder of a representative
+#: instance — the NFR26 anti-field scan iterates this so a seventh emitted
+#: type cannot join the dispatch without joining the scan.
+_EVENT_BUILDERS = {
+    SUBMITTED_EVENT: _build_submitted_event,
+    ACCEPTED_EVENT: _build_accepted_event,
+    REJECTED_EVENT: _build_rejected_event,
+    FILLED_EVENT: _build_filled_event,
+    CANCELED_EVENT: _build_canceled_event,
+    EXPIRED_EVENT: _build_expired_event,
+    DENIED_EVENT: _build_denied_event,
+}
+
+
+class TestEventNameLiteralsArePinned:
+    """AC #2 pins the exact dotted past-tense spelling — `order.canceled` is
+    single-l, matching the Nautilus event class name (`OrderCanceled`), so a
+    transcript grep for the class name and the structured record agree. A
+    test that only compares captured records against the imported constant
+    cannot catch a wrong literal (the constant and the assertion drift
+    together); these assert the literal string value directly.
+    """
+
+    def test_the_literal_spellings_are_exact(self):
+        assert ACCEPTED_EVENT == "order.accepted"
+        assert REJECTED_EVENT == "order.rejected"
+        assert FILLED_EVENT == "order.filled"
+        assert CANCELED_EVENT == "order.canceled"
+        assert EXPIRED_EVENT == "order.expired"
+        assert DENIED_EVENT == "order.denied"
+
+
+class TestEmittedOrderEventsMembership:
+    """`EMITTED_ORDER_EVENTS` is its own membership-pinned list (CLAUDE.md
+    Anti-Patterns, the `ORDER_CREATING_METHODS` precedent): every consumer
+    (here, the NFR26 anti-field scan below) only iterates it, so an
+    exact-set pin is what makes a silently dropped name visible.
+    """
+
+    def test_the_set_is_pinned_exactly(self):
+        assert frozenset(EMITTED_ORDER_EVENTS) == frozenset(
+            {
+                SUBMITTED_EVENT,
+                ACCEPTED_EVENT,
+                REJECTED_EVENT,
+                FILLED_EVENT,
+                CANCELED_EVENT,
+                EXPIRED_EVENT,
+                DENIED_EVENT,
+            }
+        )
+
+
+class TestNoRecordEverCarriesAnAccountId:
+    """NFR26: `account_id` rides on every venue-sourced order event
+    (`OrderDenied`'s own property is the hardcoded exception —
+    `order.pyx:781`), and a naive field dump would leak it. This story pins
+    the stricter never-logged-at-all, parametrized from
+    `EMITTED_ORDER_EVENTS`.
+    """
+
+    @pytest.mark.parametrize("event_name", sorted(EMITTED_ORDER_EVENTS))
+    def test_the_record_carries_no_account_id_field(self, event_name):
+        observer = OrderEventObserver(structlog.get_logger("test"))
+        event = _EVENT_BUILDERS[event_name]()
+
+        with capture_logs() as logs:
+            observer.handle_order_event(event)
+
+        matching = [entry for entry in logs if entry["event"] == event_name]
+        assert len(matching) == 1
+        assert "account_id" not in matching[0]
+
+
+class TestLifecycleReconstruction:
+    """AC #5 — a full lifecycle reconstructed from the captured records
+    alone, with no access to the observer's internal state.
+    """
+
+    def test_the_fill_path_reconstructs_end_to_end_from_records_alone(self):
+        observer = OrderEventObserver(structlog.get_logger("test"))
+        order = _make_order()
+
+        with capture_logs() as logs:
+            observer.handle_order_event(order.init_event)
+            observer.handle_order_event(TestEventStubs.order_submitted(order))
+            observer.handle_order_event(TestEventStubs.order_accepted(order))
+            observer.handle_order_event(
+                TestEventStubs.order_filled(order, AAPL_EQUITY, last_qty=Quantity.from_int(30))
+            )
+            observer.handle_order_event(
+                TestEventStubs.order_filled(order, AAPL_EQUITY, last_qty=Quantity.from_int(70))
+            )
+
+        assert [entry["event"] for entry in logs] == [
+            SUBMITTED_EVENT,
+            ACCEPTED_EVENT,
+            FILLED_EVENT,
+            FILLED_EVENT,
+        ], "OrderInitialized harvests state silently and emits nothing"
+        assert {entry["client_order_id"] for entry in logs} == {str(order.client_order_id)}
+        assert "venue_order_id" not in logs[0], "OrderSubmitted's venue_order_id is never assigned"
+        assert all("venue_order_id" in entry for entry in logs[1:])
+        final = logs[-1]
+        assert final["cum_qty"] == "100"
+        assert final["order_qty"] == "100", "fill-path finality: cum_qty == order_qty"
+
+    def test_the_rejection_path_reconstructs_submission_and_terminal_state(self):
+        observer = OrderEventObserver(structlog.get_logger("test"))
+        order = _make_order()
+        rejected = _order_rejected(order, reason="A_DISTINCTIVE_TERMINAL_REASON")
+
+        with capture_logs() as logs:
+            observer.handle_order_event(TestEventStubs.order_submitted(order))
+            observer.handle_order_event(rejected)
+
+        assert [entry["event"] for entry in logs] == [SUBMITTED_EVENT, REJECTED_EVENT]
+        assert logs[-1]["venue_reason"] == "A_DISTINCTIVE_TERMINAL_REASON"
+        assert logs[-1]["client_order_id"] == str(order.client_order_id)
+
+    def test_a_reconciliation_fill_is_distinguishable_from_a_live_fill(self):
+        """The transcript reader's defence against counting an inferred
+        reconciliation fill as a live fill
+        (`docs/qa/phase3-live-verification.md:757`). `TestEventStubs.order_filled`
+        has no `reconciliation` parameter — build directly.
+        """
+        observer = OrderEventObserver(structlog.get_logger("test"))
+        order = _make_order()
+        account = TestExecStubs.cash_account()
+        commission = account.calculate_commission(
+            instrument=AAPL_EQUITY,
+            last_qty=order.quantity,
+            last_px=Price.from_str("100.00"),
+            liquidity_side=LiquiditySide.TAKER,
+        )
+        reconciled_fill = OrderFilled(
+            trader_id=order.trader_id,
+            strategy_id=order.strategy_id,
+            instrument_id=order.instrument_id,
+            client_order_id=order.client_order_id,
+            venue_order_id=VenueOrderId("V-1"),
+            account_id=AccountId("SIM-001"),
+            trade_id=TradeId("E-RECONCILED-1"),
+            position_id=None,
+            order_side=OrderSide.BUY,
+            order_type=OrderType.MARKET,
+            last_qty=Quantity.from_int(100),
+            last_px=Price.from_str("100.00"),
+            currency=AAPL_EQUITY.quote_currency,
+            commission=commission,
+            liquidity_side=LiquiditySide.TAKER,
+            event_id=UUID4(),
+            ts_event=0,
+            ts_init=0,
+            reconciliation=True,
+        )
+        live_fill = TestEventStubs.order_filled(order, AAPL_EQUITY, last_qty=Quantity.from_int(50))
+
+        with capture_logs() as logs:
+            observer.handle_order_event(reconciled_fill)
+            observer.handle_order_event(live_fill)
+
+        filled = [entry for entry in logs if entry["event"] == FILLED_EVENT]
+        assert filled[0]["reconciliation"] is True
+        assert "reconciliation" not in filled[1]
