@@ -182,7 +182,14 @@ class TestUuidAndHyphenFlagsAreUnused:
     FLAG_NAMES = ("use_uuid_client_order_ids", "use_hyphens_in_client_order_ids")
 
     def _all_identifiers(self, path: Path) -> set[str]:
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+        return self._identifiers_in(path.read_text(encoding="utf-8"))
+
+    def _identifiers_in(self, source: str) -> set[str]:
+        """Split out from :meth:`_all_identifiers` by the 2026-08-30 review so
+        the non-vacuity probe below can drive the **real** scanner instead of
+        re-implementing it.
+        """
+        tree = ast.parse(source)
         names: set[str] = set()
         for node in ast.walk(tree):
             if isinstance(node, ast.Name):
@@ -197,17 +204,44 @@ class TestUuidAndHyphenFlagsAreUnused:
 
     def test_neither_flag_is_referenced_anywhere_in_src(self):
         offenders = []
+        scanned = 0
         for path in (PROJECT_ROOT / "src").rglob("*.py"):
+            scanned += 1
             identifiers = self._all_identifiers(path)
             hits = identifiers & set(self.FLAG_NAMES)
             if hits:
                 offenders.append((str(path.relative_to(PROJECT_ROOT)), sorted(hits)))
+        # Review fix, 2026-08-30: an empty `offenders` list was the whole
+        # assertion, so a wrong `PROJECT_ROOT` (a file move, a packaging
+        # change) would make `rglob` yield nothing and leave this permanently
+        # green while scanning zero files.
+        assert scanned > 50, f"the scan only reached {scanned} files — PROJECT_ROOT is wrong"
         assert not offenders, f"non-default client-order-id flags referenced: {offenders}"
 
-    def test_the_scan_would_catch_a_planted_reference(self):
-        probe = "SMAConfig(use_uuid_client_order_ids=True)"
-        names = {node.arg for node in ast.walk(ast.parse(probe)) if isinstance(node, ast.keyword)}
-        assert "use_uuid_client_order_ids" in names
+    @pytest.mark.parametrize("flag", FLAG_NAMES)
+    def test_the_scan_would_catch_a_planted_reference(self, flag):
+        """Review fix, 2026-08-30. This used to re-implement the AST walk
+        inline and assert that CPython's `ast` records keyword names — so it
+        passed if `_all_identifiers` were deleted, returned `set()`, or were
+        inverted. The one test that exists to prove the scan is non-vacuous
+        was the one test that never touched it.
+
+        Driven from `FLAG_NAMES` itself, and through all four node shapes the
+        scanner claims to cover, so weakening any branch of it goes red here.
+        """
+        assert flag in self._identifiers_in(f"SMAConfig({flag}=True)"), "ast.keyword"
+        assert flag in self._identifiers_in(f"{flag} = True"), "ast.Name"
+        assert flag in self._identifiers_in(f"config.{flag}"), "ast.Attribute"
+        assert flag in self._identifiers_in(f'setattr(config, "{flag}", True)'), "ast.Constant"
+
+    def test_the_scan_finds_nothing_in_source_that_does_not_mention_the_flags(self):
+        """The other half of non-vacuity: the scanner must also be capable of
+        returning a miss, or `test_neither_flag_is_referenced_anywhere_in_src`
+        proves nothing by passing.
+        """
+        identifiers = self._identifiers_in("def f(x):\n    return x + 1\n")
+
+        assert not identifiers & set(self.FLAG_NAMES)
 
     def test_the_defaults_this_repo_relies_on_have_not_drifted(self):
         """Non-vacuity for the *reason* the scan matters: confirms the

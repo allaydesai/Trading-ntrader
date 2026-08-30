@@ -176,6 +176,73 @@ class TestConnectionObservedBeforeTrading:
 
         assert observed_state_at_trading == [ConnectionState.RECOVERING]
 
+    def test_submission_is_permitted_when_trading_starts_on_a_healthy_connection(self, monkeypatch):
+        """Review fix, 2026-08-30 — the positive half of this class's own claim.
+
+        Every other test here asserts ``submission_withheld is True`` on a
+        failure path; nothing asserted it is ``False`` on the happy path. So a
+        change to the staleness window, or to when ``observe()`` stamps its
+        reading, would suppress every order in every session with this whole
+        suite green. Asserted *at trading time* rather than after ``run()``,
+        because that is the instant the wiring exists to guarantee.
+        """
+        withheld_at_trading = []
+        original_trading = LiveSessionRunner._phase_trading
+
+        def _spy_trading(self):
+            assert self._monitor is not None
+            withheld_at_trading.append(self._monitor.submission_withheld)
+            return original_trading(self)
+
+        monkeypatch.setattr(LiveSessionRunner, "_phase_trading", _spy_trading)
+
+        node = TestLiveNode(run_seconds=0.01)
+        runner = _runner(node, connection_reader=lambda settings: UP)
+
+        runner.run()
+
+        assert withheld_at_trading == [False], (
+            "a healthy connection must permit submission by the time strategies start — "
+            "otherwise the session trades nothing and no other test would notice"
+        )
+
+    def test_the_wrap_consults_the_runners_real_connection_monitor(self, monkeypatch):
+        """Review fix, 2026-08-30. Every ``test_live_order_path.py`` case uses
+        a stub whose ``submission_withheld`` is a plain attribute, so nothing
+        pinned that the wrap works against the *real* property. Were
+        ``ConnectionMonitor.submission_withheld`` to become a method,
+        ``bool(bound_method)`` is ``True`` and every order in every session
+        would be withheld forever with those tests still passing.
+
+        This drives a real ``ConnectionMonitor`` through the runner and proves
+        the wrapped method reads it live: flipping the monitor's state after
+        installation changes what the next call does.
+        """
+        installed: list = []
+        original_install = live_session_runner.install_order_path
+
+        def _capture(strategy, monitor, log):
+            installed.append((strategy, monitor))
+            return original_install(strategy, monitor, log)
+
+        monkeypatch.setattr(live_session_runner, "install_order_path", _capture)
+
+        node = TestLiveNode(run_seconds=0.01)
+        runner = _runner(node, connection_reader=lambda settings: UP)
+        runner.run()
+
+        strategy, monitor = installed[0]
+        assert monitor is runner._monitor
+        assert isinstance(monitor.submission_withheld, bool), (
+            "the wrap does `bool(monitor.submission_withheld)` — a non-bool (a bound method, "
+            "say) is truthy and would silently withhold every order for the session's life"
+        )
+        assert monitor.submission_withheld is False
+        monitor.observe(DOWN)
+        monitor.observe(DOWN)
+        assert monitor.submission_withheld is True
+        assert strategy.submit_order(object()) is None, "a withheld call returns None"
+
     def test_the_reader_receives_the_runners_own_settings(self):
         received = []
 
@@ -254,6 +321,61 @@ class TestTheRunnerReachesTheOrderPathCallSites:
         assert monitor is runner._monitor
         assert log is runner._log
         assert strategy in node.trader.added_strategies
+
+    def test_install_order_path_runs_before_add_strategy_on_one_timeline(self, monkeypatch):
+        """Review fix, 2026-08-30. The sibling test asserts
+        ``strategy in node.trader.added_strategies`` — membership, not order —
+        so moving ``install_order_path`` *after* ``add_strategy`` (or after
+        ``start_strategy``, which would leave ``on_start()`` order calls
+        unwrapped) left it green. The ordering is load-bearing and normative
+        in the module docstring, so it gets the interleaved-timeline treatment
+        ``test_session_runner_phases.py`` already uses for the subscribe/
+        add_strategy pair.
+        """
+        timeline: list[str] = []
+        original_install = live_session_runner.install_order_path
+
+        def _spy_install(strategy, monitor, log):
+            timeline.append("install_order_path")
+            return original_install(strategy, monitor, log)
+
+        monkeypatch.setattr(live_session_runner, "install_order_path", _spy_install)
+
+        node = TestLiveNode(run_seconds=0.01)
+        original_add = node.trader.add_strategy
+
+        def _spy_add(strategy):
+            timeline.append("add_strategy")
+            return original_add(strategy)
+
+        node.trader.add_strategy = _spy_add
+        original_start = node.trader.start_strategy
+
+        def _spy_start(strategy_id):
+            timeline.append("start_strategy")
+            return original_start(strategy_id)
+
+        node.trader.start_strategy = _spy_start
+
+        _runner(node).run()
+
+        assert timeline.count("install_order_path") == 1
+        assert timeline.index("install_order_path") < timeline.index("add_strategy"), timeline
+        assert timeline.index("install_order_path") < timeline.index("start_strategy"), timeline
+
+    def test_the_runner_hands_the_observer_the_traded_aggregations(self, monkeypatch):
+        """Review fix, 2026-08-30: NFR1's latency anchor may only be set by a
+        bar type a strategy actually trades, so the runner must tell the
+        observer which those are — each spec entry's ``bar_types[0]``, the one
+        ``materialise_strategy`` hands the strategy.
+        """
+        node = TestLiveNode(run_seconds=0.01)
+        runner = _runner(node)
+
+        runner.run()
+
+        assert runner._order_observer is not None
+        assert runner._order_observer._traded_bar_types == frozenset({AAPL_1MIN})
 
     def test_deleting_the_call_site_leaves_the_order_creating_methods_unwrapped(self, monkeypatch):
         """The mutation itself (M2 in Task 9's sweep, proven here so the

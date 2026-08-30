@@ -167,8 +167,17 @@ class TestOrderIdTagCollision:
         with pytest.raises(ValidationError) as exc_info:
             SessionSpec(strategies=(first, second))
 
-        errors = exc_info.value.errors()
-        assert any(error["type"] == "value_error" for error in errors)
+        # Review fix, 2026-08-30: this asserted only
+        # `any(error["type"] == "value_error")`, which passes with an empty
+        # message, the wrong strategy named, or the whole operator-facing
+        # explanation block deleted — while its name promised otherwise.
+        message = str(exc_info.value)
+        assert "'000'" in message, "the colliding resolved tag must be quoted in the message"
+        assert "momentum" in message, "the strategy that collides must be named"
+        assert "order_id_tag" in message
+        # The message's whole job is telling the operator what to do about it.
+        assert "reorder" in message.lower() or "explicit" in message.lower()
+        assert any(error["type"] == "value_error" for error in exc_info.value.errors())
 
 
 class TestStrategyCanonicalisation:

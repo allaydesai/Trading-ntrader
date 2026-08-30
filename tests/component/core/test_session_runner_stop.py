@@ -329,11 +329,34 @@ class TestUnsubscribeOnStop:
 
         runner.run()
 
-        assert len(node.trader.unsubscriptions) == 1
         topic, handler = node.trader.unsubscriptions[0]
         assert topic == BAR_TOPIC
         subscribed_topic, subscribed_handler = node.trader.subscriptions[0]
         assert (topic, handler) == (subscribed_topic, subscribed_handler)
+
+    def test_every_subscription_the_runner_made_is_cancelled(self, monkeypatch):
+        """Review fix, 2026-08-30. Story 3.2 added two more subscriptions in
+        ``_phase_subscribe`` (the order observer's bar anchor and its
+        ``events.order*`` handler) and cancelled neither, so both kept firing
+        through teardown — ``order.submitted`` records could land *after*
+        ``session.stopped``, in the very transcript AC #7 asks an operator to
+        read.
+
+        This test is written against the whole set rather than index ``[0]``
+        on purpose: the assertion it replaces hardcoded
+        ``len(unsubscriptions) == 1``, so it stayed green by construction when
+        subscriptions two and three arrived. Comparing sets means the next
+        subscription added without a matching cancel goes red on its own.
+        """
+        monkeypatch.setattr(LiveSessionRunner, "_phase_trading", _stop_after("_phase_trading"))
+        node = TestLiveNode(run_seconds=0.01)
+        runner = _runner(node)
+
+        runner.run()
+
+        assert set(node.trader.unsubscriptions) == set(node.trader.subscriptions), (
+            "every subscription the runner made in _phase_subscribe must be cancelled on stop"
+        )
 
     def test_unsubscribe_happens_before_dispose(self, monkeypatch):
         """Task 5's load-bearing ordering, on one ordered list.

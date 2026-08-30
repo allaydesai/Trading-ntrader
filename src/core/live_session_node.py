@@ -21,6 +21,7 @@ guard forbids it.
 
 import asyncio
 import time
+from collections.abc import Sequence
 from typing import Any
 
 from nautilus_trader.config import LoggingConfig
@@ -292,25 +293,39 @@ def request_node_stop(
         loop.call_soon_threadsafe(node.stop)
 
 
-def unsubscribe_bar_topic(node: TradingNode | None, steady_state: Any, log: Any) -> None:
-    """Cancel the runner's own bar-topic subscription on the stop path.
+def unsubscribe_runner_topics(
+    node: TradingNode | None, subscriptions: Sequence[tuple[str, Any]], log: Any
+) -> None:
+    """Cancel every message-bus subscription the runner made, on the stop path.
 
     ``LiveBarObserver.on_stop()`` already unsubscribes exactly the bar types
     it dispatched, and ``Trader._stop()`` runs actors before strategies —
-    both already handled. What nothing cancels today is the runner's *own*
-    message-bus subscription (``node.trader.subscribe(BAR_TOPIC, ...)`` in
-    ``_phase_subscribe``).
+    both already handled. What nothing cancels is the runner's *own*
+    subscriptions, made in ``_phase_subscribe``.
 
-    Guarded: a raising ``unsubscribe`` must not pre-empt the node teardown
-    behind it. A no-op when ``subscribe`` never ran (a stop before that
-    phase) — there is nothing to cancel.
+    Takes the whole list rather than one named handler (review 2026-08-30).
+    This was ``unsubscribe_bar_topic(node, steady_state, log)``, which
+    cancelled exactly the steady state's ``note_bar`` — so when Story 3.2
+    added the order observer's bar anchor and its ``events.order*`` handler,
+    both silently kept firing through teardown and ``order.submitted`` records
+    could land after ``session.stopped``. Iterating what the runner recorded
+    means the next subscription added is cancelled without anyone remembering
+    to come back here.
+
+    Guarded per subscription: a raising ``unsubscribe`` must not pre-empt the
+    node teardown behind it, nor stop the remaining cancellations. A no-op
+    when ``subscribe`` never ran (a stop before that phase) — there is nothing
+    to cancel.
     """
-    if node is None or steady_state is None:
+    if node is None:
         return
-    try:
-        node.trader.unsubscribe(BAR_TOPIC, steady_state.note_bar)
-    except Exception as exc:  # noqa: BLE001 - must never pre-empt the teardown behind it
-        log.error("session.unsubscribe_failed", error_type=type(exc).__name__)
+    for topic, handler in subscriptions:
+        if handler is None:
+            continue
+        try:
+            node.trader.unsubscribe(topic, handler)
+        except Exception as exc:  # noqa: BLE001 - must never pre-empt the teardown behind it
+            log.error("session.unsubscribe_failed", error_type=type(exc).__name__, topic=topic)
 
 
 def report_instrument_shortfall(node: TradingNode, bar_types: tuple[str, ...], log: Any) -> None:

@@ -102,7 +102,7 @@ from src.core.live_session_node import (
     refusal_from_report,
     report_instrument_shortfall,
     request_node_stop,
-    unsubscribe_bar_topic,
+    unsubscribe_runner_topics,
     validate_spec_is_materialisable,
 )
 from src.core.live_session_phases import PHASE_EVENT, phase
@@ -223,6 +223,7 @@ class LiveSessionRunner:
         self._steady_state: SessionSteadyState | None = None
         self._monitor: ConnectionMonitor | None = None
         self._order_observer: OrderEventObserver | None = None
+        self._subscriptions: list[tuple[str, Any]] = []
         self._deadline, self._trader_started, self._ownership_lost = 0.0, False, False
         self._record_release_failed = False
         self._shutdown_problems: list[str] = []
@@ -418,8 +419,9 @@ class LiveSessionRunner:
         )
 
     def _unsubscribe(self) -> None:
-        """Cancel the runner's own bar-topic subscription; see :func:`unsubscribe_bar_topic`."""
-        unsubscribe_bar_topic(self._node, self._steady_state, self._log)
+        """Cancel every subscription the runner made; see
+        :func:`unsubscribe_runner_topics`."""
+        unsubscribe_runner_topics(self._node, self._subscriptions, self._log)
 
     # The eight AR39 phases, in PHASE_SEQUENCE order. Separately named and
     # separately patchable is a CONTRACT: the landmine test monkeypatches the
@@ -546,12 +548,33 @@ class LiveSessionRunner:
             self._node.trader.add_actor(observer)
             self._node.trader.start_actor(observer.id)
             self._steady_state = self._build_steady_state()
-            self._node.trader.subscribe(BAR_TOPIC, self._steady_state.note_bar)
+            self._subscribe(BAR_TOPIC, self._steady_state.note_bar)
             self._observe_connection_once()
-            self._order_observer = OrderEventObserver(self._log)
-            self._node.trader.subscribe(BAR_TOPIC, self._order_observer.note_bar)
-            self._node.trader.subscribe(ORDER_EVENTS_TOPIC, self._order_observer.handle_order_event)
+            # Only the aggregations a strategy actually trades may anchor
+            # NFR1's latency (review 2026-08-30). `bar_types` above is the
+            # *subscription* set, flattened across strategies, and one
+            # instrument can carry two aggregations on it — whichever arrived
+            # last would otherwise become the anchor, measuring the interval
+            # from a close the signal never saw. `bar_types[0]` per entry is
+            # what `materialise_strategy` hands the strategy.
+            traded = tuple(entry.bar_types[0] for entry in self._spec.strategies)
+            self._order_observer = OrderEventObserver(self._log, traded_bar_types=traded)
+            self._subscribe(BAR_TOPIC, self._order_observer.note_bar)
+            self._subscribe(ORDER_EVENTS_TOPIC, self._order_observer.handle_order_event)
             report_instrument_shortfall(self._node, bar_types, self._log)
+
+    def _subscribe(self, topic: str, handler: Any) -> None:
+        """Subscribe, and record it so the stop path can cancel it.
+
+        The recording is the point (review 2026-08-30): ``_unsubscribe`` used
+        to name the steady state's ``note_bar`` explicitly, so the two
+        subscriptions Story 3.2 added were never cancelled and kept firing
+        through teardown. A subscription made through here is cancelled
+        without anyone having to remember the other end.
+        """
+        assert self._node is not None
+        self._node.trader.subscribe(topic, handler)
+        self._subscriptions.append((topic, handler))
 
     def _observe_connection_once(self) -> None:
         """One synchronous connection reading before `trading` starts (Story

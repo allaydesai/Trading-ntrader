@@ -2130,3 +2130,76 @@ adopted: **give each item a named owning story, not a priority label.** Items re
 ## Deferred from: code review of story-3.1 (2026-08-29)
 
 - `custom/sma_crossover_long_only.py:86` still calls `close_all_positions(self.instrument_id)` in its `on_stop()`, so a live session running `sma_crossover_long_only` (registered, aliased `sma_long`/`sma_long_only`, and selectable through `ntrader live create --strategy`) still manufactures an exit on every stop — the exact NFR14/AR43 behaviour Story 3.1 removes from the built-in. Not actionable from this repo: `src/core/strategies/custom/` is an unversioned git submodule, which is why the 2026-08-28 retro amendment scoped AC #3 to exclude it. Two consequences ride on this and are tracked as Story 3.1 review patches rather than here: the new stop trailer in `src/cli/commands/live.py` asserts unconditionally that no exit order was submitted, and `stop_degraded_strategies` now explicitly stops degraded strategies of any class. Fix belongs in the submodule repo.
+
+## Deferred from: code review of story-3.2 (2026-08-30)
+
+- `ConnectionMonitor._elapsed_since` (`src/core/live_connection_monitor.py:381-389`) clamps a
+  backward clock step to `0.0`, which reads as *maximally fresh* — the exact outcome its own
+  docstring says the clamp exists to prevent ("must never produce a negative age that makes a stale
+  reading look fresh"). Pre-existing Epic 1 code; the default `time_source` is `time.monotonic`, so
+  it is unreachable without an injected source. Newly load-bearing, because Story 3.2's
+  `submission_withheld` now gates order submission on the same staleness read.
+- `assert self._monitor is not None` used as a production guard at `src/core/live_session_runner.py:575`
+  and `:633`. Consistent with the module's existing convention, but under `python -O` the asserts
+  vanish, `install_order_path(strategy, None, log)` succeeds (the parameter is `Any`), and every
+  wrapped call then raises inside the wrapper's own `try` — logging `order.suppression_failed` and
+  returning `None`. Failure mode is a session that starts cleanly, reports a started trader, and
+  silently submits nothing for its whole life.
+- The `log.error` call inside each `except` in `src/core/live_order_path.py` (`:135`, `:233`, `:244`)
+  is itself the operation most likely to have caused the exception it is reporting (a broken
+  structlog sink, a closed fd). A second failure there escapes the handler — and from a msgbus
+  handler that is the `publish_c` → `os._exit(1)` path the module's docstring forbids. Universal
+  pattern in this codebase, not specific to this module.
+- `OrderEventObserver._last_bar_ts_event` (`src/core/live_order_path.py:225`) is never pruned. Keys
+  are added for every instrument delivered on the wildcard `data.bars.*` topic and removed never.
+  Bounded by the session's own subscriptions today; unbounded by construction.
+- The C-logging guard fixture copied into `tests/component/core/test_client_order_id_determinism.py:46-57`
+  (and two other files) asserts `is_logging_initialized() == before`, so once any earlier test in the
+  process initialises C logging the fixture can no longer detect that a real `Trader` required it.
+  Its docstring calls itself "the machine-enforced version of that claim"; the enforcement is
+  order-dependent.
+- `TestSubmissionWithheld::test_matches_the_pinned_closed_form_for_every_state` recomputes the
+  production expression verbatim over the same two inputs, while its docstring claims it is
+  "computed independently of the property under test so this cannot pass by tautology". It can
+  detect divergence between two copies of one formula, not a wrong policy. A hand-written
+  `(state, stale) -> expected` truth table is the honest form.
+- `_describe`'s `submit_order_list` branch (`src/core/live_order_path.py:166-170`) records only
+  `orders[0]`'s instrument, so the rest of a multi-instrument bracket is invisible in the
+  `order.suppressed` record.
+- Nothing checks `ORDER_CREATING_METHODS` (`src/core/live_order_path.py:87-89`) against the real
+  `nautilus_trader.trading.strategy.Strategy` surface. Both it and the stop path's
+  `FORBIDDEN_ORDER_METHODS` are hand-maintained, so a Nautilus upgrade exposing a new order-creating
+  entry point leaves it unwrapped — orders would leave on a known-lost connection with every test
+  green. A `dir(Strategy)` test asserting no *unlisted* public `submit*`/`close*` name exists would
+  close it; the exact-set pin catches only deliberate local shrinkage.
+- `SessionSpec._reject_order_id_tag_collision` is a `model_validator(mode="after")`, so it also runs
+  on `SessionSpec.from_stored` (`src/cli/commands/live.py:393`), not only at create. A spec persisted
+  before 2026-08-30 that happens to collide would now fail `live start` as a `ValidationError`
+  rather than reaching the node. Unreachable today (`live create --strategy` is singular; the two
+  built-ins resolve to `000`/`002`), but FR14 treats a stored spec as immutable and both the
+  docstring and the deferred-work disposition describe the validator strictly as create-time.
+- The cancel-exclusion rationale in `src/core/live_order_path.py:43-46` is argued on exposure
+  ("cancelling while disconnected creates no new exposure"). A cancel issued on a known-lost
+  connection does not cancel anything: it fails at the adapter and can leave a live working order at
+  the venue that the strategy believes is gone, and that order can fill. The exposure is not new,
+  but the believed-vs-actual divergence is precisely the failure class this boundary exists to
+  prevent. The exclusion is probably still correct; the stated reason does not support it.
+- A strategy contained by `_start_strategy` never reaches `Trader.add_strategy`, so Nautilus's
+  runtime `len(order_id_tags)` diverges from the spec position the create-time simulation walks
+  (`src/models/session.py:435-448`). The direction is safe — create-time is the stricter of the two —
+  but it means the validator can refuse a spec that would in fact have run.
+- `_resolve_order_id_tag` (`src/models/session.py:227-230`) treats an empty or whitespace-only
+  `order_id_tag` as explicit. This is faithful to Nautilus, whose own test is
+  `in (None, str(None))` — but both then produce a degenerate `StrategyId` and client order IDs
+  shaped `O-...--1`.
+- **Nothing owns strategy-visible suppression feedback.** Decided during the story-3.2 code review
+  (2026-08-30): a suppressed order returns `None`, exactly what the real `cpdef void` methods return
+  on success, so a strategy cannot tell it was withheld. That silence is now the documented contract
+  (`src/core/live_order_path.py`'s module docstring), and it is safe for the built-ins, which
+  re-derive position state from the portfolio rather than tracking it internally. It is **not** safe
+  for a strategy that sets its own `self._in_position = True` after `submit_order` — that strategy
+  would believe it holds a position that was never opened, and no reconnection reverses it. Stories
+  3.3 and 3.7 own *rejection* semantics; neither is scoped to suppression. Recorded because it would
+  otherwise fall between them: either a later story takes it, or the constraint "a live strategy must
+  re-derive position state from the portfolio, never cache it" becomes an explicit, tested rule for
+  strategy authors.

@@ -346,11 +346,42 @@ class SessionSteadyState:
         in this story. Epic 1 retro Action Item #7 requires its only production
         call site to run *after genuine reconciliation*, and ``reconcile`` is a
         no-op placeholder here. Granting permission stays Epic 4's.
+
+        **The transition narration lives here, not in the monitor** (code
+        review 2026-08-30). The monitor's own ``connection.lost`` fires only
+        from the branch guarded by ``_has_ever_connected``, which is set solely
+        by ``_grant_permission`` — reached solely by the
+        ``confirm_state_reestablished`` above, which has zero production
+        callers until Epic 4. So in a *real* session every disconnect takes
+        the ``RECOVERING -> AWAITING_CONNECTION`` branch
+        (``live_connection_monitor.py:331-337``), which returns silently, and a
+        genuine broker drop produced no ``connection.*`` output at all — while
+        ``submission_withheld`` correctly flipped and orders stopped, leaving
+        an operator with a session that had quietly stopped trading and nothing
+        to grep for.
+
+        Fixing it *in* the monitor was rejected: that branch's silence is a
+        deliberate Epic 1 decision (a half-up socket during startup has lost
+        nothing, and ``connection.lost`` there would start a halt clock
+        measuring a broker that was never reached — pinned by
+        ``test_a_half_up_first_connection_that_drops_is_still_not_a_loss``).
+        The poller is the only component holding both the previous state and
+        the next one, so it is the right place to say a transition happened.
         """
+        previous = self._monitor.state
         try:
             self._monitor.observe(self._read_connection(self._settings))
         except Exception as exc:  # noqa: BLE001 - AR42
             self._log.error("session.connection_read_failed", error_type=type(exc).__name__)
+            return
+        current = self._monitor.state
+        if current is not previous:
+            self._log.info(
+                "connection.state_changed",
+                previous=previous.value,
+                current=current.value,
+                submission_withheld=self._monitor.submission_withheld,
+            )
 
     def _warn_if_no_bars(self, now: datetime) -> None:
         """Say so, **once**, when a started session has never seen a bar.

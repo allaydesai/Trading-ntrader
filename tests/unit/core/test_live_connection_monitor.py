@@ -85,9 +85,22 @@ def _events(captured: Sequence[Mapping[str, Any]], name: str) -> list[Mapping[st
 def _drive_to(state: ConnectionState, clock: FakeClock) -> ConnectionMonitor:
     """Return a monitor genuinely driven into ``state`` through its public API.
 
-    Nothing here pokes private attributes: a state the public API cannot reach
-    is a state that cannot occur in production, and the coverage meta-test below
+    Nothing here pokes private attributes, and the coverage meta-test below
     proves this helper reaches every member of the enum.
+
+    ⚠️ Corrected by code review 2026-08-30. This used to add "a state the
+    public API cannot reach is a state that cannot occur in production", which
+    is false in the direction that matters. ``LOST`` and ``HALTED`` are
+    reached here only via ``_connected()``, i.e. via
+    ``confirm_state_reestablished`` — which has **zero production callers**
+    until Epic 4 (pinned by
+    ``test_session_steady_state.py::test_confirm_state_reestablished_is_never_called_in_this_story``).
+    ``_has_ever_connected`` is therefore always ``False`` in a real session,
+    so ``_observe_disconnected`` always takes the
+    ``RECOVERING -> AWAITING_CONNECTION`` branch and ``LOST``/``HALTED`` never
+    occur. Reachable-by-API is not the same as reachable-in-production; the
+    states below are Epic-4-facing, and the production disconnect path is
+    covered by :class:`TestTheProductionDisconnectPath`.
     """
     if state is ConnectionState.AWAITING_CONNECTION:
         return _monitor(clock)
@@ -847,6 +860,49 @@ class TestSubmissionWithheld:
         ) or monitor.observation_is_stale
 
         assert monitor.submission_withheld is expected
+
+    @pytest.mark.unit
+    def test_the_production_disconnect_path_withholds_submission(self):
+        """The transition a **real** session actually takes, which had no test.
+
+        Every case above reaches ``LOST``/``HALTED`` through
+        ``confirm_state_reestablished``, which production never calls until
+        Epic 4 — so ``_has_ever_connected`` is always ``False`` and a genuine
+        mid-session drop takes ``RECOVERING -> AWAITING_CONNECTION``
+        (``live_connection_monitor.py:331-337``) instead. That branch was
+        covered for its *state* but never for its effect on this predicate,
+        which is the only thing standing between a dead socket and a blind
+        order (review 2026-08-30).
+        """
+        clock = FakeClock()
+        monitor = _monitor(clock)
+
+        monitor.observe(UP)  # the healthy steady state: RECOVERING, never granted
+        assert monitor.state is ConnectionState.RECOVERING
+        assert monitor.submission_withheld is False
+
+        monitor.observe(DOWN)  # the drop a real session sees
+
+        assert monitor.state is ConnectionState.AWAITING_CONNECTION
+        assert monitor.submission_withheld is True, (
+            "a disconnect on the only path production can take must withhold submission"
+        )
+
+    @pytest.mark.unit
+    def test_submission_resumes_when_the_production_disconnect_path_recovers(self):
+        """The other half: withholding must not latch, or one blip would end
+        trading for the session.
+        """
+        clock = FakeClock()
+        monitor = _monitor(clock)
+        monitor.observe(UP)
+        monitor.observe(DOWN)
+        assert monitor.submission_withheld is True
+
+        monitor.observe(UP)
+
+        assert monitor.state is ConnectionState.RECOVERING
+        assert monitor.submission_withheld is False
 
     @pytest.mark.unit
     def test_submission_withheld_has_no_setter(self):

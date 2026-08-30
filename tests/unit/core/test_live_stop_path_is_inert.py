@@ -439,7 +439,21 @@ class TestTheVocabularyRuleAr36:
         # would trip it if the module ever joined the list. Today it never
         # appears as a literal — `log.warning(SUPPRESSED_EVENT, method=method_name,
         # ...)` passes the name through a variable, which this scan does not see
-        # at all (it only walks `ast.Constant` string nodes).
+        # at all (it only walks `ast.Constant` string nodes inside log/print
+        # calls).
+        #
+        # ⚠️ AR36 EXEMPTION, ruled 2026-08-30 during code review rather than
+        # left as an accident of what the scan can see. At *runtime* a
+        # suppressed close emits `order.suppressed method=close_position`, so
+        # the forbidden `close` stem does reach an operator — the scan misses
+        # it only because the value arrives through a variable. The exemption
+        # is granted, and the reason is that AR36 governs how the **session**
+        # is described (a stop must not read as a kill, a halt or a close),
+        # not the spelling of a Python method name carried in a structured
+        # field of an `order.*` record. Neutralising the value (`position_exit`
+        # and friends) would cost the direct method-to-log correspondence that
+        # makes a suppression record actionable, for no gain against the rule's
+        # actual purpose. Recorded here so the next review does not re-open it.
     )
     #: AR36's list, with ``close`` **restored** (review fix, 2026-08-22,
     #: decision D3). It had been dropped silently — and it is the one word

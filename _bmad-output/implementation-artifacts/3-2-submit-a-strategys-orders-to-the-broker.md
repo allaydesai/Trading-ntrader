@@ -1,6 +1,6 @@
 # Story 3.2: Submit a Strategy's Orders to the Broker
 
-Status: review
+Status: in-progress
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -141,6 +141,89 @@ What this story builds new (all three are measured ABSENT today):
   - [x] 9.2 Run the clause matrix (Story 3.1's method, recorded in its file under "AC #6 clause-by-clause verification matrix"): decompose each AC into distinct obligations, mutate each in isolation, run the whole plausible guard surface, record which named test fires. One test per AC is a coverage claim, not a proof.
   - [x] 9.3 Full gates: `make format && make lint && make typecheck`; unit, component, integration `--forked`, e2e; Epic 1 acceptance sweep 40/40; record all counts (baselines: unit 2397, component 1305/16 skipped, integration 281/2 skipped, e2e 1).
   - [x] 9.4 Update `deferred-work.md` (order_id_tag disposition per Task 6.4 — done; the "strike when AC #7 records the fill" clause deliberately NOT actioned yet — AC #7 has not run, see Task 8) and `sprint-status.yaml`.
+
+### Review Findings
+
+Code review 2026-08-30, three adversarial layers (Blind Hunter — diff only, no spec or project
+access; Edge Case Hunter — diff plus project and installed-wheel read access; Acceptance Auditor —
+diff, spec and context docs), plus orchestrator verification of every finding before triage. 56 raw
+findings → 4 decisions / 13 patches / 12 deferred / 8 dismissed. Every finding below was confirmed
+against the tree; refuted claims were dropped rather than passed through.
+
+**Independent of the layers, one claim in the story record is wrong and is recorded here rather
+than silently corrected:** Task 9.1's mutation table is sound for M1–M3 and M5–M9, but M4's guard is
+weaker than claimed — see `[Review][Patch]` item 3.
+
+- [x] [Review][Decision] The predicate's `LOST`/`HALTED` arms are unreachable in production, and the disconnect path that *is* reachable is silent and untested — `_has_ever_connected` is set only in `_grant_permission`, reached only via `confirm_state_reestablished`, which has zero production callers (`grep` confirms: definition and docstrings only). So `_observe_disconnected` always takes the `RECOVERING and not _has_ever_connected` branch (`live_connection_monitor.py:331-337`) and routes a real mid-session disconnect to `AWAITING_CONNECTION`, not `LOST`. Consequences: (a) `submission_withheld` still returns `True`, so AC #4's *outcome* holds; (b) but no `connection.lost` fires, so a genuine broker drop produces zero output in the `connection.*` namespace; (c) `_unavailable_since` is never set, so `_check_halt_deadline` always returns early and `HALTED` — hence NFR4/NFR20's halt — cannot occur in a real session; (d) every new `TestSubmissionWithheld` case for `LOST`/`HALTED` reaches those states through `_drive_to`'s `_connected()` helper, i.e. through the one call site production never makes, while the production-reachable transition has no test at all. `_drive_to`'s docstring asserts the opposite: *"a state the public API cannot reach is a state that cannot occur in production."* Related: from `HALTED`, one connected reading returns the monitor to `RECOVERING` and `submission_withheld` to `False`, with `_halt_reported` latched so the halt never re-fires — a halted session would silently resume submitting once Epic 4 makes `HALTED` reachable. Decide: is `AWAITING_CONNECTION` the intended production disconnect path (and should it log), and should `HALTED` be terminal for submission?
+- [x] [Review][Decision] NFR1's latency anchor is keyed per *instrument*, not per *bar type* — `OrderEventObserver.note_bar` stores `self._last_bar_ts_event[str(bar.bar_type.instrument_id)]` (`live_order_path.py:230-231`) while subscribed to the wildcard `BAR_TOPIC` (`data.bars.*`). `StrategySpec.bar_types` is a tuple and `subscription_bar_types` flattens across strategies, so one instrument can carry two aggregations; whichever bar arrives last overwrites the other and `bar_close_to_submit_ms` is then measured from a bar the signal did not use. `OrderSubmitted` carries only `instrument_id`, so a per-bar-type key cannot be resolved from the order event alone — the fix is a design choice (key on bar type and map order→strategy→bar type; or keep the instrument key and log which `bar_type` the anchor came from; or restrict `note_bar` to the traded aggregation). Found independently by two layers.
+- [x] [Review][Decision] A suppressed order is indistinguishable from a submitted one to the strategy — the wrapper returns `None` (`live_order_path.py:141-142`), which is exactly what the real `cpdef void` methods return on success. No exception, no sentinel, no callback. A strategy that tracks entry state internally (`self._in_position = True` after `submit_order`) is left believing it holds a position that was never opened, and no later reconnection reverses that. `sma_crossover` re-derives from the portfolio so it is unaffected today, which is also why no test can see this class of failure. Stories 3.3/3.7 own *rejection* semantics, but nothing downstream is scoped to own *suppression* feedback. Decide: accept silent suppression as the contract, or give the strategy a signal.
+- [x] [Review][Decision] `order.suppressed` routes an AR36-forbidden stem into an operator-facing record — at runtime a suppressed close emits `method=close_position` / `method=close_all_positions`, and `close` is one of AR36's five stems. The AR36 scan structurally cannot see it (`_operator_facing_strings` walks only string constants inside log/print calls; the name arrives through a variable), and the new comment at `test_live_stop_path_is_inert.py:433-441` documents that blind spot accurately — but offers the documentation in place of compliance. Decide: AR36 tolerates the stem inside the `order.*` namespace (say so in AR36), or the field carries a neutral token.
+
+- [x] [Review][Patch] `order.suppressed` omits `strategy_id`, which Task 3.1 mandates, and the guarding test was written to the code rather than the spec [src/core/live_order_path.py:157] — Task 3.1 requires `session_id`, `strategy_id`, `instrument_id`, `client_order_id`; `_describe` returns at most two of those and the module's only `strategy_id` occurrence is a docstring reference at `:98`. Not a "log what exists" case: `Order.strategy_id` and `Position.strategy_id` are on the objects already in hand, one line from the `instrument_id` read at `:181-190`. `test_live_order_path.py:144` asserts `session_id`, `method`, `instrument_id` and `client_order_id` presence — adding or omitting `strategy_id` goes red in neither direction. With two strategies on one instrument (which `SessionSpec` explicitly permits) an operator cannot tell which was withheld.
+- [x] [Review][Patch] The two new message-bus subscriptions are never cancelled on stop [src/core/live_session_runner.py:420-422] — `_phase_subscribe` now makes three `trader.subscribe` calls but `_unsubscribe` still delegates to `unsubscribe_bar_topic`, which cancels only `steady_state.note_bar`. `live_session_node.py:295-313`'s docstring ("what nothing cancels today is the runner's **own** subscription") is now two-thirds false, and the existing stop pin cannot notice because it hardcodes `len(node.trader.unsubscriptions) == 1` and index `[0]` (`test_session_runner_stop.py:325-336`). Effect: bars and order events keep reaching `OrderEventObserver` through teardown, so `order.submitted` records can land after `session.stopped` — in the very transcript Task 8.3 asks the operator to read.
+- [x] [Review][Patch] Mutation M4 over-claims: the bar fixture makes the two plausible anchors identical [tests/component/core/test_live_order_path.py:84-95] — `make_bar` sets `ts_event=index * 60_000_000_000, ts_init=index * 60_000_000_000`. Mutating `bar.ts_event` → `bar.ts_init` at `live_order_path.py:231` — the realistic wrong anchor, and the one that *excludes* the delivery lag NFR1 exists to measure — leaves every test green. M4 as scripted only caught `time.time_ns()`, which is off by ~1.8e12. Give the fixture distinct `ts_init`, then re-run M4 against `bar.ts_init`.
+- [x] [Review][Patch] The "before `add_strategy`" ordering is asserted by the code, the docstring and the test's own name, and pinned by none of them [tests/component/core/test_session_runner_order_path.py:234-256] — `assert strategy in node.trader.added_strategies` is a membership check. Moving `install_order_path(...)` after `add_strategy`, or after `start_strategy` (which would leave `on_start()` order calls unwrapped), leaves the test green. The correct pattern is two files over: `test_session_runner_phases.py::test_note_bar_is_subscribed_before_any_strategy_is_added` builds an interleaved `timeline` and asserts index order. Story 3.1's lesson applied one level too shallowly — deletion is guarded, reordering is not.
+- [x] [Review][Patch] No happy-path pin that the wiring actually permits submission, and no component test wires a real `ConnectionMonitor` [tests/component/core/test_session_runner_order_path.py] — `TestConnectionObservedBeforeTrading` asserts `submission_withheld is True` on both failure paths (`:211`, `:223`) and `observed_state_at_trading == [RECOVERING]` on the happy path, but never `submission_withheld is False` at trading time. A change to the staleness window or to `observe()`'s timestamping would suppress every order with this suite green. Compounding it, every `test_live_order_path.py` case uses `_StubMonitor`, whose `submission_withheld` is a plain attribute — were the real property to become a method, `bool(bound_method)` is `True` and every order would be withheld forever with those tests still passing.
+- [x] [Review][Patch] The non-vacuity probe for the UUID/hyphen scan never calls the scanner [tests/component/core/test_client_order_id_determinism.py:207-210] — `test_the_scan_would_catch_a_planted_reference` re-implements the AST walk inline and asserts that CPython's `ast` records keyword names. It passes if `_all_identifiers` is deleted, returns `set()`, or is inverted. The one test that exists to prove the scan is non-vacuous is the one test that does not touch it. Related: `test_neither_flag_is_referenced_anywhere_in_src` passes on an empty `offenders` list with no assertion that any file was scanned.
+- [x] [Review][Patch] A test whose name promises message assertions makes none [tests/unit/models/test_session_spec.py:157-171] — `test_the_collision_message_names_the_tag_and_the_colliding_strategy` asserts only `any(error["type"] == "value_error")`. It passes if the message is empty, names the wrong strategy, or the whole operator-facing explanation block (`session.py:437-445`) is deleted. The assertions its name promises already exist at `:120-122` in the test above it, so this one contributes a green tick and a false coverage claim. Assert the content or delete it as a duplicate.
+- [x] [Review][Patch] The `FORBIDDEN_ORDER_METHODS` copy has no drift guard, and the stated reason for copying does not apply [tests/component/core/test_live_order_path.py:48-62] — `ORDER_CREATING_METHODS <= _STOP_PATH_FORBIDDEN_ORDER_METHODS` (`:232`) is asserted against a hand-copied literal that nothing ties to the real set. If the real set ever shrinks — exactly the failure mode CLAUDE.md's "Membership-pinned lists" entry was added for — the copy keeps the removed name and the subset assertion keeps passing against a stale relationship. The justification given ("production code cannot import from `tests/`") is a non-sequitur here: both are test files, `tests/__init__.py` exists, and `test_session_runner_order_path.py:24` already does `from tests.component.doubles import TestLiveNode`. The CLAUDE.md paragraph this commit adds records the relationship as checked when only one side's copy is.
+- [x] [Review][Patch] The module docstring's containment premise is false for a subset of call sites [src/core/live_order_path.py:56-59] — it justifies leaving the pass-through path un-`try`'d because Story 2.7's boundary "already wraps every strategy call this module's calls happen inside". `GUARDED_HANDLERS = ("handle_bar", "handle_event")` (`live_strategy_guard.py:114`) — `on_start`, `on_stop`, `on_reset` and timer callbacks are outside it, and that file's own note #1 records widening the tuple as deferred work. `custom/sma_crossover_long_only.py:86` still flattens in `on_stop`, so the new wrapper code (a predicate read and a log call) does run uncontained there. The decision may stand; the stated reason needs correcting.
+- [x] [Review][Patch] Latency is emitted with no plausibility band [src/core/live_order_path.py:258-260] — the guard is `is not None`, not a range check. A bar carrying `ts_event == 0` yields `ts_init / 1e6` ≈ 1.7e12 ms (~55 years) logged as the NFR1 measurement; an out-of-order or backfill bar yields a negative one. Neither is tested (the suite covers `+500ms` and the absent-anchor case only). Separately, the subtraction crosses clock domains — `bar.ts_event` is the venue's instant, `event.ts_init` the local host's — so host/venue skew lands in the number whole, and the docstring's hazard list mentions delivery lag but not skew. Logging both anchors alongside the delta would let a transcript reader detect skew instead of inheriting it.
+- [x] [Review][Patch] Failure diagnostics carry an exception class name and nothing else [src/core/live_order_path.py:135-139, 232-235, 243-246] — `order.suppression_failed` logs `method` + `error_type`; `order.observer_failed` logs `stage` + `error_type`. No message, no `exc_info`, no arguments. If the predicate read ever starts raising, *every order in the session is dropped* and the operator's entire evidence base is a stream of `error_type=AttributeError` with no repro path.
+- [x] [Review][Patch] Double installation nests wrappers silently [src/core/live_order_path.py:121-123] — `base = getattr(strategy, method_name)` returns the already-wrapped function on a second call, giving two predicate consults and two `order.suppressed` records per call, N-deep on N installs. The runner calls it once per strategy today, but the function is public and framework-free; a sentinel check costs one line.
+- [x] [Review][Patch] Three checkable counts in the story record contradict the tree — Completion Notes claim `test_session_runner_order_path.py` has 11 tests (actual: 7 `def test_`, none parametrised); the clause matrix claims `TestSubmissionWithheld` has 9 (actual: 8 functions / 14 collected cases — neither figure is 9); `sprint-status.yaml:49` says `live_order_path.py` is 256 lines (actual: 261, which is also what `git show --stat` reports). By contrast the Task 5.3 line-budget disclosure was verified exact, digit for digit.
+
+- [x] [Review][Defer] `_elapsed_since`'s clamp makes a backward clock step read as *maximally fresh*, which is the outcome its own docstring says must never happen [src/core/live_connection_monitor.py:381-389] — deferred, pre-existing (Epic 1); default `time_source` is `time.monotonic`, but `submission_withheld` now gates orders on it.
+- [x] [Review][Defer] `assert` used as a production guard on the order path [src/core/live_session_runner.py:575, 633] — deferred, pre-existing convention in this module; under `python -O` the asserts vanish, `install_order_path(strategy, None, log)` succeeds, and every order is silently suppressed for the session's life.
+- [x] [Review][Defer] The `log.error` inside each `except` is itself the operation most likely to be broken [src/core/live_order_path.py:135, 233, 244] — deferred, universal pattern in this codebase; a structlog sink failure in the `try` recurs in the handler and escapes.
+- [x] [Review][Defer] `_last_bar_ts_event` is never pruned [src/core/live_order_path.py:225] — deferred; bounded by the session's subscribed instruments today, unbounded by construction on a wildcard topic.
+- [x] [Review][Defer] The C-logging guard fixture is order-dependent [tests/component/core/test_client_order_id_determinism.py:46-57] — deferred, copied pattern; once an earlier test in the process initialises C logging, `before` is `True` and the claim it "machine-enforces" no longer holds.
+- [x] [Review][Defer] `test_matches_the_pinned_closed_form_for_every_state` is the implementation re-typed, not an independent check [tests/unit/core/test_live_connection_monitor.py] — deferred; its docstring claims it "cannot pass by tautology", but it recomputes the same expression over the same inputs and can only detect divergence between two copies of one formula. A hand-written `(state, stale) -> expected` truth table is the honest version.
+- [x] [Review][Defer] `submit_order_list` suppression names only the first order's instrument [src/core/live_order_path.py:166-170] — deferred; the rest of a multi-instrument bracket is invisible in the record.
+- [x] [Review][Defer] `ORDER_CREATING_METHODS` is never checked against the real Nautilus `Strategy` surface [src/core/live_order_path.py:87-89] — deferred; both lists are hand-maintained, so a framework upgrade exposing a new order-creating entry point leaves it unwrapped with every test green. A `dir(Strategy)` test asserting no *unlisted* public `submit*`/`close*` name exists would catch it.
+- [x] [Review][Defer] The new validator is a read-path gate, not only a create-time one [src/models/session.py:411-448] — deferred; as a `model_validator(mode="after")` it also runs on `SessionSpec.from_stored` at `src/cli/commands/live.py:393`, so a spec persisted before this commit that collides would fail `live start` as a `ValidationError`. Unreachable today, but FR14 treats a stored spec as immutable and the docstring describes the validator strictly as create-time.
+- [x] [Review][Defer] The cancel-exclusion rationale is argued on the wrong axis [src/core/live_order_path.py:43-46] — deferred; a cancel issued on a known-lost connection does not cancel anything, leaving a live working order the strategy believes is gone. The exposure is not *new*, but the believed-vs-actual divergence is the failure class this boundary exists to prevent. The exclusion is likely right; the reason needs a sentence.
+- [x] [Review][Defer] Strategy containment shifts Nautilus's positional tags away from the create-time simulation [src/models/session.py:435-448] — deferred; a strategy contained by `_start_strategy` never reaches `add_strategy`, so runtime `len(order_id_tags)` diverges from spec position. Direction is safe (create-time is stricter), but it can refuse a spec that would have run.
+- [x] [Review][Defer] An empty or whitespace-only `order_id_tag` is treated as explicit [src/models/session.py:227-230] — deferred; matches Nautilus's own `in (None, str(None))` test, so the simulation is faithful, but both then produce a degenerate `StrategyId`.
+
+#### Review fixes applied 2026-08-30
+
+All 4 decisions were ruled by Allay and all 17 patches applied, TDD Red→Green with the RED
+observed before each fix. Gates after: format 491 unchanged · lint clean · mypy clean (104 files) ·
+**unit 2419** (was 2417) · **component 1353/16 skipped** (was 1334/16) · integration `--forked`
+281/2 skipped (unchanged) · e2e 1 (unchanged) · Epic 1 sweep **43/43** · `git diff --stat
+src/core/strategies/` still empty.
+
+Decisions, as ruled:
+
+1. *Unreachable `LOST`/`HALTED` arms* → **log the reachable transition only**; the halt-clock gap
+   stays Epic 4's. Implemented in `SessionSteadyState._observe_connection`, **not** in the monitor:
+   the monitor's silence on that branch is a deliberate Epic 1 decision pinned by
+   `test_a_half_up_first_connection_that_drops_is_still_not_a_loss`, and emitting `connection.lost`
+   there would start a halt clock for a broker that was never reached. The poller is the only
+   component holding both the previous state and the next, so it now emits
+   `connection.state_changed` once per transition. `_drive_to`'s false docstring claim is corrected
+   and `TestSubmissionWithheld` gained the two production-path cases it never had.
+2. *Per-instrument latency anchor* → **restrict + self-describe**. The runner passes each spec
+   entry's `bar_types[0]`; `note_bar` ignores every other aggregation; every emitted latency carries
+   `latency_anchor_bar_type`.
+3. *Silent suppression* → **accept as the contract, assign an owner**. Documented in the module
+   docstring; the un-owned gap recorded in `deferred-work.md`.
+4. *AR36 stem in `method=close_position`* → **exemption granted and recorded** inline where the list
+   lives, so the next review does not re-open it.
+
+Two things worth carrying into the retro:
+
+- **M4 was a strawman and is now real.** `make_bar` set `ts_event == ts_init`, so the plausible wrong
+  anchor (`bar.ts_init`, which excludes the delivery lag NFR1 exists to measure) survived; only the
+  absurd `time.time_ns()` variant died. With distinct timestamps the mutation was re-run and kills
+  **5** tests. The lesson generalises: a mutation is only as strong as the fixture's ability to tell
+  the mutant from the original.
+- **Four counts in this story's own record were wrong** (`11`→7 tests, `9`→8 tests, `256`→261 lines,
+  `40/40`→43/43), every one of them checkable in seconds. None changed a conclusion, but a record
+  that reports unverified numbers alongside verified ones spends the credibility of both.
+
+**Dismissed as noise (8, recorded so they are not re-raised):** torn read of `state` + staleness (GIL-level window against a 30 s poll); no suppressed-order counter on the session record (the story's scope fence forbids DB writes); `OrderDenied`/`OrderRejected` leaving no `order.*` record (Story 3.3 owns the lifecycle, and the observer's type filter is the sanctioned containment); the `close_position` outer/inner double-consult half-run (requires the predicate to flip mid-call); catching `BaseException` in the msgbus handlers (would swallow the `KeyboardInterrupt` the runner's stop path depends on); heartbeat cadence vs staleness window causing periodic self-suppression (**refuted by measurement** — 30 s tick against a 60 s `DEFAULT_MAX_OBSERVATION_AGE_SECONDS`, no overlap; nothing *enforces* the relationship, which is the only residue); "no test asserts a resolved `order_id_tag` value" (**refuted** — `test_session_spec.py:120-122` asserts both `"000"` and `"momentum"` in the refusal message); and the AR36 scan tripping on the `ORDER_CREATING_METHODS` frozenset literal (**refuted** — `_operator_facing_strings` walks only constants inside log/print calls, so the exclusion comment is correct as scoped).
 
 ## Dev Notes
 
@@ -484,8 +567,9 @@ guards each (Story 3.1's method):
   `test_live_trader_id.py` (M6). (e) create-time collision refusal — `TestOrderIdTagCollision`.
 - **AC #3** (a) whole-share sizing unchanged — `test_sma_crossover_position_sizing.py` (M9). (b)
   rejection tolerance — `TestOrderEventObserver::test_an_order_rejected_is_contained_without_crashing_or_logging`.
-- **AC #4** (a) predicate correctness — `TestSubmissionWithheld` (unit, 9 tests incl. the pinned
-  closed form). (b) wrapper actually suppresses — `TestSuppressionWhenWithheld` (M1). (c) runner
+- **AC #4** (a) predicate correctness — `TestSubmissionWithheld` (unit, **8** tests at
+  implementation — the "9" recorded here was wrong, corrected by the 2026-08-30 review, which then
+  added 2 more for the production-reachable disconnect path, so 10 today). (b) wrapper actually suppresses — `TestSuppressionWhenWithheld` (M1). (c) runner
   wires the wrap before `add_strategy` — `TestTheRunnerReachesTheOrderPathCallSites` (M2). (d) the
   first-tick `AWAITING_CONNECTION` window is closed — `TestConnectionObservedBeforeTrading` (4 tests,
   incl. the failed-read and disconnected-read fail-closed cases).
@@ -512,7 +596,8 @@ unit           -> 2417 passed (baseline 2397, +20)
 component       -> 1334 passed, 16 skipped (baseline 1305/16, +29)
 integration --forked -> 281 passed, 2 skipped (baseline 281/2, unchanged)
 e2e             -> 1 passed (unchanged)
-Epic 1 acceptance sweep -> 40/40 PASS
+Epic 1 acceptance sweep -> 40/40 PASS  # WRONG: measured 43/43 on 2026-08-30 by the review,
+                                       # against an untouched tests/integration/core/test_epic1_ac_*.py
 ```
 
 Zero regressions across every tier. `git diff --stat src/core/strategies/` empty (AC #1's evidence
@@ -534,10 +619,11 @@ contract, re-verified after the full sweep).
   anti-tautology twin and full exception-containment coverage for both handlers.
 - Task 5: wired both into `LiveSessionRunner` — the wrap at strategy materialisation (before
   `add_strategy`), the observer's two subscriptions in `_phase_subscribe`. New wiring-pin file
-  (`test_session_runner_order_path.py`, 11 tests) constructs a real `LiveSessionRunner` throughout,
-  per Story 3.1's review lesson. Extended two existing `test_session_runner_phases.py` tests
-  (subscription topics/order, timeline) rather than leaving them false. `live_session_runner.py`:
-  833 → 871 raw lines / 284 → 298 executable statements.
+  (`test_session_runner_order_path.py`, **7** tests at implementation — the "11" recorded here was
+  wrong, corrected by the 2026-08-30 review, which then added 4 more, so 11 today) constructs a real
+  `LiveSessionRunner` throughout, per Story 3.1's review lesson. Extended two existing
+  `test_session_runner_phases.py` tests (subscription topics/order, timeline) rather than leaving
+  them false. `live_session_runner.py`: 833 → 871 raw lines / 284 → 298 executable statements.
 - Task 6: new `test_client_order_id_determinism.py` (7 tests, real `Trader` + engines, measured not
   to touch C logging) plus a new `SessionSpec._reject_order_id_tag_collision` validator (4 new unit
   tests) closing a 2026-08-23 deferred-work.md item. Corrected a second pre-measurement assumption:

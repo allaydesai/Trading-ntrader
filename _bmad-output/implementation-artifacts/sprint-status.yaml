@@ -36,6 +36,49 @@
 
 generated: 2026-08-03
 last_updated: >-
+  2026-08-30 (STORY 3.2 CODE-REVIEWED -> in-progress, NOT done. review -> in-progress. epic-3 stays
+  in-progress: 3.1 done, 3.2 in-progress, 3.3-3.7 backlog. Three adversarial layers (Blind Hunter
+  diff-only / Edge Case Hunter with wheel access / Acceptance Auditor with spec) produced 56 raw
+  findings; the orchestrator verified every one before triage and DROPPED THREE AS REFUTED (the
+  heartbeat-vs-staleness alarm — 30s tick against a 60s window, measured; "no test asserts a
+  resolved order_id_tag value" — test_session_spec.py:120-122 does; the AR36 frozenset-literal trip
+  — the scan walks only constants inside log/print calls). Triage: 4 decisions / 17 patches / 12
+  deferred / 8 dismissed. ALL 4 DECISIONS RULED BY ALLAY AND ALL 17 PATCHES APPLIED, TDD Red->Green.
+  THE FINDING NO LAYER FOUND, and the reason the story is not done on the automated tiers alone:
+  ConnectionMonitor's LOST and HALTED states are UNREACHABLE IN PRODUCTION. `_has_ever_connected` is
+  set only by `_grant_permission`, reached only by `confirm_state_reestablished`, which has zero
+  production callers until Epic 4 — so every real disconnect takes the RECOVERING ->
+  AWAITING_CONNECTION branch (live_connection_monitor.py:331-337), which returned SILENTLY. Order
+  suppression was correct throughout (AWAITING_CONNECTION withholds), but a genuine broker drop
+  produced NO connection.* output at all, the halt clock never started so NFR4/NFR20 cannot fire in
+  a real session, and every new TestSubmissionWithheld case for LOST/HALTED reached those states
+  through the one call site production never makes — while `_drive_to`'s docstring asserted the
+  opposite ("a state the public API cannot reach is a state that cannot occur in production").
+  Fixed by narrating transitions in the POLLER (SessionSteadyState._observe_connection now emits
+  connection.state_changed), not the monitor: the monitor's silence there is a deliberate Epic 1
+  decision pinned by test_a_half_up_first_connection_that_drops_is_still_not_a_loss, and emitting
+  connection.lost would start a halt clock for a broker never reached. The halt-clock half stays
+  Epic 4's by Allay's call. SECOND LESSON, for the retro: MUTATION M4 WAS A STRAWMAN. make_bar set
+  ts_event == ts_init, so mutating the anchor to bar.ts_init — the plausible wrong anchor, the one
+  that excludes the delivery lag NFR1 exists to measure — left every test green; only the absurd
+  time.time_ns() variant died. With distinct timestamps the mutation was re-run and now kills 5
+  tests. A mutation is only as strong as the fixture's ability to tell the mutant from the original.
+  Other patches: order.suppressed gained strategy_id (Task 3.1 mandated four fields, three were
+  emitted, and the test had been written to the code); the two subscriptions Story 3.2 added were
+  never cancelled on stop (the existing pin hardcoded len(unsubscriptions) == 1, so it stayed green
+  by construction) — unsubscribe_bar_topic is now unsubscribe_runner_topics over a recorded list;
+  the install-before-add_strategy ordering was asserted by name only and now has an interleaved
+  timeline; a happy-path submission_withheld-is-False pin and a real-ConnectionMonitor test were
+  added; the UUID-flag non-vacuity probe re-implemented the AST walk instead of calling the scanner;
+  the FORBIDDEN_ORDER_METHODS copy had no drift guard (a test file CAN import from tests/, so it is
+  now pinned equal by import — CLAUDE.md corrected); latency gained a plausibility band so an
+  epoch-zero anchor no longer logs ~55 years as the NFR1 measurement. FOUR COUNTS IN THE STORY
+  RECORD WERE WRONG and are corrected in place: 11->7 tests, 9->8 tests, 256->261 lines, 40/40->43/43
+  Epic 1 sweep. Gates: format 491 unchanged, lint clean, mypy clean 104 files, unit 2419 (was 2417),
+  component 1353/16 skipped (was 1334/16), integration --forked 281/2 skipped unchanged, e2e 1
+  unchanged, Epic 1 sweep 43/43, git diff --stat src/core/strategies/ still empty. STORY IS NOT DONE:
+  AC #7 (the live fill) has still never run — Task 8.4's standing rule holds, and the next trading
+  day with no competing IBKR login is the gate. Previously:
   2026-08-30 (STORY 3.2 IMPLEMENTED: ready-for-dev -> in-progress -> review, same session as
   creation. epic-3 stays in-progress: 3.1 done, 3.2 review, 3.3-3.7 backlog. Tasks 1-7 and 9 of 9
   complete; Task 8 (AC #7, the live fill) is the one deliberately unrun item — checked, not
@@ -46,7 +89,8 @@ last_updated: >-
   story's own Task 8.4 and the Epic 2 retro's standing rule, this gates the story into review
   without blocking on it; the story explicitly may NOT move to done until AC #7 records a real
   OrderSubmitted -> OrderAccepted -> OrderFilled -> PositionOpened sequence inside RTH. NEW
-  src/core/live_order_path.py (256 lines): install_order_path(strategy, monitor, log) wraps the
+  src/core/live_order_path.py (261 lines at implementation — "256" was wrong, corrected by the
+  2026-08-30 review; 361 after that review's patches): install_order_path(strategy, monitor, log) wraps the
   four order-creating strategy methods (submit_order, submit_order_list, close_position,
   close_all_positions -- cancels deliberately excluded) at the instance level, installed by the
   runner between materialise_strategy and add_strategy; OrderEventObserver logs order.submitted
@@ -1892,7 +1936,7 @@ development_status:
   # carry about it are untested assumptions, not observations.
   epic-3: in-progress
   3-1-stop-trading-without-manufacturing-an-exit: done
-  3-2-submit-a-strategys-orders-to-the-broker: review
+  3-2-submit-a-strategys-orders-to-the-broker: in-progress
   3-3-track-every-order-through-its-full-lifecycle: backlog
   3-4-never-resubmit-an-order-that-is-already-working: backlog
   3-5-aggregate-partial-fills-into-one-position: backlog

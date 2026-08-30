@@ -46,10 +46,19 @@ AAPL_1MIN = "AAPL.NASDAQ-1-MINUTE-LAST-EXTERNAL"
 BAR_TYPE = BarType.from_str(AAPL_1MIN)
 
 #: Duplicated from `tests/unit/core/test_live_stop_path_is_inert.py:53-62`.
-#: Production code cannot import from `tests/`, so the relationship is
-#: asserted here instead of shared by reference. Kept as its own literal
-#: (not the story's other module-level constant) so a change to either list
-#: is a deliberate, visible edit in both files.
+#: Kept as its own literal so a change to either list is a deliberate, visible
+#: edit in both files.
+#:
+#: ⚠️ Review fix, 2026-08-30. The original comment justified the copy with
+#: "production code cannot import from `tests/`" — true, but a non-sequitur
+#: here: this is a *test* file, `tests/__init__.py` exists, and this very
+#: module already does `from tests.component.doubles import TestLiveNode`.
+#: With nothing tying the copy to its source, a *shrinking* of the real set —
+#: exactly the failure mode CLAUDE.md's "Membership-pinned lists" entry was
+#: written for — would leave the removed name here and the subset assertion
+#: below passing against a stale relationship. So the copy stays (it is the
+#: visible-edit tripwire) but is now pinned equal to its source; see
+#: `TestOrderCreatingMethodsIsPinned.test_the_local_copy_has_not_drifted`.
 _STOP_PATH_FORBIDDEN_ORDER_METHODS = frozenset(
     {
         "close_all_positions",
@@ -91,7 +100,16 @@ def make_bar(index: int, close: str) -> Bar:
         close=price,
         volume=Quantity.from_int(1_000),
         ts_event=index * 60_000_000_000,
-        ts_init=index * 60_000_000_000,
+        # Deliberately NOT equal to `ts_event` (review fix, 2026-08-30).
+        # These were identical, which made the two plausible anchors
+        # indistinguishable: mutating `note_bar` from `bar.ts_event` to
+        # `bar.ts_init` — the realistic wrong anchor, and the one that
+        # *excludes* the delivery lag NFR1 exists to measure — left every
+        # test green. Task 9.1's M4 only ever caught `time.time_ns()`, which
+        # is off by ~1.8e12 and would have been caught by anything. A real
+        # bar's `ts_init` is its arrival instant, strictly after the venue
+        # close it reports.
+        ts_init=index * 60_000_000_000 + 7_000_000_000,
     )
 
 
@@ -146,6 +164,75 @@ class TestSuppressionWhenWithheld:
         assert suppressed[0]["instrument_id"] == "AAPL.NASDAQ"
         # submit_order's own order object exists at call time -- logged.
         assert "client_order_id" in suppressed[0]
+        strategy.stop()
+
+    def test_suppression_names_the_strategy_that_was_withheld(self):
+        """Task 3.1's fourth mandated field (review 2026-08-30).
+
+        Task 3.1 names `session_id`, `strategy_id`, `instrument_id` and
+        `client_order_id`; only three were emitted, and the original
+        assertion block was written to match. `SessionSpec` permits two
+        strategies on one instrument, so without this an operator reading
+        `order.suppressed` cannot tell which one was withheld.
+
+        Read from the strategy at **call** time, never captured at install
+        time: `Trader.add_strategy` rewrites `strategy.id` when it
+        auto-assigns an `order_id_tag` (`trading/trader.py:406-412`), and
+        `install_order_path` runs *before* that rewrite.
+        """
+        strategy = _new_strategy()
+        install_order_path(strategy, _StubMonitor(withheld=True), structlog.get_logger("test"))
+        strategy.start()
+
+        with capture_logs() as logs:
+            for index, close in enumerate(CLOSES):
+                strategy.on_bar(make_bar(index, close))
+
+        suppressed = [entry for entry in logs if entry["event"] == "order.suppressed"]
+        assert len(suppressed) == 1
+        assert suppressed[0]["strategy_id"] == str(strategy.id)
+        strategy.stop()
+
+    def test_the_strategy_id_is_read_after_nautilus_rewrites_it(self):
+        """The install-time-capture trap, pinned directly.
+
+        Capturing `str(strategy.id)` inside `install_order_path` would log
+        the pre-registration id forever. Simulating the rewrite Nautilus
+        performs in `add_strategy` proves the value is read per call.
+        """
+        strategy = _new_strategy()
+        install_order_path(strategy, _StubMonitor(withheld=True), structlog.get_logger("test"))
+        strategy.change_id(StrategyId("SMACrossover-007"))
+        strategy.start()
+
+        with capture_logs() as logs:
+            for index, close in enumerate(CLOSES):
+                strategy.on_bar(make_bar(index, close))
+
+        suppressed = [entry for entry in logs if entry["event"] == "order.suppressed"]
+        assert suppressed[0]["strategy_id"] == "SMACrossover-007"
+        strategy.stop()
+
+    def test_installing_twice_does_not_nest_the_wrappers(self):
+        """Review 2026-08-30: `getattr` returns the already-wrapped function
+        on a second call, so a re-install would consult the predicate twice
+        and emit two records for one call. The runner installs once per
+        strategy today, but the function is public and framework-free.
+        """
+        strategy = _new_strategy()
+        log = structlog.get_logger("test")
+        install_order_path(strategy, _StubMonitor(withheld=True), log)
+        first = strategy.submit_order
+        install_order_path(strategy, _StubMonitor(withheld=True), log)
+
+        assert strategy.submit_order is first, "re-install must be a no-op, not another layer"
+
+        strategy.start()
+        with capture_logs() as logs:
+            for index, close in enumerate(CLOSES):
+                strategy.on_bar(make_bar(index, close))
+
+        assert len([e for e in logs if e["event"] == "order.suppressed"]) == 1
         strategy.stop()
 
     def test_a_signal_reaches_the_exec_layer_unchanged_when_healthy(self):
@@ -230,6 +317,27 @@ class TestOrderCreatingMethodsMembership:
 
     def test_is_a_subset_of_the_stop_paths_forbidden_set(self):
         assert ORDER_CREATING_METHODS <= _STOP_PATH_FORBIDDEN_ORDER_METHODS
+
+    def test_the_local_copy_has_not_drifted_from_the_stop_paths_own_list(self):
+        """Review fix, 2026-08-30 — the subset assertion above was checked
+        against a hand-copied literal that nothing tied to its source, so if
+        the real `FORBIDDEN_ORDER_METHODS` ever *shrank*, the copy would keep
+        the removed name and the subset relationship would keep passing while
+        meaning nothing.
+
+        A test file may import from another test file (`tests/__init__.py`
+        exists, and this module already imports `tests.component.doubles`), so
+        the relationship is now checked by reference rather than asserted
+        about a copy. The copy stays as the deliberate-visible-edit tripwire
+        CLAUDE.md's "Membership-pinned lists" entry asks for; this test is
+        what makes the tripwire honest.
+        """
+        from tests.unit.core.test_live_stop_path_is_inert import FORBIDDEN_ORDER_METHODS
+
+        assert _STOP_PATH_FORBIDDEN_ORDER_METHODS == FORBIDDEN_ORDER_METHODS, (
+            "the local copy and tests/unit/core/test_live_stop_path_is_inert.py's "
+            "FORBIDDEN_ORDER_METHODS have diverged — update both, deliberately"
+        )
 
     def test_cancels_are_deliberately_excluded(self):
         """Cancelling while disconnected creates no exposure and cannot
@@ -354,6 +462,133 @@ class TestOrderEventObserver:
         failed = [entry for entry in logs if entry["event"] == "order.observer_failed"]
         assert len(failed) == 1
         assert failed[0]["stage"] == "handle_order_event"
+
+
+class TestTheLatencyAnchorIsUnambiguous:
+    """Review 2026-08-30 — NFR1's anchor was keyed on the instrument alone
+    while the observer subscribes to the wildcard ``data.bars.*``, so a second
+    aggregation on the same instrument silently overwrote it.
+
+    Two halves, both pinned here: the observer only anchors on the
+    aggregations the strategies actually trade, and every emitted latency
+    names the bar type it was measured from.
+    """
+
+    INSTRUMENT_ID = InstrumentId.from_str("AAPL.NASDAQ")
+    STRATEGY_ID = StrategyId("SMACrossover-000")
+    CLIENT_ORDER_ID = ClientOrderId("O-20260830-193805-621bb88c-000-1")
+    HOURLY = BarType.from_str("AAPL.NASDAQ-1-HOUR-LAST-EXTERNAL")
+
+    def _submitted(self, ts_init: int):
+        return _order_submitted(
+            instrument_id=self.INSTRUMENT_ID,
+            client_order_id=self.CLIENT_ORDER_ID,
+            strategy_id=self.STRATEGY_ID,
+            ts_event=ts_init,
+            ts_init=ts_init,
+        )
+
+    def test_an_untraded_aggregation_never_becomes_the_anchor(self):
+        """The defect itself: a 1-HOUR bar arriving after the traded 1-MINUTE
+        bar used to overwrite the anchor, so the latency was measured from a
+        close the signal never saw.
+        """
+        observer = OrderEventObserver(
+            structlog.get_logger("test"), traded_bar_types=(str(BAR_TYPE),)
+        )
+        traded = make_bar(100, "100.00")  # far enough in that the hourly anchor stays positive
+        observer.note_bar(traded)
+        observer.note_bar(
+            Bar(
+                bar_type=self.HOURLY,
+                open=Price.from_str("100.00"),
+                high=Price.from_str("100.00"),
+                low=Price.from_str("100.00"),
+                close=Price.from_str("100.00"),
+                volume=Quantity.from_int(1_000),
+                ts_event=traded.ts_event - 3_600_000_000_000,
+                ts_init=traded.ts_event,
+            )
+        )
+
+        with capture_logs() as logs:
+            observer.handle_order_event(self._submitted(traded.ts_event + 500_000_000))
+
+        submitted = [entry for entry in logs if entry["event"] == SUBMITTED_EVENT][0]
+        assert submitted["bar_close_to_submit_ms"] == pytest.approx(500.0)
+        assert submitted["latency_anchor_bar_type"] == str(BAR_TYPE)
+
+    def test_the_emitted_latency_names_the_bar_type_it_was_measured_from(self):
+        observer = OrderEventObserver(structlog.get_logger("test"))
+        bar = make_bar(3, "100.00")
+        observer.note_bar(bar)
+
+        with capture_logs() as logs:
+            observer.handle_order_event(self._submitted(bar.ts_event + 250_000_000))
+
+        submitted = [entry for entry in logs if entry["event"] == SUBMITTED_EVENT][0]
+        assert submitted["latency_anchor_bar_type"] == str(BAR_TYPE)
+
+    def test_with_no_traded_set_every_bar_still_anchors(self):
+        """Back-compatible default: `traded_bar_types=None` keeps the
+        original behaviour, so a caller that does not know its aggregations
+        is not silently left with no latency at all.
+        """
+        observer = OrderEventObserver(structlog.get_logger("test"))
+        observer.note_bar(make_bar(1, "100.00"))
+
+        with capture_logs() as logs:
+            observer.handle_order_event(self._submitted(make_bar(1, "100.00").ts_event + 1_000_000))
+
+        submitted = [entry for entry in logs if entry["event"] == SUBMITTED_EVENT][0]
+        assert submitted["bar_close_to_submit_ms"] == pytest.approx(1.0)
+
+    @pytest.mark.parametrize(
+        ("label", "offset_ns"),
+        [
+            ("negative — bar close after the submission", -1_000_000_000),
+            ("absurd — an epoch-zero or backfill anchor", 7_200_000_000_000),
+        ],
+    )
+    def test_an_implausible_interval_is_not_emitted_as_the_nfr1_measurement(self, label, offset_ns):
+        """It is still recorded — under a different key, so a transcript
+        reader cannot mistake it for the measurement NFR1 is judged on.
+        """
+        observer = OrderEventObserver(structlog.get_logger("test"))
+        bar = make_bar(100, "100.00")
+        observer.note_bar(bar)
+
+        with capture_logs() as logs:
+            observer.handle_order_event(self._submitted(bar.ts_event + offset_ns))
+
+        submitted = [entry for entry in logs if entry["event"] == SUBMITTED_EVENT][0]
+        assert "bar_close_to_submit_ms" not in submitted, label
+        assert submitted["implausible_latency_ms"] == pytest.approx(offset_ns / 1_000_000)
+        assert submitted["latency_anchor_bar_type"] == str(BAR_TYPE)
+
+    def test_a_zero_ts_event_bar_does_not_produce_a_fifty_five_year_latency(self):
+        """The concrete shape: a bar carrying an unset `ts_event` of 0 used to
+        yield `ts_init / 1e6` — roughly 55 years — logged as the measurement.
+        """
+        observer = OrderEventObserver(structlog.get_logger("test"))
+        observer.note_bar(
+            Bar(
+                bar_type=BAR_TYPE,
+                open=Price.from_str("100.00"),
+                high=Price.from_str("100.00"),
+                low=Price.from_str("100.00"),
+                close=Price.from_str("100.00"),
+                volume=Quantity.from_int(1_000),
+                ts_event=0,
+                ts_init=0,
+            )
+        )
+
+        with capture_logs() as logs:
+            observer.handle_order_event(self._submitted(1_756_000_000_000_000_000))
+
+        submitted = [entry for entry in logs if entry["event"] == SUBMITTED_EVENT][0]
+        assert "bar_close_to_submit_ms" not in submitted
 
 
 def _make_order():

@@ -394,6 +394,66 @@ class TestTheConnectionMonitorIsFed:
 
         assert monitor.trading_permitted is False
 
+    async def test_a_connection_state_change_is_logged_once_per_transition(self):
+        """Review fix, 2026-08-30 — a real disconnect used to be silent.
+
+        ``ConnectionMonitor`` logs ``connection.lost`` only from the branch
+        that requires ``_has_ever_connected``, which is set solely by
+        ``_grant_permission`` — reached solely by ``confirm_state_reestablished``,
+        which the test above pins as having **zero** production callers until
+        Epic 4. So in a real session every disconnect takes the
+        ``RECOVERING -> AWAITING_CONNECTION`` branch
+        (``live_connection_monitor.py:331-337``), which returns silently.
+
+        The monitor's silence there is deliberate and stays (a half-up socket
+        during startup genuinely lost nothing, and
+        ``test_a_half_up_first_connection_that_drops_is_still_not_a_loss``
+        pins that). The *poller* is the right place to narrate: it is the only
+        component that sees both the previous state and the next one.
+        """
+        clock, record, log = FakeClock(), SpyRecord(), CapturingLog()
+        readings = iter(
+            [
+                ConnectionStatus(True, "ib socket connected, client ready"),
+                ConnectionStatus(True, "ib socket connected, client ready"),
+                ConnectionStatus(False, "ib socket not connected"),
+                ConnectionStatus(False, "ib socket not connected"),
+            ]
+        )
+        monitor = ConnectionMonitor(session_id="a-session")
+        state = _steady_state(
+            clock, record, log, monitor=monitor, connection_reader=lambda s: next(readings)
+        )
+
+        await _run_ticks(state, 4)
+
+        changes = log.events("connection.state_changed")
+        assert [(c["previous"], c["current"]) for c in changes] == [
+            ("awaiting_connection", "recovering"),
+            ("recovering", "awaiting_connection"),
+        ], "one record per transition — not per tick, and never for a steady state"
+
+    async def test_a_steady_healthy_connection_logs_no_state_change(self):
+        """Non-vacuity for the 'once per transition' half: four identical
+        healthy readings after the first must stay quiet, or the record is
+        noise an operator learns to ignore.
+        """
+        clock, record, log = FakeClock(), SpyRecord(), CapturingLog()
+        monitor = ConnectionMonitor(session_id="a-session")
+        state = _steady_state(
+            clock,
+            record,
+            log,
+            monitor=monitor,
+            connection_reader=lambda s: ConnectionStatus(True, "ib socket connected, client ready"),
+        )
+
+        await _run_ticks(state, 5)
+
+        changes = log.events("connection.state_changed")
+        assert len(changes) == 1
+        assert changes[0]["current"] == "recovering"
+
     def test_confirm_state_reestablished_is_never_called_in_this_story(self):
         """*Judgment call #6*: ``reconcile`` is a no-op placeholder, so there is
         no genuine reconciliation for it to follow. ``deferred-work.md:542-548``
