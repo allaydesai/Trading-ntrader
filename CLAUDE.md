@@ -70,7 +70,12 @@ make web                                # Web UI (http://127.0.0.1:8000)
   (`tests/unit/core/test_live_stop_path_is_inert.py`), `TestImportPurity.MODULES`
   (`tests/component/core/test_session_runner_phases.py`). Story 2.6's file-size split made
   `live_start.py` silently escape two of them, and nothing asserts the lists are complete, so an
-  omission is invisible. `LIVE_MODULE_GLOBS` and `STRATEGY_MODULES` are globbed and need no action
+  omission is invisible. `LIVE_MODULE_GLOBS` and `STRATEGY_MODULES` are globbed and need no action.
+  A fifth list, `_STDLIB_AND_FIRST_PARTY` (`tests/integration/core/test_epic1_ac_node.py`), is
+  triggered by a **new import** rather than by a split — adding any stdlib import to a live-path
+  module fails that scan until the name is added by hand (added to this list 2026-08-30 by code
+  review, after Story 3.3's `from decimal import Decimal` tripped it and the story's "zero
+  guard-list edits" claim turned out to be false)
 - **Membership-pinned lists** (added 2026-08-29): `FORBIDDEN_ORDER_METHODS` and `LIFECYCLE_HOOKS`
   (`tests/unit/core/test_live_stop_path_is_inert.py`) are asserted as exact sets, because every
   other consumer only *intersects* with them — dropping a name weakened a scan or deleted a
@@ -85,10 +90,19 @@ make web                                # Web UI (http://127.0.0.1:8000)
   a test file can — `tests/__init__.py` exists — so the copy is now asserted equal to the real
   constant by import. Keep the copy (it forces a deliberate, visible edit in both files) **and** the
   equality pin. `EMITTED_ORDER_EVENTS` (`src/core/live_order_path.py`, added 2026-08-30) joins the
-  discipline too: every event name `OrderEventObserver` can emit, pinned as an exact set in
+  discipline too: every **order-lifecycle** record name `OrderEventObserver` emits (diagnostic and
+  boundary records — `order.observer_failed`, `order.suppressed`, `order.suppression_failed` — are
+  deliberately outside it), pinned as an exact set in
   `tests/component/core/test_live_order_path.py`, with the NFR26 anti-field scan parametrized from
-  it — a dropped or silently-added name would otherwise exempt that event type from the scan without
-  anything going red
+  it — a dropped name would otherwise exempt that event type from the scan without anything going
+  red. **An exact-set pin against hand-written constants is one-directional** (corrected 2026-08-30
+  by code review, which found the original claim here false): comparing the tuple to a literal set
+  built from the *same* constants catches a name *dropped from the tuple*, but never a record name
+  *never added* to it, so a new emitter silently escapes the scan — the exact failure the pin was
+  written to prevent. When a constant enumerates what some code *emits* or *dispatches*, pin it
+  against **the code**, not against a second hand-written list:
+  `TestEveryDispatchedRecordNameIsPinned` derives the emitted set by driving every entry in the
+  observer's own `_dispatch` map and comparing the captured record names, so both directions go red
 
 ## Editing with Auto-Linter
 

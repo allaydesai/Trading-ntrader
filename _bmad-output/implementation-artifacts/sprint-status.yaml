@@ -36,6 +36,48 @@
 
 generated: 2026-08-03
 last_updated: >-
+  2026-08-30 (STORY 3.3 CODE-REVIEWED -> in-progress, NOT done. review -> in-progress. epic-3 stays
+  in-progress: 3.1 done, 3.2 in-progress, 3.3 in-progress, 3.4-3.7 backlog. Three adversarial layers
+  (Blind Hunter diff-only / Edge Case Hunter with wheel access / Acceptance Auditor with spec) ->
+  22 findings after dedup, 6 dismissed. 4 decisions resolved by the user, 13 of 15 patches applied.
+  THE CENTRAL FINDING IS A FRAMEWORK FACT, VERIFIED IN THE WHEEL, NOT INFERRED:
+  `ExecutionEngine._apply_event_to_order` catches the duplicate-`trade_id` `KeyError` under the
+  comment "Protection against duplicate fills" AND the FSM's `InvalidStateTrigger`, logs, and
+  returns (`execution/engine.pyx:1357-1369`) -- but the `_msgbus.publish_c` on
+  `events.order.{strategy_id}` at `:1174-1177` sits OUTSIDE that guard and runs anyway. So Nautilus
+  publishes fills it has itself refused to apply, its own duplicate-fill protection is invisible
+  downstream, and any consumer summing `last_qty` off the event stream diverges from the order's
+  real `filled_qty`. Three separate findings (duplicate fills, `OrderUpdated` staleness,
+  cancel-then-fill) all corrupted `cum_qty`/`order_qty`, and a fourth explained why none were
+  caught: four of five prune statements had NO test that could fail on their removal. Fix: the
+  accumulator is now NEVER pruned -- forced by the de-dup decision, since `trade_ids` memory only
+  works if the entry survives, and the old completion prune destroyed it in the commonest case (a
+  single-fill order redelivered once). PROCESS FINDINGS WORTH CARRYING: (1) a fixture defect no
+  review layer found, surfaced only because the new de-dup turned the tests red --
+  `TestEventStubs.order_filled` derives `trade_id` from `client_order_id`, so all three partial-fill
+  tests (discharging AC #1's central representation decision) were building an event stream no venue
+  can produce, two executions sharing one execution id; mutation M7 was being killed by an
+  impossible fixture. (2) AN EXACT-SET PIN AGAINST HAND-WRITTEN CONSTANTS IS ONE-DIRECTIONAL --
+  `EMITTED_ORDER_EVENTS` was compared to a literal set built from the SAME constants, so it caught a
+  dropped name but never a record name never added, the exact failure it was written to prevent; and
+  its docstring ("every event name the observer can emit") was false on the day it shipped, since
+  `order.observer_failed` is emitted twice and is not in it. The false guarantee had already been
+  carried into CLAUDE.md; both are corrected, and the pin now derives from the `_dispatch` map.
+  (3) THE REVIEWER RAISED AND WITHDREW A FINDING: "Epic 1 sweep 40/40 is wrong, it collects 43" --
+  running the sweep shows it emits BOTH `40/40 acceptance criteria` and `43 passed`. Two different
+  units; the dev's figure was right and the story's own `43/43` baseline is the one mixing them.
+  A test count was confirmed and a defect inferred without checking what the counter measured.
+  (4) An AC-vs-NFR CONFLICT is escalated rather than settled in a story: NFR26 is value-level ("any
+  account identifier IN IT is masked", epics.md:549) and AC #3 mandates a verbatim `venue_reason`,
+  which IBKR text can embed an account code into. Kept verbatim; needs an epic-level ruling.
+  TWO PATCHES DELIBERATELY NOT APPLIED: Task 7.2's clause matrix (the artifact whose absence let two
+  of this review's findings through -- must be authored, not batch-generated) and the missing RED
+  evidence (cannot be produced retroactively). Gates after patching: format/lint/typecheck clean,
+  unit 2419 unchanged, component 1378 -> 1409/16 skipped (+31), integration --forked 281/2 unchanged,
+  Epic 1 sweep 43 tests / 40 ACs. `live_order_path.py` 556 -> 694 raw lines, 151 -> 162 executable
+  statements, observer class 83 -> 88 (100-statement cap margin narrowed 17 -> 12); disclosed per D4,
+  not split. STORY STILL NOT DONE: live verification (Task 6) never ran -- unchanged by this review,
+  and still the same RTH window 3.2's open AC #7 waits on. Previously:
   2026-08-30 (STORY 3.3 IMPLEMENTED: ready-for-dev -> in-progress -> review, same session as
   creation. epic-3 stays in-progress: 3.1 done, 3.2 in-progress (AC #7's live fill still the gate),
   3.3 review, 3.4-3.7 backlog. All 7 tasks / 34 subtasks complete, all 5 ACs satisfied on the
@@ -2024,7 +2066,7 @@ development_status:
   epic-3: in-progress
   3-1-stop-trading-without-manufacturing-an-exit: done
   3-2-submit-a-strategys-orders-to-the-broker: in-progress
-  3-3-track-every-order-through-its-full-lifecycle: review
+  3-3-track-every-order-through-its-full-lifecycle: in-progress
   3-4-never-resubmit-an-order-that-is-already-working: backlog
   3-5-aggregate-partial-fills-into-one-position: backlog
   3-6-persist-each-trade-the-moment-it-closes: backlog

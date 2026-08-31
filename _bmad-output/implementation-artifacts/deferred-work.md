@@ -2203,3 +2203,34 @@ adopted: **give each item a named owning story, not a priority label.** Items re
   otherwise fall between them: either a later story takes it, or the constraint "a live strategy must
   re-derive position state from the portfolio, never cache it" becomes an explicit, tested rule for
   strategy authors.
+
+## Deferred from: code review of story-3.3 (2026-08-30)
+
+- **`OrderTriggered` reaches the observer unhandled, and reconciliation generates it.** Story 3.3's
+  dispatch is a deliberately closed set, justified in the test docstring as "no modify or
+  cancel-request path exists in this repo to make the others meaningful". That justification holds
+  for `OrderModifyRejected` and `OrderCancelRejected` — no `cancel_order`/`cancel_all_orders` call
+  site exists anywhere in `src/core/*.py` or `src/cli/commands/live*.py`, so neither is
+  self-inflicted. It does **not** cover `OrderTriggered`, which is neither a modify nor a cancel:
+  Nautilus's live reconciliation emits it for any venue-reported stop, trailing-stop, or triggered
+  order — including one this system never placed — at `live/execution_engine.py:1196-1218`, built
+  by `_generate_order_triggered` (`:1796-1810`) and published on the same
+  `events.order.{strategy_id}` topic the observer subscribes to. Consequence: a stop resting on the
+  paper account transitions from working to triggered with **zero record in the transcript**, and
+  the next thing an operator sees is a fill. Not actioned now because no built-in strategy creates
+  a stop order, so reachability requires an *external* resting order on the same paper account —
+  which is Epic 4's broker-authoritative-state scope. Action when Epic 4 lands reconciliation: add
+  the dispatch entry, or state in the module docstring why triggered transitions are deliberately
+  invisible.
+
+- **`order.submitted` is the only lifecycle record without `strategy_id`.** Pre-existing from Story
+  3.2; surfaced here because Story 3.3 made it visible. `_log_submitted`
+  (`src/core/live_order_path.py:411-414`) builds `client_order_id` + `instrument_id` only, while
+  every one of Story 3.3's six new builders adds `strategy_id`. Story 3.2's review restored
+  `strategy_id` to `_log_suppressed` for the two-strategies-on-one-instrument reason
+  (`SessionSpec` explicitly permits that configuration) but never to `_log_submitted`. Now that AC
+  #5 asks an operator to reconstruct an order's whole life from records alone, and that chain
+  *begins* with `order.submitted`, the first link is the only one not attributable to a strategy
+  without joining on `client_order_id`. Not actioned now because it is outside Story 3.3's diff and
+  the fix is one line best made with the ownership of whichever story next touches
+  `_log_submitted`. `OrderSubmitted.strategy_id` is on the event already.

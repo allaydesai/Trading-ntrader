@@ -103,7 +103,7 @@ Task 1.2) — so this module filters on event *type*, never merely on topic.
 
 from collections.abc import Callable
 from decimal import Decimal
-from typing import Any
+from typing import Any, TypedDict
 
 #: The order/position-*creating* strategy methods this module wraps. A
 #: subset of `tests/unit/core/test_live_stop_path_is_inert.py`'s
@@ -129,12 +129,25 @@ CANCELED_EVENT = "order.canceled"
 EXPIRED_EVENT = "order.expired"
 DENIED_EVENT = "order.denied"
 
-#: Every event name :class:`OrderEventObserver` can emit — a
+#: Every **order-lifecycle** record :class:`OrderEventObserver` emits — a
 #: membership-pinned list (CLAUDE.md Anti-Patterns, the
 #: `ORDER_CREATING_METHODS` precedent): the NFR26 anti-field scan
 #: (`tests/component/core/test_live_order_path.py`) parametrizes from this
 #: tuple and pins it as an exact set, so a dropped or added name is visible
 #: rather than silently exempted from the scan.
+#:
+#: ⚠️ Scope corrected by code review 2026-08-30. This tuple was documented as
+#: "every event name the observer can emit", which was false on the day it
+#: shipped: the observer also emits ``order.observer_failed`` (twice — see
+#: :meth:`OrderEventObserver.note_bar` and
+#: :meth:`OrderEventObserver.handle_order_event`), and the module emits
+#: ``order.suppressed`` / ``order.suppression_failed`` from the wrapper. Those
+#: are diagnostic and boundary records, not lifecycle records, and they are
+#: deliberately outside the scan. What the pin below guarantees is narrower
+#: than the original wording claimed — see
+#: `TestEveryDispatchedRecordNameIsPinned`, which derives the emitted set from
+#: the dispatch map's own handlers rather than from a hand-written list, so a
+#: *newly added* lifecycle record cannot escape the scan either.
 EMITTED_ORDER_EVENTS: tuple[str, ...] = (
     SUBMITTED_EVENT,
     ACCEPTED_EVENT,
@@ -164,6 +177,27 @@ _INSTALLED_MARKER = "_ntrader_order_path_installed"
 #: every negative. Out-of-band values are still logged, under a *different*
 #: key — see :meth:`OrderEventObserver._log_submitted`.
 MAX_PLAUSIBLE_LATENCY_NS = 3_600_000_000_000
+
+
+class _OrderAccumulator(TypedDict):
+    """Per-``client_order_id`` state behind ``order.filled``'s ``cum_qty``.
+
+    A ``TypedDict`` rather than a bare ``dict[str, Any]`` (review 2026-08-30):
+    the arithmetic here is financial, and under ``Any`` both
+    ``cum_qty + last_qty.as_decimal()`` and ``cum_qty >= order_qty`` typecheck
+    against a ``Decimal``/``Quantity``/``float`` mix-up alike.
+
+    ``trade_ids`` exists because Nautilus publishes a fill it has itself
+    refused to apply — see :meth:`OrderEventObserver._log_filled`.
+    """
+
+    cum_qty: Decimal
+    order_qty: Decimal | None
+    trade_ids: set[str]
+
+
+def _new_accumulator() -> _OrderAccumulator:
+    return {"cum_qty": Decimal(0), "order_qty": None, "trade_ids": set()}
 
 
 def install_order_path(strategy: Any, monitor: Any, log: Any) -> None:
@@ -289,11 +323,11 @@ class OrderEventObserver:
       Task 1.2), across the order's full lifecycle (Story 3.3):
       ``OrderSubmitted``, ``OrderAccepted``, ``OrderRejected``,
       ``OrderFilled``, ``OrderCanceled``, ``OrderExpired``, and
-      ``OrderDenied`` are each logged; ``OrderInitialized`` is harvested
-      silently (its ``quantity`` feeds the fill-completion accumulator
-      below) and every other type is ignored — a closed set, not a
-      default-log. A rejection is logged AND never raises (AC #3's
-      rejection-tolerance guard).
+      ``OrderDenied`` are each logged; ``OrderInitialized`` and
+      ``OrderUpdated`` are harvested silently (their ``quantity`` feeds the
+      fill-completion accumulator below) and every other type is ignored — a
+      closed set, not a default-log. A rejection is logged AND never raises
+      (AC #3's rejection-tolerance guard).
 
     Both handlers contain every exception internally and never raise: a raise
     from a msgbus handler re-enters ``MessageBus.publish_c``, which has no
@@ -307,17 +341,41 @@ class OrderEventObserver:
     ``OrderInitialized.quantity`` is harvested (never logged) so a completed
     order's ``order.filled`` record can show ``cum_qty == order_qty`` —
     without it no event carries the order's total and a finished order is
-    indistinguishable from one still working. Pruned on
-    rejected/denied (always) and on completion (``cum_qty >= order_qty``,
-    when known); canceled/expired prune ONLY an entry with no accumulated
-    fills, because a fill can cross the cancel/expiry ack — pruning
-    unconditionally would later log a ``cum_qty`` counting a late fill alone,
-    a false statement in the NFR21 record. Two disclosed residuals: (a) a
-    canceled/expired entry retained for a late fill that never comes, and any
-    unknown-``order_qty`` fill entry, lives until session end — bounded by
-    orders-touched-per-run, joining the ``_last_bar`` unpruned-dict deferral;
-    (b) ``cum_qty`` resets across a process restart — Story 3.4/Epic 4's
-    working-order resume is when that matters, disclosed not solved here.
+    indistinguishable from one still working. ``OrderUpdated.quantity`` is
+    harvested the same silent way, because an amended order's total changes
+    and a stale ``order_qty`` makes a complete order read as still working.
+
+    **Entries are never pruned** (policy change, code review 2026-08-30).
+    They previously pruned on rejected/denied, on completion, and on
+    canceled/expired-with-no-fills. Every one of those prunes destroyed state
+    a later event still needed:
+
+    - *Completion prune vs. de-duplication.* Nautilus publishes a fill it has
+      itself **refused to apply** — ``ExecutionEngine._apply_event_to_order``
+      catches the duplicate-``trade_id`` ``KeyError`` (and the FSM's
+      ``InvalidStateTrigger``), logs, and returns, but the
+      ``_msgbus.publish_c`` on ``events.order.{strategy_id}`` sits outside
+      that guard and runs anyway (``execution/engine.pyx:1357-1369`` then
+      ``:1174-1177``; the raise site is ``model/orders/base.pyx:1073``). So
+      the framework's own duplicate-fill protection is invisible downstream
+      and this observer must keep its own ``trade_ids``. Pruning a *completed*
+      order threw that memory away — and a single-fill order redelivered once
+      is the commonest shape of the problem, so the prune defeated the
+      de-duplication in exactly the case it mattered most.
+    - *Canceled/expired prune vs. the late fill.* The old rule retained an
+      entry only when fills had already accumulated, to protect a ``cum_qty``
+      counting a late fill alone. But an entry holds ``order_qty`` too, and a
+      cancel usually arrives with **zero** prior fills — so the common form of
+      the very race the rule was written for (a working order filling before
+      the cancel reaches the venue) deleted the harvested ``order_qty``, and
+      the late fill then re-seeded with no total to compare against.
+
+    The cost is one small entry per ``client_order_id`` touched, living until
+    session end — the same unpruned-dict shape as ``_last_bar``, and what
+    residual (a) already disclosed for a subset. Still disclosed, still
+    unsolved here: ``cum_qty`` and ``trade_ids`` reset across a process
+    restart, so a redelivery spanning a restart is not detectable — Story
+    3.4/Epic 4's working-order resume is when that matters.
 
     Args:
         log: A structlog logger already bound to ``session_id``. Contextvars
@@ -351,11 +409,12 @@ class OrderEventObserver:
         )
         #: instrument_id -> (venue close instant, the bar type it came from)
         self._last_bar: dict[str, tuple[int, str]] = {}
-        #: client_order_id -> {"cum_qty": Decimal, "order_qty": Decimal | None}
-        self._orders: dict[str, dict[str, Any]] = {}
+        #: client_order_id -> accumulator; never pruned, see the class docstring
+        self._orders: dict[str, _OrderAccumulator] = {}
         #: Class-name dispatch — a closed set, not a default-log (Task 2.6).
         self._dispatch: dict[str, Callable[[Any], None]] = {
             "OrderInitialized": self._harvest_initialized,
+            "OrderUpdated": self._harvest_updated,
             "OrderSubmitted": self._log_submitted,
             "OrderAccepted": self._log_accepted,
             "OrderRejected": self._log_rejected,
@@ -381,7 +440,18 @@ class OrderEventObserver:
             )
 
     def handle_order_event(self, event: Any) -> None:
-        """Handle one ``events.order*`` delivery."""
+        """Handle one ``events.order*`` delivery.
+
+        The failure record names the event type and the order (review
+        2026-08-30). The dispatch went from one handler to nine behind this
+        single ``except``, and ``stage`` + ``error_type`` alone cannot tell an
+        operator *which* event type is broken: if an adapter's ``OrderFilled``
+        lacks a field a builder reads, every fill in the session raises, no
+        ``order.filled`` record is ever written, and the transcript is an
+        undifferentiated stream of ``error_type=AttributeError``. Both fields
+        are read through ``getattr`` so the diagnostic cannot itself raise on
+        the malformed event that brought it here.
+        """
         try:
             handler = self._dispatch.get(type(event).__name__)
             if handler is not None:
@@ -390,6 +460,8 @@ class OrderEventObserver:
             self._log.error(
                 "order.observer_failed",
                 stage="handle_order_event",
+                event_type=type(event).__name__,
+                client_order_id=str(getattr(event, "client_order_id", None)),
                 error_type=type(exc).__name__,
                 exc_info=True,
             )
@@ -411,6 +483,7 @@ class OrderEventObserver:
         fields: dict[str, Any] = {
             "client_order_id": str(event.client_order_id),
             "instrument_id": str(event.instrument_id),
+            "ts_event": event.ts_event,
         }
         anchor = self._last_bar.get(str(event.instrument_id))
         if anchor is not None:
@@ -432,9 +505,30 @@ class OrderEventObserver:
         fill-completion accumulator only; a reconciliation-sourced order
         never publishes this event, so its entry simply lacks ``order_qty``.
         """
-        entry = self._orders.setdefault(
-            str(event.client_order_id), {"cum_qty": Decimal(0), "order_qty": None}
-        )
+        entry = self._orders.setdefault(str(event.client_order_id), _new_accumulator())
+        entry["order_qty"] = event.quantity.as_decimal()
+
+    def _harvest_updated(self, event: Any) -> None:
+        """Refresh ``order_qty`` from an amended order, and emit nothing.
+
+        Added by code review 2026-08-30. ``order_qty`` was harvested once from
+        ``OrderInitialized`` and never refreshed, but ``OrderUpdated`` carries
+        the order's *current* quantity (``model/events/order.pyx:4198-4200``)
+        and is live-published from two sources: the IBKR adapter regenerates it
+        from the ``openOrder`` callback whenever the total quantity, price, or
+        trigger differs (``adapters/interactive_brokers/execution.py:968-978``),
+        and reconciliation emits it whenever the venue's reported quantity
+        differs from the order's (``live/execution_engine.py:1812-1829``, via
+        ``_should_update`` at ``:1893-1895``). A stale total breaks completion
+        detection both ways: a downsize leaves a complete order reading as
+        still working, and an upsize trips completion early.
+
+        Silent, on the :meth:`_harvest_initialized` precedent — an amendment is
+        not one of AC #1's lifecycle states, and emitting one would add an
+        eighth name to :data:`EMITTED_ORDER_EVENTS` and need an AR41 namespace
+        ruling this story has no mandate to make.
+        """
+        entry = self._orders.setdefault(str(event.client_order_id), _new_accumulator())
         entry["order_qty"] = event.quantity.as_decimal()
 
     def _log_accepted(self, event: Any) -> None:
@@ -446,6 +540,7 @@ class OrderEventObserver:
             "client_order_id": str(event.client_order_id),
             "instrument_id": str(event.instrument_id),
             "strategy_id": str(event.strategy_id),
+            "ts_event": event.ts_event,
             "venue_order_id": str(event.venue_order_id),
         }
         if event.reconciliation:
@@ -454,21 +549,34 @@ class OrderEventObserver:
 
     def _log_rejected(self, event: Any) -> None:
         """``venue_reason`` is ``str(event.reason)`` verbatim — never
-        reworded, truncated, or classified (AC #3). Prunes unconditionally:
-        a rejected order can accumulate no fills.
+        reworded, truncated, or classified (AC #3).
+
+        ⚠️ Open conflict, raised by code review 2026-08-30 and deliberately
+        **not** settled here. NFR26 is value-level, not field-level: *"any
+        account identifier in it is masked to its last 3 characters"*, where
+        "it" is a rendered message (``epics.md:549``, ``:650``). IBKR rejection
+        text can embed the account code, so a verbatim ``venue_reason`` is a
+        channel NFR26's wording covers and this module's anti-field scan — which
+        checks *key names* — cannot see. AC #3's "never reworded, truncated, or
+        classified" and NFR26 cannot both hold for such a reason. Kept verbatim
+        because AC #3 is unambiguous and NFR26's own acceptance criteria are
+        scoped to gate and account-verification messages this system renders,
+        not to a venue's own text; ``mask_account``
+        (``src/core/live_gate.py:117``) is a whole-value masker and no
+        token-level scanner exists. Escalated for an epic-level ruling.
         """
         client_order_id = str(event.client_order_id)
         fields: dict[str, Any] = {
             "client_order_id": client_order_id,
             "instrument_id": str(event.instrument_id),
             "strategy_id": str(event.strategy_id),
+            "ts_event": event.ts_event,
             "venue_reason": str(event.reason),
             "due_post_only": bool(event.due_post_only),
         }
         if event.reconciliation:
             fields["reconciliation"] = True
         self._log.warning(REJECTED_EVENT, **fields)
-        self._orders.pop(client_order_id, None)
 
     def _log_filled(self, event: Any) -> None:
         """The AR41 partial-fill representation: no dedicated event exists,
@@ -476,33 +584,68 @@ class OrderEventObserver:
         emitted as a string — a raw ``Decimal`` reaches the JSON transcript
         as the literal ``"Decimal('30')"`` (the renderer's fallback),
         invisible to a component test that hands logs raw objects.
-        ``order_qty`` is included only when the ``OrderInitialized`` harvest
-        saw it; ``position_id`` only when the venue assigned one.
+        ``position_id`` is included only when the venue assigned one.
+
+        Three markers added by code review 2026-08-30, each making a record say
+        what it previously left the reader to assume:
+
+        - ``duplicate=True`` — this ``trade_id`` has already been counted, so
+          ``cum_qty`` is unchanged and the fill is **not** accumulated. Nautilus
+          publishes fills it has itself refused to apply (class docstring), and
+          a silent drop would make the redelivery unobservable; NFR21 wants the
+          evidence, not just the right total.
+        - ``order_qty_unknown=True`` — no ``OrderInitialized``/``OrderUpdated``
+          harvest was seen for this order, so ``cum_qty`` is partial knowledge.
+          Reachable in a live session, not only across a restart: the runner
+          starts the node (``live_session_runner.py:507``) and lets
+          reconciliation run before the observer subscribes (``:563``), and a
+          reconciliation-sourced order never publishes ``OrderInitialized`` at
+          all (``live/execution_engine.py:1758-1762``). Without this marker such
+          a record is byte-identical to a first fill on a fresh order.
+        - ``over_fill=True`` — ``cum_qty`` exceeded ``order_qty``. The
+          completion comparison is ``>=``, so an over-fill previously emitted a
+          record shaped exactly like an exact completion.
+
+        The accumulator is committed **after** a successful emit, not before.
+        The mutation used to happen first, so a raise anywhere in the twelve
+        field reads below left the counter advanced with no record accounting
+        for it, and the next fill logged an inflated ``cum_qty``.
         """
         client_order_id = str(event.client_order_id)
-        entry = self._orders.setdefault(client_order_id, {"cum_qty": Decimal(0), "order_qty": None})
-        entry["cum_qty"] = entry["cum_qty"] + event.last_qty.as_decimal()
+        entry = self._orders.setdefault(client_order_id, _new_accumulator())
+        trade_id = str(event.trade_id)
+        duplicate = trade_id in entry["trade_ids"]
+        order_qty = entry["order_qty"]
+        cum_qty = entry["cum_qty"] if duplicate else entry["cum_qty"] + event.last_qty.as_decimal()
         fields: dict[str, Any] = {
             "client_order_id": client_order_id,
             "instrument_id": str(event.instrument_id),
             "strategy_id": str(event.strategy_id),
+            "ts_event": event.ts_event,
             "fill_qty": str(event.last_qty),
-            "cum_qty": str(entry["cum_qty"]),
+            "cum_qty": str(cum_qty),
             "last_px": str(event.last_px),
             "commission": str(event.commission),
             "currency": str(event.currency),
-            "trade_id": str(event.trade_id),
+            "trade_id": trade_id,
             "venue_order_id": str(event.venue_order_id),
         }
-        if entry["order_qty"] is not None:
-            fields["order_qty"] = str(entry["order_qty"])
+        if order_qty is not None:
+            fields["order_qty"] = str(order_qty)
+            if cum_qty > order_qty:
+                fields["over_fill"] = True
+        else:
+            fields["order_qty_unknown"] = True
+        if duplicate:
+            fields["duplicate"] = True
         if event.position_id is not None:
             fields["position_id"] = str(event.position_id)
         if event.reconciliation:
             fields["reconciliation"] = True
         self._log.info(FILLED_EVENT, **fields)
-        if entry["order_qty"] is not None and entry["cum_qty"] >= entry["order_qty"]:
-            del self._orders[client_order_id]
+        if not duplicate:
+            entry["cum_qty"] = cum_qty
+            entry["trade_ids"].add(trade_id)
 
     def _log_canceled(self, event: Any) -> None:
         self._log_terminal(CANCELED_EVENT, event)
@@ -511,46 +654,41 @@ class OrderEventObserver:
         self._log_terminal(EXPIRED_EVENT, event)
 
     def _log_terminal(self, event_name: str, event: Any) -> None:
-        """Shared shape for ``OrderCanceled``/``OrderExpired`` — an
-        identical 10-field event, neither carrying a reason; ``venue_order_id``
-        is nullable on both — log what exists, never invent.
+        """Shared shape for ``OrderCanceled``/``OrderExpired`` — both carry the
+        same identifiers and neither carries a reason; ``venue_order_id`` is
+        nullable on both — log what exists, never invent.
+
+        No longer prunes the accumulator (review 2026-08-30). The old
+        ``_prune_if_no_fills`` retained an entry only once fills had
+        accumulated, which deleted the harvested ``order_qty`` in the *common*
+        form of the fill-crosses-the-cancel-ack race — the one with no prior
+        fill. See the class docstring.
         """
         client_order_id = str(event.client_order_id)
         fields: dict[str, Any] = {
             "client_order_id": client_order_id,
             "instrument_id": str(event.instrument_id),
             "strategy_id": str(event.strategy_id),
+            "ts_event": event.ts_event,
         }
         if event.venue_order_id is not None:
             fields["venue_order_id"] = str(event.venue_order_id)
         if event.reconciliation:
             fields["reconciliation"] = True
         self._log.info(event_name, **fields)
-        self._prune_if_no_fills(client_order_id)
-
-    def _prune_if_no_fills(self, client_order_id: str) -> None:
-        """Retain an entry that has accumulated fills — a fill can cross the
-        cancel/expiry ack (a real venue sequence); pruning unconditionally
-        would later log a ``cum_qty`` counting a late fill alone, a false
-        statement in the NFR21 record. Prune only an entry with none.
-        """
-        entry = self._orders.get(client_order_id)
-        if entry is not None and entry["cum_qty"] == 0:
-            del self._orders[client_order_id]
 
     def _log_denied(self, event: Any) -> None:
         """``reason``, deliberately not ``venue_reason``: a denial is local
-        (risk/exec engine), no venue was involved. Prunes unconditionally: a
-        denied order can accumulate no fills.
+        (risk/exec engine), no venue was involved.
         """
         client_order_id = str(event.client_order_id)
         fields: dict[str, Any] = {
             "client_order_id": client_order_id,
             "instrument_id": str(event.instrument_id),
             "strategy_id": str(event.strategy_id),
+            "ts_event": event.ts_event,
             "reason": str(event.reason),
         }
         if event.reconciliation:
             fields["reconciliation"] = True
         self._log.warning(DENIED_EVENT, **fields)
-        self._orders.pop(client_order_id, None)

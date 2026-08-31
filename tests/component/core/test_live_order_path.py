@@ -708,6 +708,9 @@ class TestOrderCanceledAndExpiredDispatch:
         assert "venue_order_id" not in records[0]
         assert records[0]["client_order_id"] == str(order.client_order_id)
         assert records[0]["strategy_id"] == str(order.strategy_id)
+        # AC #2's mandatory triple — `instrument_id` was unasserted on this
+        # path, so deleting it from `_log_terminal` left the suite green.
+        assert records[0]["instrument_id"] == str(order.instrument_id)
 
     def test_order_canceled_logs_venue_order_id_when_present(self):
         observer = OrderEventObserver(structlog.get_logger("test"))
@@ -720,6 +723,7 @@ class TestOrderCanceledAndExpiredDispatch:
             observer.handle_order_event(canceled)
 
         records = [entry for entry in logs if entry["event"] == CANCELED_EVENT]
+        assert len(records) == 1, "every sibling pins the count; a double emit slipped past here"
         assert records[0]["venue_order_id"] == "V-42"
 
     def test_order_expired_omits_venue_order_id_when_absent(self):
@@ -733,6 +737,28 @@ class TestOrderCanceledAndExpiredDispatch:
         records = [entry for entry in logs if entry["event"] == EXPIRED_EVENT]
         assert len(records) == 1
         assert "venue_order_id" not in records[0]
+        # AC #2's mandatory triple: this test asserted only a count and an
+        # absence, so `order.expired` had no guarded field at all.
+        assert records[0]["client_order_id"] == str(order.client_order_id)
+        assert records[0]["instrument_id"] == str(order.instrument_id)
+        assert records[0]["strategy_id"] == str(order.strategy_id)
+
+    def test_order_expired_logs_venue_order_id_when_present(self):
+        """The present-`venue_order_id` case was tested for cancel but not for
+        expiry. `_log_terminal` makes them share a shape today; nothing pins
+        that they keep sharing one.
+        """
+        observer = OrderEventObserver(structlog.get_logger("test"))
+        order = _make_order()
+        order.apply(TestEventStubs.order_submitted(order))
+        order.apply(TestEventStubs.order_accepted(order, venue_order_id=VenueOrderId("V-99")))
+
+        with capture_logs() as logs:
+            observer.handle_order_event(TestEventStubs.order_expired(order))
+
+        records = [entry for entry in logs if entry["event"] == EXPIRED_EVENT]
+        assert len(records) == 1
+        assert records[0]["venue_order_id"] == "V-99"
 
 
 class TestOrderFilledDispatch:
@@ -861,8 +887,12 @@ class TestPartialFillSeries:
     def test_a_partial_fill_series_produces_a_rising_cum_qty(self):
         observer = OrderEventObserver(structlog.get_logger("test"))
         order = _make_order()
-        fill_a = TestEventStubs.order_filled(order, AAPL_EQUITY, last_qty=Quantity.from_int(30))
-        fill_b = TestEventStubs.order_filled(order, AAPL_EQUITY, last_qty=Quantity.from_int(70))
+        fill_a = TestEventStubs.order_filled(
+            order, AAPL_EQUITY, last_qty=Quantity.from_int(30), trade_id=TradeId("E-1")
+        )
+        fill_b = TestEventStubs.order_filled(
+            order, AAPL_EQUITY, last_qty=Quantity.from_int(70), trade_id=TradeId("E-2")
+        )
 
         with capture_logs() as logs:
             observer.handle_order_event(fill_a)
@@ -909,9 +939,13 @@ class TestPartialFillThenCancel:
         """
         observer = OrderEventObserver(structlog.get_logger("test"))
         order = _make_order()
-        first_fill = TestEventStubs.order_filled(order, AAPL_EQUITY, last_qty=Quantity.from_int(30))
+        first_fill = TestEventStubs.order_filled(
+            order, AAPL_EQUITY, last_qty=Quantity.from_int(30), trade_id=TradeId("E-1")
+        )
         canceled = TestEventStubs.order_canceled(order)
-        late_fill = TestEventStubs.order_filled(order, AAPL_EQUITY, last_qty=Quantity.from_int(20))
+        late_fill = TestEventStubs.order_filled(
+            order, AAPL_EQUITY, last_qty=Quantity.from_int(20), trade_id=TradeId("E-2")
+        )
 
         with capture_logs() as logs:
             observer.handle_order_event(first_fill)
@@ -978,6 +1012,7 @@ class TestEventNameLiteralsArePinned:
     """
 
     def test_the_literal_spellings_are_exact(self):
+        assert SUBMITTED_EVENT == "order.submitted"
         assert ACCEPTED_EVENT == "order.accepted"
         assert REJECTED_EVENT == "order.rejected"
         assert FILLED_EVENT == "order.filled"
@@ -1010,9 +1045,20 @@ class TestEmittedOrderEventsMembership:
 class TestNoRecordEverCarriesAnAccountId:
     """NFR26: `account_id` rides on every venue-sourced order event
     (`OrderDenied`'s own property is the hardcoded exception —
-    `order.pyx:781`), and a naive field dump would leak it. This story pins
-    the stricter never-logged-at-all, parametrized from
-    `EMITTED_ORDER_EVENTS`.
+    `order.pyx:781`), and a naive field dump would leak it. This scan pins
+    that no lifecycle record carries a *key* named `account_id`,
+    parametrized from `EMITTED_ORDER_EVENTS`.
+
+    ⚠️ Scope corrected by code review 2026-08-30. This docstring claimed the
+    scan pinned "the stricter never-logged-at-all". It does not, and cannot:
+    it inspects key names, not values. NFR26's normative form is value-level —
+    *"any account identifier in it is masked to its last 3 characters"*, where
+    "it" is a rendered message (`epics.md:549`, `:650`) — and `order.rejected`
+    carries `venue_reason` verbatim per AC #3, which is a channel this scan
+    cannot see and which IBKR rejection text can embed an account code into.
+    That AC-vs-NFR conflict is recorded in `_log_rejected`'s docstring and
+    escalated for an epic-level ruling; it is deliberately not settled by
+    widening this test's claim.
     """
 
     @pytest.mark.parametrize("event_name", sorted(EMITTED_ORDER_EVENTS))
@@ -1042,10 +1088,14 @@ class TestLifecycleReconstruction:
             observer.handle_order_event(TestEventStubs.order_submitted(order))
             observer.handle_order_event(TestEventStubs.order_accepted(order))
             observer.handle_order_event(
-                TestEventStubs.order_filled(order, AAPL_EQUITY, last_qty=Quantity.from_int(30))
+                TestEventStubs.order_filled(
+                    order, AAPL_EQUITY, last_qty=Quantity.from_int(30), trade_id=TradeId("E-1")
+                )
             )
             observer.handle_order_event(
-                TestEventStubs.order_filled(order, AAPL_EQUITY, last_qty=Quantity.from_int(70))
+                TestEventStubs.order_filled(
+                    order, AAPL_EQUITY, last_qty=Quantity.from_int(70), trade_id=TradeId("E-2")
+                )
             )
 
         assert [entry["event"] for entry in logs] == [
@@ -1119,3 +1169,427 @@ class TestLifecycleReconstruction:
         filled = [entry for entry in logs if entry["event"] == FILLED_EVENT]
         assert filled[0]["reconciliation"] is True
         assert "reconciliation" not in filled[1]
+
+
+#: Every dispatch key, mapped to a builder of a representative instance.
+#: `TestEveryDispatchedRecordNameIsPinned` derives the emitted-name set from
+#: THIS map rather than from a hand-written list, which is what closes the
+#: one-directional hole the original `EMITTED_ORDER_EVENTS` pin left open —
+#: see that class's docstring.
+_DISPATCH_BUILDERS = {
+    "OrderInitialized": lambda order: order.init_event,
+    "OrderUpdated": lambda order: TestEventStubs.order_updated(order),
+    "OrderSubmitted": lambda order: TestEventStubs.order_submitted(order),
+    "OrderAccepted": lambda order: TestEventStubs.order_accepted(order),
+    "OrderRejected": lambda order: _order_rejected(order, reason="SCAN"),
+    "OrderFilled": lambda order: TestEventStubs.order_filled(order, AAPL_EQUITY),
+    "OrderCanceled": lambda order: TestEventStubs.order_canceled(order),
+    "OrderExpired": lambda order: TestEventStubs.order_expired(order),
+    "OrderDenied": lambda order: _order_denied(order, reason="SCAN"),
+}
+
+
+class TestEveryDispatchedRecordNameIsPinned:
+    """Closes the one-directional hole in the original membership pin (code
+    review 2026-08-30).
+
+    `TestEmittedOrderEventsMembership` compares `EMITTED_ORDER_EVENTS` against
+    a literal set built from the *same* imported constants, so it catches a
+    name **dropped from the tuple** but not a lifecycle record **never added**
+    to it — which is the failure Task 2.3 actually names ("a seventh emitted
+    type cannot appear without joining the scan"). Adding a handler that emits
+    `order.triggered` would leave that pin green and the NFR26 anti-field scan
+    blind to the new record.
+
+    These two derive the answer from the dispatch map itself, the only artifact
+    that enumerates emitters, so both directions now go red.
+    """
+
+    def test_the_builders_cover_every_dispatch_entry(self):
+        observer = OrderEventObserver(structlog.get_logger("test"))
+        assert set(_DISPATCH_BUILDERS) == set(observer._dispatch), (
+            "a dispatch entry was added or removed without updating "
+            "_DISPATCH_BUILDERS — update both, deliberately"
+        )
+
+    def test_the_emitted_names_are_exactly_emitted_order_events(self):
+        emitted: set[str] = set()
+        for build in _DISPATCH_BUILDERS.values():
+            observer = OrderEventObserver(structlog.get_logger("test"))
+            with capture_logs() as logs:
+                observer.handle_order_event(build(_make_order()))
+            assert [entry for entry in logs if entry["event"] == "order.observer_failed"] == []
+            emitted.update(entry["event"] for entry in logs)
+        assert emitted == set(EMITTED_ORDER_EVENTS), (
+            "the dispatch map emits a record name that is not in "
+            "EMITTED_ORDER_EVENTS, so the NFR26 anti-field scan does not cover it"
+        )
+
+
+class TestEveryLifecycleRecordCarriesTsEvent:
+    """Task 2.2: "every record also carries `strategy_id` ... and `ts_event`
+    as the venue-side nanos". structlog's own `TimeStamper`
+    (`src/utils/logging.py:54`) records host log-write time, not the venue
+    instant, so without this field the transcript cannot tell a delayed or
+    reconciliation-sourced event from a freshly delivered one.
+    """
+
+    @pytest.mark.parametrize("event_name", sorted(EMITTED_ORDER_EVENTS))
+    def test_the_record_carries_the_venue_side_ts_event(self, event_name):
+        observer = OrderEventObserver(structlog.get_logger("test"))
+        event = _EVENT_BUILDERS[event_name]()
+
+        with capture_logs() as logs:
+            observer.handle_order_event(event)
+
+        matching = [entry for entry in logs if entry["event"] == event_name]
+        assert len(matching) == 1
+        assert matching[0]["ts_event"] == event.ts_event
+
+
+class TestSeverityIsPinned:
+    """Task 3.3: "`info` for accepted/filled/canceled/expired; `warning` for
+    rejected/denied". Only the two warnings were pinned; flipping
+    `_log_accepted` to `warning` used to pass.
+    """
+
+    @pytest.mark.parametrize(
+        ("event_name", "expected"),
+        [
+            (ACCEPTED_EVENT, "info"),
+            (FILLED_EVENT, "info"),
+            (CANCELED_EVENT, "info"),
+            (EXPIRED_EVENT, "info"),
+            (SUBMITTED_EVENT, "info"),
+            (REJECTED_EVENT, "warning"),
+            (DENIED_EVENT, "warning"),
+        ],
+    )
+    def test_the_record_uses_the_specified_severity(self, event_name, expected):
+        observer = OrderEventObserver(structlog.get_logger("test"))
+
+        with capture_logs() as logs:
+            observer.handle_order_event(_EVENT_BUILDERS[event_name]())
+
+        matching = [entry for entry in logs if entry["event"] == event_name]
+        assert len(matching) == 1
+        assert matching[0]["log_level"] == expected
+
+
+class TestDuplicateFillsAreNotDoubleCounted:
+    """Nautilus publishes a fill it has itself REFUSED to apply:
+    `ExecutionEngine._apply_event_to_order` catches the duplicate-`trade_id`
+    `KeyError` (`execution/engine.pyx:1357-1369`) and returns, but the
+    `_msgbus.publish_c` at `:1174-1177` sits outside that guard. So the
+    framework's own duplicate-fill protection is invisible downstream and this
+    observer must keep its own `trade_ids`.
+
+    Fixture note: `TestEventStubs.order_filled` derives `trade_id` from the
+    `client_order_id`, so two stub fills on one order share an execution id
+    unless overridden — a shape no venue produces. The partial-fill tests above
+    now pass explicit distinct ids for that reason.
+    """
+
+    def test_a_redelivered_trade_id_does_not_advance_cum_qty(self):
+        observer = OrderEventObserver(structlog.get_logger("test"))
+        order = _make_order()
+        fill = TestEventStubs.order_filled(
+            order, AAPL_EQUITY, last_qty=Quantity.from_int(40), trade_id=TradeId("E-1")
+        )
+
+        with capture_logs() as logs:
+            observer.handle_order_event(order.init_event)
+            observer.handle_order_event(fill)
+            observer.handle_order_event(fill)
+
+        records = [entry for entry in logs if entry["event"] == FILLED_EVENT]
+        assert len(records) == 2
+        assert records[0]["cum_qty"] == "40"
+        assert records[1]["cum_qty"] == "40", "a redelivered fill must not advance the total"
+
+    def test_the_redelivered_record_is_marked_and_the_first_is_not(self):
+        observer = OrderEventObserver(structlog.get_logger("test"))
+        order = _make_order()
+        fill = TestEventStubs.order_filled(
+            order, AAPL_EQUITY, last_qty=Quantity.from_int(40), trade_id=TradeId("E-1")
+        )
+
+        with capture_logs() as logs:
+            observer.handle_order_event(fill)
+            observer.handle_order_event(fill)
+
+        records = [entry for entry in logs if entry["event"] == FILLED_EVENT]
+        assert "duplicate" not in records[0]
+        assert records[1]["duplicate"] is True, (
+            "NFR21 wants the evidence of a redelivery, not just the right total"
+        )
+
+    def test_a_duplicate_after_completion_is_still_detected(self):
+        """The reason entries are no longer pruned on completion. A single-fill
+        order redelivered once is the commonest shape of the problem, and the
+        old completion prune threw away the `trade_ids` that detect it.
+        """
+        observer = OrderEventObserver(structlog.get_logger("test"))
+        order = _make_order()
+        fill = TestEventStubs.order_filled(
+            order, AAPL_EQUITY, last_qty=order.quantity, trade_id=TradeId("E-1")
+        )
+
+        with capture_logs() as logs:
+            observer.handle_order_event(order.init_event)
+            observer.handle_order_event(fill)
+            observer.handle_order_event(fill)
+
+        records = [entry for entry in logs if entry["event"] == FILLED_EVENT]
+        assert records[0]["cum_qty"] == records[0]["order_qty"], "the order completed"
+        assert records[1]["duplicate"] is True
+        assert records[1]["cum_qty"] == records[0]["cum_qty"]
+        assert "over_fill" not in records[1], "a duplicate is not an over-fill"
+
+
+class TestOrderUpdatedRefreshesTheHarvestedQuantity:
+    """`order_qty` was harvested once from `OrderInitialized` and never
+    refreshed, but `OrderUpdated` carries the order's current quantity and is
+    live-published by the IBKR adapter's `openOrder` callback
+    (`adapters/interactive_brokers/execution.py:968-978`) and by reconciliation
+    (`live/execution_engine.py:1812-1829`).
+    """
+
+    def test_a_downsized_order_reports_completion_against_the_new_quantity(self):
+        observer = OrderEventObserver(structlog.get_logger("test"))
+        order = _make_order()
+        half = Quantity.from_int(int(order.quantity.as_decimal() / 2))
+
+        with capture_logs() as logs:
+            observer.handle_order_event(order.init_event)
+            observer.handle_order_event(TestEventStubs.order_updated(order, quantity=half))
+            observer.handle_order_event(
+                TestEventStubs.order_filled(
+                    order, AAPL_EQUITY, last_qty=half, trade_id=TradeId("E-1")
+                )
+            )
+
+        record = [entry for entry in logs if entry["event"] == FILLED_EVENT][0]
+        assert record["order_qty"] == str(half.as_decimal())
+        assert record["cum_qty"] == record["order_qty"], (
+            "a downsized order that fills its new total is complete, not half-filled"
+        )
+        assert "over_fill" not in record
+
+    def test_an_upsized_order_does_not_report_completion_early(self):
+        observer = OrderEventObserver(structlog.get_logger("test"))
+        order = _make_order()
+        doubled = Quantity.from_int(int(order.quantity.as_decimal() * 2))
+
+        with capture_logs() as logs:
+            observer.handle_order_event(order.init_event)
+            observer.handle_order_event(TestEventStubs.order_updated(order, quantity=doubled))
+            observer.handle_order_event(
+                TestEventStubs.order_filled(
+                    order, AAPL_EQUITY, last_qty=order.quantity, trade_id=TradeId("E-1")
+                )
+            )
+
+        record = [entry for entry in logs if entry["event"] == FILLED_EVENT][0]
+        assert record["order_qty"] == str(doubled.as_decimal())
+        assert record["cum_qty"] != record["order_qty"], "still working, not complete"
+
+    def test_an_order_updated_still_emits_no_record(self):
+        """The Task 2.6 silence pin stays true: the harvest is silent, so
+        `OrderUpdated` gains no AR41 name and needs no namespace ruling.
+        """
+        observer = OrderEventObserver(structlog.get_logger("test"))
+
+        with capture_logs() as logs:
+            observer.handle_order_event(TestEventStubs.order_updated(_make_order()))
+
+        assert logs == []
+
+
+class TestTheAccumulatorIsNeverPruned:
+    """Every prune the module used to do destroyed state a later event still
+    needed, and none of the four `del`/`pop` statements had a test that could
+    fail on its removal. Retention is now asserted through the records, which
+    is the only surface a component test can see.
+    """
+
+    def test_a_cancel_with_no_prior_fills_keeps_the_order_quantity(self):
+        """The common form of the fill-crosses-the-cancel-ack race: a working
+        order usually has NO prior fill when the cancel is sent. The old
+        `_prune_if_no_fills` deleted exactly this entry, taking the harvested
+        `order_qty` with it.
+        """
+        observer = OrderEventObserver(structlog.get_logger("test"))
+        order = _make_order()
+
+        with capture_logs() as logs:
+            observer.handle_order_event(order.init_event)
+            observer.handle_order_event(TestEventStubs.order_canceled(order))
+            observer.handle_order_event(
+                TestEventStubs.order_filled(
+                    order, AAPL_EQUITY, last_qty=order.quantity, trade_id=TradeId("E-1")
+                )
+            )
+
+        record = [entry for entry in logs if entry["event"] == FILLED_EVENT][0]
+        assert record["order_qty"] == str(order.quantity.as_decimal())
+        assert record["cum_qty"] == record["order_qty"], (
+            "AC #5 finality must stay readable for a fill that crosses a cancel ack"
+        )
+        assert "order_qty_unknown" not in record
+
+    def test_a_rejection_does_not_discard_the_harvested_quantity(self):
+        observer = OrderEventObserver(structlog.get_logger("test"))
+        order = _make_order()
+
+        with capture_logs() as logs:
+            observer.handle_order_event(order.init_event)
+            observer.handle_order_event(_order_rejected(order, reason="TOO_LATE"))
+            observer.handle_order_event(
+                TestEventStubs.order_filled(
+                    order, AAPL_EQUITY, last_qty=order.quantity, trade_id=TradeId("E-1")
+                )
+            )
+
+        record = [entry for entry in logs if entry["event"] == FILLED_EVENT][0]
+        assert record["order_qty"] == str(order.quantity.as_decimal())
+
+    def test_a_denial_does_not_discard_the_harvested_quantity(self):
+        observer = OrderEventObserver(structlog.get_logger("test"))
+        order = _make_order()
+
+        with capture_logs() as logs:
+            observer.handle_order_event(order.init_event)
+            observer.handle_order_event(_order_denied(order, reason="RISK"))
+            observer.handle_order_event(
+                TestEventStubs.order_filled(
+                    order, AAPL_EQUITY, last_qty=order.quantity, trade_id=TradeId("E-1")
+                )
+            )
+
+        record = [entry for entry in logs if entry["event"] == FILLED_EVENT][0]
+        assert record["order_qty"] == str(order.quantity.as_decimal())
+
+
+class TestPartialKnowledgeAndOverFillAreMarked:
+    def test_a_fill_with_no_harvest_is_marked_order_qty_unknown(self):
+        """Reachable in a live session, not only across a restart: the runner
+        starts the node and lets reconciliation run before the observer
+        subscribes, and a reconciliation-sourced order never publishes
+        `OrderInitialized` at all. Without the marker such a record is
+        byte-identical to a first fill on a fresh order.
+        """
+        observer = OrderEventObserver(structlog.get_logger("test"))
+        order = _make_order()
+
+        with capture_logs() as logs:
+            observer.handle_order_event(
+                TestEventStubs.order_filled(
+                    order, AAPL_EQUITY, last_qty=Quantity.from_int(10), trade_id=TradeId("E-1")
+                )
+            )
+
+        record = [entry for entry in logs if entry["event"] == FILLED_EVENT][0]
+        assert record["order_qty_unknown"] is True
+        assert "order_qty" not in record
+
+    def test_an_over_fill_is_marked_rather_than_reading_as_exact_completion(self):
+        """The completion comparison is `>=`, so an over-fill used to emit a
+        record shaped exactly like an exact completion.
+        """
+        observer = OrderEventObserver(structlog.get_logger("test"))
+        order = _make_order()
+        too_much = Quantity.from_int(int(order.quantity.as_decimal() + 1))
+
+        with capture_logs() as logs:
+            observer.handle_order_event(order.init_event)
+            observer.handle_order_event(
+                TestEventStubs.order_filled(
+                    order, AAPL_EQUITY, last_qty=too_much, trade_id=TradeId("E-1")
+                )
+            )
+
+        record = [entry for entry in logs if entry["event"] == FILLED_EVENT][0]
+        assert record["over_fill"] is True
+        assert record["cum_qty"] != record["order_qty"]
+
+
+class TestObserverFailureNamesTheEventAndTheOrder:
+    """The dispatch went from one handler to nine behind a single `except`.
+    `stage` + `error_type` alone cannot tell an operator which event type is
+    broken: if a builder raises on every fill, no `order.filled` record is ever
+    written and the transcript is an undifferentiated stream of
+    `error_type=AttributeError`.
+    """
+
+    def test_the_failure_record_identifies_the_event_type_and_order(self):
+        class _FakeFilled:
+            client_order_id = "O-ONLY-THIS-ONE"
+
+        observer = OrderEventObserver(structlog.get_logger("test"))
+        fake = _FakeFilled()
+        fake.__class__.__name__ = "OrderFilled"
+
+        with capture_logs() as logs:
+            observer.handle_order_event(fake)
+
+        failed = [entry for entry in logs if entry["event"] == "order.observer_failed"]
+        assert len(failed) == 1
+        assert failed[0]["event_type"] == "OrderFilled"
+        assert failed[0]["client_order_id"] == "O-ONLY-THIS-ONE"
+
+    def test_the_diagnostic_survives_an_event_with_no_client_order_id(self):
+        class _FakeDenied:
+            """Nothing at all — the diagnostic must not raise on its own read."""
+
+        observer = OrderEventObserver(structlog.get_logger("test"))
+        fake = _FakeDenied()
+        fake.__class__.__name__ = "OrderDenied"
+
+        with capture_logs() as logs:
+            observer.handle_order_event(fake)  # must not raise
+
+        failed = [entry for entry in logs if entry["event"] == "order.observer_failed"]
+        assert len(failed) == 1
+        assert failed[0]["event_type"] == "OrderDenied"
+
+
+class TestContainmentLeavesNoPhantomCumQty:
+    """Task 2.7's prescribed shape — "a stub with `last_qty` access raising" —
+    rather than an attribute-less object, which raises at the FIRST read and so
+    never reaches the accumulate point at all.
+
+    The accumulator used to be mutated before the record was built, so a raise
+    in any of the twelve field reads left the counter advanced with no record
+    accounting for it, and the next fill logged an inflated `cum_qty`.
+    """
+
+    def test_a_raise_after_the_accumulate_point_leaves_no_phantom_total(self):
+        real = TestEventStubs.order_filled(
+            _make_order(), AAPL_EQUITY, last_qty=Quantity.from_int(30), trade_id=TradeId("E-1")
+        )
+
+        class _RaisesOnCommission:
+            def __getattr__(self, name):
+                if name == "commission":
+                    raise RuntimeError("adapter field missing")
+                return getattr(real, name)
+
+        broken = _RaisesOnCommission()
+        broken.__class__.__name__ = "OrderFilled"
+        good = TestEventStubs.order_filled(
+            _make_order(), AAPL_EQUITY, last_qty=Quantity.from_int(30), trade_id=TradeId("E-2")
+        )
+
+        observer = OrderEventObserver(structlog.get_logger("test"))
+        with capture_logs() as logs:
+            observer.handle_order_event(broken)  # must not raise
+            observer.handle_order_event(good)
+
+        failed = [entry for entry in logs if entry["event"] == "order.observer_failed"]
+        records = [entry for entry in logs if entry["event"] == FILLED_EVENT]
+        assert len(failed) == 1
+        assert len(records) == 1
+        assert records[0]["cum_qty"] == "30", (
+            "the contained failure must not leave a total no record explains"
+        )
