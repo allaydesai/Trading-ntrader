@@ -152,7 +152,22 @@ def _shutdown(node, run_task, loop) -> None:
         node.dispose()
 
 
-def _run(instrument_id: InstrumentId, side: OrderSide, quantity: int, *, confirm: bool) -> str:
+def _run(
+    instrument_id: InstrumentId,
+    side: OrderSide,
+    quantity: int,
+    *,
+    confirm: bool,
+    build=build_trading_node,
+) -> str:
+    """Connect, read the broker's position, and — only if armed — close it.
+
+    Args:
+        build: Seam for the component tests, which drive this whole function
+            against a fake node. The arming order below is the tool's single
+            safety property and was once wrong in a way no test could see; it
+            is now asserted by driving this function rather than by reading it.
+    """
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
@@ -166,7 +181,7 @@ def _run(instrument_id: InstrumentId, side: OrderSide, quantity: int, *, confirm
     # The bar type is passed only so the instrument reaches both providers'
     # `load_ids` — without it the exec client cannot translate an order for it
     # (`adapters/interactive_brokers/execution.py:525`, the Story 3.2 defect).
-    node = build_trading_node(
+    node = build(
         settings,
         trader_id=FLATTEN_TRADER_ID,
         bar_types=[bar_type],
@@ -174,9 +189,26 @@ def _run(instrument_id: InstrumentId, side: OrderSide, quantity: int, *, confirm
         loop=loop,
     )
 
-    strategy = _FlattenStrategy(instrument_id, side, quantity)
-    node.trader.add_strategy(strategy)
-
+    # The strategy is deliberately NOT constructed or added here, and this is
+    # the single most important line in the file.
+    #
+    # Measured 2026-09-01, by running this tool WITHOUT `--confirm` and watching
+    # it fill a 22-share SELL: `TradingNodeKernel.start_async` ends with
+    # `self._trader.start()` (`system/kernel.py:1027`), which starts every
+    # strategy already added — so a strategy added before `run_async()` submits
+    # from `on_start` before any check in this function has run, and `--confirm`
+    # gates nothing at all.
+    #
+    # `live_session_runner.py` is safe from this by construction, not by luck:
+    # it does not add a strategy until `_phase_trading`, long after
+    # `_phase_node_connect` started the node (`:507` then `:659-660`), so
+    # `_trader.start()` finds nothing to start. An earlier version of this
+    # comment cited `:660` as proof that `run_async()` does not start
+    # strategies. That was a misreading of why the runner is safe.
+    #
+    # This tool now follows the same discipline: nothing that can submit an
+    # order exists in the trader until the broker has been read and the
+    # operator has armed it.
     print("[flatten] node built; building clients...", flush=True)
     node.build()
 
@@ -205,13 +237,18 @@ def _run(instrument_id: InstrumentId, side: OrderSide, quantity: int, *, confirm
         )
 
         if not confirm:
-            return f"held={held:+d} submitted=0 (dry run — pass --confirm to submit)"
+            return (
+                f"held={held:+d} submitted=0 (dry run — nothing that can submit "
+                "an order was ever added to the trader)"
+            )
 
         print(f"[flatten] submitting {side.name} {quantity} {instrument_id}...", flush=True)
-        # Strategies are NOT started by `run_async()`; the session runner starts
-        # each one explicitly (`live_session_runner.py:660`) so that nothing can
-        # trade before the account gate has passed. Same discipline here — this
-        # line is after the gate, the connect, and the offset check.
+        # Arming, in the only order that is safe: construct the strategy, add it
+        # to an already-running trader (`add_strategy` never auto-starts — it
+        # rejects a RUNNING strategy outright), then start it. Every check this
+        # tool makes is upstream of this line.
+        strategy = _FlattenStrategy(instrument_id, side, quantity)
+        node.trader.add_strategy(strategy)
         node.trader.start_strategy(strategy.id)
         loop.run_until_complete(_await_fill(strategy, timeout=60.0))
 
