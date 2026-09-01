@@ -36,6 +36,33 @@
 
 generated: 2026-08-03
 last_updated: >-
+  2026-09-01 (STORIES 3.2 AND 3.3 BOTH -> done. epic-3 stays in-progress: 3.1-3.3 done, 3.4-3.7
+  backlog. One RTH session closed both stories' live items, as designed. 3.2's AC #7 (the real
+  broker commission) and 3.3's AC #1/#2/#5 were evidenced in a single `order.filled` record, and
+  P7 criterion 2's position-open half closed with it -- the first strategy-owned position this
+  project has opened, filled, and kept across a stop. THREE DEFECTS WERE FOUND ON THE WAY, ALL
+  FIXED: (1) an upstream IB adapter defect put a raw `Price` into `OrderFilled.info`, which the
+  Redis cache could not serialize, and the raise landed BEFORE the event was published -- so the
+  first real fill this project ever received killed the ExecEngine while the order filled at the
+  broker (`src/core/live_exec_avg_px.py`, with the upstream behaviour pinned as canaries so the
+  workaround dies by name on a fixing upgrade); (2) naming that fix's factory subclass anything
+  other than `InteractiveBrokersLiveExecClientFactory` silently stops the trader from ever
+  starting, because Nautilus branches on the literal class-name string -- four consecutive live
+  sessions died at 120s with no exception, and no test tier caught it; (3) `flatten_position.py`
+  submitted and filled an order on a DRY RUN, because it added its strategy before `run_async()`
+  and `kernel.start_async` ends with `_trader.start()`. Defect 3 was only latent because defect 2
+  was suppressing the trader when the tool's refusals were hand-verified -- fixing 2 armed it.
+  All three recorded in docs/qa/phase3-live-verification.md. 3.3's two [NOT APPLIED] review items
+  are now dispositioned: the Task 7.2 clause matrix WAS WRITTEN (19 clauses across 5 ACs, each
+  mutated in isolation, 19/19 killed) and is labelled as the late artifact it is; the RED evidence
+  item is closed as UNOBTAINABLE, NOT SATISFIED -- it cannot be reconstructed without fabricating
+  a process record, so the story is recorded as not meeting the testing-standards requirement at
+  its own :493. NFR1 NEEDS AN EPIC-LEVEL RULING BEFORE ANY STORY CLAIMS IT: `bar_close_to_submit_ms`
+  measures from the bar's OPEN, not its close (the IB client's own docstrings say so), so it is off
+  by exactly one bar interval; and even correctly anchored on the close it reads ~5682ms against a
+  <1000 target, because IB does not deliver a completed minute bar until ~5.3-5.7s after it closes.
+  Our own decision-to-submit interval is ~3.5ms. See deferred-work.md for the three-anchor table
+  and the recommendation (log both). NEXT: the NFR1 ruling, then Story 3.4. Previously:
   2026-08-30 (STORY 3.3 CODE-REVIEWED -> in-progress, NOT done. review -> in-progress. epic-3 stays
   in-progress: 3.1 done, 3.2 in-progress, 3.3 in-progress, 3.4-3.7 backlog. Three adversarial layers
   (Blind Hunter diff-only / Edge Case Hunter with wheel access / Acceptance Auditor with spec) ->
@@ -2065,8 +2092,8 @@ development_status:
   # carry about it are untested assumptions, not observations.
   epic-3: in-progress
   3-1-stop-trading-without-manufacturing-an-exit: done
-  3-2-submit-a-strategys-orders-to-the-broker: in-progress
-  3-3-track-every-order-through-its-full-lifecycle: in-progress
+  3-2-submit-a-strategys-orders-to-the-broker: done
+  3-3-track-every-order-through-its-full-lifecycle: done
   3-4-never-resubmit-an-order-that-is-already-working: backlog
   3-5-aggregate-partial-fills-into-one-position: backlog
   3-6-persist-each-trade-the-moment-it-closes: backlog

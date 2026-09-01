@@ -1,6 +1,6 @@
 # Story 3.2: Submit a Strategy's Orders to the Broker
 
-Status: in-progress
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 

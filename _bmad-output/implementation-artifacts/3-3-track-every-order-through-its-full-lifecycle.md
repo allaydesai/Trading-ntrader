@@ -1,6 +1,6 @@
 # Story 3.3: Track Every Order Through Its Full Lifecycle
 
-Status: in-progress
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -388,7 +388,7 @@ live order events are published from a single `_evt_queue` asyncio task
 - [x] [Review][Patch] **`EMITTED_ORDER_EVENTS` does not do what its docstring, Task 2.3, and the new CLAUDE.md paragraph all say it does** [src/core/live_order_path.py:132-146; tests/component/core/test_live_order_path.py:996-1007] — three defects in one mechanism. (a) `test_the_set_is_pinned_exactly` compares `frozenset(EMITTED_ORDER_EVENTS)` against a literal set built from *the same seven imported constants*, so it catches a name **dropped from the tuple** but not a name **never added** — which is exactly the failure Task 2.3 names (*"so a seventh emitted type cannot appear without joining the scan"*). Adding a handler that emits `order.triggered` leaves the pin green and the NFR26 scan blind. Nothing pins `set(self._dispatch)`, the only artifact that enumerates emitters. (b) The docstring at `:132` — *"Every event name `OrderEventObserver` can emit"* — is **already false**: the observer also emits `order.observer_failed` at `:377` and `:391`, which is not in the tuple. (c) The CLAUDE.md amendment carries claim (a) into a project-rules file future stories will treat as settled. Fix: derive the pin from the dispatch map, correct the docstring's scope, and narrow the CLAUDE.md wording to what the test actually guarantees. Found by two layers plus the reviewer.
 - [x] [Review][Patch] **`SUBMITTED_EVENT` has no literal pin — the M3 hole closed for six constants is still open on the seventh** [tests/component/core/test_live_order_path.py:980-986] — the literal `"order.submitted"` appears nowhere in the test suite; all references go through the constant. Mutating it to `"order.submited"` passes the full suite, which is the exact drift M3 exposed and `TestEventNameLiteralsArePinned` was added to close. `SUBMITTED_EVENT` is a member of `EMITTED_ORDER_EVENTS` and an AR41 normative milestone. One line.
 - [x] [Review][Patch] **AC #2's mandated field triple is unguarded on `order.expired`, and `instrument_id` is unguarded on `order.canceled`** [tests/component/core/test_live_order_path.py:698-738] — AC #2 requires every record to carry `session_id`, `client_order_id`, and `instrument_id`. The only `order.expired` test asserts a count and an absence (`len(records) == 1`, `"venue_order_id" not in records[0]`) and nothing else; the canceled tests assert `client_order_id` and `strategy_id` but never `instrument_id`. Deleting `"instrument_id": str(event.instrument_id)` from `_log_terminal` (`:521`) leaves the whole suite green. Also in scope here: `test_order_canceled_logs_venue_order_id_when_present` (`:712`) omits the `len(records) == 1` its siblings all carry, and the `venue_order_id`-present case is tested for cancel but not expiry.
-- [ ] [Review][Patch][NOT APPLIED] **Task 7.2's clause matrix does not exist, yet the task is marked `[x]`** — Task 7.2 requires *"decompose each AC into distinct obligations, mutate each in isolation, record which named test fires, in this story file"*. The Dev Agent Record contains the Task 7.1 mutation table and nothing else; Stories 3.1 and 3.2 both have the matrix. The two findings above are precisely what the missing artifact exists to catch: AC #2 decomposes into (names) + (`fill_qty`/`cum_qty`) + (`venue_reason`) + (the mandatory triple), and only the first three were mutated.
+- [x] [Review][Patch][APPLIED 2026-09-01] **Task 7.2's clause matrix does not exist, yet the task is marked `[x]`** — Task 7.2 requires *"decompose each AC into distinct obligations, mutate each in isolation, record which named test fires, in this story file"*. The Dev Agent Record contains the Task 7.1 mutation table and nothing else; Stories 3.1 and 3.2 both have the matrix. The two findings above are precisely what the missing artifact exists to catch: AC #2 decomposes into (names) + (`fill_qty`/`cum_qty`) + (`venue_reason`) + (the mandatory triple), and only the first three were mutated.
 - [x] [Review][Dismissed] ~~"Epic 1 sweep 40/40" is wrong — the sweep collects 43~~ — **RAISED AND WITHDRAWN by the reviewer, 2026-08-30.** The Acceptance Auditor flagged `40/40` as a repeat of the figure Story 3.2's review corrected, and a static count plus `pytest --collect-only` both said 43. Running the sweep settles it the other way: it emits `40/40 acceptance criteria evidenced by a passing test in this run` **and** pytest reports `43 passed`. **Two different units** — 40 acceptance criteria, 43 test functions — so the dev's `40/40` is correct and correctly labelled ("Epic 1 acceptance sweep"). The reviewer confirmed a test count and inferred a defect without checking what the sweep's own counter measures. What is genuinely worth fixing is cheap: the story's baseline says "Epic 1 sweep **43/43**" (`:337-338`, `:505-506`), i.e. the *baseline* is the one mixing units, and Story 3.2's review "correction" of `40/40`→`43/43` appears to have introduced the confusion rather than fixed it. Suggested: state the unit in both places ("43 tests / 40 ACs").
 - [x] [Review][Patch] **`order.observer_failed` names neither the event type nor the order** [src/core/live_order_path.py:389-395] — the dispatch went from one handler to eight behind a single `except Exception`, and the error record still carries only `stage` and `error_type`. `type(event).__name__` and the `client_order_id` are both in hand at the raise site. Failure mode: an adapter's `OrderFilled` lacks a field this code reads without a `getattr` default (`position_id`, `currency`, `due_post_only`), every fill in the session raises, **no `order.filled` record is ever written**, and the operator gets an indistinguishable stream of `error_type=AttributeError` with nothing identifying which event type or which order is broken. Add both fields via `getattr` so the diagnostic cannot itself raise.
 - [x] [Review][Patch] **A guard list *was* edited, contradicting the story's categorical premise** [tests/integration/core/test_epic1_ac_node.py:528+] — the story states *"zero new subscriptions, zero runner diffs, **zero guard-list edits**"* (`:28`, repeated at `:445`), but `_STDLIB_AND_FIRST_PARTY` gains `"decimal"`, **widening** a hand-maintained dependency guard whose own comments warn against exactly that kind of silent broadening. The dev discloses the edit (`:618-625`, File List) and the widening is genuinely required by `from decimal import Decimal` — this is a record-accuracy fix, not a code fix. Related and worth doing in the same edit: CLAUDE.md's Anti-Patterns section enumerates the guard lists a live-path change must re-check and does **not** list `_STDLIB_AND_FIRST_PARTY`, so the next story will trip over it the same way.
@@ -396,7 +396,8 @@ live order events are published from a single `_evt_queue` asyncio task
 - [x] [Review][Patch] **`info` severity is specified but pinned nowhere** [tests/component/core/test_live_order_path.py] — Task 3.3 sets *"`info` for accepted/filled/canceled/expired; `warning` for rejected/denied"*. `log_level` is asserted only on the rejected and denied tests. Flipping `_log_accepted` to `self._log.warning(...)` passes.
 - [x] [Review][Patch] **The containment tests are weaker than Task 2.7's prescribed shape** [tests/component/core/test_live_order_path.py:825-838] — Task 2.7 asks for *"a stub with `last_qty` access raising"*. The tests use an attribute-less object, which raises at the *first* access (`str(event.client_order_id)`), so nothing is ever partially built. The prescribed shape is the stronger one: it exercises the `setdefault`/accumulate side effect before the raise — the window the finding above is about — and the log-then-raise case Task 2.1 named. That assertion exists only on the rejected path.
 - [x] [Review][Patch] **`self._orders: dict[str, dict[str, Any]]` erases the typing this financial arithmetic depends on** [src/core/live_order_path.py:354-355] — `entry["cum_qty"] + event.last_qty.as_decimal()` and `entry["cum_qty"] >= entry["order_qty"]` are both `Any` to mypy, so a `Decimal`/`Quantity`/`float` mix-up passes `make typecheck` silently. A `TypedDict` restores the check.
-- [ ] [Review][Patch][NOT APPLIED] **No RED evidence is recorded, though the testing-standards summary requires it** [story record] — `:493` mandates *"TDD Red first with RED evidence recorded (the 3.1/3.2 pattern)"*, and Story 3.2's record states *"TDD Red→Green with the RED observed before each fix."* This story's Debug Log References covers the Task 1 probe and the Task 7.1 mutation sweep only. Post-hoc mutation proves the tests are non-vacuous; it does not evidence test-first. This is a missing record entry, not a proven process violation.
+- [x] [Review][Patch][RESOLVED-AS-UNOBTAINABLE 2026-09-01] **No RED evidence is recorded, though the testing-standards summary requires it** [story record] — `:493` mandates *"TDD Red first with RED evidence recorded (the 3.1/3.2 pattern)"*, and Story 3.2's record states *"TDD Red→Green with the RED observed before each fix."* This story's Debug Log References covers the Task 1 probe and the Task 7.1 mutation sweep only. Post-hoc mutation proves the tests are non-vacuous; it does not evidence test-first. This is a missing record entry, not a proven process violation.
+  **Resolution (2026-09-01).** Closed as **unobtainable, not satisfied.** RED evidence is a record of something observed at a particular moment; it cannot be reconstructed later, and writing one now from the mutation results would be a fabricated process record — the mutation sweep and the clause matrix both prove the tests *can* fail, which is a different claim from "they were written first and seen failing first". So: **this story carries no RED evidence and none can be produced.** What exists instead is Task 7.1's 11-mutation sweep and the 19-clause matrix above, both post-hoc and both labelled as such. The requirement at `:493` is unmet for Story 3.3 and is recorded here as unmet rather than quietly re-scoped. Process note for the next story, which is the only place this can actually be fixed: capture the failing output at the moment each test is written, not at closeout.
 
 - [x] [Review][Defer] `OrderTriggered` is unhandled and *is* generated by reconciliation [src/core/live_order_path.py:357-366] — deferred, out of this story's AC scope. The closed set is justified as *"no modify or cancel-request path exists in this repo"*, which holds for `OrderModifyRejected`/`OrderCancelRejected` (no `cancel_order`/`cancel_all_orders` call site exists in `src/core/*.py` or `src/cli/commands/live*.py`). But `OrderTriggered` is neither: reconciliation generates it for any venue-reported stop or trailing-stop transition, including an order this system never placed (`live/execution_engine.py:1196-1218`, `:1796-1810`). No built-in strategy creates a stop today, so reachability needs an external resting order on the paper account — Epic 4's reconciliation scope.
 - [x] [Review][Defer] `order.submitted` is the only lifecycle record without `strategy_id` [src/core/live_order_path.py:411-414] — deferred, pre-existing (Story 3.2). Every one of the six new builders adds it; 3.2's review restored `strategy_id` to `_log_suppressed` for the two-strategies-on-one-instrument reason but never to `_log_submitted`. Now that AC #5 reconstructs a chain that *begins* with `order.submitted`, the first link is the only one an operator cannot attribute to a strategy without joining on `client_order_id`.
@@ -685,6 +686,67 @@ cumulative quantity, so `cum_qty` is derived by summing `Quantity.as_decimal()` 
 undeclared in that list; added `"decimal"` by hand with the same discipline the file already
 documents for its other entries.
 
+**Task 7.2 — clause matrix** (Story 3.1's method, the same shape as 3.2's). Produced **2026-09-01**,
+after the review flagged its absence — not during the original dev session. Recorded as a
+late artifact rather than backdated: the review's point stands that it should have existed before
+closeout, and two findings got through because it did not.
+
+Every clause below was mutated in isolation against the working tree, run against the four-file
+guard surface (`test_live_order_path.py`, `test_session_runner_order_path.py`,
+`test_session_runner_phases.py`, `test_live_stop_path_is_inert.py`, plus
+`test_session_runner_stop.py` for the AC #4 clauses), and reverted. **19 clauses, 19 killed, none
+survived.** The harness reverted from an in-memory copy after every mutation and `git status` was
+confirmed clean afterwards.
+
+- **AC #1** — each of the six states represented and logged as it arrives. Decomposes into one
+  clause per state plus the partial-fill representation, because a single "all six are handled"
+  test would pass with five: (a) `order.accepted` — `TestOrderAcceptedDispatch::test_order_accepted_logs_the_acknowledgement_identity`.
+  (b) `order.rejected` — `test_an_order_rejected_is_logged_with_the_venue_reason_and_never_raises`.
+  (c) `order.filled` — `TestOrderFilledDispatch::test_order_filled_logs_the_full_field_contract`.
+  (d) `order.canceled` — `TestOrderCanceledAndExpiredDispatch::test_order_canceled_omits_venue_order_id_when_absent`.
+  (e) `order.expired` — `TestOrderCanceledAndExpiredDispatch::test_order_expired_omits_venue_order_id_when_absent`.
+  (f) `order.denied` — `TestOrderDeniedDispatch::test_order_denied_logs_reason_not_venue_reason`.
+  (g) partial fill is a *rising* `cum_qty`, not a per-fill quantity (the AR41 representation
+  decision, mutated as `cum = fill` rather than `cum += fill`) —
+  `TestPartialFillSeries::test_a_partial_fill_series_produces_a_rising_cum_qty`.
+- **AC #2** — dotted past-tense names carrying the mandated fields. This is the AC the review
+  identified as under-decomposed; it splits four ways, and the last two were the unguarded ones:
+  (a) the name literals themselves — `TestEventNameLiteralsArePinned::test_the_literal_spellings_are_exact`
+  (the guard M3 added mid-sweep, still the only thing that can fail on a misspelling).
+  (b) `fill_qty` **and** `cum_qty` on `order.filled`, mutated separately — both killed by
+  `TestOrderFilledDispatch::test_order_filled_logs_the_full_field_contract`. (c) `venue_reason` on
+  `order.rejected` — `test_an_order_rejected_is_logged_with_the_venue_reason_and_never_raises`.
+  (d) the mandatory triple on the records that carry it most thinly: dropping `instrument_id` from
+  `_log_terminal` — `TestOrderCanceledAndExpiredDispatch::test_order_canceled_omits_venue_order_id_when_absent`.
+  (e) NFR26's never-logged-at-all, mutated by *adding* `account_id` — `TestNoRecordEverCarriesAnAccountId::test_the_record_carries_no_account_id_field[order.accepted]`.
+- **AC #3** — the rejection reason verbatim. (a) not reworded or classified (mutated to a generic
+  `"order rejected by venue"`) — `test_an_order_rejected_is_logged_with_the_venue_reason_and_never_raises`.
+  (b) containment survives the inversion — narrowing `except Exception` to `except ValueError` is
+  killed by `test_note_bar_never_raises_on_a_malformed_bar`, i.e. by a *3.2* guard this story did
+  not write.
+- **AC #4** — consumption through Nautilus's own bus, no polling loop, no parallel event bus.
+  Checked directly rather than by mutation where the claim is structural: (a) zero diffs under
+  `src/core/strategies/` — `git diff --stat HEAD -- src/core/strategies/` empty at closeout.
+  (b) no thread, timer, task or queue in the module — grep for `threading`/`Thread(`/
+  `asyncio.create_task`/`Queue(`/`time.sleep`/`while True` in `live_order_path.py` returns
+  **none**. (c) the runner wires the subscription — `TestTheRunnerReachesTheOrderPathCallSites::test_the_runner_wires_the_order_event_observer_before_trading`.
+  (d) the subscription is *recorded* so the stop path cancels it (mutated by calling
+  `node.trader.subscribe` directly, bypassing `_subscribe`'s bookkeeping) —
+  `TestUnsubscribeOnStop::test_every_subscription_the_runner_made_is_cancelled`. Clause (d) is not
+  in the AC's text; it is here because 3.2's review found this exact hole and the guard should be
+  named in the matrix rather than rediscovered.
+- **AC #5** — end-to-end reconstruction. (a) the `order_qty` harvest that makes fill-path finality
+  readable — `TestLifecycleReconstruction::test_the_fill_path_reconstructs_end_to_end_from_records_alone`.
+  (b) acknowledgement identity, the first venue-side id (dropping `venue_order_id` from
+  `_log_accepted`) — `TestOrderAcceptedDispatch::test_order_accepted_logs_the_acknowledgement_identity`.
+
+Two observations worth carrying forward. **AC #2's (d) and (e) were the clauses the review said
+were missing, and both are now guarded** — but note that (d) is killed by a test whose *name* is
+about `venue_order_id` absence, not about the mandatory triple; the guard is real but reads as
+incidental, and a reader auditing by name would not find it. **Three clauses are killed by tests
+this story did not write** (AC #3(b), AC #4(c), AC #4(d)) — the same property 3.2's matrix
+demonstrated, and the reason the four-file surface is run rather than the story's own file alone.
+
 ### Completion Notes List
 
 All 5 ACs satisfied. `OrderEventObserver.handle_order_event` now dispatches by class name across
@@ -756,6 +818,13 @@ open and marked `[NOT APPLIED]`: the **Task 7.2 clause matrix** (substantial aut
 the artifact whose absence let two of this review's findings through — it should be written
 deliberately, not batch-generated) and the **RED evidence** entry (cannot be produced
 retroactively; the dev should state what was observed).
+
+**Update 2026-09-01 — both now closed, by different routes.** The **clause matrix** was written:
+19 clauses across the 5 ACs, each mutated in isolation and each killed, recorded above under
+"Task 7.2 — clause matrix" and labelled as the late artifact it is. The **RED evidence** item is
+closed as **unobtainable rather than satisfied** — it cannot be reconstructed without fabricating a
+process record, so the story is recorded as not meeting `:493`. That leaves `15 of 15` review items
+dispositioned and **0 outstanding**, with one requirement explicitly unmet.
 
 **Production changes** — all in `src/core/live_order_path.py`:
 

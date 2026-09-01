@@ -2110,8 +2110,13 @@ adopted: **give each item a named owning story, not a priority label.** Items re
 
 - `close_all_positions()` in `on_stop()`, and the DEGRADED-strategy teardown leak it inverts into →
   **Story 3.1** (both now written into `epics.md` under that story).
-- The two order-path fixes' live verification, and P7 criterion 2's position-open half →
-  **Story 3.2** (written into `epics.md`).
+- ~~The two order-path fixes' live verification, and P7 criterion 2's position-open half →
+  **Story 3.2** (written into `epics.md`).~~ — **DONE**, 2026-09-01. Both discharged in one RTH
+  session: `order.submitted → order.accepted → order.filled` with a real broker commission, then
+  `PositionOpened` on a strategy-owned position that survived the stop with broker state
+  byte-identical across it. Recorded in `docs/qa/phase3-live-verification.md` under 2026-09-01.
+  Getting there required fixing an upstream serialization defect that killed the node on the first
+  real fill (`src/core/live_exec_avg_px.py`).
 - ~~Explicit `order_id_tag` per `StrategySpec`, or a create-time validator → **Story 3.2**~~ —
   **DONE**, 2026-08-30 (create-time validator; see the resolved item above, `deferred-work.md:1748`).
 - The `handle_event` wrapper's rationale (`_pending_position_events` cleared before publish) →
@@ -2237,22 +2242,51 @@ adopted: **give each item a named owning story, not a priority label.** Items re
 
 ## Deferred from: live verification of Stories 3.1/3.2/3.3 (2026-09-01)
 
-- **NFR1's `bar_close_to_submit_ms` cannot be met as defined, because its anchor is the bar's
-  *open*.** Measured live 2026-09-01, on the first order this project ever submitted from a
-  strategy signal: the record read `bar_close_to_submit_ms=65312.044` against NFR1's `< 1000`. The
-  latency is not real. IB timestamps a 1-minute bar at the start of its period and delivers it
-  ~5s after the period ends — measured on the same run, `ts_event=2026-09-01T13:55:00.000Z`,
-  `live_bars.received` at `13:56:05.307`, `order.submitted` at `13:56:05.312`. So the genuine
-  decision-to-submit interval was **5ms**, and the 65s is one bar interval plus IB's delivery lag.
-  `_log_submitted`'s docstring (`src/core/live_order_path.py:469-474`) states the anchor is "the
-  venue bar close (`bar.ts_event`)", which is false for this adapter and is the whole defect. The
-  value also sits inside `MAX_PLAUSIBLE_LATENCY_NS` (1 hour), so the story's own
-  `implausible_latency_ms` escape hatch does not catch it — it is logged as if it were the number
-  NFR1 is judged on. Not actioned now because this is an **epic-level definition question, not a
-  story bug**: either NFR1 is re-anchored on bar *arrival* (measuring what this system controls) or
-  it explicitly includes venue delivery lag and its threshold changes. Story 3.2's AC #5 and any
-  "NFR1 evidenced live" claim depend on which. Do not "fix" it by silently switching anchors — the
-  two measure different things and the docstring argues for the current one on purpose.
+- **`bar_close_to_submit_ms` does not measure from the bar close, and NFR1's `< 1s` is
+  unreachable with IB minute bars for a reason no code change of ours can fix.** Two separate
+  problems that the original wording of this item ran together; investigated further 2026-09-01 and
+  rewritten, because the first is a plain bug and only the second is a definition question.
+
+  **(1) The field is misnamed, and is off by exactly one bar interval — always.**
+  `_log_submitted` computes `event.ts_init - bar.ts_event` (`src/core/live_order_path.py:491`),
+  and for this adapter `bar.ts_event` is the bar's **open**, not its close. That is not inference:
+  the IB client's own docstring says so — `_ib_bar_to_ts_event` reads *"ts_event is set to the
+  start of the bar period"*, and its sibling `_ib_bar_to_ts_init` reads *"ts_init is set to the end
+  of the bar period and not the start"*
+  (`adapters/interactive_brokers/client/market_data.py:1304-1372`). Measured on the passing run:
+  bar `ts_event=14:31:00.000Z`, `order.submitted` at `14:32:05.682` → logged `65682.202`, which is
+  exactly `65.682s` — one 60s bar interval plus the delivery lag. So the number is not a latency at
+  all, and the name asserts something false in the transcript NFR1 is judged from. The value also
+  sits inside `MAX_PLAUSIBLE_LATENCY_NS` (1 hour), so `implausible_latency_ms` never catches it.
+
+  **(2) There are three defensible anchors, and NFR1's literal one still fails.** Measured on the
+  same submission:
+
+  | anchor | value | what it measures |
+  |---|---|---|
+  | `bar.ts_event` (bar **open**) — logged today | **65682 ms** | nothing meaningful; off by one interval |
+  | bar **close** (`ts_event + interval`) — what NFR1's text says | **5682 ms** | our latency **plus** IB's delivery lag |
+  | bar **arrival** (`live_bars.received`) | **~3.5 ms** | what this system actually controls |
+
+  The middle row is the important one: **even correctly anchored on the bar close, NFR1's `< 1000`
+  fails by ~5.7×**, and not because of anything this codebase does. Live bars arrive via
+  `reqHistoricalData(keepUpToDate=True)`, and the adapter publishes a completed bar only when the
+  *next* bar's first update arrives (`_process_bar_data`, `market_data.py:1160-1180`); IB pushes
+  those roughly every 5 seconds. The lag is therefore structural, not jitter — measured at 5.284s,
+  5.532s and 5.679s on three consecutive bars in the same run. No amount of optimisation moves it,
+  because the process does not *learn* the bar closed until ~5.3–5.7s after it did.
+
+  **What is still the operator's call, and why it was not silently fixed.** NFR1 reads *"Bar close →
+  order submission completes in < 1 second, and the latency is observable in logs"* — two clauses.
+  The observability clause is satisfiable at any anchor; the `< 1s` clause is satisfiable only at
+  bar arrival. Options: (a) re-anchor on arrival — passes with ~280× margin, but stops showing the
+  divergence window `_log_submitted`'s docstring deliberately argues for; (b) keep the close anchor
+  and raise the threshold — honest to the name, but then the number is dominated by a vendor
+  constant and tests IB rather than us; (c) log **both** — `bar_close_to_submit_ms` correctly
+  anchored on `ts_event + interval` for the divergence window, plus a new
+  `bar_arrival_to_submit_ms` that NFR1's bound is judged on. (c) satisfies both clauses of NFR1's
+  sentence and is the recommendation. Whichever is chosen, **fix (1) regardless** — a field named
+  `bar_close_*` that measures from the open is wrong under every option.
 
 - **A fill that fails to apply leaves the session permanently unstartable, and nothing says so.**
   Measured live 2026-09-01, downstream of the `avg_px` serialization defect
@@ -2271,6 +2305,23 @@ adopted: **give each item a named owning story, not a priority label.** Items re
   the current message names three possible causes and not this one. Note the general shape for
   Epic 4: **any** unapplied terminal event, not just this serialization defect, strands an order in
   `orders_open` forever.
+
+- **A "safe" flag was only ever safe because a different bug was suppressing the trader — and
+  fixing that bug armed it.** Recorded 2026-09-01 as a pattern, not just an incident. The fix is
+  landed (`fix(diagnostics): make --confirm actually gate the order`); what is deferred is the
+  general lesson. `flatten_position.py` added its order-submitting strategy to the node *before*
+  `run_async()`, and `TradingNodeKernel.start_async` ends with `self._trader.start()`
+  (`system/kernel.py:1027`), which starts every strategy already added — so `on_start` submitted
+  before any check in the tool ran, and `--confirm` gated nothing. It was hand-verified as safe
+  earlier the same day, but under a build where the misnamed exec-client factory made `start_async`
+  return early at `kernel.py:1025`, *before* `_trader.start()`. The trader never started, the dry
+  run looked inert, and the verification recorded a true observation about a false world. The next
+  commit removed that accidental safety net and the following dry run filled 22 shares.
+  **The transferable point: a manual safety verification is only valid against the build it ran
+  on, and "I saw it refuse" is not evidence that the refusal is load-bearing.** Anything gating a
+  real-money-shaped action needs a test that asserts the *inert* path registered nothing, not a
+  human watching for absence of an order. Worth a standing check whenever a tool grows a
+  `--confirm`-style flag; there is no such tool today besides this one.
 
 - **The startup failure message does not name the cause it most often has.** Surfaced by the item
   above. `live start` reports "the session did not start within 120s ... Three causes produce this
