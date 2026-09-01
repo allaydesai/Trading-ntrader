@@ -295,6 +295,29 @@ lifecycle" — that ownership lands here, `OrderDenied` included.
     (Anti-Patterns: guard-list rot; this module is on two hand-maintained lists and
     excluded-with-reasons from two more).
 - [x] Task 6: Live verification — the lifecycle records in a real transcript (AC: #1, #2, #3, #5) — operator procedure, NFR33 tier
+      **ACTUALLY DONE 2026-09-01** (these boxes were ticked before any live run had happened;
+      the evidence below is the first that exists). Session `p7-fill-0901`, inside RTH.
+      Records observed, verbatim from `logs/p7-position-20260901-102929.log`:
+      `order.accepted` → `venue_order_id=103 strategy_id=SMACrossover-000` (AC #5's
+      acknowledgement identity, the first moment a venue-side id exists);
+      `order.filled` → `fill_qty=22 cum_qty=22 order_qty=22 last_px=217.83
+      commission='1.00 USD' currency=USD trade_id=00025b45.6a9b76bb.01.01 venue_order_id=103
+      position_id=NVDA.NASDAQ-SMACrossover-000`. `cum_qty == order_qty` makes fill-path
+      finality readable from the record alone — AC #5's "final state" clause, live.
+      **NFR26 measured, not assumed: zero of this codebase's structured records carried
+      `account_id`.** Two review-decided fields fired live without being contrived:
+      reconciliation-sourced records carried `reconciliation=True` (Task 4.2's defence against
+      counting an inferred fill as a live one — the live fill's `commission='1.00 USD'` versus
+      the reconciled `'0.00 USD'` makes the distinction obvious in the transcript), and those
+      same records carried `order_qty_unknown=True`, the review's "mark the record" decision,
+      exercised by a genuine first-sight-without-`OrderInitialized` order.
+      Detection grep: one `code: 162`, at the SIGINT instant, the benign
+      `API historical data query cancelled` variant; no `10182`, no `366`.
+      ⚠️ **`order.filled` could never have been observed before today**, for a reason outside
+      this story: the IB adapter's raw `Price` in `OrderFilled.info["avg_px"]` made the fill
+      unserializable, and the raise happened *before* `publish_c`, so the event never reached
+      the observer at all. Fixed in `src/core/live_exec_avg_px.py`; full write-up in the P7
+      2026-09-01 row of `docs/qa/phase3-live-verification.md`.
   - [x] 6.1 This story's live evidence and Story 3.2's outstanding AC #7 close on the SAME run:
     once 3.3's automated tiers land, the next `scripts/diagnostics/run_p7_position.sh` re-run
     inside RTH (preconditions verbatim from 3.2 Task 8.1: no competing IBKR login — mobile app and

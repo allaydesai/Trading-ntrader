@@ -2234,3 +2234,47 @@ adopted: **give each item a named owning story, not a priority label.** Items re
   without joining on `client_order_id`. Not actioned now because it is outside Story 3.3's diff and
   the fix is one line best made with the ownership of whichever story next touches
   `_log_submitted`. `OrderSubmitted.strategy_id` is on the event already.
+
+## Deferred from: live verification of Stories 3.1/3.2/3.3 (2026-09-01)
+
+- **NFR1's `bar_close_to_submit_ms` cannot be met as defined, because its anchor is the bar's
+  *open*.** Measured live 2026-09-01, on the first order this project ever submitted from a
+  strategy signal: the record read `bar_close_to_submit_ms=65312.044` against NFR1's `< 1000`. The
+  latency is not real. IB timestamps a 1-minute bar at the start of its period and delivers it
+  ~5s after the period ends — measured on the same run, `ts_event=2026-09-01T13:55:00.000Z`,
+  `live_bars.received` at `13:56:05.307`, `order.submitted` at `13:56:05.312`. So the genuine
+  decision-to-submit interval was **5ms**, and the 65s is one bar interval plus IB's delivery lag.
+  `_log_submitted`'s docstring (`src/core/live_order_path.py:469-474`) states the anchor is "the
+  venue bar close (`bar.ts_event`)", which is false for this adapter and is the whole defect. The
+  value also sits inside `MAX_PLAUSIBLE_LATENCY_NS` (1 hour), so the story's own
+  `implausible_latency_ms` escape hatch does not catch it — it is logged as if it were the number
+  NFR1 is judged on. Not actioned now because this is an **epic-level definition question, not a
+  story bug**: either NFR1 is re-anchored on bar *arrival* (measuring what this system controls) or
+  it explicitly includes venue delivery lag and its threshold changes. Story 3.2's AC #5 and any
+  "NFR1 evidenced live" claim depend on which. Do not "fix" it by silently switching anchors — the
+  two measure different things and the docstring argues for the current one on purpose.
+
+- **A fill that fails to apply leaves the session permanently unstartable, and nothing says so.**
+  Measured live 2026-09-01, downstream of the `avg_px` serialization defect
+  (`src/core/live_exec_avg_px.py`). When `_apply_event_to_order` raised on the fill, the order stayed
+  `ACCEPTED` in the Redis-backed cache and its `client_order_id` stayed in
+  `trader-PAPER-<id>:index:orders_open` — durably, because that index is exactly what AR10's cache
+  is for. Every subsequent `live start` for that session then loaded an open order the broker had
+  filled twenty minutes earlier, and startup stalled: portfolio initialisation timed out, no bar
+  subscription was ever made, and the session aborted with `the session did not start within 120s`.
+  Reproduced three times on `p7-position-test`; a *fresh* session with a clean namespace started
+  normally, which is what isolates it to the poisoned cache rather than to the gateway. The IB
+  adapter cannot resolve the discrepancy itself — `Cannot generate list[FillReport]: not yet
+  implemented` — so nothing self-heals. Two things are deferred, both Epic 4's
+  broker-authoritative-state scope: (a) reconciliation should close an order the broker reports as
+  filled rather than stalling on it, and (b) the failure needs a diagnosis an operator can act on —
+  the current message names three possible causes and not this one. Note the general shape for
+  Epic 4: **any** unapplied terminal event, not just this serialization defect, strands an order in
+  `orders_open` forever.
+
+- **The startup failure message does not name the cause it most often has.** Surfaced by the item
+  above. `live start` reports "the session did not start within 120s ... Three causes produce this
+  identically" and lists connection, reconciliation and portfolio timeouts. A stranded open order is
+  a fourth, is not listed, and is not distinguishable from the other three without reading the
+  Nautilus lines by hand. Cheap improvement whenever `live_start.py` is next touched: report which
+  of the node's three waits actually expired (each logs distinctly), rather than listing all three.
