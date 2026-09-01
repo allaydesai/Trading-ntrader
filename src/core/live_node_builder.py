@@ -37,7 +37,9 @@ from nautilus_trader.adapters.interactive_brokers.config import (
 )
 from nautilus_trader.adapters.interactive_brokers.factories import (
     InteractiveBrokersLiveDataClientFactory,
-    InteractiveBrokersLiveExecClientFactory,
+)
+from nautilus_trader.adapters.interactive_brokers.factories import (
+    InteractiveBrokersLiveExecClientFactory as _StockIBExecClientFactory,
 )
 from nautilus_trader.config import (
     CacheConfig,
@@ -56,6 +58,7 @@ from nautilus_trader.model.data import BarType
 from src.config import IBKRSettings
 from src.core.live_bar_observer import LiveBarObserverConfig
 from src.core.live_cache import check_redis_reachable
+from src.core.live_exec_avg_px import install_avg_px_serialization_fix
 from src.core.live_gate import GateFlags, GateRefusal, evaluate_gate, mask_account
 from src.core.live_market_data import (
     LiveMarketDataError,
@@ -575,3 +578,45 @@ def build_trading_node(
     node.add_exec_client_factory(IB, InteractiveBrokersLiveExecClientFactory)
 
     return node
+
+
+class InteractiveBrokersLiveExecClientFactory(_StockIBExecClientFactory):
+    """The stock IB exec factory, with one upstream defect patched out.
+
+    Measured live 2026-09-01: the adapter puts a raw ``Price`` into the fill
+    event's ``info`` dict, which the Redis cache database cannot serialize, and
+    the resulting raise happens *before* the fill is published — so the order
+    fills at the broker and nothing downstream ever hears about it. The whole
+    diagnosis, and the conditions under which this wrapper can be deleted, are
+    in :mod:`src.core.live_exec_avg_px`.
+
+    Wrapping the factory is the narrowest seam available: Nautilus builds the
+    client here (``live/node_builder.py:249``) and nothing else touches it
+    between construction and the first fill.
+
+    **The class name is load-bearing and must not be "improved".** Nautilus
+    decides whether to call ``cache.set_specific_venue(Venue("INTERACTIVE_BROKERS"))``
+    by comparing ``factory.__name__`` against the literal string
+    ``"InteractiveBrokersLiveExecClientFactory"`` (``live/node_builder.py:265-268``,
+    under its own comment "Temporary handling for setting specific 'venue' for
+    portfolio"). Without that call, ``Cache.account_for_venue`` resolves the
+    *instrument's* venue — ``NASDAQ`` — instead of the account's issuer
+    (``cache.pyx:3704-3705``), finds no account, and ``Portfolio.initialize_positions``
+    breaks with ``initialized = False`` (``portfolio.pyx:347-353``). That is a
+    **one-shot** call, so the flag can never flip later, and
+    ``kernel.start_async`` then returns fail-quiet at ``kernel.py:1024`` — the
+    line immediately before ``self._trader.start()``. The session connects,
+    both engines report healthy, and the trader never starts.
+
+    Measured, not theorised: naming this class ``_AvgPxSafeExecClientFactory``
+    made four consecutive live sessions fail with ``the session did not start
+    within 120s`` on 2026-09-01, and no automated test noticed, because no test
+    tier builds a real ``TradingNode`` *and* inspects the portfolio.
+    ``test_live_exec_avg_px.py`` now pins both the name and Nautilus's branch.
+    """
+
+    @staticmethod
+    def create(**kwargs):  # type: ignore[override]
+        client = _StockIBExecClientFactory.create(**kwargs)
+        install_avg_px_serialization_fix(client)
+        return client

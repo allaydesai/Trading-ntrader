@@ -91,7 +91,14 @@ def _assert_factories_registered(node) -> None:
     """
     builder = node._builder
     assert builder._data_factories[IB] is InteractiveBrokersLiveDataClientFactory
-    assert builder._exec_factories[IB] is InteractiveBrokersLiveExecClientFactory
+    # `issubclass`, not `is`, since 2026-09-01 — the registered exec factory is
+    # `live_node_builder.InteractiveBrokersLiveExecClientFactory`, a subclass of the stock
+    # one imported here (same name on purpose: Nautilus branches on `factory.__name__`),
+    # carrying one upstream-defect patch (`src/core/live_exec_avg_px.py`). The property this
+    # assertion exists for — a missing or transposed registration — is unaffected:
+    # the data factory is not a subclass of the exec factory, so a transposition
+    # still fails here.
+    assert issubclass(builder._exec_factories[IB], InteractiveBrokersLiveExecClientFactory)
 
 
 class TestCoexistenceWithBacktestEngine:

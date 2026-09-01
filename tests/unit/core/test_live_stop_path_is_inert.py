@@ -57,6 +57,12 @@ STOP_PATH_MODULES = (
 #: does not forbid — so their own membership stays clean without needing the
 #: module itself on the list.
 
+#: ``src/core/live_exec_avg_px.py`` (2026-09-01) is likewise **NOT** on the list,
+#: for a simpler reason: it is build-time only. It runs once inside
+#: ``node.build()``, replaces one adapter-private dict, and is never reached
+#: again — least of all from the stop path. It calls no order or position method
+#: at all, so its membership would be inert rather than protective.
+
 #: The order/position-mutating methods AC #2 forbids on the stop path. Any
 #: call whose *attribute or function name* matches one of these is a hit,
 #: regardless of what object it is called on (`self.close_all_positions(...)`,

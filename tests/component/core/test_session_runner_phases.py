@@ -1247,6 +1247,10 @@ class TestImportPurity:
         # of in the first place, but the same hand-maintained-list discipline
         # applies: add on creation, not on next discovery.
         "src.core.live_order_path",
+        # 2026-09-01. Imported by `live_node_builder` and executed during
+        # `node.build()`. Same discipline: added on creation, not on next
+        # discovery.
+        "src.core.live_exec_avg_px",
     )
 
     @pytest.mark.parametrize("module_name", MODULES)

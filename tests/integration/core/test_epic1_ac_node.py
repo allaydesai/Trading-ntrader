@@ -192,7 +192,15 @@ def test_both_ib_live_factories_are_registered_on_the_node():
         builder = node._builder
 
         assert builder._data_factories[IB] is InteractiveBrokersLiveDataClientFactory
-        assert builder._exec_factories[IB] is InteractiveBrokersLiveExecClientFactory
+        # `issubclass`, not `is`, since 2026-09-01: the registered exec factory is
+        # `live_node_builder.InteractiveBrokersLiveExecClientFactory` — a subclass of the
+        # stock one imported here, deliberately sharing its name because Nautilus branches
+        # on `factory.__name__`, and adding one upstream-defect patch
+        # (see `src/core/live_exec_avg_px.py`).
+        # FR2/AR2 ask that the IB exec factory be the thing registered, and a subclass
+        # of it still is; what the criterion forbids — a dropped or transposed
+        # registration — is still caught, because no other factory passes this.
+        assert issubclass(builder._exec_factories[IB], InteractiveBrokersLiveExecClientFactory)
 
 
 @criterion("1.3c")

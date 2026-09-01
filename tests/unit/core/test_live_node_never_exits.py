@@ -57,6 +57,11 @@ NODE_FACING_MODULES = (
     # inside strategy calls and MessageBus.publish_c respectively — exactly
     # the shape this list exists to cover.
     "src/core/live_order_path.py",
+    # 2026-09-01. Runs inside `node.build()` (the exec-client factory wrapper)
+    # and is the last thing between a real fill and the cache write that used
+    # to kill the node. It raises `AttributeError` by design when the upstream
+    # shape moves; raising is fine here, exiting never is.
+    "src/core/live_exec_avg_px.py",
     "src/services/session_record.py",
     "src/services/session_service.py",
 )
