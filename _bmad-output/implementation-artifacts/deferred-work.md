@@ -2288,6 +2288,24 @@ adopted: **give each item a named owning story, not a priority label.** Items re
   sentence and is the recommendation. Whichever is chosen, **fix (1) regardless** — a field named
   `bar_close_*` that measures from the open is wrong under every option.
 
+  **RULED 2026-09-10 by Allay — option (c), and (1) fixed.** `OrderEventObserver.note_bar` now
+  keeps the bar's close (`ts_event + interval`) and its arrival (`bar.ts_init`) per instrument,
+  and `_log_submitted` emits both: `bar_close_to_submit_ms`, correctly anchored on the close, is
+  the divergence window and is not gated; new `bar_arrival_to_submit_ms` is the number NFR1's
+  `< 1s` bound is judged on. Each has its own out-of-band key (`implausible_latency_ms` /
+  `implausible_arrival_latency_ms`) under the same one-hour band. NFR1 is amended in
+  `planning-artifacts/epics.md:113` and the PRD's performance table (`prd.md:925`); the Story 3.2
+  AC at `epics.md:1209` carries the same amendment. Pinned by
+  `TestNfr1IsJudgedOnBarArrival` (`tests/component/core/test_live_order_path.py`), which encodes
+  the 2026-09-01 shape in miniature (5.5s lag, 3.5ms decision → ~5503.5ms close / 3.5ms arrival)
+  and an interval-independence case; both anchors mutation-checked (open-for-close: 8 tests red;
+  close-for-arrival: 5 tests red). The test fixture's bar had the same open/close confusion —
+  its "arrival" sat 7s after the *open*, 53s before the close — and is corrected with it. The
+  65682ms figure in the P7 result log (2026-09-01 row) was produced by the pre-ruling field and
+  stands as recorded; the correctly anchored value for that submission is ~5682ms close / ~3.5ms
+  arrival. **Not yet re-measured live** — the next RTH session that submits an order is the first
+  transcript to carry both fields.
+
 - **A fill that fails to apply leaves the session permanently unstartable, and nothing says so.**
   Measured live 2026-09-01, downstream of the `avg_px` serialization defect
   (`src/core/live_exec_avg_px.py`). When `_apply_event_to_order` raised on the fill, the order stayed

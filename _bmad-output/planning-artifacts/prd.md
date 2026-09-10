@@ -922,7 +922,7 @@ and be re-run; that safety net does not exist here.
 
 | Operation | Target | Rationale |
 |---|---|---|
-| Bar close → order submission | < 1 second | The backtest submits instantly; live latency is a divergence source. The real requirement is that it stays small relative to the shortest traded timeframe **and is observable**, not that it hits a specific number |
+| Bar arrival → order submission (**amended 2026-09-10**; was "bar close") | < 1 second | The backtest submits instantly; live latency is a divergence source. The real requirement is that it stays small relative to the shortest traded timeframe **and is observable**, not that it hits a specific number. The bound is judged from the bar's *arrival* in the process, the only interval this system controls; the bar-*close* → submission interval is logged beside it as the divergence window and is not bounded, because for IB minute bars it carries a structural ~5.5s delivery lag (measured 2026-09-01) |
 | Bar processing throughput | No accumulating backlog | Processing for one bar completes well before the next arrives, at the shortest supported timeframe. Unbounded queue growth means the strategy is trading stale data |
 | Session startup (connect → reconcile → warm indicators → subscribe) | **A session started 5 minutes before the open is trading at the open** | The operationally meaningful form. Bounded by IBKR historical-data pacing, so stated as an outcome rather than a raw duration |
 | Reconnection after transient disconnect | < 60 seconds | Missed bars during a gap are unrecoverable trading opportunities |

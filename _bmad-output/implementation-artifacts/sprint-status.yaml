@@ -36,6 +36,17 @@
 
 generated: 2026-08-03
 last_updated: >-
+  2026-09-10 (NFR1 RULED, option (c); no story status change. epic-3 in-progress: 3.1-3.3 done,
+  3.4-3.7 backlog, 3.4 not yet created. NFR1 now reads "bar ARRIVAL -> order submission < 1s, both
+  intervals observable" (epics.md:113, prd.md:925 amended in place with a dated note). Code:
+  `OrderEventObserver` keeps close (`ts_event + interval` -- this adapter's `ts_event` is the OPEN)
+  and arrival (`bar.ts_init`) per instrument and emits `bar_close_to_submit_ms` (divergence window,
+  unbounded) and new `bar_arrival_to_submit_ms` (what NFR1 is judged on), each with its own
+  implausible-band key. The misnamed-field bug is fixed regardless of the ruling. Pinned by
+  `TestNfr1IsJudgedOnBarArrival`; both anchors mutation-checked. The test fixture bar had the SAME
+  open/close confusion (arrival 53s before the close) and is corrected. Unit 2421 / component 1441
+  green, lint+mypy clean. NOT re-measured live: the next RTH session that submits is the first
+  transcript with both fields. NEXT: create Story 3.4. Previously:
   2026-09-01 (STORIES 3.2 AND 3.3 BOTH -> done. epic-3 stays in-progress: 3.1-3.3 done, 3.4-3.7
   backlog. One RTH session closed both stories' live items, as designed. 3.2's AC #7 (the real
   broker commission) and 3.3's AC #1/#2/#5 were evidenced in a single `order.filled` record, and

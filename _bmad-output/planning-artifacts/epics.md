@@ -110,7 +110,7 @@ FR53: Operator can configure which instruments and strategy parameters a session
 
 **Performance & Latency**
 
-NFR1: Bar close → order submission completes in < 1 second, and the latency is observable in logs.
+NFR1: Bar arrival → order submission completes in < 1 second, and both the bar-arrival→submission and the bar-close→submission intervals are observable in logs. *(Amended 2026-09-10, epic-level ruling, option (c) of the 2026-09-01 deferred-work item: the bound is judged on the interval this system controls — from the moment the adapter publishes the bar into the process (`bar.ts_init`) to `OrderSubmitted`. The bar-close→submission interval is logged beside it as the live-vs-backtest divergence window, and is not bounded, because for IB minute bars it is dominated by a structural ~5.5s delivery lag the process cannot shorten. Note this adapter's `bar.ts_event` is the bar's OPEN; the close is `ts_event + interval`.)*
 NFR2: Bar processing produces no accumulating backlog — processing for one bar completes well before the next arrives at the shortest supported timeframe.
 NFR3: A session started 5 minutes before the market open is trading at the open (connect → reconcile → warm indicators → subscribe all complete within that window).
 NFR4: Reconnection after a transient disconnect completes in < 60 seconds.
@@ -1206,7 +1206,7 @@ guarantee.
 
 **Given** a bar closes and a signal fires
 **When** submission latency is measured
-**Then** the bar-close→submission interval is logged, and is under 1 second (NFR1).
+**Then** the bar-close→submission interval is logged, and is under 1 second (NFR1). *(Amended 2026-09-10 with NFR1: both intervals are logged; the bar-arrival→submission one is under 1 second.)*
 
 **Given** an order is submitted
 **When** the event is logged
