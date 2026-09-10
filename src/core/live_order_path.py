@@ -89,9 +89,20 @@ re-enters ``MessageBus.publish_c``, which has no ``try`` around
 ``sub.handler(msg)``, and ends at Nautilus's own silent ``os._exit(1)`` with
 zero output (the Story 2.7 lesson). Nothing here may ever let that happen.
 
-**Latency anchor**: the venue bar close (``bar.ts_event``), not handler entry
-— NFR1 measures the live-vs-backtest divergence window, which includes
-delivery lag. Known hazards, stated rather than hidden: ``live_bars.received``
+**Latency anchors — two, by the NFR1 ruling of 2026-09-10.** For this
+adapter ``bar.ts_event`` is the bar's **open**, not its close
+(``_ib_bar_to_ts_event``'s own docstring; see ``live_bar_observer.py`` fact
+(1)), so the close is ``ts_event + interval``. ``bar_close_to_submit_ms`` is
+anchored there: it is the live-vs-backtest divergence window, and it
+*includes* IB's structural ~5.5s delivery lag (a completed bar is published
+only when the next bar's first update arrives). It is logged, never gated on.
+``bar_arrival_to_submit_ms`` is anchored on ``bar.ts_init`` — the wall clock
+at which the adapter published the bar into this process — and is the number
+NFR1's ``< 1s`` bound is judged on, because it is the only interval this
+system controls. Until the ruling the single field measured from the open
+under the ``bar_close_*`` name and read 65682ms on the first live fill: one
+whole 60s interval of nothing plus the lag. Known hazards, stated rather
+than hidden: ``live_bars.received``
 appears twice per bar (Nautilus C logger + structlog), and the first bar
 after subscribe can be a backfill bar (P3) — a live-transcript reader must
 read latency from steady-state bars, not the first one. ``OrderSubmitted`` is
@@ -170,13 +181,27 @@ ORDER_EVENTS_TOPIC = "events.order*"
 #: `order.suppressed` records for one call.
 _INSTALLED_MARKER = "_ntrader_order_path_installed"
 
-#: Beyond this, a bar-close-to-submit interval is not a measurement — it is a
-#: bad anchor (an unset `ts_event` of 0, a backfill bar, a clock step). NFR1's
-#: target is under one second; an hour is generous enough that nothing
-#: legitimate is discarded, and it catches the epoch-zero case (~55 years) and
-#: every negative. Out-of-band values are still logged, under a *different*
-#: key — see :meth:`OrderEventObserver._log_submitted`.
+#: Beyond this, a bar-to-submit interval (either anchor) is not a measurement
+#: — it is a bad anchor (an unset `ts_event` of 0, a backfill bar, a clock
+#: step). NFR1's target is under one second; an hour is generous enough that
+#: nothing legitimate is discarded, and it catches the epoch-zero case (~55
+#: years) and every negative. Out-of-band values are still logged, under a
+#: *different* key — see :meth:`OrderEventObserver._log_submitted`.
 MAX_PLAUSIBLE_LATENCY_NS = 3_600_000_000_000
+
+NANOS_PER_SECOND = 1_000_000_000
+
+
+class _BarAnchor(TypedDict):
+    """What :meth:`OrderEventObserver.note_bar` keeps per instrument, and
+    what both NFR1 latencies are measured from. ``close_ns`` is derived
+    (``ts_event + interval``) because the adapter's ``ts_event`` is the open;
+    ``arrival_ns`` is ``bar.ts_init`` verbatim.
+    """
+
+    close_ns: int
+    arrival_ns: int
+    bar_type: str
 
 
 class _OrderAccumulator(TypedDict):
@@ -198,6 +223,17 @@ class _OrderAccumulator(TypedDict):
 
 def _new_accumulator() -> _OrderAccumulator:
     return {"cum_qty": Decimal(0), "order_qty": None, "trade_ids": set()}
+
+
+def _put_latency(
+    fields: dict[str, Any], interval_ns: int, *, plausible: str, implausible: str
+) -> None:
+    """Record ``interval_ns`` in ms under ``plausible``, or under ``implausible``
+    when it is outside :data:`MAX_PLAUSIBLE_LATENCY_NS` — never both, never
+    neither.
+    """
+    key = plausible if 0 <= interval_ns <= MAX_PLAUSIBLE_LATENCY_NS else implausible
+    fields[key] = interval_ns / 1_000_000
 
 
 def install_order_path(strategy: Any, monitor: Any, log: Any) -> None:
@@ -407,8 +443,8 @@ class OrderEventObserver:
         self._traded_bar_types: frozenset[str] | None = (
             None if traded_bar_types is None else frozenset(str(bt) for bt in traded_bar_types)
         )
-        #: instrument_id -> (venue close instant, the bar type it came from)
-        self._last_bar: dict[str, tuple[int, str]] = {}
+        #: instrument_id -> the last traded bar's close/arrival instants
+        self._last_bar: dict[str, _BarAnchor] = {}
         #: client_order_id -> accumulator; never pruned, see the class docstring
         self._orders: dict[str, _OrderAccumulator] = {}
         #: Class-name dispatch — a closed set, not a default-log (Task 2.6).
@@ -425,12 +461,17 @@ class OrderEventObserver:
         }
 
     def note_bar(self, bar: Any) -> None:
-        """Record the venue close instant for this bar's instrument."""
+        """Record the venue close and arrival instants for this bar's instrument."""
         try:
             bar_type = str(bar.bar_type)
             if self._traded_bar_types is not None and bar_type not in self._traded_bar_types:
                 return
-            self._last_bar[str(bar.bar_type.instrument_id)] = (bar.ts_event, bar_type)
+            interval_ns = int(bar.bar_type.spec.timedelta.total_seconds() * NANOS_PER_SECOND)
+            self._last_bar[str(bar.bar_type.instrument_id)] = {
+                "close_ns": bar.ts_event + interval_ns,
+                "arrival_ns": bar.ts_init,
+                "bar_type": bar_type,
+            }
         except Exception as exc:  # noqa: BLE001 - a msgbus handler must never raise
             self._log.error(
                 "order.observer_failed",
@@ -467,18 +508,20 @@ class OrderEventObserver:
             )
 
     def _log_submitted(self, event: Any) -> None:
-        """The latency anchor is the venue bar close (``bar.ts_event``), not
-        handler entry — NFR1 measures the live-vs-backtest divergence window,
-        which includes delivery lag. Absent, never fabricated, when no bar
-        has been observed yet for this instrument.
+        """Two latencies, one submission — see the module docstring's
+        "Latency anchors". ``bar_close_to_submit_ms`` (venue close → submit)
+        is the divergence window; ``bar_arrival_to_submit_ms`` (bar arrival →
+        submit) is what NFR1's bound is judged on. Both absent, never
+        fabricated, when no bar has been observed yet for this instrument.
 
         Every emitted latency names the ``bar_type`` it was measured from, and
         an interval outside :data:`MAX_PLAUSIBLE_LATENCY_NS` is recorded under
-        ``implausible_latency_ms`` instead — visible, but impossible to
-        mistake for the number NFR1 is judged on (review 2026-08-30). Note the
-        subtraction crosses clock domains: ``bar.ts_event`` is the venue's
-        instant and ``event.ts_init`` the local host's, so host/venue skew
-        lands in the value whole. That is why the anchor is logged beside it.
+        ``implausible_latency_ms`` / ``implausible_arrival_latency_ms``
+        instead — visible, but impossible to mistake for the number NFR1 is
+        judged on (review 2026-08-30). Note the close subtraction crosses
+        clock domains: the close is the venue's instant and ``event.ts_init``
+        the local host's, so host/venue skew lands in that value whole. The
+        arrival subtraction does not — both instants are this host's clock.
         """
         fields: dict[str, Any] = {
             "client_order_id": str(event.client_order_id),
@@ -487,15 +530,19 @@ class OrderEventObserver:
         }
         anchor = self._last_bar.get(str(event.instrument_id))
         if anchor is not None:
-            bar_ts_event, bar_type = anchor
-            interval_ns = event.ts_init - bar_ts_event
-            fields["latency_anchor_bar_type"] = bar_type
-            key = (
-                "bar_close_to_submit_ms"
-                if 0 <= interval_ns <= MAX_PLAUSIBLE_LATENCY_NS
-                else "implausible_latency_ms"
+            fields["latency_anchor_bar_type"] = anchor["bar_type"]
+            _put_latency(
+                fields,
+                event.ts_init - anchor["close_ns"],
+                plausible="bar_close_to_submit_ms",
+                implausible="implausible_latency_ms",
             )
-            fields[key] = interval_ns / 1_000_000
+            _put_latency(
+                fields,
+                event.ts_init - anchor["arrival_ns"],
+                plausible="bar_arrival_to_submit_ms",
+                implausible="implausible_arrival_latency_ms",
+            )
         self._log.info(SUBMITTED_EVENT, **fields)
 
     def _harvest_initialized(self, event: Any) -> None:

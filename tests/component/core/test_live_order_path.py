@@ -107,6 +107,22 @@ class _StubMonitor:
         self.submission_withheld = withheld
 
 
+#: The IB adapter stamps `ts_event` as the bar's OPEN (see
+#: `live_bar_observer.py`, fact (1)); the close is one interval later. Every
+#: latency test below anchors on the close, never on `ts_event` itself —
+#: anchoring on `ts_event` was the Story 3.2 defect (off by one interval).
+BAR_INTERVAL_NS = 60_000_000_000
+#: How long after the venue CLOSE `make_bar`'s arrival (`ts_init`) sits —
+#: the IB delivery lag measured live on 2026-09-01 (5.28s/5.53s/5.68s on
+#: consecutive bars). Strictly after the close, as a real bar's is; and far
+#: enough from it that a test cannot pass with the wrong anchor.
+BAR_ARRIVAL_AFTER_CLOSE_NS = 5_500_000_000
+
+
+def bar_close_ns(bar: Bar) -> int:
+    return bar.ts_event + BAR_INTERVAL_NS
+
+
 def make_bar(index: int, close: str) -> Bar:
     price = Price.from_str(close)
     return Bar(
@@ -116,17 +132,17 @@ def make_bar(index: int, close: str) -> Bar:
         low=price,
         close=price,
         volume=Quantity.from_int(1_000),
-        ts_event=index * 60_000_000_000,
+        ts_event=index * BAR_INTERVAL_NS,
         # Deliberately NOT equal to `ts_event` (review fix, 2026-08-30).
-        # These were identical, which made the two plausible anchors
-        # indistinguishable: mutating `note_bar` from `bar.ts_event` to
-        # `bar.ts_init` — the realistic wrong anchor, and the one that
-        # *excludes* the delivery lag NFR1 exists to measure — left every
+        # These were identical, which made the two anchors indistinguishable:
+        # mutating `note_bar` from `bar.ts_event` to `bar.ts_init` left every
         # test green. Task 9.1's M4 only ever caught `time.time_ns()`, which
         # is off by ~1.8e12 and would have been caught by anything. A real
         # bar's `ts_init` is its arrival instant, strictly after the venue
-        # close it reports.
-        ts_init=index * 60_000_000_000 + 7_000_000_000,
+        # close it reports. (Until the 2026-09-10 NFR1 ruling this sat 7s
+        # after the OPEN — i.e. 53s *before* the close — the same open/close
+        # confusion the ruling corrected in the observer.)
+        ts_init=index * BAR_INTERVAL_NS + BAR_INTERVAL_NS + BAR_ARRIVAL_AFTER_CLOSE_NS,
     )
 
 
@@ -434,7 +450,7 @@ class TestOrderEventObserver:
             client_order_id=self.CLIENT_ORDER_ID,
             strategy_id=self.STRATEGY_ID,
             ts_event=bar.ts_event,
-            ts_init=bar.ts_event + 500_000_000,  # +500ms
+            ts_init=bar.ts_init + 500_000_000,  # 500ms after ARRIVAL, 6s after the CLOSE
         )
 
         with capture_logs() as logs:
@@ -445,7 +461,8 @@ class TestOrderEventObserver:
         assert submitted[0]["session_id"] == "s1"
         assert submitted[0]["client_order_id"] == str(self.CLIENT_ORDER_ID)
         assert submitted[0]["instrument_id"] == str(self.INSTRUMENT_ID)
-        assert submitted[0]["bar_close_to_submit_ms"] == pytest.approx(500.0)
+        assert submitted[0]["bar_close_to_submit_ms"] == pytest.approx(6_000.0)
+        assert submitted[0]["bar_arrival_to_submit_ms"] == pytest.approx(500.0)
 
     def test_order_submitted_with_no_known_bar_omits_the_latency_field(self):
         """Never a fabricated value — the field is simply absent."""
@@ -464,6 +481,7 @@ class TestOrderEventObserver:
         submitted = [entry for entry in logs if entry["event"] == SUBMITTED_EVENT]
         assert len(submitted) == 1
         assert "bar_close_to_submit_ms" not in submitted[0]
+        assert "bar_arrival_to_submit_ms" not in submitted[0]
 
     def test_an_order_initialized_on_the_same_topic_is_ignored_silently(self):
         """`submit_order` publishes `OrderInitialized` on the same topic
@@ -581,7 +599,7 @@ class TestTheLatencyAnchorIsUnambiguous:
         )
 
         with capture_logs() as logs:
-            observer.handle_order_event(self._submitted(traded.ts_event + 500_000_000))
+            observer.handle_order_event(self._submitted(bar_close_ns(traded) + 500_000_000))
 
         submitted = [entry for entry in logs if entry["event"] == SUBMITTED_EVENT][0]
         assert submitted["bar_close_to_submit_ms"] == pytest.approx(500.0)
@@ -593,7 +611,7 @@ class TestTheLatencyAnchorIsUnambiguous:
         observer.note_bar(bar)
 
         with capture_logs() as logs:
-            observer.handle_order_event(self._submitted(bar.ts_event + 250_000_000))
+            observer.handle_order_event(self._submitted(bar_close_ns(bar) + 250_000_000))
 
         submitted = [entry for entry in logs if entry["event"] == SUBMITTED_EVENT][0]
         assert submitted["latency_anchor_bar_type"] == str(BAR_TYPE)
@@ -607,7 +625,9 @@ class TestTheLatencyAnchorIsUnambiguous:
         observer.note_bar(make_bar(1, "100.00"))
 
         with capture_logs() as logs:
-            observer.handle_order_event(self._submitted(make_bar(1, "100.00").ts_event + 1_000_000))
+            observer.handle_order_event(
+                self._submitted(bar_close_ns(make_bar(1, "100.00")) + 1_000_000)
+            )
 
         submitted = [entry for entry in logs if entry["event"] == SUBMITTED_EVENT][0]
         assert submitted["bar_close_to_submit_ms"] == pytest.approx(1.0)
@@ -628,7 +648,7 @@ class TestTheLatencyAnchorIsUnambiguous:
         observer.note_bar(bar)
 
         with capture_logs() as logs:
-            observer.handle_order_event(self._submitted(bar.ts_event + offset_ns))
+            observer.handle_order_event(self._submitted(bar_close_ns(bar) + offset_ns))
 
         submitted = [entry for entry in logs if entry["event"] == SUBMITTED_EVENT][0]
         assert "bar_close_to_submit_ms" not in submitted, label
@@ -658,6 +678,115 @@ class TestTheLatencyAnchorIsUnambiguous:
 
         submitted = [entry for entry in logs if entry["event"] == SUBMITTED_EVENT][0]
         assert "bar_close_to_submit_ms" not in submitted
+        assert "bar_arrival_to_submit_ms" not in submitted
+
+
+class TestNfr1IsJudgedOnBarArrival:
+    """NFR1 ruling, 2026-09-10 (option (c) of the deferred-work item dated
+    2026-09-01): two latencies are logged from one submission.
+
+    * ``bar_close_to_submit_ms`` — anchored on the venue **close**
+      (``ts_event + interval``, because this adapter's ``ts_event`` is the
+      OPEN). It is the live-vs-backtest divergence window, and it *includes*
+      IB's structural ~5.5s delivery lag. Logged, never gated on.
+    * ``bar_arrival_to_submit_ms`` — anchored on the bar's arrival in this
+      process (``bar.ts_init``). It is what this system controls, and it is
+      the number NFR1's ``< 1s`` bound is judged on.
+
+    The pre-ruling field measured from the open, so on the 2026-09-01 fill it
+    logged 65682ms for a 60s bar: one whole interval of nothing plus the lag.
+    """
+
+    INSTRUMENT_ID = InstrumentId.from_str("AAPL.NASDAQ")
+    STRATEGY_ID = StrategyId("SMACrossover-000")
+    CLIENT_ORDER_ID = ClientOrderId("O-20260830-193805-621bb88c-000-1")
+
+    def _submitted(self, ts_init: int):
+        return _order_submitted(
+            instrument_id=self.INSTRUMENT_ID,
+            client_order_id=self.CLIENT_ORDER_ID,
+            strategy_id=self.STRATEGY_ID,
+            ts_event=ts_init,
+            ts_init=ts_init,
+        )
+
+    def _submit_after_arrival(self, bar: Bar, after_arrival_ns: int) -> dict:
+        observer = OrderEventObserver(structlog.get_logger("test"))
+        observer.note_bar(bar)
+        with capture_logs() as logs:
+            observer.handle_order_event(self._submitted(bar.ts_init + after_arrival_ns))
+        return [entry for entry in logs if entry["event"] == SUBMITTED_EVENT][0]
+
+    def test_the_close_anchor_is_one_interval_after_ts_event_not_ts_event_itself(self):
+        """The 2026-09-01 shape, in miniature: a bar that arrives 5.5s after
+        its close and a signal 3.5ms after arrival must log ~5503.5ms from the
+        close — not ~65503.5ms from the open.
+        """
+        bar = Bar(
+            bar_type=BAR_TYPE,
+            open=Price.from_str("100.00"),
+            high=Price.from_str("100.00"),
+            low=Price.from_str("100.00"),
+            close=Price.from_str("100.00"),
+            volume=Quantity.from_int(1_000),
+            ts_event=100 * BAR_INTERVAL_NS,
+            ts_init=100 * BAR_INTERVAL_NS + BAR_INTERVAL_NS + 5_500_000_000,
+        )
+
+        submitted = self._submit_after_arrival(bar, 3_500_000)
+
+        assert submitted["bar_close_to_submit_ms"] == pytest.approx(5_503.5)
+        assert submitted["bar_arrival_to_submit_ms"] == pytest.approx(3.5)
+
+    def test_the_arrival_latency_is_independent_of_the_bar_interval(self):
+        """Swap the 1-MINUTE bar for a 1-HOUR one: the close anchor moves by
+        an hour, the arrival anchor does not move at all.
+        """
+        hourly = BarType.from_str("AAPL.NASDAQ-1-HOUR-LAST-EXTERNAL")
+        bar = Bar(
+            bar_type=hourly,
+            open=Price.from_str("100.00"),
+            high=Price.from_str("100.00"),
+            low=Price.from_str("100.00"),
+            close=Price.from_str("100.00"),
+            volume=Quantity.from_int(1_000),
+            ts_event=10 * 3_600_000_000_000,
+            ts_init=11 * 3_600_000_000_000 + 5_000_000_000,
+        )
+
+        submitted = self._submit_after_arrival(bar, 2_000_000)
+
+        assert submitted["bar_close_to_submit_ms"] == pytest.approx(5_002.0)
+        assert submitted["bar_arrival_to_submit_ms"] == pytest.approx(2.0)
+        assert submitted["latency_anchor_bar_type"] == str(hourly)
+
+    def test_an_implausible_arrival_interval_is_recorded_under_its_own_key(self):
+        """A submission stamped *before* the bar arrived is clock nonsense,
+        not a sub-millisecond latency. Same band as the close anchor, same
+        rule: visible, under a key that cannot be mistaken for NFR1's number.
+        """
+        bar = make_bar(100, "100.00")
+
+        submitted = self._submit_after_arrival(bar, -1_000_000_000)
+
+        assert "bar_arrival_to_submit_ms" not in submitted
+        assert submitted["implausible_arrival_latency_ms"] == pytest.approx(-1_000.0)
+
+    def test_both_latencies_come_from_the_same_bar(self):
+        """Two bars, one traded aggregation: both fields are measured from
+        the bar the signal saw, never mixed across bars.
+        """
+        observer = OrderEventObserver(structlog.get_logger("test"))
+        observer.note_bar(make_bar(5, "100.00"))
+        latest = make_bar(6, "101.00")
+        observer.note_bar(latest)
+
+        with capture_logs() as logs:
+            observer.handle_order_event(self._submitted(latest.ts_init + 4_000_000))
+
+        submitted = [entry for entry in logs if entry["event"] == SUBMITTED_EVENT][0]
+        assert submitted["bar_close_to_submit_ms"] == pytest.approx(5_504.0)
+        assert submitted["bar_arrival_to_submit_ms"] == pytest.approx(4.0)
 
 
 def _make_order():
