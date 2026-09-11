@@ -1325,6 +1325,20 @@ sees its own open order rather than placing a second one (FR27, AR25).
 > `trading_sessions`, so a reclaimed process keeps trading for up to one heartbeat interval (~30 s) —
 > two live processes on one broker account. It was deferred five times across Epic 2 because no story
 > owned a `SessionRecordPort` write; **Epic 3 does**. See decision D1 in `epic-2-retro-2026-08-28.md`.
+>
+> **Resolved at drafting, 2026-09-10 (SM, story creation; Allay may overturn at review) — option (a),
+> and stronger than the retro assumed.** Measured in the installed 1.220.0 wheel: `NautilusKernel.__init__`
+> runs `exec_engine.load_cache()` (`cache_orders → build_index`, so every `ACCEPTED`/`PARTIALLY_FILLED`
+> order is in `orders_open` before anything starts), and `start_async` calls `_trader.start()` only
+> after connect, Nautilus's own startup reconciliation (`reconciliation=True` by default, which
+> `live_node_builder.py` does not override) and portfolio initialisation. The third criterion is
+> therefore provable with doubles today and is scoped to that: the restore and the visibility inside
+> `on_start`. What reconciliation *does* with a disagreement — broker-wins overwrite, the stale-open-order
+> startup stall measured 2026-09-01, `reconcile.*` records, NFR10's reconciliation gate — stays Story
+> 4.2's, and the dependency structure's "strictly linear" claim stands. The fencing column is **not**
+> this story's: D1 was ruled to Story 3.6 at the Epic 2 retrospective (`deferred-work.md:2083-2100`).
+> Full reasoning and citations: `3-4-never-resubmit-an-order-that-is-already-working.md`, "Why this
+> story is shaped the way it is".
 
 ### Story 3.5: Aggregate Partial Fills into One Position
 

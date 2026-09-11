@@ -2347,3 +2347,66 @@ adopted: **give each item a named owning story, not a priority label.** Items re
   a fourth, is not listed, and is not distinguishable from the other three without reading the
   Nautilus lines by hand. Cheap improvement whenever `live_start.py` is next touched: report which
   of the node's three waits actually expired (each logs distinctly), rather than listing all three.
+
+## Deferred from: story-3.4 (2026-09-11)
+
+- **The IB adapter conflates "not open" with "cancelled."** Measured while implementing Story 3.4
+  (Dev Notes, Hazards #1): `InteractiveBrokersExecutionClient.generate_order_status_report` asks
+  `reqOpenOrders`, and an order that has *filled* while its ack was lost is not open either — the
+  adapter answers "not found" by generating a **local** `OrderCanceled`
+  (`execution.py:286-296`), and `generate_fill_reports` returns `[]` unconditionally
+  (`execution.py:447-452`). The cache then believes flat while the account genuinely holds a
+  position, and the next signal opens exposure the strategy did not intend. This is not a
+  duplicate *submission* — nothing in the order path resends, which is what this story proves and
+  pins — but it is a duplicate **in effect**, and today's `order.canceled` record cannot
+  distinguish it: `OrderCanceled` carries no reason field, and the adapter's own warning line
+  ("Order ... not found, canceling") is the only trace, which this codebase does not capture
+  anywhere. **Owner: Story 4.3** (runtime alignment via broker-authoritative state) —
+  `generate_position_status_reports` *is* implemented (`execution.py:454-505`) and is the
+  mechanism 4.3 would reconcile against; this story does not solve it, only routes it, as the Epic
+  2 retro's standing rule requires for any hazard found outside a story's own scope.
+
+- **Measured correction to the Story 3.4 draft's own test design** (both found by fresh-interpreter
+  probes, Task 1, before any test was written — see the module docstring of
+  `tests/component/core/test_live_order_recovery.py` for the full citations):
+  1. `MockLiveExecutionClient.query_order` is a pure call-recorder in the installed test kit — it
+     never reaches `generate_order_status_report` at all, because the mock overrides `query_order`
+     itself rather than the base `LiveExecutionClient.query_order`'s `create_task(self._query_order(...))`.
+     The timeout path's guard is `"query_order" in client.calls`, not
+     `"generate_order_status_report"`; the reconnect path needed a client subclass
+     (`_AnsweringClient`) whose `query_order` explicitly drives the base client's real async chain.
+  2. `strategy.submit_order(restored_order)` — literally resubmitting the object a Redis restore
+     hands back — does not produce `OrderDenied`. It raises `ValueError` at Nautilus's own
+     `Condition.is_true(order.status_c() == OrderStatus.INITIALIZED, ...)` precondition
+     (`trading/strategy.pyx:794-796`), which runs strictly before the duplicate-`client_order_id`
+     check that follows it (`:806-808`) — an even stronger guarantee against resubmission than the
+     draft assumed, but the wrong shape to assert `OrderDenied` against. The scenario AC #3
+     actually describes — a resumed strategy placing a lookalike order without first consulting
+     `orders_open` — is a **new** `INITIALIZED` order carrying the restored order's
+     `client_order_id`, which does reach the duplicate check.
+  Neither correction changed the acceptance criteria or their intent; both are recorded here per
+  the "disclose and record an overage/correction rather than silently exceeding it" convention
+  (CLAUDE.md) since they diverge from the story's drafted Task 3/4 wording.
+
+- **The AR24 AST scan (Task 2, rule c) has a structural blind spot around `live_order_path.py`'s
+  own generic wrapper**, found by the Task 9 mutation sweep (M5). Rule (c) matches calls whose
+  callee identifier is literally `submit_order`/`submit_order_list`; `_wrap`'s pass-through call is
+  `base(*args, **kwargs)` — `base` is a dynamic parameter, never that literal name — so a retry
+  loop wrapped directly around the generic forwarding call is invisible to the unit-tier scan by
+  construction, not by oversight. Closed by a second, complementary structural pin in
+  `test_live_order_recovery.py::TestTheWrapperClosureHasNoQueueAttribute`
+  (`test_the_base_forwarding_call_is_not_inside_a_loop_or_try`), which walks `_wrap`'s own AST for
+  a `For`/`AsyncFor`/`While`/`Try` ancestor of the `base(...)` call specifically. Worth remembering
+  for any future name-based AST scan over a generic dispatch wrapper: the scan protects call sites
+  that name the forbidden method literally, and a structural pin on the wrapper itself is what
+  covers the indirection.
+
+- **The mutation sweep (M8) found the first version of `TestASuppressedCallIsNeverReplayed` was
+  vacuous against the mutation it exists to catch.** It flipped `monitor.submission_withheld` from
+  `True` to `False` and asserted nothing more was submitted — but drove no further call after the
+  flip, so a "queue the suppressed call and replay it on the next invocation" mutation left it
+  green. Fixed by adding a second test that submits a *fresh* signal after the flip and asserts
+  only the fresh order reaches the exec layer — the swallowed one must never ride along with it.
+  General lesson for any "no replay" guard: the assertion must include a legitimate call *after*
+  the state change, not just the absence of one, or a replay wired to the next invocation has
+  nothing to trigger it during the test.

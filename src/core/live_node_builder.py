@@ -126,6 +126,34 @@ NODE_TIMEOUT_SHUTDOWN = 5.0
 # that we set `True`, and that Nautilus still defaults `False`.
 ENGINE_GRACEFUL_SHUTDOWN_ON_EXCEPTION = True
 
+# Story 3.4 (AC #1, AR24). The in-flight sweep is what proves NFR6: it is
+# what queries the venue for a `SUBMITTED`/`PENDING_*` order that has gone
+# quiet — a lost ack, a dropped connection mid-submit — and resolves it
+# LOCALLY (`OrderRejected(reason="UNKNOWN", reconciliation=True)` for
+# `SUBMITTED`, `OrderCanceled(reconciliation=True)` for `PENDING_*`) rather
+# than ever resubmitting. Nothing in `live/execution_engine.py` calls
+# `submit_order` — the only path back to the broker after a signal is a
+# fresh strategy decision. These four fields were previously left to
+# `LiveExecEngineConfig`'s own defaults by omission (nothing in this
+# repository named, tested, or would go red if a future edit disabled them);
+# the values below are today's Nautilus 1.220.0 defaults
+# (`live/config.py:166-187`), passed explicitly for the same
+# "today's-defaults-deliberately" reason the `NODE_TIMEOUT_*` block is:
+# `tests/component/core/test_live_node_builder.py` pins both halves — that we
+# set these values, and that the wheel's own stock defaults still equal them,
+# so an upgrade that moves one becomes a decision rather than a silent drift.
+#
+# `open_check_interval_secs` is deliberately left unset (`None`, the
+# default): continuous open-order checking is Story 4.3's, and with the IB
+# adapter it is not free — `generate_order_status_reports` ignores
+# `open_only`, calls `get_positions`, and fabricates a `FILLED` report per
+# position on every tick (`execution.py:374-445`) — a 4.3 design decision,
+# not a default to flip here.
+EXEC_ENGINE_RECONCILIATION = True
+EXEC_ENGINE_INFLIGHT_CHECK_INTERVAL_MS = 2_000
+EXEC_ENGINE_INFLIGHT_CHECK_THRESHOLD_MS = 5_000
+EXEC_ENGINE_INFLIGHT_CHECK_RETRIES = 5
+
 logger = structlog.get_logger(__name__)
 
 
@@ -409,7 +437,11 @@ def build_trading_node_config(
             graceful_shutdown_on_exception=ENGINE_GRACEFUL_SHUTDOWN_ON_EXCEPTION
         ),
         exec_engine=LiveExecEngineConfig(
-            graceful_shutdown_on_exception=ENGINE_GRACEFUL_SHUTDOWN_ON_EXCEPTION
+            graceful_shutdown_on_exception=ENGINE_GRACEFUL_SHUTDOWN_ON_EXCEPTION,
+            reconciliation=EXEC_ENGINE_RECONCILIATION,
+            inflight_check_interval_ms=EXEC_ENGINE_INFLIGHT_CHECK_INTERVAL_MS,
+            inflight_check_threshold_ms=EXEC_ENGINE_INFLIGHT_CHECK_THRESHOLD_MS,
+            inflight_check_retries=EXEC_ENGINE_INFLIGHT_CHECK_RETRIES,
         ),
         risk_engine=LiveRiskEngineConfig(
             graceful_shutdown_on_exception=ENGINE_GRACEFUL_SHUTDOWN_ON_EXCEPTION

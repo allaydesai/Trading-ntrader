@@ -36,6 +36,71 @@
 
 generated: 2026-08-03
 last_updated: >-
+  2026-09-11 (STORY 3.4 IMPLEMENTED: ready-for-dev -> in-progress -> review, same session as
+  the 2026-09-10 creation. epic-3 stays in-progress: 3.1-3.3 done, 3.4 review, 3.5-3.7 backlog.
+  All 9 tasks / 33 subtasks done except 8.2 (the live IBKR transcript), which stays
+  `⏳ not yet run` per the Epic 2 retro's standing rule (3.2/3.3 precedent) -- not blocking.
+  Task 1's fresh-interpreter probes found two corrections to the drafted Task 3/4 design before
+  any test was written: MockLiveExecutionClient.query_order never reaches
+  generate_order_status_report (it overrides the base async chain entirely -- the timeout
+  guard became "query_order" in calls, the reconnect path needed an _AnsweringClient
+  subclass); and strategy.submit_order(restored_order) raises ValueError on Nautilus's own
+  INITIALIZED precondition rather than producing OrderDenied -- a fresh INITIALIZED order
+  carrying the restored client_order_id is the shape that actually reaches the duplicate
+  check. The Task 9 mutation sweep (M5, M8) found two more test gaps: the AR24 loop scan
+  cannot see a retry loop around _wrap's generic base(...) forwarding call (closed with a
+  second structural AST pin), and the suppression-replay test never drove a call after
+  unmuting so a queue-and-replay mutation stayed green (closed by adding that call). All nine
+  scripted mutations (M1-M9) confirmed red then reverted, or turned into permanent coverage
+  (M9). Production diff is exactly Task 5's scope: four new constants
+  (EXEC_ENGINE_RECONCILIATION, EXEC_ENGINE_INFLIGHT_CHECK_INTERVAL_MS/THRESHOLD_MS/RETRIES,
+  at the measured wheel defaults) plus four explicit kwargs on live_node_builder.py's
+  LiveExecEngineConfig(...) call, with a component pin and wheel-default canary. Zero diffs
+  verified on every file Task 7 named (live_order_path.py, live_session_runner.py,
+  live_connection_monitor.py, live_strategy_guard.py, strategies/**, db/**, alembic/**,
+  services/**, models/**, cli/**, all four guard-list files). Gates: format/lint/mypy clean;
+  unit 2421->2441 (+20, test_order_path_has_no_retry.py); component 1441/16sk->1457/16sk
+  (+16: test_live_order_recovery.py + TestInFlightCheckIsExplicit); integration --forked
+  281/2sk->282/2sk (+1, test_live_order_survives_restart.py, real local Redis); e2e 1->1. New
+  Procedure P10 in phase3-live-verification.md (result `⏳ not yet run`). New deferred-work.md
+  "story-3.4" section routes the IB adapter's not-found/cancelled conflation to Story 4.3 and
+  records the four measured test-design corrections. NEXT: code-review 3.4, then create 3.5.)
+  Previously:
+  2026-09-10 (STORY 3.4 DEV STARTED: ready-for-dev -> in-progress. epic-3 stays in-progress:
+  3.1-3.3 done, 3.4 in-progress, 3.5-3.7 backlog.) Previously:
+  2026-09-10 (STORY 3.4 CREATED: backlog -> ready-for-dev. File:
+  3-4-never-resubmit-an-order-that-is-already-working.md. epic-3 stays in-progress: 3.1-3.3 done,
+  3.4 ready-for-dev, 3.5-3.7 backlog. Drafted from epics.md:1280-1327 against head 35c1e1b (clean)
+  after three parallel measurements (the 1.220.0 wheel, the 3.2/3.3 records + 2026-09-01 live
+  findings, the live wiring/guard lists/test harnesses). THE STORY PROVES AND PINS; IT BUILDS ONE
+  CONFIG EDIT. Measured: the LiveExecutionEngine in-flight check already queries the venue for any
+  SUBMITTED order older than 5s (QueryOrder -> generate_order_status_report -> IB reqOpenOrders)
+  and NEVER resubmits -- retries exhausted resolve LOCALLY to OrderRejected(reason=UNKNOWN,
+  reconciliation=True); no submit_order call exists in live/execution_engine.py; a disconnect
+  cancels and drops unsent submit tasks. The Redis restore happens in NautilusKernel.__init__
+  (load_cache -> cache_orders -> build_index) and _trader.start() runs only after reconciliation
+  and portfolio init, so orders_open(strategy_id=...) already answers inside on_start;
+  Strategy._start restores the client-order-id counter from the cache and Strategy.submit_order
+  denies a duplicate client_order_id. All of it is default-by-omission in live_node_builder.py
+  (:411-413 passes only graceful_shutdown_on_exception) and pinned by nothing. DRAFTING DECISIONS:
+  (1) the flagged Epic 4 backwards dependency (epics.md:1310-1321) resolves to OPTION (a) -- AC #3
+  is provable with doubles today; what reconciliation DOES with a disagreement (incl. the
+  2026-09-01 stale-order startup stall) stays Story 4.2's; a dated note is added under the
+  epics.md flag, overridable at review. (2) The fencing column is NOT absorbed -- D1 is ruled to
+  3.6. (3) AC #1 becomes an explicit builder decision (four constants + kwargs at the wheel's
+  defaults) with a wheel-default canary; AC #2 a unit-tier AST scan (retry libs, retry/backoff
+  decorators, submit_order inside for/while/except) with a non-vacuity twin; AC #3/#4 a component
+  MockCacheDatabase restore asserted from INSIDE on_start plus a real-Redis --forked twin (skip
+  when absent); the three NFR6 paths (timeout / reconnect / restart) each count submit_order at
+  the MockLiveExecutionClient as an exact integer. (4) One new wheel hazard routed, not solved:
+  the IB adapter's generate_order_status_report answers 'not found' with a LOCAL OrderCanceled
+  (execution.py:286-296), conflating filled-while-disconnected with cancelled, and
+  generate_fill_reports returns [] -- owner Story 4.3. Live tier is OBSERVATIONAL (new P10: restart
+  a traded session, read 'Cached N order(s)' + the restored counter + both NFR1 fields), because
+  the built-in strategy's market orders cannot be left working across a restart on demand. Evidence
+  contracts: zero diffs to live_order_path.py / runner / monitor / guard / strategies / db / cli,
+  zero guard-list edits. Baselines measured: unit 2421, component 1441/16 sk, integration 281/2
+  sk, e2e 1. NEXT: dev-story 3.4.) Previously:
   2026-09-10 (NFR1 RULED, option (c); no story status change. epic-3 in-progress: 3.1-3.3 done,
   3.4-3.7 backlog, 3.4 not yet created. NFR1 now reads "bar ARRIVAL -> order submission < 1s, both
   intervals observable" (epics.md:113, prd.md:925 amended in place with a dated note). Code:
@@ -2105,7 +2170,7 @@ development_status:
   3-1-stop-trading-without-manufacturing-an-exit: done
   3-2-submit-a-strategys-orders-to-the-broker: done
   3-3-track-every-order-through-its-full-lifecycle: done
-  3-4-never-resubmit-an-order-that-is-already-working: backlog
+  3-4-never-resubmit-an-order-that-is-already-working: review
   3-5-aggregate-partial-fills-into-one-position: backlog
   3-6-persist-each-trade-the-moment-it-closes: backlog
   3-7-keep-trading-after-a-rejection: backlog

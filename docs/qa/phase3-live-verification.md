@@ -1170,3 +1170,84 @@ session: p9-status-test (<uuid>)
 | ---- | -------- | ------ | ----- |
 | 2026-08-28 | Allay (Claude Code session) | ✅ **pass — all five criteria met live** | Run inside RTH (Friday, 10:39–10:42 ET) against the paper Gateway on `127.0.0.1:4002`, Redis and Postgres up. Session `p9-status-test`, `session_id=14a0b7a8-c578-4877-8062-8a7618c6dcb5`, `trader_id=PAPER-14a0b7a8`. Driver: `scripts/diagnostics/run_p9_status.sh`, which only sequences the two real CLI commands. Logs: `logs/p9-driver-20260828.log`. **Criterion 1** — `live status` answered from a second process while the runner was alive, returning immediately from the database without blocking on the runner. **Criterion 2** — `health: trading` with the runner alive, twice (heartbeat `8s ago`, then `15s ago`), `state: running`. **Criterion 3** — after `kill -9` on the runner, and past the 90s threshold, `health: **stale**` with `heartbeat: 113s ago` — never `idle`, never `trading`. `state` stayed `running`, which is what makes the reading meaningful: the row still claims a live session and only the heartbeat age exposes that it is dead. **Criterion 4** — `last_started_at` was **identical** at all three sample points (`2026-08-28 10:39:03.759909-04:00` before any query, after both queries, and after the `kill -9`), so no query reclaimed, transitioned or wrote. **Criterion 5** — `--json` parsed and carried exactly the seven pinned keys (`session_id, name, status, closed_trade_count, open_positions, last_activity_at, health`), with `health` matching the human output in both states (`trading`, then `stale`). Three things worth recording. **(a)** `idle` was captured in a follow-up run at 10:55 ET, closing the last part of criterion 2: querying a session during its `node:build`/`node:connect` window — `status: running` with `last_bar_at` still null — returned `health: idle` on four consecutive samples. All three values named by criteria 2 and 3 have therefore now been observed live and are distinct: **`idle`** (running, no bar yet), **`trading`** (running, bar seen), **`stale`** (heartbeat older than 90s). Log: `logs/p9-idle-20260828.log`. **(b)** The first `live_bars.received` appeared within 8 seconds of start, so `health` reached `trading` on a **backfill** bar delivered at subscription rather than one that closed inside the window — the same immediate-first-bar behaviour recorded under P3 on the same day. It is a real received bar and the criterion is met, but "a bar has closed" is not what made it flip. **(c)** Incidental, and corroborating AR33 against a real database: an earlier aborted attempt was killed with `kill -9`, and the next `live start` 30 seconds later refused with `session.reclaim_refused heartbeat_age_seconds=30.94 stale_after_seconds=90.0` and the message *"already running and its heartbeat is 31s old … another process appears live"* — the reclaim guard correctly declining a not-yet-stale session, exit 1. ⚠️ **Harness note for whoever re-runs this.** The procedure warns against `\| tee` because `$!` would name `tee`; there are two further variants of the same trap, both hit and fixed here. Backgrounding a shell **function** makes bash fork a subshell, so `$!` names that subshell — measured, `$!` gave a `bash run_p9_status.sh` PID whose grandchild was the runner, and a `kill -9` on it would have left the runner heartbeating and produced a false negative on criterion 3. And `uv run` spawns its own python child and **does not forward signals** (this file already records that under P7). The reliable form is to resolve the runner by pattern — `pgrep -f "bin/python3 -m src.cli.main live start <session>"` — rather than trusting `$!` at all. |
 | — | — | ⛔ **not run** | Written with Story 2.8. `⛔ not run` is an acceptable and expected entry, per this file's own policy at the top — a dry run is not a pass. The health-derivation logic (AC #2) is fully covered by `tests/unit/core/test_live_session_health.py`'s truth table and by the mutation sweep (Story 2.8, Task 10); what this procedure alone can show is the two facts no unit test can fabricate — a real heartbeat actually advancing while a session trades, and a real process actually going silent under `kill -9`. **Procedure P8 remains the gate before Epic 2 closes; this procedure does not replace it or narrow its scope.** |
+
+## Procedure P10: restore evidence on a restarted, already-traded session
+
+**Introduced by**: Story 3.4 — Never Resubmit an Order That Is Already Working
+**Verifies**: AC #3/#4's restart path, observationally — that a real restarted process actually
+restores its Redis-backed order/counter state before trading resumes, and that both NFR1 latency
+fields are present on a live `order.submitted` record. The restore mechanism itself (AC #3) and
+the never-resubmit guarantee (AC #1/#2/#4) are proven exhaustively against broker doubles in
+`tests/component/core/test_live_order_recovery.py` and
+`tests/integration/core/test_live_order_survives_restart.py` (real Redis, `--forked`) — this
+procedure is NFR32-scoped observational evidence only, not a substitute for either.
+
+### What it does — and does not — do
+
+It reads a transcript for the restore facts a double cannot fabricate: a real `Cached N order(s)
+from database` line and a real `Set ClientOrderIdGenerator client_order_id count to N` line,
+both **before** `session.started`, on a session that has actually traded before. It does **not**
+stage a disconnect mid-submit and does **not** stage a working order surviving a restart —
+`sma_crossover`'s market orders fill in milliseconds inside RTH, so there is no way to leave one
+`SUBMITTED`/`ACCEPTED` across a restart on demand with the built-in strategy. The in-flight timeout
+and reconnect paths (AC #1/#4) are broker-double evidence by design (NFR32) and stay that way.
+
+### Preconditions
+
+Story 3.2 Task 8.1's, unchanged: (a) inside RTH; (b) **no other IBKR login** — no mobile app, no
+client portal (error 162 evicts market data); (c) the bare non-compose Gateway, never the
+compose-managed one (`READ_ONLY_API: "yes"` there refuses the first order); (d) Redis up; (e)
+strategy is `sma_crossover` only. **Do not use `p7-position-test`** — its namespace holds a
+stranded `ACCEPTED` order and startup stalls on it (`deferred-work.md:2309-2325`, Story 4.2's to
+fix, not this one's). Use `p7-fill-0901` (holds a `FILLED` order and, unless the operator has
+closed it, a real `LONG 22 NVDA` position) or a fresh session that has traded once already.
+
+### Command
+
+```bash
+# Restart an already-traded session and capture the transcript.
+uv run python -m src.cli.main live start p7-fill-0901 > logs/p10-restart-<date>.log 2>&1 &
+RUNNER_PID=$!
+
+# Let it run past at least one signal / one order.submitted, then stop it cleanly.
+sleep 180
+kill -INT "$RUNNER_PID"   # uv run does not forward signals to a backgrounded &; resolve by
+                          # pattern with pgrep if this does not reach the real runner PID.
+
+# Read the transcript for the restore and counter evidence.
+grep -n "Cached .* order(s) from database\|Set ClientOrderIdGenerator client_order_id count to" \
+  logs/p10-restart-<date>.log
+grep -n "session.started\|order.submitted" logs/p10-restart-<date>.log
+grep -c -E "162|10182|366" logs/p10-restart-<date>.log   # D6's standing rule — before anything
+                                                          # else is recorded
+```
+
+### Expected output
+
+```
+Cached 1 order(s) from database
+Set ClientOrderIdGenerator client_order_id count to 1
+session.started ...
+order.submitted client_order_id=O-...-000-2 bar_close_to_submit_ms=... bar_arrival_to_submit_ms=...
+```
+
+### Pass criteria
+
+1. **The restore is real and ordered correctly** — `Cached N order(s) from database` with `N ≥ 1`,
+   and `Set ClientOrderIdGenerator client_order_id count to N`, both appear **before**
+   `session.started` in the transcript.
+2. **The counter carries forward** — any new `order.submitted` record's `client_order_id` has a
+   trailing counter strictly greater than `N`, and no `client_order_id` value appears twice across
+   every `order.submitted` record in the transcript.
+3. **Both NFR1 fields are present on the same record** — `bar_close_to_submit_ms` and
+   `bar_arrival_to_submit_ms` both appear on the same `order.submitted` line, discharging the
+   2026-09-10 ruling's "not yet re-measured live" note (`deferred-work.md:2306-2307`) if an order
+   is submitted during the run.
+4. **`grep -c` for `162`, `10182`, `366` is checked before anything else is recorded** (D6's
+   standing rule) — a nonzero count invalidates the run as evidence of anything else.
+
+### Result log
+
+| Date | Operator | Result | Notes |
+| ---- | -------- | ------ | ----- |
+| — | — | ⏳ **not yet run** | Written with Story 3.4, 2026-09-11. The story goes to `review` with this row unresolved — the standing Epic 2 retro rule (run each story's live procedure before the story closes, not on the epic's last day; 3.2 Task 8.4 / 3.3 Task 6.3 precedent). The restore mechanism (AC #3), the never-resubmit guarantee (AC #1/#2/#4) and the wrapper's no-replay property are fully covered by the automated tiers — `tests/component/core/test_live_order_recovery.py` (12 tests, `MockCacheDatabase` + `MockLiveExecutionClient`/`_AnsweringClient`) and `tests/integration/core/test_live_order_survives_restart.py` (real Redis, `--forked`, byte-equal round trip through `CacheDatabaseAdapter` + `MsgSpecSerializer`). This row closes only when a session that has already traded is genuinely restarted against the live paper Gateway inside RTH. |

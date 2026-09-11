@@ -1410,6 +1410,71 @@ class TestEngineGracefulShutdownOnException:
         )
 
 
+class TestInFlightCheckIsExplicit:
+    """Story 3.4, AC #1 — the in-flight/reconciliation fields the venue-query
+    guarantee rests on are no longer defaults by omission.
+
+    Same shape as :class:`TestEngineGracefulShutdownOnException`: assert the
+    four values the builder passes, AND that Nautilus's own stock default
+    still equals them — the wheel-default canary that turns a future upgrade
+    into a decision rather than a silent drift.
+    """
+
+    @pytest.mark.component
+    def test_the_builder_sets_the_four_values_explicitly(self):
+        cfg = build_trading_node_config(_settings(), trader_id=TRADER_ID)
+
+        assert cfg.exec_engine.reconciliation is True
+        assert cfg.exec_engine.inflight_check_interval_ms == 2_000
+        assert cfg.exec_engine.inflight_check_threshold_ms == 5_000
+        assert cfg.exec_engine.inflight_check_retries == 5
+        assert cfg.exec_engine.open_check_interval_secs is None
+
+    @pytest.mark.component
+    def test_the_nautilus_stock_defaults_still_equal_our_explicit_values(self):
+        """The canary. If an upgrade moves any of these five, this fails by
+        name — the constants in ``live_node_builder.py`` stop being a
+        zero-behaviour-change guard and become a live decision to make.
+        """
+        import nautilus_trader.live.config as live_config
+
+        stock = live_config.LiveExecEngineConfig()
+
+        assert stock.reconciliation is True
+        assert stock.inflight_check_interval_ms == 2_000
+        assert stock.inflight_check_threshold_ms == 5_000
+        assert stock.inflight_check_retries == 5
+        assert stock.open_check_interval_secs is None
+
+    @pytest.mark.component
+    def test_the_builder_passes_all_four_fields_explicitly_rather_than_relying_on_a_default(self):
+        """Structural pin, in this file's established idiom (mirrors
+        :class:`TestEngineGracefulShutdownOnException`'s AST check): a
+        safety property resting on a third-party default is one upgrade
+        from silently changing.
+        """
+        source = Path(live_node_builder.__file__).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        expected_fields = {
+            "reconciliation",
+            "inflight_check_interval_ms",
+            "inflight_check_threshold_ms",
+            "inflight_check_retries",
+        }
+        flagged: set[str] = set()
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "LiveExecEngineConfig"
+            ):
+                flagged = {k.arg for k in node.keywords if k.arg is not None}
+
+        assert expected_fields <= flagged, (
+            f"LiveExecEngineConfig() call is missing explicit fields: {expected_fields - flagged}"
+        )
+
+
 class TestExecClientDefaultRouting:
     """The exec client must be reachable for instruments venued elsewhere.
 
