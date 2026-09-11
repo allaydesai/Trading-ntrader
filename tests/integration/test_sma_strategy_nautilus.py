@@ -474,3 +474,72 @@ class TestOnStopEquivalenceAcrossVariants:
         assert len(flatten_orders) == 0
         assert len(clean_closed) == 0
         assert len(flatten_closed) == 0
+
+
+@pytest.mark.integration
+class TestReversalSubmitsExactlyOneOrder:
+    """A reversal signal must submit ONE order, not two.
+
+    Found live 2026-09-11 during Story 3.4's Procedure P10 (deferred-work.md,
+    "Deferred from: Procedure P10 live run, story-3.4 closeout"): a real SELL
+    crossover against a real broker submitted TWO fills — one from
+    ``close_position()``, a second from the "open new short" branch right
+    after it — because ``_generate_buy_signal``/``_generate_sell_signal``
+    compute ``has_long``/``has_short`` once from ``self.cache.positions(...)``
+    and never re-check it after ``close_position()`` runs. The broker ended up
+    genuinely short while the strategy's own ``PositionClosed`` event reported
+    ``side=FLAT``.
+
+    ``REVERSAL_CLOSES`` is the minimal series that exercises this with
+    ``fast_period=2, slow_period=3`` (the same tuning used live): flat for 3
+    bars to initialize both SMAs, then up to fire a bullish crossover (BUY),
+    then down to fire a bearish crossover (SELL) while the BUY's position is
+    still open — the exact reversal shape. Bar-by-bar SMA arithmetic that
+    produces the two crossovers is recorded next to the list itself.
+    """
+
+    #: bar0-2: flat 100/100/100 -- both SMAs initialize, no signal (no
+    #: previous values yet). bar3: 130 -- fast(2)=115, slow(3)=110, prev
+    #: (100, 100) had fast<=slow -- BULLISH crossover, BUY. bar4: 140 -- no
+    #: crossover (stays bullish). bar5: 100 -- fast(2)=120, slow(3)=123.33,
+    #: prev (135, 123.33) had fast>=slow -- BEARISH crossover, SELL, while
+    #: the BUY's LONG position from bar3 is still open.
+    REVERSAL_CLOSES = [100.0, 100.0, 100.0, 130.0, 140.0, 100.0]
+
+    def test_reversal_submits_exactly_one_order(self):
+        bars = _make_daily_bars(self.REVERSAL_CLOSES)
+        orders, _ = _run_backtest(SMACrossover, bars)
+
+        buys = [o for o in orders if o.side.name == "BUY"]
+        sells = [o for o in orders if o.side.name == "SELL"]
+        assert len(buys) == 1, f"expected exactly one BUY (the entry), got {len(buys)}: {buys}"
+        assert len(sells) == 1, (
+            f"expected exactly one SELL (the reversal's close), got {len(sells)}: {sells} -- "
+            "a second SELL here is the live-observed bug: has_long/has_short read once, "
+            "before close_position(), then trusted again to decide whether to also open a "
+            "new position"
+        )
+        assert len(orders) == 2, f"expected exactly 2 orders total (one entry, one exit): {orders}"
+
+    #: Mirror of REVERSAL_CLOSES for the BUY side: bar0-2 flat at 100 to
+    #: initialize both SMAs. bar3: 70 -- fast(2)=85, slow(3)=90, prev (100,
+    #: 100) had fast>=slow -- BEARISH crossover, SELL (opens a short from
+    #: flat, one order). bar4: 60 -- no crossover (stays bearish). bar5: 100
+    #: -- fast(2)=80, slow(3)=76.67, prev (65, 76.67) had fast<slow --
+    #: BULLISH crossover, BUY, while the SELL's SHORT position from bar3 is
+    #: still open -- the mirror-image reversal.
+    REVERSAL_CLOSES_BUY_SIDE = [100.0, 100.0, 100.0, 70.0, 60.0, 100.0]
+
+    def test_reversal_submits_exactly_one_order_buy_side(self):
+        bars = _make_daily_bars(self.REVERSAL_CLOSES_BUY_SIDE)
+        orders, _ = _run_backtest(SMACrossover, bars)
+
+        buys = [o for o in orders if o.side.name == "BUY"]
+        sells = [o for o in orders if o.side.name == "SELL"]
+        assert len(sells) == 1, f"expected exactly one SELL (the entry), got {len(sells)}: {sells}"
+        assert len(buys) == 1, (
+            f"expected exactly one BUY (the reversal's close), got {len(buys)}: {buys} -- "
+            "the mirror of the SELL-side bug: has_long checked once, before close_position(), "
+            "then trusted again to decide whether to also open a new long"
+        )
+        assert len(orders) == 2, f"expected exactly 2 orders total (one entry, one exit): {orders}"

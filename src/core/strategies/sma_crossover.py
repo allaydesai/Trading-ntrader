@@ -201,15 +201,24 @@ class SMACrossover(Strategy):
         has_short = any(p.is_short and p.is_open for p in positions)
         has_long = any(p.is_long and p.is_open for p in positions)
 
-        # Close any existing short position first
+        # Close any existing short position first. A signal either closes the
+        # opposite side or opens a new position -- never both: closing does
+        # not make `has_long` stale (that flag is untouched by a short
+        # closing), but submitting a second, independently-sized order right
+        # after `close_position()` doubles commission and, against a real
+        # broker, produced two fills that left the account net short while
+        # this strategy's own bookkeeping reported flat (live-observed
+        # 2026-09-11, deferred-work.md "Deferred from: Procedure P10 live
+        # run, story-3.4 closeout").
         if has_short:
             for position in positions:
                 if position.is_short and position.is_open:
                     self.close_position(position)
                     self.log.info(f"Closed SHORT position: {position.id}")
 
-        # Only open new long position if we don't already have one
-        if not has_long:
+        # Only open new long position if we don't already have one, and only
+        # if we didn't just submit a close above.
+        elif not has_long:
             # Calculate position size based on current price
             quantity = self._calculate_position_size()
 
@@ -236,15 +245,17 @@ class SMACrossover(Strategy):
         has_long = any(p.is_long and p.is_open for p in positions)
         has_short = any(p.is_short and p.is_open for p in positions)
 
-        # Close any existing long position first
+        # Close any existing long position first. Mirror of
+        # `_generate_buy_signal`'s close/open split -- see its comment.
         if has_long:
             for position in positions:
                 if position.is_long and position.is_open:
                     self.close_position(position)
                     self.log.info(f"Closed LONG position: {position.id}")
 
-        # Only open new short position if we don't already have one
-        if not has_short:
+        # Only open new short position if we don't already have one, and only
+        # if we didn't just submit a close above.
+        elif not has_short:
             # Calculate position size based on current price
             quantity = self._calculate_position_size()
 
