@@ -1,6 +1,6 @@
 # Story 3.4: Never Resubmit an Order That Is Already Working
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -352,15 +352,20 @@ reconnect/restart/resume *order-path* half of NFR6 only; it writes no DB rows an
     (`deferred-work.md:2309-2325`). Use `p7-fill-0901` (its namespace holds a `FILLED` order and,
     unless the operator has closed it, a real `LONG 22 NVDA` position) or a fresh session that
     has traded once.
-  - [ ] 8.2 ⏳ not yet run — no live IBKR Gateway available in this environment. What this run is evidence *for*: (i) the restore — the transcript's `Cached N
-    order(s) from database` (`cache/cache.pyx:373-396`) with `N ≥ 1`, and `Set
-    ClientOrderIdGenerator client_order_id count to N` (`trading/strategy.pyx:368`) **before**
-    `session.started`; (ii) the counter — any new `order.submitted` carries a `client_order_id`
-    whose trailing counter is `> N`, and no `client_order_id` appears twice across `order.submitted`
-    records; (iii) both NFR1 fields, `bar_close_to_submit_ms` and `bar_arrival_to_submit_ms`, on
-    the same record — the 2026-09-10 ruling's "not yet re-measured live" (`deferred-work.md:2306-2307`)
-    is discharged by this transcript if an order is submitted; (iv) `grep -c` for `162`, `10182`,
-    `366` (D6's standing rule) before anything is recorded.
+  - [x] 8.2 ✅ **run 2026-09-11, all four sub-clauses pass** — against a fresh session
+    (`p10-fresh-0911`, not `p7-fill-0901`; see the new deferred-work.md finding on why). (i) the
+    restore — `Cached 4 orders from database` and `Set ClientOrderIdGenerator client_order_id
+    count to 1` both appear before `session.started` on the restart leg; (ii) the counter — the
+    two post-restart `order.submitted` records carry `client_order_id` suffixes `-000-2` and
+    `-000-3`, both `> 1`, and no `client_order_id` repeats anywhere in the transcript; (iii) both
+    NFR1 fields appear on every `order.submitted` record, pre- and post-restart (e.g.
+    `bar_close_to_submit_ms=5412.626 bar_arrival_to_submit_ms=1.999`), discharging the 2026-09-10
+    ruling's live re-measurement; (iv) `grep -c` for `162`/`10182`/`366` came back non-zero on
+    first pass but every hit was a false positive (digits inside a nanosecond timestamp, or a
+    benign `Historical Market Data Service ... query cancelled` at teardown) — no
+    competing-login evidence. Full detail in Procedure P10's result log. **A live, previously
+    undocumented defect was found during this run** — see deferred-work.md's new "story-3.4"
+    addendum — and is unrelated to this story's own AC #1-#4, which all held.
   - [x] 8.3 What this run is **not** evidence for, stated in the result row: no live disconnect
     mid-submit and no live working-order-across-restart is staged — the built-in strategy submits
     market orders that fill in milliseconds inside RTH, so a working order across a restart is not
@@ -831,10 +836,28 @@ submits a fresh signal after the flip and asserts only the fresh order reaches t
   `test_live_node_builder.py`). Integration `--forked` 281/2 sk → **282/2 sk** (+1,
   `test_live_order_survives_restart.py`, run against a real local Redis). e2e 1 → **1** (unchanged).
   Epic 1 acceptance sweep still 40/40 (unaffected by this story).
-- **Live verification**: not run — see Procedure P10 in `docs/qa/phase3-live-verification.md`,
-  result log `⏳ not yet run`. AC #1/#2/#3/#4's substance is proven exhaustively against broker
-  doubles (NFR32-compliant); P10 is the observational NFR1/restore-transcript evidence only, and
-  does not block automated-tier completion per the standing rule.
+- **Live verification**: run 2026-09-11, ✅ pass — see Procedure P10 in
+  `docs/qa/phase3-live-verification.md`. AC #1/#2/#3/#4's substance is proven exhaustively against
+  broker doubles (NFR32-compliant); P10 is the observational NFR1/restore-transcript evidence, and
+  it now confirms the same properties live: restore-before-`session.started`, a strictly
+  incrementing `client_order_id` counter with zero repeats, and both NFR1 fields on every
+  `order.submitted` record. Run against a fresh session (`p10-fresh-0911`) rather than the
+  story's suggested `p7-fill-0901`, because that session's own cache reported a stale
+  `net_position=22` for NVDA that the broker did not hold (reconciliation on restart only
+  reconciled `AAPL.NASDAQ`, not `NVDA.NASDAQ`) — routed to Story 4.2, see deferred-work.md.
+  **Unrelated to this story's own mechanism, the same live run exposed a real bug in
+  `sma_crossover.py`'s reversal handling**, fixed the same day: `_generate_buy_signal`/
+  `_generate_sell_signal` ran "close the opposite side" and "open a new position" as two
+  independent `if`s rather than a mutually-exclusive choice, so a reversal fired both and
+  submitted two orders. Live-observed: one SELL crossover produced two real fills and left the
+  broker short when the strategy's own bookkeeping reported flat. The resulting position was
+  corrected manually post-hoc (broker re-verified flat), and the strategy itself was fixed —
+  `if`/`elif`, two new integration tests (`TestReversalSubmitsExactlyOneOrder`,
+  `tests/integration/test_sma_strategy_nautilus.py`) proving RED then GREEN, full suite re-run
+  with zero regressions (unit 2441, component 1457/16sk, integration 282→284/2sk, e2e 1). Full
+  writeup in deferred-work.md. Not a BMAD story — no epic-3 story owns strategy-level position
+  logic, and this was fixed directly on operator instruction rather than through the story
+  pipeline.
 
 ### File List
 
@@ -858,3 +881,5 @@ submits a fresh signal after the flip and asserts only the fresh order reaches t
 |---|---|
 | 2026-09-10 | Story created (backlog → ready-for-dev) from `epics.md:1280-1327` against head `35c1e1b` (tree clean). Drafted after three parallel measurements: the installed 1.220.0 wheel (in-flight check, reconciliation, cache restore, IB adapter, test-kit mocks — 44 source reads), the 3.2/3.3 story records and the 2026-09-01 live findings, and the live wiring / guard lists / test harnesses. **The story proves and pins; it builds one config edit.** Central drafting decisions, all recorded in "Why this story is shaped": (1) the flagged Epic 4 backwards dependency (epics.md:1310-1321) resolves to **option (a)** — the wheel restores `orders_open` in the kernel constructor and starts strategies only after its own reconciliation, so AC #3 is provable with doubles today; what reconciliation *does* with a disagreement, including the 2026-09-01 stale-order stall, stays Story 4.2's; (2) the fencing column is **not** absorbed — D1 is ruled to Story 3.6; (3) AC #1's "queries the venue" is made an explicit builder decision with a wheel-default canary rather than an accident of omitted kwargs; (4) AC #2 becomes a unit-tier AST scan with a non-vacuity twin; (5) one new hazard found in the wheel and routed rather than solved: the IB adapter answers "not found" with a local `OrderCanceled`, conflating filled-while-disconnected with cancelled — Story 4.3. Baselines measured: unit 2421 · component 1441/16 sk · integration 281/2 sk · e2e 1. |
 | 2026-09-11 | Story implemented: `ready-for-dev` → `in-progress` → `review`. All 9 tasks / 33 subtasks complete except 8.2 (the live transcript, `⏳ not yet run` — no IBKR Gateway available in this environment; not blocking per the Epic 2 retro's standing rule, 3.2/3.3 precedent). Task 1's fresh-interpreter probes surfaced two corrections to the story's drafted Task 3/4 design before any test was written — `MockLiveExecutionClient.query_order` never reaches `generate_order_status_report` (it overrides the base method's async chain entirely), and resubmitting a restored order literally raises `ValueError` on Nautilus's own INITIALIZED precondition rather than producing `OrderDenied` — both recorded in the new component test file's module docstring and in `deferred-work.md`. The Task 9 mutation sweep found two more: the AR24 loop scan (rule c) cannot see a retry loop around `_wrap`'s generic `base(...)` forwarding call (closed with a second structural AST pin), and the original suppression-replay test never drove a call *after* unmuting so a queue-and-replay-on-next-call mutation left it green (closed by adding that call). All nine scripted mutations (M1–M9) confirmed red then reverted or turned into permanent coverage; clause matrix recorded above. Production diff is exactly Task 5's scope — four new constants and four explicit kwargs on `live_node_builder.py`'s `LiveExecEngineConfig(...)` call, at the measured wheel defaults, with a component pin and wheel-default canary. Zero diffs verified on every file Task 7 named, zero guard-list edits. Gates: format/lint/mypy clean; unit 2421→2441 (+20); component 1441/16sk→1457/16sk (+16); integration `--forked` 281/2sk→282/2sk (+1, real local Redis); e2e 1→1. New Procedure P10 recorded in `docs/qa/phase3-live-verification.md`, result `⏳ not yet run`. New `deferred-work.md` section routes the IB adapter's not-found/cancelled conflation to Story 4.3 and records the four measured corrections above. |
+| 2026-09-11 | Story closed: `review` → `done`. Task 8.2 run against the paper Gateway inside RTH: restore-before-`session.started`, a strictly incrementing `client_order_id` counter with zero repeats, and both NFR1 fields on every `order.submitted` — all four P10 pass criteria met, this story's own AC #1-#4 all hold live. Run against a fresh session (`p10-fresh-0911`) instead of the story's suggested `p7-fill-0901`, whose cache turned out to hold a stale `net_position=22` for NVDA that the broker did not have (routed to Story 4.2). **The same run found a live, previously-undisclosed defect outside this story's scope**: `sma_crossover.py`'s reversal handlers re-use a `has_long`/`has_short` value computed before `close_position()` runs, so a reversal signal submits two orders instead of one — observed live as two real fills that left the broker short while the strategy's own bookkeeping reported flat. Not a Story 3.4 regression (the exec-engine recovery path this story owns produced zero duplicate submissions in the same transcript); logged in deferred-work.md with a recommendation to fix before further live use of `sma_crossover`. Also found: `flatten_position.py`'s `--confirm` path (added by the 2026-09-01 fix, commit `29e9130`) now fails every time with `Cannot start strategy, ... not found` — Nautilus 1.220 refuses `add_strategy()` on an already-RUNNING trader, so the fix that closed the "dry run traded" hole also closed off the tool's only real use. Fails safe (no order reaches the broker), but the tool cannot currently close a position on purpose; the resulting SHORT 22 NVDA was closed with a throwaway one-off script instead, broker re-verified flat afterward. |
+| 2026-09-11 | Follow-up, same session: the `sma_crossover.py` reversal defect found above was fixed, on operator instruction, outside the story pipeline (no epic-3 story owns strategy-level position logic, so this is not a Story 3.4 change and not a BMAD story). Correction to how the defect was first described: `has_long`/`has_short` are not actually stale in the sense of flipping truth value (closing one side doesn't affect the other side's flag) — the real defect is structural: `_generate_buy_signal`/`_generate_sell_signal` run "close the opposite side" and "open a new position" as two independent `if`s instead of a mutually-exclusive choice, so a genuine reversal fires both. Fixed with `if`/`elif` in both methods. TDD: two new integration tests in `tests/integration/test_sma_strategy_nautilus.py` (`TestReversalSubmitsExactlyOneOrder`, SELL-side and a BUY-side mirror), each driving a real `BacktestEngine` over an engineered 6-bar reversal with `fast_period=2, slow_period=3` — both confirmed RED (2 orders each, mismatched quantities) before the fix, GREEN after. Full suite re-run clean: unit 2441 (unchanged), component 1457/16sk (unchanged), integration 282→284/2sk (+2), e2e 1 (unchanged); format/lint/mypy clean. The three backtest-runner integration files exercising `sma_crossover` end-to-end also re-run clean (23/23). Full writeup, including that every historical backtest reversal of this strategy paid the same double commission (not re-audited here), in `deferred-work.md`'s "story-3.4" addendum. |

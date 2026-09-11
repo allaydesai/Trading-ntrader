@@ -2410,3 +2410,115 @@ adopted: **give each item a named owning story, not a priority label.** Items re
   General lesson for any "no replay" guard: the assertion must include a legitimate call *after*
   the state change, not just the absence of one, or a replay wired to the next invocation has
   nothing to trigger it during the test.
+
+## Deferred from: Procedure P10 live run, story-3.4 closeout (2026-09-11)
+
+Story 3.4's Task 8.2 live run (Procedure P10, `docs/qa/phase3-live-verification.md`) closed the
+story's own AC #1-#4 live — see the story file's Change Log and P10's result log for that detail.
+The same run surfaced three findings unrelated to Story 3.4's own mechanism, none of which reopen
+it. Full transcripts: `logs/p10-restart-20260911.log` (the aborted `p7-fill-0901` restart, stopped
+at 200s with zero orders), `logs/p10-fresh-leg1-*.log` and `logs/p10-fresh-leg2-*.log` (the
+`p10-fresh-0911` session used instead).
+
+- **`sma_crossover.py` submitted two orders on a reversal signal instead of one — live-confirmed,
+  FIXED same day (2026-09-11), outside the story pipeline (direct fix on operator instruction,
+  not a BMAD story — no epic-3 story owns strategy-level position logic; recorded here rather
+  than fabricated into a story record after the fact).** `_generate_buy_signal`/`_generate_sell_signal`
+  (`src/core/strategies/sma_crossover.py:181-260`) each read `self.cache.positions(venue=...,
+  instrument_id=...)` once at the top and compute `has_long`/`has_short` from it. When the
+  opposite side is held, the method calls `self.close_position(position)` for it — which submits
+  its own order — and then unconditionally checks `if not has_short:` (or the BUY-side mirror) as
+  a second, **independent** `if`, not an `elif`. **Correction to how this was first described,
+  live and in the story/sprint-status entries written the same day**: `has_short`/`has_long` are
+  not actually stale in the sense of having flipped truth value — closing a short does not create
+  a long, so `has_long`'s value computed before the close is still accurate after it. The real
+  defect is structural, not a data-freshness bug: the method treats "close the opposite side" and
+  "open a new position in the signalled direction" as two independent decisions instead of one
+  mutually-exclusive choice, so a reversal — where the opposite side truly is held — fires *both*
+  branches and submits two real orders for one signal.
+  Live-observed on `p10-fresh-0911`'s post-restart leg: a SELL crossover produced
+  `client_order_id`s `O-20260911-144905-fecc285d-000-2` (from `close_position()`) and
+  `-000-3` (from the "open new short" branch), both 22-share market SELLs, both filled within
+  150ms of each other at $219.84. Nautilus's own local bookkeeping reported the net effect as
+  `PositionClosed(... side=FLAT ...)` for the `SMACrossover-000` position — **which was wrong**:
+  a direct broker read immediately afterward (`flatten_position.py`, a separate connection) showed
+  `net -22 NVDA.NASDAQ`, a real, unintended short. Closed out of band (see below). This is a
+  correctness bug that would double-execute on every reversal signal for any strategy, live or
+  paper, using this exact close-then-open pattern — today that is only `sma_crossover`. Every
+  historical backtest that ever reversed this strategy's position paid the same double
+  commission/slippage and briefly (within-bar, same-tick) routed through the same doubled order
+  path — a real, if usually invisible, cost that has been in every backtest result using this
+  strategy's reversal path since it was written. Re-auditing historical backtest numbers for this
+  is out of scope here and not done.
+
+  **FIXED same day (2026-09-11).** `_generate_buy_signal`/`_generate_sell_signal` changed from two
+  independent `if` blocks to `if has_short: close_position(...) / elif not has_long: submit_order(...)`
+  (and the BUY-side mirror) — a reversal now closes the opposite side **or** opens a new position,
+  never both in the same signal; re-entering after a close waits for the next crossover, same as
+  opening from flat. TDD: two new integration tests in
+  `tests/integration/test_sma_strategy_nautilus.py`
+  (`TestReversalSubmitsExactlyOneOrder::test_reversal_submits_exactly_one_order` for the SELL-side
+  reversal and its `..._buy_side` mirror), each driving a real `BacktestEngine` over a 6-bar series
+  engineered to fire a bullish then bearish crossover (or the reverse) with `fast_period=2,
+  slow_period=3` — both confirmed RED first (2 orders, e.g. `SELL 769` + `SELL 1_000` at
+  mismatched, independently-computed quantities — the closing size and the fresh
+  `_calculate_position_size()` size for the new entry rarely match), then GREEN after the `elif`.
+  Full suite re-run clean with zero regressions: unit 2441 (unchanged), component 1457/16sk
+  (unchanged), integration 282→284/2sk (+2, the new tests), e2e 1 (unchanged); format/lint/mypy
+  clean. Also re-ran the three backtest-runner integration files that exercise `sma_crossover`
+  against real fixture/CSV data end-to-end (`test_backtest_runner_integration.py`,
+  `test_backtest_runner_yaml.py`, `test_kraken_backtest.py`) — 23/23 pass, unaffected. **Not
+  done**: no BMAD story was created or updated for this fix (see the note at the top of this
+  entry) and no re-audit of historical backtest PnL/trade-count numbers that used this strategy's
+  reversal path was performed.
+
+- **`flatten_position.py --confirm` is broken again, by a different, unrelated mechanism than the
+  2026-09-01 incident.** The 2026-09-01 fix (commit `29e9130`) correctly stopped the strategy from
+  auto-starting before any check ran, by not constructing/adding it until after the broker read
+  and the `--confirm` gate. That fix's assumption — that `node.trader.add_strategy()` can be
+  called on the already-`RUNNING` trader `run_async()`/`kernel.start_async()` leaves behind, since
+  nothing was added yet for `_trader.start()` to start — is false in the installed Nautilus
+  1.220.0: `Trader.add_strategy()` on a `RUNNING` trader logs `ERROR ... Cannot add a strategy to a
+  running trader` and does not add it, so the subsequent `node.trader.start_strategy(strategy.id)`
+  raises `ValueError: Cannot start strategy, _FlattenStrategy-None not found.` **Measured twice**,
+  both attempts to close the SHORT 22 NVDA left by the finding above, identical failure both
+  times. This is very likely why the *original* 2026-09-01 confirmed close (mentioned in the
+  2026-09-01 story-3.2/3.3 live-verification entry above) is not independently attested anywhere —
+  the position that day was actually closed by the **unconfirmed dry-run bug**, not by a
+  subsequent, deliberately confirmed run; nothing had exercised the fixed `--confirm` path start
+  to finish since the fix landed, until today. The tool **fails safe**: no order reaches the
+  broker (reconfirmed immediately after each failure via a fresh read-only dry run showing the
+  position unchanged), so this is a correctness/availability defect, not a safety one. **Action:
+  needs a fix — likely constructing and adding the strategy before `node.build()`/`run_async()`
+  (matching the pre-fix shape) but holding it in a state that cannot submit until `--confirm`
+  passes and an explicit `start_strategy()` call runs (Nautilus strategies do not submit from
+  `on_start()` unless started; the open question is whether an added-but-unstarted strategy on a
+  not-yet-`RUNNING` trader is skipped by `_trader.start()`'s "start every added strategy" behavior,
+  which needs to be measured fresh against 1.220.0 rather than assumed from the 2026-09-01 shape)
+  — plus a regression test for *this* failure mode specifically, alongside the existing
+  `test_flatten_position.py` suite guarding the 2026-09-01 one.** Until fixed, a manual close must
+  use a throwaway script built on the pre-fix ordering (as this session did — not committed) with
+  the side/quantity confirmed independently via the tool's still-working read-only path.
+
+- **`p7-fill-0901`'s Redis-backed cache holds a stale position the broker does not.** Starting it
+  logged `Portfolio: NVDA.NASDAQ net_position=22` after reconciliation reported success, but
+  reconciliation's own log named only `Reconciling NET position for AAPL.NASDAQ` — NVDA was never
+  reconciled at all, so whatever the cache held before (a `LONG 22 NVDA.NASDAQ` position, last
+  correct on 2026-09-01 per that day's `PAPER-483c0655` transcript) is now permanently wrong,
+  because the account's real NVDA position changed out of band (the 2026-09-01 accidental SELL 22)
+  under a *different* trader identity that this session's cache has no way to observe. This is the
+  live-manifested shape of the disagreement the story file's "Why this story is shaped" section
+  already routes to **Story 4.2** ("what reconciliation does with a disagreement"); this entry adds
+  a concrete, reproducible instance rather than changing the routing. Combined with the finding
+  above (a stale `has_long` triggers a phantom `close_position()`), starting `p7-fill-0901` again
+  before Story 4.2 lands would very likely reproduce the double-order bug on its own, tuned
+  `fast_period=2, slow_period=3` config, without needing today's fresh-session workaround. **Action
+  for whoever picks up Story 4.2: `p7-fill-0901` is a live, still-existing reproduction of the
+  "reconciliation didn't correct a stale non-zero position" case — cheaper to test against than
+  constructing a new one.** Not fixed or worked around here; the session was stopped at 200s with
+  zero orders and left exactly as found.
+
+- **Housekeeping, not a defect.** A pre-existing `LONG 4 AAPL.NASDAQ` position was found still
+  open at the broker during this session's sweep (unrelated instrument, unrelated to today's
+  `p10-fresh-0911` NVDA activity — most likely residual from an earlier `momentum`/P8-era test).
+  Not touched; flagged to the operator for a decision on whether to close it.

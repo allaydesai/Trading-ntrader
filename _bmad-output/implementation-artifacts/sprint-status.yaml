@@ -36,6 +36,30 @@
 
 generated: 2026-08-03
 last_updated: >-
+  2026-09-11 (STORY 3.4 LIVE-VERIFIED: review -> done. epic-3 stays in-progress: 3.1-3.4 done,
+  3.5-3.7 backlog. Task 8.2 (Procedure P10) run against the paper Gateway inside RTH: all four
+  pass criteria met — restore evidence before session.started, a strictly incrementing
+  client_order_id counter with zero duplicates, both NFR1 fields on every order.submitted, and a
+  clean D6 check (every 162/10182/366 grep hit was a false positive — a timestamp substring or
+  the benign teardown-cancellation message, never a real competing login). Run against a fresh
+  session (p10-fresh-0911) instead of the story's suggested p7-fill-0901, whose cache reported a
+  stale net_position=22 for NVDA the broker did not actually hold — startup reconciliation had
+  only reconciled AAPL, never NVDA, for that session. Routed to Story 4.2, not worked around.
+  The same live run found two defects outside this story's scope, both written up in full under
+  deferred-work.md's "story-3.4" addendum: (1) sma_crossover.py's _generate_buy_signal /
+  _generate_sell_signal compute has_long/has_short once and never refresh the value after
+  close_position() runs, so a reversal signal submits two orders instead of one — live-observed
+  as two real fills that left the broker SHORT 22 NVDA while the strategy's own PositionClosed
+  event reported side=FLAT; this does not implicate Story 3.4's own recovery mechanism, which
+  produced zero duplicate submissions in the same transcript. Needs a fix and tests before
+  sma_crossover trades live again. (2) flatten_position.py's --confirm path, fixed 2026-09-01 by
+  29e9130, is broken by a fresh Nautilus-side regression: Trader.add_strategy() now refuses an
+  already-RUNNING trader, so --confirm can never reach start_strategy(). Fails safe (confirmed:
+  no order reached the broker), but the tool cannot currently do its one job. The resulting
+  SHORT 22 NVDA was closed with a throwaway, uncommitted one-off script using the pre-fix
+  ordering and a quantity/side already confirmed twice by the broken tool's own read path;
+  broker re-verified flat afterward. A pre-existing, unrelated LONG 4 AAPL.NASDAQ was also found
+  still open at the broker — not caused by this session, not touched, flagged to the operator.
   2026-09-11 (STORY 3.4 IMPLEMENTED: ready-for-dev -> in-progress -> review, same session as
   the 2026-09-10 creation. epic-3 stays in-progress: 3.1-3.3 done, 3.4 review, 3.5-3.7 backlog.
   All 9 tasks / 33 subtasks done except 8.2 (the live IBKR transcript), which stays
@@ -2166,11 +2190,23 @@ development_status:
   # ⚠️ 3.1 note: because no session had ever traded, the sma_crossover.on_stop() flatten that
   # 3.1 removes has NEVER been exercised against a session-owned position. The warnings P6/P7/P8
   # carry about it are untested assumptions, not observations.
+  # ⚠️ FOUND AND FIXED 2026-09-11, found live during Story 3.4's Procedure P10, fixed same day
+  # OUTSIDE the story pipeline (direct fix on operator instruction, no epic-3 story owns
+  # strategy-level position logic): sma_crossover.py's _generate_buy_signal/_generate_sell_signal
+  # treated "close the opposite side" and "open a new position" as two independent `if`s instead
+  # of one mutually-exclusive choice, so a reversal fired both and submitted two orders. Live-
+  # confirmed: a SELL crossover left the broker SHORT 22 NVDA while the strategy's own
+  # PositionClosed event reported side=FLAT. Changed to if/elif; two new integration tests
+  # (TestReversalSubmitsExactlyOneOrder, tests/integration/test_sma_strategy_nautilus.py) proved
+  # RED then GREEN. Full detail, including that every historical backtest reversal of this
+  # strategy paid the same double commission (not re-audited), in deferred-work.md's "story-3.4"
+  # addendum. Not Story 3.4's own defect (its recovery mechanism produced zero duplicates in the
+  # same run).
   epic-3: in-progress
   3-1-stop-trading-without-manufacturing-an-exit: done
   3-2-submit-a-strategys-orders-to-the-broker: done
   3-3-track-every-order-through-its-full-lifecycle: done
-  3-4-never-resubmit-an-order-that-is-already-working: review
+  3-4-never-resubmit-an-order-that-is-already-working: done
   3-5-aggregate-partial-fills-into-one-position: backlog
   3-6-persist-each-trade-the-moment-it-closes: backlog
   3-7-keep-trading-after-a-rejection: backlog
