@@ -19,9 +19,22 @@ Entry:
 
 Exits (precedence):
 1. Hard stop  — resting STOP-MARKET at entry_price - ``atr_stop_mult`` * ATR(14)
-   (fires intrabar on the low).
-2. Time stop  — flatten at the open after ``max_hold_days`` full days held.
-3. Green exit — flatten at the next open once a day closes above the prior close.
+   (fires intrabar on the low; ATR as of the setup-day close).
+2. Time stop  — flatten at the next open after ``max_hold_days`` full days held
+   (the entry day counts as day 1).
+3. Green exit — flatten at the next open once a day closes above the prior close
+   (may fire on the entry day itself).
+
+Fill assumptions (Nautilus L1 bar matching + ``GapAwareFillModel``):
+- Entry limit gapped through: the engine fills at the *limit price*, not the
+  lower open — conservative for a buyer (never better than the modeled price).
+- Hard stop: fills at the trigger intrabar; when a bar gaps through the trigger
+  overnight it fills at the bar's open (via ``GapAwareFillModel``; the engine
+  default would optimistically fill at the trigger).
+- Time/green exits: submitted from ``on_bar`` tagged ``MOO_EXIT_TAG`` so
+  ``GapAwareFillModel`` reprices them to the next bar's open, per the spec's
+  market-on-open exit. Without that model wired (or on the final bar) the sim
+  fills them at the signal-day close instead.
 """
 
 from __future__ import annotations
@@ -36,6 +49,7 @@ from nautilus_trader.model.enums import OrderSide, PriceType, TimeInForce
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.trading.strategy import Strategy, StrategyConfig
 
+from src.core.fill_models import MOO_EXIT_TAG
 from src.core.strategy_registry import StrategyRegistry, register_strategy
 from src.models.strategy import RiptideParameters
 
@@ -219,12 +233,16 @@ class Riptide(Strategy):
             self._flatten("green candle")
 
     def _flatten(self, reason: str) -> None:
-        """Cancel the resting stop and submit a market exit (fills next open)."""
+        """Cancel the resting stop and submit an MOO-tagged market exit.
+
+        With ``GapAwareFillModel`` wired at the venue the exit fills at the next
+        bar's open (per spec); otherwise it fills at the signal-day close.
+        """
         if self._stop_order is not None and self._stop_order.is_open:
             self.cancel_order(self._stop_order)
         position = self._open_position()
         if position is not None:
-            self.close_position(position)
+            self.close_position(position, tags=[MOO_EXIT_TAG])
             self._exit_pending = True
             self.log.info(f"RIPTIDE exit ({reason}) | flattening {position.quantity}")
 

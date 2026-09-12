@@ -2,6 +2,11 @@
 # Riptide — long-only pullback mean-reversion (US equities, daily bars).
 # Per-symbol scope: universe ROC-100 ranking and the 10-position portfolio cap
 # are a documented follow-up requiring a multi-instrument runner.
+#
+# Fill assumptions (GapAwareFillModel, wired by the orchestrator):
+# - Time/green exits fill at the NEXT bar's open (market-on-open per spec).
+# - A stop gapped through overnight fills at the bar's open, not the trigger.
+# - An entry limit gapped through fills at the limit price (conservative).
 strategy_path: "src.core.strategies.riptide:Riptide"
 config_path: "src.core.strategies.riptide:RiptideConfig"
 

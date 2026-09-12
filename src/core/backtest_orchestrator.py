@@ -13,7 +13,6 @@ from uuid import UUID, uuid4
 
 import structlog
 from nautilus_trader.backtest.engine import BacktestEngine, BacktestEngineConfig
-from nautilus_trader.backtest.models import FillModel
 from nautilus_trader.common.component import is_logging_initialized
 from nautilus_trader.config import LoggingConfig
 from nautilus_trader.model.currencies import USD
@@ -26,6 +25,7 @@ from nautilus_trader.trading.strategy import Strategy
 
 from src.config import get_settings
 from src.core.fee_models import IBKRCommissionModel
+from src.core.fill_models import GapAwareFillModel
 from src.core.results_extractor import ResultsExtractor
 from src.core.strategy_factory import StrategyFactory, StrategyLoader
 from src.core.strategy_registry import StrategyRegistry
@@ -186,12 +186,16 @@ class BacktestOrchestrator:
         )
         self.engine = BacktestEngine(config=config)
 
-        # Create fill model
-        fill_model = FillModel(
+        # Create fill model — gap-aware: stops gapped through overnight fill at
+        # the bar open (not the trigger), and MOO-tagged exit orders fill at the
+        # next bar's open. Requires the engine clock and bar series (below).
+        fill_model = GapAwareFillModel(
             prob_fill_on_limit=0.95,
             prob_fill_on_stop=0.95,
             prob_slippage=0.01,
         )
+        fill_model.register_clock(self.engine.kernel.clock)
+        fill_model.register_bars(bars)
 
         # Create commission model
         fee_model = IBKRCommissionModel(

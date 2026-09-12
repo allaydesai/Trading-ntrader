@@ -22,6 +22,7 @@ from nautilus_trader.model.identifiers import TraderId, Venue
 from nautilus_trader.model.objects import Money, Price, Quantity
 from nautilus_trader.test_kit.providers import TestInstrumentProvider
 
+from src.core.fill_models import GapAwareFillModel
 from src.core.strategies.riptide import Riptide, RiptideConfig
 
 # Common prefix: a 25-bar uptrend (100..124), a dip to a 5-day low (118) that is
@@ -62,23 +63,35 @@ def _bars_from_closes(bar_type: BarType, closes: list[float]) -> list[Bar]:
     return bars
 
 
-def _run(bars: list[Bar], instrument, bar_type: BarType) -> BacktestEngine:
+def _run(
+    bars: list[Bar],
+    instrument,
+    bar_type: BarType,
+    config: RiptideConfig | None = None,
+) -> BacktestEngine:
     engine = BacktestEngine(
         BacktestEngineConfig(
             trader_id=TraderId("RIPTIDE-001"),
             logging=LoggingConfig(bypass_logging=True),
         )
     )
+    # Mirror production wiring (backtest_orchestrator): gap-aware fills so stops
+    # gapped through overnight fill at the open and MOO-tagged exits fill at the
+    # next bar's open.
+    fill_model = GapAwareFillModel()
+    fill_model.register_clock(engine.kernel.clock)
+    fill_model.register_bars(bars)
     engine.add_venue(
         venue=instrument.id.venue,
         oms_type=OmsType.NETTING,
         account_type=AccountType.CASH,
         starting_balances=[Money(1_000_000, USD)],
+        fill_model=fill_model,
     )
     engine.add_instrument(instrument)
     engine.add_data(bars)
 
-    config = RiptideConfig(
+    config = config or RiptideConfig(
         instrument_id=instrument.id,
         bar_type=bar_type,
         portfolio_value=Decimal("1000000"),
@@ -199,6 +212,95 @@ def test_riptide_accepts_float_config_params():
     engine.run()  # would raise float/Decimal TypeError before the coercion fix
 
     assert len(engine.trader.generate_positions_report()) == 1
+    engine.dispose()
+
+
+def _bars_from_ohlc(bar_type: BarType, rows: list[tuple]) -> list[Bar]:
+    """Build daily bars from explicit (open, high, low, close) rows.
+
+    Unlike ``_bars_from_closes`` (open = prior close, so gapless), this builder
+    can express overnight gaps — required to pin down fill prices when price
+    gaps through a limit, a stop trigger, or an exit's next open.
+    """
+    start = pd.Timestamp("2024-01-01", tz="UTC")
+    bars: list[Bar] = []
+    for i, (open_, high, low, close) in enumerate(rows):
+        ts = int((start + pd.Timedelta(days=i)).value)
+        bars.append(
+            Bar(
+                bar_type=bar_type,
+                open=Price.from_str(f"{open_:.2f}"),
+                high=Price.from_str(f"{high:.2f}"),
+                low=Price.from_str(f"{low:.2f}"),
+                close=Price.from_str(f"{close:.2f}"),
+                volume=Quantity.from_int(1_000_000),  # $100M+ dollar volume
+                ts_event=ts,
+                ts_init=ts,
+            )
+        )
+    return bars
+
+
+# Gap-scenario prefix: a 25-bar flat-OHLC uptrend, then the setup bar — close
+# 118.00 is a 5-day low above the SMA-20, so a buy limit rests at 115.64.
+_GAP_PREFIX = [(100.0 + i,) * 4 for i in range(25)] + [(119.0, 119.5, 117.5, 118.0)]
+# Fill bar: dips to 115.00 intrabar, so the limit fills at exactly 115.64.
+_GAP_FILL_BAR = (118.0, 118.5, 115.0, 116.0)
+
+
+@pytest.mark.integration
+def test_riptide_stop_gapped_through_fills_at_open():
+    """A bar opening far below the ATR stop trigger fills the stop at the open.
+
+    The engine default fills a triggered stop-market at its trigger price even
+    when the bar gaps through it overnight — overstating stop protection.
+    GapAwareFillModel must fill at the (worse) open instead.
+    """
+    instrument = TestInstrumentProvider.equity(symbol="AAPL", venue="NASDAQ")
+    bar_type = BarType.from_str(f"{instrument.id}-1-DAY-LAST-EXTERNAL")
+
+    # Entry at 115.64 puts the 2.5*ATR(5) stop trigger well above 100; the next
+    # bar gaps down to open at 90.00, far through it.
+    rows = _GAP_PREFIX + [
+        _GAP_FILL_BAR,
+        (90.0, 92.0, 88.0, 91.0),
+        (91.0, 93.0, 90.0, 92.0),
+        (92.0, 94.0, 91.0, 93.0),
+    ]
+    engine = _run(_bars_from_ohlc(bar_type, rows), instrument, bar_type)
+
+    fills = engine.trader.generate_order_fills_report()
+    assert {"BUY", "SELL"} == set(fills["side"])
+    assert float(fills[fills["side"] == "BUY"].iloc[0]["avg_px"]) == pytest.approx(115.64)
+    # Stop fill at the gap open, not at the ~110 trigger.
+    assert float(fills[fills["side"] == "SELL"].iloc[0]["avg_px"]) == pytest.approx(90.00)
+
+    engine.dispose()
+
+
+@pytest.mark.integration
+def test_riptide_green_exit_fills_at_next_bar_open():
+    """The green-candle exit fills at the next bar's open (MOO), not the signal close.
+
+    Green candle closes at 119.00; the next bar gaps up to open at 125.00. Per
+    the spec (sell at market open on day T+1) the exit must fill at 125.00.
+    """
+    instrument = TestInstrumentProvider.equity(symbol="AAPL", venue="NASDAQ")
+    bar_type = BarType.from_str(f"{instrument.id}-1-DAY-LAST-EXTERNAL")
+
+    rows = _GAP_PREFIX + [
+        _GAP_FILL_BAR,
+        (116.0, 119.5, 115.8, 119.0),  # green candle: close 119 > prev close 116
+        (125.0, 126.0, 124.0, 125.5),  # next day gaps up to open 125
+        (125.0, 126.0, 124.0, 125.0),
+    ]
+    engine = _run(_bars_from_ohlc(bar_type, rows), instrument, bar_type)
+
+    fills = engine.trader.generate_order_fills_report()
+    assert {"BUY", "SELL"} == set(fills["side"])
+    assert float(fills[fills["side"] == "BUY"].iloc[0]["avg_px"]) == pytest.approx(115.64)
+    assert float(fills[fills["side"] == "SELL"].iloc[0]["avg_px"]) == pytest.approx(125.00)
+
     engine.dispose()
 
 
