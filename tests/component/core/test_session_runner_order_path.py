@@ -420,7 +420,7 @@ class TestTheRunnerReachesTheTradeRecorderCallSite:
     directly.
     """
 
-    def test_the_runner_subscribes_a_trade_recorder_bound_to_the_nodes_cache(self, monkeypatch):
+    def test_the_runner_subscribes_a_trade_recorder_bound_to_the_nodes_cache(self):
         node = TestLiveNode(run_seconds=0.01)
         runner = _runner(node)
 

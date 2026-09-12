@@ -1,8 +1,9 @@
 """Turns a closed Nautilus ``Position`` into one recorded trade (Story 3.5,
 FR25/FR29).
 
-Owns: the three pure ``Decimal`` conversion helpers, :func:`aggregate_closed_position`
-(reads a real ``Position`` and returns a :class:`RecordedTrade`), and
+Owns: the three pure ``Decimal`` conversion helpers, :func:`position_vouches_for`,
+:func:`aggregate_closed_position` (reads a ``PositionClosed`` event plus, when
+it vouches, the cached ``Position``, and returns a :class:`RecordedTrade`), and
 :class:`TradeRecorder` — the second, independent subscriber on
 ``events.position*`` (:data:`POSITION_EVENTS_TOPIC`) the runner installs
 beside :class:`~src.core.live_order_path.OrderEventObserver`.
@@ -14,23 +15,37 @@ persistence side of this same module — ``sink`` is the handover, and stays
 :class:`TradeRecorder` and subscribes its handler), or any rejection,
 retry, or reconciliation-query machinery (Stories 3.7/4.2/4.3).
 
-**Why the ``Position``, never the event (fact 2).** No position event carries
-commission at all — ``PositionClosed.to_dict()`` has no ``commission*`` key,
-and ``realized_pnl`` is already net of it. FR29's "sum charged across all
-constituent fills" comes from ``Position.commissions()``, looked up by
-``event.position_id`` through the cache the runner hands this class, never
-from the event and never from an in-memory fill tally (the observer's own
-``_orders`` accumulator resets across a process run and Nautilus republishes
-fills it has itself refused to apply — Story 3.3's measurement, not
-re-derived here).
+**The event is the snapshot; the ``Position`` is only for commission (facts 2
+and 3, corrected by the 2026-09-12 review).** ``PositionClosed`` carries
+``avg_px_open``/``avg_px_close`` (already volume-weighted by
+``Position._calculate_avg_px``, ``model/position.pyx:757-774``), ``peak_qty``,
+``ts_opened``/``ts_closed``/``duration_ns``, ``opening_order_id``/
+``closing_order_id``, ``entry`` and ``realized_pnl`` — an immutable copy taken
+the instant the position closed. It carries **no** commission at all
+(``to_dict()`` has no ``commission*`` key; ``realized_pnl`` is net of it), so
+FR29's "sum charged across all constituent fills" has exactly one source:
+``Position.commissions()`` (``model/position.pyx:667-676``), looked up by
+``event.position_id`` through the cache the runner hands this class.
 
-**Read-time is not negotiable (fact 3).** A ``Position`` resets in place
-(``_commissions``, ``_events``, ``_trade_ids`` all cleared, ``peak_qty``
-zeroed) the instant a fresh opening fill arrives on an instrument+strategy
-that just went FLAT — and under this project's live NETTING position IDs,
-that reset can happen on the very next bar. ``handle_position_event`` reads
-and converts everything inside one synchronous call, before returning
-control to the message bus; nothing here may defer the read.
+**Why the cache cannot simply be trusted.** Nautilus queues position events
+in ``_pending_position_events`` and publishes them only after the *whole*
+fill has been applied (``execution/engine.pyx:1171-1186``). On a **flip**
+(a fill larger than the open quantity on the opposite side, ``:1516-1600``)
+it closes the original ``Position``, then builds a **new** one under the
+same NETTING ``PositionId`` (``_open_position(instrument, None, ...)``) —
+so when ``PositionClosed`` is finally dispatched, ``cache.position(id)``
+already returns the new, open leg: ``avg_px_close 0.0``, ``ts_closed 0``,
+``closing_order_id None``, the residual leg's commission. Measured
+2026-09-12 (``tests/component/core/test_live_trade_recorder.py::
+TestAgainstARealExecutionEngine``). The closed leg's own commission is
+unrecoverable in that case. Hence :func:`position_vouches_for`: the cached
+position is used for commission and fill count **only** when it is closed
+and its ``closing_order_id`` is the event's; otherwise the leg is still
+recorded from the event, with the commission marked unknown (``None``) and
+one ``trade.commission_unavailable`` warning saying why. Reading inside the
+same synchronous dispatch is still required (a fresh opening fill on the
+*next* bar resets the closed position in place — ``_commissions``,
+``_events``, ``_trade_ids`` cleared), just no longer sufficient on its own.
 
 **Parity with the backtest path (fact 4).** ``BacktestPersistenceService
 .save_trades_from_positions`` builds every backtest trade from
@@ -53,8 +68,8 @@ process at Nautilus's own silent ``os._exit(1)`` — measured, Story 2.7.
 in one ``try`` and never re-raises; :class:`~src.core.live_order_path
 .OrderEventObserver` is the template this mirrors.
 
-**One ``PositionId`` outlives many round trips (fact 3, continued).** Under
-NETTING, ``str(position.id)`` — reused as ``TradeBase.trade_id`` for backtest
+**One ``PositionId`` outlives many round trips.** Under NETTING,
+``str(position.id)`` — reused as ``TradeBase.trade_id`` for backtest
 parity — does not identify a trade uniquely across legs of the same
 instrument. :attr:`RecordedTrade.trade_key` (``f"{position_id}:
 {closing_order_id}"``) is what does, and Story 3.6 keys its idempotent writes
@@ -65,7 +80,9 @@ callable — this story never sets one in production (no DB write, no
 repository, no port; Task 7's non-change evidence contracts cover
 ``src/db``, ``src/services`` and ``src/cli``). Story 3.6 adds the
 persistence adapter and injects it as ``sink`` from the CLI, the same shape
-``SessionRecordPort`` already uses for session rows.
+``SessionRecordPort`` already uses for session rows. A ``None``
+``commission_amount`` on the record means *unknown*, never *free* — the
+``trades.commission_amount`` column is nullable for exactly this.
 
 No ``nautilus_trader`` import: every framework object arrives duck-typed as
 ``Any`` and is dispatched by ``type(event).__name__``, the
@@ -93,12 +110,14 @@ POSITION_EVENTS_TOPIC = "events.position*"
 AGGREGATED_EVENT = "trade.aggregated"
 RECORDER_FAILED_EVENT = "trade.recorder_failed"
 COMMISSION_MIXED_EVENT = "trade.commission_mixed_currency"
+COMMISSION_UNAVAILABLE_EVENT = "trade.commission_unavailable"
 
 #: Every **lifecycle** record this module emits — a membership-pinned tuple
 #: (CLAUDE.md Anti-Patterns, the `EMITTED_ORDER_EVENTS` precedent):
-#: `trade.recorder_failed` and `trade.commission_mixed_currency` are
-#: diagnostic/boundary records and stay deliberately outside it, the
-#: `order.observer_failed` precedent (`live_order_path.py:150-161`).
+#: `trade.recorder_failed`, `trade.commission_mixed_currency` and
+#: `trade.commission_unavailable` are diagnostic/boundary records and stay
+#: deliberately outside it, the `order.observer_failed` precedent
+#: (`live_order_path.py:150-161`).
 EMITTED_TRADE_EVENTS: tuple[str, ...] = (AGGREGATED_EVENT,)
 
 #: The quantization every price/quantity conversion uses — the
@@ -158,6 +177,18 @@ def unix_nanos_to_utc(ns: int) -> datetime:
     return datetime(1970, 1, 1, tzinfo=UTC) + timedelta(microseconds=ns // NANOS_PER_MICROSECOND)
 
 
+def position_vouches_for(event: Any, position: Any) -> bool:
+    """Is ``position`` the very leg ``event`` closed — closed, and closed by
+    the same order? ``False`` for ``None``, for a position that has already
+    been re-opened under the same NETTING id (a flip: ``closing_order_id`` is
+    ``None`` again), and for one closed by some other order."""
+    return (
+        position is not None
+        and bool(position.is_closed)
+        and str(position.closing_order_id) == str(event.closing_order_id)
+    )
+
+
 @dataclass(frozen=True)
 class RecordedTrade:
     """One closed round trip, ready for a sink to persist (Story 3.6) or a
@@ -165,7 +196,9 @@ class RecordedTrade:
 
     ``trade_key`` is what 3.6 must key idempotent writes on — ``trade_id``
     (``str(position_id)``) is not unique across legs of the same instrument
-    under NETTING (fact 3).
+    under NETTING. ``trade.commission_amount`` / ``fill_count`` are ``None``
+    when no cached position vouched for the leg (module docstring): unknown,
+    not zero.
     """
 
     trade: TradeBase
@@ -174,12 +207,14 @@ class RecordedTrade:
     holding_period_seconds: int
     position_id: str
     strategy_id: str
-    fill_count: int
+    fill_count: int | None
     trade_key: str
 
 
-def aggregate_closed_position(position: Any) -> RecordedTrade:
-    """Read a closed ``Position`` and return the trade it represents.
+def aggregate_closed_position(event: Any, position: Any) -> RecordedTrade:
+    """Read a ``PositionClosed`` event (every snapshot field) and, when it
+    vouches for the leg, the cached ``Position`` (commission, fill count),
+    and return the trade they represent.
 
     Pure: no log, no cache, no side effect. Raises ``ValueError`` on an
     unconvertible field (no new exception class, retro D3) — the caller
@@ -190,41 +225,50 @@ def aggregate_closed_position(position: Any) -> RecordedTrade:
     included (Hazard #6) — parity, not a fix; the fix, if any, is Story
     5.6's, on both sides at once.
     """
-    entry_price = to_price_decimal(float(position.avg_px_open))
-    exit_price = to_price_decimal(float(position.avg_px_close))
-    quantity = to_price_decimal(float(position.peak_qty))
+    entry_price = to_price_decimal(float(event.avg_px_open))
+    exit_price = to_price_decimal(float(event.avg_px_close))
+    quantity = to_price_decimal(float(event.peak_qty))
 
-    commission_amount, commission_currency, _ = select_commission(
-        position.commissions(), position.settlement_currency.code
-    )
+    commission_amount: Decimal | None = None
+    commission_currency: str | None = None
+    fill_count: int | None = None
+    if position_vouches_for(event, position):
+        commission_amount, commission_currency, _ = select_commission(
+            position.commissions(), position.settlement_currency.code
+        )
+        fill_count = position.event_count
 
     trade = TradeBase(
-        instrument_id=str(position.instrument_id),
-        trade_id=str(position.id),
-        venue_order_id=str(position.opening_order_id),
-        client_order_id=str(position.closing_order_id),
-        order_side=position.entry.name,
+        instrument_id=str(event.instrument_id),
+        trade_id=str(event.position_id),
+        venue_order_id=str(event.opening_order_id),
+        client_order_id=str(event.closing_order_id),
+        order_side=event.entry.name,
         quantity=quantity,
         entry_price=entry_price,
         exit_price=exit_price,
         commission_amount=commission_amount,
         commission_currency=commission_currency,
-        entry_timestamp=unix_nanos_to_utc(position.ts_opened),
-        exit_timestamp=unix_nanos_to_utc(position.ts_closed),
+        entry_timestamp=unix_nanos_to_utc(event.ts_opened),
+        exit_timestamp=unix_nanos_to_utc(event.ts_closed),
     )
 
     profit_pct = ((exit_price - entry_price) / entry_price) * Decimal("100")
 
     return RecordedTrade(
         trade=trade,
-        profit_loss=position.realized_pnl.as_decimal(),
+        profit_loss=event.realized_pnl.as_decimal(),
         profit_pct=profit_pct,
-        holding_period_seconds=position.duration_ns // NANOS_PER_SECOND,
-        position_id=str(position.id),
-        strategy_id=str(position.strategy_id),
-        fill_count=position.event_count,
-        trade_key=f"{position.id}:{position.closing_order_id}",
+        holding_period_seconds=event.duration_ns // NANOS_PER_SECOND,
+        position_id=str(event.position_id),
+        strategy_id=str(event.strategy_id),
+        fill_count=fill_count,
+        trade_key=f"{event.position_id}:{event.closing_order_id}",
     )
+
+
+def _optional_str(value: Any) -> str | None:
+    return None if value is None else str(value)
 
 
 class TradeRecorder:
@@ -233,7 +277,8 @@ class TradeRecorder:
     Args:
         cache: The live node's cache (``node.cache``, a ``CacheFacade`` —
             Task 1.3), read synchronously inside :meth:`handle_position_event`
-            (fact 3: too late is wrong).
+            (module docstring: too late is wrong, and even on time is not
+            always enough).
         log: A structlog logger already bound to ``session_id``. Never
             ``structlog.get_logger()`` at call time — contextvars are empty on
             executor threads (``live_order_path.py:417-420``).
@@ -271,20 +316,30 @@ class TradeRecorder:
     def _record_closed(self, event: Any) -> None:
         self._stage = "lookup"
         position = self._cache.position(event.position_id)
-        if position is None:
-            raise LookupError(f"no cached position for {event.position_id}")
 
         self._stage = "aggregate"
-        _, _, mixed_currency = select_commission(
-            position.commissions(), position.settlement_currency.code
-        )
-        if mixed_currency:
-            self._log.warning(
-                COMMISSION_MIXED_EVENT,
-                position_id=str(position.id),
-                commissions=mixed_currency,
+        if position_vouches_for(event, position):
+            _, _, mixed_currency = select_commission(
+                position.commissions(), position.settlement_currency.code
             )
-        recorded = aggregate_closed_position(position)
+            if mixed_currency:
+                self._log.warning(
+                    COMMISSION_MIXED_EVENT,
+                    position_id=str(event.position_id),
+                    commissions=mixed_currency,
+                )
+        else:
+            self._log.warning(
+                COMMISSION_UNAVAILABLE_EVENT,
+                position_id=str(event.position_id),
+                closing_order_id=str(event.closing_order_id),
+                reason=(
+                    "no cached position"
+                    if position is None
+                    else "cached position is not the closed leg (re-opened under the same id)"
+                ),
+            )
+        recorded = aggregate_closed_position(event, position)
 
         self._stage = "sink"
         if self._sink is not None:
@@ -300,15 +355,15 @@ class TradeRecorder:
             entry_price=str(recorded.trade.entry_price),
             exit_price=str(recorded.trade.exit_price),
             quantity=str(recorded.trade.quantity),
-            fill_count=str(recorded.fill_count),
-            commission=str(recorded.trade.commission_amount),
+            fill_count=_optional_str(recorded.fill_count),
+            commission=_optional_str(recorded.trade.commission_amount),
             currency=recorded.trade.commission_currency,
             realized_pnl=str(recorded.profit_loss),
             holding_period_seconds=str(recorded.holding_period_seconds),
             opening_order_id=recorded.trade.venue_order_id,
             closing_order_id=recorded.trade.client_order_id,
-            ts_opened=str(position.ts_opened),
-            ts_closed=str(position.ts_closed),
+            ts_opened=str(event.ts_opened),
+            ts_closed=str(event.ts_closed),
             order_side=recorded.trade.order_side,
         )
 

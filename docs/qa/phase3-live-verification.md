@@ -1278,6 +1278,14 @@ trade matches the broker's own view of the position — `PositionClosed` disagre
 once already (2026-09-11, `side=FLAT` while short 22; `deferred-work.md:2439-2445` in the P10
 addendum) — broker-truth reconciliation is Story 4.3's.
 
+**Flip note (code review, 2026-09-12).** `sma_crossover` never flips (a reversal only closes,
+`438b0e4`), so this run cannot exercise it — but if any leg ever *does* close by a flip, or the
+cache cannot vouch for the closed leg, the transcript shows one `trade.commission_unavailable`
+warning beside a `trade.aggregated` record whose `commission`/`currency`/`fill_count` are `None`.
+That is the recorder working as designed, not a failure; pass criterion 4 (zero
+`trade.recorder_failed`) is unaffected, and criterion 2's commission check applies only to a
+leg with no such warning.
+
 ### Preconditions
 
 Story 3.2 Task 8.1's, unchanged: inside RTH; **no other IBKR login** (mobile app and client

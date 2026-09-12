@@ -1,6 +1,6 @@
 # Story 3.5: Aggregate Partial Fills into One Position
 
-Status: review
+Status: in-progress
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -493,6 +493,94 @@ What is measured ABSENT today (the story's whole surface):
     done in the same commit as a dated note in each file). Then `sprint-status.yaml`. Commit shape
     per Project Structure Notes.
 
+### Review Findings
+
+Code review 2026-09-12 (commit `98119e4`). The three adversarial subagent layers could not run this
+session (four launches stalled at the first read, three more were cut off by a session rate limit);
+all three layers were executed in the reviewer's own context instead, so the Blind Hunter's
+isolation from the spec was **not** preserved. Every finding below was verified by probe or by
+reading the installed 1.220.0 wheel, not taken from a layer's prose.
+
+- [x] [Review][Decision] A position flip drops the closed leg's trade — the cache is read after
+  Nautilus has already replaced the `Position` under the same NETTING id. `execution/engine.pyx:
+  1516-1600` (`_flip_position` closes the original, then calls `_open_position(instrument, None,
+  fill_split2)`, which builds a **new** `Position` and `cache.add_position` overwrites the id) and
+  `:1171-1186` (position events queue in `_pending_position_events` and publish only after the whole
+  fill, flip included). Measured 2026-09-12 against a real `ExecutionEngine` (LONG 50, then SELL
+  150): at `PositionClosed` dispatch, `cache.position(event.position_id)` returned the NEW position —
+  `is_closed False`, `avg_px_close 0.0` (event: `130.0`), `ts_closed 0`, `closing_order_id None`,
+  `commissions() == [2.00 USD]` (closed leg: 1.50), `realized_pnl -2.00 USD` (event: `498.50 USD`).
+  `aggregate_closed_position` then fails `TradeBase.exit_price > 0`, one `trade.recorder_failed`
+  (`stage="aggregate"`) is logged, and the round trip is never recorded; P11 pass criterion 4 (zero
+  `recorder_failed`) fails on any flip. Not reachable by `sma_crossover` since `438b0e4` (a reversal
+  only closes), reachable by any strategy that reverses with one oversized order. The module
+  docstring's fact 3 ("reads inside one synchronous call") is necessary but not sufficient, and no
+  test covers a `PositionClosed` whose cached position is not closed. Options: (1) read every field
+  `PositionClosed` snapshots (`avg_px_open/close`, `peak_qty`, `ts_opened/closed`, `duration_ns`,
+  `opening/closing_order_id`, `entry`, `realized_pnl`, `strategy_id`) from the **event**, and take
+  only `commissions()`/`event_count` from the cache, guarded by `position.is_closed and
+  position.closing_order_id == event.closing_order_id`, else emit a distinct warning and record the
+  commission as unknown — the leg is recorded with correct prices and PnL in every case; (2) keep
+  the `Position` read, detect the stale object with the same guard, and emit a distinct diagnostic
+  instead of `recorder_failed` — the trade stays unrecorded but the transcript says why; (3) accept
+  as a known limitation, pin it with a test, route to Story 3.6/4.2. In all cases add the
+  engine-level flip fixture as a component test (recipe: the review's `probe_flip.py`, kept in the
+  session scratchpad; it is ~60 lines against `TestComponentStubs` + `ExecutionEngine`).
+- [x] [Review][Patch] `test_empty_commissions_yield_zero_in_settlement_currency` never reaches the
+  empty branch — zero-commission fills yield `[Money(0.00, USD)]`, not `[]` (measured), and a real
+  `Position` cannot produce an empty list, so AC #3 pin (i) is exercised only by the unit test's
+  hand-rolled `[]`. Rename/re-docstring to what it actually pins (a zero-amount commission via the
+  single-entry path) [tests/component/core/test_live_trade_recorder.py:287]
+- [x] [Review][Patch] `test_mixed_currency_with_settlement_absent_picks_the_first_and_warns` never
+  asserts the warning its name promises — dropping the `COMMISSION_MIXED_EVENT` emission on the
+  settlement-absent path stays green at component tier
+  [tests/component/core/test_live_trade_recorder.py:329]
+- [x] [Review][Patch] `TestHoldingPeriodIsIntegerDivision` tests Python's `//`, not the module —
+  both assertions are integer literals and cannot fail against any code change; 2 of the 15 counted
+  unit tests are vacuous. Delete, or drive `aggregate_closed_position` with a duck-typed position
+  double [tests/unit/core/test_live_trade_recorder_arithmetic.py:142-153]
+- [x] [Review][Patch] Unused `monkeypatch` parameter
+  [tests/component/core/test_session_runner_order_path.py:423]
+- [x] [Review][Patch] Runner budget overage disclosed by number but not named — Tasks 5.5/7.1
+  budgeted ≤ 4 raw lines / ≤ 3 statements; delivered 8 raw / 4 statements (import, field,
+  constructor, subscribe). The Dev Agent Record's "2 new statements inside `_phase_subscribe`"
+  counts only the phase body. One sentence naming the overage, per CLAUDE.md D4
+  [this file, Dev Agent Record, Task 9.3 paragraph]
+- [x] [Review][Defer] A raising sink loses the computed trade from the transcript —
+  `trade.aggregated` is emitted only after the sink returns (Task 4.1 / M10, deliberate) and
+  `trade.recorder_failed` carries no prices, so under Story 3.6 a database outage leaves no record of
+  what was aggregated. `sink` is `None` in production this story
+  [src/core/live_trade_recorder.py:289-313] — deferred, owner Story 3.6 (carry the `RecordedTrade`
+  fields on the `stage="sink"` failure record, or decide the ordering there)
+
+**Resolutions (2026-09-12, batch-applied, TDD red→green):**
+
+- Decision → **option 1, applied.** `aggregate_closed_position(event, position)` now reads every
+  snapshot field from `PositionClosed` and takes only `commissions()`/`event_count` from the cached
+  `Position`, and only when the new `position_vouches_for(event, position)` guard holds (closed,
+  and closed by the event's own `closing_order_id`). Otherwise the leg is still recorded, with
+  `commission_amount`/`commission_currency`/`fill_count` = `None` (unknown, never zero — the
+  `trades` columns are nullable) and one new `trade.commission_unavailable` warning naming the
+  reason (`"no cached position"` or `"cached position is not the closed leg (re-opened under the
+  same id)"`). RED first: `TestAgainstARealExecutionEngine` drives the recorder over a real
+  `MessageBus` from a real `ExecutionEngine` (the only fixture that reproduces Nautilus's deferred
+  publication and the flip path); its flip case failed on the old code with exactly the predicted
+  `ValidationError` → `trade.recorder_failed`, and its plain-round-trip case passed on both, proving
+  the guard passes in the normal case. **Two AC #5 pins changed deliberately:** a `cache.position()`
+  `None` no longer produces `trade.recorder_failed` — it records the leg with commission unknown
+  (`test_a_missing_cached_position_records_the_leg_with_commission_unknown`); and the
+  unconvertible-`avg_px_open` case now puts the NaN on the *event* (a proxy class named
+  `PositionClosed`, since the dispatch keys on the class name), because the position's price is no
+  longer read. A third handler test pins the stale-object guard at the double level. The module
+  docstring's facts 2/3 are rewritten to say what was measured. The read-time rule still stands
+  (a next-bar re-open resets the closed position in place) — it is necessary, no longer claimed
+  sufficient.
+- Patches 2–5 applied as written (renamed + re-docstringed the zero-commission test; the
+  settlement-absent test now asserts its warning; the two integer-literal tests are replaced by
+  `TestAggregateClosedPositionWithDoubles`, six unit tests driving `aggregate_closed_position` and
+  `position_vouches_for` with no Nautilus import; the unused fixture parameter removed).
+- Patch 6 is the sentence in the Dev Agent Record below.
+
 ## Dev Notes
 
 ### The trap — read before designing anything
@@ -862,6 +950,25 @@ Claude Sonnet 5 (claude-sonnet-5)
   (was 894, the pre-existing sanctioned over-cap exception,
   `deferred-work.md:1632-1652`) — not split, per CLAUDE.md's guard-list-rot warning.
 
+- **Review patches (2026-09-12), after the batch-apply:** `make format`/`make lint` clean;
+  `make typecheck` → success, 106 source files. `make test-unit` → **2462 passed** (2458 + 4: two
+  integer-literal tests removed, six `TestAggregateClosedPositionWithDoubles` cases added).
+  `make test-component` → **1490 passed, 16 skipped** (1487 + 3: two
+  `TestAgainstARealExecutionEngine` cases and the stale-object guard pin; the cache-miss test was
+  renamed and re-pinned, not added). Dependency scan, `TestImportPurity`, `NODE_FACING_MODULES`
+  and stop-path scans re-run green; **zero guard-list edits** (no new import root — the
+  engine-level test imports live inside the test helper, in a test file). Size, disclosed per
+  CLAUDE.md D4: `src/core/live_trade_recorder.py` is now **393 raw lines / 90 executable
+  statements — over this story's own ≤ 80 budget by 10** (the guard function, the unavailable
+  branch and the two `None`-rendering lines); largest class `TradeRecorder` 30, largest function
+  `_record_closed` 13, all inside the project caps, which are what CLAUDE.md enforces. The budget
+  was set to leave 3.6 headroom in the same module; 3.6 should re-budget from 90, not 80.
+  **Runner overage, named (review patch 6):** Tasks 5.5/7.1 budgeted the runner diff at ≤ 4 raw
+  lines / ≤ 3 statements; delivered is 8 raw lines / 4 statements (import, field, constructor,
+  subscribe — the "2 new statements" figure above counts only `_phase_subscribe`'s body). The
+  budget was self-contradictory (it also asked for a two-line comment), but the rule is to name
+  an overage, not to explain it away.
+
 ### Completion Notes List
 
 - Story delivers exactly what it promised: `src/core/live_trade_recorder.py` (aggregation +
@@ -946,3 +1053,4 @@ Claude Sonnet 5 (claude-sonnet-5)
 | ---- | ------ |
 | 2026-09-11 | Created (backlog → ready-for-dev) from `epics.md:1343-1376` against head `438b0e4` (clean, submodule `06c00cb`). Five wheel facts measured by fresh-interpreter probes at drafting (VWAP on `Position`, no commission on any position event, reset-in-place on FLAT re-entry, backtest field parity, unsubscribed `events.position*`). Two placement decisions made and disclosed (`src/core/` over the architecture's `src/services/`; `tests/component/core/` over the AC's flat path). AC #6 (runner wiring + `trade.aggregated`) added at drafting so FR25 gets live evidence in this story rather than dead code until 3.6. Baselines: unit 2441 · component 1457/16 sk · integration 284/2 sk · e2e 1. Standing hazards for the live run carried in from 3.4's closeout: `flatten_position.py --confirm` broken (fails safe), stale-cache sessions not to be reused, residual `LONG 4 AAPL` external. |
 | 2026-09-11 | Story implemented: `ready-for-dev` → `in-progress` → `review`, same session as creation. All 9 tasks / 40 subtasks complete except 8.2/8.3 (the live transcript, `⏳ not yet run` — no IBKR Gateway reachable and outside RTH; not blocking per the Epic 2 retro's standing rule, 3.2/3.3/3.4 precedent). Delivers `src/core/live_trade_recorder.py`: three pure `Decimal` helpers (`to_price_decimal`, `select_commission`, `unix_nanos_to_utc`), `aggregate_closed_position` (a real `Position` → `RecordedTrade`, no log/cache/side effect), and `TradeRecorder` (a second, independent `events.position*` subscriber beside the order-path observer, never raising, `sink` staying `None` this story). Wired into the runner at `_phase_subscribe` (+8 lines). Task 1's fresh-interpreter probe corrected one story-cited fact before any test was written: `backtest_persistence.py`'s comment claiming `Decimal("NaN").quantize()` raises `InvalidOperation` is measurably false under the default decimal context (a quiet NaN propagates silently); `to_price_decimal` checks for NaN itself rather than trusting the comment, and does not rely on it. The Task 9 mutation sweep (11 scripted mutations, all killed) found two more corrections to the story's own plan: M1's prediction that AC #4 stays green does not hold (a different, disclosed mechanism reason), and M4 initially stayed green against a fixture that happened to place the correct answer at index 0 by coincidence — fixed by moving it. All measured facts and corrections recorded in `deferred-work.md`'s new "story-3.5" section, including the deferred items owned by Stories 3.6/5.3/5.6/4.2. Gates: format/lint/mypy clean; unit 2441→2458 (+17); component 1457/16sk→1487/16sk (+30); integration 284/2sk unchanged; e2e 1 unchanged — matching Task 7's non-change contract exactly. Two existing exact-subscription pins in `test_session_runner_phases.py` updated deliberately for the new `events.position*` subscription. New module: 338 raw lines / 79 executable statements (budgeted ≤80). Alembic head unchanged at `b7c419e2a3d8`. New Procedure P11 recorded in `docs/qa/phase3-live-verification.md`, result `⏳ not yet run`. |
+| 2026-09-12 | Code-reviewed: `review` → `in-progress` (NOT done — Task 8.2's live run is still `⏳ not yet run`; 3.2/3.3 precedent). The three adversarial subagent layers could not run (stalls, then a session rate limit); all three were executed in the reviewer's own context and every finding verified by probe against the installed wheel. **One decision, one HIGH:** a position flip (`execution/engine.pyx:1516-1600`) closes the `Position`, builds a new one under the same NETTING id and only then publishes `PositionClosed`, so the recorder's cache read saw the re-opened leg and dropped the trade with `trade.recorder_failed` — measured against a real `ExecutionEngine`. Resolved as option 1: snapshot fields from the event, commission from a cache position only when it vouches (`position_vouches_for`), else `None` + `trade.commission_unavailable`. Five patches applied (test hygiene, one Dev Record disclosure), one deferred to Story 3.6 (a raising sink loses the computed values from the transcript). Unit 2458→2462, component 1487→1490, module 90 statements (over the story's ≤ 80 budget, disclosed). |

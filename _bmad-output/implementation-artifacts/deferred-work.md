@@ -2603,3 +2603,16 @@ at 200s with zero orders), `logs/p10-fresh-leg1-*.log` and `logs/p10-fresh-leg2-
   `to_price_decimal`, not `Money.as_decimal()` directly) — noted here because it cost two test
   fixtures a wrong literal during drafting (`"1.00"` expected, `"1"` produced) and would cost the
   same to the next person building a `Money`-based fixture with a round amount.
+
+## Deferred from: code review of story-3.5 (2026-09-12)
+
+- **A raising sink loses the computed trade from the transcript.** `TradeRecorder._record_closed`
+  (`src/core/live_trade_recorder.py:289-313`) emits `trade.aggregated` only after the sink returns —
+  a deliberate Story 3.5 choice (Task 4.1, mutation M10: a record must not claim success for a sink
+  that failed) — and the `trade.recorder_failed` record it emits instead carries `stage`,
+  `position_id`, `event_type`, `error_type` and a traceback, but none of the aggregated values. Once
+  Story 3.6 injects a database-writing sink, a write failure therefore leaves no transcript evidence
+  of the prices, commission or PnL that were computed for that round trip. Harmless this story
+  (`sink` is `None` in production). **Owner: Story 3.6** — either carry the `RecordedTrade` fields on
+  the `stage="sink"` failure record, or revisit the emit-after-sink ordering there, with the M10
+  test updated deliberately.

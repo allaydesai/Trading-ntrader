@@ -36,6 +36,40 @@
 
 generated: 2026-08-03
 last_updated: >-
+  2026-09-12 (STORY 3.5 CODE-REVIEWED -> in-progress, NOT done. review -> in-progress. epic-3
+  stays in-progress: 3.1-3.4 done, 3.5 in-progress, 3.6-3.7 backlog. STILL NOT DONE for the
+  same reason as before this review: Task 8.2's live run (Procedure P11) has not run. PROCESS
+  NOTE: the three adversarial subagent layers never ran this session -- four launches stalled
+  at their first read of the diff and three retries died on a session rate limit -- so all
+  three layers were executed in the reviewer's own context, with the Blind Hunter's isolation
+  from the spec lost and disclosed; every finding was verified by fresh-interpreter probe
+  against the installed 1.220.0 wheel rather than taken from prose. ONE DECISION, ONE HIGH,
+  not reachable by sma_crossover but reachable by any strategy that reverses with one
+  oversized order: on a flip, Nautilus closes the Position, builds a NEW one under the same
+  NETTING id (_open_position(instrument, None, fill_split2), execution/engine.pyx:1516-1600)
+  and only THEN publishes PositionClosed (events queue in _pending_position_events,
+  :1171-1186) -- so the recorder's "synchronous" cache read returned the re-opened leg
+  (is_closed False, avg_px_close 0.0, closing_order_id None, the residual leg's commission),
+  failed TradeBase.exit_price > 0, and dropped the round trip with one trade.recorder_failed.
+  Measured against a real ExecutionEngine over a real MessageBus. Fact 3's read-time rule was
+  necessary but not sufficient. Allay chose option 1: every snapshot field now comes from the
+  PositionClosed event; commissions()/event_count come from the cached Position only when
+  position_vouches_for(event, position) (closed, and closed by the event's closing_order_id),
+  else commission/currency/fill_count are None (unknown, never zero; trades columns are
+  nullable) with one trade.commission_unavailable warning naming why. Two AC #5 pins changed
+  deliberately (cache-miss now records the leg with commission unknown; the NaN case moved
+  onto the event). TDD: the engine-level flip test went red with exactly the predicted
+  ValidationError before the fix. FIVE PATCHES applied (zero-commission test never reached
+  the empty branch -- Nautilus yields [Money(0.00, USD)], measured; the settlement-absent
+  test never asserted the warning its name promised; two unit tests asserted Python's
+  integer division on literals, replaced by six that drive aggregate_closed_position with
+  doubles; an unused fixture param; the runner's raw-line overage named). ONE DEFERRED to
+  Story 3.6 (a raising sink leaves no transcript evidence of the computed values). NINE
+  dismissed. Gates: format/lint/mypy clean; unit 2458->2462; component 1487/16sk->1490/16sk;
+  dependency scan + all guard lists green, zero guard-list edits. Module 393 raw / 90
+  statements -- over the story's own <=80 budget by 10, disclosed; 3.6 re-budgets from 90.
+  P11 gained a flip note. Committed as the fix(live) commit directly after 98119e4 (a commit cannot carry its own hash). NEXT: P11 live run
+  inside RTH, then Story 3.6.) Previously:
   2026-09-11 (STORY 3.5 CREATED: backlog -> ready-for-dev. File:
   3-5-aggregate-partial-fills-into-one-position.md. epic-3 stays in-progress: 3.1-3.4 done,
   3.5 ready-for-dev, 3.6-3.7 backlog. Drafted from epics.md:1343-1376 against head 438b0e4
@@ -2253,7 +2287,7 @@ development_status:
   3-2-submit-a-strategys-orders-to-the-broker: done
   3-3-track-every-order-through-its-full-lifecycle: done
   3-4-never-resubmit-an-order-that-is-already-working: done
-  3-5-aggregate-partial-fills-into-one-position: review
+  3-5-aggregate-partial-fills-into-one-position: in-progress
   3-6-persist-each-trade-the-moment-it-closes: backlog
   3-7-keep-trading-after-a-rejection: backlog
   epic-3-retrospective: optional

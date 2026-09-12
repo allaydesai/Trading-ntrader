@@ -36,12 +36,14 @@ from structlog.testing import capture_logs
 from src.core.live_trade_recorder import (
     AGGREGATED_EVENT,
     COMMISSION_MIXED_EVENT,
+    COMMISSION_UNAVAILABLE_EVENT,
     EMITTED_TRADE_EVENTS,
     POSITION_EVENTS_TOPIC,
     RECORDER_FAILED_EVENT,
     RecordedTrade,
     TradeRecorder,
     aggregate_closed_position,
+    position_vouches_for,
     select_commission,
 )
 
@@ -170,11 +172,11 @@ class TestEntryPriceIsVolumeWeighted:
     """AC #1."""
 
     def test_terminating_vwap(self):
-        position, _ = _round_trip(
+        position, closed_event = _round_trip(
             entry_fills=[(40, "100.00", _money("1.25")), (60, "110.00", _money("2.50"))],
             exit_fills=[(100, "120.00", _money("1.00"))],
         )
-        recorded = aggregate_closed_position(position)
+        recorded = aggregate_closed_position(closed_event, position)
 
         expected = (
             (Decimal(40) * Decimal("100.00") + Decimal(60) * Decimal("110.00")) / Decimal(100)
@@ -185,11 +187,11 @@ class TestEntryPriceIsVolumeWeighted:
         assert recorded.trade.entry_price != Decimal("110.00000000")
 
     def test_non_terminating_vwap(self):
-        position, _ = _round_trip(
+        position, closed_event = _round_trip(
             entry_fills=[(100, "10.00", _money("0.00")), (200, "10.01", _money("0.00"))],
             exit_fills=[(300, "10.50", _money("0.00"))],
         )
-        recorded = aggregate_closed_position(position)
+        recorded = aggregate_closed_position(closed_event, position)
 
         expected = (
             (Decimal(100) * Decimal("10.00") + Decimal(200) * Decimal("10.01")) / Decimal(300)
@@ -204,22 +206,22 @@ class TestExitPriceIsVolumeWeighted:
     """AC #2."""
 
     def test_terminating_vwap(self):
-        position, _ = _round_trip(
+        position, closed_event = _round_trip(
             entry_fills=[(100, "100.00", _money("0.00"))],
             exit_fills=[(50, "120.00", _money("1.00")), (50, "130.00", _money("1.00"))],
         )
-        recorded = aggregate_closed_position(position)
+        recorded = aggregate_closed_position(closed_event, position)
 
         assert recorded.trade.exit_price == Decimal("125.00000000")
         assert recorded.trade.exit_price != Decimal("120.00000000")
         assert recorded.trade.exit_price != Decimal("130.00000000")
 
     def test_non_terminating_vwap(self):
-        position, _ = _round_trip(
+        position, closed_event = _round_trip(
             entry_fills=[(300, "10.00", _money("0.00"))],
             exit_fills=[(100, "10.00", _money("0.00")), (200, "10.01", _money("0.00"))],
         )
-        recorded = aggregate_closed_position(position)
+        recorded = aggregate_closed_position(closed_event, position)
 
         assert recorded.trade.exit_price == Decimal("10.00666667")
 
@@ -233,7 +235,7 @@ class TestMixedRoundTrip:
             entry_fills=[(40, "100.00", _money("1.25")), (60, "110.00", _money("2.50"))],
             exit_fills=[(50, "120.00", _money("1.00")), (50, "130.00", _money("1.00"))],
         )
-        recorded = aggregate_closed_position(position)
+        recorded = aggregate_closed_position(closed_event, position)
 
         assert recorded.trade.entry_price == Decimal("106.00000000")
         assert recorded.trade.exit_price == Decimal("125.00000000")
@@ -259,12 +261,12 @@ class TestMixedRoundTrip:
         assert closed_event.position_id == position.id
 
     def test_short_round_trip_every_field(self):
-        position, _ = _round_trip(
+        position, closed_event = _round_trip(
             side=OrderSide.SELL,
             entry_fills=[(40, "100.00", _money("1.25")), (60, "90.00", _money("2.50"))],
             exit_fills=[(50, "80.00", _money("1.00")), (50, "70.00", _money("1.00"))],
         )
-        recorded = aggregate_closed_position(position)
+        recorded = aggregate_closed_position(closed_event, position)
 
         assert recorded.trade.order_side == "SELL"
         assert recorded.trade.entry_price == Decimal("94.00000000")
@@ -275,21 +277,28 @@ class TestCommissionIsSummedAcrossFills:
     """AC #3."""
 
     def test_the_575_case(self):
-        position, _ = _round_trip(
+        position, closed_event = _round_trip(
             entry_fills=[(40, "100.00", _money("1.25")), (60, "110.00", _money("2.50"))],
             exit_fills=[(50, "120.00", _money("1.00")), (50, "130.00", _money("1.00"))],
         )
-        recorded = aggregate_closed_position(position)
+        recorded = aggregate_closed_position(closed_event, position)
 
         assert recorded.trade.commission_amount == Decimal("5.75")
         assert recorded.trade.commission_currency == "USD"
 
-    def test_empty_commissions_yield_zero_in_settlement_currency(self):
-        position, _ = _round_trip(
+    def test_zero_amount_commissions_yield_zero_in_settlement_currency(self):
+        """AC #3 pin (i), at the tier a real ``Position`` allows. Zero-amount
+        fills do NOT produce an empty ``commissions()`` — Nautilus returns
+        ``[Money(0.00, USD)]`` (measured 2026-09-12, review) — so this goes
+        through ``select_commission``'s single-entry path, not its empty
+        branch. A real ``Position`` cannot yield ``[]`` at all; the empty
+        branch is pinned only at the unit tier, with a hand-rolled ``[]``.
+        """
+        position, closed_event = _round_trip(
             entry_fills=[(10, "100.00", _money("0.00"))],
             exit_fills=[(10, "110.00", _money("0.00"))],
         )
-        recorded = aggregate_closed_position(position)
+        recorded = aggregate_closed_position(closed_event, position)
 
         assert recorded.trade.commission_amount == Decimal("0")
         assert recorded.trade.commission_currency == str(position.settlement_currency)
@@ -335,6 +344,10 @@ class TestCommissionIsSummedAcrossFills:
 
         with capture_logs() as logs:
             recorder.handle_position_event(closed_event)
+
+        warnings = [entry for entry in logs if entry["event"] == COMMISSION_MIXED_EVENT]
+        assert len(warnings) == 1, "the settlement-absent fallback to [0] must still be loud"
+        assert warnings[0]["commissions"] == ("1.23 EUR", "2.46 GBP")
 
         aggregated = [entry for entry in logs if entry["event"] == AGGREGATED_EVENT]
         assert aggregated[0]["commission"] == "1.23"
@@ -393,11 +406,11 @@ class TestSingleFillEachSideIsTheSimpleCase:
     """AC #4."""
 
     def test_one_fill_in_one_fill_out_reduces_to_the_simple_case(self):
-        position, _ = _round_trip(
+        position, closed_event = _round_trip(
             entry_fills=[(10, "100.00", _money("1.00"))],
             exit_fills=[(10, "110.00", _money("1.00"))],
         )
-        recorded = aggregate_closed_position(position)
+        recorded = aggregate_closed_position(closed_event, position)
 
         assert recorded.trade.entry_price == Decimal("100.00000000")
         assert recorded.trade.exit_price == Decimal("110.00000000")
@@ -409,11 +422,11 @@ class TestSingleFillEachSideIsTheSimpleCase:
         distinguishes ``Decimal(value)`` from ``Decimal(str(value))``): a
         realistic-looking price whose binary repr is not exact.
         """
-        position, _ = _round_trip(
+        position, closed_event = _round_trip(
             entry_fills=[(10, "100.10", _money("0.00"))],
             exit_fills=[(10, "110.10", _money("0.00"))],
         )
-        recorded = aggregate_closed_position(position)
+        recorded = aggregate_closed_position(closed_event, position)
 
         assert recorded.trade.entry_price == Decimal("100.10000000")
         assert recorded.trade.exit_price == Decimal("110.10000000")
@@ -523,19 +536,65 @@ class TestTheHandlerNeverRaises:
         assert failed[0]["exc_info"] is True
         assert [entry for entry in logs if entry["event"] == AGGREGATED_EVENT] == []
 
-    def test_a_missing_cached_position_produces_one_recorder_failed_no_raise(self):
+    def test_a_missing_cached_position_records_the_leg_with_commission_unknown(self):
+        """Review 2026-09-12 (flip decision, option 1): every snapshot field
+        lives on the event, so a cache miss no longer costs the trade — only
+        its commission, which is marked unknown, loudly.
+        """
         position, closed_event = _round_trip(
             entry_fills=[(10, "100.00", _money("1.00"))],
             exit_fills=[(10, "110.00", _money("1.00"))],
         )
-        recorder = TradeRecorder(_StubCache({}), structlog.get_logger("test"))
+        sink_calls: list[RecordedTrade] = []
+        recorder = TradeRecorder(
+            _StubCache({}), structlog.get_logger("test"), sink=sink_calls.append
+        )
 
         with capture_logs() as logs:
             recorder.handle_position_event(closed_event)  # must not raise
 
-        failed = [entry for entry in logs if entry["event"] == RECORDER_FAILED_EVENT]
-        assert len(failed) == 1
-        assert failed[0]["stage"] == "lookup"
+        assert [entry for entry in logs if entry["event"] == RECORDER_FAILED_EVENT] == []
+        unavailable = [entry for entry in logs if entry["event"] == COMMISSION_UNAVAILABLE_EVENT]
+        assert len(unavailable) == 1
+        assert unavailable[0]["reason"] == "no cached position"
+        assert unavailable[0]["position_id"] == str(position.id)
+        aggregated = [entry for entry in logs if entry["event"] == AGGREGATED_EVENT]
+        assert len(aggregated) == 1
+        assert aggregated[0]["commission"] is None
+        assert aggregated[0]["currency"] is None
+        assert aggregated[0]["fill_count"] is None
+        assert aggregated[0]["exit_price"] == "110.00000000"
+        assert len(sink_calls) == 1
+        assert sink_calls[0].trade.commission_amount is None
+        assert sink_calls[0].fill_count is None
+
+    def test_a_cached_position_that_is_not_the_closed_leg_is_not_trusted(self):
+        """The flip shape, at the double level: the cache answers with an
+        OPEN position under the same id (``closing_order_id`` is ``None``).
+        ``TestAgainstARealExecutionEngine`` proves the real engine produces
+        exactly this; here the guard is pinned in isolation.
+        """
+        closed_position, closed_event = _round_trip(
+            entry_fills=[(10, "100.00", _money("1.00"))],
+            exit_fills=[(10, "110.00", _money("1.00"))],
+        )
+        reopened = _open_position(entry_fills=[(5, "120.00", _money("9.99"))])
+        assert not position_vouches_for(closed_event, reopened)
+        assert position_vouches_for(closed_event, closed_position)
+        recorder = TradeRecorder(
+            _StubCache({closed_event.position_id: reopened}), structlog.get_logger("test")
+        )
+
+        with capture_logs() as logs:
+            recorder.handle_position_event(closed_event)
+
+        assert [entry for entry in logs if entry["event"] == RECORDER_FAILED_EVENT] == []
+        unavailable = [entry for entry in logs if entry["event"] == COMMISSION_UNAVAILABLE_EVENT]
+        assert len(unavailable) == 1
+        assert "re-opened" in unavailable[0]["reason"]
+        aggregated = [entry for entry in logs if entry["event"] == AGGREGATED_EVENT]
+        assert len(aggregated) == 1
+        assert aggregated[0]["commission"] is None, "9.99 belongs to the new leg, never to this one"
 
     def test_an_unconvertible_avg_px_produces_one_recorder_failed_no_raise(self):
         position, closed_event = _round_trip(
@@ -543,24 +602,24 @@ class TestTheHandlerNeverRaises:
             exit_fills=[(10, "110.00", _money("1.00"))],
         )
 
-        class _NanPosition:
+        class PositionClosed:  # the class NAME is what the dispatch map keys on
             def __getattr__(self, name):
-                return getattr(position, name)
+                return getattr(closed_event, name)
 
             @property
             def avg_px_open(self):
                 return float("nan")
 
-        recorder = TradeRecorder(
-            _StubCache({position.id: _NanPosition()}), structlog.get_logger("test")
-        )
+        recorder = TradeRecorder(_StubCache({position.id: position}), structlog.get_logger("test"))
 
         with capture_logs() as logs:
-            recorder.handle_position_event(closed_event)  # must not raise
+            recorder.handle_position_event(PositionClosed())  # must not raise
 
         failed = [entry for entry in logs if entry["event"] == RECORDER_FAILED_EVENT]
         assert len(failed) == 1
         assert failed[0]["stage"] == "aggregate"
+        assert failed[0]["error_type"] == "ValueError"
+        assert [entry for entry in logs if entry["event"] == AGGREGATED_EVENT] == []
 
 
 class TestNoRecordEverCarriesAnAccountId:
@@ -617,10 +676,24 @@ class TestSeverityIsPinned:
             entry_fills=[(10, "100.00", _money("1.00"))],
             exit_fills=[(10, "110.00", _money("1.00"))],
         )
-        failing_recorder = TradeRecorder(_StubCache({}), structlog.get_logger("test"))
+        unavailable_recorder = TradeRecorder(_StubCache({}), structlog.get_logger("test"))
+        with capture_logs() as unavailable_logs:
+            unavailable_recorder.handle_position_event(missing_closed)
+        by_event = {entry["event"]: entry for entry in unavailable_logs}
+        assert by_event[COMMISSION_UNAVAILABLE_EVENT]["log_level"] == "warning"
+
+        def raising_sink(recorded: RecordedTrade) -> None:
+            raise RuntimeError("sink boom")
+
+        failing_recorder = TradeRecorder(
+            _StubCache({missing_position.id: missing_position}),
+            structlog.get_logger("test"),
+            sink=raising_sink,
+        )
         with capture_logs() as failure_logs:
             failing_recorder.handle_position_event(missing_closed)
-        assert failure_logs[0]["log_level"] == "error"
+        assert [entry["log_level"] for entry in failure_logs] == ["error"]
+        assert failure_logs[0]["event"] == RECORDER_FAILED_EVENT
 
 
 class TestEmittedTradeEventsMembership:
@@ -691,3 +764,146 @@ class TestEveryDispatchedRecordNameIsPinned:
 class TestPositionEventsTopicIsTheAr41Wildcard:
     def test_the_literal_is_exact(self):
         assert POSITION_EVENTS_TOPIC == "events.position*"
+
+
+# --------------------------------------------------------------------------
+# Review 2026-09-12: the recorder driven by a real ``ExecutionEngine`` over a
+# real ``MessageBus`` — the only fixture that reproduces Nautilus's deferred
+# position-event publication (``execution/engine.pyx:1171-1186``) and the flip
+# path (``:1516-1600``), which hand-applied fills cannot.
+# --------------------------------------------------------------------------
+
+
+def _engine_stack():
+    from nautilus_trader.common.component import MessageBus, TestClock
+    from nautilus_trader.execution.engine import ExecutionEngine
+    from nautilus_trader.portfolio.portfolio import Portfolio
+    from nautilus_trader.test_kit.stubs.component import TestComponentStubs
+    from nautilus_trader.test_kit.stubs.execution import TestExecStubs
+    from nautilus_trader.trading.strategy import Strategy
+
+    clock = TestClock()
+    msgbus = MessageBus(trader_id=TRADER_ID, clock=clock)
+    cache = TestComponentStubs.cache()
+    portfolio = Portfolio(msgbus=msgbus, cache=cache, clock=clock)
+    engine = ExecutionEngine(msgbus=msgbus, cache=cache, clock=clock)
+    cache.add_instrument(AAPL_EQUITY)
+    account = TestExecStubs.cash_account()
+    cache.add_account(account)
+    portfolio.update_account(TestEventStubs.cash_account_state())
+    strategy = Strategy()
+    strategy.register(
+        trader_id=TRADER_ID, portfolio=portfolio, msgbus=msgbus, cache=cache, clock=clock
+    )
+    engine.start()
+    return msgbus, cache, engine, strategy, account, clock
+
+
+def _engine_fill(stack, side, qty, px, commission):
+    """Submit-accept-fill one market order through the real engine; return its
+    ``ClientOrderId``. The engine assigns the NETTING ``PositionId`` itself."""
+    _, cache, engine, strategy, account, clock = stack
+    order = strategy.order_factory.market(AAPL_EQUITY.id, side, Quantity.from_int(qty))
+    order.apply(TestEventStubs.order_submitted(order))
+    cache.add_order(order, None)
+    order.apply(TestEventStubs.order_accepted(order))
+    cache.update_order(order)
+    fill = OrderFilled(
+        trader_id=order.trader_id,
+        strategy_id=order.strategy_id,
+        instrument_id=AAPL_EQUITY.id,
+        client_order_id=order.client_order_id,
+        venue_order_id=VenueOrderId(f"V-{order.client_order_id}"),
+        account_id=account.id,
+        trade_id=TradeId(f"T-{next(_COUNTER)}"),
+        position_id=None,
+        order_side=side,
+        order_type=OrderType.MARKET,
+        last_qty=Quantity.from_int(qty),
+        last_px=Price.from_str(px),
+        currency=USD,
+        commission=commission,
+        liquidity_side=LiquiditySide.TAKER,
+        event_id=UUID4(),
+        ts_event=clock.timestamp_ns(),
+        ts_init=clock.timestamp_ns(),
+    )
+    clock.advance_time(clock.timestamp_ns() + 1_000_000_000)
+    engine.process(fill)
+    return order.client_order_id
+
+
+class TestAgainstARealExecutionEngine:
+    """The recorder subscribed on ``events.position*`` of a real bus, fed by a
+    real ``ExecutionEngine`` — production wiring, no node."""
+
+    def _subscribe(self, stack):
+        msgbus, cache, *_ = stack
+        sink_calls: list[RecordedTrade] = []
+        recorder = TradeRecorder(cache, structlog.get_logger("test"), sink=sink_calls.append)
+        msgbus.subscribe(topic=POSITION_EVENTS_TOPIC, handler=recorder.handle_position_event)
+        return sink_calls
+
+    def test_a_plain_round_trip_is_recorded_with_its_summed_commission(self):
+        stack = _engine_stack()
+        sink_calls = self._subscribe(stack)
+
+        with capture_logs() as logs:
+            _engine_fill(stack, OrderSide.BUY, 100, "100.00", _money("1.25"))
+            closing = _engine_fill(stack, OrderSide.SELL, 100, "110.00", _money("1.00"))
+
+        aggregated = [entry for entry in logs if entry["event"] == AGGREGATED_EVENT]
+        assert [entry for entry in logs if entry["event"] == RECORDER_FAILED_EVENT] == []
+        assert len(aggregated) == 1
+        assert aggregated[0]["entry_price"] == "100.00000000"
+        assert aggregated[0]["exit_price"] == "110.00000000"
+        assert aggregated[0]["commission"] == "2.25"
+        assert aggregated[0]["fill_count"] == "2"
+        assert aggregated[0]["closing_order_id"] == str(closing)
+        assert len(sink_calls) == 1
+        assert sink_calls[0].trade.commission_amount == Decimal("2.25")
+
+    def test_a_flip_records_the_closed_leg_from_the_event_with_commission_unknown(self):
+        """Measured 2026-09-12: on a flip Nautilus closes the original
+        ``Position``, builds a NEW one under the same NETTING id
+        (``_open_position(instrument, None, fill_split2)``) and only then
+        publishes ``PositionClosed`` — so at dispatch time the cache holds the
+        new, open position (``avg_px_close 0.0``, ``ts_closed 0``,
+        ``closing_order_id None``, the residual leg's commission). The closed
+        leg's own commission is unrecoverable from the cache; every other
+        field is a snapshot on the event itself.
+        """
+        stack = _engine_stack()
+        sink_calls = self._subscribe(stack)
+
+        with capture_logs() as logs:
+            _engine_fill(stack, OrderSide.BUY, 50, "120.00", _money("0.50"))
+            flipping = _engine_fill(stack, OrderSide.SELL, 150, "130.00", _money("3.00"))
+
+        assert [entry for entry in logs if entry["event"] == RECORDER_FAILED_EVENT] == []
+        aggregated = [entry for entry in logs if entry["event"] == AGGREGATED_EVENT]
+        assert len(aggregated) == 1
+        record = aggregated[0]
+        assert record["entry_price"] == "120.00000000"
+        assert record["exit_price"] == "130.00000000"
+        assert record["quantity"] == "50.00000000"
+        assert record["order_side"] == "BUY"
+        assert record["closing_order_id"] == str(flipping)
+        assert Decimal(record["realized_pnl"]) == Decimal("498.50"), (
+            "50 x 10 gross, less 0.50 + 1.00"
+        )
+        assert record["commission"] is None
+        assert record["currency"] is None
+
+        assert COMMISSION_UNAVAILABLE_EVENT == "trade.commission_unavailable"
+        unavailable = [entry for entry in logs if entry["event"] == COMMISSION_UNAVAILABLE_EVENT]
+        assert len(unavailable) == 1
+        assert unavailable[0]["log_level"] == "warning"
+        assert unavailable[0]["position_id"] == record["position_id"]
+        assert unavailable[0]["closing_order_id"] == str(flipping)
+
+        assert len(sink_calls) == 1
+        assert sink_calls[0].trade.commission_amount is None
+        assert sink_calls[0].trade.commission_currency is None
+        assert sink_calls[0].trade.exit_price == Decimal("130.00000000")
+        assert sink_calls[0].fill_count is None

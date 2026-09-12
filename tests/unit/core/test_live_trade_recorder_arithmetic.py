@@ -11,7 +11,13 @@ from decimal import Decimal
 
 import pytest
 
-from src.core.live_trade_recorder import select_commission, to_price_decimal, unix_nanos_to_utc
+from src.core.live_trade_recorder import (
+    aggregate_closed_position,
+    position_vouches_for,
+    select_commission,
+    to_price_decimal,
+    unix_nanos_to_utc,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -139,15 +145,85 @@ class TestUnixNanosToUtc:
         assert (result - epoch).total_seconds() * 1_000_000 == pytest.approx(expected_micros, abs=0)
 
 
-class TestHoldingPeriodIsIntegerDivision:
-    """``holding_period_seconds = duration_ns // 1_000_000_000`` — integer
-    division, kept out of the module's own float-division equivalent
-    (``backtest_persistence.py``'s ``int(x / 1e9)``); the two agree for every
-    real duration, so this pins the safer of the two forms.
+@dataclass(frozen=True)
+class _Enum:
+    name: str
+
+
+@dataclass(frozen=True)
+class _ClosedEvent:
+    """Every field ``aggregate_closed_position`` reads off ``PositionClosed``."""
+
+    avg_px_open: float = 100.0
+    avg_px_close: float = 110.0
+    peak_qty: float = 10.0
+    ts_opened: int = 1_000_000_000
+    ts_closed: int = 4_999_999_999
+    duration_ns: int = 3_999_999_999
+    opening_order_id: str = "O-1"
+    closing_order_id: str = "O-2"
+    entry: _Enum = _Enum("BUY")
+    realized_pnl: _Money = _Money(Decimal("98"), "USD")
+    instrument_id: str = "AAPL.NASDAQ"
+    strategy_id: str = "S-1"
+    position_id: str = "AAPL.NASDAQ-S-1"
+
+
+@dataclass(frozen=True)
+class _Position:
+    is_closed: bool = True
+    closing_order_id: str = "O-2"
+    event_count: int = 2
+    settlement_currency: _Currency = _Currency("USD")
+
+    def commissions(self):
+        return [_Money(Decimal("2"), "USD")]
+
+
+class TestAggregateClosedPositionWithDoubles:
+    """Review 2026-09-12: replaces two tests that asserted ``3_000_000_000 //
+    1_000_000_000 == 3`` — Python's integer division, not the module. These
+    drive ``aggregate_closed_position`` itself, with no Nautilus import.
     """
 
-    def test_three_seconds_exactly(self):
-        assert 3_000_000_000 // 1_000_000_000 == 3
+    def test_every_snapshot_field_comes_from_the_event(self):
+        recorded = aggregate_closed_position(_ClosedEvent(), _Position())
+        assert recorded.trade.entry_price == Decimal("100.00000000")
+        assert recorded.trade.exit_price == Decimal("110.00000000")
+        assert recorded.trade.quantity == Decimal("10.00000000")
+        assert recorded.trade.order_side == "BUY"
+        assert recorded.trade.venue_order_id == "O-1"
+        assert recorded.trade.client_order_id == "O-2"
+        assert recorded.trade.entry_timestamp == datetime(1970, 1, 1, 0, 0, 1, tzinfo=UTC)
+        assert recorded.profit_loss == Decimal("98")
+        assert recorded.profit_pct == Decimal("10")
+        assert recorded.trade_key == "AAPL.NASDAQ-S-1:O-2"
 
-    def test_a_duration_with_a_remainder_truncates(self):
-        assert 3_999_999_999 // 1_000_000_000 == 3
+    def test_holding_period_is_integer_division_of_duration_ns(self):
+        recorded = aggregate_closed_position(_ClosedEvent(duration_ns=3_999_999_999), _Position())
+        assert recorded.holding_period_seconds == 3
+        recorded = aggregate_closed_position(_ClosedEvent(duration_ns=3_000_000_000), _Position())
+        assert recorded.holding_period_seconds == 3
+
+    def test_a_vouching_position_supplies_commission_and_fill_count(self):
+        recorded = aggregate_closed_position(_ClosedEvent(), _Position())
+        assert recorded.trade.commission_amount == Decimal("2")
+        assert recorded.trade.commission_currency == "USD"
+        assert recorded.fill_count == 2
+
+    @pytest.mark.parametrize(
+        "position",
+        [
+            None,
+            _Position(is_closed=False, closing_order_id="None"),
+            _Position(closing_order_id="O-9"),
+        ],
+        ids=["no-cached-position", "re-opened-under-same-id", "closed-by-another-order"],
+    )
+    def test_a_position_that_does_not_vouch_leaves_commission_unknown(self, position):
+        assert not position_vouches_for(_ClosedEvent(), position)
+        recorded = aggregate_closed_position(_ClosedEvent(), position)
+        assert recorded.trade.commission_amount is None
+        assert recorded.trade.commission_currency is None
+        assert recorded.fill_count is None
+        assert recorded.trade.exit_price == Decimal("110.00000000"), "the leg is still recorded"
