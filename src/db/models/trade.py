@@ -152,6 +152,19 @@ class Trade(Base):
             "backtest_run_id IS NOT NULL OR session_id IS NOT NULL", name="chk_trades_owner"
         ),
         Index("idx_trades_backtest_time", "backtest_run_id", "entry_timestamp"),
+        # Story 3.6: idempotent trade writes need no new column.
+        # `RecordedTrade.trade_key` (`live_trade_recorder.py`) is already this
+        # row's `(trade_id, client_order_id)` pair. Postgres treats NULL as
+        # distinct in a unique index, so backtest-owned rows (`session_id`
+        # NULL) never collide with each other or with a session's rows
+        # (measured, Task 1.2).
+        Index(
+            "uq_trades_session_trade_key",
+            "session_id",
+            "trade_id",
+            "client_order_id",
+            unique=True,
+        ),
     )
 
     def __repr__(self) -> str:

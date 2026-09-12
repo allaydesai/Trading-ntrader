@@ -839,6 +839,7 @@ class TestCreateStateConflicts:
 
 _RUNNER = "src.cli.commands.live.LiveSessionRunner"
 _RECORD = "src.cli.commands.live.SqlSessionRecord"
+_BUILD_PORTS = "src.cli.commands.live.build_session_ports"
 _SERVICE = "src.cli.commands.live_start.SessionService"
 _CACHE = "src.cli.commands.live.build_cache_config"
 
@@ -850,11 +851,13 @@ def _trading_session_row(**overrides):
 
     row = MagicMock()
     row.session_id = overrides.get("session_id", UUID("44444444-4444-4444-4444-444444444444"))
+    row.id = overrides.get("id", 99)
     row.name = overrides.get("name", "alpha-session")
     row.spec = overrides.get("spec", {"schema_version": 1, "strategies": []})
     row.last_started_at = overrides.get(
         "last_started_at", datetime(2026, 8, 19, 15, 0, 0, tzinfo=timezone.utc)
     )
+    row.owner_epoch = overrides.get("owner_epoch", 3)
     return row
 
 
@@ -899,13 +902,18 @@ def _start_harness(
     # And a fourth time: a truthy `all_strategies_failed` would flip every
     # contained-failure test into the every-strategy-failed branch.
     runner.all_strategies_failed = False
+    # And a fifth time (Story 3.6): a truthy `ownership_lost` would flip
+    # every clean-stop test into the reclaimed-by-another-process branch.
+    runner.ownership_lost = False
     record = MagicMock()
+    trade_record = MagicMock()
 
     with (
         patch(_START_GET_SYNC_SESSION, _fake_session_cm()),
         patch(_START_SESSION_REPO),
         patch(_SERVICE, return_value=service),
         patch(_RECORD, return_value=record) as record_cls,
+        patch(_BUILD_PORTS, return_value=(record, trade_record)) as build_ports,
         patch(_CACHE, return_value="a-cache-config"),
         patch("src.cli.commands.live.SessionSpec") as spec_cls,
         patch(_RUNNER, side_effect=construct_error, return_value=runner) as runner_cls,
@@ -917,6 +925,8 @@ def _start_harness(
             "runner_cls": runner_cls,
             "record": record,
             "record_cls": record_cls,
+            "trade_record": trade_record,
+            "build_ports": build_ports,
             "row": row,
         }
 
@@ -1012,15 +1022,25 @@ class TestStartComposesTheRunner:
 
         assert isinstance(spies["runner_cls"].call_args.args[0], IBKRSettings)
 
-    def test_the_record_is_bound_to_the_row_and_the_transitions_own_instant(self, runner):
-        """So the runner can never write to the wrong row, and cannot forge its
-        own claim to ownership — ``started_at`` is what the reclaim guard reads.
+    def test_the_ports_are_bound_to_the_row_and_the_epoch_the_claim_produced(self, runner):
+        """So neither adapter can write to the wrong row, and neither can
+        forge its own claim to ownership — ``owner_epoch`` is what every
+        fenced write compares (Story 3.6, retrospective D1).
         """
         with _start_harness() as spies:
             runner.invoke(live, ["start", "alpha-session"])
 
-        assert spies["record_cls"].call_args.args[0] == spies["row"].session_id
-        assert spies["record_cls"].call_args.kwargs["started_at"] == (spies["row"].last_started_at)
+        claimed = spies["build_ports"].call_args.args[0]
+        assert claimed.session_id == spies["row"].session_id
+        assert claimed.session_pk == spies["row"].id
+        assert claimed.owner_epoch == spies["row"].owner_epoch
+        assert claimed.started_at == spies["row"].last_started_at
+
+    def test_the_runner_receives_the_trade_records_persist_as_its_sink(self, runner):
+        with _start_harness() as spies:
+            runner.invoke(live, ["start", "alpha-session"])
+
+        assert spies["runner_cls"].call_args.kwargs["trade_sink"] == (spies["trade_record"].persist)
 
     def test_the_connect_timeout_reaches_the_runner(self, runner):
         with _start_harness() as spies:
@@ -1142,6 +1162,26 @@ class TestTheStopWasNotRequested:
             result = runner.invoke(live, ["start", "alpha-session"])
 
         assert "No stop signal was received" not in result.output
+
+    def test_an_ownership_loss_prints_the_reclaimed_message_not_the_crash_warning(self, runner):
+        """Story 3.6 hazard #9 (review 2026-09-12): a stop the trade fence
+        scheduled is deliberate but neither a signal nor a clean node exit —
+        it must read as a reclaim, never as "(ownership_lost)" in the signal
+        slot and never as the ended-on-its-own warning.
+        """
+        with _start_harness() as spies:
+            spies["runner"].ownership_lost = True
+            spies["runner"].stop_signal = None
+            spies["runner"].stopped_by_signal = False
+            result = runner.invoke(live, ["start", "alpha-session"])
+
+        flat = " ".join(result.output.split())
+        assert result.exit_code == 0
+        assert "Session stopped: alpha-session\n" in result.output
+        assert "(ownership_lost)" not in result.output
+        assert "reclaimed by another process" in flat
+        assert "another `live start` for this session is now running" in flat
+        assert "No stop signal was received" not in flat
 
 
 class TestTeardownProblemsAreVisible:
@@ -1538,11 +1578,11 @@ class TestStartRendersFirstPartyFailures:
         assert "live start failed" in result.output
 
     def test_a_failing_record_construction_still_releases_the_row(self, runner):
-        """The record's own constructor sits inside the guarded window now —
+        """The ports' own construction sits inside the guarded window now —
         a raise there must still put the row back to ``stopped`` (AC #10).
         """
         with _start_harness() as spies:
-            spies["record_cls"].side_effect = [RuntimeError("boom"), spies["record"]]
+            spies["build_ports"].side_effect = RuntimeError("boom")
             result = runner.invoke(live, ["start", "alpha-session"])
 
         assert result.exit_code == 1

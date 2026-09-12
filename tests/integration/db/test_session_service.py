@@ -213,6 +213,49 @@ class TestSessionServiceTransitionsAgainstRealPostgres:
         assert not errors, errors
         assert outcomes == {"winner": "reclaimed", "loser": "refused"}
 
+        # Story 3.6, retrospective D1: the winner's reclaim is a `-> running`
+        # edge like any other, so it increments the fencing token — the
+        # setup transition claimed epoch 1, the winner's reclaim epoch 2.
+        # The loser's refused attempt must not have touched it.
+        sync_db_session.refresh(created)
+        assert created.owner_epoch == 2
+
+    def test_the_winners_epoch_fences_the_losers_later_heartbeat(self, sync_db_session, request):
+        """Story 3.6: a loser that somehow still tries to write after losing
+        the reclaim (e.g. a heartbeat tick that started before it knew) is
+        refused by the epoch it captured at its own last successful claim —
+        proven end to end through ``stamp_activity_if_owner``, not just the
+        ``transition`` refusal above.
+        """
+        repository = SyncTradingSessionRepository(sync_db_session)
+        created = repository.create(name="epoch-fence-session", spec=_spec().to_stored())
+        sync_db_session.commit()
+        session_id = created.session_id
+
+        loser_claim = SessionService(repository).transition(session_id, to=SessionStatus.RUNNING)
+        sync_db_session.commit()
+        loser_epoch = loser_claim.owner_epoch
+
+        session_two, engine_two = _second_connection(request)
+        try:
+            created.last_heartbeat_at = datetime.now(timezone.utc) - timedelta(seconds=200)
+            sync_db_session.commit()
+            service_two = SessionService(SyncTradingSessionRepository(session_two))
+            winner_claim = service_two.transition(session_id, to=SessionStatus.RUNNING)
+            session_two.commit()
+            assert winner_claim.owner_epoch == loser_epoch + 1
+
+            rowcount = repository.stamp_activity_if_owner(
+                created.id, owner_epoch=loser_epoch, at=datetime.now(timezone.utc)
+            )
+            sync_db_session.commit()
+
+            assert rowcount == 0, "the loser's stale epoch must not be able to write"
+        finally:
+            session_two.rollback()
+            session_two.close()
+            engine_two.dispose()
+
     def test_a_reclaim_is_refused_even_when_the_caller_already_loaded_the_row(
         self, sync_db_session, request
     ):

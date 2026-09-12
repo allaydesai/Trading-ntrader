@@ -1346,3 +1346,107 @@ trade.aggregated position_id=... entry_price=... exit_price=... quantity=... fil
 | Date | Operator | Result | Notes |
 | ---- | -------- | ------ | ----- |
 | — | — | ⏳ **not yet run** | Written with Story 3.5, 2026-09-11, before any live run. No Gateway was reachable at drafting time (`nc -z 127.0.0.1 4002/4001/7497` all closed) and it was outside RTH (Friday 20:13 ET, after the 16:00 close) — the standing Epic 2 retro rule (run each story's live procedure before the story closes; 3.2 Task 8.4 / 3.3 Task 6.3 / 3.4 Task 8.4 precedent) means this story goes to `review` with this row unresolved, not `done`. |
+
+## Procedure P12: a session killed mid-run still has every trade that closed before the kill
+
+**Introduced by**: Story 3.6 — Persist Each Trade the Moment It Closes
+**Verifies**: NFR8 live (AC #3) — that a `SIGKILL` genuinely loses nothing already committed —
+plus AC #1's live wiring (`trades` rows actually land against `session_id`, `live status`'s
+`closed trades:` counter finally moves off zero) and AC #6's `trade.persisted` record. AC #2's
+field-mapping and AC #4's retry/idempotency are proven exhaustively at the unit/component/
+integration tiers (`tests/unit/services/test_trade_record_adapter.py`,
+`tests/component/core/test_live_trade_recorder.py`,
+`tests/integration/db/test_trade_record.py`); this procedure is live evidence of the kill
+guarantee specifically, which only a real process death can demonstrate.
+
+### What it does — and does not — do
+
+The whole point of this story is that a trade write commits **before** the handler returns and
+before `trade.persisted` is logged (D-A) — so a `kill -9` timed right after that line proves the
+row survived a death the process had no chance to react to. What this run **is** evidence for:
+the commit-before-log ordering (AC #1, AC #3), the live `owner_epoch` mechanics (a next
+`live start` reclaiming at the incremented epoch), and that `live status` reports a non-zero
+`closed trades:` count for the first time this project has ever produced one. What it is **not**
+evidence for, stated rather than left implicit: a genuine database outage under trading load (AC
+#4's retry-and-recover path is component-tier evidence only — staging a real Postgres failure
+live is not attempted); the reclaim refusal at a trade write itself (AC #7/#8b — proven at the
+integration tier with two real Postgres connections; running two live processes against one
+paper account on purpose is exactly the NFR6 catastrophe this project exists to prevent, and is
+never staged live); broker-truth reconciliation (Story 4.3's).
+
+### Preconditions
+
+Story 3.4/3.5's Task 8's, unchanged, plus one new step: inside RTH; **no other IBKR login**
+(mobile app and client portal included — error 162); the bare non-compose Gateway
+(`READ_ONLY_API: "yes"` on the compose one refuses the first order); Redis **and Postgres** up;
+**`alembic upgrade head` run first** — this story's migration (`85c949ac0374`) must be applied
+before the session starts, or `owner_epoch`/the trade-key index will not exist; strategy
+`sma_crossover` only (`fast_period=2, slow_period=3`). **Use a fresh session name** —
+`p7-position-test` and `p7-fill-0901` are both poisoned (see P11's preconditions for why).
+**Know before starting**: `flatten_position.py --confirm` is still broken and fails safe (P11) —
+a position left open at the end of the run stays open at the broker by design.
+
+### Command
+
+```bash
+# Confirm the migration landed before starting.
+uv run alembic current   # must read 85c949ac0374 (head)
+
+# Start a fresh session and let it complete at least one round trip.
+uv run python -m src.cli.main live start <fresh-session-name> > logs/p12-<date>.log 2>&1 &
+
+# Watch for the first trade.persisted line, then kill within seconds of it —
+# resolve the PID by pgrep, never $! (P9's harness note: $! is often a wrapper, not the runner).
+tail -f logs/p12-<date>.log | grep -m1 "trade.persisted"
+kill -9 "$(pgrep -f 'live start <fresh-session-name>')"
+
+# Read the transcript, then compare against the database.
+grep -n "trade.aggregated\|trade.persisted\|trade.recorder_failed\|trade.persist_refused" logs/p12-<date>.log
+grep -c -E "162|10182|366" logs/p12-<date>.log   # D6's standing rule — before anything else
+
+uv run python -m src.cli.main live status <fresh-session-name>
+
+psql "$DATABASE_URL" -c \
+  "SELECT trade_id, client_order_id, entry_price, exit_price, commission_amount, profit_loss \
+   FROM trades WHERE session_id = <pk from live status or the sessions table>"
+
+# Then, on the same session — must reclaim, this time on purpose.
+uv run python -m src.cli.main live start <fresh-session-name> > logs/p12-reclaim-<date>.log 2>&1 &
+grep -n "owner_epoch\|session.reclaimed" logs/p12-reclaim-<date>.log
+```
+
+### Expected output
+
+```
+trade.aggregated position_id=... trade_key=... entry_price=... exit_price=...
+trade.persisted trade_key=... inserted=True attempt=first session_id=... entry_price=... ...
+```
+then, after the kill, `live status` reports `closed trades: N` with `N >= 1`, and `psql` returns
+exactly the `trade_key`s (`trade_id`, `client_order_id` pair) the transcript's `trade.persisted`
+lines named, with `entry_price`/`exit_price`/`commission_amount`/`profit_loss` equal to the
+transcript's.
+
+### Pass criteria
+
+1. **Each `PositionClosed` is followed by exactly one `trade.aggregated` and one
+   `trade.persisted`** with the same `trade_key`, bound with `session_id` (AC #1, AC #6).
+2. **After the kill, `psql` returns exactly the `trade_key`s the transcript's `trade.persisted`
+   lines named**, with column values equal to the transcript's (AC #3 — the comparison this
+   procedure exists to make).
+3. **`live status <name>` reports `closed trades: N`, `N >= 1`** — the first non-zero reading
+   this counter has ever produced in a live session.
+4. **Zero `trade.recorder_failed`, zero `trade.persist_refused`** anywhere in the transcript.
+5. **The next `live start` on the same session reclaims after the 90s staleness window**, and the
+   reclaimed row's `owner_epoch` is exactly one higher than the killed run's own claim (P9's
+   criterion 4, inverted — this time the row *must* change, not stay put).
+6. **`grep -c` for `162`, `10182`, `366` inspected before anything else is recorded** (D6's
+   standing rule).
+7. **Record the Task 1.3 number observed live**: the wall-clock gap between the `PositionClosed`
+   Nautilus line and the corresponding `trade.persisted` line, for comparison against the
+   sub-millisecond local measurement (D-A's cost claim).
+
+### Result log
+
+| Date | Operator | Result | Notes |
+| ---- | -------- | ------ | ----- |
+| — | — | ⏳ **not yet run** | Written with Story 3.6, 2026-09-12, before any live run. No Gateway was reachable at drafting time (4001/4002/7496/7497 all closed, no docker daemon) and it was outside RTH (Saturday) — the standing Epic 2 retro rule (3.2/3.3/3.4/3.5 precedent) means this story goes to `review` with this row unresolved, not `done`. |

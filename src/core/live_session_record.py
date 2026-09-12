@@ -48,19 +48,15 @@ class SessionReclaimedError(Exception):
     importing ``src.db.exceptions`` — which AR38 forbids it. The adapter
     translates; see ``src/services/session_record.py``.
 
-    Known, accepted limit: this is a **detection**, not a cure. The window
-    between another process reclaiming the session and this process's next
-    heartbeat is up to one interval of two live processes on one broker
-    account — the NFR6 catastrophe, narrowed rather than closed. Closing it
-    needs a fencing token the schema does not have.
-
-    ⚠️ **The reason that column was rejected no longer holds** (Story 2.7,
-    2026-08-23). It was rejected *"because this phase's single migration is
-    spent"*; Story 2.7's ``runtime_flags`` migration falsified that, so the
-    cost argument against an owner/epoch column is gone while the hazard is
-    unchanged. Re-opened in ``deferred-work.md`` under ``story-2.7`` rather than
-    taken here: a fencing token changes the meaning of every write on this port
-    and is not a bystander to a containment story.
+    **Closed by Story 3.6** (retrospective D1). The fencing token this
+    docstring used to say the schema lacked now exists —
+    ``trading_sessions.owner_epoch`` — and every write through this port is
+    qualified against it (``SqlSessionRecord``, ``src/services/
+    session_record.py``) or, for the trade sink, against the same column
+    directly (``SqlTradeRecord``, ``src/services/trade_record.py``). The
+    window described above is closed for every write *this* exception can be
+    raised from; it is not a cure for a write that never reaches the
+    database at all (an order-path epoch check remains Story 4.3's, per D-C).
     """
 
 

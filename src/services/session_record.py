@@ -19,11 +19,11 @@ for the life of the session would hold the row lock for hours and block every
 ``live status``."* A 6.5-hour session writes roughly 780 heartbeats; each is
 its own transaction and each ends before the call returns.
 
-**``session_id`` and ``started_at`` are bound at construction, not passed per
+**``session_id`` and ``owner_epoch`` are bound at construction, not passed per
 call.** The runner therefore cannot write to another session's row, and cannot
-supply a ``started_at`` other than the one its own ``-> running`` transition
-stamped — which is the value ``session_service._stamp_activity`` compares
-against to detect being reclaimed mid-run.
+supply an epoch other than the one its own ``-> running`` transition produced
+— the fencing token every qualified write compares against (Story 3.6,
+retrospective D1, replacing the old ``started_at`` clock comparison).
 
 Known, accepted limits:
 
@@ -61,10 +61,11 @@ class SqlSessionRecord:
     Args:
         session_id: The session's UUID business key — ``TradingSession
             .session_id``, not its ``name`` and not its ``id``.
-        started_at: The instant this process's own ``-> running`` transition
-            stamped into ``last_started_at``. Held for the object's life and
-            compared on every write, so a session reclaimed by a second process
-            is detected rather than silently double-driven.
+        owner_epoch: The epoch this process's own ``-> running`` transition
+            produced. Held for the object's life and compared on every write
+            (Story 3.6, retrospective D1), so a session reclaimed by a second
+            process is refused by the database itself rather than silently
+            double-driven.
         session_factory: The ``get_sync_session`` context manager. Injected so
             the transaction discipline is testable without a database.
     """
@@ -73,11 +74,11 @@ class SqlSessionRecord:
         self,
         session_id: UUID,
         *,
-        started_at: datetime,
+        owner_epoch: int,
         session_factory: SessionFactory = get_sync_session,
     ) -> None:
         self._session_id = session_id
-        self._started_at = started_at
+        self._owner_epoch = owner_epoch
         self._session_factory = session_factory
 
     def record_activity(self, *, at: datetime, bar_seen_at: datetime | None = None) -> None:
@@ -93,14 +94,15 @@ class SqlSessionRecord:
         :class:`~src.core.live_session_record.SessionReclaimedError`, for two
         reasons. The runner may not import ``src.db`` (AR38), so it could not
         catch the database exception even if it wanted to; and both refusals
-        that produce one — the row is not ``running``, or its
-        ``last_started_at`` moved past this process's own — mean the same thing
-        to a runner, which is that it no longer owns this session and must
-        stop. That is a **widening** of Story 2.5's literal wording, which
-        names only the reclaim; the "not running" case reaches the same
-        conclusion by the same evidence, and treating it as a survivable hiccup
-        would log an error every 30 seconds forever against a row that will
-        never accept another write. Flagged for the Epic 2 retro.
+        that produce one — the row is not ``running``, or its ``owner_epoch``
+        moved past this process's own (Story 3.6, retrospective D1) — mean
+        the same thing to a runner, which is that it no longer owns this
+        session and must stop. That is a **widening** of Story 2.5's literal
+        wording, which names only the reclaim; the "not running" case reaches
+        the same conclusion by the same evidence, and treating it as a
+        survivable hiccup would log an error every 30 seconds forever against
+        a row that will never accept another write. Flagged for the Epic 2
+        retro.
 
         Raises:
             RecordNotFoundError: The session's row is gone. Deliberately **not**
@@ -114,7 +116,7 @@ class SqlSessionRecord:
             try:
                 service.record_activity(
                     self._session_id,
-                    started_at=self._started_at,
+                    owner_epoch=self._owner_epoch,
                     at=at,
                     bar_seen_at=bar_seen_at,
                 )
@@ -127,7 +129,7 @@ class SqlSessionRecord:
         Never assigns ``status`` itself — AR37 admits exactly one assigner and
         it is not this module.
 
-        The bound ``started_at`` is passed through, which arms the service's
+        The bound ``owner_epoch`` is passed through, which arms the service's
         ownership guard on the **stop** path too (review fix, 2026-08-21):
         without it, an incumbent exiting inside the one-interval detection
         window would transition the *successor's* running row to ``stopped``.
@@ -147,7 +149,7 @@ class SqlSessionRecord:
             service = SessionService(repository)
             try:
                 service.transition(
-                    self._session_id, to=SessionStatus.STOPPED, started_at=self._started_at
+                    self._session_id, to=SessionStatus.STOPPED, owner_epoch=self._owner_epoch
                 )
             except InvalidSessionTransition as exc:
                 raise SessionReclaimedError(str(exc)) from exc
@@ -178,7 +180,7 @@ class SqlSessionRecord:
         :class:`~src.core.live_session_record.SessionReclaimedError` for the two
         reasons ``record_activity`` documents — the runner may not import
         ``src.db`` (AR38), and both refusals that produce one (the row is not
-        ``running``, or its ``last_started_at`` moved past this process's own)
+        ``running``, or its ``owner_epoch`` moved past this process's own)
         mean the same thing: this session is no longer ours to write to.
 
         ⚠️ The **caller's** policy differs here, and deliberately. For the
@@ -199,7 +201,7 @@ class SqlSessionRecord:
             try:
                 service.record_strategy_failure(
                     self._session_id,
-                    started_at=self._started_at,
+                    owner_epoch=self._owner_epoch,
                     strategy_id=strategy_id,
                     spec_strategy_id=spec_strategy_id,
                     error_type=error_type,

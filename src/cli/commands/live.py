@@ -36,7 +36,12 @@ from rich.console import Console
 from rich.markup import escape
 from sqlalchemy.exc import SQLAlchemyError
 
-from src.cli.commands.live_start import claim_session, exit_with, release_quietly
+from src.cli.commands.live_start import (
+    build_session_ports,
+    claim_session,
+    exit_with,
+    release_quietly,
+)
 from src.cli.commands.live_status import list_sessions, status
 from src.config import get_settings
 from src.core.live_cache import build_cache_config
@@ -368,7 +373,7 @@ def start(session: str, connect_timeout: float) -> None:
     """
     settings = get_settings()
     try:
-        session_id, spec_payload, started_at = claim_session(session)
+        claimed = claim_session(session)
     except (RuntimeError, DatabaseConnectionError, SQLAlchemyError) as exc:
         # Postgres-layer failures carry this codebase's own actionable text
         # ("Database not configured…", the connection detail) that the AR28
@@ -380,19 +385,20 @@ def start(session: str, connect_timeout: float) -> None:
         exit_with(exc)
 
     # Everything after the `→ running` transition is guarded — including the
-    # record's own construction (review fix, 2026-08-21): reading the spec
-    # back and building the cache config can both fail, and a failure anywhere
-    # in this window must still put the row back to `stopped` (AC #10). The
+    # ports' own construction (review fix, 2026-08-21): reading the spec back
+    # and building the cache config can both fail, and a failure anywhere in
+    # this window must still put the row back to `stopped` (AC #10). The
     # excepts rebuild the release adapter because its constructor is pure
     # attribute assignment and cannot itself be mid-failure.
     try:
-        record = SqlSessionRecord(session_id, started_at=started_at)
+        record, trade_record = build_session_ports(claimed)
         runner = LiveSessionRunner(
             settings.ibkr,
-            session_id=session_id,
-            spec=SessionSpec.from_stored(spec_payload),
+            session_id=claimed.session_id,
+            spec=SessionSpec.from_stored(claimed.spec),
             record=record,
-            started_at=started_at,
+            started_at=claimed.started_at,
+            trade_sink=trade_record.persist,
             cache=build_cache_config(settings.redis),
             connect_timeout=connect_timeout,
         )
@@ -403,11 +409,11 @@ def start(session: str, connect_timeout: float) -> None:
         # than withholding a bare type name (review fix, 2026-08-21).
         messages = "; ".join(err.get("msg", "") for err in exc.errors())
         messages = messages.replace("Value error, ", "") or str(exc)
-        release_quietly(SqlSessionRecord(session_id, started_at=started_at))
+        release_quietly(SqlSessionRecord(claimed.session_id, owner_epoch=claimed.owner_epoch))
         console.print(f"live start failed: {messages}", markup=False, highlight=False)
         raise SystemExit(EXIT_ERROR) from exc
     except (Exception, KeyboardInterrupt, asyncio.CancelledError) as exc:
-        release_quietly(SqlSessionRecord(session_id, started_at=started_at))
+        release_quietly(SqlSessionRecord(claimed.session_id, owner_epoch=claimed.owner_epoch))
         exit_with(exc)
 
     try:
@@ -449,7 +455,19 @@ def _print_stop_result(session: str, runner: LiveSessionRunner) -> None:
     """
     suffix = f" ({runner.stop_signal})" if runner.stop_signal else ""
     console.print(f"Session stopped: [bold]{escape(session)}[/bold]{suffix}", highlight=False)
-    if not runner.stopped_by_signal:
+    if runner.ownership_lost:
+        # Story 3.6, D-C: a deliberate stop, but neither an operator signal
+        # nor a clean node exit — printing the generic "no stop signal"
+        # warning below would misreport it as an unexplained crash, and
+        # `stop_signal` is deliberately never set for this path (hazard #9).
+        console.print(
+            "⚠️  This session was reclaimed by another process — a trade write's own fence "
+            "detected it no longer owns this session, and the runner stopped itself. Check "
+            "whether another `live start` for this session is now running.",
+            markup=False,
+            highlight=False,
+        )
+    elif not runner.stopped_by_signal:
         # Review fix, 2026-08-22 (decision D4): `run()` returning is NOT proof
         # that a signal ended it. `run_async` swallows cancellation, so a node
         # that died on its own returns cleanly too — and printing the same

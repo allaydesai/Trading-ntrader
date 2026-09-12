@@ -483,3 +483,64 @@ class TestTheRunnerReachesTheTradeRecorderCallSite:
         topics = [topic for topic, _ in node.trader.subscriptions]
         assert POSITION_EVENTS_TOPIC not in topics
         assert "events.mutated*" in topics
+
+    def test_the_recorder_holds_the_trade_sink_and_the_runners_own_callback(self):
+        """Story 3.6, Task 8.1: the recorder the runner subscribes must hold
+        exactly what ``LiveSessionRunner(..., trade_sink=...)`` was given, and
+        an ``on_ownership_lost`` bound to this runner.
+        """
+        node = TestLiveNode(run_seconds=0.01)
+        sink_calls = []
+
+        def sink(recorded) -> bool:
+            # Honours the sink's `-> bool` contract (review 2026-09-12) —
+            # a bare `list.append` returned `None`, which the recorder would
+            # have logged as `inserted="None"` without anything noticing.
+            sink_calls.append(recorded)
+            return True
+
+        runner = _runner(node, trade_sink=sink)
+
+        runner.run()
+
+        assert runner._trade_recorder is not None
+        assert runner._trade_recorder._sink is sink
+        assert runner._trade_recorder._on_ownership_lost == runner._note_ownership_lost
+
+    def test_trade_sink_omitted_leaves_the_recorders_sink_none(self):
+        """Non-change contract: every existing runner test that never passes
+        ``trade_sink`` must keep working unchanged.
+        """
+        node = TestLiveNode(run_seconds=0.01)
+        runner = _runner(node)
+
+        runner.run()
+
+        assert runner._trade_recorder is not None
+        assert runner._trade_recorder._sink is None
+
+    def test_invoking_the_callback_sets_ownership_lost_and_schedules_node_stop(self):
+        """The callback's actual effect (Story 3.6, D-C): setting the flag and
+        scheduling a stop through the same ``call_soon_threadsafe`` handoff
+        signals use — proven with a real event loop, not a full ``run()``, so
+        the assertion is about the callback's own mechanics.
+        """
+        import asyncio
+
+        node = TestLiveNode(run_forever=False)
+        runner = _runner(node)
+        loop = asyncio.new_event_loop()
+        try:
+            runner._loop = loop
+            runner._node = node
+            runner._trader_started = True
+
+            runner._note_ownership_lost()
+            loop.run_until_complete(asyncio.sleep(0))
+
+            assert runner._ownership_lost is True
+            assert node.stopped is True
+            assert runner._signals.signal_name is None, "must never look like an OS signal"
+            assert runner.ownership_lost is True
+        finally:
+            loop.close()

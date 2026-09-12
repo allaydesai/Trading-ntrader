@@ -3,16 +3,19 @@
 For sync operations (CLI use), use trading_session_repository_sync.py.
 """
 
+from datetime import datetime
 from typing import List, Optional, Sequence
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.exceptions import DatabaseConnectionError, DuplicateRecordError
 from src.db.models.trade import Trade
 from src.db.models.trading_session import TradingSession
+from src.models.session import SessionStatus
 
 
 class TradingSessionRepository:
@@ -21,7 +24,7 @@ class TradingSessionRepository:
     Used by future web API endpoints via FastAPI dependency injection. The
     spec is write-once: no method here updates a row's ``spec`` column, the
     same discipline ``BacktestRun.config_snapshot`` already follows — there is
-    no update/setter method of any kind (AC #7).
+    no write path to ``spec``, of any name (AC #7).
 
     Attributes:
         session: Async SQLAlchemy session for database operations.
@@ -172,3 +175,66 @@ class TradingSessionRepository:
             stmt = stmt.where(TradingSession.id.in_(session_ids))
         result = await self.session.execute(stmt)
         return {row[0]: (row[1], row[2]) for row in result}
+
+    async def stamp_activity_if_owner(
+        self,
+        session_pk: int,
+        *,
+        owner_epoch: int,
+        at: datetime,
+        bar_seen_at: Optional[datetime] = None,
+    ) -> int:
+        """The async twin of the sync repository's method of the same name —
+        see there for the full rationale (one qualified ``UPDATE``, no window
+        between checking ownership and writing).
+
+        Args:
+            session_pk: The row's internal ``TradingSession.id``.
+            owner_epoch: The epoch this caller's own claim produced.
+            at: The heartbeat instant to write.
+            bar_seen_at: When a bar was last observed, or ``None`` to leave
+                ``last_bar_at`` untouched.
+
+        Returns:
+            ``1`` on a successful write, ``0`` otherwise.
+        """
+        values: dict = {"last_heartbeat_at": at}
+        if bar_seen_at is not None:
+            values["last_bar_at"] = bar_seen_at
+        stmt = (
+            update(TradingSession)
+            .where(
+                TradingSession.id == session_pk,
+                TradingSession.owner_epoch == owner_epoch,
+                TradingSession.status == SessionStatus.RUNNING,
+            )
+            .values(**values)
+        )
+        result = await self.session.execute(stmt)
+        return result.rowcount
+
+    async def insert_trade_if_absent(self, trade: Trade) -> bool:
+        """The async twin of the sync repository's method of the same name —
+        see there for the full rationale (idempotent on
+        ``(session_id, trade_id, client_order_id)``, no new column).
+
+        Args:
+            trade: An unattached ``Trade`` ORM instance (no ``id`` yet).
+
+        Returns:
+            ``True`` when a new row was inserted, ``False`` when it already
+            existed.
+        """
+        values = {
+            column.name: getattr(trade, column.name)
+            for column in Trade.__table__.columns
+            if column.name != "id"
+            and not (column.name == "created_at" and trade.created_at is None)
+        }
+        stmt = (
+            pg_insert(Trade)
+            .values(**values)
+            .on_conflict_do_nothing(index_elements=["session_id", "trade_id", "client_order_id"])
+        )
+        result = await self.session.execute(stmt)
+        return result.rowcount == 1

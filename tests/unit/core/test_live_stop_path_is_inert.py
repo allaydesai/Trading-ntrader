@@ -41,6 +41,7 @@ STOP_PATH_MODULES = (
     "src/core/live_session_steady_state.py",
     "src/core/live_session_node.py",
     "src/core/live_strategy_guard.py",
+    "src/core/live_trade_recorder.py",
     "src/cli/commands/live.py",
     "src/cli/commands/live_start.py",
 )
@@ -57,12 +58,14 @@ STOP_PATH_MODULES = (
 #: does not forbid — so their own membership stays clean without needing the
 #: module itself on the list.
 
-#: ``src/core/live_trade_recorder.py`` (Story 3.5) is likewise **NOT** on the
-#: list, for a simpler reason still: it calls no order or position *method* at
-#: all — it only reads ``cache.position(...)`` and calls a ``sink`` callable
-#: (``None`` in production this story). It is not reached from the stop path
-#: either (it is subscribed on ``events.position*``, not driven by
-#: ``stop()``). Membership here would be inert, not protective.
+#: ``src/core/live_trade_recorder.py`` **joined the list at Story 3.6** —
+#: 3.5's exemption above no longer holds. ``flush_pending()`` is called from
+#: the runner's own teardown ``finally`` now (:meth:`LiveSessionRunner
+#: ._flush_pending_trades`), so the module IS reached from the stop path.
+#: Membership stays protective, not inert: the module calls no order or
+#: position *method* at all — only ``cache.position(...)`` and a ``sink``
+#: callable — so it should never trip this scan, and a future change that
+#: added a forbidden call here would now be caught.
 
 #: ``src/core/live_exec_avg_px.py`` (2026-09-01) is likewise **NOT** on the list,
 #: for a simpler reason: it is build-time only. It runs once inside
@@ -468,12 +471,22 @@ class TestTheVocabularyRuleAr36:
         # makes a suppression record actionable, for no gain against the rule's
         # actual purpose. Recorded here so the next review does not re-open it.
         #
-        # Story 3.5's `src/core/live_trade_recorder.py` is deliberately **NOT**
-        # added: it is not a stop-path module (see the STOP_PATH_MODULES
-        # comment above), and by construction its record names carry none of
-        # AR36's stems — `trade.aggregated`, never `trade.closed`, is exactly
-        # that discipline; the `close` stem is precisely why that name was
-        # not chosen.
+        # `src/core/live_trade_recorder.py` is deliberately **NOT** added here,
+        # even though Story 3.6 put it ON STOP_PATH_MODULES above (3.5's
+        # "not a stop-path module" reasoning no longer holds — say so, don't
+        # leave the stale claim). The exclusion survives for a different
+        # reason, the Story 3.2 `close_position` exemption's own logic
+        # applied here: this module's diagnostic `reason=` strings
+        # legitimately describe a **position's** state — `"cached position is
+        # not the closed leg (re-opened under the same id)"` — and the AR36
+        # prose scan's `\bclose\w*\b` regex would match the literal `closed`
+        # inside it. AR36 governs how the **session** is described (a stop
+        # must not read as a kill, a halt or a close), not the vocabulary of
+        # a position-state diagnostic. Every genuinely new operator-facing
+        # string this module adds (`trade.persist_refused`,
+        # `trade.persist_skipped reason="reconciliation_owned"`, the widened
+        # `trade.recorder_failed`) was hand-audited against the five AR36
+        # stems at drafting and carries none of them.
     )
     #: AR36's list, with ``close`` **restored** (review fix, 2026-08-22,
     #: decision D3). It had been dropped silently — and it is the one word

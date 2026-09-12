@@ -349,6 +349,202 @@ async def async_session(async_test_engine, request):
         yield session
 
 
+def _running_session(repository, sync_db_session, *, name: str, owner_epoch: int = 0):
+    """A row forced to ``running`` at a given epoch, for exercising the
+    qualified heartbeat write directly (Story 3.6) — bypassing
+    ``SessionService`` on purpose, since these tests are about the
+    repository's own SQL, not the service's validation.
+    """
+    session = repository.create(name=name, spec=_spec().to_stored())
+    sync_db_session.flush()
+    session.status = SessionStatus.RUNNING
+    session.owner_epoch = owner_epoch
+    sync_db_session.commit()
+    return session
+
+
+@pytest.mark.integration
+class TestSyncStampActivityIfOwner:
+    """Story 3.6, retrospective D1: the heartbeat's whole contract in one
+    epoch- and status-qualified ``UPDATE``, proven against real Postgres.
+    """
+
+    def test_a_matching_epoch_on_a_running_row_updates_and_returns_one(self, sync_db_session):
+        repository = SyncTradingSessionRepository(sync_db_session)
+        session = _running_session(repository, sync_db_session, name="stamp-hit", owner_epoch=5)
+        at = datetime(2026, 9, 12, 12, 0, 0, tzinfo=timezone.utc)
+
+        rowcount = repository.stamp_activity_if_owner(session.id, owner_epoch=5, at=at)
+        sync_db_session.commit()
+
+        assert rowcount == 1
+        refreshed = repository.find_by_session_id(session.session_id)
+        assert refreshed is not None
+        assert refreshed.last_heartbeat_at == at
+        assert refreshed.last_bar_at is None
+
+    def test_bar_seen_at_is_set_only_when_given_and_never_cleared(self, sync_db_session):
+        repository = SyncTradingSessionRepository(sync_db_session)
+        session = _running_session(repository, sync_db_session, name="stamp-bar", owner_epoch=0)
+        first_bar = datetime(2026, 9, 12, 12, 0, 0, tzinfo=timezone.utc)
+        second_at = datetime(2026, 9, 12, 12, 0, 30, tzinfo=timezone.utc)
+
+        repository.stamp_activity_if_owner(
+            session.id, owner_epoch=0, at=first_bar, bar_seen_at=first_bar
+        )
+        sync_db_session.commit()
+        repository.stamp_activity_if_owner(session.id, owner_epoch=0, at=second_at)
+        sync_db_session.commit()
+
+        refreshed = repository.find_by_session_id(session.session_id)
+        assert refreshed is not None
+        assert refreshed.last_heartbeat_at == second_at
+        assert refreshed.last_bar_at == first_bar, (
+            "a quiet interval must not clear the last real bar"
+        )
+
+    def test_a_mismatched_epoch_returns_zero_and_changes_nothing(self, sync_db_session):
+        repository = SyncTradingSessionRepository(sync_db_session)
+        session = _running_session(
+            repository, sync_db_session, name="stamp-epoch-miss", owner_epoch=5
+        )
+
+        rowcount = repository.stamp_activity_if_owner(
+            session.id, owner_epoch=999, at=datetime(2026, 9, 12, 12, 0, 0, tzinfo=timezone.utc)
+        )
+        sync_db_session.commit()
+
+        assert rowcount == 0
+        refreshed = repository.find_by_session_id(session.session_id)
+        assert refreshed is not None
+        assert refreshed.last_heartbeat_at is None
+
+    def test_a_non_running_status_returns_zero_even_with_the_right_epoch(self, sync_db_session):
+        repository = SyncTradingSessionRepository(sync_db_session)
+        session = repository.create(name="stamp-status-miss", spec=_spec().to_stored())
+        sync_db_session.commit()  # status stays CREATED, owner_epoch defaults to 0
+
+        rowcount = repository.stamp_activity_if_owner(
+            session.id, owner_epoch=0, at=datetime(2026, 9, 12, 12, 0, 0, tzinfo=timezone.utc)
+        )
+
+        assert rowcount == 0
+
+    def test_a_missing_row_returns_zero(self, sync_db_session):
+        repository = SyncTradingSessionRepository(sync_db_session)
+
+        rowcount = repository.stamp_activity_if_owner(
+            999_999_999, owner_epoch=0, at=datetime(2026, 9, 12, 12, 0, 0, tzinfo=timezone.utc)
+        )
+
+        assert rowcount == 0
+
+    def test_a_post_stopped_write_refuses_ac8a(self, sync_db_session):
+        """AC #8a: an adapter whose write runs after ``mark_stopped``
+        committed gets rowcount 0 — the row is no longer ``running``.
+        """
+        repository = SyncTradingSessionRepository(sync_db_session)
+        session = _running_session(repository, sync_db_session, name="stamp-post-stopped")
+        session.status = SessionStatus.STOPPED
+        sync_db_session.commit()
+
+        rowcount = repository.stamp_activity_if_owner(
+            session.id, owner_epoch=0, at=datetime(2026, 9, 12, 12, 0, 0, tzinfo=timezone.utc)
+        )
+
+        assert rowcount == 0
+
+
+@pytest.mark.integration
+class TestSyncInsertTradeIfAbsent:
+    """Story 3.6: idempotent on ``(session_id, trade_id, client_order_id)`` —
+    already two existing columns plus the FK, no new column (fact 2).
+    """
+
+    @staticmethod
+    def _trade_row(session_id, *, trade_id="AAPL.NASDAQ-SMACrossover-000", client_order_id="O-1"):
+        return Trade(
+            session_id=session_id,
+            instrument_id="AAPL.NASDAQ",
+            trade_id=trade_id,
+            venue_order_id="O-0",
+            client_order_id=client_order_id,
+            order_side="BUY",
+            quantity=Decimal("10"),
+            entry_price=Decimal("100.00"),
+            exit_price=Decimal("110.00"),
+            entry_timestamp=datetime(2026, 9, 12, 11, 0, 0, tzinfo=timezone.utc),
+            exit_timestamp=datetime(2026, 9, 12, 11, 5, 0, tzinfo=timezone.utc),
+        )
+
+    def test_a_new_trade_inserts_and_returns_true(self, sync_db_session):
+        repository = SyncTradingSessionRepository(sync_db_session)
+        session = repository.create(name="insert-trade-new", spec=_spec().to_stored())
+        sync_db_session.flush()
+
+        inserted = repository.insert_trade_if_absent(self._trade_row(session.id))
+        sync_db_session.commit()
+
+        assert inserted is True
+        counts = repository.trade_counts_by_session([session.id])
+        assert counts[session.id] == (1, 0)
+
+    def test_a_repeat_key_returns_false_and_leaves_exactly_one_row(self, sync_db_session):
+        repository = SyncTradingSessionRepository(sync_db_session)
+        session = repository.create(name="insert-trade-repeat", spec=_spec().to_stored())
+        sync_db_session.flush()
+
+        first = repository.insert_trade_if_absent(self._trade_row(session.id))
+        sync_db_session.commit()
+        second = repository.insert_trade_if_absent(self._trade_row(session.id))
+        sync_db_session.commit()
+
+        assert (first, second) == (True, False)
+        counts = repository.trade_counts_by_session([session.id])
+        assert counts[session.id] == (1, 0), "the retry must not have created a second row"
+
+    def test_a_backtest_owned_row_with_the_same_key_never_conflicts(self, sync_db_session):
+        """NULL is distinct in a unique index — a backtest row (``session_id``
+        NULL) inserts freely against a session-owned row sharing the same
+        ``trade_id``/``client_order_id``.
+        """
+        repository = SyncTradingSessionRepository(sync_db_session)
+        backtest_repo = SyncBacktestRepository(sync_db_session)
+        run = _backtest_run(backtest_repo)
+        sync_db_session.flush()
+        session = repository.create(name="insert-trade-null-distinct", spec=_spec().to_stored())
+        sync_db_session.flush()
+        repository.insert_trade_if_absent(self._trade_row(session.id))
+
+        backtest_row = self._trade_row(None)
+        backtest_row.backtest_run_id = run.id
+
+        inserted = repository.insert_trade_if_absent(backtest_row)
+        sync_db_session.commit()
+
+        assert inserted is True
+        counts = repository.trade_counts_by_session([session.id])
+        assert counts[session.id] == (1, 0), "the backtest row must not have joined this session"
+
+    def test_a_row_with_neither_owner_still_violates_chk_trades_owner(self, sync_db_session):
+        """The pre-existing CHECK constraint is untouched by this story's
+        index — still enforced, not silently loosened.
+
+        pg8000 (this fixture's driver) surfaces a CHECK violation as
+        ``ProgrammingError``, not ``IntegrityError`` — measured here, not
+        assumed from psycopg2's mapping.
+        """
+        from sqlalchemy.exc import DatabaseError
+
+        repository = SyncTradingSessionRepository(sync_db_session)
+        orphan_row = self._trade_row(None)
+        orphan_row.backtest_run_id = None
+
+        with pytest.raises(DatabaseError, match="chk_trades_owner"):
+            repository.insert_trade_if_absent(orphan_row)
+        sync_db_session.rollback()
+
+
 @pytest.mark.integration
 class TestAsyncTradingSessionRepository:
     async def test_create_persists_a_session_with_status_created(self, async_session):
@@ -450,3 +646,98 @@ class TestAsyncTradeCountsBySession:
         counts = await repository.trade_counts_by_session([session.id])
 
         assert counts[session.id] == (0, 0)
+
+
+async def _async_running_session(repository, async_session, *, name: str, owner_epoch: int = 0):
+    from src.models.session import SessionStatus
+
+    session = await repository.create(name=name, spec=_spec().to_stored())
+    await async_session.flush()
+    session.status = SessionStatus.RUNNING
+    session.owner_epoch = owner_epoch
+    await async_session.commit()
+    return session
+
+
+@pytest.mark.integration
+class TestAsyncStampActivityIfOwner:
+    """AR9's async twin — Story 3.6, retrospective D1. Tested against real
+    Postgres, not "for symmetry" (the story's own words): the async fixture
+    is a genuinely separate code path (asyncpg, not pg8000/psycopg2).
+    """
+
+    async def test_a_matching_epoch_on_a_running_row_updates_and_returns_one(self, async_session):
+        repository = TradingSessionRepository(async_session)
+        session = await _async_running_session(
+            repository, async_session, name="async-stamp-hit", owner_epoch=5
+        )
+        at = datetime(2026, 9, 12, 12, 0, 0, tzinfo=timezone.utc)
+
+        rowcount = await repository.stamp_activity_if_owner(session.id, owner_epoch=5, at=at)
+        await async_session.commit()
+
+        assert rowcount == 1
+        refreshed = await repository.find_by_session_id(session.session_id)
+        assert refreshed is not None
+        assert refreshed.last_heartbeat_at == at
+
+    async def test_a_mismatched_epoch_returns_zero_and_changes_nothing(self, async_session):
+        repository = TradingSessionRepository(async_session)
+        session = await _async_running_session(
+            repository, async_session, name="async-stamp-miss", owner_epoch=5
+        )
+
+        rowcount = await repository.stamp_activity_if_owner(
+            session.id, owner_epoch=999, at=datetime(2026, 9, 12, 12, 0, 0, tzinfo=timezone.utc)
+        )
+
+        assert rowcount == 0
+        refreshed = await repository.find_by_session_id(session.session_id)
+        assert refreshed is not None
+        assert refreshed.last_heartbeat_at is None
+
+
+@pytest.mark.integration
+class TestAsyncInsertTradeIfAbsent:
+    """AR9's async twin for the idempotent trade insert."""
+
+    async def test_a_new_trade_inserts_and_a_repeat_key_returns_false(self, async_session):
+        repository = TradingSessionRepository(async_session)
+        session = await repository.create(name="async-insert-trade", spec=_spec().to_stored())
+        await async_session.flush()
+        trade = Trade(
+            session_id=session.id,
+            instrument_id="AAPL.NASDAQ",
+            trade_id="AAPL.NASDAQ-SMACrossover-000",
+            venue_order_id="O-0",
+            client_order_id="O-1",
+            order_side="BUY",
+            quantity=Decimal("10"),
+            entry_price=Decimal("100.00"),
+            exit_price=Decimal("110.00"),
+            entry_timestamp=datetime(2026, 9, 12, 11, 0, 0, tzinfo=timezone.utc),
+            exit_timestamp=datetime(2026, 9, 12, 11, 5, 0, tzinfo=timezone.utc),
+        )
+
+        first = await repository.insert_trade_if_absent(trade)
+        await async_session.commit()
+
+        second_trade = Trade(
+            session_id=session.id,
+            instrument_id="AAPL.NASDAQ",
+            trade_id="AAPL.NASDAQ-SMACrossover-000",
+            venue_order_id="O-0",
+            client_order_id="O-1",
+            order_side="BUY",
+            quantity=Decimal("10"),
+            entry_price=Decimal("100.00"),
+            exit_price=Decimal("110.00"),
+            entry_timestamp=datetime(2026, 9, 12, 11, 0, 0, tzinfo=timezone.utc),
+            exit_timestamp=datetime(2026, 9, 12, 11, 5, 0, tzinfo=timezone.utc),
+        )
+        second = await repository.insert_trade_if_absent(second_trade)
+        await async_session.commit()
+
+        assert (first, second) == (True, False)
+        counts = await repository.trade_counts_by_session([session.id])
+        assert counts[session.id] == (1, 0)

@@ -122,7 +122,7 @@ from src.core.live_strategy_guard import (
     StrategyFailure,
     StrategyGuard,
 )
-from src.core.live_trade_recorder import POSITION_EVENTS_TOPIC, TradeRecorder
+from src.core.live_trade_recorder import POSITION_EVENTS_TOPIC, RecordedTrade, TradeRecorder
 from src.core.live_trader_id import derive_trader_id
 from src.models.session import DEFAULT_HEARTBEAT_INTERVAL_SECONDS, SessionSpec
 
@@ -159,6 +159,11 @@ class LiveSessionRunner:
         stop_signals: The stop-signal policy (Story 2.6), injected so a test
             needs no real signal or event loop; ``None`` builds the production
             :class:`~src.core.live_session_signals.SessionStopSignals`.
+        trade_sink: Story 3.6's persistence handover, passed straight through
+            to the :class:`~src.core.live_trade_recorder.TradeRecorder` this
+            runner constructs. ``None`` (default) leaves the recorder
+            aggregating with no database write — the 3.5 production state
+            until the CLI supplies a real sink.
     """
 
     def __init__(
@@ -181,6 +186,7 @@ class LiveSessionRunner:
         client_builder: ClientBuilder = build_clients,
         connection_reader: ConnectionReader = read_ibkr_connection_status,
         stop_signals: SessionStopSignals | None = None,
+        trade_sink: Callable[[RecordedTrade], bool] | None = None,
     ) -> None:
         self._settings = settings
         self._session_id = session_id
@@ -188,6 +194,7 @@ class LiveSessionRunner:
         self._record = record
         self._started_at = started_at
         self._cache = cache
+        self._trade_sink = trade_sink
         self._logging = SESSION_LOGGING if logging is None else logging
         self._connect_timeout = connect_timeout
         self._heartbeat_interval_seconds = heartbeat_interval_seconds
@@ -227,6 +234,9 @@ class LiveSessionRunner:
         self._trade_recorder: TradeRecorder | None = None
         self._subscriptions: list[tuple[str, Any]] = []
         self._deadline, self._trader_started, self._ownership_lost = 0.0, False, False
+        #: Set once teardown's own drain starts (review 2026-09-12): a reclaim
+        #: observed there has nothing left to stop.
+        self._tearing_down = False
         self._record_release_failed = False
         self._shutdown_problems: list[str] = []
 
@@ -273,6 +283,18 @@ class LiveSessionRunner:
         other than a reclaim — the CLI's cue to print an operator warning.
         """
         return self._record_release_failed
+
+    @property
+    def ownership_lost(self) -> bool:
+        """Story 3.6, D-C: whether this run ended because a trade write's own
+        fence detected another process now owns the session.
+
+        The CLI's cue to print a distinct message instead of either the
+        normal stop report or the "no stop signal was received" warning —
+        this *was* a deliberate stop, just not one an operator's signal or a
+        clean node exit caused.
+        """
+        return self._ownership_lost
 
     @property
     def contained_failures(self) -> tuple[StrategyFailure, ...]:
@@ -401,6 +423,7 @@ class LiveSessionRunner:
                 # leaving `_finish_record()`'s Postgres round trip unprotected.
                 self._signals.rearm_process_handlers()
                 self._flush_contained_failures()
+                self._flush_pending_trades()
                 self._finish_record()
                 restore_event_loop(previous_loop)
             finally:
@@ -567,7 +590,12 @@ class LiveSessionRunner:
             # today), so a position already open at attach time is first
             # seen mid-life — the `live_order_path.py:645-651` caveat applies
             # identically here.
-            self._trade_recorder = TradeRecorder(self._node.cache, self._log)
+            self._trade_recorder = TradeRecorder(
+                self._node.cache,
+                self._log,
+                sink=self._trade_sink,
+                on_ownership_lost=self._note_ownership_lost,
+            )
             self._subscribe(POSITION_EVENTS_TOPIC, self._trade_recorder.handle_position_event)
             report_instrument_shortfall(self._node, bar_types, self._log)
 
@@ -811,6 +839,84 @@ class LiveSessionRunner:
                     spec_strategy_id=failure.spec_strategy_id,
                     error_type=type(exc).__name__,
                 )
+
+    def _note_ownership_lost(self) -> None:
+        """``TradeRecorder``'s ``on_ownership_lost`` callback (Story 3.6, D-C).
+
+        Fires the instant a trade write's own fence detects the reclaim — up
+        to one heartbeat interval earlier than the steady-state tick would
+        have noticed on its own. This runs from inside the recorder's msgbus
+        handler, on the loop thread, where a raise is fatal (``os._exit(1)``)
+        and a direct ``node.stop()`` call is not safe
+        (``request_node_stop``'s own docstring); reuses the signal path's
+        ``call_soon_threadsafe`` handoff verbatim — safe to call whether the
+        caller is a real OS signal or, as here, already on the loop thread.
+
+        Deliberately does **not** go through ``self._signals``: this is not a
+        stop signal, and ``runner.stop_signal``/``stopped_by_signal`` must
+        stay ``None``/``False`` so the CLI does not print an ownership loss
+        as if a `SIGINT`/`SIGTERM` had arrived. ``self._ownership_lost`` is
+        the CLI's own cue (:attr:`ownership_lost`).
+        """
+        self._ownership_lost = True
+        self._log.error(
+            "session.reclaimed_by_another_process",
+            detail="observed at a trade write",
+        )
+        # Review 2026-09-12: the teardown drain can also observe the reclaim,
+        # after the loop has already stopped — there is nothing left to stop,
+        # and queueing `node.stop()` on a stopped loop would only log a
+        # `session.stopped` that never happens.
+        if self._tearing_down:
+            return
+        request_node_stop(
+            self._node,
+            self._loop,
+            self._log,
+            signal_name=None,
+            reason="ownership_lost",
+            trader_started=self._trader_started,
+        )
+
+    def _flush_pending_trades(self) -> None:
+        """Drain any trades a failed write queued, while the row is still
+        ours (Story 3.6, AC #4). Same slot reasoning as
+        :meth:`_flush_contained_failures`: after :meth:`_stop_heartbeat`, so
+        the row still reads ``running`` and the steady-state executor cannot
+        race this write. Skipped entirely once ownership is already known
+        lost — retrying a write this process cannot win is pointless and
+        would re-schedule a stop that is already underway.
+
+        ``TradeRecorder.flush_pending()`` is designed never to raise (every
+        sink outcome is caught inside it), but this call site is guarded
+        anyway — the same ``shutdown_problems`` channel
+        ``stop_degraded_strategies`` reports through (decision D4) — so a
+        defect in that guarantee degrades to a recorded problem, never a
+        teardown abort.
+        """
+        if self._trade_recorder is None:
+            return
+        if self._ownership_lost:
+            # Review 2026-09-12: not retried, but never silent — every trade
+            # this process could not persist is named, so the successor's
+            # operator can reconcile it against the transcript.
+            leftover = self._trade_recorder.pending_trade_keys
+            if leftover:
+                self._log.warning(
+                    "session.trades_still_pending",
+                    pending=len(leftover),
+                    trade_keys=list(leftover),
+                    detail="ownership lost; not retried by this process",
+                )
+            return
+        self._tearing_down = True
+        try:
+            remaining = self._trade_recorder.flush_pending()
+        except BaseException as exc:  # noqa: BLE001 - teardown must never abort
+            self._shutdown_problems.append(f"flush_pending_trades: {type(exc).__name__}")
+            return
+        if remaining:
+            self._log.warning("session.trades_still_pending", pending=remaining)
 
     def _finish_record(self) -> None:
         """Mark the session ``stopped`` after ``shutdown()``; policy in :func:`release_record`."""

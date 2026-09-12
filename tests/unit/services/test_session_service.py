@@ -31,6 +31,9 @@ from src.services.session_service import DEFAULT_HEARTBEAT_STALE_AFTER_SECONDS, 
 pytestmark = pytest.mark.unit
 
 SESSION_ID = UUID("11111111-1111-1111-1111-111111111111")
+#: This process's own claimed epoch (Story 3.6, retrospective D1) — replaces
+#: the old ``last_started_at`` clock comparison as the ownership token.
+OWNER_EPOCH = 3
 
 
 class FakeClock:
@@ -61,6 +64,7 @@ def _session_row(
     last_started_at: datetime | None = None,
     last_bar_at: datetime | None = None,
     runtime_flags: dict | None = None,
+    owner_epoch: int = OWNER_EPOCH,
 ) -> TradingSession:
     """A detached ``TradingSession`` with every column the service reads set explicitly."""
     return TradingSession(
@@ -72,6 +76,7 @@ def _session_row(
         last_started_at=last_started_at,
         last_bar_at=last_bar_at,
         runtime_flags=runtime_flags,
+        owner_epoch=owner_epoch,
     )
 
 
@@ -79,6 +84,10 @@ def _repository(row: TradingSession | None, *, by_name: TradingSession | None = 
     repository = MagicMock(spec=SyncTradingSessionRepository)
     repository.find_by_session_id.return_value = row
     repository.find_by_name.return_value = by_name
+    repository.stamp_activity_if_owner.return_value = 1
+    # `session` is an instance attribute, invisible to `spec=` — the refusal
+    # path expires the identity-mapped row through it (review 2026-09-12).
+    repository.session = MagicMock()
     return repository
 
 
@@ -115,6 +124,44 @@ class TestLegalTransitionsSucceedAndStampTimestamps:
         assert result.status is target
         for column in stamped_columns:
             assert getattr(result, column) == clock.now
+
+    @pytest.mark.parametrize(
+        "current, target, should_increment",
+        [
+            (SessionStatus.CREATED, SessionStatus.RUNNING, True),
+            (SessionStatus.STOPPED, SessionStatus.RUNNING, True),
+            (SessionStatus.RUNNING, SessionStatus.STOPPED, False),
+            (SessionStatus.STOPPED, SessionStatus.SEALED, False),
+        ],
+        ids=["created_to_running", "stopped_to_running", "running_to_stopped", "stopped_to_sealed"],
+    )
+    def test_owner_epoch_increments_only_on_running_edges(self, current, target, should_increment):
+        """Story 3.6, retrospective D1: every ``-> running`` edge increments
+        the fencing token — a fresh claim and a reclaim alike are a new
+        process taking the session. No other edge touches it.
+        """
+        clock = FakeClock()
+        row = _session_row(current, owner_epoch=OWNER_EPOCH)
+        service = SessionService(_repository(row), time_source=clock)
+
+        result = service.transition(row.session_id, to=target)
+
+        assert result.owner_epoch == (OWNER_EPOCH + 1 if should_increment else OWNER_EPOCH)
+
+    def test_a_reclaim_also_increments_the_epoch(self):
+        """``RUNNING -> RUNNING`` (the reclaim) is a ``-> running`` edge too —
+        it must not be treated as a self-edge that leaves the epoch alone.
+        """
+        clock = FakeClock()
+        stale_heartbeat = clock.now - timedelta(seconds=DEFAULT_HEARTBEAT_STALE_AFTER_SECONDS + 1)
+        row = _session_row(
+            SessionStatus.RUNNING, last_heartbeat_at=stale_heartbeat, owner_epoch=OWNER_EPOCH
+        )
+        service = SessionService(_repository(row), time_source=clock)
+
+        result = service.transition(row.session_id, to=SessionStatus.RUNNING)
+
+        assert result.owner_epoch == OWNER_EPOCH + 1
 
     def test_stopped_to_running_overwrites_the_previous_start_without_clearing_last_stopped_at(
         self,
@@ -579,10 +626,23 @@ class TestTheAR37StatusAssignmentGuard:
         assert offenders == {self.ALLOWED_ASSIGNER} | set(self.UNRELATED_STATUS_MODELS)
 
 
+#: AC #5 (Story 3.6): the two repository modules and the new trade-record
+#: adapter join the no-Nautilus scan, alongside ``session_service`` itself
+#: (AC #7 of Story 2.3). ``sqlalchemy`` is legitimately allowed in every one
+#: of these — the polarity that is forbidden is a *live-trading* library, not
+#: a database one.
+_IMPORT_PURITY_MODULES = (
+    "src.services.session_service",
+    "src.services.trade_record",
+    "src.db.repositories.trading_session_repository_sync",
+    "src.db.repositories.trading_session_repository",
+)
+
+
 class TestImportPurity:
-    """AC #7: no ``nautilus_trader``/``ibapi`` import. ``sqlalchemy`` is
-    legitimately allowed here, unlike in ``src/models/session.py`` — this
-    module is a database-facing service, not a framework-free domain model.
+    """AC #7 (Story 2.3) / AC #5 (Story 3.6): no ``nautilus_trader``/``ibapi``
+    import, across every module that talks to the database on the trade or
+    session-record write path.
     """
 
     FORBIDDEN = {"nautilus_trader", "ibapi"}
@@ -612,6 +672,43 @@ class TestImportPurity:
         )
 
         assert result.stdout.strip() == ""
+
+    @pytest.mark.parametrize("module_name", _IMPORT_PURITY_MODULES)
+    def test_no_forbidden_top_level_import_in_any_write_path_module(self, module_name):
+        import importlib
+
+        module = importlib.import_module(module_name)
+        tree = ast.parse(Path(module.__file__).read_text())
+        for node in tree.body:
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    assert alias.name.split(".")[0] not in self.FORBIDDEN
+            elif isinstance(node, ast.ImportFrom):
+                assert (node.module or "").split(".")[0] not in self.FORBIDDEN
+
+    @pytest.mark.parametrize("module_name", _IMPORT_PURITY_MODULES)
+    def test_importing_any_write_path_module_loads_no_nautilus_trader(self, module_name):
+        """``nautilus_trader`` only, not ``ibapi``, for this parametrized
+        check (AC #5's actual polarity): ``src.config`` itself imports
+        ``ibapi.common.MarketDataTypeEnum`` at module level for
+        ``IBKRSettings``' own validation, and every module here reaches
+        ``src.config`` transitively through ``src.db.session_sync``. That is
+        pre-existing and unrelated to this story — measured true already for
+        ``src/services/session_record.py`` (Story 2.5), not merely
+        introduced here. AC #5 is about the live-trading *engine*, which is
+        ``nautilus_trader``.
+        """
+        code = f"import sys, {module_name};print('nautilus_trader' in sys.modules)"
+
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=Path(service_module.__file__).parents[2],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+        assert result.stdout.strip() == "False"
 
 
 class TestScopedGrepGates:
@@ -667,91 +764,97 @@ class TestScopedGrepGates:
 
 
 class TestRecordActivity:
-    """AR32's liveness write (Story 2.5, AC #5): the runner's heartbeat path."""
+    """AR32's liveness write (Story 2.5, AC #5; Story 3.6, retrospective D1).
 
-    def _service(self, row, clock: FakeClock) -> tuple[SessionService, MagicMock]:
+    The write itself is now the repository's epoch-qualified
+    ``stamp_activity_if_owner`` — a single SQL statement, not an ORM
+    mutation — so these tests assert on the repository call and its
+    configured ``rowcount``, not on the row's Python attributes.
+    """
+
+    def _service(
+        self, row, clock: FakeClock, *, rowcount: int = 1
+    ) -> tuple[SessionService, MagicMock]:
         repository = _repository(row)
+        repository.stamp_activity_if_owner.return_value = rowcount
         return SessionService(repository, time_source=clock), repository
 
-    def test_an_explicit_at_is_what_lands_in_last_heartbeat_at(self):
-        """The runner's own clock must reach the column.
+    def test_an_explicit_at_is_what_lands_in_the_qualified_update(self):
+        """The runner's own clock must reach the write.
 
         Without this the ``time_source`` seam on the adapter is decorative and
         Tasks 6 and 8 cannot drive the cadence deterministically.
         """
         clock = FakeClock()
-        started = clock.now
         stamped = clock.now.replace(microsecond=123456)
-        row = _session_row(SessionStatus.RUNNING, last_started_at=started)
-        service, _ = self._service(row, clock)
+        row = _session_row(SessionStatus.RUNNING)
+        service, repository = self._service(row, clock)
 
-        service.record_activity(SESSION_ID, started_at=started, at=stamped)
+        service.record_activity(SESSION_ID, owner_epoch=OWNER_EPOCH, at=stamped)
 
-        assert row.last_heartbeat_at == stamped
+        call = repository.stamp_activity_if_owner.call_args
+        assert call.args[0] == row.id
+        assert call.kwargs["owner_epoch"] == OWNER_EPOCH
+        assert call.kwargs["at"] == stamped
 
     def test_without_at_the_injected_time_source_is_used(self):
         clock = FakeClock()
-        started = clock.now
-        row = _session_row(SessionStatus.RUNNING, last_started_at=started)
-        service, _ = self._service(row, clock)
+        row = _session_row(SessionStatus.RUNNING)
+        service, repository = self._service(row, clock)
         clock.advance(45)
 
-        service.record_activity(SESSION_ID, started_at=started)
+        service.record_activity(SESSION_ID, owner_epoch=OWNER_EPOCH)
 
-        assert row.last_heartbeat_at == clock.now
+        assert repository.stamp_activity_if_owner.call_args.kwargs["at"] == clock.now
 
     def test_bar_seen_at_is_the_bars_observed_time_not_now(self):
         clock = FakeClock()
-        started = clock.now
-        row = _session_row(SessionStatus.RUNNING, last_started_at=started)
-        service, _ = self._service(row, clock)
+        row = _session_row(SessionStatus.RUNNING)
+        service, repository = self._service(row, clock)
         observed = clock.now + timedelta(seconds=7)
         clock.advance(30)
 
-        service.record_activity(SESSION_ID, started_at=started, bar_seen_at=observed)
+        service.record_activity(SESSION_ID, owner_epoch=OWNER_EPOCH, bar_seen_at=observed)
 
-        assert row.last_bar_at == observed
-        assert row.last_heartbeat_at == clock.now
+        call = repository.stamp_activity_if_owner.call_args
+        assert call.kwargs["bar_seen_at"] == observed
+        assert call.kwargs["at"] == clock.now
 
-    def test_no_bar_leaves_last_bar_at_completely_alone(self):
-        """A quiet interval must not overwrite the last real bar's timestamp."""
+    def test_no_bar_forwards_none_rather_than_omitting_the_argument(self):
         clock = FakeClock()
-        started = clock.now
-        previous_bar = clock.now - timedelta(minutes=5)
-        row = _session_row(SessionStatus.RUNNING, last_started_at=started, last_bar_at=previous_bar)
-        service, _ = self._service(row, clock)
-        clock.advance(30)
+        row = _session_row(SessionStatus.RUNNING)
+        service, repository = self._service(row, clock)
 
-        service.record_activity(SESSION_ID, started_at=started)
+        service.record_activity(SESSION_ID, owner_epoch=OWNER_EPOCH)
 
-        assert row.last_bar_at == previous_bar
+        assert repository.stamp_activity_if_owner.call_args.kwargs["bar_seen_at"] is None
 
-    def test_it_returns_the_row_it_stamped(self):
+    def test_it_returns_the_row_it_resolved(self):
         clock = FakeClock()
-        row = _session_row(SessionStatus.RUNNING, last_started_at=clock.now)
+        row = _session_row(SessionStatus.RUNNING)
         service, _ = self._service(row, clock)
 
-        assert service.record_activity(SESSION_ID, started_at=clock.now) is row
+        assert service.record_activity(SESSION_ID, owner_epoch=OWNER_EPOCH) is row
 
     def test_an_unknown_session_raises_record_not_found(self):
         clock = FakeClock()
         service, _ = self._service(None, clock)
 
         with pytest.raises(RecordNotFoundError, match=str(SESSION_ID)):
-            service.record_activity(SESSION_ID, started_at=clock.now)
+            service.record_activity(SESSION_ID, owner_epoch=OWNER_EPOCH)
 
     def test_the_read_does_not_take_the_row_lock(self):
         """A heartbeat every 30s must never block ``live status``.
 
         Mirrors ``test_resolve_reads_without_the_lock``: ``transition`` needs
         ``FOR UPDATE`` because it decides across a read-then-write window; a
-        heartbeat writes one column and has no such window.
+        heartbeat's write is a single qualified statement with no such window.
         """
         clock = FakeClock()
-        row = _session_row(SessionStatus.RUNNING, last_started_at=clock.now)
+        row = _session_row(SessionStatus.RUNNING)
         service, repository = self._service(row, clock)
 
-        service.record_activity(SESSION_ID, started_at=clock.now)
+        service.record_activity(SESSION_ID, owner_epoch=OWNER_EPOCH)
 
         assert repository.find_by_session_id.call_args.kwargs.get("for_update") in (None, False)
 
@@ -760,68 +863,72 @@ class TestRecordActivity:
     )
     def test_a_session_that_is_not_running_refuses_the_heartbeat(self, status):
         """A heartbeat for a stopped session resurrects the liveness signal the
-        reclaim depends on, making the row permanently un-reclaimable.
+        reclaim depends on, making the row permanently un-reclaimable. The
+        qualified UPDATE's own ``status = 'running'`` clause refuses it
+        (rowcount 0); the re-read names the reason.
         """
         clock = FakeClock()
-        row = _session_row(status, last_started_at=clock.now)
-        service, _ = self._service(row, clock)
+        row = _session_row(status)
+        service, _ = self._service(row, clock, rowcount=0)
 
         with pytest.raises(InvalidSessionTransition, match="not running"):
-            service.record_activity(SESSION_ID, started_at=clock.now)
+            service.record_activity(SESSION_ID, owner_epoch=OWNER_EPOCH)
 
-        assert row.last_heartbeat_at is None
-
-    def test_a_row_whose_last_started_at_moved_forward_refuses(self):
+    def test_a_row_whose_owner_epoch_has_moved_on_refuses(self):
         """The mid-run reclaim guard: another process now owns this session."""
         clock = FakeClock()
-        mine = clock.now
-        theirs = clock.now + timedelta(seconds=120)
-        row = _session_row(SessionStatus.RUNNING, last_started_at=theirs)
-        service, _ = self._service(row, clock)
+        row = _session_row(SessionStatus.RUNNING, owner_epoch=OWNER_EPOCH + 1)
+        service, _ = self._service(row, clock, rowcount=0)
 
         with pytest.raises(InvalidSessionTransition, match="reclaimed"):
-            service.record_activity(SESSION_ID, started_at=mine)
+            service.record_activity(SESSION_ID, owner_epoch=OWNER_EPOCH)
 
-        assert row.last_heartbeat_at is None
-
-    def test_a_row_whose_last_started_at_matches_is_accepted(self):
-        """Equal, not merely older — this is the ordinary happy path."""
-        clock = FakeClock()
-        started = clock.now
-        row = _session_row(SessionStatus.RUNNING, last_started_at=started)
-        service, _ = self._service(row, clock)
-
-        service.record_activity(SESSION_ID, started_at=started)
-
-        assert row.last_heartbeat_at == started
-
-    def test_a_null_last_started_at_is_accepted_rather_than_treated_as_a_reclaim(self):
-        """``transition(to=RUNNING)`` always stamps it, so ``None`` means a row
-        written by something older — refusing would strand it, and there is no
-        evidence of a competitor.
+    def test_the_refusal_re_reads_a_fresh_row_not_the_identity_mapped_copy(self):
+        """Review 2026-09-12 (measured against real Postgres): the row loaded
+        to resolve the PK is already in the session's identity map, so an
+        unlocked re-read hands it straight back with the pre-refusal epoch and
+        the error reads "owner_epoch is N, not this process's N". The service
+        must expire it before the re-read.
         """
         clock = FakeClock()
-        row = _session_row(SessionStatus.RUNNING, last_started_at=None)
-        service, _ = self._service(row, clock)
+        row = _session_row(SessionStatus.RUNNING, owner_epoch=OWNER_EPOCH)
+        service, repository = self._service(row, clock, rowcount=0)
+        fresh = _session_row(SessionStatus.RUNNING, owner_epoch=OWNER_EPOCH + 1)
+        repository.find_by_session_id.side_effect = [row, fresh]
 
-        service.record_activity(SESSION_ID, started_at=clock.now)
+        with pytest.raises(InvalidSessionTransition) as refused:
+            service.record_activity(SESSION_ID, owner_epoch=OWNER_EPOCH)
 
-        assert row.last_heartbeat_at == clock.now
+        repository.session.expire.assert_called_once_with(row)
+        assert f"owner_epoch is {OWNER_EPOCH + 1}, not this process's {OWNER_EPOCH}" in str(
+            refused.value
+        )
 
-    def test_the_reclaim_refusal_is_logged_with_both_instants(self):
+    def test_a_matching_owner_epoch_is_accepted(self):
+        """Equal, not merely older — this is the ordinary happy path."""
         clock = FakeClock()
-        theirs = clock.now + timedelta(seconds=120)
-        row = _session_row(SessionStatus.RUNNING, last_started_at=theirs)
-        service, _ = self._service(row, clock)
+        row = _session_row(SessionStatus.RUNNING, owner_epoch=OWNER_EPOCH)
+        service, repository = self._service(row, clock)
+
+        service.record_activity(SESSION_ID, owner_epoch=OWNER_EPOCH)
+
+        assert repository.stamp_activity_if_owner.call_args.kwargs["owner_epoch"] == OWNER_EPOCH
+
+    def test_the_reclaim_refusal_is_logged_with_both_epochs(self):
+        clock = FakeClock()
+        row = _session_row(SessionStatus.RUNNING, owner_epoch=OWNER_EPOCH + 1)
+        service, _ = self._service(row, clock, rowcount=0)
 
         with capture_logs() as logs:
             with pytest.raises(InvalidSessionTransition):
-                service.record_activity(SESSION_ID, started_at=clock.now)
+                service.record_activity(SESSION_ID, owner_epoch=OWNER_EPOCH)
 
         events = [e for e in logs if e["event"] == "session.activity_refused"]
         assert len(events) == 1
         assert events[0]["log_level"] == "error"
         assert events[0]["session_id"] == str(SESSION_ID)
+        assert events[0]["own_epoch"] == OWNER_EPOCH
+        assert events[0]["row_epoch"] == OWNER_EPOCH + 1
 
 
 class TestTheHeartbeatIntervalConstantIsShareable:
@@ -869,49 +976,34 @@ class TestTransitionOwnershipGuard:
     def _service(self, row, clock: FakeClock) -> SessionService:
         return SessionService(_repository(row), time_source=clock)
 
-    def test_a_stop_with_a_stale_started_at_refuses_as_reclaimed(self):
+    def test_a_stop_with_a_moved_on_owner_epoch_refuses_as_reclaimed(self):
         clock = FakeClock()
-        mine = clock.now
-        theirs = clock.now + timedelta(seconds=120)
-        row = _session_row(SessionStatus.RUNNING, last_started_at=theirs)
+        row = _session_row(SessionStatus.RUNNING, owner_epoch=OWNER_EPOCH + 1)
         service = self._service(row, clock)
 
         with pytest.raises(InvalidSessionTransition, match="reclaimed"):
-            service.transition(SESSION_ID, to=SessionStatus.STOPPED, started_at=mine)
+            service.transition(SESSION_ID, to=SessionStatus.STOPPED, owner_epoch=OWNER_EPOCH)
 
         assert row.status is SessionStatus.RUNNING, "the successor's row must not move"
         assert row.last_stopped_at is None
 
-    def test_a_matching_started_at_is_accepted(self):
+    def test_a_matching_owner_epoch_is_accepted(self):
         """Equal, not merely older — the ordinary single-process teardown."""
         clock = FakeClock()
-        started = clock.now
-        row = _session_row(SessionStatus.RUNNING, last_started_at=started)
+        row = _session_row(SessionStatus.RUNNING, owner_epoch=OWNER_EPOCH)
         service = self._service(row, clock)
 
-        service.transition(SESSION_ID, to=SessionStatus.STOPPED, started_at=started)
+        service.transition(SESSION_ID, to=SessionStatus.STOPPED, owner_epoch=OWNER_EPOCH)
 
         assert row.status is SessionStatus.STOPPED
 
-    def test_a_null_row_started_at_is_accepted(self):
-        """A row written by something older carries no evidence of a competitor."""
-        clock = FakeClock()
-        row = _session_row(SessionStatus.RUNNING, last_started_at=None)
-        service = self._service(row, clock)
-
-        service.transition(SESSION_ID, to=SessionStatus.STOPPED, started_at=clock.now)
-
-        assert row.status is SessionStatus.STOPPED
-
-    def test_omitting_started_at_preserves_story_23_behaviour(self):
-        """The claim path and operator tooling pass no ``started_at`` and are
-        allowed to move a row whose ``last_started_at`` is newer — a claim is
+    def test_omitting_owner_epoch_preserves_story_23_behaviour(self):
+        """The claim path and operator tooling pass no ``owner_epoch`` and are
+        allowed to move a row regardless of its current epoch — a claim is
         exactly the operation that takes a stale session.
         """
         clock = FakeClock()
-        row = _session_row(
-            SessionStatus.RUNNING, last_started_at=clock.now + timedelta(seconds=120)
-        )
+        row = _session_row(SessionStatus.RUNNING, owner_epoch=OWNER_EPOCH + 1)
         service = self._service(row, clock)
 
         service.transition(SESSION_ID, to=SessionStatus.STOPPED)
@@ -924,28 +1016,25 @@ class TestTransitionOwnershipGuard:
         investigate).
         """
         clock = FakeClock()
-        mine = clock.now
-        row = _session_row(
-            SessionStatus.STOPPED, last_started_at=clock.now + timedelta(seconds=120)
-        )
+        row = _session_row(SessionStatus.STOPPED, owner_epoch=OWNER_EPOCH + 1)
         service = self._service(row, clock)
 
         with pytest.raises(InvalidSessionTransition, match="reclaimed"):
-            service.transition(SESSION_ID, to=SessionStatus.STOPPED, started_at=mine)
+            service.transition(SESSION_ID, to=SessionStatus.STOPPED, owner_epoch=OWNER_EPOCH)
 
-    def test_the_refusal_is_logged_with_both_instants(self):
+    def test_the_refusal_is_logged_with_both_epochs(self):
         clock = FakeClock()
-        theirs = clock.now + timedelta(seconds=120)
-        row = _session_row(SessionStatus.RUNNING, last_started_at=theirs)
+        row = _session_row(SessionStatus.RUNNING, owner_epoch=OWNER_EPOCH + 1)
         service = self._service(row, clock)
 
         with capture_logs() as logs:
             with pytest.raises(InvalidSessionTransition):
-                service.transition(SESSION_ID, to=SessionStatus.STOPPED, started_at=clock.now)
+                service.transition(SESSION_ID, to=SessionStatus.STOPPED, owner_epoch=OWNER_EPOCH)
 
         events = [e for e in logs if e["event"] == "session.activity_refused"]
         assert len(events) == 1
-        assert events[0]["row_started_at"] == theirs.isoformat()
+        assert events[0]["own_epoch"] == OWNER_EPOCH
+        assert events[0]["row_epoch"] == OWNER_EPOCH + 1
 
 
 class TestRuntimeFlagsAreClearedOnEveryRunningEdge:
@@ -1044,10 +1133,10 @@ class TestRecordStrategyFailure:
 
     def test_the_first_failure_creates_the_versioned_document(self):
         clock = FakeClock()
-        row = _session_row(SessionStatus.RUNNING, last_started_at=clock.now)
+        row = _session_row(SessionStatus.RUNNING)
 
         self._service(row, clock).record_strategy_failure(
-            SESSION_ID, started_at=clock.now, **self._failure(clock)
+            SESSION_ID, owner_epoch=OWNER_EPOCH, **self._failure(clock)
         )
 
         assert row.runtime_flags["v"] == 1
@@ -1066,23 +1155,23 @@ class TestRecordStrategyFailure:
         the system.
         """
         clock = FakeClock()
-        row = _session_row(SessionStatus.RUNNING, last_started_at=clock.now)
+        row = _session_row(SessionStatus.RUNNING)
 
         self._service(row, clock).record_strategy_failure(
-            SESSION_ID, started_at=clock.now, **self._failure(clock)
+            SESSION_ID, owner_epoch=OWNER_EPOCH, **self._failure(clock)
         )
 
         assert "traceback" not in row.runtime_flags["failed_strategies"][0]
 
     def test_a_second_failure_appends_rather_than_replacing(self):
         clock = FakeClock()
-        row = _session_row(SessionStatus.RUNNING, last_started_at=clock.now)
+        row = _session_row(SessionStatus.RUNNING)
         service = self._service(row, clock)
 
-        service.record_strategy_failure(SESSION_ID, started_at=clock.now, **self._failure(clock))
+        service.record_strategy_failure(SESSION_ID, owner_epoch=OWNER_EPOCH, **self._failure(clock))
         service.record_strategy_failure(
             SESSION_ID,
-            started_at=clock.now,
+            owner_epoch=OWNER_EPOCH,
             **self._failure(clock, spec_strategy_id="momentum", strategy_id="SMAMomentum-001"),
         )
 
@@ -1098,14 +1187,14 @@ class TestRecordStrategyFailure:
         is the only thing that makes the write reach Postgres.
         """
         clock = FakeClock()
-        row = _session_row(SessionStatus.RUNNING, last_started_at=clock.now)
+        row = _session_row(SessionStatus.RUNNING)
         service = self._service(row, clock)
-        service.record_strategy_failure(SESSION_ID, started_at=clock.now, **self._failure(clock))
+        service.record_strategy_failure(SESSION_ID, owner_epoch=OWNER_EPOCH, **self._failure(clock))
         first_document = row.runtime_flags
         first_list = row.runtime_flags["failed_strategies"]
 
         service.record_strategy_failure(
-            SESSION_ID, started_at=clock.now, **self._failure(clock, spec_strategy_id="momentum")
+            SESSION_ID, owner_epoch=OWNER_EPOCH, **self._failure(clock, spec_strategy_id="momentum")
         )
 
         assert row.runtime_flags is not first_document
@@ -1113,10 +1202,10 @@ class TestRecordStrategyFailure:
 
     def test_all_failed_is_carried_when_the_caller_says_so(self):
         clock = FakeClock()
-        row = _session_row(SessionStatus.RUNNING, last_started_at=clock.now)
+        row = _session_row(SessionStatus.RUNNING)
 
         self._service(row, clock).record_strategy_failure(
-            SESSION_ID, started_at=clock.now, all_failed=True, **self._failure(clock)
+            SESSION_ID, owner_epoch=OWNER_EPOCH, all_failed=True, **self._failure(clock)
         )
 
         assert row.runtime_flags["all_failed"] is True
@@ -1126,15 +1215,15 @@ class TestRecordStrategyFailure:
         the session as partially alive again.
         """
         clock = FakeClock()
-        row = _session_row(SessionStatus.RUNNING, last_started_at=clock.now)
+        row = _session_row(SessionStatus.RUNNING)
         service = self._service(row, clock)
         service.record_strategy_failure(
-            SESSION_ID, started_at=clock.now, all_failed=True, **self._failure(clock)
+            SESSION_ID, owner_epoch=OWNER_EPOCH, all_failed=True, **self._failure(clock)
         )
 
         service.record_strategy_failure(
             SESSION_ID,
-            started_at=clock.now,
+            owner_epoch=OWNER_EPOCH,
             all_failed=False,
             **self._failure(clock, spec_strategy_id="momentum"),
         )
@@ -1143,14 +1232,11 @@ class TestRecordStrategyFailure:
 
     def test_a_reclaimed_row_refuses_the_write(self):
         clock = FakeClock()
-        mine = clock.now
-        row = _session_row(
-            SessionStatus.RUNNING, last_started_at=clock.now + timedelta(seconds=120)
-        )
+        row = _session_row(SessionStatus.RUNNING, owner_epoch=OWNER_EPOCH + 1)
 
         with pytest.raises(InvalidSessionTransition, match="reclaimed"):
             self._service(row, clock).record_strategy_failure(
-                SESSION_ID, started_at=mine, **self._failure(clock)
+                SESSION_ID, owner_epoch=OWNER_EPOCH, **self._failure(clock)
             )
 
         assert row.runtime_flags is None
@@ -1160,11 +1246,11 @@ class TestRecordStrategyFailure:
     )
     def test_a_row_that_is_not_running_refuses_the_write(self, status):
         clock = FakeClock()
-        row = _session_row(status, last_started_at=clock.now)
+        row = _session_row(status)
 
         with pytest.raises(InvalidSessionTransition):
             self._service(row, clock).record_strategy_failure(
-                SESSION_ID, started_at=clock.now, **self._failure(clock)
+                SESSION_ID, owner_epoch=OWNER_EPOCH, **self._failure(clock)
             )
 
         assert row.runtime_flags is None
@@ -1175,7 +1261,7 @@ class TestRecordStrategyFailure:
 
         with pytest.raises(RecordNotFoundError):
             service.record_strategy_failure(
-                SESSION_ID, started_at=clock.now, **self._failure(clock)
+                SESSION_ID, owner_epoch=OWNER_EPOCH, **self._failure(clock)
             )
 
     def test_the_write_never_assigns_status(self):
@@ -1184,10 +1270,10 @@ class TestRecordStrategyFailure:
         session whose strategy failed is still ``running`` (AC #1's letter).
         """
         clock = FakeClock()
-        row = _session_row(SessionStatus.RUNNING, last_started_at=clock.now)
+        row = _session_row(SessionStatus.RUNNING)
 
         self._service(row, clock).record_strategy_failure(
-            SESSION_ID, started_at=clock.now, **self._failure(clock)
+            SESSION_ID, owner_epoch=OWNER_EPOCH, **self._failure(clock)
         )
 
         assert row.status is SessionStatus.RUNNING
@@ -1202,12 +1288,11 @@ class TestRecordStrategyFailure:
         clock = FakeClock()
         row = _session_row(
             SessionStatus.RUNNING,
-            last_started_at=clock.now,
             runtime_flags={"v": 1, "connection_lost_at": "2026-08-23T14:00:00+00:00"},
         )
 
         self._service(row, clock).record_strategy_failure(
-            SESSION_ID, started_at=clock.now, **self._failure(clock)
+            SESSION_ID, owner_epoch=OWNER_EPOCH, **self._failure(clock)
         )
 
         assert row.runtime_flags["connection_lost_at"] == "2026-08-23T14:00:00+00:00"
@@ -1226,11 +1311,11 @@ class TestRecordStrategyFailure:
         rare, because the guard latches per strategy.
         """
         clock = FakeClock()
-        row = _session_row(SessionStatus.RUNNING, last_started_at=clock.now)
+        row = _session_row(SessionStatus.RUNNING)
         repository = _repository(row)
 
         SessionService(repository, time_source=clock).record_strategy_failure(
-            SESSION_ID, started_at=clock.now, **self._failure(clock)
+            SESSION_ID, owner_epoch=OWNER_EPOCH, **self._failure(clock)
         )
 
         (_args, kwargs) = repository.find_by_session_id.call_args

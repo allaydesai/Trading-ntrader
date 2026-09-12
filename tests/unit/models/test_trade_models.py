@@ -45,6 +45,51 @@ class TestTradeCreateValidation:
         assert trade.order_side == "BUY"
         assert trade.quantity == Decimal("100")
 
+    def test_session_id_alone_is_valid(self):
+        """Story 3.6: a session-owned trade has no backtest_run_id until seal."""
+        trade = TradeCreate(
+            session_id=7,
+            instrument_id="AAPL",
+            trade_id="trade-123",
+            venue_order_id="order-456",
+            order_side="BUY",
+            quantity=Decimal("100"),
+            entry_price=Decimal("150.00"),
+            entry_timestamp=datetime(2025, 1, 1, 10, 0, 0, tzinfo=timezone.utc),
+        )
+
+        assert trade.session_id == 7
+        assert trade.backtest_run_id is None
+
+    def test_neither_owner_is_rejected_naming_both_fields(self):
+        with pytest.raises(ValidationError, match="backtest_run_id or session_id"):
+            TradeCreate(
+                instrument_id="AAPL",
+                trade_id="trade-123",
+                venue_order_id="order-456",
+                order_side="BUY",
+                quantity=Decimal("100"),
+                entry_price=Decimal("150.00"),
+                entry_timestamp=datetime(2025, 1, 1, 10, 0, 0, tzinfo=timezone.utc),
+            )
+
+    def test_both_owners_set_is_valid(self):
+        """A sealed trade holds both — do not tighten to exactly one."""
+        trade = TradeCreate(
+            backtest_run_id=1,
+            session_id=7,
+            instrument_id="AAPL",
+            trade_id="trade-123",
+            venue_order_id="order-456",
+            order_side="BUY",
+            quantity=Decimal("100"),
+            entry_price=Decimal("150.00"),
+            entry_timestamp=datetime(2025, 1, 1, 10, 0, 0, tzinfo=timezone.utc),
+        )
+
+        assert trade.backtest_run_id == 1
+        assert trade.session_id == 7
+
     def test_invalid_order_side(self):
         """Test that invalid order_side raises ValidationError."""
         with pytest.raises(ValidationError) as exc_info:

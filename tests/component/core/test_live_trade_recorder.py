@@ -9,6 +9,7 @@ socket; the autouse guard below is copied verbatim from
 """
 
 import itertools
+import threading
 from decimal import Decimal
 
 import pytest
@@ -33,11 +34,16 @@ from nautilus_trader.test_kit.providers import TestInstrumentProvider
 from nautilus_trader.test_kit.stubs.events import TestEventStubs
 from structlog.testing import capture_logs
 
+from src.core.live_session_record import SessionReclaimedError
 from src.core.live_trade_recorder import (
     AGGREGATED_EVENT,
     COMMISSION_MIXED_EVENT,
     COMMISSION_UNAVAILABLE_EVENT,
     EMITTED_TRADE_EVENTS,
+    PERSIST_DROPPED_EVENT,
+    PERSIST_REFUSED_EVENT,
+    PERSIST_SKIPPED_EVENT,
+    PERSISTED_EVENT,
     POSITION_EVENTS_TOPIC,
     RECORDER_FAILED_EVENT,
     RecordedTrade,
@@ -477,17 +483,26 @@ class TestTheHandlerNeverRaises:
         assert logs == []
         assert sink_calls == []
 
-    def test_position_closed_produces_exactly_one_record_and_one_sink_call_after_it(self):
+    def test_position_closed_produces_aggregated_then_sink_then_persisted(self):
+        """D-E (3.5 review resolution): ``trade.aggregated`` is a statement
+        about aggregation, which always succeeds by this point — it is
+        emitted BEFORE the sink, so a raising sink cannot erase the computed
+        values from the transcript. ``trade.persisted`` is the one that must
+        never claim success for a failed write, so it comes after.
+        """
         position, closed_event = _round_trip(
             entry_fills=[(10, "100.00", _money("1.00"))],
             exit_fills=[(10, "110.00", _money("1.00"))],
         )
         order = []
         sink_calls: list[RecordedTrade] = []
+        sink_threads: list[threading.Thread] = []
 
-        def sink(recorded: RecordedTrade) -> None:
+        def sink(recorded: RecordedTrade) -> bool:
             order.append("sink")
             sink_calls.append(recorded)
+            sink_threads.append(threading.current_thread())
+            return True
 
         class _LoggingProxy:
             def info(self, *args, **kwargs):
@@ -507,10 +522,17 @@ class TestTheHandlerNeverRaises:
             recorder.handle_position_event(closed_event)
 
         aggregated = [entry for entry in logs if entry["event"] == AGGREGATED_EVENT]
+        persisted = [entry for entry in logs if entry["event"] == PERSISTED_EVENT]
         assert len(aggregated) == 1
+        assert len(persisted) == 1
+        assert persisted[0]["inserted"] == "True"
+        assert persisted[0]["attempt"] == "first"
         assert len(sink_calls) == 1
         assert isinstance(sink_calls[0], RecordedTrade)
-        assert order == ["sink", "log"], "the record must be emitted AFTER the sink returns"
+        assert order == ["log", "sink", "log"], "aggregated before the sink, persisted after"
+        # AC #1: "immediately" — inside the handler call, on the caller's own
+        # thread (no task, no executor, no thread).
+        assert sink_threads == [threading.current_thread()]
 
     def test_a_raising_sink_produces_one_recorder_failed_no_raise(self):
         position, closed_event = _round_trip(
@@ -518,7 +540,7 @@ class TestTheHandlerNeverRaises:
             exit_fills=[(10, "110.00", _money("1.00"))],
         )
 
-        def raising_sink(recorded: RecordedTrade) -> None:
+        def raising_sink(recorded: RecordedTrade) -> bool:
             raise RuntimeError("sink boom")
 
         recorder = TradeRecorder(
@@ -531,10 +553,18 @@ class TestTheHandlerNeverRaises:
         failed = [entry for entry in logs if entry["event"] == RECORDER_FAILED_EVENT]
         assert len(failed) == 1
         assert failed[0]["stage"] == "sink"
-        assert failed[0]["position_id"] == str(position.id)
+        assert failed[0]["trade_key"] == f"{position.id}:{closed_event.closing_order_id}"
         assert failed[0]["error_type"] == "RuntimeError"
-        assert failed[0]["exc_info"] is True
-        assert [entry for entry in logs if entry["event"] == AGGREGATED_EVENT] == []
+        assert failed[0]["pending"] == "1"
+        # Review 2026-09-12: the record is logged after `_attempt_sink`'s
+        # `except` block has returned, where `exc_info=True` would attach
+        # nothing — the exception object itself must be what is bound.
+        assert isinstance(failed[0]["exc_info"], RuntimeError)
+        assert str(failed[0]["exc_info"]) == "sink boom"
+        # D-E: aggregated is emitted regardless of what the sink then does.
+        assert len(logs) == 2
+        assert [entry for entry in logs if entry["event"] == AGGREGATED_EVENT] != []
+        assert [entry for entry in logs if entry["event"] == PERSISTED_EVENT] == []
 
     def test_a_missing_cached_position_records_the_leg_with_commission_unknown(self):
         """Review 2026-09-12 (flip decision, option 1): every snapshot field
@@ -631,7 +661,11 @@ class TestNoRecordEverCarriesAnAccountId:
             entry_fills=[(10, "100.00", _money("1.00"))],
             exit_fills=[(10, "110.00", _money("1.00"))],
         )
-        recorder = TradeRecorder(_StubCache({position.id: position}), structlog.get_logger("test"))
+        recorder = TradeRecorder(
+            _StubCache({position.id: position}),
+            structlog.get_logger("test"),
+            sink=lambda recorded: True,
+        )
 
         with capture_logs() as logs:
             recorder.handle_position_event(closed_event)
@@ -639,6 +673,102 @@ class TestNoRecordEverCarriesAnAccountId:
         matching = [entry for entry in logs if entry["event"] == event_name]
         assert len(matching) == 1
         assert "account_id" not in matching[0]
+
+
+def _diagnostic_record_scenarios():
+    """Every diagnostic/boundary record the persistence path emits, each
+    produced by driving the recorder — parametrized so the NFR26 scan covers
+    them alongside ``EMITTED_TRADE_EVENTS`` (review 2026-09-12, AC #6
+    "extended to every new record").
+    """
+
+    def _reclaiming(recorded):
+        raise SessionReclaimedError("reclaimed")
+
+    def _invalid(recorded):
+        raise ValueError("bad record")
+
+    def _failing(recorded):
+        raise RuntimeError("db down")
+
+    return [
+        pytest.param(PERSIST_REFUSED_EVENT, _reclaiming, None, id="persist_refused"),
+        pytest.param(PERSIST_DROPPED_EVENT, _invalid, None, id="persist_dropped"),
+        pytest.param(RECORDER_FAILED_EVENT, _failing, None, id="recorder_failed_sink"),
+        pytest.param(PERSIST_SKIPPED_EVENT, lambda r: True, "EXTERNAL", id="persist_skipped"),
+    ]
+
+
+class TestNoDiagnosticRecordEverCarriesAnAccountId:
+    @pytest.mark.parametrize("event_name, sink, strategy_id", _diagnostic_record_scenarios())
+    def test_the_record_carries_no_account_id_field(self, event_name, sink, strategy_id):
+        position, real_closed = _round_trip(
+            entry_fills=[(10, "100.00", _money("1.00"))],
+            exit_fills=[(10, "110.00", _money("1.00"))],
+        )
+        closed_event = real_closed
+        if strategy_id is not None:
+            closed_event = _with_strategy_id(real_closed, strategy_id)
+        recorder = TradeRecorder(
+            _StubCache({position.id: position}), structlog.get_logger("test"), sink=sink
+        )
+
+        with capture_logs() as logs:
+            recorder.handle_position_event(closed_event)
+
+        matching = [entry for entry in logs if entry["event"] == event_name]
+        assert len(matching) == 1
+        assert "account_id" not in matching[0]
+        assert matching[0]["trade_key"] == f"{position.id}:{real_closed.closing_order_id}"
+
+    def test_the_ownership_lost_skip_carries_no_account_id_field(self):
+        position, closed_event = _round_trip(
+            entry_fills=[(10, "100.00", _money("1.00"))],
+            exit_fills=[(10, "110.00", _money("1.00"))],
+        )
+        recorder = TradeRecorder(
+            _StubCache({position.id: position}),
+            structlog.get_logger("test"),
+            sink=lambda recorded: True,
+        )
+        recorder._reclaimed = True
+
+        with capture_logs() as logs:
+            recorder.handle_position_event(closed_event)
+
+        skipped = [entry for entry in logs if entry["event"] == PERSIST_SKIPPED_EVENT]
+        assert len(skipped) == 1
+        assert skipped[0]["reason"] == "ownership_lost"
+        assert "account_id" not in skipped[0]
+
+
+def _with_strategy_id(real_closed, strategy_id: str):
+    """A ``PositionClosed`` proxy whose ``strategy_id`` is overridden — the
+    class NAME is what the dispatch map keys on."""
+
+    class PositionClosed:
+        def __getattr__(self, name):
+            return getattr(real_closed, name)
+
+        @property
+        def strategy_id(self):
+            return StrategyId(strategy_id)
+
+    return PositionClosed()
+
+
+class TestRecordNameLiteralsArePinned:
+    """3.3's M3 lesson: every other test compares a record to the imported
+    constant and cannot see a misspelt constant. These literals can.
+    """
+
+    def test_the_persistence_record_names_are_exactly_these_strings(self):
+        assert PERSISTED_EVENT == "trade.persisted"
+        assert PERSIST_REFUSED_EVENT == "trade.persist_refused"
+        assert PERSIST_SKIPPED_EVENT == "trade.persist_skipped"
+        assert PERSIST_DROPPED_EVENT == "trade.persist_dropped"
+        assert AGGREGATED_EVENT == "trade.aggregated"
+        assert RECORDER_FAILED_EVENT == "trade.recorder_failed"
 
 
 class TestEveryDecimalInARecordIsAStr:
@@ -682,7 +812,7 @@ class TestSeverityIsPinned:
         by_event = {entry["event"]: entry for entry in unavailable_logs}
         assert by_event[COMMISSION_UNAVAILABLE_EVENT]["log_level"] == "warning"
 
-        def raising_sink(recorded: RecordedTrade) -> None:
+        def raising_sink(recorded: RecordedTrade) -> bool:
             raise RuntimeError("sink boom")
 
         failing_recorder = TradeRecorder(
@@ -692,15 +822,395 @@ class TestSeverityIsPinned:
         )
         with capture_logs() as failure_logs:
             failing_recorder.handle_position_event(missing_closed)
-        assert [entry["log_level"] for entry in failure_logs] == ["error"]
-        assert failure_logs[0]["event"] == RECORDER_FAILED_EVENT
+        by_event = {entry["event"]: entry for entry in failure_logs}
+        assert by_event[AGGREGATED_EVENT]["log_level"] == "info"
+        assert by_event[RECORDER_FAILED_EVENT]["log_level"] == "error"
+
+    def test_persisted_is_info_persist_refused_and_persist_skipped_are_warning(self):
+        position, closed_event = _round_trip(
+            entry_fills=[(10, "100.00", _money("1.00"))],
+            exit_fills=[(10, "110.00", _money("1.00"))],
+        )
+        recorder = TradeRecorder(
+            _StubCache({position.id: position}),
+            structlog.get_logger("test"),
+            sink=lambda recorded: True,
+        )
+        with capture_logs() as logs:
+            recorder.handle_position_event(closed_event)
+        assert {e["event"]: e["log_level"] for e in logs}[PERSISTED_EVENT] == "info"
+
+        def reclaiming_sink(recorded: RecordedTrade) -> bool:
+            raise SessionReclaimedError("reclaimed")
+
+        refused_position, refused_closed = _round_trip(
+            entry_fills=[(10, "100.00", _money("1.00"))],
+            exit_fills=[(10, "110.00", _money("1.00"))],
+        )
+        refused_recorder = TradeRecorder(
+            _StubCache({refused_position.id: refused_position}),
+            structlog.get_logger("test"),
+            sink=reclaiming_sink,
+        )
+        with capture_logs() as refused_logs:
+            refused_recorder.handle_position_event(refused_closed)
+        assert {e["event"]: e["log_level"] for e in refused_logs}[
+            PERSIST_REFUSED_EVENT
+        ] == "warning"
+
+        external_position, real_closed = _round_trip(
+            entry_fills=[(10, "100.00", _money("1.00"))],
+            exit_fills=[(10, "110.00", _money("1.00"))],
+        )
+
+        class PositionClosed:  # the class NAME is what the dispatch map keys on
+            def __getattr__(self, name):
+                return getattr(real_closed, name)
+
+            @property
+            def strategy_id(self):
+                return StrategyId("EXTERNAL")
+
+        external_closed = PositionClosed()
+        skipped_recorder = TradeRecorder(
+            _StubCache({external_position.id: external_position}),
+            structlog.get_logger("test"),
+            sink=lambda recorded: True,
+        )
+        with capture_logs() as skipped_logs:
+            skipped_recorder.handle_position_event(external_closed)
+        assert {e["event"]: e["log_level"] for e in skipped_logs}[
+            PERSIST_SKIPPED_EVENT
+        ] == "warning"
 
 
 class TestEmittedTradeEventsMembership:
     """Membership-pinned (CLAUDE.md Anti-Patterns)."""
 
     def test_the_set_is_pinned_exactly(self):
-        assert EMITTED_TRADE_EVENTS == (AGGREGATED_EVENT,)
+        assert EMITTED_TRADE_EVENTS == (AGGREGATED_EVENT, PERSISTED_EVENT)
+
+
+class TestNoSinkConfigured:
+    """The 3.5 production state (before this story wires a real sink)."""
+
+    def test_aggregated_only_no_persisted_nothing_queued(self):
+        position, closed_event = _round_trip(
+            entry_fills=[(10, "100.00", _money("1.00"))],
+            exit_fills=[(10, "110.00", _money("1.00"))],
+        )
+        recorder = TradeRecorder(_StubCache({position.id: position}), structlog.get_logger("test"))
+
+        with capture_logs() as logs:
+            recorder.handle_position_event(closed_event)
+
+        assert [e["event"] for e in logs] == [AGGREGATED_EVENT]
+        assert recorder.flush_pending() == 0
+
+
+class TestSinkReturnsFalse:
+    def test_inserted_is_false_severity_still_info(self):
+        position, closed_event = _round_trip(
+            entry_fills=[(10, "100.00", _money("1.00"))],
+            exit_fills=[(10, "110.00", _money("1.00"))],
+        )
+        recorder = TradeRecorder(
+            _StubCache({position.id: position}),
+            structlog.get_logger("test"),
+            sink=lambda recorded: False,
+        )
+
+        with capture_logs() as logs:
+            recorder.handle_position_event(closed_event)
+
+        persisted = next(e for e in logs if e["event"] == PERSISTED_EVENT)
+        assert persisted["inserted"] == "False"
+        assert persisted["log_level"] == "info"
+
+
+class TestPendingRetryAndOwnershipLoss:
+    """AC #4 (queue + FIFO retry) and AC #8b (a reclaim is terminal)."""
+
+    def test_a_failed_sink_is_retried_on_the_next_event_and_succeeds(self):
+        position, closed_event = _round_trip(
+            entry_fills=[(10, "100.00", _money("1.00"))],
+            exit_fills=[(10, "110.00", _money("1.00"))],
+        )
+        calls = {"n": 0}
+
+        def flaky_sink(recorded: RecordedTrade) -> bool:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("db down")
+            return True
+
+        recorder = TradeRecorder(
+            _StubCache({position.id: position}), structlog.get_logger("test"), sink=flaky_sink
+        )
+        with capture_logs():
+            recorder.handle_position_event(closed_event)
+        assert calls["n"] == 1
+
+        opened_position = _open_position(entry_fills=[(5, "50.00", _money("0.00"))])
+        opened_event = TestEventStubs.position_opened(opened_position)
+        with capture_logs() as logs:
+            recorder.handle_position_event(opened_event)
+
+        assert calls["n"] == 2
+        persisted = [e for e in logs if e["event"] == PERSISTED_EVENT]
+        assert len(persisted) == 1
+        assert persisted[0]["attempt"] == "retry"
+        assert persisted[0]["trade_key"] == f"{position.id}:{closed_event.closing_order_id}"
+        # PositionOpened itself still produces no record of its own.
+        assert [e for e in logs if e["event"] not in (PERSISTED_EVENT,)] == []
+
+    def test_fifo_order_and_stop_on_first_failure(self):
+        msft = TestInstrumentProvider.equity(symbol="MSFT", venue="NASDAQ")
+        first_position, first_closed = _round_trip(
+            entry_fills=[(10, "100.00", _money("1.00"))],
+            exit_fills=[(10, "110.00", _money("1.00"))],
+        )
+        second_position, second_closed = _round_trip(
+            entry_fills=[(20, "200.00", _money("1.00"))],
+            exit_fills=[(20, "210.00", _money("1.00"))],
+            instrument=msft,
+        )
+        first_key = f"{first_position.id}:{first_closed.closing_order_id}"
+        second_key = f"{second_position.id}:{second_closed.closing_order_id}"
+        recorder = TradeRecorder(
+            _StubCache({first_position.id: first_position, second_position.id: second_position}),
+            structlog.get_logger("test"),
+            sink=lambda recorded: (_ for _ in ()).throw(RuntimeError("db down")),
+        )
+        with capture_logs():
+            recorder.handle_position_event(first_closed)
+        with capture_logs():
+            recorder.handle_position_event(second_closed)
+        assert len(recorder._pending) == 2
+        assert recorder._pending[0].trade_key == first_key
+        assert recorder._pending[1].trade_key == second_key
+
+        attempts: list[str] = []
+
+        def fails_first_then_succeeds(recorded: RecordedTrade) -> bool:
+            attempts.append(recorded.trade_key)
+            if recorded.trade_key == first_key:
+                raise RuntimeError("still down")
+            return True
+
+        recorder._sink = fails_first_then_succeeds
+        remaining = recorder.flush_pending()
+
+        assert attempts == [first_key]
+        assert remaining == 2, "the first item's failure stops the drain; nothing after it is tried"
+
+    def test_a_reclaimed_write_is_not_retried_and_calls_ownership_lost_once(self):
+        position, closed_event = _round_trip(
+            entry_fills=[(10, "100.00", _money("1.00"))],
+            exit_fills=[(10, "110.00", _money("1.00"))],
+        )
+        lost_calls = []
+
+        def reclaiming_sink(recorded: RecordedTrade) -> bool:
+            raise SessionReclaimedError("reclaimed")
+
+        recorder = TradeRecorder(
+            _StubCache({position.id: position}),
+            structlog.get_logger("test"),
+            sink=reclaiming_sink,
+            on_ownership_lost=lambda: lost_calls.append(1),
+        )
+
+        with capture_logs() as logs:
+            recorder.handle_position_event(closed_event)
+
+        refused = [e for e in logs if e["event"] == PERSIST_REFUSED_EVENT]
+        assert len(refused) == 1
+        assert refused[0]["trade_key"] == f"{position.id}:{closed_event.closing_order_id}"
+        assert [e for e in logs if e["event"] == RECORDER_FAILED_EVENT] == []
+        assert recorder._pending == []
+        assert lost_calls == [1]
+
+    def test_the_sink_is_never_called_again_after_a_reclaim(self):
+        """Review 2026-09-12: "called at most once" is now enforced by a
+        latch. A second close after the reclaim is aggregated and logged,
+        then skipped loudly — no second sink call, no second callback.
+        """
+        position_one, closed_one = _round_trip(
+            entry_fills=[(10, "100.00", _money("1.00"))],
+            exit_fills=[(10, "110.00", _money("1.00"))],
+        )
+        position_two, closed_two = _round_trip(
+            entry_fills=[(5, "50.00", _money("1.00"))],
+            exit_fills=[(5, "55.00", _money("1.00"))],
+        )
+        lost_calls = []
+        sink_calls = []
+
+        def reclaiming_sink(recorded: RecordedTrade) -> bool:
+            sink_calls.append(recorded.trade_key)
+            raise SessionReclaimedError("reclaimed")
+
+        recorder = TradeRecorder(
+            _StubCache({position_one.id: position_one, position_two.id: position_two}),
+            structlog.get_logger("test"),
+            sink=reclaiming_sink,
+            on_ownership_lost=lambda: lost_calls.append(1),
+        )
+
+        with capture_logs() as logs:
+            recorder.handle_position_event(closed_one)
+            recorder.handle_position_event(closed_two)
+
+        assert len(sink_calls) == 1
+        assert lost_calls == [1]
+        assert len([e for e in logs if e["event"] == AGGREGATED_EVENT]) == 2
+        assert len([e for e in logs if e["event"] == PERSIST_REFUSED_EVENT]) == 1
+        skipped = [e for e in logs if e["event"] == PERSIST_SKIPPED_EVENT]
+        assert len(skipped) == 1
+        assert skipped[0]["reason"] == "ownership_lost"
+        assert skipped[0]["trade_key"] == f"{position_two.id}:{closed_two.closing_order_id}"
+        assert recorder._pending == []
+
+    def test_a_reclaim_found_while_draining_stops_the_same_delivery_from_hitting_the_sink(self):
+        """Two queued trades, then a reclaim on the pre-dispatch drain: the
+        first pending entry is refused (and discarded), the second stays
+        queued and is named by ``pending_trade_keys``, the delivery's own
+        close never reaches the sink, and the callback fires exactly once.
+        """
+        position_a, closed_a = _round_trip(
+            entry_fills=[(10, "100.00", _money("1.00"))],
+            exit_fills=[(10, "110.00", _money("1.00"))],
+        )
+        position_b, closed_b = _round_trip(
+            entry_fills=[(5, "50.00", _money("1.00"))],
+            exit_fills=[(5, "55.00", _money("1.00"))],
+        )
+        position_c, closed_c = _round_trip(
+            entry_fills=[(1, "10.00", _money("1.00"))],
+            exit_fills=[(1, "11.00", _money("1.00"))],
+        )
+        cache = _StubCache(
+            {position_a.id: position_a, position_b.id: position_b, position_c.id: position_c}
+        )
+        lost_calls = []
+        recorder = TradeRecorder(
+            cache,
+            structlog.get_logger("test"),
+            sink=lambda recorded: (_ for _ in ()).throw(RuntimeError("db down")),
+            on_ownership_lost=lambda: lost_calls.append(1),
+        )
+        with capture_logs():
+            recorder.handle_position_event(closed_a)
+            recorder.handle_position_event(closed_b)
+        assert len(recorder._pending) == 2
+
+        sink_calls = []
+
+        def reclaiming_sink(recorded: RecordedTrade) -> bool:
+            sink_calls.append(recorded.trade_key)
+            raise SessionReclaimedError("reclaimed")
+
+        recorder._sink = reclaiming_sink
+        with capture_logs() as logs:
+            recorder.handle_position_event(closed_c)
+
+        assert sink_calls == [f"{position_a.id}:{closed_a.closing_order_id}"]
+        assert lost_calls == [1]
+        assert recorder.pending_trade_keys == (f"{position_b.id}:{closed_b.closing_order_id}",)
+        skipped = [e for e in logs if e["event"] == PERSIST_SKIPPED_EVENT]
+        assert [e["trade_key"] for e in skipped] == [f"{position_c.id}:{closed_c.closing_order_id}"]
+
+    def test_an_invalid_record_is_dropped_loudly_and_never_queued(self):
+        """Review 2026-09-12 (decision 2): a ``ValueError``/``TypeError`` from
+        the sink is permanent (``TradeCreate`` validation, a caller bug), so
+        queueing it would head-of-line-block every later trade for the life
+        of the session. It is dropped with every aggregated field and the
+        exception attached; a later close still persists.
+        """
+        position_one, closed_one = _round_trip(
+            entry_fills=[(10, "100.00", _money("1.00"))],
+            exit_fills=[(10, "110.00", _money("1.00"))],
+        )
+        position_two, closed_two = _round_trip(
+            entry_fills=[(5, "50.00", _money("1.00"))],
+            exit_fills=[(5, "55.00", _money("1.00"))],
+        )
+        outcomes = iter([ValueError("quantity must be positive"), True])
+
+        def sink(recorded: RecordedTrade) -> bool:
+            outcome = next(outcomes)
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+
+        recorder = TradeRecorder(
+            _StubCache({position_one.id: position_one, position_two.id: position_two}),
+            structlog.get_logger("test"),
+            sink=sink,
+        )
+
+        with capture_logs() as logs:
+            recorder.handle_position_event(closed_one)
+            recorder.handle_position_event(closed_two)
+
+        dropped = [e for e in logs if e["event"] == PERSIST_DROPPED_EVENT]
+        assert len(dropped) == 1
+        assert dropped[0]["log_level"] == "error"
+        assert dropped[0]["reason"] == "invalid_record"
+        assert dropped[0]["error_type"] == "ValueError"
+        assert dropped[0]["trade_key"] == f"{position_one.id}:{closed_one.closing_order_id}"
+        assert dropped[0]["entry_price"] == "100.00000000"
+        assert isinstance(dropped[0]["exc_info"], ValueError)
+        assert [e for e in logs if e["event"] == RECORDER_FAILED_EVENT] == []
+        assert recorder._pending == []
+        persisted = [e for e in logs if e["event"] == PERSISTED_EVENT]
+        assert [e["trade_key"] for e in persisted] == [
+            f"{position_two.id}:{closed_two.closing_order_id}"
+        ]
+
+    def test_a_retry_failure_carries_the_exception_not_a_bare_true(self):
+        position, closed_event = _round_trip(
+            entry_fills=[(10, "100.00", _money("1.00"))],
+            exit_fills=[(10, "110.00", _money("1.00"))],
+        )
+        recorder = TradeRecorder(
+            _StubCache({position.id: position}),
+            structlog.get_logger("test"),
+            sink=lambda recorded: (_ for _ in ()).throw(RuntimeError("db down")),
+        )
+        with capture_logs():
+            recorder.handle_position_event(closed_event)
+
+        recorder._sink = lambda recorded: (_ for _ in ()).throw(OSError("still down"))
+        with capture_logs() as logs:
+            remaining = recorder.flush_pending()
+
+        assert remaining == 1
+        failed = [e for e in logs if e["event"] == RECORDER_FAILED_EVENT]
+        assert len(failed) == 1
+        assert failed[0]["error_type"] == "OSError"
+        assert isinstance(failed[0]["exc_info"], OSError)
+
+    def test_flush_pending_drains_without_an_event_and_returns_the_remaining_count(self):
+        position, closed_event = _round_trip(
+            entry_fills=[(10, "100.00", _money("1.00"))],
+            exit_fills=[(10, "110.00", _money("1.00"))],
+        )
+        recorder = TradeRecorder(
+            _StubCache({position.id: position}),
+            structlog.get_logger("test"),
+            sink=lambda recorded: (_ for _ in ()).throw(RuntimeError("db down")),
+        )
+        with capture_logs():
+            recorder.handle_position_event(closed_event)
+        assert len(recorder._pending) == 1
+
+        recorder._sink = lambda recorded: True
+        remaining = recorder.flush_pending()
+
+        assert remaining == 0
+        assert recorder._pending == []
 
 
 def _build_position_opened():
@@ -750,7 +1260,9 @@ class TestEveryDispatchedRecordNameIsPinned:
         for build in _DISPATCH_BUILDERS.values():
             position, event = build()
             recorder = TradeRecorder(
-                _StubCache({position.id: position}), structlog.get_logger("test")
+                _StubCache({position.id: position}),
+                structlog.get_logger("test"),
+                sink=lambda recorded: True,
             )
             with capture_logs() as logs:
                 recorder.handle_position_event(event)

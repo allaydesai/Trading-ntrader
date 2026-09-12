@@ -596,8 +596,10 @@ def release_record(
         operator-visible warning on an otherwise-clean stop; a reclaim is not
         a failure of *this* process's stop, so it does not count.
     """
-    detail = "the row belongs to another process now and is left untouched; up to one heartbeat "
-    detail += "interval of overlap is possible — there is no fencing token on trading_sessions."
+    # Review 2026-09-12 (Story 3.6, decision 1): the "no fencing token"
+    # sentence this line used to carry became false when `owner_epoch` landed.
+    detail = "the row belongs to another process now and is left untouched; every further write "
+    detail += "from this process is refused by the row's owner_epoch fence."
     if ownership_lost:
         log.error("session.reclaimed_by_another_process", trader_id=trader_id, detail=detail)
         return False

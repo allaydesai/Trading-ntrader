@@ -10,7 +10,7 @@ No behaviour changes; every symbol here moved verbatim from ``live.py``.
 """
 
 from datetime import datetime
-from typing import NoReturn
+from typing import NamedTuple, NoReturn
 from uuid import UUID
 
 import structlog
@@ -23,12 +23,45 @@ from src.db.session_sync import get_sync_session
 from src.models.session import SessionStatus
 from src.services.session_record import SqlSessionRecord
 from src.services.session_service import SessionService
+from src.services.trade_record import SqlTradeRecord
 
 console = Console()
 logger = structlog.get_logger(__name__)
 
 
-def claim_session(identifier: str) -> tuple[UUID, dict, datetime]:
+class ClaimedSession(NamedTuple):
+    """What one atomic ``-> running`` claim hands the composition root.
+
+    Story 3.6: ``session_pk`` and ``owner_epoch`` join the original three so
+    ``SqlTradeRecord`` can be constructed without ever resolving the UUID —
+    it binds the internal PK and the fencing epoch directly, the same way
+    ``SqlSessionRecord`` binds the UUID and the epoch.
+    """
+
+    session_id: UUID
+    session_pk: int
+    spec: dict
+    started_at: datetime
+    owner_epoch: int
+
+
+def build_session_ports(claimed: ClaimedSession) -> tuple[SqlSessionRecord, SqlTradeRecord]:
+    """Construct both database-facing adapters from one claim (Story 3.6).
+
+    The composition root's one place binding ``session_pk``/``owner_epoch``
+    into the objects that carry them across every subsequent write — pure
+    attribute assignment, so this cannot itself be mid-failure (the same
+    property ``SqlSessionRecord``'s own construction already had, which is
+    why ``start()`` rebuilds a session record fresh in every except branch
+    rather than relying on a partially-executed local).
+    """
+    return (
+        SqlSessionRecord(claimed.session_id, owner_epoch=claimed.owner_epoch),
+        SqlTradeRecord(claimed.session_pk, owner_epoch=claimed.owner_epoch),
+    )
+
+
+def claim_session(identifier: str) -> ClaimedSession:
     """Resolve the identifier and move the session to ``running``, atomically.
 
     Everything happens inside **one** short-lived ``get_sync_session()`` block
@@ -38,9 +71,11 @@ def claim_session(identifier: str) -> tuple[UUID, dict, datetime]:
     life of a 6.5-hour session would block every ``live status``.
 
     Returns:
-        The session's UUID, its stored spec payload, and the instant this
-        transition stamped into ``last_started_at`` — the value the runner's
-        record port is bound to, and the one the mid-run reclaim guard reads.
+        The claimed session — its UUID and internal PK, its stored spec
+        payload, the instant this transition stamped into ``last_started_at``
+        (the runner's log line only, Story 3.6), and the epoch this claim
+        produced — the fencing token every subsequent write through
+        ``SessionRecordPort`` or the trade sink is qualified against.
 
     Raises:
         RecordNotFoundError: No session matches ``identifier``.
@@ -51,7 +86,14 @@ def claim_session(identifier: str) -> tuple[UUID, dict, datetime]:
         service = SessionService(SyncTradingSessionRepository(db_session))
         trading_session = service.resolve(identifier)
         started = service.transition(trading_session.session_id, to=SessionStatus.RUNNING)
-        return started.session_id, started.spec, started.last_started_at
+        assert started.last_started_at is not None, "a -> RUNNING transition always stamps it"
+        return ClaimedSession(
+            started.session_id,
+            started.id,
+            started.spec,
+            started.last_started_at,
+            started.owner_epoch,
+        )
 
 
 def exit_with(exc: BaseException) -> NoReturn:

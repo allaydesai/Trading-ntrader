@@ -3,16 +3,19 @@
 For async operations (future API endpoints), use trading_session_repository.py.
 """
 
+from datetime import datetime
 from typing import List, Optional, Sequence
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from src.db.exceptions import DatabaseConnectionError, DuplicateRecordError
 from src.db.models.trade import Trade
 from src.db.models.trading_session import TradingSession
+from src.models.session import SessionStatus
 
 
 class SyncTradingSessionRepository:
@@ -20,7 +23,9 @@ class SyncTradingSessionRepository:
 
     Used by CLI commands. The spec is write-once: no method here updates a
     row's ``spec`` column, the same discipline ``BacktestRun.config_snapshot``
-    already follows — there is no update/setter method of any kind (AC #7).
+    already follows — there is no write path to ``spec``, of any name (AC #7,
+    amended by Story 3.6: ``stamp_activity_if_owner`` writes liveness columns
+    only, never ``spec``).
 
     Attributes:
         session: Synchronous SQLAlchemy session for database operations.
@@ -189,3 +194,86 @@ class SyncTradingSessionRepository:
             stmt = stmt.where(TradingSession.id.in_(session_ids))
         result = self.session.execute(stmt)
         return {row[0]: (row[1], row[2]) for row in result}
+
+    def stamp_activity_if_owner(
+        self,
+        session_pk: int,
+        *,
+        owner_epoch: int,
+        at: datetime,
+        bar_seen_at: Optional[datetime] = None,
+    ) -> int:
+        """The heartbeat's whole contract, in one statement (Story 3.6, D1).
+
+        Qualified on the internal PK, the caller's claimed ``owner_epoch`` and
+        ``status = 'running'`` all in the same ``WHERE`` — checked and written
+        atomically, so there is no window between deciding ownership and
+        writing the liveness columns the way the old unlocked-read-then-mutate
+        shape had. ``last_bar_at`` is set only when ``bar_seen_at`` is given;
+        a quiet interval must never clear it.
+
+        Residual this fence does **not** close (AC #8a): a ``mark_stopped``
+        that itself failed (Postgres unreachable at teardown) leaves the row
+        ``running`` at the same epoch, so an abandoned worker's later write
+        still matches — only a successor's reclaim, which increments the
+        epoch, can refuse it.
+
+        Args:
+            session_pk: The row's internal ``TradingSession.id`` — never the
+                UUID business key. ``SqlTradeRecord`` calls this with the PK
+                it was constructed with, never resolving the UUID.
+            owner_epoch: The epoch this caller's own claim produced.
+            at: The heartbeat instant to write.
+            bar_seen_at: When a bar was last observed since the previous
+                tick, or ``None`` to leave ``last_bar_at`` untouched.
+
+        Returns:
+            ``1`` when the row was owned and running and the write landed,
+            ``0`` when the epoch no longer matches, the row is not
+            ``running``, or the row does not exist.
+        """
+        values: dict = {"last_heartbeat_at": at}
+        if bar_seen_at is not None:
+            values["last_bar_at"] = bar_seen_at
+        stmt = (
+            update(TradingSession)
+            .where(
+                TradingSession.id == session_pk,
+                TradingSession.owner_epoch == owner_epoch,
+                TradingSession.status == SessionStatus.RUNNING,
+            )
+            .values(**values)
+        )
+        result = self.session.execute(stmt)
+        return result.rowcount
+
+    def insert_trade_if_absent(self, trade: Trade) -> bool:
+        """Idempotent trade write (Story 3.6, AC #4/#7).
+
+        Keys on ``(session_id, trade_id, client_order_id)`` — already two
+        existing columns plus the FK, no new column (fact 2: `trade_id` alone
+        is not unique per round trip under NETTING). Postgres treats NULL as
+        distinct in a unique index, so a backtest-owned row (``session_id``
+        NULL) never conflicts with any other row.
+
+        Args:
+            trade: An unattached ``Trade`` ORM instance (no ``id`` yet).
+
+        Returns:
+            ``True`` when a new row was inserted, ``False`` when the same key
+            already existed and nothing changed — the shape a safe retry
+            after a lost acknowledgement needs.
+        """
+        values = {
+            column.name: getattr(trade, column.name)
+            for column in Trade.__table__.columns
+            if column.name != "id"
+            and not (column.name == "created_at" and trade.created_at is None)
+        }
+        stmt = (
+            pg_insert(Trade)
+            .values(**values)
+            .on_conflict_do_nothing(index_elements=["session_id", "trade_id", "client_order_id"])
+        )
+        result = self.session.execute(stmt)
+        return result.rowcount == 1

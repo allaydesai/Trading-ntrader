@@ -75,14 +75,32 @@ instrument. :attr:`RecordedTrade.trade_key` (``f"{position_id}:
 {closing_order_id}"``) is what does, and Story 3.6 keys its idempotent writes
 on it, not on ``trade_id``.
 
-**3.6 handover.** ``TradeRecorder.__init__`` takes an optional ``sink``
-callable — this story never sets one in production (no DB write, no
-repository, no port; Task 7's non-change evidence contracts cover
-``src/db``, ``src/services`` and ``src/cli``). Story 3.6 adds the
-persistence adapter and injects it as ``sink`` from the CLI, the same shape
-``SessionRecordPort`` already uses for session rows. A ``None``
-``commission_amount`` on the record means *unknown*, never *free* — the
-``trades.commission_amount`` column is nullable for exactly this.
+**Persistence side (Story 3.6).** ``TradeRecorder.__init__`` takes an
+optional ``sink`` callable — ``None`` in the 3.5 production state, and a
+:class:`~src.services.trade_record.SqlTradeRecord` bound to the session
+everywhere else (D-F). The sink's contract, decided at drafting: a
+synchronous call that returns ``bool`` (inserted or already-present) or
+raises — ``SessionReclaimedError`` (imported from
+``src.core.live_session_record``, a ``src`` root with no database import, so
+this module's own no-``sqlalchemy`` boundary is untouched) for "this process
+no longer owns the session" (D-C, terminal, never retried), anything else for
+an ordinary database hiccup (queued and retried on the next event, AR42). A
+``None`` ``commission_amount`` on the record means *unknown*, never *free* —
+the ``trades.commission_amount`` column is nullable for exactly this.
+
+**D-E — ``trade.aggregated`` is emitted before the sink is ever called.**
+3.5's own ordering lost every computed value from the transcript on a
+raising sink; aggregation succeeding and persistence succeeding are two
+different facts, and only the first is true by the time this record is
+logged.
+
+**D-D — a reconciliation-owned position is not persisted.** A
+``PositionClosed`` whose ``str(event.strategy_id)`` is ``"EXTERNAL"`` or
+``"INTERNAL-DIFF"`` (measured, Task 1.1: reconciliation's own stamp,
+``live/execution_engine.py:1709-1721``) is aggregated and logged exactly as
+any other, then skipped loudly instead of reaching the sink — there is no
+``strategy_id`` column on ``trades``, and a persisted row would silently join
+the strategy's own comparison sample.
 
 No ``nautilus_trader`` import: every framework object arrives duck-typed as
 ``Any`` and is dispatched by ``type(event).__name__``, the
@@ -96,6 +114,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
+from src.core.live_session_record import SessionReclaimedError
 from src.models.trade import TradeBase
 
 #: The wildcard topic position events publish on
@@ -108,17 +127,34 @@ POSITION_EVENTS_TOPIC = "events.position*"
 #: module emits (AR36) — `trade.aggregated`, not `trade.closed`, is exactly
 #: that discipline applied to this record's own name.
 AGGREGATED_EVENT = "trade.aggregated"
+#: AR41's normative lifecycle milestone (Story 3.6) — the name is fixed,
+#: epics.md:241, not this module's to choose.
+PERSISTED_EVENT = "trade.persisted"
 RECORDER_FAILED_EVENT = "trade.recorder_failed"
 COMMISSION_MIXED_EVENT = "trade.commission_mixed_currency"
 COMMISSION_UNAVAILABLE_EVENT = "trade.commission_unavailable"
+PERSIST_REFUSED_EVENT = "trade.persist_refused"
+PERSIST_SKIPPED_EVENT = "trade.persist_skipped"
+#: Review 2026-09-12 (decision 2): a sink that raises ``ValueError``/``TypeError``
+#: — ``TradeCreate`` validation, a caller bug — is permanent, so the record is
+#: dropped with every aggregated field on this record rather than queued,
+#: where it would head-of-line-block every later trade for the session.
+PERSIST_DROPPED_EVENT = "trade.persist_dropped"
+
+#: Reconciliation's own strategy_id stamps (D-D, measured Task 1.1):
+#: `live/execution_engine.py:1709-1721`. A string-comparison filter, not a
+#: reconciliation policy — Story 4.2 owns what reconciliation does with a
+#: disagreement and can flip this with a one-line change.
+RECONCILIATION_STRATEGY_IDS = frozenset({"EXTERNAL", "INTERNAL-DIFF"})
 
 #: Every **lifecycle** record this module emits — a membership-pinned tuple
 #: (CLAUDE.md Anti-Patterns, the `EMITTED_ORDER_EVENTS` precedent):
-#: `trade.recorder_failed`, `trade.commission_mixed_currency` and
-#: `trade.commission_unavailable` are diagnostic/boundary records and stay
+#: `trade.recorder_failed`, `trade.commission_mixed_currency`,
+#: `trade.commission_unavailable`, `trade.persist_refused`,
+#: `trade.persist_skipped` and `trade.persist_dropped` are diagnostic/boundary records and stay
 #: deliberately outside it, the `order.observer_failed` precedent
 #: (`live_order_path.py:150-161`).
-EMITTED_TRADE_EVENTS: tuple[str, ...] = (AGGREGATED_EVENT,)
+EMITTED_TRADE_EVENTS: tuple[str, ...] = (AGGREGATED_EVENT, PERSISTED_EVENT)
 
 #: The quantization every price/quantity conversion uses — the
 #: `backtest_persistence.py:489-493` precedent, reproduced for parity.
@@ -282,18 +318,37 @@ class TradeRecorder:
         log: A structlog logger already bound to ``session_id``. Never
             ``structlog.get_logger()`` at call time — contextvars are empty on
             executor threads (``live_order_path.py:417-420``).
-        sink: Story 3.6's handover point. ``None`` in production this story.
+        sink: Story 3.6's persistence handover. ``None`` in the 3.5
+            production state (no sink configured); a callable that returns
+            ``bool`` or raises everywhere else.
+        on_ownership_lost: Called at most once, with no arguments, the
+            instant a sink raises ``SessionReclaimedError`` (D-C). The runner
+            wires this to a scheduled ``node.stop()`` via ``loop.call_soon``
+            — never called directly from here, which stays framework-free.
+            "At most once" is enforced by the ``_reclaimed`` latch (review
+            2026-09-12): once set, the sink is never called again — a later
+            close is aggregated and logged, then skipped loudly.
     """
 
     def __init__(
         self,
         cache: Any,
         log: Any,
-        sink: Callable[[RecordedTrade], None] | None = None,
+        sink: Callable[[RecordedTrade], bool] | None = None,
+        on_ownership_lost: Callable[[], None] | None = None,
     ) -> None:
         self._cache = cache
         self._log = log
         self._sink = sink
+        self._on_ownership_lost = on_ownership_lost
+        #: Closed trades whose sink call failed with an ordinary error
+        #: (never a reclaim — D-C says that one is terminal, not retried).
+        #: Bounded: at most one entry per closed round trip, drained FIFO on
+        #: the next ``events.position*`` delivery of any type (AC #4, NFR2).
+        self._pending: list[RecordedTrade] = []
+        #: Latched the first time a sink raises ``SessionReclaimedError``;
+        #: the sink is never called again after that (D-C: terminal).
+        self._reclaimed = False
         #: Class-name dispatch — a closed set, the `OrderEventObserver`
         #: precedent (`live_order_path.py:451-461`). The two-directional
         #: `EMITTED_TRADE_EVENTS` pin drives its test builders from this map's
@@ -312,6 +367,26 @@ class TradeRecorder:
     def _ignore(self, event: Any) -> None:
         """`PositionOpened`/`PositionChanged` produce no record, no sink call."""
         return
+
+    @property
+    def pending_trade_keys(self) -> tuple[str, ...]:
+        """The ``trade_key`` of every queued, not-yet-persisted trade — what
+        the runner names in the transcript when it cannot retry them."""
+        return tuple(recorded.trade_key for recorded in self._pending)
+
+    def _trade_fields(self, recorded: RecordedTrade) -> dict[str, str | None]:
+        """The field set every persistence-outcome record shares."""
+        return {
+            "position_id": recorded.position_id,
+            "instrument_id": recorded.trade.instrument_id,
+            "strategy_id": recorded.strategy_id,
+            "entry_price": str(recorded.trade.entry_price),
+            "exit_price": str(recorded.trade.exit_price),
+            "quantity": str(recorded.trade.quantity),
+            "commission": _optional_str(recorded.trade.commission_amount),
+            "currency": recorded.trade.commission_currency,
+            "realized_pnl": str(recorded.profit_loss),
+        }
 
     def _record_closed(self, event: Any) -> None:
         self._stage = "lookup"
@@ -341,31 +416,147 @@ class TradeRecorder:
             )
         recorded = aggregate_closed_position(event, position)
 
-        self._stage = "sink"
-        if self._sink is not None:
-            self._sink(recorded)
-
+        # D-E: a statement about aggregation, which just succeeded — emitted
+        # before the sink is ever called, so a raising sink cannot erase the
+        # computed values from the transcript.
         self._log.info(
             AGGREGATED_EVENT,
-            position_id=recorded.position_id,
-            instrument_id=recorded.trade.instrument_id,
-            strategy_id=recorded.strategy_id,
             ts_event=str(event.ts_event),
             trade_key=recorded.trade_key,
-            entry_price=str(recorded.trade.entry_price),
-            exit_price=str(recorded.trade.exit_price),
-            quantity=str(recorded.trade.quantity),
             fill_count=_optional_str(recorded.fill_count),
-            commission=_optional_str(recorded.trade.commission_amount),
-            currency=recorded.trade.commission_currency,
-            realized_pnl=str(recorded.profit_loss),
             holding_period_seconds=str(recorded.holding_period_seconds),
             opening_order_id=recorded.trade.venue_order_id,
             closing_order_id=recorded.trade.client_order_id,
             ts_opened=str(event.ts_opened),
             ts_closed=str(event.ts_closed),
             order_side=recorded.trade.order_side,
+            **self._trade_fields(recorded),
         )
+
+        if recorded.strategy_id in RECONCILIATION_STRATEGY_IDS:
+            # D-D: no `strategy_id` column on `trades` -- a persisted row
+            # would silently join the strategy's own comparison sample.
+            self._log.warning(
+                PERSIST_SKIPPED_EVENT,
+                reason="reconciliation_owned",
+                trade_key=recorded.trade_key,
+                **self._trade_fields(recorded),
+            )
+            return
+
+        self._persist(recorded, attempt="first")
+
+    def _attempt_sink(
+        self, recorded: RecordedTrade, *, attempt: str
+    ) -> tuple[str, Exception | None]:
+        """Call the sink once. Never raises.
+
+        Returns:
+            ``("ok", None)`` on success (logs ``trade.persisted``);
+            ``("reclaimed", None)`` when the sink raised
+            ``SessionReclaimedError`` (logs ``trade.persist_refused``, latches
+            ``_reclaimed``, fires ``on_ownership_lost`` once);
+            ``("invalid", exc)`` for ``ValueError``/``TypeError`` — permanent,
+            the caller drops it loudly; ``("failed", exc)`` for any other
+            exception — the caller queues it for retry.
+        """
+        assert self._sink is not None
+        try:
+            inserted = self._sink(recorded)
+        except SessionReclaimedError:
+            self._log.warning(
+                PERSIST_REFUSED_EVENT, trade_key=recorded.trade_key, **self._trade_fields(recorded)
+            )
+            already_latched, self._reclaimed = self._reclaimed, True
+            if self._on_ownership_lost is not None and not already_latched:
+                self._on_ownership_lost()
+            return "reclaimed", None
+        except (ValueError, TypeError) as exc:
+            return "invalid", exc
+        except Exception as exc:  # noqa: BLE001 - the caller decides what to do
+            return "failed", exc
+        self._log.info(
+            PERSISTED_EVENT,
+            trade_key=recorded.trade_key,
+            inserted=str(inserted),
+            attempt=attempt,
+            **self._trade_fields(recorded),
+        )
+        return "ok", None
+
+    def _log_sink_failure(self, recorded: RecordedTrade, exc: Exception | None) -> None:
+        """One ``trade.recorder_failed stage="sink"`` record, traceback attached.
+
+        ``exc_info=exc``, never ``exc_info=True``: this runs after
+        ``_attempt_sink``'s ``except`` block has already returned, where
+        ``sys.exc_info()`` is empty and ``True`` would attach nothing (review
+        2026-09-12, confirmed against structlog's ``format_exc_info``).
+        """
+        self._log.error(
+            RECORDER_FAILED_EVENT,
+            stage="sink",
+            trade_key=recorded.trade_key,
+            error_type=type(exc).__name__ if exc is not None else "",
+            pending=str(len(self._pending)),
+            exc_info=exc,
+        )
+
+    def _log_dropped(self, recorded: RecordedTrade, exc: Exception | None) -> None:
+        self._log.error(
+            PERSIST_DROPPED_EVENT,
+            reason="invalid_record",
+            trade_key=recorded.trade_key,
+            error_type=type(exc).__name__ if exc is not None else "",
+            exc_info=exc,
+            **self._trade_fields(recorded),
+        )
+
+    def _persist(self, recorded: RecordedTrade, *, attempt: str) -> None:
+        self._stage = "sink"
+        if self._sink is None:
+            return
+        if self._reclaimed:
+            self._log.warning(
+                PERSIST_SKIPPED_EVENT,
+                reason="ownership_lost",
+                trade_key=recorded.trade_key,
+                **self._trade_fields(recorded),
+            )
+            return
+        status, exc = self._attempt_sink(recorded, attempt=attempt)
+        if status == "failed":
+            self._pending.append(recorded)
+            self._log_sink_failure(recorded, exc)
+        elif status == "invalid":
+            self._log_dropped(recorded, exc)
+
+    def flush_pending(self) -> int:
+        """Drain queued trades FIFO, stopping at the first failure (AC #4).
+
+        Called on every ``events.position*`` delivery before dispatch, and
+        once more at teardown (``LiveSessionRunner``'s ``finally``). A
+        reclaim mid-drain discards the reclaimed entry (D-C: never retried)
+        and stops — and once ``_reclaimed`` is latched, nothing is drained
+        again (the runner names the leftovers); an ordinary failure leaves it
+        and the rest queued; an invalid entry is dropped loudly and the drain
+        continues.
+
+        Returns:
+            The count still pending after this call — ``0`` on a full drain.
+        """
+        while self._pending and not self._reclaimed:
+            recorded = self._pending[0]
+            status, exc = self._attempt_sink(recorded, attempt="retry")
+            if status in ("ok", "reclaimed"):
+                self._pending.pop(0)
+                continue
+            if status == "invalid":
+                self._pending.pop(0)
+                self._log_dropped(recorded, exc)
+                continue
+            self._log_sink_failure(recorded, exc)
+            break
+        return len(self._pending)
 
     def handle_position_event(self, event: Any) -> None:
         """Handle one ``events.position*`` delivery.
@@ -379,6 +570,7 @@ class TradeRecorder:
         event_type = type(event).__name__
         self._stage = "dispatch"
         try:
+            self.flush_pending()
             handler = self._dispatch.get(event_type)
             if handler is not None:
                 handler(event)

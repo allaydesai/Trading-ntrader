@@ -2616,3 +2616,110 @@ at 200s with zero orders), `logs/p10-fresh-leg1-*.log` and `logs/p10-fresh-leg2-
   (`sink` is `None` in production). **Owner: Story 3.6** — either carry the `RecordedTrade` fields on
   the `stage="sink"` failure record, or revisit the emit-after-sink ordering there, with the M10
   test updated deliberately.
+
+## Deferred from: story-3.6 (2026-09-12)
+
+- **Order-path epoch check before submit.** D-C closes the reclaim window at the *trade write*
+  (a reclaimed incumbent that closes a position learns it at that instant) but not at *order
+  submission* — an incumbent that submits an order without ever touching the DB first still has
+  the heartbeat's up-to-90s detection window. Closing that needs an epoch check inside
+  `src/core/live_order_path.py`'s submit path, which this story deliberately does not touch (Task
+  10's zero-diff evidence contract). **Owner: Story 4.3** (broker-aligned runtime state) — named
+  in the story's own D-C decision, repeated here as the durable record.
+- **D-D's reconciliation-owned-position policy may need to flip.** Story 3.6 skips persisting any
+  `PositionClosed` whose `strategy_id` renders `"EXTERNAL"` or `"INTERNAL-DIFF"` (`trade.
+  persist_skipped reason="reconciliation_owned"`), because `trades` has no `strategy_id` column
+  and a persisted row would silently join a strategy's own comparison sample. This is a
+  string-comparison filter, not a reconciliation policy — Story 4.2 owns what reconciliation
+  actually does with a disagreement and can flip this with a one-line change plus a named test.
+  **Owner: Story 4.2**, to confirm or flip.
+- **`trades` has no `strategy_id` column — a multi-strategy session's rows cannot be attributed
+  per strategy.** Not fixed here (AR43 forbids inventing new metrics tables/columns for paper
+  results without an epic-level decision) and not urgent within Epic 3 (today's sessions run one
+  strategy). Becomes load-bearing once Epic 5 builds the paper-vs-backtest comparison across a
+  session that ran more than one strategy. **Owner: Epic 5's comparison stories** — named as
+  unowned-within-Epic-3, not labelled low priority.
+- **`_bmad-output/project-context.md`'s "4 migration versions" is stale**, and has been since
+  Phase 2 (the phase now has 17 migrations, single head `85c949ac0374`). Not this story's file to
+  correct (Task 2.4) — **owner: whoever next edits that document for an unrelated reason**, named
+  so the staleness does not silently persist unnoticed.
+- **D-A's stall exposure to a wedged Postgres, with the measured baseline.** The trade write is
+  synchronous and inline on the loop thread (D-A) — sub-millisecond median measured locally (Task
+  1.3: pg8000 0.54ms, psycopg2 0.32ms), four orders of magnitude under a 1-minute bar, so the
+  decision is sound today. A genuinely wedged Postgres (not merely slow) would stall the loop for
+  one connection/statement timeout on the *next* close, not on every bar — stated as a known
+  limit in the module docstring, not mitigated further. **Owner: whoever first observes this
+  live** — a per-write engine with its own short timeout is the escape hatch, to be built only
+  when the stall is actually observed, not pre-built speculatively.
+- **`live_trade_recorder.py` and `live_session_runner.py` both grew past their own pre-declared
+  budgets this story**, disclosed in full in the story's Task 7/8 completion notes and Task 12.3's
+  size paragraph (module 146 vs ≤130 statements; `TradeRecorder` 75 vs ≤60; runner delta +78 raw
+  vs the ≤24 the wiring alone was budgeted). Neither was split, per the guard-list-rot
+  anti-pattern both are already subject to (`live_trade_recorder.py` joined `STOP_PATH_MODULES`
+  this very story). **Owner: whoever next materially edits either module** — re-budget from these
+  measured figures, not from the pre-3.6 ones, and re-check every guard list named in this
+  story's Task 9 before any split.
+- **Task 12.1's mutation sweep is partial: 3 of 17 named mutations actually run** (M9, M12, and an
+  M14-equivalent — see the story's Task 12.1 for which and why those three). The remaining 14
+  (M1–M8, M10, M11, M13, M15–M17) are named in the story text with the specific test each should
+  kill, but that kill was never confirmed this session. **Owner: whoever next touches this
+  story's production code** — run the named mutation against the named test before trusting that
+  test's sensitivity, since it has not been independently confirmed.
+- **`tests/integration/db/` is still `--ignore`d in CI (D2 not landed)**, unchanged by this story
+  — every Postgres-backed proof this story added (14 in `test_trading_session_repository.py`, 6 in
+  the new `test_trade_record.py`, 2 in `test_session_service.py`, 4 in `test_migration_schema.py`)
+  runs locally only. The unit-tier shape pins (`EXPECTED_CAPABILITIES`, the migration text/ORM
+  pins) are what actually gate a PR today. **Owner: D2's own story**, whichever one lands it —
+  already named in prior stories' deferred-work entries, repeated here for this story's own
+  Postgres-backed test count.
+
+## Deferred from: code review of story-3.6 (2026-09-12)
+
+- **`SqlTradeRecord.persist` collapses "row not running" and "reclaimed" into one message.**
+  Unlike `SessionService.record_activity`, the adapter never re-reads the row after a rowcount of
+  0, so a `stopped`/`sealed` row is reported as "owner_epoch no longer matches" and the CLI's new
+  reclaimed-session message sends the operator hunting for a second `live start`
+  (`src/services/trade_record.py:118-135`). Harmless today: the only path that persists after
+  `stopped` (the teardown flush) is already skipped once ownership is known lost. **Owner:**
+  whoever adds a second trade writer or an operator-driven `live stop` transition.
+- **Once one write is pending, every `events.position*` delivery becomes a synchronous DB round
+  trip on the loop thread, with no backoff.** `flush_pending()` runs before dispatch of every
+  `PositionOpened`/`Changed`/`Closed` (one per fill, not per bar), so D-A's "on the next close,
+  not on every bar" holds only while `_pending` is empty
+  (`src/core/live_trade_recorder.py:521-529`). Folds into the D-A stall-exposure item above —
+  same owner, same escape hatch (a per-write engine with its own timeout, plus a retry backoff).
+- **`assert` used for control flow in production paths.** `claim_session`'s
+  `assert started.last_started_at is not None` (`src/cli/commands/live_start.py:91`) and
+  `_attempt_sink`'s `assert self._sink is not None` (`src/core/live_trade_recorder.py:455`)
+  vanish under `python -O`. The repo never runs optimised; both are internal invariants.
+  **Owner:** none until a `-O` deployment is ever contemplated.
+- **The unique index `uq_trades_session_trade_key` is not partial.** Every backtest-owned row
+  (`session_id IS NULL`, 14,982+ of them) maintains a three-column unique index that can never
+  protect it; `WHERE session_id IS NOT NULL` would cost nothing at conflict inference. Perf-only,
+  needs a fourth migration. **Owner:** the next story that touches the `trades` schema.
+- **A session-owned row with `client_order_id IS NULL` escapes idempotency.** NULL is distinct in
+  the index, so a retry would insert a duplicate. `TradeBase.client_order_id` is `Optional` while
+  the recorder always sets it from `closing_order_id`. A CHECK constraint or a `TradeCreate`
+  validator (`session_id IS NOT NULL ⇒ client_order_id IS NOT NULL`) is the fix.
+  **Owner:** whoever adds a second session-trade writer.
+- **Idempotency now depends on Story 3.5's opening-in-`venue_order_id` /
+  closing-in-`client_order_id` convention**, documented in `live_trade_recorder.py` but nowhere on
+  the ORM model (`src/db/models/trade.py:162-168`). A writer that populates `client_order_id`
+  "honestly" breaks per-round-trip uniqueness under NETTING. **Owner:** whoever revisits the
+  backtest-parity column mapping.
+- **Migration unit tests are substring greps** (`tests/unit/db/test_migration_owner_epoch.py:52-68`)
+  that match the migration's own docstring; only the ordering test inspects structure. Same
+  pattern as Story 2.7's; the integration `migrated` fixture is the real proof and runs locally
+  only (D2). **Owner:** D2's story, when `tests/integration/db/` lands in CI.
+- **`src/cli/commands/live.py` grew +18 raw against the story's ≤8-line budget** — the third
+  size overage of Story 3.6, disclosed by code review rather than by the Dev Agent Record (which
+  had read the budget as `start()`'s body). The file was already the phase's sanctioned over-cap
+  CLI module (`:1897`). **Owner: whoever next materially edits `live.py`** — same rule as the
+  other two: re-budget from the measured 568, re-check the guard lists before any split.
+- **`TradeRecorder` grew again under the review's own patches** (the `_reclaimed` latch,
+  `pending_trade_keys`, `_log_sink_failure`, `_log_dropped`, the invalid branch): 31→84 statements
+  vs head `6a10047` on one AST counter. Same owner and rule as the entry above.
+- **Import-purity AST scan inspects only module-level statements**
+  (`tests/unit/services/test_session_service.py:681-690`) — a function-local
+  `from nautilus_trader …` passes, and the subprocess variant covers `nautilus_trader` only.
+  Pre-existing pattern. **Owner:** whoever next extends `TestImportPurity`.

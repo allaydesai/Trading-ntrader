@@ -55,7 +55,7 @@ make web                                # Web UI (http://127.0.0.1:8000)
 2. **`--forked` tests** — integration tests need `--forked` because Nautilus C/Rust extensions corrupt state across `fork()`. Already configured in `make test-integration`
 3. **Strategies submodule** — `src/core/strategies/custom/` is a git submodule. Update: `git submodule update --remote`
 4. **BacktestEngine is single-use** — cannot be reused after a run; create a new instance each time
-5. **Alembic migrations** — run `alembic upgrade head` before first use. 16 migrations in `alembic/versions/`, single head (`b7c419e2a3d8`)
+5. **Alembic migrations** — run `alembic upgrade head` before first use. 17 migrations in `alembic/versions/`, single head (`85c949ac0374`)
 
 ## Anti-Patterns (things that break)
 
@@ -103,6 +103,19 @@ make web                                # Web UI (http://127.0.0.1:8000)
   against **the code**, not against a second hand-written list:
   `TestEveryDispatchedRecordNameIsPinned` derives the emitted set by driving every entry in the
   observer's own `_dispatch` map and comparing the captured record names, so both directions go red
+- **`EMITTED_TRADE_EVENTS`** (`src/core/live_trade_recorder.py`) joined the discipline at Story 3.5
+  and was **changed deliberately at Story 3.6**: `PERSISTED_EVENT` (`trade.persisted`, AR41's fixed
+  milestone name) was added alongside `AGGREGATED_EVENT`, following the same two-directional,
+  `_dispatch`-driven pin `EMITTED_ORDER_EVENTS` uses (`tests/component/core/
+  test_live_trade_recorder.py`) — `trade.recorder_failed`, `trade.commission_mixed_currency`,
+  `trade.commission_unavailable`, `trade.persist_refused` and `trade.persist_skipped` stay
+  deliberately outside it as diagnostic/boundary records, the `order.observer_failed` precedent.
+- **`EXPECTED_CAPABILITIES`** (`tests/unit/db/test_trading_session_repository_shape.py`) — an
+  exact-set allowlist for both `TradingSessionRepository` twins, **changed deliberately at Story
+  3.6**: `stamp_activity_if_owner` and `insert_trade_if_absent` joined it (AR9, both twins in the
+  same story). Neither name starts with a forbidden mutator prefix
+  (`update/set_/save/patch/merge/upsert/replace`), and neither writes `spec` — AC #7 of Story 2.2
+  is about there being no write path to `spec`, not about there being no write path at all.
 
 ## Editing with Auto-Linter
 

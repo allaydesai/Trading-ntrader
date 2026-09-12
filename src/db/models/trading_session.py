@@ -53,6 +53,15 @@ class TradingSession(Base, TimestampMixin):
             add a key without guessing. Written only by
             ``session_service._record_strategy_failure``; cleared on every
             ``-> running`` transition.
+        owner_epoch: The fencing token for every write through
+            ``SessionRecordPort`` and the trade sink (Story 3.6, retrospective
+            D1). Incremented on every ``-> running`` edge (claim *and*
+            reclaim); every port write is qualified against it in the same
+            ``WHERE`` clause as ``status = 'running'``, so a dispossessed
+            incumbent's write is refused by the database itself — no clock
+            comparison anywhere on the path. Replaces the old
+            ``last_started_at`` comparison (``session_service._refuse_if_reclaimed``,
+            deleted).
         created_at: When the row was created (via ``TimestampMixin``).
     """
 
@@ -113,6 +122,13 @@ class TradingSession(Base, TimestampMixin):
     # Cleared to NULL on every `-> running` transition, so a failure from a
     # previous process run is never reported against the current one.
     runtime_flags: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+
+    # Story 3.6 (retrospective D1). NOT NULL DEFAULT 0 rather than nullable:
+    # every row, including the two pre-existing ones, must have a comparable
+    # epoch from the moment this column exists — a NULL would make the very
+    # first qualified UPDATE's `WHERE owner_epoch = :e` unmatchable. Metadata-
+    # only on PG 11+ for a constant default (measured, Task 2.3).
+    owner_epoch: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
 
     __table_args__ = (Index("ix_trading_sessions_status", "status"),)
 

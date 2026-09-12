@@ -270,11 +270,17 @@ def request_node_stop(
     loop: asyncio.AbstractEventLoop | None,
     log: Any,
     *,
-    signal_name: str,
+    signal_name: str | None,
     trader_started: bool,
+    reason: str = "signal",
 ) -> None:
     """Log the stop, then ask the node to stop — never call ``node.stop()``
     directly from a signal handler (Story 2.6).
+
+    ``reason`` (review 2026-09-12, Story 3.6 hazard #9): ``"signal"`` for an
+    operator signal, where ``signal_name`` names it; ``"ownership_lost"`` for
+    the trade fence's scheduled stop, where ``signal_name`` is ``None`` — so
+    the transcript never reports a reclaim as if a signal had arrived.
 
     This is ``SessionStopSignals``'s ``on_stop`` callback, run on the main
     thread, synchronously, inside its ``_handle`` — between two arbitrary
@@ -288,7 +294,7 @@ def request_node_stop(
     ``gate:static`` or the start of ``node:build``) and a loop already closed
     (the narrow window after ``shutdown()`` but before ``restore()``).
     """
-    log.info("session.stopped", signal=signal_name, trader_started=trader_started)
+    log.info("session.stopped", signal=signal_name, reason=reason, trader_started=trader_started)
     if node is not None and loop is not None and not loop.is_closed():
         loop.call_soon_threadsafe(node.stop)
 

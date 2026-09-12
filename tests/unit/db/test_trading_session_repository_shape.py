@@ -23,8 +23,21 @@ from src.db.repositories.trading_session_repository_sync import SyncTradingSessi
 #: not a prefix test: `startswith("update")` alone would let `set_spec`, `save`,
 #: `patch_spec` or `merge` through, and AC #7 is satisfied by there being no
 #: write path *of any name*.
+#:
+#: Story 3.6 adds `stamp_activity_if_owner` (the heartbeat's epoch-qualified
+#: liveness write) and `insert_trade_if_absent` (the idempotent trade insert)
+#: — updated deliberately, for both twins (AR9). Neither name starts with a
+#: forbidden mutator prefix, and neither writes `spec`.
 EXPECTED_CAPABILITIES = frozenset(
-    {"create", "find_by_session_id", "find_by_name", "find_all", "trade_counts_by_session"}
+    {
+        "create",
+        "find_by_session_id",
+        "find_by_name",
+        "find_all",
+        "trade_counts_by_session",
+        "stamp_activity_if_owner",
+        "insert_trade_if_absent",
+    }
 )
 
 

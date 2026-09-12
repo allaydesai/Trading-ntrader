@@ -770,3 +770,195 @@ class TestStopDegradedStrategies:
         first.stop.assert_called_once()
         second.stop.assert_called_once()
         assert problems == []
+
+
+class TestFlushPendingTradesInTeardown:
+    """Story 3.6, Task 8.2: ``flush_pending()`` runs in the same teardown
+    slot reasoning as ``_flush_contained_failures`` — after
+    ``_stop_heartbeat`` (the row still reads ``running``, the executor
+    cannot race it) and before ``_finish_record`` (the row still ours).
+    """
+
+    def test_it_runs_after_stop_heartbeat_and_before_finish_record(self, monkeypatch):
+        from src.core import live_session_runner as runner_module
+
+        order: list[str] = []
+        original_stop_heartbeat = runner_module.LiveSessionRunner._stop_heartbeat
+        original_flush_pending = runner_module.LiveSessionRunner._flush_pending_trades
+        original_finish_record = runner_module.LiveSessionRunner._finish_record
+
+        def _spy_stop_heartbeat(self, loop):
+            order.append("stop_heartbeat")
+            return original_stop_heartbeat(self, loop)
+
+        def _spy_flush_pending(self):
+            order.append("flush_pending_trades")
+            return original_flush_pending(self)
+
+        def _spy_finish_record(self):
+            order.append("finish_record")
+            return original_finish_record(self)
+
+        monkeypatch.setattr(runner_module.LiveSessionRunner, "_stop_heartbeat", _spy_stop_heartbeat)
+        monkeypatch.setattr(
+            runner_module.LiveSessionRunner, "_flush_pending_trades", _spy_flush_pending
+        )
+        monkeypatch.setattr(runner_module.LiveSessionRunner, "_finish_record", _spy_finish_record)
+
+        node = TestLiveNode(run_seconds=0.01)
+        _runner(node).run()
+
+        assert order == ["stop_heartbeat", "flush_pending_trades", "finish_record"], order
+
+    def test_a_pending_trade_is_drained_at_teardown_with_no_further_event(self):
+        """A trade queued earlier in the run is retried at teardown even
+        though nothing else ever delivers another ``events.position*`` to
+        trigger the recorder's own drain-on-next-event path.
+        """
+        from decimal import Decimal
+
+        from src.core.live_trade_recorder import RecordedTrade
+        from src.models.trade import TradeBase
+
+        pending = RecordedTrade(
+            trade=TradeBase(
+                instrument_id="AAPL.NASDAQ",
+                trade_id="AAPL.NASDAQ-SMACrossover-000",
+                venue_order_id="O-1",
+                client_order_id="O-2",
+                order_side="BUY",
+                quantity=Decimal("10"),
+                entry_price=Decimal("100"),
+                exit_price=Decimal("110"),
+                commission_amount=None,
+                commission_currency=None,
+                entry_timestamp=STARTED_AT,
+                exit_timestamp=STARTED_AT,
+            ),
+            profit_loss=Decimal("98.50"),
+            profit_pct=Decimal("10"),
+            holding_period_seconds=300,
+            position_id="AAPL.NASDAQ-SMACrossover-000",
+            strategy_id="SMACrossover-000",
+            fill_count=1,
+            trade_key="AAPL.NASDAQ-SMACrossover-000:O-2",
+        )
+        attempts: list[str] = []
+
+        def eventually_succeeds(recorded) -> bool:
+            attempts.append(recorded.trade_key)
+            return True
+
+        node = TestLiveNode(run_seconds=0.01)
+        runner = _runner(node, trade_sink=eventually_succeeds)
+
+        def _seed_pending():
+            assert runner._trade_recorder is not None
+            runner._trade_recorder._pending.append(pending)
+
+        original_subscribe = LiveSessionRunner._phase_subscribe
+
+        def _spy_phase_subscribe(self):
+            original_subscribe(self)
+            _seed_pending()
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(LiveSessionRunner, "_phase_subscribe", _spy_phase_subscribe)
+            runner.run()
+
+        assert attempts == ["AAPL.NASDAQ-SMACrossover-000:O-2"]
+        assert runner._trade_recorder is not None
+        assert runner._trade_recorder._pending == []
+
+    def test_skipped_entirely_once_ownership_is_already_lost(self):
+        calls: list[str] = []
+
+        class _RecordingRecorder:
+            pending_trade_keys = ()
+
+            def flush_pending(self) -> int:
+                calls.append("flush_pending")
+                return 0
+
+        node = TestLiveNode(run_seconds=0.01)
+        runner = _runner(node)
+        runner._trade_recorder = _RecordingRecorder()  # type: ignore[assignment]
+        runner._ownership_lost = True
+
+        runner._flush_pending_trades()
+
+        assert calls == [], "a reclaim already known must not retry a write this process cannot win"
+
+    def test_leftover_trades_are_named_when_ownership_is_lost(self):
+        """Review 2026-09-12: not retried, but never silent — every queued
+        trade this process could not persist is named by ``trade_key`` so the
+        successor's operator can reconcile the transcript against the table.
+        """
+
+        class _LeftoverRecorder:
+            pending_trade_keys = ("P-1:O-2", "P-1:O-4")
+
+            def flush_pending(self) -> int:
+                raise AssertionError("must not drain once ownership is lost")
+
+        node = TestLiveNode(run_seconds=0.01)
+        runner = _runner(node)
+        runner._trade_recorder = _LeftoverRecorder()  # type: ignore[assignment]
+        runner._ownership_lost = True
+
+        with capture_logs() as logs:
+            runner._flush_pending_trades()
+
+        pending = [e for e in logs if e["event"] == "session.trades_still_pending"]
+        assert len(pending) == 1
+        assert pending[0]["pending"] == 2
+        assert pending[0]["trade_keys"] == ["P-1:O-2", "P-1:O-4"]
+        assert "account_id" not in pending[0]
+
+    def test_a_reclaim_observed_during_the_teardown_drain_does_not_schedule_a_stop(self):
+        """Review 2026-09-12: the teardown drain runs after the loop has
+        stopped; a reclaim seen there sets the flag (so ``_finish_record``
+        skips ``mark_stopped``) but must not queue ``node.stop()`` or log a
+        ``session.stopped`` that never happens.
+        """
+        runner_holder = {}
+
+        class _ReclaimingRecorder:
+            pending_trade_keys = ()
+
+            def flush_pending(self) -> int:
+                runner_holder["runner"]._note_ownership_lost()
+                return 0
+
+        node = TestLiveNode(run_seconds=0.01)
+        runner = _runner(node)
+        runner_holder["runner"] = runner
+        runner._trade_recorder = _ReclaimingRecorder()  # type: ignore[assignment]
+        runner._node = node
+
+        with capture_logs() as logs:
+            runner._flush_pending_trades()
+
+        assert runner.ownership_lost is True
+        assert node.stopped is False
+        assert [e for e in logs if e["event"] == "session.stopped"] == []
+        assert [e for e in logs if e["event"] == "session.reclaimed_by_another_process"] != []
+
+    def test_a_raising_flush_is_contained_and_recorded_in_shutdown_problems(self):
+        """``flush_pending()`` is designed never to raise, but this call site
+        is guarded anyway — the ``stop_degraded_strategies`` precedent
+        (decision D4) — so a defect in that guarantee degrades to a recorded
+        problem, never a teardown abort.
+        """
+
+        class _ExplodingRecorder:
+            def flush_pending(self) -> int:
+                raise RuntimeError("flush boom")
+
+        node = TestLiveNode(run_seconds=0.01)
+        runner = _runner(node)
+        runner._trade_recorder = _ExplodingRecorder()  # type: ignore[assignment]
+
+        runner._flush_pending_trades()  # must not raise
+
+        assert runner.shutdown_problems == ["flush_pending_trades: RuntimeError"]
