@@ -1,6 +1,6 @@
 # Story 3.5: Aggregate Partial Fills into One Position
 
-Status: in-progress
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -837,7 +837,9 @@ output (3.3:478-480). The observer's `handle_order_event` is the template (`live
 
 ### Agent Model Used
 
-Claude Sonnet 5 (claude-sonnet-5)
+Claude Sonnet 5 (claude-sonnet-5) — creation and implementation
+Claude Fable 5.1 (claude-fable-5-1) — code review and the batch-applied resolutions
+Claude Opus 5 (claude-opus-5) — post-review gate re-verification and closeout to `review`
 
 ### Debug Log References
 
@@ -969,6 +971,18 @@ Claude Sonnet 5 (claude-sonnet-5)
   budget was self-contradictory (it also asked for a two-line comment), but the rule is to name
   an overage, not to explain it away.
 
+- **Post-review re-verification (2026-09-12, this session, head `b5036dc`, tree clean):** the
+  standing Task 0.1 check re-run before touching anything — **no Gateway** (`nc -z` on 4001, 4002,
+  7496, 7497 all closed; no docker containers) and **outside RTH** (Saturday 09:08 EDT, the market
+  is shut for the weekend), so Task 8.2's live transcript cannot be produced in this session
+  either. Redis up. Full gate suite re-run against the resolution commit with nothing left to
+  fix: `make format` → 502 files unchanged (no rewrite, tree still clean after); `make lint` →
+  all checks passed; `make typecheck` → success, 106 source files. `make test-unit` → **2462
+  passed**; `make test-component` → **1490 passed, 16 skipped**; `make test-integration`
+  (`--forked`) → **284 passed, 2 skipped**; `make test-e2e` → **1 passed**. Every count is
+  identical to the figures recorded for the review patches above, and integration/e2e are
+  unchanged from the creation baseline — Task 7's non-change contract still holds.
+
 ### Completion Notes List
 
 - Story delivers exactly what it promised: `src/core/live_trade_recorder.py` (aggregation +
@@ -1008,6 +1022,14 @@ Claude Sonnet 5 (claude-sonnet-5)
   per the 3.2/3.3/3.4 precedent this project has followed at every prior Epic 3 story — the story
   lands at `review`, not `done`, with only 8.2/8.3 (and Task 8's own parent checkbox) left
   unchecked; every other task and subtask is complete.
+- Review closeout (2026-09-12): all seven review findings are resolved and committed in `b5036dc`
+  — the Decision as option 1 (snapshot fields from the `PositionClosed` event, commission from the
+  cached `Position` only when `position_vouches_for` holds), patches 2–5 as written, patch 6 as the
+  disclosure sentence in the Debug Log, and one item deferred to Story 3.6 with a named owner. The
+  full gate suite was re-run against that commit in a later session and is green at unchanged
+  counts. Task 8.2/8.3 stay `⏳ not yet run` for the second session running — the market is closed
+  (Saturday) and no Gateway is reachable — so the story returns to `review`, not `done`, exactly as
+  Task 8.4 and the standing Epic 2 retro rule require. Nothing else is outstanding.
 - Deferred work routed to named owning stories (`deferred-work.md`, "Deferred from: story-3.5"):
   the backtest path's `commissions[0]` bug (Story 5.3), the side-unaware `profit_pct` formula
   reproduced for parity (Story 5.6), NETTING `PositionId` reuse and the `trade_key` Story 3.6
@@ -1054,3 +1076,4 @@ Claude Sonnet 5 (claude-sonnet-5)
 | 2026-09-11 | Created (backlog → ready-for-dev) from `epics.md:1343-1376` against head `438b0e4` (clean, submodule `06c00cb`). Five wheel facts measured by fresh-interpreter probes at drafting (VWAP on `Position`, no commission on any position event, reset-in-place on FLAT re-entry, backtest field parity, unsubscribed `events.position*`). Two placement decisions made and disclosed (`src/core/` over the architecture's `src/services/`; `tests/component/core/` over the AC's flat path). AC #6 (runner wiring + `trade.aggregated`) added at drafting so FR25 gets live evidence in this story rather than dead code until 3.6. Baselines: unit 2441 · component 1457/16 sk · integration 284/2 sk · e2e 1. Standing hazards for the live run carried in from 3.4's closeout: `flatten_position.py --confirm` broken (fails safe), stale-cache sessions not to be reused, residual `LONG 4 AAPL` external. |
 | 2026-09-11 | Story implemented: `ready-for-dev` → `in-progress` → `review`, same session as creation. All 9 tasks / 40 subtasks complete except 8.2/8.3 (the live transcript, `⏳ not yet run` — no IBKR Gateway reachable and outside RTH; not blocking per the Epic 2 retro's standing rule, 3.2/3.3/3.4 precedent). Delivers `src/core/live_trade_recorder.py`: three pure `Decimal` helpers (`to_price_decimal`, `select_commission`, `unix_nanos_to_utc`), `aggregate_closed_position` (a real `Position` → `RecordedTrade`, no log/cache/side effect), and `TradeRecorder` (a second, independent `events.position*` subscriber beside the order-path observer, never raising, `sink` staying `None` this story). Wired into the runner at `_phase_subscribe` (+8 lines). Task 1's fresh-interpreter probe corrected one story-cited fact before any test was written: `backtest_persistence.py`'s comment claiming `Decimal("NaN").quantize()` raises `InvalidOperation` is measurably false under the default decimal context (a quiet NaN propagates silently); `to_price_decimal` checks for NaN itself rather than trusting the comment, and does not rely on it. The Task 9 mutation sweep (11 scripted mutations, all killed) found two more corrections to the story's own plan: M1's prediction that AC #4 stays green does not hold (a different, disclosed mechanism reason), and M4 initially stayed green against a fixture that happened to place the correct answer at index 0 by coincidence — fixed by moving it. All measured facts and corrections recorded in `deferred-work.md`'s new "story-3.5" section, including the deferred items owned by Stories 3.6/5.3/5.6/4.2. Gates: format/lint/mypy clean; unit 2441→2458 (+17); component 1457/16sk→1487/16sk (+30); integration 284/2sk unchanged; e2e 1 unchanged — matching Task 7's non-change contract exactly. Two existing exact-subscription pins in `test_session_runner_phases.py` updated deliberately for the new `events.position*` subscription. New module: 338 raw lines / 79 executable statements (budgeted ≤80). Alembic head unchanged at `b7c419e2a3d8`. New Procedure P11 recorded in `docs/qa/phase3-live-verification.md`, result `⏳ not yet run`. |
 | 2026-09-12 | Code-reviewed: `review` → `in-progress` (NOT done — Task 8.2's live run is still `⏳ not yet run`; 3.2/3.3 precedent). The three adversarial subagent layers could not run (stalls, then a session rate limit); all three were executed in the reviewer's own context and every finding verified by probe against the installed wheel. **One decision, one HIGH:** a position flip (`execution/engine.pyx:1516-1600`) closes the `Position`, builds a new one under the same NETTING id and only then publishes `PositionClosed`, so the recorder's cache read saw the re-opened leg and dropped the trade with `trade.recorder_failed` — measured against a real `ExecutionEngine`. Resolved as option 1: snapshot fields from the event, commission from a cache position only when it vouches (`position_vouches_for`), else `None` + `trade.commission_unavailable`. Five patches applied (test hygiene, one Dev Record disclosure), one deferred to Story 3.6 (a raising sink loses the computed values from the transcript). Unit 2458→2462, component 1487→1490, module 90 statements (over the story's ≤ 80 budget, disclosed). |
+| 2026-09-12 | Review findings closed out: `in-progress` → `review`. All seven findings from the 2026-09-12 code review are resolved and committed (`b5036dc`) — the flip Decision applied as option 1, five patches, one item deferred to Story 3.6. Full gate suite re-run against that commit: format/lint/typecheck clean; unit 2462, component 1490/16sk, integration 284/2sk, e2e 1 — all identical to the post-patch figures, integration and e2e unchanged from the creation baseline. Task 0.1's standing check re-run and recorded: no Gateway listening (4001/4002/7496/7497 all closed) and outside RTH (Saturday), so Task 8.2's live transcript (Procedure P11) is `⏳ not yet run` for a second session and Task 8 stays unchecked. Story is `review`, not `done`, per Task 8.4. |

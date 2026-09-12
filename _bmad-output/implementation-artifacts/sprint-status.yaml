@@ -36,6 +36,24 @@
 
 generated: 2026-08-03
 last_updated: >-
+  2026-09-12 (STORY 3.5 REVIEW FINDINGS CLOSED: in-progress -> review. epic-3 stays
+  in-progress: 3.1-3.4 done, 3.5 review, 3.6-3.7 backlog. All seven findings from the
+  2026-09-12 code review below are resolved and committed in b5036dc -- the flip Decision as
+  option 1 (every snapshot field from the PositionClosed event; commissions()/event_count from
+  the cached Position only when position_vouches_for holds, else None + one
+  trade.commission_unavailable warning), five patches, one item deferred to Story 3.6 with a
+  named owner. Gates re-run green against b5036dc in a later session: format/lint/typecheck
+  clean, unit 2462, component 1490/16sk, integration 284/2sk, e2e 1 -- identical to the
+  post-patch figures, integration and e2e unchanged from the creation baseline, so Task 7's
+  non-change contract still holds. STILL NOT DONE, same single reason as both prior passes:
+  Task 8.2's live run (Procedure P11, docs/qa/phase3-live-verification.md:1256) has not run.
+  Task 0.1's standing check was re-run this session and recorded -- no Gateway listening
+  (4001/4002/7496/7497 all closed, no containers) and outside RTH (Saturday) -- so P11's result
+  log stays "not yet run" and Task 8 stays unchecked, per Task 8.4 and the standing Epic 2 retro
+  rule. NEXT: re-review of the resolution diff, then P11 on the next RTH session with a Gateway
+  up -- a fresh session name is required (p7-position-test and p7-fill-0901 are both poisoned)
+  and flatten_position.py --confirm is still broken and fails safe, so any position left open at
+  the end of that run stays open at the broker by design.) Previously:
   2026-09-12 (STORY 3.5 CODE-REVIEWED -> in-progress, NOT done. review -> in-progress. epic-3
   stays in-progress: 3.1-3.4 done, 3.5 in-progress, 3.6-3.7 backlog. STILL NOT DONE for the
   same reason as before this review: Task 8.2's live run (Procedure P11) has not run. PROCESS
@@ -2287,7 +2305,7 @@ development_status:
   3-2-submit-a-strategys-orders-to-the-broker: done
   3-3-track-every-order-through-its-full-lifecycle: done
   3-4-never-resubmit-an-order-that-is-already-working: done
-  3-5-aggregate-partial-fills-into-one-position: in-progress
+  3-5-aggregate-partial-fills-into-one-position: review
   3-6-persist-each-trade-the-moment-it-closes: backlog
   3-7-keep-trading-after-a-rejection: backlog
   epic-3-retrospective: optional
