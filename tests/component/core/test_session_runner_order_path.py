@@ -20,6 +20,7 @@ from src.core import live_session_runner
 from src.core.live_connection_monitor import ConnectionState, ConnectionStatus
 from src.core.live_gate import GateDecision, GateMode
 from src.core.live_session_runner import LiveSessionRunner
+from src.core.live_trade_recorder import POSITION_EVENTS_TOPIC, TradeRecorder
 from src.models.session import SessionSpec, StrategySpec
 from tests.component.doubles import TestLiveNode
 
@@ -410,3 +411,75 @@ class TestTheRunnerReachesTheOrderPathCallSites:
         assert runner._order_observer is not None
         topics = [topic for topic, _ in node.trader.subscriptions]
         assert "events.order*" in topics
+
+
+class TestTheRunnerReachesTheTradeRecorderCallSite:
+    """Story 3.5, Task 4.3 — the same wiring-claim discipline
+    ``TestTheRunnerReachesTheOrderPathCallSites`` established: a real
+    ``LiveSessionRunner`` against a ``TestLiveNode``, never the helper called
+    directly.
+    """
+
+    def test_the_runner_subscribes_a_trade_recorder_bound_to_the_nodes_cache(self, monkeypatch):
+        node = TestLiveNode(run_seconds=0.01)
+        runner = _runner(node)
+
+        runner.run()
+
+        assert runner._trade_recorder is not None
+        assert isinstance(runner._trade_recorder, TradeRecorder)
+        assert runner._trade_recorder._cache is node.cache
+        assert runner._trade_recorder._log is runner._log
+
+        matching = [
+            handler
+            for topic, handler in node.trader.subscriptions
+            if topic == POSITION_EVENTS_TOPIC
+        ]
+        assert len(matching) == 1
+        assert matching[0].__self__ is runner._trade_recorder
+        assert matching[0].__func__ is TradeRecorder.handle_position_event
+
+    def test_the_subscription_precedes_add_strategy_on_one_timeline(self, monkeypatch):
+        timeline: list[str] = []
+        original_subscribe = live_session_runner.LiveSessionRunner._subscribe
+
+        def _spy_subscribe(self, topic, handler):
+            if topic == POSITION_EVENTS_TOPIC:
+                timeline.append("subscribe_trade_recorder")
+            return original_subscribe(self, topic, handler)
+
+        monkeypatch.setattr(live_session_runner.LiveSessionRunner, "_subscribe", _spy_subscribe)
+
+        node = TestLiveNode(run_seconds=0.01)
+        original_add = node.trader.add_strategy
+
+        def _spy_add(strategy):
+            timeline.append("add_strategy")
+            return original_add(strategy)
+
+        node.trader.add_strategy = _spy_add
+
+        _runner(node).run()
+
+        assert timeline.count("subscribe_trade_recorder") == 1
+        assert timeline.index("subscribe_trade_recorder") < timeline.index("add_strategy"), timeline
+
+    def test_no_position_topic_is_subscribed_when_the_wiring_is_mutated_away(self, monkeypatch):
+        """Non-vacuity: proves the primary test's topic assertion can
+        genuinely fail. Skipping ``_phase_subscribe`` outright is not usable
+        here — ``_serve()`` asserts ``self._steady_state is not None``, which
+        that phase alone sets — so the mutation instead retargets the topic
+        constant the runner subscribes under, leaving the rest of the phase
+        (including the steady state) intact.
+        """
+        monkeypatch.setattr(live_session_runner, "POSITION_EVENTS_TOPIC", "events.mutated*")
+
+        node = TestLiveNode(run_seconds=0.01)
+        runner = _runner(node)
+        runner.run()
+
+        assert runner._trade_recorder is not None
+        topics = [topic for topic, _ in node.trader.subscriptions]
+        assert POSITION_EVENTS_TOPIC not in topics
+        assert "events.mutated*" in topics

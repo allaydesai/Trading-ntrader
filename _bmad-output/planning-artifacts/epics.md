@@ -1370,6 +1370,9 @@ charge (FR29).
 **When** it is tested
 **Then** `tests/component/test_live_trade_recorder.py` covers multi-fill entry, multi-fill exit, and
 mixed cases against position-event doubles, with no broker involved (NFR32).
+**Path amended 2026-09-11 (Story 3.5):** built at `tests/component/core/test_live_trade_recorder.py`
+instead — every Epic 1-3 live component suite lives under `tests/component/core/`; this line
+predates that directory. Honoured on substance, not on the literal path.
 
 **Note:** this story introduces `live_trade_recorder` with its **aggregation** logic only, returning
 a domain trade object. Story 3.6 adds the database write path to the same module. Splitting it this

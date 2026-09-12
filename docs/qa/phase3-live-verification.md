@@ -1252,3 +1252,89 @@ order.submitted client_order_id=O-...-000-2 bar_close_to_submit_ms=... bar_arriv
 | ---- | -------- | ------ | ----- |
 | 2026-09-11 | Allay (Claude Code session) | ✅ **pass — all four criteria met live** | Run inside RTH (Friday, 10:29–10:54 ET) against the bare (non-compose) IB Gateway on `127.0.0.1:4002`, Redis and Postgres up, no competing IBKR login confirmed by the operator beforehand. **Deviation from 8.1's suggested session, deliberate and disclosed**: `p7-fill-0901` was not used. A read-only precheck (`flatten_position.py` without `--confirm`) showed the broker flat (`net +0 NVDA.NASDAQ`), but starting `p7-fill-0901` showed its own `Portfolio` logging `NVDA.NASDAQ net_position=22` after reconciliation — its startup reconciliation log named only `Reconciling NET position for AAPL.NASDAQ`, never NVDA, so the stale cached position was never corrected. Since this session's strategy config is tuned `fast_period=2, slow_period=3` (fast, deliberate crossovers), continuing on it risked exactly the failure mode found below, on a position that was never real. Routed to Story 4.2 rather than worked around; the session was stopped at 200s with zero orders submitted and left untouched. A fresh session, `p10-fresh-0911`, was created instead (`sma_crossover`, `fast_period=2, slow_period=3, portfolio_value=1000000, position_size_pct=0.5` — the same proven fast-crossover tuning as `p7-fill-0901`/P7), which is exactly the doc's sanctioned alternative ("a fresh session that has traded once already"). **Criterion 1 (restore, ordered correctly)** — on restart, `Cached 4 orders from database` and `Set ClientOrderIdGenerator client_order_id count to 1` both appear before `session.started`. **Criterion 2 (counter carries forward, zero duplicates)** — the two post-restart orders carry `client_order_id` suffixes `-000-2` and `-000-3` (both `> 1`), and no `client_order_id` repeats anywhere across either leg's transcript. **Criterion 3 (both NFR1 fields, same record)** — present on every `order.submitted`, pre- and post-restart: pre-restart `bar_arrival_to_submit_ms=1.999 bar_close_to_submit_ms=5412.626`; post-restart `bar_arrival_to_submit_ms=3.359 bar_close_to_submit_ms=5725.408` and `=3.607`/`=5725.656` — discharging the 2026-09-10 ruling's live re-measurement. **Criterion 4 (D6 check first)** — `grep -c` for `162`/`10182`/`366` came back non-zero on every transcript; every hit was inspected and is a false positive — digits inside a nanosecond timestamp (e.g. `...149366000Z` contains `366`) or the benign `Historical Market Data Service ... query cancelled (code: 162)` that fires on every clean `SIGINT` teardown as bar subscriptions are cancelled — never `Client login has been superseded` or any other real competing-login text. Zero duplicate orders from the recovery mechanism this story owns, in both legs. **A live, previously undocumented defect outside this story's scope was found and is recorded in full in `deferred-work.md`'s new "story-3.4" addendum**: the post-restart SELL crossover produced *two* real fills (client_order_ids `-000-2` from `close_position()` and `-000-3` from the strategy's own "open new short" branch), because `sma_crossover.py`'s `_generate_sell_signal`/`_generate_buy_signal` compute `has_long`/`has_short` once and never refresh it after calling `close_position()`. Broker-verified net after: `SHORT 22 NVDA.NASDAQ`, while the session's own `PositionClosed` event reported `side=FLAT` — local bookkeeping was wrong. This is unrelated to Story 3.4's exec-engine recovery mechanism (which produced the correctly-incrementing, zero-duplicate counter above) and does not reopen this story; it is a `sma_crossover` strategy bug, live-confirmed for the first time and **fixed the same day** (`if`/`elif` instead of two independent `if`s; two new integration tests, `TestReversalSubmitsExactlyOneOrder` in `tests/integration/test_sma_strategy_nautilus.py`; full detail in `deferred-work.md`'s "story-3.4" addendum). **Also found**: `flatten_position.py --confirm` (fixed by commit `29e9130` on 2026-09-01) is itself now broken by a fresh Nautilus-side regression — `Trader.add_strategy()` refuses an already-RUNNING trader (`Cannot start strategy, _FlattenStrategy-None not found.`), so `--confirm` can never reach `start_strategy()`. It fails **safe** (no order reaches the broker — reconfirmed by an immediate dry-run read showing the position unchanged), but the tool cannot currently perform its one job. The resulting `SHORT 22 NVDA` was closed with a throwaway one-off script (not committed) built on the pre-fix ordering, using the quantity/side already confirmed twice by the broken tool's own read-only path moments apart; broker re-verified `net +0 NVDA.NASDAQ` afterward. A pre-existing, unrelated `LONG 4 AAPL.NASDAQ` was also found still open at the broker during the sweep — not caused by this session, not touched, flagged to the operator. |
 | — | — | ⛔ *(superseded by the row above)* | Written with Story 3.4, 2026-09-11, before any live run. Left here for the history of the standing Epic 2 retro rule this row's resolution follows (run each story's live procedure before the story closes; 3.2 Task 8.4 / 3.3 Task 6.3 precedent). |
+
+## Procedure P11: a closed position is recorded at its volume-weighted prices and full commission
+
+**Introduced by**: Story 3.5 — Aggregate Partial Fills into One Position
+**Verifies**: AC #4 and AC #6 live — that the runner actually subscribes the trade recorder and
+that a real `PositionClosed` produces exactly one `trade.aggregated` record — plus AC #3's
+commission sum on whatever legs the session happens to fill. AC #1/#2's volume-weighting
+arithmetic is proven exhaustively against real `Position` objects built from hand-constructed
+`OrderFilled` events in `tests/component/core/test_live_trade_recorder.py` (NFR32); this
+procedure is observational evidence of the wiring and the degenerate (single-fill) case, not a
+substitute for it.
+
+### What it does — and does not — do
+
+A single market order on a small quantity fills whole, in milliseconds, inside RTH — there is no
+way to stage a genuine partial fill on demand with the built-in `sma_crossover` strategy, so AC
+#1/#2's multi-fill VWAP is broker-double evidence by design (the same NFR32 shape every prior
+Epic 3 procedure in this file has recorded). If IBKR happens to fill an order in pieces (several
+`order.filled` records sharing one `client_order_id`, `cum_qty` climbing), this run becomes
+opportunistic evidence for AC #1 too — checked, not staged. What this run *is* evidence for: the
+runner wiring (AC #6), the single-fill-each-side degenerate case (AC #4), and the commission sum
+across the two legs of one round trip (AC #3). What it is **not** evidence for: that the recorded
+trade matches the broker's own view of the position — `PositionClosed` disagreed with the broker
+once already (2026-09-11, `side=FLAT` while short 22; `deferred-work.md:2439-2445` in the P10
+addendum) — broker-truth reconciliation is Story 4.3's.
+
+### Preconditions
+
+Story 3.2 Task 8.1's, unchanged: inside RTH; **no other IBKR login** (mobile app and client
+portal included — error 162); the bare non-compose Gateway (`READ_ONLY_API: "yes"` on the
+compose one refuses the first order); Redis up; strategy `sma_crossover` only
+(`fast_period=2, slow_period=3`, the proven fast-crossover tuning that produces a reversal within
+minutes inside RTH). **Use a fresh session** — `p7-position-test` is poisoned (a stranded
+`ACCEPTED` order, `deferred-work.md:2309-2325`) and `p7-fill-0901` carries a stale
+`net_position=22` the broker does not hold (`deferred-work.md:2503-2519`), routed to Story 4.2.
+**Know before starting**: `flatten_position.py --confirm` is currently broken by a Nautilus-side
+regression and fails safe (`deferred-work.md:2475-2501`) — a position left open at the end of the
+run stays open at the broker, by design (stop never flattens, AR40/NFR14), and there is no
+working tool to close it on purpose. Say so to the operator before the run, not after.
+
+### Command
+
+```bash
+# Start a fresh session and let it complete at least one round trip (entry fill, exit fill).
+uv run python -m src.cli.main live start <fresh-session-name> > logs/p11-<date>.log 2>&1 &
+RUNNER_PID=$!
+
+sleep <until at least one reversal has fired>
+kill -INT "$RUNNER_PID"   # resolve by pgrep pattern if this PID is a wrapper, not the runner
+
+# Read the transcript.
+grep -n "trade.aggregated\|trade.recorder_failed\|PositionClosed\|order.filled" logs/p11-<date>.log
+grep -c -E "162|10182|366" logs/p11-<date>.log   # D6's standing rule — before anything else
+```
+
+### Expected output
+
+```
+order.filled ... client_order_id=O-...-000-1 ...
+order.filled ... client_order_id=O-...-000-2 ...
+trade.aggregated position_id=... entry_price=... exit_price=... quantity=... fill_count=2
+  commission=... currency=USD realized_pnl=... trade_key=...
+```
+
+### Pass criteria
+
+1. **Exactly one `trade.aggregated` record follows each Nautilus `PositionClosed` line**, bound
+   with the session's `session_id` context.
+2. **For a leg with one entry fill and one exit fill**, `trade.aggregated`'s `entry_price`/
+   `exit_price` equal those two fills' `last_px` exactly (AC #4, live), and `commission` equals
+   the sum of the two fills' `commission` values (AC #3, live). If IBKR fills an order in pieces
+   (several `order.filled` records sharing one `client_order_id`), `entry_price`/`exit_price`
+   equal the VWAP of those fills computed by hand from the transcript (AC #1/#2, live —
+   opportunistic, not staged).
+3. **`fill_count` equals the number of distinct `trade_id`s** across the leg's `order.filled`
+   records (excluding any marked `duplicate=True`).
+4. **Zero `trade.recorder_failed` records** anywhere in the transcript.
+5. **`grep -c` for `162`, `10182`, `366` inspected before anything else is recorded** (D6's
+   standing rule) — every hit inspected; timestamp digits and the benign teardown
+   `query cancelled (code: 162)` are known false positives (3.4:363-368).
+
+### Result log
+
+| Date | Operator | Result | Notes |
+| ---- | -------- | ------ | ----- |
+| — | — | ⏳ **not yet run** | Written with Story 3.5, 2026-09-11, before any live run. No Gateway was reachable at drafting time (`nc -z 127.0.0.1 4002/4001/7497` all closed) and it was outside RTH (Friday 20:13 ET, after the 16:00 close) — the standing Epic 2 retro rule (run each story's live procedure before the story closes; 3.2 Task 8.4 / 3.3 Task 6.3 / 3.4 Task 8.4 precedent) means this story goes to `review` with this row unresolved, not `done`. |

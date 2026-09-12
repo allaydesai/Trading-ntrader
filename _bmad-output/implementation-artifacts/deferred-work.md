@@ -2522,3 +2522,84 @@ at 200s with zero orders), `logs/p10-fresh-leg1-*.log` and `logs/p10-fresh-leg2-
   open at the broker during this session's sweep (unrelated instrument, unrelated to today's
   `p10-fresh-0911` NVDA activity — most likely residual from an earlier `momentum`/P8-era test).
   Not touched; flagged to the operator for a decision on whether to close it.
+
+## Deferred from: story-3.5 (2026-09-11)
+
+- **The backtest path's `commissions[0]`.** `BacktestPersistenceService.save_trades_from_positions`
+  (`src/services/backtest_persistence.py:452-458`) takes only the first parsed commission entry
+  and ignores the rest — a real gap on a mixed-currency position, unlike this story's
+  `select_commission`, which sums same-currency fills into one `Money` (Nautilus does that part)
+  and picks the settlement-currency entry (with a loud `trade.commission_mixed_currency` warning)
+  when more than one currency is genuinely present. Not fixed here — the story's mandate is
+  parity with the backtest path's *conversions*, and being measurably better than a defect it does
+  not own would be scope creep. **Owner: Story 5.3**, the seal path that reuses
+  `BacktestPersistenceService` for comparison — fixing both sides together keeps them comparable.
+- **The side-unaware `profit_pct` formula, reproduced for parity.** `(exit_price - entry_price) /
+  entry_price * 100` is what `backtest_persistence.py:504-507` uses regardless of `order_side`, so
+  a profitable SHORT trade's `profit_pct` reads negative. `aggregate_closed_position` reproduces it
+  verbatim (Hazard #6) rather than fixing one side alone, which would make the two sides
+  incomparable. **Owner: Story 5.6**, the comparison views — both sides must change together, if
+  at all.
+- **NETTING `PositionId` reuse and `trade_key`.** Fact 3, measured by this story's Task 1.3: one
+  `PositionId` (`{instrument_id}-{strategy_id}`) hosts every successive round trip on an
+  instrument+strategy under NETTING, so `TradeBase.trade_id` (`str(position_id)`, kept for backtest
+  parity) is **not** unique per leg. `RecordedTrade.trade_key`
+  (`f"{position_id}:{closing_order_id}"`) is unique per round trip instead. **Owner: Story 3.6**,
+  which must key its idempotent database writes on `trade_key`, not `trade_id` — a
+  session/backtest_run-scoped uniqueness constraint on `trade_id` alone would silently drop every
+  round trip after the first on a repeatedly-traded instrument.
+- **`PositionClosed` for `EXTERNAL`/`INTERNAL-DIFF` positions arrives on the same wildcard topic**
+  reconciliation creates them on (`live/execution_engine.py:1709-1721`) and this story's recorder
+  aggregates whatever closes, stamping whatever `strategy_id` the position carries — there is no
+  filter on position origin. Whether Story 3.6 should persist a trade for a position the strategy
+  never opened is a policy question this story has no mandate to answer. **Owner: Story 3.6, with
+  Story 4.2 consulted** (4.2 owns what reconciliation does with a disagreement in the first place).
+- **Two placement deviations, corrected in the planning docs the same day** (owner: this story,
+  done in this commit): `src/core/live_trade_recorder.py` lives under `src/core/`, not
+  `src/services/` as `architecture.md:537-538, 576` names — every live module Epics 1-3 shipped
+  lives under `src/core/`, and `src/services/` holds no `live_*.py` at all; the module keeps AR38
+  by holding a `sink` callable (a port, injected by the CLI in Story 3.6) rather than importing
+  `src/services`/`src/db` directly, the same shape `SessionRecordPort` already uses. The component
+  test lives at `tests/component/core/test_live_trade_recorder.py`, not the flat
+  `tests/component/…` path `epics.md:1371-1372` names (written 2026-08-03, before
+  `tests/component/core/` existed) — every Epic 1-3 live component suite lives under `core/`.
+  `architecture.md` and `epics.md` are amended with dated notes at their respective locations.
+- **`backtest_persistence.py`'s own comment about `Decimal("NaN").quantize()` is measurably wrong**,
+  found by this story's Task 1 fresh-interpreter probe: the comment (`:495-496`) claims quantizing
+  a NaN `Decimal` raises `InvalidOperation`; under the default decimal context it does not — a
+  quiet NaN propagates silently to a NaN result, and only an *ordering* comparison on it raises.
+  The backtest path is not actually exposed to this (it filters `avg_px_close`'s NaN with
+  `pd.isna()` *before* the `Decimal(str(...)).quantize()` call the comment sits above, so the
+  claimed raise is never exercised either way), so nothing there is broken — but the comment would
+  mislead a future reader into trusting `.quantize()` as a NaN guard. `to_price_decimal` in this
+  story's module does not rely on it and checks for NaN itself (`value != value`). Not fixed here
+  (out of this story's file-list); **owner: whoever next touches
+  `backtest_persistence.py:437-526`**, to correct or remove the comment.
+- **Two measured corrections to this story's own mutation-sweep plan (Task 9.1), found while
+  running it, in the spirit of "disclose an overage/correction rather than silently exceeding it"
+  (CLAUDE.md):**
+  1. M1 (read `position.last_event.last_px` instead of `avg_px_open`) does **not** leave
+     `TestSingleFillEachSideIsTheSimpleCase` green as drafted — `position.last_event` is whichever
+     fill was applied most recently to the `Position` overall, not the entry leg's own last fill,
+     so by the time `aggregate_closed_position` runs (after both legs have been applied) it always
+     resolves to the *closing* fill's price, corrupting the single-fill case too. The AC #1/AC #4
+     "pairing" argument in the story text does not hold for this specific mutation; M1 still
+     correctly kills `TestEntryPriceIsVolumeWeighted`, which is the requirement Task 9.1 actually
+     needs satisfied.
+  2. M4 (`commissions()[0]` unconditionally instead of `select_commission`'s settlement-preferring
+     logic) **stayed green** against the mixed-currency test fixtures as originally drafted — both
+     put the settlement currency (USD) on the entry leg, and `Position.commissions()` returns
+     entries in insertion order, so `commissions()[0]` and the correct settlement-seeking logic
+     happened to agree. Per the story's own "inspect the fixture before concluding the guard is
+     missing" rule (Task 9.1), the fixture was the problem: fixed by moving the settlement currency
+     to the *exit* leg in `test_mixed_currency_commission_picks_the_settlement_entry_and_warns`, so
+     the two implementations can disagree. M4 now correctly kills it. General lesson for any
+     "pick by criterion, not by position" guard: at least one fixture must place the correct answer
+     somewhere other than index 0.
+- **`nautilus_trader.model.objects.Money.as_decimal()` normalizes away trailing zeros** — measured:
+  `Money(Decimal("1.00"), USD).as_decimal() == Decimal("1")`, not `Decimal("1.00")`. Not a defect
+  (the 8 dp `decimal_places` constraint on `TradeBase.commission_amount` is satisfied either way,
+  and the `.quantize()`-based price/quantity conversions are unaffected since they route through
+  `to_price_decimal`, not `Money.as_decimal()` directly) — noted here because it cost two test
+  fixtures a wrong literal during drafting (`"1.00"` expected, `"1"` produced) and would cost the
+  same to the next person building a `Money`-based fixture with a round amount.

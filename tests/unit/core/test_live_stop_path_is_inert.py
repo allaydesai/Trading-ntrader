@@ -57,6 +57,13 @@ STOP_PATH_MODULES = (
 #: does not forbid — so their own membership stays clean without needing the
 #: module itself on the list.
 
+#: ``src/core/live_trade_recorder.py`` (Story 3.5) is likewise **NOT** on the
+#: list, for a simpler reason still: it calls no order or position *method* at
+#: all — it only reads ``cache.position(...)`` and calls a ``sink`` callable
+#: (``None`` in production this story). It is not reached from the stop path
+#: either (it is subscribed on ``events.position*``, not driven by
+#: ``stop()``). Membership here would be inert, not protective.
+
 #: ``src/core/live_exec_avg_px.py`` (2026-09-01) is likewise **NOT** on the list,
 #: for a simpler reason: it is build-time only. It runs once inside
 #: ``node.build()``, replaces one adapter-private dict, and is never reached
@@ -460,6 +467,13 @@ class TestTheVocabularyRuleAr36:
         # and friends) would cost the direct method-to-log correspondence that
         # makes a suppression record actionable, for no gain against the rule's
         # actual purpose. Recorded here so the next review does not re-open it.
+        #
+        # Story 3.5's `src/core/live_trade_recorder.py` is deliberately **NOT**
+        # added: it is not a stop-path module (see the STOP_PATH_MODULES
+        # comment above), and by construction its record names carry none of
+        # AR36's stems — `trade.aggregated`, never `trade.closed`, is exactly
+        # that discipline; the `close` stem is precisely why that name was
+        # not chosen.
     )
     #: AR36's list, with ``close`` **restored** (review fix, 2026-08-22,
     #: decision D3). It had been dropped silently — and it is the one word

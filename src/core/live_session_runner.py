@@ -122,6 +122,7 @@ from src.core.live_strategy_guard import (
     StrategyFailure,
     StrategyGuard,
 )
+from src.core.live_trade_recorder import POSITION_EVENTS_TOPIC, TradeRecorder
 from src.core.live_trader_id import derive_trader_id
 from src.models.session import DEFAULT_HEARTBEAT_INTERVAL_SECONDS, SessionSpec
 
@@ -223,6 +224,7 @@ class LiveSessionRunner:
         self._steady_state: SessionSteadyState | None = None
         self._monitor: ConnectionMonitor | None = None
         self._order_observer: OrderEventObserver | None = None
+        self._trade_recorder: TradeRecorder | None = None
         self._subscriptions: list[tuple[str, Any]] = []
         self._deadline, self._trader_started, self._ownership_lost = 0.0, False, False
         self._record_release_failed = False
@@ -561,6 +563,12 @@ class LiveSessionRunner:
             self._order_observer = OrderEventObserver(self._log, traded_bar_types=traded)
             self._subscribe(BAR_TOPIC, self._order_observer.note_bar)
             self._subscribe(ORDER_EVENTS_TOPIC, self._order_observer.handle_order_event)
+            # Story 3.5. Attaches after reconciliation (Epic 4, still a no-op
+            # today), so a position already open at attach time is first
+            # seen mid-life — the `live_order_path.py:645-651` caveat applies
+            # identically here.
+            self._trade_recorder = TradeRecorder(self._node.cache, self._log)
+            self._subscribe(POSITION_EVENTS_TOPIC, self._trade_recorder.handle_position_event)
             report_instrument_shortfall(self._node, bar_types, self._log)
 
     def _subscribe(self, topic: str, handler: Any) -> None:

@@ -534,8 +534,15 @@ Trading-ntrader/
 │       │                                  #   'paper') → backfill trades.backtest_run_id →
 │       │                                  #   session_conditions snapshot; reuses
 │       │                                  #   BacktestPersistenceService validation
-│       ├── live_trade_recorder.py         # NEW — position-closed → incremental trade rows
-│       │                                  #   (savepoint discipline; never kills the node)
+│       ├── live_trade_recorder.py         # SUPERSEDED 2026-09-11 (Story 3.5): built at
+│       │                                  #   src/core/live_trade_recorder.py instead —
+│       │                                  #   every live module Epics 1-3 shipped lives
+│       │                                  #   under src/core/, and src/services/ has no
+│       │                                  #   live_*.py at all. AR38 is kept the way
+│       │                                  #   SessionRecordPort keeps it: a `sink`
+│       │                                  #   callable (a port), not a src.services
+│       │                                  #   import. Story 3.6 injects the persistence
+│       │                                  #   adapter as that sink from the CLI.
 │       └── reconciliation_service.py      # NEW — on-demand positions/cash vs IBKR; explicit
 │                                          #   discrepancy report (never auto-resolve local-ward)
 ├── tests/
@@ -545,7 +552,11 @@ Trading-ntrader/
 │   │   └── models/test_session_spec.py    # NEW — spec validation, list-of-strategy-specs shape
 │   ├── component/
 │   │   ├── doubles/                       # MOD — +TestLiveExecClient, +TestPositionEvents
-│   │   ├── test_live_trade_recorder.py    # NEW — partial-fill VWAP aggregation, rejection flow
+│   │   ├── test_live_trade_recorder.py    # RELOCATED 2026-09-11 (Story 3.5): built at
+│   │   │                                  #   tests/component/core/test_live_trade_recorder.py
+│   │   │                                  #   instead — every Epic 1-3 live component suite
+│   │   │                                  #   lives under tests/component/core/. Rejection
+│   │   │                                  #   flow is Story 3.7's, not this one's.
 │   │   └── test_session_runner_phases.py  # NEW — startup phase ordering, signal handling
 │   ├── integration/
 │   │   └── test_live_node_lifecycle.py    # NEW — --forked; TradingNode + LogGuard coexistence

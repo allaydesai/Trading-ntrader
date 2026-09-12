@@ -860,12 +860,19 @@ class TestSubscribeAndTradingRegisterRealThings:
         runner.run()
 
         topics = [topic for topic, _ in node.trader.subscriptions]
-        assert topics == ["data.bars.*", "data.bars.*", "events.order*"]
+        assert topics == [
+            "data.bars.*",
+            "data.bars.*",
+            "events.order*",
+            "events.position*",
+        ]
         assert runner._order_observer is not None
+        assert runner._trade_recorder is not None
         handlers = [handler for _, handler in node.trader.subscriptions]
         assert handlers[0] == runner._steady_state.note_bar
         assert handlers[1] == runner._order_observer.note_bar
         assert handlers[2] == runner._order_observer.handle_order_event
+        assert handlers[3] == runner._trade_recorder.handle_position_event
 
     def test_note_bar_is_subscribed_before_any_strategy_is_added(self, registered_accounts):
         """Pre-verified finding #12's ordering, pinned (review fix, 2026-08-23).
@@ -898,13 +905,14 @@ class TestSubscribeAndTradingRegisterRealThings:
 
         assert "subscribe" in timeline and "add_strategy" in timeline
         assert timeline.index("subscribe") < timeline.index("add_strategy")
-        # Story 3.2: not just the FIRST subscribe — every subscribe call the
-        # runner makes (steady state's bar topic, the order path's bar topic,
-        # the order path's events.order* topic) must land before the first
-        # `add_strategy`. A weaker check would miss a bug that put the new
-        # order-path subscriptions AFTER trading started.
+        # Story 3.2 (extended by Story 3.5): not just the FIRST subscribe —
+        # every subscribe call the runner makes (steady state's bar topic,
+        # the order path's bar topic, the order path's events.order* topic,
+        # and now the trade recorder's events.position* topic) must land
+        # before the first `add_strategy`. A weaker check would miss a bug
+        # that put a new subscription AFTER trading started.
         first_add_strategy = timeline.index("add_strategy")
-        assert timeline[:first_add_strategy].count("subscribe") == 3, timeline
+        assert timeline[:first_add_strategy].count("subscribe") == 4, timeline
 
     def test_a_real_bus_dispatches_equal_priority_subscribers_in_subscription_order(self):
         """The bus-side half of finding #12, against a real ``MessageBus``:
@@ -1251,6 +1259,13 @@ class TestImportPurity:
         # `node.build()`. Same discipline: added on creation, not on next
         # discovery.
         "src.core.live_exec_avg_px",
+        # Story 3.5. Subscribed in `_phase_subscribe` beside the order path,
+        # and — the reason it matters for THIS list specifically — it takes a
+        # `sink` callable rather than a `src.services`/`src.db` import, so it
+        # stays inside AR38's discipline the same way the order path and the
+        # strategy guard do. Story 3.6 adds the persistence adapter as an
+        # injected port, not a new import here.
+        "src.core.live_trade_recorder",
     )
 
     @pytest.mark.parametrize("module_name", MODULES)

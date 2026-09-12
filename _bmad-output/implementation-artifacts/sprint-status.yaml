@@ -36,6 +36,52 @@
 
 generated: 2026-08-03
 last_updated: >-
+  2026-09-11 (STORY 3.5 CREATED: backlog -> ready-for-dev. File:
+  3-5-aggregate-partial-fills-into-one-position.md. epic-3 stays in-progress: 3.1-3.4 done,
+  3.5 ready-for-dev, 3.6-3.7 backlog. Drafted from epics.md:1343-1376 against head 438b0e4
+  (clean, submodule 06c00cb). Design settled at drafting on five wheel facts measured by
+  fresh-interpreter probes: Nautilus Position already volume-weights (40@100+60@110 ->
+  avg_px_open 106.0) and the position events carry it as float; NO position event carries
+  commission (Position.commissions() does, summed per currency); a Position resets in place
+  on the next opening fill under NETTING ids, so commissions must be read synchronously inside
+  the PositionClosed dispatch; the backtest extractor reads exactly the same fields, so parity
+  means reading them too (not a fill tally, which resets across process runs and counts fills
+  Nautilus refused); nothing subscribes events.position* today. New module
+  src/core/live_trade_recorder.py (duck-typed, no nautilus import; TradeRecorder +
+  aggregate_closed_position -> RecordedTrade wrapping the existing TradeBase; records
+  trade.aggregated / trade.recorder_failed / trade.commission_mixed_currency; sink=None is
+  3.6's persistence handover). AC #6 added at drafting: runner subscribes the recorder in
+  _phase_subscribe (<=4 lines on the sanctioned over-cap runner) so FR25 gets live evidence
+  (new Procedure P11). Two placement deviations disclosed: src/core/ over architecture.md's
+  src/services/ (AR38 honoured via a port in 3.6, as SessionRecordPort is), and
+  tests/component/core/ over the AC's flat tests/component/ path. Guard-list plan: hand-add to
+  NODE_FACING_MODULES and TestImportPurity.MODULES; deliberate non-add to STOP_PATH_MODULES
+  with reason; _STDLIB_AND_FIRST_PARTY expected untouched (decimal/dataclasses/datetime/typing/
+  collections already listed) but proven by running the scan, not claimed. Baselines at
+  creation: unit 2441 / component 1457/16sk / integration 284/2sk / e2e 1. Live-run hazards
+  carried in from 3.4: flatten_position.py --confirm broken (fails safe), do not reuse
+  p7-position-test or p7-fill-0901, residual LONG 4 AAPL external at the broker.) Previously:
+  2026-09-11 (STORY 3.5 IMPLEMENTED: ready-for-dev -> in-progress -> review, same session as
+  creation. epic-3 stays in-progress: 3.1-3.4 done, 3.5 review, 3.6-3.7 backlog. All 9 tasks /
+  40 subtasks complete except 8.2/8.3 (the live transcript, not yet run -- no IBKR Gateway
+  reachable and outside RTH; not blocking per the Epic 2 retro's standing rule, 3.2/3.3/3.4
+  precedent). Delivered exactly the drafted module: src/core/live_trade_recorder.py (three
+  pure Decimal helpers, aggregate_closed_position, TradeRecorder), wired into
+  live_session_runner.py's _phase_subscribe (+8 lines). Task 1's fresh-interpreter probe
+  corrected one story-cited fact before any test was written: backtest_persistence.py's
+  comment claiming Decimal("NaN").quantize() raises InvalidOperation is measurably false
+  (a quiet NaN propagates silently under the default decimal context) -- to_price_decimal
+  checks for NaN itself rather than trusting the comment. The Task 9 mutation sweep (11
+  scripted mutations, all killed) found two more corrections to the story's own plan (M1's
+  AC #4-stays-green prediction did not hold; M4 initially stayed green against a fixture that
+  coincidentally placed the right answer at index 0, fixed). All disclosed in
+  deferred-work.md's new "story-3.5" section, including items owned by Stories
+  3.6/5.3/5.6/4.2. Gates: format/lint/mypy clean; unit 2441->2458 (+17); component
+  1457/16sk->1487/16sk (+30); integration 284/2sk unchanged; e2e 1 unchanged -- matching
+  Task 7's non-change contract exactly. New module: 338 raw lines / 79 executable statements
+  (budgeted <=80). Alembic head unchanged at b7c419e2a3d8. New Procedure P11 recorded in
+  docs/qa/phase3-live-verification.md, result not yet run. NEXT: run Procedure P11 live when
+  a Gateway is available inside RTH, then dev-story 3.6.) Previously:
   2026-09-11 (STORY 3.4 LIVE-VERIFIED: review -> done. epic-3 stays in-progress: 3.1-3.4 done,
   3.5-3.7 backlog. Task 8.2 (Procedure P10) run against the paper Gateway inside RTH: all four
   pass criteria met — restore evidence before session.started, a strictly incrementing
@@ -2207,7 +2253,7 @@ development_status:
   3-2-submit-a-strategys-orders-to-the-broker: done
   3-3-track-every-order-through-its-full-lifecycle: done
   3-4-never-resubmit-an-order-that-is-already-working: done
-  3-5-aggregate-partial-fills-into-one-position: backlog
+  3-5-aggregate-partial-fills-into-one-position: review
   3-6-persist-each-trade-the-moment-it-closes: backlog
   3-7-keep-trading-after-a-rejection: backlog
   epic-3-retrospective: optional

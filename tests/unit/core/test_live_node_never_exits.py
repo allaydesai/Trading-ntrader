@@ -62,6 +62,10 @@ NODE_FACING_MODULES = (
     # to kill the node. It raises `AttributeError` by design when the upstream
     # shape moves; raising is fine here, exiting never is.
     "src/core/live_exec_avg_px.py",
+    # Story 3.5. Runs inline inside `MessageBus.publish_c`, the same shape as
+    # `live_order_path.py` above — a raise here would re-enter Nautilus's own
+    # silent `os._exit(1)`, so this scan must cover it too.
+    "src/core/live_trade_recorder.py",
     "src/services/session_record.py",
     "src/services/session_service.py",
 )
