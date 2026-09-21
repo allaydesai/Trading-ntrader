@@ -36,6 +36,32 @@
 
 generated: 2026-08-03
 last_updated: >-
+  2026-09-21 (EPIC 3 RETROSPECTIVE DONE: epic-3-retrospective optional -> done. Documentation-driven
+  method per the Epic 1/2 precedent, synthesized from all 7 story records plus the Epic 2 retro and
+  deferred-work.md's Epic-3-relevant entries; full document at
+  implementation-artifacts/epic-3-retro-2026-09-21.md. Three decisions explicitly punted to this
+  retro by name were ruled by Allay: D-G (Story 3.7) -- add a degraded_because key to AR29's --json
+  output, implementation still needed; D-I (Story 3.3) -- keep venue rejection text logged verbatim
+  despite NFR26's anti-field scan being key-only not value-level, documented as an accepted limit
+  rather than built out; the IB-error-code-outside-ORDER_REJECTION_CODES delay (Story 3.7) -- ruled
+  to Story 4.3, bundled with its other IB-adapter reconciliation debt. No significant-discovery alert
+  against Epic 4's plan -- several Epic 3 findings (stale-
+  cache reconciliation bug, IB adapter double-counting its own fill, not-open/cancelled conflation)
+  are previews of exactly what Stories 4.2/4.3 are already scoped to fix; one item flagged for an
+  explicit sanity check at Story 4.2 rather than a re-plan: confirm_state_reestablished has had zero
+  production callers through the whole epic by design, and Epic 4 is where that path goes live for
+  the first time. Ten action items committed by Allay (see retro doc's Action Items section):
+  suppression-feedback ownership, D2 (Postgres CI service) and D3 (exit_outcome protocol) before Epic
+  4 stories start, D4 (AST size-cap guard) resolved one way or the other, running 3.7's live P13
+  BLOCKING before Epic 4 begins (Allay's explicit sequencing call), a call on whether weekend/RTH
+  live-verification gating should be scheduled rather than a recurring surprise, fixing or retiring
+  flatten_position.py --confirm (broken twice across two live sessions), closing the three
+  log.error-inside-except sites (OrderEventObserver, TradeRecorder, live_order_rejections.py) flagged
+  three times and never fixed, confirming CLAUDE.md's guard-list registry names
+  _STDLIB_AND_FIRST_PARTY, and fixing project-context.md's stale migration-count note. epic-3 itself
+  STAYS in-progress, NOT done: this retro deliberately treats Epic 3's engineering work as complete
+  per Allay's direction while leaving epic-3's own status keyed to Story 3.7 reaching done, which is
+  gated on P13 -- the retro does not shortcut that gate.)
   2026-09-21 (STORY 3.7 CODE REVIEW DONE: stays review. Three parallel adversarial layers
   (Blind Hunter / Edge Case Hunter / Acceptance Auditor) plus the reviewer's own read: 37 raw
   findings -> 2 decisions, 16 patches, 6 deferred, 8 dismissed, all written to the story's
@@ -2562,6 +2588,9 @@ development_status:
   # strategy paid the same double commission (not re-audited), in deferred-work.md's "story-3.4"
   # addendum. Not Story 3.4's own defect (its recovery mechanism produced zero duplicates in the
   # same run).
+  # Retro done 2026-09-21 (implementation-artifacts/epic-3-retro-2026-09-21.md). epic-3 deliberately
+  # STAYS in-progress: the retro treated the epic's engineering work as complete per Allay's
+  # direction, but 3.7's live P13 has not run, and Allay ruled P13 BLOCKING before Epic 4 starts.
   epic-3: in-progress
   3-1-stop-trading-without-manufacturing-an-exit: done
   3-2-submit-a-strategys-orders-to-the-broker: done
@@ -2570,7 +2599,7 @@ development_status:
   3-5-aggregate-partial-fills-into-one-position: done
   3-6-persist-each-trade-the-moment-it-closes: done
   3-7-keep-trading-after-a-rejection: review
-  epic-3-retrospective: optional
+  epic-3-retrospective: done
 
   # Epic 4: Stop, Restart & Resume Mid-Position
   # FR32–FR39 · Standalone: a session survives a full process stop/restart WHILE holding

@@ -2880,3 +2880,25 @@ are recorded here; neither reopens either story, and neither was actioned.
   Every live session to date runs one strategy. Fix shape for Epic 4: `dict[str, int]` keyed by
   `strategy_id`, `consecutive = max(...)` so the D-D document shape and the port signature stay
   unchanged, optionally one extra field naming the worst strategy. Owner: unassigned.
+
+## Dispositions from the Epic 3 retrospective (2026-09-21)
+
+Full retrospective: `implementation-artifacts/epic-3-retro-2026-09-21.md`. Two items above were
+explicitly routed to this retrospective by name; both are now ruled by Allay.
+
+- **D-G (AR29's `--json` missing a cause), routed above under "story-3.7"** — **RULED: take the
+  shape.** Add an eighth key, `degraded_because: [...]`, listing sense names, keeping the existing
+  seven stable. Implementation still needed; tracked as an Epic 3 retro action item, owner
+  unassigned.
+- **D-I (NFR26's asymmetric application to venue rejection text), routed above under "story-3.7"
+  and originally requested by Story 3.3** — **RULED: keep the transcript verbatim; do not reverse
+  Story 3.3.** The asymmetry (column redacted, transcript verbatim) is accepted as a documented
+  limit rather than closed by building value-level redaction. No further action — this entry is
+  now closed, not merely deferred.
+- The IB-error-code-outside-`ORDER_REJECTION_CODES` delay item (routed above to "Story 4.3 or the
+  Epic 3 retrospective, whichever Allay rules") — **RULED: Story 4.3.** Bundled with the other
+  IB-adapter reconciliation debt Story 4.3 already owns (the not-open/cancelled conflation, the
+  double-counted-own-fill phantom trade) rather than a standalone fix.
+- All other Epic-3-relevant entries above remain open and travel forward into Epic 4 per their
+  existing "Owner" notes; the retrospective's own action-item list (process, technical debt,
+  documentation) is in the retro document itself rather than duplicated here.
