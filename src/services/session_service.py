@@ -498,6 +498,125 @@ def _record_strategy_failure(
     return trading_session
 
 
+#: The ``runtime_flags`` key Story 3.7's refusal summary lives under. One
+#: sub-document, replaced whole on every write — never a list (NFR2).
+ORDER_REJECTIONS_KEY = "order_rejections"
+
+
+def _record_order_rejections(
+    trading_session: TradingSession,
+    *,
+    owner_epoch: int,
+    rejected: int,
+    denied: int,
+    consecutive: int,
+    first_at: datetime,
+    last_at: datetime,
+    last_kind: str,
+    last_client_order_id: str,
+    last_instrument_id: str,
+    last_strategy_id: str,
+    last_reason: str,
+    last_reconciliation: bool,
+) -> TradingSession:
+    """Replace the session's refusal summary in ``runtime_flags`` (Story 3.7).
+
+    At module scope for the same reasons :func:`_record_strategy_failure` is,
+    and written beside it so the two stay recognisably one shape.
+
+    **Never assigns ``status``.** A session whose orders are being rejected is
+    still ``running`` — that is exactly what AC #1 requires, and it is the
+    whole reason the condition needs a *different* channel to become visible
+    through. AR37's AST guard matches only ``t.attr == "status"``, so this
+    write is invisible to it, which is correct rather than a loophole.
+
+    Two guards, the same two the sibling has: writing into a row this process
+    no longer owns puts a stale fact in a successor's record, and a row that
+    is not ``running`` has no current run to record anything about.
+
+    **The row is loaded ``FOR UPDATE``**, for the sibling's reason: this is a
+    read-modify-write of the whole ``runtime_flags`` document, so an unlocked
+    read lets a dispossessed incumbent rebuild the doc from a pre-reclaim
+    snapshot and erase what the successor already recorded.
+
+    ⚠️ **The document is rebuilt and reassigned, never mutated in place.**
+    SQLAlchemy does not track in-place mutation of a plain ``JSONB`` column, so
+    ``trading_session.runtime_flags["order_rejections"]["rejected"] = n``
+    silently never persists — the write appears to succeed, a test against an
+    in-memory object passes, and the column never changes. Both the outer dict
+    and the sub-document are new objects.
+
+    ⚠️ **A snapshot, not an append** (decision D-D). The sub-document is
+    replaced wholesale, and it contains no list-typed value anywhere. A
+    session rejected on every 1-minute crossover refuses an order every few
+    minutes for 6.5 hours; a per-rejection list would grow without bound and
+    be re-serialised whole on every write, which is the unbounded state NFR2
+    forbids. If a reviewer ever sees a list under this key, the design has
+    drifted.
+
+    ``**existing`` first, like its sibling: a refusal write must not erase
+    ``failed_strategies``/``all_failed``, and a strategy-failure write must not
+    erase this key. ``v`` is **not** bumped — a new key is an addition, not a
+    meaning change (Story 2.7's rule), and every reader is tolerant of keys it
+    does not know.
+
+    Args:
+        trading_session: The row to write to, already loaded ``FOR UPDATE`` by
+            the caller.
+        owner_epoch: This process's own claimed epoch, for the ownership guard.
+        rejected: Every ``OrderRejected`` so far this run.
+        denied: Every ``OrderDenied`` so far this run.
+        consecutive: Refusals since the last non-reconciliation acceptance.
+        first_at: The first refusal's instant.
+        last_at: The most recent refusal's instant.
+        last_kind: ``"rejected"`` or ``"denied"``.
+        last_client_order_id: The refused order's own id.
+        last_instrument_id: The refused order's instrument.
+        last_strategy_id: The Nautilus strategy id that asked.
+        last_reason: The reason, **already redacted** and capped (NFR26).
+        last_reconciliation: Whether it came from reconciliation rather than
+            from a fresh venue answer.
+
+    Returns:
+        The same ``TradingSession``, mutated in place.
+
+    Raises:
+        InvalidSessionTransition: Either guard refused.
+    """
+    current = _as_status(
+        trading_session.status, f"The stored status of session {trading_session.name!r}"
+    )
+    if current is not SessionStatus.RUNNING:
+        raise InvalidSessionTransition(
+            f"Session {trading_session.name!r} is {current.value!r}, not running, so an order "
+            "rejection cannot be recorded against it — the run it would describe is over."
+        )
+
+    _refuse_unless_owner(trading_session, owner_epoch=owner_epoch)
+
+    existing = trading_session.runtime_flags or {}
+    trading_session.runtime_flags = {
+        **existing,
+        "v": RUNTIME_FLAGS_VERSION,
+        ORDER_REJECTIONS_KEY: {
+            "rejected": rejected,
+            "denied": denied,
+            "consecutive": consecutive,
+            "first_at": first_at.isoformat(),
+            "last": {
+                "at": last_at.isoformat(),
+                "kind": last_kind,
+                "client_order_id": last_client_order_id,
+                "instrument_id": last_instrument_id,
+                "strategy_id": last_strategy_id,
+                "reason": last_reason,
+                "reconciliation": last_reconciliation,
+            },
+        },
+    }
+    return trading_session
+
+
 class SessionService:
     """The single validated path through which a session's status changes.
 
@@ -618,4 +737,19 @@ class SessionService:
             trading_session,
             owner_epoch=owner_epoch,
             **failure,  # type: ignore[arg-type]
+        )
+
+    def record_order_rejections(
+        self, session_id: UUID, *, owner_epoch: int, **rejections: object
+    ) -> TradingSession:
+        """Replace the refusal summary; rules in :func:`_record_order_rejections`.
+
+        Loads **``FOR UPDATE``**, unlike the heartbeat — the why lives with
+        the rules, in :func:`_record_order_rejections`.
+        """
+        trading_session = _load_or_raise(self._repository, session_id, for_update=True)
+        return _record_order_rejections(
+            trading_session,
+            owner_epoch=owner_epoch,
+            **rejections,  # type: ignore[arg-type]
         )

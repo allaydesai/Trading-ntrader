@@ -1419,3 +1419,54 @@ class TestAgainstARealExecutionEngine:
         assert sink_calls[0].trade.commission_currency is None
         assert sink_calls[0].trade.exit_price == Decimal("130.00000000")
         assert sink_calls[0].fill_count is None
+
+
+class TestAnOrderEventCanNeverReachThisRecorder:
+    """Story 3.7, AC #4(b) — FR24's structural half: a rejection is not a trade.
+
+    The scenario half lives in
+    ``tests/component/core/test_live_order_rejections_engine.py`` (a real
+    engine rejects a real order and no position event is published, beside a
+    control where a filled round trip *does* reach the sink). This class pins
+    the two structural barriers that make that outcome true by construction
+    rather than by the scenario happening to exercise it, because each catches
+    a different mutation: adding an ``Order*`` key to the dispatch map, and
+    widening the topic pattern.
+    """
+
+    def test_the_dispatch_keys_are_position_events_only(self):
+        recorder = TradeRecorder(_StubCache({}), structlog.get_logger("test"))
+
+        assert set(recorder._dispatch) <= {
+            "PositionOpened",
+            "PositionChanged",
+            "PositionClosed",
+        }
+        assert not any(name.startswith("Order") for name in recorder._dispatch)
+
+    def test_the_topic_pattern_cannot_match_an_order_topic(self):
+        from fnmatch import fnmatch
+
+        assert fnmatch("events.order.SMACrossover-000", POSITION_EVENTS_TOPIC) is False
+        assert fnmatch("events.order*", POSITION_EVENTS_TOPIC) is False
+        # The control, so the assertions above are testing the pattern rather
+        # than a typo that matches nothing at all.
+        assert fnmatch("events.position.SMACrossover-000", POSITION_EVENTS_TOPIC) is True
+
+    def test_an_order_shaped_event_handed_straight_to_the_handler_records_nothing(self):
+        """Belt and braces: even if a future wiring change subscribed this
+        handler on the wrong topic, an order event produces no record and no
+        sink call — it falls off the closed dispatch set in silence.
+        """
+        sink_calls: list[RecordedTrade] = []
+        recorder = TradeRecorder(
+            _StubCache({}), structlog.get_logger("test"), sink=sink_calls.append
+        )
+        rejected = type("OrderRejected", (), {"position_id": None})()
+
+        with capture_logs() as logs:
+            recorder.handle_position_event(rejected)
+
+        assert sink_calls == []
+        assert [entry for entry in logs if entry["event"] == AGGREGATED_EVENT] == []
+        assert [entry for entry in logs if entry["event"] == RECORDER_FAILED_EVENT] == []

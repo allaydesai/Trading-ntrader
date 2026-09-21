@@ -29,6 +29,7 @@ class _HandWrittenRecord:
         self.activity: list[tuple[datetime, datetime | None]] = []
         self.stopped = 0
         self.failures: list[str] = []
+        self.rejections: list[dict] = []
 
     def record_activity(self, *, at: datetime, bar_seen_at: datetime | None = None) -> None:
         self.activity.append((at, bar_seen_at))
@@ -49,6 +50,23 @@ class _HandWrittenRecord:
     ) -> None:
         self.failures.append(spec_strategy_id)
 
+    def record_order_rejections(
+        self,
+        *,
+        rejected: int,
+        denied: int,
+        consecutive: int,
+        first_at: datetime,
+        last_at: datetime,
+        last_kind: str,
+        last_client_order_id: str,
+        last_instrument_id: str,
+        last_strategy_id: str,
+        last_reason: str,
+        last_reconciliation: bool,
+    ) -> None:
+        self.rejections.append({"rejected": rejected, "consecutive": consecutive})
+
 
 class _MissingMarkStopped:
     def record_activity(self, *, at: datetime, bar_seen_at: datetime | None = None) -> None:
@@ -58,15 +76,30 @@ class _MissingMarkStopped:
 class TestTheProtocolShape:
     """AR32's *"record port"*, in the narrowest shape that satisfies AR38."""
 
-    def test_the_port_declares_exactly_three_methods(self):
-        """An exact set, not a subset: a further method would be a design change
-        the runner and every adapter would silently inherit.
+    def test_the_port_declares_exactly_four_methods(self):
+        """An exact set, not a subset: a further method is a design change the
+        runner and every adapter would otherwise silently inherit.
 
-        ``record_strategy_failure`` is Story 2.7's — the third and, so far, last
-        thing a *running* session needs from its own row.
+        ``record_strategy_failure`` is Story 2.7's. ``record_order_rejections``
+        is **Story 3.7's, and the widening was argued rather than assumed**:
+        Story 3.6's decision D-F refused to widen this port for the trade sink
+        on the ground that *"a trade is not a session-row fact"* — it is an
+        event in its own right, with its own table. A refusal summary is the
+        opposite: it is a fact *about this run of this session*, the same class
+        of thing as a contained strategy, it lives in the same
+        ``runtime_flags`` document, and it is written on the same tick by the
+        same executor through the same two guards. So it belongs here, and the
+        cost — six hand-written doubles in the test tree plus this pin, all
+        edited in the one commit — is the deliberate, visible edit that cost
+        is meant to buy.
         """
         declared = {name for name in vars(SessionRecordPort) if not name.startswith("_")}
-        assert declared == {"record_activity", "mark_stopped", "record_strategy_failure"}
+        assert declared == {
+            "record_activity",
+            "mark_stopped",
+            "record_strategy_failure",
+            "record_order_rejections",
+        }
         # `Protocol` synthesises `__init__` and `_is_protocol`; the public
         # surface is what a caller and an adapter have to agree on.
         assert SessionRecordPort._is_protocol is True
@@ -89,6 +122,44 @@ class TestTheProtocolShape:
         assert [p.name for p in parameters] == ["at", "bar_seen_at"]
         assert all(p.kind is inspect.Parameter.KEYWORD_ONLY for p in parameters)
         assert parameters[1].default is None
+
+    def test_record_order_rejections_is_keyword_only_with_no_defaults(self):
+        """Every field is required and keyword-only, mirroring
+        ``record_activity``'s pin. No default may exist: a snapshot is written
+        whole, and a silently defaulted counter would write a zero over a real
+        one.
+        """
+        import inspect
+
+        signature = inspect.signature(SessionRecordPort.record_order_rejections)
+        parameters = list(signature.parameters.values())[1:]  # drop `self`
+
+        assert [p.name for p in parameters] == [
+            "rejected",
+            "denied",
+            "consecutive",
+            "first_at",
+            "last_at",
+            "last_kind",
+            "last_client_order_id",
+            "last_instrument_id",
+            "last_strategy_id",
+            "last_reason",
+            "last_reconciliation",
+        ]
+        assert all(p.kind is inspect.Parameter.KEYWORD_ONLY for p in parameters)
+        assert all(p.default is inspect.Parameter.empty for p in parameters)
+
+    def test_record_order_rejections_takes_primitives_only(self):
+        """AR38: the snapshot crosses from ``src/core`` into ``src/services``,
+        so nothing Nautilus-shaped may appear in its annotations.
+        """
+        import inspect
+
+        signature = inspect.signature(SessionRecordPort.record_order_rejections)
+        annotations = {p.annotation for p in list(signature.parameters.values())[1:]}
+
+        assert annotations <= {int, str, bool, datetime}
 
     def test_the_port_takes_no_session_id_and_no_started_at(self):
         """Both are bound into the adapter at construction.

@@ -437,3 +437,96 @@ class TestRecordStrategyFailure:
 
         with pytest.raises(SessionReclaimedError):
             record.record_strategy_failure(**self._fields())
+
+
+class TestRecordOrderRejections:
+    """Story 3.7's fourth port method, through the same one-transaction adapter.
+
+    Nothing new in the *discipline* — one short-lived transaction, the
+    ``InvalidSessionTransition -> SessionReclaimedError`` translation, no
+    ``status`` assignment. What this class pins is that the fourth method did
+    not get a *different* discipline by accident.
+    """
+
+    @staticmethod
+    def _fields(**overrides):
+        fields = {
+            "rejected": 2,
+            "denied": 0,
+            "consecutive": 2,
+            "first_at": STARTED_AT + timedelta(seconds=60),
+            "last_at": STARTED_AT + timedelta(seconds=150),
+            "last_kind": "rejected",
+            "last_client_order_id": "O-20260922-140905-0a1b2c3d-000-3",
+            "last_instrument_id": "NVDA.NASDAQ",
+            "last_strategy_id": "SMACrossover-000",
+            "last_reason": "Order rejected - reason: insufficient margin",
+            "last_reconciliation": False,
+        }
+        fields.update(overrides)
+        return fields
+
+    def test_it_opens_and_closes_exactly_one_session(self, patched):
+        factory = _RecordingFactory()
+        record = SqlSessionRecord(SESSION_ID, owner_epoch=OWNER_EPOCH, session_factory=factory)
+
+        record.record_order_rejections(**self._fields())
+
+        assert (factory.entered, factory.exited) == (1, 1)
+
+    def test_the_document_reaches_runtime_flags(self, monkeypatch):
+        from src.services import session_record as adapter_module
+
+        row = _row(SessionStatus.RUNNING)
+        repository = MagicMock()
+        repository.find_by_session_id.return_value = row
+        monkeypatch.setattr(adapter_module, "SyncTradingSessionRepository", lambda s: repository)
+        record = SqlSessionRecord(
+            SESSION_ID, owner_epoch=OWNER_EPOCH, session_factory=_RecordingFactory()
+        )
+
+        record.record_order_rejections(**self._fields())
+
+        document = row.runtime_flags["order_rejections"]
+        assert document["rejected"] == 2
+        assert document["consecutive"] == 2
+        assert document["last"]["instrument_id"] == "NVDA.NASDAQ"
+        assert row.status is SessionStatus.RUNNING
+
+    def test_a_reclaimed_row_raises_the_ports_own_error(self, monkeypatch):
+        from src.core.live_session_record import SessionReclaimedError
+        from src.services import session_record as adapter_module
+
+        row = _row(SessionStatus.RUNNING, owner_epoch=OWNER_EPOCH + 1)
+        repository = MagicMock()
+        repository.find_by_session_id.return_value = row
+        monkeypatch.setattr(adapter_module, "SyncTradingSessionRepository", lambda s: repository)
+        record = SqlSessionRecord(
+            SESSION_ID, owner_epoch=OWNER_EPOCH, session_factory=_RecordingFactory()
+        )
+
+        with pytest.raises(SessionReclaimedError, match="reclaimed"):
+            record.record_order_rejections(**self._fields())
+
+        assert row.runtime_flags is None
+
+    def test_a_row_that_is_no_longer_running_is_translated_the_same_way(self, monkeypatch):
+        from src.core.live_session_record import SessionReclaimedError
+        from src.services import session_record as adapter_module
+
+        row = _row(SessionStatus.STOPPED)
+        repository = MagicMock()
+        repository.find_by_session_id.return_value = row
+        monkeypatch.setattr(adapter_module, "SyncTradingSessionRepository", lambda s: repository)
+        record = SqlSessionRecord(
+            SESSION_ID, owner_epoch=OWNER_EPOCH, session_factory=_RecordingFactory()
+        )
+
+        with pytest.raises(SessionReclaimedError):
+            record.record_order_rejections(**self._fields())
+
+    def test_the_adapter_still_satisfies_the_widened_port(self):
+        """The pin that makes Task 2.4(d) load-bearing: the port grew a method,
+        and ``@runtime_checkable`` ``isinstance`` now checks for four names.
+        """
+        assert isinstance(SqlSessionRecord(SESSION_ID, owner_epoch=OWNER_EPOCH), SessionRecordPort)

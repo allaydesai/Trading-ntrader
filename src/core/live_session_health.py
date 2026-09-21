@@ -53,6 +53,22 @@ class SessionHealth(StrEnum):
 DEFAULT_BAR_FRESH_AFTER_SECONDS = 300.0
 
 
+#: Story 3.7's third ``degraded`` sense: how many refusals in a row with no
+#: acceptance between make "rejected on every order" a *pattern* rather than
+#: an incident. **Judgment call D-F, flagged for Allay.**
+#:
+#: Not one, because Story 3.3 ruled a single rejection *"a normal venue
+#: answer"* and one rejected order followed by an accepted one is a session
+#: that is trading. Two, because that is the first count at which no order has
+#: got through across two separate attempts, and because it is provable live
+#: inside one RTH session with fast-crossover tuning (two crossovers).
+#:
+#: Declared **here**, in the reader's module, exactly as
+#: :data:`DEFAULT_BAR_FRESH_AFTER_SECONDS` is: the writer never needs it, and
+#: this module must not reach into a node-facing one.
+DEFAULT_REJECTIONS_DEGRADED_AFTER = 2
+
+
 def _as_utc(at: datetime | None) -> datetime | None:
     """Normalise a timestamp to tz-aware UTC, or pass ``None`` through.
 
@@ -116,20 +132,55 @@ def _failed_strategy_entries(runtime_flags: object) -> tuple[Mapping[str, object
     return tuple(entry for entry in raw if isinstance(entry, Mapping))
 
 
+def _order_rejections(runtime_flags: object) -> Mapping[str, object]:
+    """``order_rejections``, or an empty mapping if it is not one (Story 3.7).
+
+    The :func:`_failed_strategy_entries` shape, one level down: the single
+    writer always produces the decision D-D document, so anything else is a
+    hand-edited row, a restored backup or a future writer — and tolerance here
+    is what keeps the one command whose job is to *explain* a session from
+    being the one command that cannot report on it.
+    """
+    document = _flags_mapping(runtime_flags).get("order_rejections")
+    return document if isinstance(document, Mapping) else {}
+
+
+def _refusal_streak(runtime_flags: object) -> int:
+    """``order_rejections.consecutive`` as an ``int``, or ``0``.
+
+    ``bool`` is excluded deliberately: it is a subclass of ``int``, so
+    ``{"consecutive": True}`` would otherwise read as a streak of one. A
+    string, a ``None`` or a missing key reads as no streak at all — a
+    malformed document must never make a healthy session report as impaired
+    (``TestMalformedRejectionDocumentsAreToleratedNotFatal``).
+    """
+    streak = _order_rejections(runtime_flags).get("consecutive")
+    return streak if isinstance(streak, int) and not isinstance(streak, bool) else 0
+
+
 def _is_degraded(runtime_flags: Mapping[str, object] | None) -> bool:
-    """AC #4: both AR32 senses of ``degraded``, from one derivation.
+    """AC #4: every sense of ``degraded``, from one derivation.
 
     Sense (a) — contained strategies — has a live writer today
     (``failed_strategies``/``all_failed``, Story 2.7). Sense (b) — connection
     lost — is a **dormant** reader on the pre-planned ``connection_lost_at``
     key: no writer exists yet, and none may be added here (Epic 4 owns
-    ``ConnectionMonitor``, which stays unread by this story).
+    ``ConnectionMonitor``, which stays unread by this story). Sense (c) —
+    Story 3.7 — is a live refusal streak at or past
+    :data:`DEFAULT_REJECTIONS_DEGRADED_AFTER`.
 
-    Tolerant by construction: only the three known keys are ever read, so an
-    unknown key, an unexpected ``v``, or a document that is not an object at
-    all never raises — the document is rendered for what is understood, per
-    Story 2.7's own versioning rule that ``v`` bumps only on a *meaning*
-    change, not on an addition.
+    **Why sense (c) is health and not merely a rendered line.** ``live list``
+    shows health alone, and ``status --json`` carries health alone (AR29's
+    seven keys). A session rejected on every order would otherwise read
+    ``trading`` in both — the same false-green trap Story 2.7's ``all_failed``
+    sense closes, and the exact failure the PRD calls *"the worst possible…
+    it looks like a quiet market"*.
+
+    Tolerant by construction: only the four known keys are ever read, and each
+    through a reader that accepts anything, so an unknown key, an unexpected
+    ``v``, or a document that is not an object at all never raises — the
+    document is read for what is understood, per Story 2.7's own versioning
+    rule that ``v`` bumps only on a *meaning* change, not on an addition.
     """
     flags = _flags_mapping(runtime_flags)
     if not flags:
@@ -137,6 +188,8 @@ def _is_degraded(runtime_flags: Mapping[str, object] | None) -> bool:
     if flags.get("all_failed"):
         return True
     if flags.get("failed_strategies"):
+        return True
+    if _refusal_streak(flags) >= DEFAULT_REJECTIONS_DEGRADED_AFTER:
         return True
     return flags.get("connection_lost_at") is not None
 
@@ -265,6 +318,12 @@ class StatusReport:
             pre-planned ``runtime_flags`` key. **Dormant** — no writer exists
             (Epic 4 owns ``ConnectionMonitor``); carried so that a degraded
             session always renders a cause, whichever sense caused it.
+        order_rejections: Story 3.7's ``runtime_flags["order_rejections"]``,
+            carried verbatim for the renderer exactly as ``failed_strategies``
+            is — the column's own mapping, never a dataclass. The writer lives
+            in another process; this module only reads what it finds, and
+            reads it tolerantly. ``None`` when no order was ever refused, so
+            a clean session renders nothing at all.
     """
 
     session_id: str
@@ -280,6 +339,7 @@ class StatusReport:
     failed_strategies: tuple[Mapping[str, object], ...] = field(default_factory=tuple)
     all_failed: bool = False
     connection_lost_at: str | None = None
+    order_rejections: Mapping[str, object] | None = None
 
 
 def build_status_report(
@@ -363,6 +423,7 @@ def build_status_report(
         failed_strategies=_failed_strategy_entries(runtime_flags),
         all_failed=bool(flags.get("all_failed", False)),
         connection_lost_at=str(connection_lost_at) if connection_lost_at is not None else None,
+        order_rejections=_order_rejections(runtime_flags) or None,
     )
 
 
@@ -408,10 +469,61 @@ def _render_failed_strategies(failed_strategies: Sequence[Mapping[str, object]])
     return lines
 
 
+def _render_rejections(report: StatusReport) -> list[str]:
+    """Story 3.7, AC #3c: what was refused, when, and why — from the column.
+
+    Called on **both** the degraded and the non-degraded path: AC #3's
+    "visible without reading logs" holds from the *first* refusal, while the
+    one-word health waits for :data:`DEFAULT_REJECTIONS_DEGRADED_AFTER`. A
+    clean session renders nothing — the empty list, not a "no rejections"
+    line.
+
+    Every value is read defensively, one level at a time: this document comes
+    from unconstrained ``JSONB`` and this renderer runs *outside* the CLI's
+    exit-code guard, so a malformed ``last`` must cost the reader that
+    sub-block and nothing else (AR28).
+
+    ``reason`` is rendered verbatim because it was already redacted at the
+    catch site (NFR26, decision D-I) — re-masking it with ``mask_account``
+    would destroy the payload, the mistake ``_render_failed_strategies``
+    documents for ``detail``.
+
+    AR36-audited: *refused*, *rejected* and *denied* are sanctioned operator
+    vocabulary; no ``halt``/``kill``/``pause``/``close``/``finalize`` stem
+    appears.
+    """
+    document = report.order_rejections
+    if not document:
+        return []
+    rejected = document.get("rejected", 0)
+    denied = document.get("denied", 0)
+    streak = _refusal_streak({"order_rejections": document})
+    lines = [
+        f"  orders refused: {rejected} rejected, {denied} denied "
+        f"({streak} in a row with no acceptance between)"
+    ]
+    first_at = document.get("first_at")
+    if first_at is not None:
+        lines.append(f"    first refusal at {first_at}")
+    last = document.get("last")
+    if not isinstance(last, Mapping):
+        return lines
+    marker = " (from reconciliation)" if last.get("reconciliation") else ""
+    kind = "denied locally" if last.get("kind") == "denied" else "rejected by the venue"
+    lines.append(
+        f"    most recent at {last.get('at', '')} — {last.get('instrument_id', '')} "
+        f"{last.get('client_order_id', '')} {kind}{marker}"
+    )
+    reason = last.get("reason")
+    if reason:
+        lines.append(f"    reason: {reason}")
+    return lines
+
+
 def _render_degradation(report: StatusReport) -> list[str]:
     """AC #4, #5: whenever health is ``degraded``, name the cause.
 
-    :func:`_is_degraded` treats its three senses as independent, so the
+    :func:`_is_degraded` treats its four senses as independent, so the
     renderer must too. Gating every explanation behind a non-empty
     ``failed_strategies`` — as this function's first version did — left
     ``all_failed`` unexplained on its own and AR32's connection-lost sense
@@ -430,6 +542,12 @@ def _render_degradation(report: StatusReport) -> list[str]:
         lines.append("  Every strategy in this session was contained. It can no longer trade.")
     if report.connection_lost_at is not None:
         lines.append(f"  Broker connection was lost at {report.connection_lost_at}.")
+    if _refusal_streak({"order_rejections": report.order_rejections or {}}) >= (
+        DEFAULT_REJECTIONS_DEGRADED_AFTER
+    ):
+        lines.append(
+            "  This session asked for orders and did not get them. It is not a quiet market."
+        )
     if report.health == SessionHealth.DEGRADED and not lines:
         lines.append("  Impaired, but this session's runtime flags name no cause.")
     return lines
@@ -439,8 +557,16 @@ def render_status(report: StatusReport) -> str:
     """The operator-facing summary block for ``live status`` (AC #1, #5).
 
     Contains no unmasked account: nothing this module reads ever carries one
-    — ``failed_strategies[*].detail`` was already redacted at the catch site
-    (NFR26), and no other field originates from a third party.
+    — ``failed_strategies[*].detail`` and ``order_rejections.last.reason``
+    were both already redacted at their catch sites (NFR26), and no other
+    field originates from a third party.
+
+    The rejection block is rendered **before** the degradation block and on
+    every path, degraded or not (Story 3.7, AC #3c): a single refusal is
+    visible from the first one, while the one-word health waits for
+    :data:`DEFAULT_REJECTIONS_DEGRADED_AFTER`. ``_render_degradation`` then
+    adds the sentence that names *why* a degraded session is degraded, so the
+    "never a bare ``degraded``" contract covers the new sense too.
     """
     lines = [
         f"session: {report.name} ({report.session_id})",
@@ -460,5 +586,6 @@ def render_status(report: StatusReport) -> str:
         lines.append(f"  last activity: {report.last_activity_at.isoformat()}")
     else:
         lines.append("  last activity: never")
+    lines.extend(_render_rejections(report))
     lines.extend(_render_degradation(report))
     return "\n".join(lines)

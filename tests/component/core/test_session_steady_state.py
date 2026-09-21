@@ -58,6 +58,11 @@ class SpyRecord:
         self.failures: list[tuple[str, bool]] = []
         self.failure_threads: list[str] = []
         self.failure_raises: BaseException | None = None
+        #: Story 3.7's fourth port method. Same three-list shape and the
+        #: same thread-name assertion: the write must leave the loop thread.
+        self.rejections: list[dict] = []
+        self.rejection_threads: list[str] = []
+        self.rejection_raises: BaseException | None = None
 
     def record_activity(self, *, at: datetime, bar_seen_at: datetime | None = None) -> None:
         self.activity.append((at, bar_seen_at))
@@ -82,6 +87,45 @@ class SpyRecord:
         self.failure_threads.append(threading.current_thread().name)
         if self.failure_raises is not None:
             raise self.failure_raises
+
+    def record_order_rejections(
+        self,
+        *,
+        rejected: int,
+        denied: int,
+        consecutive: int,
+        first_at: datetime,
+        last_at: datetime,
+        last_kind: str,
+        last_client_order_id: str,
+        last_instrument_id: str,
+        last_strategy_id: str,
+        last_reason: str,
+        last_reconciliation: bool,
+    ) -> None:
+        """Story 3.7's fourth port method. Records the thread for the same
+        reason ``record_strategy_failure`` does: the write must leave the
+        event-loop thread, and a thread NAME is how a mutation back to
+        ``asyncio.to_thread`` is caught (decision D2's 59.81 s lesson).
+        """
+        self.rejections.append(
+            {
+                "rejected": rejected,
+                "denied": denied,
+                "consecutive": consecutive,
+                "first_at": first_at,
+                "last_at": last_at,
+                "last_kind": last_kind,
+                "last_client_order_id": last_client_order_id,
+                "last_instrument_id": last_instrument_id,
+                "last_strategy_id": last_strategy_id,
+                "last_reason": last_reason,
+                "last_reconciliation": last_reconciliation,
+            }
+        )
+        self.rejection_threads.append(threading.current_thread().name)
+        if self.rejection_raises is not None:
+            raise self.rejection_raises
 
 
 class CapturingLog:
@@ -1147,3 +1191,227 @@ class TestTheTickDrainsTheStrategyGuard:
 
         assert state.ticks == 2
         assert record.failures == []
+
+
+class _FakeTally:
+    """The two members the tick duck-types against, plus a test-side dirtier.
+
+    Mirrors :class:`RejectionTally`'s dirty-flag contract exactly, and no more:
+    ``pending()`` returns ``None`` when nothing changed since the last
+    acknowledged version, and ``mark_written`` only accepts a version newer
+    than the last one it accepted.
+    """
+
+    def __init__(self) -> None:
+        self.version = 0
+        self.written: list[int] = []
+        self._rejected = 0
+        self.pending_calls = 0
+
+    def refuse(self) -> None:
+        """Simulate one order refusal reaching the tally."""
+        self._rejected += 1
+        self.version += 1
+
+    def pending(self):
+        self.pending_calls += 1
+        if self.version == 0 or (self.written and self.written[-1] == self.version):
+            return None
+        from src.core.live_order_rejections import RejectionSnapshot
+
+        return RejectionSnapshot(
+            version=self.version,
+            rejected=self._rejected,
+            denied=0,
+            consecutive=self._rejected,
+            first_at=STARTED_AT,
+            last_at=STARTED_AT + timedelta(seconds=self._rejected),
+            last_kind="rejected",
+            last_client_order_id=f"O-{self._rejected}",
+            last_instrument_id="NVDA.NASDAQ",
+            last_strategy_id="SMACrossover-000",
+            last_reason="Order rejected - reason: insufficient margin",
+            last_reconciliation=False,
+        )
+
+    def mark_written(self, version: int) -> None:
+        self.written.append(version)
+
+
+class TestTheTickDrainsTheRejectionTally:
+    """Story 3.7, AC #3a — the refusal summary is written *here*, not inline.
+
+    Story 3.6 wrote a trade *inside* the handler, and the argument for that
+    (NFR8: a ``SIGKILL`` must lose nothing already closed) does not transfer.
+    A refusal can happen every minute for a whole session; every constituent
+    ``order.rejected`` record is already in the transcript (NFR21); and losing
+    the last ≤ 30 s of a *summary* costs nothing an operator cannot
+    reconstruct. So this is Story 2.7's queue-and-drain shape, not 3.6's
+    inline one — except that nothing is queued at all: a dirty flag, so the
+    newest summary supersedes an older one and the write is bounded by the
+    tick rate rather than by the refusal rate (NFR2).
+    """
+
+    async def test_a_dirty_tally_is_written_on_the_tick(self):
+        clock, record, log = FakeClock(), SpyRecord(), CapturingLog()
+        tally = _FakeTally()
+        tally.refuse()
+        state = _steady_state(clock, record, log, tally=tally)
+
+        await _run_ticks(state, 1)
+
+        assert len(record.rejections) == 1
+        written = record.rejections[0]
+        assert written["rejected"] == 1
+        assert written["consecutive"] == 1
+        assert written["last_instrument_id"] == "NVDA.NASDAQ"
+        assert written["last_client_order_id"] == "O-1"
+        assert written["last_reconciliation"] is False
+
+    async def test_the_written_version_is_acknowledged(self):
+        clock, record, log = FakeClock(), SpyRecord(), CapturingLog()
+        tally = _FakeTally()
+        tally.refuse()
+        state = _steady_state(clock, record, log, tally=tally)
+
+        await _run_ticks(state, 1)
+
+        assert tally.written == [1]
+
+    async def test_the_write_runs_on_the_objects_own_executor_never_the_loop(self):
+        """⚠️ Never ``asyncio.to_thread``, whose default executor is the
+        kernel's — the one ``TradingNode.dispose()`` joins with ``wait=True``
+        (decision D2's measured 59.81 s). Asserted by **thread name**, so a
+        mutation back to ``to_thread`` fails rather than merely being slower.
+        """
+        clock, record, log = FakeClock(), SpyRecord(), CapturingLog()
+        tally = _FakeTally()
+        tally.refuse()
+        state = _steady_state(clock, record, log, tally=tally)
+
+        await _run_ticks(state, 1)
+
+        assert record.rejection_threads
+        assert all(
+            name.startswith("session-heartbeat-write") for name in record.rejection_threads
+        ), record.rejection_threads
+
+    async def test_a_clean_tally_costs_zero_writes_across_three_ticks(self):
+        """The anti-tautology twin of the test above: a session that never had
+        an order refused must not pay a database round trip per tick.
+        """
+        clock, record, log = FakeClock(), SpyRecord(), CapturingLog()
+        tally = _FakeTally()
+        state = _steady_state(clock, record, log, tally=tally)
+
+        await _run_ticks(state, 3)
+
+        assert record.rejections == []
+        assert tally.pending_calls == 3
+
+    async def test_a_written_tally_costs_no_further_writes_until_it_dirties_again(self):
+        clock, record, log = FakeClock(), SpyRecord(), CapturingLog()
+        tally = _FakeTally()
+        tally.refuse()
+        state = _steady_state(clock, record, log, tally=tally)
+
+        await _run_ticks(state, 4)
+
+        assert len(record.rejections) == 1
+
+    async def test_a_further_refusal_costs_exactly_one_more_write(self):
+        clock, record, log = FakeClock(), SpyRecord(), CapturingLog()
+        tally = _FakeTally()
+        tally.refuse()
+        state = _steady_state(clock, record, log, tally=tally)
+        state._sleeper = _dirty_after(state, tally, at_tick=2)  # type: ignore[attr-defined]
+
+        await _run_ticks(state, 4)
+
+        assert [entry["rejected"] for entry in record.rejections] == [1, 2]
+
+    async def test_a_write_failure_is_logged_and_the_session_continues(self):
+        """AR42: a database hiccup must never kill a trading session."""
+        clock, record, log = FakeClock(), SpyRecord(), CapturingLog()
+        record.rejection_raises = RuntimeError("postgres is down")
+        tally = _FakeTally()
+        tally.refuse()
+        state = _steady_state(clock, record, log, tally=tally)
+
+        await _run_ticks(state, 2)
+
+        assert ("error", "session.rejection_record_failed") in [
+            (level, event) for level, event, _ in log.records
+        ]
+        assert state.ticks == 2
+
+    async def test_a_failed_write_is_not_acknowledged_and_the_next_tick_retries(self):
+        """Nothing is queued: the *next* tick writes the *then-current*
+        snapshot. Dirtying the tally between the failed write and the retry is
+        what makes "newest wins" observable — a queue would have replayed the
+        stale summary first.
+        """
+        clock, record, log = FakeClock(), SpyRecord(), CapturingLog()
+        attempts = {"n": 0}
+        original = record.record_order_rejections
+
+        def flaky_once(**kwargs):
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                raise RuntimeError("postgres is down")
+            original(**kwargs)
+
+        record.record_order_rejections = flaky_once
+        tally = _FakeTally()
+        tally.refuse()
+        state = _steady_state(clock, record, log, tally=tally)
+        state._sleeper = _dirty_after(state, tally, at_tick=1)  # type: ignore[attr-defined]
+
+        await _run_ticks(state, 2)
+
+        assert attempts["n"] == 2
+        assert tally.written == [2]
+        # The second, NEWER summary landed — not a replay of the failed first.
+        assert [entry["rejected"] for entry in record.rejections] == [2]
+
+    async def test_a_reclaim_on_the_rejection_write_ends_the_loop(self):
+        """The one exception AR42 does not survive, on this path as on its two
+        siblings': two processes on one broker account is NFR6's catastrophe.
+        """
+        clock, record, log = FakeClock(), SpyRecord(), CapturingLog()
+        record.rejection_raises = SessionReclaimedError("taken by another process")
+        tally = _FakeTally()
+        tally.refuse()
+        state = _steady_state(clock, record, log, tally=tally)
+
+        with pytest.raises(SessionReclaimedError):
+            await _run_ticks(state, 2)
+
+    async def test_a_steady_state_built_without_a_tally_drains_nothing(self):
+        """Story 2.5's and 2.6's construction sites keep working unmodified —
+        ``tally`` defaults to ``None`` exactly as ``guard`` does.
+        """
+        clock, record, log = FakeClock(), SpyRecord(), CapturingLog()
+        state = _steady_state(clock, record, log)
+
+        await _run_ticks(state, 3)
+
+        assert record.rejections == []
+        assert state.ticks == 3
+
+
+def _dirty_after(state, tally: _FakeTally, *, at_tick: int):
+    """Wrap the state's sleeper so the tally is refused once more after
+    ``at_tick`` complete ticks — the "a refusal arrived between two ticks"
+    timeline, driven deterministically rather than by a race.
+    """
+    inner = state._sleeper  # type: ignore[attr-defined]
+    seen = {"n": 0}
+
+    async def _sleeper(seconds: float) -> None:
+        if seen["n"] == at_tick:
+            tally.refuse()
+        seen["n"] += 1
+        await inner(seconds)
+
+    return _sleeper

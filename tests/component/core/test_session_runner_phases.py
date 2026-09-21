@@ -142,6 +142,8 @@ class SpyRecord:
         self.calls: list[str] = []
         self.activity: list[tuple[datetime, datetime | None]] = []
         self.failures: list[str] = []
+        #: Story 3.7's fourth port method.
+        self.rejections: list[dict] = []
         self.raises: BaseException | None = None
 
     def record_activity(self, *, at: datetime, bar_seen_at: datetime | None = None) -> None:
@@ -170,6 +172,28 @@ class SpyRecord:
         """
         self.calls.append("record_strategy_failure")
         self.failures.append(spec_strategy_id)
+
+    def record_order_rejections(
+        self,
+        *,
+        rejected: int,
+        denied: int,
+        consecutive: int,
+        first_at: datetime,
+        last_at: datetime,
+        last_kind: str,
+        last_client_order_id: str,
+        last_instrument_id: str,
+        last_strategy_id: str,
+        last_reason: str,
+        last_reconciliation: bool,
+    ) -> None:
+        """Story 3.7's fourth port method. Duck-typed here, but kept complete so
+        the double stays an honest ``SessionRecordPort`` rather than one that
+        happens to satisfy the calls this file makes today.
+        """
+        self.calls.append("record_order_rejections")
+        self.rejections.append({"rejected": rejected, "consecutive": consecutive})
 
 
 def _permitting_verifier(mode: GateMode = GateMode.PAPER):
@@ -851,6 +875,10 @@ class TestSubscribeAndTradingRegisterRealThings:
         """Extended by Story 3.2, Task 5.1: the order path adds its own bar
         subscription (latency anchoring) and an order-events subscription,
         both alongside — never instead of — the steady state's original one.
+        Extended again by Story 3.7: the rejection tally is the **third**
+        independent subscriber on ``events.order*``, beside the observer's own
+        handler, so that topic now appears twice. An exact list, so a lost
+        subscription is as visible as a wrong one.
         """
         settings = _settings()
         registered_accounts(settings)
@@ -864,15 +892,18 @@ class TestSubscribeAndTradingRegisterRealThings:
             "data.bars.*",
             "data.bars.*",
             "events.order*",
+            "events.order*",
             "events.position*",
         ]
         assert runner._order_observer is not None
+        assert runner._rejection_tally is not None
         assert runner._trade_recorder is not None
         handlers = [handler for _, handler in node.trader.subscriptions]
         assert handlers[0] == runner._steady_state.note_bar
         assert handlers[1] == runner._order_observer.note_bar
         assert handlers[2] == runner._order_observer.handle_order_event
-        assert handlers[3] == runner._trade_recorder.handle_position_event
+        assert handlers[3] == runner._rejection_tally.handle_order_event
+        assert handlers[4] == runner._trade_recorder.handle_position_event
 
     def test_note_bar_is_subscribed_before_any_strategy_is_added(self, registered_accounts):
         """Pre-verified finding #12's ordering, pinned (review fix, 2026-08-23).
@@ -905,14 +936,15 @@ class TestSubscribeAndTradingRegisterRealThings:
 
         assert "subscribe" in timeline and "add_strategy" in timeline
         assert timeline.index("subscribe") < timeline.index("add_strategy")
-        # Story 3.2 (extended by Story 3.5): not just the FIRST subscribe —
-        # every subscribe call the runner makes (steady state's bar topic,
-        # the order path's bar topic, the order path's events.order* topic,
-        # and now the trade recorder's events.position* topic) must land
-        # before the first `add_strategy`. A weaker check would miss a bug
-        # that put a new subscription AFTER trading started.
+        # Story 3.2 (extended by Stories 3.5 and 3.7): not just the FIRST
+        # subscribe — every subscribe call the runner makes (steady state's
+        # bar topic, the order path's bar topic, the order path's
+        # events.order* topic, the rejection tally's events.order* topic, and
+        # the trade recorder's events.position* topic) must land before the
+        # first `add_strategy`. A weaker check would miss a bug that put a new
+        # subscription AFTER trading started.
         first_add_strategy = timeline.index("add_strategy")
-        assert timeline[:first_add_strategy].count("subscribe") == 4, timeline
+        assert timeline[:first_add_strategy].count("subscribe") == 5, timeline
 
     def test_a_real_bus_dispatches_equal_priority_subscribers_in_subscription_order(self):
         """The bus-side half of finding #12, against a real ``MessageBus``:
@@ -1266,6 +1298,12 @@ class TestImportPurity:
         # strategy guard do. Story 3.6 adds the persistence adapter as an
         # injected port, not a new import here.
         "src.core.live_trade_recorder",
+        # Story 3.7. Subscribed in `_phase_subscribe` beside the other two,
+        # and builds the primitives-only snapshot that crosses into
+        # `src/services` through the record port — exactly the shape AR38
+        # governs. Its one non-stdlib import is `live_strategy_guard`'s
+        # redaction pair, which is itself on this list. Added on creation.
+        "src.core.live_order_rejections",
     )
 
     @pytest.mark.parametrize("module_name", MODULES)

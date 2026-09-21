@@ -1452,3 +1452,177 @@ transcript's.
 | ---- | -------- | ------ | ----- |
 | 2026-09-21 | Allay (Claude Code session) | ✅ **pass — all seven criteria met live; NFR8 holds against a real `kill -9` 189 ms after the commit** | Run inside RTH (Monday, 14:06–14:14 ET), same Gateway/Redis/Postgres preconditions as P11's row above, on the same preflight. **Migration first, and it mattered**: the database was at `b7c419e2a3d8`, and `live list` was failing outright (`ProgrammingError`, the missing `owner_epoch` column) until `alembic upgrade head` applied `85c949ac0374` — so the precondition is load-bearing, not ceremonial. Fresh session `p12-0921` (`session_id=064feace-6262-4716-84f6-87be0c41b88d`, `trader_id=PAPER-064feace`), same recipe as P11. **Criterion 6 (D6 check, read first)** — the kill transcript's `grep -c -E "162|10182|366"` = 2, and **both are timestamp digits**: zero `code: 162`, `code: 10182` or `code: 366` matches anywhere in it. The reclaim transcript has 3 hits, one of which is the benign teardown `query cancelled: 10005 (code: 162, req_id=10005)`. Zero `superseded` / `different IP address` in either. **Criterion 1** — entry fill 18:10:05.933Z (`O-20260921-181005-064feace-000-1`, `last_px=227.12`), exit fill 18:11:05.809Z (`O-20260921-181105-064feace-000-2`, `last_px=227.14`), then one `trade.aggregated` (18:11:05.810460Z) and one `trade.persisted attempt=first inserted=True` (18:11:05.816399Z), both carrying `trade_key=NVDA.NASDAQ-SMACrossover-000:O-20260921-181105-064feace-000-2` and the bound `session_id`. (A second `trade.aggregated` fired for a reconciliation-owned `INTERNAL-DIFF` position, the same adapter double-count P11's row documents, and was correctly `trade.persist_skipped reason=reconciliation_owned` — not a persisted trade, and not bearing on this criterion.) **The `kill -9` was delivered at 18:11:06.005Z**, 189 ms after the `trade.persisted` line, and the transcript's last line is the strategy's own `<--[EVT] PositionClosed(` print at 18:11:05.816587Z — the process died mid-event-propagation, which is exactly the death this procedure needs. **Criterion 2 (the comparison this procedure exists to make)** — after the kill, `trades` holds exactly one row for the session (`id=14984`) and it matches the transcript field for field: `trade_id=NVDA.NASDAQ-SMACrossover-000`, `client_order_id=O-20260921-181105-064feace-000-2`, `entry_price=227.12000000`, `exit_price=227.14000000`, `commission_amount=2.11000000` `USD`, `profit_loss=-1.67000000`, `quantity=22.00000000`, `holding_period_seconds=59`, `entry_timestamp=2026-09-21 14:10:06-04`, `exit_timestamp=2026-09-21 14:11:05-04`. **NFR8 holds live: a `SIGKILL` the process had no chance to react to lost nothing already committed.** **Criterion 3** — `live status p12-0921` reports `closed trades: 1, open positions: 0`, **the first non-zero reading this counter has ever produced in a live session**. **Criterion 4** — zero `trade.recorder_failed`, zero `trade.persist_refused`. **Criterion 5** — the next `live start p12-0921` (18:13:05Z, after the window) logged `session.reclaimed heartbeat_age_seconds=119.563624` then `session.started`, and the row's `owner_epoch` moved `1 -> 2`, exactly one higher than the killed run's claim. Incidentally re-evidences P10's criteria 1/2: `Cached 4 orders from database` and `Set ClientOrderIdGenerator client_order_id count to 2` both appear before `session.started`. That reclaim run was SIGINT-stopped before it opened any position. **Criterion 7 (the Task 1.3 number, live) — and the procedure's own phrasing is wrong.** The gap it asks for is negative: `trade.persisted` (18:11:05.816399Z) precedes the strategy-side Nautilus `PositionClosed(` print (18:11:05.816587Z) by 0.19 ms, because the recorder's handler runs ahead of the strategy's own logger. The measurable equivalents from the same transcript: closing `order.filled` → `trade.persisted` = **6.44 ms**, of which `trade.aggregated` → `trade.persisted` = **5.94 ms** is the persist step itself. So D-A's sub-millisecond local measurement understates the live cost by roughly an order of magnitude (~6 ms, against a local Postgres) — still four orders of magnitude inside a 1-minute bar, so the decision D-A rests on is unchanged, but the number on record should be ~6 ms, not sub-millisecond. **Broker state** — `net_position=0` at the kill, and the reclaim run's startup reconciliation found no NVDA position to reconcile, so nothing was left open at the broker. Logs: `logs/p12-20260921.log`, `logs/p12-reclaim-20260921.log`. |
 | — | — | ⛔ *(superseded by the row above)* | Written with Story 3.6, 2026-09-12, before any live run. No Gateway was reachable at drafting time (4001/4002/7496/7497 all closed, no docker daemon) and it was outside RTH (Saturday) — the standing Epic 2 retro rule (3.2/3.3/3.4/3.5 precedent) means this story goes to `review` with this row unresolved, not `done`. |
+
+---
+
+## Procedure P13: a session rejected on every order stays up and says so
+
+**Introduced by**: Story 3.7 — Keep Trading After a Rejection
+**Verifies**: AC #1 live (a real IBKR rejection with a real venue reason, followed by the
+session's next crossover submitting a fresh order), AC #2 live (the node does not terminate and
+nothing is contained), AC #3 live (the condition is readable from a **second terminal** —
+`live status` reads `health: degraded` with the refusal block, `live list` shows `degraded`,
+`runtime_flags.order_rejections` on the row matches the transcript), and AC #4 live (zero
+`trades` rows for a run whose every order was refused).
+
+### What it does — and does not — do
+
+Half of this story shipped under Story 3.3: `order.rejected` with a verbatim `venue_reason`
+already exists, and Nautilus's own `on_order_rejected`/`on_order_denied` are no-ops, so "the
+session continues" is already the mechanical truth. This procedure is **not** evidence that the
+story created that; it is evidence that the story's *pins* describe reality, and — the actual
+deliverable — that a rejection is now visible **from another process**, which nothing before
+this story could show.
+
+What this run is **not** evidence for, stated rather than left implicit: a strategy that
+overrides `on_order_rejected` and raises (AC #2c — component-tier only; no strategy in this repo
+overrides it, and adding one to provoke a live `strategy.failed` would be staging a defect);
+`OrderDenied` from the risk engine (see **measured fact** below — the paper account is a MARGIN
+account, so the notional checks that would produce one are skipped entirely; the denial path is
+component-tier evidence only); the retry/idempotency of the tick write (AR42 — component tier);
+the reclaim refusal at a rejection write (integration tier, two real Postgres connections —
+running two live processes against one paper account is the NFR6 catastrophe this project exists
+to prevent, and is never staged live).
+
+### Preconditions
+
+P12's, unchanged: inside RTH; **no other IBKR login** (mobile app and client portal included —
+error 162); the bare non-compose Gateway (`READ_ONLY_API: "yes"` on the compose one refuses the
+first order); Redis **and** Postgres up; `uv run alembic current` reads `85c949ac0374` — this
+story adds **no** migration, so the head must be unchanged before *and* after; a **fresh session
+name**; `flatten_position.py --confirm` is still broken and fails safe (P11), so a position left
+open at the end of the run stays open at the broker by design.
+
+Plus, specific to this procedure:
+
+**Measured fact (re-measured 2026-09-21 against the installed 1.220.0 wheel):**
+`RiskEngine._check_orders_risk` (`risk/engine.pyx:626`) returns early at
+**`risk/engine.pyx:652`** — `if account.is_margin_account: return True  # TODO: Determine risk
+controls for margin` — *before* any `NOTIONAL_EXCEEDS_*` branch is reached. The live paper
+account is `account_type=MARGIN` (`logs/p12-20260921.log`, 18:06:25Z, `free=32_542.54 USD`,
+`BuyingPower: 108475.14`). **Consequence:** an oversized market order of **either** side reaches
+IBKR and is rejected *there* (expected code 201, the margin rejection) rather than being denied
+locally — which is exactly the venue rejection AC #1's letter ("rejected by IBKR") needs. If a
+future wheel removes that early return, a BUY would instead be denied locally
+(`NOTIONAL_EXCEEDS_FREE_BALANCE`, since `MarginAccount.balance_impact` is `-notional` for a BUY
+and `+notional` for a SELL) and only a SELL would reach IBKR — in that case at least one SELL
+crossover is required for criterion 1, and the BUY crossovers will surface as `order.denied`.
+**Re-measure the line before running**, and record which you found.
+
+**⚠️ Read `BuyingPower` from the transcript before the first crossover fires.** The recipe below
+sizes the order far above it on purpose. If the account's buying power has grown past the sizing,
+**the order fills** and the operator owns a real ~$500k paper position with no working tool to
+close it (P11's warning, restated). Read the first
+`ExecClient-INTERACTIVE_BROKERS: {… 'USD': {…}}` line in the transcript and confirm the sizing is
+still far above it before letting a second crossover run.
+
+### Command
+
+```bash
+uv run alembic current   # must read 85c949ac0374 (head), before AND after
+
+# ~$500,000 notional (≈ 2,200 NVDA at $227) against BuyingPower ≈ 108,475 measured 2026-09-21.
+# fast_period=2/slow_period=3 gives two crossovers within minutes on 1-minute bars.
+uv run python -m src.cli.main live create --name p13-<date> \
+  --strategy sma_crossover \
+  --bar-type NVDA.NASDAQ-1-MINUTE-LAST-EXTERNAL \
+  --param fast_period=2 --param slow_period=3 \
+  --param portfolio_value=1000000 --param position_size_pct=50
+
+uv run python -m src.cli.main live start p13-<date> > logs/p13-<date>.log 2>&1 &
+
+# D6's standing rule — inspected BEFORE anything else is recorded.
+grep -c -E "162|10182|366" logs/p13-<date>.log
+
+# Confirm the sizing is still far above buying power, before a second crossover runs.
+grep -m1 "BuyingPower" logs/p13-<date>.log
+
+# Wait for TWO crossovers (minutes with this tuning), then from a SECOND TERMINAL:
+uv run python -m src.cli.main live status p13-<date>
+uv run python -m src.cli.main live list
+uv run python -m src.cli.main live status p13-<date> --json | jq keys
+
+# Read the transcript.
+grep -n "order.submitted\|order.rejected\|order.denied\|order.accepted" logs/p13-<date>.log
+grep -n "rejection_tally_failed\|observer_failed\|strategy.failed\|rejection_record_failed" \
+  logs/p13-<date>.log
+grep -n "Unhandled order warning or error code" logs/p13-<date>.log   # fact 5, see criterion 1
+
+# Cross-process: the column must match the transcript.
+psql "$DATABASE_URL" -c \
+  "SELECT runtime_flags->'order_rejections' FROM trading_sessions WHERE name='p13-<date>'"
+psql "$DATABASE_URL" -c \
+  "SELECT count(*) FROM trades WHERE session_id = (SELECT id FROM trading_sessions \
+   WHERE name='p13-<date>')"
+
+# Then SIGINT the run, and confirm the block survives the stop.
+kill -INT "$(pgrep -f 'live start p13-<date>')"
+uv run python -m src.cli.main live status p13-<date>
+```
+
+### Expected output
+
+In the transcript:
+
+```
+order.submitted client_order_id=O-<...>-000-1 instrument_id=NVDA.NASDAQ ...
+order.rejected  client_order_id=O-<...>-000-1 venue_reason=<IB's own text> due_post_only=False
+order.submitted client_order_id=O-<...>-000-2 ...      # the NEXT crossover, after the rejection
+order.rejected  client_order_id=O-<...>-000-2 venue_reason=<IB's own text>
+```
+
+and, from the second terminal, after the second rejection and at least one heartbeat tick:
+
+```
+session: p13-<date> (<uuid>)
+  state: running
+  health: degraded
+  closed trades: 0, open positions: 0
+  heartbeat: Ns ago
+  orders refused: 2 rejected, 0 denied (2 in a row with no acceptance between)
+    first refusal at 2026-..-..T..:..:..+00:00
+    most recent at 2026-..-..T..:..:..+00:00 — NVDA.NASDAQ O-<...>-000-2 rejected by the venue
+    reason: <IB's own text, with any account-shaped token masked>
+  This session asked for orders and did not get them. It is not a quiet market.
+```
+
+### Pass criteria
+
+1. **At least one `order.rejected` record with a non-empty `venue_reason` that is not `UNKNOWN`
+   and with `reconciliation` absent/false**, preceded by the adapter's own `[ERROR]`/`[WARNING]`
+   line naming the code (expected **201**; record whichever appears — the adapter logs the code,
+   the event does not carry it) — AC #1's letter.
+   *If only `venue_reason="UNKNOWN" reconciliation=True` appears*, **fact 5 fired**: the venue
+   answered with a code outside `ORDER_REJECTION_CODES = {201, 203, 321, 10289, 10293}`
+   (`adapters/interactive_brokers/client/error.py:40`), so `_handle_order_error` logged
+   `Unhandled order warning or error code` and emitted **no event** (`:231-236`), and Story 3.4's
+   in-flight sweep resolved the order minutes later as `UNKNOWN`. Record that line and its code,
+   note that the tally still counted the refusal, and count this criterion **met with the fact-5
+   caveat**.
+2. **The next crossover's `order.submitted` appears *after* the first `order.rejected`**, and the
+   session is still heartbeating throughout (`live status` from a second terminal reads
+   `state: running` with a fresh heartbeat) — AC #1's "remains eligible to trade". The process
+   stays alive until the operator's `SIGINT`.
+3. **Zero `order.rejection_tally_failed`, zero `order.observer_failed`, zero `strategy.failed`,
+   zero `session.rejection_record_failed`** anywhere in the transcript — AC #2.
+4. **From a second terminal, after the second rejection and at least one heartbeat tick:**
+   `live status p13-<date>` reads `health: degraded` and the refusal block with `rejected: 2`
+   (or more), a streak ≥ 2, `first_at`, and the last refusal's instrument, `client_order_id` and
+   **redacted** reason; `live list` shows `degraded` in the Health column and **no** reason text;
+   `live status p13-<date> --json | jq keys` is exactly the seven AR29 keys with
+   `"health": "degraded"` — AC #3.
+5. **`psql`'s `runtime_flags->'order_rejections'` matches the transcript's counters**, and after
+   a clean `SIGINT` stop the block still renders (flags survive a stop; they are cleared only on
+   the next `-> running` edge) — AC #3, cross-process.
+6. **`SELECT count(*) FROM trades WHERE session_id = <pk>` is `0`**, and `live status` reads
+   `closed trades: 0, open positions: 0` — AC #4. A rejection is not a trade.
+7. **`grep -c -E "162|10182|366"` inspected before anything else is recorded** (D6's standing
+   rule), and `net_position=0` at the end with nothing open at the broker. A rejected order opens
+   nothing — but confirm it, because a **fill** here is the one bad outcome this recipe can
+   produce.
+
+### Result log
+
+| Date | Operator | Result | Notes |
+| ---- | -------- | ------ | ----- |
+| 2026-09-21 | Allay (Claude Code session) | ⏳ **not yet run — no Gateway reachable** | Written and attempted at implementation time. **Gateway check, recorded rather than assumed**: at 15:56 ET (Monday, still inside RTH) ports 4001, 4002, 7496 and 7497 were all closed — no Gateway or TWS running — with ~4 minutes of RTH left, so the two crossovers this recipe needs could not have completed even had one been started. The story therefore goes to `review`, not `done` — the standing Epic 2 retro rule (3.2–3.6 precedent). One precondition **was** re-measured against the installed wheel at implementation time and is unchanged from drafting: `risk/engine.pyx:652` still reads `if account.is_margin_account: return True` inside `_check_orders_risk` (`:626`), so the recipe stands as written — an oversized order of **either** side reaches IBKR and is rejected there rather than denied locally, and no SELL-only variant is needed. |

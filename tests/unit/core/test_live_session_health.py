@@ -17,6 +17,7 @@ import pytest
 from src.core import live_session_health
 from src.core.live_session_health import (
     DEFAULT_BAR_FRESH_AFTER_SECONDS,
+    DEFAULT_REJECTIONS_DEGRADED_AFTER,
     SessionHealth,
     StatusReport,
     build_status_report,
@@ -743,3 +744,328 @@ class TestModulePurity:
         offenders = [name for name in imported if name.startswith(forbidden)]
 
         assert offenders == [], f"live_session_health must stay framework-free: {offenders}"
+
+
+def _rejections(consecutive: int = 2, **overrides) -> dict:
+    """A well-formed ``order_rejections`` sub-document, as the writer builds it."""
+    document = {
+        "rejected": consecutive,
+        "denied": 0,
+        "consecutive": consecutive,
+        "first_at": "2026-08-24T11:55:00+00:00",
+        "last": {
+            "at": "2026-08-24T11:59:30+00:00",
+            "kind": "rejected",
+            "client_order_id": "O-20260824-115930-0a1b2c3d-000-3",
+            "instrument_id": "NVDA.NASDAQ",
+            "strategy_id": "SMACrossover-000",
+            "reason": "Order rejected - reason: insufficient margin",
+            "reconciliation": False,
+        },
+    }
+    document.update(overrides)
+    return document
+
+
+class TestDegradedCoversTheRejectionSense:
+    """Story 3.7, AC #3c — the third ``degraded`` sense, and the reason it is a
+    *health* sense rather than only a rendered line.
+
+    ``live list`` shows health alone and ``status --json`` carries health alone
+    (AR29's seven keys, Story 2.8 Judgment call #9). A body line in ``status``
+    would therefore leave both reading ``trading`` for a session that cannot
+    get an order placed — the exact false-green AC #3 exists to close, and the
+    same argument Story 2.7's ``all_failed`` sense was given.
+
+    **The threshold is a judgment call (decision D-F), flagged for Allay.**
+    Story 3.3 ruled a single rejection *"a normal venue answer"*, and one
+    rejected order followed by an accepted one is a session that is trading.
+    Two refusals with no acceptance between is where "rejected on every order"
+    stops being an incident and becomes a pattern — and it is provable live
+    inside one RTH session with fast-crossover tuning. A single rejection
+    still renders its line in the body from the very first one; only the
+    one-word health waits for the second.
+    """
+
+    def test_a_streak_at_the_threshold_is_degraded(self):
+        health = _derive(
+            last_heartbeat_at=_ago(1),
+            last_bar_at=_ago(1),
+            runtime_flags={"v": 1, "order_rejections": _rejections(consecutive=2)},
+        )
+        assert health is SessionHealth.DEGRADED
+
+    def test_the_boundary_is_at_least_not_greater_than(self):
+        """``>=``: exactly-at-threshold counts. The mutation this pins is
+        ``>``, which would need a *third* refusal before saying anything.
+        """
+        assert DEFAULT_REJECTIONS_DEGRADED_AFTER == 2
+        at_threshold = _derive(
+            last_heartbeat_at=_ago(1),
+            last_bar_at=_ago(1),
+            runtime_flags={
+                "v": 1,
+                "order_rejections": _rejections(consecutive=DEFAULT_REJECTIONS_DEGRADED_AFTER),
+            },
+        )
+        below = _derive(
+            last_heartbeat_at=_ago(1),
+            last_bar_at=_ago(1),
+            runtime_flags={
+                "v": 1,
+                "order_rejections": _rejections(consecutive=DEFAULT_REJECTIONS_DEGRADED_AFTER - 1),
+            },
+        )
+        assert at_threshold is SessionHealth.DEGRADED
+        assert below is SessionHealth.TRADING
+
+    def test_a_streak_of_one_is_still_trading(self):
+        health = _derive(
+            last_heartbeat_at=_ago(1),
+            last_bar_at=_ago(1),
+            runtime_flags={"v": 1, "order_rejections": _rejections(consecutive=1)},
+        )
+        assert health is SessionHealth.TRADING
+
+    def test_a_streak_reset_to_zero_reads_trading_again(self):
+        """An acceptance clears the streak, and the *next* tick writes the
+        cleared summary. Without this, a session that recovered would read
+        ``degraded`` from another process for the rest of its run.
+        """
+        health = _derive(
+            last_heartbeat_at=_ago(1),
+            last_bar_at=_ago(1),
+            runtime_flags={"v": 1, "order_rejections": _rejections(consecutive=0, rejected=5)},
+        )
+        assert health is SessionHealth.TRADING
+
+    def test_two_rows_identical_but_for_the_flags_derive_differently(self):
+        """**The distinguishability pin itself** (AC #3's letter): a session
+        rejected on every order must not look like a session seeing no
+        signals. Both rows have a fresh heartbeat and a bar 30 s old — every
+        column that feeds health is identical except ``runtime_flags``.
+        """
+        common = dict(
+            session_id="11111111-1111-1111-1111-111111111111",
+            name="alpha-session",
+            status=SessionStatus.RUNNING,
+            last_heartbeat_at=_ago(1),
+            last_bar_at=_ago(30),
+            last_started_at=_ago(500),
+            last_stopped_at=None,
+            sealed_at=None,
+            closed_trade_count=0,
+            open_positions=0,
+            now=NOW,
+            heartbeat_stale_after_seconds=90.0,
+        )
+
+        quiet_market = build_status_report(runtime_flags=None, **common)
+        rejected_on_every_order = build_status_report(
+            runtime_flags={"v": 1, "order_rejections": _rejections(consecutive=2)}, **common
+        )
+
+        assert quiet_market.health == SessionHealth.TRADING
+        assert rejected_on_every_order.health == SessionHealth.DEGRADED
+
+    def test_a_single_rejection_differs_by_body_text_even_while_health_agrees(self):
+        """The other half of the same pin: visibility does **not** wait for the
+        threshold. A session with one refusal reads ``trading`` — and still
+        says so in the body.
+        """
+        common = dict(
+            session_id="11111111-1111-1111-1111-111111111111",
+            name="alpha-session",
+            status=SessionStatus.RUNNING,
+            last_heartbeat_at=_ago(1),
+            last_bar_at=_ago(30),
+            last_started_at=_ago(500),
+            last_stopped_at=None,
+            sealed_at=None,
+            closed_trade_count=0,
+            open_positions=0,
+            now=NOW,
+            heartbeat_stale_after_seconds=90.0,
+        )
+
+        quiet_market = render_status(build_status_report(runtime_flags=None, **common))
+        one_refusal = render_status(
+            build_status_report(
+                runtime_flags={"v": 1, "order_rejections": _rejections(consecutive=1)}, **common
+            )
+        )
+
+        assert "NVDA.NASDAQ" in one_refusal
+        assert "NVDA.NASDAQ" not in quiet_market
+        assert "health: trading" in one_refusal
+
+    def test_the_rejection_sense_does_not_outrank_stale_or_stopped(self):
+        """Precedence is unchanged: ``stopped`` > ``stale`` > ``degraded``."""
+        flags = {"v": 1, "order_rejections": _rejections(consecutive=9)}
+        assert _derive(SessionStatus.STOPPED, runtime_flags=flags) is SessionHealth.STOPPED
+        assert _derive(last_heartbeat_at=_ago(1_000), runtime_flags=flags) is SessionHealth.STALE
+
+
+class TestTheRejectionBlockRenders:
+    """AC #3c: the body names the counters, the streak and the last refusal."""
+
+    def _report(self, **overrides) -> StatusReport:
+        fields = dict(
+            session_id="11111111-1111-1111-1111-111111111111",
+            name="alpha-session",
+            status=SessionStatus.RUNNING,
+            last_heartbeat_at=_ago(1),
+            last_bar_at=_ago(1),
+            last_started_at=_ago(500),
+            last_stopped_at=None,
+            sealed_at=None,
+            runtime_flags={"v": 1, "order_rejections": _rejections(consecutive=2)},
+            closed_trade_count=0,
+            open_positions=0,
+            now=NOW,
+            heartbeat_stale_after_seconds=90.0,
+        )
+        fields.update(overrides)
+        return build_status_report(**fields)
+
+    def test_every_named_field_reaches_the_operator(self):
+        text = render_status(self._report())
+
+        assert "2" in text  # both counters and the streak
+        assert "NVDA.NASDAQ" in text
+        assert "O-20260824-115930-0a1b2c3d-000-3" in text
+        assert "insufficient margin" in text
+        assert "2026-08-24T11:55:00+00:00" in text  # first_at
+        assert "2026-08-24T11:59:30+00:00" in text  # last.at
+
+    def test_a_denial_is_named_as_a_denial_not_a_rejection(self):
+        document = _rejections(consecutive=2, rejected=0, denied=2)
+        document["last"]["kind"] = "denied"
+        text = render_status(self._report(runtime_flags={"v": 1, "order_rejections": document}))
+
+        assert "denied" in text.lower()
+
+    def test_a_reconciliation_refusal_is_marked_as_such(self):
+        document = _rejections(consecutive=2)
+        document["last"]["reconciliation"] = True
+        document["last"]["reason"] = "UNKNOWN"
+        text = render_status(self._report(runtime_flags={"v": 1, "order_rejections": document}))
+
+        assert "reconciliation" in text.lower()
+
+    def test_nothing_of_the_block_appears_when_no_order_was_refused(self):
+        """The anti-tautology twin — otherwise every assertion above could be
+        satisfied by a renderer that always prints the block.
+        """
+        text = render_status(self._report(runtime_flags=None))
+
+        assert "NVDA.NASDAQ" not in text
+        assert "refused" not in text.lower()
+        assert "rejected" not in text.lower()
+
+    def test_no_line_of_the_block_violates_ar36(self):
+        for line in render_status(self._report()).splitlines():
+            assert _ar36_violations(line) == [], line
+
+    def test_the_block_carries_no_unmasked_account_shaped_token(self):
+        """NFR26: ``reason`` was redacted at the catch site, and the renderer
+        prints it verbatim — re-masking would destroy the payload. This pins
+        that nothing *else* in the block reintroduces one.
+        """
+        document = _rejections(consecutive=2)
+        document["last"]["reason"] = "Error 321: account ***626 is not managed"
+        text = render_status(self._report(runtime_flags={"v": 1, "order_rejections": document}))
+
+        assert not re.search(r"\b[A-Z]{1,2}\d{6,10}\b", text)
+
+    def test_a_degraded_by_rejections_report_names_its_cause_not_the_fallback(self):
+        """``_render_degradation``'s "never a bare ``degraded``" contract
+        extends to the new sense: the generic fallback must not fire.
+        """
+        report = self._report()
+        text = render_status(report)
+
+        assert report.health == SessionHealth.DEGRADED
+        assert "Impaired, but this session's runtime flags name no cause." not in text
+        assert "NVDA.NASDAQ" in text
+
+    def test_the_json_payload_is_still_exactly_seven_keys(self):
+        """D-G: ``health: degraded`` is what a monitoring script sees;
+        ``live status <name>`` is where it reads why. AR29's key set does not
+        grow a key per failure mode (Story 2.8 Judgment call #9, ratified
+        2026-08-24). Re-flagged for the Epic 3 retro, not reopened here.
+        """
+        payload = status_json_payload(self._report())
+
+        assert set(payload) == TestStatusJsonPayload.EXPECTED_KEYS
+        assert payload["health"] == "degraded"
+
+
+class TestMalformedRejectionDocumentsAreToleratedNotFatal:
+    """``runtime_flags`` is unconstrained JSONB and the renderer runs outside
+    the CLI's exit-code guard. A shape the one writer never produces must
+    degrade gracefully — and must never read ``degraded`` on the strength of
+    garbage.
+    """
+
+    def _build(self, flags):
+        return build_status_report(
+            session_id="11111111-1111-1111-1111-111111111111",
+            name="alpha-session",
+            status=SessionStatus.RUNNING,
+            last_heartbeat_at=_ago(1),
+            last_bar_at=_ago(1),
+            last_started_at=_ago(500),
+            last_stopped_at=None,
+            sealed_at=None,
+            runtime_flags=flags,
+            closed_trade_count=0,
+            open_positions=0,
+            now=NOW,
+            heartbeat_stale_after_seconds=90.0,
+        )
+
+    @pytest.mark.parametrize(
+        "document",
+        [
+            "boom",
+            ["boom"],
+            42,
+            None,
+            {},
+            {"rejected": 3},  # no `consecutive`
+            {"consecutive": "two"},  # a string where an int belongs
+            {"consecutive": None},
+            {"consecutive": 2, "last": "not a mapping"},
+            {"consecutive": 2, "last": ["also not a mapping"]},
+            {"consecutive": 2, "last": {}},
+            {"consecutive": 2, "first_at": {"nested": "junk"}},
+        ],
+    )
+    def test_neither_deriving_nor_rendering_raises(self, document):
+        report = self._build({"v": 1, "order_rejections": document})
+
+        assert render_status(report)
+        assert status_json_payload(report)["status"] == "running"
+
+    @pytest.mark.parametrize(
+        "document",
+        ["boom", ["boom"], 42, {}, {"rejected": 3}, {"consecutive": "two"}, {"consecutive": None}],
+    )
+    def test_garbage_never_reads_degraded_on_its_own(self, document):
+        """A tolerant reader that treated any truthy ``order_rejections`` as a
+        refusal streak would report every malformed row as impaired.
+        """
+        report = self._build({"v": 1, "order_rejections": document})
+
+        assert report.health == SessionHealth.TRADING
+
+    def test_a_malformed_last_still_renders_the_counters_it_understands(self):
+        report = self._build(
+            {"v": 1, "order_rejections": {"rejected": 4, "denied": 1, "consecutive": 5}}
+        )
+
+        text = render_status(report)
+
+        assert report.health == SessionHealth.DEGRADED
+        assert "4" in text and "5" in text

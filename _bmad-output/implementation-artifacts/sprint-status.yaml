@@ -36,6 +36,90 @@
 
 generated: 2026-08-03
 last_updated: >-
+  2026-09-21 (STORY 3.7 IMPLEMENTED: ready-for-dev -> in-progress -> review. Epic 3's last story.
+  All twelve tasks done; 174 new tests (unit 2501 -> 2623, component 1517 -> 1563, integration
+  307 -> 313), every tier green, format/lint/typecheck clean, alembic still 85c949ac0374 (NO
+  migration, NO new column, NO repository method -- EXPECTED_CAPABILITIES unchanged). Shipped as
+  designed in D-A..D-J: a new stdlib-only src/core/live_order_rejections.py holding RejectionTally
+  (the THIRD independent subscriber on events.order*, beside OrderEventObserver and TradeRecorder)
+  and an O(1) primitives-only RejectionSnapshot; a FOURTH SessionRecordPort method
+  record_order_rejections (the exact-method pin went three -> four deliberately, and all six
+  hand-written doubles grew it in the same commit); a runtime_flags `order_rejections`
+  sub-document replaced whole on every write; a dirty-flag drain on the steady-state tick plus a
+  teardown flush (a clean session costs ZERO round trips, a session refused on every crossover at
+  most one per 30s tick); and a FOURTH `degraded` sense at DEFAULT_REJECTIONS_DEGRADED_AFTER = 2 --
+  still a JUDGMENT CALL for Allay -- with the status body block rendering from the FIRST refusal.
+  --json keeps its seven AR29 keys and `list` grew no column (D-G). live_order_path.py,
+  live_trade_recorder.py, live_status.py, src/db/**, alembic/**, src/api/** and templates/** are
+  all ZERO-DIFF, proven by git diff --stat. ONE DESIGN DECISION CHANGED AND DISCLOSED: a streak
+  reset now DIRTIES the tally so the cleared streak reaches the row -- as drafted, a session that
+  recovered would have kept reporting `degraded` to every other process for the rest of its run,
+  the exact stale-fact trap Story 2.7's `-> running` clear exists to close. THREE WHEEL FACTS
+  CORRECTED THE DEV NOTES, each found by a test failing for the right reason: (1) getattr(event,
+  name, None) is NOT containment -- its default suppresses only AttributeError, so an event whose
+  __getattr__ raises anything else re-raises out of the except block meant to contain it, into
+  MessageBus.publish_c (no try) and on to os._exit(1); the tally uses a _safe_str helper with its
+  own try, mutation M15 pins it, and the two sibling handlers (OrderEventObserver,
+  TradeRecorder) carry the same hole and are zero-diff files -- recorded in deferred-work.md with
+  the honest note that a real Nautilus event cannot trigger it, so it is defence-in-depth not a
+  live defect; (2) OrderDenied.__init__ takes ts_init ONLY (model/events/order.pyx:661-680), so
+  the Dev Notes' "same as OrderRejected minus due_post_only" is true of the attributes and false
+  of the constructor; (3) Strategy.handle_event returns early unless the component FSM reads
+  RUNNING (trading/strategy.pyx:1645) -- a registered-but-unstarted strategy swallows every event
+  before reaching on_order_rejected, which would have made ALL of AC #2(c) pass for entirely the
+  wrong reason. MUTATION SWEEP RUN IN FULL: 18 mutations, 18 KILLED, none skipped. Three of the
+  story's OWN specified mutations (M1, M2, M7) were no-ops as written and were rewritten; M2 then
+  SURVIVED, exposing a real gap -- mark_written assigning the version unconditionally was
+  invisible to the test that looks like it covers it -- closed by a new TestMarkWrittenIsMonotonic.
+  M9 (in-place JSONB mutation) was killed at BOTH tiers: the unit tier's object-identity assertion
+  caught it too, answering the story's open question. Guard lists: live_order_rejections.py added
+  by hand to NODE_FACING_MODULES and TestImportPurity.MODULES in the creating commit, deliberately
+  NOT to STOP_PATH_MODULES; LIVE_MODULE_GLOBS confirmed picking it up by resolving the globs;
+  _STDLIB_AND_FIRST_PARTY needed no edit (confirmed by running the integration tier, not by
+  inspection). FIVE SIZE-BUDGET OVERAGES of 1-6 statements each, all docstring-dominated, all
+  disclosed per CLAUDE.md D4 rather than silently exceeded; against the REAL caps all are
+  compliant but LiveSessionRunner's pre-existing one. TWO NUMBERS TO CARRY FORWARD:
+  SessionSteadyState is now at 97 of its 100-statement cap (the next story adding a tick job must
+  budget the split BEFORE the edit), and live.py is at 154 against a file already over its line
+  cap. STATUS IS `review`, NOT `done`: Procedure P13 is written into
+  docs/qa/phase3-live-verification.md but NOT RUN -- no Gateway was reachable (ports 4001/4002/
+  7496/7497 all closed at 15:56 ET, four minutes of RTH left), the standing Epic 2 retro rule.
+  One P13 precondition WAS re-measured and is unchanged: risk/engine.pyx:652 still returns early
+  for a MARGIN account, so an oversized order of either side reaches IBKR and is rejected there
+  rather than denied locally. epic-3 stays in-progress until the retro rules it done.)
+
+  2026-09-21 (STORY 3.7 CREATED: backlog -> ready-for-dev, file
+  3-7-keep-trading-after-a-rejection.md. The last Epic 3 story. Drafting found that AC #1/#2's
+  logging and containment already shipped under Story 3.3 (order.rejected with verbatim
+  venue_reason, one-try containment) and Nautilus's own on_order_rejected/on_order_denied are
+  no-ops (trading/strategy.pyx:507/443), so the story PINS those and builds the missing half:
+  FR49/NFR24 cross-process visibility. Design (D-A..D-J, disclosed in the file): a third
+  independent events.order* subscriber, RejectionTally, in a new stdlib-only
+  src/core/live_order_rejections.py (live_order_path.py stays ZERO-DIFF -- its observer class
+  is at 98/100 statements); an O(1) snapshot (rejected/denied/consecutive/first_at/last)
+  written as a runtime_flags sub-document `order_rejections`, replaced whole, v stays 1, NO
+  migration, NO repository method; written by the steady-state tick on its private executor
+  (dirty-flag drain, at most one write per tick) plus a teardown flush -- the 2.7 queue-and-
+  drain precedent, NOT 3.6's inline write (NFR8 does not apply to a rejection); a FOURTH
+  SessionRecordPort method record_order_rejections (the exact-three-methods pin changes to
+  four deliberately; six test doubles must grow it in the same commit); health `degraded`
+  gains a third sense when the consecutive-refusal streak reaches
+  DEFAULT_REJECTIONS_DEGRADED_AFTER = 2 -- a JUDGMENT CALL flagged for Allay -- because `list`
+  and --json carry health alone and would otherwise read `trading` for a session rejected on
+  every order; --json keeps its seven AR29 keys (2.8 Judgment call #9); the column's reason is
+  redacted via redact_accounts (NFR26), the transcript stays verbatim (3.3's escalated conflict
+  untouched). Denials (OrderDenied) and 3.4's UNKNOWN/reconciliation=True rejections are
+  tallied too; a reconciliation=True OrderAccepted does not reset the streak. TWO MEASURED FACTS
+  THAT DECIDE PROCEDURE P13: the live paper account is MARGIN (free 32,542.54, BuyingPower
+  108,475.14 in logs/p12-20260921.log) and Nautilus's RiskEngine._check_orders_risk returns
+  True early for margin accounts (risk/engine.pyx ~:653), so an oversized market order of
+  EITHER side reaches IBKR and is rejected there (expected code 201) rather than denied locally
+  -- P13's recipe is sma_crossover fast=2/slow=3 with position_size_pct=50 (~$500k notional),
+  and the operator must read BuyingPower from the transcript before the first crossover. Also
+  recorded: an IB error code outside ORDER_REJECTION_CODES {201,203,321,10289,10293} produces
+  NO event -- the order surfaces minutes later as venue_reason=UNKNOWN via 3.4's in-flight
+  sweep. epic-3 stays in-progress: 3.1-3.6 done, 3.7 ready-for-dev.)
+
   2026-09-21 (STORIES 3.5 AND 3.6 CLOSED TO done -- both live procedures RUN AND PASSED against a
   real paper Gateway inside RTH (Monday 14:02-14:14 ET, bare non-compose Gateway on 127.0.0.1:4002,
   Redis + Postgres up, `live_bars_probe.py` preflight took 3 NVDA bars with zero competing-login
@@ -2461,7 +2545,7 @@ development_status:
   3-4-never-resubmit-an-order-that-is-already-working: done
   3-5-aggregate-partial-fills-into-one-position: done
   3-6-persist-each-trade-the-moment-it-closes: done
-  3-7-keep-trading-after-a-rejection: backlog
+  3-7-keep-trading-after-a-rejection: review
   epic-3-retrospective: optional
 
   # Epic 4: Stop, Restart & Resume Mid-Position

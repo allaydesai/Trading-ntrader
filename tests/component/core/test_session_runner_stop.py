@@ -110,6 +110,9 @@ class SpyRecord:
     def __init__(self) -> None:
         self.calls: list[str] = []
         self.failures: list[str] = []
+        #: Story 3.7's fourth port method — the teardown flush's target.
+        self.rejections: list[dict] = []
+        self.rejection_raises: BaseException | None = None
 
     def record_activity(self, *, at: datetime, bar_seen_at: datetime | None = None) -> None:
         self.calls.append("record_activity")
@@ -134,6 +137,44 @@ class SpyRecord:
         """
         self.calls.append("record_strategy_failure")
         self.failures.append(spec_strategy_id)
+
+    def record_order_rejections(
+        self,
+        *,
+        rejected: int,
+        denied: int,
+        consecutive: int,
+        first_at: datetime,
+        last_at: datetime,
+        last_kind: str,
+        last_client_order_id: str,
+        last_instrument_id: str,
+        last_strategy_id: str,
+        last_reason: str,
+        last_reconciliation: bool,
+    ) -> None:
+        """Story 3.7's fourth port method. Duck-typed here, but kept complete so
+        the double stays an honest ``SessionRecordPort`` rather than one that
+        happens to satisfy the calls this file makes today.
+        """
+        self.calls.append("record_order_rejections")
+        self.rejections.append(
+            {
+                "rejected": rejected,
+                "denied": denied,
+                "consecutive": consecutive,
+                "first_at": first_at,
+                "last_at": last_at,
+                "last_kind": last_kind,
+                "last_client_order_id": last_client_order_id,
+                "last_instrument_id": last_instrument_id,
+                "last_strategy_id": last_strategy_id,
+                "last_reason": last_reason,
+                "last_reconciliation": last_reconciliation,
+            }
+        )
+        if self.rejection_raises is not None:
+            raise self.rejection_raises
 
 
 async def _never_sleeps(seconds: float) -> None:
@@ -962,3 +1003,148 @@ class TestFlushPendingTradesInTeardown:
         runner._flush_pending_trades()  # must not raise
 
         assert runner.shutdown_problems == ["flush_pending_trades: RuntimeError"]
+
+
+def _refuse_an_order(runner: LiveSessionRunner, *, count: int = 1) -> None:
+    """Dirty the runner's own tally through the handler the bus would call.
+
+    Deliberately *through* ``handle_order_event`` rather than by reaching into
+    the tally's counters: the object under test in the teardown flush is the
+    one the runner wired, and a test that set its private state would pass
+    against a runner that never subscribed it.
+    """
+    assert runner._rejection_tally is not None
+    for index in range(count):
+        event = type(
+            "OrderRejected",
+            (),
+            {
+                "client_order_id": f"O-{index}",
+                "instrument_id": "NVDA.NASDAQ",
+                "strategy_id": "SMACrossover-000",
+                "reason": "Order rejected - reason: insufficient margin",
+                "reconciliation": False,
+            },
+        )()
+        runner._rejection_tally.handle_order_event(event)
+
+
+def _refuse_after_subscribe(runner: LiveSessionRunner, *, count: int = 1) -> None:
+    """Refuse ``count`` orders the instant the runner's tally exists.
+
+    Wraps ``_phase_subscribe`` — the phase that constructs and subscribes the
+    tally — so the refusals land inside the run, after the wiring and before
+    the teardown, without the test ever building a tally of its own.
+    """
+    original = runner._phase_subscribe
+
+    def _subscribe_then_refuse() -> None:
+        original()
+        _refuse_an_order(runner, count=count)
+
+    runner._phase_subscribe = _subscribe_then_refuse  # type: ignore[method-assign]
+
+
+class TestTheTeardownFlushesTheRejectionTally:
+    """Story 3.7, Task 3.2 — the end-of-run window, closed the same way
+    ``_flush_contained_failures`` closes it for a contained strategy.
+
+    The steady-state tick is the routine path, but a refusal that arrives in
+    the last interval before a stop would otherwise never reach the row: the
+    ``-> stopped`` transition makes that permanent, because the service
+    refuses writes against a non-``running`` row by design. So the runner's
+    ``finally`` writes once more, **before** ``mark_stopped``, while the row
+    is still ours.
+    """
+
+    def test_a_refusal_after_the_last_tick_reaches_the_record_before_mark_stopped(self):
+        """The heartbeat never ticks in these tests (``_never_sleeps``), so the
+        only route this summary has to the record is the teardown flush.
+        """
+        record = SpyRecord()
+        node = TestLiveNode(run_seconds=0.01)
+        runner = _runner(node, record=record)
+        _refuse_after_subscribe(runner, count=2)
+
+        runner.run()
+
+        (written,) = record.rejections
+        assert written["rejected"] == 2
+        assert written["consecutive"] == 2
+        assert written["last_instrument_id"] == "NVDA.NASDAQ"
+        # Ordering is the point: the write lands while the row still reads
+        # `running` — after `mark_stopped` the service would refuse it.
+        flush_index = record.calls.index("record_order_rejections")
+        assert flush_index < record.calls.index("mark_stopped")
+
+    def test_a_clean_run_writes_nothing_at_teardown(self):
+        """The anti-tautology twin: no refusal, no round trip."""
+        record = SpyRecord()
+        runner = _runner(TestLiveNode(run_seconds=0.01), record=record)
+
+        runner.run()
+
+        assert record.rejections == []
+        assert "record_order_rejections" not in record.calls
+
+    def test_the_flush_is_skipped_when_ownership_is_already_lost(self):
+        """The remaining facts belong in the successor's log, not its row —
+        the ``_flush_contained_failures`` short-circuit, verbatim.
+        """
+        record = SpyRecord()
+        node = TestLiveNode(run_seconds=0.01)
+        runner = _runner(node, record=record)
+        _refuse_after_subscribe(runner)
+        runner._ownership_lost = True
+
+        runner.run()
+
+        assert record.rejections == []
+
+    def test_a_raising_flush_does_not_replace_the_runs_outcome(self):
+        """AR42 on the flush path: the teardown behind it — ``mark_stopped``
+        above all — must still run.
+        """
+        record = SpyRecord()
+        record.rejection_raises = RuntimeError("postgres is down")
+        node = TestLiveNode(run_seconds=0.01)
+        runner = _runner(node, record=record)
+        _refuse_after_subscribe(runner)
+
+        with capture_logs() as logs:
+            runner.run()  # must not raise
+
+        assert record.calls[-1] == "mark_stopped"
+        assert [e for e in logs if e["event"] == "session.rejection_record_failed"] != []
+
+    def test_a_reclaim_during_the_flush_marks_ownership_lost(self):
+        """A reclaim is not a hiccup: it stops the flush and is recorded, the
+        way the contained-failure flush handles the same refusal.
+        """
+        from src.core.live_session_record import SessionReclaimedError
+
+        record = SpyRecord()
+        record.rejection_raises = SessionReclaimedError("taken by another process")
+        node = TestLiveNode(run_seconds=0.01)
+        runner = _runner(node, record=record)
+        _refuse_after_subscribe(runner)
+
+        runner.run()  # must not raise
+
+        assert runner.ownership_lost is True
+
+    def test_the_runner_exposes_the_final_snapshot_for_the_cli(self):
+        """Decision D-H's in-process half: ``live start`` reads this after
+        ``run()`` returns, so an operator watching the stop is told what was
+        refused without going to the database.
+        """
+        node = TestLiveNode(run_seconds=0.01)
+        runner = _runner(node)
+        _refuse_after_subscribe(runner, count=3)
+
+        runner.run()
+
+        snapshot = runner.order_rejections
+        assert snapshot is not None
+        assert snapshot.rejected == 3
+        assert snapshot.consecutive == 3

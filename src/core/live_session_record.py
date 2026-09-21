@@ -1,6 +1,6 @@
 """AR32's record port: the only way a running session touches its own row.
 
-Owns: :class:`SessionRecordPort`, the two-method Protocol
+Owns: :class:`SessionRecordPort`, the four-method Protocol
 ``LiveSessionRunner`` writes its liveness timestamps and its final ``stopped``
 transition through.
 
@@ -134,5 +134,76 @@ class SessionRecordPort(Protocol):
                 place in the system.
             all_failed: Whether every strategy in this session has now failed.
                 Never downgraded by a later call.
+        """
+        ...
+
+    def record_order_rejections(
+        self,
+        *,
+        rejected: int,
+        denied: int,
+        consecutive: int,
+        first_at: datetime,
+        last_at: datetime,
+        last_kind: str,
+        last_client_order_id: str,
+        last_instrument_id: str,
+        last_strategy_id: str,
+        last_reason: str,
+        last_reconciliation: bool,
+    ) -> None:
+        """Replace this session's refusal summary, so another process can see
+        that its orders are not getting placed (Story 3.7, FR49, NFR24).
+
+        **Why a refusal summary is a session-row fact, when a trade is not.**
+        Story 3.6's decision D-F refused to widen this port for the trade
+        sink: a trade is an event in its own right, with its own table, its
+        own identity and a lifetime longer than the run that produced it. A
+        refusal summary is the opposite — it describes *this run of this
+        session*, it is cleared with every other runtime flag on the next
+        ``-> running`` edge, and it is exactly the same class of fact as a
+        contained strategy. So it belongs beside
+        :meth:`record_strategy_failure`, in the same document, written on the
+        same tick by the same executor through the same two guards.
+
+        Called from ``SessionSteadyState``'s tick and from the runner's
+        teardown flush, **never** from the msgbus handler that saw the
+        rejection: ``handle_*`` runs inline on the event-loop thread inside
+        ``MessageBus.publish_c``, and a Postgres round trip there stalls the
+        loop and delays the bar for every later-subscribed strategy. (This is
+        deliberately *not* Story 3.6's inline-write shape. NFR8 — a
+        ``SIGKILL`` must lose nothing already closed — argues for a trade; a
+        summary whose every constituent event is already in the transcript
+        loses nothing an operator cannot reconstruct.)
+
+        **A snapshot, not an append.** Every call replaces the whole summary;
+        the counters are cumulative for the run and the ``last_*`` fields
+        describe only the most recent refusal. NFR2: a session rejected on
+        every 1-minute crossover must not grow an unbounded document.
+
+        Every argument is a standard-library primitive (AR38).
+
+        Args:
+            rejected: Every ``OrderRejected`` so far this run — the venue's
+                own, the adapter's local translation failure, and Story 3.4's
+                ``UNKNOWN`` in-flight sweep alike.
+            denied: Every ``OrderDenied`` so far this run — the local risk
+                engine's refusal.
+            consecutive: Refusals of either kind since the last
+                non-reconciliation ``OrderAccepted``. The number the reader's
+                health derivation reads.
+            first_at: The first refusal's instant, from the runner's clock.
+            last_at: The most recent refusal's instant.
+            last_kind: ``"rejected"`` or ``"denied"``.
+            last_client_order_id: The refused order's own id — the same string
+                the transcript's ``order.rejected`` record carries.
+            last_instrument_id: The refused order's instrument.
+            last_strategy_id: The Nautilus strategy id that asked.
+            last_reason: The venue's or the risk engine's reason, **already
+                redacted** and capped (NFR26). The redaction happens at the
+                catch site because that is the only place the raw text exists;
+                the transcript keeps Story 3.3's verbatim copy.
+            last_reconciliation: Whether the most recent refusal was
+                reconciliation-generated rather than a fresh venue answer.
         """
         ...

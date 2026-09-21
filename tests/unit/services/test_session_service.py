@@ -1320,3 +1320,262 @@ class TestRecordStrategyFailure:
 
         (_args, kwargs) = repository.find_by_session_id.call_args
         assert kwargs.get("for_update", False) is True
+
+
+class TestRecordOrderRejections:
+    """Story 3.7, AC #3b — the fourth write a running session may make.
+
+    Same two guards as :class:`TestRecordStrategyFailure` and for the same
+    reasons, same ``FOR UPDATE`` read, same ``**existing``-first rebuild. What
+    differs is the *shape*: a refusal summary is a **snapshot**, replaced
+    whole on every write, never a growing list (NFR2, decision D-D). A session
+    rejected on every 1-minute crossover refuses an order every few minutes
+    for 6.5 hours; a per-rejection list would grow without bound and be
+    re-serialised whole on every write.
+    """
+
+    @staticmethod
+    def _service(row, clock):
+        return SessionService(_repository(row), time_source=clock)
+
+    @staticmethod
+    def _rejections(clock, **overrides):
+        fields = {
+            "rejected": 2,
+            "denied": 0,
+            "consecutive": 2,
+            "first_at": clock.now,
+            "last_at": clock.now + timedelta(seconds=90),
+            "last_kind": "rejected",
+            "last_client_order_id": "O-20260922-140905-0a1b2c3d-000-3",
+            "last_instrument_id": "NVDA.NASDAQ",
+            "last_strategy_id": "SMACrossover-000",
+            "last_reason": "Order rejected - reason: insufficient margin",
+            "last_reconciliation": False,
+        }
+        fields.update(overrides)
+        return fields
+
+    def test_the_first_write_creates_the_sub_document(self):
+        clock = FakeClock()
+        row = _session_row(SessionStatus.RUNNING)
+
+        self._service(row, clock).record_order_rejections(
+            SESSION_ID, owner_epoch=OWNER_EPOCH, **self._rejections(clock)
+        )
+
+        assert row.runtime_flags["v"] == 1
+        document = row.runtime_flags["order_rejections"]
+        assert document["rejected"] == 2
+        assert document["denied"] == 0
+        assert document["consecutive"] == 2
+        assert document["first_at"] == clock.now.isoformat()
+        assert document["last"]["at"] == (clock.now + timedelta(seconds=90)).isoformat()
+        assert document["last"]["kind"] == "rejected"
+        assert document["last"]["client_order_id"] == "O-20260922-140905-0a1b2c3d-000-3"
+        assert document["last"]["instrument_id"] == "NVDA.NASDAQ"
+        assert document["last"]["strategy_id"] == "SMACrossover-000"
+        assert document["last"]["reason"] == "Order rejected - reason: insufficient margin"
+        assert document["last"]["reconciliation"] is False
+
+    def test_a_second_write_replaces_the_sub_document_wholesale(self):
+        """NFR2's bound, asserted as an absence: the old ``last`` is *gone*,
+        not appended beside the new one.
+        """
+        clock = FakeClock()
+        row = _session_row(SessionStatus.RUNNING)
+        service = self._service(row, clock)
+        service.record_order_rejections(
+            SESSION_ID, owner_epoch=OWNER_EPOCH, **self._rejections(clock)
+        )
+
+        service.record_order_rejections(
+            SESSION_ID,
+            owner_epoch=OWNER_EPOCH,
+            **self._rejections(
+                clock,
+                rejected=3,
+                consecutive=3,
+                last_client_order_id="O-20260922-141500-deadbeef-000-4",
+            ),
+        )
+
+        document = row.runtime_flags["order_rejections"]
+        assert document["rejected"] == 3
+        assert document["last"]["client_order_id"] == "O-20260922-141500-deadbeef-000-4"
+        assert "O-20260922-140905-0a1b2c3d-000-3" not in repr(row.runtime_flags)
+
+    def test_the_document_contains_no_list_typed_value_anywhere(self):
+        """The design regression this test exists to catch: if a reviewer ever
+        sees a list under ``order_rejections``, the snapshot has drifted back
+        into a per-rejection log (decision D-D, "the third trap").
+        """
+        clock = FakeClock()
+        row = _session_row(SessionStatus.RUNNING)
+
+        self._service(row, clock).record_order_rejections(
+            SESSION_ID, owner_epoch=OWNER_EPOCH, **self._rejections(clock)
+        )
+
+        def _walk(value):
+            assert not isinstance(value, (list, tuple)), f"{value!r} is a sequence"
+            if isinstance(value, dict):
+                for item in value.values():
+                    _walk(item)
+
+        _walk(row.runtime_flags["order_rejections"])
+
+    def test_the_document_is_reassigned_not_mutated_in_place(self):
+        """⚠️ SQLAlchemy does not track in-place mutation of a plain ``JSONB``
+        column. Asserted at the unit tier against a detached row *and* at the
+        integration tier against real Postgres (mutation M9) — a MagicMock row
+        cannot tell the two apart on its own.
+        """
+        clock = FakeClock()
+        row = _session_row(SessionStatus.RUNNING)
+        service = self._service(row, clock)
+        service.record_order_rejections(
+            SESSION_ID, owner_epoch=OWNER_EPOCH, **self._rejections(clock)
+        )
+        first_document = row.runtime_flags
+        first_sub_document = row.runtime_flags["order_rejections"]
+
+        service.record_order_rejections(
+            SESSION_ID, owner_epoch=OWNER_EPOCH, **self._rejections(clock, rejected=3)
+        )
+
+        assert row.runtime_flags is not first_document
+        assert row.runtime_flags["order_rejections"] is not first_sub_document
+
+    def test_keys_this_write_does_not_own_survive_the_rebuild(self):
+        """``**existing`` first. A rejection write must not erase Story 2.7's
+        ``failed_strategies``/``all_failed`` or Story 2.8's planned
+        ``connection_lost_at`` — the same rule, in the other direction.
+        """
+        clock = FakeClock()
+        row = _session_row(
+            SessionStatus.RUNNING,
+            runtime_flags={
+                "v": 1,
+                "all_failed": True,
+                "failed_strategies": [{"spec_strategy_id": "sma_crossover"}],
+                "connection_lost_at": "2026-08-23T14:00:00+00:00",
+            },
+        )
+
+        self._service(row, clock).record_order_rejections(
+            SESSION_ID, owner_epoch=OWNER_EPOCH, **self._rejections(clock)
+        )
+
+        assert row.runtime_flags["all_failed"] is True
+        assert row.runtime_flags["failed_strategies"] == [{"spec_strategy_id": "sma_crossover"}]
+        assert row.runtime_flags["connection_lost_at"] == "2026-08-23T14:00:00+00:00"
+        assert row.runtime_flags["order_rejections"]["rejected"] == 2
+
+    def test_a_strategy_failure_write_does_not_erase_the_rejection_document(self):
+        """The other direction of the same rule, tested because Hazard 4 names
+        both: ``_record_strategy_failure`` already spreads ``**existing``, and
+        this pins that it keeps doing so now that there is a key to lose.
+        """
+        clock = FakeClock()
+        row = _session_row(SessionStatus.RUNNING)
+        service = self._service(row, clock)
+        service.record_order_rejections(
+            SESSION_ID, owner_epoch=OWNER_EPOCH, **self._rejections(clock)
+        )
+
+        service.record_strategy_failure(
+            SESSION_ID,
+            owner_epoch=OWNER_EPOCH,
+            **TestRecordStrategyFailure._failure(clock),
+        )
+
+        assert row.runtime_flags["order_rejections"]["rejected"] == 2
+        assert len(row.runtime_flags["failed_strategies"]) == 1
+
+    def test_a_reclaimed_row_refuses_the_write(self):
+        clock = FakeClock()
+        row = _session_row(SessionStatus.RUNNING, owner_epoch=OWNER_EPOCH + 1)
+
+        with pytest.raises(InvalidSessionTransition, match="reclaimed"):
+            self._service(row, clock).record_order_rejections(
+                SESSION_ID, owner_epoch=OWNER_EPOCH, **self._rejections(clock)
+            )
+
+        assert row.runtime_flags is None
+
+    @pytest.mark.parametrize(
+        "status", [SessionStatus.CREATED, SessionStatus.STOPPED, SessionStatus.SEALED]
+    )
+    def test_a_row_that_is_not_running_refuses_the_write(self, status):
+        clock = FakeClock()
+        row = _session_row(status)
+
+        with pytest.raises(InvalidSessionTransition):
+            self._service(row, clock).record_order_rejections(
+                SESSION_ID, owner_epoch=OWNER_EPOCH, **self._rejections(clock)
+            )
+
+        assert row.runtime_flags is None
+
+    def test_an_unknown_session_raises_record_not_found(self):
+        clock = FakeClock()
+        service = SessionService(_repository(None), time_source=clock)
+
+        with pytest.raises(RecordNotFoundError):
+            service.record_order_rejections(
+                SESSION_ID, owner_epoch=OWNER_EPOCH, **self._rejections(clock)
+            )
+
+    def test_the_write_never_assigns_status(self):
+        """A session whose orders are being rejected is still ``running`` —
+        that is the whole point of AC #1. AR37's AST guard matches only
+        ``t.attr == "status"``, so this write is invisible to it, which is
+        correct rather than a loophole.
+        """
+        clock = FakeClock()
+        row = _session_row(SessionStatus.RUNNING)
+
+        self._service(row, clock).record_order_rejections(
+            SESSION_ID, owner_epoch=OWNER_EPOCH, **self._rejections(clock)
+        )
+
+        assert row.status is SessionStatus.RUNNING
+
+    def test_the_read_is_locked_because_the_write_rebuilds_the_document(self):
+        """A read-modify-write of the whole ``runtime_flags`` document, so it
+        locks for exactly the reason its sibling does.
+        """
+        clock = FakeClock()
+        row = _session_row(SessionStatus.RUNNING)
+        repository = _repository(row)
+
+        SessionService(repository, time_source=clock).record_order_rejections(
+            SESSION_ID, owner_epoch=OWNER_EPOCH, **self._rejections(clock)
+        )
+
+        (_args, kwargs) = repository.find_by_session_id.call_args
+        assert kwargs.get("for_update", False) is True
+
+    def test_the_runtime_flags_version_is_not_bumped_by_an_addition(self):
+        """Story 2.7's rule: ``v`` bumps only on a *meaning* change. A new key
+        is an addition, and every reader is tolerant of unknown keys.
+        """
+        assert service_module.RUNTIME_FLAGS_VERSION == 1
+
+    def test_a_reconciliation_refusal_is_recorded_as_such(self):
+        """Story 3.4's in-flight sweep produces ``reason="UNKNOWN",
+        reconciliation=True``. The column says so, so a reader can tell a
+        venue's answer from a local timeout.
+        """
+        clock = FakeClock()
+        row = _session_row(SessionStatus.RUNNING)
+
+        self._service(row, clock).record_order_rejections(
+            SESSION_ID,
+            owner_epoch=OWNER_EPOCH,
+            **self._rejections(clock, last_reason="UNKNOWN", last_reconciliation=True),
+        )
+
+        assert row.runtime_flags["order_rejections"]["last"]["reconciliation"] is True
+        assert row.runtime_flags["order_rejections"]["last"]["reason"] == "UNKNOWN"

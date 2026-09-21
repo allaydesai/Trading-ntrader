@@ -47,6 +47,7 @@ from src.config import get_settings
 from src.core.live_cache import build_cache_config
 from src.core.live_check import EXIT_ERROR, render_report
 from src.core.live_check_driver import run_live_check
+from src.core.live_order_rejections import render_rejection_summary
 from src.core.live_session_node import DEFAULT_SESSION_CONNECT_TIMEOUT_SECONDS
 from src.core.live_session_runner import LiveSessionRunner
 from src.core.strategy_registry import StrategyRegistry
@@ -427,6 +428,7 @@ def start(session: str, connect_timeout: float) -> None:
         # be exactly the run whose failures never reached `runtime_flags`, so
         # this report is the operator's only in-process trace of them.
         _print_contained_failures(runner)
+        _print_order_rejections(runner)
         exit_with(exc)
 
     _print_stop_result(session, runner)
@@ -502,6 +504,7 @@ def _print_stop_result(session: str, runner: LiveSessionRunner) -> None:
             highlight=False,
         )
     _print_contained_failures(runner)
+    _print_order_rejections(runner)
     if runner.record_release_failed:
         console.print(
             "⚠️  The session stopped cleanly but its record could not be marked stopped. The "
@@ -510,6 +513,27 @@ def _print_stop_result(session: str, runner: LiveSessionRunner) -> None:
             markup=False,
             highlight=False,
         )
+
+
+def _print_order_rejections(runner: LiveSessionRunner) -> None:
+    """Name what the venue (or the risk engine) refused this run (Story 3.7).
+
+    Prints nothing at all on a clean run, which is the common case, and the
+    exit code stays **0** either way — the session ran and it stopped. AR28's
+    table has no code for "the orders were refused", and Story 1.7 recorded
+    that a CLI inventing a code outside its own documented table is worse
+    than one reporting a generic failure.
+
+    **Every** line — header and trailer included — comes from
+    :func:`render_rejection_summary` in the core module, so this helper holds
+    no wording at all. That is this file's "registration lines only"
+    discipline (Story 2.8): ``live.py`` is already over its size cap, and a
+    renderer here would be untestable without a Click runner. AR36's
+    vocabulary and NFR26's redaction are both audited there, and asserted
+    end-to-end here in ``tests/unit/cli/commands/test_live_cli.py``.
+    """
+    for line in render_rejection_summary(runner.order_rejections):
+        console.print(line, markup=False, highlight=False)
 
 
 def _print_contained_failures(runner: LiveSessionRunner) -> None:

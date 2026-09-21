@@ -71,6 +71,9 @@ make web                                # Web UI (http://127.0.0.1:8000)
   (`tests/component/core/test_session_runner_phases.py`). Story 2.6's file-size split made
   `live_start.py` silently escape two of them, and nothing asserts the lists are complete, so an
   omission is invisible. `LIVE_MODULE_GLOBS` and `STRATEGY_MODULES` are globbed and need no action.
+  Story 3.7 added `src/core/live_order_rejections.py` to `NODE_FACING_MODULES` and
+  `TestImportPurity.MODULES` in the commit that created it, and deliberately **not** to
+  `STOP_PATH_MODULES` (it calls no order method and is not on the stop path).
   A fifth list, `_STDLIB_AND_FIRST_PARTY` (`tests/integration/core/test_epic1_ac_node.py`), is
   triggered by a **new import** rather than by a split — adding any stdlib import to a live-path
   module fails that scan until the name is added by hand (added to this list 2026-08-30 by code
@@ -110,6 +113,15 @@ make web                                # Web UI (http://127.0.0.1:8000)
   test_live_trade_recorder.py`) — `trade.recorder_failed`, `trade.commission_mixed_currency`,
   `trade.commission_unavailable`, `trade.persist_refused` and `trade.persist_skipped` stay
   deliberately outside it as diagnostic/boundary records, the `order.observer_failed` precedent.
+- **`SessionRecordPort`'s exact-method pin** (`tests/unit/core/test_live_session_record.py`) went
+  from **three methods to four at Story 3.7**: `record_order_rejections` joined
+  `record_activity`/`mark_stopped`/`record_strategy_failure`. The port is `@runtime_checkable`, so
+  the widening also breaks every `isinstance(double, SessionRecordPort)` until **all six**
+  hand-written doubles in `tests/` grow the method — `grep -rn "def record_strategy_failure"
+  tests/` is the list, and 3.6 found five `SpyRecord`s where its own text estimated two. The
+  widening was argued, not inherited: Story 3.6's D-F refused the same widening for the trade sink
+  because *a trade is not a session-row fact*; a refusal summary is one, lives in the same
+  `runtime_flags` document, and is written on the same tick by the same executor.
 - **`EXPECTED_CAPABILITIES`** (`tests/unit/db/test_trading_session_repository_shape.py`) — an
   exact-set allowlist for both `TradingSessionRepository` twins, **changed deliberately at Story
   3.6**: `stamp_activity_if_owner` and `insert_trade_if_absent` joined it (AR9, both twins in the

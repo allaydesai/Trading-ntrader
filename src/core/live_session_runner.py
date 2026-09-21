@@ -90,6 +90,7 @@ from src.core.live_connection_monitor import ConnectionMonitor
 from src.core.live_connection_probe import read_ibkr_connection_status
 from src.core.live_node_builder import GateRefusedError, build_trading_node
 from src.core.live_order_path import ORDER_EVENTS_TOPIC, OrderEventObserver, install_order_path
+from src.core.live_order_rejections import RejectionSnapshot, RejectionTally
 from src.core.live_session_controller import build_session_controller_config
 from src.core.live_session_node import (
     BAR_TOPIC,
@@ -110,6 +111,7 @@ from src.core.live_session_record import SessionReclaimedError, SessionRecordPor
 from src.core.live_session_signals import SessionStopRequested, SessionStopSignals
 from src.core.live_session_steady_state import (
     DEFAULT_NO_BARS_AFTER_SECONDS,
+    REJECTION_RECORD_FAILED_EVENT,
     ConnectionReader,
     SessionSteadyState,
     StartupHeartbeat,
@@ -232,6 +234,7 @@ class LiveSessionRunner:
         self._monitor: ConnectionMonitor | None = None
         self._order_observer: OrderEventObserver | None = None
         self._trade_recorder: TradeRecorder | None = None
+        self._rejection_tally: RejectionTally | None = None
         self._subscriptions: list[tuple[str, Any]] = []
         self._deadline, self._trader_started, self._ownership_lost = 0.0, False, False
         #: Set once teardown's own drain starts (review 2026-09-12): a reclaim
@@ -306,6 +309,19 @@ class LiveSessionRunner:
         a clean run, which is the common case and prints nothing.
         """
         return self._guard.failures
+
+    @property
+    def order_rejections(self) -> RejectionSnapshot | None:
+        """Every order this run asked for and did not get, or ``None`` (3.7).
+
+        The in-process half of the visibility ``runtime_flags`` provides
+        across processes, and the exact shape ``contained_failures`` above
+        already models: read by the CLI after ``run()`` returns, so an
+        operator watching a stop is told that the session's orders were being
+        refused without having to query the row. ``None`` on a clean run,
+        which is the common case and prints nothing.
+        """
+        return self._rejection_tally.snapshot if self._rejection_tally is not None else None
 
     @property
     def all_strategies_failed(self) -> bool:
@@ -423,6 +439,7 @@ class LiveSessionRunner:
                 # leaving `_finish_record()`'s Postgres round trip unprotected.
                 self._signals.rearm_process_handlers()
                 self._flush_contained_failures()
+                self._flush_order_rejections()
                 self._flush_pending_trades()
                 self._finish_record()
                 restore_event_loop(previous_loop)
@@ -572,6 +589,18 @@ class LiveSessionRunner:
             observer = LiveBarObserver(build_bar_observer_config(self._settings, bar_types))
             self._node.trader.add_actor(observer)
             self._node.trader.start_actor(observer.id)
+            # Story 3.7. Constructed **before** the steady state, which is
+            # handed this instance (the tick drains it); *subscribed* below,
+            # after the observer's own two, because the bus does not care
+            # about order and the reading order of this method should match
+            # the order events reach the three subscribers in.
+            # `settings.tws_account` is already loaded for the guard, so no
+            # settings read happens inside a msgbus handler.
+            self._rejection_tally = RejectionTally(
+                self._log,
+                time_source=self._time_source,
+                account=self._settings.tws_account,
+            )
             self._steady_state = self._build_steady_state()
             self._subscribe(BAR_TOPIC, self._steady_state.note_bar)
             self._observe_connection_once()
@@ -586,6 +615,12 @@ class LiveSessionRunner:
             self._order_observer = OrderEventObserver(self._log, traded_bar_types=traded)
             self._subscribe(BAR_TOPIC, self._order_observer.note_bar)
             self._subscribe(ORDER_EVENTS_TOPIC, self._order_observer.handle_order_event)
+            # Story 3.7's third independent subscriber on this topic, the
+            # `TradeRecorder`-on-`events.position*` precedent: the observer
+            # logs each refusal verbatim, this one counts them so another
+            # process can tell a session rejected on every order from one
+            # seeing no signals.
+            self._subscribe(ORDER_EVENTS_TOPIC, self._rejection_tally.handle_order_event)
             # Story 3.5. Attaches after reconciliation (Epic 4, still a no-op
             # today), so a position already open at attach time is first
             # seen mid-life — the `live_order_path.py:645-651` caveat applies
@@ -777,6 +812,7 @@ class LiveSessionRunner:
             no_bars_after_seconds=self._no_bars_after_seconds,
             connection_reader=self._connection_reader,
             guard=self._guard,
+            tally=self._rejection_tally,
         )
 
     def _stop_heartbeat(self, loop: asyncio.AbstractEventLoop) -> None:
@@ -839,6 +875,40 @@ class LiveSessionRunner:
                     spec_strategy_id=failure.spec_strategy_id,
                     error_type=type(exc).__name__,
                 )
+
+    def _flush_order_rejections(self) -> None:
+        """Write the last refusal summary, while the row is still ours (3.7).
+
+        The same end-of-run window :meth:`_flush_contained_failures` closes,
+        for the same reason and in the same slot: after :meth:`_stop_heartbeat`
+        so the steady-state executor cannot race this write on the same row,
+        and before :meth:`_finish_record` so the row still reads ``running``.
+        The call is synchronous — the loop has already stopped, so there is
+        nothing left to block.
+
+        A refusal contained within the last interval before a stop would
+        otherwise never be written, and the ``-> stopped`` transition makes
+        that permanent because the service refuses writes against a
+        non-``running`` row by design.
+
+        Guarded, AR42: a DB hiccup here must not replace the run's primary
+        outcome. A reclaim stops the flush — the remaining facts belong in the
+        successor's log, not its row.
+        """
+        if self._ownership_lost or self._rejection_tally is None:
+            return
+        snapshot = self._rejection_tally.pending()
+        if snapshot is None:
+            return
+        try:
+            self._record.record_order_rejections(**snapshot.as_port_kwargs())
+        except SessionReclaimedError:
+            self._ownership_lost = True
+            return
+        except Exception as exc:  # noqa: BLE001 - AR42: must not replace the outcome
+            self._log.error(REJECTION_RECORD_FAILED_EVENT, error_type=type(exc).__name__)
+            return
+        self._rejection_tally.mark_written(snapshot.version)
 
     def _note_ownership_lost(self) -> None:
         """``TradeRecorder``'s ``on_ownership_lost`` callback (Story 3.6, D-C).

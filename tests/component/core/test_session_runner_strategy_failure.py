@@ -182,6 +182,8 @@ class SpyRecord:
     def __init__(self) -> None:
         self.calls: list[str] = []
         self.failures: list[dict] = []
+        #: Story 3.7's fourth port method.
+        self.rejections: list[dict] = []
 
     def record_activity(self, *, at: datetime, bar_seen_at: datetime | None = None) -> None:
         self.calls.append("record_activity")
@@ -192,6 +194,11 @@ class SpyRecord:
     def record_strategy_failure(self, **fields) -> None:
         self.calls.append("record_strategy_failure")
         self.failures.append(fields)
+
+    def record_order_rejections(self, **fields) -> None:
+        """Story 3.7's fourth port method, in this file's kwargs-only style."""
+        self.calls.append("record_order_rejections")
+        self.rejections.append(fields)
 
 
 def _pairs(logs) -> list[tuple[str, str]]:

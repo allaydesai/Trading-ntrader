@@ -782,3 +782,177 @@ class TestTraderIdIsAStatusOnlyField:
             result = runner.invoke(live, ["status", "alpha-session"])
 
         assert derive_trader_id(spies["row"].session_id) in result.output
+
+
+class TestRejectionVisibility:
+    """Story 3.7, AC #3d: the operator reads it from another process.
+
+    Everything below goes through the real ``live status`` / ``live list``
+    Click commands against a row carrying the decision D-D document — not
+    through ``render_status`` directly — because the claim under test is that
+    the *command* surfaces it.
+    """
+
+    def _document(self, consecutive=2, **overrides):
+        document = {
+            "rejected": consecutive,
+            "denied": 0,
+            "consecutive": consecutive,
+            "first_at": "2026-08-24T11:55:00+00:00",
+            "last": {
+                "at": "2026-08-24T11:59:30+00:00",
+                "kind": "rejected",
+                "client_order_id": "O-20260824-115930-0a1b2c3d-000-3",
+                "instrument_id": "NVDA.NASDAQ",
+                "strategy_id": "SMACrossover-000",
+                "reason": "Order rejected - reason: insufficient margin",
+                "reconciliation": False,
+            },
+        }
+        document.update(overrides)
+        return document
+
+    def test_status_renders_every_named_field(self, runner):
+        row = _row(runtime_flags={"v": 1, "order_rejections": self._document()})
+
+        with _status_harness(row=row):
+            result = runner.invoke(live, ["status", "alpha-session"])
+
+        assert result.exit_code == 0
+        assert "degraded" in result.output
+        assert "NVDA.NASDAQ" in result.output
+        assert "O-20260824-115930-0a1b2c3d-000-3" in result.output
+        assert "insufficient margin" in result.output
+        assert "2026-08-24T11:55:00+00:00" in result.output
+
+    def test_a_quiet_market_says_none_of_it(self, runner):
+        """The anti-tautology twin — the same command, the same row shape, no
+        rejection document: the two readings must differ.
+        """
+        with _status_harness(row=_row(runtime_flags=None)):
+            result = runner.invoke(live, ["status", "alpha-session"])
+
+        assert result.exit_code == 0
+        assert "NVDA.NASDAQ" not in result.output
+        assert "refused" not in result.output.lower()
+
+    def test_a_single_refusal_is_visible_while_health_still_reads_trading(self, runner):
+        row = _row(runtime_flags={"v": 1, "order_rejections": self._document(consecutive=1)})
+
+        with _status_harness(row=row):
+            result = runner.invoke(live, ["status", "alpha-session"])
+
+        assert "trading" in result.output
+        assert "NVDA.NASDAQ" in result.output
+
+    def test_a_stopped_sessions_rejections_still_render(self, runner):
+        """``runtime_flags`` is cleared only on ``-> running``, so a stopped
+        session's refusals stay readable — which is exactly when an operator
+        is asking why it stopped getting fills.
+        """
+        row = _row(
+            status=SessionStatus.STOPPED,
+            runtime_flags={"v": 1, "order_rejections": self._document()},
+        )
+
+        with _status_harness(row=row):
+            result = runner.invoke(live, ["status", "alpha-session"])
+
+        assert result.exit_code == 0
+        assert "NVDA.NASDAQ" in result.output
+
+    def test_rejections_never_leak_into_status_json(self, runner):
+        """Decision D-G: AR29's key set is exact and does not grow a key per
+        failure mode (Story 2.8 Judgment call #9). ``health: degraded`` is what
+        a monitoring script sees; the human command is where it reads why.
+        """
+        row = _row(runtime_flags={"v": 1, "order_rejections": self._document()})
+
+        with _status_harness(row=row):
+            result = runner.invoke(live, ["status", "alpha-session", "--json"])
+
+        payload = json.loads(result.output)
+        assert set(payload) == TestStatusJson.EXPECTED_KEYS
+        assert payload["health"] == "degraded"
+
+    def test_list_shows_degraded_for_the_streak_and_trading_below_it(self, runner):
+        """The false-green ``list`` would show without the health sense — and
+        its twin, so the assertion cannot pass by always saying ``degraded``.
+        """
+        at_threshold = _row(
+            id=8,
+            name="rejected-session",
+            session_id=uuid4(),
+            runtime_flags={"v": 1, "order_rejections": self._document(consecutive=2)},
+        )
+        below = _row(
+            id=9,
+            name="one-refusal-session",
+            session_id=uuid4(),
+            runtime_flags={"v": 1, "order_rejections": self._document(consecutive=1)},
+        )
+        repo = MagicMock()
+        repo.find_all.return_value = [at_threshold, below]
+        repo.trade_counts_by_session.return_value = {8: (0, 0), 9: (0, 0)}
+
+        with (
+            patch(_STATUS_GET_SYNC_SESSION, _fake_session_cm),
+            patch(_STATUS_SESSION_REPO, MagicMock(return_value=repo)),
+        ):
+            result = runner.invoke(live, ["list"])
+
+        assert result.exit_code == 0
+        rejected_line = next(
+            line for line in result.output.splitlines() if "rejected-session" in line
+        )
+        below_line = next(
+            line for line in result.output.splitlines() if "one-refusal-session" in line
+        )
+        assert "degraded" in rejected_line
+        assert "trading" in below_line
+
+    def test_the_list_table_grew_no_column_and_shows_no_reason_text(self, runner):
+        """Decision D-G: ``list`` is unchanged. The table is a fleet view; the
+        cause belongs in ``status``.
+        """
+        row = _row(
+            id=8,
+            name="rejected-session",
+            session_id=uuid4(),
+            runtime_flags={"v": 1, "order_rejections": self._document()},
+        )
+        repo = MagicMock()
+        repo.find_all.return_value = [row]
+        repo.trade_counts_by_session.return_value = {8: (0, 0)}
+
+        with (
+            patch(_STATUS_GET_SYNC_SESSION, _fake_session_cm),
+            patch(_STATUS_SESSION_REPO, MagicMock(return_value=repo)),
+        ):
+            result = runner.invoke(live, ["list"])
+
+        assert "insufficient margin" not in result.output
+        assert "NVDA.NASDAQ" not in result.output
+        assert "Reject" not in result.output
+
+    def test_a_malformed_document_does_not_break_the_command(self, runner):
+        """The renderer runs outside the CLI's exit-code guard, so a
+        hand-edited row must cost the reader that block and nothing else.
+        """
+        row = _row(runtime_flags={"v": 1, "order_rejections": "boom"})
+
+        with _status_harness(row=row):
+            result = runner.invoke(live, ["status", "alpha-session"])
+
+        assert result.exit_code == 0
+        assert "alpha-session" in result.output
+
+    def test_the_wording_respects_ar36s_vocabulary(self, runner):
+        row = _row(runtime_flags={"v": 1, "order_rejections": self._document()})
+
+        with _status_harness(row=row):
+            result = runner.invoke(live, ["status", "alpha-session"])
+
+        scrubbed = result.output.lower().replace("closed trade", "")
+        for forbidden in ("pause", "halt", "kill", "close", "finalize"):
+            assert not re.findall(rf"\b{forbidden}\w*\b", scrubbed), forbidden

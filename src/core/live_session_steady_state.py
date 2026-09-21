@@ -97,6 +97,64 @@ NO_BARS_EVENT = "session.no_bars_observed"
 ConnectionReader = Callable[[IBKRSettings], ConnectionStatus]
 Sleeper = Callable[[float], Awaitable[None]]
 
+#: AR41's ``session.*`` namespace: the refusal-summary write failed and the
+#: session continues (AR42). Logged only on the failure path — a successful
+#: write is silent, the ``_write_strategy_failures`` precedent.
+REJECTION_RECORD_FAILED_EVENT = "session.rejection_record_failed"
+
+
+async def write_rejection_snapshot(
+    record: SessionRecordPort,
+    tally: Any,
+    *,
+    executor: ThreadPoolExecutor,
+    loop: asyncio.AbstractEventLoop,
+    log: Any,
+) -> None:
+    """Write the tally's pending refusal summary, at most once (Story 3.7).
+
+    At module scope rather than as a method for CLAUDE.md's class cap: the
+    ``SessionSteadyState`` class was at 89 statements against a 100-statement
+    limit before this story, and the ``_record_strategy_failure`` pair in
+    ``session_service.py`` is the same module-level-body-plus-thin-method
+    shape.
+
+    **Dirty-flag, not a queue.** ``pending()`` returns ``None`` when nothing
+    changed since the last acknowledged write, so a session that never had an
+    order refused costs **zero** database round trips no matter how long it
+    runs, and a session refused on every crossover costs at most one short
+    transaction per tick regardless of the refusal rate (NFR2).
+
+    **A failed write is left dirty and simply not acknowledged.** Nothing is
+    re-queued, because there is nothing to queue: the next tick writes the
+    *then-current* summary, which supersedes the one that failed. That differs
+    from ``_write_strategy_failures``'s re-queue on purpose — a failure list is
+    append-only and losing an entry loses a fact, while a newer snapshot
+    contains everything an older one did.
+
+    Runs on the **caller's private executor**, never ``asyncio.to_thread``:
+    the loop's default executor is the one ``TradingNode.__init__`` replaces
+    with the kernel's and ``dispose()`` joins with ``wait=True`` — decision
+    D2's measured 59.81 s of blocked teardown on a wedged write.
+
+    Raises:
+        SessionReclaimedError: Another process owns this session now. The one
+            failure AR42 does not survive, re-raised exactly as its sibling
+            does.
+    """
+    snapshot = tally.pending()
+    if snapshot is None:
+        return
+    write = functools.partial(record.record_order_rejections, **snapshot.as_port_kwargs())
+    try:
+        await loop.run_in_executor(executor, write)
+    except SessionReclaimedError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - AR42: a DB hiccup must not kill a session
+        log.error(REJECTION_RECORD_FAILED_EVENT, error_type=type(exc).__name__)
+        return
+    tally.mark_written(snapshot.version)
+
 
 class SessionSteadyState:
     """The heartbeat tick and the bar observation that feeds it.
@@ -124,6 +182,10 @@ class SessionSteadyState:
             simply has nothing to drain. Duck-typed to two members
             (``drain_pending()`` and ``all_failed``) rather than imported for a
             type, which keeps this module's dependency direction unchanged.
+        tally: Story 3.7's ``RejectionTally``, whose pending snapshot this tick
+            writes. Optional and defaulting to ``None`` for the same reason
+            ``guard`` is; duck-typed to two members (``pending()`` and
+            ``mark_written(version)``) rather than imported for a type.
     """
 
     def __init__(
@@ -139,8 +201,10 @@ class SessionSteadyState:
         no_bars_after_seconds: float = DEFAULT_NO_BARS_AFTER_SECONDS,
         connection_reader: ConnectionReader = read_ibkr_connection_status,
         guard: Any = None,
+        tally: Any = None,
     ) -> None:
         self._guard = guard
+        self._tally = tally
         self._record = record
         self._settings = settings
         self._monitor = monitor
@@ -213,7 +277,7 @@ class SessionSteadyState:
         return seen
 
     async def run(self) -> None:
-        """Tick forever: sleep one interval, then do the tick's four jobs.
+        """Tick forever: sleep one interval, then do the tick's five jobs.
 
         Sleeps **first**. The ``-> running`` transition has already stamped
         ``last_heartbeat_at``, so writing again immediately would be a
@@ -231,6 +295,7 @@ class SessionSteadyState:
             self.ticks += 1
             await self._write_activity(now)
             await self._write_strategy_failures()
+            await self._write_order_rejections()
             self._observe_connection()
             self._warn_if_no_bars(now)
 
@@ -298,6 +363,26 @@ class SessionSteadyState:
                 )
         if unwritten:
             self._guard.requeue(unwritten)
+
+    async def _write_order_rejections(self) -> None:
+        """Write the refusal summary, but only when it changed (Story 3.7).
+
+        Delegates to :func:`write_rejection_snapshot`, which holds the policy —
+        the body lives at module scope so this class stays inside CLAUDE.md's
+        100-statement cap (it was at 89 before this story), the same
+        module-level-body shape ``_record_strategy_failure`` uses in
+        ``session_service.py``.
+
+        Raises:
+            SessionReclaimedError: Another process owns this session now — the
+                one failure AR42 does not survive.
+        """
+        if self._tally is None:
+            return
+        loop = asyncio.get_running_loop()
+        await write_rejection_snapshot(
+            self._record, self._tally, executor=self._executor, loop=loop, log=self._log
+        )
 
     async def _write_activity(self, now: datetime) -> None:
         """Persist the tick, surviving anything but a loss of ownership.

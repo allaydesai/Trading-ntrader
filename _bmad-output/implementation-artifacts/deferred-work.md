@@ -2769,3 +2769,71 @@ are recorded here; neither reopens either story, and neither was actioned.
   live session it is ~6 ms. **D-A's decision is unchanged** — 6 ms is four orders of magnitude
   inside a 1-minute bar — but the number on record should be corrected, and the criterion reworded
   to name two records that actually appear in that order, if P12 is ever re-run.
+
+## Deferred from: story-3.7 (2026-09-21)
+
+- **A containment block's own diagnostic can re-raise, and two shipped handlers carry the hole.**
+  Found while writing this story's containment test (`tests/unit/core/test_live_order_rejections.py::
+  TestContainmentExtendsToEveryDispatchedBranch`), by feeding a handler an object whose
+  `__getattr__` raises `RuntimeError`. `getattr(event, name, None)` suppresses **only**
+  `AttributeError`, so the default is no protection against exactly the malformed event that put
+  execution in the `except` block in the first place — the diagnostic raises, out of the handler
+  that exists to contain it, into `MessageBus.publish_c`, which has no `try` of its own, and ends
+  at Nautilus's own silent `os._exit(1)`. `OrderEventObserver.handle_order_event`
+  (`src/core/live_order_path.py:499-507`) and `TradeRecorder.handle_position_event`
+  (`src/core/live_trade_recorder.py:578-586`) both use the bare form. Story 3.7's own
+  `RejectionTally` uses a `_safe_str` helper with its own `try` instead, and mutation M15 pins it.
+  **Not fixed here** because both files are zero-diff in this story by decision D-A
+  (`live_order_path.py`'s observer class is at 98/100 statements and its `EMITTED_ORDER_EVENTS`
+  pins would need re-arguing). **Reachability, stated honestly:** a real Nautilus event object
+  cannot produce this — every field is a cdef attribute — so this is a defence-in-depth gap, not a
+  live defect. It becomes reachable the moment a handler is fed an adapter-built or
+  reconciliation-built object whose field access can fail for any reason other than absence.
+  **Action:** adopt `_safe_str` (or an equivalent) in both handlers in the next story that already
+  touches those files; do not open them solely for this.
+- **AR29's `--json` carries no cause, and a monitoring script therefore cannot tell the four
+  `degraded` senses apart** (decision D-G). `status --json` is pinned to exactly seven keys by set
+  equality (`tests/unit/core/test_live_session_health.py::TestStatusJsonPayload`), ratified as
+  Story 2.8's Judgment call #9 by Allay on 2026-08-24: the human path carries the cause, and the
+  JSON contract does not grow a key per failure mode. Story 3.7 adds a **fourth** sense (the
+  refusal streak) without reopening it, which makes the question sharper rather than new: a script
+  that alerts on `health: degraded` now has four possible causes and no machine-readable way to
+  distinguish "every strategy failed" from "the venue is refusing every order" — two conditions
+  with very different operator responses. **Owner: the Epic 3 retrospective.** The shape if it is
+  taken: an eighth key `degraded_because: [...]`, a list of sense names, which keeps the existing
+  seven stable.
+- **NFR26 is applied asymmetrically to a rejection reason, on purpose, and the asymmetry is still
+  unratified** (decision D-I). The **column** that `live status` renders is redacted
+  (`redact_accounts` + `MAX_DETAIL_CHARS`, applied at the catch site in
+  `src/core/live_order_rejections.py`); the **transcript** keeps Story 3.3's verbatim
+  `venue_reason`, because that story's AC #3 says "never reworded, truncated, or classified" and
+  an epic-level ruling was requested and never given (`src/core/live_order_path.py:600-613`).
+  Story 3.7 settles the column only and deliberately does not reverse 3.3. Both are now proven in
+  one test (`test_live_order_rejections_engine.py::
+  test_the_transcript_keeps_the_reason_verbatim_and_the_column_redacts_it`), so whichever way the
+  ruling goes, one assertion changes. **Owner: the epic-level ruling Story 3.3 requested.**
+- **An IB error code outside `ORDER_REJECTION_CODES` produces no event at all**, and the operator
+  sees nothing until Story 3.4's in-flight sweep resolves the order as
+  `OrderRejected(reason="UNKNOWN", reconciliation=True)` — potentially minutes later.
+  `_handle_order_error` logs `Unhandled order warning or error code` and returns
+  (`adapters/interactive_brokers/client/error.py:231-236`, re-measured 2026-09-21); an
+  `orderStatus` of `Inactive` is a warning-and-return too (`execution.py:1003-1007`). Story 3.7's
+  tally counts the `UNKNOWN` refusal when it eventually arrives and marks it
+  `reconciliation=True`, so the operator can tell a venue answer from a local timeout — but the
+  *delay* is unaddressed, and the real reason exists only in the adapter's own log line, never in
+  a structured record. Procedure P13's criterion 1 says what to grep for so a run that hits this
+  is still evidence. **Owner: Story 4.3 or the Epic 3 retrospective, whichever Allay rules.**
+- **`OrderTriggered` is still unhandled** — cross-reference only, not a new entry: see *Deferred
+  from: code review of story-3.3 (2026-08-30)* above. Story 3.7's tally keeps the same closed set
+  for the same reason (decision D-J): a triggered stop is not a refusal, and Epic 4 owns the
+  broker-authoritative state that makes it reachable.
+- **Strategy-visible suppression feedback is still unowned, and Story 3.7 explicitly does not take
+  it.** The entry under *story-3.2 code review (2026-08-30)* above says "Stories 3.3 and 3.7 own
+  *rejection* semantics; neither is scoped to suppression", and records the worry that it would
+  fall between them. Stating it outright so it is not left implicit: **it did not.** A suppressed
+  order never becomes an `OrderRejected` or an `OrderDenied` — it never becomes an event at all,
+  because the wrapper returns before calling the real method — so it never reaches the tally, is
+  never counted, and never appears in `runtime_flags.order_rejections`. That is correct (a
+  withheld order is not a refused one, and the session is not trading in the first place while the
+  connection is unobserved), and it means the gap is exactly as open as it was. **Owner:
+  unassigned; the entry above stands unchanged.**

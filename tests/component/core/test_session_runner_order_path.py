@@ -19,6 +19,8 @@ from src.config import IBKRSettings
 from src.core import live_session_runner
 from src.core.live_connection_monitor import ConnectionState, ConnectionStatus
 from src.core.live_gate import GateDecision, GateMode
+from src.core.live_order_path import ORDER_EVENTS_TOPIC
+from src.core.live_order_rejections import RejectionTally
 from src.core.live_session_runner import LiveSessionRunner
 from src.core.live_trade_recorder import POSITION_EVENTS_TOPIC, TradeRecorder
 from src.models.session import SessionSpec, StrategySpec
@@ -102,6 +104,8 @@ class SpyRecord:
     def __init__(self) -> None:
         self.calls: list[str] = []
         self.failures: list[str] = []
+        #: Story 3.7's fourth port method.
+        self.rejections: list[dict] = []
 
     def record_activity(self, *, at: datetime, bar_seen_at: datetime | None = None) -> None:
         self.calls.append("record_activity")
@@ -122,6 +126,28 @@ class SpyRecord:
     ) -> None:
         self.calls.append("record_strategy_failure")
         self.failures.append(spec_strategy_id)
+
+    def record_order_rejections(
+        self,
+        *,
+        rejected: int,
+        denied: int,
+        consecutive: int,
+        first_at: datetime,
+        last_at: datetime,
+        last_kind: str,
+        last_client_order_id: str,
+        last_instrument_id: str,
+        last_strategy_id: str,
+        last_reason: str,
+        last_reconciliation: bool,
+    ) -> None:
+        """Story 3.7's fourth port method. Duck-typed here, but kept complete so
+        the double stays an honest ``SessionRecordPort`` rather than one that
+        happens to satisfy the calls this file makes today.
+        """
+        self.calls.append("record_order_rejections")
+        self.rejections.append({"rejected": rejected, "consecutive": consecutive})
 
 
 async def _never_sleeps(seconds: float) -> None:
@@ -544,3 +570,125 @@ class TestTheRunnerReachesTheTradeRecorderCallSite:
             assert runner.ownership_lost is True
         finally:
             loop.close()
+
+
+class TestTheRunnerReachesTheRejectionTallyCallSite:
+    """Story 3.7, Task 3.3 — the same wiring-claim discipline its two siblings
+    established: a real ``LiveSessionRunner`` against a ``TestLiveNode``, never
+    the tally constructed directly in a test. Story 3.1's review finding is
+    what this class exists for — a wiring claim pinned only by a test that
+    builds the object itself survives the call site being deleted.
+    """
+
+    def test_the_runner_subscribes_a_rejection_tally_on_the_order_topic(self):
+        node = TestLiveNode(run_seconds=0.01)
+        runner = _runner(node)
+
+        runner.run()
+
+        assert runner._rejection_tally is not None
+        assert isinstance(runner._rejection_tally, RejectionTally)
+
+        matching = [
+            handler
+            for topic, handler in node.trader.subscriptions
+            if topic == ORDER_EVENTS_TOPIC
+            and getattr(handler, "__self__", None) is runner._rejection_tally
+        ]
+        assert len(matching) == 1
+        assert matching[0].__func__ is RejectionTally.handle_order_event
+
+    def test_three_handlers_now_sit_on_the_order_topic(self):
+        """The observer's two (``note_bar`` is on the bar topic; its
+        ``handle_order_event`` is here) plus the tally's one. Pinned as a count
+        so a *lost* subscribe is visible, not only a wrong one.
+        """
+        node = TestLiveNode(run_seconds=0.01)
+        runner = _runner(node)
+
+        runner.run()
+
+        on_order = [
+            handler for topic, handler in node.trader.subscriptions if topic == "events.order*"
+        ]
+        assert len(on_order) == 2  # observer.handle_order_event + tally.handle_order_event
+
+    def test_the_tally_is_constructed_with_the_configured_account_and_the_runners_clock(self):
+        """NFR26's configured-value clause is armed without the tally ever
+        reading settings — the runner already holds the string for the guard
+        (``live_session_runner.py:214-216``), so no settings read happens
+        inside a msgbus handler.
+        """
+        node = TestLiveNode(run_seconds=0.01)
+        clock = lambda: STARTED_AT  # noqa: E731 - a one-expression injected clock
+        runner = _runner(node, time_source=clock)
+
+        runner.run()
+
+        assert runner._rejection_tally is not None
+        assert runner._rejection_tally._account == "DU4076626"
+        assert runner._rejection_tally._time_source is clock
+
+    def test_the_subscription_is_recorded_so_the_stop_path_cancels_it(self):
+        """Through ``self._subscribe``, so ``_unsubscribe`` cancels it without
+        anyone having to remember the other end (the review fix of
+        2026-08-30 that ``_subscribe`` exists for).
+        """
+        node = TestLiveNode(run_seconds=0.01)
+        runner = _runner(node)
+
+        runner.run()
+
+        assert runner._rejection_tally is not None
+        recorded = [
+            handler
+            for topic, handler in runner._subscriptions
+            if getattr(handler, "__self__", None) is runner._rejection_tally
+        ]
+        assert len(recorded) == 1
+
+    def test_the_tally_subscribe_happens_inside_the_subscribe_phase(self, monkeypatch):
+        """Ordering pin: after the observer's own subscribe, before
+        ``report_instrument_shortfall`` — i.e. inside ``_phase_subscribe``, not
+        bolted on somewhere later where a phase failure would skip it.
+        """
+        timeline: list[str] = []
+        original_subscribe = live_session_runner.LiveSessionRunner._subscribe
+        original_shortfall = live_session_runner.report_instrument_shortfall
+
+        def _spy_subscribe(self, topic, handler):
+            owner = type(getattr(handler, "__self__", None)).__name__
+            timeline.append(f"subscribe:{owner}.{getattr(handler, '__name__', handler)}")
+            return original_subscribe(self, topic, handler)
+
+        def _spy_shortfall(node, bar_types, log):
+            timeline.append("shortfall")
+            return original_shortfall(node, bar_types, log)
+
+        monkeypatch.setattr(live_session_runner.LiveSessionRunner, "_subscribe", _spy_subscribe)
+        monkeypatch.setattr(live_session_runner, "report_instrument_shortfall", _spy_shortfall)
+
+        _runner(TestLiveNode(run_seconds=0.01)).run()
+
+        tally_index = timeline.index("subscribe:RejectionTally.handle_order_event")
+        observer_index = timeline.index("subscribe:OrderEventObserver.handle_order_event")
+        assert observer_index < tally_index < timeline.index("shortfall")
+
+    def test_the_steady_state_is_handed_the_same_tally_instance(self):
+        """Not a second one: the tick must drain the object the bus feeds."""
+        node = TestLiveNode(run_seconds=0.01)
+        runner = _runner(node)
+
+        runner.run()
+
+        assert runner._steady_state is not None
+        assert runner._steady_state._tally is runner._rejection_tally
+
+    def test_order_rejections_is_none_after_a_run_that_refused_nothing(self):
+        """The clean-run case, and the reason ``live start`` prints nothing."""
+        node = TestLiveNode(run_seconds=0.01)
+        runner = _runner(node)
+
+        runner.run()
+
+        assert runner.order_rejections is None

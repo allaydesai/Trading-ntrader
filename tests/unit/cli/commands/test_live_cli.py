@@ -905,6 +905,11 @@ def _start_harness(
     # And a fifth time (Story 3.6): a truthy `ownership_lost` would flip
     # every clean-stop test into the reclaimed-by-another-process branch.
     runner.ownership_lost = False
+    # And a sixth (Story 3.7): a bare MagicMock `order_rejections` is truthy
+    # and attribute-rich, so an unset one would make every clean-stop test
+    # print the refusal block full of `<MagicMock ...>` reprs. `None` is what
+    # a run that had no order refused actually exposes.
+    runner.order_rejections = None
     record = MagicMock()
     trade_record = MagicMock()
 
@@ -1587,3 +1592,144 @@ class TestStartRendersFirstPartyFailures:
 
         assert result.exit_code == 1
         spies["record"].mark_stopped.assert_called_once_with()
+
+
+class TestOrderRejectionsAreVisibleAtTheStop:
+    """Story 3.7, decision D-H — the in-process half of AC #3's visibility.
+
+    Story 2.7 established both halves for a contained failure: ``runtime_flags``
+    for another process, and a console block for the operator watching the
+    stop. A refusal gets the same treatment, for the same reason — the run
+    whose last refusals never reached the row (a reclaim above all) is exactly
+    the run whose operator most needs to be told.
+
+    Exit code stays **0**: the session ran and it stopped. AR28's table has no
+    code for "the venue refused the orders", and Story 1.7 recorded that a CLI
+    inventing a code outside its own documented table is worse than one
+    reporting a generic failure.
+    """
+
+    @staticmethod
+    def _snapshot(**overrides):
+        from datetime import datetime, timezone
+
+        from src.core.live_order_rejections import RejectionSnapshot
+
+        fields = {
+            "version": 3,
+            "rejected": 2,
+            "denied": 0,
+            "consecutive": 2,
+            "first_at": datetime(2026, 9, 22, 14, 3, 11, tzinfo=timezone.utc),
+            "last_at": datetime(2026, 9, 22, 14, 9, 5, tzinfo=timezone.utc),
+            "last_kind": "rejected",
+            "last_client_order_id": "O-20260922-140905-0a1b2c3d-000-3",
+            "last_instrument_id": "NVDA.NASDAQ",
+            "last_strategy_id": "SMACrossover-000",
+            "last_reason": "Order rejected - reason: insufficient margin",
+            "last_reconciliation": False,
+        }
+        fields.update(overrides)
+        return RejectionSnapshot(**fields)
+
+    def test_the_counters_the_streak_and_the_last_refusal_are_printed(self, runner):
+        with _start_harness() as spies:
+            spies["runner"].order_rejections = self._snapshot()
+            result = runner.invoke(live, ["start", "alpha-session"])
+
+        flat = " ".join(result.output.split())
+        assert result.exit_code == 0
+        assert "2 rejected" in flat
+        assert "0 denied" in flat
+        assert "2 in a row" in flat
+        assert "NVDA.NASDAQ" in flat
+        assert "O-20260922-140905-0a1b2c3d-000-3" in flat
+        assert "insufficient margin" in flat
+
+    def test_a_clean_run_prints_nothing_extra(self, runner):
+        """The anti-tautology twin: ``None`` renders no block at all — not a
+        "0 orders refused" line.
+        """
+        with _start_harness() as spies:
+            spies["runner"].order_rejections = None
+            result = runner.invoke(live, ["start", "alpha-session"])
+
+        assert "refused" not in result.output.lower()
+        assert result.exit_code == 0
+
+    def test_the_block_is_printed_even_when_the_run_ends_by_raising(self, runner):
+        """The ``_print_contained_failures`` reasoning, verbatim: a run that
+        ends by raising — a reclaim above all — may be exactly the run whose
+        last refusals never reached ``runtime_flags``, because the write is
+        refused once the row leaves ``running``.
+        """
+        with _start_harness(runner_error=RuntimeError("the node died")) as spies:
+            spies["runner"].order_rejections = self._snapshot()
+            result = runner.invoke(live, ["start", "alpha-session"])
+
+        flat = " ".join(result.output.split())
+        assert result.exit_code != 0
+        assert "NVDA.NASDAQ" in flat
+
+    def test_a_denial_is_named_as_a_denial(self, runner):
+        with _start_harness() as spies:
+            spies["runner"].order_rejections = self._snapshot(
+                rejected=0,
+                denied=2,
+                last_kind="denied",
+                last_reason="NOTIONAL_EXCEEDS_FREE_BALANCE",
+            )
+            result = runner.invoke(live, ["start", "alpha-session"])
+
+        flat = " ".join(result.output.split())
+        assert "denied locally" in flat
+
+    def test_a_reconciliation_refusal_says_so(self, runner):
+        """Story 3.4's in-flight sweep is a local timeout, not a venue answer,
+        and an operator reading a transcript needs to know which they have.
+        """
+        with _start_harness() as spies:
+            spies["runner"].order_rejections = self._snapshot(
+                last_reconciliation=True, last_reason="UNKNOWN"
+            )
+            result = runner.invoke(live, ["start", "alpha-session"])
+
+        assert "reconciliation" in " ".join(result.output.split()).lower()
+
+    def test_the_operator_is_told_where_the_evidence_is(self, runner):
+        with _start_harness() as spies:
+            spies["runner"].order_rejections = self._snapshot()
+            result = runner.invoke(live, ["start", "alpha-session"])
+
+        flat = " ".join(result.output.split())
+        assert "order.rejected" in flat
+        assert "runtime_flags" in flat
+
+    def test_the_wording_respects_ar36s_vocabulary(self, runner):
+        """``test_live_cli.py`` asserts AR36 directly for this module — the
+        AST scan in ``test_live_stop_path_is_inert.py`` does not cover
+        ``src/cli/commands/live.py``.
+        """
+        import re as _re
+
+        with _start_harness() as spies:
+            spies["runner"].order_rejections = self._snapshot()
+            result = runner.invoke(live, ["start", "alpha-session"])
+
+        scrubbed = " ".join(result.output.split()).lower().replace("closed trade", "")
+        for forbidden in ("pause", "halt", "kill", "close", "finalize"):
+            assert not _re.findall(rf"\b{forbidden}\w*\b", scrubbed), forbidden
+
+    def test_no_unmasked_account_shaped_token_reaches_the_console(self, runner):
+        """NFR26. The reason was redacted when the snapshot was built; this
+        pins that the CLI does not reintroduce one.
+        """
+        import re as _re
+
+        with _start_harness() as spies:
+            spies["runner"].order_rejections = self._snapshot(
+                last_reason="Error 321: account ***626 is not managed"
+            )
+            result = runner.invoke(live, ["start", "alpha-session"])
+
+        assert not _re.search(r"\b[A-Z]{1,2}\d{6,10}\b", result.output)

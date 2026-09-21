@@ -66,6 +66,12 @@ NODE_FACING_MODULES = (
     # `live_order_path.py` above — a raise here would re-enter Nautilus's own
     # silent `os._exit(1)`, so this scan must cover it too.
     "src/core/live_trade_recorder.py",
+    # Story 3.7. The rejection tally is the third subscriber on
+    # `events.order*`, so it runs inline inside `MessageBus.publish_c` — the
+    # same shape as `live_order_path.py` and `live_trade_recorder.py` above.
+    # Added in the commit that created the module, because this list is
+    # hand-maintained and an omission is invisible (CLAUDE.md, Anti-Patterns).
+    "src/core/live_order_rejections.py",
     "src/services/session_record.py",
     "src/services/session_service.py",
 )

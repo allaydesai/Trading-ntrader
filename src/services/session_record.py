@@ -212,3 +212,75 @@ class SqlSessionRecord:
                 )
             except InvalidSessionTransition as exc:
                 raise SessionReclaimedError(str(exc)) from exc
+
+    def record_order_rejections(
+        self,
+        *,
+        rejected: int,
+        denied: int,
+        consecutive: int,
+        first_at: datetime,
+        last_at: datetime,
+        last_kind: str,
+        last_client_order_id: str,
+        last_instrument_id: str,
+        last_strategy_id: str,
+        last_reason: str,
+        last_reconciliation: bool,
+    ) -> None:
+        """Replace ``runtime_flags["order_rejections"]`` (Story 3.7, FR49).
+
+        One short-lived transaction, like its three siblings, and for the same
+        reason: a 6.5-hour session must never hold a row lock. Bounded by the
+        caller rather than by a latch — ``SessionSteadyState``'s tick writes at
+        most once per interval, and only while refusals are arriving, so a
+        session rejected on every crossover still costs at most one short
+        transaction per 30 seconds and a clean session costs none at all.
+
+        Never assigns ``status`` itself — AR37 admits exactly one assigner and
+        it is not this module. A session whose orders are being rejected is
+        still ``running``; that is the condition this write exists to make
+        visible.
+
+        ``at`` has no single value here (the snapshot carries two instants), so
+        the service is constructed with ``time_source=lambda: last_at`` — the
+        most recent refusal. Nothing in ``_record_order_rejections`` reads the
+        clock; the binding exists only so no wall-clock reading can leak into
+        a write whose every timestamp the caller chose.
+
+        Every ``InvalidSessionTransition`` is translated to
+        :class:`~src.core.live_session_record.SessionReclaimedError` for the two
+        reasons ``record_activity`` documents — the runner may not import
+        ``src.db`` (AR38), and both refusals that produce one mean the same
+        thing: this session is no longer ours to write to.
+
+        ⚠️ The **caller's** policy differs from the heartbeat's, as it does for
+        ``record_strategy_failure``: the steady-state tick re-raises a reclaim
+        out of ``run()``, and the runner's teardown flush folds it into
+        ``_ownership_lost``. That policy lives in the caller, not here.
+
+        Raises:
+            RecordNotFoundError: The session's row is gone.
+            SessionReclaimedError: This process no longer owns the session.
+        """
+        with self._session_factory() as db_session:
+            repository = SyncTradingSessionRepository(db_session)  # type: ignore[arg-type]
+            service = SessionService(repository, time_source=lambda: last_at)
+            try:
+                service.record_order_rejections(
+                    self._session_id,
+                    owner_epoch=self._owner_epoch,
+                    rejected=rejected,
+                    denied=denied,
+                    consecutive=consecutive,
+                    first_at=first_at,
+                    last_at=last_at,
+                    last_kind=last_kind,
+                    last_client_order_id=last_client_order_id,
+                    last_instrument_id=last_instrument_id,
+                    last_strategy_id=last_strategy_id,
+                    last_reason=last_reason,
+                    last_reconciliation=last_reconciliation,
+                )
+            except InvalidSessionTransition as exc:
+                raise SessionReclaimedError(str(exc)) from exc
