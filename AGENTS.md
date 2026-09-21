@@ -1,0 +1,212 @@
+# NTrader — Nautilus Trader Backtesting System
+
+Production-grade algorithmic trading backtester using Nautilus Trader + IBKR data.
+
+## BMAD Context
+
+This project uses the BMAD method for agentic development. Read these before implementing:
+
+- **`_bmad-output/project-context.md`** — implementation rules: tech stack, coding patterns, testing, gotchas (read first)
+- **`docs/governance/development-principles.md`** — non-negotiable rules: TDD, coverage, performance targets, security
+- **`_bmad/`** — BMAD core config, templates, and agent personas
+
+## Mental Model
+
+Data flows: IBKR/Kraken/CSV → Parquet catalog → BacktestEngine → Results DB → Web UI/Reports
+
+## Commands
+
+```bash
+make test-unit          # Unit tests (parallel, no Nautilus)
+make test-component     # Component tests (test doubles)
+make test-integration   # Integration tests (--forked for C extensions)
+make test-e2e           # End-to-end (sequential)
+make test-all           # All tests
+make test-coverage      # Coverage report (src/core + src/strategies)
+
+make format             # ruff format .
+make lint               # ruff check .
+make typecheck          # mypy src/core src/services
+make install-hooks      # Install git pre-commit hook (run once per clone)
+
+uv run python -m src.cli.main          # CLI entry point
+make web                                # Web UI (http://127.0.0.1:8000)
+./scripts/build-css.sh                  # Build Tailwind CSS (required first time)
+```
+
+## Foundational Rules
+
+- **TDD is non-negotiable** — every feature starts with a failing test (Red-Green-Refactor)
+- **UV only** for dependencies — `uv add`, `uv remove`, `uv sync`
+- **IBKR/Kraken env vars** — all connection settings via `IBKRSettings`/`KrakenSettings`. Never hardcode
+- **Size limits** — files <500 lines, functions <50 lines, classes <100 lines, line length 100 chars.
+  **Measured on executable statements, not raw lines** (decided 2026-08-28, Epic 2 retro D4): a module
+  whose bulk is a docstring recording measured framework behaviour is not the problem these caps exist
+  for. Line length is the only one ruff enforces today; a unit-tier AST guard for the other three is
+  pending, with an explicit allowlist for sanctioned exceptions. **Disclose and record an overage
+  rather than silently exceeding it** — and budget a split *before* the edit, not during it, because
+  a split that moves a module also moves it out of the hand-maintained guard lists (see Anti-Patterns)
+- **context7 MCP** — always use for library documentation lookups
+- **Keep README.md in sync** — validate before modifying, update if instructions change
+
+## Critical Gotchas
+
+1. **Nautilus LogGuard** — C logging panics if initialized twice. Store guard via `set_nautilus_log_guard()` in `src/utils/logging.py`. Never let it go out of scope
+2. **`--forked` tests** — integration tests need `--forked` because Nautilus C/Rust extensions corrupt state across `fork()`. Already configured in `make test-integration`
+3. **Strategies submodule** — `src/core/strategies/custom/` is a git submodule. Update: `git submodule update --remote`
+4. **BacktestEngine is single-use** — cannot be reused after a run; create a new instance each time
+5. **Alembic migrations** — run `alembic upgrade head` before first use. 17 migrations in `alembic/versions/`, single head (`85c949ac0374`)
+
+## Anti-Patterns (things that break)
+
+- Never instantiate `LiveLogger` or `Logger` directly — use LogGuard via `set_nautilus_log_guard()`
+- Never reuse a `BacktestEngine` instance across runs — create fresh each time
+- Never import from `src.core.strategies.custom.*` in core code — custom/ is a git submodule
+- Never run integration tests without `--forked` — C extensions corrupt shared state
+- Never hardcode IBKR/Kraken connection details — use env var settings classes
+- Never split a `src/core/live_*.py` or `src/cli/commands/live*.py` module without re-checking the
+  **hand-maintained guard lists** in the same commit — `NODE_FACING_MODULES` / `EXEMPT_MODULES`
+  (`tests/unit/core/test_live_node_never_exits.py`), `STOP_PATH_MODULES`
+  (`tests/unit/core/test_live_stop_path_is_inert.py`), `TestImportPurity.MODULES`
+  (`tests/component/core/test_session_runner_phases.py`). Story 2.6's file-size split made
+  `live_start.py` silently escape two of them, and nothing asserts the lists are complete, so an
+  omission is invisible. `LIVE_MODULE_GLOBS` and `STRATEGY_MODULES` are globbed and need no action.
+  A fifth list, `_STDLIB_AND_FIRST_PARTY` (`tests/integration/core/test_epic1_ac_node.py`), is
+  triggered by a **new import** rather than by a split — adding any stdlib import to a live-path
+  module fails that scan until the name is added by hand (added to this list 2026-08-30 by code
+  review, after Story 3.3's `from decimal import Decimal` tripped it and the story's "zero
+  guard-list edits" claim turned out to be false)
+- **Membership-pinned lists** (added 2026-08-29): `FORBIDDEN_ORDER_METHODS` and `LIFECYCLE_HOOKS`
+  (`tests/unit/core/test_live_stop_path_is_inert.py`) are asserted as exact sets, because every
+  other consumer only *intersects* with them — dropping a name weakened a scan or deleted a
+  parametrized probe's own case without anything going red. Change either deliberately, in the
+  membership test and the constant together. `ORDER_CREATING_METHODS`
+  (`src/core/live_order_path.py`, added 2026-08-30) joins this discipline: pinned as an exact set in
+  `tests/component/core/test_live_order_path.py`, and separately asserted a *subset* of
+  `FORBIDDEN_ORDER_METHODS` against a duplicated literal there. **A duplicated literal needs its own
+  equality pin** (added 2026-08-30 by code review): the copy existed with nothing tying it to its
+  source, so a *shrink* of the real set would leave the stale name in the copy and the subset
+  assertion passing while meaning nothing. Production code genuinely cannot import from `tests/`, but
+  a test file can — `tests/__init__.py` exists — so the copy is now asserted equal to the real
+  constant by import. Keep the copy (it forces a deliberate, visible edit in both files) **and** the
+  equality pin. `EMITTED_ORDER_EVENTS` (`src/core/live_order_path.py`, added 2026-08-30) joins the
+  discipline too: every **order-lifecycle** record name `OrderEventObserver` emits (diagnostic and
+  boundary records — `order.observer_failed`, `order.suppressed`, `order.suppression_failed` — are
+  deliberately outside it), pinned as an exact set in
+  `tests/component/core/test_live_order_path.py`, with the NFR26 anti-field scan parametrized from
+  it — a dropped name would otherwise exempt that event type from the scan without anything going
+  red. **An exact-set pin against hand-written constants is one-directional** (corrected 2026-08-30
+  by code review, which found the original claim here false): comparing the tuple to a literal set
+  built from the *same* constants catches a name *dropped from the tuple*, but never a record name
+  *never added* to it, so a new emitter silently escapes the scan — the exact failure the pin was
+  written to prevent. When a constant enumerates what some code *emits* or *dispatches*, pin it
+  against **the code**, not against a second hand-written list:
+  `TestEveryDispatchedRecordNameIsPinned` derives the emitted set by driving every entry in the
+  observer's own `_dispatch` map and comparing the captured record names, so both directions go red
+- **`EMITTED_TRADE_EVENTS`** (`src/core/live_trade_recorder.py`) joined the discipline at Story 3.5
+  and was **changed deliberately at Story 3.6**: `PERSISTED_EVENT` (`trade.persisted`, AR41's fixed
+  milestone name) was added alongside `AGGREGATED_EVENT`, following the same two-directional,
+  `_dispatch`-driven pin `EMITTED_ORDER_EVENTS` uses (`tests/component/core/
+  test_live_trade_recorder.py`) — `trade.recorder_failed`, `trade.commission_mixed_currency`,
+  `trade.commission_unavailable`, `trade.persist_refused` and `trade.persist_skipped` stay
+  deliberately outside it as diagnostic/boundary records, the `order.observer_failed` precedent.
+- **`EXPECTED_CAPABILITIES`** (`tests/unit/db/test_trading_session_repository_shape.py`) — an
+  exact-set allowlist for both `TradingSessionRepository` twins, **changed deliberately at Story
+  3.6**: `stamp_activity_if_owner` and `insert_trade_if_absent` joined it (AR9, both twins in the
+  same story). Neither name starts with a forbidden mutator prefix
+  (`update/set_/save/patch/merge/upsert/replace`), and neither writes `spec` — AC #7 of Story 2.2
+  is about there being no write path to `spec`, not about there being no write path at all.
+
+## Editing with Auto-Linter
+
+A ruff auto-formatter runs after each file edit. `F401` (unused import) is configured `unfixable`, so the formatter no longer silently strips imports — but a half-applied edit (import added, usage not yet) leaves an unused import that **hard-blocks the commit**.
+
+**The structural import gate** — unused (F401) / undefined (F821) imports are rejected at three points: the `.githooks/pre-commit` hook (universal — terminal, IDE, and Codex commits alike; run `make install-hooks` once per clone), the `.Codex/hooks/bash-guard.sh` commit gate (Codex-issued commits), and CI. A commit will not land until the import is fixed.
+
+- **Escape hatch** — for an intentional unused import (e.g. a re-export in `__init__.py`), append `# noqa: F401  # <reason>`. The reason comment is a required convention (not machine-enforced).
+- **Make dependent changes in a single edit** — e.g., when moving an import from inline to top-level, remove the inline usage in the same edit that adds the top-level import
+- **When removing a function parameter**, update call sites first (extra args still work), then remove the parameter
+- **Re-read the file after each edit** if you suspect the linter modified it — never assume your edit landed as written
+- **The commit gate only inspects *staged* files** — `.Codex/hooks/bash-guard.sh` runs `ruff format`/`check`/`mypy` before a `git commit`, then reconciles only what the formatter changed among files already in the index. Consequences: partial commits work (stage a subset, commit, repeat — unstaged files are left alone), and `git add <files> && git commit` in one call works too. If the formatter rewrites a fully-staged file, the hook **re-stages it for you**. It blocks only when a *partially* staged file's indexed content is itself unformatted, because re-staging would sweep in the hunks you held back — stash the WIP or stage the file in full
+
+## Commit Format
+
+```
+<type>(<scope>): <subject>
+```
+Types: `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`
+Never include AI/Codex references in commit messages.
+
+## Decision Heuristics
+
+- **Test tier**: Unit for pure logic · Component for Nautilus with test doubles · Integration for real engine runs (`--forked`) · E2E for full workflows · **UI testing** via `agent-browser` skill
+- **New file vs edit**: Prefer editing existing files. Only create new for genuinely new concepts (new strategy, new API route)
+- **UI changes**: Always invoke the `web-ui-development` skill before editing templates, routes, or HTMX patterns
+- **Stuck on Nautilus error?**: Read `docs/agent/nautilus.md` before trying workarounds
+
+## UI Testing (agent-browser)
+
+Use the `agent-browser` skill for all browser-based UI testing and verification.
+
+- **Always snapshot before interacting** — `agent-browser snapshot -i` to get element refs (@e1, @e2, ...). Never guess selectors
+- **Re-snapshot after navigation/re-render** — refs become stale after page changes
+- **Wait for async content** — use `agent-browser wait --text "Expected"` before snapshotting dynamic pages
+- **Capture evidence** — `agent-browser screenshot result.png` for pass/fail proof
+- **Date inputs** — `agent-browser fill @ref` silently fails on `<input type="date">` (exposed as 3 spinbuttons). Use `agent-browser eval` with native value setter + event dispatch instead
+- **HTMX form submission** — `agent-browser click @ref` on submit buttons may not trigger HTMX's event chain. Use `agent-browser eval "document.querySelector('button[type=\"submit\"]').click()"` to ensure HTMX intercepts the submit
+- **Timeouts for long requests** — set `AGENT_BROWSER_DEFAULT_TIMEOUT=120000` when clicking actions that trigger slow server responses (e.g., backtest execution)
+- **Playwright MCP timeouts** — configured with `--timeout-action 60000 --timeout-navigation 120000` to handle long-running backtest requests
+- Dev server: `http://127.0.0.1:8000` (FastAPI/HTMX)
+
+## Hooks
+
+Hooks in `.Codex/hooks/` auto-enforce formatting, file protection, and pre-commit checks (Codex-issued actions only). The tracked `.githooks/pre-commit` hook gates the structural import check (F401/F821) for **all** commits — terminal, IDE, and Codex — and is installed via `make install-hooks` (once per clone; sets `core.hooksPath`).
+
+## Project Layout
+
+```
+src/
+├── config.py          # Settings + IBKRSettings (Pydantic, env vars)
+├── api/               # FastAPI REST + Jinja2/HTMX UI routes
+├── cli/               # Click CLI commands
+├── core/              # Strategy registry, backtest runner, analytics
+│   └── strategies/    # Built-in + custom/ (git submodule)
+├── db/                # SQLAlchemy models + async repositories
+├── models/            # Domain Pydantic models
+├── services/          # IBKR client, data catalog, persistence, reports
+└── utils/             # Logging (LogGuard), config loader, helpers
+tests/                 # unit/ component/ integration/ e2e/ api/ ui/
+```
+
+## Example: Adding a Strategy
+
+```
+Good — single file with register_strategy, test first:
+  tests/unit/strategies/test_my_strat.py   # Write failing test (TDD)
+  src/core/strategies/my_strat.py          # Strategy class + config + register_strategy()
+
+Bad — config in a separate file, no test, missing register_strategy call
+```
+
+## Design Context
+
+Read before any UI/design work (templates, CSS, charts, new pages):
+
+- **`PRODUCT.md`** — register (product), users, brand personality ("modern quant workbench"), anti-references, strategic design principles
+- **`DESIGN.md`** — visual system: color tokens, typography, elevation doctrine (flat/tonal), component specs, do's and don'ts
+
+## Progressive Disclosure
+
+Detailed docs for specific areas — read on demand by topic:
+
+- `_bmad-output/project-context.md` — tech stack, coding patterns, testing rules, anti-patterns
+- `docs/governance/development-principles.md` — TDD enforcement, coverage, performance targets, security
+- `docs/agent/architecture.md` — source tree overview, data flow map, progressive disclosure index
+- `docs/agent/nautilus.md` — LogGuard, C extension isolation, engine lifecycle, strategy config
+- `docs/agent/data-pipeline.md` — DataCatalogService, IBKR/Kraken clients, Parquet catalog, symbol resolution
+- `docs/agent/web-ui.md` — HTMX patterns, templates, DI chain, charts, presentation models
+- `docs/agent/persistence.md` — DB models, async/sync repositories, results extraction, exceptions
+- `docs/agent/testing.md` — test pyramid, markers, fixtures, TDD workflow, coverage
+- `docs/agent/conventions.md` — git workflow, UV commands, quality checks, error handling, style
+
+See README.md for full setup and usage instructions.
