@@ -496,7 +496,7 @@ class TestRenderStatus:
 
 
 class TestEveryDegradationNamesItsCause:
-    """AC #4, #5: `_is_degraded` has three independent senses, and the renderer
+    """AC #4, #5: `_is_degraded` has four independent senses, and the renderer
     must explain whichever one fired — not only `failed_strategies`."""
 
     def _report(self, **overrides) -> StatusReport:
@@ -931,7 +931,8 @@ class TestTheRejectionBlockRenders:
     def test_every_named_field_reaches_the_operator(self):
         text = render_status(self._report())
 
-        assert "2" in text  # both counters and the streak
+        assert "2 rejected, 0 denied" in text
+        assert "2 in a row" in text
         assert "NVDA.NASDAQ" in text
         assert "O-20260824-115930-0a1b2c3d-000-3" in text
         assert "insufficient margin" in text
@@ -944,6 +945,29 @@ class TestTheRejectionBlockRenders:
         text = render_status(self._report(runtime_flags={"v": 1, "order_rejections": document}))
 
         assert "denied" in text.lower()
+
+    def test_an_unknown_kind_is_named_not_mistaken_for_a_venue_answer(self):
+        """Review 2026-09-21: JSONB is unconstrained, so a ``kind`` this
+        reader does not know must not render as "rejected by the venue".
+        """
+        document = _rejections()
+        document["last"]["kind"] = "withheld"
+
+        text = render_status(self._report(runtime_flags={"v": 1, "order_rejections": document}))
+
+        assert "rejected by the venue" not in text
+        assert "withheld" in text
+
+    def test_a_cleared_streak_reads_as_recovered_not_zero_in_a_row(self):
+        """Review 2026-09-21: after a later acceptance the writer stores
+        ``consecutive: 0``; the body must not say "0 in a row".
+        """
+        text = render_status(
+            self._report(runtime_flags={"v": 1, "order_rejections": _rejections(consecutive=0)})
+        )
+
+        assert "0 in a row" not in text
+        assert "streak cleared" in text
 
     def test_a_reconciliation_refusal_is_marked_as_such(self):
         document = _rejections(consecutive=2)
@@ -1068,4 +1092,5 @@ class TestMalformedRejectionDocumentsAreToleratedNotFatal:
         text = render_status(report)
 
         assert report.health == SessionHealth.DEGRADED
-        assert "4" in text and "5" in text
+        assert "4 rejected, 1 denied" in text
+        assert "5 in a row" in text

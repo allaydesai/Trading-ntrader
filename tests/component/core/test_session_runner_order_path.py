@@ -598,10 +598,11 @@ class TestTheRunnerReachesTheRejectionTallyCallSite:
         assert len(matching) == 1
         assert matching[0].__func__ is RejectionTally.handle_order_event
 
-    def test_three_handlers_now_sit_on_the_order_topic(self):
-        """The observer's two (``note_bar`` is on the bar topic; its
-        ``handle_order_event`` is here) plus the tally's one. Pinned as a count
-        so a *lost* subscribe is visible, not only a wrong one.
+    def test_two_handlers_now_sit_on_the_order_topic(self):
+        """The observer's ``handle_order_event`` plus the tally's (the
+        observer's other subscription, ``note_bar``, is on the bar topic — the
+        original name of this test said "three" and counted it). Pinned as a
+        count so a *lost* subscribe is visible, not only a wrong one.
         """
         node = TestLiveNode(run_seconds=0.01)
         runner = _runner(node)

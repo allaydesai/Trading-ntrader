@@ -566,7 +566,7 @@ def _record_order_rejections(
         owner_epoch: This process's own claimed epoch, for the ownership guard.
         rejected: Every ``OrderRejected`` so far this run.
         denied: Every ``OrderDenied`` so far this run.
-        consecutive: Refusals since the last non-reconciliation acceptance.
+        consecutive: Refusals since the last non-reconciliation acceptance or fill.
         first_at: The first refusal's instant.
         last_at: The most recent refusal's instant.
         last_kind: ``"rejected"`` or ``"denied"``.

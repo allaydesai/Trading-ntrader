@@ -163,7 +163,10 @@ class TestTheSnapshotCountsRefusals:
 
 
 class TestTheStreakResetsOnlyOnARealAcceptance:
-    """D-C: an acceptance is the venue saying "this order is working"."""
+    """D-C: an acceptance is the venue saying "this order is working", and a
+    fill is the venue saying it worked (the 2026-09-21 review amendment: the
+    IB adapter does not promise an acceptance before every fill).
+    """
 
     def test_an_acceptance_resets_the_streak_but_not_the_totals(self):
         tally = _tally(_Clock())
@@ -191,6 +194,44 @@ class TestTheStreakResetsOnlyOnARealAcceptance:
 
         assert snapshot is not None
         assert snapshot.consecutive == 2
+
+    def test_a_fill_resets_the_streak_too(self):
+        """Review 2026-09-21: the IB adapter generates ``OrderAccepted`` only
+        from a ``PreSubmitted``/``Submitted`` ``openOrder`` callback, so an
+        order it reports straight as ``Filled`` emits a fill with no
+        acceptance. A fill is stronger evidence than an acceptance that orders
+        are getting through, and must clear the streak on its own.
+        """
+        tally = _tally(_Clock())
+
+        tally.handle_order_event(_named("OrderRejected"))
+        tally.handle_order_event(_named("OrderRejected"))
+        tally.handle_order_event(_named("OrderFilled"))
+        snapshot = tally.pending()
+
+        assert snapshot is not None
+        assert snapshot.consecutive == 0
+        assert snapshot.rejected == 2
+
+    def test_a_reconciliation_fill_does_not_reset_the_streak(self):
+        """The same startup-restore rule as for acceptances."""
+        tally = _tally(_Clock())
+
+        tally.handle_order_event(_named("OrderRejected"))
+        tally.handle_order_event(_named("OrderFilled", reconciliation=True))
+        tally.handle_order_event(_named("OrderRejected"))
+        snapshot = tally.pending()
+
+        assert snapshot is not None
+        assert snapshot.consecutive == 2
+
+    def test_a_fill_alone_never_produces_a_snapshot(self):
+        tally = _tally(_Clock())
+
+        tally.handle_order_event(_named("OrderFilled"))
+
+        assert tally.pending() is None
+        assert tally.snapshot is None
 
     def test_a_denial_extends_the_same_streak_as_a_rejection(self):
         tally = _tally(_Clock())
@@ -289,20 +330,22 @@ class TestDirtyFlagSemantics:
 
 
 class TestTheDispatchIsAClosedSet:
-    """D-J: three names, and everything else is ignored in silence."""
+    """D-J: four names (``OrderFilled`` joined at the 2026-09-21 review), and
+    everything else is ignored in silence.
+    """
 
-    def test_the_dispatch_keys_are_exactly_the_three_refusal_related_types(self):
+    def test_the_dispatch_keys_are_exactly_the_four_order_outcome_types(self):
         assert set(_tally(_Clock())._dispatch) == {
             "OrderRejected",
             "OrderDenied",
             "OrderAccepted",
+            "OrderFilled",
         }
 
     @pytest.mark.parametrize(
         "event_type",
         [
             "OrderSubmitted",
-            "OrderFilled",
             "OrderInitialized",
             "OrderTriggered",
             "OrderModifyRejected",
@@ -346,7 +389,9 @@ class TestContainmentExtendsToEveryDispatchedBranch:
         _Exploding.__name__ = name
         return _Exploding()
 
-    @pytest.mark.parametrize("event_type", ["OrderRejected", "OrderDenied", "OrderAccepted"])
+    DISPATCHED = ["OrderRejected", "OrderDenied", "OrderAccepted", "OrderFilled"]
+
+    @pytest.mark.parametrize("event_type", DISPATCHED)
     def test_a_raising_event_is_contained_and_recorded_once(self, event_type):
         tally = _tally(_Clock())
 
@@ -361,7 +406,7 @@ class TestContainmentExtendsToEveryDispatchedBranch:
         assert failed[0]["exc_info"] is True
         assert failed[0]["log_level"] == "error"
 
-    @pytest.mark.parametrize("event_type", ["OrderRejected", "OrderDenied", "OrderAccepted"])
+    @pytest.mark.parametrize("event_type", DISPATCHED)
     def test_a_failed_build_leaves_the_counters_untouched(self, event_type):
         """The ``_log_filled`` lesson (Story 3.3 review): commit the counters
         only after the record is built, or a half-applied increment survives a
@@ -385,7 +430,9 @@ class TestContainmentExtendsToEveryDispatchedBranch:
 
     def test_the_client_order_id_is_read_through_getattr(self):
         """The diagnostic cannot itself raise on the malformed event that
-        brought it here (the ``handle_order_event`` precedent).
+        brought it here (the ``handle_order_event`` precedent), and an
+        unreadable id is the empty string — not the literal ``"None"`` a bare
+        ``str(getattr(..., None))`` produces (review 2026-09-21).
         """
         tally = _tally(_Clock())
 
@@ -393,7 +440,33 @@ class TestContainmentExtendsToEveryDispatchedBranch:
             tally.handle_order_event(self._exploding("OrderRejected"))
 
         failed = [entry for entry in logs if entry["event"] == TALLY_FAILED_EVENT]
-        assert "client_order_id" in failed[0]
+        assert failed[0]["client_order_id"] == ""
+
+    def test_the_diagnostic_carries_the_client_order_id_when_it_is_readable(self):
+        """The control for the test above: when only ``reason`` is broken, the
+        diagnostic still names the order, so a transcript line and the failure
+        record can be matched up.
+        """
+
+        class _ReasonExplodes:
+            client_order_id = "O-20260922-140000-abcd-000-9"
+            instrument_id = "NVDA.NASDAQ"
+            strategy_id = "SMACrossover-000"
+            reconciliation = False
+
+            @property
+            def reason(self):
+                raise RuntimeError("boom")
+
+        _ReasonExplodes.__name__ = "OrderRejected"
+        tally = _tally(_Clock())
+
+        with capture_logs() as logs:
+            tally.handle_order_event(_ReasonExplodes())
+
+        failed = [entry for entry in logs if entry["event"] == TALLY_FAILED_EVENT]
+        assert failed[0]["client_order_id"] == "O-20260922-140000-abcd-000-9"
+        assert tally.pending() is None  # nothing was committed for a half-read event
 
 
 class TestTheSnapshotCrossesAr38sLineInPrimitivesOnly:
@@ -479,7 +552,9 @@ class TestRenderRejectionSummary:
         lines = render_rejection_summary(self._snapshot())
 
         text = "\n".join(lines)
-        assert "1" in text  # rejected
+        assert "1 rejected, 1 denied" in text
+        assert "2 in a row" in text
+        assert "denied locally" in text  # the last refusal was the denial
         assert "NVDA.NASDAQ" in text
         assert "O-20260922-140000-abcd-000-1" in text
         assert T0.isoformat() in text
@@ -507,6 +582,35 @@ class TestRenderRejectionSummary:
     def test_rendering_none_produces_nothing(self):
         assert render_rejection_summary(None) == []
 
+    def test_a_cleared_streak_does_not_render_as_zero_in_a_row(self):
+        """Review 2026-09-21: a session that recovered must not print
+        "0 in a row with no acceptance between".
+        """
+        tally = _tally(_Clock())
+        tally.handle_order_event(_named("OrderRejected"))
+        tally.handle_order_event(_named("OrderAccepted"))
+        snapshot = tally.pending()
+        assert snapshot is not None
+
+        text = "\n".join(render_rejection_summary(snapshot))
+
+        assert "0 in a row" not in text
+        assert "streak cleared" in text
+
+    def test_a_reconciliation_sweep_is_not_described_as_a_venue_answer(self):
+        """Review 2026-09-21: Story 3.4's in-flight sweep is a local timeout;
+        "rejected by the venue (from reconciliation)" contradicted itself.
+        """
+        tally = _tally(_Clock())
+        tally.handle_order_event(_named("OrderRejected", reason="UNKNOWN", reconciliation=True))
+        snapshot = tally.pending()
+        assert snapshot is not None
+
+        text = "\n".join(render_rejection_summary(snapshot))
+
+        assert "rejected by the venue" not in text
+        assert "reconciliation" in text
+
 
 class TestModulePurity:
     """The tally runs inline inside ``MessageBus.publish_c`` and builds the
@@ -515,6 +619,10 @@ class TestModulePurity:
     """
 
     FORBIDDEN = ("sqlalchemy", "nautilus_trader", "ibapi", "src.db", "src.services")
+    #: The only first-party modules the tally may borrow from: Story 2.7's
+    #: redaction primitive and the reader's wording helpers (review
+    #: 2026-09-21) — never the reverse direction, and never a node-facing one.
+    ALLOWED_FIRST_PARTY = {"src.core.live_strategy_guard", "src.core.live_session_health"}
 
     def test_top_level_imports_never_reach_a_framework(self):
         tree = ast.parse(Path(tally_module.__file__).read_text(encoding="utf-8"))
@@ -527,6 +635,8 @@ class TestModulePurity:
 
         offenders = [name for name in imported if name.startswith(self.FORBIDDEN)]
         assert offenders == [], f"the tally must stay framework-free, found: {offenders}"
+        first_party = {name for name in imported if name.startswith("src.")}
+        assert first_party == self.ALLOWED_FIRST_PARTY
 
     def test_no_record_name_is_emitted_but_the_one_diagnostic(self):
         """NFR26/AR41: this module emits exactly one record, and it is a
@@ -535,17 +645,21 @@ class TestModulePurity:
         """
         source = Path(tally_module.__file__).read_text(encoding="utf-8")
         tree = ast.parse(source)
-        emitted = {
-            node.args[0].value
+        first_args = [
+            node.args[0]
             for node in ast.walk(tree)
             if isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
             and node.func.attr in {"debug", "info", "warning", "error"}
             and node.args
-            and isinstance(node.args[0], ast.Constant)
-            and isinstance(node.args[0].value, str)
-        }
-        assert emitted == set()  # every call site names the constant, not a literal
+        ]
+        literals = {a.value for a in first_args if isinstance(a, ast.Constant)}
+        names = {a.id for a in first_args if isinstance(a, ast.Name)}
+        assert literals == set()  # every call site names the constant, not a literal
+        # Review 2026-09-21: pin the constant set too, or a second
+        # `self._log.error(OTHER_CONSTANT, ...)` would pass the literal scan.
+        assert names == {"TALLY_FAILED_EVENT"}
+        assert len(first_args) == len(names)  # exactly one emit site
         assert TALLY_FAILED_EVENT == "order.rejection_tally_failed"
 
     def test_no_record_field_is_named_account(self):

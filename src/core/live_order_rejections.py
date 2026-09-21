@@ -37,10 +37,16 @@ crosses AR38's boundary into ``src/services`` (through the record port), so no
 ``OrderRejected``, no ``ClientOrderId`` and no Nautilus object may travel with
 it: every field is an ``int``, ``str``, ``bool`` or ``datetime``. Dispatch is
 on ``type(event).__name__`` over a closed set for the same reason — this
-module never imports the classes it reacts to. The one non-stdlib import is
+module never imports the classes it reacts to. The non-stdlib imports are
 :func:`~src.core.live_strategy_guard.redact_accounts` and its companion cap,
 which are themselves framework-free (the same package, Story 2.7's
-per-token primitive built for exactly this case).
+per-token primitive built for exactly this case), and the two wording helpers
+:func:`~src.core.live_session_health.describe_streak` /
+:func:`~src.core.live_session_health.describe_refusal`, imported **from** the
+reader's module so that ``live start``'s block and ``live status``'s body say
+the same thing about the same refusal — that direction, never the reverse:
+the health module is read from another process and must not reach into a
+node-facing one.
 
 **What counts, and what resets the streak** (decision D-C, measured facts
 below). ``rejected`` counts every ``OrderRejected``: IBKR's own
@@ -53,18 +59,38 @@ unanswered order as ``OrderRejected(reason="UNKNOWN", reconciliation=True)``
 ``last_reconciliation=True`` in the snapshot so a reader can tell which kind it
 was. ``denied`` counts every ``OrderDenied``, the risk engine's local refusal
 (``risk/engine.pyx:726-823``). ``consecutive`` counts both since the last
-**non-reconciliation** ``OrderAccepted``: an acceptance is the venue saying
-"this order is working", which is the opposite of a refusal, while a
-``reconciliation=True`` acceptance is a *startup restore* of an order accepted
-before a restart, not fresh evidence that orders are getting through today.
-Fills are never consulted — every fill was preceded by an acceptance. A
-strategy denied locally on every order is the same silent quiet-market failure
-as one rejected by the venue on every order, which is why denials extend the
-same streak; ``last_kind`` keeps the two distinguishable for the operator.
+**non-reconciliation** ``OrderAccepted`` **or ``OrderFilled``**: an acceptance
+is the venue saying "this order is working", and a fill is the venue saying it
+worked — both are the opposite of a refusal — while a ``reconciliation=True``
+acceptance or fill is a *startup restore* of an order placed before a restart,
+not fresh evidence that orders are getting through today. Fills reset the
+streak as well as acceptances (code review 2026-09-21, amending D-C): the IB
+adapter generates ``OrderAccepted`` only from an ``openOrder`` callback in
+``PreSubmitted``/``Submitted`` (``adapters/interactive_brokers/execution.py:
+929-985``) and its ``_on_order_status("Filled")`` branch is a debug log
+(``:873-876``), so an order IB reports straight as ``Filled`` emits a fill
+with no acceptance before it. Every live run so far did show ``order.accepted``
+before each fill, but nothing guarantees it, and a streak that an actual fill
+cannot clear would read ``degraded`` for the rest of the run — the opposite
+false signal from the one this module exists to close. A strategy denied
+locally on every order is the same silent quiet-market failure as one rejected
+by the venue on every order, which is why denials extend the same streak;
+``last_kind`` keeps the two distinguishable for the operator.
+
+**The streak is session-wide, not per strategy** (code review 2026-09-21,
+accepted for Epic 3 and recorded in ``deferred-work.md``). One counter serves
+the whole session, so in a multi-strategy session one strategy accepted on
+every order clears the streak of another rejected on every order, and that
+second strategy's silent failure never reaches the one-word health — it stays
+visible only through ``last_strategy_id`` in the body block and through the
+transcript's ``order.rejected`` records. Every live session to date runs one
+strategy; a per-``strategy_id`` streak (``consecutive = max(...)`` keeps the
+document shape) is the Epic 4 shape if multi-strategy sessions become routine.
 
 ``OrderTriggered``, ``OrderModifyRejected`` and ``OrderCancelRejected`` stay
-outside the closed set (decision D-J): no modify or cancel-request path exists
-in this repo, and a triggered stop is not a refusal. Epic 4 owns the
+outside the closed set (decision D-J, now four names rather than three): no
+modify or cancel-request path exists in this repo, and a triggered stop is not
+a refusal. Epic 4 owns the
 broker-authoritative view that would change that.
 
 **Bounded by construction (NFR2).** A session rejected on every 1-minute
@@ -115,6 +141,7 @@ from datetime import datetime
 from functools import partial
 from typing import Any
 
+from src.core.live_session_health import describe_refusal, describe_streak
 from src.core.live_strategy_guard import MAX_DETAIL_CHARS, redact_accounts
 
 #: AR41's ``order.*`` namespace. A **diagnostic** record — the tally's own
@@ -146,7 +173,8 @@ def _safe_str(event: Any, name: str) -> str:
     later.
     """
     try:
-        return str(getattr(event, name, None))
+        value = getattr(event, name, None)
+        return "" if value is None else str(value)
     except Exception:  # noqa: BLE001 - the diagnostic must never raise
         return ""
 
@@ -168,8 +196,8 @@ class RejectionSnapshot:
             adapter-local and reconciliation alike.
         denied: Every ``OrderDenied`` since the session started.
         consecutive: Refusals of either kind since the last non-reconciliation
-            ``OrderAccepted``. This is the number the operator's health
-            derivation reads.
+            ``OrderAccepted`` or ``OrderFilled``. This is the number the
+            operator's health derivation reads.
         first_at: The first refusal's instant. Never moves.
         last_at: The most recent refusal's instant.
         last_kind: :data:`KIND_REJECTED` or :data:`KIND_DENIED`.
@@ -255,12 +283,14 @@ class RejectionTally:
         self._snapshot: RejectionSnapshot | None = None
         #: Class-name dispatch over a closed set — the ``OrderEventObserver``
         #: and ``TradeRecorder`` precedent. Pinned as an exact set by
-        #: ``tests/unit/core/test_live_order_rejections.py`` so a fourth type
-        #: cannot join silently (decision D-J).
+        #: ``tests/unit/core/test_live_order_rejections.py`` so a fifth type
+        #: cannot join silently (decision D-J; ``OrderFilled`` joined at the
+        #: 2026-09-21 code review, see the module docstring).
         self._dispatch: dict[str, Callable[[Any], None]] = {
             "OrderRejected": partial(self._record_refusal, kind=KIND_REJECTED),
             "OrderDenied": partial(self._record_refusal, kind=KIND_DENIED),
-            "OrderAccepted": self._note_accepted,
+            "OrderAccepted": self._note_order_through,
+            "OrderFilled": self._note_order_through,
         }
 
     @property
@@ -326,13 +356,15 @@ class RejectionTally:
         if version > self._written_version:
             self._written_version = version
 
-    def _note_accepted(self, event: Any) -> None:
-        """Reset the streak — unless this acceptance is a startup restore.
+    def _note_order_through(self, event: Any) -> None:
+        """Reset the streak — unless this acceptance or fill is a startup restore.
 
-        A ``reconciliation=True`` ``OrderAccepted`` is Story 3.4's replay of an
-        order accepted *before* a restart; treating it as fresh evidence that
-        orders are getting through today would silently clear a streak the
-        operator needs to see (decision D-C).
+        A ``reconciliation=True`` ``OrderAccepted`` (or ``OrderFilled``) is
+        Story 3.4's replay of an order placed *before* a restart; treating it
+        as fresh evidence that orders are getting through today would silently
+        clear a streak the operator needs to see (decision D-C). A fill counts
+        as well as an acceptance because the IB adapter does not promise an
+        acceptance before every fill (module docstring).
 
         **A reset dirties the tally**, so the *next* tick writes the cleared
         streak to the row. Without that, a session that recovered would read
@@ -411,17 +443,16 @@ def render_rejection_summary(snapshot: RejectionSnapshot | None) -> list[str]:
     """
     if snapshot is None:
         return []
-    kind = "rejected by the venue" if snapshot.last_kind == KIND_REJECTED else "denied locally"
-    marker = " (from reconciliation)" if snapshot.last_reconciliation else ""
     return [
         "⚠️  Orders were refused during this run:",
         f"    {snapshot.rejected} rejected, {snapshot.denied} denied "
-        f"({snapshot.consecutive} in a row with no acceptance between)",
+        f"({describe_streak(snapshot.consecutive)})",
         f"    first refusal at {snapshot.first_at.isoformat()}",
         f"    most recent at {snapshot.last_at.isoformat()} — {snapshot.last_instrument_id} "
-        f"{snapshot.last_client_order_id} {kind}{marker}",
+        f"{snapshot.last_client_order_id} "
+        f"{describe_refusal(snapshot.last_kind, reconciliation=snapshot.last_reconciliation)}",
         f"    reason: {snapshot.last_reason}",
         "    See `order.rejected` / `order.denied` in the log for each venue reason verbatim, "
-        "and `runtime_flags.order_rejections` on the session's row for the same summary from "
-        "another process.",
+        "and `runtime_flags.order_rejections` on the session's row for the most recent summary "
+        "that reached it — one interval behind this one if the final write did not land.",
     ]

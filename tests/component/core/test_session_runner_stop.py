@@ -1115,7 +1115,11 @@ class TestTheTeardownFlushesTheRejectionTally:
             runner.run()  # must not raise
 
         assert record.calls[-1] == "mark_stopped"
-        assert [e for e in logs if e["event"] == "session.rejection_record_failed"] != []
+        (failed,) = [e for e in logs if e["event"] == "session.rejection_record_failed"]
+        assert failed["exc_info"] is True
+        # Review 2026-09-21: a lost final summary reaches the operator's stop
+        # report through the same channel Story 3.6's trade flush uses.
+        assert runner.shutdown_problems == ["flush_order_rejections: RuntimeError"]
 
     def test_a_reclaim_during_the_flush_marks_ownership_lost(self):
         """A reclaim is not a hiccup: it stops the flush and is recorded, the

@@ -892,8 +892,11 @@ class LiveSessionRunner:
         non-``running`` row by design.
 
         Guarded, AR42: a DB hiccup here must not replace the run's primary
-        outcome. A reclaim stops the flush — the remaining facts belong in the
-        successor's log, not its row.
+        outcome, but it is not silent either — it is logged with its traceback
+        and appended to ``shutdown_problems``, the channel Story 3.6's
+        ``_flush_pending_trades`` uses, so a lost final summary reaches the
+        operator's stop report (code review 2026-09-21). A reclaim stops the
+        flush — the remaining facts belong in the successor's log, not its row.
         """
         if self._ownership_lost or self._rejection_tally is None:
             return
@@ -906,7 +909,10 @@ class LiveSessionRunner:
             self._ownership_lost = True
             return
         except Exception as exc:  # noqa: BLE001 - AR42: must not replace the outcome
-            self._log.error(REJECTION_RECORD_FAILED_EVENT, error_type=type(exc).__name__)
+            self._log.error(
+                REJECTION_RECORD_FAILED_EVENT, error_type=type(exc).__name__, exc_info=True
+            )
+            self._shutdown_problems.append(f"flush_order_rejections: {type(exc).__name__}")
             return
         self._rejection_tally.mark_written(snapshot.version)
 

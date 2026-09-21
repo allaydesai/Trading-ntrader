@@ -36,6 +36,30 @@
 
 generated: 2026-08-03
 last_updated: >-
+  2026-09-21 (STORY 3.7 CODE REVIEW DONE: stays review. Three parallel adversarial layers
+  (Blind Hunter / Edge Case Hunter / Acceptance Auditor) plus the reviewer's own read: 37 raw
+  findings -> 2 decisions, 16 patches, 6 deferred, 8 dismissed, all written to the story's
+  Review Findings section. Both decisions ruled by Allay and applied in the same session: a
+  non-reconciliation OrderFilled now RESETS the refusal streak (the IB adapter only generates
+  OrderAccepted from a PreSubmitted/Submitted openOrder callback, so a fill without an
+  acceptance is possible and would have left a session reading degraded for the rest of its
+  run -- D-C amended, D-J widened to four names, M12 re-run as a fifth-type mutation and
+  killed); the session-wide streak is accepted for Epic 3 and recorded in deferred-work.md as
+  an Epic 4 item. Headline patch: AC #1(b)'s "submit count == 2" harness was calling its exec
+  client double directly, so the count it asserted was its own -- it now submits through the
+  real Strategy.submit_order -> RiskEngine -> ExecutionEngine -> registered double. Also:
+  _safe_str no longer stringifies None; shared describe_streak/describe_refusal wording helpers
+  in the health module (a reconciliation sweep is not "rejected by the venue", unknown JSONB
+  kinds are named, a cleared streak is not "0 in a row"); a failed teardown flush now lands in
+  shutdown_problems with its traceback; three cannot-fail assertions, a mis-named
+  subscriber-count test, a CWD-relative strategies scan and a literal-only record-name scan
+  tightened; 18-vs-17 mutation count, run() 55-statement overage, AC #2(c) test location and
+  Task 8.3 recorded in the story. Gates after patching: unit 1362 / component 388 on the touched
+  files, integration test_live_status_e2e.py 12/12 on local Postgres, format/lint/typecheck
+  clean. STAYS review, NOT done: Procedure P13 (live rejection) is still not run. epic-3 stays
+  in-progress: 3.1-3.6 done, 3.7 review.)
+
+  Previously:
   2026-09-21 (STORY 3.7 IMPLEMENTED: ready-for-dev -> in-progress -> review. Epic 3's last story.
   All twelve tasks done; 174 new tests (unit 2501 -> 2623, component 1517 -> 1563, integration
   307 -> 313), every tier green, format/lint/typecheck clean, alembic still 85c949ac0374 (NO

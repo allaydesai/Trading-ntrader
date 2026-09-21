@@ -285,7 +285,10 @@ before production code is written:
    `OrderRejected` through `handle_event` and the outcome is one `strategy.failed
    handler=handle_event` record with the guard latched — never a propagated exception — the
    Epic 2 retro's *"do not tidy it away"* wrapper proven against this story's own event
-   (`tests/unit/core/test_live_strategy_guard.py`). (d) `src/core/live_order_rejections.py` is on
+   (`tests/component/core/test_live_order_rejections_engine.py::
+   TestAStrategyThatRaisesOnARejectionIsContained` — the component tier, because the proof drives
+   a real `Strategy.handle_event`; the draft named `test_live_strategy_guard.py`, corrected at the
+   2026-09-21 review). (d) `src/core/live_order_rejections.py` is on
    `NODE_FACING_MODULES`, so the never-exits AST scan covers it from the commit that creates it.*
 
 3. **Given** repeated rejections
@@ -737,6 +740,37 @@ before production code is written:
     (the 3.1–3.6 shape); subject an operator-outcome sentence, e.g. `feat(live): keep trading
     after a rejection and show repeated rejections from live status`; no AI references.
 
+### Review Findings
+
+Code review 2026-09-21 (three parallel adversarial layers — Blind Hunter, Edge Case Hunter,
+Acceptance Auditor — plus the reviewer's own read; 37 raw findings, 8 dismissed as noise or
+already decided by the story's own D-C/D-J).
+
+- [x] [Review][Decision] Streak reset relies on an `OrderAccepted` the IB adapter does not always emit — `RejectionTally._note_accepted` is the only reset, and the module docstring asserts "every fill was preceded by an acceptance" as fact. The IB adapter generates `OrderAccepted` only from an `openOrder` callback in `PreSubmitted`/`Submitted` (`adapters/interactive_brokers/execution.py:929-985`); its `_on_order_status("Filled")` branch is a debug log (`:873-876`), and fills come from `execDetails`. An order IB reports straight as `Filled` therefore emits `OrderFilled` with no `OrderAccepted`, and a session that fills repeatedly after two early rejections keeps `consecutive >= 2` and reads `degraded` / "It is not a quiet market" for the rest of the run — the opposite false signal from the one the story exists to close. Every live run so far (P7, P11, P12) did show `order.accepted` before each fill, so this is unproven live but unguarded. **Ruled by Allay 2026-09-21: option (1).** Patched — `OrderFilled` (non-reconciliation) now resets the streak; the D-J set is four names, re-pinned; M12 re-run as a fifth-type mutation and killed.
+- [x] [Review][Decision] The streak is session-global, not per strategy — `RejectionTally` holds one `_consecutive`, and any strategy's non-reconciliation acceptance zeroes it. In a two-strategy session, one strategy accepted on every order masks another rejected on every order forever: `last_strategy_id` is carried but never consulted by `_is_degraded`, so the "rejected on every order" pattern the PRD names is invisible exactly in the multi-strategy case. The story never discusses multi-strategy sessions, and `failed_strategies` is per strategy. **Ruled by Allay 2026-09-21: option (1).** Documented in the module docstring and recorded in `deferred-work.md` as an Epic 4 item; no code change.
+- [x] [Review][Patch] AC #1(b)'s "submit_order count is exactly 2 / B is SUBMITTED" pin is tautological — `_RecordingExecClient` is never registered with the `ExecutionEngine`, and `_submit()` calls `client.submit(order)` directly, adds the order to the cache by hand and applies `order_submitted` itself; both asserted values are ones the helper wrote. Wire a real exec-client double (`register_client`) and submit through `strategy.submit_order` so the count is measured through the engine [tests/component/core/test_live_order_rejections_engine.py:118-175, :263-278]
+- [x] [Review][Patch] `_safe_str` returns the string `"None"` for a missing attribute, not `""` as its docstring says, so the `order.rejection_tally_failed` diagnostic carries a literal `None` client id; `test_the_client_order_id_is_read_through_getattr` only asserts the key exists [src/core/live_order_rejections.py:181-192]
+- [x] [Review][Patch] Both renderers say "rejected by the venue" for anything that is not literally `"denied"`, so a reconciliation sweep renders as "rejected by the venue (from reconciliation)" — a contradiction, since the venue never answered — and an unknown `kind` from JSONB is reported as a venue rejection [src/core/live_order_rejections.py:412-413, src/core/live_session_health.py:510-511]
+- [x] [Review][Patch] Recovered sessions print "0 in a row with no acceptance between" after `_note_accepted` clears the streak; a zero streak should read as recovered, not as a zero-length run [src/core/live_order_rejections.py:416, src/core/live_session_health.py:500-502]
+- [x] [Review][Patch] The `live start` trailer unconditionally points at `runtime_flags.order_rejections` "for the same summary", including on the exception path where the teardown flush was refused (reclaim) or failed; the operator is sent to a column that is stale or absent [src/core/live_order_rejections.py:424-426, src/cli/commands/live.py:431]
+- [x] [Review][Patch] `_flush_order_rejections` swallows a failed final write with `error_type` only — no `exc_info`, and nothing appended to `shutdown_problems` — whereas Story 3.6's `_flush_pending_trades` records `flush_pending_trades: <ErrorType>` there; a lost final summary is invisible to whatever renders shutdown problems [src/core/live_session_runner.py:905-908]
+- [x] [Review][Patch] Three assertions cannot fail: `assert "1" in text` (ISO timestamp contains it), `assert "2" in text`, `assert "4" in text and "5" in text` against output that contains timestamps; pin the rendered phrases (`"1 rejected, 0 denied"`) instead [tests/unit/core/test_live_order_rejections.py:482, tests/unit/core/test_live_session_health.py:934, :1071]
+- [x] [Review][Patch] `test_three_handlers_now_sit_on_the_order_topic` asserts `len(on_order) == 2`; the docstring explains why two is right (`note_bar` is on the bar topic), so the name is wrong [tests/component/core/test_session_runner_order_path.py:601-614]
+- [x] [Review][Patch] `test_no_built_in_strategy_overrides_either_hook` uses a CWD-relative `pathlib.Path("src/core/strategies")`, so from any other directory it scans nothing and passes vacuously; it also walks the `custom/` submodule the AC scopes out. Anchor on the package's `__file__` and exclude `custom/` [tests/component/core/test_live_order_rejections_engine.py:522]
+- [x] [Review][Patch] `test_no_record_name_is_emitted_but_the_one_diagnostic` only asserts no string-literal first argument to `log.*`; a second `self._log.error(OTHER_CONSTANT, ...)` passes. Collect the `ast.Name` first arguments too and assert they equal `{"TALLY_FAILED_EVENT"}` [tests/unit/core/test_live_order_rejections.py:531-549]
+- [x] [Review][Patch] `_render_rejections` and `_render_degradation` each wrap the sub-document back into `{"order_rejections": document}` to reuse `_refusal_streak`; a `_streak_of(document)` helper removes the re-wrap and the second `or {}` guard [src/core/live_session_health.py:500, :545]
+- [x] [Review][Patch] Stale test docstring: `TestEveryDegradationNamesItsCause` still says "`_is_degraded` has three independent senses"; the story is also inconsistent on "third" (D-F, `_is_degraded`) vs "fourth" (`_render_degradation`, Completion Notes) [tests/unit/core/test_live_session_health.py:499]
+- [x] [Review][Patch] Dev Agent Record claims "18 mutations, 18 killed" but the table has 17 rows (M1–M17); either name the 18th or correct the count (M9's two tiers is one mutation) [3-7-keep-trading-after-a-rejection.md:1162, :1335]
+- [x] [Review][Patch] `LiveSessionRunner.run()` went 54 → 55 statements (already over the 50-statement function cap) with the added `_flush_order_rejections()` call and the size table does not disclose it; record the overage per CLAUDE.md [src/core/live_session_runner.py:442; story size table]
+- [x] [Review][Patch] AC #2(c) and Project Structure Notes cite `tests/unit/core/test_live_strategy_guard.py` as modified; the commit does not touch it — the pin lives in `test_live_order_rejections_engine.py::TestAStrategyThatRaisesOnARejectionIsContained`. Fix the story text and File List [3-7-keep-trading-after-a-rejection.md AC #2(c), Project Structure Notes]
+- [x] [Review][Patch] Task 8.3 ("confirm and say so" for `TestImportPurity` in `test_session_service.py`) is not recorded in the Dev Agent Record; the class scans only `session_service` so nothing was needed — say so [3-7-keep-trading-after-a-rejection.md Dev Agent Record, Task 8]
+- [x] [Review][Defer] A tick write still in flight on the executor when `release_executor(wait=False)` runs can land after the synchronous teardown flush, leaving the older snapshot on the row permanently once `mark_stopped` follows; the flush docstring asserts "cannot race" without a join [src/core/live_session_runner.py:876-908, src/core/live_session_steady_state.py:236-250] — deferred, pre-existing (decision D2's `wait=False` shape, shared exactly with `_flush_contained_failures`; window is one Postgres round trip)
+- [x] [Review][Defer] `self._log.error` raising inside `handle_order_event`'s `except` escapes the handler and reaches Nautilus's `os._exit(1)` [src/core/live_order_rejections.py:297-305] — deferred, pre-existing (the same shape as `OrderEventObserver.handle_order_event` and `TradeRecorder`; a structlog failure would already take the sibling handlers down first)
+- [x] [Review][Defer] `exc_info=True` on the diagnostic can carry the account id inside an exception message or traceback (NFR26 value-level) [src/core/live_order_rejections.py:304] — deferred, pre-existing (identical to `order.observer_failed` / `order.suppression_failed`; NFR26 measured live as zero account fields)
+- [x] [Review][Defer] A venue reason containing newlines or control characters breaks the console block and the status body line layout [src/core/live_order_rejections.py:365, :423; src/core/live_session_health.py:516] — deferred, pre-existing (`failed_strategies[*].detail` has the same exposure through `_render_failed_strategies`)
+- [x] [Review][Defer] `existing = trading_session.runtime_flags or {}` then `**existing` raises `TypeError` if the JSONB column holds a non-mapping (list/str/number), so the summary is never persisted [src/services/session_service.py:597-598] — deferred, pre-existing (byte-identical to `_record_strategy_failure` at `:476`; the column has a single writer)
+- [x] [Review][Defer] Task 3.2's interleaved-timeline assertion pins "before `mark_stopped`" but not "after `_stop_heartbeat`", so a mutation moving the flush ahead of the heartbeat join would not go red [tests/component/core/test_session_runner_stop.py:460-478] — deferred, pre-existing (the Story 2.7 contained-failure test has the same limitation)
+
 ## Dev Notes
 
 ### The trap — read before designing anything
@@ -957,9 +991,11 @@ and the 2026-09-21 live transcripts; "Nautilus docs are not evidence" stands.
   `test_session_service.py`, `test_session_record_adapter.py`, `test_live_session_health.py`,
   `test_live_status_cli.py`, `test_live_cli.py`, `test_session_steady_state.py`,
   `test_session_runner_order_path.py`, `test_session_runner_stop.py`,
-  `test_session_runner_strategy_failure.py`, `test_live_strategy_guard.py`,
+  `test_session_runner_strategy_failure.py`,
   `test_live_trade_recorder.py`, `test_live_node_never_exits.py`, `test_session_runner_phases.py`,
-  `tests/integration/db/test_live_status_e2e.py`.
+  `tests/integration/db/test_live_status_e2e.py`. (`test_live_strategy_guard.py` was listed here
+  by the draft and is **not** touched — the AC #2(c) pin lives in the new
+  `test_live_order_rejections_engine.py`; corrected at the 2026-09-21 review.)
 - **Modified — docs/artifacts**: `CLAUDE.md` (Task 8.5), `docs/qa/phase3-live-verification.md`,
   `deferred-work.md`, `sprint-status.yaml`, this file.
 - **Naming**: module `live_order_rejections`; classes `RejectionTally`, `RejectionSnapshot`;
@@ -1159,8 +1195,9 @@ zero writes nothing. `test_a_streak_reset_to_zero_reads_trading_again` pins the 
   the direction that actually needs the guard — two acknowledgements arriving out of order must
   leave the tally *clean* — and kills it.
 
-**Task 11 — mutation evidence, every one run for real.** 18 mutations, **18 killed**, 0 survived,
-0 not run:
+**Task 11 — mutation evidence, every one run for real.** 17 mutations, **17 killed**, 0 survived,
+0 not run (first recorded as "18", which double-counted M9's two tiers — corrected at the
+2026-09-21 code review, which also re-ran M12 against the widened dispatch set, see the row):
 
 | # | Mutation | Killed by |
 | --- | --- | --- |
@@ -1175,7 +1212,7 @@ zero writes nothing. `test_a_streak_reset_to_zero_reads_trading_again` pins the 
 | M9 | mutate the document in place instead of reassigning | **both tiers** — unit `test_the_document_is_reassigned_not_mutated_in_place` *and* real-Postgres `test_the_second_write_actually_reached_the_column` |
 | M10 | `>=` → `>` on the threshold | `test_a_streak_at_the_threshold_is_degraded` |
 | M11 | add an eighth key to `status_json_payload` | `TestStatusJsonPayload`'s set equality |
-| M12 | add `OrderFilled` to the tally's dispatch | `test_the_dispatch_keys_are_exactly_the_three_refusal_related_types` |
+| M12 | add a fifth type (`OrderSubmitted`) to the tally's dispatch — originally "add `OrderFilled`", until the 2026-09-21 review made `OrderFilled` a deliberate member (streak reset on fill) | `test_the_dispatch_keys_are_exactly_the_four_order_outcome_types` (re-run after the review patch: 1 failed / 52 passed) |
 | M13 | delete the runner's teardown flush | `test_a_refusal_after_the_last_tick_reaches_the_record_before_mark_stopped` |
 | M14 | delete the runner's tally subscribe | `test_the_runner_subscribes_a_rejection_tally_on_the_order_topic` |
 | M15 | revert `_safe_str` to a bare `getattr` | `test_a_raising_event_is_contained_and_recorded_once` |
@@ -1209,7 +1246,10 @@ asserting the path is among them), the AR24 retry scan (20 passed), the AR37 `st
 `test_live_dependency_invariance.py` (7 passed), `EXPECTED_CAPABILITIES` (68 passed, unchanged),
 `EMITTED_ORDER_EVENTS`/`TestEveryDispatchedRecordNameIsPinned` (unchanged — the tally's
 `order.rejection_tally_failed` is a diagnostic outside the lifecycle pin, on the
-`order.observer_failed` precedent, and the module docstring says so). `_STDLIB_AND_FIRST_PARTY`
+`order.observer_failed` precedent, and the module docstring says so). Task 8.3, confirmed and
+said so (added at the 2026-09-21 review, which found it unrecorded):
+`test_session_service.py::TestImportPurity` scans `session_service` only, not
+`session_record.py`, so nothing was added there. `_STDLIB_AND_FIRST_PARTY`
 needed **no** hand edit — the new module's imports (`collections.abc`, `dataclasses`, `datetime`,
 `functools`, `typing`) are all already listed — confirmed by the integration tier passing, not by
 inspection.
@@ -1228,9 +1268,10 @@ The measure is an AST walk over all `ast.stmt` nodes (the one that reproduces dr
 | Module | Drafting | Budget | After | Verdict |
 | --- | --- | --- | --- | --- |
 | `src/core/live_order_rejections.py` | — | ≤ 95 (class ≤ 55) | **93** (`RejectionTally` 54) | ✅ |
-| `src/core/live_session_health.py` | 129 | ≤ 160 | **166** | ⚠️ +6 |
+| `src/core/live_session_health.py` | 129 | ≤ 160 | **166** → **181** after the 2026-09-21 review (two shared wording helpers, `_streak_of`) | ⚠️ +21 |
 | `src/core/live_session_steady_state.py` | 166 (class 89) | ≤ 182 (class ≤ 100) | **187** (class **97**) | ⚠️ +5 (class ✅) |
-| `src/core/live_session_runner.py` | 338 (class 290) | ≤ 356 | **360** (class 311) | ⚠️ +4 |
+| `src/core/live_session_runner.py` | 338 (class 290) | ≤ 356 | **360** (class 311) → **361** (class 312) after the review | ⚠️ +5 |
+| `LiveSessionRunner.run()` (function) | 54 | 50 (CLAUDE.md function cap) | **55** | ⚠️ already over before this story; +1 for `_flush_order_rejections()` — **undisclosed until the 2026-09-21 review**, recorded here rather than split (the split moves the module out of the guard lists) |
 | `src/core/live_session_record.py` | 16 | ≤ 18 | **19** | ⚠️ +1 |
 | `src/services/session_record.py` | 44 | ≤ 54 | **52** | ✅ |
 | `src/services/session_service.py` | 136 (class 37) | ≤ 152 (class ≤ 42) | **150** (class **41**) | ✅ |
@@ -1238,7 +1279,7 @@ The measure is an AST walk over all `ast.stmt` nodes (the one that reproduces dr
 | `src/cli/commands/live_status.py` | 71 | 71 | **71** | ✅ zero diff |
 | `src/core/live_order_path.py` | 187 (class 98) | 187 | **187** | ✅ zero diff |
 
-Every overage is 1–6 statements and is docstring-dominated — the case CLAUDE.md's D4 note
+Every overage but the health module's is 1–6 statements and is docstring-dominated — the case CLAUDE.md's D4 note
 explicitly carves out. Against the **real** caps rather than this story's self-imposed budgets,
 all ten are compliant except `LiveSessionRunner`'s class count, which was already over before this
 story and is a disclosed precedent (splitting it would move it out of two hand-maintained guard
@@ -1332,7 +1373,8 @@ needed updating.
 - 2026-09-21 — Implemented (ready-for-dev → review). All twelve tasks complete; 174 new tests
   (unit +122, component +46, integration +6), every tier green, `format`/`lint`/`typecheck`
   clean, `alembic current` unchanged at `85c949ac0374`. Task 11's mutation sweep run in full:
-  18 mutations, 18 killed, none skipped — three of the story's own specified mutations (M1, M2,
+  17 mutations, 17 killed, none skipped (recorded as 18 until the 2026-09-21 review; M9's two
+  tiers had been counted twice) — three of the story's own specified mutations (M1, M2,
   M7) were no-ops as written and were rewritten; **M2 then survived, exposing a real gap in the
   dirty-flag tests**, closed by the new `TestMarkWrittenIsMonotonic`. One design decision changed
   and disclosed: a streak reset now *dirties* the tally so the cleared streak reaches the row —
@@ -1345,3 +1387,24 @@ needed updating.
   overages disclosed rather than silently exceeded. **Status is `review`, not `done`: Procedure
   P13 is written but not run** — no Gateway was reachable (all four ports closed at 15:56 ET with
   four minutes of RTH left).
+- 2026-09-21 — Code review (three parallel adversarial layers + reviewer read; 37 raw findings →
+  2 decisions, 16 patches, 6 deferred, 8 dismissed; all in the Review Findings section). Both
+  decisions ruled by Allay and applied: **a non-reconciliation `OrderFilled` now resets the
+  streak** (the IB adapter emits `OrderAccepted` only from a `PreSubmitted`/`Submitted`
+  `openOrder`, so a fill with no acceptance is possible and a streak a fill could not clear would
+  read `degraded` for the rest of the run — D-C amended, D-J widened to four names, M12 re-run as
+  a fifth-type mutation and killed); the **session-wide streak is accepted for Epic 3** and
+  recorded in `deferred-work.md` for Epic 4. Patches: AC #1(b)'s harness now submits through the
+  real `Strategy.submit_order` → `RiskEngine` → `ExecutionEngine` → registered exec-client double
+  (the first version called the double directly, so the "count == 2" it asserted was its own);
+  `_safe_str` returns `""` not `"None"`; shared `describe_streak`/`describe_refusal` in the
+  health module (a reconciliation sweep is no longer "rejected by the venue", an unknown JSONB
+  `kind` is named, a cleared streak no longer renders "0 in a row"); the `live start` trailer no
+  longer promises the row holds "the same summary"; a failed teardown flush now logs its
+  traceback and lands in `shutdown_problems`; three assertions that could not fail, one
+  mis-named subscriber-count test, one CWD-relative scan and one literal-only record-name scan
+  tightened; stale "three senses" docstring, the 18-vs-17 mutation count, the `run()` 55-statement
+  overage, AC #2(c)'s test location and Task 8.3's confirmation recorded. Gates after the
+  patches: unit 1362 (touched files), component 388 (touched files), integration
+  `test_live_status_e2e.py` 12/12 on local Postgres, `format`/`lint`/`typecheck` clean.
+  **Status stays `review`: Procedure P13 is still not run.**

@@ -190,8 +190,8 @@ class SessionRecordPort(Protocol):
             denied: Every ``OrderDenied`` so far this run — the local risk
                 engine's refusal.
             consecutive: Refusals of either kind since the last
-                non-reconciliation ``OrderAccepted``. The number the reader's
-                health derivation reads.
+                non-reconciliation ``OrderAccepted`` or ``OrderFilled``. The
+                number the reader's health derivation reads.
             first_at: The first refusal's instant, from the runner's clock.
             last_at: The most recent refusal's instant.
             last_kind: ``"rejected"`` or ``"denied"``.

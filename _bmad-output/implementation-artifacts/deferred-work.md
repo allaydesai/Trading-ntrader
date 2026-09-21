@@ -2837,3 +2837,46 @@ are recorded here; neither reopens either story, and neither was actioned.
   withheld order is not a refused one, and the session is not trading in the first place while the
   connection is unobserved), and it means the gap is exactly as open as it was. **Owner:
   unassigned; the entry above stands unchanged.**
+
+## Deferred from: code review of story-3.7 (2026-09-21)
+
+- **In-flight tick write vs teardown flush** (`src/core/live_session_runner.py:876-908`,
+  `src/core/live_session_steady_state.py:236-250`): `release_executor(wait=False)` (decision D2)
+  means a tick's `record_order_rejections` write still running on the executor can commit *after*
+  the synchronous `_flush_order_rejections` write of a newer snapshot; `mark_stopped` then makes
+  the older snapshot permanent. `_flush_contained_failures` has the identical exposure and the
+  identical "cannot race" docstring. Window is one Postgres round trip. Fix shape: join the
+  executor with a bounded timeout before the flushes, or have the flush skip when a write is in
+  flight. Owner: unassigned.
+- **`log.error` raising inside a msgbus handler's `except`** (`src/core/live_order_rejections.py:
+  297-305`): a structlog processor/render failure inside the containment block escapes
+  `handle_order_event` and reaches `MessageBus.publish_c` → `os._exit(1)`. Same shape in
+  `OrderEventObserver.handle_order_event` and `TradeRecorder`. Fix shape: a nested
+  `try/except Exception: pass` around the diagnostic emit, applied to all three at once.
+- **`exc_info=True` on the tally diagnostic** (`src/core/live_order_rejections.py:304`): an
+  exception message or traceback can embed the account code (NFR26 is value-level). Identical to
+  `order.observer_failed` / `order.suppression_failed`; NFR26 measured live as zero account
+  fields, so this is exposure, not a defect seen. Fix shape: `detail=redact_accounts(str(exc))`
+  and a redacted traceback, applied to every sibling together.
+- **Multi-line venue reason** (`src/core/live_order_rejections.py:365, :423`;
+  `src/core/live_session_health.py:516`): a `reason` containing newlines or control characters
+  breaks the `live start` block and the `live status` body layout. `failed_strategies[*].detail`
+  has the same exposure. Fix shape: collapse whitespace at the catch site before the cap.
+- **Non-mapping `runtime_flags` JSONB** (`src/services/session_service.py:597-598`):
+  `**existing` raises `TypeError` when the column holds a list/str/number, so the write fails on
+  every tick and the teardown flush. Byte-identical to `_record_strategy_failure` (`:476`); the
+  column has a single writer and the reader already tolerates it. Fix shape: `isinstance(...,
+  Mapping)` guard in both.
+- **Flush ordering half-pinned** (`tests/component/core/test_session_runner_stop.py:460-478`):
+  Task 3.2 asks for "after `_stop_heartbeat` and before `mark_stopped`"; only the second half is
+  asserted. Same limitation in the Story 2.7 contained-failure twin. Fix shape: assert the flush
+  index is after the last `record_activity` call on the spy.
+- **Session-wide refusal streak, not per strategy** (`src/core/live_order_rejections.py`,
+  `RejectionTally._consecutive`) — **ruled by Allay at the 2026-09-21 code review: accepted for
+  Epic 3.** One counter serves the whole session, so in a multi-strategy session one strategy
+  accepted on every order clears the streak of another rejected on every order, and that second
+  strategy's silent failure never reaches the one-word `degraded` health — it stays visible only
+  through `last_strategy_id` in the body block and the transcript's `order.rejected` records.
+  Every live session to date runs one strategy. Fix shape for Epic 4: `dict[str, int]` keyed by
+  `strategy_id`, `consecutive = max(...)` so the D-D document shape and the port signature stay
+  unchanged, optionally one extra field naming the worst strategy. Owner: unassigned.

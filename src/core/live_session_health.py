@@ -145,8 +145,8 @@ def _order_rejections(runtime_flags: object) -> Mapping[str, object]:
     return document if isinstance(document, Mapping) else {}
 
 
-def _refusal_streak(runtime_flags: object) -> int:
-    """``order_rejections.consecutive`` as an ``int``, or ``0``.
+def _streak_of(document: Mapping[str, object] | None) -> int:
+    """``consecutive`` from one ``order_rejections`` sub-document, or ``0``.
 
     ``bool`` is excluded deliberately: it is a subclass of ``int``, so
     ``{"consecutive": True}`` would otherwise read as a streak of one. A
@@ -154,8 +154,44 @@ def _refusal_streak(runtime_flags: object) -> int:
     malformed document must never make a healthy session report as impaired
     (``TestMalformedRejectionDocumentsAreToleratedNotFatal``).
     """
-    streak = _order_rejections(runtime_flags).get("consecutive")
+    streak = document.get("consecutive") if document else None
     return streak if isinstance(streak, int) and not isinstance(streak, bool) else 0
+
+
+def _refusal_streak(runtime_flags: object) -> int:
+    """``order_rejections.consecutive`` from the whole flags document, or ``0``."""
+    return _streak_of(_order_rejections(runtime_flags))
+
+
+def describe_streak(consecutive: int) -> str:
+    """The parenthetical after the refusal counters, shared with ``live start``.
+
+    A streak of zero is a session that recovered — a later order got through —
+    and must not read as a zero-length run (code review 2026-09-21).
+    """
+    if consecutive == 0:
+        return "streak cleared — a later order got through"
+    return f"{consecutive} in a row with no acceptance between"
+
+
+def describe_refusal(kind: object, *, reconciliation: bool) -> str:
+    """What the most recent refusal was, in operator vocabulary.
+
+    ``kind`` is read back from unconstrained JSONB here and from the tally's
+    snapshot in ``live start``, so an unknown value is named rather than
+    mistaken for a venue answer. A reconciliation-generated ``OrderRejected``
+    is Story 3.4's in-flight sweep — a local timeout, not the venue speaking —
+    so it is never described as "rejected by the venue" (code review
+    2026-09-21). AR36-audited: no ``halt``/``kill``/``pause``/``close``/
+    ``finalize`` stem.
+    """
+    if kind == "denied":
+        return "denied locally"
+    if kind == "rejected" and reconciliation:
+        return "unanswered — swept by reconciliation, not a venue answer"
+    if kind == "rejected":
+        return "rejected by the venue"
+    return f"refused (kind {kind!r})"
 
 
 def _is_degraded(runtime_flags: Mapping[str, object] | None) -> bool:
@@ -497,10 +533,9 @@ def _render_rejections(report: StatusReport) -> list[str]:
         return []
     rejected = document.get("rejected", 0)
     denied = document.get("denied", 0)
-    streak = _refusal_streak({"order_rejections": document})
     lines = [
         f"  orders refused: {rejected} rejected, {denied} denied "
-        f"({streak} in a row with no acceptance between)"
+        f"({describe_streak(_streak_of(document))})"
     ]
     first_at = document.get("first_at")
     if first_at is not None:
@@ -508,11 +543,10 @@ def _render_rejections(report: StatusReport) -> list[str]:
     last = document.get("last")
     if not isinstance(last, Mapping):
         return lines
-    marker = " (from reconciliation)" if last.get("reconciliation") else ""
-    kind = "denied locally" if last.get("kind") == "denied" else "rejected by the venue"
+    kind = describe_refusal(last.get("kind"), reconciliation=bool(last.get("reconciliation")))
     lines.append(
         f"    most recent at {last.get('at', '')} — {last.get('instrument_id', '')} "
-        f"{last.get('client_order_id', '')} {kind}{marker}"
+        f"{last.get('client_order_id', '')} {kind}"
     )
     reason = last.get("reason")
     if reason:
@@ -542,9 +576,7 @@ def _render_degradation(report: StatusReport) -> list[str]:
         lines.append("  Every strategy in this session was contained. It can no longer trade.")
     if report.connection_lost_at is not None:
         lines.append(f"  Broker connection was lost at {report.connection_lost_at}.")
-    if _refusal_streak({"order_rejections": report.order_rejections or {}}) >= (
-        DEFAULT_REJECTIONS_DEGRADED_AFTER
-    ):
+    if _streak_of(report.order_rejections) >= DEFAULT_REJECTIONS_DEGRADED_AFTER:
         lines.append(
             "  This session asked for orders and did not get them. It is not a quiet market."
         )

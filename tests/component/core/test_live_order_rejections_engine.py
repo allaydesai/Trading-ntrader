@@ -11,7 +11,11 @@ What this file proves that the unit tier cannot:
 
 - **AC #1(b)** — "the session continues operating and remains eligible to
   trade" is a claim about the *engine*, not about the tally. Submit → reject →
-  submit, and the exec client's ``submit_order`` count is exactly two.
+  submit **through the real chain** — ``Strategy.submit_order`` → ``RiskEngine``
+  → ``ExecutionEngine`` → an exec-client double registered with the engine —
+  and the double's ``submit_order`` count is exactly two. (The 2026-09-21
+  review found the first version of this harness calling the double directly,
+  so the count it asserted was the test's own; the chain is now real.)
 - **AC #1(c)** — a rejection does not trip the suppression predicate, so the
   next wrapped ``submit_order`` calls straight through.
 - **AC #2(b)** — Nautilus's own ``Strategy.on_order_rejected`` /
@@ -42,8 +46,9 @@ from nautilus_trader.common.component import (
     is_logging_initialized,
 )
 from nautilus_trader.core.uuid import UUID4
+from nautilus_trader.execution.client import ExecutionClient
 from nautilus_trader.model.currencies import USD
-from nautilus_trader.model.enums import LiquiditySide, OrderSide, OrderType
+from nautilus_trader.model.enums import AccountType, LiquiditySide, OmsType, OrderSide, OrderType
 from nautilus_trader.model.events.order import (
     OrderAccepted,
     OrderDenied,
@@ -52,6 +57,7 @@ from nautilus_trader.model.events.order import (
 )
 from nautilus_trader.model.identifiers import (
     AccountId,
+    ClientId,
     ClientOrderId,
     TradeId,
     TraderId,
@@ -109,25 +115,61 @@ def _assert_c_logging_state_is_unchanged():
     )
 
 
-class _RecordingExecClient:
+class _RecordingExecClient(ExecutionClient):
     """Counts what actually reached the venue side.
 
     The whole of AC #1(b) is an integer: after a rejection, the *next* order
-    still leaves. A recording client is what turns that into an assertion a
-    mutation can break.
+    still leaves. Registered with the real ``ExecutionEngine`` (review
+    2026-09-21), so ``submitted`` holds only what the strategy → risk engine →
+    execution engine chain handed over — never what a test helper wrote. Each
+    submission generates ``OrderSubmitted`` exactly as a real client does
+    (the IB adapter's ``_submit_order``), so the order reads ``SUBMITTED``
+    through the engine's own apply path.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, account_id: AccountId, msgbus, cache, clock) -> None:
+        # The client id must be the account's issuer (`_set_account_id`
+        # asserts it); routing is by `venue`, which is AAPL's. NETTING, not
+        # the test kit's `MockExecutionClient` HEDGING default: the engine
+        # reads the OMS type off the client, and under HEDGING the control's
+        # exit fill opens a second position instead of closing the first.
+        super().__init__(
+            client_id=ClientId(account_id.get_issuer()),
+            venue=AAPL_EQUITY.id.venue,
+            oms_type=OmsType.NETTING,
+            account_type=AccountType.CASH,
+            base_currency=USD,
+            msgbus=msgbus,
+            cache=cache,
+            clock=clock,
+        )
         self.submitted: list[ClientOrderId] = []
+        self._set_account_id(account_id)  # `generate_order_submitted` stamps it
 
-    def submit(self, order) -> None:
+    def _start(self) -> None:
+        self._set_connected(True)
+
+    def _stop(self) -> None:
+        self._set_connected(False)
+
+    def submit_order(self, command) -> None:
+        order = command.order
         self.submitted.append(order.client_order_id)
+        self.generate_order_submitted(
+            strategy_id=order.strategy_id,
+            instrument_id=order.instrument_id,
+            client_order_id=order.client_order_id,
+            ts_event=self._clock.timestamp_ns(),
+        )
 
 
 def _engine_stack():
-    """A real engine, bus, cache, portfolio and ``Strategy`` — no node."""
+    """A real engine, bus, cache, portfolio, risk engine and ``Strategy`` — no
+    node — with the recording exec-client double registered for AAPL's venue.
+    """
     from nautilus_trader.execution.engine import ExecutionEngine
     from nautilus_trader.portfolio.portfolio import Portfolio
+    from nautilus_trader.risk.engine import RiskEngine
     from nautilus_trader.test_kit.stubs.component import TestComponentStubs
     from nautilus_trader.test_kit.stubs.execution import TestExecStubs
 
@@ -136,16 +178,21 @@ def _engine_stack():
     cache = TestComponentStubs.cache()
     portfolio = Portfolio(msgbus=msgbus, cache=cache, clock=clock)
     engine = ExecutionEngine(msgbus=msgbus, cache=cache, clock=clock)
+    risk_engine = RiskEngine(portfolio=portfolio, msgbus=msgbus, cache=cache, clock=clock)
     cache.add_instrument(AAPL_EQUITY)
     account = TestExecStubs.cash_account()
     cache.add_account(account)
     portfolio.update_account(TestEventStubs.cash_account_state())
+    client = _RecordingExecClient(account.id, msgbus, cache, clock)
+    engine.register_client(client)
     strategy = Strategy()
     strategy.register(
         trader_id=TRADER_ID, portfolio=portfolio, msgbus=msgbus, cache=cache, clock=clock
     )
+    risk_engine.start()
     engine.start()
-    return msgbus, cache, engine, strategy, account, clock
+    client.start()
+    return msgbus, cache, engine, strategy, account, clock, client
 
 
 def _tally(account: str | None = None) -> RejectionTally:
@@ -156,16 +203,16 @@ def _tally(account: str | None = None) -> RejectionTally:
     )
 
 
-def _submit(stack, client, side=OrderSide.BUY, qty=100):
-    """Put one market order on the books the way the engine would, and record
-    it against the exec client double. Returns the order.
+def _submit(stack, side=OrderSide.BUY, qty=100):
+    """Submit one market order the way a signal does: ``Strategy.submit_order``
+    → ``RiskEngine`` → ``ExecutionEngine`` → the registered double, which
+    generates ``OrderSubmitted`` back through the engine. Returns the order,
+    ``SUBMITTED`` by the engine's own apply path — nothing here touches the
+    cache or applies an event by hand (review 2026-09-21).
     """
-    _, cache, _engine, strategy, _account, _clock = stack
+    _, _cache, _engine, strategy, _account, _clock, _client = stack
     order = strategy.order_factory.market(AAPL_EQUITY.id, side, Quantity.from_int(qty))
-    cache.add_order(order, None)
-    client.submit(order)
-    order.apply(TestEventStubs.order_submitted(order))
-    cache.update_order(order)
+    strategy.submit_order(order)
     return order
 
 
@@ -176,7 +223,7 @@ def _reject(stack, order, reason=MARGIN_REJECTION, reconciliation=False):
     which hardcodes ``reason="ORDER_REJECTED"`` (Story 3.3, Hazard 8) — and
     the reason is the whole point of several tests here.
     """
-    _, _cache, engine, _strategy, account, clock = stack
+    _, _cache, engine, _strategy, account, clock, _client = stack
     event = OrderRejected(
         trader_id=order.trader_id,
         strategy_id=order.strategy_id,
@@ -195,7 +242,7 @@ def _reject(stack, order, reason=MARGIN_REJECTION, reconciliation=False):
 
 
 def _accept(stack, order, reconciliation=False):
-    _, _cache, engine, _strategy, account, clock = stack
+    _, _cache, engine, _strategy, account, clock, _client = stack
     event = OrderAccepted(
         trader_id=order.trader_id,
         strategy_id=order.strategy_id,
@@ -213,7 +260,7 @@ def _accept(stack, order, reconciliation=False):
 
 
 def _fill(stack, order, px="100.00", commission="1.00"):
-    _, _cache, engine, _strategy, account, clock = stack
+    _, _cache, engine, _strategy, account, clock, _client = stack
     event = OrderFilled(
         trader_id=order.trader_id,
         strategy_id=order.strategy_id,
@@ -257,12 +304,12 @@ class TestARejectionLeavesTheSessionEligibleToTrade:
 
     def test_the_order_after_a_rejection_is_still_submitted(self):
         stack = _engine_stack()
-        client = _RecordingExecClient()
+        client = stack[6]  # the exec-client double registered with the engine
         _observer, tally = self._wire(stack)
 
-        first = _submit(stack, client)
+        first = _submit(stack)
         _reject(stack, first)
-        second = _submit(stack, client)
+        second = _submit(stack)
 
         assert len(client.submitted) == 2
         assert client.submitted == [first.client_order_id, second.client_order_id]
@@ -276,12 +323,11 @@ class TestARejectionLeavesTheSessionEligibleToTrade:
 
     def test_an_acceptance_of_the_next_order_clears_the_streak(self):
         stack = _engine_stack()
-        client = _RecordingExecClient()
         _observer, tally = self._wire(stack)
 
-        first = _submit(stack, client)
+        first = _submit(stack)
         _reject(stack, first)
-        second = _submit(stack, client)
+        second = _submit(stack)
         _accept(stack, second)
 
         snapshot = tally.pending()
@@ -295,12 +341,11 @@ class TestARejectionLeavesTheSessionEligibleToTrade:
         are getting through today (decision D-C).
         """
         stack = _engine_stack()
-        client = _RecordingExecClient()
         _observer, tally = self._wire(stack)
 
-        first = _submit(stack, client)
+        first = _submit(stack)
         _reject(stack, first)
-        second = _submit(stack, client)
+        second = _submit(stack)
         _accept(stack, second, reconciliation=True)
 
         snapshot = tally.pending()
@@ -316,10 +361,9 @@ class TestARejectionLeavesTheSessionEligibleToTrade:
         site instead. Both policies hold, on the same event, at once.
         """
         stack = _engine_stack()
-        client = _RecordingExecClient()
         _observer, tally = self._wire(stack, account=PAPER_ACCOUNT)
 
-        order = _submit(stack, client)
+        order = _submit(stack)
         with capture_logs() as logs:
             _reject(stack, order)
 
@@ -339,11 +383,10 @@ class TestARejectionLeavesTheSessionEligibleToTrade:
         strategy asked and nothing was placed — so it extends the same streak.
         """
         stack = _engine_stack()
-        client = _RecordingExecClient()
-        msgbus, _cache, engine, _strategy, _account, clock = stack
+        msgbus, _cache, engine, _strategy, _account, clock, _client = stack
         _observer, tally = self._wire(stack)
 
-        order = _submit(stack, client)
+        order = _submit(stack)
         denied = OrderDenied(
             trader_id=order.trader_id,
             strategy_id=order.strategy_id,
@@ -373,13 +416,12 @@ class TestARejectionLeavesTheSessionEligibleToTrade:
         not quietly swallowing every event.
         """
         stack = _engine_stack()
-        client = _RecordingExecClient()
         _observer, tally = self._wire(stack)
 
         with capture_logs() as logs:
-            order = _submit(stack, client)
+            order = _submit(stack)
             _reject(stack, order)
-            second = _submit(stack, client)
+            second = _submit(stack)
             _accept(stack, second)
             _fill(stack, second)
 
@@ -519,7 +561,15 @@ class TestNautilusOwnHandlersAreNoOps:
         """
         import pathlib
 
-        sources = pathlib.Path("src/core/strategies").rglob("*.py")
+        from src.core import strategies as strategies_package
+
+        # Anchored on the package, not the CWD (review 2026-09-21: a relative
+        # path scanned nothing from any other directory and passed vacuously),
+        # and `custom/` — the git submodule core must not depend on — is
+        # outside "built-in".
+        root = pathlib.Path(strategies_package.__file__).parent
+        sources = [path for path in root.rglob("*.py") if "custom" not in path.parts]
+        assert len(sources) >= 3, "the built-in strategies were not found"
         offenders = [
             str(path)
             for path in sources
@@ -676,11 +726,10 @@ class TestARejectionIsNotATrade:
 
     def test_a_rejected_order_publishes_no_position_event_and_records_no_trade(self):
         stack = _engine_stack()
-        client = _RecordingExecClient()
         sink_calls, position_events, tally = self._wire(stack)
 
         with capture_logs() as logs:
-            order = _submit(stack, client)
+            order = _submit(stack)
             _reject(stack, order)
 
         assert position_events == []
@@ -694,13 +743,12 @@ class TestARejectionIsNotATrade:
         never wired at all.
         """
         stack = _engine_stack()
-        client = _RecordingExecClient()
         sink_calls, position_events, _tally = self._wire(stack)
 
-        entry = _submit(stack, client, side=OrderSide.BUY)
+        entry = _submit(stack, side=OrderSide.BUY)
         _accept(stack, entry)
         _fill(stack, entry, px="100.00")
-        exit_order = _submit(stack, client, side=OrderSide.SELL)
+        exit_order = _submit(stack, side=OrderSide.SELL)
         _accept(stack, exit_order)
         _fill(stack, exit_order, px="110.00")
 
