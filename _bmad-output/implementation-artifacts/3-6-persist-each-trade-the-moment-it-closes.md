@@ -1,6 +1,6 @@
 # Story 3.6: Persist Each Trade the Moment It Closes
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -645,7 +645,20 @@ design; each is re-measured in Task 1 before production code is written:
 - [x] Task 11: Live verification — Procedure P12 (AC: #1, #3, #6, live)
   - [x] 11.1 Preconditions written into Procedure P12 exactly as specified, plus the
     `alembic upgrade head` step P11 did not need (this story's migration must be applied first).
-  - [ ] 11.2 ⏳ **not yet run** — no Gateway reachable and outside RTH throughout this dev session
+  - [x] 11.2 ✅ **RUN AND PASSED live, 2026-09-21** (Monday, 14:06–14:14 ET, fresh session
+    `p12-0921` / `064feace-6262-4716-84f6-87be0c41b88d`, after `alembic upgrade head` applied
+    `85c949ac0374` — the database was still at `b7c419e2a3d8` and `live list` was failing on the
+    missing `owner_epoch` column until it did, so the precondition is load-bearing). All seven
+    criteria met: `kill -9` delivered 189 ms after the `trade.persisted` line, and the surviving
+    `trades` row matches the transcript field for field; `live status` read `closed trades: 1` for
+    the first time in this project's history; the reclaiming `live start` moved `owner_epoch`
+    `1 -> 2`. **Criterion 7's number, live: ~6 ms** (closing `order.filled` → `trade.persisted` =
+    6.44 ms, of which `trade.aggregated` → `trade.persisted` = 5.94 ms), not the sub-millisecond
+    local figure D-A cites — the criterion's own phrasing is also unreadable as written, since
+    `trade.persisted` *precedes* the strategy-side `PositionClosed` print by 0.19 ms. D-A's
+    decision is unchanged; the recorded number should be ~6 ms. Full row in Procedure P12's result
+    log. Logs: `logs/p12-20260921.log`, `logs/p12-reclaim-20260921.log`. Superseded text follows.
+    ⏳ not yet run — no Gateway reachable and outside RTH throughout this dev session
     (confirmed at Task 0.1 and unchanged since: Saturday, 4001/4002/7496/7497 all closed, no
     docker daemon). Pass criteria written into the procedure in full.
   - [x] 11.3 Written into the procedure's "What it does — and does not — do" section: not

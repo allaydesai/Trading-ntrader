@@ -2723,3 +2723,49 @@ at 200s with zero orders), `logs/p10-fresh-leg1-*.log` and `logs/p10-fresh-leg2-
   (`tests/unit/services/test_session_service.py:681-690`) — a function-local
   `from nautilus_trader …` passes, and the subprocess variant covers `nautilus_trader` only.
   Pre-existing pattern. **Owner:** whoever next extends `TestImportPurity`.
+
+## Deferred from: Procedures P11 + P12 live runs, story-3.5/3.6 closeout (2026-09-21)
+
+Stories 3.5 and 3.6 both closed to `done` on this run — P11 met all five of its criteria and P12
+all seven, including a `kill -9` 189 ms after `trade.persisted` that lost nothing (NFR8 live) and
+the first non-zero `closed trades:` this project has ever reported. Detail lives in those two
+procedures' result logs in `docs/qa/phase3-live-verification.md`. Two findings from the same runs
+are recorded here; neither reopens either story, and neither was actioned.
+
+- **The IB adapter double-counts a session's own fresh fill against its own position poll —
+  first live sighting, routed to Story 4.3 (keep runtime state aligned with the broker).**
+  Reproduced identically on both runs. Between the strategy's `order.accepted` and the arrival of
+  its own `OrderFilled`, the adapter's position poll observes NVDA go `0 -> 22`, logs `External
+  position change detected (likely option exercise): Contract 4815747 (STK), quantity change:
+  0 -> 22`, and emits a `PositionStatusReport`. `ExecEngine` reconciles that report by generating
+  an *inferred* fill on a synthetic `NVDA.NASDAQ-INTERNAL-DIFF` order, taking `Portfolio:
+  NVDA.NASDAQ net_position=22`. The real fill for the strategy's order then arrives and takes
+  `net_position=44` — **44 for a single 22-share order**. The adapter's next poll sees `44 -> 22`
+  and generates the offsetting inferred fill, which closes `INTERNAL-DIFF` at the *next* traded
+  price. Net effect on the transcript: one spurious round trip per entry, opened and closed inside
+  ~14 ms, `holding_period_seconds=0`, `realized_pnl=-1.1`, with no corresponding broker activity.
+  The final `net_position` is correct (`0` at the end of both runs, and the P12 reclaim run's
+  startup reconciliation found no NVDA position to reconcile), so nothing was mis-traded — the
+  defect is in the intermediate runtime view, which is exactly Story 4.3's subject. It is the same
+  family as the 2026-09-11 `PositionClosed side=FLAT`-while-short finding recorded in the P10
+  addendum above.
+  **The trade recorder handled it correctly and needs no change**: the spurious close produced one
+  `trade.aggregated` and then `trade.persist_skipped reason=reconciliation_owned`, so it is
+  observable in the transcript and never reaches the `trades` table. Worth knowing when reading any
+  future live transcript: **a strategy-owned entry produces two `trade.aggregated` records, not
+  one** — its own eventual round trip, plus reconciliation's immediate phantom — and only the first
+  is a real trade.
+  Evidence: `logs/p11-20260921.log:235-274`, `logs/p12-20260921.log:254-270`.
+
+- **Story 3.6 Procedure P12's criterion 7 is phrased so it cannot be read, and D-A's cost figure
+  is off by roughly an order of magnitude.** The criterion asks for "the wall-clock gap between the
+  `PositionClosed` Nautilus line and the corresponding `trade.persisted` line". Live, that gap is
+  **negative**: `trade.persisted` (18:11:05.816399Z) precedes the strategy-side `<--[EVT]
+  PositionClosed(` print (18:11:05.816587Z) by 0.19 ms, because the recorder's event handler runs
+  ahead of the strategy's own logger. The readable equivalents from the same transcript are closing
+  `order.filled` -> `trade.persisted` = **6.44 ms**, of which `trade.aggregated` ->
+  `trade.persisted` = **5.94 ms** is the persist step itself. D-A's cost claim rests on a
+  sub-millisecond *local* measurement (Task 1.3); against a real local Postgres inside a running
+  live session it is ~6 ms. **D-A's decision is unchanged** — 6 ms is four orders of magnitude
+  inside a 1-minute bar — but the number on record should be corrected, and the criterion reworded
+  to name two records that actually appear in that order, if P12 is ever re-run.

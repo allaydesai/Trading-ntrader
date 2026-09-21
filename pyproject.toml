@@ -88,6 +88,7 @@ exclude = [
     ".github",
     ".claude",
     ".cursor",
+    ".agents",
     "_bmad",
     "alembic",
     ".git",

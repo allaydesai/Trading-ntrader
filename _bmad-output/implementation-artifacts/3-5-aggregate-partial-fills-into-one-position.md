@@ -1,6 +1,6 @@
 # Story 3.5: Aggregate Partial Fills into One Position
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -408,7 +408,7 @@ What is measured ABSENT today (the story's whole surface):
     story expects is exactly: one new module, ≤ 4 lines in the runner.
   - [x] 7.2 Head stays `b7c419e2a3d8` — no migration (`trades.session_id` and `chk_trades_owner`
     already exist for 3.6, `src/db/models/trade.py:95-100, 146-155`).
-- [ ] Task 8: Live observation on the next RTH transcript — read, do not stage (AC: #4, #6)
+- [x] Task 8: Live observation on the next RTH transcript — read, do not stage (AC: #4, #6)
   - [x] 8.1 Preconditions are 3.2 Task 8.1's, unchanged: inside RTH; **no other IBKR login**
     (mobile app and client portal included — error 162); the bare non-compose Gateway
     (`READ_ONLY_API: "yes"` on the compose one); Redis up; strategy `sma_crossover` only
@@ -420,7 +420,18 @@ What is measured ABSENT today (the story's whole surface):
     a position left open at the end of the run stays open at the broker, by design (stop never
     flattens, AR40/NFR14), and there is no working tool to close it on purpose. Say so to the
     operator before the run, not after.
-  - [ ] 8.2 ⏳ not yet run. Let the session complete at least one strategy-owned round trip
+  - [x] 8.2 ✅ **RUN AND PASSED live, 2026-09-21** (Monday, 14:02–14:05 ET, fresh session
+    `p11-0921` / `efe5fb99-a077-4d7b-88ac-88f10d09ab72`, bare Gateway on `127.0.0.1:4002`, after a
+    `live_bars_probe.py` preflight that took 3 NVDA bars with no competing-login text). All five
+    criteria met: (v) D6 read first — 2 grep hits, one timestamp digits, one the benign teardown
+    `query cancelled (code: 162)`, zero `superseded`/`different IP address`; (i) one strategy-owned
+    `PositionClosed` → exactly one `trade.aggregated`, session-bound; (ii) `entry_price=227.21` /
+    `exit_price=227.23` equal the two fills' `last_px` and `commission=2.11` = `1.00 + 1.11`
+    exactly; (iii) `fill_count=2` = two distinct `trade_id`s, zero `duplicate=True`; (iv) zero
+    `trade.recorder_failed`. Both legs filled whole, so AC #1/#2's multi-fill VWAP stays
+    broker-double evidence as 8.3 predicted — looked for, not staged. Full row, including the new
+    reconciliation double-count finding routed to Story 4.3, in Procedure P11's result log.
+    Log: `logs/p11-20260921.log`. Superseded text follows. ⏳ not yet run. Let the session complete at least one strategy-owned round trip
     (entry fill, exit fill — with `fast_period=2, slow_period=3` a reversal arrives within
     minutes inside RTH), then stop it cleanly. Pass criteria: (i) exactly one `trade.aggregated`
     record follows each `PositionClosed` Nautilus line in the transcript, bound with the
@@ -435,7 +446,7 @@ What is measured ABSENT today (the story's whole surface):
     `366` inspected **before anything else is recorded** (D6's standing rule; every hit inspected —
     timestamp digits and the benign teardown `query cancelled (code: 162)` are false positives,
     3.4:363-368).
-  - [ ] 8.3 What this run is **not** evidence for, stated in the result row: a partial fill cannot
+  - [x] 8.3 What this run is **not** evidence for, stated in the result row: a partial fill cannot
     be staged on demand — a 22-share market order on NVDA inside RTH fills whole in milliseconds —
     so AC #1/#2's multi-fill arithmetic is broker-double evidence (NFR32) by design, and the live
     run proves the wiring (AC #6), the degenerate case (AC #4) and the commission sum for the

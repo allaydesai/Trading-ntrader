@@ -36,6 +36,43 @@
 
 generated: 2026-08-03
 last_updated: >-
+  2026-09-21 (STORIES 3.5 AND 3.6 CLOSED TO done -- both live procedures RUN AND PASSED against a
+  real paper Gateway inside RTH (Monday 14:02-14:14 ET, bare non-compose Gateway on 127.0.0.1:4002,
+  Redis + Postgres up, `live_bars_probe.py` preflight took 3 NVDA bars with zero competing-login
+  text before anything traded). P11 (Story 3.5, session p11-0921): all five criteria met -- one
+  strategy-owned PositionClosed -> exactly one trade.aggregated, entry_price=227.21 / exit_price=227.23
+  equal to the two fills' last_px, commission=2.11 = 1.00 + 1.11 exactly, fill_count=2 = two distinct
+  trade_ids, zero trade.recorder_failed, D6 read first (2 grep hits: timestamp digits + the benign
+  teardown `query cancelled (code: 162)`). Both legs filled whole, so AC #1/#2's multi-fill VWAP
+  stays broker-double evidence by design, exactly as Task 8.3 predicted. P12 (Story 3.6, session
+  p12-0921): all seven criteria met -- `alembic upgrade head` had to run first (DB was at
+  b7c419e2a3d8 and `live list` was failing on the missing owner_epoch column, so that precondition
+  is load-bearing, not ceremonial); `kill -9` landed 189 ms after the trade.persisted line, mid
+  event-propagation, and the surviving `trades` row (id=14984) matches the transcript field for
+  field -- NFR8 holds live; `live status p12-0921` read `closed trades: 1`, THE FIRST NON-ZERO
+  READING THIS COUNTER HAS EVER PRODUCED in a live session; the reclaiming `live start` logged
+  session.reclaimed heartbeat_age_seconds=119.56 and moved owner_epoch 1 -> 2, exactly one higher
+  than the killed run's claim. TWO THINGS TO CARRY FORWARD. (1) Criterion 7's number, measured
+  live, is ~6 ms, not D-A's sub-millisecond local figure: closing order.filled -> trade.persisted
+  = 6.44 ms, of which trade.aggregated -> trade.persisted = 5.94 ms is the persist step. The
+  criterion's own phrasing is also unreadable as written -- trade.persisted PRECEDES the
+  strategy-side PositionClosed print by 0.19 ms, because the recorder's handler runs ahead of the
+  strategy's logger. D-A's decision is unchanged (six ms is four orders of magnitude inside a
+  1-minute bar); the number on record should be corrected. (2) NEW LIVE FINDING, ROUTED TO STORY
+  4.3, NOT ACTIONED: on BOTH runs the IB adapter double-counted the session's own fresh fill
+  against its own position poll. Between order.accepted and the real fill it saw NVDA 0 -> 22,
+  called it `External position change detected (likely option exercise)`, and ExecEngine reconciled
+  it into a synthetic NVDA.NASDAQ-INTERNAL-DIFF position via an inferred fill; the real fill then
+  took Portfolio net_position to 44 for one 22-share order, and the next poll (44 -> 22) generated
+  the offsetting inferred fill that closed INTERNAL-DIFF inside 14 ms. The recorder handled it
+  exactly as designed -- one trade.aggregated for it, then trade.persist_skipped
+  reason=reconciliation_owned, so it is recorded and never written to `trades` -- but the
+  double-count itself is the same broker-truth family as the 2026-09-11 side=FLAT-while-short
+  finding and belongs to Story 4.3. Both sessions ended net_position=0 with nothing left open at
+  the broker, so the broken flatten_position.py --confirm never came into play. Logs:
+  precheck-nvda-20260921.log, p11-20260921.log, p12-20260921.log, p12-reclaim-20260921.log. epic-3
+  stays in-progress: 3.1-3.6 done, 3.7 backlog.)
+
   2026-09-12 (STORY 3.6 CODE REVIEW DONE: stays review. Three parallel adversarial layers
   (Blind Hunter / Edge Case Hunter / Acceptance Auditor) ran as subagents this time; 49 raw
   findings -> 2 decisions, 15 patches, 8 deferred, 13 dismissed. Allay ruled both decisions
@@ -2422,8 +2459,8 @@ development_status:
   3-2-submit-a-strategys-orders-to-the-broker: done
   3-3-track-every-order-through-its-full-lifecycle: done
   3-4-never-resubmit-an-order-that-is-already-working: done
-  3-5-aggregate-partial-fills-into-one-position: review
-  3-6-persist-each-trade-the-moment-it-closes: review
+  3-5-aggregate-partial-fills-into-one-position: done
+  3-6-persist-each-trade-the-moment-it-closes: done
   3-7-keep-trading-after-a-rejection: backlog
   epic-3-retrospective: optional
 
