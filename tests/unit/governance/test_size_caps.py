@@ -86,6 +86,10 @@ FILE_ALLOWLIST: dict[str, int] = {
 #: report were independently re-measured against this implementation and
 #: match it exactly (`src/config.py::IBKRSettings` measures 101, confirming
 #: metric ruling 1 — field annotations count).
+#:
+#: 93 since 2026-09-22 (Story 4.4 test fix): the two ``custom/`` submodule
+#: entries (``apolo_rsi``, ``bollinger_reversal``) left with the submodule's
+#: exclusion from the walk — see ``_iter_src_files``.
 SIZE_BASELINE: dict[str, int] = {
     "src/api/models/backtest_detail.py::build_metrics_panel": 99,
     "src/api/rest/indicators.py::_compute_bollinger_indicators": 54,
@@ -143,8 +147,6 @@ SIZE_BASELINE: dict[str, int] = {
     "src/core/metrics.py::PerformanceCalculator.calculate_metrics_from_data": 55,
     "src/core/results_extractor.py::ResultsExtractor": 154,
     "src/core/results_extractor.py::ResultsExtractor.extract_results": 85,
-    "src/core/strategies/custom/apolo_rsi.py::ApoloRSI.on_bar": 53,
-    "src/core/strategies/custom/bollinger_reversal.py::BollingerReversalStrategy": 110,
     # Story 4.4, 103 -> 110: AR40 warm-up inline in `on_start` + the history
     # callback, deliberately not hidden in a helper so AC #2's inspection reads
     # the three Nautilus calls in the strategy file itself.
@@ -332,8 +334,15 @@ def measure_module(path: Path) -> Measurement:
     return Measurement(file_lines=total_file, classes=classes, functions=functions)
 
 
-def _iter_src_files():
-    return sorted(SRC_ROOT.rglob("*.py"))
+def _iter_src_files(src_root: Path = SRC_ROOT) -> list[Path]:
+    """Every ``.py`` under ``src_root`` except the ``custom/`` strategies
+    submodule — an unversioned git submodule this repo cannot pin (the
+    ``STRATEGY_MODULES`` precedent in ``test_live_stop_path_is_inert.py``).
+    Walking into it made the verdict depend on whether the submodule was
+    checked out: a fresh worktree saw its baseline entries as deleted.
+    """
+    submodule = src_root / "core" / "strategies" / "custom"
+    return sorted(path for path in src_root.rglob("*.py") if not path.is_relative_to(submodule))
 
 
 def _print_baseline() -> None:
@@ -420,6 +429,25 @@ class TestMeasureModuleMetric:
         assert measurement.functions["outer"] == 24
         assert "inner" not in measurement.functions
         assert "outer.inner" not in measurement.functions
+
+
+class TestScannedTree:
+    """Which files the guard walks — pinned so its verdict cannot depend on
+    whether the ``custom/`` submodule happens to be checked out.
+    """
+
+    def test_the_custom_submodule_is_excluded_from_the_walk(self, tmp_path):
+        strategies = tmp_path / "core" / "strategies"
+        (strategies / "custom").mkdir(parents=True)
+        (strategies / "custom" / "private.py").write_text("x = 1\n")
+        (strategies / "builtin.py").write_text("x = 1\n")
+
+        assert _iter_src_files(tmp_path) == [strategies / "builtin.py"]
+
+    def test_the_real_walk_is_not_vacuous(self):
+        # Without this, a walk that found nothing — a moved SRC_ROOT, a
+        # renamed tree — would pass every cap below vacuously.
+        assert len(_iter_src_files()) > 100
 
 
 class TestFileCap:
