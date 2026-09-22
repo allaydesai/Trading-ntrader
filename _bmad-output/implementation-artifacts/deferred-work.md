@@ -1625,20 +1625,28 @@ tracked in that story's `### Review Findings` section, not here.
   write semantics, where NFR6's two-processes hazard becomes order-adjacent to whatever that story
   is already doing. **Ratified by Allay, 2026-08-24.**
 
-- **Class-size limit violations on Story 2.6's touched files.** Measured by AST against the current
-  tree: `LiveSessionRunner` = **379** lines, `SessionSteadyState` = **171**, `SessionStopSignals` =
-  **109**, against CLAUDE.md's <100-line class guideline. Only the 109 is disclosed anywhere in the
-  story. Both larger classes shipped in Story 2.5, so this is pre-existing rather than introduced
-  here — but Task 11's "Confirm ... every class under 100" subtask is marked `[x]` while three
-  classes violate it, and that false claim *is* patched by this review. The guideline is documented
-  in CLAUDE.md and `project-context.md` and enforced by nothing in the repo (no ruff rule, no test),
-  which is why it drifted silently across two stories. **Re-measured by Story 2.7 (2026-08-23), all
-  larger than when this item was written and one of them new:** `LiveSessionRunner` = **537**,
-  `StrategyGuard` = **320** (new, Story 2.7), `LiveBarObserver` = **215**, `SessionSteadyState` =
-  **240**, `SessionStopSignals` = **195**. Story 2.7 discloses its own 320 in the module docstring
-  rather than repeating Story 2.6's false "every class under 100" claim. **Action:** either enforce it (a unit-tier
-  AST guard, the shape this repo already uses for AR37) or amend the guideline to say what is
-  actually intended for orchestration classes. Flag for the Epic 2 retro.
+- ~~**Class-size limit violations on Story 2.6's touched files.**~~ — **RESOLVED by D4 (Epic 4
+  pre-work), 2026-09-22.** Built, not amended:
+  `tests/unit/governance/test_size_caps.py` enforces the caps by AST, measured on executable
+  statements (the raw-line counts below were the wrong metric all along — re-measured on the
+  executable-statement metric, `LiveSessionRunner` is 400 today, not the raw-line figures this entry
+  cites, and `SessionStopSignals` clears the cap entirely). Every genuine overage on the current tree
+  is now a disclosed, shrink-only baseline entry with its own recorded ceiling; a new one fails the
+  gate until its author adds one. Original text follows, for the history of how long this drifted.
+  Measured by AST against the current tree: `LiveSessionRunner` = **379** lines, `SessionSteadyState`
+  = **171**, `SessionStopSignals` = **109**, against CLAUDE.md's <100-line class guideline. Only the
+  109 is disclosed anywhere in the story. Both larger classes shipped in Story 2.5, so this is
+  pre-existing rather than introduced here — but Task 11's "Confirm ... every class under 100"
+  subtask is marked `[x]` while three classes violate it, and that false claim *is* patched by this
+  review. The guideline is documented in CLAUDE.md and `project-context.md` and enforced by nothing
+  in the repo (no ruff rule, no test), which is why it drifted silently across two stories.
+  **Re-measured by Story 2.7 (2026-08-23), all larger than when this item was written and one of
+  them new:** `LiveSessionRunner` = **537**, `StrategyGuard` = **320** (new, Story 2.7),
+  `LiveBarObserver` = **215**, `SessionSteadyState` = **240**, `SessionStopSignals` = **195**. Story
+  2.7 discloses its own 320 in the module docstring rather than repeating Story 2.6's false "every
+  class under 100" claim. **Action:** either enforce it (a unit-tier AST guard, the shape this repo
+  already uses for AR37) or amend the guideline to say what is actually intended for orchestration
+  classes. Flag for the Epic 2 retro.
 
 - **`unsubscribe_bar_topic` uses `steady_state is not None` as its proxy for "subscribe ran".**
   `_phase_subscribe` assigns `self._steady_state = self._build_steady_state()` one line *before*
@@ -2116,7 +2124,7 @@ already been re-argued between three and five times. Every recommendation was ac
 | **D1** | Owner/epoch **fencing column** on `trading_sessions` | **5** | **Story 3.6** — the first story owning a `SessionRecordPort` write. Epic 2 never had a legitimate owner (2.8, the natural candidate, was the phase's one pure reader). | ✅ Written into `epics.md` under Story 3.6, with the hazard, the two folded-in findings (post-`stopped` heartbeat write; `SessionReclaimedError` non-fatal on the bar path) and the retired cost argument |
 | **D2** | CI `--ignore=tests/integration/db` | **5** | **Drop the `--ignore`, add a Postgres service.** The SQLite component route cannot exercise the SQL that actually broke — the tables use `JSONB`, `PG_UUID`, `sa.Enum`. | ✅ Landed in the Epic 4 pre-work (2026-09-22): both `--ignore=tests/integration/db` lines removed from `.github/workflows/ci.yml`; `tests/integration/db/__init__.py` added (fixes the `test_session_service.py` basename collision with `tests/unit/services/`); the availability skip now raises loudly under `CI=true` instead of skipping silently. Also fixed in the same commit: `is_postgres_available()` and `test_db_schema`'s setup/cleanup called `asyncio.run()`, whose teardown unregisters the thread's current event loop — harmless while `--ignore`d, but once this directory's `conftest.py` imports inside a shared `pytest-xdist` worker, it broke `asyncio.get_event_loop()` in unrelated component tests scheduled to the same worker (`test_live_order_recovery.py`, 2 tests) later in the same run. All three call sites now run on a scratch loop that never touches the thread's global event-loop state. |
 | **D3** | AR28 exit-code **marker protocol** | **4** | **`exit_outcome` marker attribute, now**, before a sixth hand-maintained string. | ✅ Landed in the Epic 4 pre-work (2026-09-22): `LiveCheckOutcome`/`EXIT_*`/`EXIT_CODES` moved to a new stdlib-only leaf module, `src/core/exit_outcome.py`; every exception from the table (`GateRefusedError`, `BrokerUnreachableError`, `LiveNodeConfigError`, `LiveMarketDataError`, `InvalidCheckWindowError`, `RedisUnreachableError`, `InvalidSessionTransition`, `RecordNotFoundError`, `LiveCheckError`, `SessionReclaimedError`, `NoStrategyStartedError`) now carries `exit_outcome`/`operator_safe_message` class attributes directly, found by `classify_failure`/`failure_message` via `getattr` off the MRO — no import of the class needed, so `live_check.py`'s purity is untouched and `src/db/exceptions.py` still has no imports of its own beyond the new leaf module. Both string-keyed maps (`_OUTCOME_BY_EXCEPTION_NAME`, `_SAFE_MESSAGE_EXCEPTION_NAMES`) are deleted. The `sqlalchemy.exc.TimeoutError` → exit 4 collision is fixed: the residual builtin map is now keyed by class **identity**, not name, so a same-named-but-different class no longer matches (`tests/component/core/test_live_check_driver.py::test_the_sqlalchemy_timeout_collision_is_gone`, against the real library). No already-documented exit code changed (README unchanged). A new drift guard (`tests/unit/core/test_exit_outcome_markers.py`) fails on any future typed failure with neither marker. |
-| **D4** | What the size caps mean | — | **Keep them, measure on executable statements**, enforce with a unit-tier AST guard in the AR37 shape + a sanctioned-exception allowlist. | ◑ `CLAUDE.md` wording updated; the **AST guard is not yet written**. Its allowlist starts with Epic 2's six over-cap files |
+| **D4** | What the size caps mean | — | **Keep them, measure on executable statements**, enforce with a unit-tier AST guard in the AR37 shape + a sanctioned-exception allowlist. | ✅ Landed in the Epic 4 pre-work (2026-09-22): `tests/unit/governance/test_size_caps.py`, same shape as the AR37 guard. File cap is hard with a 3-entry allowlist (`backtest_runner.py` 952, `data_catalog.py` 635, `backtests.py` 524, matching the honest executable-statement metric exactly). Class/function caps are a shrink-only ratchet baseline, generated from the tree via `python -m tests.unit.governance.test_size_caps --print-baseline`: 95 entries, not the pre-work reconnaissance's estimated 98 — every one of the 11 named examples and all 3 file totals that reconnaissance reported were independently re-measured against the finished tool and match exactly (`IBKRSettings` 101, confirming field annotations count), so the tool's own count is now authoritative. `CLAUDE.md` and `docs/agent/conventions.md` wording updated. Metric pinned by 5 fixtures; the ratchet's four failure shapes (new overage, grown ceiling, stale entry, removed-but-still-over entry) hand-verified by injecting each and reverting. |
 | **D5** | Should an all-strategies-failed session stop? | — | **Leave as-is.** `session.all_strategies_failed` + `runtime_flags.all_failed` make it visible and 2.8 renders it `degraded`. | ✅ Closed on its merits — no change. Revisit only if observed in practice |
 | **D6** | Resubscription after a subscription-killing IB error | 3 instances | **Epic 4**, with the broker-authoritative reconciliation work. | ✅ Routed. Interim rule stands: "zero bars inside RTH" is a red flag, not a quiet outcome; grep every transcript for **162**, **10182**, **366** |
 
@@ -3010,3 +3018,24 @@ place above; this heading records the closing summary per item.
   drift. README's exit-code table and AR28 are untouched — no already-documented exit code
   changed. Full gate green, including `pytest tests/ -n auto --cov=src --cov-fail-under=64 -q`
   (4707 passed).
+
+- **D4 — Size-cap guard, built as a ratchet.** Landed. `tests/unit/governance/test_size_caps.py`
+  measures executable-statement lines per the three metric rulings (field annotations count;
+  multi-line literals count every line except a docstring in docstring position; nested functions
+  fold into their parent with no key of their own, methods keep their own key and roll into their
+  class, classes and functions both roll into the file). File cap is hard, with the same 3-entry
+  allowlist the spec's own reconnaissance named (`backtest_runner.py` 952, `data_catalog.py` 635,
+  `backtests.py` 524 — all three re-measured exact matches). Class/function caps are a shrink-only
+  ratchet baseline (95 entries) regenerable via `python -m tests.unit.governance.test_size_caps
+  --print-baseline`. **Measured count differs from the spec's own estimate (95, not 98):** the 11
+  named class/function examples and the 3 file totals the pre-work reconnaissance reported were all
+  independently re-derived against this finished, tested implementation and match it exactly,
+  including the `IBKRSettings` 101 example — so the gap is almost certainly in whatever informal
+  tool produced "98" during reconnaissance, not in this one; this tool's count is the one that
+  matters going forward, since it is what the gate now runs. All four ratchet failure shapes
+  (unbaselined overage, baselined entry grown past its ceiling, stale entry at/under cap, entry
+  removed while still over cap) were hand-verified by injecting each into the real tree and
+  reverting — not merely asserted from the metric's description. `CLAUDE.md`'s Size limits bullet
+  and `docs/agent/conventions.md`'s Code Size Limits section updated to point at the guard. Strikes
+  D4's row in the Epic 2 retro table and the Story 2.6 "enforce it or amend the guideline" entry.
+  `make test-unit` runtime grew by under a second (12 new AST-only tests, no I/O).

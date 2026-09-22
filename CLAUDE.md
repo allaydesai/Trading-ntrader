@@ -42,10 +42,13 @@ make web                                # Web UI (http://127.0.0.1:8000)
 - **Size limits** — files <500 lines, functions <50 lines, classes <100 lines, line length 100 chars.
   **Measured on executable statements, not raw lines** (decided 2026-08-28, Epic 2 retro D4): a module
   whose bulk is a docstring recording measured framework behaviour is not the problem these caps exist
-  for. Line length is the only one ruff enforces today; a unit-tier AST guard for the other three is
-  pending, with an explicit allowlist for sanctioned exceptions. **Disclose and record an overage
-  rather than silently exceeding it** — and budget a split *before* the edit, not during it, because
-  a split that moves a module also moves it out of the hand-maintained guard lists (see Anti-Patterns)
+  for. Line length is the only one ruff enforces today; the other three are **enforced by
+  `tests/unit/governance/test_size_caps.py`** (Epic 4 pre-work, 2026-09-22): new code must be under the
+  caps; an overage in existing code is a baseline entry that may only shrink. To exceed a cap
+  deliberately, add the entry **with a one-line reason** in the same commit — that is the
+  disclose-and-record step. **Disclose and record an overage rather than silently exceeding it** — and
+  budget a split *before* the edit, not during it, because a split that moves a module also moves it
+  out of the hand-maintained guard lists (see Anti-Patterns)
 - **context7 MCP** — always use for library documentation lookups
 - **Keep README.md in sync** — validate before modifying, update if instructions change
 
