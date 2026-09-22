@@ -2,6 +2,7 @@
 
 from decimal import Decimal
 
+from nautilus_trader.core.uuid import UUID4
 from nautilus_trader.indicators import SimpleMovingAverage
 from nautilus_trader.model.data import Bar, BarType
 from nautilus_trader.model.enums import OrderSide, PriceType
@@ -10,6 +11,7 @@ from nautilus_trader.model.objects import Quantity
 from nautilus_trader.trading.strategy import Strategy, StrategyConfig
 
 from src.core.strategy_registry import StrategyRegistry, register_strategy
+from src.core.strategy_warmup import warmup_lookback
 from src.models.strategy import SMAParameters
 
 
@@ -77,7 +79,36 @@ class SMACrossover(Strategy):
         self._current_bar: Bar | None = None
 
     def on_start(self) -> None:
-        """Actions to be performed on strategy start."""
+        """Register the SMAs and ask for enough history to warm them (Story 4.4).
+
+        ``subscribe_bars`` is deliberately **not** called here: it runs last in
+        :meth:`_on_history_loaded`, so the live stream starts only once the
+        history has loaded. The seam between the two is not guarded: a bar
+        closing while the request is in flight can be missed, or counted twice
+        (``deferred-work.md``, code review of Story 4.4 — owned by Story 4.5).
+        Mode-agnostic by construction (AR40) — a backtest answers the request
+        with nothing, synchronously, so there the callback subscribes before
+        this method returns and the strategy behaves exactly as before.
+        """
+        self.register_indicator_for_bars(self.bar_type, self.fast_sma)
+        self.register_indicator_for_bars(self.bar_type, self.slow_sma)
+        period = max(self.fast_sma.period, self.slow_sma.period)
+        start = self.clock.utc_now() - warmup_lookback(self.bar_type, period)
+        self.request_bars(self.bar_type, start=start, callback=self._on_history_loaded)
+
+    def _on_history_loaded(self, request_id: UUID4) -> None:
+        """Carry the crossover baseline over from history, then go live.
+
+        History reaches the registered indicators but never ``on_bar``, so
+        without this the strategy would be warm and still deaf for one bar
+        (and, on daily bars, lose a last-history-to-first-live crossover
+        outright). Only the baseline is taken: no signal is ever evaluated on
+        a historical bar. Cold indicators (a backtest's empty history) record
+        nothing, which leaves the first bars exactly as they were.
+        """
+        if self.fast_sma.initialized and self.slow_sma.initialized:
+            self._prev_fast_sma = self.fast_sma.value
+            self._prev_slow_sma = self.slow_sma.value
         self.subscribe_bars(self.bar_type)
 
     def on_stop(self) -> None:
@@ -96,9 +127,9 @@ class SMACrossover(Strategy):
         # Store current bar for position sizing
         self._current_bar = bar
 
-        # Update indicators with new bar
-        self.fast_sma.handle_bar(bar)
-        self.slow_sma.handle_bar(bar)
+        # Both SMAs are registered in `on_start`, so `Actor.handle_bar` has
+        # already fed them this bar before calling here — feeding them again
+        # would count every bar twice.
 
         # Wait for both indicators to be initialized
         if not (self.fast_sma.initialized and self.slow_sma.initialized):

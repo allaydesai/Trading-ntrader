@@ -8,18 +8,26 @@ from unittest.mock import patch
 import pytest
 from nautilus_trader.backtest.engine import BacktestEngine, BacktestEngineConfig
 from nautilus_trader.backtest.models import FillModel
+from nautilus_trader.cache.cache import Cache
+from nautilus_trader.common.component import MessageBus, TestClock
 from nautilus_trader.config import LoggingConfig
+from nautilus_trader.data.engine import DataEngine
 from nautilus_trader.model.currencies import USD
 from nautilus_trader.model.data import Bar, BarType
 from nautilus_trader.model.enums import AccountType, OmsType
 from nautilus_trader.model.identifiers import TraderId, Venue
 from nautilus_trader.model.objects import Money, Price, Quantity
+from nautilus_trader.portfolio.portfolio import Portfolio
 from nautilus_trader.test_kit.providers import TestInstrumentProvider
 from nautilus_trader.test_kit.stubs.data import TestDataStubs
 
 from src.core.fee_models import IBKRCommissionModel
 from src.core.strategies.sma_crossover import SMAConfig, SMACrossover
 from src.services.firstrate.backtest_loader import build_equity
+
+AUDUSD_SIM = TestInstrumentProvider.default_fx_ccy("AUD/USD")
+#: `TestDataStubs.bar_5decimal()`'s own bar type.
+STUB_BAR_TYPE = BarType.from_str("AUD/USD.SIM-1-MINUTE-BID-EXTERNAL")
 
 
 def test_sma_config_creation():
@@ -65,21 +73,48 @@ def test_sma_strategy_initialization():
     assert not strategy.slow_sma.initialized
 
 
+def _started(strategy: SMACrossover) -> SMACrossover:
+    """Register ``strategy`` on a real bus behind a real, synchronous data engine.
+
+    Story 4.4: both SMAs are registered indicators now — ``Actor.handle_bar``
+    feeds them before calling ``on_bar`` — and ``on_start`` requests history,
+    which needs a registered strategy. The (non-live) ``DataEngine`` answers
+    that request with an empty history inside ``start()``, exactly as a
+    backtest does, so the history callback has subscribed by the time this
+    returns.
+    """
+    clock = TestClock()
+    trader_id = TraderId("TESTER-000")
+    msgbus = MessageBus(trader_id=trader_id, clock=clock)
+    cache = Cache(database=None)
+    cache.add_instrument(AUDUSD_SIM)
+    engine = DataEngine(msgbus=msgbus, cache=cache, clock=clock)
+    engine.start()
+    strategy.register(trader_id, Portfolio(msgbus, cache, clock), msgbus, cache, clock)
+    strategy.start()
+    return strategy
+
+
+def _stub_bar_config(**periods) -> SMAConfig:
+    """A config on the stub bar's own type: registered indicators only see
+    bars of the type they were registered for."""
+    return SMAConfig(instrument_id=AUDUSD_SIM.id, bar_type=STUB_BAR_TYPE, **periods)
+
+
 @pytest.mark.integration
-def test_strategy_on_start_subscribes_to_bars():
-    """Test that strategy subscribes to bars on start."""
-    instrument = TestInstrumentProvider.default_fx_ccy("EUR/USD")
-    config = SMAConfig(
-        instrument_id=instrument.id,
-        bar_type=f"{instrument.id}-15-MINUTE-BID-INTERNAL",
-    )
+def test_strategy_on_start_subscribes_to_bars_once_history_has_loaded():
+    """``subscribe_bars`` runs from the history callback, not ``on_start``."""
+    strategy = SMACrossover(config=_stub_bar_config())
 
-    strategy = SMACrossover(config=config)
+    with (
+        patch.object(strategy, "subscribe_bars") as mock_subscribe,
+        patch.object(strategy, "request_bars", wraps=strategy.request_bars) as mock_request,
+    ):
+        _started(strategy)
 
-    # Mock the subscribe_bars method
-    with patch.object(strategy, "subscribe_bars") as mock_subscribe:
-        strategy.on_start()
-        mock_subscribe.assert_called_once()
+        mock_request.assert_called_once()
+        assert mock_request.call_args.kwargs["callback"] == strategy._on_history_loaded
+        mock_subscribe.assert_called_once_with(STUB_BAR_TYPE)
 
 
 @pytest.mark.integration
@@ -113,28 +148,18 @@ def test_strategy_on_stop_only_unsubscribes():
 
 @pytest.mark.integration
 def test_on_bar_updates_indicators_when_not_initialized():
-    """Test that on_bar updates indicators but doesn't trade when not initialized."""
-    instrument = TestInstrumentProvider.default_fx_ccy("EUR/USD")
-    config = SMAConfig(
-        instrument_id=instrument.id,
-        bar_type=f"{instrument.id}-15-MINUTE-BID-INTERNAL",
-        fast_period=2,  # Small periods for easier testing
-        slow_period=3,
-    )
-
-    strategy = SMACrossover(config=config)
-
-    # Create a test bar
-    bar = TestDataStubs.bar_5decimal()
+    """A bar reaches the indicators but no signal is checked while they are cold."""
+    strategy = _started(SMACrossover(config=_stub_bar_config(fast_period=2, slow_period=3)))
 
     # Mock _check_for_signals to ensure it's not called
     with patch.object(strategy, "_check_for_signals") as mock_check:
-        strategy.on_bar(bar)
+        strategy.handle_bar(TestDataStubs.bar_5decimal())
 
         # Should not check for signals when indicators aren't initialized
         mock_check.assert_not_called()
 
-        # Indicators should have received the bar
+        # Indicators received the bar exactly once (Story 4.4: fed by
+        # `handle_bar` as registered indicators, no longer by `on_bar` too)
         assert strategy.fast_sma.count == 1
         assert strategy.slow_sma.count == 1
 
@@ -142,27 +167,15 @@ def test_on_bar_updates_indicators_when_not_initialized():
 @pytest.mark.integration
 def test_on_bar_checks_signals_when_indicators_initialized():
     """Test that on_bar checks for signals when indicators are initialized."""
-    instrument = TestInstrumentProvider.default_fx_ccy("EUR/USD")
-    config = SMAConfig(
-        instrument_id=instrument.id,
-        bar_type=f"{instrument.id}-15-MINUTE-BID-INTERNAL",
-        fast_period=2,
-        slow_period=2,  # Same period to initialize quickly
-    )
-
-    strategy = SMACrossover(config=config)
+    strategy = _started(SMACrossover(config=_stub_bar_config(fast_period=2, slow_period=2)))
 
     # Feed bars to initialize indicators
-    bar1 = TestDataStubs.bar_5decimal()
-    bar2 = TestDataStubs.bar_5decimal()
-
-    strategy.on_bar(bar1)
-    strategy.on_bar(bar2)  # Both indicators should be initialized now
+    strategy.handle_bar(TestDataStubs.bar_5decimal())
+    strategy.handle_bar(TestDataStubs.bar_5decimal())  # Both initialized now
 
     # Mock _check_for_signals
     with patch.object(strategy, "_check_for_signals") as mock_check:
-        bar3 = TestDataStubs.bar_5decimal()
-        strategy.on_bar(bar3)
+        strategy.handle_bar(TestDataStubs.bar_5decimal())
 
         # Should check for signals when both indicators are initialized and we have previous values
         mock_check.assert_called_once()

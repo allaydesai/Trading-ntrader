@@ -1849,11 +1849,13 @@ tracked in that story's `### Review Findings` section, not here.
   printed, no traceback. No repo strategy uses timers today, so this is latent. Story 2.7 does not
   wrap them (there is no `handle_*` seam to wrap). **Action:** whenever a strategy first uses a timer.
 
-- **`Actor.handle_bar` runs `_handle_indicators_for_bar` OUTSIDE its `try`.** A `handle_*` wrapper
+- ~~**`Actor.handle_bar` runs `_handle_indicators_for_bar` OUTSIDE its `try`.** A `handle_*` wrapper
   contains a raising registered indicator; an `on_*` wrapper would not (`actor.pyx:3735-3744`). Story
   2.7 chose `handle_*` for exactly this forward reason. **Relevant to Story 4.4**, which rewrites
   `on_start` to register indicators and is the first story where this stops being hypothetical —
-  `grep -rn register_indicator src/core/strategies/` returns zero today.
+  `grep -rn register_indicator src/core/strategies/` returns zero today.~~ **DISPOSITIONED by Story
+  4.4 (2026-09-22)** — proven on the live-bar path, residual on the history path; see "Deferred from:
+  story-4.4" below.
 
 - **`StrategyRegistry.discover()` catches only `ImportError`.** `src/core/strategy_registry.py:271-275`
   swallows it into `warnings.warn`; any *other* exception at strategy-module import time aborts
@@ -2157,8 +2159,9 @@ adopted: **give each item a named owning story, not a priority label.** Items re
   recorded in `epics.md` under Epic 3 so it is not tidied away as premature.
 - Widening `GUARDED_HANDLERS` → the first story shipping a strategy that overrides an unwrapped
   handler, with a per-handler containment test.
-- `Actor.handle_bar` running `_handle_indicators_for_bar` outside its `try` → **Story 4.4**, the
-  first story to register indicators.
+- ~~`Actor.handle_bar` running `_handle_indicators_for_bar` outside its `try` → **Story 4.4**, the
+  first story to register indicators.~~ **DONE by Story 4.4** (2026-09-22) — see "Deferred from:
+  story-4.4".
 - Re-validating a persisted spec on read, and `model_copy(update=…)` → **Epic 5**, unchanged.
 - P4's unreachable probe assertion → a diagnostics fix, unowned by any story; see Action Item 15.
 - `StrategyRegistry.discover()` swallowing only `ImportError`, the `live_check.*` prefix question,
@@ -3039,3 +3042,92 @@ place above; this heading records the closing summary per item.
   and `docs/agent/conventions.md`'s Code Size Limits section updated to point at the guard. Strikes
   D4's row in the Epic 2 retro table and the Story 2.6 "enforce it or amend the guideline" entry.
   `make test-unit` runtime grew by under a second (12 new AST-only tests, no I/O).
+
+## Deferred from: story-4.4 (2026-09-22)
+
+Story 4.4 (warm indicators from history before the live stream starts). Each item names an owner;
+none blocks the story.
+
+- **The Story 2.7 debt routed here — dispositioned.** `Actor.handle_bar` feeding registered
+  indicators outside its own `try` (`actor.pyx:3735-3744`) is now proven contained on the **live**
+  bar path: `tests/component/core/test_strategy_warmup_engine.py::
+  TestARaisingRegisteredIndicatorIsContained` registers a raising `Indicator` subclass on a real,
+  guarded `Strategy`, and one published bar gives `strategy.failed handler=handle_bar`, the raiser
+  `DEGRADED`, and the sibling still receiving the bar — with an unguarded twin in which the raise
+  escapes `MessageBus.publish`. **Residual, not closed:** the **history** path. A registered
+  indicator raising on a historical bar raises inside `Actor.handle_bars` (the `request_bars`
+  response), before any callback, outside every boundary this repo installs; on
+  `LiveDataEngine`'s response queue that is `_handle_queue_exception("DataResponse")`, i.e. a
+  graceful shutdown of the **whole node** (`graceful_shutdown_on_exception=True`). The built-in
+  `SimpleMovingAverage` cannot raise on a valid bar, so this is latent. `GUARDED_HANDLERS` was
+  deliberately not widened (its pin is exact, and each handler needs its own dispatch measurement).
+  **Owner:** whoever first ships an indicator that can raise.
+- **`momentum`'s `trade_size` default is now live-relevant.** `MomentumParameters.trade_size`
+  defaults to `1000000` shares. That never mattered while the strategy could not cross (the F8
+  cumulative-sum defect Story 4.4 fixed under ruling D-G: A). A default-parameter `momentum` session
+  would now submit million-share market orders, which IBKR rejects (Story 3.7's path handles that
+  loudly, not safely-by-design). **Owner:** before any `momentum` session is created, or the next
+  story that touches `MomentumParameters`.
+- **Sub-minute bars cannot warm pre-open.** `warmup_lookback` asks in seconds below one minute
+  (IB's small-bar rules refuse a days-long 5-second request), and a seconds window ending before
+  the open covers no RTH bar — the adapter answers with nothing, and the runner contains the
+  strategy (`warmup.failed reason=no_response`) rather than letting it sit silent. Safe, but such a
+  strategy never trades a run started pre-open. IB's identical-request pacing rule (15 s) also
+  applies to small bars and is not addressed for two strategies sharing a sub-minute bar type.
+  **Owner:** whoever first runs a sub-minute strategy live.
+- **A failed warm-up costs the full deadline (default 75 s) even when IB already said "Failed".**
+  The IB adapter publishes `{"status": "Failed"}` on `requests.{id}` for an empty history
+  (`adapters/interactive_brokers/data.py:536-546`); the watch does not listen for it, to avoid
+  coupling to adapter internals. Worst case with two strategies both failing is 150 s — inside
+  NFR3's five minutes. **Owner:** whoever first observes a slow failed warm-up eating into NFR3.
+- **`custom/` submodule strategies stay cold.** They are not edited (submodule); one that issues no
+  `request_bars` in `on_start` is logged `warmup.skipped` and starts exactly as before. One that
+  *does* call `request_bars` gets the same bounded wait and containment, because the watch wraps
+  `request_bars` on every strategy. **Owner:** the submodule's maintainer.
+- **The size-cap guard fails in any checkout without the `custom/` submodule.** Two
+  `SIZE_BASELINE` entries (`ApoloRSI.on_bar`, `BollingerReversalStrategy`) name submodule files,
+  so `test_no_baseline_entry_has_dropped_to_or_under_its_cap` and
+  `test_regenerating_the_baseline_reproduces_it_exactly` fail wherever the submodule is not
+  populated — true of this story's harness worktree before any edit (measured at Task 0, recorded,
+  not "fixed" by deleting entries that are correct in a full checkout). CI checks the submodule out
+  or it does not; either way the guard should say which. **Owner:** unowned, named — the next
+  person to touch `test_size_caps.py`.
+- **`warmup.completed`'s `elapsed_ms` has never been read live.** It measures request issue → the
+  history callback on the loop; the P14 procedure reads it, but no Gateway was reachable during
+  this story (ports 4001/4002/7496/7497 closed, after RTH). **Owner:** whoever next runs P14.
+
+## Deferred from: code review of 4-4-warm-indicators-from-history-before-the-live-stream-starts (2026-09-22)
+
+- **The history/live seam can lose or double-count one bar — ruled A by the PO (defer).** The
+  live IB stream is open from `_phase_subscribe` (the bar observer); a strategy joins the bus only
+  in its history callback. A bar that closes after the history request's `end` but is published
+  before the callback is never seen (gap); a bar inside the history that the adapter publishes
+  after the callback — it publishes bar X on X+1's first update, or `duration+1s` later
+  (`adapters/interactive_brokers/client/market_data.py:1068-1073, 1163-1168`) — is fed to the
+  SMAs twice, because `Actor.handle_bar` feeds registered indicators before the strategy's code
+  runs and AC #1 mandates registration. Probability ≈ publication lag ÷ bar interval per start
+  (a few percent on 1-minute bars); effect: the SMAs are off by one bar for at most
+  `slow_period` bars — never a trade on cold indicators, but one crossover can shift by a bar,
+  which is exactly the resume-correctness question Story 4.5 exists for. A fix needs a seam
+  guard outside the strategy (a per-strategy monotonic-`ts_event` filter at the runner's
+  `handle_bar` boundary, plus a gap fill from the cache in the callback). **Owner:** Story 4.5.
+  P14 criterion 7 records which reading each live run shows.
+- **Serialized warm-up scales as N × (`ibkr_request_timeout` + 15 s).** D-B starts one strategy at
+  a time so at most one history request is in flight (NFR15, and F2's same-second dedup). The cost
+  is that a session whose strategies *all* fail to warm takes N × 75 s by default to fail: two is
+  150 s, inside NFR3's five minutes; four or more would not be. **Owner:** the first session
+  specified with four or more strategies.
+- **A strategy that stops itself in `on_start` is logged `warmup.skipped` and counted as started.**
+  `momentum`'s missing-instrument path calls `self.stop()` and makes no history request; the watch
+  sees no request and the runner counts it, exactly as Story 2.7's start loop already did before
+  this story. **Owner:** unowned, named — whoever next touches `_start_strategy`'s success test.
+- **Only `request_bars` on the instance is watched.** A custom strategy that warms through
+  `request_aggregated_bars`, `request_data`, a tick request or `super().request_bars(...)` gets
+  `warmup.skipped` and no deadline. **Owner:** the `custom/` submodule's maintainer, or the first
+  story that ships such a strategy in-repo.
+- **IB's small-bar duration caps are unverified.** The published table caps a 5-second request at
+  3,600 s; `warmup_lookback` would ask 3,750 s for 5-second bars at period 250. A refusal would be
+  IB error 162 — the same code D6's grep reads as a competing login — and the strategy would be
+  contained after the deadline. **Owner:** whoever first runs a sub-minute strategy live (the
+  story-4.4 section above already routes sub-minute pre-open warm-up to the same owner).
+

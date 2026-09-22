@@ -164,6 +164,16 @@ async def main():
     for strategy in strategies:
         strategy.start()
     await wait_for(lambda: all(s.is_running for s in strategies), "every strategy to start")
+    # Story 4.4: both strategies subscribe from their history callback, which
+    # this engine answers (empty -- it has no client) on its request queue,
+    # AFTER `start()` returns. A bar processed before that lands on no
+    # subscriber, and the "sibling was starved" assertion would fire for a
+    # reason that has nothing to do with the guard.
+    await wait_for(
+        lambda: not any(s.has_pending_requests() for s in strategies)
+        and len(msgbus.subscriptions(f"data.bars.{BAR_TYPE}")) == len(strategies),
+        "every strategy's history request to settle and its subscription to land",
+    )
 
     for index, close in enumerate(CLOSES):
         engine.process(make_bar(index, close))

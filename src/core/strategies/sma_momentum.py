@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
-from collections import deque
+from datetime import timedelta
 from decimal import Decimal
 from typing import Optional
 
-import pandas as pd
 from nautilus_trader.config import StrategyConfig
+from nautilus_trader.core.uuid import UUID4
+from nautilus_trader.indicators import SimpleMovingAverage
 from nautilus_trader.model import Bar, BarType, InstrumentId
-from nautilus_trader.model.enums import OrderSide
+from nautilus_trader.model.enums import OrderSide, PriceType
 from nautilus_trader.trading.strategy import Strategy
 
 from src.core.strategy_registry import StrategyRegistry, register_strategy
+from src.core.strategy_warmup import warmup_lookback
 from src.models.strategy import MomentumParameters
 
 
@@ -45,6 +47,12 @@ class SMAMomentum(Strategy):
     Buys when fast MA crosses above slow MA.
     Sells when fast MA crosses below slow MA.
     Optional short selling support.
+
+    Both averages are registered Nautilus ``SimpleMovingAverage`` indicators
+    (Story 4.4). They replaced a hand-rolled deque average that summed every
+    close it had ever seen instead of a window — its ``len(q) > maxlen`` evict
+    branch could never fire on a ``deque(maxlen=...)`` — so ``fast`` sat above
+    ``slow`` permanently and the strategy could never cross.
     """
 
     def __init__(self, config: SMAMomentumConfig) -> None:
@@ -53,34 +61,41 @@ class SMAMomentum(Strategy):
         self.instrument_id = self.config.instrument_id
         self.bar_type = self.config.bar_type
 
-        self._fast: deque[float] = deque(maxlen=self.config.fast_period)
-        self._slow: deque[float] = deque(maxlen=self.config.slow_period)
-        self._fast_sum = 0.0
-        self._slow_sum = 0.0
+        self.fast_sma = SimpleMovingAverage(self.config.fast_period, price_type=PriceType.LAST)
+        self.slow_sma = SimpleMovingAverage(self.config.slow_period, price_type=PriceType.LAST)
         self._prev_fast: Optional[float] = None
         self._prev_slow: Optional[float] = None
 
     def on_start(self) -> None:
-        """Actions to be performed on strategy start."""
+        """Register the averages and ask for enough history to warm them (Story 4.4).
+
+        ``subscribe_bars`` runs last in :meth:`_on_history_loaded`, never here,
+        so the live stream starts only once the history has loaded (AR40).
+        ``warmup_days`` is kept as a floor under the computed window, snapped
+        with it so the adapter's rounding cannot cut it short.
+        """
         self.instrument = self.cache.instrument(self.instrument_id)
         if self.instrument is None:
             self.log.error(f"Instrument not found: {self.instrument_id}")
             self.stop()
             return
 
-        start = self.clock.utc_now() - pd.Timedelta(days=int(self.config.warmup_days))
-        self.request_bars(self.bar_type, start=start)
-        self.subscribe_bars(self.bar_type)
+        self.register_indicator_for_bars(self.bar_type, self.fast_sma)
+        self.register_indicator_for_bars(self.bar_type, self.slow_sma)
+        period = max(self.config.fast_period, self.config.slow_period)
+        floor = timedelta(days=int(self.config.warmup_days))
+        start = self.clock.utc_now() - warmup_lookback(self.bar_type, period, minimum=floor)
+        self.request_bars(self.bar_type, start=start, callback=self._on_history_loaded)
 
-    def _update_ma(
-        self, q: deque, total: float, x: float, maxlen: int
-    ) -> tuple[float | None, float]:
-        """Update moving average calculation."""
-        q.append(x)
-        total += x
-        if len(q) > maxlen:
-            total -= q[-(maxlen + 1)]
-        return (total / maxlen if len(q) >= maxlen else None, total)
+    def _on_history_loaded(self, request_id: UUID4) -> None:
+        """Carry the crossover baseline over from history, then go live.
+
+        Only the baseline is taken — no signal is evaluated on a historical
+        bar. Cold averages (a backtest's empty history) record nothing.
+        """
+        if self.fast_sma.initialized and self.slow_sma.initialized:
+            self._prev_fast, self._prev_slow = self.fast_sma.value, self.slow_sma.value
+        self.subscribe_bars(self.bar_type)
 
     def on_bar(self, bar: Bar) -> None:
         """
@@ -94,17 +109,10 @@ class SMAMomentum(Strategy):
         if bar.bar_type != self.bar_type:
             return
 
-        close = float(bar.close)
-
-        fast_val, self._fast_sum = self._update_ma(
-            self._fast, self._fast_sum, close, self.config.fast_period
-        )
-        slow_val, self._slow_sum = self._update_ma(
-            self._slow, self._slow_sum, close, self.config.slow_period
-        )
-
-        if fast_val is None or slow_val is None:
+        # `Actor.handle_bar` has already fed both registered averages this bar.
+        if not (self.fast_sma.initialized and self.slow_sma.initialized):
             return
+        fast_val, slow_val = self.fast_sma.value, self.slow_sma.value
 
         # Cross detection needs previous values
         if self._prev_fast is None or self._prev_slow is None:

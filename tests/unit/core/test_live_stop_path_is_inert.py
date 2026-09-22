@@ -67,6 +67,13 @@ STOP_PATH_MODULES = (
 #: callable — so it should never trip this scan, and a future change that
 #: added a forbidden call here would now be caught.
 
+#: ``src/core/live_session_warmup.py`` (Story 4.4) is **NOT** on the list: it
+#: runs only during startup — the ``warmup`` phase arms it and ``trading``
+#: waits on it — and nothing in the teardown ``finally`` calls into it. Like the
+#: order path above, its wrapper's whole job is to call a wrapped original
+#: (``base(**bound)``, here ``request_bars``), and it calls no order or
+#: position method at all, so membership would be inert, not protective.
+
 #: ``src/core/live_exec_avg_px.py`` (2026-09-01) is likewise **NOT** on the list,
 #: for a simpler reason: it is build-time only. It runs once inside
 #: ``node.build()``, replaces one adapter-private dict, and is never reached

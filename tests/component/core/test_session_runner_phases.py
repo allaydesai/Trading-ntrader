@@ -382,7 +382,13 @@ class TestAFailureStopsTheSequence:
 
 
 class TestTheEpicFourPlaceholders:
-    """AC #3 — ``reconcile`` and ``warmup`` log their phase and do nothing else."""
+    """AC #3 — ``reconcile`` and ``warmup`` log their phase and touch no node.
+
+    Story 4.4 gave ``warmup`` a body, and deliberately one that still makes no
+    call on the node: it only arms the runner's warm-up watch. The warming
+    happens in each strategy's ``on_start`` during ``trading``
+    (``test_session_runner_warmup.py``), so every assertion here still holds.
+    """
 
     def test_they_log_started_then_ok(self, registered_accounts):
         settings = _settings()
@@ -431,7 +437,12 @@ class TestTheEpicFourPlaceholders:
         assert accesses == []
 
     def test_neither_emits_ar41s_warmup_completed(self, registered_accounts):
-        """Nothing warmed, so claiming it did would be a false record."""
+        """Nothing warmed, so claiming it did would be a false record.
+
+        Still true after Story 4.4: this double's ``start_strategy`` never runs
+        ``on_start``, so no history is requested and the runner logs
+        ``warmup.skipped`` — never a ``warmup.completed`` it cannot back.
+        """
         settings = _settings()
         registered_accounts(settings)
         runner = _runner(TestLiveNode(run_seconds=0.01), settings=settings)
@@ -1305,6 +1316,12 @@ class TestImportPurity:
         # governs. Its one non-stdlib import is `live_strategy_guard`'s
         # redaction pair, which is itself on this list. Added on creation.
         "src.core.live_order_rejections",
+        # Story 4.4. Constructed in `_phase_warmup` and installed on every
+        # started strategy in `_start_strategy`, beside the guard and the
+        # order path — duck-typed and stdlib-only, with no `src.db`/
+        # `src.services` to stay clear of in the first place. Added on
+        # creation, not on next discovery.
+        "src.core.live_session_warmup",
     )
 
     @pytest.mark.parametrize("module_name", MODULES)

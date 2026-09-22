@@ -145,6 +145,32 @@ Config and parameter validation happen separately — a strategy can be register
 
 For data sources and exchange clients, see `docs/agent/data-pipeline.md`.
 
+### Warming indicators from history (Story 4.4)
+
+Both built-ins warm the same, mode-agnostic way (AR40 — never `if self.is_live:`):
+`on_start()` calls `register_indicator_for_bars(...)` for each indicator, then
+`request_bars(bar_type, start=now - warmup_lookback(bar_type, period), callback=...)`;
+the callback records the crossover baseline and calls `subscribe_bars` **last**.
+`tests/unit/strategies/test_strategy_warmup_shape.py` enforces that shape. Measured
+facts (`nautilus-trader 1.220.0`) that bite:
+
+1. **A registered indicator is fed by `Actor.handle_bar`, before `on_bar`.** Feeding
+   it again inside `on_bar` counts every bar twice; calling `on_bar` directly in a
+   test no longer moves it — drive `handle_bar`.
+2. **History reaches `on_historical_data`, never `on_bar`**, so crossover state
+   (`_prev_*`) has to be set in the callback or the strategy is warm but deaf for a bar.
+3. **In a backtest the request is answered with nothing, synchronously**, inside
+   `on_start` (no `DataEngine` catalog is registered) — backtests behave exactly as
+   before. A test harness with **no** `DataEngine` behind its bus never answers at
+   all, and the strategy never subscribes: give it one.
+4. **Live, the IB adapter can finish a request without ever calling the callback**
+   (missing contract, empty or timed-out history, a same-second duplicate). The
+   runner's `WarmupWatch` (`src/core/live_session_warmup.py`) bounds that wait and
+   contains the strategy (`warmup.failed`) instead of leaving it silent.
+5. **Ask in whole days for `>= 1 minute` bars.** The adapter sends a sub-day span as
+   seconds, and a seconds window ending pre-open returns nothing — see
+   `src/core/strategy_warmup.py`.
+
 ## Live Session Cache (Redis)
 
 A live paper-trading session's engine state lives in Redis, namespaced per

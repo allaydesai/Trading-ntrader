@@ -33,6 +33,7 @@ import structlog
 from nautilus_trader.adapters.interactive_brokers.factories import IB_CLIENTS
 from nautilus_trader.cache.cache import Cache
 from nautilus_trader.common.component import LiveClock, MessageBus, is_logging_initialized
+from nautilus_trader.data.engine import DataEngine
 from nautilus_trader.model.data import Bar, BarType
 from nautilus_trader.model.identifiers import TraderId
 from nautilus_trader.model.objects import Price, Quantity
@@ -274,6 +275,14 @@ class RealDispatch:
     ``STOPPED`` — the survivor never subscribes and AC #2's assertion becomes
     untestable rather than false. :meth:`assert_both_running` is the guard on
     the guard.
+
+    ⚠️ A real (non-live, synchronous) ``DataEngine`` sits behind the bus
+    (Story 4.4). Both built-ins now subscribe from their history callback, not
+    from ``on_start``; with no engine registered for ``DataEngine.request``
+    the request is dropped, the callback never fires, and neither strategy
+    ever subscribes — the adapter's silent-failure shape (story F2) in harness
+    form. With the engine and no data client, the request is answered with an
+    empty history inside ``start()``, exactly as a backtest answers it.
     """
 
     def __init__(self, order, *, guard: StrategyGuard | None) -> None:
@@ -283,6 +292,8 @@ class RealDispatch:
         self.cache = Cache(database=None)
         self.cache.add_instrument(TestInstrumentProvider.equity(symbol="AAPL", venue="NASDAQ"))
         portfolio = Portfolio(self.bus, self.cache, clock)
+        self.engine = DataEngine(msgbus=self.bus, cache=self.cache, clock=clock)
+        self.engine.start()
 
         self.order = order
         #: What each strategy's ``on_bar`` actually processed. Inside

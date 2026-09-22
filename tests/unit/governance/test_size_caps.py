@@ -131,7 +131,10 @@ SIZE_BASELINE: dict[str, int] = {
     "src/core/live_connection_monitor.py::ConnectionMonitor": 118,
     "src/core/live_node_builder.py::build_trading_node_config": 128,
     "src/core/live_order_path.py::OrderEventObserver": 165,
-    "src/core/live_session_runner.py::LiveSessionRunner": 400,
+    # Story 4.4, 400 -> 414: warm-up wiring (arm in `_phase_warmup`, instrument
+    # + settle per strategy, the stop/reclaim predicate the wait reads); the
+    # watch itself is its own module.
+    "src/core/live_session_runner.py::LiveSessionRunner": 414,
     "src/core/live_session_runner.py::LiveSessionRunner.run": 66,
     "src/core/live_session_steady_state.py::SessionSteadyState": 120,
     "src/core/live_strategy_guard.py::StrategyGuard": 121,
@@ -142,8 +145,12 @@ SIZE_BASELINE: dict[str, int] = {
     "src/core/results_extractor.py::ResultsExtractor.extract_results": 85,
     "src/core/strategies/custom/apolo_rsi.py::ApoloRSI.on_bar": 53,
     "src/core/strategies/custom/bollinger_reversal.py::BollingerReversalStrategy": 110,
-    "src/core/strategies/sma_crossover.py::SMACrossover": 103,
-    "src/core/strategies/sma_momentum.py::SMAMomentum.on_bar": 58,
+    # Story 4.4, 103 -> 110: AR40 warm-up inline in `on_start` + the history
+    # callback, deliberately not hidden in a helper so AC #2's inspection reads
+    # the three Nautilus calls in the strategy file itself.
+    "src/core/strategies/sma_crossover.py::SMACrossover": 110,
+    # Story 4.4, 58 -> 52 (shrank): registered SMAs replaced the deque average.
+    "src/core/strategies/sma_momentum.py::SMAMomentum.on_bar": 52,
     "src/core/strategy_registry.py::StrategyRegistry": 101,
     "src/db/repositories/backtest_repository.py::BacktestRepository": 236,
     "src/db/repositories/backtest_repository_sync.py::SyncBacktestRepository": 153,
