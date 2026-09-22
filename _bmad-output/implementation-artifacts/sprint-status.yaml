@@ -36,6 +36,16 @@
 
 generated: 2026-08-03
 last_updated: >-
+  2026-09-22 (STORY 3.7 DONE, EPIC 3 DONE: 3-7-keep-trading-after-a-rejection review -> done, epic-3
+  in-progress -> done. Live Procedure P13 ran inside RTH (09:37-09:44 ET) against the reachable paper
+  Gateway and passed all seven criteria -- session p13-0922, a real IBKR margin rejection (code 201)
+  on every crossover, the session stayed up and kept submitting through four rejections, zero
+  tally/observer/strategy-failure markers, live status read health: degraded with the refusal block
+  from a second terminal, runtime_flags.order_rejections matched the transcript and survived a clean
+  SIGINT, zero trades rows, D6's 162/10182/366 sweep found only benign teardown/timestamp hits. Full
+  result row at docs/qa/phase3-live-verification.md's Procedure P13 section. This was the sole named
+  gate from the 2026-09-21 retro (Allay's blocking sequencing call) -- Epic 4 story creation may now
+  begin. D-G's degraded_because --json key remains open, non-blocking, tracked in deferred-work.md.
   2026-09-21 (EPIC 3 RETROSPECTIVE DONE: epic-3-retrospective optional -> done. Documentation-driven
   method per the Epic 1/2 precedent, synthesized from all 7 story records plus the Epic 2 retro and
   deferred-work.md's Epic-3-relevant entries; full document at
@@ -2588,17 +2598,17 @@ development_status:
   # strategy paid the same double commission (not re-audited), in deferred-work.md's "story-3.4"
   # addendum. Not Story 3.4's own defect (its recovery mechanism produced zero duplicates in the
   # same run).
-  # Retro done 2026-09-21 (implementation-artifacts/epic-3-retro-2026-09-21.md). epic-3 deliberately
-  # STAYS in-progress: the retro treated the epic's engineering work as complete per Allay's
-  # direction, but 3.7's live P13 has not run, and Allay ruled P13 BLOCKING before Epic 4 starts.
-  epic-3: in-progress
+  # Retro done 2026-09-21 (implementation-artifacts/epic-3-retro-2026-09-21.md). P13 ran and passed
+  # 2026-09-22 (docs/qa/phase3-live-verification.md, Procedure P13 result log) -- the formal gate
+  # the retro named -- so epic-3 and 3.7 both close to done. Epic 4 may now start.
+  epic-3: done
   3-1-stop-trading-without-manufacturing-an-exit: done
   3-2-submit-a-strategys-orders-to-the-broker: done
   3-3-track-every-order-through-its-full-lifecycle: done
   3-4-never-resubmit-an-order-that-is-already-working: done
   3-5-aggregate-partial-fills-into-one-position: done
   3-6-persist-each-trade-the-moment-it-closes: done
-  3-7-keep-trading-after-a-rejection: review
+  3-7-keep-trading-after-a-rejection: done
   epic-3-retrospective: done
 
   # Epic 4: Stop, Restart & Resume Mid-Position
