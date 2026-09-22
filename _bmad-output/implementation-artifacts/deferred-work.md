@@ -735,14 +735,19 @@ Non-blocking findings from the three-layer adversarial review. Blocking items (2
   `managedAccounts` wait first, now up to three times. The component test asserts the *bound* in
   wall clock rather than only the exception, so the size of the overshoot is at least measured.
 
-- **`live_check.classify_failure` couples exit codes to exception class *names*, not classes.**
-  Deliberate — importing `GateRefusedError` or `LiveMarketDataError` would make `live_check.py`
-  Nautilus-dependent and collapse the pure/impure split that lets AR28's exit-code table be
-  unit-tested with no broker. The coupling is pinned by a component test that asserts the real class
-  names, so a rename fails loudly. But it is still a string, and a *new* exception type added to
-  `live_node_builder` or `live_market_data` will silently classify as a generic error (exit 1) until
-  someone adds it to the map. **Action:** if Epic 2 grows more typed failures on this path, consider
-  a shared marker protocol (an `exit_outcome` attribute on the exception) instead of a name map.
+- ~~**`live_check.classify_failure` couples exit codes to exception class *names*, not classes.**~~
+  — **RESOLVED by D3 (Epic 4 pre-work), 2026-09-22.** `exit_outcome`/`operator_safe_message` class
+  attributes, found via `getattr` off each class in the MRO — the marker protocol this entry's own
+  Action line proposed. A new typed failure with neither marker now fails
+  `tests/unit/core/test_exit_outcome_markers.py` until its author decides its exit code, rather than
+  silently classifying as a generic error. Original text follows. Deliberate — importing
+  `GateRefusedError` or `LiveMarketDataError` would make `live_check.py` Nautilus-dependent and
+  collapse the pure/impure split that lets AR28's exit-code table be unit-tested with no broker. The
+  coupling is pinned by a component test that asserts the real class names, so a rename fails
+  loudly. But it is still a string, and a *new* exception type added to `live_node_builder` or
+  `live_market_data` will silently classify as a generic error (exit 1) until someone adds it to the
+  map. **Action:** if Epic 2 grows more typed failures on this path, consider a shared marker
+  protocol (an `exit_outcome` attribute on the exception) instead of a name map.
 
 - **Zero bars is reported, not failed, and the two causes are indistinguishable.** Outside RTH no
   bar can close, so the check exits 0 with the shortfall named; `--require-bars` makes it fail for a
@@ -1301,14 +1306,18 @@ one superseded) and five were read and left open with updated notes. The items b
   phase sequence and *not* the `finally` — Story 2.5's own instructions were explicit that 2.6
   attaches to both.
 
-- **`SessionReclaimedError` is a fourth name in `_SAFE_MESSAGE_EXCEPTION_NAMES` where only three
-  went into `_OUTCOME_BY_EXCEPTION_NAME`.** The two collections answer different questions — which
-  exit code describes the failure, and whether the message text is ours to show — and a reclaim
-  needs the second without needing the first (AR28 has no better code for it than the generic 1).
-  Story 2.5's own Judgment call #8 says a fourth typed failure is *"the moment to revisit"* the
-  marker-protocol idea (`deferred-work.md`, story-1.7 section: an `exit_outcome` attribute on the
-  exception rather than two name-keyed collections). **Action for the Epic 2 retro:** decide whether
-  Story 2.6's `stop` — which will add at least one more typed failure — is where that lands.
+- ~~**`SessionReclaimedError` is a fourth name in `_SAFE_MESSAGE_EXCEPTION_NAMES` where only three
+  went into `_OUTCOME_BY_EXCEPTION_NAME`.**~~ — **RESOLVED by D3 (Epic 4 pre-work), 2026-09-22.**
+  Both name-keyed collections are gone; `SessionReclaimedError` carries its own
+  `exit_outcome`/`operator_safe_message` markers directly, the same shape every other typed failure
+  on this path now uses — there is no longer a "fourth name" to be out of step with a count of
+  three. Original text follows. The two collections answer different questions — which exit code
+  describes the failure, and whether the message text is ours to show — and a reclaim needs the
+  second without needing the first (AR28 has no better code for it than the generic 1). Story 2.5's
+  own Judgment call #8 says a fourth typed failure is *"the moment to revisit"* the marker-protocol
+  idea (`deferred-work.md`, story-1.7 section: an `exit_outcome` attribute on the exception rather
+  than two name-keyed collections). **Action for the Epic 2 retro:** decide whether Story 2.6's
+  `stop` — which will add at least one more typed failure — is where that lands.
 
   **Story 2.6 answer (2026-08-21): no, and recorded as an answer, not left open a second time.**
   This story adds `SessionStopRequested`, but it never reaches `classify_failure` at all — `run()`
@@ -1749,13 +1758,18 @@ tracked in that story's `### Review Findings` section, not here.
   configured value is still not redacted (e.g. the second entry of a multi-account
   `TWS_ACCOUNT="DU…,U…"` — the guard receives the raw string and matches it whole).
 
-- **`NoStrategyStartedError` is the FIFTH name in `live_check._SAFE_MESSAGE_EXCEPTION_NAMES` where
-  only three go into `_OUTCOME_BY_EXCEPTION_NAME`.** Story 2.5's *Judgment call #8* said a **fourth**
-  typed failure was the moment to revisit the marker-protocol idea; `SessionReclaimedError` made four
-  and this makes five, so the question is now overdue rather than approaching. The two sets answer
-  genuinely different questions (*"is this text ours to show?"* versus *"which exit code describes
-  it?"*), which is why the divergence keeps growing. **Action for the Epic 2 retro:** a marker base
-  class or a protocol, decided once, rather than a sixth hand-maintained string.
+- ~~**`NoStrategyStartedError` is the FIFTH name in `live_check._SAFE_MESSAGE_EXCEPTION_NAMES` where
+  only three go into `_OUTCOME_BY_EXCEPTION_NAME`.**~~ — **RESOLVED by D3 (Epic 4 pre-work),
+  2026-09-22.** Both hand-maintained name sets are deleted; `NoStrategyStartedError` carries its own
+  markers like every other typed failure on this path, so there is no divergent count left to grow.
+  A drift guard (`tests/unit/core/test_exit_outcome_markers.py`) now fails on a **sixth** (or any
+  further) unmarked typed failure instead of relying on someone noticing the count. Original text
+  follows. Story 2.5's *Judgment call #8* said a **fourth** typed failure was the moment to revisit
+  the marker-protocol idea; `SessionReclaimedError` made four and this makes five, so the question is
+  now overdue rather than approaching. The two sets answer genuinely different questions (*"is this
+  text ours to show?"* versus *"which exit code describes it?"*), which is why the divergence keeps
+  growing. **Action for the Epic 2 retro:** a marker base class or a protocol, decided once, rather
+  than a sixth hand-maintained string.
 
 - ~~**The `order_id_tag` collision is a latent startup failure that nothing prevents at create
   time.**~~ — **RESOLVED in story-3.2, 2026-08-30.** `SessionSpec._reject_order_id_tag_collision`
@@ -2101,7 +2115,7 @@ already been re-argued between three and five times. Every recommendation was ac
 |---|---|---|---|---|
 | **D1** | Owner/epoch **fencing column** on `trading_sessions` | **5** | **Story 3.6** — the first story owning a `SessionRecordPort` write. Epic 2 never had a legitimate owner (2.8, the natural candidate, was the phase's one pure reader). | ✅ Written into `epics.md` under Story 3.6, with the hazard, the two folded-in findings (post-`stopped` heartbeat write; `SessionReclaimedError` non-fatal on the bar path) and the retired cost argument |
 | **D2** | CI `--ignore=tests/integration/db` | **5** | **Drop the `--ignore`, add a Postgres service.** The SQLite component route cannot exercise the SQL that actually broke — the tables use `JSONB`, `PG_UUID`, `sa.Enum`. | ✅ Landed in the Epic 4 pre-work (2026-09-22): both `--ignore=tests/integration/db` lines removed from `.github/workflows/ci.yml`; `tests/integration/db/__init__.py` added (fixes the `test_session_service.py` basename collision with `tests/unit/services/`); the availability skip now raises loudly under `CI=true` instead of skipping silently. Also fixed in the same commit: `is_postgres_available()` and `test_db_schema`'s setup/cleanup called `asyncio.run()`, whose teardown unregisters the thread's current event loop — harmless while `--ignore`d, but once this directory's `conftest.py` imports inside a shared `pytest-xdist` worker, it broke `asyncio.get_event_loop()` in unrelated component tests scheduled to the same worker (`test_live_order_recovery.py`, 2 tests) later in the same run. All three call sites now run on a scratch loop that never touches the thread's global event-loop state. |
-| **D3** | AR28 exit-code **marker protocol** | **4** | **`exit_outcome` marker attribute, now**, before a sixth hand-maintained string. | ⏳ `src/core/live_check.py` — **not yet built**. Must fix the `sqlalchemy.exc.TimeoutError` → exit 4 collision and change no already-documented exit code |
+| **D3** | AR28 exit-code **marker protocol** | **4** | **`exit_outcome` marker attribute, now**, before a sixth hand-maintained string. | ✅ Landed in the Epic 4 pre-work (2026-09-22): `LiveCheckOutcome`/`EXIT_*`/`EXIT_CODES` moved to a new stdlib-only leaf module, `src/core/exit_outcome.py`; every exception from the table (`GateRefusedError`, `BrokerUnreachableError`, `LiveNodeConfigError`, `LiveMarketDataError`, `InvalidCheckWindowError`, `RedisUnreachableError`, `InvalidSessionTransition`, `RecordNotFoundError`, `LiveCheckError`, `SessionReclaimedError`, `NoStrategyStartedError`) now carries `exit_outcome`/`operator_safe_message` class attributes directly, found by `classify_failure`/`failure_message` via `getattr` off the MRO — no import of the class needed, so `live_check.py`'s purity is untouched and `src/db/exceptions.py` still has no imports of its own beyond the new leaf module. Both string-keyed maps (`_OUTCOME_BY_EXCEPTION_NAME`, `_SAFE_MESSAGE_EXCEPTION_NAMES`) are deleted. The `sqlalchemy.exc.TimeoutError` → exit 4 collision is fixed: the residual builtin map is now keyed by class **identity**, not name, so a same-named-but-different class no longer matches (`tests/component/core/test_live_check_driver.py::test_the_sqlalchemy_timeout_collision_is_gone`, against the real library). No already-documented exit code changed (README unchanged). A new drift guard (`tests/unit/core/test_exit_outcome_markers.py`) fails on any future typed failure with neither marker. |
 | **D4** | What the size caps mean | — | **Keep them, measure on executable statements**, enforce with a unit-tier AST guard in the AR37 shape + a sanctioned-exception allowlist. | ◑ `CLAUDE.md` wording updated; the **AST guard is not yet written**. Its allowlist starts with Epic 2's six over-cap files |
 | **D5** | Should an all-strategies-failed session stop? | — | **Leave as-is.** `session.all_strategies_failed` + `runtime_flags.all_failed` make it visible and 2.8 renders it `degraded`. | ✅ Closed on its merits — no change. Revisit only if observed in practice |
 | **D6** | Resubscription after a subscription-killing IB error | 3 instances | **Epic 4**, with the broker-authoritative reconciliation work. | ✅ Routed. Interim rule stands: "zero bars inside RTH" is a red flag, not a quiet outcome; grep every transcript for **162**, **10182**, **366** |
@@ -2973,3 +2987,26 @@ place above; this heading records the closing summary per item.
   currently say the tool is broken — left unchanged here because that claim should not flip to
   "fixed" before a live broker actually proves it. **Owner: whoever runs the first Epic 4
   procedure that leaves a position open.**
+
+- **D3 — `exit_outcome` marker protocol in `live_check.py`.** Landed. New leaf module
+  `src/core/exit_outcome.py` (stdlib only) carries `LiveCheckOutcome`/`EXIT_*`/`EXIT_CODES`;
+  `live_check.py` re-exports them so every existing import keeps working unchanged. All eleven
+  exceptions from the ruling's table now carry `exit_outcome`/`operator_safe_message` class
+  attributes directly, found via `getattr` off `type(exc).__mro__` — no import of the class needed,
+  which is what lets `src/db/exceptions.py` (still no imports of its own besides the new leaf
+  module) and every `nautilus_trader`/`sqlalchemy`-backed exception participate without dragging
+  either into `live_check.py`. Both string-keyed maps deleted. The motivating collision
+  (`sqlalchemy.exc.TimeoutError` classifying as the real socket timeout, exit 4) is fixed and
+  pinned against the real library at component tier — the residual map for builtins that cannot
+  carry a class attribute of their own is now keyed by class identity, not name. A new drift guard
+  (`tests/unit/core/test_exit_outcome_markers.py`) AST-scans every `src/core/live_*.py` (a glob,
+  not a hand-maintained list — CLAUDE.md's guard-list-rot anti-pattern cannot apply to this one) plus
+  `src/db/exceptions.py`, asserting every class ending in `Error`/`Transition` either carries both
+  markers or is in an explicit, itself-guarded `UNMARKED` allowlist; five pre-existing
+  backtest-persistence exceptions in `src/db/exceptions.py` were added to that allowlist as
+  genuinely out of scope (a different code path than `ntrader live *` entirely), not overlooked.
+  Strikes D3's row in the Epic 2 retro table, the story-1.7 entry that first proposed the marker
+  idea, and the story-2.5/story-2.7 "fourth name"/"FIFTH name" entries that tracked the map's
+  drift. README's exit-code table and AR28 are untouched — no already-documented exit code
+  changed. Full gate green, including `pytest tests/ -n auto --cov=src --cov-fail-under=64 -q`
+  (4707 passed).

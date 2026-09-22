@@ -95,8 +95,9 @@ import traceback
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, ClassVar
 
+from src.core.exit_outcome import LiveCheckOutcome
 from src.core.live_gate import mask_account
 
 #: The two Nautilus entry points this guard wraps, at the **instance** level.
@@ -208,12 +209,14 @@ class NoStrategyStartedError(Exception):
 
     Raised by ``LiveSessionRunner._phase_trading``, so AR39's *"a failure in any
     phase stops the sequence"* does the rest. The exit code is AR28's generic
-    **1** (*"a configuration, state or database failure"*), reached by
-    ``live_check.classify_failure`` walking the MRO and finding nothing more
-    specific — which is correct here and invents no code, the discipline Story
-    1.7 recorded. Its message is this codebase's own and names the specs that
-    failed, so it is on ``live_check._SAFE_MESSAGE_EXCEPTION_NAMES``.
+    **1** (*"a configuration, state or database failure"*), carried on its own
+    ``exit_outcome`` marker below rather than reached by name — invents no
+    code, the discipline Story 1.7 recorded. Its message is this codebase's
+    own and names the specs that failed, so ``operator_safe_message`` is True.
     """
+
+    exit_outcome: ClassVar[LiveCheckOutcome] = LiveCheckOutcome.ERROR
+    operator_safe_message: ClassVar[bool] = True
 
 
 @dataclass(frozen=True)

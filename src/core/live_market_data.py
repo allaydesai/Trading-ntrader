@@ -26,12 +26,14 @@ of it (FR3, AR21):
 """
 
 from collections.abc import Sequence
+from typing import ClassVar
 
 import structlog
 from ibapi.common import MarketDataTypeEnum  # type: ignore[import-untyped]
 from nautilus_trader.model.data import BarType
 
 from src.config import IBKRSettings
+from src.core.exit_outcome import LiveCheckOutcome
 
 logger = structlog.get_logger(__name__)
 
@@ -66,6 +68,9 @@ class LiveMarketDataError(Exception):
     map configuration failures to an outcome — the diagnostic probes today,
     Story 1.7's CLI next — must catch both.
     """
+
+    exit_outcome: ClassVar[LiveCheckOutcome] = LiveCheckOutcome.CONFIG_ERROR
+    operator_safe_message: ClassVar[bool] = True
 
 
 def resolve_live_market_data_type(settings: IBKRSettings) -> MarketDataTypeEnum:

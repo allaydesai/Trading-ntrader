@@ -47,11 +47,13 @@ installed 1.220.0 rather than read from documentation:
 
 import math
 import socket
+from typing import ClassVar
 
 import structlog
 from nautilus_trader.config import CacheConfig, DatabaseConfig
 
 from src.config import RedisSettings
+from src.core.exit_outcome import LiveCheckOutcome
 
 logger = structlog.get_logger(__name__)
 
@@ -69,6 +71,9 @@ class RedisUnreachableError(Exception):
     Redis that answers" alike — from a caller's point of view both mean the same
     thing, because both hang ``CacheDatabaseAdapter.__init__`` forever.
     """
+
+    exit_outcome: ClassVar[LiveCheckOutcome] = LiveCheckOutcome.CONFIG_ERROR
+    operator_safe_message: ClassVar[bool] = True
 
 
 def _unreachable(host: str, port: int, detail: str) -> RedisUnreachableError:

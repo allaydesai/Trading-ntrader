@@ -27,6 +27,7 @@ owns the state machine and the trading-permission flag it derives.
 
 import asyncio
 from collections.abc import Sequence
+from typing import ClassVar
 
 import structlog
 from nautilus_trader.adapters.interactive_brokers.common import IB
@@ -56,6 +57,7 @@ from nautilus_trader.live.node import TradingNode
 from nautilus_trader.model.data import BarType
 
 from src.config import IBKRSettings
+from src.core.exit_outcome import LiveCheckOutcome
 from src.core.live_bar_observer import LiveBarObserverConfig
 from src.core.live_cache import check_redis_reachable
 from src.core.live_exec_avg_px import install_avg_px_serialization_fix
@@ -160,6 +162,9 @@ logger = structlog.get_logger(__name__)
 class GateRefusedError(Exception):
     """The safety gate refused the connection; no client config was constructed."""
 
+    exit_outcome: ClassVar[LiveCheckOutcome] = LiveCheckOutcome.GATE_REFUSED
+    operator_safe_message: ClassVar[bool] = True
+
     def __init__(self, refusal: GateRefusal) -> None:
         super().__init__(refusal.message)
         self.refusal = refusal
@@ -167,6 +172,9 @@ class GateRefusedError(Exception):
 
 class LiveNodeConfigError(Exception):
     """Configuration cannot produce a usable node."""
+
+    exit_outcome: ClassVar[LiveCheckOutcome] = LiveCheckOutcome.CONFIG_ERROR
+    operator_safe_message: ClassVar[bool] = True
 
 
 def _validate_trader_id(trader_id: str) -> str:

@@ -16,7 +16,7 @@ from structlog.testing import capture_logs
 
 from src.config import IBKRSettings
 from src.core.live_account_gate import verify_connected_account
-from src.core.live_check import BrokerUnreachableError, LiveCheckOutcome
+from src.core.live_check import LiveCheckOutcome
 from src.core.live_check_driver import (
     CHECK_TRADER_ID,
     LiveCheckError,
@@ -704,29 +704,31 @@ class TestSessionDidNotDoItsJob:
 
 
 class TestExceptionNameCoupling:
-    """``live_check.classify_failure`` keys on class names; pin them here.
-
-    This is the test that makes the string map safe. Without it a rename would
-    silently reclassify a gate refusal as a generic error — turning exit 3 into
-    exit 1 on the one path FR11 exists for.
+    """``live_check.classify_failure`` reads each real class's own
+    ``exit_outcome`` marker — D3's replacement for the string-keyed map this
+    class used to pin by name. Nothing here needs a name pin any more: a
+    rename cannot desynchronise a class attribute from itself.
     """
-
-    @pytest.mark.parametrize(
-        ("klass", "expected_name"),
-        [
-            (GateRefusedError, "GateRefusedError"),
-            (LiveNodeConfigError, "LiveNodeConfigError"),
-            (LiveMarketDataError, "LiveMarketDataError"),
-            (BrokerUnreachableError, "BrokerUnreachableError"),
-        ],
-    )
-    def test_exception_class_names_are_what_live_check_keys_on(self, klass, expected_name):
-        assert klass.__name__ == expected_name
 
     def test_the_check_error_classifies_as_a_generic_error(self):
         from src.core.live_check import classify_failure
 
         assert classify_failure(LiveCheckError("boom")) is LiveCheckOutcome.ERROR
+
+    def test_the_sqlalchemy_timeout_collision_is_gone(self):
+        """The D2 ruling's motivating case: SQLAlchemy's pool-timeout class
+        shares the builtin ``TimeoutError``'s name but is a distinct class
+        carrying no marker, so it must classify as a generic error (exit 1),
+        not the real socket timeout's ``BROKER_UNREACHABLE`` (exit 4) — which
+        would tell an operator to go restart a healthy Gateway over a DB pool
+        timeout in ``live start``/``live status``.
+        """
+        import sqlalchemy.exc
+
+        from src.core.live_check import EXIT_CODES, classify_failure
+
+        assert sqlalchemy.exc.TimeoutError is not TimeoutError
+        assert EXIT_CODES[classify_failure(sqlalchemy.exc.TimeoutError("pool exhausted"))] == 1
 
 
 class TestNoOrderPath:

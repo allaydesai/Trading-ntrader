@@ -255,29 +255,36 @@ class TestPreflightGateLogsTheRefusal:
         assert REAL_LOOKING_MASK in rendered
 
 
+def _marked(name, outcome, *, safe=True, base=Exception):
+    """A stand-in exception carrying D3's markers directly, the same shape
+    every real typed failure uses. Never the real classes — importing
+    ``GateRefusedError``/``LiveMarketDataError``/etc. here would drag Nautilus
+    into a unit-tier module; their markers are pinned against these same
+    values at component tier
+    (``tests/component/core/test_live_check_driver.py``,
+    ``tests/component/core/test_session_runner_phases.py``).
+    """
+    return type(name, (base,), {"exit_outcome": outcome, "operator_safe_message": safe})
+
+
 class TestClassifyFailure:
     """The pure exception→outcome map, so the driver holds no exit-code opinions."""
 
     @pytest.mark.parametrize(
-        ("exception_name", "expected"),
+        "outcome",
         [
-            ("GateRefusedError", LiveCheckOutcome.GATE_REFUSED),
-            ("BrokerUnreachableError", LiveCheckOutcome.BROKER_UNREACHABLE),
-            ("LiveNodeConfigError", LiveCheckOutcome.CONFIG_ERROR),
-            ("LiveMarketDataError", LiveCheckOutcome.CONFIG_ERROR),
+            LiveCheckOutcome.GATE_REFUSED,
+            LiveCheckOutcome.BROKER_UNREACHABLE,
+            LiveCheckOutcome.CONFIG_ERROR,
+            LiveCheckOutcome.ERROR,
         ],
     )
-    def test_named_exceptions_map_to_their_outcome(self, exception_name, expected):
-        """Stand-ins by name: importing the real classes would drag in Nautilus.
-
-        ``tests/component/core/test_live_check_driver.py`` asserts the real
-        classes still carry these names, so the coupling cannot rot silently.
-        """
-        stand_in = type(exception_name, (Exception,), {})
-        assert classify_failure(stand_in("boom")) is expected
+    def test_a_marked_exception_classifies_by_its_own_marker(self, outcome):
+        stand_in = _marked("SomeTypedFailure", outcome)
+        assert classify_failure(stand_in("boom")) is outcome
 
     def test_subclasses_classify_as_their_base(self):
-        base = type("GateRefusedError", (Exception,), {})
+        base = _marked("SomeBaseFailure", LiveCheckOutcome.GATE_REFUSED)
         derived = type("SomethingMoreSpecific", (base,), {})
         assert classify_failure(derived("boom")) is LiveCheckOutcome.GATE_REFUSED
 
@@ -296,18 +303,40 @@ class TestClassifyFailure:
         """A refused socket is 'failed to connect', not a generic error."""
         assert classify_failure(exc) is LiveCheckOutcome.BROKER_UNREACHABLE
 
-    def test_named_subclass_classifies_by_its_own_name(self):
-        """MRO order is precedence: a named subclass matches before its base does."""
-        specific = type("LiveNodeConfigError", (OSError,), {})
+    def test_a_marked_subclass_overrides_its_bases_marker(self):
+        """MRO order is precedence: the first class in the MRO carrying its
+        *own* marker wins — a subclass overriding it behaves like overriding
+        any other class attribute.
+        """
+        base = _marked("SomeBase", LiveCheckOutcome.ERROR, safe=False, base=OSError)
+        specific = type(
+            "SomeSpecificFailure",
+            (base,),
+            {"exit_outcome": LiveCheckOutcome.CONFIG_ERROR, "operator_safe_message": True},
+        )
         assert classify_failure(specific("boom")) is LiveCheckOutcome.CONFIG_ERROR
 
     def test_anything_else_is_a_generic_error(self):
         assert classify_failure(RuntimeError("boom")) is LiveCheckOutcome.ERROR
         assert classify_failure(ValueError("boom")) is LiveCheckOutcome.ERROR
 
-    def test_an_unrelated_class_named_like_ours_is_not_special_cased_by_accident(self):
-        """Sanity: the map is keyed on the name, and that is a deliberate trade."""
-        assert classify_failure(Exception("boom")) is LiveCheckOutcome.ERROR
+    def test_an_unmarked_class_is_not_special_cased_by_accident(self):
+        """Sanity: classification is by marker, never by name."""
+        stand_in = type("GateRefusedError", (Exception,), {})
+        assert classify_failure(stand_in("boom")) is LiveCheckOutcome.ERROR
+
+    def test_a_name_alike_with_no_marker_does_not_collide_with_the_real_builtin(self):
+        """The exact collision the D3 ruling was written to fix, in miniature:
+        a class merely *named* like a builtin the residual map keys on must
+        not inherit that entry — only class *identity* does. The real
+        collision (SQLAlchemy's pool-timeout class) is asserted at component
+        tier against the actual library
+        (``tests/component/core/test_live_check_driver.py::
+        test_the_sqlalchemy_timeout_collision_is_gone``).
+        """
+        stand_in = type("TimeoutError", (Exception,), {})
+        assert stand_in is not TimeoutError
+        assert classify_failure(stand_in("boom")) is LiveCheckOutcome.ERROR
 
 
 class TestRenderReport:
@@ -412,14 +441,15 @@ class TestModulePurity:
 
 
 class TestStoryTwoFiveClassifications:
-    """Three names ``ntrader live start`` needs, added as **string literals**.
+    """Four names ``ntrader live start`` needs, now proven with marker-carrying
+    stand-ins rather than string literals in a name-keyed map (D3).
 
     Importing the real classes would drag ``sqlalchemy`` (``InvalidSessionTransition``,
     ``RecordNotFoundError``) and ``nautilus_trader`` (``RedisUnreachableError``,
     transitively) into this module and destroy the purity the split exists for.
-    ``TestTheStoryTwoFiveNamesStillExist`` in
-    ``tests/component/core/test_session_runner_phases.py``'s sibling suites pins
-    the real classes against these names.
+    ``TestStoryTwoFiveExceptionNameCoupling`` in
+    ``tests/component/core/test_session_runner_phases.py`` pins the real
+    classes' markers against these same values.
     """
 
     @pytest.mark.parametrize(
@@ -433,7 +463,7 @@ class TestStoryTwoFiveClassifications:
         session-state conflict is neither; and an unknown session name is an
         operator error, while 2 is Click's own.
         """
-        stand_in = type(exception_name, (Exception,), {})
+        stand_in = _marked(exception_name, LiveCheckOutcome.CONFIG_ERROR)
 
         outcome = classify_failure(stand_in("boom"))
 
@@ -441,38 +471,38 @@ class TestStoryTwoFiveClassifications:
         assert EXIT_CODES[outcome] == EXIT_ERROR
 
     @pytest.mark.parametrize(
-        "exception_name",
+        ("exception_name", "outcome"),
         [
-            "RedisUnreachableError",
-            "InvalidSessionTransition",
-            "RecordNotFoundError",
-            "SessionReclaimedError",
+            ("RedisUnreachableError", LiveCheckOutcome.CONFIG_ERROR),
+            ("InvalidSessionTransition", LiveCheckOutcome.CONFIG_ERROR),
+            ("RecordNotFoundError", LiveCheckOutcome.CONFIG_ERROR),
+            ("SessionReclaimedError", LiveCheckOutcome.ERROR),
         ],
     )
-    def test_their_messages_reach_the_operator(self, exception_name):
+    def test_their_messages_reach_the_operator(self, exception_name, outcome):
         """Each was written to be actionable — host/port/remedy, the session
         name and its heartbeat age — and all are first-party text carrying no
-        third-party string, so NFR26 does not withhold them.
+        third-party string, so ``operator_safe_message`` is True on all four.
         """
-        stand_in = type(exception_name, (Exception,), {})
+        stand_in = _marked(exception_name, outcome)
 
         assert failure_message(stand_in("the actionable detail")) == "the actionable detail"
 
-    def test_a_subclass_of_backtest_storage_error_still_classifies_by_its_own_name(self):
-        """``InvalidSessionTransition`` inherits ``BacktestStorageError``; the
-        MRO walk must match the specific name first.
+    def test_a_subclass_of_backtest_storage_error_still_classifies_by_its_own_marker(self):
+        """``InvalidSessionTransition`` inherits ``BacktestStorageError``, which
+        carries no marker; the MRO walk must find the subclass's own first.
         """
         base = type("BacktestStorageError", (Exception,), {})
-        derived = type("InvalidSessionTransition", (base,), {})
+        derived = _marked("InvalidSessionTransition", LiveCheckOutcome.CONFIG_ERROR, base=base)
 
         assert classify_failure(derived("boom")) is LiveCheckOutcome.CONFIG_ERROR
 
     def test_a_reclaimed_session_is_a_generic_error_not_a_broker_failure(self):
-        """Deliberately unmapped in the outcome table: AR28's five codes are the
+        """Deliberately mapped to the generic outcome: AR28's five codes are the
         contract, and *"a CLI that invents an exit code outside its own
         documented table is worse than one that reports a generic failure"*.
         """
-        stand_in = type("SessionReclaimedError", (Exception,), {})
+        stand_in = _marked("SessionReclaimedError", LiveCheckOutcome.ERROR)
 
         assert classify_failure(stand_in("boom")) is LiveCheckOutcome.ERROR
         assert EXIT_CODES[LiveCheckOutcome.ERROR] == EXIT_ERROR

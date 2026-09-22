@@ -7,22 +7,35 @@ report that carries what happened, and the operator-facing rendering of it.
 Does not own: driving a node — that is ``src/core/live_check_driver.py``, which
 may import Nautilus; the gate's *rules* — that is ``src/core/live_gate.py``,
 which this module calls and never modifies; and a session's lifecycle — that is
-Epic 2's ``live_session_runner.py`` (AR38).
+Epic 2's ``live_session_runner.py`` (AR38). The outcome vocabulary and exit-code
+table themselves live in ``src/core/exit_outcome.py`` — a stdlib-only leaf
+module so a typed failure anywhere in the codebase can carry an
+``exit_outcome``/``operator_safe_message`` marker without importing this module
+or anything it imports; re-exported here so every existing import keeps
+working.
 
 **Purity is the point.** This module imports only the standard library,
-``structlog`` and ``src.core.live_gate``. It is the same split
-``live_gate`` (pure decisions) has to ``live_account_gate`` (enforcement seam),
-one level up — and it is what lets the exit codes scripts depend on (FR11, AR28)
-be tested with no Nautilus, no broker and no event loop.
+``structlog``, ``src.core.exit_outcome`` and ``src.core.live_gate``. It is the
+same split ``live_gate`` (pure decisions) has to ``live_account_gate``
+(enforcement seam), one level up — and it is what lets the exit codes scripts
+depend on (FR11, AR28) be tested with no Nautilus, no broker and no event loop.
 """
 
-from collections.abc import Mapping
+import socket
 from dataclasses import dataclass
-from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 import structlog
 
+from src.core.exit_outcome import (  # noqa: F401  # re-export: existing callers import these from live_check
+    EXIT_BROKER_UNREACHABLE,
+    EXIT_CODES,
+    EXIT_ERROR,
+    EXIT_GATE_REFUSED,
+    EXIT_OK,
+    EXIT_USAGE,
+    LiveCheckOutcome,
+)
 from src.core.live_gate import (
     GateFlags,
     GateMode,
@@ -35,38 +48,24 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger(__name__)
 
-#: AR28's exit codes. Named here rather than inlined so the whole table is
-#: readable in one place and assertable in one test — scripts branch on these,
-#: and `3` in particular is the entire content of FR11.
-EXIT_OK = 0
-EXIT_ERROR = 1
-EXIT_USAGE = 2  # Click's own default; named so the table below is complete
-EXIT_GATE_REFUSED = 3
-EXIT_BROKER_UNREACHABLE = 4
-
 #: This check's name for the Layer 1 step, mirroring
 #: ``live_account_gate.STARTUP_PHASE == "gate:account"`` for Layer 2. Deliberately
 #: *not* a claim to AR39's full startup sequence, which is Epic 2's contract.
 GATE_PHASE = "gate:static"
 
 
-class LiveCheckOutcome(str, Enum):
-    """What a connectivity check concluded."""
-
-    OK = "ok"
-    GATE_REFUSED = "gate_refused"
-    BROKER_UNREACHABLE = "broker_unreachable"
-    CONFIG_ERROR = "config_error"
-    INTERRUPTED = "interrupted"
-    ERROR = "error"
-
-
 class BrokerUnreachableError(Exception):
     """The gate permitted the connection but the broker never answered."""
+
+    exit_outcome: ClassVar[LiveCheckOutcome] = LiveCheckOutcome.BROKER_UNREACHABLE
+    operator_safe_message: ClassVar[bool] = True
 
 
 class LiveCheckError(RuntimeError):
     """The check reached the gateway but the session did not do its job."""
+
+    exit_outcome: ClassVar[LiveCheckOutcome] = LiveCheckOutcome.ERROR
+    operator_safe_message: ClassVar[bool] = True
 
 
 class InvalidCheckWindowError(Exception):
@@ -79,118 +78,34 @@ class InvalidCheckWindowError(Exception):
     begins, and ``inf`` makes it never end while the live client id is held.
     """
 
+    exit_outcome: ClassVar[LiveCheckOutcome] = LiveCheckOutcome.CONFIG_ERROR
+    operator_safe_message: ClassVar[bool] = True
 
-#: Outcome → process exit code. Total over ``LiveCheckOutcome`` by construction,
-#: and a test loops the enum to keep it that way: an outcome added without a code
-#: must fail a test rather than raise ``KeyError`` in front of an operator.
-EXIT_CODES: Mapping[LiveCheckOutcome, int] = {
-    LiveCheckOutcome.OK: EXIT_OK,
-    LiveCheckOutcome.GATE_REFUSED: EXIT_GATE_REFUSED,
-    LiveCheckOutcome.BROKER_UNREACHABLE: EXIT_BROKER_UNREACHABLE,
-    LiveCheckOutcome.CONFIG_ERROR: EXIT_ERROR,
-    # AR28's table has no 130. A CLI that invents an exit code outside its own
-    # documented table is worse than one that reports a generic failure, and an
-    # interrupted check proved nothing — which is exactly what `1` says.
-    LiveCheckOutcome.INTERRUPTED: EXIT_ERROR,
-    LiveCheckOutcome.ERROR: EXIT_ERROR,
-}
 
-#: Exception class name → outcome. Keyed on the **name**, not the class, because
-#: importing ``GateRefusedError`` (``live_node_builder``) or
-#: ``LiveMarketDataError`` (``live_market_data``) would drag ``nautilus_trader``
-#: and ``ibapi` into this module and destroy the purity the split exists for.
-#: ``tests/component/core/test_live_check_driver.py`` asserts the real classes
-#: still carry these names, so the coupling fails loudly instead of silently
-#: reclassifying a gate refusal as a generic error — which would turn exit 3 into
-#: exit 1 on the one path FR11 exists for.
-_OUTCOME_BY_EXCEPTION_NAME: Mapping[str, LiveCheckOutcome] = {
-    # This module's own exceptions are keyed by `__name__` rather than by a
-    # literal, so a rename cannot desynchronise them from the map. Only the ones
-    # that live behind a Nautilus import are unavoidably strings.
-    BrokerUnreachableError.__name__: LiveCheckOutcome.BROKER_UNREACHABLE,
-    InvalidCheckWindowError.__name__: LiveCheckOutcome.CONFIG_ERROR,
-    "GateRefusedError": LiveCheckOutcome.GATE_REFUSED,
-    "LiveNodeConfigError": LiveCheckOutcome.CONFIG_ERROR,
-    "LiveMarketDataError": LiveCheckOutcome.CONFIG_ERROR,
-    # Story 2.5's three, for `ntrader live start`. All CONFIG_ERROR (exit 1),
-    # each for its own reason: AR28 defines 4 as *broker* connectivity and
-    # Redis is not the broker — 4 must stay scriptably specific to IBKR; a
-    # session-state conflict is neither a gate refusal nor a connectivity
-    # failure; and an unknown session name is an operator error, where 2 is
-    # Click's own code for misuse of the command line itself.
-    #
-    # `InvalidSessionTransition` inherits `BacktestStorageError`, and the MRO
-    # walk in `classify_failure` matches the specific name first — so a future
-    # entry for the base would not silently reclassify this one.
-    "RedisUnreachableError": LiveCheckOutcome.CONFIG_ERROR,
-    "InvalidSessionTransition": LiveCheckOutcome.CONFIG_ERROR,
-    "RecordNotFoundError": LiveCheckOutcome.CONFIG_ERROR,
-    "KeyboardInterrupt": LiveCheckOutcome.INTERRUPTED,
-    # The socket-level failures, named individually rather than through their
+#: Builtins that cannot carry a class attribute of their own (``socket.gaierror``
+#: and friends do not accept arbitrary class bodies the way a first-party
+#: exception does), keyed by class **identity** rather than name — the identity
+#: check is exact where a name match is not: ``sqlalchemy.exc.TimeoutError`` is
+#: a distinct class that happens to share the builtin's name, carries no marker,
+#: and is deliberately *not* in this map, so it now classifies as ``ERROR``
+#: (exit 1) rather than colliding with the real socket timeout below (exit 4).
+#: ``asyncio.TimeoutError is TimeoutError`` on the Python this repo targets, so
+#: one entry covers both spellings.
+_BUILTIN_OUTCOMES: dict[type, LiveCheckOutcome] = {
+    KeyboardInterrupt: LiveCheckOutcome.INTERRUPTED,
+    # The socket-level failures, listed individually rather than through their
     # shared `OSError` base. Keying on `OSError` was tried and is wrong: it also
     # catches `FileNotFoundError`, `PermissionError` and `IsADirectoryError`, so
     # a log-directory permission failure during node construction would exit 4
     # and tell the operator to go restart a perfectly healthy gateway.
     # - `ConnectionError` covers refused/reset/aborted (gateway not listening)
-    # - `gaierror` is `socket.gaierror` — a mistyped `IBKR_HOST`
+    # - `socket.gaierror` — a mistyped `IBKR_HOST`
     # - `TimeoutError` is an `OSError` subclass since 3.10 and is what a socket
     #   that accepts but never answers produces
-    # Listed last in intent, not precedence: `classify_failure` walks the MRO,
-    # so a more specific name above always wins.
-    "ConnectionError": LiveCheckOutcome.BROKER_UNREACHABLE,
-    "gaierror": LiveCheckOutcome.BROKER_UNREACHABLE,
-    "TimeoutError": LiveCheckOutcome.BROKER_UNREACHABLE,
+    ConnectionError: LiveCheckOutcome.BROKER_UNREACHABLE,
+    socket.gaierror: LiveCheckOutcome.BROKER_UNREACHABLE,
+    TimeoutError: LiveCheckOutcome.BROKER_UNREACHABLE,
 }
-
-#: Exception names whose ``str()`` is safe to show an operator, because this
-#: codebase wrote it. Everything else is third-party text, and
-#: ``live_account_gate._stop_node`` documents why that must never be rendered:
-#: "adapter and broker error text routinely embeds the account identifier, and
-#: NFR26 admits no exception for a string that arrived from a third party."
-#: A raw `str(exc)` from the IB adapter really does carry account ids — verified
-#: during review, where `Error 321: account DU4076626 is not managed...` printed
-#: the identifier straight to the console.
-_SAFE_MESSAGE_EXCEPTION_NAMES: frozenset[str] = frozenset(
-    {
-        BrokerUnreachableError.__name__,
-        LiveCheckError.__name__,
-        InvalidCheckWindowError.__name__,
-        "GateRefusedError",
-        "LiveNodeConfigError",
-        "LiveMarketDataError",
-        # Story 2.5's, for `ntrader live start`. Each was written to be
-        # actionable — the Redis host/port and the two remedies; the session's
-        # name and its heartbeat's age; the identifier that matched nothing;
-        # the two start instants that prove another process took the session —
-        # and every one of those strings is this codebase's own, carrying no
-        # adapter or broker text. Withholding them would leave the operator a
-        # bare type name and make writing them pointless.
-        #
-        # `SessionReclaimedError` is a **fourth** name here where only three go
-        # into the outcome map above: the map is about which exit code
-        # describes the failure (a reclaim is a generic error, exit 1, and AR28
-        # has no better code), while this set is only about whether the text is
-        # ours to show. It is. Flagged for the Epic 2 retro.
-        "RedisUnreachableError",
-        "InvalidSessionTransition",
-        "RecordNotFoundError",
-        "SessionReclaimedError",
-        # Story 2.7's, for `ntrader live start`. Its message names the specs
-        # that failed and points at the `strategy.start_failed` records; every
-        # word is this codebase's own, and the *third-party* text — whatever the
-        # strategy actually raised — is deliberately not in it. Withholding it
-        # would leave the operator a bare type name for a failure whose remedy
-        # is entirely in their own spec.
-        #
-        # This is the **fifth** name here where only three go into the outcome
-        # map above, so Story 2.5's Judgment call #8 (*"a fourth typed failure
-        # is the moment to revisit the marker protocol"*) is now overdue rather
-        # than approaching. Recorded in `deferred-work.md` for the Epic 2 retro;
-        # not changed here, because inventing a protocol mid-story is exactly
-        # the move that story warned against.
-        "NoStrategyStartedError",
-    }
-)
 
 
 @dataclass(frozen=True)
@@ -344,14 +259,21 @@ def preflight_gate(
 def classify_failure(exc: BaseException) -> LiveCheckOutcome:
     """Map a raised exception to the outcome whose exit code describes it.
 
-    Walks the MRO so a subclass classifies as its base, and defaults to
-    ``ERROR``. Matching is by class **name** — see
-    ``_OUTCOME_BY_EXCEPTION_NAME`` for why, and for what pins it.
+    Walks the MRO so a subclass classifies as its base. Each class's *own*
+    ``exit_outcome`` marker (see ``exit_outcome.ExitOutcomeMarker``) is checked
+    first — this needs no import of the class at all, which is what lets a
+    typed failure behind ``src.db``, ``sqlalchemy`` or ``nautilus_trader``
+    classify itself without dragging any of them into this module. A small
+    residual map covers builtins, which cannot carry a class attribute of
+    their own. Defaults to ``ERROR``.
     """
     for klass in type(exc).__mro__:
-        outcome = _OUTCOME_BY_EXCEPTION_NAME.get(klass.__name__)
-        if outcome is not None:
-            return outcome
+        marked = klass.__dict__.get("exit_outcome")
+        if isinstance(marked, LiveCheckOutcome):
+            return marked
+        builtin_outcome = _BUILTIN_OUTCOMES.get(klass)
+        if builtin_outcome is not None:
+            return builtin_outcome
     return LiveCheckOutcome.ERROR
 
 
@@ -380,15 +302,18 @@ class CheckEvidence:
 def failure_message(exc: BaseException) -> str:
     """The operator-facing text for a raised failure, never empty, never leaky.
 
-    Only this codebase's own exception messages are shown verbatim. Anything
-    else — an adapter error, a broker error, an unexpected builtin — is reported
-    by **type name only**, because third-party error text routinely embeds the
+    Only this codebase's own exception messages are shown verbatim — carried on
+    each class's own ``operator_safe_message`` marker, found the same
+    import-free way ``classify_failure`` finds ``exit_outcome``. Anything else
+    — an adapter error, a broker error, an unexpected builtin — is reported by
+    **type name only**, because third-party error text routinely embeds the
     account identifier and NFR26 admits no exception for a string that arrived
     from a third party. ``live_account_gate._stop_node`` takes the same posture
-    for the same reason.
+    for the same reason. No builtin carries this marker, so a socket failure or
+    a `KeyboardInterrupt` always falls through to the generic message below.
     """
     for klass in type(exc).__mro__:
-        if klass.__name__ in _SAFE_MESSAGE_EXCEPTION_NAMES:
+        if klass.__dict__.get("operator_safe_message") is True:
             return str(exc) or klass.__name__
     return (
         f"{type(exc).__name__} was raised while running the command. Its message is not shown "

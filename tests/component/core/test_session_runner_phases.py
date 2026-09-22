@@ -35,9 +35,10 @@ from structlog.testing import capture_logs
 from src.config import IBKRSettings
 from src.core.live_account_gate import verify_connected_account
 from src.core.live_cache import RedisUnreachableError
-from src.core.live_check import BrokerUnreachableError
+from src.core.live_check import BrokerUnreachableError, InvalidCheckWindowError
 from src.core.live_gate import GateDecision, GateMode, GateRefusalReason, build_refusal
-from src.core.live_node_builder import GateRefusedError
+from src.core.live_market_data import LiveMarketDataError
+from src.core.live_node_builder import GateRefusedError, LiveNodeConfigError
 from src.core.live_session_node import (
     DEFAULT_SESSION_CONNECT_TIMEOUT_SECONDS,
     SESSION_CONNECTION_ATTEMPTS,
@@ -45,6 +46,7 @@ from src.core.live_session_node import (
 )
 from src.core.live_session_phases import PHASE_SEQUENCE
 from src.core.live_session_runner import LiveSessionRunner
+from src.core.live_strategy_guard import NoStrategyStartedError
 from src.models.session import SessionSpec, StrategySpec
 from tests.component.doubles import TestIBAccountsClient, TestLiveNode
 
@@ -1107,7 +1109,6 @@ class TestStrategyMaterialisation:
 
     def test_a_two_bar_type_strategy_is_refused_at_gate_static(self, registered_accounts):
         """*Judgment call #4* — before any socket opens, and naming the strategy."""
-        from src.core.live_market_data import LiveMarketDataError
 
         settings = _settings()
         registered_accounts(settings)
@@ -1467,34 +1468,11 @@ class TestBeingReclaimedOutFromUnderYourself:
 
 
 class TestStoryTwoFiveExceptionNameCoupling:
-    """``live_check`` keys its exit-code map on class **names**; pin the four
-    Story 2.5 added, the way ``test_live_check_driver.py`` pins Story 1.7's.
-
-    Without this a rename silently reclassifies a session-state conflict as a
-    generic error and drops its message — and the message is the whole point of
-    having added the name.
+    """``live_check.classify_failure`` reads each real class's own
+    ``exit_outcome`` marker (D3) — no name pin needed any more: a rename
+    cannot desynchronise a class attribute from itself. The two behavioural
+    tests below are the contract that must keep passing regardless.
     """
-
-    @pytest.mark.parametrize(
-        ("klass", "expected_name"),
-        [
-            (RedisUnreachableError, "RedisUnreachableError"),
-            (
-                pytest.importorskip("src.db.exceptions").InvalidSessionTransition,
-                "InvalidSessionTransition",
-            ),
-            (
-                pytest.importorskip("src.db.exceptions").RecordNotFoundError,
-                "RecordNotFoundError",
-            ),
-            (
-                pytest.importorskip("src.core.live_session_record").SessionReclaimedError,
-                "SessionReclaimedError",
-            ),
-        ],
-    )
-    def test_the_real_class_still_carries_the_name_the_map_uses(self, klass, expected_name):
-        assert klass.__name__ == expected_name
 
     @pytest.mark.parametrize(
         ("klass", "expected_code"),
@@ -1502,11 +1480,21 @@ class TestStoryTwoFiveExceptionNameCoupling:
             (RedisUnreachableError, 1),
             (pytest.importorskip("src.db.exceptions").InvalidSessionTransition, 1),
             (pytest.importorskip("src.db.exceptions").RecordNotFoundError, 1),
+            (LiveNodeConfigError, 1),
+            (LiveMarketDataError, 1),
+            (InvalidCheckWindowError, 1),
+            (NoStrategyStartedError, 1),
+            (pytest.importorskip("src.core.live_session_record").SessionReclaimedError, 1),
             (GateRefusedError, 3),
             (BrokerUnreachableError, 4),
         ],
     )
     def test_the_real_class_maps_to_the_documented_exit_code(self, klass, expected_code):
+        """D3's acceptance criterion: every row of the ruling's table asserted
+        on the **real** class, not a stand-in — the unit-tier suite covers the
+        mechanism with stand-ins; this covers that the actual production
+        classes carry the markers the table promises.
+        """
         from src.core.live_check import EXIT_CODES, classify_failure
 
         if klass is GateRefusedError:

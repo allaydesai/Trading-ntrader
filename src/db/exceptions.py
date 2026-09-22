@@ -5,6 +5,10 @@ This module defines a hierarchy of exceptions for handling various error
 conditions in backtest persistence and retrieval.
 """
 
+from typing import ClassVar
+
+from src.core.exit_outcome import LiveCheckOutcome
+
 
 class BacktestStorageError(Exception):
     """
@@ -63,7 +67,8 @@ class RecordNotFoundError(BacktestStorageError):
         - No records match query filters
     """
 
-    pass
+    exit_outcome: ClassVar[LiveCheckOutcome] = LiveCheckOutcome.CONFIG_ERROR
+    operator_safe_message: ClassVar[bool] = True
 
 
 class InstrumentMappingError(Exception):
@@ -84,4 +89,5 @@ class InvalidSessionTransition(BacktestStorageError):
           process appears to be live on it.
     """
 
-    pass
+    exit_outcome: ClassVar[LiveCheckOutcome] = LiveCheckOutcome.CONFIG_ERROR
+    operator_safe_message: ClassVar[bool] = True

@@ -31,7 +31,9 @@ here.
 """
 
 from datetime import datetime
-from typing import Protocol, runtime_checkable
+from typing import ClassVar, Protocol, runtime_checkable
+
+from src.core.exit_outcome import LiveCheckOutcome
 
 
 class SessionReclaimedError(Exception):
@@ -58,6 +60,9 @@ class SessionReclaimedError(Exception):
     raised from; it is not a cure for a write that never reaches the
     database at all (an order-path epoch check remains Story 4.3's, per D-C).
     """
+
+    exit_outcome: ClassVar[LiveCheckOutcome] = LiveCheckOutcome.ERROR
+    operator_safe_message: ClassVar[bool] = True
 
 
 @runtime_checkable
