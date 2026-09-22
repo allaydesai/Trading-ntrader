@@ -960,7 +960,11 @@ Three adversarial layers produced 40 raw findings; 10 independent skeptics refut
 14. No critical, high or medium finding survived verification. The three items below are real but
 were judged not actionable inside this story.
 
-- **Both new repository classes have zero CI-gating test coverage.** Every test of
+- ~~**Both new repository classes have zero CI-gating test coverage.**~~ — **RESOLVED by D2
+  (Epic 4 pre-work), 2026-09-22.** `.github/workflows/ci.yml` no longer `--ignore`s
+  `tests/integration/db` on either job; both a Postgres service and `alembic upgrade head` were
+  already provisioned, so `TradingSessionRepository`/`SyncTradingSessionRepository`'s tests now gate
+  every PR. The original text follows, for the reasoning that led here. Every test of
   `TradingSessionRepository` and `SyncTradingSessionRepository` lives in `tests/integration/db/`,
   which `.github/workflows/ci.yml` `--ignore`s on *both* the integration job (:168) and the coverage
   job (:238); the unit-tier CLI tests replace `SyncTradingSessionRepository` with a `MagicMock`, so
@@ -1025,8 +1029,10 @@ answer; it stays open, re-pointed at Story 2.8.
   from: story-2.2").** Untouched — no spec is constructed anywhere in `session_service.py`.
   Re-pointed at Story 2.4 by Story 2.2; unchanged here.
 
-- **Both trading-session repositories still have zero CI-gating coverage (deferred-work.md,
-  "Deferred from: code review of story-2.2").** This story adds one unit-tier structural guard
+- ~~**Both trading-session repositories still have zero CI-gating coverage (deferred-work.md,
+  "Deferred from: code review of story-2.2").**~~ — **RESOLVED by D2 (Epic 4 pre-work),
+  2026-09-22.** `tests/integration/db/test_session_service.py`'s `for_update` concurrency proof now
+  runs in CI, not just locally. Original text follows. This story adds one unit-tier structural guard
   (`test_find_by_session_id_can_lock_the_row_for_update`) for the new `for_update` read, which
   narrows the gap slightly but does not close it — the behavioural proof of `for_update` under real
   concurrency still lives only in `tests/integration/db/test_session_service.py`, which CI
@@ -1133,13 +1139,15 @@ deferred. The five items below were deferred.
   gets stopped or sealed, resolving to the wrong session silently is a real hazard. Either test the
   precedence explicitly or reject UUID-shaped `--name` values at creation.
 
-- **Both trading-session repositories still have zero CI-gating coverage.** Carried forward from
-  the story-2.2 code review, and now load-bearing: `tests/integration/db/` is `--ignore`d by CI
-  (`ci.yml:168`, `:238`), so AC #6's only behavioural evidence — the two-connection reclaim race —
-  never gates a PR. Story 2.3 adds one unit-tier structural guard for the `for_update` read, which
-  narrows the gap but does not close it. The code review also found that the race test as written
-  could not have caught the Critical defect anyway, because its loser uses a fresh `Session` whose
-  identity map has never seen the row. Owner stays the Epic 2 retro.
+- ~~**Both trading-session repositories still have zero CI-gating coverage.**~~ — **RESOLVED by D2
+  (Epic 4 pre-work), 2026-09-22.** The two-connection reclaim race in AC #6 now gates every PR via
+  the same `tests/integration/db/` directory, no longer `--ignore`d. Original text follows. Carried
+  forward from the story-2.2 code review, and now load-bearing: `tests/integration/db/` is
+  `--ignore`d by CI (`ci.yml:168`, `:238`), so AC #6's only behavioural evidence — the two-connection
+  reclaim race — never gates a PR. Story 2.3 adds one unit-tier structural guard for the `for_update`
+  read, which narrows the gap but does not close it. The code review also found that the race test as
+  written could not have caught the Critical defect anyway, because its loser uses a fresh `Session`
+  whose identity map has never seen the row. Owner stays the Epic 2 retro.
 
 ## Deferred from: story-2.4 (2026-08-19)
 
@@ -1549,29 +1557,33 @@ with updated notes. The items below are new.
   the Redis namespace genuinely unchanged — remains unverified. **Action:** run P7 once with a
   position open and once without, per its own preconditions, and record both.
 
-- **`tests/integration/db/test_session_stop_start_cycles.py` is not CI-gated**, for the same
-  structural reason every file in that directory is not: no `__init__.py`, `--ignore`d by both the
-  integration job and `coverage-report` (`ci.yml:168`, `:238`). It is evidence, not a gate — the
-  same posture `test_session_service.py` beside it already documents. Not a new gap; recorded so
-  Story 2.6's identity claim (AC #5) is not mistaken for CI-enforced.
+- ~~**`tests/integration/db/test_session_stop_start_cycles.py` is not CI-gated**~~ — **RESOLVED by
+  D2 (Epic 4 pre-work), 2026-09-22.** Story 2.6's identity claim (AC #5) is now CI-enforced, not
+  just evidenced. Original text follows, for the same structural reason every file in that
+  directory is not: no `__init__.py`, `--ignore`d by both the integration job and
+  `coverage-report` (`ci.yml:168`, `:238`). It is evidence, not a gate — the same posture
+  `test_session_service.py` beside it already documents. Not a new gap; recorded so Story 2.6's
+  identity claim (AC #5) is not mistaken for CI-enforced.
 
-- **Story 2.8's `trade_counts_by_session` tests are not CI-gated either, for the same reason
-  (fifth entry).** The typed-key join proof (AC #8: closed/open counts, the join-on-UUID mutation
-  check) and the `create → status → list` round trip (`test_live_status_e2e.py`) both live in
-  `tests/integration/db/`, which `--ignore`s the same way every sibling in this thread does. The
-  behavioural gap is narrower than it looks: `tests/unit/cli/commands/test_live_status_cli.py`
-  mocks the repository and carries the gated coverage for `status`/`list`'s own wiring (option
-  surface, exit codes, `--json` shape, AR36 vocabulary), and
-  `tests/unit/db/test_trading_session_repository_shape.py` gates the capability-set and
-  deterministic-ordering guards. What stays uncovered on a PR is specifically the SQL itself —
-  the `LEFT OUTER JOIN`/`FILTER` phantom-row bug this story's own TDD cycle caught (a session with
-  zero trades counted itself as one open position until the aggregate was rewritten to
-  `count(Trade.id).filter(...)` instead of `count(case(...))`) is exactly the class of defect this
-  gap would let back in silently. **Action, still the Epic 2 retro's to decide:** the two options
-  named in the first entry above (component-tier repository tests against in-memory SQLite, or
-  stop `--ignore`ing this directory with a CI Postgres service) apply unchanged; five stories
-  independently hitting the same `--ignore` is the strongest signal yet that the root cause, not
-  another workaround, is what the retro should spend its time on.
+- ~~**Story 2.8's `trade_counts_by_session` tests are not CI-gated either, for the same reason
+  (fifth entry).**~~ — **RESOLVED by D2 (Epic 4 pre-work), 2026-09-22.** The `LEFT OUTER
+  JOIN`/`FILTER` phantom-row class of defect this entry worried about is now caught by CI, not just
+  locally. Original text follows. The typed-key join proof (AC #8: closed/open counts, the
+  join-on-UUID mutation check) and the `create → status → list` round trip
+  (`test_live_status_e2e.py`) both live in `tests/integration/db/`, which `--ignore`s the same way
+  every sibling in this thread does. The behavioural gap is narrower than it looks:
+  `tests/unit/cli/commands/test_live_status_cli.py` mocks the repository and carries the gated
+  coverage for `status`/`list`'s own wiring (option surface, exit codes, `--json` shape, AR36
+  vocabulary), and `tests/unit/db/test_trading_session_repository_shape.py` gates the
+  capability-set and deterministic-ordering guards. What stays uncovered on a PR is specifically
+  the SQL itself — the `LEFT OUTER JOIN`/`FILTER` phantom-row bug this story's own TDD cycle caught
+  (a session with zero trades counted itself as one open position until the aggregate was rewritten
+  to `count(Trade.id).filter(...)` instead of `count(case(...))`) is exactly the class of defect
+  this gap would let back in silently. **Action, still the Epic 2 retro's to decide:** the two
+  options named in the first entry above (component-tier repository tests against in-memory
+  SQLite, or stop `--ignore`ing this directory with a CI Postgres service) apply unchanged; five
+  stories independently hitting the same `--ignore` is the strongest signal yet that the root
+  cause, not another workaround, is what the retro should spend its time on.
 
 ---
 
@@ -2088,7 +2100,7 @@ already been re-argued between three and five times. Every recommendation was ac
 | # | Item | Deferrals | **Ruling** | Implementation |
 |---|---|---|---|---|
 | **D1** | Owner/epoch **fencing column** on `trading_sessions` | **5** | **Story 3.6** — the first story owning a `SessionRecordPort` write. Epic 2 never had a legitimate owner (2.8, the natural candidate, was the phase's one pure reader). | ✅ Written into `epics.md` under Story 3.6, with the hazard, the two folded-in findings (post-`stopped` heartbeat write; `SessionReclaimedError` non-fatal on the bar path) and the retired cost argument |
-| **D2** | CI `--ignore=tests/integration/db` | **5** | **Drop the `--ignore`, add a Postgres service.** The SQLite component route cannot exercise the SQL that actually broke — the tables use `JSONB`, `PG_UUID`, `sa.Enum`. | ⏳ `.github/workflows/ci.yml` (both the integration job and `coverage-report`) — **not yet made** |
+| **D2** | CI `--ignore=tests/integration/db` | **5** | **Drop the `--ignore`, add a Postgres service.** The SQLite component route cannot exercise the SQL that actually broke — the tables use `JSONB`, `PG_UUID`, `sa.Enum`. | ✅ Landed in the Epic 4 pre-work (2026-09-22): both `--ignore=tests/integration/db` lines removed from `.github/workflows/ci.yml`; `tests/integration/db/__init__.py` added (fixes the `test_session_service.py` basename collision with `tests/unit/services/`); the availability skip now raises loudly under `CI=true` instead of skipping silently. Also fixed in the same commit: `is_postgres_available()` and `test_db_schema`'s setup/cleanup called `asyncio.run()`, whose teardown unregisters the thread's current event loop — harmless while `--ignore`d, but once this directory's `conftest.py` imports inside a shared `pytest-xdist` worker, it broke `asyncio.get_event_loop()` in unrelated component tests scheduled to the same worker (`test_live_order_recovery.py`, 2 tests) later in the same run. All three call sites now run on a scratch loop that never touches the thread's global event-loop state. |
 | **D3** | AR28 exit-code **marker protocol** | **4** | **`exit_outcome` marker attribute, now**, before a sixth hand-maintained string. | ⏳ `src/core/live_check.py` — **not yet built**. Must fix the `sqlalchemy.exc.TimeoutError` → exit 4 collision and change no already-documented exit code |
 | **D4** | What the size caps mean | — | **Keep them, measure on executable statements**, enforce with a unit-tier AST guard in the AR37 shape + a sanctioned-exception allowlist. | ◑ `CLAUDE.md` wording updated; the **AST guard is not yet written**. Its allowlist starts with Epic 2's six over-cap files |
 | **D5** | Should an all-strategies-failed session stop? | — | **Leave as-is.** `session.all_strategies_failed` + `runtime_flags.all_failed` make it visible and 2.8 renders it `degraded`. | ✅ Closed on its merits — no change. Revisit only if observed in practice |
@@ -2665,13 +2677,14 @@ at 200s with zero orders), `logs/p10-fresh-leg1-*.log` and `logs/p10-fresh-leg2-
   kill, but that kill was never confirmed this session. **Owner: whoever next touches this
   story's production code** — run the named mutation against the named test before trusting that
   test's sensitivity, since it has not been independently confirmed.
-- **`tests/integration/db/` is still `--ignore`d in CI (D2 not landed)**, unchanged by this story
-  — every Postgres-backed proof this story added (14 in `test_trading_session_repository.py`, 6 in
-  the new `test_trade_record.py`, 2 in `test_session_service.py`, 4 in `test_migration_schema.py`)
-  runs locally only. The unit-tier shape pins (`EXPECTED_CAPABILITIES`, the migration text/ORM
-  pins) are what actually gate a PR today. **Owner: D2's own story**, whichever one lands it —
-  already named in prior stories' deferred-work entries, repeated here for this story's own
-  Postgres-backed test count.
+- ~~**`tests/integration/db/` is still `--ignore`d in CI (D2 not landed)**~~ — **RESOLVED by D2
+  (Epic 4 pre-work), 2026-09-22.** All 14+6+2+4 Postgres-backed proofs this story added now run in
+  CI. Original text follows, unchanged by this story — every Postgres-backed proof this story added
+  (14 in `test_trading_session_repository.py`, 6 in the new `test_trade_record.py`, 2 in
+  `test_session_service.py`, 4 in `test_migration_schema.py`) runs locally only. The unit-tier shape
+  pins (`EXPECTED_CAPABILITIES`, the migration text/ORM pins) are what actually gate a PR today.
+  **Owner: D2's own story**, whichever one lands it — already named in prior stories' deferred-work
+  entries, repeated here for this story's own Postgres-backed test count.
 
 ## Deferred from: code review of story-3.6 (2026-09-12)
 
@@ -2707,10 +2720,12 @@ at 200s with zero orders), `logs/p10-fresh-leg1-*.log` and `logs/p10-fresh-leg2-
   the ORM model (`src/db/models/trade.py:162-168`). A writer that populates `client_order_id`
   "honestly" breaks per-round-trip uniqueness under NETTING. **Owner:** whoever revisits the
   backtest-parity column mapping.
-- **Migration unit tests are substring greps** (`tests/unit/db/test_migration_owner_epoch.py:52-68`)
-  that match the migration's own docstring; only the ordering test inspects structure. Same
-  pattern as Story 2.7's; the integration `migrated` fixture is the real proof and runs locally
-  only (D2). **Owner:** D2's story, when `tests/integration/db/` lands in CI.
+- ~~**Migration unit tests are substring greps**~~ (`tests/unit/db/test_migration_owner_epoch.py:52-68`)
+  — **RESOLVED by D2 (Epic 4 pre-work), 2026-09-22.** The integration `migrated` fixture this entry
+  calls "the real proof" now runs in CI. Original text follows: that match the migration's own
+  docstring; only the ordering test inspects structure. Same pattern as Story 2.7's; the integration
+  `migrated` fixture is the real proof and runs locally only (D2). **Owner:** D2's story, when
+  `tests/integration/db/` lands in CI.
 - **`src/cli/commands/live.py` grew +18 raw against the story's ≤8-line budget** — the third
   size overage of Story 3.6, disclosed by code review rather than by the Dev Agent Record (which
   had read the budget as `start()`'s body). The file was already the phase's sanctioned over-cap
@@ -2902,3 +2917,26 @@ explicitly routed to this retrospective by name; both are now ruled by Allay.
 - All other Epic-3-relevant entries above remain open and travel forward into Epic 4 per their
   existing "Owner" notes; the retrospective's own action-item list (process, technical debt,
   documentation) is in the retro document itself rather than duplicated here.
+
+## Dispositions from the Epic 4 pre-work (2026-09-22)
+
+Four items from `_bmad-output/implementation-artifacts/epic4-prework-spec.md` (Epic 3 retro action
+items 2, 3, 4, 7 — D2/D3/D4 ruled at the Epic 2 retro, 2026-08-28), landed as operator commits on
+`015-paper-trading` before the Epic 4 harness worktree branched off. Each disposition is struck in
+place above; this heading records the closing summary per item.
+
+- **D2 — CI stops `--ignore`-ing `tests/integration/db`.** Landed. Both `--ignore` lines removed
+  from `.github/workflows/ci.yml`; `tests/integration/db/__init__.py` added; the availability skip
+  raises loudly under `CI=true`. The seven "not CI-gated" entries this closes are struck above
+  (story-2.2 code review, story-2.3 ×2, story-2.6, story-2.8, story-3.6 ×2), plus the D2 row in the
+  Epic 2 retro's decision table. **Found and fixed in the same commit, not in the original spec:**
+  `is_postgres_available()` and `test_db_schema`'s setup/cleanup used `asyncio.run()`, whose
+  teardown calls `asyncio.set_event_loop(None)` — invisible while the directory was `--ignore`d,
+  but once `conftest.py` imports inside a shared `pytest-xdist` worker, that teardown broke
+  `asyncio.get_event_loop()` in whichever unrelated test ran next in the same worker
+  (`tests/component/core/test_live_order_recovery.py`, 2 tests, confirmed reproducible only with
+  `tests/integration/db` included in the run). Fixed by running all three call sites on a scratch
+  loop (`_run_isolated`) that never registers itself as the thread's current loop. Full gate green:
+  `ruff check`, `make typecheck`, `make test-unit`, `make test-component`, `make test-integration`,
+  and the coverage-report job's exact local command
+  (`pytest tests/ -n auto --cov=src --cov-fail-under=64 -q`, 4704 passed).
