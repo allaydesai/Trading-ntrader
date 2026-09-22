@@ -2619,7 +2619,7 @@ development_status:
   4-1-read-the-brokers-authoritative-view-of-positions-and-cash: backlog
   4-2-reconcile-against-the-broker-before-any-strategy-trades: backlog
   4-3-keep-runtime-state-aligned-with-the-broker: backlog
-  4-4-warm-indicators-from-history-before-the-live-stream-starts: backlog
+  4-4-warm-indicators-from-history-before-the-live-stream-starts: done
   4-5-resume-a-strategy-mid-position: backlog
   4-6-check-positions-and-cash-against-ibkr-on-demand: backlog
   4-7-absorb-corporate-actions-through-broker-authoritative-state: backlog

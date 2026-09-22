@@ -72,6 +72,11 @@ NODE_FACING_MODULES = (
     # Added in the commit that created the module, because this list is
     # hand-maintained and an omission is invisible (CLAUDE.md, Anti-Patterns).
     "src/core/live_order_rejections.py",
+    # Story 4.4. The warm-up watch's wrapped callback runs inline inside the
+    # history response dispatch (`Actor._finish_response`, on
+    # `LiveDataEngine`'s response queue), where a raise shuts the whole node
+    # down — the same shape as the three above. Added in the creating commit.
+    "src/core/live_session_warmup.py",
     "src/services/session_record.py",
     "src/services/session_service.py",
 )

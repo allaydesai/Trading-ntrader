@@ -1627,3 +1627,101 @@ session: p13-<date> (<uuid>)
 | ---- | -------- | ------ | ----- |
 | 2026-09-22 | Allay (Claude Code session) | ✅ **pass — all seven criteria met live** | Run inside RTH (Tuesday, 09:37–09:44 ET / 13:37–13:44Z). Preflight: Gateway paper port 4002 open only (4001/7496/7497 closed); Redis and Postgres up; `alembic current` = `85c949ac0374` before **and** after (no migration); no other live session running; `risk/engine.pyx:652` re-measured unchanged (`if account.is_margin_account: return True`). Fresh session `p13-0922` (`session_id=44c0b4df-da9d-465c-8312-2802daae57aa`, `trader_id=PAPER-44c0b4df`), same recipe as drafted. `BuyingPower` read from the first `ExecClient-INTERACTIVE_BROKERS` line = **108,490.67 USD** (P12-era measurement was 108,475.14) — comfortably below the ~$500k order size, so nothing filled. **Criterion 1** — first `order.rejected` at 13:41:05.567Z, non-empty `venue_reason`, not `UNKNOWN`, `reconciliation` absent from the event and confirmed `false` in the DB row; the adapter's own line names the code: `[ERROR] ... Order rejected - reason:...margin requirements... (code: 201, req_id=109)` — the predicted 201, no fact-5 caveat (`Unhandled order warning or error code` never appears). **Criterion 2** — the next crossover's `order.submitted` (`...-000-2`) fired at 13:42:05.525Z, after the first rejection; the session kept heartbeating and kept submitting through four crossovers (all rejected, none denied) until the operator's SIGINT — it never stopped itself. **Criterion 3** — zero `order.rejection_tally_failed`, zero `order.observer_failed`, zero `strategy.failed`, zero `session.rejection_record_failed` anywhere in the transcript. **Criterion 4** — from a second terminal after the second rejection, `live status p13-0922` read `health: degraded` with the refusal block (`2 rejected` at that point, `4 rejected` by the time of the later checks — the criterion allows "or more"), `first_at`/most-recent timestamp, instrument and `client_order_id` populated; `live list` showed `degraded` in the Health column with no reason text; `live status --json \| jq keys` is exactly the seven AR29 keys with `"health": "degraded"` (operational note: the CLI's `logging_configured` line also goes to stdout ahead of the JSON, so `grep '^{'` is needed before piping to `jq` non-interactively). **Criterion 5** — `psql`'s `runtime_flags->'order_rejections'` matched the transcript exactly (`rejected: 4, consecutive: 4, reconciliation: false`, last `client_order_id=...-000-4`) both before and after a clean `SIGINT`; the block survived the stop (`live status` post-stop read `state: stopped, health: stopped` with the same 4-rejection block still rendered). **Criterion 6** — `SELECT count(*) FROM trades ...` = 0 before and after the stop; `live status` read `closed trades: 0, open positions: 0` throughout. **Criterion 7** — `grep -c -E "162\|10182\|366"` inspected first, D6 rule: 1 hit before trading began (`...T13:37:17.408162000Z`, a timestamp digit, not a code), 3 total by the end, the extra two from the controlled-teardown line `Historical Market Data Service error message:API historical data query cancelled: 10005 (code: 162, req_id=10005)` plus its `Unhandled error: 162` echo — the same benign shutdown pattern P12's row documents (message text is a cancelled historical-data query on unsubscribe, not a duplicate-session signal); zero `superseded`/`different IP address` anywhere. `net_position=0` at the end, nothing left open at the broker. Story 3.7 can move from `review` to `done`. Log: `logs/p13-0922.log`. |
 | — | — | ⛔ *(superseded by the row above)* | Written and first attempted 2026-09-21. **Gateway check, recorded rather than assumed**: at 15:56 ET (Monday, still inside RTH) ports 4001, 4002, 7496 and 7497 were all closed — no Gateway or TWS running — with ~4 minutes of RTH left, so the two crossovers this recipe needs could not have completed even had one been started. The story therefore went to `review`, not `done` — the standing Epic 2 retro rule (3.2–3.6 precedent). |
+
+## Procedure P14: a restarted session is warm before its first live bar
+
+**Introduced by**: Story 4.4 — Warm Indicators from History Before the Live Stream Starts
+**Verifies**: AC #4 live (every registered indicator initialised at the first live bar, and
+`warmup.completed` logged before any bar reaches the strategy), AC #5 live (the history request's
+duration string and the absence of an IB pacing error), AC #6 live (the 09:25 ET variant is
+subscribed and trading by 09:30), and AC #7's absence case (zero `warmup.failed` on a healthy run).
+
+> **Numbering note.** Epic 4's stories are implemented in parallel worktrees. If another Epic 4
+> story also appended a "Procedure P14", the integrator renumbers one of them; the content of this
+> section does not depend on its number.
+
+### What it does — and does not — do
+
+A normal `live start` of `sma_crossover`. On start, the strategy registers its two SMAs, asks IBKR
+for history (`request_bars`), and subscribes to live bars only from that request's callback. The
+runner's warm-up watch logs `warmup.completed` inside the callback, *before* the strategy's own
+code subscribes, so the record necessarily precedes every live bar — this run is evidence that the
+shape holds against the real adapter, not that the ordering is timing-dependent.
+
+What this run is **not** evidence for, stated rather than left implicit: backtest parity (AC #3 —
+integration tier, `tests/integration/core/test_warmup_backtest_parity.py`, fill lists byte-identical
+to the pre-change code); the never-answering history request (AC #7's contained path — component
+tier; staging a real IB failure means provoking a pacing violation or a competing login, which is
+the NFR6/D6 hazard this file exists to avoid); `momentum` (the paper account has no business
+running its default `trade_size` of 1,000,000 shares — see `deferred-work.md`, story-4.4).
+
+### Preconditions
+
+- Inside RTH for the main run (live bars arrive only in RTH, `ibkr_use_rth=True`); the NFR3
+  variant starts at **09:25 ET**.
+- The bare non-compose paper Gateway, **no other IBKR login** (error 162); Redis and Postgres up;
+  `uv run alembic current` unchanged (this story adds no migration).
+- A **fresh session name**. Paper orders may result from a crossover — the P10–P13 precedent;
+  `flatten_position.py --confirm` works again as of the Epic 4 pre-work if a position is left open.
+- Run the `live_bars_probe.py` preflight first (P11/P12's standing rule): 3 bars, zero
+  competing-login text.
+
+### Command
+
+```bash
+uv run python -m src.cli.main live create --name p14-<date> \
+  --strategy sma_crossover \
+  --bar-type NVDA.NASDAQ-1-MINUTE-LAST-EXTERNAL \
+  --param fast_period=10 --param slow_period=20
+
+uv run python -m src.cli.main live start p14-<date> > logs/p14-<date>.log 2>&1 &
+
+# D6's standing rule — inspected BEFORE anything else is recorded. An IB historical pacing
+# violation also surfaces as code 162 ("Historical Market Data Service error message").
+grep -c -E "162|10182|366" logs/p14-<date>.log
+
+# The history request as the data client logs it at INFO: `Request <bar_type> bars <start> to
+# <end>` (`live/data_client.py:858-864`). The adapter derives IB's duration string from that range
+# (`timedelta_to_duration_str`), which it logs only at DEBUG.
+grep -n "Request NVDA.NASDAQ-1-MINUTE-LAST-EXTERNAL bars" logs/p14-<date>.log
+
+# The milestone, its fields, and its position relative to the first bar and session.started.
+grep -n "warmup\.\|session.started\|session.phase" logs/p14-<date>.log
+grep -n -m1 "Bar(NVDA\|bar.received\|last_bar_at" logs/p14-<date>.log
+
+# Then SIGINT the run.
+kill -INT "$(pgrep -f 'live start p14-<date>')"
+```
+
+For the NFR3 variant, start the same command (fresh name, `p14-open-<date>`) at 09:25 ET and read
+the `session.started` timestamp and the first `order.*`/bar record against 09:30:00 ET.
+
+### Pass criteria
+
+1. **D6's grep inspected first**; every hit explained (timestamp digits, or the benign teardown
+   `query cancelled (code: 162)` P12/P13 document). **No** pacing-violation text.
+2. **The history request spans whole days** — the `Request … bars` range is at least one day
+   (five, for this recipe), so the adapter sends `N D`/`N W`, never `N S` — AC #5, D-H.
+3. **Exactly one `warmup.completed`** for `sma_crossover`, at `info` level, with
+   `indicators_initialized=true`, `not_initialized=[]`, a plausible `elapsed_ms` (record it), and
+   `requested_from` about five calendar days before the start — AC #4.
+4. **Order of records:** `phase=warmup status=ok` → `warmup.completed` → `session.started` → the
+   first live bar — AC #4's "logged before the first bar was processed", and D-B's
+   "`session.started` only after warm-up".
+5. **Zero `warmup.failed`, zero `warmup.discarded`, zero `strategy.start_failed`** — AC #7's absence
+   case.
+6. *(NFR3 variant only)* `session.started` before **09:30:00 ET**, and the strategy's first bar is
+   the 09:30 bar — AC #6.
+7. **Informational, not pass/fail — the history/live seam** (code review 2026-09-22, deferred to
+   Story 4.5). Record the last history bar's close (`requested_from` + the window, or the
+   `Received <Bar[N]>` line) and the strategy's first live bar's `ts_event`. Exactly one bar step
+   apart is the clean case; two steps is a **gap** (a bar closed while the request was in flight
+   and was published before the strategy subscribed); zero is a **duplicate** (a bar already in
+   the history was published after it subscribed, and was fed to the SMAs twice). Either reading
+   is expected occasionally — record which one this run shows.
+
+### Result log
+
+| Date | Operator | Result | Notes |
+| ---- | -------- | ------ | ----- |
+| 2026-09-22 | Story 4.4 dev session | ⏳ **defined, not run** | Gateway check recorded rather than assumed: at 16:39 ET (Tuesday, after the RTH close) ports 4001, 4002, 7496 and 7497 were all closed — no Gateway or TWS running; Redis (6379) and Postgres (5432) were up. No live bar can arrive outside RTH in any case. Informational evidence only, never a gate for this story; the broker-double proofs are `test_strategy_warmup_engine.py` (real `DataEngine`, AC #4), `test_session_runner_warmup.py` (runner, AC #7) and `test_warmup_backtest_parity.py` (AC #3). |

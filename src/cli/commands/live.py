@@ -358,7 +358,8 @@ def start(session: str, connect_timeout: float) -> None:
     Startup runs in this order, each phase logging `phase=<name> status=...`:
       gate:static -> node:build -> node:connect -> gate:account
       -> reconcile -> warmup -> subscribe -> trading
-    `reconcile` and `warmup` are no-op placeholders until Epic 4.
+    `reconcile` is a no-op placeholder until Epic 4. Each strategy warms its
+    indicators from history as it starts, before it subscribes to live bars.
 
     \b
     Exit codes:

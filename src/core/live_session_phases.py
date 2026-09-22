@@ -22,9 +22,12 @@ here at all — it imports ``nautilus_trader`` at its line 18 — which is why
 rather than shared by import.
 
 Known, accepted limit: this module logs *that* a phase started and how it
-ended. It makes no claim about what the phase did. ``reconcile`` and ``warmup``
-are no-op placeholders in Epic 2 and log ``ok`` having done nothing at all — a
-clean phase log is not evidence that reconciliation happened.
+ended. It makes no claim about what the phase did. ``reconcile`` is a no-op
+placeholder in Epic 2 and logs ``ok`` having done nothing at all — a clean
+phase log is not evidence that reconciliation happened. ``warmup``'s ``ok``
+(Story 4.4) means the runner's warm-up watch is armed, not that anything is
+warm: strategies warm in their own ``on_start`` during ``trading``, and
+``warmup.completed`` is the record that says so.
 """
 
 from collections.abc import Iterator

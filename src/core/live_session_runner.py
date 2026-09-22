@@ -14,8 +14,10 @@ static gate (``live_check``) or the account gate (``live_account_gate``) — eac
 of which logs its own half of the phase it owns — the database
 (``src/services/session_record.py``, reached only through AR32's port), the
 stop-signal *policy* (``live_session_signals`` — Judgment call #8), strategy-
-failure containment (Story 2.7), ``status``/``list`` (Story 2.8), reconcile and
-warm-up (Epic 4, no-op placeholders here), or orders and trades (Epic 3).
+failure containment (Story 2.7), ``status``/``list`` (Story 2.8), reconcile
+(Epic 4, a no-op placeholder here), the warm-up itself (each strategy's own
+``on_start``; the runner only arms and waits on ``live_session_warmup`` —
+Story 4.4), or orders and trades (Epic 3).
 
 **No SQLAlchemy, ever** (AR38). The runner holds a ``SessionRecordPort``, never
 a session, a repository or an engine. Kept true in both forms by an AST scan
@@ -118,6 +120,7 @@ from src.core.live_session_steady_state import (
     join_heartbeat,
     release_record,
 )
+from src.core.live_session_warmup import WarmupWatch, warmup_deadline_seconds
 from src.core.live_strategy_guard import (
     GUARD_FAILED_EVENT,
     NoStrategyStartedError,
@@ -235,6 +238,7 @@ class LiveSessionRunner:
         self._order_observer: OrderEventObserver | None = None
         self._trade_recorder: TradeRecorder | None = None
         self._rejection_tally: RejectionTally | None = None
+        self._warmup: WarmupWatch | None = None
         self._subscriptions: list[tuple[str, Any]] = []
         self._deadline, self._trader_started, self._ownership_lost = 0.0, False, False
         #: Set once teardown's own drain starts (review 2026-09-12): a reclaim
@@ -577,9 +581,24 @@ class LiveSessionRunner:
             pass
 
     def _phase_warmup(self) -> None:
-        """Epic 4. A no-op placeholder; nothing warmed."""
+        """Arm the warm-up watch (Story 4.4). Warms nothing, touches no node.
+
+        AR40 puts warm-up in each strategy's ``on_start``, which runs in
+        ``trading``, after this phase; AR39 forbids moving it. So this phase
+        only builds the :class:`~src.core.live_session_warmup.WarmupWatch` that
+        ``_start_strategy`` installs on every strategy and then waits on — the
+        warming itself is ``warmup.completed``'s to report, not this record's.
+        While it waits, the watch re-observes the connection once a second: an
+        earlier strategy is already live and may trade (NFR10), and the steady
+        state that normally does this is not running yet.
+        """
         with phase(self._log, "warmup"):
-            pass
+            self._warmup = WarmupWatch(
+                log=self._log,
+                deadline_seconds=warmup_deadline_seconds(self._settings),
+                stop_requested=self._stopping,
+                on_poll=self._observe_connection_once,
+            )
 
     def _phase_subscribe(self) -> None:
         """Register the bar observer and start watching the bus for bars."""
@@ -676,17 +695,22 @@ class LiveSessionRunner:
         """Materialise and start the strategies, then declare the trader started."""
         with phase(self._log, "trading"):
             assert self._node is not None
-            # A session reclaimed during the earlier phases must never trade.
-            if self._startup_heartbeat is not None and self._startup_heartbeat.reclaim is not None:
-                raise self._startup_heartbeat.reclaim
             self._guard.expect(len(self._spec.strategies))
             started = [spec for spec in self._spec.strategies if self._start_strategy(spec)]
+            # A session reclaimed during the earlier phases — or during a
+            # warm-up wait, which runs the loop for up to a deadline per
+            # strategy (code review 2026-09-22) — must never trade.
+            # `_start_strategy` refuses to start anything once `_stopping()`
+            # reads the reclaim, so checking after the loop is not late.
+            if self._startup_heartbeat is not None and self._startup_heartbeat.reclaim is not None:
+                raise self._startup_heartbeat.reclaim
             if not started:
                 names = ", ".join(s.strategy_id for s in self._spec.strategies)
                 raise NoStrategyStartedError(
                     "No strategy in this session started, so it cannot trade. Every "
-                    f"specification failed: {names}. See the `strategy.start_failed` records "
-                    "for each one's error and traceback."
+                    f"specification failed or was interrupted before it warmed: {names}. See "
+                    "the `strategy.start_failed` and `warmup.*` records, and whatever stopped "
+                    "the node, for each one's cause."
                 )
             self._trader_started = True
             self._log.info(
@@ -713,27 +737,46 @@ class LiveSessionRunner:
         ``install_order_path`` (Story 3.2) is wired here too, for the same
         reason: the strategy's own order-creating calls are plain instance
         attributes Nautilus reads directly, with no later re-binding to
-        intercept.
+        intercept. So is the warm-up watch (Story 4.4), which wraps
+        ``request_bars`` the same way, and then waits for the history the
+        strategy's ``on_start`` asked for — one strategy at a time, so at most
+        one warm-up request is ever in flight (NFR15). A warm-up that never
+        settles raises ``WarmupFailedError`` into the ``except`` below, which
+        contains it exactly as it contains a raising ``on_start``. An earlier
+        strategy is already live — it may trade — while a later one warms.
 
         Returns:
-            ``True`` when the strategy is live. ``False`` when it was contained
-            — the caller counts these, because a session where *none* returned
-            ``True`` cannot trade and must not report itself started.
+            ``True`` when the strategy is live and warm (or asked for no
+            history). ``False`` when it was contained, when its wait was ended
+            by a stop, a reclaim or the node's run task ending, or when one of
+            those came first and it was never started — the caller counts these,
+            because a session where *none* returned ``True`` cannot trade and
+            must not report itself started.
         """
+        if self._stopping():
+            return False
         strategy = None
         try:
             strategy = materialise_strategy(strategy_spec)
             self._guard.wrap(strategy, spec_strategy_id=strategy_spec.strategy_id)
-            assert self._monitor is not None
+            assert self._monitor is not None and self._warmup is not None
             install_order_path(strategy, self._monitor, self._log)
+            self._warmup.instrument(strategy, spec_strategy_id=strategy_spec.strategy_id)
             assert self._node is not None
             self._node.trader.add_strategy(strategy)
             self._node.trader.start_strategy(strategy.id)
-            return True
+            return self._warmup.settle_blocking(self._loop, strategy_spec.strategy_id)
         except Exception as exc:  # noqa: BLE001 - AC #5: one bad spec is not the session
             self._guard.record_start_failure(spec_strategy_id=strategy_spec.strategy_id, exc=exc)
             self._fault_quietly(strategy, strategy_spec.strategy_id)
             return False
+
+    def _stopping(self) -> bool:
+        """Whether startup must stop: a stop signal, a reclaim observed by the
+        startup heartbeat, or the node's run task having ended (Story 4.4)."""
+        heartbeat, task = self._startup_heartbeat, self._run_task
+        reclaimed = heartbeat is not None and heartbeat.reclaim is not None
+        return reclaimed or self._signals.requested or bool(task and task.done())
 
     def _fault_quietly(self, strategy: object | None, spec_strategy_id: str) -> None:
         """Isolate a strategy that failed to start. ``fault()``, not the others.
