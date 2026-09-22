@@ -2484,8 +2484,21 @@ at 200s with zero orders), `logs/p10-fresh-leg1-*.log` and `logs/p10-fresh-leg2-
   entry) and no re-audit of historical backtest PnL/trade-count numbers that used this strategy's
   reversal path was performed.
 
-- **`flatten_position.py --confirm` is broken again, by a different, unrelated mechanism than the
-  2026-09-01 incident.** The 2026-09-01 fix (commit `29e9130`) correctly stopped the strategy from
+- ~~**`flatten_position.py --confirm` is broken again, by a different, unrelated mechanism than
+  the 2026-09-01 incident.**~~ — **RESOLVED in the Epic 4 pre-work, 2026-09-22** (component-tier;
+  live paper verification still pending — see the disposition heading at the end of this file).
+  Both mechanisms are now satisfied at once: the strategy is constructed and added to
+  `node.trader` **before** `node.build()`/`run_async()` (so 1.220.0's `add_strategy`-on-a-RUNNING-
+  trader refusal never applies), and its `on_start()` does nothing (so `_trader.start()`'s
+  auto-start of every added strategy is inert). The only order-submitting method is
+  `_FlattenStrategy.submit_close`, callable from nowhere but `_run`, which calls it only after the
+  broker read, the offset check, and `--confirm`. `tests/component/scripts/test_flatten_position.py`
+  was rewritten around this property; both regression shapes were hand-verified to fail the new
+  suite before this note was written (the pre-fix "construct after `run_async()`" shape fails 7 of
+  11 tests, and a reintroduced order-submitting `on_start()` fails 10 of 11, including a new
+  AST-level scan that names the offending method directly). Original text follows for the
+  incident's forensic detail. The 2026-09-01 fix (commit `29e9130`) correctly stopped the strategy
+  from
   auto-starting before any check ran, by not constructing/adding it until after the broker read
   and the `--confirm` gate. That fix's assumption — that `node.trader.add_strategy()` can be
   called on the already-`RUNNING` trader `run_async()`/`kernel.start_async()` leaves behind, since
@@ -2940,3 +2953,23 @@ place above; this heading records the closing summary per item.
   `ruff check`, `make typecheck`, `make test-unit`, `make test-component`, `make test-integration`,
   and the coverage-report job's exact local command
   (`pytest tests/ -n auto --cov=src --cov-fail-under=64 -q`, 4704 passed).
+
+- **`flatten_position.py --confirm`** — restored, at the component tier. `_FlattenStrategy` is now
+  constructed and added to `node.trader` before `node.build()`/`run_async()`; its `on_start()` does
+  nothing; the only order-submitting method is `submit_close`, called by `_run` only after the
+  broker read, the offset check, and `--confirm`. `tests/component/scripts/test_flatten_position.py`
+  was rewritten around this property (11 tests): a fake `_Trader` mirrors 1.220.0's
+  `add_strategy`-refuses-on-RUNNING behaviour and drives `on_start()` from the fake node's
+  `run_async()`, exactly where the real kernel drives it, so either past regression shape fails the
+  suite — hand-verified both ways (not merely asserted) before this note was written. Strikes the
+  2026-09-11 "broken again, by a different mechanism" entry above.
+  **Live verification is NOT done** — the spec's own "Live verification (operator)" section
+  requires a real open paper position, which did not exist during this pre-work session. Still
+  outstanding, per the spec's own sequencing: (1) a dry run and a deliberately wrong-side run
+  against the live paper account, both expected to refuse with zero `order.submitted` in the log;
+  (2) the first time an Epic 4 procedure leaves a position open, close it with `--confirm` and
+  record the result in `docs/qa/phase3-live-verification.md`'s housekeeping notes; (3) only then
+  update that doc's three "Know before starting" notes (around lines 1298, 1387, 1493) that
+  currently say the tool is broken — left unchanged here because that claim should not flip to
+  "fixed" before a live broker actually proves it. **Owner: whoever runs the first Epic 4
+  procedure that leaves a position open.**

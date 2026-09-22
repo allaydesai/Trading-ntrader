@@ -18,6 +18,11 @@ logic. It is therefore built to be hard to misfire:
   The operator's ``--side``/``--quantity`` are a confirmation to be checked, not
   an instruction to be trusted.
 - Without ``--confirm`` it connects, reports, and submits nothing.
+- The registered strategy has exactly **one** submit path
+  (``_FlattenStrategy.submit_close``), it is not reachable from any Nautilus
+  lifecycle hook, and ``_run`` reaches it only after the broker read, the
+  offset check, and ``--confirm`` — see the two regression mechanisms
+  documented on ``_FlattenStrategy`` and in ``_run`` below.
 
 Usage:
     PYTHONPATH=. uv run python scripts/diagnostics/flatten_position.py \
@@ -59,32 +64,55 @@ class FlattenError(RuntimeError):
 
 
 class _FlattenStrategy(Strategy):
-    """Submit exactly one market order on start, then record what comes back.
+    """Registered before the trader starts; inert until ``submit_close`` is called.
 
     Deliberately defined here rather than under ``src/core/strategies/``: that
     package is scanned by the Story 3.1 stop-path guards and carries a
     zero-diff evidence contract for Stories 3.2 and 3.3. A diagnostic that
     submits an order has no business inside it.
+
+    Two regression mechanisms shaped this class, and they contradict each
+    other unless both are honoured at once:
+
+    1. **2026-09-01** — a strategy added *before* ``run_async()`` had its
+       ``on_start()`` submit an order, because ``TradingNodeKernel.start_async``
+       ends with ``self._trader.start()`` (``system/kernel.py:1027``), which
+       calls ``on_start()`` on every strategy already added. A dry run filled
+       a real order.
+    2. **2026-09-11** — moving the strategy's construction *after*
+       ``run_async()`` (so ``on_start`` could never fire early) instead hit
+       ``Trader.add_strategy()`` on an already-``RUNNING`` trader
+       (``trading/trader.py:392-397``, measured against Nautilus 1.220.0),
+       which logs and returns without adding — so ``--confirm`` could never
+       submit anything at all.
+
+    The resolution: add this strategy to the trader **before** it starts (so
+    mechanism 2 does not apply), but give it an ``on_start()`` that does
+    nothing (so mechanism 1 does not apply either). The only method that can
+    call ``submit_order`` is ``submit_close``, and no lifecycle hook calls it
+    — ``_run`` calls it directly, and only after the broker read, the offset
+    check, and ``--confirm``.
     """
 
-    def __init__(self, instrument_id: InstrumentId, side: OrderSide, quantity: int) -> None:
+    def __init__(self, instrument_id: InstrumentId) -> None:
         super().__init__()
         self._instrument_id = instrument_id
-        self._side = side
-        self._quantity = quantity
         self.submitted: list = []
         self.fills: list = []
         self.rejections: list = []
 
     def on_start(self) -> None:
+        pass
+
+    def submit_close(self, side: OrderSide, quantity: int) -> None:
+        """The tool's one submit path. Called by ``_run``, never by a hook."""
         instrument = self.cache.instrument(self._instrument_id)
         if instrument is None:
-            self.log.error(f"instrument not in cache: {self._instrument_id}")
-            return
+            raise FlattenError(f"instrument not in cache: {self._instrument_id}")
         order = self.order_factory.market(
             instrument_id=self._instrument_id,
-            order_side=self._side,
-            quantity=Quantity.from_int(self._quantity),
+            order_side=side,
+            quantity=Quantity.from_int(quantity),
         )
         self.submitted.append(order)
         self.submit_order(order)
@@ -189,26 +217,17 @@ def _run(
         loop=loop,
     )
 
-    # The strategy is deliberately NOT constructed or added here, and this is
-    # the single most important line in the file.
-    #
-    # Measured 2026-09-01, by running this tool WITHOUT `--confirm` and watching
-    # it fill a 22-share SELL: `TradingNodeKernel.start_async` ends with
-    # `self._trader.start()` (`system/kernel.py:1027`), which starts every
-    # strategy already added — so a strategy added before `run_async()` submits
-    # from `on_start` before any check in this function has run, and `--confirm`
-    # gates nothing at all.
-    #
-    # `live_session_runner.py` is safe from this by construction, not by luck:
-    # it does not add a strategy until `_phase_trading`, long after
-    # `_phase_node_connect` started the node (`:507` then `:659-660`), so
-    # `_trader.start()` finds nothing to start. An earlier version of this
-    # comment cited `:660` as proof that `run_async()` does not start
-    # strategies. That was a misreading of why the runner is safe.
-    #
-    # This tool now follows the same discipline: nothing that can submit an
-    # order exists in the trader until the broker has been read and the
-    # operator has armed it.
+    # Registered here, before `node.build()`/`run_async()`, because 1.220.0's
+    # `Trader.add_strategy()` silently refuses to add to an already-RUNNING
+    # trader (see `_FlattenStrategy`'s docstring, mechanism 2). `run_async()`
+    # then starts every strategy already added (mechanism 1), which is safe
+    # here only because `on_start()` does nothing: the strategy's one submit
+    # path, `submit_close`, is called explicitly below — never from a
+    # lifecycle hook, and only after the broker read, the offset check, and
+    # `--confirm`.
+    strategy = _FlattenStrategy(instrument_id)
+    node.trader.add_strategy(strategy)
+
     print("[flatten] node built; building clients...", flush=True)
     node.build()
 
@@ -238,18 +257,13 @@ def _run(
 
         if not confirm:
             return (
-                f"held={held:+d} submitted=0 (dry run — nothing that can submit "
-                "an order was ever added to the trader)"
+                f"held={held:+d} submitted=0 (dry run — the strategy is running "
+                "but its only submit path was never called)"
             )
 
         print(f"[flatten] submitting {side.name} {quantity} {instrument_id}...", flush=True)
-        # Arming, in the only order that is safe: construct the strategy, add it
-        # to an already-running trader (`add_strategy` never auto-starts — it
-        # rejects a RUNNING strategy outright), then start it. Every check this
-        # tool makes is upstream of this line.
-        strategy = _FlattenStrategy(instrument_id, side, quantity)
-        node.trader.add_strategy(strategy)
-        node.trader.start_strategy(strategy.id)
+        # Every check this tool makes is upstream of this line.
+        strategy.submit_close(side, quantity)
         loop.run_until_complete(_await_fill(strategy, timeout=60.0))
 
         for fill in strategy.fills:
