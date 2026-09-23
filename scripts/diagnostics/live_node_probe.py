@@ -22,9 +22,16 @@ looks like trading — and reports what the gateway said the account is. It is
 opt-in so that Procedure P1, which this probe is the tool for, keeps exactly the
 behaviour it was verified with.
 
+``--read-broker-state`` (Story 4.1, Procedure P15) additionally asks IBKR what
+the account actually holds — positions and ``TotalCashValue`` — through
+``src.core.live_broker_state.read_broker_state``, and prints it masked. Strictly
+a read: the probe adds no strategy, so nothing on this node can submit an order.
+Also opt-in, so P1's and P2's documented output is unchanged without it.
+
 Usage::
 
-    uv run python scripts/diagnostics/live_node_probe.py [--run-seconds 5] [--verify-account]
+    uv run python scripts/diagnostics/live_node_probe.py [--run-seconds 5] [--verify-account] \
+        [--read-broker-state]
 
 Preconditions:
     - IB Gateway or TWS running on the configured paper port (see .env)
@@ -54,6 +61,11 @@ from src.core.live_account_gate import (  # noqa: E402
     gateway_reported_accounts,
     masked_accounts,
     verify_connected_account,
+)
+from src.core.live_broker_state import (  # noqa: E402
+    BrokerStateUnavailableError,
+    read_broker_state,
+    render_broker_state,
 )
 from src.core.live_gate import GateFlags, GateRefusal  # noqa: E402
 from src.core.live_node_builder import (  # noqa: E402
@@ -182,7 +194,23 @@ def _verify_account(node, settings: IBKRSettings, loop: asyncio.AbstractEventLoo
     return mode
 
 
-def _run(run_seconds: int, *, verify_account: bool) -> str:
+def _read_broker_state(node, loop: asyncio.AbstractEventLoop) -> int:
+    """Ask IBKR what the account holds (Story 4.1), and print it masked.
+
+    Driven through ``run_until_complete`` on the node's own loop, like
+    ``_verify_account``. A failure raises ``BrokerStateUnavailableError`` —
+    never a flat reading — and ``main`` turns it into its own RESULT reason.
+    """
+    print("[probe] reading broker state (positions + cash)...", flush=True)
+    t0 = time.monotonic()
+    state = loop.run_until_complete(read_broker_state(node))
+    for line in render_broker_state(state):
+        print(f"[probe] {line}", flush=True)
+    print(f"[probe] broker state read in {(time.monotonic() - t0) * 1000:.0f} ms", flush=True)
+    return len(state.positions)
+
+
+def _run(run_seconds: int, *, verify_account: bool, read_state: bool = False) -> str:
     """Drive the node's lifecycle on a loop this function owns end to end.
 
     ``TradingNode.dispose()`` calls ``loop.stop()`` synchronously whenever it
@@ -220,6 +248,7 @@ def _run(run_seconds: int, *, verify_account: bool) -> str:
     print("[probe] starting node...", flush=True)
     run_task = loop.create_task(node.run_async())
     gate_account: str | None = None
+    broker_positions: int | None = None
 
     try:
         print(
@@ -232,6 +261,7 @@ def _run(run_seconds: int, *, verify_account: bool) -> str:
         print("[probe] connected (data + exec)", flush=True)
 
         gate_account = _verify_account(node, settings, loop) if verify_account else None
+        broker_positions = _read_broker_state(node, loop) if read_state else None
 
         print(f"[probe] running for {run_seconds}s...", flush=True)
         loop.run_until_complete(asyncio.sleep(run_seconds))
@@ -254,6 +284,9 @@ def _run(run_seconds: int, *, verify_account: bool) -> str:
     # line is byte-for-byte what it was before this flag existed.
     if gate_account is not None:
         detail += f" gate_account={gate_account}"
+    # Likewise only with --read-broker-state, so P1/P2's lines are unchanged.
+    if broker_positions is not None:
+        detail += f" broker_state=ok positions={broker_positions}"
     return detail
 
 
@@ -283,6 +316,14 @@ def main() -> int:
             "Off by default so Procedure P1's behaviour is unchanged."
         ),
     )
+    parser.add_argument(
+        "--read-broker-state",
+        action="store_true",
+        help=(
+            "After connecting (and after --verify-account, if given), read the positions and "
+            "cash IBKR reports for the account (Procedure P15). Read-only; off by default."
+        ),
+    )
     args = parser.parse_args()
 
     # Loaded here, not at import time: load_dotenv() mutates os.environ
@@ -293,7 +334,11 @@ def main() -> int:
 
     t0 = time.monotonic()
     try:
-        detail = _run(args.run_seconds, verify_account=args.verify_account)
+        detail = _run(
+            args.run_seconds,
+            verify_account=args.verify_account,
+            read_state=args.read_broker_state,
+        )
         print(
             f"RESULT: ok mode=build-connect-run-stop {detail} elapsed={time.monotonic() - t0:.2f}",
             flush=True,
@@ -307,6 +352,18 @@ def main() -> int:
         # not what does that, and must not be relied on for it.
         print(
             f"RESULT: fail reason=account_gate_refused refusal={e.refusal.reason.value} "
+            f"elapsed={time.monotonic() - t0:.2f}",
+            flush=True,
+        )
+        return 1
+    except BrokerStateUnavailableError as e:
+        # Its own reason, so a failed read can never be mistaken for a flat
+        # account (NFR20): the node connected, the broker's view did not arrive.
+        # The detail is the reader's own text (masked, no broker text) and, for
+        # adapter drift, names the exception type and where it was raised.
+        print(f"[probe] broker state failed: {e.detail}", flush=True)
+        print(
+            f"RESULT: fail reason=broker_state_unavailable failure={e.reason.value} "
             f"elapsed={time.monotonic() - t0:.2f}",
             flush=True,
         )

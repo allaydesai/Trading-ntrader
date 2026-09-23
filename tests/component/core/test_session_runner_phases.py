@@ -1322,6 +1322,11 @@ class TestImportPurity:
         # `src.services` to stay clear of in the first place. Added on
         # creation, not on next discovery.
         "src.core.live_session_warmup",
+        # Story 4.1. Story 4.2 calls it from `_phase_reconcile`, and it builds
+        # the `src.models.broker_state` values a services-layer comparison
+        # (Story 4.6) consumes — AR38's boundary, crossed in domain types, never
+        # through a `src.db`/`src.services` import. Added on creation.
+        "src.core.live_broker_state",
     )
 
     @pytest.mark.parametrize("module_name", MODULES)

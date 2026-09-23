@@ -74,6 +74,12 @@ STOP_PATH_MODULES = (
 #: (``base(**bound)``, here ``request_bars``), and it calls no order or
 #: position method at all, so membership would be inert, not protective.
 
+#: ``src/core/live_broker_state.py`` (Story 4.1) is **NOT** on the list: it is a
+#: read — at startup (Story 4.2's ``reconcile`` phase) and on demand (Story
+#: 4.6) — and nothing in the teardown ``finally`` calls into it. It calls no
+#: order or position method at all (``get_positions`` and ``get_instrument``
+#: only), so membership would be inert, not protective.
+
 #: ``src/core/live_exec_avg_px.py`` (2026-09-01) is likewise **NOT** on the list,
 #: for a simpler reason: it is build-time only. It runs once inside
 #: ``node.build()``, replaces one adapter-private dict, and is never reached
