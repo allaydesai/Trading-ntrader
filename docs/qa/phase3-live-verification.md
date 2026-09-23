@@ -1725,3 +1725,114 @@ the `session.started` timestamp and the first `order.*`/bar record against 09:30
 | Date | Operator | Result | Notes |
 | ---- | -------- | ------ | ----- |
 | 2026-09-22 | Story 4.4 dev session | ⏳ **defined, not run** | Gateway check recorded rather than assumed: at 16:39 ET (Tuesday, after the RTH close) ports 4001, 4002, 7496 and 7497 were all closed — no Gateway or TWS running; Redis (6379) and Postgres (5432) were up. No live bar can arrive outside RTH in any case. Informational evidence only, never a gate for this story; the broker-double proofs are `test_strategy_warmup_engine.py` (real `DataEngine`, AC #4), `test_session_runner_warmup.py` (runner, AC #7) and `test_warmup_backtest_parity.py` (AC #3). |
+
+## Procedure P15: read the broker's positions and cash, and match them against TWS
+
+**Introduced by**: Story 4.1 — Read the Broker's Authoritative View of Positions and Cash
+**Verifies**:
+- AC #1 live: positions (instrument, quantity, average price) and `TotalCashValue` are read for
+  the configured account, and they match what TWS shows.
+- AC #3 live: on a flat account, the read is a success reading `positions=0 flat=True`, not a
+  failure.
+- AC #5 live: the read completes in well under 30 s against the real Gateway.
+- NFR26: the account is masked in every line this code prints.
+
+**Tool**: `scripts/diagnostics/live_node_probe.py --verify-account --read-broker-state`
+
+> **Numbering note.** Epic 4's stories are implemented in parallel worktrees. If another Epic 4
+> story also appended a "Procedure P15", the integrator renumbers one of them. The content of this
+> section does not depend on its number.
+
+### What it does, and what it does not do
+
+This procedure is strictly a read. The probe:
+- builds a node, with Layer 1 before any socket and Layer 2 (`gate:account`) after connecting;
+- adds **no strategy**, so nothing on this node can submit an order;
+- uses an in-memory cache, so it writes nothing to Redis.
+
+Once connected it calls `read_broker_state(node)`. That sends a fresh `reqPositions` through the IB
+adapter and reads cash from the account-summary push the exec client received at connect. The
+positions answer is classified from the adapter's own request future, because the adapter's return
+value conflates a flat account with a failed read (Story 4.1, F1). Cash comes from IBKR's
+`TotalCashValue`, never from Nautilus's `AccountBalance`, which is net liquidation or an invented
+`400000` (F5).
+
+Positions and cash can be read outside RTH. Only a running, logged-in Gateway is needed.
+
+This run is **not** evidence for the failure paths:
+- a timed-out read;
+- a dropped socket;
+- an unresolvable contract;
+- a cash tag that never arrives.
+
+Staging any of them against a real Gateway means disturbing the connection, which this file
+avoids. Those paths are proven against the real adapter code at component tier:
+`tests/component/core/test_live_broker_state_adapter.py`.
+
+### Preconditions
+
+- The bare, non-compose paper Gateway, logged in, and **no other IBKR login** (error 162).
+- **No live session running.** The probe connects on `ibkr_live_client_id`. The Gateway would
+  refuse the probe's connection (client id in use); it would not evict the session. Stop the
+  session first anyway so that the reading is not taken mid-trade.
+- Run from a checkout whose `.env` carries `TWS_ACCOUNT`, `IBKR_PORT` and `IBKR_TRADING_MODE=paper`.
+  Without them the probe stops at `config_error` before any socket opens.
+- TWS (or the Gateway's account window) open beside it, showing the same account's Portfolio and
+  Account panes.
+
+### Command
+
+```bash
+PYTHONPATH=. uv run python scripts/diagnostics/live_node_probe.py \
+  --run-seconds 1 --verify-account --read-broker-state | tee logs/p15-<date>.log
+```
+
+### Expected output (shape)
+
+```
+[probe] connected (data + exec)
+[probe] verifying connected account (phase=gate:account)...
+[probe] gate:account ok mode=paper accounts=***NNN
+[probe] reading broker state (positions + cash)...
+… [info] reconcile.broker_state_retrieved account=***NNN cash={'USD': '<C>'} elapsed_ms=<ms> position_count=<N> positions={…}
+[probe] broker state account=***NNN positions=<N> flat=<True|False>
+[probe] position <INSTRUMENT> qty=<+/-Q> avg_price=<P>        # one line per open position
+[probe] cash USD total_cash=<C>
+[probe] broker state read in <T> ms
+RESULT: ok mode=build-connect-run-stop loop_closed=True gate_account=paper broker_state=ok positions=<N> elapsed=<E>
+```
+
+A failed read prints `[probe] broker state failed: <detail>` and then
+`RESULT: fail reason=broker_state_unavailable failure=<reason>`, and exits `1`. It never prints a
+flat reading. For adapter drift (`failure=adapter_incompatible`) the detail names the exception
+type and where it was raised.
+
+### Pass criteria
+
+1. `RESULT: ok … broker_state=ok positions=<N>`, exit `0`, with the `gate:account ok` line before
+   the broker-state lines (AR39's order).
+2. **Positions match TWS.** Every `position` line matches TWS's Portfolio window, instrument for
+   instrument and share for share, with the sign giving long or short. No TWS position is missing.
+   A position printed as `IB-CONID-<n> (unresolved …)` still counts as present. Record the list.
+   On a flat account: `positions=0 flat=True`, and TWS shows no position.
+3. **Cash matches TWS.** The `cash USD total_cash=` line equals TWS's *Total Cash Value* for the
+   base currency. Record both values.
+4. **Timed (AC #5).** The reader's own `elapsed_ms` on the `reconcile.broker_state_retrieved`
+   record is under 30000. That is the number AC #5 is judged on, measured on the loop's clock over
+   the whole read. Record it together with the probe's wall-clock `broker state read in <T> ms`,
+   which should agree to within a few ms. A healthy local Gateway should read in well under a
+   second.
+5. **Masked (NFR26).** `grep '^\[probe\]' logs/p15-<date>.log | grep -c '<full account id>'`
+   prints `0`. The unscoped grep will not be `0`, because the adapter prints the raw account itself
+   (P2's criterion 3 explains why).
+6. **Nothing traded.** `grep -c "order.submitted\|SubmitOrder" logs/p15-<date>.log` prints `0`.
+7. **Informational, not pass/fail: IBKR's average price.** For any open position, record the
+   printed `avg_price` beside TWS's *Avg Price* and the fill price in the session transcript that
+   opened it. IBKR documents a stock's `avgCost` as commission-inclusive, and Nautilus's
+   `avg_px_open` is not. This reading tells Story 4.6 how far apart they are (D-G).
+
+### Result log
+
+| Date | Operator | Result | Notes |
+| ---- | -------- | ------ | ----- |
+| 2026-09-22 | Story 4.1 dev session | ⏳ **defined, not run** | Attempted at 21:15 ET (Tuesday). This procedure does not need RTH, but the story's harness worktree has no `.env`: it is gitignored, and the charter forbids creating or reading one. The attempt, `live_node_probe.py --run-seconds 1 --verify-account --read-broker-state`, therefore stopped exactly where it should, before any socket was opened: `RESULT: fail reason=config_error msg=Cannot build an IBKR execution client: TWS_ACCOUNT is not set …`. That is evidence the tooling runs and fails closed, not that P15 passes. Whether a Gateway was listening could not be checked: the session's sandbox refused every port probe (`nc`, `lsof`). Informational only, never a gate for Story 4.1. The broker-double proofs are `test_live_broker_state_adapter.py`, which uses the real IB client, exec client, instrument provider and `ExecutionEngine` with only the socket stood in. It covers AC #1, #3 and #5 and the D-C no-cancel property. `test_live_broker_state.py` covers every AC #4 reason. Run P15 from a checkout that has `.env` the next time a Gateway is up. |

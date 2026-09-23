@@ -77,6 +77,12 @@ NODE_FACING_MODULES = (
     # `LiveDataEngine`'s response queue), where a raise shuts the whole node
     # down — the same shape as the three above. Added in the creating commit.
     "src/core/live_session_warmup.py",
+    # Story 4.1. The broker-state reader drives the node's own IB exec client
+    # and adapter (`get_positions`, the instrument provider) on the node's
+    # loop, and Story 4.2 calls it from the runner's `reconcile` phase — a
+    # failure here must surface as `BrokerStateUnavailableError`, never an exit.
+    # Added in the creating commit.
+    "src/core/live_broker_state.py",
     "src/services/session_record.py",
     "src/services/session_service.py",
 )

@@ -1220,7 +1220,10 @@ New items:
   conflict, but no code detects or resolves a divergence between cached and broker state. This is by
   design — AC #5 asks only that the design be inspectable, and startup reconciliation is Epic 4
   (FR35, AR25). **Action for Epic 4:** the claim in those two docstrings becomes false-by-omission if
-  Epic 4 ships without it; check them when the reconcile path lands.
+  Epic 4 ships without it; check them when the reconcile path lands. *Story 4.1 (2026-09-22): the
+  independent broker read this needs now exists (`src/core/live_broker_state.read_broker_state`);
+  comparing it against the cache and acting on a divergence is still Story 4.2's, so the entry
+  stays open.*
 
 ## Deferred from: code review of story-2.4 (2026-08-19)
 
@@ -3131,3 +3134,73 @@ none blocks the story.
   contained after the deadline. **Owner:** whoever first runs a sub-minute strategy live (the
   story-4.4 section above already routes sub-minute pre-open warm-up to the same owner).
 
+## Deferred from: story-4.1 (2026-09-22)
+
+Story 4.1 (read the broker's authoritative view of positions and cash). Every item below was
+measured against the installed `nautilus-trader 1.220.0` while building
+`src/core/live_broker_state.py`. Each names an owner; none blocks the story.
+
+- **Nautilus's native startup reconciliation cannot fail on a failed position read.** → **Story 4.2.**
+  The adapter's `get_positions` returns `None` for a timeout, a lost connection *and* an empty
+  account (`client/account.py:166-171`). `generate_position_status_reports` turns all three into
+  `[]` (`execution.py:463-464`). `generate_mass_status` turns any raise into `None`
+  (`live/execution_client.py:505-507`). `reconcile_execution_state` logs a warning for a `None` mass
+  status and does not count it as a failure (`live/execution_engine.py:915-920`). Its
+  `timeout_secs` (`NODE_TIMEOUT_RECONCILIATION`) is validated positive and never enforced (`:874`).
+  So the framework's "Execution state reconciled" proves nothing about positions. Story 4.2's
+  0-discrepancy check must compare against `read_broker_state`, never lean on the framework's log
+  line.
+- **The adapter's own 30 s timeout poisons every joiner of the shared request.** → **Story 4.2.**
+  Measured at Task 1: `_await_request`'s `wait_for(request.future, 30)` *cancels* the shared
+  `OpenPositions` future on timeout, so every other awaiter of the same request gets
+  `CancelledError`, a `BaseException` that `generate_mass_status`'s `except Exception` does not
+  catch. Nautilus's own startup reconciliation runs two joiners concurrently (orders and positions
+  both call `get_positions`). `read_broker_state` classifies a cancelled future as
+  `POSITIONS_UNANSWERED` and never cancels anything itself. What Nautilus's reconciliation does
+  with that `CancelledError` was not measured.
+- **A mid-session broker read diverts real position updates for its duration.** → **Story 4.3.**
+  While any `OpenPositions` request is in flight, `process_position` appends streaming updates to
+  that request's result instead of routing them to the exec client's `_on_position_update`
+  (`client/account.py:223-234`). A fill landing during a read is absorbed into the read and never
+  reaches the external-change detector. At startup, before trading, that is harmless. A periodic
+  runtime read inherits it. Cash freshness mid-session belongs here too: cash is the latest
+  account-summary push, and re-requesting it would re-send `reqAccountSummary` with the same reqId,
+  which is unmeasured IB behaviour (D-J).
+- **Compare quantities exactly; treat average price as informational.** → **Story 4.6.** IBKR
+  documents a stock's `avgCost` as commission-inclusive. Nautilus's `avg_px_open` excludes
+  commission, and the adapter's own position report does not divide by the multiplier while its
+  order report does (`execution.py:487-490` vs `:410-414`). `BrokerPosition.average_price` is IBKR's
+  number divided by the contract multiplier. P15 criterion 7 records one live reading. Also size
+  4.6's `timeout_seconds` inside its own NFR5 budget: the default 20 s leaves about 10 s for
+  connect/compare/disconnect. The reader takes a node, so 4.6's `ibkr_live_client_id + 1` node
+  works unchanged.
+- **Never read IB `AccountState` balances as cash or equity.** → **Story 5.1.** The adapter's
+  `AccountBalance.total` is `NetLiquidation`. When maintenance margin exceeds half of it the adapter
+  substitutes a literal `400000` (`execution.py:814-815`, `# TODO: Bug`); this is pinned by
+  `TestAdapterCanaries::test_the_summary_keeps_cash_per_currency_and_nautilus_balance_is_not_cash`.
+  The live-host `ResultsExtractor` widening must not reuse the backtest path's
+  `account_for_venue(...).balance_total(USD)` for a live session.
+- **P15 has not run.** The procedure is defined in `docs/qa/phase3-live-verification.md`. The
+  harness worktree has no `.env`, so the probe stops at `config_error` before any socket opens. It
+  was attempted and recorded. **Owner:** whoever next has a Gateway up and a checkout with `.env`.
+  It does not need RTH.
+
+## Deferred from: code review of 4-1-read-the-brokers-authoritative-view-of-positions-and-cash (2026-09-22)
+
+- **A cancelled awaiter strands a registered `OpenPositions` request, and every later positions read
+  fails until restart.** → **Story 4.2 / 4.3.** The adapter's `_await_request` catches only
+  `TimeoutError` and `ConnectionError`. When the *task awaiting* `get_positions` is cancelled (for
+  example Nautilus's reconciliation cancelled at shutdown), its `wait_for` cancels the shared future
+  and propagates `CancelledError` without calling `_end_request`
+  (`adapters/interactive_brokers/client/client.py:522-534`). The request then stays in the
+  registry with a cancelled future. Every later `get_positions` joins it and raises
+  `CancelledError` at once, and `read_broker_state` reports `POSITIONS_UNANSWERED` at once, every
+  time. That is explicit and never "flat", but it cannot recover within the process. Recovering
+  would mean removing the dead request, which writes adapter state; D-B keeps the reader read-only.
+  Pre-existing adapter defect. **Owner:** Story 4.2 (whose phase fails on it) or 4.3 (a runtime
+  read), whichever first observes it live.
+- **Multi-currency cash would be returned partially.** → **Story 4.7** (or whoever requests
+  `$LEDGER`). `_read_cash` returns as soon as any one currency has `TotalCashValue`. Only the
+  account's base currency arrives, because the adapter's `AllTags` subscription omits `$LEDGER`
+  (F7), so no second currency can be in flight today. There is no `accountSummaryEnd` signal to
+  wait on. **Owner:** the first change that widens the account-summary tags.

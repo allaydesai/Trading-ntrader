@@ -205,3 +205,48 @@ Four things that bite:
 
 `DatabaseConfig` at 1.220.0 has no database-index field, so `REDIS_DB` cannot be
 honoured; `RedisSettings` refuses any non-zero value rather than ignoring it.
+
+## Reading Broker State (Story 4.1)
+
+To ask IBKR what the account actually holds, call
+`await src.core.live_broker_state.read_broker_state(node)` on the node's loop. It
+returns a `src.models.broker_state.BrokerState` (positions, and cash as
+`TotalCashValue`), or raises `BrokerStateUnavailableError` with a reason. A flat
+account is `positions == ()`, which is a success; a failure never returns a state.
+
+Do **not** reach for the obvious Nautilus APIs. Each of these was measured against
+1.220.0:
+
+- **`get_positions` / `generate_position_status_reports` cannot tell flat from failed.**
+  The adapter's `get_positions` returns `None` for a timeout, a lost connection
+  *and* an empty account. `generate_position_status_reports` turns all three into
+  `[]`. `reconcile_execution_state` counts a client whose mass status raised as
+  reconciled. So "Execution state reconciled" proves nothing about positions. The
+  reader classifies IBKR's answer from the adapter's own `OpenPositions` request
+  future instead: a list is `positionEnd`, and `ConnectionError` is a dropped
+  socket. A *cancelled* future means some awaiter's `wait_for` gave up on the
+  request: normally the adapter's own 30 s timeout, though any cancelled awaiter
+  has the same effect. Either way IBKR's answer never arrived. A cancelled
+  awaiter also leaves the dead request registered, so every later
+  `get_positions` fails immediately (`deferred-work.md`, story-4.1 review).
+- **`cache.account(...).balance_total()` is not cash.** The IB adapter sets
+  `total = NetLiquidation`. When maintenance margin exceeds half of net
+  liquidation it substitutes a literal `400000` (`# TODO: Bug`). Cash is the
+  `TotalCashValue` tag in the exec client's in-memory `_account_summary`. The
+  `accountSummary:<acct>` general-cache key holds the same data, but it is
+  Redis-persisted, so after a restart it serves the previous process's values.
+- **Never `wait_for` an adapter request you might share.** Cancelling
+  `get_positions` cancels the `OpenPositions` future that Nautilus's own
+  reconciliation may also be awaiting. Its joiner then gets `CancelledError`, a
+  `BaseException` that `generate_mass_status`'s `except Exception` does not
+  catch. Wait with `asyncio.wait(..., timeout=...)` and leave the request alone.
+- **`provider.get_instrument(contract)` raises `ValueError`** for a contract it
+  cannot resolve. The reader keeps such a position as `IB-CONID-<conId>` rather
+  than dropping it, and does the same if a provider ever returns no instrument.
+- **ibapi's "unset" sentinels arrive as values.** `UNSET_DOUBLE` is
+  `sys.float_info.max`, and the decoder returns `UNSET_DECIMAL` (`2**127-1`) for
+  an empty field. The reader treats an unset average cost or cash value as
+  absent, and refuses an unset quantity.
+
+The operator surface is `scripts/diagnostics/live_node_probe.py
+--read-broker-state` (Procedure P15).
