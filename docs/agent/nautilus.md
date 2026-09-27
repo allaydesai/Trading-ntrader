@@ -182,9 +182,10 @@ session. `src/core/live_cache.py` builds the `CacheConfig`;
 **Redis is a disposable cache. IBKR is authoritative.** It holds engine cache
 state — orders, positions, accounts, instruments — all of which is rebuildable
 from the broker. Flushing it loses no system of record: closed trades are in
-PostgreSQL and session identity is in `trading_sessions`. Nothing currently
-*detects or resolves* a conflict between cached state and broker state;
-startup reconciliation is Epic 4 (FR35, AR25).
+PostgreSQL and session identity is in `trading_sessions`. A conflict between
+cached state and broker state is detected and resolved at every session start
+by the `reconcile` phase — see "Startup Reconciliation" below (Story 4.2, FR35,
+AR25).
 
 Four things that bite:
 
@@ -290,3 +291,58 @@ Each point below was measured against 1.220.0:
   same way.
 - **`SCAN` may return a key twice.** Dedupe position keys before netting;
   Nautilus's own `load_positions` dedupes by id.
+## Startup Reconciliation (Story 4.2)
+
+Nautilus's own startup reconciliation stays switched on
+(`EXEC_ENGINE_RECONCILIATION = True`) and runs **inside `node:connect`**:
+`start_async` does engines-connected → reconcile → emulator → portfolio →
+`trader.start()` in one coroutine (`system/kernel.py:1008-1027`), and returns
+early, leaving the trader unstarted, if it reports failure. The `reconcile` phase
+(`src/core/live_startup_reconcile.py`) therefore **verifies and completes** that pass,
+after `gate:account` and before any strategy exists. It never re-runs it.
+
+Four measured facts (1.220.0, Story 4.2 Task 1) that shape it:
+
+1. **The framework's "Execution state reconciled" proves nothing about a flat
+   instrument.** Its sweep of cached positions filters by the IB client's venue
+   (`INTERACTIVE_BROKERS`), while positions carry the exchange (`NASDAQ`), and
+   the IB adapter's position report ignores its instrument filter and skips zero
+   quantities. A position cached on an instrument the broker is flat in is never
+   touched, and the pass still reports success. That is the `p7-fill-0901`
+   phantom. So the phase compares the cache against `read_broker_state`, never
+   against the framework's log line.
+2. **Every framework correction is attributed to a synthetic owner.** An order
+   the broker reports that the cache lacks becomes `EXTERNAL`, and a net
+   correction becomes `INTERNAL-DIFF`. Under NETTING the correcting fill lands
+   in that owner's position (`{instrument}-{strategy}`), **never a strategy's**.
+   A normal mid-position restart therefore leaves three open positions (strategy
+   +10, `EXTERNAL` +10, `INTERNAL-DIFF` −10), with the net correct. See
+   `deferred-work.md` for what that means for Story 4.5.
+3. **Without the broker's average price, a correcting fill is priced 0.** The
+   phase always passes `avg_px_open` when IBKR reported one.
+4. **`reconcile_execution_report` returns `True` for an instrument excluded by
+   `reconciliation_instrument_ids`**, having done nothing. That is why the phase
+   re-reads and re-compares after correcting.
+
+The phase's rules:
+
+- **Internal position state** is the cache's net signed quantity per
+  instrument, over every open position, compared exactly with the broker's.
+- **A strategy's own position that the broker contradicts refuses the start.**
+  This is the PO's 2026-09-27 ruling. The framework cannot rewrite it (fact 2),
+  and a started strategy would act on it: `sma_crossover` closes it, which is a
+  real order against the broker.
+- **Anything else is corrected broker-ward** through
+  `exec_engine.reconcile_execution_report(PositionStatusReport)`, and must then
+  re-compare clean.
+
+The records are `reconcile.discrepancy` (`resolution` is `framework`, `broker`
+or `refused`) and `reconcile.ok`. A refusal is `ReconciliationFailedError`,
+exit 1.
+
+**Operator remedy for a refused start** (`strategy_position_contradicted`):
+create a new session for the strategy. The alternative is clearing the
+session's engine cache. That cache is disposable by architecture (D2): delete the
+session's `trader-PAPER-<id>:*` keys with the process stopped. Doing so also
+loses the restored client-order-id counter (Story 3.4), so prefer a new session.
+Never use `flush()`, which is `FLUSHDB`.

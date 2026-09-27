@@ -66,7 +66,8 @@ class TestTheFlag:
             return "loop_closed=True"
 
         assert _main(monkeypatch, ["--run-seconds", "1"], run) == 0
-        assert seen == {"verify_account": False, "read_state": False}
+        # Story 4.2 widened the flag set deliberately (`--reconcile`, P17a).
+        assert seen == {"verify_account": False, "read_state": False, "reconcile": False}
 
     def test_it_reaches_the_run(self, monkeypatch):
         seen = {}
@@ -76,7 +77,7 @@ class TestTheFlag:
             return "loop_closed=True"
 
         assert _main(monkeypatch, ["--read-broker-state", "--verify-account"], run) == 0
-        assert seen == {"verify_account": True, "read_state": True}
+        assert seen == {"verify_account": True, "read_state": True, "reconcile": False}
 
     def test_a_failed_read_has_its_own_result_reason(self, monkeypatch, capsys):
         def run(run_seconds, **kwargs):

@@ -3,8 +3,9 @@
 Owns: waiting for a node to be *genuinely started* rather than merely
 connected, the message that wait fails with, the refusal an unexplained account
 verdict becomes, turning a frozen ``StrategySpec`` into a live ``Strategy``,
-refusing a spec this phase cannot materialise at all, and reporting the
-requested-versus-loaded instrument shortfall.
+refusing a spec this phase cannot materialise at all, reporting the
+requested-versus-loaded instrument shortfall, and (moved here from the runner by
+Story 4.2's budget split) stopping every ``DEGRADED`` strategy at teardown.
 
 Does not own: the *sequence* those steps belong to, the event loop, or the
 teardown — all of which are ``src/core/live_session_runner.py``'s (AR38). Nor
@@ -26,6 +27,7 @@ from typing import Any
 
 from nautilus_trader.config import LoggingConfig
 from nautilus_trader.live.node import TradingNode
+from nautilus_trader.trading.trader import Trader
 
 from src.config import IBKRSettings
 from src.core.live_check import BrokerUnreachableError, LiveCheckReport
@@ -355,3 +357,88 @@ def report_instrument_shortfall(node: TradingNode, bar_types: tuple[str, ...], l
             missing=missing,
             reason="IBKR did not qualify these contracts; their subscriptions cannot deliver",
         )
+
+
+def stop_degraded_strategies(trader: Trader, log: Any) -> list[str]:
+    """Explicitly stop every ``DEGRADED`` strategy at teardown (Story 3.1, AC #6).
+
+    ``Trader._stop()`` guards on ``is_running`` — ``state == RUNNING``
+    exactly — so a ``DEGRADED`` strategy's ``on_stop()`` never runs on the
+    normal teardown path. Before Story 3.1 that was strictly *safer*:
+    ``on_stop()`` still flattened positions, and skipping it stopped an
+    unrelated ``on_bar`` bug from manufacturing an exit (NFR14, AR43). After
+    Story 3.1 removes the flatten, the same skip inverts into a leak — no
+    strategy-owned cleanup at all — which this closes.
+
+    **What this does and does not deliver** (review correction, 2026-08-29;
+    the first wording claimed the whole leak was closed). On the dominant
+    **signal** stop path, ``request_node_stop`` has already driven
+    ``node.stop()`` before ``run()``'s ``finally`` reaches this function, so
+    the engines are down and ``unsubscribe_bars`` does **not** reach a live
+    data engine. What is delivered on every path is the contained ``on_stop()``
+    itself and the terminal ``STOPPED`` state. The unsubscribe flows through a
+    running engine only on the phase-failure paths where the node is still up.
+    The call site cannot be moved earlier (see ``run()``'s ``finally``), so
+    this is the accepted scope, stated rather than implied.
+
+    **Class-agnostic, deliberately** (review disclosure, 2026-08-29): this
+    stops every ``DEGRADED`` strategy whatever its class, including one from
+    the unversioned ``src/core/strategies/custom/`` submodule that AC #3's
+    lifecycle scan cannot reach. ``custom/sma_crossover_long_only.py:86``
+    still flattens in its ``on_stop()``, so stopping it here runs that
+    flatten where ``Trader._stop()``'s ``is_running`` skip previously
+    suppressed it. On the signal path the exec engine's queue is already
+    stopped and the order does not leave; on the phase-failure paths it can.
+    Accepted rather than gated: the fix belongs in the submodule, and gating
+    would put strategy-class knowledge in the runner, which has none today.
+
+    Measured (installed nautilus-trader 1.220.0): ``(DEGRADED, STOP) ->
+    STOPPING`` is a legal FSM transition (``common/component.pyx:1594``), an
+    explicit ``strategy.stop()`` runs ``on_stop()`` and ends ``STOPPED``, and
+    a raise inside ``on_stop()`` during that explicit stop PROPAGATES and
+    strands the strategy in ``STOPPING`` — hence the per-strategy
+    ``BaseException`` containment below; one bad strategy's teardown must
+    never abort the rest, nor prevent the remaining degraded strategies from
+    being stopped.
+
+    Module level, not a method, and in this module rather than the runner
+    (Story 4.2's budget split, decision D-K): the runner file sits at its
+    500-statement cap. ``live_session_runner`` imports it, so
+    ``from src.core.live_session_runner import stop_degraded_strategies``
+    still works, and this module is on every guard list the runner is on
+    (``NODE_FACING_MODULES``, ``STOP_PATH_MODULES``, ``TestImportPurity``).
+    ``trader.strategies()`` is a plain method returning ``list[Strategy]`` —
+    NOT a property (``trading/trader.py:160``) — iterating the un-called
+    attribute would be a ``TypeError`` this function's own containment would
+    otherwise silently swallow.
+
+    Returns a ``shutdown()``-shaped problems list (one entry per failed stop,
+    carrying only the exception **type**, per NFR26); empty when every
+    degraded strategy stopped cleanly.
+
+    The ``strategy_stop:`` prefix is load-bearing (review fix, 2026-08-29):
+    these entries are concatenated into ``_shutdown_problems`` alongside
+    ``shutdown()``'s own, and ``shutdown()`` reports a failed ``node.stop()``
+    as ``"stop: {type}"`` (``live_check_node.py:240``). Byte-identical strings
+    made a strategy's teardown raise indistinguishable from the broker socket
+    failing to close, which is what the CLI tells the operator about.
+    """
+    problems: list[str] = []
+    for strategy in trader.strategies():
+        if not strategy.is_degraded:
+            continue
+        try:
+            strategy.stop()
+        except BaseException as exc:  # noqa: BLE001 - one bad strategy must not abort teardown
+            problems.append(f"strategy_stop: {type(exc).__name__}")
+            log.warning(
+                "strategy.stop_failed",
+                error_type=type(exc).__name__,
+                strategy_id=str(getattr(strategy, "id", "unknown")),
+            )
+        else:
+            log.info(
+                "strategy.stopped_while_degraded",
+                strategy_id=str(getattr(strategy, "id", "unknown")),
+            )
+    return problems

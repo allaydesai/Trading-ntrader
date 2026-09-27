@@ -22,9 +22,12 @@ here at all — it imports ``nautilus_trader`` at its line 18 — which is why
 rather than shared by import.
 
 Known, accepted limit: this module logs *that* a phase started and how it
-ended. It makes no claim about what the phase did. ``reconcile`` is a no-op
-placeholder in Epic 2 and logs ``ok`` having done nothing at all — a clean
-phase log is not evidence that reconciliation happened. ``warmup``'s ``ok``
+ended. It makes no claim about what the phase did. ``reconcile``'s ``ok``
+(Story 4.2) means the cache was proven to match the broker exactly — but
+Nautilus's *own* reconciliation pass runs earlier, inside ``node:connect``
+(``kernel.py:1008-1027``), which is why the phase verifies and completes it
+rather than running one; ``reconcile.ok`` is the record that says it matched,
+and a hard native failure stops the session at ``node:connect``. ``warmup``'s ``ok``
 (Story 4.4) means the runner's warm-up watch is armed, not that anything is
 warm: strategies warm in their own ``on_start`` during ``trading``, and
 ``warmup.completed`` is the record that says so.

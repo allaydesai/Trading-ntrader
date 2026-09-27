@@ -137,8 +137,10 @@ SIZE_BASELINE: dict[str, int] = {
     "src/core/live_order_path.py::OrderEventObserver": 165,
     # Story 4.4, 400 -> 414: warm-up wiring (arm in `_phase_warmup`, instrument
     # + settle per strategy, the stop/reclaim predicate the wait reads); the
-    # watch itself is its own module.
-    "src/core/live_session_runner.py::LiveSessionRunner": 414,
+    # watch itself is its own module. Story 4.2, 414 -> 424: reconcile seam,
+    # pre-reconciliation snapshot, trading latch; the logic is live_startup_reconcile.py
+    # (file budget made first by moving stop_degraded_strategies out, 499 -> 481).
+    "src/core/live_session_runner.py::LiveSessionRunner": 424,
     "src/core/live_session_runner.py::LiveSessionRunner.run": 66,
     "src/core/live_session_steady_state.py::SessionSteadyState": 120,
     "src/core/live_strategy_guard.py::StrategyGuard": 121,

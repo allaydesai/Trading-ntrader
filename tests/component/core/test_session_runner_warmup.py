@@ -33,7 +33,7 @@ from src.core.live_session_warmup import COMPLETED_EVENT, FAILED_EVENT, SKIPPED_
 from src.core.live_strategy_guard import START_FAILED_EVENT, NoStrategyStartedError
 from src.core.strategy_registry import StrategyRegistry
 from src.models.session import SessionSpec, StrategySpec
-from tests.component.doubles import TestIBAccountsClient, TestLiveNode
+from tests.component.doubles import TestIBAccountsClient, TestLiveNode, flat_broker_state_reader
 
 pytestmark = pytest.mark.component
 
@@ -143,6 +143,7 @@ def _permitting_verifier():
 
 
 def _runner(node: TestLiveNode, spec: SessionSpec) -> runner_module.LiveSessionRunner:
+    node.run_seconds_from_first_strategy = True  # Story 4.2: see the double's docstring
     return runner_module.LiveSessionRunner(
         _settings(),
         session_id=SESSION_ID,
@@ -152,6 +153,7 @@ def _runner(node: TestLiveNode, spec: SessionSpec) -> runner_module.LiveSessionR
         connect_timeout=2.0,
         node_factory=lambda settings_arg, **kwargs: node,
         account_verifier=_permitting_verifier(),
+        broker_state_reader=flat_broker_state_reader,
         client_builder=lambda *a, **k: None,
         sleeper=_never_sleeps,
     )

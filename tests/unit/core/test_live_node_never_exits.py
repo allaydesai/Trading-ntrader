@@ -93,6 +93,11 @@ NODE_FACING_MODULES = (
     # the node's teardown: an exit here would skip that teardown and strand
     # the `+ 1` client id on the Gateway. Added in the creating commit.
     "src/core/live_session_view.py",
+    # Story 4.2. The `reconcile` phase's body: it reads the node's exec engine
+    # and cache and hands the engine broker-ward `PositionStatusReport`s on the
+    # node's loop — every refusal must surface as `ReconciliationFailedError`
+    # (exit 1), never an exit. Added in the creating commit.
+    "src/core/live_startup_reconcile.py",
     "src/services/session_record.py",
     "src/services/session_service.py",
 )

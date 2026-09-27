@@ -1960,3 +1960,102 @@ RESULT: discrepancy — positions=<n> cash=<n> line(s) differ from IBKR (…); n
 (1) `live reconcile p13-0922` printed `reconcile: session p13-0922 (status=stopped) against IBKR on client_id=11` (the `+ 1` reservation), then `gate.static … status=ok`, then `reconcile.session_view_failed reason=no_engine_state` in 5.5 ms, and `live reconcile failed: … (no_engine_state) …`, exit `1`, before any IBKR socket. The session row was read from PostgreSQL and Redis was PINGed; no Gateway connection was attempted.
 (2) `live reconcile p7-fill-0901` passed the same header, `gate.static` and the session-state precheck, then stopped at the builder, before any IBKR socket: `live reconcile failed: Cannot build an IBKR execution client: TWS_ACCOUNT is not set …`, exit `1`.
 The worktree has no `.env`, and the charter forbids creating or reading one. **Session side, read for real (load-only, no broker needed):** `p7-fill-0901`'s engine cache (18 keys) holds **AAPL.NASDAQ +4 and NVDA.NASDAQ +22**. That is the namespace the Epic 3 retro cites for a phantom position the broker did not hold, so a Variant A run against it should name any line IBKR no longer carries. Its `accountSummary` key exists, but it was read here with a placeholder account, so cash read `unknown`. The namespaces of `p12-0921`, `p13-0922` and `rth-day-1` are **empty** on this Redis, and the reader reported `no_engine_state` for each rather than "flat". Pick a session that has run against this Redis for Variant A. Informational only, never a gate for Story 4.6. The broker-double proofs are `test_live_reconcile.py` (driver, including the `+ 1` pin on the real builder), `test_live_session_view.py`, `test_live_session_view_redis.py` (real Redis and `MONITOR`), `test_reconciliation_service.py` and `test_live_reconcile_cli.py`. |
+
+## Procedure P17: startup reconciliation against the real broker
+
+> Written as P16 by Story 4.2 in parallel with Story 4.6's P16; renumbered to P17 at integration.
+
+**Introduced by**: Story 4.2 — Reconcile Against the Broker Before Any Strategy Trades
+**Verifies**:
+- AC #2 / #5 live (P17a): after Nautilus's own startup pass, the `reconcile` phase's body proves
+  the cache matches IBKR exactly (`reconcile.ok`, 0 discrepancy), naming whatever the framework
+  imported (`reconcile.discrepancy resolution="framework"`), inside NFR5's 30 s.
+- AC #3 / D-D live (P17b): a session whose Redis cache holds a strategy position the broker does
+  not hold — the `p7-fill-0901` shape — **refuses to start**, naming the instrument and both
+  quantities, and submits nothing.
+
+**Tools**: `scripts/diagnostics/live_node_probe.py --verify-account --reconcile` (P17a);
+`ntrader live start <session>` (P17b).
+
+
+### What it does, and what it does not do
+
+**P17a is strictly read-only against the broker.** The probe builds a node (Layer 1 before any
+socket, Layer 2 after connecting), adds **no strategy**, and uses an **in-memory** cache — so the
+snapshot taken before the node runs is empty, Nautilus's own pass imports every broker position as
+`EXTERNAL` inside `run_async`, and `reconcile_at_startup` then compares the cache against a fresh
+`read_broker_state`. Any broker-ward correction the phase makes lands in that throwaway cache,
+never in a session's Redis namespace. Nothing can submit an order. It does not need RTH.
+
+**P17b is not read-only**: `live start` starts strategies if reconciliation passes. It is written
+for the operator and is **never** run by an automated story session.
+
+### Preconditions
+
+- A running, logged-in paper Gateway on the configured paper port; no session running on
+  `ibkr_live_client_id` (the probe shares it — P15's precondition).
+- P17a: nothing else. It works on a flat account (`positions=0`) and on one holding positions.
+- P17b: a session whose Redis namespace holds a strategy-owned position the broker does **not**
+  hold. `p7-fill-0901` was such a session on 2026-09-11 (P10's result row: its cache logged
+  `NVDA.NASDAQ net_position=22` on a flat broker). Confirm the broker side read-only first
+  (P17a, or TWS). **Do not run P17b inside RTH on a session whose cache might agree with the
+  broker** — if reconciliation passes, its strategies start and may trade.
+
+### Command
+
+```bash
+# P17a — read-only.
+uv run python scripts/diagnostics/live_node_probe.py --run-seconds 1 --verify-account \
+  --reconcile > logs/p17a-<date>.log 2>&1
+grep -E "^\[probe\]|RESULT|reconcile\.(ok|discrepancy)" logs/p17a-<date>.log
+
+# P17b — operator only; starts strategies if reconciliation passes.
+uv run python -m src.cli.main live start p7-fill-0901 > logs/p17b-<date>.log 2>&1
+echo "exit=$?"
+grep -E "session.phase|reconcile\.(ok|discrepancy)|live start failed" logs/p17b-<date>.log
+grep -c -E "162|10182|366" logs/p17b-<date>.log   # D6's standing rule, checked first
+```
+
+### Expected output
+
+```
+# P17a
+[probe] gate:account ok mode=paper accounts=['***626']
+[probe] waiting for Nautilus's own reconciliation (trader started)...
+[probe] reconciling against the broker (phase=reconcile)...
+[probe] reconciled AAPL.NASDAQ qty=+4          # one line per broker position, if any
+[probe] reconcile ok positions=1 discrepancies=1 open_orders=0 synthetic_positions=1 elapsed_ms=...
+RESULT: ok mode=build-connect-run-stop loop_closed=True gate_account=paper reconcile=ok positions=1 discrepancies=1 ...
+
+# P17b
+session.phase phase=reconcile status=started
+reconcile.discrepancy instrument_id=NVDA.NASDAQ kind=strategy_position resolution=refused
+  local_quantity=22 strategy_quantity=22 broker_quantity=0 reason=strategy_position_contradicted
+session.phase phase=reconcile status=failed error_type=ReconciliationFailedError
+live start failed: Startup reconciliation refused to let this session trade (strategy_position_contradicted): ...
+exit=1
+```
+
+### Pass criteria
+
+1. **P17a:** `RESULT: ok … reconcile=ok positions=<N> discrepancies=<M>`, exit `0`, with
+   `gate:account ok` before the reconcile lines (AR39's order). On a flat account `positions=0`.
+2. **P17a — the framework's imports are named, not silent.** Every broker position appears as one
+   `reconcile.discrepancy` record — `resolution="framework"` for each the framework imported (the
+   in-memory cache knew nothing), `resolution="broker"` for any the phase had to correct itself —
+   and `discrepancies` equals the number of those records. `positions` matches TWS instrument for instrument, share for
+   share (P15's criterion 2).
+3. **P17a — timed (NFR5).** `reconcile.ok`'s `elapsed_ms` is under 30000. Record it.
+4. **P17a — masked (NFR26).** `grep '^\[probe\]' logs/p17a-<date>.log | grep -c '<full account
+   id>'` prints `0`.
+5. **Both — nothing traded.** `grep -c "order.submitted\|SubmitOrder"` prints `0` in each log.
+6. **P17b — refused, not resolved.** `phase=reconcile status=failed`, no `warmup`/`subscribe`/
+   `trading` phase record after it, one `resolution=refused` record naming the instrument with
+   `strategy_quantity` ≠ `broker_quantity`, the operator message names the instrument and both
+   quantities, and exit is `1`. `live list` shows the session `stopped`.
+
+### Result log
+
+| Date | Operator | Result | Notes |
+| ---- | -------- | ------ | ----- |
+| 2026-09-27 | Story 4.2 dev session | ⏳ **P17a defined, not run; P17b defined, not run (operator only)** | P17a attempted: `live_node_probe.py --run-seconds 1 --verify-account --reconcile` stopped at `RESULT: fail reason=config_error msg=Cannot build an IBKR execution client: TWS_ACCOUNT is not set…` before any socket opened — the story's harness worktree has no `.env` (gitignored; the charter forbids creating or reading one), the Story 4.1 P15 precedent. Note for the operator: the probe needs the repo root importable (`PYTHONPATH=.` or run it via `python -m`/`runpy`), a pre-existing property of the script. P17b needs a session with a stale strategy position and starts strategies if reconciliation passes, so it is never run by an automated session. Both are informational evidence only (NFR33), never a gate: the same logic is proven against broker doubles and a real `LiveExecutionEngine` in `tests/component/core/test_live_startup_reconcile_engine.py` and `test_session_runner_phases.py`. |

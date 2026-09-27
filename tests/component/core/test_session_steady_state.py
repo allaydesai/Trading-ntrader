@@ -499,17 +499,20 @@ class TestTheConnectionMonitorIsFed:
         assert changes[0]["current"] == "recovering"
 
     def test_confirm_state_reestablished_is_never_called_in_this_story(self):
-        """*Judgment call #6*: ``reconcile`` is a no-op placeholder, so there is
-        no genuine reconciliation for it to follow. ``deferred-work.md:542-548``
-        warns verbatim that calling it after merely observing a live socket
-        *"would satisfy the type signature while defeating the design"*.
+        """*Judgment call #6*, still true after Story 4.2 (decision D-J):
+        startup reconciliation is real now, but the grant cannot go live on its
+        own — its first call arms the monitor's LOST/halt path, and the halt
+        clock is cleared only by a *later* confirm, which is Story 4.3's
+        reconnect re-confirm. ``live_startup_reconcile`` joins the scan so the phase
+        that finally has a genuine reconciliation to follow cannot quietly
+        start granting. Story 4.3 changes this test deliberately.
         """
         import ast
         from pathlib import Path
 
-        from src.core import live_session_runner, live_session_steady_state
+        from src.core import live_session_runner, live_session_steady_state, live_startup_reconcile
 
-        for module in (live_session_steady_state, live_session_runner):
+        for module in (live_session_steady_state, live_session_runner, live_startup_reconcile):
             tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
             called = {
                 node.func.attr
