@@ -3204,3 +3204,80 @@ measured against the installed `nautilus-trader 1.220.0` while building
   account's base currency arrives, because the adapter's `AllTags` subscription omits `$LEDGER`
   (F7), so no second currency can be in flight today. There is no `accountSummaryEnd` signal to
   wait on. **Owner:** the first change that widens the account-summary tags.
+
+## Deferred from: story-4.6 (2026-09-27)
+
+Story 4.6 (`ntrader live reconcile`). Every item was measured while building
+`src/core/live_session_view.py` / `live_reconcile.py`. Each names an owner, and none blocks the
+story.
+
+- **Architecture G3's "trades-derived local view" cannot represent an open position.** →
+  **Architecture / Epic 4 retro.** `TradeRecorder` persists `PositionClosed` only, and
+  reconciliation-stamped positions never; every live `trades` row nets to zero. So a trades-derived
+  position is always flat, the exact "failure reads as flat" shape NFR20 forbids. Nothing in
+  PostgreSQL records a session's cash. Story 4.6 compares against the session's **engine cache**
+  instead (Redis, load-only, D-A). `architecture.md:696-700` should be amended to say so.
+- **Story 4.2 can reuse the comparison rather than grow a second one.** → **Story 4.2 (the
+  integrator).** `reconciliation_service.compare(broker: BrokerState, local: SessionView, …)` takes
+  two domain values. A `SessionView` built from the live node's `cache.positions_open()` (net
+  `signed_decimal_qty()` per instrument) gives 4.2's startup 0-discrepancy check the same exact,
+  tolerance-free line-by-line verdict. Note that `live_reconcile` receives `compare` as a port
+  because `TestImportPurity` forbids `src.services` in the runner's family; 4.2 must do the same.
+- **`live list` / `live status` "Open Positions" is always `0` for a live session.**
+  → **Unowned, named: the next story that touches `trade_counts_by_session`.**
+  `trade_counts_by_session` counts `trades` rows with a null exit, which only the backtest path
+  writes, so its "every session honestly reports zero today" docstring
+  (`trading_session_repository_sync.py:162-164`) is stale for the wrong reason. Measured
+  2026-09-27: `p7-fill-0901` lists `0` open positions while its engine cache holds AAPL.NASDAQ +4 and
+  NVDA.NASDAQ +22. `live reconcile` is where a session's open positions are now answered.
+- **A session's local cash carries no timestamp.** → **Story 4.7.** The
+  `general:accountSummary:<acct>` key holds the values without a time, so a cash discrepancy
+  cannot say *since when*. The last `AccountState` event's `ts_event` in `accounts:<id>` would
+  give it.
+- **`msgspec` is now a declared dependency.** → **Recorded, closed.** The PO approved it on
+  2026-09-27 (Story 4.6, option 1). `CacheDatabaseAdapter` needs a `MsgSpecSerializer` to decode a
+  session's positions. The msgspec-free alternative, the Rust-side `load_all()`, was measured to
+  return **no positions** for Python-written data, which is a silent flat. `msgspec 0.19.0` was
+  already installed as a hard requirement of `nautilus-trader` (`>=0.19.0,<1.0.0`), so nothing new
+  was installed. `pyproject.toml` gained `msgspec>=0.19.0,<1.0.0`, and `uv.lock` records it as a
+  direct dependency. Of the two AR3 guards, `test_live_dependency_invariance.py` was **not
+  edited**: it passes because `msgspec` is now declared, which is exactly what it checks.
+  `test_epic1_ac_node.py` was edited deliberately: its `PERMITTED_THIRD_PARTY`, its
+  declared-distribution loop and its docstring now name `msgspec` and the approval.
+- **The engine caches of `p12-0921` and `p13-0922` are empty on the local Redis.** → **Whoever
+  next runs P16, and Story 4.2's Redis-disposability enforcement.** Both sessions ran recently
+  (`p12-0921` recorded a closed trade), yet `trader-PAPER-064feace:*` and `trader-PAPER-44c0b4df:*`
+  hold no keys. Either Redis was flushed after they ran, or they ran against a different Redis
+  (compose versus Homebrew). `live reconcile` reports `no_engine_state` (exit 1) for them, never
+  "flat". The cause was not investigated.
+- **The connect budget is not a hard bound when the Gateway is down.** → **P16's operator.**
+  `node.build()` runs the adapter's own connect attempt synchronously. `live_check_node`'s comment
+  measures a failed attempt at about 20 s: a 15 s `managedAccounts` wait plus a 5 s reconnect
+  delay. The 10 s `CONNECT_TIMEOUT_SECONDS` is enforced only after `build()` returns, so a down
+  Gateway costs about 20 s before exit `4`. That is inside NFR5's 30 s but outside the connect
+  budget. Record the wall clock of one run with the Gateway stopped.
+- **P16 has not run.** → **Whoever next has a Gateway up and a checkout with `.env`.** It does not
+  need RTH. Variant A needs a session whose namespace exists on the local Redis; `p7-fill-0901`
+  qualifies.
+
+## Deferred from: code review of 4-6-check-positions-and-cash-against-ibkr-on-demand (2026-09-27)
+
+- **Partial Redis eviction would read as a flat session view.** → **Story 4.2
+  (Redis-disposability enforcement).** `read_session_view` refuses only a wholly empty namespace.
+  If an eviction policy (for example `allkeys-lru`) or a partial delete removed the `positions:*`
+  lists but kept other keys, the view would read as a valid flat session. Detecting that needs a
+  cross-check against `index:positions`. The project's Redis runs with the default `noeviction`,
+  so the case is not reachable today.
+- **Two concurrent `live reconcile` runs collide on the one `+ 1` client id.** → **Documented; no
+  owner.** AR34 reserves exactly one reconcile id. The second run's connection is refused, and it
+  reads as broker-unreachable (exit 4, "is the Gateway running?"), which is misleading. Run one at
+  a time.
+- **Ctrl-C after the reconcile node is built never maps to INTERRUPTED.** → **Pre-existing; the
+  owner of `live_check_node`.** `NautilusKernel._setup_loop` installs loop signal handlers
+  (`system/kernel.py:557-561`), so SIGINT calls `node.stop()` instead of raising
+  `KeyboardInterrupt`. The pending step then fails as broker-unreachable, and a signal during the
+  synchronous view read is only seen afterwards. `live check` behaves the same.
+- **A changed `IBKR_LIVE_CLIENT_ID` can put reconcile on a running session's id.** →
+  **Pre-existing; the first story that records a session's client id.** Neither the session row
+  nor Redis stores the client id a session connected with, so a config change between the
+  session's start and a reconcile can make the new `+ 1` equal the old live id.

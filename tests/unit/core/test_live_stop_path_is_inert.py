@@ -80,6 +80,17 @@ STOP_PATH_MODULES = (
 #: order or position method at all (``get_positions`` and ``get_instrument``
 #: only), so membership would be inert, not protective.
 
+#: ``src/core/live_reconcile.py`` and ``src/core/live_session_view.py`` (Story
+#: 4.6) are **NOT** on the list either: ``ntrader live reconcile`` is an
+#: on-demand check with no session stop path — it runs its own read-only node,
+#: never a session's — and neither module calls any ``FORBIDDEN_ORDER_METHODS``
+#: name. (The view reader does *read* positions — the cache adapter's
+#: ``load_position`` and a ``Position``'s ``is_open``/``signed_decimal_qty`` —
+#: but reads nothing that submits, cancels, modifies or closes.) Membership
+#: would be inert, not protective; the scan that does cover all five new
+#: reconcile modules is ``TestTheReconcileModulesSubmitNothing`` in
+#: ``tests/unit/cli/commands/test_live_reconcile_cli.py``.
+
 #: ``src/core/live_exec_avg_px.py`` (2026-09-01) is likewise **NOT** on the list,
 #: for a simpler reason: it is build-time only. It runs once inside
 #: ``node.build()``, replaces one adapter-private dict, and is never reached
