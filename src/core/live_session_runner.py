@@ -14,8 +14,10 @@ static gate (``live_check``) or the account gate (``live_account_gate``) — eac
 of which logs its own half of the phase it owns — the database
 (``src/services/session_record.py``, reached only through AR32's port), the
 stop-signal *policy* (``live_session_signals`` — Judgment call #8), strategy-
-failure containment (Story 2.7), ``status``/``list`` (Story 2.8), reconcile
-(Epic 4, a no-op placeholder here), the warm-up itself (each strategy's own
+failure containment (Story 2.7), ``status``/``list`` (Story 2.8), the
+reconciliation policy (``live_startup_reconcile`` — Story 4.2; the runner only
+snapshots the cache before the node runs, awaits the phase and latches
+``trading`` on its result), the warm-up itself (each strategy's own
 ``on_start``; the runner only arms and waits on ``live_session_warmup`` —
 Story 4.4), or orders and trades (Epic 3).
 
@@ -52,11 +54,14 @@ architecture's intent (foreground, no daemon, one process) is unchanged.
 runner's logger and ``structlog.contextvars`` — so every structlog record
 carries it. It does **not** reach Nautilus's own stdout, which is Rust-side.
 
-Known, accepted limits, stated rather than implied: a clean phase log does
-**not** mean reconciliation happened; a heartbeat proves a process is writing,
-not that it is trading; and ``confirm_state_reestablished`` is deliberately
-never called until Epic 4 has a real reconciliation to follow (*Judgment call
-#6*). Stopping leaves positions alone (Story 3.1): the strategy's own
+Known, accepted limits, stated rather than implied: Nautilus's own
+reconciliation pass runs inside ``node:connect``, so a *hard* native failure
+stops the session there, not at ``reconcile`` (Story 4.2, decision D-A); a
+heartbeat proves a process is writing, not that it is trading; and
+``confirm_state_reestablished`` is still deliberately never called — its first
+call arms the monitor's LOST/halt path, whose clock only a later confirm
+clears, so it goes live with Story 4.3's reconnect re-confirm (*Judgment call
+#6*, decision D-J). Stopping leaves positions alone (Story 3.1): the strategy's own
 ``on_stop()`` no longer flattens, and ``finally`` explicitly stops any
 ``DEGRADED`` strategy too, via :func:`stop_degraded_strategies`, so its own
 teardown still runs — though on the dominant signal path the engines are
@@ -74,12 +79,13 @@ from uuid import UUID
 import structlog
 from nautilus_trader.config import CacheConfig, LoggingConfig
 from nautilus_trader.live.node import TradingNode
-from nautilus_trader.trading.trader import Trader
 from structlog.contextvars import bind_contextvars, unbind_contextvars
 
 from src.config import IBKRSettings
+from src.core import live_startup_reconcile
 from src.core.live_account_gate import verify_connected_account
 from src.core.live_bar_observer import LiveBarObserver, build_bar_observer_config
+from src.core.live_broker_state import read_broker_state
 from src.core.live_check import GATE_PHASE, preflight_gate
 from src.core.live_check_driver import AccountVerifier, NodeFactory
 from src.core.live_check_node import (
@@ -105,6 +111,7 @@ from src.core.live_session_node import (
     refusal_from_report,
     report_instrument_shortfall,
     request_node_stop,
+    stop_degraded_strategies,
     unsubscribe_runner_topics,
     validate_spec_is_materialisable,
 )
@@ -121,6 +128,7 @@ from src.core.live_session_steady_state import (
     release_record,
 )
 from src.core.live_session_warmup import WarmupWatch, warmup_deadline_seconds
+from src.core.live_startup_reconcile import capture_local_positions
 from src.core.live_strategy_guard import (
     GUARD_FAILED_EVENT,
     NoStrategyStartedError,
@@ -129,6 +137,7 @@ from src.core.live_strategy_guard import (
 )
 from src.core.live_trade_recorder import POSITION_EVENTS_TOPIC, RecordedTrade, TradeRecorder
 from src.core.live_trader_id import derive_trader_id
+from src.models.position_reconciliation import CachedPosition, StartupReconciliation
 from src.models.session import DEFAULT_HEARTBEAT_INTERVAL_SECONDS, SessionSpec
 
 ClientBuilder = Callable[..., None]
@@ -161,6 +170,8 @@ class LiveSessionRunner:
             780 ticks without waiting 6.5 hours.
         node_factory, account_verifier, client_builder, connection_reader: The
             four broker-facing seams (``live_check_driver.py:124-125``).
+        broker_state_reader: The fifth (Story 4.2): how ``reconcile`` asks the
+            broker what it holds — Story 4.1's ``read_broker_state``.
         stop_signals: The stop-signal policy (Story 2.6), injected so a test
             needs no real signal or event loop; ``None`` builds the production
             :class:`~src.core.live_session_signals.SessionStopSignals`.
@@ -190,6 +201,7 @@ class LiveSessionRunner:
         account_verifier: AccountVerifier = verify_connected_account,
         client_builder: ClientBuilder = build_clients,
         connection_reader: ConnectionReader = read_ibkr_connection_status,
+        broker_state_reader: live_startup_reconcile.BrokerStateReader = read_broker_state,
         stop_signals: SessionStopSignals | None = None,
         trade_sink: Callable[[RecordedTrade], bool] | None = None,
     ) -> None:
@@ -210,6 +222,7 @@ class LiveSessionRunner:
         self._account_verifier = account_verifier
         self._client_builder = client_builder
         self._connection_reader = connection_reader
+        self._broker_state_reader = broker_state_reader
         self._trader_id = derive_trader_id(session_id)
         self._log = structlog.get_logger(__name__).bind(session_id=str(session_id))
         # Story 2.7. The runner *wires* the containment; the policy is the
@@ -239,6 +252,9 @@ class LiveSessionRunner:
         self._trade_recorder: TradeRecorder | None = None
         self._rejection_tally: RejectionTally | None = None
         self._warmup: WarmupWatch | None = None
+        #: Story 4.2: the cache before Nautilus's own pass, and the phase's proof.
+        self._local_positions: tuple[CachedPosition, ...] | None = None
+        self._reconciliation: StartupReconciliation | None = None
         self._subscriptions: list[tuple[str, Any]] = []
         self._deadline, self._trader_started, self._ownership_lost = 0.0, False, False
         #: Set once teardown's own drain starts (review 2026-09-12): a reclaim
@@ -383,7 +399,7 @@ class LiveSessionRunner:
             self._signals.raise_if_requested()
             loop.run_until_complete(self._phase_gate_account())
             self._signals.raise_if_requested()
-            self._phase_reconcile()
+            loop.run_until_complete(self._phase_reconcile())
             self._signals.raise_if_requested()
             self._phase_warmup()
             self._signals.raise_if_requested()
@@ -547,9 +563,15 @@ class LiveSessionRunner:
             )
 
     def _phase_node_connect(self) -> None:
-        """Start the node; wait for a post-condition of the whole startup."""
+        """Start the node; wait for a post-condition of the whole startup.
+
+        Nautilus's own startup reconciliation runs inside this wait
+        (``kernel.py:1008-1027``), so the cache is snapshotted first: the last
+        instant it holds only what Redis gave it (Story 4.2, decision D-F).
+        """
         with phase(self._log, "node:connect"):
             assert self._loop is not None and self._node is not None
+            self._local_positions = capture_local_positions(self._node, self._log)
             self._run_task = self._loop.create_task(self._node.run_async())
             wait = await_trader_started(
                 self._node,
@@ -573,12 +595,24 @@ class LiveSessionRunner:
             # an unverified account — same fail-closed reading as `live_check_driver`.
             raise GateRefusedError(decision.refusal or UNEXPLAINED_ACCOUNT_REFUSAL)
 
-    def _phase_reconcile(self) -> None:
-        """Epic 4 (FR35, AR25). A no-op placeholder — deliberately does
-        nothing (``deferred-work.md:542-548``).
+    async def _phase_reconcile(self) -> None:
+        """Prove the cache matches the broker before any strategy exists (Story 4.2).
+
+        Verifies and completes Nautilus's own pass rather than running one —
+        that pass already ran inside ``node:connect`` and is read-only against
+        the broker. Policy in :func:`~src.core.live_startup_reconcile.reconcile_at_startup`:
+        enforce the broker-ward engine settings, read the broker, refuse a
+        strategy position it contradicts, correct the rest broker-ward, and
+        re-verify 0 discrepancy (FR33, FR35, NFR9). Every refusal raises, so
+        this phase logs ``failed`` and no later phase runs (AR39).
         """
         with phase(self._log, "reconcile"):
-            pass
+            self._reconciliation = await live_startup_reconcile.reconcile_at_startup(
+                self._node,
+                log=self._log,
+                local_before=self._local_positions,
+                read_state=self._broker_state_reader,
+            )
 
     def _phase_warmup(self) -> None:
         """Arm the warm-up watch (Story 4.4). Warms nothing, touches no node.
@@ -692,8 +726,15 @@ class LiveSessionRunner:
             self._log.error("session.connection_read_failed", error_type=type(exc).__name__)
 
     def _phase_trading(self) -> None:
-        """Materialise and start the strategies, then declare the trader started."""
+        """Materialise and start the strategies, then declare the trader started.
+
+        Opens with Story 4.2's latch (decision D-I, NFR18): no strategy is
+        materialised unless ``reconcile`` produced its proof — ordering alone
+        guarantees it today, and the latch turns a later edit that no-ops or
+        swallows reconciliation into a refusal rather than unverified trading.
+        """
         with phase(self._log, "trading"):
+            live_startup_reconcile.require_reconciled(self._reconciliation)
             assert self._node is not None
             self._guard.expect(len(self._spec.strategies))
             started = [spec for spec in self._spec.strategies if self._start_strategy(spec)]
@@ -1045,83 +1086,3 @@ class LiveSessionRunner:
             trader_id=self._trader_id,
             ownership_lost=self._ownership_lost,
         )
-
-
-def stop_degraded_strategies(trader: Trader, log: Any) -> list[str]:
-    """Explicitly stop every ``DEGRADED`` strategy at teardown (Story 3.1, AC #6).
-
-    ``Trader._stop()`` guards on ``is_running`` — ``state == RUNNING``
-    exactly — so a ``DEGRADED`` strategy's ``on_stop()`` never runs on the
-    normal teardown path. Before Story 3.1 that was strictly *safer*:
-    ``on_stop()`` still flattened positions, and skipping it stopped an
-    unrelated ``on_bar`` bug from manufacturing an exit (NFR14, AR43). After
-    Story 3.1 removes the flatten, the same skip inverts into a leak — no
-    strategy-owned cleanup at all — which this closes.
-
-    **What this does and does not deliver** (review correction, 2026-08-29;
-    the first wording claimed the whole leak was closed). On the dominant
-    **signal** stop path, ``request_node_stop`` has already driven
-    ``node.stop()`` before ``run()``'s ``finally`` reaches this function, so
-    the engines are down and ``unsubscribe_bars`` does **not** reach a live
-    data engine. What is delivered on every path is the contained ``on_stop()``
-    itself and the terminal ``STOPPED`` state. The unsubscribe flows through a
-    running engine only on the phase-failure paths where the node is still up.
-    The call site cannot be moved earlier (see ``run()``'s ``finally``), so
-    this is the accepted scope, stated rather than implied.
-
-    **Class-agnostic, deliberately** (review disclosure, 2026-08-29): this
-    stops every ``DEGRADED`` strategy whatever its class, including one from
-    the unversioned ``src/core/strategies/custom/`` submodule that AC #3's
-    lifecycle scan cannot reach. ``custom/sma_crossover_long_only.py:86``
-    still flattens in its ``on_stop()``, so stopping it here runs that
-    flatten where ``Trader._stop()``'s ``is_running`` skip previously
-    suppressed it. On the signal path the exec engine's queue is already
-    stopped and the order does not leave; on the phase-failure paths it can.
-    Accepted rather than gated: the fix belongs in the submodule, and gating
-    would put strategy-class knowledge in the runner, which has none today.
-
-    Measured (installed nautilus-trader 1.220.0): ``(DEGRADED, STOP) ->
-    STOPPING`` is a legal FSM transition (``common/component.pyx:1594``), an
-    explicit ``strategy.stop()`` runs ``on_stop()`` and ends ``STOPPED``, and
-    a raise inside ``on_stop()`` during that explicit stop PROPAGATES and
-    strands the strategy in ``STOPPING`` — hence the per-strategy
-    ``BaseException`` containment below; one bad strategy's teardown must
-    never abort the rest, nor prevent the remaining degraded strategies from
-    being stopped.
-
-    Module level, not a method (the class is already at its sanctioned
-    over-cap size). ``trader.strategies()`` is a plain method returning
-    ``list[Strategy]`` — NOT a property (``trading/trader.py:160``) —
-    iterating the un-called attribute would be a ``TypeError`` this
-    function's own containment would otherwise silently swallow.
-
-    Returns a ``shutdown()``-shaped problems list (one entry per failed stop,
-    carrying only the exception **type**, per NFR26); empty when every
-    degraded strategy stopped cleanly.
-
-    The ``strategy_stop:`` prefix is load-bearing (review fix, 2026-08-29):
-    these entries are concatenated into ``_shutdown_problems`` alongside
-    ``shutdown()``'s own, and ``shutdown()`` reports a failed ``node.stop()``
-    as ``"stop: {type}"`` (``live_check_node.py:240``). Byte-identical strings
-    made a strategy's teardown raise indistinguishable from the broker socket
-    failing to close, which is what the CLI tells the operator about.
-    """
-    problems: list[str] = []
-    for strategy in trader.strategies():
-        if not strategy.is_degraded:
-            continue
-        try:
-            strategy.stop()
-        except BaseException as exc:  # noqa: BLE001 - one bad strategy must not abort teardown
-            problems.append(f"strategy_stop: {type(exc).__name__}")
-            log.warning(
-                "strategy.stop_failed",
-                error_type=type(exc).__name__,
-                strategy_id=str(getattr(strategy, "id", "unknown")),
-            )
-        else:
-            log.info(
-                "strategy.stopped_while_degraded",
-                strategy_id=str(getattr(strategy, "id", "unknown")),
-            )
-    return problems

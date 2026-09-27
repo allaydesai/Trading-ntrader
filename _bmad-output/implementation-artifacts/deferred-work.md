@@ -619,6 +619,16 @@ Non-blocking findings from the three-layer adversarial review. Blocking items (2
   `trading` phase of the startup sequence — **and for Epic 4**, which owns the reconciliation that
   makes the confirmation truthful after a reconnect. A runner that calls it straight after
   observing a live socket would satisfy the type signature while defeating the design.
+  **Story 4.2 sanity check (2026-09-27, decision D-J): still no production caller, deliberately.**
+  Startup reconciliation is genuine now, but the first call sets `_has_ever_connected`, which arms
+  the monitor's own `connection.lost` → `_unavailable_since` → `connection.halted` path; the halt
+  clock is cleared only by a *later* confirm; the steady state narrates transitions precisely
+  because the monitor is silent; and `trading_permitted` has no production reader (the order gate
+  is `submission_withheld`). A startup-only grant would make every later outage log
+  `connection.halted` 60 s after the loss even if it reconnected in 5 s. So the call goes live
+  with **Story 4.3**'s reconnect re-confirm, together; `live_startup_reconcile` joined the zero-callers
+  scan (`test_confirm_state_reestablished_is_never_called_in_this_story`), which 4.3 changes
+  deliberately.
 
 - ~~**Nothing polls the monitor yet, and the halt deadline is only evaluated inside `observe()`.**~~
   — **RESOLVED in story-2.5, 2026-08-21**, by exactly the carrier this item recommends: the
@@ -1223,7 +1233,10 @@ New items:
   Epic 4 ships without it; check them when the reconcile path lands. *Story 4.1 (2026-09-22): the
   independent broker read this needs now exists (`src/core/live_broker_state.read_broker_state`);
   comparing it against the cache and acting on a divergence is still Story 4.2's, so the entry
-  stays open.*
+  stays open.* **CLOSED by Story 4.2 (2026-09-27):** the `reconcile` phase
+  (`src/core/live_startup_reconcile.py`) compares the cache against that read at every session start,
+  corrects broker-ward what no strategy believes, and refuses the start when a strategy's own
+  position is contradicted; `live_cache.py` and `docs/agent/nautilus.md` now say so.
 
 ## Deferred from: code review of story-2.4 (2026-08-19)
 
@@ -1357,7 +1370,8 @@ one superseded) and five were read and left open with updated notes. The items b
   called (*Judgment call #6*: `reconcile` is a no-op placeholder, so there is no genuine
   reconciliation for the confirmation to follow). A reader could reasonably assume feeding the
   monitor means acting on it. **Action for Epic 4**, which owns reconciliation and is the only place
-  the confirmation can be truthful.
+  the confirmation can be truthful. *Story 4.2 (2026-09-27): still unread in production — see the
+  D-J sanity check on the `confirm_state_reestablished` entry above; routed to Story 4.3.*
 
 - **The heartbeat's `asyncio.to_thread` runs on the kernel's own thread pool.**
   `TradingNode.__init__` installs the kernel's `ThreadPoolExecutor` as the loop's default
@@ -2569,7 +2583,13 @@ at 200s with zero orders), `logs/p10-fresh-leg1-*.log` and `logs/p10-fresh-leg2-
   for whoever picks up Story 4.2: `p7-fill-0901` is a live, still-existing reproduction of the
   "reconciliation didn't correct a stale non-zero position" case — cheaper to test against than
   constructing a new one.** Not fixed or worked around here; the session was stopped at 200s with
-  zero orders and left exactly as found.
+  zero orders and left exactly as found. **Dispositioned by Story 4.2 (2026-09-27):** the mechanism
+  is now measured (the framework's per-cached-position sweep filters by the IB client's venue, so
+  it never asks about NVDA, and the adapter never reports a flat instrument anyway), and this shape
+  — a *strategy-owned* position the broker contradicts — now **refuses the start** at `reconcile`
+  (PO ruling 2026-09-27, option A), naming the instrument and both quantities; a merely synthetic
+  stale position is corrected broker-ward instead. Live confirmation is Procedure P17b (operator
+  only — it starts strategies if reconciliation passes).
 
 - **Housekeeping, not a defect.** A pre-existing `LONG 4 AAPL.NASDAQ` position was found still
   open at the broker during this session's sweep (unrelated instrument, unrelated to today's
@@ -2685,7 +2705,13 @@ at 200s with zero orders), `logs/p10-fresh-leg1-*.log` and `logs/p10-fresh-leg2-
   and a persisted row would silently join a strategy's own comparison sample. This is a
   string-comparison filter, not a reconciliation policy — Story 4.2 owns what reconciliation
   actually does with a disagreement and can flip this with a one-line change plus a named test.
-  **Owner: Story 4.2**, to confirm or flip.
+  **Owner: Story 4.2**, to confirm or flip. **CONFIRMED by Story 4.2 (2026-09-27), not flipped
+  (decision D-L):** every broker-ward correction reconciliation makes is a fill attributed to
+  `EXTERNAL`/`INTERNAL-DIFF`, landing in that owner's position and never a strategy's (measured),
+  and Story 4.2 refuses rather than rewrites a contradicted strategy position — so a synthetic
+  position's round trip is never a strategy decision and must never join a strategy's comparison
+  sample. `live_trade_recorder.py` is zero-diff; the new models module's duplicated
+  `SYNTHETIC_STRATEGY_IDS` is pinned equal to `RECONCILIATION_STRATEGY_IDS` by import.
 - **`trades` has no `strategy_id` column — a multi-strategy session's rows cannot be attributed
   per strategy.** Not fixed here (AR43 forbids inventing new metrics tables/columns for paper
   results without an epic-level decision) and not urgent within Epic 3 (today's sessions run one
@@ -3149,7 +3175,8 @@ measured against the installed `nautilus-trader 1.220.0` while building
   `timeout_secs` (`NODE_TIMEOUT_RECONCILIATION`) is validated positive and never enforced (`:874`).
   So the framework's "Execution state reconciled" proves nothing about positions. Story 4.2's
   0-discrepancy check must compare against `read_broker_state`, never lean on the framework's log
-  line.
+  line. **CLOSED by Story 4.2 (2026-09-27):** it does — `reconcile_at_startup` compares the cache
+  against `read_broker_state` and reports `reconcile.ok` only at 0 discrepancy.
 - **The adapter's own 30 s timeout poisons every joiner of the shared request.** → **Story 4.2.**
   Measured at Task 1: `_await_request`'s `wait_for(request.future, 30)` *cancels* the shared
   `OpenPositions` future on timeout, so every other awaiter of the same request gets
@@ -3157,7 +3184,10 @@ measured against the installed `nautilus-trader 1.220.0` while building
   catch. Nautilus's own startup reconciliation runs two joiners concurrently (orders and positions
   both call `get_positions`). `read_broker_state` classifies a cancelled future as
   `POSITIONS_UNANSWERED` and never cancels anything itself. What Nautilus's reconciliation does
-  with that `CancelledError` was not measured.
+  with that `CancelledError` was not measured. **Story 4.2 (2026-09-27):** at the `reconcile` phase
+  this surfaces as `BrokerStateUnavailableError(POSITIONS_UNANSWERED)`, which fails the phase
+  explicitly (exit 4) — never "flat". Not measured further; the runtime read inherits it
+  (→ **Story 4.3**).
 - **A mid-session broker read diverts real position updates for its duration.** → **Story 4.3.**
   While any `OpenPositions` request is in flight, `process_position` appends streaming updates to
   that request's result instead of routing them to the exec client's `_on_position_update`
@@ -3198,7 +3228,10 @@ measured against the installed `nautilus-trader 1.220.0` while building
   time. That is explicit and never "flat", but it cannot recover within the process. Recovering
   would mean removing the dead request, which writes adapter state; D-B keeps the reader read-only.
   Pre-existing adapter defect. **Owner:** Story 4.2 (whose phase fails on it) or 4.3 (a runtime
-  read), whichever first observes it live.
+  read), whichever first observes it live. **Story 4.2 (2026-09-27):** the phase fails on it
+  explicitly (`POSITIONS_UNANSWERED`, exit 4) and a process restart clears it; not observed live
+  (P17a could not run), so it stays routed to **Story 4.3**, whose periodic read would hit it
+  mid-session with no restart to clear it.
 - **Multi-currency cash would be returned partially.** → **Story 4.7** (or whoever requests
   `$LEDGER`). `_read_cash` returns as soon as any one currency has `TotalCashValue`. Only the
   account's base currency arrives, because the adapter's `AllTags` subscription omits `$LEDGER`
@@ -3281,3 +3314,65 @@ story.
   **Pre-existing; the first story that records a session's client id.** Neither the session row
   nor Redis stores the client id a session connected with, so a config change between the
   session's start and a reconcile can make the new `+ 1` equal the old live id.
+## Deferred from: story-4.2 (2026-09-27)
+
+Story 4.2 (reconcile against the broker before any strategy trades). Every item below was measured
+against the installed `nautilus-trader 1.220.0` with a real `LiveExecutionEngine` + `Cache` +
+`Portfolio` and an IB-shaped NETTING client (Task 1; pinned as named canaries in
+`tests/component/core/test_live_startup_reconcile_engine.py`). Each names an owner; none blocks the story.
+
+- **A normal mid-position restart leaves three open positions on the instrument.** → **Story 4.5.**
+  With strategy S holding +10 in the Redis cache and the broker at +10, the IB adapter's
+  fabricated `FILLED` order report (keyed `client_order_id = instrument id`) is unknown to the
+  cache, so the framework imports it as `EXTERNAL +10`; its position pass then sees net 20 against
+  the broker's 10 and adds `INTERNAL-DIFF −10`. Net is right (Story 4.2's check passes); the
+  strategy's own view is not the broker's position, it is its old one beside two synthetics.
+- **`sma_crossover` reads every strategy's positions on its instrument — an NFR14 hazard whenever a
+  synthetic position shares a traded instrument.** → **Story 4.5.** `_generate_buy_signal`/
+  `_generate_sell_signal` call `cache.positions(venue, instrument_id)` with no strategy filter and
+  `close_position()` every opposite-side open position — including `EXTERNAL`/`INTERNAL-DIFF`
+  ones. In the triple above, a SELL crossover closes S +10 **and** `EXTERNAL` +10 (sells 20 against
+  a broker at 10); a BUY closes `INTERNAL-DIFF −10` (buys 10 more). Story 4.2 refuses only a
+  *contradicted* strategy position (D-D); a consistent strategy beside synthetics passes, and the
+  hazard is the resume path's to close (e.g. a strategy-filtered read, or adopting the broker's
+  position via `external_order_claims`).
+- **A restart after the broker position *shrank* aborts the process inside Nautilus's own pass.** →
+  **Story 4.5 (HIGH).** After a first restart imported `EXTERNAL "NVDA.NASDAQ"` filled 10, a later
+  restart with the broker at 4 makes `_reconcile_order_report` see `_should_update` → `True` and
+  call `_generate_order_updated` with quantity 4 on an order filled 10; `leaves_qty` underflows and
+  the process dies on a Rust panic (`raw outside valid range`) — uncatchable, inside `node:connect`,
+  before any phase of ours runs, leaving the row `running` until its heartbeat goes stale. The
+  code reading predicted a `False` return (`report.filled_qty < order.filled_qty`); the measurement
+  found the abort first. Pinned in a subprocess by
+  `TestTheShrunkReEntryAbortCanary::test_the_second_restart_aborts_the_process`, which goes red by
+  name when an upgrade fixes it. The ordinary resume journey reaches it: restart mid-position,
+  let the strategy reduce, stop, restart.
+- **`node:connect`'s timeout message cannot say which of the three pre-trader waits failed.** →
+  unowned, named: whoever next touches `await_trader_started`. The kernel ordering
+  (`kernel.py:1015-1027`: reconciliation, then `_emulator.start()`, then portfolio, then
+  `trader.start()`) would allow it — an emulator not yet running after engines connected means the
+  framework's reconciliation is what never finished. Today all three causes are named together.
+- **The stranded-`ACCEPTED`-order startup stall (`p7-position-test`) is not fixed here.** →
+  **Story 4.3.** It is a portfolio-initialisation timeout on an order the broker filled but the
+  cache still holds open — open-order reconciliation, which is the adapter's not-open/cancelled
+  conflation already routed to 4.3. It fails at `node:connect` (the trader never starts), before
+  `reconcile` runs.
+- **Two story-text corrections, recorded rather than silently absorbed.** (1) F2/F3's mechanism is
+  stronger than drafted: the framework's sweep of cached positions calls
+  `self._cache.positions_open(venue)` with the IB client's venue (`INTERACTIVE_BROKERS`) while
+  positions carry the exchange (`NASDAQ`), so it never asks about a phantom at all
+  (`position_calls == [None]`) — the adapter ignoring its filter is a second, independent reason.
+  (2) F14 counted eight runner-building test files; five construct `LiveSessionRunner`
+  (`test_session_runner_{phases,stop,strategy_failure,order_path,warmup}.py`) — the two
+  `test_epic1_ac_*` integration files drive `run_live_check` and needed no seam.
+
+## Deferred from: code review of 4-2-reconcile-against-the-broker-before-any-strategy-trades (2026-09-27)
+
+- A normal mid-position restart passes with `S +10 / EXTERNAL +10 / INTERNAL-DIFF −10` (net matches) although this story's own deferred notes call that state an order hazard for `sma_crossover` [src/models/position_reconciliation.py] — deferred, routed to Story 4.5 (strategy adoption)
+- Open orders are counted, never compared with the broker's; a stale open order passes [src/core/live_startup_reconcile.py:268] — deferred, routed to Story 4.3 (open-order reconciliation)
+- A cached working order that fills, or a manual TWS trade, between the broker read and the cache comparison makes the phase correct toward a stale snapshot; `framework_resolved` mislabels such changes [src/core/live_startup_reconcile.py:240] — deferred, runtime alignment is Story 4.3's
+- A broker-only position with no average price is imported by the framework at a fill price of 0 (F5's fallback) [src/core/live_startup_reconcile.py:361] — deferred, rare (IB reports `avgCost` for every held position); revisit with 4.3
+- The D-B settings check runs after `node:connect`; with `generate_missing_orders=False` the kernel's own pass fails first and the session exits 4 blaming the broker [src/core/live_startup_reconcile.py:188] — deferred, config-time check belongs in the node builder
+- Any unresolvable broker position — including a manual holding in an instrument this session never trades — refuses every start of every session (D-E, as specified) [src/core/live_startup_reconcile.py:313] — deferred, policy revisit with Story 4.5
+- Duplicate broker rows for one instrument id collapse in `held = {…}` [src/models/position_reconciliation.py:154] — deferred, pre-existing in Story 4.1's reader contract
+- A stop signal that arrives while `reconcile` refuses demotes the refusal to a clean stop (exit 0) [src/core/live_session_runner.py:421] — deferred, pre-existing (Story 3.1 stop semantics; nothing trades either way)

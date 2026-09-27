@@ -360,13 +360,17 @@ def start(session: str, connect_timeout: float) -> None:
     Startup runs in this order, each phase logging `phase=<name> status=...`:
       gate:static -> node:build -> node:connect -> gate:account
       -> reconcile -> warmup -> subscribe -> trading
-    `reconcile` is a no-op placeholder until Epic 4. Each strategy warms its
+    `reconcile` compares the engine cache against IBKR's own view of the
+    account before any strategy starts: what only the net disagrees on is
+    corrected broker-ward, a strategy position the broker contradicts refuses
+    the start, and `ok` means 0 discrepancy remains. Each strategy warms its
     indicators from history as it starts, before it subscribes to live bars.
 
     \b
     Exit codes:
       0  the session ran and stopped cleanly
-      1  a configuration, state or database failure
+      1  a configuration, state or database failure — including startup
+         reconciliation refusing to let the session trade
       2  usage error
       3  the safety gate refused the connection (scriptably distinct)
       4  the broker was unreachable, or the trader never started

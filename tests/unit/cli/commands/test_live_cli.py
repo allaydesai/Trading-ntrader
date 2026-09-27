@@ -1385,6 +1385,38 @@ class TestStartExitCodes:
 
         assert result.exit_code == 4
 
+    def test_a_reconciliation_refusal_names_the_position_and_exits_one(self, runner):
+        """Story 4.2 (D-D, D-H): the operator is told which instrument, what
+        this session recorded and what the broker holds, and what to do — the
+        message is operator-safe, so it is printed rather than withheld as a
+        third-party type name. The row's release is the runner's own
+        ``finally`` (proven through ``runner.run()`` in
+        ``test_session_runner_phases.py``), not this command's."""
+        from decimal import Decimal
+
+        from src.core.live_startup_reconcile import ReconciliationFailedError, ReconciliationFailure
+        from src.models.position_reconciliation import PositionDiscrepancy
+
+        row = PositionDiscrepancy(
+            instrument_id="NVDA.NASDAQ",
+            local_quantity=Decimal("22"),
+            strategy_quantity=Decimal("22"),
+            broker_quantity=Decimal("0"),
+        )
+        error = ReconciliationFailedError(
+            ReconciliationFailure.STRATEGY_POSITION_CONTRADICTED,
+            "a strategy is contradicted",
+            (row,),
+        )
+
+        with _start_harness(runner_error=error):
+            result = runner.invoke(live, ["start", "alpha-session"])
+
+        assert result.exit_code == 1
+        assert "strategy_position_contradicted" in result.output
+        assert "NVDA.NASDAQ" in result.output and "+22" in result.output
+        assert "broker +0" in result.output
+
     @pytest.mark.parametrize(
         "exception_factory",
         [

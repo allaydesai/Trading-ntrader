@@ -90,6 +90,12 @@ STOP_PATH_MODULES = (
 #: would be inert, not protective; the scan that does cover all five new
 #: reconcile modules is ``TestTheReconcileModulesSubmitNothing`` in
 #: ``tests/unit/cli/commands/test_live_reconcile_cli.py``.
+#: ``src/core/live_startup_reconcile.py`` (Story 4.2) is **NOT** on the list: it is the
+#: ``reconcile`` phase's body, run once at startup before any strategy exists,
+#: and nothing in the teardown ``finally`` calls into it. Its only engine write
+#: is ``reconcile_execution_report`` — not an order or position method — so
+#: membership would be inert, not protective. ``LIVE_MODULE_GLOBS`` still scans
+#: it for every forbidden order method.
 
 #: ``src/core/live_exec_avg_px.py`` (2026-09-01) is likewise **NOT** on the list,
 #: for a simpler reason: it is build-time only. It runs once inside

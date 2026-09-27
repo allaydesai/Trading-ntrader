@@ -428,9 +428,12 @@ class SessionSteadyState:
         is not "by test" for a third-party adapter's private flags.
 
         ⚠️ ``confirm_state_reestablished()`` is deliberately **never** called
-        in this story. Epic 1 retro Action Item #7 requires its only production
-        call site to run *after genuine reconciliation*, and ``reconcile`` is a
-        no-op placeholder here. Granting permission stays Epic 4's.
+        here. Epic 1 retro Action Item #7 requires its only production call
+        site to run *after genuine reconciliation*. Story 4.2 made startup
+        reconciliation genuine but still does not grant (decision D-J): the
+        first grant arms the monitor's LOST/halt path below, whose clock only a
+        *later* confirm clears — Story 4.3's reconnect re-confirm. Until then
+        this narration stays the only transition record.
 
         **The transition narration lives here, not in the monitor** (code
         review 2026-08-30). The monitor's own ``connection.lost`` fires only
