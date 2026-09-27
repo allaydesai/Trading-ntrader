@@ -1327,6 +1327,15 @@ class TestImportPurity:
         # (Story 4.6) consumes — AR38's boundary, crossed in domain types, never
         # through a `src.db`/`src.services` import. Added on creation.
         "src.core.live_broker_state",
+        # Story 4.6. The on-demand reconcile driver. It needs the comparison
+        # in `src.services.reconciliation_service` and takes it as an injected
+        # `compare` port instead of importing it — the Story 3.5/3.6 `sink`
+        # precedent — so it stays inside this list's rule. Added on creation.
+        "src.core.live_reconcile",
+        # Story 4.6. Reads a session's engine cache through Nautilus's own
+        # adapter and converts it to `src.models.reconciliation` values at the
+        # boundary; no `src.db`/`src.services` import. Added on creation.
+        "src.core.live_session_view",
     )
 
     @pytest.mark.parametrize("module_name", MODULES)

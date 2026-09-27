@@ -83,6 +83,16 @@ NODE_FACING_MODULES = (
     # failure here must surface as `BrokerStateUnavailableError`, never an exit.
     # Added in the creating commit.
     "src/core/live_broker_state.py",
+    # Story 4.6. The on-demand reconcile driver builds, runs and tears down its
+    # own read-only node (`ibkr_live_client_id + 1`) and drives the broker
+    # read on it; every failure must surface as a typed exception the CLI maps
+    # to AR28's table — raising is fine here, exiting never is. Added in the
+    # creating commit.
+    "src/core/live_reconcile.py",
+    # Story 4.6. Reached from the driver above, between the broker read and
+    # the node's teardown: an exit here would skip that teardown and strand
+    # the `+ 1` client id on the Gateway. Added in the creating commit.
+    "src/core/live_session_view.py",
     "src/services/session_record.py",
     "src/services/session_service.py",
 )
@@ -103,12 +113,15 @@ NODE_FACING_MODULES = (
 #: *process* is exactly this layer's job; the rule is that nothing **below**
 #: it may. ``live_status.py`` (Story 2.8) joined at creation: `status`/`list`
 #: exit through the same ``EXIT_CODES``-derived ``SystemExit`` `live_start.py`
-#: does, for the same reason.
+#: does, for the same reason. ``live_reconcile.py`` (Story 4.6) joined at
+#: creation for the same reason again: `reconcile` exits 0/5, or through
+#: ``EXIT_CODES`` on a failure.
 EXEMPT_MODULES = (
     "src/core/live_session_signals.py",
     "src/cli/commands/live.py",
     "src/cli/commands/live_start.py",
     "src/cli/commands/live_status.py",
+    "src/cli/commands/live_reconcile.py",
 )
 
 

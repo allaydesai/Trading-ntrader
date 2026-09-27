@@ -1836,3 +1836,127 @@ type and where it was raised.
 | Date | Operator | Result | Notes |
 | ---- | -------- | ------ | ----- |
 | 2026-09-22 | Story 4.1 dev session | ⏳ **defined, not run** | Attempted at 21:15 ET (Tuesday). This procedure does not need RTH, but the story's harness worktree has no `.env`: it is gitignored, and the charter forbids creating or reading one. The attempt, `live_node_probe.py --run-seconds 1 --verify-account --read-broker-state`, therefore stopped exactly where it should, before any socket was opened: `RESULT: fail reason=config_error msg=Cannot build an IBKR execution client: TWS_ACCOUNT is not set …`. That is evidence the tooling runs and fails closed, not that P15 passes. Whether a Gateway was listening could not be checked: the session's sandbox refused every port probe (`nc`, `lsof`). Informational only, never a gate for Story 4.1. The broker-double proofs are `test_live_broker_state_adapter.py`, which uses the real IB client, exec client, instrument provider and `ExecutionEngine` with only the socket stood in. It covers AC #1, #3 and #5 and the D-C no-cancel property. `test_live_broker_state.py` covers every AC #4 reason. Run P15 from a checkout that has `.env` the next time a Gateway is up. |
+
+## Procedure P16: check a session's positions and cash against IBKR on demand
+
+**Introduced by**: Story 4.6 — Check Positions and Cash Against IBKR on Demand
+**Verifies**:
+- AC #1 live: `ntrader live reconcile <session>` connects, reads IBKR's positions and cash, reads
+  the session's own view, prints an explicit result and disconnects.
+- AC #2 live (Variant B): it runs on `ibkr_live_client_id + 1` beside a running session without
+  evicting it.
+- AC #3/#5 live: every line names an instrument (or currency) with the session's value, IBKR's value
+  and the difference; a clean account exits `0`.
+- AC #6 live: the whole command completes in under 30 s.
+- NFR26: the account is masked in every line the command prints.
+
+**Tool**: `uv run python -m src.cli.main live reconcile <name-or-id>`
+
+> **Numbering note.** Epic 4's stories are implemented in parallel worktrees. If another Epic 4
+> story also appended a "Procedure P16", the integrator renumbers one of them. The content of this
+> section does not depend on its number.
+
+### What it does, and what it does not do
+
+It is strictly a read, on both sides:
+
+- **Broker side.** It builds its own node on `IBKR_LIVE_CLIENT_ID + 1`. The node carries no
+  strategy, controller or bar observer, so nothing on it can submit an order, and it uses an
+  in-memory cache, so it writes no Redis. Layer 1 of the gate runs before any socket and Layer 2
+  (`gate:account`) after connecting. Once connected it calls Story 4.1's `read_broker_state`.
+- **Session side.** It reads the session's durable engine cache in Redis
+  (`trader-PAPER-<8hex>:`) through Nautilus's own adapter, with load methods only. That covers the
+  net of its open positions per instrument, and the last `TotalCashValue` its engine received.
+  This read is proven write-free by `MONITOR` at integration tier
+  (`tests/integration/core/test_live_session_view_redis.py`).
+
+It then compares both sides exactly and prints every line. It changes **nothing** anywhere: no
+transition, no record, no Redis key, no order.
+
+A session whose engine cache is empty has no view to compare. That covers a session that never ran,
+or one whose Redis was flushed. It exits `1` with `no_engine_state`, never "flat". The check
+happens right after Layer 1 and before any IBKR socket (the order is gate → session-state precheck
+→ node), so it costs no Gateway connection.
+
+This run is **not** evidence for the failure paths:
+- a never-answering broker;
+- an unreadable cache;
+- the budget clamp.
+
+Those are proven at component tier (`tests/component/core/test_live_reconcile.py`,
+`test_live_session_view.py`).
+
+### Preconditions
+
+- The bare, non-compose paper Gateway, logged in, and **no other IBKR login** (error 162). RTH is
+  not needed.
+- A session that **has run at least once against this Redis**. `live list` names it; an empty
+  namespace reads `no_engine_state`.
+- A checkout whose `.env` carries `TWS_ACCOUNT`, `IBKR_PORT` and `IBKR_TRADING_MODE=paper`. Without
+  `TWS_ACCOUNT` the command stops at `config_error` before any socket opens.
+- TWS (or the Gateway's account window) open beside it, showing the account's Portfolio and
+  Account panes.
+- **Variant A:** the session is stopped. **Variant B (operator only):** the session is running.
+  The session itself may trade, per the P10–P13 precedent; the reconcile never does.
+
+### Command
+
+```bash
+time uv run python -m src.cli.main live reconcile <session> 2>&1 | tee logs/p16-<date>.log
+echo "exit=${PIPESTATUS[0]}"
+
+# Variant B only, run against the *session's* log, around the reconcile's timestamp: the session
+# must show no eviction and no disconnect.
+grep -n -E "326|1100|connection\.lost" logs/<session-log>
+```
+
+### Expected output (shape)
+
+```
+reconcile: session <name> (status=<status>) against IBKR on client_id=<live+1>
+… [info] gate.static … status=ok
+… [info] live_check.building … client_id=<live+1> trader_id=PAPER-RECONCILE
+… [info] reconcile.broker_state_retrieved account=***NNN … elapsed_ms=<ms>
+… [info] reconcile.session_view_read trader_id=PAPER-<8hex> … elapsed_ms=<ms>
+reconcile session=<name> trader_id=PAPER-<8hex> account=***NNN broker_read_at=<iso>
+position <INSTRUMENT> session=<+/-Q|0> broker=<+/-Q|0> avg_price=<P> match|difference=<D> DISCREPANCY
+cash USD session=<C|unknown> broker=<C> match|difference=<D> DISCREPANCY
+RESULT: clean — positions and cash match IBKR exactly (positions=<N> currencies=1) elapsed_ms=<ms>
+   or
+RESULT: discrepancy — positions=<n> cash=<n> line(s) differ from IBKR (…); nothing was changed elapsed_ms=<ms>
+```
+
+### Pass criteria
+
+1. **An explicit result and the right exit code.** `RESULT: clean` with exit `0`, or
+   `RESULT: discrepancy` with exit `5`. The `gate.static` line comes before the build line, and the
+   build line before the broker-state line (AR39's order).
+2. **Positions match TWS.** Every `position` line's `broker=` value matches TWS's Portfolio,
+   instrument for instrument and share for share, with the sign giving long or short. Every
+   `session=` value is what the session last believed. Record each discrepancy line and say whether
+   it is expected, for example an `EXTERNAL` position opened since the session last ran.
+3. **Cash explained.** The `cash USD broker=` value equals TWS's *Total Cash Value*. For a stopped
+   session, a cash difference is expected if the account moved since it last ran; record the
+   reason.
+4. **Timed (AC #6).** The `time` output's *real* value is under 30 s, and no
+   `reconcile.budget_exceeded` record was logged. Also record the report's
+   `elapsed_ms` (start to verdict) and the reader's own `elapsed_ms` on
+   `reconcile.broker_state_retrieved`.
+5. **Masked (NFR26).** `grep -c '<full account id>'` over the lines the command itself prints
+   (`reconcile:`, `reconcile session=`, `position`, `cash`, `RESULT:`, `live reconcile failed:`)
+   is `0`. The adapter's own log lines print the raw account (P2's criterion 3 explains why), so the
+   unscoped grep will not be `0`.
+6. **Nothing traded.** `grep -c "order.submitted\|SubmitOrder" logs/p16-<date>.log` prints `0`.
+7. **The reservation.** The build line reads `client_id=<IBKR_LIVE_CLIENT_ID + 1>` and
+   `trader_id=PAPER-RECONCILE`. *(Variant B)* The session's log shows no `326`, no `1100` and no
+   `connection.lost` at the reconcile's timestamp, and `live status <session>` still reads
+   `trading` or `idle`.
+
+### Result log
+
+| Date | Operator | Result | Notes |
+| ---- | -------- | ------ | ----- |
+| 2026-09-27 | Story 4.6 dev session | ⏳ **defined, not run** | No Gateway: at 11:22 ET (Sunday) a TCP connect to ports 4001, 4002, 7496 and 7497 was refused on all four. Two attempts ran the real CLI, after the code review's gate-first reorder:
+(1) `live reconcile p13-0922` printed `reconcile: session p13-0922 (status=stopped) against IBKR on client_id=11` (the `+ 1` reservation), then `gate.static … status=ok`, then `reconcile.session_view_failed reason=no_engine_state` in 5.5 ms, and `live reconcile failed: … (no_engine_state) …`, exit `1`, before any IBKR socket. The session row was read from PostgreSQL and Redis was PINGed; no Gateway connection was attempted.
+(2) `live reconcile p7-fill-0901` passed the same header, `gate.static` and the session-state precheck, then stopped at the builder, before any IBKR socket: `live reconcile failed: Cannot build an IBKR execution client: TWS_ACCOUNT is not set …`, exit `1`.
+The worktree has no `.env`, and the charter forbids creating or reading one. **Session side, read for real (load-only, no broker needed):** `p7-fill-0901`'s engine cache (18 keys) holds **AAPL.NASDAQ +4 and NVDA.NASDAQ +22**. That is the namespace the Epic 3 retro cites for a phantom position the broker did not hold, so a Variant A run against it should name any line IBKR no longer carries. Its `accountSummary` key exists, but it was read here with a placeholder account, so cash read `unknown`. The namespaces of `p12-0921`, `p13-0922` and `rth-day-1` are **empty** on this Redis, and the reader reported `no_engine_state` for each rather than "flat". Pick a session that has run against this Redis for Variant A. Informational only, never a gate for Story 4.6. The broker-double proofs are `test_live_reconcile.py` (driver, including the `+ 1` pin on the real builder), `test_live_session_view.py`, `test_live_session_view_redis.py` (real Redis and `MONITOR`), `test_reconciliation_service.py` and `test_live_reconcile_cli.py`. |

@@ -250,3 +250,43 @@ Do **not** reach for the obvious Nautilus APIs. Each of these was measured again
 
 The operator surface is `scripts/diagnostics/live_node_probe.py
 --read-broker-state` (Procedure P15).
+
+### Reading a session's engine cache (Story 4.6)
+
+To read what a session *believes* it holds, from outside any node, call
+`src.core.live_session_view.read_session_view(session_id, account, redis)`. It
+returns a `src.models.reconciliation.SessionView` (net open quantity per
+instrument, and the last `TotalCashValue` the session's engine received), or
+raises `SessionViewUnavailableError`. This is the local side of `ntrader live
+reconcile`. The `trades` table cannot be that side: it holds closed round trips
+only, so a trades-derived position is always flat.
+
+Each point below was measured against 1.220.0:
+
+- **Load-only reads are write-free.** A fresh `CacheDatabaseAdapter` on the
+  session's `trader_id`, calling only `keys` / `load_position` / `load` (plus
+  `close()`; the set is pinned by a test), issues
+  `SCAN`, `LRANGE`, `GET`, `MGET`, `INFO` and `CLIENT SETINFO`. The namespace
+  stays byte-identical, and constructing the adapter does not initialise C
+  logging. **Never** call an adapter `add*` / `update*` / `delete*` /
+  `heartbeat` / `snapshot*` / `index_*` on a session's namespace. `flush()` is
+  `FLUSHDB` on the *whole* database.
+- **An unreachable Redis hangs the adapter's constructor forever.** Run
+  `check_redis_reachable` first.
+- **`load_positions()` silently drops a position whose instrument key is
+  missing.** `load_position` returns `None`, and the dict just lacks it. The
+  reader enumerates `keys("positions:*")` itself and fails loudly instead.
+- **Replay is correct across reuse of a position id.** A NETTING close then
+  reopen, or a flip, appends to one fill list. `Position.apply` resets at FLAT,
+  so the replay ends on the current leg.
+- **Nautilus's Rust-side `load_all()` returns no positions** for data the Python
+  adapter wrote. That is a silent flat, so do not use it.
+- **The serializer needs `msgspec`.** The reader builds `MsgSpecSerializer`
+  exactly as `NautilusKernel` does. `msgspec` is declared in `pyproject.toml`
+  for this reason; it was already a hard requirement of `nautilus-trader`.
+- **The summary key embeds the raw account** (`general:accountSummary:<acct>`).
+  Never log a key name. The account there, and on every position, is the
+  builder's normalised form (`TWS_ACCOUNT.strip().upper()`), so look it up the
+  same way.
+- **`SCAN` may return a key twice.** Dedupe position keys before netting;
+  Nautilus's own `load_positions` dedupes by id.

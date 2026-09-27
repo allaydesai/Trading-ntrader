@@ -2621,7 +2621,7 @@ development_status:
   4-3-keep-runtime-state-aligned-with-the-broker: backlog
   4-4-warm-indicators-from-history-before-the-live-stream-starts: done
   4-5-resume-a-strategy-mid-position: backlog
-  4-6-check-positions-and-cash-against-ibkr-on-demand: backlog
+  4-6-check-positions-and-cash-against-ibkr-on-demand: done
   4-7-absorb-corporate-actions-through-broker-authoritative-state: backlog
   epic-4-retrospective: optional
 
