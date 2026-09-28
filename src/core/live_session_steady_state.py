@@ -63,7 +63,14 @@ Known, accepted limits, stated rather than implied:
    bar still means the feed is alive — but ``last_bar_at`` is therefore not
    "the time of a *new* bar".
 4. The watchdog is **visibility only**. It logs once and changes nothing.
-   Broker-authoritative subscription state is Epic 4's.
+   Broker-authoritative subscription state (D6: resubscription after IB codes
+   162/10182/366) was routed by Story 4.3 to a dedicated story from the Epic 4
+   retrospective (PO ruling 3A); it is not built here.
+
+Since Story 4.3 the tick also drives the runtime reconciler
+(``live_runtime_reconcile``) right after observing the connection: it keeps the
+cache aligned with the broker and is the only path that returns trading
+permission after a loss.
 """
 
 import asyncio
@@ -78,6 +85,7 @@ from src.config import IBKRSettings
 from src.core.live_connection_monitor import ConnectionMonitor, ConnectionStatus
 from src.core.live_connection_probe import read_ibkr_connection_status
 from src.core.live_session_record import SessionReclaimedError, SessionRecordPort
+from src.core.live_strategy_guard import GUARD_FAILED_EVENT
 from src.models.session import DEFAULT_HEARTBEAT_INTERVAL_SECONDS
 
 #: How long a started session may go without a single bar before the watchdog
@@ -156,6 +164,104 @@ async def write_rejection_snapshot(
     tally.mark_written(snapshot.version)
 
 
+def flush_contained_failures(record: SessionRecordPort, guard: Any, log: Any) -> None:
+    """Persist any contained failure still queued, synchronously (Story 2.7).
+
+    The body of ``LiveSessionRunner._flush_contained_failures``, moved here
+    verbatim by Story 4.3's budget split (decision D-I) — the runner file was at
+    495 of 500 statements. The runner keeps the *when* (after the heartbeat is
+    joined, before the row is released, never once ownership is lost); this
+    keeps the *what*. Guarded per failure, AR42: a DB hiccup must not replace
+    the run's primary outcome.
+
+    Raises:
+        SessionReclaimedError: Another process owns the row; the runner stops
+            the flush and records the loss. Remaining facts belong in the
+            successor's log, not its row.
+    """
+    pending = guard.drain_pending()
+    if not pending:
+        return
+    all_failed = bool(guard.all_failed)
+    for failure in pending:
+        try:
+            record.record_strategy_failure(
+                strategy_id=failure.strategy_id,
+                spec_strategy_id=failure.spec_strategy_id,
+                error_type=failure.error_type,
+                handler=failure.handler,
+                at=failure.at,
+                detail=failure.detail,
+                all_failed=all_failed,
+            )
+        except SessionReclaimedError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - AR42: must not replace the outcome
+            log.error(
+                GUARD_FAILED_EVENT,
+                spec_strategy_id=failure.spec_strategy_id,
+                error_type=type(exc).__name__,
+            )
+
+
+def flush_rejection_snapshot(record: SessionRecordPort, tally: Any, log: Any) -> str | None:
+    """Write the tally's last pending refusal summary, synchronously (Story 3.7).
+
+    The body of ``LiveSessionRunner._flush_order_rejections``, moved here by
+    Story 4.3's budget split (decision D-I), beside the tick's own
+    :func:`write_rejection_snapshot`. Guarded, AR42: a failed write is logged
+    with its traceback and returned as a problem string, which the runner
+    appends to ``shutdown_problems`` so a lost final summary reaches the
+    operator's stop report.
+
+    Returns:
+        ``None`` when there was nothing to write or the write succeeded;
+        otherwise the ``shutdown_problems`` entry describing the failure.
+
+    Raises:
+        SessionReclaimedError: Another process owns the row.
+    """
+    snapshot = tally.pending()
+    if snapshot is None:
+        return None
+    try:
+        record.record_order_rejections(**snapshot.as_port_kwargs())
+    except SessionReclaimedError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - AR42: must not replace the outcome
+        log.error(REJECTION_RECORD_FAILED_EVENT, error_type=type(exc).__name__, exc_info=True)
+        return f"flush_order_rejections: {type(exc).__name__}"
+    tally.mark_written(snapshot.version)
+    return None
+
+
+def no_bars_overdue(
+    now: datetime, started_at: datetime | None, bars_seen: int, window_seconds: float
+) -> bool:
+    """Whether a started session has gone ``window_seconds`` without one bar.
+
+    The test half of ``SessionSteadyState._warn_if_no_bars``, moved to module
+    level by Story 4.3's budget split (decision D-I) — the class was at its
+    120-statement ratchet ceiling.
+    """
+    if bars_seen or started_at is None:
+        return False
+    return (now - started_at).total_seconds() >= window_seconds
+
+
+def warn_no_bars(log: Any, window_seconds: float) -> None:
+    """Emit :data:`NO_BARS_EVENT` — the say-it-once half of the watchdog."""
+    log.warning(
+        NO_BARS_EVENT,
+        no_bars_after_seconds=window_seconds,
+        remedy=(
+            "the market may be closed (use_rth=True means no bar closes outside RTH), the "
+            "account may lack a market-data subscription, or IBKR may never have qualified "
+            "the contract — see the instrument shortfall logged at the subscribe phase"
+        ),
+    )
+
+
 class SessionSteadyState:
     """The heartbeat tick and the bar observation that feeds it.
 
@@ -186,6 +292,12 @@ class SessionSteadyState:
             writes. Optional and defaulting to ``None`` for the same reason
             ``guard`` is; duck-typed to two members (``pending()`` and
             ``mark_written(version)``) rather than imported for a type.
+        reconciler: Story 4.3's ``RuntimeReconciler``, awaited right after the
+            connection is observed so a reconnect is re-established in the tick
+            that saw it. Optional, defaulted and duck-typed to one member
+            (``on_tick()``) for the same reasons as ``guard``. It contains its
+            own failures (AR42); the one it lets out — a runtime
+            ``ReconciliationFailedError`` — ends the session, like a reclaim.
     """
 
     def __init__(
@@ -202,9 +314,11 @@ class SessionSteadyState:
         connection_reader: ConnectionReader = read_ibkr_connection_status,
         guard: Any = None,
         tally: Any = None,
+        reconciler: Any = None,
     ) -> None:
         self._guard = guard
         self._tally = tally
+        self._reconciler = reconciler
         self._record = record
         self._settings = settings
         self._monitor = monitor
@@ -277,16 +391,20 @@ class SessionSteadyState:
         return seen
 
     async def run(self) -> None:
-        """Tick forever: sleep one interval, then do the tick's five jobs.
+        """Tick forever: sleep one interval, then do the tick's six jobs.
 
         Sleeps **first**. The ``-> running`` transition has already stamped
         ``last_heartbeat_at``, so writing again immediately would be a
         redundant round trip before the session has done anything.
 
         Raises:
-            SessionReclaimedError: Another process owns this session now. The
-                only exception the tick's guarded steps deliberately let out —
-                see the module docstring for what is and is not guarded.
+            SessionReclaimedError: Another process owns this session now — the
+                tick's guarded steps let this out deliberately; see the module
+                docstring for what is and is not guarded.
+            ReconciliationFailedError: Story 4.3's runtime reconciliation
+                refused (a strategy's own position contradicted by the broker,
+                or a correction the framework would not make). The session
+                must stop, positions untouched (decision D-D).
         """
         self._started_at = self._time_source()
         while True:
@@ -297,6 +415,8 @@ class SessionSteadyState:
             await self._write_strategy_failures()
             await self._write_order_rejections()
             self._observe_connection()
+            if self._reconciler is not None:
+                await self._reconciler.on_tick()
             self._warn_if_no_bars(now)
 
     async def _write_strategy_failures(self) -> None:
@@ -428,25 +548,24 @@ class SessionSteadyState:
         is not "by test" for a third-party adapter's private flags.
 
         ⚠️ ``confirm_state_reestablished()`` is deliberately **never** called
-        here. Epic 1 retro Action Item #7 requires its only production call
-        site to run *after genuine reconciliation*. Story 4.2 made startup
-        reconciliation genuine but still does not grant (decision D-J): the
-        first grant arms the monitor's LOST/halt path below, whose clock only a
-        *later* confirm clears — Story 4.3's reconnect re-confirm. Until then
-        this narration stays the only transition record.
+        here. Epic 1 retro Action Item #7 requires every production call to run
+        *after genuine reconciliation*; since Story 4.3 both live in
+        ``live_runtime_reconcile`` (the startup grant, and the reconnect
+        re-confirm the reconciler makes in this same tick, just after this
+        observation) — pinned as the exact caller set.
 
         **The transition narration lives here, not in the monitor** (code
         review 2026-08-30). The monitor's own ``connection.lost`` fires only
         from the branch guarded by ``_has_ever_connected``, which is set solely
-        by ``_grant_permission`` — reached solely by the
-        ``confirm_state_reestablished`` above, which has zero production
-        callers until Epic 4. So in a *real* session every disconnect takes
-        the ``RECOVERING -> AWAITING_CONNECTION`` branch
+        by ``_grant_permission``. Before Story 4.3 that had zero production
+        callers, so every real disconnect took the
+        ``RECOVERING -> AWAITING_CONNECTION`` branch
         (``live_connection_monitor.py:331-337``), which returns silently, and a
-        genuine broker drop produced no ``connection.*`` output at all — while
-        ``submission_withheld`` correctly flipped and orders stopped, leaving
-        an operator with a session that had quietly stopped trading and nothing
-        to grep for.
+        genuine broker drop produced no ``connection.*`` output at all. A
+        granted session's drop is now narrated by the monitor as well
+        (``connection.lost`` / ``connection.restored``); this record still
+        covers the transitions it does not narrate — a drop before the first
+        grant among them.
 
         Fixing it *in* the monitor was rejected: that branch's silence is a
         deliberate Epic 1 decision (a half-up socket during startup has lost
@@ -481,20 +600,13 @@ class SessionSteadyState:
         as far as the *broker* is concerned; only Epic 4's
         broker-authoritative subscription state can close that.
         """
-        if self._silence_reported or self._bars_seen or self._started_at is None:
-            return
-        if (now - self._started_at).total_seconds() < self._no_bars_after_seconds:
+        window = self._no_bars_after_seconds
+        if self._silence_reported or not no_bars_overdue(
+            now, self._started_at, self._bars_seen, window
+        ):
             return
         self._silence_reported = True
-        self._log.warning(
-            NO_BARS_EVENT,
-            no_bars_after_seconds=self._no_bars_after_seconds,
-            remedy=(
-                "the market may be closed (use_rth=True means no bar closes outside RTH), the "
-                "account may lack a market-data subscription, or IBKR may never have qualified "
-                "the contract — see the instrument shortfall logged at the subscribe phase"
-            ),
-        )
+        warn_no_bars(self._log, window)
 
 
 class StartupHeartbeat:

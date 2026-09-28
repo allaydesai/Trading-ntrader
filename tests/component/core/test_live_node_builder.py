@@ -1475,6 +1475,43 @@ class TestInFlightCheckIsExplicit:
         )
 
 
+class TestOpenOrderCheckIsDeliberatelyOff:
+    """Story 4.3 (PO ruling 1A, 2026-09-27) — the open-order consistency check
+    stays **off**, passed explicitly so the decision is visible at the call site.
+
+    Measured (Task 1.1b): with the check on, a locally-cancelled order that IB
+    still lists open is never corrected — the engine republishes an
+    ``OrderAccepted`` for it on every check, forever. The wheel-default half of
+    the pin is :class:`TestInFlightCheckIsExplicit`'s canary; the republish
+    itself is pinned as a named canary in ``test_live_runtime_reconcile_engine.py``.
+    """
+
+    @pytest.mark.component
+    def test_the_constant_is_off_and_the_built_config_carries_it(self):
+        assert live_node_builder.EXEC_ENGINE_OPEN_CHECK_INTERVAL_SECS is None
+        cfg = build_trading_node_config(_settings(), trader_id=TRADER_ID)
+
+        assert cfg.exec_engine.open_check_interval_secs is None
+
+    @pytest.mark.component
+    def test_the_builder_passes_the_open_check_explicitly(self):
+        """Explicit, not by omission — the ``TestInFlightCheckIsExplicit`` idiom."""
+        tree = ast.parse(Path(live_node_builder.__file__).read_text(encoding="utf-8"))
+        calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "LiveExecEngineConfig"
+        ]
+
+        (call,) = calls
+        passed = {k.arg: k.value for k in call.keywords}
+        assert "open_check_interval_secs" in passed
+        value = passed["open_check_interval_secs"]
+        assert isinstance(value, ast.Name) and value.id == "EXEC_ENGINE_OPEN_CHECK_INTERVAL_SECS"
+
+
 class TestExecClientDefaultRouting:
     """The exec client must be reachable for instruments venued elsewhere.
 

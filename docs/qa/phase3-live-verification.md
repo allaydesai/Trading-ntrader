@@ -2059,3 +2059,106 @@ exit=1
 | Date | Operator | Result | Notes |
 | ---- | -------- | ------ | ----- |
 | 2026-09-27 | Story 4.2 dev session | ⏳ **P17a defined, not run; P17b defined, not run (operator only)** | P17a attempted: `live_node_probe.py --run-seconds 1 --verify-account --reconcile` stopped at `RESULT: fail reason=config_error msg=Cannot build an IBKR execution client: TWS_ACCOUNT is not set…` before any socket opened — the story's harness worktree has no `.env` (gitignored; the charter forbids creating or reading one), the Story 4.1 P15 precedent. Note for the operator: the probe needs the repo root importable (`PYTHONPATH=.` or run it via `python -m`/`runpy`), a pre-existing property of the script. P17b needs a session with a stale strategy position and starts strategies if reconciliation passes, so it is never run by an automated session. Both are informational evidence only (NFR33), never a gate: the same logic is proven against broker doubles and a real `LiveExecutionEngine` in `tests/component/core/test_live_startup_reconcile_engine.py` and `test_session_runner_phases.py`. |
+
+## Procedure P18: runtime state stays aligned with the broker
+
+> Written by Story 4.3. If a story running in parallel also appended a "Procedure P18", the
+> integrator renumbers one of them; the content of this procedure does not depend on its number.
+
+**Introduced by**: Story 4.3 — Keep Runtime State Aligned with the Broker
+**Verifies**:
+- AC #1 / D-B live (P18a): a strategy entry produces **one** round trip — the IB adapter's
+  "External position change detected" report, and its phantom `INTERNAL-DIFF` round trip
+  (P11/P12), are gone.
+- AC #2 live (P18b): a position change the session did not make, on an instrument a session
+  strategy trades but does not hold, is corrected broker-ward within two runtime cycles and logged
+  `reconcile.discrepancy scope=runtime resolution=broker` with the instrument and quantities.
+- AC #3 live (P18c): a clean hour logs at most two `reconcile.ok scope=runtime` records.
+- AC #4 live (P18d): after a Gateway restart mid-session, no order is sent until
+  `reconcile.ok scope=reconnect` and then `connection.restored` appear, in that order.
+- D-D live (P18e, PO ruling 2A): closing a strategy's own position in TWS stops the session,
+  exit `1`, naming the instrument and both quantities; the positions left at IBKR are untouched.
+
+**Tools**: `ntrader live start <session>`; TWS (P18b, P18e); the Gateway's own restart (P18d).
+
+### What it does, and what it does not do
+
+**None of P18 is read-only.** Every part runs `live start`, whose strategies may trade, and P18b /
+P18e change a position at the broker by hand in TWS. It is written for the operator and is
+**never** run by an automated story session. It does not need `--real-money` and must never be
+run with it.
+
+### Preconditions
+
+- A running, logged-in paper Gateway on the configured paper port, inside RTH (so bars arrive and a
+  strategy can enter). No IBKR mobile app or client portal session while it runs (the 162 rule).
+- A session whose strategy trades an instrument you are willing to trade by hand in TWS (P18b uses
+  a second instrument from the same session spec, or a fresh session on it).
+- D6's standing rule first: grep every transcript for `162`, `10182`, `366` before reading it.
+
+### Command
+
+```bash
+uv run python -m src.cli.main live start <session> > logs/p18-<date>.log 2>&1 &
+# P18a: wait for an entry, then:
+grep -c "External position change detected" logs/p18-<date>.log          # expect 0
+grep -c "reconcile.position_update_deferred" logs/p18-<date>.log         # expect >= 1 per fill
+grep -c "trade.aggregated" logs/p18-<date>.log                           # one per round trip
+# P18b: in TWS, buy 1 share of an instrument the session trades but holds nothing in; wait 2-3 min.
+grep -E "reconcile\.(discrepancy|ok)" logs/p18-<date>.log | grep "scope=runtime"
+# P18c: leave it clean for an hour.
+grep -c "reconcile.ok.*scope=runtime" logs/p18-<date>.log
+# P18d: restart the Gateway (not the session); wait for it to come back.
+grep -nE "connection\.(lost|restored|halted)|scope=reconnect|order\.(submitted|suppressed)" \
+  logs/p18-<date>.log
+# P18e: in TWS, close the strategy's own position by hand; wait 2-3 min.
+wait; echo "exit=$?"
+grep -E "resolution=refused|live start failed" logs/p18-<date>.log
+```
+
+### Expected output
+
+```
+# P18b (about two minutes after the TWS trade)
+reconcile.discrepancy scope=runtime instrument_id=MSFT.NASDAQ kind=position resolution=broker
+  local_quantity=0 strategy_quantity=0 broker_quantity=1
+reconcile.ok scope=runtime cycles=1 positions=... instruments=...
+
+# P18d
+connection.lost ...
+connection.state_changed previous=connected current=lost
+connection.state_changed previous=lost current=recovering
+reconcile.ok scope=reconnect cycles=1 ...
+connection.restored downtime_seconds=... reconnect_seconds=...
+
+# P18e
+reconcile.discrepancy scope=runtime instrument_id=NVDA.NASDAQ kind=strategy_position
+  resolution=refused reason=strategy_position_contradicted local_quantity=22 ... broker_quantity=0
+live start failed: Runtime reconciliation stopped this session (runtime, strategy_position_contradicted): ...
+exit=1
+```
+
+### Pass criteria
+
+1. **P18a:** zero `External position change detected` lines; one `trade.aggregated` per real round
+   trip (P11/P12 recorded two per entry, one of them `INTERNAL-DIFF`); no `trade.persist_skipped
+   reason=reconciliation_owned` for an entry that nobody changed at the broker.
+2. **P18b:** within ~3 minutes of the TWS trade, one `reconcile.discrepancy scope=runtime
+   resolution=broker` naming the instrument, `local_quantity=0` and the broker's quantity; then a
+   `reconcile.ok scope=runtime`. Record the minutes between the trade and the record (the accepted
+   1–2 cycle lag).
+3. **P18c:** at most two `reconcile.ok scope=runtime` records in the clean hour, and no
+   `reconcile.broker_state_retrieved` line from the runtime cycle.
+4. **P18d:** between `connection.lost` and `connection.restored`: zero `order.submitted`; any order
+   the strategy attempted appears as `order.suppressed`; `reconcile.ok scope=reconnect` precedes
+   `connection.restored`. If the Gateway took longer than 60 s, `connection.halted` appears too —
+   expected, and it must still be followed by `connection.restored`.
+5. **P18e:** exit `1`; the message names the instrument and both quantities and says positions at
+   IBKR were not touched; TWS shows no order from the session after the manual close; `live list`
+   shows the session `stopped`.
+
+### Result log
+
+| Date | Operator | Result | Notes |
+| ---- | -------- | ------ | ----- |
+| 2026-09-27 | Story 4.3 dev session | ⏳ **Defined, not run (operator only)** | Every part needs `live start` (strategies may trade), and P18b/P18e change a broker position by hand — the story charter forbids submitting orders or opening, closing or flattening positions, so no part is read-only. The one read-only surface this story touches — the exec-client factory, which now installs the D-B patch, reached by `live check` — was attempted: `ntrader live check` stopped at `Cannot build an IBKR execution client: TWS_ACCOUNT is not set` in 0.00 s, before any socket opened, because the harness worktree has no `.env` (the P15/P17a precedent; the charter forbids creating or reading one). Informational evidence only (NFR33), never a gate: the same logic is proven against broker doubles and a real `LiveExecutionEngine` in `tests/unit/core/test_live_runtime_reconcile.py`, `tests/component/core/test_live_runtime_reconcile_engine.py`, `test_session_runner_runtime_reconcile.py` and `test_live_exec_position_reports.py`. |

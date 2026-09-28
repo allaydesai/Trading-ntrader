@@ -778,26 +778,33 @@ class TestHalt:
 
 
 class TestSubmissionWithheld:
-    """Story 3.2, AC #4 — the order-path suppression predicate.
+    """The order-path suppression predicate — Story 3.2 AC #4, **tightened
+    deliberately by Story 4.3** (decision D-F, NFR10).
 
-    Deliberately **not** ``trading_permitted``: that flag is False for the
-    entire life of every session today (``confirm_state_reestablished`` is
-    never called in production until Epic 4), so gating submission on it
-    would suppress every order this phase ever proves. ``submission_withheld``
-    answers a narrower question — "is the connection *known lost or
-    unobserved*?" — and is False through the permanently-healthy
-    ``RECOVERING``-with-fresh-observation steady state.
+    Story 3.2 drew the line one state early: ``RECOVERING`` with a fresh
+    observation did *not* withhold, because with no production grant every
+    healthy session lived in ``RECOVERING`` for its whole life. Story 4.3 makes
+    the grant real — at the end of ``reconcile`` and after every reconnect's
+    clean reconciliation cycle — so ``RECOVERING`` now means "the socket is back
+    and state is not yet re-established", and an order there is exactly the
+    blind trading NFR10 forbids. The predicate is therefore the complement of
+    ``trading_permitted``.
 
     Closed form, adopted verbatim so no cell is arguable:
-    ``withheld = (state not in {CONNECTED, RECOVERING}) or observation_is_stale``.
+    ``withheld = (state is not CONNECTED) or observation_is_stale``.
     """
 
     @pytest.mark.unit
     @pytest.mark.parametrize(
         "state",
-        [ConnectionState.AWAITING_CONNECTION, ConnectionState.LOST, ConnectionState.HALTED],
+        [
+            ConnectionState.AWAITING_CONNECTION,
+            ConnectionState.RECOVERING,
+            ConnectionState.LOST,
+            ConnectionState.HALTED,
+        ],
     )
-    def test_withheld_for_every_not_connected_or_recovering_state(self, state):
+    def test_withheld_in_every_state_but_connected(self, state):
         monitor = _drive_to(state, FakeClock())
         assert monitor.submission_withheld is True
 
@@ -809,34 +816,22 @@ class TestSubmissionWithheld:
         assert monitor.submission_withheld is False
 
     @pytest.mark.unit
-    def test_not_withheld_while_recovering_with_a_fresh_observation(self):
-        """Today's permanent healthy steady state (Dev Notes "AC #4 trap"):
-        ``confirm_state_reestablished()`` is never called in production, so a
-        healthy session sits in ``RECOVERING`` for its whole life. If this
-        state withheld, no order would ever be submitted at all.
-        """
+    def test_withheld_while_recovering_even_with_a_fresh_observation(self):
+        """The Story 4.3 change itself: a live socket is not re-established
+        state. Before 4.3 this read ``False`` (the never-granted steady state)."""
         clock = FakeClock()
         monitor = _monitor(clock)
         monitor.observe(UP)
         assert monitor.state is ConnectionState.RECOVERING
+        assert monitor.observation_is_stale is False
 
-        assert monitor.submission_withheld is False
+        assert monitor.submission_withheld is True
 
     @pytest.mark.unit
     def test_withheld_once_a_connected_observation_goes_stale(self):
         clock = FakeClock()
         monitor = _connected(clock)
         clock.advance(DEFAULT_MAX_OBSERVATION_AGE_SECONDS + 0.1)
-
-        assert monitor.submission_withheld is True
-
-    @pytest.mark.unit
-    def test_withheld_once_a_recovering_observation_goes_stale(self):
-        clock = FakeClock()
-        monitor = _monitor(clock)
-        monitor.observe(UP)
-        clock.advance(DEFAULT_MAX_OBSERVATION_AGE_SECONDS + 0.1)
-        assert monitor.state is ConnectionState.RECOVERING
 
         assert monitor.submission_withheld is True
 
@@ -855,54 +850,48 @@ class TestSubmissionWithheld:
         """
         monitor = _drive_to(state, FakeClock())
 
-        expected = (
-            monitor.state not in (ConnectionState.CONNECTED, ConnectionState.RECOVERING)
-        ) or monitor.observation_is_stale
+        expected = (monitor.state is not ConnectionState.CONNECTED) or monitor.observation_is_stale
 
         assert monitor.submission_withheld is expected
 
     @pytest.mark.unit
-    def test_the_production_disconnect_path_withholds_submission(self):
-        """The transition a **real** session actually takes, which had no test.
+    @pytest.mark.parametrize("state", list(ConnectionState))
+    def test_is_exactly_the_complement_of_trading_permitted(self, state):
+        monitor = _drive_to(state, FakeClock())
 
-        Every case above reaches ``LOST``/``HALTED`` through
-        ``confirm_state_reestablished``, which production never calls until
-        Epic 4 — so ``_has_ever_connected`` is always ``False`` and a genuine
-        mid-session drop takes ``RECOVERING -> AWAITING_CONNECTION``
-        (``live_connection_monitor.py:331-337``) instead. That branch was
-        covered for its *state* but never for its effect on this predicate,
-        which is the only thing standing between a dead socket and a blind
-        order (review 2026-08-30).
-        """
-        clock = FakeClock()
-        monitor = _monitor(clock)
-
-        monitor.observe(UP)  # the healthy steady state: RECOVERING, never granted
-        assert monitor.state is ConnectionState.RECOVERING
-        assert monitor.submission_withheld is False
-
-        monitor.observe(DOWN)  # the drop a real session sees
-
-        assert monitor.state is ConnectionState.AWAITING_CONNECTION
-        assert monitor.submission_withheld is True, (
-            "a disconnect on the only path production can take must withhold submission"
-        )
+        assert monitor.submission_withheld is (not monitor.trading_permitted)
 
     @pytest.mark.unit
-    def test_submission_resumes_when_the_production_disconnect_path_recovers(self):
-        """The other half: withholding must not latch, or one blip would end
-        trading for the session.
-        """
+    def test_a_granted_session_that_drops_withholds_until_state_is_reestablished(self):
+        """The path a real session takes from Story 4.3 on: granted, lost, back
+        (still withheld), then re-confirmed after reconciliation."""
+        clock = FakeClock()
+        monitor = _connected(clock)
+        assert monitor.submission_withheld is False
+
+        monitor.observe(DOWN)
+        assert monitor.state is ConnectionState.LOST
+        assert monitor.submission_withheld is True
+
+        monitor.observe(UP)
+        assert monitor.state is ConnectionState.RECOVERING
+        assert monitor.submission_withheld is True, (
+            "a reconnected socket alone must not re-enable submission (NFR10)"
+        )
+
+        monitor.confirm_state_reestablished(UP)
+        assert monitor.submission_withheld is False
+
+    @pytest.mark.unit
+    def test_a_never_granted_first_connection_that_drops_stays_withheld(self):
+        """The pre-grant half-up drop (``RECOVERING -> AWAITING_CONNECTION``)."""
         clock = FakeClock()
         monitor = _monitor(clock)
         monitor.observe(UP)
         monitor.observe(DOWN)
+
+        assert monitor.state is ConnectionState.AWAITING_CONNECTION
         assert monitor.submission_withheld is True
-
-        monitor.observe(UP)
-
-        assert monitor.state is ConnectionState.RECOVERING
-        assert monitor.submission_withheld is False
 
     @pytest.mark.unit
     def test_submission_withheld_has_no_setter(self):

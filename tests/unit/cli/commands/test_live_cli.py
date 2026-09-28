@@ -1417,6 +1417,41 @@ class TestStartExitCodes:
         assert "NVDA.NASDAQ" in result.output and "+22" in result.output
         assert "broker +0" in result.output
 
+    def test_a_runtime_reconciliation_stop_names_the_position_and_exits_one(self, runner):
+        """Story 4.3 (D-D, PO ruling 2A; D-H): the same class, raised by the
+        running session's cycle — the operator is told the session was
+        *stopped*, which instrument, both quantities, and that positions at
+        IBKR were not touched."""
+        from decimal import Decimal
+        from types import SimpleNamespace
+
+        from src.core.live_runtime_reconcile import SCOPE_RUNTIME, refuse
+        from src.core.live_startup_reconcile import ReconciliationFailedError, ReconciliationFailure
+        from src.models.position_reconciliation import PositionDiscrepancy
+
+        row = PositionDiscrepancy(
+            instrument_id="NVDA.NASDAQ",
+            local_quantity=Decimal("22"),
+            strategy_quantity=Decimal("22"),
+            broker_quantity=Decimal("0"),
+        )
+        with pytest.raises(ReconciliationFailedError) as caught:
+            refuse(
+                SimpleNamespace(error=lambda *a, **k: None),
+                ReconciliationFailure.STRATEGY_POSITION_CONTRADICTED,
+                (row,),
+                SCOPE_RUNTIME,
+            )
+
+        with _start_harness(runner_error=caught.value):
+            result = runner.invoke(live, ["start", "alpha-session"])
+
+        assert result.exit_code == 1
+        assert "Runtime reconciliation stopped this session" in result.output
+        assert "NVDA.NASDAQ" in result.output and "+22" in result.output
+        assert "broker +0" in result.output
+        assert "positions at IBKR were not touched" in result.output
+
     @pytest.mark.parametrize(
         "exception_factory",
         [

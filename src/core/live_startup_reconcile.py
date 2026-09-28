@@ -46,8 +46,11 @@ path the framework's own pass runs, and then re-verified: the phase reports
 
 What this module never does: purge or write the cache directly, call an order
 method, re-invoke ``reconcile_execution_state``, or read ``trading_permitted``.
-``confirm_state_reestablished`` stays dormant until Story 4.3's reconnect
-re-confirm (decision D-J).
+Granting trading permission after the phase proves the cache — the first
+``confirm_state_reestablished`` call — is Story 4.3's
+(``live_runtime_reconcile.grant_after_reconciliation``, called by the runner),
+which also shares :func:`position_report` and :func:`log_discrepancy` with the
+running session's cycle.
 """
 
 import time
@@ -77,6 +80,10 @@ BrokerStateReader = Callable[..., Awaitable[BrokerState]]
 OK_EVENT = "reconcile.ok"
 DISCREPANCY_EVENT = "reconcile.discrepancy"
 SNAPSHOT_FAILED_EVENT = "reconcile.local_snapshot_failed"
+#: Story 4.3 (D-G): every ``reconcile.ok`` / ``reconcile.discrepancy`` says
+#: which reconciliation wrote it — this module's startup phase, or the running
+#: session's cycle (``live_runtime_reconcile``: ``runtime`` / ``reconnect``).
+SCOPE_STARTUP = "startup"
 
 #: D-B. The live engine's settings under which the broker's view can win: the
 #: framework's pass runs, a discrepancy generates the correcting order rather
@@ -125,10 +132,16 @@ class ReconciliationFailedError(RuntimeError):
     *read* the broker is not this class: ``BrokerStateUnavailableError``
     propagates unchanged (exit 4, or 1 for adapter drift).
 
+    Story 4.3 (D-H) raises the same class from the running session's cycle, with
+    ``scope`` other than :data:`SCOPE_STARTUP`: same markers, same exit code, a
+    message that says the session was *stopped* rather than refused a start.
+
     Attributes:
         reason: The :class:`ReconciliationFailure`.
         detail: What happened, in this module's words.
         discrepancies: The disagreeing instruments, when there are any.
+        scope: Which reconciliation refused — ``startup``, ``runtime`` or
+            ``reconnect``.
     """
 
     exit_outcome: ClassVar[LiveCheckOutcome] = LiveCheckOutcome.ERROR
@@ -139,16 +152,21 @@ class ReconciliationFailedError(RuntimeError):
         reason: ReconciliationFailure,
         detail: str,
         discrepancies: Sequence[PositionDiscrepancy] = (),
+        *,
+        scope: str = SCOPE_STARTUP,
     ) -> None:
         rows = "; ".join(_describe(row) for row in discrepancies)
         suffix = f" {rows}." if rows else ""
-        super().__init__(
-            f"Startup reconciliation refused to let this session trade ({reason.value}): "
-            f"{detail.rstrip('.')}.{suffix}"
+        prefix = (
+            f"Startup reconciliation refused to let this session trade ({reason.value})"
+            if scope == SCOPE_STARTUP
+            else f"Runtime reconciliation stopped this session ({scope}, {reason.value})"
         )
+        super().__init__(f"{prefix}: {detail.rstrip('.')}.{suffix}")
         self.reason = reason
         self.detail = detail
         self.discrepancies = tuple(discrepancies)
+        self.scope = scope
 
 
 def _describe(row: PositionDiscrepancy) -> str:
@@ -246,7 +264,7 @@ async def reconcile_at_startup(
     rows = compare_positions(cached_positions(node.cache), broker)
     framework = _framework_resolved(local_before, broker, rows)
     for row in framework:
-        _log_discrepancy(log, row, "framework")
+        log_discrepancy(log, row, "framework")
     # An unresolved broker row is keyed ``IB-CONID-*``, so the cache's row for
     # the same holding reads "broker 0" and would pass for a contradiction —
     # whose remedy (abandon the session) is wrong for a transient lookup miss.
@@ -264,7 +282,7 @@ async def reconcile_at_startup(
     still = {row.instrument_id for row in remaining}
     for row in corrected:
         if row.instrument_id not in still:
-            _log_discrepancy(log, row, "broker")
+            log_discrepancy(log, row, "broker")
     if remaining:
         _refuse(
             log,
@@ -325,7 +343,7 @@ def _correct(
     held = {position.instrument_id: position for position in broker.positions}
     account_id = find_ib_exec_client(node).account_id
     reports = [
-        _position_report(row, held.get(row.instrument_id), node.cache, account_id) for row in rows
+        position_report(row, held.get(row.instrument_id), node.cache, account_id) for row in rows
     ]
     unresolvable = [row for row, report in zip(rows, reports, strict=True) if report is None]
     if unresolvable:
@@ -361,7 +379,7 @@ def _correct(
     return tuple(rows)
 
 
-def _position_report(
+def position_report(
     row: PositionDiscrepancy,
     held: BrokerPosition | None,
     cache: Any,
@@ -408,18 +426,23 @@ def _refuse(
 ) -> None:
     rows = tuple(rows)
     for row in rows:
-        _log_discrepancy(log, row, "refused", reason=reason)
+        log_discrepancy(log, row, "refused", reason=reason)
     raise ReconciliationFailedError(reason, detail, rows)
 
 
-def _log_discrepancy(
+def log_discrepancy(
     log: Any,
     row: PositionDiscrepancy,
     resolution: str,
     *,
     reason: ReconciliationFailure | None = None,
+    scope: str = SCOPE_STARTUP,
 ) -> None:
+    """One ``reconcile.discrepancy`` naming the instrument and every quantity
+    (AR41); ERROR when refused or unresolved, WARNING otherwise. Shared with
+    Story 4.3's runtime cycle, which passes its own ``scope``."""
     fields: dict[str, Any] = {
+        "scope": scope,
         "instrument_id": row.instrument_id,
         "kind": row.kind,
         "resolution": resolution,
@@ -429,7 +452,8 @@ def _log_discrepancy(
     }
     if reason is not None:
         fields["reason"] = reason.value
-    _emit(log, "error" if resolution == "refused" else "warning", DISCREPANCY_EVENT, **fields)
+    level = "error" if resolution in ("refused", "unresolved") else "warning"
+    _emit(log, level, DISCREPANCY_EVENT, **fields)
 
 
 def _log_ok(log: Any, result: StartupReconciliation) -> None:
@@ -438,6 +462,7 @@ def _log_ok(log: Any, result: StartupReconciliation) -> None:
         log,
         "info",
         OK_EVENT,
+        scope=SCOPE_STARTUP,
         account=broker.account,
         positions=len(broker.positions),
         instruments={p.instrument_id: str(p.quantity) for p in broker.positions},

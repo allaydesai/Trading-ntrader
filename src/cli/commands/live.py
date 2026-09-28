@@ -363,14 +363,20 @@ def start(session: str, connect_timeout: float) -> None:
     `reconcile` compares the engine cache against IBKR's own view of the
     account before any strategy starts: what only the net disagrees on is
     corrected broker-ward, a strategy position the broker contradicts refuses
-    the start, and `ok` means 0 discrepancy remains. Each strategy warms its
-    indicators from history as it starts, before it subscribes to live bars.
+    the start, and `ok` means 0 discrepancy remains; only then is trading
+    permitted. Each strategy warms its indicators from history as it starts,
+    before it subscribes to live bars. While running, the session re-checks
+    its positions against IBKR every minute and corrects a disagreement seen
+    twice broker-ward (`reconcile.discrepancy`); a strategy position the broker
+    contradicts stops the session, positions untouched. After a disconnect, no
+    order is sent until a clean check re-establishes state.
 
     \b
     Exit codes:
       0  the session ran and stopped cleanly
-      1  a configuration, state or database failure — including startup
-         reconciliation refusing to let the session trade
+      1  a configuration, state or database failure — including
+         reconciliation refusing to let the session trade, at startup or
+         while it runs
       2  usage error
       3  the safety gate refused the connection (scriptably distinct)
       4  the broker was unreachable, or the trader never started

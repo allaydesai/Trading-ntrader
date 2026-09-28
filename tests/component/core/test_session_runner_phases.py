@@ -47,6 +47,7 @@ from src.core.live_broker_state import (
 )
 from src.core.live_cache import RedisUnreachableError
 from src.core.live_check import BrokerUnreachableError, InvalidCheckWindowError, classify_failure
+from src.core.live_connection_monitor import ConnectionMonitor, ConnectionState, ConnectionStatus
 from src.core.live_gate import GateDecision, GateMode, GateRefusalReason, build_refusal
 from src.core.live_market_data import LiveMarketDataError
 from src.core.live_node_builder import GateRefusedError, LiveNodeConfigError
@@ -475,7 +476,11 @@ class TestTheEpicFourPhases:
         broker-ward settings, D-B) and ``cache`` (open positions and orders),
         and hands the node to the broker read — never the ``trader``, so no
         strategy or actor can be registered from here. A clean cache against a
-        flat broker makes no ``reconcile_execution_report`` call at all."""
+        flat broker makes no ``reconcile_execution_report`` call at all.
+
+        Story 4.3 (D-F): the phase then grants trading permission through the
+        monitor ``node:connect`` built — a monitor and connection-reader call,
+        still nothing more on the node."""
         settings = _settings()
         registered_accounts(settings)
         node = TestLiveNode(run_seconds=0.01)
@@ -491,8 +496,16 @@ class TestTheEpicFourPhases:
             read_by.append(node_arg)
             return await flat_broker_state_reader(node_arg, log=log)
 
-        runner = _runner(node, settings=settings, broker_state_reader=_reader)
+        runner = _runner(
+            node,
+            settings=settings,
+            broker_state_reader=_reader,
+            connection_reader=lambda _settings: ConnectionStatus(connected=True, detail="up"),
+        )
         runner._node = _RecordingNode()
+        runner._monitor = ConnectionMonitor(
+            session_id=str(SESSION_ID)
+        )  # as `node:connect` leaves it
         loop = asyncio.new_event_loop()
         try:
             loop.run_until_complete(runner._phase_reconcile())
@@ -503,6 +516,7 @@ class TestTheEpicFourPhases:
         assert read_by == [runner._node]
         assert node.kernel.exec_engine.reconcile_reports == []
         assert runner._reconciliation is not None
+        assert runner._monitor.state is ConnectionState.CONNECTED
 
     def test_neither_emits_ar41s_warmup_completed(self, registered_accounts):
         """Nothing warmed, so claiming it did would be a false record.
@@ -1641,6 +1655,14 @@ class TestImportPurity:
         # corrects through the exec engine — never a `src.db`/`src.services`
         # import (AR38). Added in the creating commit.
         "src.core.live_startup_reconcile",
+        # Story 4.3. Constructed by the runner in `_build_steady_state` and
+        # called from `_phase_reconcile` (the startup grant): compares in the
+        # same domain values and corrects through the exec engine — no
+        # `src.db`/`src.services` import (AR38). Added in the creating commit.
+        "src.core.live_runtime_reconcile",
+        # Story 4.3. Imported by `live_node_builder` and executed during
+        # `node.build()`, beside `live_exec_avg_px`. Added in the creating commit.
+        "src.core.live_exec_position_reports",
     )
 
     @pytest.mark.parametrize("module_name", MODULES)

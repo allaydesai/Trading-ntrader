@@ -250,6 +250,10 @@ class _TestCache:
         #: :func:`flat_broker_state_reader` is a clean reconciliation.
         self.open_positions: list[object] = []
         self.open_orders: list[object] = []
+        #: Story 4.3: orders still in flight (``SUBMITTED``/``PENDING_*``) — the
+        #: runtime cycle defers their instruments and the reconnect grant waits
+        #: for them. Empty by default.
+        self.inflight_orders: list[object] = []
         #: What ``instrument()`` resolves; empty, so nothing is correctable.
         self.instruments_by_id: dict[object, object] = {}
 
@@ -261,6 +265,9 @@ class _TestCache:
 
     def orders_open(self) -> list[object]:
         return list(self.open_orders)
+
+    def orders_inflight(self) -> list[object]:
+        return list(self.inflight_orders)
 
     def instrument(self, instrument_id: object) -> object | None:
         return self.instruments_by_id.get(instrument_id)

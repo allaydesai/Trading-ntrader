@@ -629,6 +629,11 @@ Non-blocking findings from the three-layer adversarial review. Blocking items (2
   with **Story 4.3**'s reconnect re-confirm, together; `live_startup_reconcile` joined the zero-callers
   scan (`test_confirm_state_reestablished_is_never_called_in_this_story`), which 4.3 changes
   deliberately.
+  **✅ LIVE — Story 4.3 (2026-09-27), decision D-F.** Both calls ship together in
+  `src/core/live_runtime_reconcile.py`: the startup grant at the end of `reconcile` (after the cache is
+  proven) and the reconnect re-confirm after a clean runtime cycle with nothing in flight. The scan
+  became an exact caller-set pin (`test_confirm_state_reestablished_has_exactly_one_production_caller`,
+  over every module under `src/`). `submission_withheld` is now `not trading_permitted`.
 
 - ~~**Nothing polls the monitor yet, and the halt deadline is only evaluated inside `observe()`.**~~
   — **RESOLVED in story-2.5, 2026-08-21**, by exactly the carrier this item recommends: the
@@ -2145,7 +2150,7 @@ already been re-argued between three and five times. Every recommendation was ac
 | **D3** | AR28 exit-code **marker protocol** | **4** | **`exit_outcome` marker attribute, now**, before a sixth hand-maintained string. | ✅ Landed in the Epic 4 pre-work (2026-09-22): `LiveCheckOutcome`/`EXIT_*`/`EXIT_CODES` moved to a new stdlib-only leaf module, `src/core/exit_outcome.py`; every exception from the table (`GateRefusedError`, `BrokerUnreachableError`, `LiveNodeConfigError`, `LiveMarketDataError`, `InvalidCheckWindowError`, `RedisUnreachableError`, `InvalidSessionTransition`, `RecordNotFoundError`, `LiveCheckError`, `SessionReclaimedError`, `NoStrategyStartedError`) now carries `exit_outcome`/`operator_safe_message` class attributes directly, found by `classify_failure`/`failure_message` via `getattr` off the MRO — no import of the class needed, so `live_check.py`'s purity is untouched and `src/db/exceptions.py` still has no imports of its own beyond the new leaf module. Both string-keyed maps (`_OUTCOME_BY_EXCEPTION_NAME`, `_SAFE_MESSAGE_EXCEPTION_NAMES`) are deleted. The `sqlalchemy.exc.TimeoutError` → exit 4 collision is fixed: the residual builtin map is now keyed by class **identity**, not name, so a same-named-but-different class no longer matches (`tests/component/core/test_live_check_driver.py::test_the_sqlalchemy_timeout_collision_is_gone`, against the real library). No already-documented exit code changed (README unchanged). A new drift guard (`tests/unit/core/test_exit_outcome_markers.py`) fails on any future typed failure with neither marker. |
 | **D4** | What the size caps mean | — | **Keep them, measure on executable statements**, enforce with a unit-tier AST guard in the AR37 shape + a sanctioned-exception allowlist. | ✅ Landed in the Epic 4 pre-work (2026-09-22): `tests/unit/governance/test_size_caps.py`, same shape as the AR37 guard. File cap is hard with a 3-entry allowlist (`backtest_runner.py` 952, `data_catalog.py` 635, `backtests.py` 524, matching the honest executable-statement metric exactly). Class/function caps are a shrink-only ratchet baseline, generated from the tree via `python -m tests.unit.governance.test_size_caps --print-baseline`: 95 entries, not the pre-work reconnaissance's estimated 98 — every one of the 11 named examples and all 3 file totals that reconnaissance reported were independently re-measured against the finished tool and match exactly (`IBKRSettings` 101, confirming field annotations count), so the tool's own count is now authoritative. `CLAUDE.md` and `docs/agent/conventions.md` wording updated. Metric pinned by 5 fixtures; the ratchet's four failure shapes (new overage, grown ceiling, stale entry, removed-but-still-over entry) hand-verified by injecting each and reverting. |
 | **D5** | Should an all-strategies-failed session stop? | — | **Leave as-is.** `session.all_strategies_failed` + `runtime_flags.all_failed` make it visible and 2.8 renders it `degraded`. | ✅ Closed on its merits — no change. Revisit only if observed in practice |
-| **D6** | Resubscription after a subscription-killing IB error | 3 instances | **Epic 4**, with the broker-authoritative reconciliation work. | ✅ Routed. Interim rule stands: "zero bars inside RTH" is a red flag, not a quiet outcome; grep every transcript for **162**, **10182**, **366** |
+| **D6** | Resubscription after a subscription-killing IB error | 3 instances | **Epic 4**, with the broker-authoritative reconciliation work. | ✅ Routed. Interim rule stands: "zero bars inside RTH" is a red flag, not a quiet outcome; grep every transcript for **162**, **10182**, **366**. **Story 4.3 (2026-09-27): re-routed by PO ruling 3A to the Epic 4 retrospective as a dedicated story, per-code mechanism measured — see "Deferred from: story-4.3".** |
 
 **Note for readers of the older entries above.** D1's original item text still reads "moves to the
 first Epic 3/Epic 4 story that owns a write on that port" and D2's still offers two options. Those are
@@ -2281,6 +2286,10 @@ adopted: **give each item a named owning story, not a priority label.** Items re
   which is Epic 4's broker-authoritative-state scope. Action when Epic 4 lands reconciliation: add
   the dispatch entry, or state in the module docstring why triggered transitions are deliberately
   invisible.
+  **✅ CLOSED — Story 4.3 (2026-09-27): unreachable through the IB adapter**, stated in
+  `live_order_path.py`'s module docstring and pinned by
+  `tests/component/core/test_live_order_path_triggered_canary.py` (no IB status maps to
+  `TRIGGERED`; the adapter never generates one; its report parser never sets `ts_triggered`).
 
 - **`order.submitted` is the only lifecycle record without `strategy_id`.** Pre-existing from Story
   3.2; surfaced here because Story 3.3 made it visible. `_log_submitted`
@@ -2419,6 +2428,12 @@ adopted: **give each item a named owning story, not a priority label.** Items re
   `generate_position_status_reports` *is* implemented (`execution.py:454-505`) and is the
   mechanism 4.3 would reconcile against; this story does not solve it, only routes it, as the Epic
   2 retro's standing rule requires for any hazard found outside a story's own scope.
+  **Story 4.3 (2026-09-27) — dispositioned, consequence caught.** The position a lost fill leaves
+  behind is a runtime discrepancy: detected, logged and corrected broker-ward (or, when it
+  contradicts a strategy's own position, refused with the session stopped — PO ruling 2A). The
+  *order record* stays "canceled": the adapter's `generate_fill_reports` returns `[]`, so no fill
+  evidence exists to correct it with. **Unowned, named** as an upstream adapter limit. See "Deferred
+  from: story-4.3" below.
 
 - **Measured correction to the Story 3.4 draft's own test design** (both found by fresh-interpreter
   probes, Task 1, before any test was written — see the module docstring of
@@ -2699,6 +2714,8 @@ at 200s with zero orders), `logs/p10-fresh-leg1-*.log` and `logs/p10-fresh-leg2-
   `src/core/live_order_path.py`'s submit path, which this story deliberately does not touch (Task
   10's zero-diff evidence contract). **Owner: Story 4.3** (broker-aligned runtime state) — named
   in the story's own D-C decision, repeated here as the durable record.
+  **Story 4.3 (2026-09-27) — RE-ROUTED by PO ruling 3A** to the Epic 4 retrospective, as a
+  dedicated story (measurements in "Deferred from: story-4.3" below).
 - **D-D's reconciliation-owned-position policy may need to flip.** Story 3.6 skips persisting any
   `PositionClosed` whose `strategy_id` renders `"EXTERNAL"` or `"INTERNAL-DIFF"` (`trade.
   persist_skipped reason="reconciliation_owned"`), because `trades` has no `strategy_id` column
@@ -2837,6 +2854,11 @@ are recorded here; neither reopens either story, and neither was actioned.
   future live transcript: **a strategy-owned entry produces two `trade.aggregated` records, not
   one** — its own eventual round trip, plus reconciliation's immediate phantom — and only the first
   is a real trade.
+  **✅ FIXED — Story 4.3 (2026-09-27), decision D-B (PO ruling 1A).** The adapter's
+  position-update reports are switched off (`src/core/live_exec_position_reports.py`, installed by
+  the exec-client factory); the mechanism was reproduced against the adapter's real code
+  (`TestTheAdapterDefect`). From 4.3 on, an entry produces one `trade.aggregated`; Procedure P18a
+  checks it live.
   Evidence: `logs/p11-20260921.log:235-274`, `logs/p12-20260921.log:254-270`.
 
 - **Story 3.6 Procedure P12's criterion 7 is phrased so it cannot be read, and D-A's cost figure
@@ -2905,6 +2927,7 @@ are recorded here; neither reopens either story, and neither was actioned.
   *delay* is unaddressed, and the real reason exists only in the adapter's own log line, never in
   a structured record. Procedure P13's criterion 1 says what to grep for so a run that hits this
   is still evidence. **Owner: Story 4.3 or the Epic 3 retrospective, whichever Allay rules.**
+  **Story 4.3 (2026-09-27) — measured and bounded, no code change.** See "Deferred from: story-4.3".
 - **`OrderTriggered` is still unhandled** — cross-reference only, not a new entry: see *Deferred
   from: code review of story-3.3 (2026-08-30)* above. Story 3.7's tally keeps the same closed set
   for the same reason (decision D-J): a triggered stop is not a refusal, and Epic 4 owns the
@@ -3376,3 +3399,99 @@ against the installed `nautilus-trader 1.220.0` with a real `LiveExecutionEngine
 - Any unresolvable broker position — including a manual holding in an instrument this session never trades — refuses every start of every session (D-E, as specified) [src/core/live_startup_reconcile.py:313] — deferred, policy revisit with Story 4.5
 - Duplicate broker rows for one instrument id collapse in `held = {…}` [src/models/position_reconciliation.py:154] — deferred, pre-existing in Story 4.1's reader contract
 - A stop signal that arrives while `reconcile` refuses demotes the refusal to a clean stop (exit 0) [src/core/live_session_runner.py:421] — deferred, pre-existing (Story 3.1 stop semantics; nothing trades either way)
+
+## Deferred from: story-4.3 (2026-09-27)
+
+Story 4.3 (keep runtime state aligned with the broker). Every item routed to 4.3 by
+`prd-epic4-scope.md`, the Epic 2/3 retrospectives and Stories 4.1/4.2 is dispositioned here, with
+the PO's rulings (Allay, 2026-09-27: **1A 2A 3A** at story creation; **1A 2A** at the Task 1 gate).
+Measured against the installed `nautilus-trader 1.220.0` (Task 1, probes and canaries in
+`tests/component/core/test_live_runtime_reconcile_engine.py` /
+`test_live_exec_position_reports.py` / `test_live_order_path_triggered_canary.py`).
+
+- **D6 — resubscription after a subscription-killing IB error (162 / 10182 / 366; also 1101).** →
+  **RE-ROUTED by PO ruling 3A to the Epic 4 retrospective, as a dedicated story.** Not in 4.3's ACs
+  (market-data subscription state, not order/position alignment), and none of the codes reaches any
+  code of ours. Measured mechanism, the new story's starting point
+  (`adapters/interactive_brokers/client/error.py:90-190`, `client/client.py:292-391`): **366 / 10189
+  / 102** — the adapter cancels **and re-issues** the subscription itself
+  (`_handle_subscription_error`); **10182** — clears `_is_ib_connected`, and the 1 s connection
+  watchdog then degrades, sleeps 5 s, reconnects and `_resume`s (`_resubscribe_all`) — **unless**
+  the flag is set again first (the P5 shape: farm-restored codes 2104/2106 are warnings and set
+  nothing, so what re-set it there is unmeasured); **162** — "Unknown subscription error", logged,
+  nothing done (environmental: a competing login evicts the entitlement; resubscribing fails until
+  it ends); **1101** ("restored, data lost") — sets `_is_ib_connected` with **no** resubscription.
+  Fix shape: an instance-level hook on the shared `InteractiveBrokersClient` error path (the
+  `live_exec_avg_px` / `live_exec_position_reports` precedent) that calls `_resubscribe_all()` on
+  1101 and logs a `connection.market_data_lost` record on 162; verification needs broker-side fault
+  injection (162 is reproducible with a mobile login). Interim rule unchanged: grep every transcript
+  for 162/10182/366; zero bars inside RTH is a red flag.
+- **The pre-submit reclaim window `owner_epoch` does not fence (Story 3.6 D-C).** → **RE-ROUTED by
+  PO ruling 3A to the Epic 4 retrospective, as a dedicated story.** Not in 4.3's ACs (session
+  ownership, not broker alignment). Measured shape: the fence is checked at every trade write
+  (`SqlTradeRecord.persist`) and by the heartbeat (`record_activity`, every 30 s, detection ≤ 90 s),
+  but `live_order_path._wrap` consults only `monitor.submission_withheld` — an incumbent whose row
+  was reclaimed can submit until its next heartbeat or trade write. Fix shape: an ownership probe
+  (`record.record_activity(at=now)`, which already raises `SessionReclaimedError` on an epoch
+  mismatch) called by the wrapper before each order, suppressing and requesting a stop on a
+  reclaim. Cost: one synchronous DB round trip per submission on the loop thread (~6 ms measured
+  live, P12) — Story 3.6 D-A's stall exposure — and it needs its own two-process AC.
+- **The IB adapter double-counts the session's own fresh fill (P11/P12 phantom).** → **FIXED**
+  (D-B, PO ruling 1A): the adapter's position-update reports are switched off; runtime positions are
+  `live_runtime_reconcile`'s. **Accepted cost (1A):** a position change the execution stream did not
+  explain is corrected one to two cycles (~60–120 s) after it happens, not on arrival.
+- **The not-open/cancelled conflation on `generate_order_status_report`.** → **Consequence caught,
+  order record not correctable; unowned, named (upstream).** The in-flight sweep's query answers
+  "not found" with a local `Cancelled`; a lost *fill* therefore reads as a cancel. The position it
+  leaves behind is a runtime discrepancy — detected, logged, corrected broker-ward, or (if it
+  contradicts a strategy's own position) refused with the session stopped. The order record cannot
+  be corrected: the adapter's `generate_fill_reports` returns `[]`.
+- **An `ACCEPTED` order stays open forever after a restart (Task 1.5, measured; PO ruling 2A).**
+  With the broker holding the position, the framework's startup pass returns `True`, imports
+  `EXTERNAL`, and leaves the stranded order `ACCEPTED` — nothing native clears it with IB (the
+  consistency check only reconciles venue-open orders, and is off). No stall at component tier (the
+  live `p7-position-test` stall was a portfolio-initialisation timeout a kernel-less harness cannot
+  reproduce). Consequence handled by 2A: the runtime cycle defers only *in-flight* orders, so a
+  stranded open order never makes its instrument unverifiable. → **Story 4.5** (the restart path)
+  owns the stranded order itself and the live stall, if P18/P17b reproduce it.
+- **The open-order consistency check.** → **Stays off (PO ruling 1A), measured:** a locally-cancelled
+  order IB still lists open is never corrected — the engine republishes an `OrderAccepted` for it
+  on every check, forever (the event is published even after `apply` fails), resetting Story 3.7's
+  refusal streak each time. Pinned as a canary; no workaround of ours compensates.
+- **An IB error code outside `ORDER_REJECTION_CODES` (RULED to 4.3 by the Epic 3 retro).** →
+  **Measured and bounded, no code change.** A `SUBMITTED` order resolves as `OrderCanceled` within
+  `inflight_check_threshold_ms` + one sweep interval (~7 s: the query → "not found" → local
+  `Cancelled`), not minutes; the real reason exists only in the adapter's log line. Mapping unknown
+  codes to rejections is refused: IB sends many informational per-order codes (399, 404, 2109, …),
+  and treating a live order as dead invites a duplicate order (NFR14).
+- **`OrderTriggered` unhandled.** → **Closed: unreachable** through the IB adapter (see the struck
+  item under story-3.3 code review).
+- **Open orders counted, never compared (4.2 review).** → The venue-open direction would need the
+  consistency check (off, above); the cache-open/venue-gone direction has no native path with IB.
+  Their position consequences are the runtime cycle's. Recorded, no further owner.
+- **A cached order fills between the broker read and the compare (4.2 review).** → **Fixed for
+  runtime:** the cycle skips when the cache moves during the read, defers in-flight instruments,
+  and acts only on a row identical across two checks ≥ 60 s apart.
+- **A broker-only position with no average price is imported at 0 (4.2 review).** → Unchanged: the
+  runtime path reuses Story 4.2's report builder, which passes the broker's average whenever known.
+- **A mid-session broker read diverts position updates (4.1).** → **Moot** under D-B: no report
+  depends on the adapter's position stream any more.
+- **A cancelled awaiter strands `OpenPositions` (4.1 review).** → **Fails closed** under the runtime
+  cycle: one `reconcile.cycle_failed reason=positions_unanswered` per streak; a reconnect cannot
+  re-grant, so the session stays withheld and the monitor reports `connection.halted`. Recovery
+  still needs a restart (writing adapter state stays out of bounds).
+- **`confirm_state_reestablished` sanity check (4.2 D-J).** → **Live** (D-F), struck in place above.
+- **New, found here — the steady state skips the reconciler for one tick when `observe` itself
+  moves `RECOVERING → HALTED`** (the halt deadline is evaluated inside `observe`). The next tick's
+  observation moves `HALTED → RECOVERING` and the reconnect cycle runs, so a halted session
+  restores one tick (≤ 30 s) later than it could. Accepted: the halt is reported, nothing trades.
+  **Owner:** none unless observed live (P18d).
+
+## Deferred from: code review of 4-3-keep-runtime-state-aligned-with-the-broker (2026-09-28)
+
+- **An `ACCEPTED` order filled while disconnected, with `execDetails` never replayed,** is corrected broker-ward as a synthetic `INTERNAL-DIFF` position while the order itself stays `ACCEPTED` — the strategy still believes it is flat with a working order. A consequence of rulings 1A/2A (open check off; defer only in-flight), not a coding error. **Owner:** Story 4.5 (resume mid-position), which owns strategy-vs-broker ownership.
+- **A drop-and-reconnect inside one 30 s tick is never observed as a loss** — the connection reading has no generation counter, so the monitor stays `CONNECTED` and no reconnect cycle runs (NFR10's re-check is skipped; the next runtime cycle still verifies within 60 s). Pre-existing Story 3.2 monitor design.
+- **D-B's suppression is proven only on a stand-in** (`SimpleNamespace`), never on a real `InteractiveBrokersExecutionClient` instance. P18 exercises it live.
+- **The D-D `runner.run()` component test sets `DEBOUNCE_SECONDS` to 0** — the two-observation rule is proven at unit tier only.
+- **Repeated cache-moved skips are silent** — a cycle starved by constant fills leaves no record (a skip now forces the next `reconcile.ok`, so the gap is visible afterwards).
+- **Story 4.6 timing flake:** `tests/component/core/test_live_reconcile.py::TestTheCheckIsBounded::test_the_connect_deadline_never_outlives_the_budget` failed once under the full `-n auto` component run with three review agents loading the machine; 5/5 green alone. The 1.2 s budget is tight under load.

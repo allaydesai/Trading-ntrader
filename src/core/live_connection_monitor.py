@@ -9,9 +9,11 @@ Does not own: *taking* the reading (``read_ibkr_connection_status`` in
 ``src/core/live_connection_probe.py`` does; its lookup key is the exact
 ``(host, port, client_id)`` triple ``live_node_builder`` configures, so the two
 must be kept in step by hand), the poll schedule (Epic 2's runner —
-AR38), re-establishing state after a reconnect (Epic 4's reconciliation), or
-consuming the flag on an order path (Epic 3 — Epic 1 has no order path at all,
-which is the point: the control ships before the capability it constrains).
+AR38), re-establishing state after a reconnect (Story 4.3's
+``live_runtime_reconcile``, the only production caller of
+:meth:`ConnectionMonitor.confirm_state_reestablished`), or consuming the flag
+on an order path (Epic 3's ``live_order_path`` reads
+:attr:`ConnectionMonitor.submission_withheld`).
 
 Deliberately framework-free — standard library plus ``structlog``, nothing
 else. That purity is what keeps the state machine in the unit tier, and it
@@ -29,8 +31,9 @@ is up and nothing has been checked against the broker's authoritative view.
 ``confirm_state_reestablished(status)`` therefore takes a ``ConnectionStatus``
 and folds it in as an observation first: the grant is atomic with a live
 reading, and a socket that died between the caller's last poll and its
-confirmation cannot be confirmed. This is the seam Epic 4 will call once
-reconciliation exists.
+confirmation cannot be confirmed. Story 4.3 calls it at exactly two points, both
+after a genuine reconciliation: the end of the startup ``reconcile`` phase, and
+after a clean reconnect cycle.
 
 **Unavailability is anchored, not restarted.** ``_unavailable_since`` is set
 once when trading permission is withdrawn and cleared only by a *successful*
@@ -189,31 +192,26 @@ class ConnectionMonitor:
     def submission_withheld(self) -> bool:
         """Whether Story 3.2's order path should suppress submission right now.
 
-        **Not** :attr:`trading_permitted`, and the difference is the whole
-        point (Story 3.2, AC #4). That flag is ``False`` for the entire life
-        of every session today, by design: its only grant path,
-        ``confirm_state_reestablished()``, is deliberately never called in
-        production until Epic 4 has a real reconciliation to follow
-        (``live_session_steady_state.py:345-348``). Gating order submission
-        on it would suppress every order this phase ever proves, including
-        this story's own target fill.
+        **The complement of** :attr:`trading_permitted` since Story 4.3
+        (decision D-F, NFR10). Story 3.2 drew the line one state earlier —
+        ``RECOVERING`` with a fresh observation did not withhold — because
+        ``confirm_state_reestablished()`` had no production caller, so every
+        healthy session lived in ``RECOVERING`` for its whole life. Story 4.3
+        made the grant real: the runner grants at the end of ``reconcile``
+        (``live_runtime_reconcile.grant_after_reconciliation``), and after a
+        loss only a clean reconnect reconciliation cycle grants again. So
+        ``RECOVERING`` now means "the socket is back and state is not yet
+        re-established", and an order there is the blind trading NFR10
+        forbids — both halves of NFR10 (disconnected, reconciliation
+        incomplete) are enforced here.
 
-        This predicate answers a narrower question instead: is the
-        connection *known lost or unobserved*? It is derived, never stored,
-        from the same two facts as ``trading_permitted`` — state and
-        staleness — but draws the line one state earlier: ``RECOVERING`` with
-        a fresh observation does **not** withhold, because that is this
-        phase's permanent healthy steady state (Epic 1 retro Action Item #7
-        keeps the grant Epic 4's). NFR10's other half — no orders while
-        reconciliation is incomplete — is therefore not enforced by this
-        property; it is Epic 4's by phase design.
+        Kept as its own property rather than folded into callers'
+        ``not monitor.trading_permitted``: the order wrapper duck-types on this
+        name (``live_order_path.py``), and the history above belongs with it.
 
-        Closed form: ``(state not in {CONNECTED, RECOVERING}) or
-        observation_is_stale``.
+        Closed form: ``(state is not CONNECTED) or observation_is_stale``.
         """
-        return (
-            self._state not in (ConnectionState.CONNECTED, ConnectionState.RECOVERING)
-        ) or self.observation_is_stale
+        return not self.trading_permitted
 
     @property
     def observation_is_stale(self) -> bool:

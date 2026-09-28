@@ -311,6 +311,10 @@ class TestInstall:
         class _Client:
             def __init__(self) -> None:
                 self._order_avg_prices: dict = {}
+                # Story 4.3: the same factory now also installs the D-B patch,
+                # which refuses a client missing these two adapter attributes.
+                self._handle_position_update = None
+                self._known_positions: dict = {}
 
         built = _Client()
         monkeypatch.setattr(
