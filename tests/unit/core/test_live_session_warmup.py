@@ -29,6 +29,8 @@ from src.core.live_session_warmup import (
     DISCARDED_EVENT,
     FAILED_EVENT,
     ON_POLL_INTERVAL_SECONDS,
+    SEAM_DUPLICATE_EVENT,
+    SEAM_GAP_EVENT,
     SKIPPED_EVENT,
     WARMUP_DEADLINE_MARGIN_SECONDS,
     WARMUP_POLL_SECONDS,
@@ -576,3 +578,208 @@ class TestTheWaitIsResponsive:
             assert watch.settle_blocking(loop, "sma_crossover") is True
         finally:
             loop.close()
+
+
+# ---------------------------------------------------------------------------
+# Story 4.5 (D-F, PO ruling B) — the history/live seam's own branches. The
+# engine-level proof is ``tests/component/core/test_warmup_seam.py``.
+# ---------------------------------------------------------------------------
+
+
+def _bar(ts_event: int, bar_type: str = BAR_TYPE):
+    return SimpleNamespace(bar_type=bar_type, ts_event=ts_event)
+
+
+class _SeamStrategy(_Strategy):
+    """``_Strategy`` plus the ``Actor`` bar surface the seam wraps: the
+    history batch goes to ``handle_bars`` before the callback (the response
+    path's order), live bars to ``handle_bar``, and ``cache.bars`` holds what
+    ``DataEngine`` cached while the request was in flight."""
+
+    def __init__(self, timeline, *, history=(), in_flight=(), **kwargs) -> None:
+        super().__init__(timeline, **kwargs)
+        self.delivered: list[int] = []
+        self._history = list(history)
+        in_flight = list(in_flight)
+        self.cache = SimpleNamespace(
+            bars=lambda bar_type: [bar for bar in in_flight if bar.bar_type == bar_type]
+        )
+
+    def handle_bars(self, bars) -> None:
+        pass
+
+    def handle_bar(self, bar) -> None:
+        self.delivered.append(getattr(bar, "ts_event", bar))
+
+    def request_bars(self, bar_type, start, end=None, limit=0, client_id=None, callback=None,
+                     update_catalog=False, params=None):  # fmt: skip
+        self.handle_bars([bar for bar in self._history if bar.bar_type == bar_type])
+        return super().request_bars(bar_type, start, end, limit, client_id, callback)
+
+
+OTHER = "MSFT.NASDAQ-1-MINUTE-LAST-EXTERNAL"
+
+
+def _seam(timeline, *, watch=None, **kwargs):
+    watch = watch or _watch(timeline)
+    strategy = _SeamStrategy(timeline, **kwargs)
+    watch.instrument(strategy, spec_strategy_id="sma_crossover")
+    strategy.on_start()
+    return strategy
+
+
+class TestTheSeamDropsWhatTheHistoryHeld:
+    def test_a_bar_at_or_before_the_history_end_is_dropped_and_said_so_once(self):
+        """D-F (B): the record is once per strategy; every duplicate is dropped."""
+        timeline = _Timeline()
+        strategy = _seam(timeline, history=[_bar(8), _bar(10)])
+
+        strategy.handle_bar(_bar(9))
+        strategy.handle_bar(_bar(10))
+        strategy.handle_bar(_bar(11))
+
+        assert strategy.delivered == [11]
+        dropped = [e for e in timeline.entries if e[1] == SEAM_DUPLICATE_EVENT]
+        assert [(e[0], e[2]["ts_event"]) for e in dropped] == [
+            ("info", "1970-01-01T00:00:00+00:00")
+        ]
+
+    def test_another_bar_type_is_never_filtered(self):
+        strategy = _seam(_Timeline(), history=[_bar(10)])
+
+        strategy.handle_bar(_bar(5, OTHER))
+
+        assert strategy.delivered == [5]
+
+    async def test_a_history_after_the_warmup_settles_moves_no_watermark(self):
+        """Only the warm-up is the seam: a later request's history is not."""
+        timeline = _Timeline()
+        watch = _watch(timeline)
+        strategy = _seam(timeline, watch=watch, history=[_bar(10)])
+        await watch.settle("sma_crossover", stop_requested=_never_stopped)
+
+        strategy.handle_bars([_bar(50)])
+        strategy.handle_bar(_bar(20))
+
+        assert strategy.delivered == [20]
+
+    async def test_a_warmup_that_never_answers_disarms_when_the_wait_ends(self):
+        """Code review 2026-09-28: the seam used to disarm only on a successful
+        answer, so after a stalled or stopped warm-up a later history kept
+        moving the watermark."""
+        timeline = _Timeline()
+        watch = _watch(timeline)
+        strategy = _seam(timeline, watch=watch, history=[_bar(10)], answer="never")
+        await watch.settle("sma_crossover", stop_requested=lambda: True)
+
+        strategy.handle_bars([_bar(50)])
+        strategy.handle_bar(_bar(20))
+
+        assert strategy.delivered == [20]
+
+    def test_a_second_warmup_request_records_its_own_watermark(self):
+        """Code review 2026-09-28: the first answer used to disarm the seam, so
+        a second bar type's history was never recorded."""
+        timeline = _Timeline()
+        strategy = _seam(timeline, history=[_bar(10), _bar(30, OTHER)])
+        strategy.request_bars(OTHER, "2026-09-17T13:25:00+00:00", callback=lambda _: None)
+
+        strategy.handle_bar(_bar(30, OTHER))
+        strategy.handle_bar(_bar(31, OTHER))
+
+        assert strategy.delivered == [31]
+
+    def test_a_bar_it_cannot_read_is_delivered_not_raised(self):
+        """Containment: any failure of the seam's own reads delivers the bar
+        exactly as before this story — nothing raises into the message bus."""
+        strategy = _seam(_Timeline(), history=[_bar(10)])
+        unreadable = SimpleNamespace(bar_type=BAR_TYPE)  # no ts_event
+
+        strategy.handle_bar(unreadable)
+
+        assert strategy.delivered == [unreadable]
+
+    def test_a_raising_log_still_drops_the_duplicate(self):
+        class _RaisingLog(_Log):
+            def info(self, event, **fields):
+                raise RuntimeError("sink down")
+
+        timeline = _Timeline()
+        watch = WarmupWatch(log=_RaisingLog(timeline), deadline_seconds=DEADLINE)
+        strategy = _SeamStrategy(timeline, history=[_bar(10)])
+        watch.instrument(strategy, spec_strategy_id="sma_crossover")
+        strategy.on_start()
+
+        strategy.handle_bar(_bar(10))
+
+        assert strategy.delivered == []
+
+
+class TestTheSeamNamesWhatTheStrategyMissed:
+    def test_one_warning_per_bar_cached_while_the_request_was_in_flight(self):
+        """In ascending order, ``ts_event`` and the history's end as ISO UTC."""
+        second = 1_000_000_000
+        timeline = _Timeline()
+        strategy = _seam(
+            timeline,
+            history=[_bar(10 * second)],
+            in_flight=[_bar(12 * second), _bar(11 * second), _bar(9 * second)],
+        )
+
+        gaps = [e for e in timeline.entries if e[1] == SEAM_GAP_EVENT]
+        assert [e[0] for e in gaps] == ["warning", "warning"]
+        assert [e[2]["ts_event"] for e in gaps] == [
+            "1970-01-01T00:00:11+00:00",
+            "1970-01-01T00:00:12+00:00",
+        ]
+        assert {e[2]["last_history_ts_event"] for e in gaps} == {"1970-01-01T00:00:10+00:00"}
+        assert timeline.events().index(COMPLETED_EVENT) < timeline.events().index(SEAM_GAP_EVENT)
+        assert timeline.events()[-1] == "subscribe_bars", "the strategy still subscribed"
+        assert strategy.delivered == [], "a missed bar was replayed"
+
+    def test_a_cache_that_raises_costs_nothing(self):
+        timeline = _Timeline()
+        watch = _watch(timeline)
+        strategy = _SeamStrategy(timeline, history=[_bar(10)])
+
+        def _raising(bar_type):
+            raise RuntimeError("cache down")
+
+        strategy.cache = SimpleNamespace(bars=_raising)
+        watch.instrument(strategy, spec_strategy_id="sma_crossover")
+        strategy.on_start()
+
+        assert timeline.events() == [COMPLETED_EVENT, "subscribe_bars"]
+
+    def test_an_empty_history_names_nothing(self):
+        timeline = _Timeline()
+        _seam(timeline, history=[], in_flight=[_bar(12)])
+
+        assert SEAM_GAP_EVENT not in timeline.events()
+
+    def test_only_the_bar_type_whose_history_just_answered_is_reported(self):
+        """Code review 2026-09-28: a later answer used to re-report every bar
+        type's gap."""
+        timeline = _Timeline()
+        strategy = _seam(timeline, history=[_bar(10), _bar(30, OTHER)], in_flight=[_bar(12)])
+        before = timeline.events().count(SEAM_GAP_EVENT)
+
+        strategy.request_bars(OTHER, "2026-09-17T13:25:00+00:00", callback=lambda _: None)
+
+        assert before == 1
+        assert timeline.events().count(SEAM_GAP_EVENT) == 1, "BAR_TYPE's gap was re-reported"
+
+    def test_a_bar_the_strategy_did_receive_is_not_named_missing(self):
+        """A strategy that subscribed before its history answered (possible for
+        a custom strategy) received the in-flight bar; it is not a gap."""
+        timeline = _Timeline()
+        watch = _watch(timeline)
+        strategy = _SeamStrategy(timeline, history=[_bar(10)], in_flight=[_bar(12)], answer="later")
+        watch.instrument(strategy, spec_strategy_id="sma_crossover")
+        strategy.on_start()
+        strategy.handle_bar(_bar(12))  # delivered while the request was still in flight
+
+        strategy.callbacks[0]("request-1")
+
+        assert SEAM_GAP_EVENT not in timeline.events()
+        assert strategy.delivered == [12]

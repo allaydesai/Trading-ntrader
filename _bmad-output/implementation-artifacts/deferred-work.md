@@ -3163,7 +3163,10 @@ none blocks the story.
   which is exactly the resume-correctness question Story 4.5 exists for. A fix needs a seam
   guard outside the strategy (a per-strategy monotonic-`ts_event` filter at the runner's
   `handle_bar` boundary, plus a gap fill from the cache in the callback). **Owner:** Story 4.5.
-  P14 criterion 7 records which reading each live run shows.
+  P14 criterion 7 records which reading each live run shows. **✅ DISPOSITIONED — Story 4.5
+  (2026-09-28), PO ruling D-F: B:** the duplicate is dropped (`warmup.seam_duplicate_dropped`) and
+  every missed bar is named (`warmup.seam_gap`, WARNING) — **not** replayed (a replayed bar could
+  signal on a stale price). See "Deferred from: story-4.5".
 - **Serialized warm-up scales as N × (`ibkr_request_timeout` + 15 s).** D-B starts one strategy at
   a time so at most one history request is in flight (NFR15, and F2's same-second dedup). The cost
   is that a session whose strategies *all* fail to warm takes N × 75 s by default to fail: two is
@@ -3350,6 +3353,8 @@ against the installed `nautilus-trader 1.220.0` with a real `LiveExecutionEngine
   cache, so the framework imports it as `EXTERNAL +10`; its position pass then sees net 20 against
   the broker's 10 and adds `INTERNAL-DIFF −10`. Net is right (Story 4.2's check passes); the
   strategy's own view is not the broker's position, it is its old one beside two synthetics.
+  **✅ FIXED — Story 4.5 (D-A):** the session's engine runs with
+  `filter_unclaimed_external_orders=True`; a restart leaves only the strategy's own position.
 - **`sma_crossover` reads every strategy's positions on its instrument — an NFR14 hazard whenever a
   synthetic position shares a traded instrument.** → **Story 4.5.** `_generate_buy_signal`/
   `_generate_sell_signal` call `cache.positions(venue, instrument_id)` with no strategy filter and
@@ -3358,7 +3363,8 @@ against the installed `nautilus-trader 1.220.0` with a real `LiveExecutionEngine
   a broker at 10); a BUY closes `INTERNAL-DIFF −10` (buys 10 more). Story 4.2 refuses only a
   *contradicted* strategy position (D-D); a consistent strategy beside synthetics passes, and the
   hazard is the resume path's to close (e.g. a strategy-filtered read, or adopting the broker's
-  position via `external_order_claims`).
+  position via `external_order_claims`). **✅ FIXED — Story 4.5 (D-B):** both built-ins read their
+  own book only (`strategy_id=self.id`); backtest fills unchanged (Story 4.4's fingerprint).
 - **A restart after the broker position *shrank* aborts the process inside Nautilus's own pass.** →
   **Story 4.5 (HIGH).** After a first restart imported `EXTERNAL "NVDA.NASDAQ"` filled 10, a later
   restart with the broker at 4 makes `_reconcile_order_report` see `_should_update` → `True` and
@@ -3369,7 +3375,9 @@ against the installed `nautilus-trader 1.220.0` with a real `LiveExecutionEngine
   found the abort first. Pinned in a subprocess by
   `TestTheShrunkReEntryAbortCanary::test_the_second_restart_aborts_the_process`, which goes red by
   name when an upgrade fixes it. The ordinary resume journey reaches it: restart mid-position,
-  let the strategy reduce, stop, restart.
+  let the strategy reduce, stop, restart. **✅ FIXED — Story 4.5:** new namespaces never cache the
+  fabricated order (D-A; the canary's session-config twin exits 0), and a pre-4.5 namespace that
+  already did is refused before `run_async()` (D-D, `session.resume_refused`, exit 1).
 - **`node:connect`'s timeout message cannot say which of the three pre-trader waits failed.** →
   unowned, named: whoever next touches `await_trader_started`. The kernel ordering
   (`kernel.py:1015-1027`: reconciliation, then `_emulator.start()`, then portfolio, then
@@ -3495,3 +3503,90 @@ Measured against the installed `nautilus-trader 1.220.0` (Task 1, probes and can
 - **The D-D `runner.run()` component test sets `DEBOUNCE_SECONDS` to 0** — the two-observation rule is proven at unit tier only.
 - **Repeated cache-moved skips are silent** — a cycle starved by constant fills leaves no record (a skip now forces the next `reconcile.ok`, so the gap is visible afterwards).
 - **Story 4.6 timing flake:** `tests/component/core/test_live_reconcile.py::TestTheCheckIsBounded::test_the_connect_deadline_never_outlives_the_budget` failed once under the full `-n auto` component run with three review agents loading the machine; 5/5 green alone. The 1.2 s budget is tight under load.
+
+## Deferred from: story-4.5 (2026-09-28)
+
+Story 4.5 (resume a strategy mid-position). Every item routed to 4.5 by Stories 4.2, 4.3 and 4.4
+(and Story 3.4's hand-off) is dispositioned here, with the PO's rulings (Allay, 2026-09-28:
+**D-C: B**, **D-F: B**; D-A, D-B, D-D, D-E approved as drafted). Measured against the installed
+`nautilus-trader 1.220.0` (Task 1, probes in `/tmp/p45/`, not committed; pinned by tests).
+
+- **The triple-position restart shape (4.2, :3347).** → **FIXED (D-A).**
+  `EXEC_ENGINE_FILTER_UNCLAIMED_EXTERNAL_ORDERS = True`, enforced on the running engine through
+  `BROKER_WARD_SETTINGS`. Measured: S +10 against broker +10 now leaves exactly S +10; an empty
+  cache against broker +10 imports `INTERNAL-DIFF +10` at the broker's price. **Accepted trade-off:**
+  a working order the cache never knew (a manual TWS order, a lost cache) is no longer imported at
+  startup; its fills still reach the cache as a net correction. A strategy's own working orders are
+  unaffected (AR25; the 4.2 AR25 test passes under the filter).
+- **`sma_crossover`'s unfiltered position read (4.2, :3353).** → **FIXED (D-B)**, and `momentum`'s
+  portfolio-net read with it. Backtest parity proven: `test_warmup_backtest_parity.py` and
+  `test_sma_strategy_nautilus.py` unchanged and green.
+- **The shrunk-re-entry process abort (4.2, :3362, HIGH).** → **FIXED for every namespace created
+  after this story (D-A)** — the canary's session-config twin exits 0 — and **refused explicitly for
+  a pre-4.5 namespace (D-D)**: a cached order with strategy `EXTERNAL` and `client_order_id ==
+  instrument id` refuses the start inside `node:connect`, before `run_async()`
+  (`session.resume_refused reason=legacy_position_import`, exit 1, remedy: a new session). Measured:
+  the filter does not help a namespace that already cached the order (known orders never reach
+  `_generate_order`), so D-D is load-bearing. **Consequence, accepted:** every session restarted
+  mid-position before Story 4.5 (P7–P13-era paper sessions, e.g. `p7-fill-0901`) now refuses to
+  start. Owner: none — the remedy is a new session.
+- **D-D's contradicted-strategy refusal (4.2), "which 4.5 may relax".** → **Relaxed at startup
+  for one shape only (code review Decision 2, PO ruling A, 2026-09-28), otherwise kept.** When IBKR
+  holds everything the strategies own on the same side *and more*, the startup phase no longer
+  refuses the session: the excess is unowned, and D-C refuses only that strategy. IBKR holding
+  less, nothing or the opposite side still refuses the whole start. The runtime cycle is
+  unchanged: it still stops the session on all of them, pinned by
+  `test_a_covering_broker_holding_still_stops_the_running_session`. A real contradiction still
+  cannot be rewritten (the framework's corrections never land in a strategy's position).
+- **Any unresolvable (`IB-CONID-*`) broker position refuses every start (4.2 review, :3399).** →
+  **Kept (D-G).** An unresolved row cannot be tied to, or excluded from, any strategy's instrument;
+  refusing is the only reading that cannot trade blind. Owner for a narrower rule: unowned, named
+  — whoever first meets an unresolvable holding live.
+- **A holding no strategy owns on a traded instrument (new, D-C, PO ruling B).** The strategy on
+  that instrument is refused (`strategy.resume_refused`, contained, siblings start, fail closed if
+  none can); the holding is never traded or adjusted. **Consequence:** P18b's hand-bought share, or
+  the paper account's old `AAPL +4`, blocks that instrument's strategy until removed by hand in TWS
+  (P18's "Know before starting" note records it).
+- **The stranded `ACCEPTED` order and the `p7-position-test` stall (4.3, :3449).** → **Carried
+  forward, still conditional:** neither P17b nor P18 has been run, so the live stall has never been
+  reproduced. Owner unchanged: the first operator run of P17b/P18/P19b that reproduces it.
+- **An `ACCEPTED` order filled while disconnected, corrected as `INTERNAL-DIFF` (4.3 review,
+  :3492).** → **Next start: governed by D-C** (the unowned `INTERNAL-DIFF` refuses that strategy,
+  loudly). **Mid-run: not fixed** — re-attributing a synthetic position to a strategy needs cache
+  surgery, which Story 4.2's PO ruling rejected. The strategy keeps running flat beside it until
+  the next start. **Owner: Epic 4 retrospective.**
+- **A strategy consults `orders_open` before a fresh signal (Story 3.4's hand-off).** → **Not built
+  (D-H a).** A stranded `ACCEPTED` order (above) would silence the strategy forever; the framework
+  already denies a same-`client_order_id` duplicate; both built-ins place market orders.
+  Visibility instead: `strategy.resumed` carries the strategy's own `open_orders`. Owner: unowned,
+  named — the first strategy that places resting orders.
+- **Strategy-visible suppression feedback (Epic 3 retro Action Item 1).** → **Unchanged (D-H d).**
+  The built-ins keep no private position state and, since D-B, read their own book from the cache
+  on every signal. The action item's general owner question stays with the retro.
+- **The history/live seam (4.4 review, :3153).** → **Dispositioned (D-F, PO ruling B)** — struck
+  in place above. **Residual, accepted:** a missed bar is named, not replayed, so the averages can
+  still lag one bar for up to `slow_period` bars after a gap; the WARNING says when.
+- **`on_stop` flattening in `custom/sma_crossover_long_only` (:2196).** → **Unchanged, owner the
+  submodule repo**; P19b's preconditions say to use the built-in `sma_crossover`.
+- **P19 is defined, not run.** No Gateway was reachable (ports closed at 11:31 ET Monday) and the
+  harness worktree has no `.env`. **Owner:** the operator, P19a (read-only) first.
+
+## Deferred from: code review of 4-5-resume-a-strategy-mid-position (2026-09-28)
+
+The three review deferrals, each dispositioned with an owner (PO instruction, 2026-09-28). The
+review's 19 patches, including the HIGH order-id renumbering, are applied, not deferred. See the
+story's Review Findings.
+
+- **The seam assumes history and live bars share one `ts_event` convention.** The IB adapter's
+  history trims the forming bar (`_check_bounds`, measured by Story 4.4), so the watermark is always
+  a completed bar. But the claim that a republished live bar carries the *same* `ts_event` as its
+  history twin is unverifiable offline: every harness builds both from one helper. If the
+  conventions differ, the first genuine live bar is dropped and logged only at INFO
+  (`warmup.seam_duplicate_dropped`). **Owner:** whoever runs P19 first — criterion 7 reads it.
+- **The built-ins ignore their own working orders restored from Redis** (a signal while an own
+  entry or close is still working). This is D-H (a), disclosed and routed above; the review
+  re-raised it. **Owner:** unchanged.
+- **An unowned holding that appears after a strategy's start check is never refused.** A manual
+  trade or a late fill arrives through Story 4.3's runtime cycle as `INTERNAL-DIFF`, and the
+  strategy keeps trading its own book beside it with no refusal record. **Owner:** Epic 4
+  retrospective (runtime alignment; pairs with the mid-run re-attribution item above).

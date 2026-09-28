@@ -223,14 +223,16 @@ class SMACrossover(Strategy):
 
     def _generate_buy_signal(self) -> None:
         """Generate a buy signal."""
-        # Get current positions from cache (always up-to-date)
-        positions = self.cache.positions(
-            venue=self.instrument_id.venue, instrument_id=self.instrument_id
-        )
+        # This strategy's own open positions only (Story 4.5): the cache can
+        # also hold positions reconciliation owns (`EXTERNAL`/`INTERNAL-DIFF`)
+        # on this instrument, and acting on those trades a holding this
+        # strategy never opened (NFR14). Backtests run one strategy per
+        # instrument, so there the set is unchanged.
+        positions = self.cache.positions_open(instrument_id=self.instrument_id, strategy_id=self.id)
 
         # Check for open positions
-        has_short = any(p.is_short and p.is_open for p in positions)
-        has_long = any(p.is_long and p.is_open for p in positions)
+        has_short = any(p.is_short for p in positions)
+        has_long = any(p.is_long for p in positions)
 
         # Close any existing short position first. A signal either closes the
         # opposite side or opens a new position -- never both: closing does
@@ -243,7 +245,7 @@ class SMACrossover(Strategy):
         # run, story-3.4 closeout").
         if has_short:
             for position in positions:
-                if position.is_short and position.is_open:
+                if position.is_short:
                     self.close_position(position)
                     self.log.info(f"Closed SHORT position: {position.id}")
 
@@ -267,20 +269,18 @@ class SMACrossover(Strategy):
 
     def _generate_sell_signal(self) -> None:
         """Generate a sell signal."""
-        # Get current positions from cache
-        positions = self.cache.positions(
-            venue=self.instrument_id.venue, instrument_id=self.instrument_id
-        )
+        # Own positions only -- see `_generate_buy_signal`.
+        positions = self.cache.positions_open(instrument_id=self.instrument_id, strategy_id=self.id)
 
         # Check for open positions
-        has_long = any(p.is_long and p.is_open for p in positions)
-        has_short = any(p.is_short and p.is_open for p in positions)
+        has_long = any(p.is_long for p in positions)
+        has_short = any(p.is_short for p in positions)
 
         # Close any existing long position first. Mirror of
         # `_generate_buy_signal`'s close/open split -- see its comment.
         if has_long:
             for position in positions:
-                if position.is_long and position.is_open:
+                if position.is_long:
                     self.close_position(position)
                     self.log.info(f"Closed LONG position: {position.id}")
 

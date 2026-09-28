@@ -121,6 +121,8 @@ class _TestEngine:
         self.generate_missing_orders = True
         self.filter_position_reports = False
         self.reconciliation_instrument_ids: list[object] = []
+        # Story 4.5 (D-A): the session's own value, not Nautilus's default.
+        self.filter_unclaimed_external_orders = True
         self.reconcile_reports: list[object] = []
         self.reconcile_returns = True
         # `find_ib_exec_client` reads this; only a correcting `reconcile` needs it.
@@ -256,21 +258,47 @@ class _TestCache:
         self.inflight_orders: list[object] = []
         #: What ``instrument()`` resolves; empty, so nothing is correctable.
         self.instruments_by_id: dict[object, object] = {}
+        #: Story 4.5: every cached order, open or not — what the pre-`run_async`
+        #: scan for a pre-4.5 fabricated order reads. Empty by default.
+        self.all_orders: list[object] = []
 
     def instruments(self) -> list[TestInstrument]:
         return list(self._instruments)
 
-    def positions_open(self) -> list[object]:
-        return list(self.open_positions)
+    def positions_open(
+        self, instrument_id: object = None, strategy_id: object = None
+    ) -> list[object]:
+        """Filtered the way ``Cache.positions_open`` filters (Story 4.5 reads
+        a strategy's own book); unfiltered with no arguments, as before."""
+        return [
+            position
+            for position in self.open_positions
+            if _matches(position, instrument_id=instrument_id, strategy_id=strategy_id)
+        ]
 
-    def orders_open(self) -> list[object]:
-        return list(self.open_orders)
+    def orders_open(self, instrument_id: object = None, strategy_id: object = None) -> list[object]:
+        return [
+            order
+            for order in self.open_orders
+            if _matches(order, instrument_id=instrument_id, strategy_id=strategy_id)
+        ]
+
+    def orders(self) -> list[object]:
+        return list(self.all_orders)
 
     def orders_inflight(self) -> list[object]:
         return list(self.inflight_orders)
 
     def instrument(self, instrument_id: object) -> object | None:
         return self.instruments_by_id.get(instrument_id)
+
+
+def _matches(item: object, **wanted: object) -> bool:
+    """``Cache``'s keyword filters: ``None`` means any; compared as strings."""
+    return all(
+        value is None or str(getattr(item, name, None)) == str(value)
+        for name, value in wanted.items()
+    )
 
 
 class TestLiveNode:

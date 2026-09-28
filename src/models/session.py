@@ -449,6 +449,24 @@ class SessionSpec(BaseModel):
         return self
 
     @property
+    def order_id_tags(self) -> dict[str, str]:
+        """Each entry's ``order_id_tag``, keyed by ``strategy_id``, exactly as
+        ``Trader.add_strategy`` resolves it when **every** entry is added in
+        order — the walk :meth:`_reject_order_id_tag_collision` validates.
+
+        Story 4.5 (code review): the runner passes it explicitly at
+        materialisation, because ``add_strategy`` counts the strategies
+        *actually added* — so an entry refused or failed before registration
+        used to shift every later strategy's id, and the position its previous
+        run left under the old id became invisible to it. Keyed by
+        ``strategy_id``, which :meth:`_reject_duplicate_strategies` keeps unique.
+        """
+        tags: dict[str, str] = {}
+        for strategy in self.strategies:
+            tags[strategy.strategy_id] = _resolve_order_id_tag(strategy.parameters, len(tags))
+        return tags
+
+    @property
     def subscription_bar_types(self) -> tuple[str, ...]:
         """Every strategy's bar types, flattened and deduplicated across strategies.
 

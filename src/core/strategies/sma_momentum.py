@@ -122,15 +122,17 @@ class SMAMomentum(Strategy):
         crossed_up = self._prev_fast <= self._prev_slow and fast_val > slow_val
         crossed_dn = self._prev_fast >= self._prev_slow and fast_val < slow_val
 
-        is_long = self.portfolio.is_net_long(self.instrument_id)
-        is_short = self.portfolio.is_net_short(self.instrument_id)
-        is_flat = self.portfolio.is_flat(self.instrument_id)
+        own = self._own_net_quantity()
+        is_long, is_short, is_flat = own > 0, own < 0, own == 0
 
-        # Long-only default: buy on golden cross, exit on death cross
+        # Long-only default: buy on golden cross, exit on death cross. Exits and
+        # flips are sized from its own position, not `trade_size` (Story 4.5):
+        # a resumed position can differ from it (an entry part-filled before a
+        # restart). In backtests the two are always equal, so fills are unchanged.
         if crossed_up:
             if is_short:
-                # flip to long (cover + go long) by buying `trade_size * 2`
-                qty = self.instrument.make_qty(self.config.trade_size * 2)
+                # flip to long: cover its own short, then open `trade_size`
+                qty = self.instrument.make_qty(abs(own) + self.config.trade_size)
             elif is_flat:
                 qty = self.instrument.make_qty(self.config.trade_size)
             else:
@@ -147,7 +149,7 @@ class SMAMomentum(Strategy):
         elif crossed_dn:
             if self.config.allow_short:
                 if is_long:
-                    qty = self.instrument.make_qty(self.config.trade_size * 2)
+                    qty = self.instrument.make_qty(abs(own) + self.config.trade_size)
                     side = OrderSide.SELL
                 elif is_flat:
                     qty = self.instrument.make_qty(self.config.trade_size)
@@ -168,11 +170,23 @@ class SMAMomentum(Strategy):
                     order = self.order_factory.market(
                         instrument_id=self.instrument_id,
                         order_side=OrderSide.SELL,
-                        quantity=self.instrument.make_qty(self.config.trade_size),
+                        quantity=self.instrument.make_qty(abs(own)),
                     )
                     self.submit_order(order)
 
         self._prev_fast, self._prev_slow = fast_val, slow_val
+
+    def _own_net_quantity(self) -> Decimal:
+        """This strategy's signed net on its instrument (Story 4.5).
+
+        Never the portfolio's: that nets every owner's positions, including
+        the ones reconciliation holds (``EXTERNAL``/``INTERNAL-DIFF``), so a
+        holding this strategy never opened would read as its own long and be
+        sold on the next death cross. Backtests run one strategy per
+        instrument, so there the two are equal.
+        """
+        positions = self.cache.positions_open(instrument_id=self.instrument_id, strategy_id=self.id)
+        return sum((p.signed_decimal_qty() for p in positions), Decimal(0))
 
 
 # Register config and parameter model for this strategy

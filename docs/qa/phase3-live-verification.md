@@ -1982,8 +1982,9 @@ The worktree has no `.env`, and the charter forbids creating or reading one. **S
 
 **P17a is strictly read-only against the broker.** The probe builds a node (Layer 1 before any
 socket, Layer 2 after connecting), adds **no strategy**, and uses an **in-memory** cache — so the
-snapshot taken before the node runs is empty, Nautilus's own pass imports every broker position as
-`EXTERNAL` inside `run_async`, and `reconcile_at_startup` then compares the cache against a fresh
+snapshot taken before the node runs is empty, Nautilus's own pass imports every broker position —
+as `INTERNAL-DIFF` since Story 4.5 (the adapter's fabricated `EXTERNAL` order is filtered, D-A;
+before it, as `EXTERNAL`) — inside `run_async`, and `reconcile_at_startup` then compares the cache against a fresh
 `read_broker_state`. Any broker-ward correction the phase makes lands in that throwaway cache,
 never in a session's Redis namespace. Nothing can submit an order. It does not need RTH.
 
@@ -2094,6 +2095,11 @@ run with it.
   strategy can enter). No IBKR mobile app or client portal session while it runs (the 162 rule).
 - A session whose strategy trades an instrument you are willing to trade by hand in TWS (P18b uses
   a second instrument from the same session spec, or a fresh session on it).
+- **Know before starting (Story 4.5):** P18b's hand-bought share is a holding no strategy owns. At
+  the session's **next** start, the strategy trading that instrument is not started
+  (`strategy.resume_refused reason=unowned_position`, PO ruling D-C: B) until you remove the share
+  by hand in TWS; its sibling strategies still start. That is the intended behaviour, not a P18
+  failure.
 - D6's standing rule first: grep every transcript for `162`, `10182`, `366` before reading it.
 
 ### Command
@@ -2162,3 +2168,148 @@ exit=1
 | Date | Operator | Result | Notes |
 | ---- | -------- | ------ | ----- |
 | 2026-09-27 | Story 4.3 dev session | ⏳ **Defined, not run (operator only)** | Every part needs `live start` (strategies may trade), and P18b/P18e change a broker position by hand — the story charter forbids submitting orders or opening, closing or flattening positions, so no part is read-only. The one read-only surface this story touches — the exec-client factory, which now installs the D-B patch, reached by `live check` — was attempted: `ntrader live check` stopped at `Cannot build an IBKR execution client: TWS_ACCOUNT is not set` in 0.00 s, before any socket opened, because the harness worktree has no `.env` (the P15/P17a precedent; the charter forbids creating or reading one). Informational evidence only (NFR33), never a gate: the same logic is proven against broker doubles and a real `LiveExecutionEngine` in `tests/unit/core/test_live_runtime_reconcile.py`, `tests/component/core/test_live_runtime_reconcile_engine.py`, `test_session_runner_runtime_reconcile.py` and `test_live_exec_position_reports.py`. |
+
+## Procedure P19: a session restarted across an open position resumes it
+
+> Written by Story 4.5. If a story running in parallel also appended a "Procedure P19", the
+> integrator renumbers one of them; the content of this procedure does not depend on its number.
+
+**Introduced by**: Story 4.5 — Resume a Strategy Mid-Position
+**Verifies**:
+- D-A live (P19a): Nautilus's own startup pass imports a broker position **once**, as
+  `INTERNAL-DIFF`, with no `EXTERNAL` order — the IB adapter's fabricated per-position order is
+  filtered (`filter_unclaimed_external_orders=True`).
+- AC #1 / #2 live (P19b): a session stopped holding a position resumes it — `strategy.resumed`
+  with `quantity == broker_quantity` and `opened_before_this_run=True`, `reconcile.ok` with
+  `synthetic_positions=0` — and the strategy enters nothing on a same-side signal.
+- AC #3 / #5 live (P19b): the eventual exit is **one** order of the resumed quantity, and the round
+  trip is **one** `trade.persisted` whose `ts_opened` is the first run's, in the same `session_id`.
+- AC #4 live (P19b): `reconcile.ok` → `strategy.resumed` → `warmup.completed` → the first bar, in
+  that order, before any `order.submitted`.
+- D-F (informational, P19b): the history/live seam reading — `warmup.seam_duplicate_dropped` /
+  `warmup.seam_gap` — replaces P14 criterion 7's hand comparison.
+
+**Tools**: `scripts/diagnostics/live_node_probe.py --verify-account --reconcile` (P19a);
+`ntrader live start <session>` and TWS (P19b).
+
+### What it does, and what it does not do
+
+**P19a is strictly read-only against the broker** — P17a's command, read for a different fact: the
+probe adds no strategy and uses an in-memory cache, so nothing can submit an order and no session's
+Redis namespace is touched. It needs an account that **holds** a position (a flat account shows
+nothing to import). It does not need RTH.
+
+**P19b is not read-only**: `live start` starts strategies, which enter and exit at IBKR paper. It
+is written for the operator and is **never** run by an automated story session. It does not need
+`--real-money` and must never be run with it.
+
+### Preconditions
+
+- A running, logged-in paper Gateway on the configured paper port, inside RTH for P19b. No IBKR
+  mobile app or client portal session while it runs (the 162 rule). D6's standing rule first:
+  grep every transcript for `162`, `10182`, `366` before reading it.
+- **P19b: a fresh session** created after Story 4.5 (`live create --name p19-<date> --strategy
+  sma_crossover --bar-type NVDA.NASDAQ-1-MINUTE-LAST-EXTERNAL`). A session restarted mid-position
+  *before* Story 4.5 refuses to start (`session.resume_refused reason=legacy_position_import`,
+  exit 1, D-D) — that refusal is itself worth recording once, on such a session, but it is not P19b.
+- The account holds **nothing** on the session's instrument that the session did not open —
+  otherwise the strategy is not started (`strategy.resume_refused`, D-C) and P19b cannot run.
+- **Know before starting:** `custom/sma_crossover_long_only` still flattens in `on_stop()`
+  (`deferred-work.md:2196`, owner: the submodule repo). Use the built-in `sma_crossover`.
+- P19b leaves a position open between its two runs, by design, and possibly at the end if no exit
+  signal comes. Close a leftover **by hand in TWS** or with `scripts/flatten_position.py --confirm`
+  (whose first live use is still to be recorded — `deferred-work.md:3043-3052`).
+
+### Command
+
+```bash
+# P19a — read-only, on an account holding a position.
+uv run python scripts/diagnostics/live_node_probe.py --run-seconds 1 --verify-account \
+  --reconcile > logs/p19a-<date>.log 2>&1
+grep -E "^\[probe\]|RESULT|reconcile\.(ok|discrepancy)|EXTERNAL|INTERNAL-DIFF" logs/p19a-<date>.log
+
+# P19b run 1 — wait for an entry (`order.filled`), then Ctrl-C once.
+uv run python -m src.cli.main live start p19-<date> > logs/p19b-1-<date>.log 2>&1
+# Record the IBKR position in TWS. It must be unchanged by the stop.
+
+# P19b run 2 — the same session, by name.
+uv run python -m src.cli.main live start p19-<date> > logs/p19b-2-<date>.log 2>&1
+grep -nE "reconcile\.(ok|discrepancy)|strategy\.resum|warmup\.(completed|seam)|order\.submitted|\
+trade\.(aggregated|persisted)|session\.started" logs/p19b-2-<date>.log
+# After the exit fills, Ctrl-C once, then:
+psql "$DATABASE_URL" -c "SELECT session_id, trade_id, venue_order_id, client_order_id, \
+  entry_timestamp, exit_timestamp FROM trades WHERE session_id = \
+  (SELECT id FROM trading_sessions WHERE name = 'p19-<date>') ORDER BY exit_timestamp;"
+```
+
+### Expected output
+
+```
+# P19a
+[probe] reconciled NVDA.NASDAQ qty=+22
+[probe] reconcile ok positions=1 discrepancies=1 open_orders=0 synthetic_positions=1 elapsed_ms=...
+RESULT: ok ... reconcile=ok positions=1 discrepancies=1 ...
+# and no "EXTERNAL" line from Nautilus's own reconciliation of the position
+
+# P19b run 2
+session.phase phase=reconcile status=ok
+reconcile.ok scope=startup positions=1 instruments={'NVDA.NASDAQ': '22'} discrepancies=0 synthetic_positions=0
+strategy.resumed strategy_id=SMACrossover-000 instrument_id=NVDA.NASDAQ side=LONG quantity=22
+  broker_quantity=22 opened_before_this_run=True open_orders=0 ...
+warmup.completed strategy_id=sma_crossover indicators_initialized=True ...
+session.started ...
+order.submitted ... side=SELL quantity=22          # only on the opposite crossover
+trade.aggregated strategy_id=SMACrossover-000 opening_order_id=<run 1's> ...
+trade.persisted ...
+```
+
+### Pass criteria
+
+1. **P19a:** every broker position appears once, and the framework's import of it is
+   `INTERNAL-DIFF` — `grep -c EXTERNAL` on Nautilus's reconciliation lines prints `0`.
+   `RESULT: ok`. Nothing traded (`grep -c "order.submitted\|SubmitOrder"` prints `0`).
+2. **P19b, the stop:** TWS shows the same position before and after the Ctrl-C; run 1's log has
+   no `order.submitted` after `session.stopped`.
+3. **P19b, the resume:** run 2's `reconcile.ok` has `discrepancies=0` and `synthetic_positions=0`;
+   exactly one `strategy.resumed`, with `quantity == broker_quantity` and
+   `opened_before_this_run=True`; its line precedes `warmup.completed`, which precedes the first bar
+   and any `order.submitted`.
+4. **P19b, no fresh entry:** no `order.submitted` with the entry's side while the position is open.
+5. **P19b, one exit:** on the opposite crossover, exactly one `order.submitted` of the resumed
+   quantity, and TWS goes flat.
+6. **P19b, one trade:** exactly one `trade.aggregated` for the round trip (none for a synthetic
+   owner), its `opening_order_id` is run 1's entry order, and the `trades` query shows one row for
+   it with run 1's `entry_timestamp`, in the same `session_id` as every earlier row of this
+   session.
+7. **Informational, not pass/fail — the seam:** record any `warmup.seam_duplicate_dropped` /
+   `warmup.seam_gap` line from either run. A gap is named, never replayed (PO ruling D-F: B). The
+   duplicate record's `ts_event` equal to `last_history_ts_event` is also the first live evidence
+   that IB stamps a republished history bar and its live twin alike (`deferred-work.md`, story-4.5
+   review deferral) — record it.
+
+### Variants
+
+- **P19b day two — the signature journey (Journey 2).** Run 1 near the close; stop it (Ctrl-C) with
+  the position open; let the Gateway take its **overnight restart** with nothing running; start
+  run 2 the next morning. The pass criteria are the same, and in addition run 2's `node:connect`
+  reconnects to a Gateway process that never saw run 1. `session.phase phase=reconcile
+  status=ok` with `synthetic_positions=0` is the whole point: the broker's answer, not any
+  in-memory state, is what the resume rests on.
+- **P19b at 09:25 ET (NFR3).** Start run 2 five minutes before the open. Record the time of
+  `session.started` and of the first `strategy`-owned bar: the resumed strategy must be
+  reconciled, warm and subscribed by 09:30. The lookback is whole days for `>= 1 minute` bars
+  (Story 4.4), so a pre-open start never sends a seconds window that returns nothing.
+- **P19c, the covered excess (PO ruling D-C, 2026-09-28 — operator only).** Between runs, buy a
+  few extra shares of the strategy's instrument by hand in TWS. Run 2's `reconcile` phase ends
+  `ok` (a holding that covers the strategy's own is not a contradiction at startup); the strategy
+  is **not started** — `strategy.resume_refused reason=unowned_position` names the instrument,
+  `unowned_quantity`, `strategy_quantity` and `broker_quantity`, and the console prints the
+  remedy — its sibling strategies start, and nothing is traded for the refused one. Remove the
+  extra shares by hand in TWS and restart: the strategy resumes. Selling shares by hand instead
+  (IBKR below the strategy's own) must refuse the **whole** start at `reconcile`, exit 1.
+
+### Result log
+
+| Date | Operator | Result | Notes |
+| ---- | -------- | ------ | ----- |
+| 2026-09-28 | Story 4.5 dev session | ⏳ **P19a defined, not run; P19b defined, not run (operator only)** | Port check at 11:31 ET Monday: 4001/4002/7496/7497 **closed** — no Gateway was running; Redis 6379 and Postgres 5432 open. P19a also needs `TWS_ACCOUNT`, and this harness worktree has no `.env` (the charter forbids creating or reading one — the P15/P17a/P18 precedent). P19b needs a position opened and closed at the broker, which the charter forbids an automated session to do. Informational evidence only (NFR33), never a gate: the same logic is proven against broker doubles and real engines in `tests/component/core/test_live_session_resume_engine.py` (process A → B across a shared cache database, under the session's own exec config), `tests/component/core/test_session_runner_resume.py`, `tests/component/core/test_strategy_own_book.py`, `tests/component/core/test_warmup_seam.py`, `tests/integration/core/test_resume_round_trip_redis.py` (real Redis) and `tests/integration/db/test_trade_record.py` (FR19, real Postgres). |

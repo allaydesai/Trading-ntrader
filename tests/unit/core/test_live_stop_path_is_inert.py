@@ -107,6 +107,11 @@ STOP_PATH_MODULES = (
 #: ``src/core/live_exec_position_reports.py`` (Story 4.3) is **NOT** on it
 #: either, for ``live_exec_avg_px.py``'s reason below: build-time only (plus an
 #: adapter task that sends nothing), and it calls no order or position method.
+#: ``src/core/live_session_resume.py`` (Story 4.5) is **NOT** on it: it runs
+#: only at startup (``node:connect`` and ``trading``), nothing in the teardown
+#: ``finally`` calls into it, and it only *reads* the cache — its refusal leaves
+#: every holding untouched by design (PO ruling D-C: B). ``LIVE_MODULE_GLOBS``
+#: still scans it for every forbidden order method.
 
 #: ``src/core/live_exec_avg_px.py`` (2026-09-01) is likewise **NOT** on the list,
 #: for a simpler reason: it is build-time only. It runs once inside
@@ -487,6 +492,10 @@ class TestTheVocabularyRuleAr36:
         # reason: an operator reading a contained failure must not see it
         # described as a kill or a halt. (`strategy.halted` would fail here.)
         "src/core/live_strategy_guard.py",
+        # Story 4.5's resume module writes operator-facing refusals of its own
+        # (`strategy.resume_refused`, `session.resume_refused`) about holdings
+        # it must never touch — an operator must not read them as a close.
+        "src/core/live_session_resume.py",
         # Story 3.2's `src/core/live_order_path.py` is deliberately **NOT**
         # added here — it is not a stop-path module (see the STOP_PATH_MODULES
         # comment above for why it is excluded from that list too). Hygiene

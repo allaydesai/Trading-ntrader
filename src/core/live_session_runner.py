@@ -20,7 +20,9 @@ snapshots the cache before the node runs, awaits the phase and latches
 ``trading`` on its result), runtime alignment and the trading-permission grant
 (``live_runtime_reconcile`` — Story 4.3; the runner calls the startup grant at
 the end of ``reconcile`` and hands the reconciler to the steady state), the
-warm-up itself (each strategy's own
+resume policy (``live_session_resume`` — Story 4.5; the runner calls its
+pre-``run_async`` refusal in ``node:connect`` and its per-strategy check in
+``trading``), the warm-up itself (each strategy's own
 ``on_start``; the runner only arms and waits on ``live_session_warmup`` —
 Story 4.4), or orders and trades (Epic 3).
 
@@ -121,6 +123,7 @@ from src.core.live_session_node import (
 )
 from src.core.live_session_phases import PHASE_EVENT, phase
 from src.core.live_session_record import SessionReclaimedError, SessionRecordPort
+from src.core.live_session_resume import ResumeCheck, refuse_imported_position_orders
 from src.core.live_session_signals import SessionStopRequested, SessionStopSignals
 from src.core.live_session_steady_state import (
     DEFAULT_NO_BARS_AFTER_SECONDS,
@@ -573,9 +576,13 @@ class LiveSessionRunner:
         Nautilus's own startup reconciliation runs inside this wait
         (``kernel.py:1008-1027``), so the cache is snapshotted first: the last
         instant it holds only what Redis gave it (Story 4.2, decision D-F).
+        Before even that, a pre-4.5 cache the framework's pass would abort the
+        process on is refused (Story 4.5, D-D) — nothing after ``run_async()``
+        could catch that abort.
         """
         with phase(self._log, "node:connect"):
             assert self._loop is not None and self._node is not None
+            refuse_imported_position_orders(self._node.cache, self._log)
             self._local_positions = capture_local_positions(self._node, self._log)
             self._run_task = self._loop.create_task(self._node.run_async())
             wait = await_trader_started(
@@ -688,10 +695,9 @@ class LiveSessionRunner:
             # process can tell a session rejected on every order from one
             # seeing no signals.
             self._subscribe(ORDER_EVENTS_TOPIC, self._rejection_tally.handle_order_event)
-            # Story 3.5. Attaches after reconciliation (Epic 4, still a no-op
-            # today), so a position already open at attach time is first
-            # seen mid-life — the `live_order_path.py:645-651` caveat applies
-            # identically here.
+            # Story 3.5. Attaches after reconciliation, so a position already
+            # open at attach time — a resumed one (Story 4.5) — is first seen
+            # at its close; the closing event carries the whole round trip.
             self._trade_recorder = TradeRecorder(
                 self._node.cache,
                 self._log,
@@ -748,10 +754,11 @@ class LiveSessionRunner:
         swallows reconciliation into a refusal rather than unverified trading.
         """
         with phase(self._log, "trading"):
-            live_startup_reconcile.require_reconciled(self._reconciliation)
+            reconciled = live_startup_reconcile.require_reconciled(self._reconciliation)
             assert self._node is not None
+            resume = ResumeCheck(self._node.cache, reconciled, self._started_at, self._log)
             self._guard.expect(len(self._spec.strategies))
-            started = [spec for spec in self._spec.strategies if self._start_strategy(spec)]
+            started = [spec for spec in self._spec.strategies if self._start_strategy(spec, resume)]
             # A session reclaimed during the earlier phases — or during a
             # warm-up wait, which runs the loop for up to a deadline per
             # strategy (code review 2026-09-22) — must never trade.
@@ -764,8 +771,8 @@ class LiveSessionRunner:
                 raise NoStrategyStartedError(
                     "No strategy in this session started, so it cannot trade. Every "
                     f"specification failed or was interrupted before it warmed: {names}. See "
-                    "the `strategy.start_failed` and `warmup.*` records, and whatever stopped "
-                    "the node, for each one's cause."
+                    "the `strategy.start_failed`, `strategy.resume_refused` and `warmup.*` "
+                    "records, and whatever stopped the node, for each one's cause."
                 )
             self._trader_started = True
             self._log.info(
@@ -775,8 +782,14 @@ class LiveSessionRunner:
                 started_at=self._started_at.isoformat(),
             )
 
-    def _start_strategy(self, strategy_spec) -> bool:
+    def _start_strategy(self, strategy_spec, resume: ResumeCheck) -> bool:
         """Materialise, guard, register and start one spec — contained (AC #5).
+
+        Story 4.5: a spec whose instrument carries a holding no strategy owns
+        is refused first, inside the same ``try`` — contained like any start
+        failure, never materialised (PO ruling D-C: B); a strategy that
+        restarts holding its own position is named (``strategy.resumed``)
+        after ``add_strategy`` fixes its id and before ``on_start`` runs.
 
         The ``try`` is **per spec and inside** ``with phase(...)``, never around
         the phase: wrapping the phase would defeat AR39's *"a failure in any
@@ -812,13 +825,15 @@ class LiveSessionRunner:
             return False
         strategy = None
         try:
-            strategy = materialise_strategy(strategy_spec)
+            resume.refuse_unowned(strategy_spec)
+            strategy = materialise_strategy(strategy_spec, self._spec)
             self._guard.wrap(strategy, spec_strategy_id=strategy_spec.strategy_id)
             assert self._monitor is not None and self._warmup is not None
             install_order_path(strategy, self._monitor, self._log)
             self._warmup.instrument(strategy, spec_strategy_id=strategy_spec.strategy_id)
             assert self._node is not None
             self._node.trader.add_strategy(strategy)
+            resume.note_resumed(strategy)
             self._node.trader.start_strategy(strategy.id)
             return self._warmup.settle_blocking(self._loop, strategy_spec.strategy_id)
         except Exception as exc:  # noqa: BLE001 - AC #5: one bad spec is not the session

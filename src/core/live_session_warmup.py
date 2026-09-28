@@ -43,6 +43,20 @@ It does **not** reach a registered indicator raising on a historical bar: that
 happens in ``Actor.handle_bars``, before any callback, outside every boundary
 this repo installs (``GUARDED_HANDLERS`` is ``handle_bar``/``handle_event``).
 
+**The history/live seam** (Story 4.5, D-F — PO ruling B). A strategy joins the
+bar stream only in its history callback, so a bar the history already held and
+the adapter publishes afterwards (IB publishes bar X on X+1's first update)
+would reach the registered indicators twice, and a bar published while the
+request was in flight is never seen at all. The watch records where the
+history ended — from an instance-level ``handle_bars`` wrapper, because
+``Cache.add_bars`` keeps only history newer than a live bar already cached, so
+``cache.bar()`` cannot say (measured, Story 4.5 Task 1.4) — then drops any live
+bar at or before that point (``warmup.seam_duplicate_dropped``) and names every
+bar the strategy missed (``warmup.seam_gap``, one WARNING each, read from the
+cache that ``DataEngine`` fills whether or not the strategy has subscribed).
+Missed bars are **never replayed**: a replayed bar could signal on a stale
+price. Every piece of it is contained — it can decline to act, never raise.
+
 **Framework-free by contract** — duck-typed strategies, standard library, the
 D3 exit-outcome markers. No ``nautilus_trader``, no ``src.db``/``src.services``.
 """
@@ -50,7 +64,8 @@ D3 exit-outcome markers. No ``nautilus_trader``, no ``src.db``/``src.services``.
 import asyncio
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from typing import Any, ClassVar
 
 from src.core.exit_outcome import LiveCheckOutcome
@@ -73,6 +88,11 @@ COMPLETED_EVENT = "warmup.completed"
 FAILED_EVENT = "warmup.failed"
 SKIPPED_EVENT = "warmup.skipped"
 DISCARDED_EVENT = "warmup.discarded"
+#: Story 4.5 (D-F): a live bar the history already held, dropped.
+SEAM_DUPLICATE_EVENT = "warmup.seam_duplicate_dropped"
+#: Story 4.5 (D-F): a bar published while the history request was in flight,
+#: which the strategy never saw — named, never replayed.
+SEAM_GAP_EVENT = "warmup.seam_gap"
 
 #: ``Actor.request_bars``'s parameters, in order (``common/actor.pyx:3078-3088``),
 #: so a positional ``callback`` is found as reliably as a keyword one. Pinned
@@ -126,6 +146,26 @@ class _Request:
     state: str = "pending"  # pending | completed | failed | abandoned
 
 
+@dataclass(eq=False)
+class _Seam:
+    """Where one strategy's warm-up history ended, per bar type (D-F).
+
+    ``armed`` until the strategy's warm-up **settles** — every request answered,
+    failed or abandoned (code review 2026-09-28: it used to disarm at the first
+    answer, so a second warm-up request recorded nothing). A history requested
+    after that is not the seam and moves no watermark. ``delivered`` holds the
+    live bars the strategy actually received while armed — one that subscribed
+    before its history answered is not missing them (review).
+    """
+
+    spec_strategy_id: str
+    watermarks: dict[str, int] = field(default_factory=dict)
+    bar_types: dict[str, Any] = field(default_factory=dict)
+    delivered: set[tuple[str, int]] = field(default_factory=set)
+    armed: bool = True
+    duplicate_logged: bool = False
+
+
 class WarmupWatch:
     """Instrument strategies' history requests and wait for them to settle.
 
@@ -163,6 +203,7 @@ class WarmupWatch:
         self._poll_seconds = poll_seconds
         self._requests: dict[str, list[_Request]] = {}
         self._settled: set[str] = set()
+        self._seams: dict[str, _Seam] = {}
 
     def instrument(self, strategy: Any, *, spec_strategy_id: str) -> None:
         """Wrap ``strategy.request_bars`` — call **before** ``add_strategy``.
@@ -173,11 +214,15 @@ class WarmupWatch:
         sees. Idempotent. Once the strategy has settled, the wrapper passes
         every call straight through — a mid-session request is not a warm-up —
         and so it does for a call the real signature would refuse anyway.
+        Also guards the history/live seam (Story 4.5, D-F): see the module
+        docstring; installed here, after the strategy guard's own
+        ``handle_bar`` wrapper, so the seam filter sits outside it.
         """
         if getattr(strategy, _INSTALLED_MARKER, False):
             return
         base = strategy.request_bars
         requests = self._requests.setdefault(spec_strategy_id, [])
+        seam = self._seams[spec_strategy_id] = _install_seam(self._log, strategy, spec_strategy_id)
 
         def request_bars(*args: Any, **kwargs: Any) -> Any:
             if spec_strategy_id in self._settled or len(args) > len(_REQUEST_BARS_PARAMETERS):
@@ -192,7 +237,7 @@ class WarmupWatch:
             )
             requests.append(request)
             bound["callback"] = _wrap_callback(
-                self._log, self._clock, strategy, request, bound.get("callback")
+                self._log, self._clock, strategy, request, bound.get("callback"), seam
             )
             try:
                 return base(**bound)
@@ -257,6 +302,7 @@ class WarmupWatch:
         finally:
             self._settled.add(spec_strategy_id)
             _abandon(requests)
+            _disarm(self._seams.get(spec_strategy_id))
 
     def _expire(self, requests: list[_Request]) -> bool:
         """Abandon every request past the deadline, one ``warmup.failed`` each."""
@@ -279,7 +325,12 @@ class WarmupWatch:
 
 
 def _wrap_callback(
-    log: Any, clock: Callable[[], float], strategy: Any, request: _Request, inner: Any
+    log: Any,
+    clock: Callable[[], float],
+    strategy: Any,
+    request: _Request,
+    inner: Any,
+    seam: _Seam | None = None,
 ) -> Callable[[Any], None]:
     """The callback Nautilus calls once the history has fed the indicators.
 
@@ -308,6 +359,8 @@ def _wrap_callback(
                 return
             _log_completed(log, clock, strategy, request)
             request.state = "completed"
+            if seam is not None:
+                _report_gap(log, strategy, seam, request.bar_type)
             if inner is not None:
                 inner(request_id)
         except (KeyboardInterrupt, asyncio.CancelledError):
@@ -344,6 +397,121 @@ def _log_completed(log: Any, clock: Callable[[], float], strategy: Any, request:
         indicators_initialized=initialized,
         not_initialized=cold,
     )
+
+
+def _install_seam(log: Any, strategy: Any, spec_strategy_id: str) -> _Seam:
+    """Wrap ``handle_bars`` (to learn where the history ended) and ``handle_bar``
+    (to drop a live bar the history already held) on the instance (D-F).
+
+    ``subscribe_bars`` binds ``self.handle_bar`` when the strategy's callback
+    runs, and ``Actor``'s response path calls ``self.handle_bars`` — both honour
+    an instance attribute (measured, Story 4.5 Task 1.4). A strategy without
+    that surface (a unit-test stub) is left alone.
+    """
+    seam = _Seam(spec_strategy_id)
+    base_bars = getattr(strategy, "handle_bars", None)
+    base_bar = getattr(strategy, "handle_bar", None)
+    if base_bars is None or base_bar is None:
+        return seam
+
+    def handle_bars(bars: Any) -> Any:
+        _note_history(seam, bars)
+        return base_bars(bars)
+
+    def handle_bar(bar: Any) -> Any:
+        if _is_seam_duplicate(log, seam, bar):
+            return None
+        return base_bar(bar)
+
+    setattr(strategy, "handle_bars", handle_bars)
+    setattr(strategy, "handle_bar", handle_bar)
+    return seam
+
+
+def _note_history(seam: _Seam, bars: Any) -> None:
+    """Record the last warm-up history bar per bar type. Never raises."""
+    if not seam.armed:
+        return
+    try:
+        for bar in bars:
+            key = str(bar.bar_type)
+            seam.watermarks[key] = max(seam.watermarks.get(key, bar.ts_event), bar.ts_event)
+            seam.bar_types[key] = bar.bar_type
+    except Exception:  # noqa: BLE001 - bookkeeping must never cost the history
+        pass
+
+
+def _is_seam_duplicate(log: Any, seam: _Seam, bar: Any) -> bool:
+    """Whether ``bar`` is at or before the history's end — dropped, and said so
+    once per strategy (D-F (B)).
+
+    A bar that passes is noted as delivered while the seam is armed. Any
+    failure of our own reads as "not a duplicate": the bar is delivered, exactly
+    as before this story, and nothing raises into the message bus.
+    """
+    try:
+        key = str(bar.bar_type)
+        watermark = seam.watermarks.get(key)
+        if watermark is None or bar.ts_event > watermark:
+            if seam.armed:
+                seam.delivered.add((key, bar.ts_event))
+            return False
+        if seam.duplicate_logged:
+            return True
+        seam.duplicate_logged = True
+        fields = _seam_fields(seam, key, bar.ts_event, watermark)
+    except Exception:  # noqa: BLE001 - a msgbus handler must never raise
+        return False
+    _emit(log, "info", SEAM_DUPLICATE_EVENT, fields)
+    return True
+
+
+def _report_gap(log: Any, strategy: Any, seam: _Seam, bar_type: str) -> None:
+    """One ``warmup.seam_gap`` per live bar of ``bar_type`` — the bar type whose
+    history just answered — published after the history ended and never
+    delivered to the strategy (``DataEngine`` caches it whether or not the
+    strategy has subscribed). Named, never replayed. Never raises."""
+    try:
+        watermark = seam.watermarks.get(bar_type)
+        if watermark is None:
+            return
+        missed = sorted(
+            bar.ts_event
+            for bar in strategy.cache.bars(seam.bar_types[bar_type])
+            if bar.ts_event > watermark and (bar_type, bar.ts_event) not in seam.delivered
+        )
+        records = [_seam_fields(seam, bar_type, ts_event, watermark) for ts_event in missed]
+    except Exception:  # noqa: BLE001 - reading the cache must never cost the warm-up
+        return
+    for fields in records:
+        _emit(log, "warning", SEAM_GAP_EVENT, fields)
+
+
+def _disarm(seam: _Seam | None) -> None:
+    """The warm-up has settled: no later history moves a watermark."""
+    if seam is not None:
+        seam.armed = False
+
+
+def _seam_fields(seam: _Seam, bar_type: str, ts_event: int, watermark: int) -> dict[str, Any]:
+    return {
+        "strategy_id": seam.spec_strategy_id,
+        "bar_type": bar_type,
+        "ts_event": _ns_iso(ts_event),
+        "last_history_ts_event": _ns_iso(watermark),
+    }
+
+
+def _emit(log: Any, level: str, event: str, fields: dict[str, Any]) -> None:
+    try:
+        getattr(log, level)(event, **fields)
+    except Exception:  # noqa: BLE001 - a diagnostic must never change the outcome
+        pass
+
+
+def _ns_iso(ns: int) -> str:
+    """UNIX nanoseconds as an ISO UTC timestamp; exact to the microsecond."""
+    return (datetime(1970, 1, 1, tzinfo=UTC) + timedelta(microseconds=ns // 1_000)).isoformat()
 
 
 def _abandon(requests: list[_Request]) -> None:

@@ -70,6 +70,7 @@ from structlog.testing import capture_logs
 from src.core import live_startup_reconcile
 from src.core.live_node_builder import build_trading_node_config
 from src.core.live_startup_reconcile import (
+    BROKER_WARD_SETTINGS,
     DISCREPANCY_EVENT,
     OK_EVENT,
     ReconciliationFailedError,
@@ -184,8 +185,17 @@ class _IBShapedClient(LiveExecutionClient):
         ]
 
 
+#: Nautilus's own default for the switch Story 4.5 turns on (D-A). The framework
+#: canaries below pass it explicitly: they pin what the framework does, which
+#: the session no longer runs with.
+NAUTILUS_DEFAULT_FILTER = {"filter_unclaimed_external_orders": False}
+
+
 class _Harness:
     def __init__(self, broker: dict | None = None, **engine_config) -> None:
+        # The session's own value (Story 4.5, D-A) unless a test says otherwise:
+        # the `reconcile` phase refuses an engine that imports the broker twice.
+        engine_config.setdefault("filter_unclaimed_external_orders", True)
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
         clock = TestClock()
@@ -304,6 +314,65 @@ def _state(*held: tuple[InstrumentId, str, str | None]) -> BrokerState:
     )
 
 
+def _session_engine_config() -> dict:
+    """Every field the session's builder passes to ``LiveExecEngineConfig``."""
+    built = build_trading_node_config(_ibkr_settings(), trader_id=str(TRADER)).exec_engine
+    fields = (
+        "reconciliation",
+        "inflight_check_interval_ms",
+        "inflight_check_threshold_ms",
+        "inflight_check_retries",
+        "open_check_interval_secs",
+        "filter_unclaimed_external_orders",
+    )
+    return {name: getattr(built, name) for name in fields}
+
+
+def _working_report(venue_order_id: str, client_order_id: str) -> OrderStatusReport:
+    """The broker's view of an ``ACCEPTED`` AAPL limit order."""
+    return OrderStatusReport(
+        account_id=ACCOUNT,
+        instrument_id=AAPL.id,
+        venue_order_id=VenueOrderId(venue_order_id),
+        order_side=OrderSide.BUY,
+        order_type=OrderType.LIMIT,
+        time_in_force=TimeInForce.DAY,
+        order_status=OrderStatus.ACCEPTED,
+        price=Price.from_str("150.00"),
+        quantity=Quantity.from_int(3),
+        filled_qty=Quantity.from_int(0),
+        report_id=UUID4(),
+        ts_accepted=0,
+        ts_last=0,
+        ts_init=0,
+        client_order_id=ClientOrderId(client_order_id),
+    )
+
+
+def _restore_working_order(h: "_Harness", client_order_id: str, venue_order_id: str):
+    """A strategy's ``ACCEPTED`` limit order, pre-loaded the way
+    ``NautilusKernel.__init__`` restores it from Redis."""
+    order = TestExecStubs.limit_order(
+        instrument=AAPL,
+        order_side=OrderSide.BUY,
+        price=Price.from_str("150.00"),
+        quantity=Quantity.from_int(3),
+        time_in_force=TimeInForce.DAY,
+        trader_id=TRADER,
+        strategy_id=STRATEGY,
+        client_order_id=ClientOrderId(client_order_id),
+    )
+    h.cache.add_order(order)
+    order.apply(TestEventStubs.order_submitted(order, account_id=ACCOUNT))
+    order.apply(
+        TestEventStubs.order_accepted(
+            order, account_id=ACCOUNT, venue_order_id=VenueOrderId(venue_order_id)
+        )
+    )
+    h.cache.update_order(order)
+    return order
+
+
 class TestTheBrokersViewWins:
     """AC #3 — the cache ends at the broker's view, through the framework."""
 
@@ -338,9 +407,11 @@ class TestTheBrokersViewWins:
         assert Decimal(str(position.avg_px_open)) == Decimal("101.25")
 
     def test_what_the_frameworks_own_pass_corrected_is_named(self, harness):
-        """(c): a fresh cache and a broker holding +10 — Nautilus imports it as
-        ``EXTERNAL`` inside ``node:connect``; the snapshot taken before that
-        makes it a ``resolution="framework"`` record instead of silence."""
+        """(c): a fresh cache and a broker holding +10 — Nautilus imports it
+        inside ``node:connect`` (as ``INTERNAL-DIFF`` under the session's
+        filter since Story 4.5; as ``EXTERNAL`` under its own default); the
+        snapshot taken before that makes it a ``resolution="framework"``
+        record instead of silence."""
         h = harness({NVDA.id: (10, 100.0)})
         before = cached_positions(h.cache)
         assert h.native() is True
@@ -368,42 +439,40 @@ class TestTheBrokersViewWins:
         assert h.open_positions() == {str(STRATEGY): Decimal("22")}, "the phase wrote the cache"
 
     def test_a_normal_mid_position_restart_passes(self, harness):
-        """Scenario A: strategy +10 cached, broker +10. The framework leaves its
-        triple (measured 1.4A); net and the strategy's own share both agree."""
+        """Scenario A: strategy +10 cached, broker +10. Under the session's own
+        config (Story 4.5, D-A) the framework imports nothing beside it — the
+        triple measured at 1.4A is gone — and the phase passes clean."""
         h = harness({NVDA.id: (10, 100.0)})
         h.seed(NVDA, 10)
         assert h.native() is True
 
         result = h.reconcile(_state((NVDA.id, "10", "100")))
 
-        assert result.reconcile_resolved == () and result.synthetic_positions == 2
+        assert result.reconcile_resolved == () and result.synthetic_positions == 0
+        assert h.open_positions() == {str(STRATEGY): Decimal("10")}
+
+    def test_under_nautilus_defaults_the_same_restart_leaves_the_triple(self, harness):
+        """The 1.4A measurement, kept as a pin of the framework's own default:
+        ``EXTERNAL +10 / INTERNAL-DIFF −10`` beside the strategy, net correct."""
+        h = harness({NVDA.id: (10, 100.0)}, **NAUTILUS_DEFAULT_FILTER)
+        h.seed(NVDA, 10)
+
+        assert h.native() is True
+
+        assert h.open_positions() == {
+            str(STRATEGY): Decimal("10"),
+            "EXTERNAL": Decimal("10"),
+            "INTERNAL-DIFF": Decimal("-10"),
+        }
 
 
 class TestTheFrameworkLoadsWorkingOrdersAndPositions:
     """AC #2 — characterization of the framework behaviour AR25 relies on."""
 
     def test_an_open_order_and_a_position_the_broker_reports_are_in_the_cache(self, harness):
-        h = harness({NVDA.id: (10, 100.0)})
-        now = 0
-        h.client.open_order_reports.append(
-            OrderStatusReport(
-                account_id=ACCOUNT,
-                instrument_id=AAPL.id,
-                venue_order_id=VenueOrderId("IB-77"),
-                order_side=OrderSide.BUY,
-                order_type=OrderType.LIMIT,
-                time_in_force=TimeInForce.DAY,
-                order_status=OrderStatus.ACCEPTED,
-                price=Price.from_str("150.00"),
-                quantity=Quantity.from_int(3),
-                filled_qty=Quantity.from_int(0),
-                report_id=UUID4(),
-                ts_accepted=now,
-                ts_last=now,
-                ts_init=now,
-                client_order_id=ClientOrderId("O-20260926-000000-000-001-7"),
-            )
-        )
+        """Under Nautilus's default: an order the cache never knew is imported."""
+        h = harness({NVDA.id: (10, 100.0)}, **NAUTILUS_DEFAULT_FILTER)
+        h.client.open_order_reports.append(_working_report("IB-77", "O-20260926-000000-000-001-7"))
 
         assert h.native() is True
 
@@ -412,27 +481,25 @@ class TestTheFrameworkLoadsWorkingOrdersAndPositions:
         ]
         assert h.net(NVDA) == 10
 
+    def test_under_the_sessions_filter_an_unknown_working_order_is_not_imported(self, harness):
+        """Story 4.5 (D-A)'s disclosed trade-off, pinned: a working order the
+        cache never knew (a manual TWS order, or a cache lost) is not imported
+        at startup — it belongs to no strategy of this session either way. The
+        position the broker reports still is. A strategy's *own* working order,
+        restored from Redis, is untouched (the AR25 test below)."""
+        h = harness({NVDA.id: (10, 100.0)})
+        h.client.open_order_reports.append(_working_report("IB-77", "O-20260926-000000-000-001-7"))
+
+        assert h.native() is True
+
+        assert h.cache.orders_open() == []
+        assert h.net(NVDA) == 10
+
     def test_the_phase_counts_the_working_orders_it_found(self, harness):
+        """A strategy's own working order restored from the cache is counted."""
         h = harness()
-        h.client.open_order_reports.append(
-            OrderStatusReport(
-                account_id=ACCOUNT,
-                instrument_id=AAPL.id,
-                venue_order_id=VenueOrderId("IB-78"),
-                order_side=OrderSide.BUY,
-                order_type=OrderType.LIMIT,
-                time_in_force=TimeInForce.DAY,
-                order_status=OrderStatus.ACCEPTED,
-                price=Price.from_str("150.00"),
-                quantity=Quantity.from_int(3),
-                filled_qty=Quantity.from_int(0),
-                report_id=UUID4(),
-                ts_accepted=0,
-                ts_last=0,
-                ts_init=0,
-                client_order_id=ClientOrderId("O-20260926-000000-000-001-8"),
-            )
-        )
+        _restore_working_order(h, "O-20260926-000000-000-001-8", "IB-78")
+        h.client.open_order_reports.append(_working_report("IB-78", "O-20260926-000000-000-001-8"))
         assert h.native() is True
 
         assert h.reconcile(_state()).open_orders == 1
@@ -508,7 +575,38 @@ class TestTheFrameworkLoadsWorkingOrdersAndPositions:
         assert cfg.exec_engine.reconciliation is True
 
     def test_the_real_engines_defaults_let_the_broker_win(self, harness):
+        """Nautilus's defaults plus the one switch the session departs on (D-A)."""
         require_broker_ward_reconciliation(harness().engine)
+
+    def test_the_enforced_settings_are_pinned_as_an_exact_set(self):
+        """Story 4.5 code review ("double pins"): membership changes only
+        deliberately, here and in the constant together (CLAUDE.md)."""
+        assert dict(BROKER_WARD_SETTINGS) == {
+            "reconciliation": True,
+            "generate_missing_orders": True,
+            "filter_position_reports": False,
+            "filter_unclaimed_external_orders": True,
+        }
+        assert len(BROKER_WARD_SETTINGS) == 4, "a setting is listed twice"
+
+    def test_every_enforced_setting_is_a_real_attribute_of_the_sessions_engine(self, harness):
+        """The other direction: each name is read off a real running
+        ``LiveExecutionEngine`` built with the session's own config, not a
+        double — a misspelt name would otherwise refuse every start."""
+        engine = harness(**_session_engine_config()).engine
+
+        for name, expected in BROKER_WARD_SETTINGS:
+            assert getattr(engine, name) is expected, name
+
+    def test_a_real_engine_that_imports_the_broker_twice_is_refused(self, harness):
+        """Story 4.5 (D-A): Nautilus's own default leaves the filter off."""
+        h = harness(**NAUTILUS_DEFAULT_FILTER)
+
+        with pytest.raises(ReconciliationFailedError) as caught:
+            h.reconcile(_state())
+
+        assert caught.value.reason is ReconciliationFailure.FRAMEWORK_RECONCILIATION_DISABLED
+        assert "filter_unclaimed_external_orders" in str(caught.value)
 
     def test_a_real_engine_with_reconciliation_off_is_refused(self, harness):
         h = harness(reconciliation=False)
@@ -546,7 +644,7 @@ class TestFrameworkCanaries:
         assert h.client.position_calls == [None], "the per-cached-position sweep now fires"
 
     def test_f4_a_broker_position_is_imported_as_an_external_order(self, harness):
-        h = harness({NVDA.id: (10, 100.0)})
+        h = harness({NVDA.id: (10, 100.0)}, **NAUTILUS_DEFAULT_FILTER)
 
         assert h.native() is True
 
@@ -570,6 +668,7 @@ class TestFrameworkCanaries:
         assert engine.generate_missing_orders is True
         assert engine.filter_position_reports is False
         assert engine.reconciliation_instrument_ids == []
+        assert engine.filter_unclaimed_external_orders is True
 
 
 def _engine_method_calls(source: str) -> set[str]:
@@ -703,7 +802,7 @@ _SHRUNK_REENTRY = textwrap.dedent(
     import asyncio, sys
     sys.path.insert(0, {root!r})
     from tests.component.core.test_live_startup_reconcile_engine import _Harness, NVDA
-    h = _Harness({{NVDA.id: (10, 100.0)}})
+    h = _Harness({{NVDA.id: (10, 100.0)}}, filter_unclaimed_external_orders={filter})
     assert h.native() is True
     print("FIRST_RESTART_OK", flush=True)
     h.client.broker[NVDA.id] = (4, 100.0)
@@ -724,9 +823,11 @@ class TestTheShrunkReEntryAbortCanary:
     """
 
     def test_the_second_restart_aborts_the_process(self):
+        """Under Nautilus's own default. Story 4.5's session config is the
+        twin in ``test_live_session_resume_engine.py`` (it does not abort)."""
         root = str(Path(__file__).resolve().parents[3])
         result = subprocess.run(
-            [sys.executable, "-c", _SHRUNK_REENTRY.format(root=root)],
+            [sys.executable, "-c", _SHRUNK_REENTRY.format(root=root, filter=False)],
             cwd=root,
             capture_output=True,
             text=True,

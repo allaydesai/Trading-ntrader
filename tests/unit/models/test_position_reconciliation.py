@@ -32,6 +32,7 @@ from src.models.position_reconciliation import (
     StartupReconciliation,
     compare_positions,
     count_synthetic,
+    split_by_owner,
 )
 
 pytestmark = pytest.mark.unit
@@ -261,6 +262,68 @@ class TestCountSynthetic:
             _cached(NVDA, "-10", "INTERNAL-DIFF"),
         ]
         assert count_synthetic(cached) == 2
+
+
+class TestBrokerCoversStrategy:
+    """Story 4.5, PO ruling 2026-09-28: the broker holds all the strategies own,
+    on the same side, and more — the one contradiction startup leaves to D-C."""
+
+    @pytest.mark.parametrize(
+        ("strategy", "broker", "covered"),
+        [
+            ("10", "15", True),
+            ("-10", "-15", True),
+            ("10", "10", False),  # equal: not a disagreement at all
+            ("10", "5", False),  # the broker holds less than believed
+            ("10", "0", False),  # the broker is flat
+            ("10", "-5", False),  # the opposite side
+            ("-10", "15", False),
+            ("0", "15", False),  # no strategy position: nothing to cover
+        ],
+    )
+    def test_it_is_true_only_for_a_same_side_larger_holding(self, strategy, broker, covered):
+        row = PositionDiscrepancy(
+            instrument_id=NVDA,
+            local_quantity=Decimal(broker),
+            strategy_quantity=Decimal(strategy),
+            broker_quantity=Decimal(broker),
+        )
+
+        assert row.broker_covers_strategy is covered
+
+
+class TestSplitByOwner:
+    """Story 4.5 (D-C): what a strategy may start beside — the strategies'
+    signed net on one instrument, and the part no strategy owns."""
+
+    def test_a_strategy_alone_owns_everything(self):
+        assert split_by_owner([_cached(NVDA, "10")], NVDA) == (Decimal("10"), Decimal("0"))
+
+    def test_an_unattributable_holding_is_unowned(self):
+        cached = [_cached(NVDA, "10", "INTERNAL-DIFF")]
+
+        assert split_by_owner(cached, NVDA) == (Decimal("0"), Decimal("10"))
+
+    def test_a_pre_4_5_triple_nets_its_synthetics_to_nothing(self):
+        """``EXTERNAL +10 / INTERNAL-DIFF −10`` beside the strategy's own +10:
+        nothing is unowned, so the strategy is not refused for it."""
+        cached = [
+            _cached(NVDA, "10"),
+            _cached(NVDA, "10", "EXTERNAL"),
+            _cached(NVDA, "-10", "INTERNAL-DIFF"),
+        ]
+
+        assert split_by_owner(cached, NVDA) == (Decimal("10"), Decimal("0"))
+
+    def test_other_instruments_are_ignored(self):
+        cached = [_cached(AAPL, "4", "EXTERNAL"), _cached(AAPL, "3")]
+
+        assert split_by_owner(cached, NVDA) == (Decimal("0"), Decimal("0"))
+
+    def test_every_strategy_of_the_session_counts_as_owned(self):
+        cached = [_cached(NVDA, "10"), _cached(NVDA, "-4", "SMAMomentum-002")]
+
+        assert split_by_owner(cached, NVDA) == (Decimal("6"), Decimal("0"))
 
 
 class TestStartupReconciliation:

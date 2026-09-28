@@ -88,6 +88,11 @@ class _Engine:
         self.generate_missing_orders = settings.pop("generate_missing_orders", True)
         self.filter_position_reports = settings.pop("filter_position_reports", False)
         self.reconciliation_instrument_ids = settings.pop("reconciliation_instrument_ids", [])
+        # Story 4.5 (D-A): the session's engine drops the adapter's fabricated
+        # per-position order instead of importing it as `EXTERNAL`.
+        self.filter_unclaimed_external_orders = settings.pop(
+            "filter_unclaimed_external_orders", True
+        )
         self._clients = {
             "INTERACTIVE_BROKERS": SimpleNamespace(
                 account_id=AccountId(f"INTERACTIVE_BROKERS-{RAW_ACCOUNT}")
@@ -183,6 +188,7 @@ class TestBrokerWardSettingsAreEnforcedOnTheRunningEngine:
             ("generate_missing_orders", False),
             ("filter_position_reports", True),
             ("reconciliation_instrument_ids", [InstrumentId.from_str(NVDA)]),
+            ("filter_unclaimed_external_orders", False),
         ],
     )
     def test_each_drifted_setting_is_refused(self, setting, value):
@@ -322,6 +328,68 @@ class TestAStrategyContradictionIsRefusedBeforeAnythingIsWritten:
         assert NVDA in message and "+22" in message and "broker +0" in message
         assert "new session" in message
         assert RAW_ACCOUNT not in message
+
+
+class TestABrokerHoldingThatCoversTheStrategyIsNotAContradiction:
+    """Story 4.5, PO ruling 2026-09-28 (review Decision 2: A — startup only).
+
+    The broker holding everything the strategies own on the same side, *and
+    more*, is not a contradiction: the strategies' position is real, and the
+    excess belongs to no strategy — D-C's to refuse, per strategy, contained
+    (``live_session_resume``). Every other disagreement still refuses the whole
+    session, unchanged."""
+
+    @pytest.mark.parametrize(
+        ("own", "excess", "broker"),
+        [("10", "5", "15"), ("-10", "-5", "-15")],
+        ids=["long", "short"],
+    )
+    def test_the_covered_excess_passes_the_startup_phase(self, own, excess, broker):
+        """After the framework's own pass: the strategy's position plus the
+        ``INTERNAL-DIFF`` it imported for the excess. Nothing is written."""
+        cache = _Cache(
+            positions=[_Position(NVDA, STRATEGY, own), _Position(NVDA, "INTERNAL-DIFF", excess)]
+        )
+        node = _node(cache)
+
+        with capture_logs() as logs:
+            result = _reconcile(node, _reader(_state(_held(NVDA, broker))))
+
+        assert result.synthetic_positions == 1
+        assert node.kernel.exec_engine.reports == []
+        assert [e["event"] for e in logs if e["event"] == OK_EVENT] == [OK_EVENT]
+        assert all(e.get("resolution") != "refused" for e in _events(logs, DISCREPANCY_EVENT))
+
+    def test_an_uncorrected_covered_excess_is_corrected_broker_ward_then_passes(self):
+        """The framework left only the strategy's +10 against a broker at +15:
+        the phase corrects the net (``INTERNAL-DIFF +5``) and re-verifies."""
+        node = _node(_Cache(positions=[_Position(NVDA, STRATEGY, "10")]))
+
+        result = _reconcile(node, _reader(_state(_held(NVDA, "15"))))
+
+        (report,) = node.kernel.exec_engine.reports
+        assert report.signed_decimal_qty == Decimal("15")
+        assert result.synthetic_positions == 1
+
+    @pytest.mark.parametrize(
+        ("synthetic", "broker"),
+        [("-5", "5"), ("-10", None), ("-15", "-5")],
+        ids=["broker-holds-less", "broker-flat", "opposite-side"],
+    )
+    def test_every_other_disagreement_still_refuses_the_session(self, synthetic, broker):
+        """The net matches in each (the framework's correction is in the cache),
+        but the broker cannot hold what the strategy believes it holds."""
+        cache = _Cache(
+            positions=[_Position(NVDA, STRATEGY, "10"), _Position(NVDA, "INTERNAL-DIFF", synthetic)]
+        )
+        held = () if broker is None else (_held(NVDA, broker),)
+        node = _node(cache)
+
+        with pytest.raises(ReconciliationFailedError) as caught:
+            _reconcile(node, _reader(_state(*held)))
+
+        assert caught.value.reason is ReconciliationFailure.STRATEGY_POSITION_CONTRADICTED
+        assert node.kernel.exec_engine.reports == [], "the cache was written on a refused start"
 
 
 class TestEverythingElseResolvesBrokerWard:

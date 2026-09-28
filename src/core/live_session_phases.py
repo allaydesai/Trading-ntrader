@@ -34,7 +34,12 @@ session's own re-checks log ``reconcile.*`` records with ``scope="runtime"`` /
 ``"reconnect"``, outside any phase. ``warmup``'s ``ok``
 (Story 4.4) means the runner's warm-up watch is armed, not that anything is
 warm: strategies warm in their own ``on_start`` during ``trading``, and
-``warmup.completed`` is the record that says so.
+``warmup.completed`` is the record that says so. Story 4.5 adds work inside two
+phases without adding a phase: ``node:connect`` refuses a pre-4.5 engine cache
+before Nautilus's own pass runs (``session.resume_refused``), and ``trading``
+contains a strategy whose instrument carries a holding no strategy owns
+(``strategy.resume_refused``) and names one that restarts holding its own
+position (``strategy.resumed``).
 """
 
 from collections.abc import Iterator
