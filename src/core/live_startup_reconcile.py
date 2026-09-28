@@ -7,8 +7,16 @@ framework's own public entry point — refusing what cannot be corrected, and th
 ``reconcile.ok`` / ``reconcile.discrepancy`` records (AR41). Does not own: the
 phase's position in AR39's sequence (the runner), the broker read
 (``live_broker_state``), the comparison itself (``src.models.position_reconciliation``,
-stdlib-only so Story 4.6 can reuse it), runtime alignment (Story 4.3), or how a
-strategy adopts a resumed position (Story 4.5).
+stdlib-only so Story 4.6 can reuse it), runtime alignment (Story 4.3), or what a
+strategy may start beside once the cache is proven (Story 4.5,
+``live_session_resume``).
+
+**The framework imports the broker once, not twice** (Story 4.5, D-A). The
+session's engine runs with ``filter_unclaimed_external_orders=True``, enforced
+below with the other broker-ward settings: the IB adapter's fabricated
+per-position ``FILLED`` order is dropped rather than imported as ``EXTERNAL``,
+so a restart holding a position leaves only the strategy's own position, and a
+holding the cache cannot attribute arrives once, as ``INTERNAL-DIFF``.
 
 **Why the phase verifies rather than runs reconciliation** (decision D-A).
 ``NautilusKernel.start_async`` reconciles *inside* ``node:connect`` —
@@ -43,6 +51,15 @@ position the broker no longer holds, a broker position the cache lacks — is
 corrected through ``exec_engine.reconcile_execution_report``, the same netting
 path the framework's own pass runs, and then re-verified: the phase reports
 ``ok`` only when the cache matches the broker exactly (NFR9).
+
+**A covering broker holding is not a contradiction here** (Story 4.5, PO ruling
+2026-09-28, startup only). When the broker holds everything the strategies own
+on the same side *and more* (+10 owned, IBKR +15 — a share bought by hand), the
+strategies' position is real and the excess belongs to no strategy: this phase
+lets the framework's ``INTERNAL-DIFF`` carry the excess and leaves it to the
+per-strategy resume check (``live_session_resume``), which refuses only that
+strategy. IBKR holding less, nothing or the opposite side still refuses the
+whole session, and the running session's cycle still stops on all of them.
 
 What this module never does: purge or write the cache directly, call an order
 method, re-invoke ``reconcile_execution_state``, or read ``trading_permitted``.
@@ -89,10 +106,15 @@ SCOPE_STARTUP = "startup"
 #: framework's pass runs, a discrepancy generates the correcting order rather
 #: than being skipped (``live/execution_engine.py:1469-1474``), and position
 #: reports are not filtered out. Compared by identity — ``1`` is not ``True``.
+#: Story 4.5 (D-A) added ``filter_unclaimed_external_orders``: it is what keeps
+#: the broker's view from being imported *twice* — once as the IB adapter's
+#: fabricated ``EXTERNAL`` order, once as the ``INTERNAL-DIFF`` that undoes it —
+#: beside a strategy's own restored position (``live_node_builder``'s comment).
 BROKER_WARD_SETTINGS: tuple[tuple[str, bool], ...] = (
     ("reconciliation", True),
     ("generate_missing_orders", True),
     ("filter_position_reports", False),
+    ("filter_unclaimed_external_orders", True),
 )
 #: Non-empty, it excludes every other instrument from reconciliation — and
 #: ``reconcile_execution_report`` then returns ``True`` having done nothing.
@@ -261,7 +283,7 @@ async def reconcile_at_startup(
     started = clock()
     require_broker_ward_reconciliation(node.kernel.exec_engine)
     broker = await read_state(node, log=log)
-    rows = compare_positions(cached_positions(node.cache), broker)
+    rows = _to_act_on(compare_positions(cached_positions(node.cache), broker))
     framework = _framework_resolved(local_before, broker, rows)
     for row in framework:
         log_discrepancy(log, row, "framework")
@@ -271,11 +293,11 @@ async def reconcile_at_startup(
     unresolved = [row for row in rows if not row.broker_resolved]
     if unresolved:
         _refuse(log, ReconciliationFailure.UNRESOLVABLE_DISCREPANCY, unresolved, _UNRESOLVED)
-    if any(row.strategy_contradicted for row in rows):
+    if any(row.strategy_contradicted and not row.broker_covers_strategy for row in rows):
         _refuse(log, ReconciliationFailure.STRATEGY_POSITION_CONTRADICTED, rows, _REMEDY)
     corrected = _correct(node, rows, broker, log)
     cached = cached_positions(node.cache)
-    remaining = compare_positions(cached, broker)
+    remaining = _to_act_on(compare_positions(cached, broker))
     # A correction is recorded as the broker's only once the re-read proves it
     # took: a report the framework accepted without acting on (an instrument
     # filtered out of reconciliation returns `True`) must not read "resolved".
@@ -300,6 +322,23 @@ async def reconcile_at_startup(
     )
     _log_ok(log, result)
     return result
+
+
+def _to_act_on(rows: Sequence[PositionDiscrepancy]) -> tuple[PositionDiscrepancy, ...]:
+    """The rows this phase must correct or refuse (Story 4.5, PO ruling 2026-09-28).
+
+    A row whose net already matches the broker and whose broker holding
+    covers the strategies' own on the same side is settled here: the
+    strategies' position is real, and the excess — imported by the framework
+    as ``INTERNAL-DIFF`` — belongs to no strategy, which the per-strategy
+    resume check refuses in ``trading`` (``live_session_resume``). Startup
+    only: the running session's cycle still stops on the same row.
+    """
+    return tuple(
+        row
+        for row in rows
+        if not (row.broker_covers_strategy and row.local_quantity == row.broker_quantity)
+    )
 
 
 def require_reconciled(result: StartupReconciliation | None) -> StartupReconciliation:

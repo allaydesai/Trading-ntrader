@@ -170,6 +170,13 @@ facts (`nautilus-trader 1.220.0`) that bite:
 5. **Ask in whole days for `>= 1 minute` bars.** The adapter sends a sub-day span as
    seconds, and a seconds window ending pre-open returns nothing — see
    `src/core/strategy_warmup.py`.
+6. **The history/live seam** (Story 4.5, PO ruling B). A live bar the history
+   already held (IB republishes bar X on X+1's first update) is dropped by the
+   watch — `warmup.seam_duplicate_dropped` — and a bar published while the
+   request was in flight, which the strategy never saw, is named, one
+   `warmup.seam_gap` WARNING each, **never replayed**. The watermark comes from
+   an instance-level `handle_bars` wrapper, not `cache.bar()`: `Cache.add_bars`
+   keeps only history newer than a live bar already cached.
 
 ## Live Session Cache (Redis)
 
@@ -315,9 +322,12 @@ Four measured facts (1.220.0, Story 4.2 Task 1) that shape it:
    the broker reports that the cache lacks becomes `EXTERNAL`, and a net
    correction becomes `INTERNAL-DIFF`. Under NETTING the correcting fill lands
    in that owner's position (`{instrument}-{strategy}`), **never a strategy's**.
-   A normal mid-position restart therefore leaves three open positions (strategy
-   +10, `EXTERNAL` +10, `INTERNAL-DIFF` −10), with the net correct. See
-   `deferred-work.md` for what that means for Story 4.5.
+   Under Nautilus's defaults a normal mid-position restart therefore leaves three
+   open positions (strategy +10, `EXTERNAL` +10, `INTERNAL-DIFF` −10), because
+   the IB adapter fabricates a `FILLED` order report per broker position. Since
+   Story 4.5 the session's engine runs with `filter_unclaimed_external_orders=True`
+   (enforced by the phase), so the fabricated order is dropped and the restart
+   leaves only the strategy's own position — see "Resuming Mid-Position" below.
 3. **Without the broker's average price, a correcting fill is priced 0.** The
    phase always passes `avg_px_open` when IBKR reported one.
 4. **`reconcile_execution_report` returns `True` for an instrument excluded by
@@ -331,7 +341,10 @@ The phase's rules:
 - **A strategy's own position that the broker contradicts refuses the start.**
   This is the PO's 2026-09-27 ruling. The framework cannot rewrite it (fact 2),
   and a started strategy would act on it: `sma_crossover` closes it, which is a
-  real order against the broker.
+  real order against the broker. Since Story 4.5 (PO ruling 2026-09-28) a broker
+  holding that *covers* the strategies' own on the same side, and more, is not a
+  contradiction here — the excess is unowned and left to the per-strategy resume
+  check; see "Resuming Mid-Position".
 - **Anything else is corrected broker-ward** through
   `exec_engine.reconcile_execution_report(PositionStatusReport)`, and must then
   re-compare clean.
@@ -402,3 +415,54 @@ by `confirm_state_reestablished` — the one production caller is
 `RECOVERING` withholds every order. A reconnect whose state cannot be verified
 stays withheld; past the 60 s window the monitor logs `connection.halted`, and a
 later clean cycle still restores (`connection.restored`).
+
+## Resuming Mid-Position (Story 4.5)
+
+A session stopped while holding a position leaves it at IBKR (Story 3.1). On the
+next `live start` the strategy's own position comes back from the session's Redis
+namespace — same position id, same fills, same commissions — and the `reconcile`
+phase proves its side and quantity equal the broker's, or refuses the start. The
+strategy then acts on it: the opposite crossover exits it, a same-side one enters
+nothing, and the round trip closes as **one** trade in the same `session_id`.
+Four rules make that true:
+
+1. **The broker is imported once** (D-A). `EXEC_ENGINE_FILTER_UNCLAIMED_EXTERNAL_ORDERS
+   = True` (`live_node_builder.py`) drops the IB adapter's fabricated per-position
+   `FILLED` order, so no `EXTERNAL` copy appears beside the strategy's position.
+   A holding the cache cannot attribute (a manual trade, a lost cache) is imported
+   once, as `INTERNAL-DIFF`, at the broker's average price. Trade-off: the switch
+   holds for the engine's whole life, so a working order the cache never knew is
+   not imported at startup or later (a manual TWS order has no `orderRef` and never
+   reached the engine anyway); a strategy's own working orders still come back from
+   Redis (AR25).
+2. **Built-in strategies act on their own book only** (D-B). `sma_crossover` reads
+   `cache.positions_open(instrument_id=..., strategy_id=self.id)`; `momentum` nets
+   the same set instead of reading the portfolio, and sizes its exits and flips
+   from that net, not `trade_size`. Backtests run one strategy per instrument, so
+   their fills are unchanged (the Story 4.4 parity fingerprint). **A strategy's id
+   is a pure function of the frozen spec:** the runner materialises each one with
+   the `order_id_tag` its spec position resolves (`SessionSpec.order_id_tags`),
+   never the one `Trader.add_strategy` would count from the strategies actually
+   added — so a refused or failed earlier entry cannot renumber a sibling and
+   orphan its restored position.
+3. **A holding no strategy owns refuses only that instrument's strategy** (D-C,
+   PO ruling B). `strategy.resume_refused` names the instrument, the unowned
+   quantity, the strategies' own quantity and the broker's quantity; the strategy
+   is contained through the start-failure path, its siblings start, and a session
+   where none can fails closed (exit 1). The holding is **never** traded, flattened
+   or resized — the remedy is manual, in TWS. **Startup only** (PO ruling
+   2026-09-28): a broker holding that covers the strategies' own position on the
+   same side, *and more* (+10 owned, IBKR +15), is not a contradiction at
+   `reconcile` — the +5 is left to this rule. IBKR holding less, nothing, or the
+   opposite side still refuses the whole session, and the running session's
+   cycle still stops on any of them.
+4. **A pre-4.5 namespace is refused before the framework runs** (D-D). One that
+   cached the fabricated order would abort the process inside `node:connect`
+   after a shrink (a Rust panic, uncatchable). `session.resume_refused
+   reason=legacy_position_import`, exit 1: create a new session.
+
+A strategy that restarts holding its own position logs `strategy.resumed`
+(position id, quantity, `broker_quantity`, `ts_opened`, `opened_before_this_run`,
+its own `open_orders`) after `reconcile.ok` and before its `warmup.completed`, so
+its first live decision follows both. The operator procedure is P19
+(`docs/qa/phase3-live-verification.md`).

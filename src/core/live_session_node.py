@@ -234,7 +234,9 @@ def validate_spec_is_materialisable(spec: SessionSpec) -> None:
             )
 
 
-def materialise_strategy(strategy_spec: StrategySpec) -> Any:
+def materialise_strategy(
+    strategy_spec: StrategySpec, session_spec: SessionSpec | None = None
+) -> Any:
     """Turn a frozen ``StrategySpec`` into a live Nautilus ``Strategy``.
 
     Follows ``BacktestOrchestrator._create_strategy``
@@ -254,6 +256,13 @@ def materialise_strategy(strategy_spec: StrategySpec) -> Any:
     Imported lazily for one reason only: ``src.core.strategy_factory`` triggers
     registry discovery on first use, and importing it at module scope would
     make that a cost of importing the runner.
+
+    ``session_spec`` (Story 4.5, code review): when given, the strategy is
+    built with the ``order_id_tag`` its **spec position** resolves to
+    (``SessionSpec.order_id_tags``) rather than left for ``Trader.add_strategy``
+    to assign by how many strategies were *actually added* — so a strategy's id,
+    and the id its restored positions carry, never depends on an earlier entry
+    being refused or failing before registration.
     """
     from nautilus_trader.model.data import BarType
 
@@ -264,6 +273,8 @@ def materialise_strategy(strategy_spec: StrategySpec) -> Any:
         "instrument_id": bar_type.instrument_id,
         "bar_type": bar_type,
     }
+    if session_spec is not None:
+        params["order_id_tag"] = session_spec.order_id_tags[strategy_spec.strategy_id]
     return StrategyLoader.create_strategy(strategy_spec.strategy_id, params)
 
 

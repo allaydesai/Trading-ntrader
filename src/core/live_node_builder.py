@@ -173,6 +173,30 @@ EXEC_ENGINE_INFLIGHT_CHECK_THRESHOLD_MS = 5_000
 EXEC_ENGINE_INFLIGHT_CHECK_RETRIES = 5
 EXEC_ENGINE_OPEN_CHECK_INTERVAL_SECS: float | None = None
 
+# Story 4.5 (D-A): a deliberate departure from Nautilus's default (`False`).
+# The IB adapter FABRICATES one `FILLED` order report per broker position,
+# keyed `client_order_id = instrument id` (`execution.py:374-433`). The cache
+# never knows that order, so under the default the framework imports it as
+# `EXTERNAL` — and its position pass then adds `INTERNAL-DIFF` to undo the
+# double count. Every restart holding a position therefore left the strategy
+# beside `EXTERNAL +N / INTERNAL-DIFF −N` (measured, Story 4.2 Task 1.4A), which
+# both built-in strategies acted on; and a later restart after the position
+# shrank aborted the process on a Rust panic inside the framework's own pass
+# (1.4S). With the filter on, `_generate_order` returns `None` for an unclaimed
+# `EXTERNAL` order (`live/execution_engine.py:1723-1728`), the position pass
+# alone aligns net (as `INTERNAL-DIFF`, which is never filtered), and a restart
+# leaves exactly the strategy's own position. Accepted trade-off: the switch is
+# an engine setting, so it holds for the session's whole life, not only at
+# startup — an order the cache never knew is not imported at startup, nor later
+# when the adapter reports one it cannot match (an order another API client
+# placed; a manual TWS order carries no `orderRef` and never reaches the engine
+# at all, `execution.py:909-912`). Its fills still reach the cache as a net
+# correction, through the startup pass and Story 4.3's runtime cycle. A
+# strategy's own working orders come back from Redis by `client_order_id` and
+# are untouched (AR25). Enforced on the running engine by the `reconcile` phase
+# (`live_startup_reconcile.BROKER_WARD_SETTINGS`).
+EXEC_ENGINE_FILTER_UNCLAIMED_EXTERNAL_ORDERS = True
+
 logger = structlog.get_logger(__name__)
 
 
@@ -468,6 +492,7 @@ def build_trading_node_config(
             inflight_check_threshold_ms=EXEC_ENGINE_INFLIGHT_CHECK_THRESHOLD_MS,
             inflight_check_retries=EXEC_ENGINE_INFLIGHT_CHECK_RETRIES,
             open_check_interval_secs=EXEC_ENGINE_OPEN_CHECK_INTERVAL_SECS,
+            filter_unclaimed_external_orders=EXEC_ENGINE_FILTER_UNCLAIMED_EXTERNAL_ORDERS,
         ),
         risk_engine=LiveRiskEngineConfig(
             graceful_shutdown_on_exception=ENGINE_GRACEFUL_SHUTDOWN_ON_EXCEPTION

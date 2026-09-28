@@ -364,7 +364,12 @@ def start(session: str, connect_timeout: float) -> None:
     account before any strategy starts: what only the net disagrees on is
     corrected broker-ward, a strategy position the broker contradicts refuses
     the start, and `ok` means 0 discrepancy remains; only then is trading
-    permitted. Each strategy warms its indicators from history as it starts,
+    permitted. A strategy restarted while holding its own position resumes it
+    (`strategy.resumed`) and acts only on its own positions; one whose
+    instrument carries a holding no strategy of the session owns — including
+    shares beyond its own on the same side — is not started
+    (`strategy.resume_refused`), and the holding is left alone. Each
+    strategy warms its indicators from history as it starts,
     before it subscribes to live bars. While running, the session re-checks
     its positions against IBKR every minute and corrects a disagreement seen
     twice broker-ward (`reconcile.discrepancy`); a strategy position the broker
@@ -582,6 +587,12 @@ def _print_contained_failures(runner: LiveSessionRunner) -> None:
             markup=False,
             highlight=False,
         )
+        # Story 4.5 (code review): a strategy refused at start — a holding it
+        # cannot attribute (D-C), a warm-up that never arrived — is only
+        # actionable with its own remedy. Its detail is the guard's already
+        # redacted first line, capped; a runtime failure's stays in the log.
+        if failure.handler == "start" and failure.detail:
+            console.print(f"        {failure.detail}", markup=False, highlight=False)
     # Branch on the runner's own fact (review fix, 2026-08-23): the old
     # unconditional "the other strategies were unaffected" was false in the
     # most common trigger — a single-strategy session has no other strategies,

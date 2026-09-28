@@ -170,8 +170,8 @@ class _History:
     def install(self, monkeypatch) -> None:
         materialise = runner_module.materialise_strategy
 
-        def materialise_with_fake_history(strategy_spec):
-            strategy = materialise(strategy_spec)
+        def materialise_with_fake_history(strategy_spec, *args):
+            strategy = materialise(strategy_spec, *args)
             name = type(strategy).__name__
             delay = self.answer_after.get(name)
 

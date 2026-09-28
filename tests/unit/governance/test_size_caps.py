@@ -135,7 +135,8 @@ SIZE_BASELINE: dict[str, int] = {
     # Story 4.3, 118 -> 116: `submission_withheld` is now `not trading_permitted` (D-F).
     "src/core/live_connection_monitor.py::ConnectionMonitor": 116,
     # Story 4.3, 128 -> 129: `open_check_interval_secs` passed explicitly as off (PO ruling 1A).
-    "src/core/live_node_builder.py::build_trading_node_config": 129,
+    # Story 4.5, 129 -> 130: `filter_unclaimed_external_orders` passed explicitly as on (D-A).
+    "src/core/live_node_builder.py::build_trading_node_config": 130,
     "src/core/live_order_path.py::OrderEventObserver": 165,
     # Story 4.4, 400 -> 414: warm-up wiring (arm in `_phase_warmup`, instrument
     # + settle per strategy, the stop/reclaim predicate the wait reads); the
@@ -146,7 +147,9 @@ SIZE_BASELINE: dict[str, int] = {
     # flush bodies moved to live_session_steady_state.py (file 495 -> 470) — then
     # the startup grant and the runtime reconciler's construction (-> 485); the
     # logic is live_runtime_reconcile.py.
-    "src/core/live_session_runner.py::LiveSessionRunner": 412,
+    # Story 4.5, 412 -> 416: the resume wiring (pre-`run_async` refusal, the
+    # per-start `ResumeCheck` and its two calls); the policy is live_session_resume.py.
+    "src/core/live_session_runner.py::LiveSessionRunner": 416,
     "src/core/live_session_runner.py::LiveSessionRunner.run": 66,
     # Story 4.3, 120 -> 114: the no-bars watchdog's test and emit moved to module
     # level (decision D-I, -9) to make room for the runtime reconciler's tick call.
@@ -159,10 +162,12 @@ SIZE_BASELINE: dict[str, int] = {
     "src/core/results_extractor.py::ResultsExtractor.extract_results": 85,
     # Story 4.4, 103 -> 110: AR40 warm-up inline in `on_start` + the history
     # callback, deliberately not hidden in a helper so AC #2's inspection reads
-    # the three Nautilus calls in the strategy file itself.
-    "src/core/strategies/sma_crossover.py::SMACrossover": 110,
+    # the three Nautilus calls in the strategy file itself. Story 4.5, 110 -> 106
+    # (shrank): the own-book read is `positions_open(...)`, no `is_open` re-checks.
+    "src/core/strategies/sma_crossover.py::SMACrossover": 106,
     # Story 4.4, 58 -> 52 (shrank): registered SMAs replaced the deque average.
-    "src/core/strategies/sma_momentum.py::SMAMomentum.on_bar": 52,
+    # Story 4.5, 52 -> 51 (shrank): the own-book net replaced three portfolio reads.
+    "src/core/strategies/sma_momentum.py::SMAMomentum.on_bar": 51,
     "src/core/strategy_registry.py::StrategyRegistry": 101,
     "src/db/repositories/backtest_repository.py::BacktestRepository": 236,
     "src/db/repositories/backtest_repository_sync.py::SyncBacktestRepository": 153,

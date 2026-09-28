@@ -108,6 +108,12 @@ NODE_FACING_MODULES = (
     # `live_exec_avg_px.py`) and then inside the adapter's position-update task
     # for the whole session. Added in the creating commit.
     "src/core/live_exec_position_reports.py",
+    # Story 4.5. Called by the runner inside `node:connect` (before
+    # `run_async()`) and inside `trading`'s per-strategy containment: its
+    # refusals are a typed `ResumeRefusedError` the runner's `finally` (or the
+    # start-failure path) must receive — raising is fine here, exiting never
+    # is. Added in the creating commit.
+    "src/core/live_session_resume.py",
     "src/services/session_record.py",
     "src/services/session_service.py",
 )

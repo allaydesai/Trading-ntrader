@@ -1512,6 +1512,49 @@ class TestOpenOrderCheckIsDeliberatelyOff:
         assert isinstance(value, ast.Name) and value.id == "EXEC_ENGINE_OPEN_CHECK_INTERVAL_SECS"
 
 
+class TestUnclaimedExternalOrdersAreFiltered:
+    """Story 4.5 (D-A) — the IB adapter's fabricated per-position ``FILLED``
+    order is dropped by the framework instead of imported as ``EXTERNAL``.
+
+    Without it every mid-position restart leaves the strategy beside
+    ``EXTERNAL +N / INTERNAL-DIFF −N`` (Story 4.2, measured 1.4A), and a later
+    restart after the position shrank aborts the process (1.4S). Nautilus
+    defaults the switch **off**, so this is a deliberate departure from the
+    wheel's default, pinned on both halves like the fields above.
+    """
+
+    @pytest.mark.component
+    def test_the_constant_is_on_and_the_built_config_carries_it(self):
+        assert live_node_builder.EXEC_ENGINE_FILTER_UNCLAIMED_EXTERNAL_ORDERS is True
+        cfg = build_trading_node_config(_settings(), trader_id=TRADER_ID)
+
+        assert cfg.exec_engine.filter_unclaimed_external_orders is True
+
+    @pytest.mark.component
+    def test_the_nautilus_stock_default_is_still_off(self):
+        """The canary: if an upgrade turns it on by default, the constant stops
+        being a departure and this fails by name."""
+        import nautilus_trader.live.config as live_config
+
+        assert live_config.LiveExecEngineConfig().filter_unclaimed_external_orders is False
+
+    @pytest.mark.component
+    def test_the_builder_passes_the_filter_explicitly(self):
+        tree = ast.parse(Path(live_node_builder.__file__).read_text(encoding="utf-8"))
+        (call,) = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "LiveExecEngineConfig"
+        ]
+
+        passed = {k.arg: k.value for k in call.keywords}
+        value = passed.get("filter_unclaimed_external_orders")
+        assert isinstance(value, ast.Name)
+        assert value.id == "EXEC_ENGINE_FILTER_UNCLAIMED_EXTERNAL_ORDERS"
+
+
 class TestExecClientDefaultRouting:
     """The exec client must be reachable for instruments venued elsewhere.
 

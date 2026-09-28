@@ -93,6 +93,7 @@ def _session_exec_config() -> dict:
             "inflight_check_threshold_ms",
             "inflight_check_retries",
             "open_check_interval_secs",
+            "filter_unclaimed_external_orders",
         )
     }
 

@@ -223,6 +223,8 @@ Exit codes: `0` success · `1` partial (some bar files failed) · `2` fatal (bad
 
 > **Stopping a session leaves positions alone.** The bundled `sma_crossover` no longer flattens its positions in `on_stop()` (Story 3.1) — a stop tears down subscriptions and nothing else, so a daily restart cannot fabricate a round trip the strategy never asked for. Ctrl-C is handled: one `SIGINT`/`SIGTERM` stops the session cleanly, a second forces exit.
 >
+> **Restarting resumes mid-position** (Story 4.5). `live start` on a session that stopped holding a position brings the strategy back holding it — the same position, proven against IBKR by `reconcile` — logs `strategy.resumed` with its quantity beside the broker's, and the strategy keeps hunting the same exit: its next opposite signal closes it, and the round trip is recorded as **one** trade in the same session. The built-in strategies act only on their own positions. A holding on a strategy's instrument that no strategy of the session owns (a trade made by hand in TWS, or an engine cache that lost it — including shares beyond the strategy's own on the same side) is never traded or adjusted: that strategy is not started (`strategy.resume_refused`, naming the instrument and the quantities), its siblings are, and the remedy is manual, in TWS. A session restarted mid-position before Story 4.5 refuses to start (`session.resume_refused`, exit `1`); create a new session for it.
+>
 > ⚠️ A strategy from the unversioned `src/core/strategies/custom/` submodule may still flatten on stop — `sma_crossover_long_only` does. The AST guard that forbids order calls in lifecycle hooks cannot reach that submodule, so check the broker after stopping a session that ran one.
 
 ## Common Workflows

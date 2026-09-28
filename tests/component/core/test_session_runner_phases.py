@@ -1663,6 +1663,10 @@ class TestImportPurity:
         # Story 4.3. Imported by `live_node_builder` and executed during
         # `node.build()`, beside `live_exec_avg_px`. Added in the creating commit.
         "src.core.live_exec_position_reports",
+        # Story 4.5. Imported by the runner (`node:connect` and `trading`): it
+        # reads the cache and the reconciliation proof in domain values — no
+        # `src.db`/`src.services` import (AR38). Added in the creating commit.
+        "src.core.live_session_resume",
     )
 
     @pytest.mark.parametrize("module_name", MODULES)

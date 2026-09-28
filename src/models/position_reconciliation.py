@@ -117,6 +117,22 @@ class PositionDiscrepancy:
         return self.strategy_quantity != 0 and self.strategy_quantity != self.broker_quantity
 
     @property
+    def broker_covers_strategy(self) -> bool:
+        """Whether the broker holds everything the strategies own, on the same
+        side, **and more** (Story 4.5, PO ruling 2026-09-28).
+
+        Such a row is a contradiction by :attr:`strategy_contradicted`'s letter,
+        but not in substance: the strategies' position is real, and the excess
+        belongs to no strategy. Only the *startup* phase reads this — it leaves
+        the excess to the per-strategy resume check — and the running
+        session's cycle still stops on it, unchanged.
+        """
+        if self.strategy_quantity == 0 or self.broker_quantity == 0:
+            return False
+        same_side = (self.strategy_quantity > 0) == (self.broker_quantity > 0)
+        return same_side and abs(self.broker_quantity) > abs(self.strategy_quantity)
+
+    @property
     def kind(self) -> str:
         """:data:`STRATEGY_POSITION` or :data:`POSITION`."""
         return STRATEGY_POSITION if self.strategy_contradicted else POSITION
@@ -170,6 +186,28 @@ def compare_positions(
 def count_synthetic(cached: Iterable[CachedPosition]) -> int:
     """How many open positions reconciliation, not a strategy, owns."""
     return sum(1 for position in cached if position.is_synthetic)
+
+
+def split_by_owner(cached: Iterable[CachedPosition], instrument_id: str) -> tuple[Decimal, Decimal]:
+    """The strategies' signed net on ``instrument_id``, and the part no strategy owns.
+
+    Story 4.5 (D-C): a holding reconciliation imported because no strategy's
+    position explains it — a manual trade, an engine cache that lost it — is
+    the **unowned** part. Synthetic positions that net to zero (the triple a
+    pre-4.5 restart left, ``EXTERNAL +N / INTERNAL-DIFF −N``) own nothing.
+
+    Returns:
+        ``(owned, unowned)``, each exact.
+    """
+    owned = unowned = _ZERO
+    for position in cached:
+        if position.instrument_id != instrument_id:
+            continue
+        if position.is_synthetic:
+            unowned += position.quantity
+        else:
+            owned += position.quantity
+    return owned, unowned
 
 
 @dataclass(frozen=True, slots=True)

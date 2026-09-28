@@ -491,6 +491,21 @@ class TestAContradictedStrategyPositionStopsTheSession:
 
         assert EXIT_CODES[classify_failure(caught.value)] == EXIT_ERROR
 
+    def test_a_covering_broker_holding_still_stops_the_running_session(self):
+        """Story 4.5's relaxation is **startup only** (PO ruling 2026-09-28):
+        at runtime a strategy +10 against a broker at +15 — the net already
+        corrected — still stops the session, exactly as before."""
+        world = _World(
+            [_Position(NVDA, STRATEGY, "10"), _Position(NVDA, "INTERNAL-DIFF", "5")],
+            state=_state(_held(NVDA, "15")),
+        )
+
+        with pytest.raises(ReconciliationFailedError) as caught:
+            world.cycles(2)
+
+        assert caught.value.reason is ReconciliationFailure.STRATEGY_POSITION_CONTRADICTED
+        assert world.engine.reports == []
+
     def test_seen_once_it_does_not_stop_the_session(self):
         """The strategy's own fill can reach the cache before IB's position does."""
         world = _World([_Position(NVDA, STRATEGY, "22")], state=_state())
