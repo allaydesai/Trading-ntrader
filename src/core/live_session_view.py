@@ -27,13 +27,21 @@ cache is the only local record of what the session believes it holds:
   the broker reader uses, so normalisation can never manufacture or hide a
   difference. The key names the account as the exec client knew it — trimmed
   and upper-cased by the node builder — so it is looked up the same way.
+- **When the cash was recorded** (Story 4.7, D-C) — ``accounts:<id>`` holds
+  the account's ``AccountState`` events; the last *reported* one is when IBKR
+  last pushed the summary, so a cash difference can say "session cash as of
+  <time>". Read only when cash is known; a missing account or one with no
+  reported event is ``None`` (unknown), never a failure — and so is an account
+  that cannot be read, logged ``reconcile.session_view_account_unreadable``:
+  the one read here that is contained, because the time only decorates the
+  cash note (code review, 2026-09-28).
 
 **Load-only, measured.** Against a real Redis with ``MONITOR`` capturing, the
-adapter's ``keys``/``load_position``/``load`` issue only ``SCAN``, ``LRANGE``,
-``GET``, ``MGET``, ``INFO`` and ``CLIENT SETINFO``, and the namespace is
-byte-identical afterwards (``tests/integration/core/
+adapter's ``keys``/``load_position``/``load``/``load_account`` issue only
+``SCAN``, ``LRANGE``, ``GET``, ``MGET``, ``INFO`` and ``CLIENT SETINFO``, and the
+namespace is byte-identical afterwards (``tests/integration/core/
 test_live_session_view_redis.py``). Constructing the adapter does not
-initialise Nautilus's C logging. This module calls those three load methods
+initialise Nautilus's C logging. This module calls those four load methods
 and ``close()`` — nothing that writes — and the component suite pins both the
 set and the absence of any mutator: a second writer into a running session's
 namespace would be the auto-resolution FR35 forbids.
@@ -54,6 +62,7 @@ import json
 import time
 from collections import defaultdict
 from collections.abc import Callable, Mapping
+from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
 from typing import Any, ClassVar, TypeVar
@@ -64,7 +73,7 @@ import structlog
 from nautilus_trader.cache.config import CacheConfig
 from nautilus_trader.cache.database import CacheDatabaseAdapter
 from nautilus_trader.core.uuid import UUID4
-from nautilus_trader.model.identifiers import PositionId, TraderId
+from nautilus_trader.model.identifiers import AccountId, PositionId, TraderId
 from nautilus_trader.serialization.serializer import MsgSpecSerializer
 
 from src.config import RedisSettings
@@ -72,7 +81,17 @@ from src.core.exit_outcome import LiveCheckOutcome
 
 # Private by name, shared on purpose: both sides of the comparison must be
 # normalised by one function, and emitted through one never-raising sink.
-from src.core.live_broker_state import _cash_from, _emit
+# ``ACCOUNT_SUMMARY_KEY_PREFIX`` — the general-cache key the IB exec client
+# writes its account summary under — is owned by the broker reader since Story
+# 4.7 (the pre-run snapshot reads it too), and pinned against the real adapter
+# by a component canary.
+from src.core.live_broker_state import (
+    ACCOUNT_SUMMARY_KEY_PREFIX,
+    IB_EXEC_CLIENT_ID,
+    _cash_from,
+    _emit,
+    cash_recorded_at,
+)
 from src.core.live_cache import build_cache_config, check_redis_reachable
 from src.core.live_trader_id import derive_trader_id
 from src.models.broker_state import CashBalance
@@ -82,19 +101,19 @@ logger = structlog.get_logger(__name__)
 
 T = TypeVar("T")
 
-#: The general-cache key the IB exec client writes its account summary under,
-#: followed by its ``account_id.get_id()`` (``adapters/interactive_brokers/
-#: execution.py``). Pinned against the real adapter by a component canary.
-ACCOUNT_SUMMARY_KEY_PREFIX = "accountSummary:"
 #: The collection the adapter keeps each position's fill list in.
 POSITIONS_COLLECTION = "positions"
 #: The adapter members this module reads through. ``close()`` releases the
 #: handle; nothing else is called. Pinned as an exact set, mutator-free.
-LOAD_METHODS = ("keys", "load_position", "load")
+#: ``load_account`` joined deliberately at Story 4.7 (D-C, PO ruling A).
+LOAD_METHODS = ("keys", "load_position", "load", "load_account")
 
 READ_EVENT = "reconcile.session_view_read"
 FAILED_EVENT = "reconcile.session_view_failed"
 OTHER_ACCOUNT_EVENT = "reconcile.session_view_other_account"
+#: Story 4.7 code review: the account (for "session cash as of") could not be
+#: read; the view is still complete, its cash time unknown.
+ACCOUNT_UNREADABLE_EVENT = "reconcile.session_view_account_unreadable"
 
 
 class SessionViewFailure(StrEnum):
@@ -232,7 +251,7 @@ def read_session_view(
     reachability(redis.redis_host, redis.redis_port)
     target = normalised_account(account)
     try:
-        view, skipped = _using(
+        view, skipped, account_unreadable = _using(
             adapter_factory, trader_id, redis, lambda adapter: _read(adapter, trader_id, target)
         )
     except SessionViewUnavailableError as failure:
@@ -240,6 +259,14 @@ def read_session_view(
         raise
     if skipped:
         _emit(log, "warning", OTHER_ACCOUNT_EVENT, trader_id=trader_id, positions_skipped=skipped)
+    if account_unreadable is not None:
+        _emit(
+            log,
+            "warning",
+            ACCOUNT_UNREADABLE_EVENT,
+            trader_id=trader_id,
+            error_type=account_unreadable,
+        )
     _emit(
         log,
         "info",
@@ -280,8 +307,8 @@ def _require_state(adapter: Any, trader_id: str) -> None:
         )
 
 
-def _read(adapter: Any, trader_id: str, account: str) -> tuple[SessionView, int]:
-    keys, load_position, load = (_member(adapter, name) for name in LOAD_METHODS)
+def _read(adapter: Any, trader_id: str, account: str) -> tuple[SessionView, int, str | None]:
+    keys, load_position, load, load_account = (_member(adapter, name) for name in LOAD_METHODS)
     _require_state(adapter, trader_id)
     # SCAN may return a key more than once; a position counts once.
     position_keys = _call(
@@ -293,8 +320,30 @@ def _read(adapter: Any, trader_id: str, account: str) -> tuple[SessionView, int]
         raise SessionViewUnavailableError(
             SessionViewFailure.UNREADABLE, "the general cache has an unexpected shape"
         )
-    summary = general.get(f"{ACCOUNT_SUMMARY_KEY_PREFIX}{account}")
-    return SessionView(trader_id=trader_id, positions=positions, cash=_cash(summary)), skipped
+    cash = _cash(general.get(f"{ACCOUNT_SUMMARY_KEY_PREFIX}{account}"))
+    recorded_at, unreadable = _cash_recorded(load_account, account) if cash else (None, None)
+    view = SessionView(
+        trader_id=trader_id, positions=positions, cash=cash, cash_recorded_at=recorded_at
+    )
+    return view, skipped, unreadable
+
+
+def _cash_recorded(
+    load_account: Callable[[AccountId], Any], account: str
+) -> tuple[datetime | None, str | None]:
+    """When the broker last reported the session's cash (Story 4.7, D-C), or
+    ``(None, <error type>)`` when the account cannot be read.
+
+    The account is stored under the exec client's key (``factories.py:304``:
+    ``AccountId(f"{name}-{account}")``, ``name`` = ``IB``). Contained, unlike
+    every other read here (code review, 2026-09-28): the time only decorates the
+    cash note, so an unreadable account must not fail a check whose positions
+    and cash were read — ``live reconcile`` stays report-and-exit (PO note 3).
+    """
+    try:
+        return cash_recorded_at(load_account(AccountId(f"{IB_EXEC_CLIENT_ID}-{account}"))), None
+    except Exception as exc:  # noqa: BLE001 - an informational field must not fail the check
+        return None, type(exc).__name__
 
 
 def _member(adapter: Any, name: str) -> Callable[..., Any]:

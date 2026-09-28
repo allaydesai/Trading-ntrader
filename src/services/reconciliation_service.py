@@ -17,7 +17,8 @@ the broker.
 net of every open position it holds per instrument, and the last
 ``TotalCashValue`` its engine was pushed. So a stopped session whose account
 moved since it last ran — another session's fill, interest, a dividend —
-honestly reads as a discrepancy; the rendered note says why.
+honestly reads as a discrepancy; the rendered note says why, and since when
+("session cash as of <time>", Story 4.7 D-C).
 
 **Price is informational.** IBKR's average cost is commission-inclusive and
 Nautilus's is not (Story 4.1, D-G), so it is printed beside the broker's
@@ -69,6 +70,7 @@ def compare(
         cash=_cash_lines(broker, local),
         broker_retrieved_at=broker.retrieved_at,
         elapsed_ms=elapsed_ms,
+        local_cash_recorded_at=local.cash_recorded_at,
     )
 
 
@@ -136,6 +138,22 @@ def _render_cash(line: CashLine) -> str:
     return f"{text} difference={_signed(line.difference)} DISCREPANCY"
 
 
+def _cash_note(report: ReconciliationReport) -> str:
+    """Why session cash can differ, and since when (Story 4.7, D-C)."""
+    if all(line.local_cash is None for line in report.cash):
+        return (
+            "note: the session's engine never recorded a TotalCashValue, so its cash is unknown "
+            "(never zero)"
+        )
+    recorded = report.local_cash_recorded_at
+    when = "an unknown time" if recorded is None else recorded.isoformat()
+    return (
+        f"note: session cash as of {when} is the last TotalCashValue the session's engine "
+        "received; for a stopped session that is its value when the session last ran, so a "
+        "dividend, interest or another client's trade since then reads here"
+    )
+
+
 def render_report(report: ReconciliationReport) -> list[str]:
     """Operator-readable lines, ending in one ``RESULT:`` line; account masked."""
     lines = [
@@ -152,10 +170,7 @@ def render_report(report: ReconciliationReport) -> list[str]:
         )
         return lines
     if any(not line.matches for line in report.cash):
-        lines.append(
-            "note: session cash is the last TotalCashValue the session's engine received; "
-            "for a stopped session that is its value when the session last ran"
-        )
+        lines.append(_cash_note(report))
     position_count = sum(1 for line in report.positions if not line.matches)
     cash_count = sum(1 for line in report.cash if not line.matches)
     lines.append(

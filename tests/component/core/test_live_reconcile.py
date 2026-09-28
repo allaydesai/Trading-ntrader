@@ -21,6 +21,7 @@ from nautilus_trader.adapters.interactive_brokers.factories import IB_CLIENTS
 from nautilus_trader.common.component import is_logging_initialized
 
 from src.config import IBKRSettings, RedisSettings
+from src.core.exit_outcome import EXIT_DISCREPANCY
 from src.core.live_broker_state import BrokerStateFailure, BrokerStateUnavailableError
 from src.core.live_cache import RedisUnreachableError
 from src.core.live_check import EXIT_CODES, BrokerUnreachableError, classify_failure
@@ -109,11 +110,14 @@ def _broker(*positions: tuple[str, str], cash: str = "1000.00") -> BrokerState:
     )
 
 
-def _view(*positions: tuple[str, str], cash: str | None = "1000.00") -> SessionView:
+def _view(
+    *positions: tuple[str, str], cash: str | None = "1000.00", recorded_at=None
+) -> SessionView:
     return SessionView(
         trader_id="PAPER-0e8f1c2a",
         positions=tuple(ViewPosition(i, Decimal(q)) for i, q in positions),
         cash=() if cash is None else (CashBalance("USD", Decimal(cash)),),
+        cash_recorded_at=recorded_at,
     )
 
 
@@ -622,6 +626,30 @@ class TestTheVerdictIsRecorded:
 
         [record] = [r for r in harness.log.records if r[1] == "reconcile.discrepancy"]
         assert record[2]["local_cash"] == "unknown"
+        assert record[2]["local_cash_recorded_at"] is None
+
+    def test_a_cash_discrepancy_records_when_the_sessions_cash_was_recorded(self):
+        """Story 4.7, D-C: "session cash as of <time>" in the record too."""
+        recorded = datetime(2026, 9, 26, 20, 0, 1, 250000, tzinfo=UTC)
+        harness = Harness(
+            broker=_broker(cash="1123.45"), view=_view(cash="1000.00", recorded_at=recorded)
+        )
+
+        harness.run()
+
+        [record] = [r for r in harness.log.records if r[1] == "reconcile.discrepancy"]
+        assert record[2]["local_cash_recorded_at"] == recorded.isoformat()
+
+    def test_live_reconcile_stays_report_and_exit_with_its_exit_codes(self):
+        """PO note (3): the timestamp changes what is said, not what is done —
+        a cash difference is still exit 5. (That nothing is written is pinned
+        separately: the session view's mutator scans and the Redis MONITOR proof.)"""
+        recorded = datetime(2026, 9, 26, 20, 0, 1, 250000, tzinfo=UTC)
+        harness = Harness(broker=_broker(cash="1123.45"), view=_view(recorded_at=recorded))
+
+        report = harness.run()
+
+        assert exit_code_for(report) == EXIT_DISCREPANCY
 
     def test_no_raw_account_in_any_record(self):
         harness = Harness(broker=_broker(("AAPL.NASDAQ", "4")))

@@ -502,6 +502,69 @@ class TestAContradictedStrategyPositionStopsTheSession:
         assert world.engine.reports == []
 
 
+class TestACorporateActionIsAbsorbedWhileRunning:
+    """Story 4.7, D-A (PO ruling A): a split that grows a strategy's position
+    mid-session is corrected broker-ward and named — the session keeps running
+    and the strategy's own lot is never touched."""
+
+    def test_a_forward_split_is_corrected_named_and_the_session_continues(self):
+        world = _World([_Position(NVDA, STRATEGY, "10")], state=_state(_held(NVDA, "20")))
+
+        with capture_logs() as logs:
+            world.cycles(2)  # seen twice, DEBOUNCE_SECONDS apart
+            world.cycles(1)  # the next cycle is clean
+
+        (report,) = world.engine.reports
+        assert report.signed_decimal_qty == Decimal("20")
+        own = [p.signed_decimal_qty() for p in world.cache.positions if p.strategy_id == STRATEGY]
+        assert own == [Decimal("10")], "the strategy's own lot was adjusted"
+        (record,) = _events(logs, DISCREPANCY_EVENT)
+        assert (record["resolution"], record["scope"], record["kind"]) == (
+            "broker",
+            SCOPE_RUNTIME,
+            "position",
+        )
+        assert (record["local_quantity"], record["strategy_quantity"]) == ("10", "10")
+        assert record["broker_quantity"] == "20"
+        assert _events(logs, OK_EVENT), "no clean cycle followed the correction"
+
+    def test_seen_once_a_split_changes_nothing(self):
+        """The debounce still applies: a broker position that lags a fill looks
+        exactly like a split for one cycle."""
+        world = _World([_Position(NVDA, STRATEGY, "10")], state=_state(_held(NVDA, "20")))
+
+        world.cycles(1)
+
+        assert world.engine.reports == []
+
+
+class TestAnUncoveredStrategyPositionStillStopsTheSession:
+    """Story 4.7, PO ruling: a strictly-shrinking, zero or opposite-side broker
+    quantity still stops the session, before anything is written, and the stop
+    names the likely cause."""
+
+    @pytest.mark.parametrize(
+        ("broker", "phrase"),
+        [(("5",), "reverse split"), ((), "cash merger"), (("-5",), "opposite side")],
+        ids=["shrinking", "zero", "opposite-side"],
+    )
+    def test_each_shape_stops_the_session_and_names_its_cause(self, broker, phrase):
+        held = tuple(_held(NVDA, quantity) for quantity in broker)
+        world = _World([_Position(NVDA, STRATEGY, "10")], state=_state(*held))
+
+        with capture_logs() as logs, pytest.raises(ReconciliationFailedError) as caught:
+            world.cycles(2)
+
+        assert caught.value.reason is ReconciliationFailure.STRATEGY_POSITION_CONTRADICTED
+        assert world.engine.reports == [], "an uncovered strategy row reached the framework"
+        assert phrase in str(caught.value)
+        # Code review: true for every refused shape, not only "the broker holds none".
+        assert "no longer covers a strategy's own position" in str(caught.value)
+        (record,) = _events(logs, DISCREPANCY_EVENT)
+        assert record["resolution"] == "refused" and phrase in record["likely_cause"]
+        assert RAW_ACCOUNT not in str(caught.value)
+
+
 class TestReconcileOkVolume:
     """AC #3."""
 

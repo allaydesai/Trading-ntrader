@@ -402,7 +402,7 @@ class SessionSteadyState:
                 tick's guarded steps let this out deliberately; see the module
                 docstring for what is and is not guarded.
             ReconciliationFailedError: Story 4.3's runtime reconciliation
-                refused (a strategy's own position contradicted by the broker,
+                refused (a strategy's own position the broker no longer covers,
                 or a correction the framework would not make). The session
                 must stop, positions untouched (decision D-D).
         """

@@ -328,10 +328,14 @@ The phase's rules:
 
 - **Internal position state** is the cache's net signed quantity per
   instrument, over every open position, compared exactly with the broker's.
-- **A strategy's own position that the broker contradicts refuses the start.**
-  This is the PO's 2026-09-27 ruling. The framework cannot rewrite it (fact 2),
-  and a started strategy would act on it: `sma_crossover` closes it, which is a
-  real order against the broker.
+- **A strategy's own position that the broker does not cover refuses the
+  start.** This is the PO's 2026-09-27 ruling, narrowed by Story 4.7's
+  coverage rule (PO, 2026-09-28): the broker holds fewer shares in the
+  strategy's direction, none, or the opposite side. The framework cannot
+  rewrite it (fact 2), and a started strategy would act on it: `sma_crossover`
+  closes it, which is a real order against the broker. The refusal names the
+  likely cause. A strategy position the broker holds *more* of is not refused
+  — see "Corporate actions" below.
 - **Anything else is corrected broker-ward** through
   `exec_engine.reconcile_execution_report(PositionStatusReport)`, and must then
   re-compare clean.
@@ -384,10 +388,11 @@ startup. So runtime alignment is split three ways:
    through `reconcile_execution_report` (the Story 4.2 path) and logged
    `reconcile.discrepancy scope=runtime resolution=broker`. An instrument the
    cache cannot express is logged `resolution=unresolved` once. A strategy's
-   own position the broker contradicts **stops the session** before anything
-   is written (PO ruling 2A) — `ReconciliationFailedError` out of the tick, the
-   ordinary teardown, positions untouched, exit 1. The same happens when the
-   framework refuses a correction or one does not take.
+   own position the broker no longer covers **stops the session** before
+   anything is written (PO ruling 2A, narrowed by Story 4.7's coverage rule) —
+   `ReconciliationFailedError` out of the tick, the ordinary teardown,
+   positions untouched, exit 1, the likely cause named. The same happens when
+   the framework refuses a correction or one does not take.
 
 **Latency, accepted:** a change the execution stream did not explain (a manual
 TWS trade, a split) is corrected one to two cycles after it happens, not on
@@ -402,3 +407,140 @@ by `confirm_state_reestablished` — the one production caller is
 `RECOVERING` withholds every order. A reconnect whose state cannot be verified
 stays withheld; past the 60 s window the monitor logs `connection.halted`, and a
 later clean cycle still restores (`connection.restored`).
+
+## Corporate actions (Story 4.7)
+
+IBKR's account is the truth for positions and cash (FR35). A split or a
+dividend over a multi-week session changes that truth **underneath** the
+session: IBKR reports no execution for it, and Nautilus 1.220.0 has no
+corporate-action or position-adjustment event. Reconciliation absorbs the change
+and names it, and never silently corrects it.
+
+**Positions: the coverage rule** (PO ruling, 2026-09-28). A strategy's own
+position is refused only when the broker does not *cover* it:
+
+| Broker vs the strategy's own net | Typical cause | What happens |
+|---|---|---|
+| more, same side (+10 → +20) | forward split, stock dividend, a manual add in TWS | **absorbed**: corrected broker-ward, `reconcile.discrepancy` names the before and after quantities |
+| fewer, same side (+10 → +5) | reverse split, a partial sale outside the session, a lost fill | **refused**: the start is refused, or a running session is stopped |
+| none (+10 → 0) | cash merger, symbol change, a close outside the session | **refused** |
+| the opposite side (+10 → −5) | a trade outside the session | **refused** |
+| strategies on **both** sides of one instrument | — | the pre-4.7 rule: refused unless the strategies' net equals the broker's exactly |
+
+- **Why covered growth is safe, and where that stops.** When a strategy closes
+  **its own lot**, the broker is left at `broker − strategy`, on the broker's
+  own side, so *that* close can never carry the account through zero into a
+  position nobody asked for (NFR14). That hazard is the whole reason an
+  uncovered strategy is refused.
+  - With strategies on both sides of one instrument, their net says nothing
+    about each lot, so the equality rule stays (the last table row).
+  - **Startup caveat, built-in `sma_crossover`.** A split absorbed at startup
+    leaves the triple: strategy +10, `EXTERNAL` +20, `INTERNAL-DIFF` −10.
+    `sma_crossover` reads every position on its instrument, not only its own, and
+    closes every one on the opposite side. On its next SELL crossover it closes
+    the +10 **and** the `EXTERNAL` +20: 30 shares against a broker at 20, which
+    leaves the account short 10. That is Story 4.5's open hazard, and a normal
+    mid-position restart reaches the same state. The PO ruled that this story
+    cross-references it rather than fixing it. **Until 4.5 lands, do not run a
+    `sma_crossover` session across a split it holds.**
+  - A split absorbed *mid-session* leaves strategy +10 beside `INTERNAL-DIFF`
+    +10. `sma_crossover` then sells 20 against 20, which leaves the account
+    flat, not short.
+- **How it is absorbed.** Nautilus's reconciliation writes the difference as a
+  fill on a synthetic owner (`EXTERNAL` / `INTERNAL-DIFF`), exactly as for any
+  net correction. The strategy's own lot is **never** adjusted, closed or
+  flattened, and no zero-price adjustment fill is ever written for it.
+  - At startup, Nautilus's own pass inside `node:connect` usually imports the
+    split. The `reconcile` phase then names it from the pre-run snapshot:
+    `resolution=framework`, with `local_quantity` = before and
+    `broker_quantity` = after.
+  - While the session runs, the minute cycle corrects it after its 60 s
+    debounce: `resolution=broker`, `scope=runtime`.
+  - The synthetic fill is priced so that the **combined** average equals the
+    broker's: `(target·avg − current·avg) / difference`
+    (`live/reconciliation.py`).
+    - IBKR's average includes commission, so a long split solves to a small
+      positive price (about 0.10).
+    - An exact split solves to `0`, and a commission-inclusive short solves
+      negative. `calculate_reconciliation_price` rejects both, and the fill
+      falls back to the current average price (measured, both sides).
+    - That fill price only ever lands on the synthetic position, and the
+      combined cost basis still equals IBKR's.
+- **What a refusal says.** `reconcile.discrepancy resolution=refused` carries
+  `likely_cause`, and the operator message names it: "the broker holds fewer
+  shares than the strategy believes — a reverse split, …". When the net already
+  matches the broker, it also names this session's own orders against a
+  reconciliation-owned position. That case arises when a strategy that reads
+  the net, such as `sma_momentum`, sells a split's extra shares: the refusal is
+  then not an outside event. The remedy is unchanged: create a new session (see
+  "Startup Reconciliation" above).
+
+**Costs of absorbing, accepted by the PO:**
+- **A lot held across a split records its round trip at unadjusted prices.**
+  Entry is before the split and exit after it, so a 2:1 split reads as a ~50 %
+  loss on the strategy's lot.
+- **The split's extra shares sit in a reconciliation-owned position.** The trade
+  recorder never persists those (Story 3.6 D-D), so their gain is never recorded
+  as a trade.
+  - A strategy that exits only its own lot leaves them at IBKR, visible in
+    `reconcile.ok` (`instruments`, `synthetic_positions`) and in
+    `live reconcile`.
+  - The built-in `sma_crossover` closes them too; see the startup caveat above
+    for when that oversells.
+- **Not corporate-action specific.** A manual same-direction add in TWS is
+  absorbed the same way. The record names it either way.
+- **Story 4.5 owns the neighbouring hazards**, and this rule does not fix them:
+  - the three-position state a mid-position restart leaves (strategy +10,
+    `EXTERNAL`, `INTERNAL-DIFF`);
+  - `sma_crossover` reading every strategy's positions on its instrument and
+    closing synthetic ones too;
+  - a restart after the broker position **shrank**, which can abort the process
+    inside Nautilus's own pass. A reverse split can reach this.
+
+  See `deferred-work.md`.
+
+**Cash: absorbed natively, named at startup.** The session's cash *is* IBKR's
+account-summary push, so no local copy can drift while the process runs. A
+dividend or interest credited while the session was stopped moves the cash
+between runs.
+- The pre-run snapshot captures the previous run's last `TotalCashValue` and
+  when IBKR last reported it. It reads existing Redis state only: the restored
+  `accountSummary:<acct>` general key, and the account's last *reported*
+  `AccountState`. There is no new column and no migration.
+- The `reconcile` phase then logs one INFO `reconcile.cash_changed` per currency
+  that moved, with `before`, `after`, `difference` and `recorded_at`.
+- It is informational: it never refuses a start, never blocks the phase, and
+  never touches trading permission.
+- **What "before" is, exactly.** It is the last summary IBKR *pushed* to the
+  previous run, at `recorded_at`, and IBKR pushes only every few minutes.
+  - The previous run's own last fills and commissions can therefore show up in
+    the difference, as well as a dividend, interest, a fee or another client's
+    trade. Compare `recorded_at` with the run's last fill before reading it as a
+    corporate action.
+  - A start that fails *after* connecting (a `gate:account` refusal, a failed
+    broker read) has already let the first push overwrite the stored summary,
+    so the next start names nothing.
+  - `live reconcile` on the stopped session, before starting it, is the reliable
+    view.
+- `live reconcile` says the same thing on demand: "session cash as of <time>".
+  An account whose time cannot be read is logged
+  `reconcile.session_view_account_unreadable` and the time reads as unknown.
+  The check is not failed.
+
+**Price basis: an expected structural property of the comparison, not a defect
+to chase.** Backtest data is
+FirstRate: split- *and* dividend-adjusted, consolidated. Live data is IBKR:
+**unadjusted**, SMART-routed. The backtest never sees a corporate action as an
+event, because it is pre-baked into adjusted prices. A live session sees:
+- a price cliff in its bars on the ex-date (a split halves the price; an SMA
+  crossing it may fire);
+- the position-size change above;
+- the unadjusted P&L of a lot held across it.
+
+So a live session and its backtest diverge by construction around every
+corporate action. That divergence is **an expected structural property of the
+comparison, not a defect to chase**: expected and attributable. Epic 5 records
+it on every sealed session as
+`session_conditions.price_basis = "ibkr_unadjusted_smart"`, against a backtest's
+`"firstrate_adjusted"` (Story 5.4, architecture AR7). Read a live-vs-backtest
+difference near a corporate action against that property first.

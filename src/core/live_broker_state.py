@@ -91,6 +91,12 @@ OPEN_POSITIONS_REQUEST = "OpenPositions"
 READINESS_FLAGS = ("_is_ib_connected", "_is_client_ready")
 #: IBKR's cash tag — not ``NetLiquidation``, not Nautilus's ``AccountBalance``.
 CASH_TAG = "TotalCashValue"
+#: The general-cache key the IB exec client writes the whole account summary
+#: under, suffixed with ``account_id.get_id()`` (``execution.py:841-844``).
+#: Redis-persisted, so across a restart it holds the previous run's values
+#: until the exec client's first push — read by Story 4.6's session view and by
+#: Story 4.7's pre-run snapshot.
+ACCOUNT_SUMMARY_KEY_PREFIX = "accountSummary:"
 #: The identifier a position gets when its contract cannot be resolved.
 UNRESOLVED_PREFIX = "IB-CONID-"
 #: ibapi's "no value" sentinels (``ibapi/const.py``), pinned by a canary. Its
@@ -558,6 +564,28 @@ def _cash_from(summary: Mapping[str, Mapping[str, Any]]) -> tuple[CashBalance, .
         if amount is not None:
             balances.append(CashBalance(currency=currency, total_cash=amount))
     return tuple(sorted(balances, key=lambda balance: balance.currency))
+
+
+def cash_recorded_at(account: Any) -> datetime | None:
+    """When the broker last reported this account's summary, or ``None``.
+
+    The IB exec client emits a ``reported`` ``AccountState`` on every complete
+    summary push, in the same handler that writes the summary key
+    (``execution.py:833-844``); the portfolio's own recalculated states are not
+    reported, so they are skipped. Duck-typed over a Nautilus ``Account`` —
+    ``events``, ``is_reported``, ``ts_event`` — and ``None`` for a missing
+    account, no reported event, or a ``ts_event`` of ``0`` (never the epoch).
+    """
+    if account is None:
+        return None
+    for event in reversed(list(account.events)):
+        if event.is_reported:
+            nanos = int(event.ts_event)
+            if nanos <= 0:
+                return None
+            seconds, remainder = divmod(nanos, 1_000_000_000)
+            return datetime.fromtimestamp(seconds, UTC).replace(microsecond=remainder // 1000)
+    return None
 
 
 def _emit(log: Any, level: str, event: str, **fields: Any) -> None:

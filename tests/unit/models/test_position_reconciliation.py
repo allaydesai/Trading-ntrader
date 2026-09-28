@@ -24,12 +24,20 @@ from src.core.live_trade_recorder import RECONCILIATION_STRATEGY_IDS
 from src.models import position_reconciliation as module
 from src.models.broker_state import BrokerPosition, BrokerState, CashBalance
 from src.models.position_reconciliation import (
+    CAUSE_FLAT,
+    CAUSE_MIXED,
+    CAUSE_NET_AGREES,
+    CAUSE_OPPOSITE,
+    CAUSE_SHRANK,
     POSITION,
     STRATEGY_POSITION,
     SYNTHETIC_STRATEGY_IDS,
     CachedPosition,
+    CashChange,
+    LocalSnapshot,
     PositionDiscrepancy,
     StartupReconciliation,
+    cash_changes,
     compare_positions,
     count_synthetic,
 )
@@ -251,6 +259,278 @@ class TestPositionDiscrepancy:
             broker_quantity=Decimal("0"),
         )
         assert row.kind == POSITION and not row.strategy_contradicted
+
+
+def _row(strategy: str, broker: str, local: str | None = None) -> PositionDiscrepancy:
+    return PositionDiscrepancy(
+        instrument_id=NVDA,
+        local_quantity=Decimal(strategy if local is None else local),
+        strategy_quantity=Decimal(strategy),
+        broker_quantity=Decimal(broker),
+    )
+
+
+class TestTheCoverageRule:
+    """Story 4.7, D-A (PO ruling A, 2026-09-28): a strategy's own position is
+    contradicted only when the broker does not cover it — the broker holds
+    less in the strategy's direction, holds nothing, or holds the opposite
+    side. Growth in the strategy's direction (a forward split, a stock
+    dividend) is absorbed broker-ward instead of stopping the session: the
+    strategy closing its lot then leaves the broker at ``B − S``, same side as
+    ``B``, so the close can never carry the account through zero."""
+
+    @pytest.mark.parametrize(
+        ("strategy", "broker", "contradicted"),
+        [
+            ("10", "20", False),  # a 2:1 forward split, long
+            ("-10", "-20", False),  # the same split on a short
+            ("10", "10", False),  # agreement
+            ("10", "5", True),  # a reverse split: the broker holds fewer
+            ("10", "0", True),  # a cash merger, a symbol change: the broker holds none
+            ("10", "-5", True),  # the opposite side
+            ("10", "-20", True),  # the opposite side, and larger: size alone must not decide
+            ("-10", "-5", True),  # a short the broker holds fewer of
+            ("-10", "5", True),  # a short against a long
+            ("-10", "20", True),  # a short against a larger long
+            ("-10", "0", True),  # a short against nothing
+        ],
+    )
+    def test_the_truth_table(self, strategy, broker, contradicted):
+        row = _row(strategy, broker)
+
+        assert row.strategy_contradicted is contradicted
+        assert row.kind == (STRATEGY_POSITION if contradicted else POSITION)
+
+    def test_a_forward_split_on_a_strategy_position_is_a_resolvable_row(self):
+        """The named test Stories 4.2 and 4.3 handed to this story: strategy +10,
+        the broker +20 after a 2:1 split — a net row the framework can
+        correct, not a refusal."""
+        (row,) = compare_positions([_cached(NVDA, "10")], _broker(_held(NVDA, "20")))
+
+        assert row.kind == POSITION and not row.strategy_contradicted
+        assert (row.local_quantity, row.strategy_quantity, row.broker_quantity) == (
+            Decimal("10"),
+            Decimal("10"),
+            Decimal("20"),
+        )
+
+    def test_once_absorbed_a_split_leaves_no_row(self):
+        """1.1a, measured: after the framework's pass the strategy's lot sits beside
+        the synthetic shares and net equals the broker — clean."""
+        cached = [
+            _cached(NVDA, "10"),
+            _cached(NVDA, "20", "EXTERNAL"),
+            _cached(NVDA, "-10", "INTERNAL-DIFF"),
+        ]
+        assert compare_positions(cached, _broker(_held(NVDA, "20"))) == ()
+
+    def test_a_strategy_beside_an_external_holding_is_not_a_discrepancy(self):
+        """Strategy +10 beside an ``EXTERNAL`` +4 the account already held: the
+        broker's 14 covers the strategy, net agrees — nothing to stop for."""
+        cached = [_cached(NVDA, "10"), _cached(NVDA, "4", "EXTERNAL")]
+        assert compare_positions(cached, _broker(_held(NVDA, "14"))) == ()
+
+    def test_same_side_strategies_are_covered_by_their_sum(self):
+        """Two long strategies, +10 each: the broker must hold at least 20 — closing
+        both leaves it at ``broker − 20``, on its own side."""
+        cached = [_cached(NVDA, "10", "A-000"), _cached(NVDA, "10", "B-000")]
+
+        assert compare_positions(cached, _broker(_held(NVDA, "30")))[0].kind == POSITION
+        (row,) = compare_positions(cached, _broker(_held(NVDA, "15")))
+        assert row.kind == STRATEGY_POSITION
+
+
+class TestStrategiesOnBothSidesKeepTheEqualityRule:
+    """Code review (2026-09-28): coverage is judged on the strategies' *net*, which
+    means nothing when their own lots are on both sides — A +10 and B −5 net +5,
+    "covered" by a broker at 7, yet A closing its 10 crosses the broker through
+    zero. Such an instrument keeps the pre-4.7 rule (exact equality), so the
+    coverage rule stays strictly a relaxation and single-side sessions are as
+    the PO ruled."""
+
+    def test_growth_over_a_mixed_net_is_refused(self):
+        cached = [_cached(NVDA, "10", "A-000"), _cached(NVDA, "-5", "B-000")]
+
+        (row,) = compare_positions(cached, _broker(_held(NVDA, "7")))
+
+        assert row.strategy_mixed_sides is True
+        assert row.kind == STRATEGY_POSITION and row.strategy_contradicted
+        assert row.likely_cause == CAUSE_MIXED
+
+    def test_a_mixed_net_that_equals_the_broker_is_clean(self):
+        cached = [_cached(NVDA, "10", "A-000"), _cached(NVDA, "-5", "B-000")]
+        assert compare_positions(cached, _broker(_held(NVDA, "5"))) == ()
+
+    def test_synthetic_owners_do_not_make_a_strategy_mixed(self):
+        """Only strategies' own lots count: a synthetic −10 beside S +10 is the
+        normal restart triple, judged by coverage as before."""
+        cached = [_cached(NVDA, "10"), _cached(NVDA, "-10", "INTERNAL-DIFF")]
+
+        (row,) = compare_positions(cached, _broker(_held(NVDA, "20")))
+
+        assert row.strategy_mixed_sides is False and row.kind == POSITION
+
+
+class TestWhatStaysRefused:
+    """PO ruling (Story 4.7): a strictly-shrinking, a zero and an opposite-side
+    broker quantity are still refused — the NFR14 floor the coverage rule keeps."""
+
+    @pytest.mark.parametrize(
+        ("broker", "cause"),
+        [("5", CAUSE_SHRANK), ("0", CAUSE_FLAT), ("-5", CAUSE_OPPOSITE)],
+        ids=["shrinking", "zero", "opposite-side"],
+    )
+    def test_each_uncovered_shape_is_refused_through_compare(self, broker, cause):
+        held = () if broker == "0" else (_held(NVDA, broker),)
+
+        (row,) = compare_positions([_cached(NVDA, "10")], _broker(*held))
+
+        assert row.kind == STRATEGY_POSITION and row.strategy_contradicted
+        assert row.likely_cause == cause
+
+    def test_a_shrink_that_net_already_matches_is_still_refused(self):
+        """Measured 1.4D's shape after a reverse split: the framework's pass
+        makes net agree, and only the strategy check still sees S +22 against 10."""
+        cached = [
+            _cached(NVDA, "22"),
+            _cached(NVDA, "10", "EXTERNAL"),
+            _cached(NVDA, "-22", "INTERNAL-DIFF"),
+        ]
+
+        (row,) = compare_positions(cached, _broker(_held(NVDA, "10")))
+
+        assert row.local_quantity == row.broker_quantity
+        assert row.likely_cause == f"{CAUSE_SHRANK}{CAUSE_NET_AGREES}"
+
+
+class TestLikelyCause:
+    """PO ruling (Story 4.7): the refusal names the likely cause — our own
+    words, chosen from the broker's shape alone, never broker text."""
+
+    @pytest.mark.parametrize(
+        ("strategy", "broker", "cause"),
+        [
+            ("10", "5", CAUSE_SHRANK),
+            ("-10", "-5", CAUSE_SHRANK),
+            ("10", "0", CAUSE_FLAT),
+            ("-10", "0", CAUSE_FLAT),
+            ("10", "-5", CAUSE_OPPOSITE),
+            ("-10", "5", CAUSE_OPPOSITE),
+        ],
+    )
+    def test_each_refused_shape_names_its_cause(self, strategy, broker, cause):
+        assert _row(strategy, broker).likely_cause == cause
+
+    @pytest.mark.parametrize(("strategy", "broker"), [("10", "20"), ("0", "4"), ("10", "10")])
+    def test_a_row_that_is_not_refused_names_none(self, strategy, broker):
+        assert _row(strategy, broker, local="4").likely_cause is None
+
+    def test_the_causes_name_the_corporate_actions_the_ruling_lists(self):
+        assert "reverse split" in CAUSE_SHRANK and "partial sale" in CAUSE_SHRANK
+        assert "cash merger" in CAUSE_FLAT and "symbol change" in CAUSE_FLAT
+        assert "opposite side" in CAUSE_OPPOSITE
+
+    def test_when_the_net_already_agrees_the_sessions_own_orders_are_named_too(self):
+        """Code review (2026-09-28): after a split is absorbed, a strategy that
+        sells the reconciliation-owned shares (``sma_momentum`` reads the net)
+        ends S −10 beside a synthetic +10 on a flat broker. Net agrees; blaming a
+        cash merger alone would send the operator after an event that never
+        happened."""
+        row = _row("-10", "0", local="0")
+
+        assert row.likely_cause == f"{CAUSE_FLAT}{CAUSE_NET_AGREES}"
+        assert "reconciliation-owned" in CAUSE_NET_AGREES
+
+    def test_when_the_net_disagrees_the_cause_is_the_brokers_shape_alone(self):
+        assert _row("10", "0").likely_cause == CAUSE_FLAT
+
+
+def _usd(amount: str, currency: str = "USD") -> CashBalance:
+    return CashBalance(currency=currency, total_cash=Decimal(amount))
+
+
+class TestLocalSnapshot:
+    """Story 4.7, D-B: what the cache held before Nautilus's own pass — its
+    positions (Story 4.2 D-F) and the previous run's last-recorded cash."""
+
+    def test_it_holds_positions_cash_and_when_the_cash_was_recorded(self):
+        snapshot = LocalSnapshot(
+            positions=(_cached(NVDA, "10"),), cash=(_usd("100000"),), cash_recorded_at=AT
+        )
+
+        assert snapshot.positions[0].quantity == Decimal("10")
+        assert snapshot.cash == (_usd("100000"),) and snapshot.cash_recorded_at == AT
+
+    def test_cash_and_its_time_default_to_unknown(self):
+        snapshot = LocalSnapshot(positions=())
+
+        assert snapshot.cash == () and snapshot.cash_recorded_at is None
+
+    def test_a_naive_recorded_at_is_refused(self):
+        with pytest.raises(ValueError, match="timezone-aware"):
+            LocalSnapshot(positions=(), cash_recorded_at=datetime(2026, 9, 27))
+
+    def test_one_row_per_currency(self):
+        with pytest.raises(ValueError, match="currency"):
+            LocalSnapshot(positions=(), cash=(_usd("1"), _usd("2")))
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [("positions", [_cached(NVDA, "1")]), ("cash", [_usd("1")]), ("positions", ("x",))],
+    )
+    def test_members_are_typed_tuples(self, field, value):
+        values = {"positions": (), field: value}
+        with pytest.raises(TypeError):
+            LocalSnapshot(**values)
+
+
+class TestCashChanges:
+    """Story 4.7, D-B (PO ruling A): cash that moved while the session was not
+    running — informational, compared exactly, per currency."""
+
+    def test_a_dividend_is_one_change_with_before_after_and_difference(self):
+        before = LocalSnapshot(positions=(), cash=(_usd("100000.00"),), cash_recorded_at=AT)
+        broker = BrokerState(
+            account="***626", positions=(), cash=(_usd("100123.45"),), retrieved_at=AT
+        )
+
+        (change,) = cash_changes(before, broker)
+
+        assert change == CashChange(
+            currency="USD", before=Decimal("100000.00"), after=Decimal("100123.45")
+        )
+        assert change.difference == Decimal("123.45")
+
+    def test_unchanged_cash_is_no_change_and_the_comparison_is_exact(self):
+        before = LocalSnapshot(positions=(), cash=(_usd("100000.00"),))
+
+        assert cash_changes(before, _broker()) == (), "100000.00 == 100000 as a Decimal"
+        moved = LocalSnapshot(positions=(), cash=(_usd("100000.01"),))
+        assert [c.difference for c in cash_changes(moved, _broker())] == [Decimal("-0.01")]
+
+    def test_no_recorded_cash_is_nothing_to_compare(self):
+        """A fresh session, or a flushed cache: there is no before."""
+        assert cash_changes(LocalSnapshot(positions=()), _broker()) == ()
+
+    def test_a_currency_on_one_side_only_is_a_change_with_that_side_unknown(self):
+        before = LocalSnapshot(positions=(), cash=(_usd("5", "EUR"), _usd("100000")))
+
+        (change,) = cash_changes(before, _broker())
+
+        assert (change.currency, change.before, change.after) == ("EUR", Decimal("5"), None)
+        assert change.difference is None
+
+    def test_changes_are_sorted_by_currency(self):
+        before = LocalSnapshot(positions=(), cash=(_usd("5", "EUR"), _usd("1")))
+        broker = BrokerState(
+            account="***626", positions=(), cash=(_usd("2"), _usd("6", "EUR")), retrieved_at=AT
+        )
+
+        assert [c.currency for c in cash_changes(before, broker)] == ["EUR", "USD"]
+
+    def test_a_change_needs_at_least_one_side(self):
+        with pytest.raises(ValueError, match="side"):
+            CashChange(currency="USD", before=None, after=None)
 
 
 class TestCountSynthetic:

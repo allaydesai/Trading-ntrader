@@ -131,6 +131,19 @@ make web                                # Web UI (http://127.0.0.1:8000)
   same story). Neither name starts with a forbidden mutator prefix
   (`update/set_/save/patch/merge/upsert/replace`), and neither writes `spec` — AC #7 of Story 2.2
   is about there being no write path to `spec`, not about there being no write path at all.
+- **`EMITTED_RECONCILE_EVENTS`** (`src/core/live_startup_reconcile.py`) joined the discipline at
+  Story 4.7: `reconcile.ok`, `reconcile.discrepancy`, `reconcile.cash_changed` — the startup
+  phase's records, with `reconcile.local_snapshot_failed` deliberately outside it as a
+  diagnostic. There is no dispatch map to drive, so
+  `TestEveryEmittedReconcileRecordIsPinned` (`tests/unit/core/test_live_startup_reconcile.py`)
+  pins it **against the code both ways**:
+  - an AST scan of every `_emit` in the module, which catches a name never added;
+  - the phase driven through every path, which catches a name listed but never emitted.
+
+  The NFR26 scan is parametrized from the constant. **`LOAD_METHODS`**
+  (`src/core/live_session_view.py`) went from three reads to four at Story 4.7 (`load_account`,
+  PO ruling). It was widened in the constant and in its exact pin together. The Redis `MONITOR`
+  proof now asserts the account read is inside it.
 
 ## Editing with Auto-Linter
 

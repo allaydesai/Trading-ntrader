@@ -45,12 +45,16 @@ def _broker(*positions, cash=(("USD", "1000.00"),)) -> BrokerState:
     )
 
 
-def _local(*positions, cash=(("USD", "1000.00"),)) -> SessionView:
+def _local(*positions, cash=(("USD", "1000.00"),), recorded_at=None) -> SessionView:
     return SessionView(
         trader_id="PAPER-0e8f1c2a",
         positions=tuple(ViewPosition(i, Decimal(q)) for i, q in positions),
         cash=tuple(CashBalance(c, Decimal(v)) for c, v in cash),
+        cash_recorded_at=recorded_at,
     )
+
+
+RECORDED = datetime(2026, 9, 26, 20, 0, 1, 250000, tzinfo=UTC)
 
 
 def _compare(broker: BrokerState, local: SessionView):
@@ -253,6 +257,50 @@ class TestRender:
 
         assert any("account=***626" in line for line in lines)
         assert not any(RAW_ACCOUNT in line for line in lines)
+
+
+class TestSessionCashAsOf:
+    """Story 4.7, D-C (PO ruling A): a cash difference says since when — the
+    time the broker last reported the session's cash — so a dividend on a
+    stopped session reads as "moved since <time>" (Story 4.6's routed debt)."""
+
+    def test_the_report_carries_when_the_sessions_cash_was_recorded(self):
+        report = _compare(_broker(), _local(recorded_at=RECORDED))
+
+        assert report.local_cash_recorded_at == RECORDED
+
+    def test_a_cash_discrepancy_says_session_cash_as_of_when(self):
+        lines = render_report(
+            _compare(
+                _broker(cash=(("USD", "1123.45"),)),
+                _local(cash=(("USD", "1000.00"),), recorded_at=RECORDED),
+            )
+        )
+
+        [note] = [line for line in lines if line.startswith("note:")]
+        assert f"session cash as of {RECORDED.isoformat()}" in note
+
+    def test_an_unknown_time_is_said_so_never_invented(self):
+        lines = render_report(
+            _compare(_broker(cash=(("USD", "1123.45"),)), _local(cash=(("USD", "1000.00"),)))
+        )
+
+        [note] = [line for line in lines if line.startswith("note:")]
+        assert "session cash as of an unknown time" in note
+
+    def test_unknown_session_cash_is_not_described_as_something_received(self):
+        """Code review: with no recorded cash at all the engine received nothing,
+        so the note must not say it is "the last TotalCashValue ... received"."""
+        lines = render_report(_compare(_broker(), _local(cash=())))
+
+        [note] = [line for line in lines if line.startswith("note:")]
+        assert "never recorded" in note and "unknown" in note
+        assert "the last TotalCashValue" not in note
+
+    def test_a_clean_report_has_no_note(self):
+        lines = render_report(_compare(_broker(), _local(recorded_at=RECORDED)))
+
+        assert not [line for line in lines if line.startswith("note:")]
 
 
 #: Constructs a comparison could use to hide a difference. FR36: none of them.

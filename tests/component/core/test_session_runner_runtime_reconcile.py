@@ -18,6 +18,8 @@ import pytest
 import structlog
 from nautilus_trader.adapters.interactive_brokers.factories import IB_CLIENTS
 from nautilus_trader.common.component import is_logging_initialized
+from nautilus_trader.model.identifiers import InstrumentId
+from nautilus_trader.test_kit.providers import TestInstrumentProvider
 from structlog.testing import capture_logs
 
 from src.core import live_runtime_reconcile
@@ -57,6 +59,7 @@ pytestmark = pytest.mark.component
 UP = ConnectionStatus(connected=True, detail="ib socket connected, client ready")
 DOWN = ConnectionStatus(connected=False, detail="ib socket not connected")
 NVDA = "NVDA.NASDAQ"
+NVDA_EQUITY = TestInstrumentProvider.equity(symbol="NVDA", venue="NASDAQ")
 STRATEGY = "SMACrossover-000"
 
 
@@ -256,6 +259,81 @@ class TestARuntimeStrategyContradictionStopsTheSession:
         ]
         # The ordinary teardown ran: node stopped and disposed, row released.
         assert node.disposed is True
+        assert record.calls[-1] == "mark_stopped"
+
+
+class TestARuntimeForwardSplitDoesNotStopTheSession:
+    """Story 4.7, D-A (PO ruling A) — the sibling of the stop above, through
+    ``runner.run()``: a 2:1 split mid-session grows the broker's position in
+    the strategy's direction. It is corrected broker-ward, named, and the
+    session runs on to its ordinary end; the strategy's own position object is
+    never touched."""
+
+    def test_the_session_runs_on_and_the_split_is_named(self, registered_accounts, monkeypatch):
+        monkeypatch.setattr(live_runtime_reconcile, "DEBOUNCE_SECONDS", 0.0)
+        settings = _settings()
+        registered_accounts(settings)
+        node = TestLiveNode(run_seconds=0.5)
+        position = _open_position(NVDA, STRATEGY, "22")
+        node.cache.open_positions = [position]
+        node.cache.instruments_by_id = {InstrumentId.from_str(NVDA): NVDA_EQUITY}
+        engine = node.kernel.exec_engine
+        recorded = engine.reconcile_execution_report
+
+        def _apply(report):
+            # The real engine's netting correction (measured 1.2): the
+            # difference lands in an INTERNAL-DIFF position, never the strategy's.
+            recorded(report)
+            node.cache.open_positions.append(_open_position(NVDA, "INTERNAL-DIFF", "22"))
+            return True
+
+        engine.reconcile_execution_report = _apply
+        reads: list[BrokerState] = []
+
+        async def _broker(node_arg, *, log):
+            state = _state((NVDA, "22")) if not reads else _state((NVDA, "44"))
+            reads.append(state)
+            return state
+
+        async def _yield(seconds: float) -> None:
+            await asyncio.sleep(0)
+
+        record = SpyRecord()
+        runner = _runner(
+            node,
+            settings=settings,
+            record=record,
+            broker_state_reader=_broker,
+            connection_reader=lambda s: UP,
+            sleeper=_yield,
+        )
+
+        with capture_logs() as logs:
+            runner.run()
+
+        assert len(reads) > 2, "no runtime cycle ran"
+        # One correction, broker-ward, for the whole position (the strategy's
+        # lot is untouched by construction here — the real engine proves that in
+        # test_live_corporate_actions_engine.py).
+        (report,) = engine.reconcile_reports
+        assert report.signed_decimal_qty == Decimal("44")
+        records = [e for e in logs if e["event"] == DISCREPANCY_EVENT]
+        assert [(e["scope"], e["resolution"], e["kind"]) for e in records] == [
+            (SCOPE_RUNTIME, "broker", "position")
+        ]
+        assert (records[0]["local_quantity"], records[0]["broker_quantity"]) == ("22", "44")
+        # AC #1: the session kept running past the correction — a later runtime
+        # cycle came back clean — and nothing refused or failed on the way.
+        events = [e["event"] for e in logs]
+        after = events[events.index(DISCREPANCY_EVENT) + 1 :]
+        assert [
+            e
+            for e in logs[events.index(DISCREPANCY_EVENT) + 1 :]
+            if e["event"] == OK_EVENT and e["scope"] == SCOPE_RUNTIME
+        ], f"no clean runtime cycle after the correction: {after}"
+        assert not [e for e in records if e["resolution"] == "refused"]
+        assert not [pair for pair in _pairs(logs) if pair[1] == "failed"]
+        # The stop is the ordinary end of the run (`run_seconds`), not a refusal.
         assert record.calls[-1] == "mark_stopped"
 
 

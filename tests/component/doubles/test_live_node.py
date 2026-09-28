@@ -256,6 +256,17 @@ class _TestCache:
         self.inflight_orders: list[object] = []
         #: What ``instrument()`` resolves; empty, so nothing is correctable.
         self.instruments_by_id: dict[object, object] = {}
+        #: Story 4.7: the general cache and accounts Redis restored at init —
+        #: what the pre-run snapshot reads the previous run's cash from. Empty
+        #: by default: a fresh session, so no ``reconcile.cash_changed``.
+        self.general: dict[str, bytes] = {}
+        self.accounts: dict[object, object] = {}
+
+    def get(self, key: str) -> bytes | None:
+        return self.general.get(key)
+
+    def account(self, account_id: object) -> object | None:
+        return self.accounts.get(account_id)
 
     def instruments(self) -> list[TestInstrument]:
         return list(self._instruments)

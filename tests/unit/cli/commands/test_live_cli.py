@@ -1447,10 +1447,14 @@ class TestStartExitCodes:
             result = runner.invoke(live, ["start", "alpha-session"])
 
         assert result.exit_code == 1
-        assert "Runtime reconciliation stopped this session" in result.output
-        assert "NVDA.NASDAQ" in result.output and "+22" in result.output
-        assert "broker +0" in result.output
-        assert "positions at IBKR were not touched" in result.output
+        # The CLI wraps its message; read it as words, not as terminal lines
+        # (Story 4.7's longer wording moved a line break into this phrase).
+        output = " ".join(result.output.split())
+        assert "Runtime reconciliation stopped this session" in output
+        assert "NVDA.NASDAQ" in output and "+22" in output
+        assert "broker +0" in output
+        assert "positions at IBKR were not touched" in output
+        assert "a cash merger" in output, "the likely cause did not reach the operator"
 
     @pytest.mark.parametrize(
         "exception_factory",

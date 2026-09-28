@@ -117,6 +117,15 @@ class TestSessionView:
         with pytest.raises(dataclasses.FrozenInstanceError):
             _view().positions = ()  # type: ignore[misc]
 
+    def test_when_the_cash_was_recorded_defaults_to_unknown(self):
+        """Story 4.7, D-C: the account's last reported summary time, or ``None``."""
+        assert _view().cash_recorded_at is None
+        assert _view(cash_recorded_at=AT).cash_recorded_at == AT
+
+    def test_a_naive_recorded_time_is_refused(self):
+        with pytest.raises(ValueError, match="timezone"):
+            _view(cash_recorded_at=datetime(2026, 9, 27, 15, 0))
+
 
 class TestPositionLine:
     def test_difference_is_broker_minus_session(self):
@@ -197,6 +206,19 @@ class TestReconciliationReport:
     def test_timestamps_are_timezone_aware(self):
         with pytest.raises(ValueError, match="timezone"):
             _report(broker_retrieved_at=datetime(2026, 9, 27, 15, 0))
+        with pytest.raises(ValueError, match="timezone"):
+            _report(local_cash_recorded_at=datetime(2026, 9, 27, 15, 0))
+
+    def test_the_broker_read_time_stays_required(self):
+        """Code review: sharing the timezone loop with the optional field must not
+        make the required one optional."""
+        with pytest.raises(ValueError, match="broker_retrieved_at"):
+            _report(broker_retrieved_at=None)
+
+    def test_it_carries_when_the_sessions_cash_was_recorded(self):
+        """Story 4.7, D-C: "session cash as of <time>" — ``None`` when unknown."""
+        assert _report().local_cash_recorded_at is None
+        assert _report(local_cash_recorded_at=AT).local_cash_recorded_at == AT
 
     def test_it_is_immutable(self):
         with pytest.raises(dataclasses.FrozenInstanceError):

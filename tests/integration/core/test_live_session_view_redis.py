@@ -454,6 +454,11 @@ class TestTheReadIsLoadOnly:
         namespace_clients = {addr for addr, _, line in lines if session.trader_id in line}
 
         assert {"SCAN", "LRANGE", "MGET"} <= reader_verbs, f"MONITOR missed the reader: {lines}"
+        # Story 4.7, D-C: `load_account` joined the read — it must be inside
+        # this proof, not merely allowed by the pinned list.
+        assert any(
+            addr in relay.upstream_addrs and ":accounts:" in line for addr, _, line in lines
+        ), f"MONITOR did not see the reader's account read: {lines}"
         assert namespace_clients <= relay.upstream_addrs, "the namespace was touched off-relay"
         assert reader_verbs <= READ_VERBS | HOUSEKEEPING_VERBS, (
             f"the reader issued non-read verbs: {reader_verbs - READ_VERBS - HOUSEKEEPING_VERBS}"

@@ -18,11 +18,25 @@ resolves a disagreement by attributing a correcting fill to a synthetic owner
 synthetic owner's position, never the strategy's (measured against 1.220.0,
 Story 4.2 Task 1). So a matching net can hide a strategy that believes it
 holds shares the broker does not — and a started strategy acts on that belief.
-A row answers both: ``kind`` is :data:`STRATEGY_POSITION` when the strategy's
-own net is non-zero and differs from the broker's, else :data:`POSITION`.
+A row answers both: ``kind`` is :data:`STRATEGY_POSITION` when the broker does
+not **cover** the strategy's own net — it holds less in the strategy's
+direction, none, or the opposite side — else :data:`POSITION`.
+
+**Coverage, not equality** (Story 4.7, PO ruling A, 2026-09-28). A corporate
+action that grows a held position — a forward split, a stock dividend — leaves
+the broker holding *more* than the strategy believes, on the same side. That is
+absorbed, not refused: the net moves broker-ward into a synthetic owner and the
+strategy keeps its own lot, which the broker still covers, so the strategy
+closing it can never cross the account through zero (NFR14). A reverse split, a
+cash merger or a symbol change leaves the broker holding less, none or another
+instrument, and stays refused; :attr:`PositionDiscrepancy.likely_cause` names
+which, for the refusal's own message.
 
 Compared exactly, as ``Decimal``: no tolerance, no "close enough" (FR36).
-Average price and cash are not compared here (Story 4.1's routing).
+Average price is not compared here (Story 4.1's routing). Cash is never a
+discrepancy either: :func:`cash_changes` only *names* cash that differs from
+what the previous run last recorded, against the pre-run
+:class:`LocalSnapshot` (Story 4.7, D-B) — informational, never a refusal.
 
 Stdlib only (plus the equally stdlib-only ``broker_state``), pinned by
 ``tests/unit/models/test_position_reconciliation.py`` — Story 4.6's service
@@ -31,9 +45,10 @@ layer reuses :func:`compare_positions` and must never import Nautilus (AR38).
 
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
 
-from src.models.broker_state import BrokerState
+from src.models.broker_state import BrokerState, CashBalance, is_currency_code
 
 #: The two strategy ids Nautilus's reconciliation stamps on what it generates:
 #: ``EXTERNAL`` for an order the broker reports that the cache does not know,
@@ -44,10 +59,33 @@ from src.models.broker_state import BrokerState
 #: module's tests — a duplicated literal needs its own equality pin (CLAUDE.md).
 SYNTHETIC_STRATEGY_IDS = frozenset({"EXTERNAL", "INTERNAL-DIFF"})
 
-#: A strategy's own position contradicts the broker (decision D-D: refused).
+#: The broker does not cover a strategy's own position (D-D, narrowed by Story
+#: 4.7's coverage rule): refused.
 STRATEGY_POSITION = "strategy_position"
 #: Only the net disagrees; no strategy's own belief does (D-E: resolvable).
 POSITION = "position"
+
+#: The likely cause a refusal names (Story 4.7, PO ruling), by the broker's shape.
+CAUSE_SHRANK = (
+    "the broker holds fewer shares than the strategy believes — a reverse split, a partial sale "
+    "outside the session, or a lost fill"
+)
+CAUSE_FLAT = (
+    "the broker holds none — a cash merger, a symbol change, or a close outside the session"
+)
+CAUSE_OPPOSITE = "the broker holds the opposite side — a trade outside the session"
+CAUSE_MIXED = (
+    "this session's strategies hold both sides of the instrument, so only an exact match with "
+    "the broker is accepted — a trade outside the session, or a corporate action"
+)
+#: Appended when the cache's net already equals the broker's (code review,
+#: 2026-09-28): the disagreement is then between the strategy's own lot and the
+#: reconciliation-owned positions beside it — e.g. a strategy that sold shares
+#: a split had added — not necessarily an event at the broker.
+CAUSE_NET_AGREES = (
+    "; or, because the session's net already matches the broker, this session's own orders "
+    "against a reconciliation-owned position on this instrument (see Story 4.5)"
+)
 
 _ZERO = Decimal(0)
 
@@ -103,6 +141,9 @@ class PositionDiscrepancy:
         broker_resolved: ``False`` when the broker's row could not be resolved
             to a Nautilus instrument (Story 4.1's ``IB-CONID-*`` fallback), so
             nothing can be reconciled against it.
+        strategy_mixed_sides: ``True`` when the strategies' own lots on this
+            instrument are on both sides (one long, another short), so their
+            net says nothing about whether any one lot is covered.
     """
 
     instrument_id: str
@@ -110,11 +151,44 @@ class PositionDiscrepancy:
     strategy_quantity: Decimal
     broker_quantity: Decimal
     broker_resolved: bool = True
+    strategy_mixed_sides: bool = False
 
     @property
     def strategy_contradicted(self) -> bool:
-        """Whether a strategy holds a position the broker contradicts."""
-        return self.strategy_quantity != 0 and self.strategy_quantity != self.broker_quantity
+        """Whether a strategy holds a position the broker does not cover.
+
+        Story 4.7's coverage rule (PO ruling A, 2026-09-28): the broker holds
+        less in the strategy's direction, none, or the opposite side. Growth
+        in the strategy's direction — a forward split, a stock dividend — is
+        not a contradiction: the strategy closing its own lot leaves the broker
+        at ``broker − strategy``, on the broker's own side, so *that* close can
+        never carry the account through zero into a position nobody asked for.
+        Strategies on both sides of one instrument keep the pre-4.7 equality
+        rule: their net cannot tell whether each lot is covered (code review).
+        """
+        strategy, broker = self.strategy_quantity, self.broker_quantity
+        if self.strategy_mixed_sides:
+            return strategy != 0 and strategy != broker
+        return (strategy > 0 and broker < strategy) or (strategy < 0 and broker > strategy)
+
+    @property
+    def likely_cause(self) -> str | None:
+        """What a refused row most likely means, by the broker's shape — and, when
+        the net already agrees, the session's own orders too; ``None`` when the
+        row is not refused (Story 4.7, PO ruling)."""
+        if not self.strategy_contradicted:
+            return None
+        if self.strategy_mixed_sides:
+            cause = CAUSE_MIXED
+        elif self.broker_quantity == 0:
+            cause = CAUSE_FLAT
+        elif (self.broker_quantity > 0) != (self.strategy_quantity > 0):
+            cause = CAUSE_OPPOSITE
+        else:
+            cause = CAUSE_SHRANK
+        if self.local_quantity == self.broker_quantity:
+            return f"{cause}{CAUSE_NET_AGREES}"
+        return cause
 
     @property
     def kind(self) -> str:
@@ -145,12 +219,14 @@ def compare_positions(
     """
     net: dict[str, Decimal] = {}
     owned: dict[str, Decimal] = {}
+    sides: dict[str, set[bool]] = {}
     for position in cached:
         net[position.instrument_id] = net.get(position.instrument_id, _ZERO) + position.quantity
         if not position.is_synthetic:
             owned[position.instrument_id] = (
                 owned.get(position.instrument_id, _ZERO) + position.quantity
             )
+            sides.setdefault(position.instrument_id, set()).add(position.quantity > 0)
     held = {position.instrument_id: position for position in broker.positions}
     rows = []
     for instrument_id in sorted(net.keys() | held.keys()):
@@ -161,6 +237,7 @@ def compare_positions(
             strategy_quantity=owned.get(instrument_id, _ZERO),
             broker_quantity=_ZERO if broker_row is None else broker_row.quantity,
             broker_resolved=True if broker_row is None else broker_row.instrument_resolved,
+            strategy_mixed_sides=len(sides.get(instrument_id, ())) > 1,
         )
         if row.local_quantity != row.broker_quantity or row.strategy_contradicted:
             rows.append(row)
@@ -170,6 +247,94 @@ def compare_positions(
 def count_synthetic(cached: Iterable[CachedPosition]) -> int:
     """How many open positions reconciliation, not a strategy, owns."""
     return sum(1 for position in cached if position.is_synthetic)
+
+
+def _tuple_of(name: str, values: object, member_type: type) -> None:
+    if not isinstance(values, tuple) or not all(isinstance(v, member_type) for v in values):
+        raise TypeError(f"{name} must be a tuple of {member_type.__name__}")
+
+
+@dataclass(frozen=True, slots=True)
+class LocalSnapshot:
+    """What the session's cache held before Nautilus's own pass touched it.
+
+    Taken at one instant — immediately before ``node.run_async()``, while the
+    cache holds only what Redis restored (Story 4.2 D-F). Diagnostic only: it
+    lets the ``reconcile`` phase name what changed, never decide anything.
+
+    Attributes:
+        positions: The cache's open positions (Story 4.2).
+        cash: The previous run's last-recorded ``TotalCashValue`` per currency
+            (Story 4.7, D-B). ``()`` means none was recorded — unknown, never
+            zero — so nothing is compared.
+        cash_recorded_at: When the broker last reported that cash — the
+            restored account's last reported ``AccountState`` — or ``None``.
+    """
+
+    positions: tuple[CachedPosition, ...]
+    cash: tuple[CashBalance, ...] = ()
+    cash_recorded_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        _tuple_of("positions", self.positions, CachedPosition)
+        _tuple_of("cash", self.cash, CashBalance)
+        currencies = [balance.currency for balance in self.cash]
+        if len(set(currencies)) != len(currencies):
+            raise ValueError(f"one row per currency, got {sorted(currencies)}")
+        if self.cash_recorded_at is not None and self.cash_recorded_at.utcoffset() is None:
+            raise ValueError("cash_recorded_at must be timezone-aware")
+
+
+@dataclass(frozen=True, slots=True)
+class CashChange:
+    """One currency whose cash differs from what the previous run last recorded (D-B).
+
+    Not a discrepancy — the running session's cash *is* the broker's push, so
+    nothing is resolved — but a named observation: a dividend, interest, a fee,
+    or another client's trade (FR39). IBKR pushes the summary only every few
+    minutes, so the previous run's own last fills or commissions can appear
+    here too; ``recorded_at`` says since when (code review, 2026-09-28).
+
+    Attributes:
+        currency: A three-letter code.
+        before: The previous run's last-recorded cash, or ``None`` when that
+            run recorded none in this currency.
+        after: The broker's cash now, or ``None`` when it reports none.
+    """
+
+    currency: str
+    before: Decimal | None
+    after: Decimal | None
+
+    def __post_init__(self) -> None:
+        if not is_currency_code(self.currency):
+            raise ValueError(f"currency must be a three-letter code, got {self.currency!r}")
+        if self.before is None and self.after is None:
+            raise ValueError("a cash change needs at least one side")
+        for name, value in (("before", self.before), ("after", self.after)):
+            if value is not None:
+                _require_decimal(name, value)
+
+    @property
+    def difference(self) -> Decimal | None:
+        """``after − before``, or ``None`` when either side is unknown."""
+        if self.before is None or self.after is None:
+            return None
+        return self.after - self.before
+
+
+def cash_changes(before: LocalSnapshot, broker: BrokerState) -> tuple[CashChange, ...]:
+    """Every currency whose cash differs, exactly, from what the previous run
+    recorded; ``()`` when it recorded none (a fresh session — no before)."""
+    if not before.cash:
+        return ()
+    recorded = {balance.currency: balance.total_cash for balance in before.cash}
+    actual = {balance.currency: balance.total_cash for balance in broker.cash}
+    return tuple(
+        CashChange(currency=currency, before=recorded.get(currency), after=actual.get(currency))
+        for currency in sorted(recorded.keys() | actual.keys())
+        if recorded.get(currency) != actual.get(currency)
+    )
 
 
 @dataclass(frozen=True, slots=True)

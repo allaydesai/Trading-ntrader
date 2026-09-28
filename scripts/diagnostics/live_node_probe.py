@@ -91,7 +91,7 @@ from src.core.live_session_node import (  # noqa: E402
 )
 from src.core.live_startup_reconcile import (  # noqa: E402
     ReconciliationFailedError,
-    capture_local_positions,
+    capture_local_state,
     reconcile_at_startup,
 )
 
@@ -299,9 +299,7 @@ def _run(
 
     # Before the node runs: the framework reconciles inside `run_async`.
     local_before = (
-        capture_local_positions(node, structlog.get_logger("live_node_probe"))
-        if reconcile
-        else None
+        capture_local_state(node, structlog.get_logger("live_node_probe")) if reconcile else None
     )
     print("[probe] starting node...", flush=True)
     run_task = loop.create_task(node.run_async())

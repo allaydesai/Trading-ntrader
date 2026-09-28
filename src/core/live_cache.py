@@ -18,7 +18,7 @@ and the session's own identity lives in ``trading_sessions``. This module does
 ``reconcile`` phase does (``src/core/live_startup_reconcile.py``, FR35, AR25) — it
 compares the cache against IBKR's own view before any strategy starts, corrects
 broker-ward what no strategy believes, and refuses the start when a strategy's
-own cached position is contradicted.
+own cached position is not covered by the broker (Story 4.7's coverage rule).
 
 Two Nautilus facts this module is built around, both executed against the
 installed 1.220.0 rather than read from documentation:

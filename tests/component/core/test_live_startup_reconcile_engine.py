@@ -79,6 +79,7 @@ from src.core.live_startup_reconcile import (
     require_broker_ward_reconciliation,
 )
 from src.models.broker_state import BrokerPosition, BrokerState, CashBalance
+from src.models.position_reconciliation import LocalSnapshot
 from tests.component.core.test_live_node_builder import _settings as _ibkr_settings
 
 pytestmark = pytest.mark.component
@@ -342,7 +343,7 @@ class TestTheBrokersViewWins:
         ``EXTERNAL`` inside ``node:connect``; the snapshot taken before that
         makes it a ``resolution="framework"`` record instead of silence."""
         h = harness({NVDA.id: (10, 100.0)})
-        before = cached_positions(h.cache)
+        before = LocalSnapshot(positions=cached_positions(h.cache))
         assert h.native() is True
 
         with capture_logs() as logs:
