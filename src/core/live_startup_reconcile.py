@@ -45,21 +45,32 @@ strategy's (measured: a flat report against a strategy's ``+22`` leaves the
 ``+22`` and adds ``INTERNAL-DIFF −22``). A strategy started on that cache still
 believes its ``+22``, and the built-in ``sma_crossover`` would ``close_position``
 it on its next opposite signal — a real order against a flat account (NFR14).
-So a strategy whose own position contradicts the broker stops the session,
-before anything here writes to the cache. Everything else — a synthetic
-position the broker no longer holds, a broker position the cache lacks — is
-corrected through ``exec_engine.reconcile_execution_report``, the same netting
-path the framework's own pass runs, and then re-verified: the phase reports
-``ok`` only when the cache matches the broker exactly (NFR9).
+So a strategy whose own position the broker does not **cover** — it holds
+less in the strategy's direction, none, or the opposite side — stops the
+session, before anything here writes to the cache; the refusal names the
+likely cause (a reverse split, a cash merger or symbol change, a trade outside
+the session). Everything else — a synthetic position the broker no longer
+holds, a broker position the cache lacks, and a strategy's position the broker
+now holds *more* of (a forward split or stock dividend, Story 4.7's coverage
+rule) — is corrected through ``exec_engine.reconcile_execution_report``, the
+same netting path the framework's own pass runs, and then re-verified: the
+phase reports ``ok`` only when the cache matches the broker exactly (NFR9).
+Absorbing a split never adjusts, closes or flattens the strategy's own lot:
+the extra shares land in a synthetic owner's position, which the trade
+recorder never persists (Story 3.6 D-D).
 
 **A covering broker holding is not a contradiction here** (Story 4.5, PO ruling
 2026-09-28, startup only). When the broker holds everything the strategies own
-on the same side *and more* (+10 owned, IBKR +15 — a share bought by hand), the
-strategies' position is real and the excess belongs to no strategy: this phase
-lets the framework's ``INTERNAL-DIFF`` carry the excess and leaves it to the
-per-strategy resume check (``live_session_resume``), which refuses only that
-strategy. IBKR holding less, nothing or the opposite side still refuses the
-whole session, and the running session's cycle still stops on all of them.
+on the same side *and more* (+10 owned, IBKR +15 — a share bought by hand, or
+a forward split), the strategies' position is real and the excess belongs to
+no strategy: this phase lets the framework's ``INTERNAL-DIFF`` carry the excess
+(or corrects the net into it, as above) and leaves it to the per-strategy
+resume check (``live_session_resume``), which refuses only the strategies on
+that instrument. Since Story 4.7's coverage rule this exemption decides
+something only for strategies holding both sides of one instrument — any other
+covering row is not contradicted at all. IBKR holding less, nothing or the
+opposite side still refuses the whole session, and the running session's cycle
+still stops on all of them.
 
 What this module never does: purge or write the cache directly, call an order
 method, re-invoke ``reconcile_execution_state``, or read ``trading_permitted``.
@@ -70,8 +81,10 @@ which also shares :func:`position_report` and :func:`log_discrepancy` with the
 running session's cycle.
 """
 
+import json
 import time
-from collections.abc import Awaitable, Callable, Iterable, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from datetime import datetime
 from enum import StrEnum
 from typing import Any, ClassVar
 
@@ -81,12 +94,24 @@ from nautilus_trader.model.enums import PositionSide
 from nautilus_trader.model.identifiers import InstrumentId
 
 from src.core.exit_outcome import LiveCheckOutcome
-from src.core.live_broker_state import find_ib_exec_client, read_broker_state
-from src.models.broker_state import BrokerPosition, BrokerState
+
+# ``_cash_from`` is private by name, shared on purpose: the before and the
+# after of ``reconcile.cash_changed`` must be normalised by one function
+# (Story 4.6's ``live_session_view`` precedent).
+from src.core.live_broker_state import (
+    ACCOUNT_SUMMARY_KEY_PREFIX,
+    _cash_from,
+    cash_recorded_at,
+    find_ib_exec_client,
+    read_broker_state,
+)
+from src.models.broker_state import BrokerPosition, BrokerState, CashBalance
 from src.models.position_reconciliation import (
     CachedPosition,
+    LocalSnapshot,
     PositionDiscrepancy,
     StartupReconciliation,
+    cash_changes,
     compare_positions,
     count_synthetic,
 )
@@ -96,7 +121,24 @@ BrokerStateReader = Callable[..., Awaitable[BrokerState]]
 
 OK_EVENT = "reconcile.ok"
 DISCREPANCY_EVENT = "reconcile.discrepancy"
+#: Story 4.7, D-B (PO ruling A): cash that differs from the last value the
+#: previous run recorded (``recorded_at``) — a dividend, interest or a fee while
+#: the session was stopped, *or* the previous run's own last fills and
+#: commissions, since IBKR pushes the summary only every few minutes (code
+#: review). Informational only: never a refusal, never a phase failure, never a
+#: trading-permission input. A start that fails after connecting has already
+#: let the first push overwrite the stored value, so the next start names
+#: nothing — ``live reconcile`` before starting is the reliable view.
+CASH_CHANGED_EVENT = "reconcile.cash_changed"
+#: A **diagnostic** — the snapshot's own read broke — so it sits outside
+#: :data:`EMITTED_RECONCILE_EVENTS`, the ``order.observer_failed`` precedent.
 SNAPSHOT_FAILED_EVENT = "reconcile.local_snapshot_failed"
+#: Every record :func:`reconcile_at_startup` emits — membership-pinned against
+#: the code, both directions (``TestEveryEmittedReconcileRecordIsPinned``: an
+#: AST scan of every ``_emit`` in this module, and the phase driven through
+#: every path), so a new record name cannot join silently (CLAUDE.md,
+#: "Membership-pinned lists"; PO ruling, Story 4.7).
+EMITTED_RECONCILE_EVENTS: tuple[str, ...] = (OK_EVENT, DISCREPANCY_EVENT, CASH_CHANGED_EVENT)
 #: Story 4.3 (D-G): every ``reconcile.ok`` / ``reconcile.discrepancy`` says
 #: which reconciliation wrote it — this module's startup phase, or the running
 #: session's cycle (``live_runtime_reconcile``: ``runtime`` / ``reconnect``).
@@ -192,9 +234,11 @@ class ReconciliationFailedError(RuntimeError):
 
 
 def _describe(row: PositionDiscrepancy) -> str:
+    cause = row.likely_cause
     return (
         f"{row.instrument_id}: this session's record {row.local_quantity:+}, its strategies "
         f"{row.strategy_quantity:+}, broker {row.broker_quantity:+}"
+        + ("" if cause is None else f" — {cause}")
     )
 
 
@@ -214,7 +258,7 @@ def cached_positions(cache: Any) -> tuple[CachedPosition, ...]:
     return tuple(positions)
 
 
-def capture_local_positions(node: Any, log: Any) -> tuple[CachedPosition, ...] | None:
+def capture_local_state(node: Any, log: Any) -> LocalSnapshot | None:
     """What the cache held before Nautilus's own pass touched it (decision D-F).
 
     Called by the runner immediately before ``node.run_async()``: the cache was
@@ -222,12 +266,40 @@ def capture_local_positions(node: Any, log: Any) -> tuple[CachedPosition, ...] |
     and nothing has reconciled it yet. Diagnostic only — it lets the phase name
     what the framework corrected — so a failure is contained (AR42) and returns
     ``None``, which the phase treats as "not known", never as a failure.
+
+    Story 4.7 (D-B) adds the previous run's last-recorded cash — the restored
+    ``accountSummary`` key the exec client's first push is about to overwrite —
+    and when the broker reported it. Existing Redis state only, read only
+    (``positions_open``, ``get``, ``account``). A cash read that fails is
+    contained on its own: the positions are still captured, and cash is
+    unknown, so nothing is compared.
     """
     try:
-        return cached_positions(node.cache)
+        positions = cached_positions(node.cache)
     except Exception as exc:  # noqa: BLE001 - diagnostics must not change the outcome
-        _emit(log, "warning", SNAPSHOT_FAILED_EVENT, error_type=type(exc).__name__)
+        _emit(
+            log, "warning", SNAPSHOT_FAILED_EVENT, part="positions", error_type=type(exc).__name__
+        )
         return None
+    try:
+        cash, recorded_at = _recorded_cash(node)
+    except Exception as exc:  # noqa: BLE001 - diagnostics must not change the outcome
+        _emit(log, "warning", SNAPSHOT_FAILED_EVENT, part="cash", error_type=type(exc).__name__)
+        cash, recorded_at = (), None
+    return LocalSnapshot(positions=positions, cash=cash, cash_recorded_at=recorded_at)
+
+
+def _recorded_cash(node: Any) -> tuple[tuple[CashBalance, ...], datetime | None]:
+    """The restored summary's ``TotalCashValue`` per currency, normalised by the
+    broker reader's own function, and when the broker last reported it."""
+    account_id = find_ib_exec_client(node).account_id
+    raw = node.cache.get(f"{ACCOUNT_SUMMARY_KEY_PREFIX}{account_id.get_id()}")
+    if raw is None:
+        return (), None
+    summary = json.loads(raw)
+    if not isinstance(summary, Mapping):
+        raise TypeError("the restored account summary is not a mapping")
+    return _cash_from(summary), cash_recorded_at(node.cache.account(account_id))
 
 
 def require_broker_ward_reconciliation(exec_engine: Any) -> None:
@@ -257,7 +329,7 @@ async def reconcile_at_startup(
     node: Any,
     *,
     log: Any,
-    local_before: Sequence[CachedPosition] | None,
+    local_before: LocalSnapshot | None,
     read_state: BrokerStateReader = read_broker_state,
     clock: Callable[[], float] = time.monotonic,
 ) -> StartupReconciliation:
@@ -265,11 +337,14 @@ async def reconcile_at_startup(
 
     Must run on the node's own loop (``read_broker_state`` checks). Nothing is
     written to the cache until every disagreement is known to be correctable.
+    Cash that differs from what the previous run last recorded is named right
+    after the read (``reconcile.cash_changed``, Story 4.7 D-B) —
+    informational: it cannot refuse, fail or delay the phase.
 
     Args:
         node: The running, connected, account-verified ``TradingNode``.
         log: The session-bound logger.
-        local_before: :func:`capture_local_positions`'s snapshot, or ``None``.
+        local_before: :func:`capture_local_state`'s snapshot, or ``None``.
         read_state: The broker read — ``read_broker_state`` in production.
         clock: Monotonic seconds, for ``elapsed_ms``.
 
@@ -283,6 +358,8 @@ async def reconcile_at_startup(
     started = clock()
     require_broker_ward_reconciliation(node.kernel.exec_engine)
     broker = await read_state(node, log=log)
+    if local_before is not None:
+        _log_cash_changes(log, local_before, broker)
     rows = _to_act_on(compare_positions(cached_positions(node.cache), broker))
     framework = _framework_resolved(local_before, broker, rows)
     for row in framework:
@@ -352,7 +429,7 @@ def require_reconciled(result: StartupReconciliation | None) -> StartupReconcili
 
 
 def _framework_resolved(
-    local_before: Sequence[CachedPosition] | None,
+    local_before: LocalSnapshot | None,
     broker: BrokerState,
     remaining: Sequence[PositionDiscrepancy],
 ) -> tuple[PositionDiscrepancy, ...]:
@@ -361,8 +438,34 @@ def _framework_resolved(
         return ()
     still = {row.instrument_id for row in remaining}
     return tuple(
-        row for row in compare_positions(local_before, broker) if row.instrument_id not in still
+        row
+        for row in compare_positions(local_before.positions, broker)
+        if row.instrument_id not in still
     )
+
+
+def _log_cash_changes(log: Any, before: LocalSnapshot, broker: BrokerState) -> None:
+    """One ``reconcile.cash_changed`` per currency that moved since the previous
+    run recorded it (D-B). Contained end to end: a failure here names nothing,
+    and never reaches the phase (PO ruling — never blocks a phase)."""
+    try:
+        changes = cash_changes(before, broker)
+    except Exception:  # noqa: BLE001 - an observation must not change the outcome
+        return
+    recorded_at = before.cash_recorded_at
+    for change in changes:
+        difference = change.difference
+        _emit(
+            log,
+            "info",
+            CASH_CHANGED_EVENT,
+            scope=SCOPE_STARTUP,
+            currency=change.currency,
+            before=None if change.before is None else str(change.before),
+            after=None if change.after is None else str(change.after),
+            difference=None if difference is None else str(difference),
+            recorded_at=None if recorded_at is None else recorded_at.isoformat(),
+        )
 
 
 def _correct(
@@ -479,7 +582,8 @@ def log_discrepancy(
 ) -> None:
     """One ``reconcile.discrepancy`` naming the instrument and every quantity
     (AR41); ERROR when refused or unresolved, WARNING otherwise. Shared with
-    Story 4.3's runtime cycle, which passes its own ``scope``."""
+    Story 4.3's runtime cycle, which passes its own ``scope``. A refused
+    strategy row also carries its ``likely_cause`` (Story 4.7, PO ruling)."""
     fields: dict[str, Any] = {
         "scope": scope,
         "instrument_id": row.instrument_id,
@@ -491,6 +595,8 @@ def log_discrepancy(
     }
     if reason is not None:
         fields["reason"] = reason.value
+    if resolution == "refused" and row.likely_cause is not None:
+        fields["likely_cause"] = row.likely_cause
     level = "error" if resolution in ("refused", "unresolved") else "warning"
     _emit(log, level, DISCREPANCY_EVENT, **fields)
 

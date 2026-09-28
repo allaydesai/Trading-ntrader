@@ -357,10 +357,12 @@ def _record_verdict(log: Any, report: ReconciliationReport, target: ReconcileTar
         )
         return
     for line in report.discrepancies:
-        _emit(log, "warning", DISCREPANCY_EVENT, **_discrepancy_fields(line), **common)
+        _emit(log, "warning", DISCREPANCY_EVENT, **_discrepancy_fields(line, report), **common)
 
 
-def _discrepancy_fields(line: PositionLine | CashLine) -> dict[str, Any]:
+def _discrepancy_fields(
+    line: PositionLine | CashLine, report: ReconciliationReport
+) -> dict[str, Any]:
     if isinstance(line, PositionLine):
         return {
             "kind": "position",
@@ -369,10 +371,13 @@ def _discrepancy_fields(line: PositionLine | CashLine) -> dict[str, Any]:
             "broker_quantity": str(line.broker_quantity),
             "difference": str(line.difference),
         }
+    recorded = report.local_cash_recorded_at
     return {
         "kind": "cash",
         "currency": line.currency,
         "local_cash": "unknown" if line.local_cash is None else str(line.local_cash),
         "broker_cash": "none" if line.broker_cash is None else str(line.broker_cash),
         "difference": None if line.difference is None else str(line.difference),
+        # Story 4.7, D-C: "session cash as of" — since when the difference can be.
+        "local_cash_recorded_at": None if recorded is None else recorded.isoformat(),
     }

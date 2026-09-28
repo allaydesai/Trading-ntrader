@@ -3262,7 +3262,10 @@ measured against the installed `nautilus-trader 1.220.0` while building
   `$LEDGER`). `_read_cash` returns as soon as any one currency has `TotalCashValue`. Only the
   account's base currency arrives, because the adapter's `AllTags` subscription omits `$LEDGER`
   (F7), so no second currency can be in flight today. There is no `accountSummaryEnd` signal to
-  wait on. **Owner:** the first change that widens the account-summary tags.
+  wait on. **Owner:** the first change that widens the account-summary tags. **Story 4.7
+  (2026-09-28): unchanged, re-affirmed.** Nothing in 4.7 widens the tags. Its startup
+  `reconcile.cash_changed` compares per currency against the same single-currency read, so it
+  inherits the limit and adds no new partial-read path. The owner rule stands.
 
 ## Deferred from: story-4.6 (2026-09-27)
 
@@ -3292,7 +3295,12 @@ story.
 - **A session's local cash carries no timestamp.** → **Story 4.7.** The
   `general:accountSummary:<acct>` key holds the values without a time, so a cash discrepancy
   cannot say *since when*. The last `AccountState` event's `ts_event` in `accounts:<id>` would
-  give it.
+  give it. **✅ Closed by Story 4.7 (2026-09-28, D-C, PO ruling A):** `live reconcile` now
+  reports "session cash as of <time>". The time is the account's last *reported* `AccountState`,
+  read load-only through `CacheDatabaseAdapter.load_account`.
+  - `LOAD_METHODS` widened to four, in the constant and its pin.
+  - The `MONITOR` proof now asserts the account read and still sees only read verbs.
+  - The startup phase's `reconcile.cash_changed` carries the same time (`recorded_at`).
 - **`msgspec` is now a declared dependency.** → **Recorded, closed.** The PO approved it on
   2026-09-27 (Story 4.6, option 1). `CacheDatabaseAdapter` needs a `MsgSpecSerializer` to decode a
   session's positions. The msgspec-free alternative, the Rust-side `load_all()`, was measured to
@@ -3363,8 +3371,20 @@ against the installed `nautilus-trader 1.220.0` with a real `LiveExecutionEngine
   a broker at 10); a BUY closes `INTERNAL-DIFF −10` (buys 10 more). Story 4.2 refuses only a
   *contradicted* strategy position (D-D); a consistent strategy beside synthetics passes, and the
   hazard is the resume path's to close (e.g. a strategy-filtered read, or adopting the broker's
-  position via `external_order_claims`). **✅ FIXED — Story 4.5 (D-B):** both built-ins read their
-  own book only (`strategy_id=self.id`); backtest fills unchanged (Story 4.4's fingerprint).
+  position via `external_order_claims`). **Story 4.7 (2026-09-28) adds a path into this
+  state.** Under the coverage rule, a forward split absorbed at startup is no longer refused, so it
+  reaches the triple too: S +10, `EXTERNAL` +20, `INTERNAL-DIFF` −10 (measured 1.1a). A SELL
+  crossover then closes 30 against a broker at 20, leaving the account short 10. The mid-session
+  shape (S +10, `INTERNAL-DIFF` +10) sells 20 against 20 and ends flat. `sma_momentum`, which
+  reads the net, sells the split's extra shares and ends S −10 beside a synthetic +10, and the
+  next cycle stops the session. 4.7's `likely_cause` now names that self-inflicted shape. The fix
+  here closes all of them. Until then, `docs/agent/nautilus.md` ("Corporate actions") and P20
+  tell the operator not to let `sma_crossover` trade after an absorbed start.
+  **✅ FIXED — Story 4.5 (D-B):** both built-ins read their own book only (`strategy_id=self.id`);
+  backtest fills unchanged (Story 4.4's fingerprint). *(Integration merge of 4.5 and 4.7,
+  2026-09-28: with D-A the startup split leaves S +10 beside `INTERNAL-DIFF` +10, and D-C then
+  refuses the strategy on that instrument; the `nautilus.md` caveat and 4.7's procedure — now
+  **P20**, renumbered — were updated to say so.)*
 - **A restart after the broker position *shrank* aborts the process inside Nautilus's own pass.** →
   **Story 4.5 (HIGH).** After a first restart imported `EXTERNAL "NVDA.NASDAQ"` filled 10, a later
   restart with the broker at 4 makes `_reconcile_order_report` see `_should_update` → `True` and
@@ -3538,6 +3558,9 @@ Story 4.5 (resume a strategy mid-position). Every item routed to 4.5 by Stories 
   unchanged: it still stops the session on all of them, pinned by
   `test_a_covering_broker_holding_still_stops_the_running_session`. A real contradiction still
   cannot be rewritten (the framework's corrections never land in a strategy's position).
+  *(Superseded in part at the integration merge with Story 4.7, 2026-09-28 — see that section
+  below: 4.7's coverage rule made single-side covered growth an ordinary row at runtime too, so the
+  pin now covers only the mixed-sides shape.)*
 - **Any unresolvable (`IB-CONID-*`) broker position refuses every start (4.2 review, :3399).** →
   **Kept (D-G).** An unresolved row cannot be tied to, or excluded from, any strategy's instrument;
   refusing is the only reading that cannot trade blind. Owner for a narrower rule: unowned, named
@@ -3590,3 +3613,109 @@ story's Review Findings.
   trade or a late fill arrives through Story 4.3's runtime cycle as `INTERNAL-DIFF`, and the
   strategy keeps trading its own book beside it with no refusal record. **Owner:** Epic 4
   retrospective (runtime alignment; pairs with the mid-run re-attribution item above).
+
+## Deferred from: story-4.7 (2026-09-28)
+
+Story 4.7 (corporate actions). Every item below is a disclosed cost of the PO's coverage rule
+(D-A (A), 2026-09-28) or a neighbouring hazard it reaches. Each names an owner, and none blocks
+the story.
+
+- **A lot held across a split records its round trip at unadjusted prices.** → **Epic 5 (Story
+  5.4, `session_conditions`).** A strategy that bought 10 @ 200 before a 2:1 split and sells its
+  10 @ 100 after it records a ~50 % loss on that trade. The split's other 10 shares sit in a
+  reconciliation-owned (`INTERNAL-DIFF` / `EXTERNAL`) position, which `TradeRecorder` never
+  persists (Story 3.6 D-D), so their gain is never recorded as a trade. This is the
+  adjusted-vs-unadjusted price-basis divergence AC #3 records as **an expected structural
+  property, not a defect to chase** (`docs/agent/nautilus.md`, "Corporate actions"). Epic 5 should
+  carry it in `session_conditions`: `price_basis = "ibkr_unadjusted_smart"`, and ideally a named
+  note, or the corporate actions a session held through, so a seal-time comparison can attribute
+  the difference rather than read it as strategy decay.
+- **The split's extra shares are unmanaged once the strategy exits.** → **Epic 5 (Story 5.4's
+  `open_positions_at_seal`), and Story 4.5.** After absorption they belong to a synthetic owner.
+  - A strategy-filtered exit leaves them held at IBKR. They are visible in `reconcile.ok`
+    (`instruments`, `synthetic_positions`) and in `live reconcile`, but no strategy closes them.
+  - `sma_crossover`'s *unfiltered* read (below) closes them too.
+  - Which is right is 4.5's ownership question.
+- **Covered-growth absorption reaches the 1.4A synthetic triple and `sma_crossover`'s
+  close-everything hazard.** → **Story 4.5 (the existing HIGH entries above, "A normal
+  mid-position restart leaves three open positions" and "`sma_crossover` reads every strategy's
+  positions").** This adds a new *path* into the same state, not a new hazard class:
+  - measured 1.1a: a split at startup leaves S +10, `EXTERNAL` +20, `INTERNAL-DIFF` −10;
+  - a SELL crossover then closes S +10 **and** `EXTERNAL` +20, 30 shares against a broker at 20.
+  Before 4.7 the session refused to start there. Now it reaches the same state every
+  mid-position restart already reaches, so 4.5's fix covers both.
+- **A reverse split after a prior mid-position restart can abort the next start inside
+  Nautilus.** → **Story 4.5 (1.4S, HIGH; `TestTheShrunkReEntryAbortCanary`).** The coverage rule
+  refuses a reverse split cleanly when the phase gets to run. But once an earlier restart has
+  imported the `EXTERNAL` order, a shrink trips `_generate_order_updated`'s underflow first, and
+  the process aborts in `node:connect` before our phase exists. P20c's pass criterion 4 tells the
+  operator how to record it.
+- **The runtime cash is never compared.** → **Recorded, accepted.** `reconcile.cash_changed` is
+  startup-only by design: a running session's cash *is* IBKR's push, so no local copy can drift
+  while the process runs. A dividend credited during an always-on session (never stopped
+  overnight) is absorbed natively but not named. Nothing owns it unless an always-on session
+  becomes the operating model.
+
+## Deferred from: code review of 4-7-absorb-corporate-actions-through-broker-authoritative-state (2026-09-28)
+
+- **`load_account` replays every `AccountState` in `accounts:<id>`.** Every reported summary push
+  and every portfolio recalculation over a multi-week session is replayed, and nobody has measured
+  that cost on `live reconcile`'s 30 s (NFR5) path. It is the same list Nautilus itself loads at
+  every kernel init (`cache_accounts`). **Owner:** P16's operator, who records `elapsed_ms`
+  against a long-lived session's account.
+- **The coverage rule also absorbs a broker position that leads or lags the session's own fill by
+  more than the debounce.** The shapes: a fill whose `execDetails` arrives after a reconnect, or an
+  IB position read lagging a partial reduce across two cycles ≥ 60 s apart. These used to stop the
+  session. Now they are corrected into a synthetic owner and re-corrected when the fill lands, with
+  no order in between. **Owner:** Story 4.3's debounce design, and Story 4.5's strategy/broker
+  ownership. The earlier "ACCEPTED order filled while disconnected" entry above is the same family.
+- **The real-engine test harnesses end with `asyncio.set_event_loop(None)`.** Any later test file
+  on the same xdist worker that reads the implicit current loop fails with "There is no current
+  event loop". Story 4.7 fixed `test_live_order_recovery.py` locally with an autouse loop fixture.
+  **Owner:** whoever next touches the shared harnesses. The fix is a conftest-level loop fixture.
+- **A currency missing from a partial broker cash read would be named `after=None` by
+  `reconcile.cash_changed`.** Latent: only the base currency arrives today (Story 4.1 F7).
+  **Owner:** the existing "multi-currency cash would be returned partially" entry, meaning the
+  first change that widens the account-summary tags.
+
+## Deferred from: integration merge of story-4.5 and story-4.7 (2026-09-28)
+
+Stories 4.5 and 4.7 ran in parallel and each relaxed Story 4.2's `S != B` refusal for a broker
+holding *more* than the strategy on the same side: 4.5 with a startup-only exemption
+(`broker_covers_strategy`, PO ruling 2026-09-28), 4.7 by redefining `strategy_contradicted` as the
+coverage rule at startup **and** runtime (PO ruling A, 2026-09-28). Both rulings are kept as ruled.
+How they compose, and the one pin that could not survive:
+
+- **4.5's runtime pin contradicted 4.7's ruling A, and was rewritten.**
+  `test_a_covering_broker_holding_still_stops_the_running_session` asserted that strategy +10 /
+  `INTERNAL-DIFF` +5 against a broker at +15 stops a running session "exactly as before". That is
+  the very state 4.7's runtime correction leaves, and 4.7's
+  `test_a_forward_split_is_corrected_named_and_the_session_continues` asserts it is clean — both
+  cannot hold. 4.7's ruling explicitly governs runtime; 4.5's pin said 4.5 had not changed runtime.
+  The pin now asserts what stays true of 4.5's intent — its exemption is never read at runtime —
+  on the mixed-sides shape (A +20, B −10, broker +15), which still stops the session; the
+  single-side shape is pinned clean at runtime
+  (`test_a_covering_holding_the_net_already_absorbed_is_clean_while_running`).
+- **⚠️ For the PO — a forward split while stopped absorbs the split, then refuses the
+  strategy.** At startup, 4.7 absorbs the split (`reconcile.ok`, the start is not refused), and
+  4.5's D-C then refuses the strategy on that instrument, because the split's extra shares
+  (`INTERNAL-DIFF` +N) belong to no strategy (`strategy.resume_refused reason=unowned_position`;
+  its siblings start, a single-strategy session exits 1). The remedy is manual (remove the shares
+  in TWS). This meets 4.7 AC #1's "absorbed without manual intervention" for the **reconcile**
+  phase but not for the strategy's resumption. Mid-session, the split is absorbed and the strategy
+  keeps running (4.7), and the next start refuses it the same way. Neither ruling anticipated the
+  other; the merge changes neither. Docs now say so (`nautilus.md` both sections, README, P20).
+  **Owner: the PO** — e.g. whether D-C should exempt an excess the pre-run snapshot shows arrived
+  as covered growth on a strategy-held instrument.
+- **4.5's startup exemption now decides only mixed-sides rows.** Under 4.7's rule every single-side
+  covered row is not contradicted at all, so `broker_covers_strategy` changes the outcome only when
+  strategies hold both sides of one instrument — where 4.7's code review kept the equality rule
+  ("their net cannot tell whether each lot is covered"). At startup such a row passes the phase
+  and D-C refuses every strategy on the instrument, so nothing trades on it; at runtime it still
+  stops the session. Pinned at startup by
+  `test_a_covered_excess_over_mixed_sides_passes_only_by_this_exemption`, so the exemption stays
+  load-bearing. **Owner: the PO**, to confirm (refusing the whole session there instead would be
+  4.7's reading).
+- **Procedure numbering.** Both stories appended "Procedure P19"; 4.5's stays P19, 4.7's is now
+  **P20** (evidence index, cross-references — including the two in 4.7's entries above — and log
+  names updated; the 4.7 story file keeps its original "P19" as history).

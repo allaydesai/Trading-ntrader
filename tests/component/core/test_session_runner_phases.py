@@ -22,6 +22,7 @@ tests use stub verifiers, where the phase's own records are not the subject.
 """
 
 import asyncio
+import json
 import signal
 import time
 from datetime import datetime, timedelta, timezone
@@ -62,7 +63,7 @@ from src.core.live_startup_reconcile import DISCREPANCY_EVENT as RECONCILE_DISCR
 from src.core.live_startup_reconcile import OK_EVENT as RECONCILE_OK_EVENT
 from src.core.live_startup_reconcile import ReconciliationFailedError, ReconciliationFailure
 from src.core.live_strategy_guard import NoStrategyStartedError
-from src.models.position_reconciliation import CachedPosition
+from src.models.position_reconciliation import CachedPosition, LocalSnapshot
 from src.models.session import SessionSpec, StrategySpec
 from tests.component.doubles import TestIBAccountsClient, TestLiveNode, flat_broker_state_reader
 
@@ -754,17 +755,57 @@ class TestReconcileBeforeAnyStrategyTrades:
         with capture_logs() as logs:
             runner.run()
 
-        assert runner._local_positions == (
-            CachedPosition(
-                instrument_id=AAPL_INSTRUMENT, strategy_id="EXTERNAL", quantity=Decimal(4)
-            ),
+        assert runner._local_state == LocalSnapshot(
+            positions=(
+                CachedPosition(
+                    instrument_id=AAPL_INSTRUMENT, strategy_id="EXTERNAL", quantity=Decimal(4)
+                ),
+            )
         )
+        # Code review: an empty cash snapshot must be "none recorded", not a
+        # contained failure of the cash read.
+        assert not [e for e in logs if e["event"] == "reconcile.local_snapshot_failed"]
         framework = [
             e
             for e in logs
             if e["event"] == RECONCILE_DISCREPANCY_EVENT and e["resolution"] == "framework"
         ]
         assert [e["instrument_id"] for e in framework] == [AAPL_INSTRUMENT]
+
+    def test_cash_that_moved_while_stopped_is_named_before_the_phase_reports(
+        self, registered_accounts
+    ):
+        """Story 4.7, D-B: the previous run's cash is captured with the
+        positions, before the exec client's first push overwrites the key inside
+        ``node:connect`` (measured 1.3); the phase names the dividend and still
+        reports ``ok`` — the record never blocks it."""
+        settings = _settings()
+        registered_accounts(settings)
+        node = TestLiveNode(run_seconds=0.01)
+        key = f"accountSummary:{PAPER_ACCOUNT}"
+        node.cache.general = {key: json.dumps({"USD": {"TotalCashValue": 99876.55}}).encode()}
+        original_run = node.run_async
+
+        async def _run_async():
+            # The exec client's first push, overwriting the restored summary.
+            node.cache.general[key] = json.dumps({"USD": {"TotalCashValue": 100000}}).encode()
+            await original_run()
+
+        node.run_async = _run_async  # type: ignore[method-assign]
+        runner = _runner(node, settings=settings)
+
+        with capture_logs() as logs:
+            runner.run()
+
+        (record,) = [e for e in logs if e["event"] == "reconcile.cash_changed"]
+        assert (record["before"], record["after"], record["difference"]) == (
+            "99876.55",
+            "100000",
+            "123.45",
+        )
+        names = [e["event"] for e in logs]
+        assert names.index("reconcile.cash_changed") < names.index("reconcile.ok")
+        assert ("reconcile", "ok") in _pairs(logs)
 
 
 class TestNothingIsRegisteredWhenTheAccountGateDecides:

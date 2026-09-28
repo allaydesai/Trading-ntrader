@@ -261,6 +261,17 @@ class _TestCache:
         #: Story 4.5: every cached order, open or not — what the pre-`run_async`
         #: scan for a pre-4.5 fabricated order reads. Empty by default.
         self.all_orders: list[object] = []
+        #: Story 4.7: the general cache and accounts Redis restored at init —
+        #: what the pre-run snapshot reads the previous run's cash from. Empty
+        #: by default: a fresh session, so no ``reconcile.cash_changed``.
+        self.general: dict[str, bytes] = {}
+        self.accounts: dict[object, object] = {}
+
+    def get(self, key: str) -> bytes | None:
+        return self.general.get(key)
+
+    def account(self, account_id: object) -> object | None:
+        return self.accounts.get(account_id)
 
     def instruments(self) -> list[TestInstrument]:
         return list(self._instruments)

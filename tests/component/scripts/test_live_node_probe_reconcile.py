@@ -17,6 +17,7 @@ import pytest
 from nautilus_trader.common.component import is_logging_initialized
 
 from src.core.live_startup_reconcile import ReconciliationFailedError, ReconciliationFailure
+from src.models.position_reconciliation import LocalSnapshot
 from tests.component.core.test_live_startup_reconcile_engine import NVDA, _Harness
 
 pytestmark = pytest.mark.component
@@ -133,7 +134,9 @@ class TestTheResultLine:
         detail, calls = _real_run(monkeypatch, reconcile=True)
 
         assert detail == "loop_closed=True reconcile=ok positions=1 discrepancies=1"
-        assert calls == [()], "the snapshot was not taken, or not handed to the phase"
+        assert calls == [LocalSnapshot(positions=())], (
+            "the snapshot was not taken, or not handed to the phase"
+        )
 
     def test_without_the_flag_nothing_runs_and_the_suffix_is_unchanged(self, monkeypatch):
         detail, calls = _real_run(monkeypatch, reconcile=False)
@@ -150,7 +153,7 @@ class TestThePhaseBody:
         framework's resolution — exactly what P17a expects to see live."""
         h = _Harness({NVDA.id: (10, 100.0)})
         order: list[str] = []
-        before = ()
+        before = LocalSnapshot(positions=())
         try:
             assert h.native() is True
 

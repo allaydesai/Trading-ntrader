@@ -42,12 +42,17 @@ the reconnect grant. An unresolved broker row does withhold it (fail closed), an
 while one stands only the rows it could be masking — the cache's rows reading
 "broker 0" — are held back; every other instrument is still checked and
 corrected (PO ruling, code review 2026-09-28). A strategy's own position
-the broker contradicts is **refused and the session stopped**, before anything
-is written (D-D, PO ruling 2A): the framework cannot rewrite a strategy's
-position, and a strategy believing it holds shares the broker does not will
-close them on its next opposite signal (NFR14). A framework refusal, or a row
-that survives its correction, stops the session the same way. The stop is the
-runner's ordinary teardown — positions at IBKR are untouched.
+the broker does not cover — less in its direction, none, or the opposite side
+(Story 4.7's coverage rule) — is **refused and the session stopped**, before
+anything is written (D-D, PO ruling 2A), naming the likely cause: the
+framework cannot rewrite a strategy's position, and a strategy believing it
+holds shares the broker does not will close them on its next opposite signal
+(NFR14). A strategy position the broker holds *more* of — a forward split, a
+stock dividend — is an ordinary row: corrected broker-ward into a synthetic
+owner, the strategy's own lot left exactly as it was (Story 4.7, PO ruling A).
+A framework refusal, or a row that survives its correction, stops the session
+the same way. The stop is the runner's ordinary teardown — positions at IBKR
+are untouched.
 
 **Latency, stated.** A change the execution stream did not explain is corrected
 one to two cycles after it happens (~60–120 s at AR32's 30 s tick), not on
@@ -107,10 +112,11 @@ CONNECTION_READ_FAILED_EVENT = "session.connection_read_failed"
 ConnectionReader = Callable[[Any], ConnectionStatus]
 
 _CONTRADICTED = (
-    "a strategy's own position disagrees with the broker while the session was running. IBKR is "
+    "the broker no longer covers a strategy's own position (it holds fewer shares, none, or the "
+    "opposite side) while the session was running. IBKR is "
     "authoritative and reconciliation cannot rewrite a strategy's own position, so nothing was "
     "written to the cache and the session was stopped rather than let a strategy trade on a "
-    "position the broker does not hold; positions at IBKR were not touched. Restarting this "
+    "position the broker does not cover; positions at IBKR were not touched. Restarting this "
     "session meets the same check at startup: create a new session for the strategy, or see "
     "docs/agent/nautilus.md, 'Startup reconciliation', for clearing its disposable engine cache"
 )

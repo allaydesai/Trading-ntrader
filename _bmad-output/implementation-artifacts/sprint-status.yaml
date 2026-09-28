@@ -2622,7 +2622,7 @@ development_status:
   4-4-warm-indicators-from-history-before-the-live-stream-starts: done
   4-5-resume-a-strategy-mid-position: done
   4-6-check-positions-and-cash-against-ibkr-on-demand: done
-  4-7-absorb-corporate-actions-through-broker-authoritative-state: backlog
+  4-7-absorb-corporate-actions-through-broker-authoritative-state: done
   epic-4-retrospective: optional
 
   # Epic 5: Seal a Session & Compare It Against Its Backtest

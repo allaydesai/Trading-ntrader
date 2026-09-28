@@ -15,8 +15,10 @@ autouse fixture holds the component tier to that.
 import ast
 import fnmatch
 import json
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
@@ -119,6 +121,7 @@ class FakeAdapter:
         general=None,
         other_keys=("instruments:AAPL.NASDAQ",),
         repeat_keys: bool = False,
+        accounts=None,
     ):
         self.positions: dict[str, object] = dict(positions or {})
         #: A dict normally; anything else stands in for a drifted `load()` answer.
@@ -126,6 +129,8 @@ class FakeAdapter:
         self.other_keys = tuple(other_keys)
         #: Redis SCAN may return a key more than once (rehashing): model it.
         self.repeat_keys = repeat_keys
+        #: Story 4.7, D-C: ``accounts:<id>`` — ``{str(AccountId): account or exception}``.
+        self.accounts: dict[str, object] = dict(accounts or {})
         self.calls: list[tuple] = []
         self.closed = False
 
@@ -153,6 +158,13 @@ class FakeAdapter:
     def load(self):
         self.calls.append(("load",))
         return dict(self.general) if isinstance(self.general, dict) else self.general
+
+    def load_account(self, account_id):
+        self.calls.append(("load_account", str(account_id)))
+        value = self.accounts.get(str(account_id))
+        if isinstance(value, BaseException):
+            raise value
+        return value
 
     def close(self) -> None:
         self.calls.append(("close",))
@@ -336,6 +348,104 @@ class TestTheSessionsCashIsRead:
         assert raised.value.reason is SessionViewFailure.UNREADABLE
 
 
+RECORDED = datetime(2026, 9, 26, 20, 0, 1, 250000, tzinfo=UTC)
+RECORDED_NANOS = 1_790_452_801_250_000_000
+IB_ACCOUNT_KEY = f"INTERACTIVE_BROKERS-{ACCOUNT}"
+
+
+def _account(*events) -> SimpleNamespace:
+    return SimpleNamespace(events=list(events))
+
+
+def _state(nanos: int, *, reported: bool = True) -> SimpleNamespace:
+    return SimpleNamespace(ts_event=nanos, is_reported=reported)
+
+
+class TestTheSessionsCashSaysWhenItWasRecorded:
+    """Story 4.7, D-C (PO ruling A): Story 4.6's routed debt — "a session's local
+    cash carries no timestamp". The account's last *reported* ``AccountState``
+    is when the broker last pushed the summary, read load-only."""
+
+    def test_the_last_reported_state_is_when_the_cash_was_recorded(self):
+        adapter = FakeAdapter(
+            general=_summary(USD={"TotalCashValue": 5.0}),
+            accounts={
+                IB_ACCOUNT_KEY: _account(
+                    _state(RECORDED_NANOS - 1),
+                    _state(RECORDED_NANOS),
+                    _state(RECORDED_NANOS + 9, reported=False),
+                )
+            },
+        )
+
+        view, _ = _read(adapter)
+
+        assert view.cash_recorded_at == RECORDED
+        assert ("load_account", IB_ACCOUNT_KEY) in adapter.calls
+
+    @pytest.mark.parametrize(
+        "account",
+        [None, _account(), _account(_state(0)), _account(_state(5, reported=False))],
+        ids=["no-account", "no-events", "zero-ts", "none-reported"],
+    )
+    def test_an_unknown_time_is_none_never_a_failure(self, account):
+        accounts = {} if account is None else {IB_ACCOUNT_KEY: account}
+        adapter = FakeAdapter(general=_summary(USD={"TotalCashValue": 5.0}), accounts=accounts)
+
+        view, _ = _read(adapter)
+
+        assert view.cash == (CashBalance("USD", Decimal("5.0")),)
+        assert view.cash_recorded_at is None
+
+    def test_unknown_cash_reads_no_account(self):
+        """Nothing to date: the account is not read at all."""
+        adapter = FakeAdapter(general=_summary(OTHER_ACCOUNT, USD={"TotalCashValue": 5.0}))
+
+        view, _ = _read(adapter)
+
+        assert view.cash_recorded_at is None
+        assert not [call for call in adapter.calls if call[0] == "load_account"]
+
+    @pytest.mark.parametrize(
+        "broken",
+        [
+            RuntimeError(f"decode failed for {ACCOUNT}"),
+            SimpleNamespace(events=[SimpleNamespace(ts_event=5)]),  # drifted event shape
+        ],
+        ids=["load-raises", "event-drift"],
+    )
+    def test_an_account_that_cannot_be_read_leaves_the_time_unknown_and_says_so(self, broken):
+        """Code review (2026-09-28): the time only decorates the cash note, so an
+        unreadable account must not fail the whole check (PO note 3: report and
+        exit). Positions and cash are read and compared as before; the time is
+        unknown, and a WARNING says why — never silent, never a raw account."""
+        log = RecordingLog()
+        adapter = FakeAdapter(
+            general=_summary(USD={"TotalCashValue": 5.0}), accounts={IB_ACCOUNT_KEY: broken}
+        )
+
+        view, _ = _read(adapter, log=log)
+
+        assert view.cash == (CashBalance("USD", Decimal("5.0")),)
+        assert view.cash_recorded_at is None
+        [(level, _, fields)] = [
+            r for r in log.records if r[1] == live_session_view.ACCOUNT_UNREADABLE_EVENT
+        ]
+        assert level == "warning" and fields["error_type"] in ("RuntimeError", "AttributeError")
+        assert ACCOUNT not in repr(log.records)
+        assert adapter.closed is True
+
+    def test_the_account_is_found_under_the_normalised_account(self):
+        adapter = FakeAdapter(
+            general=_summary(USD={"TotalCashValue": 5.0}),
+            accounts={IB_ACCOUNT_KEY: _account(_state(RECORDED_NANOS))},
+        )
+
+        view, _ = _read(adapter, account="  du4076626 ")
+
+        assert view.cash_recorded_at == RECORDED
+
+
 class TestAMissingOrBrokenViewIsAFailureNeverFlat:
     def test_an_empty_namespace_is_no_engine_state(self):
         adapter = FakeAdapter(other_keys=())
@@ -507,7 +617,13 @@ class TestTheReaderNeverWrites:
 
         _read(adapter)
 
-        assert {call[0] for call in adapter.calls} <= {"keys", "load_position", "load", "close"}
+        assert {call[0] for call in adapter.calls} <= {
+            "keys",
+            "load_position",
+            "load",
+            "load_account",
+            "close",
+        }
 
 
 class TestTheAccountIsTheOneTheSessionKnew:
@@ -735,8 +851,10 @@ def _adapter_members(source: str) -> set[str]:
 class TestTheLoadSurfaceIsPinned:
     """Review fix: the members this module reaches are an exact, mutator-free set."""
 
-    def test_load_methods_are_exactly_the_three_reads(self):
-        assert live_session_view.LOAD_METHODS == ("keys", "load_position", "load")
+    def test_load_methods_are_exactly_the_four_reads(self):
+        """Story 4.7, D-C (PO ruling A): ``load_account`` joins deliberately, in
+        the constant and in this pin together."""
+        assert live_session_view.LOAD_METHODS == ("keys", "load_position", "load", "load_account")
         assert not [m for m in live_session_view.LOAD_METHODS if m.startswith(ADAPTER_MUTATORS)]
 
     def test_every_adapter_member_named_is_a_load_method_or_close(self):
@@ -776,3 +894,50 @@ class TestTheSummaryKeyIsTheAdapters:
         parsed = live_session_view._cash(raw)
         assert parsed == _cash_from(stack.exec_client._account_summary)
         assert parsed == (CashBalance("USD", Decimal("100000.52")),)
+
+
+class TestTheAccountTimeIsTheAdapters:
+    """Canaries for Story 4.7's "session cash as of <time>" (D-B, D-C): the id the
+    account is stored under, and the reported ``AccountState`` the push emits."""
+
+    def test_the_factory_names_the_account_after_the_client_key(self):
+        """The session's account is ``AccountId(f"{name or IB_VENUE.value}-…")``
+        (``factories.py:304``); the node builder's only exec-client key is ``IB``
+        (pinned in ``test_live_node_builder.py``), which is ``IB_EXEC_CLIENT_ID``."""
+        import inspect
+
+        from nautilus_trader.adapters.interactive_brokers.common import IB
+        from nautilus_trader.adapters.interactive_brokers.factories import (
+            InteractiveBrokersLiveExecClientFactory,
+        )
+
+        from src.core.live_broker_state import IB_EXEC_CLIENT_ID
+
+        source = inspect.getsource(InteractiveBrokersLiveExecClientFactory.create)
+        assert 'AccountId(f"{name or IB_VENUE.value}-{ib_account}")' in source, (
+            "CANARY: the IB factory no longer names the account after its client key, "
+            "so `live reconcile` would look for the session's account under the wrong id"
+        )
+        assert IB == IB_EXEC_CLIENT_ID
+
+    async def test_a_summary_push_emits_a_reported_state_the_time_is_read_from(self):
+        from nautilus_trader.portfolio.portfolio import Portfolio
+
+        from src.core.live_broker_state import cash_recorded_at
+        from tests.component.core.test_live_broker_state_adapter import (
+            _push_account_summary,
+            _stack,
+        )
+
+        stack = _stack()
+        cache = stack.exec_client._cache
+        Portfolio(stack.exec_client._msgbus, cache, stack.exec_client._clock)
+
+        _push_account_summary(stack.exec_client)
+
+        account = cache.account(stack.exec_client.account_id)
+        assert account is not None, "CANARY: the summary push no longer reaches the account"
+        assert str(stack.exec_client.account_id) == IB_ACCOUNT_KEY
+        assert account.last_event.is_reported is True
+        recorded = cash_recorded_at(account)
+        assert recorded is not None and recorded.tzinfo is not None

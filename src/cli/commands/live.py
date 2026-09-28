@@ -362,19 +362,22 @@ def start(session: str, connect_timeout: float) -> None:
       -> reconcile -> warmup -> subscribe -> trading
     `reconcile` compares the engine cache against IBKR's own view of the
     account before any strategy starts: what only the net disagrees on is
-    corrected broker-ward, a strategy position the broker contradicts refuses
-    the start, and `ok` means 0 discrepancy remains; only then is trading
-    permitted. A strategy restarted while holding its own position resumes it
+    corrected broker-ward, a strategy position the broker does not cover
+    (fewer shares, none, or the opposite side) refuses the start naming the
+    likely cause, and `ok` means 0 discrepancy remains; only then is trading
+    permitted. A split that grows a strategy's position is absorbed and
+    logged; cash that moved while stopped is logged `reconcile.cash_changed`.
+    A strategy restarted while holding its own position resumes it
     (`strategy.resumed`) and acts only on its own positions; one whose
     instrument carries a holding no strategy of the session owns — including
-    shares beyond its own on the same side — is not started
-    (`strategy.resume_refused`), and the holding is left alone. Each
-    strategy warms its indicators from history as it starts,
-    before it subscribes to live bars. While running, the session re-checks
-    its positions against IBKR every minute and corrects a disagreement seen
+    shares beyond its own on the same side, a split's among them — is not
+    started (`strategy.resume_refused`), and the holding is left alone. Each
+    strategy warms its indicators from history as it starts, before it
+    subscribes to live bars. While running, the session re-checks its
+    positions against IBKR every minute and corrects a disagreement seen
     twice broker-ward (`reconcile.discrepancy`); a strategy position the broker
-    contradicts stops the session, positions untouched. After a disconnect, no
-    order is sent until a clean check re-establishes state.
+    no longer covers stops the session, positions untouched. After a
+    disconnect, no order is sent until a clean check re-establishes state.
 
     \b
     Exit codes:

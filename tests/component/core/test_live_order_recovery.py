@@ -102,6 +102,22 @@ def _assert_c_logging_state_is_unchanged():
     )
 
 
+@pytest.fixture(autouse=True)
+def _a_current_event_loop():
+    """Test isolation (added by Story 4.7): ``_harness`` and two scenarios read
+    the *implicit* current loop, and the Story 4.2/4.3/4.7 real-engine harnesses
+    clear it on close (``asyncio.set_event_loop(None)``). Under ``-n auto`` this
+    file failed with "There is no current event loop" whenever one of those
+    files ran first on the same worker — reproduced with Story 4.2's
+    ``test_live_startup_reconcile_engine.py`` alone ahead of it; Story 4.7's
+    engine file is one more such predecessor."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    yield loop
+    loop.close()
+    asyncio.set_event_loop(None)
+
+
 class _AnsweringClient(MockLiveExecutionClient):
     """A ``MockLiveExecutionClient`` whose ``query_order`` actually reaches
     ``generate_order_status_report`` (measured correction #1 above), keyed

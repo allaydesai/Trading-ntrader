@@ -136,7 +136,7 @@ from src.core.live_session_steady_state import (
     release_record,
 )
 from src.core.live_session_warmup import WarmupWatch, warmup_deadline_seconds
-from src.core.live_startup_reconcile import capture_local_positions
+from src.core.live_startup_reconcile import capture_local_state
 from src.core.live_strategy_guard import (
     GUARD_FAILED_EVENT,
     NoStrategyStartedError,
@@ -145,7 +145,7 @@ from src.core.live_strategy_guard import (
 )
 from src.core.live_trade_recorder import POSITION_EVENTS_TOPIC, RecordedTrade, TradeRecorder
 from src.core.live_trader_id import derive_trader_id
-from src.models.position_reconciliation import CachedPosition, StartupReconciliation
+from src.models.position_reconciliation import LocalSnapshot, StartupReconciliation
 from src.models.session import DEFAULT_HEARTBEAT_INTERVAL_SECONDS, SessionSpec
 
 ClientBuilder = Callable[..., None]
@@ -260,8 +260,8 @@ class LiveSessionRunner:
         self._trade_recorder: TradeRecorder | None = None
         self._rejection_tally: RejectionTally | None = None
         self._warmup: WarmupWatch | None = None
-        #: Story 4.2: the cache before Nautilus's own pass, and the phase's proof.
-        self._local_positions: tuple[CachedPosition, ...] | None = None
+        #: Story 4.2/4.7: the cache (and its cash) before Nautilus's own pass; the proof.
+        self._local_state: LocalSnapshot | None = None
         self._reconciliation: StartupReconciliation | None = None
         self._subscriptions: list[tuple[str, Any]] = []
         self._deadline, self._trader_started, self._ownership_lost = 0.0, False, False
@@ -583,7 +583,7 @@ class LiveSessionRunner:
         with phase(self._log, "node:connect"):
             assert self._loop is not None and self._node is not None
             refuse_imported_position_orders(self._node.cache, self._log)
-            self._local_positions = capture_local_positions(self._node, self._log)
+            self._local_state = capture_local_state(self._node, self._log)
             self._run_task = self._loop.create_task(self._node.run_async())
             wait = await_trader_started(
                 self._node,
@@ -614,8 +614,9 @@ class LiveSessionRunner:
         that pass already ran inside ``node:connect`` and is read-only against
         the broker. Policy in :func:`~src.core.live_startup_reconcile.reconcile_at_startup`:
         enforce the broker-ward engine settings, read the broker, refuse a
-        strategy position it contradicts, correct the rest broker-ward, and
-        re-verify 0 discrepancy (FR33, FR35, NFR9). Every refusal raises, so
+        strategy position it does not cover (Story 4.7: a split that grows one
+        is absorbed), correct the rest broker-ward, and re-verify 0
+        discrepancy (FR33, FR35, NFR9). Every refusal raises, so
         this phase logs ``failed`` and no later phase runs (AR39).
 
         Then — and only then — the first trading-permission grant (Story 4.3,
@@ -627,7 +628,7 @@ class LiveSessionRunner:
             self._reconciliation = await live_startup_reconcile.reconcile_at_startup(
                 self._node,
                 log=self._log,
-                local_before=self._local_positions,
+                local_before=self._local_state,
                 read_state=self._broker_state_reader,
             )
             assert self._monitor is not None

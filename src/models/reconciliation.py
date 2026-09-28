@@ -83,11 +83,15 @@ class SessionView:
         cash: ``TotalCashValue`` per currency, from the last account-summary
             push the session's engine received. ``()`` means the engine never
             recorded one — cash is then **unknown**, never zero.
+        cash_recorded_at: When the broker last reported that cash — the
+            session's account's last reported ``AccountState`` (Story 4.7,
+            D-C) — or ``None`` when unknown.
     """
 
     trader_id: str
     positions: tuple[ViewPosition, ...]
     cash: tuple[CashBalance, ...]
+    cash_recorded_at: datetime | None = None
 
     def __post_init__(self) -> None:
         if not self.trader_id:
@@ -100,6 +104,8 @@ class SessionView:
         currencies = [balance.currency for balance in self.cash]
         if len(set(currencies)) != len(currencies):
             raise ValueError(f"one row per currency, got {sorted(currencies)}")
+        if self.cash_recorded_at is not None and self.cash_recorded_at.utcoffset() is None:
+            raise ValueError("cash_recorded_at must be timezone-aware")
 
     @property
     def cash_known(self) -> bool:
@@ -196,6 +202,8 @@ class ReconciliationReport:
             the broker always reports cash (``BrokerState`` refuses none).
         broker_retrieved_at: When the broker read completed (timezone-aware).
         elapsed_ms: The check's own time from start to verdict.
+        local_cash_recorded_at: When the broker last reported the session's
+            cash (Story 4.7, D-C) — "session cash as of" — or ``None``.
     """
 
     session_name: str
@@ -205,6 +213,7 @@ class ReconciliationReport:
     cash: tuple[CashLine, ...]
     broker_retrieved_at: datetime
     elapsed_ms: float
+    local_cash_recorded_at: datetime | None = None
 
     def __post_init__(self) -> None:
         _require_masked(self.account)
@@ -212,8 +221,12 @@ class ReconciliationReport:
         _tuple_of("cash", self.cash, CashLine)
         if not self.cash:
             raise ValueError("cash lines must not be empty; the broker always reports cash")
-        if self.broker_retrieved_at.utcoffset() is None:
-            raise ValueError("broker_retrieved_at must be timezone-aware")
+        if self.broker_retrieved_at is None:
+            raise ValueError("broker_retrieved_at is required")
+        for name in ("broker_retrieved_at", "local_cash_recorded_at"):
+            value = getattr(self, name)
+            if value is not None and value.utcoffset() is None:
+                raise ValueError(f"{name} must be timezone-aware")
 
     @property
     def discrepancies(self) -> tuple[PositionLine | CashLine, ...]:
