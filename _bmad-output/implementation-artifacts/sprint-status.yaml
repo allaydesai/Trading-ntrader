@@ -2615,7 +2615,7 @@ development_status:
   # FR32–FR39 · Standalone: a session survives a full process stop/restart WHILE holding
   # an open position and resumes mid-position with warm indicators and broker-confirmed
   # state, no artificial exit. The phase's truth-test (external-authority check).
-  epic-4: backlog
+  epic-4: done
   4-1-read-the-brokers-authoritative-view-of-positions-and-cash: done
   4-2-reconcile-against-the-broker-before-any-strategy-trades: done
   4-3-keep-runtime-state-aligned-with-the-broker: done
