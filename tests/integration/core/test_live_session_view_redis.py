@@ -10,9 +10,11 @@ default adapter — reads it back. Two things only a real Redis can prove:
    NETTING close-then-reopen and a flip, which reuse one position id and one
    fill list.
 2. **Load-only (D-I, FR35).** A ``MONITOR`` capture over the read sees no
-   write verb against the namespace, and the namespace is byte-identical before
-   and after. A second writer into a running session's namespace would be an
-   auto-resolution; this is the proof there is none.
+   write verb on any connection the reader opened — identified through a TCP
+   relay, not by timing, so parallel workers' writes are never blamed on it —
+   and the namespace is byte-identical before and after. A second writer into a
+   running session's namespace would be an auto-resolution; this is the proof
+   there is none.
 
 Every trader id derives from a fresh ``uuid4()`` (``test_live_cache_namespace
 .py``'s isolation discipline), cleanup deletes only this test's own keys, and
@@ -21,6 +23,8 @@ Every trader id derives from a fresh ``uuid4()`` (``test_live_cache_namespace
 
 import json
 import socket
+import subprocess
+import sys
 import threading
 import time
 from decimal import Decimal
@@ -144,6 +148,62 @@ class _Resp:
 
     def close(self) -> None:
         self.sock.close()
+
+
+#: Each upstream address is printed before a byte is relayed on it, so no
+#: command ``MONITOR`` sees from the relay can precede its address.
+_RELAY_SCRIPT = """
+import socket, sys, threading
+
+def pipe(src, dst):
+    try:
+        while chunk := src.recv(65536):
+            dst.sendall(chunk)
+        dst.shutdown(socket.SHUT_WR)
+    except OSError:
+        pass
+
+listener = socket.create_server(("127.0.0.1", 0))
+print(listener.getsockname()[1], flush=True)
+while True:
+    client, _ = listener.accept()
+    upstream = socket.create_connection((sys.argv[1], int(sys.argv[2])), 5)
+    print("{}:{}".format(*upstream.getsockname()[:2]), flush=True)
+    for src, dst in ((client, upstream), (upstream, client)):
+        threading.Thread(target=pipe, args=(src, dst), daemon=True).start()
+"""
+
+
+class _Relay:
+    """A stdlib TCP relay in front of Redis, so the reader's connections are known exactly.
+
+    Under ``-n auto`` other workers' fresh adapters connect and write in the same
+    ``MONITOR`` window, so "opened in the window" blamed their ``SET``/``MULTI``/``EXEC``
+    on the reader. A reader pointed here reaches Redis only through the relay, and each
+    upstream socket's local address is the ``<addr>`` ``MONITOR`` prints for it.
+
+    It is a separate interpreter, not a thread: ``CacheDatabaseAdapter.__init__``
+    blocks in Rust holding the GIL, so an in-process relay deadlocks the reader.
+    """
+
+    def __init__(self, target: RedisSettings) -> None:
+        self.proc = subprocess.Popen(
+            [sys.executable, "-c", _RELAY_SCRIPT, target.redis_host, str(target.redis_port)],
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        assert self.proc.stdout is not None
+        self.port = int(self.proc.stdout.readline())
+        self.upstream_addrs: set[str] = set()
+
+    def settings(self) -> RedisSettings:
+        return RedisSettings(_env_file=None, redis_host="127.0.0.1", redis_port=self.port)
+
+    def close(self) -> None:
+        """Stop relaying, and collect the address of every connection it relayed."""
+        self.proc.terminate()
+        out, _ = self.proc.communicate(timeout=5)
+        self.upstream_addrs = set(out.split())
 
 
 def _snapshot(client: _Resp, prefix: str) -> dict:
@@ -357,6 +417,7 @@ class TestTheReadIsLoadOnly:
         observer = _Resp(_redis_settings())
         before = _snapshot(observer, session.prefix)
 
+        relay = _Relay(_redis_settings())
         monitor = _Resp(_redis_settings())
         assert monitor.cmd("MONITOR") == "OK"
         captured = bytearray()
@@ -376,27 +437,24 @@ class TestTheReadIsLoadOnly:
         thread = threading.Thread(target=pump, daemon=True)
         thread.start()
         try:
-            read_session_view(session.session_id, ACCOUNT, _redis_settings())
+            read_session_view(session.session_id, ACCOUNT, relay.settings())
             time.sleep(0.3)
         finally:
             stop.set()
             thread.join()
             monitor.close()
+            relay.close()
 
         after = _snapshot(observer, session.prefix)
         observer.close()
         lines = _monitor_lines(bytes(captured))
-        # The reader's connections: every client that touched the namespace, or
-        # that opened (the Rust client's `CLIENT SETINFO` handshake) in the window.
-        readers = {
-            addr
-            for addr, verb, line in lines
-            if session.trader_id in line or (verb == "CLIENT" and "SETINFO" in line)
-        }
-        reader_verbs = {verb for addr, verb, _ in lines if addr in readers}
-        namespaced_verbs = {verb for _, verb, line in lines if session.trader_id in line}
+        # The reader's connections, exactly: every one it opened, keyless verbs
+        # included, and nothing another worker's adapter wrote in the window.
+        reader_verbs = {verb for addr, verb, _ in lines if addr in relay.upstream_addrs}
+        namespace_clients = {addr for addr, _, line in lines if session.trader_id in line}
 
-        assert {"SCAN", "LRANGE", "MGET"} <= namespaced_verbs, f"MONITOR missed: {lines}"
+        assert {"SCAN", "LRANGE", "MGET"} <= reader_verbs, f"MONITOR missed the reader: {lines}"
+        assert namespace_clients <= relay.upstream_addrs, "the namespace was touched off-relay"
         assert reader_verbs <= READ_VERBS | HOUSEKEEPING_VERBS, (
             f"the reader issued non-read verbs: {reader_verbs - READ_VERBS - HOUSEKEEPING_VERBS}"
         )
