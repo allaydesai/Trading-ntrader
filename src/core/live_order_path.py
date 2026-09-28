@@ -19,6 +19,19 @@ observer (below) now owns the order's full lifecycle (Story 3.3): every
 state a backtest never produces — acceptance, partial and final fills,
 rejection, cancellation, expiry, and denial — is logged as it arrives.
 
+Since Story 4.3 the predicate withholds in ``RECOVERING`` too (it is the
+complement of ``trading_permitted``): after a disconnect no order passes until
+a clean reconciliation has re-established state (NFR10).
+
+**``OrderTriggered`` is deliberately not dispatched** (Story 4.3, D-J; the
+Story 3.3 code-review item). It is **unreachable through the IB adapter** at
+nautilus-trader 1.220.0: the adapter's ``MAP_ORDER_STATUS`` maps no IB status
+to ``TRIGGERED``, and reconciliation emits ``OrderTriggered`` only for a
+``TRIGGERED`` report or a cancelled/expired one with ``ts_triggered > 0``,
+which the adapter's report parser never sets. A canary
+(``tests/component/core/test_live_order_path_triggered_canary.py``) fails by
+name on an upgrade that makes it reachable — the moment to add the entry.
+
 **Why a new module, not `live_strategy_guard.py` or the runner.**
 ``live_strategy_guard.py`` and ``live_session_runner.py`` are both in
 ``STOP_PATH_MODULES`` (``tests/unit/core/test_live_stop_path_is_inert.py``),

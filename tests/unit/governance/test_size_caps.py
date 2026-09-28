@@ -132,17 +132,25 @@ SIZE_BASELINE: dict[str, int] = {
     "src/core/backtest_runner.py::MinimalBacktestRunner.run_from_config_with_catalog_data": 66,
     "src/core/backtest_runner.py::MinimalBacktestRunner.run_sma_backtest": 56,
     "src/core/live_bar_observer.py::LiveBarObserver": 120,
-    "src/core/live_connection_monitor.py::ConnectionMonitor": 118,
-    "src/core/live_node_builder.py::build_trading_node_config": 128,
+    # Story 4.3, 118 -> 116: `submission_withheld` is now `not trading_permitted` (D-F).
+    "src/core/live_connection_monitor.py::ConnectionMonitor": 116,
+    # Story 4.3, 128 -> 129: `open_check_interval_secs` passed explicitly as off (PO ruling 1A).
+    "src/core/live_node_builder.py::build_trading_node_config": 129,
     "src/core/live_order_path.py::OrderEventObserver": 165,
     # Story 4.4, 400 -> 414: warm-up wiring (arm in `_phase_warmup`, instrument
     # + settle per strategy, the stop/reclaim predicate the wait reads); the
     # watch itself is its own module. Story 4.2, 414 -> 424: reconcile seam,
     # pre-reconciliation snapshot, trading latch; the logic is live_startup_reconcile.py
     # (file budget made first by moving stop_degraded_strategies out, 499 -> 481).
-    "src/core/live_session_runner.py::LiveSessionRunner": 424,
+    # Story 4.3, 424 -> 412: budget split first (decision D-I) — the two teardown
+    # flush bodies moved to live_session_steady_state.py (file 495 -> 470) — then
+    # the startup grant and the runtime reconciler's construction (-> 485); the
+    # logic is live_runtime_reconcile.py.
+    "src/core/live_session_runner.py::LiveSessionRunner": 412,
     "src/core/live_session_runner.py::LiveSessionRunner.run": 66,
-    "src/core/live_session_steady_state.py::SessionSteadyState": 120,
+    # Story 4.3, 120 -> 114: the no-bars watchdog's test and emit moved to module
+    # level (decision D-I, -9) to make room for the runtime reconciler's tick call.
+    "src/core/live_session_steady_state.py::SessionSteadyState": 114,
     "src/core/live_strategy_guard.py::StrategyGuard": 121,
     "src/core/live_trade_recorder.py::TradeRecorder": 164,
     "src/core/metrics.py::PerformanceCalculator": 128,

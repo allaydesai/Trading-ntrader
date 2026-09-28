@@ -27,7 +27,11 @@ ended. It makes no claim about what the phase did. ``reconcile``'s ``ok``
 Nautilus's *own* reconciliation pass runs earlier, inside ``node:connect``
 (``kernel.py:1008-1027``), which is why the phase verifies and completes it
 rather than running one; ``reconcile.ok`` is the record that says it matched,
-and a hard native failure stops the session at ``node:connect``. ``warmup``'s ``ok``
+and a hard native failure stops the session at ``node:connect``. Since Story
+4.3 the ``reconcile`` phase's ``ok`` also marks the first trading-permission
+grant — issued inside it, only once the cache is proven — and the running
+session's own re-checks log ``reconcile.*`` records with ``scope="runtime"`` /
+``"reconnect"``, outside any phase. ``warmup``'s ``ok``
 (Story 4.4) means the runner's warm-up watch is armed, not that anything is
 warm: strategies warm in their own ``on_start`` during ``trading``, and
 ``warmup.completed`` is the record that says so.

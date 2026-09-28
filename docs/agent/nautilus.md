@@ -346,3 +346,59 @@ session's engine cache. That cache is disposable by architecture (D2): delete th
 session's `trader-PAPER-<id>:*` keys with the process stopped. Doing so also
 loses the restored client-order-id counter (Story 3.4), so prefer a new session.
 Never use `flush()`, which is `FLUSHDB`.
+
+## Runtime Reconciliation (Story 4.3)
+
+Nautilus 1.220.0 has **no continuous position reconciliation**. Its one
+continuous task (`_continuous_reconciliation_loop`, created in
+`LiveExecutionEngine._on_start`) runs the **in-flight sweep** — on for the whole
+session since Story 3.4 — and, only if `open_check_interval_secs` is set, an
+open-order consistency check. Neither ever compares positions again after
+startup. So runtime alignment is split three ways:
+
+1. **Orders — native.** The in-flight sweep queries the venue for a
+   `SUBMITTED`/`PENDING_*` order gone quiet and resolves it locally; it never
+   resubmits. The **open-order check stays off** (PO ruling, 2026-09-27): with
+   it on, a cached order the sweep already cancelled locally, which IB still
+   lists open, is never corrected — the engine republishes an `OrderAccepted`
+   for it on every check, forever (`execution/engine.pyx:1165-1178` publishes
+   even after `apply` fails). The measured reason lives in
+   `live_node_builder.py`'s comment; a canary in
+   `test_live_runtime_reconcile_engine.py` pins it.
+2. **The IB adapter's own position-update reports — switched off**
+   (`src/core/live_exec_position_reports.py`, installed by the exec-client
+   factory beside the avg-px fix). The adapter reports any broker position that
+   differs from its own `_known_positions` straight to the engine. A flat
+   instrument is untracked, so the broker's `0 → 22` update arriving before the
+   strategy's own `execDetails` is "external"; the `execDetails` then makes the
+   tracked quantity 44 and the next `22` is reported again. That is the P11/P12
+   phantom `INTERNAL-DIFF` round trip on **every** entry. It also returns early
+   on quantity 0, so it never reports a position going flat.
+3. **Positions — a verified cycle of ours, resolving through the framework**
+   (`src/core/live_runtime_reconcile.py`, driven by the heartbeat tick). Every
+   2 ticks (60 s) while `CONNECTED`: snapshot the cache, read the broker (Story
+   4.1's reader, its own per-read records dropped), **skip** the cycle if the
+   cache moved during the read, compare exactly, **defer** instruments with an
+   order still in flight, and act only on a disagreement seen **identically on
+   two checks at least 60 s apart**. A net disagreement is corrected broker-ward
+   through `reconcile_execution_report` (the Story 4.2 path) and logged
+   `reconcile.discrepancy scope=runtime resolution=broker`. An instrument the
+   cache cannot express is logged `resolution=unresolved` once. A strategy's
+   own position the broker contradicts **stops the session** before anything
+   is written (PO ruling 2A) — `ReconciliationFailedError` out of the tick, the
+   ordinary teardown, positions untouched, exit 1. The same happens when the
+   framework refuses a correction or one does not take.
+
+**Latency, accepted:** a change the execution stream did not explain (a manual
+TWS trade, a split) is corrected one to two cycles after it happens, not on
+arrival. `reconcile.ok scope=runtime` is logged on the first clean cycle, after
+any problem, and otherwise at most hourly (`cycles` says how many it covers).
+
+**Trading permission** (`ConnectionMonitor`): granted at the end of the
+startup `reconcile` phase, and after a loss **only** by a clean reconnect cycle
+(`scope=reconnect`, every tick while `RECOVERING`, no order in flight) followed
+by `confirm_state_reestablished` — the one production caller is
+`live_runtime_reconcile`. `submission_withheld` is `not trading_permitted`, so
+`RECOVERING` withholds every order. A reconnect whose state cannot be verified
+stays withheld; past the 60 s window the monitor logs `connection.halted`, and a
+later clean cycle still restores (`connection.restored`).

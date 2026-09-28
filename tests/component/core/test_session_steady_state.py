@@ -443,11 +443,12 @@ class TestTheConnectionMonitorIsFed:
 
         ``ConnectionMonitor`` logs ``connection.lost`` only from the branch
         that requires ``_has_ever_connected``, which is set solely by
-        ``_grant_permission`` — reached solely by ``confirm_state_reestablished``,
-        which the test above pins as having **zero** production callers until
-        Epic 4. So in a real session every disconnect takes the
-        ``RECOVERING -> AWAITING_CONNECTION`` branch
-        (``live_connection_monitor.py:331-337``), which returns silently.
+        ``_grant_permission`` — reached solely by ``confirm_state_reestablished``.
+        Before Story 4.3 that had **zero** production callers, so every real
+        disconnect took the ``RECOVERING -> AWAITING_CONNECTION`` branch
+        (``live_connection_monitor.py:331-337``), which returns silently. Since
+        Story 4.3 a granted session's drop is narrated by the monitor too; a
+        drop before the first grant still is not, which is what this pins.
 
         The monitor's silence there is deliberate and stays (a half-up socket
         during startup genuinely lost nothing, and
@@ -498,28 +499,38 @@ class TestTheConnectionMonitorIsFed:
         assert len(changes) == 1
         assert changes[0]["current"] == "recovering"
 
-    def test_confirm_state_reestablished_is_never_called_in_this_story(self):
-        """*Judgment call #6*, still true after Story 4.2 (decision D-J):
-        startup reconciliation is real now, but the grant cannot go live on its
-        own — its first call arms the monitor's LOST/halt path, and the halt
-        clock is cleared only by a *later* confirm, which is Story 4.3's
-        reconnect re-confirm. ``live_startup_reconcile`` joins the scan so the phase
-        that finally has a genuine reconciliation to follow cannot quietly
-        start granting. Story 4.3 changes this test deliberately.
+    def test_confirm_state_reestablished_has_exactly_one_production_caller(self):
+        """Changed deliberately by Story 4.3 (decision D-F; was
+        ``..._is_never_called_in_this_story`` — *Judgment call #6*, then Story
+        4.2's D-J). The grant goes live with both of its calls together: the
+        startup grant after ``reconcile`` proves the cache, and the reconnect
+        re-confirm after a clean reconciliation cycle — which is what clears the
+        halt clock the first grant arms. Both live in
+        ``live_runtime_reconcile`` and nowhere else, so trading permission can
+        only ever follow a state check (Epic 1 retro Action Item #7; PO: "only
+        after the state check passes").
+
+        Scans every production module under ``src/`` (not a hand-kept list —
+        a new caller anywhere goes red), by call-attribute name.
         """
         import ast
         from pathlib import Path
 
-        from src.core import live_session_runner, live_session_steady_state, live_startup_reconcile
+        import src
 
-        for module in (live_session_steady_state, live_session_runner, live_startup_reconcile):
-            tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
-            called = {
-                node.func.attr
+        root = Path(src.__file__).parent
+        callers = set()
+        for path in sorted(root.rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            if any(
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "confirm_state_reestablished"
                 for node in ast.walk(tree)
-                if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-            }
-            assert "confirm_state_reestablished" not in called, module.__name__
+            ):
+                callers.add(path.relative_to(root.parent).as_posix())
+
+        assert callers == {"src/core/live_runtime_reconcile.py"}
 
 
 class TestTheFirstBarWatchdog:

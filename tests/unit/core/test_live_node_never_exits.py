@@ -98,6 +98,16 @@ NODE_FACING_MODULES = (
     # node's loop — every refusal must surface as `ReconciliationFailedError`
     # (exit 1), never an exit. Added in the creating commit.
     "src/core/live_startup_reconcile.py",
+    # Story 4.3. The runtime reconciler runs on every heartbeat tick for the
+    # session's whole life, reading the broker and correcting the cache through
+    # the exec engine on the node's loop; its one deliberate way out is a typed
+    # `ReconciliationFailedError` that the runner's `finally` must receive —
+    # raising is fine here, exiting never is. Added in the creating commit.
+    "src/core/live_runtime_reconcile.py",
+    # Story 4.3. Runs inside `node.build()` (the exec-client factory, beside
+    # `live_exec_avg_px.py`) and then inside the adapter's position-update task
+    # for the whole session. Added in the creating commit.
+    "src/core/live_exec_position_reports.py",
     "src/services/session_record.py",
     "src/services/session_service.py",
 )

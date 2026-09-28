@@ -189,6 +189,10 @@ class TestConnectionObservedBeforeTrading:
     """
 
     def test_the_monitor_is_no_longer_awaiting_connection_when_trading_starts(self, monkeypatch):
+        """Changed deliberately by Story 4.3 (decision D-F): this read
+        ``RECOVERING`` while the grant had no production caller. The
+        ``reconcile`` phase now grants once the cache is proven, so a healthy
+        start reaches ``trading`` already ``CONNECTED`` — permitted."""
         observed_state_at_trading = []
         original_trading = LiveSessionRunner._phase_trading
 
@@ -204,7 +208,7 @@ class TestConnectionObservedBeforeTrading:
 
         runner.run()
 
-        assert observed_state_at_trading == [ConnectionState.RECOVERING]
+        assert observed_state_at_trading == [ConnectionState.CONNECTED]
 
     def test_submission_is_permitted_when_trading_starts_on_a_healthy_connection(self, monkeypatch):
         """Review fix, 2026-08-30 — the positive half of this class's own claim.

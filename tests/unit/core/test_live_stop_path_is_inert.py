@@ -97,6 +97,17 @@ STOP_PATH_MODULES = (
 #: membership would be inert, not protective. ``LIVE_MODULE_GLOBS`` still scans
 #: it for every forbidden order method.
 
+#: ``src/core/live_runtime_reconcile.py`` (Story 4.3) is **NOT** on the list: it
+#: runs on the heartbeat tick, and the teardown ``finally`` cancels that tick
+#: (``join_heartbeat``) before anything else — nothing in the stop path calls
+#: into it. Its only engine write is ``reconcile_execution_report``; when it
+#: stops a session it *raises* and leaves the stop to the runner's ordinary
+#: teardown (PO ruling 2A). Membership would be inert, not protective;
+#: ``LIVE_MODULE_GLOBS`` still scans it for every forbidden order method.
+#: ``src/core/live_exec_position_reports.py`` (Story 4.3) is **NOT** on it
+#: either, for ``live_exec_avg_px.py``'s reason below: build-time only (plus an
+#: adapter task that sends nothing), and it calls no order or position method.
+
 #: ``src/core/live_exec_avg_px.py`` (2026-09-01) is likewise **NOT** on the list,
 #: for a simpler reason: it is build-time only. It runs once inside
 #: ``node.build()``, replaces one adapter-private dict, and is never reached

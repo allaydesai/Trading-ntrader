@@ -17,7 +17,10 @@ stop-signal *policy* (``live_session_signals`` — Judgment call #8), strategy-
 failure containment (Story 2.7), ``status``/``list`` (Story 2.8), the
 reconciliation policy (``live_startup_reconcile`` — Story 4.2; the runner only
 snapshots the cache before the node runs, awaits the phase and latches
-``trading`` on its result), the warm-up itself (each strategy's own
+``trading`` on its result), runtime alignment and the trading-permission grant
+(``live_runtime_reconcile`` — Story 4.3; the runner calls the startup grant at
+the end of ``reconcile`` and hands the reconciler to the steady state), the
+warm-up itself (each strategy's own
 ``on_start``; the runner only arms and waits on ``live_session_warmup`` —
 Story 4.4), or orders and trades (Epic 3).
 
@@ -57,11 +60,11 @@ carries it. It does **not** reach Nautilus's own stdout, which is Rust-side.
 Known, accepted limits, stated rather than implied: Nautilus's own
 reconciliation pass runs inside ``node:connect``, so a *hard* native failure
 stops the session there, not at ``reconcile`` (Story 4.2, decision D-A); a
-heartbeat proves a process is writing, not that it is trading; and
-``confirm_state_reestablished`` is still deliberately never called — its first
-call arms the monitor's LOST/halt path, whose clock only a later confirm
-clears, so it goes live with Story 4.3's reconnect re-confirm (*Judgment call
-#6*, decision D-J). Stopping leaves positions alone (Story 3.1): the strategy's own
+heartbeat proves a process is writing, not that it is trading; and trading
+permission is granted only after a reconciliation — at the end of ``reconcile``,
+and after a loss only by the runtime reconciler's clean reconnect cycle (Story
+4.3, decision D-F), so a runtime refusal ends the session through the same
+teardown as any other failure. Stopping leaves positions alone (Story 3.1): the strategy's own
 ``on_stop()`` no longer flattens, and ``finally`` explicitly stops any
 ``DEGRADED`` strategy too, via :func:`stop_degraded_strategies`, so its own
 teardown still runs — though on the dominant signal path the engines are
@@ -99,6 +102,7 @@ from src.core.live_connection_probe import read_ibkr_connection_status
 from src.core.live_node_builder import GateRefusedError, build_trading_node
 from src.core.live_order_path import ORDER_EVENTS_TOPIC, OrderEventObserver, install_order_path
 from src.core.live_order_rejections import RejectionSnapshot, RejectionTally
+from src.core.live_runtime_reconcile import RuntimeReconciler, grant_after_reconciliation
 from src.core.live_session_controller import build_session_controller_config
 from src.core.live_session_node import (
     BAR_TOPIC,
@@ -120,10 +124,11 @@ from src.core.live_session_record import SessionReclaimedError, SessionRecordPor
 from src.core.live_session_signals import SessionStopRequested, SessionStopSignals
 from src.core.live_session_steady_state import (
     DEFAULT_NO_BARS_AFTER_SECONDS,
-    REJECTION_RECORD_FAILED_EVENT,
     ConnectionReader,
     SessionSteadyState,
     StartupHeartbeat,
+    flush_contained_failures,
+    flush_rejection_snapshot,
     join_heartbeat,
     release_record,
 )
@@ -605,6 +610,11 @@ class LiveSessionRunner:
         strategy position it contradicts, correct the rest broker-ward, and
         re-verify 0 discrepancy (FR33, FR35, NFR9). Every refusal raises, so
         this phase logs ``failed`` and no later phase runs (AR39).
+
+        Then — and only then — the first trading-permission grant (Story 4.3,
+        decision D-F): the state check has passed, so
+        ``confirm_state_reestablished`` is truthful. A refused grant is not a
+        phase failure; the running session's reconnect cycle grants later.
         """
         with phase(self._log, "reconcile"):
             self._reconciliation = await live_startup_reconcile.reconcile_at_startup(
@@ -612,6 +622,10 @@ class LiveSessionRunner:
                 log=self._log,
                 local_before=self._local_positions,
                 read_state=self._broker_state_reader,
+            )
+            assert self._monitor is not None
+            grant_after_reconciliation(
+                self._monitor, self._connection_reader, self._settings, self._log
             )
 
     def _phase_warmup(self) -> None:
@@ -864,8 +878,9 @@ class LiveSessionRunner:
         tasks (``live/node.py:343-370``), so it returns when the node stops
         (Story 2.6's ``node.stop()``, called from the signal handler's
         callback) and raises if the node died. The heartbeat is waited on
-        *alongside* it rather than fired and forgotten, because its one fatal
-        outcome (this process no longer owns the session) has to reach the
+        *alongside* it rather than fired and forgotten, because its two fatal
+        outcomes (this process no longer owns the session; Story 4.3's runtime
+        reconciliation refusing to let it keep trading) have to reach the
         caller rather than sit unretrieved on a task nobody inspects until the
         ``finally``.
         """
@@ -897,6 +912,16 @@ class LiveSessionRunner:
             connection_reader=self._connection_reader,
             guard=self._guard,
             tally=self._rejection_tally,
+            # Story 4.3: keeps the running cache aligned with the broker and is
+            # the only path that returns trading permission after a loss.
+            reconciler=RuntimeReconciler(
+                node=self._node,
+                monitor=self._monitor,
+                log=self._log,
+                connection_reader=self._connection_reader,
+                settings=self._settings,
+                read_state=self._broker_state_reader,
+            ),
         )
 
     def _stop_heartbeat(self, loop: asyncio.AbstractEventLoop) -> None:
@@ -931,34 +956,16 @@ class LiveSessionRunner:
 
         Guarded per failure, AR42: a DB hiccup here must not replace the run's
         primary outcome. A reclaim stops the flush entirely — the remaining
-        facts belong in the successor's log, not its row.
+        facts belong in the successor's log, not its row. The body lives in
+        :func:`~src.core.live_session_steady_state.flush_contained_failures`
+        (Story 4.3's budget split, decision D-I); the slot stays here.
         """
         if self._ownership_lost:
             return
-        pending = self._guard.drain_pending()
-        if not pending:
-            return
-        all_failed = bool(self._guard.all_failed)
-        for failure in pending:
-            try:
-                self._record.record_strategy_failure(
-                    strategy_id=failure.strategy_id,
-                    spec_strategy_id=failure.spec_strategy_id,
-                    error_type=failure.error_type,
-                    handler=failure.handler,
-                    at=failure.at,
-                    detail=failure.detail,
-                    all_failed=all_failed,
-                )
-            except SessionReclaimedError:
-                self._ownership_lost = True
-                return
-            except Exception as exc:  # noqa: BLE001 - AR42: must not replace the outcome
-                self._log.error(
-                    GUARD_FAILED_EVENT,
-                    spec_strategy_id=failure.spec_strategy_id,
-                    error_type=type(exc).__name__,
-                )
+        try:
+            flush_contained_failures(self._record, self._guard, self._log)
+        except SessionReclaimedError:
+            self._ownership_lost = True
 
     def _flush_order_rejections(self) -> None:
         """Write the last refusal summary, while the row is still ours (3.7).
@@ -981,24 +988,19 @@ class LiveSessionRunner:
         ``_flush_pending_trades`` uses, so a lost final summary reaches the
         operator's stop report (code review 2026-09-21). A reclaim stops the
         flush — the remaining facts belong in the successor's log, not its row.
+        The body lives in
+        :func:`~src.core.live_session_steady_state.flush_rejection_snapshot`
+        (Story 4.3's budget split, decision D-I); the slot stays here.
         """
         if self._ownership_lost or self._rejection_tally is None:
             return
-        snapshot = self._rejection_tally.pending()
-        if snapshot is None:
-            return
         try:
-            self._record.record_order_rejections(**snapshot.as_port_kwargs())
+            problem = flush_rejection_snapshot(self._record, self._rejection_tally, self._log)
         except SessionReclaimedError:
             self._ownership_lost = True
             return
-        except Exception as exc:  # noqa: BLE001 - AR42: must not replace the outcome
-            self._log.error(
-                REJECTION_RECORD_FAILED_EVENT, error_type=type(exc).__name__, exc_info=True
-            )
-            self._shutdown_problems.append(f"flush_order_rejections: {type(exc).__name__}")
-            return
-        self._rejection_tally.mark_written(snapshot.version)
+        if problem is not None:
+            self._shutdown_problems.append(problem)
 
     def _note_ownership_lost(self) -> None:
         """``TradeRecorder``'s ``on_ownership_lost`` callback (Story 3.6, D-C).
