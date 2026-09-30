@@ -543,7 +543,10 @@ position is refused only when the broker does not *cover* it:
   the net sells a split's extra shares: the refusal is then not an outside
   event. Neither built-in does since Story 4.5 (`sma_momentum` read the net
   before it). The remedy is unchanged: create a new session (see
-  "Startup Reconciliation" above).
+  "Startup Reconciliation" above). Only the contradicted rows are `refused`
+  (ERROR, and alone in the exit-1 message); every other row a refused start
+  found disagreeing is logged `resolution=untouched` at WARNING — named, not
+  corrected, because the phase stopped before correcting anything.
 
 **Costs of absorbing, accepted by the PO:**
 - **A lot held across a split records its round trip at unadjusted prices.**

@@ -323,7 +323,11 @@ def _read(adapter: Any, trader_id: str, account: str) -> tuple[SessionView, int,
     cash = _cash(general.get(f"{ACCOUNT_SUMMARY_KEY_PREFIX}{account}"))
     recorded_at, unreadable = _cash_recorded(load_account, account) if cash else (None, None)
     view = SessionView(
-        trader_id=trader_id, positions=positions, cash=cash, cash_recorded_at=recorded_at
+        trader_id=trader_id,
+        positions=positions,
+        cash=cash,
+        cash_recorded_at=recorded_at,
+        positions_skipped=skipped,
     )
     return view, skipped, unreadable
 

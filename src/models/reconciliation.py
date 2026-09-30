@@ -86,16 +86,23 @@ class SessionView:
         cash_recorded_at: When the broker last reported that cash — the
             session's account's last reported ``AccountState`` (Story 4.7,
             D-C) — or ``None`` when unknown.
+        positions_skipped: How many open positions in the cache are held for
+            an account other than the one configured, and so are not in
+            ``positions``. Non-zero after a ``TWS_ACCOUNT`` change since the
+            session ran (PR #35 code review, P9).
     """
 
     trader_id: str
     positions: tuple[ViewPosition, ...]
     cash: tuple[CashBalance, ...]
     cash_recorded_at: datetime | None = None
+    positions_skipped: int = 0
 
     def __post_init__(self) -> None:
         if not self.trader_id:
             raise ValueError("trader_id is required")
+        if self.positions_skipped < 0:
+            raise ValueError("positions_skipped is a count")
         _tuple_of("positions", self.positions, ViewPosition)
         _tuple_of("cash", self.cash, CashBalance)
         instruments = [position.instrument_id for position in self.positions]
@@ -204,6 +211,9 @@ class ReconciliationReport:
         elapsed_ms: The check's own time from start to verdict.
         local_cash_recorded_at: When the broker last reported the session's
             cash (Story 4.7, D-C) — "session cash as of" — or ``None``.
+        local_positions_skipped: The session view's ``positions_skipped`` —
+            cached positions held for another account, left out of the
+            session side of every position line (PR #35 code review, P9).
     """
 
     session_name: str
@@ -214,9 +224,12 @@ class ReconciliationReport:
     broker_retrieved_at: datetime
     elapsed_ms: float
     local_cash_recorded_at: datetime | None = None
+    local_positions_skipped: int = 0
 
     def __post_init__(self) -> None:
         _require_masked(self.account)
+        if self.local_positions_skipped < 0:
+            raise ValueError("local_positions_skipped is a count")
         _tuple_of("positions", self.positions, PositionLine)
         _tuple_of("cash", self.cash, CashLine)
         if not self.cash:

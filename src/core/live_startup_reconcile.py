@@ -370,8 +370,17 @@ async def reconcile_at_startup(
     unresolved = [row for row in rows if not row.broker_resolved]
     if unresolved:
         _refuse(log, ReconciliationFailure.UNRESOLVABLE_DISCREPANCY, unresolved, _UNRESOLVED)
-    if any(row.strategy_contradicted and not row.broker_covers_strategy for row in rows):
-        _refuse(log, ReconciliationFailure.STRATEGY_POSITION_CONTRADICTED, rows, _REMEDY)
+    contradicted = [
+        row for row in rows if row.strategy_contradicted and not row.broker_covers_strategy
+    ]
+    if contradicted:
+        # Only the cause is refused, as the runtime twin does; every other
+        # disagreeing row is named as left untouched, so a refused start still
+        # shows the account as found (PR #35 code review, P4).
+        for row in rows:
+            if row not in contradicted:
+                log_discrepancy(log, row, "untouched")
+        _refuse(log, ReconciliationFailure.STRATEGY_POSITION_CONTRADICTED, contradicted, _REMEDY)
     corrected = _correct(node, rows, broker, log)
     cached = cached_positions(node.cache)
     remaining = _to_act_on(compare_positions(cached, broker))
@@ -599,8 +608,9 @@ def log_discrepancy(
     scope: str = SCOPE_STARTUP,
 ) -> None:
     """One ``reconcile.discrepancy`` naming the instrument and every quantity
-    (AR41); ERROR when refused or unresolved, WARNING otherwise. Shared with
-    Story 4.3's runtime cycle, which passes its own ``scope``. A refused
+    (AR41); ERROR when refused or unresolved, WARNING otherwise (``framework``,
+    ``broker``, or ``untouched`` — a row a refused start left as found). Shared
+    with Story 4.3's runtime cycle, which passes its own ``scope``. A refused
     strategy row also carries its ``likely_cause`` (Story 4.7, PO ruling)."""
     fields: dict[str, Any] = {
         "scope": scope,

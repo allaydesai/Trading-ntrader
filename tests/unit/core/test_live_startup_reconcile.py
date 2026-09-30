@@ -358,8 +358,11 @@ class TestAStrategyContradictionIsRefusedBeforeAnythingIsWritten:
         assert caught.value.reason is ReconciliationFailure.STRATEGY_POSITION_CONTRADICTED
 
     def test_every_disagreeing_instrument_is_logged_when_the_start_is_refused(self):
-        """A refused start resolves nothing — so the resolvable row is logged
-        as refused too, rather than silently left."""
+        """A refused start resolves nothing — so the resolvable row is named
+        too, rather than silently left. Only the cause is *refused* (ERROR,
+        with the reason, and alone in the exit-1 message); the unrelated row
+        is logged ``untouched`` at WARNING, as the runtime twin refuses only
+        the contradicted rows (PR #35 code review, P4)."""
         cache = _Cache(
             positions=[_Position(NVDA, STRATEGY, "22"), _Position(AAPL, "EXTERNAL", "4")]
         )
@@ -369,12 +372,17 @@ class TestAStrategyContradictionIsRefusedBeforeAnythingIsWritten:
             with pytest.raises(ReconciliationFailedError) as caught:
                 _reconcile(node, _reader())
 
-        assert [row.instrument_id for row in caught.value.discrepancies] == [AAPL, NVDA]
+        assert [row.instrument_id for row in caught.value.discrepancies] == [NVDA]
+        assert AAPL not in str(caught.value)
         records = _events(logs, DISCREPANCY_EVENT)
-        assert {(r["instrument_id"], r["resolution"]) for r in records} == {
-            (AAPL, "refused"),
-            (NVDA, "refused"),
+        assert {(r["instrument_id"], r["resolution"], r["log_level"]) for r in records} == {
+            (AAPL, "untouched", "warning"),
+            (NVDA, "refused", "error"),
         }
+        assert [r["reason"] for r in records if r["instrument_id"] == NVDA] == [
+            "strategy_position_contradicted"
+        ]
+        assert all("reason" not in r for r in records if r["instrument_id"] == AAPL)
         assert node.kernel.exec_engine.reports == []
 
     def test_the_message_names_the_instrument_both_quantities_and_the_remedy(self):

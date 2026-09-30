@@ -120,7 +120,11 @@ Task 1 re-measures F3, F8 and F9 against real objects before production code is 
 ### Design decisions (disclosed here, not discovered in review)
 
 - **D-A — ✅ Ruled (A) (PO, 2026-09-28). When a strategy's own position differs from the broker's,
-  what is absorbed?**
+  what is absorbed?** *(Narrowed at code review, 2026-09-28, PO option 1: strategies on **both
+  sides** of one instrument keep the pre-4.7 equality rule — `strategy_mixed_sides`, its own
+  cause `CAUSE_MIXED` — because coverage is judged on the strategies' net and a net cannot tell
+  whether each lot is covered. The coverage rule below governs single-side rows. Amended here
+  by PR #35's code review, P8; the "Resolution" paragraph under the review findings records it.)*
   - **(A) Recommended: the coverage rule.**
     - `strategy_contradicted` becomes: `S != 0` **and** the broker does not cover `S`. "Not
       covered" means `B` is flat, `B` has the opposite sign, or `|B| < |S|`. In code:
@@ -300,7 +304,11 @@ Agent Record states which rulings were applied.
      written before the refusal.
    - **Through `runner.run()`.** A runtime covered growth leaves the session running. The node is
      not stopped, `mark_stopped` is not called, and the heartbeat keeps ticking. Use the existing
-     `test_session_runner_runtime_reconcile.py` harness.
+     `test_session_runner_runtime_reconcile.py` harness. *(As proven: the correction is not what
+     stops the session — a later runtime cycle comes back clean, nothing is refused or failed —
+     and the run then ends the ordinary way, so `mark_stopped` **is** the last record call, from
+     `run_seconds`, not from a refusal. The "not called" wording was too strong; the test asserts
+     the stop is the ordinary end. PR #35 code review, P8.)*
    - **Cash.** The session's cash is IBKR's push (F7), and no code of this story writes cash
      anywhere. A scan or spy pins that D-B's capture only reads (`cache.get`, `cache.account`).
 2. **Given such a change is absorbed, When it is logged, Then it appears as an explicit
@@ -787,7 +795,9 @@ charter forbids creating one. P19 is recorded as **defined, not run**.
 - **D-A — the coverage rule** (`PositionDiscrepancy.strategy_contradicted`, one property that both
   phases read, with no caller change).
   - A strategy's own position is refused only when the broker holds less in its direction, none,
-    or the opposite side. Forward splits and stock dividends are absorbed broker-ward.
+    or the opposite side. Forward splits and stock dividends are absorbed broker-ward. *(Single-side
+    rows; strategies on both sides of one instrument keep the equality rule, `CAUSE_MIXED` — the
+    code review's narrowing, recorded under D-A above.)*
     - At startup, Nautilus's own pass imports the difference. It is named from the pre-run
       snapshot (`resolution=framework`, before `local_quantity`, after `broker_quantity`).
     - At runtime, the cycle corrects it after its debounce (`resolution=broker`).

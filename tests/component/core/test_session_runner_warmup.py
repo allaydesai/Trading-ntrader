@@ -372,6 +372,33 @@ class TestAWarmupThatNeverArrivesIsContained:
 
         assert not runner.trader_started
 
+    def test_two_silent_strategies_cost_one_deadline_each_in_series(
+        self, registered_accounts, monkeypatch
+    ):
+        """AC #6's worst case, at the runner tier (PR #35 code review, P6): two
+        strategies whose warm-ups never answer cost exactly one deadline each,
+        in series — never less (a deadline is waited in full) and never a
+        second wait or the node's own ``run_seconds`` ending it. With the
+        default settings that is 2 × 75 s, inside NFR3's five minutes; the
+        constant half is ``test_live_session_warmup.py``'s."""
+        settings = _settings()
+        registered_accounts(settings)
+        _History({"SMACrossover": None, "SMAMomentum": None}).install(monkeypatch)
+        node = TestLiveNode(run_seconds=RUN_SECONDS)
+        _start_issues_a_history_request(node)
+        runner = _runner(node, _spec("sma_crossover", "momentum"))
+        deadline = warmup_module.warmup_deadline_seconds(settings)
+
+        started = time.monotonic()
+        with capture_logs() as logs, pytest.raises(NoStrategyStartedError):
+            runner.run()
+        elapsed = time.monotonic() - started
+
+        failed = [(e["strategy_id"], e["reason"]) for e in logs if e["event"] == FAILED_EVENT]
+        assert failed == [("sma_crossover", "no_response"), ("momentum", "no_response")]
+        assert elapsed >= 2 * deadline, "a deadline was cut short"
+        assert elapsed < RUN_SECONDS, "the node's run window, not the deadlines, ended the wait"
+
 
 class TestAStopDuringTheWait:
     def test_a_node_that_stops_mid_warmup_ends_the_wait_without_a_failure(

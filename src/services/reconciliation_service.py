@@ -71,6 +71,7 @@ def compare(
         broker_retrieved_at=broker.retrieved_at,
         elapsed_ms=elapsed_ms,
         local_cash_recorded_at=local.cash_recorded_at,
+        local_positions_skipped=local.positions_skipped,
     )
 
 
@@ -162,6 +163,15 @@ def render_report(report: ReconciliationReport) -> list[str]:
     ]
     lines.extend(_render_position(line) for line in report.positions)
     lines.extend(_render_cash(line) for line in report.cash)
+    if report.local_positions_skipped:
+        # Without this, every broker line reads as a real mismatch after a
+        # TWS_ACCOUNT change (PR #35 code review, P9).
+        lines.append(
+            f"note: {report.local_positions_skipped} position(s) in the session's engine cache "
+            "are held for an account other than the one configured and were left out of the "
+            "session side; if TWS_ACCOUNT changed since the session ran, the position lines "
+            "above compare the wrong account"
+        )
     counts = f"positions={len(report.positions)} currencies={len(report.cash)}"
     if report.is_clean:
         lines.append(

@@ -217,7 +217,11 @@ F4 and F7 in a fresh interpreter before production code is written.
   `live_connection_probe._flag_is_set` shape. That module imports Nautilus at top level and
   hard-wires `ibkr_live_client_id`, so it is not imported. Either flag unset: `NOT_CONNECTED`
   immediately. Otherwise `reqPositions` on a dead socket answers nothing, and the operator waits
-  the full deadline for the same verdict.
+  the full deadline for the same verdict. *(Amended at code review, 2026-09-22: a flag that is
+  present but unset is `NOT_CONNECTED`; a flag that is **missing** or unreadable, or a node with
+  no IB exec client, is adapter drift — `BrokerStateAdapterError`, `ADAPTER_INCOMPATIBLE`, exit 1
+  — because the fail-closed reading contradicted that class's own rationale. This is what the
+  code and tests do; the AC #4 bullet and dev-time refinement 4 below were written before it.)*
 
 ## Acceptance Criteria
 
@@ -261,7 +265,10 @@ The epic text (`epics.md:1481-1510`) is in **bold**. The clarifications under ea
      `reason`, logs exactly one `reconcile.broker_state_failed`, and returns no `BrokerState`.
      Each of these has a test:
      - `NOT_CONNECTED`: no request is issued;
-     - no IB exec client registered: `NOT_CONNECTED`;
+     - no IB exec client registered: `NOT_CONNECTED` *(superseded at code review, 2026-09-22: a
+       missing exec client, or a missing readiness flag, is adapter drift and reads
+       `ADAPTER_INCOMPATIBLE` (exit 1) — see the review's first patch and D-K's amendment below;
+       the code and tests say `ADAPTER_INCOMPATIBLE`)*;
      - our deadline: `TIMEOUT`;
      - adapter `TimeoutError`: `POSITIONS_UNANSWERED`;
      - `ConnectionError`: `CONNECTION_LOST`;

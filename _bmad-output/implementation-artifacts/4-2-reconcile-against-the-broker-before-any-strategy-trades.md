@@ -118,7 +118,11 @@ Task 1 re-measures F4–F8 against a real `LiveExecutionEngine` before productio
     `TradingNodeConfig.exec_engine.load_cache is True`. That flag is what brings a session's own
     working orders back from Redis (AR25). `filter_unclaimed_external_orders` is **not**
     enforced: `True` drops `EXTERNAL` orders, but F5's position pass still corrects net through
-    `INTERNAL-DIFF`, and D-C's re-verify is the final guard either way.
+    `INTERNAL-DIFF`, and D-C's re-verify is the final guard either way. *(Superseded by Story 4.5,
+    D-A, 2026-09-28: the session's engine now runs with `filter_unclaimed_external_orders=True`
+    and `require_broker_ward_reconciliation` enforces it as a fourth entry of
+    `live_startup_reconcile.py`'s `BROKER_WARD_SETTINGS` — it is what keeps the adapter's
+    fabricated per-position order out of the cache.)*
 - **D-C — What "internal position state matches the broker exactly" means (NFR9).**
   - For every instrument in (cache open positions ∪ broker positions): the cache's **net**
     signed quantity (`Σ position.signed_decimal_qty()` over all open positions, every strategy)
@@ -330,7 +334,11 @@ The epic text (`epics.md:1512-1546`) is in **bold**. The clarifications under ea
 5. **Given reconciliation completes, When state is compared, Then internal position state matches
    the broker exactly — 0 discrepancy — before trading is permitted (NFR9).**
    - `reconcile.ok` is emitted only when the post-resolution `compare_positions(cache, broker)`
-     is `()`.
+     is `()`. *(Narrowed by Story 4.5, PO ruling 2026-09-28, startup only: a row whose net
+     already matches the broker and whose broker holding covers the strategies' own on the same
+     side is settled by `_to_act_on` and does not withhold `reconcile.ok`; the excess is refused
+     per strategy in `trading` by D-C's resume check. The running session's cycle still stops on
+     the same row.)*
    - A resolution the framework reports as successful that leaves a row (F8's filtered-instrument
      shape) → `DISCREPANCY_REMAINS`.
    - `compare_positions` is exact (`Decimal("22") != Decimal("22.0001")`). It spans cache ∪ broker

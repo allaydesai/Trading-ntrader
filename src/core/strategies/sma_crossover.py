@@ -83,10 +83,12 @@ class SMACrossover(Strategy):
 
         ``subscribe_bars`` is deliberately **not** called here: it runs last in
         :meth:`_on_history_loaded`, so the live stream starts only once the
-        history has loaded. The seam between the two is not guarded: a bar
-        closing while the request is in flight can be missed, or counted twice
-        (``deferred-work.md``, code review of Story 4.4 — owned by Story 4.5).
-        Mode-agnostic by construction (AR40) — a backtest answers the request
+        history has loaded. The seam between the two is guarded outside the
+        strategy, by the session's warm-up watch (Story 4.5, D-F): a live bar
+        at or before the last history bar is dropped once, and each bar missed
+        while the request was in flight is named (``warmup.seam_gap``), not
+        replayed — see ``live_session_warmup.py``. Mode-agnostic by
+        construction (AR40) — a backtest answers the request
         with nothing, synchronously, so there the callback subscribes before
         this method returns and the strategy behaves exactly as before.
         """

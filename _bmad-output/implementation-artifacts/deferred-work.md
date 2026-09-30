@@ -3719,3 +3719,106 @@ How they compose, and the one pin that could not survive:
 - **Procedure numbering.** Both stories appended "Procedure P19"; 4.5's stays P19, 4.7's is now
   **P20** (evidence index, cross-references — including the two in 4.7's entries above — and log
   names updated; the 4.7 story file keeps its original "P19" as history).
+
+## Deferred from: code review of PR #35, Epic 4 integration (2026-09-30)
+
+The review's full text is on the PR (`p3-epic4-base` → `015-paper-trading`). Its patches P1, P2,
+P3 and P5 landed in `2e275c8`; P4 and P6–P9 in the commit that adds this section. What follows is
+what the review deferred (W1–W11) and the five decisions it put to the PO, which are **open**.
+
+**Decisions for the PO (D1–D5) — none ruled at the time of writing.**
+
+- **D1 [HIGH] A permanent unresolvable broker row masks a "broker 0" strategy contradiction for
+  the life of the session.** `live_runtime_reconcile.py`'s `_act` holds back every cache row
+  reading "broker 0" while any `IB-CONID-*` row exists, with no bound. If the account acquires a
+  contract the IB provider cannot build (bond, warrant/rights stub, BAG, delisted symbol —
+  reachable mid-session by a corporate action or a manual trade) and the strategy's own `+22` is
+  then sold by hand, the contradicted row is never refused, `trading_permitted` stays granted, and
+  the strategy's next opposite signal closes 22 shares the account does not hold (NFR14).
+  `test_an_unresolved_broker_row_holds_back_only_the_rows_it_could_mask` asserts the hold-back
+  across 3 cycles; nothing asserts it ends. Options: bound the hold-back (N cycles, then treat the
+  unresolved row as permanent and act on the held-back rows); hold back only rows whose symbol
+  matches the unresolved contract's; or stop the session on a persistent unresolved row. The
+  reviewer's recommendation: rule this one before merge, bounded hold-back as the least invasive
+  fix. **Owner: the PO.**
+- **D2 [MEDIUM] No policy for holdings the adapter cannot express** (non-equity contracts,
+  fractional shares). Startup refuses forever with the remedy "retry the start"; a fractional
+  broker excess (`+22.5` vs `+22`, a DRIP) is `UNRESOLVABLE` at startup but inert-and-clean at
+  runtime (`reconcile.ok` with a standing 0.5-share discrepancy — `Equity.make_qty(Decimal("22.5"))`
+  rounds silently to 22, verified against the wheel); and while an unresolved row exists the
+  reconnect grant is never issued, so after any disconnect orders are withheld for the rest of the
+  session. Needs one ruling covering startup, runtime and reconnect. **Owner: the PO**; suggested
+  routing: Epic 5 planning, beside the `owner_epoch` debt.
+- **D3 [MEDIUM] A persistent runtime cycle failure is only an hourly warning.**
+  `RuntimeReconciler._run` turns every non-`ReconciliationFailedError` — including
+  `BrokerStateAdapterError` for the real account condition "two IB contracts resolve to one
+  instrument id" — into `reconcile.cycle_failed` at most hourly. With the adapter's own position
+  reports switched off (4.3, ruling 1A), the session then trades for its whole life with no runtime
+  alignment and, after a disconnect, no reconnect grant. `_FailureStreak.count` exists but nothing
+  acts on it. Should a streak beyond N withdraw permission or stop the session? **Owner: the PO**;
+  suggested routing: Epic 5 planning.
+- **D4 [MEDIUM] The ownership predicate treats any non-synthetic `strategy_id` as owned.**
+  `split_by_owner` and `ResumeCheck.refuse_unowned` refuse only when the synthetic net is non-zero.
+  A cached position under an id no spec entry resolves to (e.g. `SMACrossover-000` left by a
+  pre-fix run in which an earlier entry was refused) passes 4.2 and D-C, and the restarted
+  `SMACrossover-001` reads its own book as flat and re-enters — the FR38 double exposure D-C option
+  B was chosen to prevent. The `order_id_tags` patch prevents new orphans; no test seeds a stale
+  own-id. Option: refuse when a non-synthetic id is not in the session's resolved id set.
+  **Owner: the PO**; suggested routing: Epic 5 planning.
+- **D5 [MEDIUM] Two behaviours the PR codifies are still "Owner: the PO" above (integration
+  merge section) and unruled by the retro.** (a) A forward split while stopped is absorbed by
+  `reconcile` and then the strategy is refused (`strategy.resume_refused`, remedy manual in TWS);
+  `live start` help, README and nautilus.md now document this as intended. (b) Mixed-sides rows
+  pass the startup phase (`broker_covers_strategy` exemption in `_to_act_on`) but stop the running
+  session, and when the net already matches no `reconcile.discrepancy` is emitted at all at
+  startup — visibility depends on `strategy.resume_refused`. Confirm both or change before merge.
+  **Owner: the PO.**
+
+**Deferred (W1–W11).**
+
+- **W1 Runtime corrections write the Redis namespace without an ownership check**
+  (`live_runtime_reconcile.py`, the correction write). The `owner_epoch` fencing gap the retro
+  routed to Epic 5; the worst case here is a 20 s broker read between the tick's reclaim check and
+  the write. **Owner:** Epic 5's `owner_epoch` story.
+- **W2 A broker row that changes every cycle** (scaling in by hand, a resting order part-filling)
+  restarts the debounce forever, with no record and no `reconcile.ok` — silently never clean.
+  **Owner:** Story 4.3's debounce design; the first operator report of a session that never logs
+  `reconcile.ok`.
+- **W3 A stop landing while `on_tick` awaits the broker read** leaves the detached
+  `get_positions` task pending at loop close and can log `reconcile.cycle_failed
+  reason=connection_lost` on a clean exit-0 stop (`live_broker_state.py`, the timeout path); the
+  detached task can also issue a second, unread `reqPositions`. **Owner:** whoever next touches
+  the broker reader's timeout; cancel the detached task on the stop path.
+- **W4 `read_broker_state` is not read-only:** `provider.get_instrument` →
+  `load_with_return_async` → `cache.add_instrument`, so every runtime cycle and every
+  `live reconcile` adds account-held instruments to the node cache and, on the session node,
+  `instruments:*` keys to the Redis namespace. The module docstring and `live_reconcile.py`'s
+  "read-only is structural" are inaccurate for this write. It is also why an unrelated broker
+  holding does not refuse startup: the instrument is loaded before `position_report` runs.
+  **Owner:** Story 4.1's module docstring, when next edited; no behaviour change wanted without
+  a PO look.
+- **W5 Concurrent `live reconcile` invocations share `ibkr_live_client_id + 1`;** the first is
+  evicted mid-read and fails as `BROKER_UNREACHABLE` with no hint. **Owner:** the README's
+  `live reconcile` row (document: one at a time).
+- **W6 Two empty `positionEnd` answers ≥ 60 s apart after a Gateway re-login** stop the session
+  `STRATEGY_POSITION_CONTRADICTED` — the fail-closed direction, positions untouched; there is no
+  quorum on an all-flat answer. **Owner:** the first live observation; P19/P20's operator.
+- **W7 A strategy that stops itself in `on_start`** (momentum with `cache.instrument` None) is
+  counted as started and warm (`warmup.skipped`); pre-existing strategy behaviour, the shortfall
+  is reported at `subscribe`. **Owner:** the strategy-author guide, if one is written.
+- **W8 Sub-minute bar types with a period ≥ 28,800** snap to a whole-day IB duration IB rejects;
+  contained at the deadline rather than refused at config time (`strategy_warmup.py`, the
+  duration mapping). **Owner:** the first sub-minute live strategy.
+- **W9 P16's "✅ passed (A and B)" row in `docs/qa/phase3-live-verification.md`** records none of
+  the values criteria 2–7 require (discrepancy lines, cash values, `elapsed_ms`, grep counts,
+  `live status`); the index promotes it to ✅ on assertion. A provenance gap in the phase-gate
+  evidence, not a code defect. **Owner:** the next P16 run records the values.
+- **W10 Proof-scope caveats already recorded by the story reviews:** the warm-up parity test
+  compares indicator state, not orders, under `OmsType.NETTING` with a hand-captured fingerprint;
+  4.5 AC #4's "runner tier" chain is proven at engine tier; 4.3 D-D's runner test disables the
+  debounce; D-B's factory proof uses a `SimpleNamespace` stand-in. **Owner:** the story entries
+  above; listed here so the integration review's reader sees them in one place.
+- **W11 Minor:** `require_engine_state` and `_read` each run `keys("*")` (two full SCANs inside
+  the 30 s budget); `SessionView.cash_known` has no caller in `src/`; budget exhaustion in
+  `live reconcile` is reported as exit 4 "broker unreachable". **Owner:** whoever next touches
+  `live_session_view.py` / `live_reconcile.py`.

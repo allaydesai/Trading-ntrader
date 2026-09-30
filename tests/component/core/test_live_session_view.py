@@ -663,6 +663,9 @@ class TestTheAccountIsTheOneTheSessionKnew:
         view, _ = _read(adapter, log=log)
 
         assert view.positions == (ViewPosition("AAPL.NASDAQ", Decimal("5")),)
+        # The count rides on the view too, so `live reconcile` can print it
+        # (PR #35 code review, P9).
+        assert view.positions_skipped == 1
         [warning] = [r for r in log.records if r[1] == "reconcile.session_view_other_account"]
         assert warning[0] == "warning"
         assert warning[2]["positions_skipped"] == 1

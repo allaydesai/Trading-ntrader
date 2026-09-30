@@ -325,11 +325,17 @@ The epic text (`epics.md:1548-1571`) is in **bold**. The clarifications under ea
    - Pins on the built `TradingNodeConfig.exec_engine`: `open_check_interval_secs ==
      EXEC_ENGINE_OPEN_CHECK_INTERVAL_SECS` (60.0), `open_check_open_only is True`, and the Story 3.4
      in-flight values unchanged; plus the wheel-default canaries (`None` / `True`).
+     *(Superseded at the Task 1 gate, PO ruling 1A, 2026-09-27: the open-order check stays
+     **off**. What is pinned is `open_check_interval_secs is None` on the built config
+     (`test_live_node_builder.py`) and the measured reason as a named canary
+     (`TestTheOpenOrderCheckStaysOffCanary`, `test_live_runtime_reconcile_engine.py`, Task 1.1b).
+     No `open_check_open_only is True` pin exists — the setting is moot with the check off.)*
    - Real-engine component test: a `LiveExecutionEngine` built from the session's pinned config has a
      running `continuous_reconciliation` task after start (`get_reconciliation_task()` not `None`,
      not done) and it is cancelled by stop; with an IB-shaped client, a fabricated `FILLED` report
      is a no-op and a venue-open report for an order the cache lacks is imported (Task 1.1 pinned as
-     named canaries).
+     named canaries). *(As shipped: the two Task 1.1 canaries named here were not written under
+     those names; the surviving canary is Task 1.1b's above. PR #35 code review, P8.)*
    - Runner component test: across a driven sequence of heartbeat ticks the reconciler runs a
      cycle every `RUNTIME_RECONCILE_EVERY_TICKS` ticks while `CONNECTED`, and every correction it
      makes goes through `reconcile_execution_report` only (call-recording spy + an AST check that
@@ -729,7 +735,11 @@ Claude Opus 5.5 (`claude-opus-5-5`), BMAD dev-story workflow, 2026-09-27.
   4. **A runtime strategy contradiction stops the session (D-D, PO ruling 2A).** Refused before
      anything is written; `ReconciliationFailedError(STRATEGY_POSITION_CONTRADICTED,
      scope="runtime")` out of the tick; the runner's ordinary teardown (the inert stop path —
-     nothing closes, flattens or resizes; `close_all_positions()` is called nowhere in `src/`); exit
+     nothing closes, flattens or resizes; `close_all_positions()` is called nowhere in the core
+     modules the stop-path scan covers — *as written, "nowhere in `src/`" was false: the
+     strategies submodule's `custom/sma_crossover_long_only.py` calls it in `on_stop`, and the
+     registry discovers `custom/`, so a session that named that strategy would flatten on stop.
+     Neither built-in does. PR #35 code review, P8*); exit
      1 naming the instrument and both quantities. Proven through `runner.run()` against a broker
      double and against the real engine (the strategy's +22 untouched, no synthetic position).
   5. **Trading permission after a reconnect (AC #4, D-F).** `confirm_state_reestablished` goes live

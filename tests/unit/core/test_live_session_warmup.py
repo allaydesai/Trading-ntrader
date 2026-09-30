@@ -467,11 +467,17 @@ class TestTheDeadline:
         assert warmup_deadline_seconds(settings) == 60 + WARMUP_DEADLINE_MARGIN_SECONDS
         assert WARMUP_DEADLINE_MARGIN_SECONDS > 0
 
-    def test_two_strategies_both_timing_out_still_trade_by_the_open(self):
-        """AC #6's broker-double half: a session started at 09:25 ET with the
-        default timeout and two strategies whose warm-ups both fail is past
-        its startup by 09:27:30 — inside the five minutes NFR3 allows."""
-        settings = SimpleNamespace(ibkr_request_timeout=60)
+    def test_the_default_deadline_leaves_room_for_two_strategies_before_the_open(self):
+        """AC #6's broker-double half, the constant: with the default timeout
+        one deadline is 75 s, so two in series end by 09:27:30 from a 09:25
+        start — inside the five minutes NFR3 allows. That the runner really
+        spends at most one deadline per strategy, in series, is the runner-tier
+        test in ``test_session_runner_warmup.py`` (PR #35 code review, P6)."""
+        from src.config import IBKRSettings
+
+        # The model's own default, not a literal: a raised default fails here.
+        default_timeout = IBKRSettings.model_fields["ibkr_request_timeout"].default
+        settings = SimpleNamespace(ibkr_request_timeout=default_timeout)
 
         assert 2 * warmup_deadline_seconds(settings) < 5 * 60
 

@@ -939,7 +939,8 @@ Claude Opus 5.5 (`claude-opus-5-5`), in the Epic 4 harness worktree
     - a never-connecting node and a silent broker both end within budget;
     - `elapsed_ms` carried.
 
-    Live: P16, defined, not run.
+    Live: P16, defined, not run *(at story close; run and passed, A and B, in the 2026-09-28 Epic 4
+    live run — `docs/qa/phase3-live-verification.md`)*.
 - **Guard lists (CLAUDE.md Anti-Patterns), all in this change:**
   - `NODE_FACING_MODULES` gained both core modules and `EXEMPT_MODULES` the CLI module;
     `TestImportPurity.MODULES` gained both core modules. Each has its reason.
@@ -959,7 +960,8 @@ Claude Opus 5.5 (`claude-opus-5-5`), in the Epic 4 harness worktree
   - README validated and updated: the `live reconcile` row, exit `5`, a local-view note.
     `IBKR_LIVE_CLIENT_ID`'s "reserves `+ 1` for reconcile" is now true.
 - **Live verification.** P16 is written and recorded as **defined, not run**: no Gateway, and no
-  `TWS_ACCOUNT` in this worktree. It is informational only. Nothing was submitted; `--real-money`,
+  `TWS_ACCOUNT` in this worktree *(at story close; passed, A and B, in the 2026-09-28 Epic 4 live
+  run — see `docs/qa/phase3-live-verification.md`)*. It is informational only. Nothing was submitted; `--real-money`,
   `.env`, docker and the kill/reconnect/connection-loss scripts were not touched.
 - **Routed** (`deferred-work.md`, "Deferred from: story-4.6"):
   - G3 amendment → architecture / retro;

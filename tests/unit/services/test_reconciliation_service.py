@@ -211,6 +211,54 @@ class TestRender:
         assert lines[-1].startswith("RESULT: clean")
         assert "positions=0" in lines[-1]
 
+
+class TestPositionsHeldForAnotherAccountAreSaidSo:
+    """PR #35 code review, P9: after a ``TWS_ACCOUNT`` change the session view
+    leaves the old account's positions out, so every broker line would read
+    as a real mismatch with nothing to say why."""
+
+    def _skipping(self, count: int) -> SessionView:
+        return SessionView(
+            trader_id="PAPER-0e8f1c2a",
+            positions=(),
+            cash=(CashBalance("USD", Decimal("1000.00")),),
+            positions_skipped=count,
+        )
+
+    def test_the_count_is_carried_into_the_report(self):
+        report = _compare(_broker(_bp("NVDA.NASDAQ", "10")), self._skipping(2))
+
+        assert report.local_positions_skipped == 2
+        # The broker's NVDA still reads as a discrepancy: the count explains, never excuses.
+        assert not report.is_clean
+
+    def test_the_report_prints_the_count_and_names_the_likely_cause(self):
+        lines = render_report(_compare(_broker(_bp("NVDA.NASDAQ", "10")), self._skipping(2)))
+
+        [note] = [line for line in lines if line.startswith("note:")]
+        assert "2 position(s)" in note
+        assert "another" in note or "other than the one configured" in note
+        assert "TWS_ACCOUNT" in note
+        assert lines.index(note) < lines.index(lines[-1])
+        assert lines[-1].startswith("RESULT: discrepancy")
+
+    def test_a_clean_report_still_prints_the_hint(self):
+        """Flat on both sides, but with a position left out: the operator must
+        still learn the view was not the whole cache."""
+        lines = render_report(_compare(_broker(), self._skipping(1)))
+
+        assert lines[-1].startswith("RESULT: clean")
+        assert any("1 position(s)" in line for line in lines)
+
+    def test_no_skipped_positions_prints_nothing(self):
+        lines = render_report(_compare(_broker(), _local()))
+
+        assert not [line for line in lines if "TWS_ACCOUNT" in line]
+
+    def test_a_negative_count_is_refused(self):
+        with pytest.raises(ValueError, match="count"):
+            self._skipping(-1)
+
     def test_a_position_discrepancy_names_instrument_expected_actual_and_difference(self):
         lines = render_report(_compare(_broker(_bp("AAPL.NASDAQ", "4", price="150.5")), _local()))
 

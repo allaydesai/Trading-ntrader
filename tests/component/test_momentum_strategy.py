@@ -10,6 +10,36 @@ from src.models.strategy import MomentumParameters
 
 
 @pytest.mark.component
+class TestTheLiveDefaultTradeSize:
+    """``trade_size`` defaults to 100 shares in all three places that carry it
+    (Epic 4 retro; PR #35 code review, P7). ``Settings.trade_size`` is pinned
+    in ``tests/unit/test_config.py``; these are the other two. 1,000,000 was
+    inert only while the strategy's SMA could never cross (Story 4.4 fixed
+    that), so a drift back would reach a real paper account as a real-money-
+    scale order."""
+
+    def test_the_parameter_model_default(self):
+        assert MomentumParameters().trade_size == Decimal("100")
+
+    def test_the_registry_default(self):
+        from src.core.strategies.sma_momentum import SMAMomentum  # noqa: F401  # registers it
+        from src.core.strategy_registry import StrategyRegistry
+
+        assert StrategyRegistry.get("momentum").default_config["trade_size"] == 100
+
+    def test_the_three_defaults_agree(self):
+        """One value, three carriers — a drift in any one goes red by name."""
+        from src.config import Settings
+        from src.core.strategies.sma_momentum import SMAMomentum  # noqa: F401  # registers it
+        from src.core.strategy_registry import StrategyRegistry
+
+        registry = Decimal(StrategyRegistry.get("momentum").default_config["trade_size"])
+        settings = Settings.model_fields["trade_size"].default
+
+        assert MomentumParameters().trade_size == registry == Decimal(settings)
+
+
+@pytest.mark.component
 class TestSMAMomentumStrategy:
     """Test cases for SMA Momentum strategy with Nautilus Trader integration."""
 
