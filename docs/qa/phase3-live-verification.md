@@ -39,22 +39,24 @@ procedure passed; it is evidence that the tooling exists to run it.
 | | P13 | A session rejected on every order stays up and says so | ✅ 2026-09-22 |
 | **Restart resume** | P9 | `live status` against a live session, then a `kill -9` read as stale | ✅ 2026-08-28 |
 | | P10 | A restarted, already-traded session restores its evidence | ✅ 2026-09-11 |
-| | P14 | A restarted session is warm before its first live bar | ⏳ 2026-09-22 |
-| | P17 | Startup reconciliation against the real broker (P17a read-only; P17b refusal) | ⏳ 2026-09-27 |
-| | P19 | Resume mid-position: stop and restart across an open position, no artificial exit | ⏳ 2026-09-28 |
-| **Reconciliation** | P15 | The broker's positions and cash, matched against TWS | ⏳ 2026-09-22 |
-| | P16 | `ntrader live reconcile` on demand, including against a running session | ⏳ 2026-09-27 |
-| | P17 | Startup reconciliation, as above | ⏳ 2026-09-27 |
-| | P18 | Runtime alignment: a TWS change corrected, a reconnect re-established | ⏳ 2026-09-27 |
-| | P20 | Corporate actions absorbed and named; a reverse split refused | ⏳ 2026-09-28 |
+| | P14 | A restarted session is warm before its first live bar | ✅ 2026-09-28 |
+| | P17 | Startup reconciliation against the real broker (P17a read-only; P17b refusal) | ⚠️ 2026-09-28: P17a ✅; P17b still ⏳ (operator only) |
+| | P19 | Resume mid-position: stop and restart across an open position, no artificial exit | ⚠️ 2026-09-28: P19b ✅; P19a criterion 1 not literally met, accepted by PO ruling (see Result log) |
+| **Reconciliation** | P15 | The broker's positions and cash, matched against TWS | ✅ 2026-09-28 |
+| | P16 | `ntrader live reconcile` on demand, including against a running session | ✅ 2026-09-28 |
+| | P17 | Startup reconciliation, as above | ⚠️ 2026-09-28: P17a ✅; P17b still ⏳ (operator only) |
+| | P18 | Runtime alignment: a TWS change corrected, a reconnect re-established | ⏳ 2026-09-27 (operator only) |
+| | P20 | Corporate actions absorbed and named; a reverse split refused | ⏳ 2026-09-28 (operator only) |
 
-**Where the gate stands (2026-09-28).** Connectivity, gate refusal and the complete round trip
-have passed live, with P4 partial. Every Epic 4 procedure (P14–P20) is **defined, not run**:
-- the story sessions that wrote them had no `.env`, and must never create or read one;
-- most of them need `live start` (which can trade) or a position held at the broker, so they are
-  operator-only.
-
-Running them is the operator's phase-gate step.
+**Where the gate stands (2026-09-28, updated at the Epic 4 retrospective).** Connectivity, gate
+refusal and the complete round trip have passed live, with P4 partial. A live E2E pass on
+2026-09-28 (14:17–14:41 ET, `p3-epic4-base` worktree, f892d56) closed most of Epic 4's read-only
+and resume procedures: **P14, P15, P16 (A+B), P17a and P19b passed live**; **P19a's criterion 1**
+printed a non-zero `EXTERNAL` grep count on a position-holding account and was accepted as a
+documented exception by PO ruling rather than re-run (see P19's Result log — the filter's own
+discard-lines, not an unfiltered import, are what matched). **Still genuinely not run**: P17b,
+P18, P20 (all operator-only — they start strategies or change a broker position by hand) and the
+09:25 ET NFR3 variants. Running those remains the operator's phase-gate step.
 
 ## Procedure P1: build, start and stop a node against IBKR paper
 
@@ -1765,6 +1767,7 @@ the `session.started` timestamp and the first `order.*`/bar record against 09:30
 | Date | Operator | Result | Notes |
 | ---- | -------- | ------ | ----- |
 | 2026-09-22 | Story 4.4 dev session | ⏳ **defined, not run** | Gateway check recorded rather than assumed: at 16:39 ET (Tuesday, after the RTH close) ports 4001, 4002, 7496 and 7497 were all closed — no Gateway or TWS running; Redis (6379) and Postgres (5432) were up. No live bar can arrive outside RTH in any case. Informational evidence only, never a gate for this story; the broker-double proofs are `test_strategy_warmup_engine.py` (real `DataEngine`, AC #4), `test_session_runner_warmup.py` (runner, AC #7) and `test_warmup_backtest_parity.py` (AC #3). |
+| 2026-09-28 | Epic 4 retro live E2E (14:17–14:41 ET, Mon) | ✅ **passed** | Run from the `p3-epic4-base` worktree (f892d56), against a real paper Gateway. 5-day warm-up before the first live bar, seam clean (no `warmup.seam_gap`/`warmup.seam_duplicate_dropped`). D6's grep run first (162/10182/366, with the timestamp-digit false-positive fixed by requiring a `code[: =]+`/`error[ =:]+` prefix): only the benign teardown `query cancelled (code: 162)` hit. Logs: `logs/*-0928.log` in that worktree. |
 
 ## Procedure P15: read the broker's positions and cash, and match them against TWS
 
@@ -1876,6 +1879,7 @@ type and where it was raised.
 | Date | Operator | Result | Notes |
 | ---- | -------- | ------ | ----- |
 | 2026-09-22 | Story 4.1 dev session | ⏳ **defined, not run** | Attempted at 21:15 ET (Tuesday). This procedure does not need RTH, but the story's harness worktree has no `.env`: it is gitignored, and the charter forbids creating or reading one. The attempt, `live_node_probe.py --run-seconds 1 --verify-account --read-broker-state`, therefore stopped exactly where it should, before any socket was opened: `RESULT: fail reason=config_error msg=Cannot build an IBKR execution client: TWS_ACCOUNT is not set …`. That is evidence the tooling runs and fails closed, not that P15 passes. Whether a Gateway was listening could not be checked: the session's sandbox refused every port probe (`nc`, `lsof`). Informational only, never a gate for Story 4.1. The broker-double proofs are `test_live_broker_state_adapter.py`, which uses the real IB client, exec client, instrument provider and `ExecutionEngine` with only the socket stood in. It covers AC #1, #3 and #5 and the D-C no-cancel property. `test_live_broker_state.py` covers every AC #4 reason. Run P15 from a checkout that has `.env` the next time a Gateway is up. |
+| 2026-09-28 | Epic 4 retro live E2E (14:17–14:41 ET, Mon) | ✅ **passed** | Run from the `p3-epic4-base` worktree (f892d56), which does carry `.env`. Broker read completed in 71 ms. Positions and cash matched TWS; nothing traded. Alembic stayed at `85c949ac0374`. Logs: `logs/p15-0928.log`. |
 
 ## Procedure P16: check a session's positions and cash against IBKR on demand
 
@@ -2000,6 +2004,7 @@ RESULT: discrepancy — positions=<n> cash=<n> line(s) differ from IBKR (…); n
 (1) `live reconcile p13-0922` printed `reconcile: session p13-0922 (status=stopped) against IBKR on client_id=11` (the `+ 1` reservation), then `gate.static … status=ok`, then `reconcile.session_view_failed reason=no_engine_state` in 5.5 ms, and `live reconcile failed: … (no_engine_state) …`, exit `1`, before any IBKR socket. The session row was read from PostgreSQL and Redis was PINGed; no Gateway connection was attempted.
 (2) `live reconcile p7-fill-0901` passed the same header, `gate.static` and the session-state precheck, then stopped at the builder, before any IBKR socket: `live reconcile failed: Cannot build an IBKR execution client: TWS_ACCOUNT is not set …`, exit `1`.
 The worktree has no `.env`, and the charter forbids creating or reading one. **Session side, read for real (load-only, no broker needed):** `p7-fill-0901`'s engine cache (18 keys) holds **AAPL.NASDAQ +4 and NVDA.NASDAQ +22**. That is the namespace the Epic 3 retro cites for a phantom position the broker did not hold, so a Variant A run against it should name any line IBKR no longer carries. Its `accountSummary` key exists, but it was read here with a placeholder account, so cash read `unknown`. The namespaces of `p12-0921`, `p13-0922` and `rth-day-1` are **empty** on this Redis, and the reader reported `no_engine_state` for each rather than "flat". Pick a session that has run against this Redis for Variant A. Informational only, never a gate for Story 4.6. The broker-double proofs are `test_live_reconcile.py` (driver, including the `+ 1` pin on the real builder), `test_live_session_view.py`, `test_live_session_view_redis.py` (real Redis and `MONITOR`), `test_reconciliation_service.py` and `test_live_reconcile_cli.py`. |
+| 2026-09-28 | Epic 4 retro live E2E (14:17–14:41 ET, Mon) | ✅ **passed (A and B)** | Run from the `p3-epic4-base` worktree (f892d56). Variant A: `live reconcile` on a genuinely stale session exited `5` (`EXIT_DISCREPANCY`) in ~11 s. Variant B: run on `ibkr_live_client_id + 1` beside a running session, clean, no disturbance to the running session. Logs: `logs/p16-0928.log`. |
 
 ## Procedure P17: startup reconciliation against the real broker
 
@@ -2100,6 +2105,7 @@ exit=1
 | Date | Operator | Result | Notes |
 | ---- | -------- | ------ | ----- |
 | 2026-09-27 | Story 4.2 dev session | ⏳ **P17a defined, not run; P17b defined, not run (operator only)** | P17a attempted: `live_node_probe.py --run-seconds 1 --verify-account --reconcile` stopped at `RESULT: fail reason=config_error msg=Cannot build an IBKR execution client: TWS_ACCOUNT is not set…` before any socket opened — the story's harness worktree has no `.env` (gitignored; the charter forbids creating or reading one), the Story 4.1 P15 precedent. Note for the operator: the probe needs the repo root importable (`PYTHONPATH=.` or run it via `python -m`/`runpy`), a pre-existing property of the script. P17b needs a session with a stale strategy position and starts strategies if reconciliation passes, so it is never run by an automated session. Both are informational evidence only (NFR33), never a gate: the same logic is proven against broker doubles and a real `LiveExecutionEngine` in `tests/component/core/test_live_startup_reconcile_engine.py` and `test_session_runner_phases.py`. |
+| 2026-09-28 | Epic 4 retro live E2E (14:17–14:41 ET, Mon) | ✅ **P17a passed**; P17b still not run | Run from the `p3-epic4-base` worktree (f892d56). P17a on a flat account: `reconcile.ok`, 0 discrepancies. P17b (needs a stale strategy position and starts strategies if reconciliation passes) remains operator-only and was not run this session. Logs: `logs/p17a-0928.log`. |
 
 ## Procedure P18: runtime state stays aligned with the broker
 
@@ -2353,6 +2359,7 @@ trade.persisted ...
 | Date | Operator | Result | Notes |
 | ---- | -------- | ------ | ----- |
 | 2026-09-28 | Story 4.5 dev session | ⏳ **P19a defined, not run; P19b defined, not run (operator only)** | Port check at 11:31 ET Monday: 4001/4002/7496/7497 **closed** — no Gateway was running; Redis 6379 and Postgres 5432 open. P19a also needs `TWS_ACCOUNT`, and this harness worktree has no `.env` (the charter forbids creating or reading one — the P15/P17a/P18 precedent). P19b needs a position opened and closed at the broker, which the charter forbids an automated session to do. Informational evidence only (NFR33), never a gate: the same logic is proven against broker doubles and real engines in `tests/component/core/test_live_session_resume_engine.py` (process A → B across a shared cache database, under the session's own exec config), `tests/component/core/test_session_runner_resume.py`, `tests/component/core/test_strategy_own_book.py`, `tests/component/core/test_warmup_seam.py`, `tests/integration/core/test_resume_round_trip_redis.py` (real Redis) and `tests/integration/db/test_trade_record.py` (FR19, real Postgres). |
+| 2026-09-28 | Epic 4 retro live E2E (14:17–14:41 ET, Mon) | ⚠️ **P19a criterion 1 not literally met (accepted, PO ruling); P19b passed** | Run from the `p3-epic4-base` worktree (f892d56). **P19a**, on an account holding a (short) position: `grep -c EXTERNAL` on the reconciliation lines printed `3`, not `0` — `Filtering unclaimed EXTERNAL orders`, an inferred `OrderFilled` at `position_id=NVDA.NASDAQ-EXTERNAL`, and `Filtered 1 unclaimed EXTERNAL orders`; `INTERNAL-DIFF` import still happened and nothing traded. On a flat account the same run read `0`, as specified. **PO ruling (Epic 4 retro, 2026-09-28): accepted as a documented exception, not a blocker** — these are the filter's own log lines naming what it discarded, not an unfiltered `EXTERNAL` order reaching the cache; D-A's actual guarantee (no fabricated `EXTERNAL` order reaches the cache) held. The pass criterion's literal wording should be read as "no unclaimed `EXTERNAL` order is imported", not "the substring `EXTERNAL` never appears in the log." **P19b**: `reconcile.ok` with `discrepancies=0`/`synthetic_positions=0`, one `strategy.resumed` with `opened_before_this_run=True`, one `trade.aggregated`/`trade.persisted` on the exit, and the `trades` row carried run 1's `entry_timestamp` in the same `session_id`. `flatten_position.py` also exercised live for the first time: dry-run wrong-side/wrong-qty refused with zero orders, `--confirm` filled a 21-share BUY and the broker read back flat. Logs: `logs/p19a-0928.log`, `logs/p19b-*-0928.log`. |
 
 ## Procedure P20: corporate actions are absorbed through broker-authoritative state
 
