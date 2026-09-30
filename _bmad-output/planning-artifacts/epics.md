@@ -1704,6 +1704,55 @@ restart resume, and reconciliation — the phase-gate evidence that cannot live 
 
 ---
 
+### Story 4.8: Clear a Stranded Order After a Broker-Confirmed Fill or Cancel
+
+> Added post-retro (2026-09-28), not part of the original FR32–FR39 scope. Commissioned by the PO
+> at the Epic 4 retrospective to close "the stranded `ACCEPTED` order and the `p7-position-test`
+> stall" — measured, disclosed and re-routed by Stories 4.2, 4.3 and 4.5 without a fix ever being
+> built. Full story: `4-8-clear-a-stranded-order-after-a-broker-confirmed-fill-or-cancel.md`.
+
+As the operator,
+I want an order the cache still shows open after IBKR has already resolved it — filled or
+cancelled while the session was stopped or disconnected — cleared automatically instead of
+staying `ACCEPTED` forever,
+So that a session's record of its own orders stays true to the broker, and a namespace never
+carries a permanently-stale order into every restart after it.
+
+**Acceptance Criteria:**
+
+**Given** a cached order whose status is `ACCEPTED` (or `PARTIALLY_FILLED`/`TRIGGERED`) with a
+`venue_order_id` set
+**When** the broker's own open-orders response, read defensively, does not list it on two
+consecutive runtime cycles at least 60 s apart
+**Then** the order is reconciled to `CANCELED` through the engine's own reconciliation path, and
+one `reconcile.stale_order_cleared` record is logged naming the instrument, side, quantity and
+`client_order_id` (FR35).
+
+**Given** the broker read fails for any reason
+**When** a runtime cycle runs
+**Then** the cycle is unaffected — no order is cleared, nothing escapes the tick, and the failure
+is logged at most once per streak (NFR20).
+
+**Given** an order was in fact filled while the session was down or disconnected
+**When** it is cleared
+**Then** the record discloses that the true outcome could not be determined here and no fill,
+price or commission is fabricated — the existing position-level reconciliation carries the real
+economic effect (NFR26).
+
+**Given** Story 4.3's PO ruling that the native open-order consistency check stays off
+**When** this story ships
+**Then** that setting is untouched — this story detects and resolves a stranded order with its
+own targeted, defensive broker read, never by re-enabling the native check.
+
+**Given** the historical `p7-position-test` live stall occurred inside Nautilus's own
+`node:connect` sequence, before any of this project's code runs
+**When** this story's design is evaluated
+**Then** it is judged honestly on what it can close — the stranded order *record*, for every
+session from here on — and does not claim to explain or prevent a hang that happens before its
+own code has a chance to run.
+
+---
+
 ## Epic 5: Seal a Session & Compare It Against Its Backtest
 
 The payoff. An explicit seal turns a stopped session into an ordinary run record through the same
