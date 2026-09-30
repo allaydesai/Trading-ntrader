@@ -219,6 +219,59 @@ class TestWarmupCompletedIsLoggedBeforeTheStrategySubscribes:
         assert timeline.events() == [COMPLETED_EVENT, "subscribe_bars"]
 
 
+class TestALoggingFailureNeverFailsTheWarmup:
+    """Code review of PR #35: every other module's ``_emit`` never raises. The
+    history callback's own records sat inside the ``try`` whose ``except``
+    marks the request ``failed``, so a failing log sink contained a strategy
+    whose history had in fact arrived."""
+
+    class _RaisingLog(_Log):
+        def info(self, event: str, **fields) -> None:
+            raise RuntimeError("sink down")
+
+        def warning(self, event: str, **fields) -> None:
+            raise RuntimeError("sink down")
+
+        def error(self, event: str, **fields) -> None:
+            raise RuntimeError("sink down")
+
+    def _watch_with_raising_log(self, timeline: _Timeline) -> WarmupWatch:
+        clock = _Clock()
+
+        async def sleeper(seconds: float) -> None:
+            clock.now += seconds
+            await asyncio.sleep(0)
+
+        return WarmupWatch(
+            log=self._RaisingLog(timeline), deadline_seconds=DEADLINE, clock=clock, sleeper=sleeper
+        )
+
+    async def test_the_milestone_sink_raising_still_completes_and_subscribes(self):
+        timeline = _Timeline()
+        watch = self._watch_with_raising_log(timeline)
+        strategy = _Strategy(timeline)
+        watch.instrument(strategy, spec_strategy_id="sma_crossover")
+
+        strategy.on_start()
+        settled = await watch.settle("sma_crossover", stop_requested=_never_stopped)
+
+        assert settled is True
+        assert timeline.events() == ["subscribe_bars"]
+
+    async def test_the_failure_sink_raising_still_reports_a_raising_callback_as_failed(self):
+        """The ``except`` that records ``callback_raised`` must not itself raise
+        into the response queue (F6) when the sink is down."""
+        timeline = _Timeline()
+        watch = self._watch_with_raising_log(timeline)
+        strategy = _Strategy(timeline, raises=RuntimeError("boom"))
+        watch.instrument(strategy, spec_strategy_id="sma_crossover")
+
+        strategy.on_start()
+
+        with pytest.raises(WarmupFailedError):
+            await watch.settle("sma_crossover", stop_requested=_never_stopped)
+
+
 class TestTheWrapperBindsTheRealSignature:
     def test_a_positional_callback_is_wrapped_too(self):
         timeline = _Timeline()

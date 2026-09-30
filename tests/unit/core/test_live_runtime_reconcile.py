@@ -219,6 +219,28 @@ class TestTheReadersOwnRecordsAreQuieted:
         assert not _events(logs, "reconcile.broker_state_failed")
         assert _events(logs, OK_EVENT), "premise: the cycle's own records are captured"
 
+    def test_only_the_two_per_read_records_are_dropped(self):
+        """Code review of PR #35: F9 names two records. Story 4.1 D-F's
+        ``reconcile.broker_instrument_unresolved`` (WARNING, once per unresolved
+        contract) is the only place the contract's symbol and error type are
+        named, and at runtime it must still reach the log."""
+        world = _World()
+
+        async def _unresolved(node, *, log):
+            log.info("reconcile.broker_state_retrieved", positions={})
+            log.warning(
+                "reconcile.broker_instrument_unresolved", con_id=1, symbol="X", sec_type="BOND"
+            )
+            return _state()
+
+        world.reconciler._read_state = _unresolved
+        with capture_logs() as logs:
+            world.cycles(1)
+
+        assert not _events(logs, "reconcile.broker_state_retrieved")
+        (record,) = _events(logs, "reconcile.broker_instrument_unresolved")
+        assert (record["symbol"], record["sec_type"]) == ("X", "BOND")
+
 
 class TestDebounce:
     def test_a_discrepancy_seen_once_changes_nothing(self):

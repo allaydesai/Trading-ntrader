@@ -506,6 +506,11 @@ def _correct(
             accepted, failure = False, f"it raised {type(exc).__name__}"
         if not accepted:
             applied = [done.instrument_id for done in rows[:index]]
+            # D-F: a row the framework took before refusing this one was a
+            # discrepancy that got resolved — logged so, as the running
+            # session's cycle does, never only named in the message below
+            # (code review of PR #35).
+            _log_taken(node, rows[:index], broker, log)
             already = (
                 f"; already corrected broker-ward before it: {', '.join(applied)}"
                 if applied
@@ -519,6 +524,19 @@ def _correct(
                 f"({failure}){already}",
             )
     return tuple(rows)
+
+
+def _log_taken(
+    node: Any, corrected: Sequence[PositionDiscrepancy], broker: BrokerState, log: Any
+) -> None:
+    """Log ``resolution="broker"`` for each correction the re-read proves took —
+    on the way to a refusal (``_correct``), the same rule the success path
+    applies inline after every row: a report the framework accepted without
+    acting on must not read "resolved"."""
+    still = {row.instrument_id for row in compare_positions(cached_positions(node.cache), broker)}
+    for row in corrected:
+        if row.instrument_id not in still:
+            log_discrepancy(log, row, "broker")
 
 
 def position_report(

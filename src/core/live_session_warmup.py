@@ -351,10 +351,11 @@ def _wrap_callback(
         try:
             if request.state != "pending" or getattr(strategy, "is_faulted", False):
                 request.state = "abandoned" if request.state == "pending" else request.state
-                log.info(
+                _emit(
+                    log,
+                    "info",
                     DISCARDED_EVENT,
-                    strategy_id=request.spec_strategy_id,
-                    bar_type=request.bar_type,
+                    {"strategy_id": request.spec_strategy_id, "bar_type": request.bar_type},
                 )
                 return
             _log_completed(log, clock, strategy, request)
@@ -367,12 +368,16 @@ def _wrap_callback(
             raise
         except BaseException as exc:  # noqa: BLE001 - F6: never into the response queue
             request.state = "failed"
-            log.error(
+            _emit(
+                log,
+                "error",
                 FAILED_EVENT,
-                strategy_id=request.spec_strategy_id,
-                bar_type=request.bar_type,
-                reason="callback_raised",
-                error_type=type(exc).__name__,
+                {
+                    "strategy_id": request.spec_strategy_id,
+                    "bar_type": request.bar_type,
+                    "reason": "callback_raised",
+                    "error_type": type(exc).__name__,
+                },
             )
 
     return callback
@@ -380,22 +385,27 @@ def _wrap_callback(
 
 def _log_completed(log: Any, clock: Callable[[], float], strategy: Any, request: _Request) -> None:
     """``warmup.completed`` — INFO when warm (or nothing is registered to be
-    warm), WARNING when the history fell short of an indicator's period."""
+    warm), WARNING when the history fell short of an indicator's period.
+    Never raises: a failing sink must not turn a history that arrived into
+    ``callback_raised`` (code review of PR #35)."""
     try:
         registered = list(strategy.registered_indicators)
         cold = [repr(i) for i in registered if not i.initialized]
         initialized: bool | None = bool(strategy.indicators_initialized()) if registered else None
     except Exception:  # noqa: BLE001 - reading state must never cost the warm-up
         cold, initialized = [], None
-    emit = log.warning if initialized is False else log.info
-    emit(
+    _emit(
+        log,
+        "warning" if initialized is False else "info",
         COMPLETED_EVENT,
-        strategy_id=request.spec_strategy_id,
-        bar_type=request.bar_type,
-        requested_from=request.requested_from,
-        elapsed_ms=round((clock() - request.issued_at) * 1000, 1),
-        indicators_initialized=initialized,
-        not_initialized=cold,
+        {
+            "strategy_id": request.spec_strategy_id,
+            "bar_type": request.bar_type,
+            "requested_from": request.requested_from,
+            "elapsed_ms": round((clock() - request.issued_at) * 1000, 1),
+            "indicators_initialized": initialized,
+            "not_initialized": cold,
+        },
     )
 
 

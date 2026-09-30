@@ -733,13 +733,23 @@ class TestReviewFindings:
             apply(report) and str(report.instrument_id) == AAPL
         )
 
-        with pytest.raises(ReconciliationFailedError) as caught:
-            _reconcile(node, _reader())
+        with capture_logs() as logs:
+            with pytest.raises(ReconciliationFailedError) as caught:
+                _reconcile(node, _reader())
 
         error = caught.value
         assert error.reason is ReconciliationFailure.RESOLUTION_REFUSED
         assert [row.instrument_id for row in error.discrepancies] == [NVDA]
         assert f"already corrected broker-ward before it: {AAPL}" in str(error)
+        # D-F: a row the framework took before refusing a later one is a
+        # discrepancy that was resolved — logged, never only named in an error
+        # message (code review of PR #35).
+        assert [
+            (r["instrument_id"], r["resolution"]) for r in _events(logs, DISCREPANCY_EVENT)
+        ] == [
+            (AAPL, "broker"),
+            (NVDA, "refused"),
+        ]
 
     def test_an_engine_exception_is_the_typed_refusal_not_an_escape(self):
         node = _node(_Cache(positions=[_Position(AAPL, "EXTERNAL", "4")]))

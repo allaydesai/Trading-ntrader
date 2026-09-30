@@ -72,6 +72,8 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from src.core.live_broker_state import FAILED_EVENT as READER_FAILED_EVENT
+from src.core.live_broker_state import RETRIEVED_EVENT as READER_RETRIEVED_EVENT
 from src.core.live_broker_state import find_ib_exec_client, read_broker_state
 from src.core.live_connection_monitor import (
     ConnectionMonitor,
@@ -124,15 +126,42 @@ _REMAINS = "after the correction, the cache still disagrees with the broker"
 
 
 class _Quiet:
-    """A logger that drops everything: the broker reader's per-read records."""
+    """The broker reader's logger for a cycle (F9): its two per-read records —
+    ``reconcile.broker_state_retrieved`` (INFO) and
+    ``reconcile.broker_state_failed`` (ERROR), ~390 lines a day at 60 s — are
+    dropped. Everything else reaches the session log, such as Story 4.1 D-F's
+    ``reconcile.broker_instrument_unresolved`` WARNING, the only record that
+    names an unresolved contract's symbol and error type (code review of PR
+    #35: the first version dropped every level). Never raises."""
 
-    def _drop(self, *args: Any, **kwargs: Any) -> None:
+    _DROPPED = frozenset({READER_RETRIEVED_EVENT, READER_FAILED_EVENT})
+
+    def __init__(self, log: Any) -> None:
+        self._log = log
+
+    def _forward(self, level: str, event: str, *args: Any, **kwargs: Any) -> None:
+        if event in self._DROPPED:
+            return None
+        try:
+            getattr(self._log, level)(event, *args, **kwargs)
+        except Exception:  # noqa: BLE001 - diagnostics must not change the outcome
+            pass
         return None
 
-    debug = info = warning = error = exception = _drop
+    def debug(self, event: str, *args: Any, **kwargs: Any) -> None:
+        self._forward("debug", event, *args, **kwargs)
 
+    def info(self, event: str, *args: Any, **kwargs: Any) -> None:
+        self._forward("info", event, *args, **kwargs)
 
-_QUIET = _Quiet()
+    def warning(self, event: str, *args: Any, **kwargs: Any) -> None:
+        self._forward("warning", event, *args, **kwargs)
+
+    def error(self, event: str, *args: Any, **kwargs: Any) -> None:
+        self._forward("error", event, *args, **kwargs)
+
+    def exception(self, event: str, *args: Any, **kwargs: Any) -> None:
+        self._forward("exception", event, *args, **kwargs)
 
 
 @dataclass(frozen=True, slots=True)
@@ -249,7 +278,7 @@ class RuntimeReconciler:
 
     async def _run(self, scope: str) -> None:
         try:
-            observation = await observe(self._node, self._read_state, self._clock)
+            observation = await observe(self._node, self._read_state, self._clock, self._log)
             if observation is None:
                 self._ok.needed = True  # the cache moved during the read: no action, no progress
                 return
@@ -314,17 +343,18 @@ class RuntimeReconciler:
 
 
 async def observe(
-    node: Any, read_state: BrokerStateReader, clock: Callable[[], float]
+    node: Any, read_state: BrokerStateReader, clock: Callable[[], float], log: Any
 ) -> _Observation | None:
     """Read the broker and compare, or ``None`` when the cache moved meanwhile.
 
-    The reader's own records are dropped (F9); instruments with an order still
-    in flight are deferred (PO ruling 2A) — the in-flight sweep owns them.
+    The reader's two per-read records are dropped (F9, :class:`_Quiet`);
+    instruments with an order still in flight are deferred (PO ruling 2A) —
+    the in-flight sweep owns them.
     """
     cache = node.cache
     started = clock()
     before = _fingerprint(cached_positions(cache))
-    broker = await read_state(node, log=_QUIET)
+    broker = await read_state(node, log=_Quiet(log))
     cached = cached_positions(cache)
     if _fingerprint(cached) != before:
         return None

@@ -165,10 +165,15 @@ class PositionDiscrepancy:
         never carry the account through zero into a position nobody asked for.
         Strategies on both sides of one instrument keep the pre-4.7 equality
         rule: their net cannot tell whether each lot is covered (code review).
+        Exact equality, with no ``strategy != 0`` guard: lots exist whenever
+        the sides are mixed, so a net of zero is two open lots, not "no
+        position" — A +10 and B −10 against a broker at +5 is refused, or the
+        correction lands in a synthetic +5 and A closing its 10 carries the
+        account short 5 (code review of PR #35).
         """
         strategy, broker = self.strategy_quantity, self.broker_quantity
         if self.strategy_mixed_sides:
-            return strategy != 0 and strategy != broker
+            return strategy != broker
         return (strategy > 0 and broker < strategy) or (strategy < 0 and broker > strategy)
 
     @property

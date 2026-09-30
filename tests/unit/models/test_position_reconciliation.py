@@ -362,6 +362,24 @@ class TestStrategiesOnBothSidesKeepTheEqualityRule:
         cached = [_cached(NVDA, "10", "A-000"), _cached(NVDA, "-5", "B-000")]
         assert compare_positions(cached, _broker(_held(NVDA, "5"))) == ()
 
+    def test_a_mixed_net_of_zero_against_a_broker_holding_is_refused(self):
+        """Code review of PR #35: A +10 and B −10 net to 0. Lots exist, so the
+        ``strategy != 0`` guard the single-side rule uses cannot mean "no
+        position" here — a broker at +5 must be refused, or the correction
+        lands in ``INTERNAL-DIFF +5`` and A closing its 10 carries the account
+        short 5 (NFR14)."""
+        cached = [_cached(NVDA, "10", "A-000"), _cached(NVDA, "-10", "B-000")]
+
+        (row,) = compare_positions(cached, _broker(_held(NVDA, "5")))
+
+        assert row.strategy_mixed_sides is True
+        assert row.strategy_contradicted and row.kind == STRATEGY_POSITION
+        assert row.likely_cause == CAUSE_MIXED
+
+    def test_a_mixed_net_of_zero_against_a_flat_broker_is_clean(self):
+        cached = [_cached(NVDA, "10", "A-000"), _cached(NVDA, "-10", "B-000")]
+        assert compare_positions(cached, _broker()) == ()
+
     def test_synthetic_owners_do_not_make_a_strategy_mixed(self):
         """Only strategies' own lots count: a synthetic −10 beside S +10 is the
         normal restart triple, judged by coverage as before."""
