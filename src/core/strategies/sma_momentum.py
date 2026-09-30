@@ -197,7 +197,7 @@ StrategyRegistry.set_default_config(
     {
         "instrument_id": "AAPL.NASDAQ",
         "bar_type": "AAPL.NASDAQ-1-MINUTE-LAST-INTERNAL",
-        "trade_size": 1000000,
+        "trade_size": 100,  # live-relevant default now Story 4.4 fixed the SMA-never-moves bug
         "order_id_tag": "002",
         "fast_period": 20,
         "slow_period": 50,
