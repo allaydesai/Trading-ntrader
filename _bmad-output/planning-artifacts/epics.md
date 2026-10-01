@@ -1704,6 +1704,55 @@ restart resume, and reconciliation — the phase-gate evidence that cannot live 
 
 ---
 
+### Story 4.8: Clear a Stranded Order After a Broker-Confirmed Fill or Cancel
+
+> Added post-retro (2026-09-28), not part of the original FR32–FR39 scope. Commissioned by the PO
+> at the Epic 4 retrospective to close "the stranded `ACCEPTED` order and the `p7-position-test`
+> stall" — measured, disclosed and re-routed by Stories 4.2, 4.3 and 4.5 without a fix ever being
+> built. Full story: `4-8-clear-a-stranded-order-after-a-broker-confirmed-fill-or-cancel.md`.
+
+As the operator,
+I want an order the cache still shows open after IBKR has already resolved it — filled or
+cancelled while the session was stopped or disconnected — cleared automatically instead of
+staying `ACCEPTED` forever,
+So that a session's record of its own orders stays true to the broker, and a namespace never
+carries a permanently-stale order into every restart after it.
+
+**Acceptance Criteria:**
+
+**Given** a cached order whose status is `ACCEPTED` (or `PARTIALLY_FILLED`/`TRIGGERED`) with a
+`venue_order_id` set
+**When** the broker's own open-orders response, read defensively, does not list it on two
+consecutive runtime cycles at least 60 s apart
+**Then** the order is reconciled to `CANCELED` through the engine's own reconciliation path, and
+one `reconcile.stale_order_cleared` record is logged naming the instrument, side, quantity and
+`client_order_id` (FR35).
+
+**Given** the broker read fails for any reason
+**When** a runtime cycle runs
+**Then** the cycle is unaffected — no order is cleared, nothing escapes the tick, and the failure
+is logged at most once per streak (NFR20).
+
+**Given** an order was in fact filled while the session was down or disconnected
+**When** it is cleared
+**Then** the record discloses that the true outcome could not be determined here and no fill,
+price or commission is fabricated — the existing position-level reconciliation carries the real
+economic effect (NFR26).
+
+**Given** Story 4.3's PO ruling that the native open-order consistency check stays off
+**When** this story ships
+**Then** that setting is untouched — this story detects and resolves a stranded order with its
+own targeted, defensive broker read, never by re-enabling the native check.
+
+**Given** the historical `p7-position-test` live stall occurred inside Nautilus's own
+`node:connect` sequence, before any of this project's code runs
+**When** this story's design is evaluated
+**Then** it is judged honestly on what it can close — the stranded order *record*, for every
+session from here on — and does not claim to explain or prevent a hang that happens before its
+own code has a chance to run.
+
+---
+
 ## Epic 5: Seal a Session & Compare It Against Its Backtest
 
 The payoff. An explicit seal turns a stopped session into an ordinary run record through the same
@@ -1909,3 +1958,81 @@ untouched (AR44)
 **When** existing trade queries run
 **Then** they return the session's trades through `backtest_run_id` exactly as they do for backtests
 (AR8).
+
+### Story 5.7: Name Holdings the Adapter Cannot Express Instead of Refusing or Hiding Them
+
+*(Added 2026-09-30 from PR #35's code review, decision D2 — PO ruling: "same-symbol rule
+everywhere, name the rest". Routed here rather than fixed on the Epic 4 branch because it touches
+startup, runtime, the reconnect grant and the models together. D1's runtime half — the symbol-scoped,
+bounded hold-back — already shipped on PR #35 and is the mechanism this story extends.)*
+
+As the operator,
+I want a holding the IB adapter cannot express — a bond, a warrant, a BAG, a delisted symbol, or a
+fractional share from a DRIP — to be named once and otherwise left out of what reconciliation judges,
+So that a paper account that happens to hold one can still start, run and reconnect, and the one
+disagreement that could mask a strategy's own position is still caught.
+
+**Acceptance Criteria:**
+
+**Given** the broker holds a position the adapter cannot resolve to an instrument (an `IB-CONID-*` row)
+whose symbol matches no cached position
+**When** the session starts
+**Then** the row is logged `reconcile.discrepancy resolution=unresolved` once and the start is **not**
+refused (today it refuses `UNRESOLVABLE_DISCREPANCY` forever with the remedy "retry the start").
+
+**Given** the same row while the session runs
+**When** a disconnect is recovered
+**Then** the row does not withhold the reconnect grant (today `_act` never returns empty while any
+unresolved row exists, so orders are withheld for the rest of the session).
+
+**Given** an unresolved row whose symbol **does** match a cached position
+**When** either phase judges it
+**Then** the existing fail-closed rules apply unchanged: the start is refused; at runtime the same-symbol
+"broker 0" row is held back for `HOLD_BACK_CYCLES` and then acted on (PR #35 D1).
+
+**Given** a broker quantity the instrument's size increment cannot express (`+22.5` against the
+strategy's `+22`, where `Equity.make_qty` rounds silently to 22)
+**When** the session reconciles, at startup or at runtime
+**Then** the remainder is logged once per instrument at WARNING, naming both quantities, and the row is
+clean at the expressible precision — never `UNRESOLVABLE` at startup and never a silent `reconcile.ok`
+over a standing gap at runtime.
+
+**Given** `live reconcile`
+**When** it reads the same account
+**Then** it stays exact (FR36): the fractional remainder is a discrepancy line and exit `5`.
+
+### Story 5.8: Act on a Persistent Runtime Reconciliation Failure
+
+*(Added 2026-09-30 from PR #35's code review, decision D3 — PO ruling: "withhold after 3, drift
+stops". Belongs beside Story 5.4's `session_conditions`, which is where a withheld period should be
+recorded.)*
+
+As the operator,
+I want a session whose runtime reconciliation keeps failing to stop sending orders, and one whose
+adapter has drifted to stop outright,
+So that a session never trades for its whole life with no alignment against IBKR just because the
+broker read keeps failing quietly.
+
+**Acceptance Criteria:**
+
+**Given** `RuntimeReconciler._run` catches a non-`ReconciliationFailedError` on three consecutive cycles
+(`_FailureStreak.count` reaches 3)
+**When** the third failure is noted
+**Then** trading permission is withdrawn through the connection monitor's existing `RECOVERING` state
+(orders withheld, `order.suppressed`), one `reconcile.cycle_failed` is logged at ERROR naming the streak,
+and the next clean cycle re-grants through `confirm_state_reestablished` exactly as a reconnect does.
+
+**Given** the failure is a `BrokerStateAdapterError` (adapter drift — e.g. two IB contracts resolving
+to one instrument id)
+**When** it is first noted
+**Then** the session stops with exit `1` on the first occurrence, as startup treats adapter drift; the
+hourly throttle does not apply.
+
+**Given** a withheld period
+**When** the session is later sealed (Story 5.3)
+**Then** the period is recorded in `session_conditions` (Story 5.4) with its start, end and cause.
+
+**Given** the three-cycle threshold
+**When** it is pinned
+**Then** it is a named constant with a test that fails if a streak of two withholds or a streak of
+three does not.

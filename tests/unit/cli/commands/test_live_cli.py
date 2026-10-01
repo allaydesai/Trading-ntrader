@@ -1337,6 +1337,33 @@ class TestContainedStrategyFailuresAreVisible:
         # Still exit 0: the session ran and it stopped (AR28 has no code for this).
         assert result.exit_code == 0
 
+    def test_a_start_refusal_prints_its_own_remedy(self, runner):
+        """Story 4.5 code review: a strategy refused at start (D-C) is only
+        useful to the operator with its remedy — "remove the holding by hand in
+        TWS" — which the contained line's type name alone never said."""
+        detail = (
+            "Strategy 'sma_crossover' was not started: IBKR reported +15 of NVDA.NASDAQ at "
+            "this start's reconciliation, and +5 of it belongs to no strategy of this session "
+            "(its strategies hold +10) — remove the holding by hand in TWS."
+        )
+        failure = self._failure(
+            strategy_id="", error_type="ResumeRefusedError", handler="start", detail=detail
+        )
+        with _start_harness() as spies:
+            spies["runner"].contained_failures = (failure,)
+            result = runner.invoke(live, ["start", "alpha-session"])
+
+        flat = " ".join(result.output.split())
+        assert "remove the holding by hand in TWS" in flat
+        assert "+5" in flat and "+10" in flat
+
+    def test_a_runtime_failure_still_prints_only_its_type(self, runner):
+        with _start_harness() as spies:
+            spies["runner"].contained_failures = (self._failure(),)
+            result = runner.invoke(live, ["start", "alpha-session"])
+
+        assert "decimal.DivisionByZero" not in result.output
+
     @pytest.mark.parametrize("all_failed", [False, True])
     def test_the_wording_respects_ar36s_vocabulary(self, runner, all_failed):
         """``tests/unit/core/test_live_stop_path_is_inert.py`` word-boundary
@@ -1384,6 +1411,99 @@ class TestStartExitCodes:
             result = runner.invoke(live, ["start", "alpha-session"])
 
         assert result.exit_code == 4
+
+    def test_a_reconciliation_refusal_names_the_position_and_exits_one(self, runner):
+        """Story 4.2 (D-D, D-H): the operator is told which instrument, what
+        this session recorded and what the broker holds, and what to do — the
+        message is operator-safe, so it is printed rather than withheld as a
+        third-party type name. The row's release is the runner's own
+        ``finally`` (proven through ``runner.run()`` in
+        ``test_session_runner_phases.py``), not this command's."""
+        from decimal import Decimal
+
+        from src.core.live_startup_reconcile import ReconciliationFailedError, ReconciliationFailure
+        from src.models.position_reconciliation import PositionDiscrepancy
+
+        row = PositionDiscrepancy(
+            instrument_id="NVDA.NASDAQ",
+            local_quantity=Decimal("22"),
+            strategy_quantity=Decimal("22"),
+            broker_quantity=Decimal("0"),
+        )
+        error = ReconciliationFailedError(
+            ReconciliationFailure.STRATEGY_POSITION_CONTRADICTED,
+            "a strategy is contradicted",
+            (row,),
+        )
+
+        with _start_harness(runner_error=error):
+            result = runner.invoke(live, ["start", "alpha-session"])
+
+        assert result.exit_code == 1
+        assert "strategy_position_contradicted" in result.output
+        assert "NVDA.NASDAQ" in result.output and "+22" in result.output
+        assert "broker +0" in result.output
+
+    def test_a_pre_4_5_cache_refusal_names_the_instrument_and_the_remedy(self, runner):
+        """Story 4.5 (D-D, PO condition): the refusal is explicit and fail
+        closed — exit 1, the instrument named, the remedy "create a new
+        session" printed (operator-safe), nothing traded."""
+        from src.core.live_session_resume import LEGACY_POSITION_IMPORT, ResumeRefusedError
+
+        error = ResumeRefusedError(
+            LEGACY_POSITION_IMPORT,
+            "This session's engine cache holds an order Nautilus imported from a broker "
+            "position before Story 4.5 (NVDA.NASDAQ). ... Create a new session for this "
+            "strategy.",
+            ("NVDA.NASDAQ",),
+        )
+
+        with _start_harness(runner_error=error):
+            result = runner.invoke(live, ["start", "alpha-session"])
+
+        output = " ".join(result.output.split())
+        assert result.exit_code == 1
+        assert "NVDA.NASDAQ" in output
+        assert "Create a new session" in output
+
+    def test_a_runtime_reconciliation_stop_names_the_position_and_exits_one(self, runner):
+        """Story 4.3 (D-D, PO ruling 2A; D-H): the same class, raised by the
+        running session's cycle — the operator is told the session was
+        *stopped*, which instrument, both quantities, and that positions at
+        IBKR were not touched."""
+        from decimal import Decimal
+        from types import SimpleNamespace
+
+        from src.core.live_runtime_reconcile import SCOPE_RUNTIME, refuse
+        from src.core.live_startup_reconcile import ReconciliationFailedError, ReconciliationFailure
+        from src.models.position_reconciliation import PositionDiscrepancy
+
+        row = PositionDiscrepancy(
+            instrument_id="NVDA.NASDAQ",
+            local_quantity=Decimal("22"),
+            strategy_quantity=Decimal("22"),
+            broker_quantity=Decimal("0"),
+        )
+        with pytest.raises(ReconciliationFailedError) as caught:
+            refuse(
+                SimpleNamespace(error=lambda *a, **k: None),
+                ReconciliationFailure.STRATEGY_POSITION_CONTRADICTED,
+                (row,),
+                SCOPE_RUNTIME,
+            )
+
+        with _start_harness(runner_error=caught.value):
+            result = runner.invoke(live, ["start", "alpha-session"])
+
+        assert result.exit_code == 1
+        # The CLI wraps its message; read it as words, not as terminal lines
+        # (Story 4.7's longer wording moved a line break into this phrase).
+        output = " ".join(result.output.split())
+        assert "Runtime reconciliation stopped this session" in output
+        assert "NVDA.NASDAQ" in output and "+22" in output
+        assert "broker +0" in output
+        assert "positions at IBKR were not touched" in output
+        assert "a cash merger" in output, "the likely cause did not reach the operator"
 
     @pytest.mark.parametrize(
         "exception_factory",
@@ -1733,3 +1853,36 @@ class TestOrderRejectionsAreVisibleAtTheStop:
             result = runner.invoke(live, ["start", "alpha-session"])
 
         assert not _re.search(r"\b[A-Z]{1,2}\d{6,10}\b", result.output)
+
+
+class TestEveryStartOfOneSessionBindsItsTradesToTheSameRow:
+    """Story 4.5, AC #5 (FR19) — the composition-root half only.
+
+    This pins the **binding**: the trade sink is built from the claim's primary
+    key and epoch, not from anything per-run. It does not prove the re-claim
+    returns the same row — both claims here are constructed with one key. That
+    proof is Postgres's: ``tests/integration/db/test_trade_record.py`` re-claims
+    one session through the real service and persists a trade in each run under
+    one ``session_id`` (code review 2026-09-28 asked for this to be said)."""
+
+    def test_two_claims_bind_one_session_pk_and_their_own_epochs(self):
+        from datetime import datetime, timezone
+
+        from src.cli.commands.live_start import ClaimedSession, build_session_ports
+
+        first = ClaimedSession(
+            session_id=uuid4(),
+            session_pk=99,
+            spec={"schema_version": 1, "strategies": []},
+            started_at=datetime(2026, 9, 25, 13, 25, tzinfo=timezone.utc),
+            owner_epoch=3,
+        )
+        second = first._replace(
+            started_at=datetime(2026, 9, 28, 13, 25, tzinfo=timezone.utc), owner_epoch=4
+        )
+
+        _, before = build_session_ports(first)
+        _, after = build_session_ports(second)
+
+        assert before._session_pk == after._session_pk == 99
+        assert (before._owner_epoch, after._owner_epoch) == (3, 4)

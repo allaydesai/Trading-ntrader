@@ -10,6 +10,36 @@ from src.models.strategy import MomentumParameters
 
 
 @pytest.mark.component
+class TestTheLiveDefaultTradeSize:
+    """``trade_size`` defaults to 100 shares in all three places that carry it
+    (Epic 4 retro; PR #35 code review, P7). ``Settings.trade_size`` is pinned
+    in ``tests/unit/test_config.py``; these are the other two. 1,000,000 was
+    inert only while the strategy's SMA could never cross (Story 4.4 fixed
+    that), so a drift back would reach a real paper account as a real-money-
+    scale order."""
+
+    def test_the_parameter_model_default(self):
+        assert MomentumParameters().trade_size == Decimal("100")
+
+    def test_the_registry_default(self):
+        from src.core.strategies.sma_momentum import SMAMomentum  # noqa: F401  # registers it
+        from src.core.strategy_registry import StrategyRegistry
+
+        assert StrategyRegistry.get("momentum").default_config["trade_size"] == 100
+
+    def test_the_three_defaults_agree(self):
+        """One value, three carriers — a drift in any one goes red by name."""
+        from src.config import Settings
+        from src.core.strategies.sma_momentum import SMAMomentum  # noqa: F401  # registers it
+        from src.core.strategy_registry import StrategyRegistry
+
+        registry = Decimal(StrategyRegistry.get("momentum").default_config["trade_size"])
+        settings = Settings.model_fields["trade_size"].default
+
+        assert MomentumParameters().trade_size == registry == Decimal(settings)
+
+
+@pytest.mark.component
 class TestSMAMomentumStrategy:
     """Test cases for SMA Momentum strategy with Nautilus Trader integration."""
 
@@ -75,13 +105,12 @@ class TestSMAMomentumStrategy:
 
         strategy = SMAMomentum(config)
 
-        # Should initialize with deques for moving averages
-        assert hasattr(strategy, "_fast")
-        assert hasattr(strategy, "_slow")
-        assert hasattr(strategy, "_fast_sum")
-        assert hasattr(strategy, "_slow_sum")
-        assert strategy._fast_sum == 0.0
-        assert strategy._slow_sum == 0.0
+        # Story 4.4 (D-G): two Nautilus SMAs, registered in `on_start`, replaced
+        # the hand-rolled deques.
+        assert strategy.fast_sma.period == 10
+        assert strategy.slow_sma.period == 20
+        assert not strategy.fast_sma.initialized
+        assert not strategy.slow_sma.initialized
         assert strategy._prev_fast is None
         assert strategy._prev_slow is None
 
@@ -108,26 +137,28 @@ class TestSMAMomentumStrategy:
         # Generate mock bars
         mock_bars = generate_mock_bars(instrument_id, num_bars=15)
 
-        # Process bars to warm up moving averages
+        # Process bars to warm up moving averages. In a session `Actor.handle_bar`
+        # feeds the registered indicators; here they are fed directly.
         for bar in mock_bars:
-            close = float(bar.close)
-            fast_val, strategy._fast_sum = strategy._update_ma(
-                strategy._fast, strategy._fast_sum, close, config.fast_period
-            )
-            slow_val, strategy._slow_sum = strategy._update_ma(
-                strategy._slow, strategy._slow_sum, close, config.slow_period
-            )
+            strategy.fast_sma.handle_bar(bar)
+            strategy.slow_sma.handle_bar(bar)
 
-        # After processing bars, internal state should be updated
-        assert len(strategy._fast) > 0
-        assert len(strategy._slow) > 0
-        assert strategy._fast_sum > 0
-        assert strategy._slow_sum > 0
+        # After processing bars, both averages are warm and are true averages
+        # of their own windows.
+        closes = [float(bar.close) for bar in mock_bars]
+        assert strategy.fast_sma.initialized and strategy.slow_sma.initialized
+        assert abs(strategy.fast_sma.value - sum(closes[-5:]) / 5) < 1e-9
+        assert abs(strategy.slow_sma.value - sum(closes[-10:]) / 10) < 1e-9
 
     def test_sma_momentum_ma_calculation(self):
-        """Test moving average calculation logic."""
-        from collections import deque
+        """The average is a moving window, including after the window slides.
 
+        Story 4.4 (D-G, story F8): the deque version this replaced passed the
+        old form of this test because it stopped after the **first three**
+        prices, before anything had to be evicted. Past that point it returned
+        the running sum of every close divided by the period, so ``fast`` sat
+        above ``slow`` forever and the strategy could never cross.
+        """
         from src.core.strategies.sma_momentum import SMAMomentum, SMAMomentumConfig
 
         config = SMAMomentumConfig(
@@ -141,18 +172,14 @@ class TestSMAMomentumStrategy:
 
         strategy = SMAMomentum(config)
 
-        # Test MA calculation with sample prices
-        test_prices = [100.0, 102.0, 101.0, 103.0, 102.0]
-        test_deque = deque(maxlen=3)
-        total = 0.0
+        # Longer than both windows, so the fast one has slid four times.
+        test_prices = [100.0, 102.0, 101.0, 103.0, 102.0, 110.0, 90.0]
+        for price in test_prices:
+            strategy.fast_sma.update_raw(price)
+            strategy.slow_sma.update_raw(price)
 
-        for price in test_prices[:3]:
-            ma_val, total = strategy._update_ma(test_deque, total, price, 3)
-
-        # After 3 prices, should have MA
-        assert ma_val is not None
-        expected_ma = sum(test_prices[:3]) / 3
-        assert abs(ma_val - expected_ma) < 0.01
+        assert abs(strategy.fast_sma.value - sum(test_prices[-3:]) / 3) < 1e-9
+        assert abs(strategy.slow_sma.value - sum(test_prices[-5:]) / 5) < 1e-9
 
     def test_sma_momentum_crossover_detection(self):
         """Test crossover detection logic."""

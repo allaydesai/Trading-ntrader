@@ -316,6 +316,43 @@ class TestSqlTradeRecordAgainstRealPostgres:
             session_two.close()
             engine_two.dispose()
 
+    def test_story_4_5_a_trade_closed_after_a_restart_joins_the_same_session(self, sync_db_session):
+        """Story 4.5, AC #5 (FR19). Run 1 claims the session and persists a
+        round trip; the session is stopped; run 2 re-claims it by the same row —
+        a new ``owner_epoch``, a new ``SqlTradeRecord``, exactly what
+        ``live start <name>`` builds on every start — and persists the trade it
+        closed, whose entry was run 1's. Both rows carry one ``session_id``, and
+        a retry of the second is idempotent.
+        """
+        factory = _committing_factory(sync_db_session)
+        service = SessionService(SyncTradingSessionRepository(sync_db_session))
+        run_1 = _claimed_running_session(sync_db_session, name="trade-record-fr19")
+        # Plain values: the ORM identity map hands run 2 the same object.
+        session_pk, epoch_1 = run_1.id, run_1.owner_epoch
+        SqlTradeRecord(session_pk, owner_epoch=epoch_1, session_factory=factory).persist(
+            _recorded_trade(client_order_id="O-2")
+        )
+        service.transition(run_1.session_id, to=SessionStatus.STOPPED, owner_epoch=epoch_1)
+        sync_db_session.commit()
+
+        run_2 = service.transition(run_1.session_id, to=SessionStatus.RUNNING)
+        sync_db_session.commit()
+        record_2 = SqlTradeRecord(run_2.id, owner_epoch=run_2.owner_epoch, session_factory=factory)
+        resumed = _recorded_trade(client_order_id="O-4")
+        inserted = record_2.persist(resumed)
+        retried = record_2.persist(resumed)
+        sync_db_session.commit()
+
+        assert (run_2.id, run_2.owner_epoch) == (session_pk, epoch_1 + 1)
+        assert (inserted, retried) == (True, False)
+        rows = sync_db_session.execute(
+            text("SELECT session_id, client_order_id FROM trades ORDER BY client_order_id"),
+        ).all()
+        assert [(row.session_id, row.client_order_id) for row in rows] == [
+            (session_pk, "O-2"),
+            (session_pk, "O-4"),
+        ]
+
     def test_ac8a_a_post_stopped_write_refuses(self, sync_db_session):
         session = _claimed_running_session(sync_db_session, name="trade-record-ac8a")
         record = SqlTradeRecord(

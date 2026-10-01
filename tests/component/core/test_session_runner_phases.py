@@ -22,20 +22,33 @@ tests use stub verifiers, where the phase's own records are not the subject.
 """
 
 import asyncio
+import json
+import signal
 import time
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
+from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
 from nautilus_trader.adapters.interactive_brokers.factories import IB_CLIENTS
 from nautilus_trader.common.component import is_logging_initialized
 from nautilus_trader.config import LoggingConfig
+from nautilus_trader.model.identifiers import InstrumentId
+from nautilus_trader.test_kit.providers import TestInstrumentProvider
 from structlog.testing import capture_logs
 
 from src.config import IBKRSettings
+from src.core.exit_outcome import EXIT_CODES
 from src.core.live_account_gate import verify_connected_account
+from src.core.live_broker_state import (
+    BrokerStateAdapterError,
+    BrokerStateFailure,
+    BrokerStateUnavailableError,
+)
 from src.core.live_cache import RedisUnreachableError
-from src.core.live_check import BrokerUnreachableError, InvalidCheckWindowError
+from src.core.live_check import BrokerUnreachableError, InvalidCheckWindowError, classify_failure
+from src.core.live_connection_monitor import ConnectionMonitor, ConnectionState, ConnectionStatus
 from src.core.live_gate import GateDecision, GateMode, GateRefusalReason, build_refusal
 from src.core.live_market_data import LiveMarketDataError
 from src.core.live_node_builder import GateRefusedError, LiveNodeConfigError
@@ -46,9 +59,13 @@ from src.core.live_session_node import (
 )
 from src.core.live_session_phases import PHASE_SEQUENCE
 from src.core.live_session_runner import LiveSessionRunner
+from src.core.live_startup_reconcile import DISCREPANCY_EVENT as RECONCILE_DISCREPANCY_EVENT
+from src.core.live_startup_reconcile import OK_EVENT as RECONCILE_OK_EVENT
+from src.core.live_startup_reconcile import ReconciliationFailedError, ReconciliationFailure
 from src.core.live_strategy_guard import NoStrategyStartedError
+from src.models.position_reconciliation import CachedPosition, LocalSnapshot
 from src.models.session import SessionSpec, StrategySpec
-from tests.component.doubles import TestIBAccountsClient, TestLiveNode
+from tests.component.doubles import TestIBAccountsClient, TestLiveNode, flat_broker_state_reader
 
 pytestmark = pytest.mark.component
 
@@ -57,6 +74,9 @@ STARTED_AT = datetime(2026, 8, 19, 14, 30, 0, tzinfo=timezone.utc)
 PAPER_ACCOUNT = "DU4076626"
 AAPL_1MIN = "AAPL.NASDAQ-1-MINUTE-LAST-EXTERNAL"
 AAPL_INSTRUMENT = "AAPL.NASDAQ"
+#: A real instrument, for the reconcile cases whose correction reaches the
+#: report builder (Story 4.2): it reads ``id``, ``size_precision``, ``make_qty``.
+AAPL_EQUITY = TestInstrumentProvider.equity(symbol="AAPL", venue="NASDAQ")
 
 
 @pytest.fixture(autouse=True)
@@ -227,6 +247,7 @@ def registered_accounts(monkeypatch):
 
 def _runner(node: TestLiveNode, *, settings=None, record=None, **overrides) -> LiveSessionRunner:
     """Build a runner whose node factory returns ``node`` and records its kwargs."""
+    node.run_seconds_from_first_strategy = True  # Story 4.2: see the double's docstring
     factory_calls: list[dict] = []
 
     def _factory(settings_arg, **kwargs):
@@ -241,6 +262,7 @@ def _runner(node: TestLiveNode, *, settings=None, record=None, **overrides) -> L
         "connect_timeout": 2.0,
         "node_factory": _factory,
         "account_verifier": _permitting_verifier(),
+        "broker_state_reader": flat_broker_state_reader,
         "client_builder": lambda *a, **k: None,
         "sleeper": _never_sleeps,
     }
@@ -343,7 +365,15 @@ class TestAFailureStopsTheSequence:
 
     @pytest.mark.parametrize(
         "failing_phase",
-        ["_phase_node_build", "_phase_node_connect", "_phase_subscribe", "_phase_trading"],
+        [
+            "_phase_node_build",
+            "_phase_node_connect",
+            # Story 4.2: the phase with a body now — its failure must stop the
+            # sequence exactly as every other phase's does (AC #1, #6).
+            "_phase_reconcile",
+            "_phase_subscribe",
+            "_phase_trading",
+        ],
     )
     def test_a_failure_in_any_phase_leaves_every_later_phase_unrun(
         self, monkeypatch, registered_accounts, failing_phase
@@ -354,6 +384,7 @@ class TestAFailureStopsTheSequence:
             {
                 "_phase_node_build": "node:build",
                 "_phase_node_connect": "node:connect",
+                "_phase_reconcile": "reconcile",
                 "_phase_subscribe": "subscribe",
                 "_phase_trading": "trading",
             }[failing_phase]
@@ -365,7 +396,11 @@ class TestAFailureStopsTheSequence:
             raise RuntimeError("phase blew up")
 
         monkeypatch.setattr(LiveSessionRunner, failing_phase, _boom)
-        runner = _runner(TestLiveNode(), settings=settings)
+        # The real verifier (Story 4.2): `gate:account`'s own pair is only
+        # emitted by it, and it is the phase immediately before `reconcile`.
+        runner = _runner(
+            TestLiveNode(), settings=settings, account_verifier=verify_connected_account
+        )
 
         with capture_logs() as logs:
             with pytest.raises(RuntimeError, match="phase blew up"):
@@ -381,8 +416,21 @@ class TestAFailureStopsTheSequence:
         assert (PHASE_SEQUENCE[index - 1], "ok") in _pairs(logs)
 
 
-class TestTheEpicFourPlaceholders:
-    """AC #3 — ``reconcile`` and ``warmup`` log their phase and do nothing else."""
+class TestTheEpicFourPhases:
+    """Story 2.5's AC #3, as Epic 4 has filled the two slots.
+
+    Story 4.4 gave ``warmup`` a body, and deliberately one that still makes no
+    call on the node: it only arms the runner's warm-up watch. The warming
+    happens in each strategy's ``on_start`` during ``trading``
+    (``test_session_runner_warmup.py``).
+
+    **Story 4.2 changed this class deliberately** (it was
+    ``TestTheEpicFourPlaceholders``): ``reconcile`` is no longer a placeholder.
+    Its "touches no node" assertion is replaced by an exact read surface — the
+    exec engine's settings and the cache, plus the broker read — and by the
+    proof that a clean cache writes nothing. The placeholder test called the
+    now-async phase without awaiting it, which would have passed vacuously.
+    """
 
     def test_they_log_started_then_ok(self, registered_accounts):
         settings = _settings()
@@ -397,17 +445,10 @@ class TestTheEpicFourPlaceholders:
         assert ("reconcile", "started") in pairs and ("reconcile", "ok") in pairs
         assert ("warmup", "started") in pairs and ("warmup", "ok") in pairs
 
-    def test_they_make_no_call_on_the_node(self, registered_accounts):
-        """A placeholder that "helpfully" did something would defeat the point:
-        ``deferred-work.md:542-548`` warns verbatim that a runner calling
-        ``confirm_state_reestablished`` straight after observing a live socket
-        *"would satisfy the type signature while defeating the design"*.
-
-        Strengthened at the 2026-08-21 review: every attribute access on the
-        node is recorded, not a sampled tuple of counters — a placeholder that
-        touched *anything* on the node goes red here, not only the four
-        surfaces the original tuple happened to watch.
-        """
+    def test_warmup_makes_no_call_on_the_node(self, registered_accounts):
+        """Every attribute access on the node is recorded (strengthened at the
+        2026-08-21 review), so a warm-up phase that touched *anything* on the
+        node goes red, not only a sampled set of surfaces."""
         settings = _settings()
         registered_accounts(settings)
         node = TestLiveNode(run_seconds=0.01)
@@ -425,13 +466,66 @@ class TestTheEpicFourPlaceholders:
         assert accesses == ["trader"]
         accesses.clear()
 
-        runner._phase_reconcile()
         runner._phase_warmup()
 
         assert accesses == []
 
+    def test_reconcile_reads_only_the_engine_and_the_cache_and_writes_nothing_when_clean(
+        self, registered_accounts
+    ):
+        """Story 4.2. The phase touches the node's ``kernel`` (the exec engine's
+        broker-ward settings, D-B) and ``cache`` (open positions and orders),
+        and hands the node to the broker read — never the ``trader``, so no
+        strategy or actor can be registered from here. A clean cache against a
+        flat broker makes no ``reconcile_execution_report`` call at all.
+
+        Story 4.3 (D-F): the phase then grants trading permission through the
+        monitor ``node:connect`` built — a monitor and connection-reader call,
+        still nothing more on the node."""
+        settings = _settings()
+        registered_accounts(settings)
+        node = TestLiveNode(run_seconds=0.01)
+        accesses: list[str] = []
+        read_by: list[object] = []
+
+        class _RecordingNode:
+            def __getattr__(self, name):
+                accesses.append(name)
+                return getattr(node, name)
+
+        async def _reader(node_arg, *, log):
+            read_by.append(node_arg)
+            return await flat_broker_state_reader(node_arg, log=log)
+
+        runner = _runner(
+            node,
+            settings=settings,
+            broker_state_reader=_reader,
+            connection_reader=lambda _settings: ConnectionStatus(connected=True, detail="up"),
+        )
+        runner._node = _RecordingNode()
+        runner._monitor = ConnectionMonitor(
+            session_id=str(SESSION_ID)
+        )  # as `node:connect` leaves it
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(runner._phase_reconcile())
+        finally:
+            loop.close()
+
+        assert set(accesses) == {"kernel", "cache"}
+        assert read_by == [runner._node]
+        assert node.kernel.exec_engine.reconcile_reports == []
+        assert runner._reconciliation is not None
+        assert runner._monitor.state is ConnectionState.CONNECTED
+
     def test_neither_emits_ar41s_warmup_completed(self, registered_accounts):
-        """Nothing warmed, so claiming it did would be a false record."""
+        """Nothing warmed, so claiming it did would be a false record.
+
+        Still true after Story 4.4: this double's ``start_strategy`` never runs
+        ``on_start``, so no history is requested and the runner logs
+        ``warmup.skipped`` — never a ``warmup.completed`` it cannot back.
+        """
         settings = _settings()
         registered_accounts(settings)
         runner = _runner(TestLiveNode(run_seconds=0.01), settings=settings)
@@ -440,6 +534,278 @@ class TestTheEpicFourPlaceholders:
             runner.run()
 
         assert not [entry for entry in logs if entry["event"] == "warmup.completed"]
+
+
+def _open_position(instrument_id: str, strategy_id: str, quantity: str) -> SimpleNamespace:
+    """An open cache position as ``live_startup_reconcile.cached_positions`` reads it."""
+    return SimpleNamespace(
+        instrument_id=instrument_id,
+        strategy_id=strategy_id,
+        signed_decimal_qty=lambda: Decimal(quantity),
+    )
+
+
+def _reader_raising(error: BaseException):
+    async def _read(node, *, log):
+        raise error
+
+    return _read
+
+
+def _refusal_case(name: str, node: TestLiveNode) -> None:
+    """Arrange ``node`` so the ``reconcile`` phase refuses for ``name``."""
+    engine, cache = node.kernel.exec_engine, node.cache
+    if name == "disabled":
+        engine.reconciliation = False
+    elif name == "contradicted":
+        cache.open_positions = [_open_position("NVDA.NASDAQ", "SMACrossover-000", "22")]
+    else:
+        cache.open_positions = [_open_position(AAPL_INSTRUMENT, "EXTERNAL", "4")]
+        if name in ("refused", "remains"):
+            cache.instruments_by_id = {InstrumentId.from_str(AAPL_INSTRUMENT): AAPL_EQUITY}
+        engine.reconcile_returns = name != "refused"
+
+
+class TestReconcileBeforeAnyStrategyTrades:
+    """Story 4.2, AC #1, #4, #6 — through ``runner.run()``, not the helper."""
+
+    LATER = ("warmup", "subscribe", "trading")
+
+    def test_it_runs_after_the_account_gate_with_nothing_registered(self, registered_accounts):
+        """AC #1: at the instant the broker is read, ``gate:account`` has
+        passed, no later phase has started, and the trader holds no strategy
+        and no actor — then, and only then, trading goes ahead."""
+        settings = _settings()
+        registered_accounts(settings)
+        node = TestLiveNode(run_seconds=0.01)
+        seen: dict[str, list] = {}
+
+        with capture_logs() as logs:
+
+            async def _reader(node_arg, *, log):
+                seen["pairs"] = _pairs(list(logs))
+                seen["registered"] = [
+                    *node.trader.added_strategies,
+                    *node.trader.started_strategies,
+                    *node.trader.added_actors,
+                ]
+                return await flat_broker_state_reader(node_arg, log=log)
+
+            _runner(
+                node,
+                settings=settings,
+                account_verifier=verify_connected_account,
+                broker_state_reader=_reader,
+            ).run()
+
+        assert seen["pairs"][-1] == ("reconcile", "started")
+        assert ("gate:account", "ok") in seen["pairs"]
+        assert not {name for name, _ in seen["pairs"]} & set(self.LATER)
+        assert seen["registered"] == []
+        assert node.trader.added_strategies, "non-vacuity: trading did register a strategy later"
+        assert [e["event"] for e in logs if e["event"] == RECONCILE_OK_EVENT] == [
+            RECONCILE_OK_EVENT
+        ]
+
+    @pytest.mark.parametrize(
+        ("case", "reason"),
+        [
+            ("disabled", ReconciliationFailure.FRAMEWORK_RECONCILIATION_DISABLED),
+            ("contradicted", ReconciliationFailure.STRATEGY_POSITION_CONTRADICTED),
+            ("unresolvable", ReconciliationFailure.UNRESOLVABLE_DISCREPANCY),
+            ("refused", ReconciliationFailure.RESOLUTION_REFUSED),
+            ("remains", ReconciliationFailure.DISCREPANCY_REMAINS),
+        ],
+    )
+    def test_each_refusal_stops_the_sequence_and_starts_nothing(
+        self, registered_accounts, case, reason
+    ):
+        """AC #6 for every reason the phase itself refuses: ``(reconcile,
+        failed)`` is the last phase record, the typed error propagates with
+        exit 1, no strategy is ever registered, and the row is released."""
+        settings = _settings()
+        registered_accounts(settings)
+        node = TestLiveNode(run_seconds=0.01)
+        _refusal_case(case, node)
+        record = SpyRecord()
+        runner = _runner(node, settings=settings, record=record)
+
+        with capture_logs() as logs:
+            with pytest.raises(ReconciliationFailedError) as caught:
+                runner.run()
+
+        assert caught.value.reason is reason
+        assert _pairs(logs)[-1] == ("reconcile", "failed")
+        assert not {name for name, _ in _pairs(logs)} & set(self.LATER)
+        assert node.trader.added_strategies == [] and node.trader.added_actors == []
+        assert record.calls[-1] == "mark_stopped"
+        assert EXIT_CODES[classify_failure(caught.value)] == 1
+
+    def test_a_broker_that_cannot_be_read_fails_the_phase_with_exit_4(self, registered_accounts):
+        settings = _settings()
+        registered_accounts(settings)
+        node = TestLiveNode(run_seconds=0.01)
+        failure = BrokerStateUnavailableError(BrokerStateFailure.TIMEOUT, "IBKR did not answer")
+        record = SpyRecord()
+        runner = _runner(
+            node, settings=settings, record=record, broker_state_reader=_reader_raising(failure)
+        )
+
+        with capture_logs() as logs:
+            with pytest.raises(BrokerStateUnavailableError) as caught:
+                runner.run()
+
+        assert caught.value is failure
+        assert _pairs(logs)[-1] == ("reconcile", "failed")
+        assert node.trader.added_strategies == []
+        assert record.calls[-1] == "mark_stopped"
+        assert EXIT_CODES[classify_failure(caught.value)] == 4
+
+    def test_an_adapter_that_no_longer_reads_fails_the_phase_with_exit_1(self, registered_accounts):
+        """AC #6, the reader's other failure: ``BrokerStateAdapterError`` is a
+        ``BrokerStateUnavailableError`` subclass, but adapter drift is a code
+        problem, so it must classify as exit 1 — never 4, which would send the
+        operator to restart a healthy Gateway."""
+        settings = _settings()
+        registered_accounts(settings)
+        node = TestLiveNode(run_seconds=0.01)
+        failure = BrokerStateAdapterError("the IB exec client is not registered on this node")
+        record = SpyRecord()
+        runner = _runner(
+            node, settings=settings, record=record, broker_state_reader=_reader_raising(failure)
+        )
+
+        with capture_logs() as logs:
+            with pytest.raises(BrokerStateAdapterError) as caught:
+                runner.run()
+
+        assert caught.value is failure
+        assert _pairs(logs)[-1] == ("reconcile", "failed")
+        assert not {name for name, _ in _pairs(logs)} & set(self.LATER)
+        assert node.trader.added_strategies == [] and node.trader.added_actors == []
+        assert record.calls[-1] == "mark_stopped"
+        assert EXIT_CODES[classify_failure(caught.value)] == 1
+
+    def test_trading_refuses_without_a_reconciliation_result(
+        self, monkeypatch, registered_accounts
+    ):
+        """AC #4 / D-I: a ``reconcile`` that ran but produced nothing — the
+        shape a later edit that no-ops or swallows it would leave — cannot
+        reach a strategy. The latch refuses before materialisation."""
+
+        async def _no_op(self_):
+            return None
+
+        monkeypatch.setattr(LiveSessionRunner, "_phase_reconcile", _no_op)
+        settings = _settings()
+        registered_accounts(settings)
+        node = TestLiveNode(run_seconds=0.01)
+        record = SpyRecord()
+
+        with capture_logs() as logs:
+            with pytest.raises(ReconciliationFailedError) as caught:
+                _runner(node, settings=settings, record=record).run()
+
+        assert caught.value.reason is ReconciliationFailure.NOT_RECONCILED
+        assert _pairs(logs)[-1] == ("trading", "failed")
+        assert node.trader.added_strategies == []
+        assert record.calls[-1] == "mark_stopped"
+        assert EXIT_CODES[classify_failure(caught.value)] == 1
+
+    def test_a_stop_during_the_broker_read_is_a_stop_not_a_failure(self, registered_accounts):
+        """A Ctrl-C stops the node underneath the read, which then fails; the
+        runner's existing demotion reports a stop, exit 0, never a broker
+        fault — and nothing was registered."""
+        settings = _settings()
+        registered_accounts(settings)
+        node = TestLiveNode(run_seconds=5.0)
+        holder: dict[str, LiveSessionRunner] = {}
+
+        async def _reader(node_arg, *, log):
+            holder["runner"]._signals._handle(signal.SIGINT, None)
+            raise BrokerStateUnavailableError(BrokerStateFailure.CONNECTION_LOST, "stopped")
+
+        runner = _runner(node, settings=settings, broker_state_reader=_reader)
+        holder["runner"] = runner
+
+        with capture_logs() as logs:
+            runner.run()
+
+        assert runner.stopped_by_signal
+        assert any(e["event"] == "session.stop_superseded_failure" for e in logs)
+        assert node.trader.added_strategies == []
+
+    def test_the_snapshot_is_taken_before_the_node_runs(self, registered_accounts):
+        """D-F: what the cache held before Nautilus's own pass is what the
+        phase compares against, so a correction made inside ``node:connect``
+        is named rather than silent."""
+        settings = _settings()
+        registered_accounts(settings)
+        node = TestLiveNode(run_seconds=0.01)
+        node.cache.open_positions = [_open_position(AAPL_INSTRUMENT, "EXTERNAL", "4")]
+        original_run = node.run_async
+
+        async def _run_async():
+            node.cache.open_positions = []  # the framework's pass, correcting it
+            await original_run()
+
+        node.run_async = _run_async  # type: ignore[method-assign]
+        runner = _runner(node, settings=settings)
+
+        with capture_logs() as logs:
+            runner.run()
+
+        assert runner._local_state == LocalSnapshot(
+            positions=(
+                CachedPosition(
+                    instrument_id=AAPL_INSTRUMENT, strategy_id="EXTERNAL", quantity=Decimal(4)
+                ),
+            )
+        )
+        # Code review: an empty cash snapshot must be "none recorded", not a
+        # contained failure of the cash read.
+        assert not [e for e in logs if e["event"] == "reconcile.local_snapshot_failed"]
+        framework = [
+            e
+            for e in logs
+            if e["event"] == RECONCILE_DISCREPANCY_EVENT and e["resolution"] == "framework"
+        ]
+        assert [e["instrument_id"] for e in framework] == [AAPL_INSTRUMENT]
+
+    def test_cash_that_moved_while_stopped_is_named_before_the_phase_reports(
+        self, registered_accounts
+    ):
+        """Story 4.7, D-B: the previous run's cash is captured with the
+        positions, before the exec client's first push overwrites the key inside
+        ``node:connect`` (measured 1.3); the phase names the dividend and still
+        reports ``ok`` — the record never blocks it."""
+        settings = _settings()
+        registered_accounts(settings)
+        node = TestLiveNode(run_seconds=0.01)
+        key = f"accountSummary:{PAPER_ACCOUNT}"
+        node.cache.general = {key: json.dumps({"USD": {"TotalCashValue": 99876.55}}).encode()}
+        original_run = node.run_async
+
+        async def _run_async():
+            # The exec client's first push, overwriting the restored summary.
+            node.cache.general[key] = json.dumps({"USD": {"TotalCashValue": 100000}}).encode()
+            await original_run()
+
+        node.run_async = _run_async  # type: ignore[method-assign]
+        runner = _runner(node, settings=settings)
+
+        with capture_logs() as logs:
+            runner.run()
+
+        (record,) = [e for e in logs if e["event"] == "reconcile.cash_changed"]
+        assert (record["before"], record["after"], record["difference"]) == (
+            "99876.55",
+            "100000",
+            "123.45",
+        )
+        names = [e["event"] for e in logs]
+        assert names.index("reconcile.cash_changed") < names.index("reconcile.ok")
+        assert ("reconcile", "ok") in _pairs(logs)
 
 
 class TestNothingIsRegisteredWhenTheAccountGateDecides:
@@ -1305,6 +1671,43 @@ class TestImportPurity:
         # governs. Its one non-stdlib import is `live_strategy_guard`'s
         # redaction pair, which is itself on this list. Added on creation.
         "src.core.live_order_rejections",
+        # Story 4.4. Constructed in `_phase_warmup` and installed on every
+        # started strategy in `_start_strategy`, beside the guard and the
+        # order path — duck-typed and stdlib-only, with no `src.db`/
+        # `src.services` to stay clear of in the first place. Added on
+        # creation, not on next discovery.
+        "src.core.live_session_warmup",
+        # Story 4.1. Story 4.2 calls it from `_phase_reconcile`, and it builds
+        # the `src.models.broker_state` values a services-layer comparison
+        # (Story 4.6) consumes — AR38's boundary, crossed in domain types, never
+        # through a `src.db`/`src.services` import. Added on creation.
+        "src.core.live_broker_state",
+        # Story 4.6. The on-demand reconcile driver. It needs the comparison
+        # in `src.services.reconciliation_service` and takes it as an injected
+        # `compare` port instead of importing it — the Story 3.5/3.6 `sink`
+        # precedent — so it stays inside this list's rule. Added on creation.
+        "src.core.live_reconcile",
+        # Story 4.6. Reads a session's engine cache through Nautilus's own
+        # adapter and converts it to `src.models.reconciliation` values at the
+        # boundary; no `src.db`/`src.services` import. Added on creation.
+        "src.core.live_session_view",
+        # Story 4.2. The `reconcile` phase's body, imported by the runner: it
+        # compares in `src.models.position_reconciliation` domain values and
+        # corrects through the exec engine — never a `src.db`/`src.services`
+        # import (AR38). Added in the creating commit.
+        "src.core.live_startup_reconcile",
+        # Story 4.3. Constructed by the runner in `_build_steady_state` and
+        # called from `_phase_reconcile` (the startup grant): compares in the
+        # same domain values and corrects through the exec engine — no
+        # `src.db`/`src.services` import (AR38). Added in the creating commit.
+        "src.core.live_runtime_reconcile",
+        # Story 4.3. Imported by `live_node_builder` and executed during
+        # `node.build()`, beside `live_exec_avg_px`. Added in the creating commit.
+        "src.core.live_exec_position_reports",
+        # Story 4.5. Imported by the runner (`node:connect` and `trading`): it
+        # reads the cache and the reconciliation proof in domain values — no
+        # `src.db`/`src.services` import (AR38). Added in the creating commit.
+        "src.core.live_session_resume",
     )
 
     @pytest.mark.parametrize("module_name", MODULES)

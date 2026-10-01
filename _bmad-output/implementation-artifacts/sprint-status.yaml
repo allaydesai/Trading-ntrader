@@ -1,5 +1,5 @@
 # generated: 2026-08-03
-# last_updated: 2026-08-03 (Phase 3 sprint board generated from planning-artifacts/epics.md — Paper Trading. 5 epics, 35 stories, all backlog; no story files created yet. Phase 1 (Stocks) and Phase 2 (ETFs) sprint boards are archived under archive/phase-1-stocks/ and archive/phase-2-etfs/. NOTE: epic-1..epic-5 keys are REUSED for Phase 3 paper-trading work — they are NOT the completed Phase 1/2 epics; those done-records live in the archive + epic-N-retro-*.md files.)
+# last_updated: 2026-09-30 (Stories 5.7 and 5.8 added to Epic 5 from PR #35's code-review rulings D2 and D3 — 37 stories now); 2026-08-03 (Phase 3 sprint board generated from planning-artifacts/epics.md — Paper Trading. 5 epics, 35 stories, all backlog; no story files created yet. Phase 1 (Stocks) and Phase 2 (ETFs) sprint boards are archived under archive/phase-1-stocks/ and archive/phase-2-etfs/. NOTE: epic-1..epic-5 keys are REUSED for Phase 3 paper-trading work — they are NOT the completed Phase 1/2 epics; those done-records live in the archive + epic-N-retro-*.md files.)
 # project: Trading-ntrader
 # project_key: NOKEY
 # tracking_system: file-system
@@ -36,6 +36,35 @@
 
 generated: 2026-08-03
 last_updated: >-
+  2026-09-28 (EPIC 4 RETROSPECTIVE DONE: epic-4-retrospective optional -> done. Documentation-driven
+  method per the Epic 1-3 precedent, synthesized from all 7 story records, deferred-work.md's Epic-4
+  entries and the Epic 3 retro; full document at implementation-artifacts/epic-4-retro-2026-09-28.md.
+  Run against the p3-epic4-base worktree, NOT 015-paper-trading (Epic 4 is unmerged there). Seven
+  decisions ruled by Allay: P19a's live discrepancy (grep -c EXTERNAL printed 3, not 0, on a
+  position-holding account) accepted as a documented exception -- the three matches were the D-A
+  filter's own discard-lines, not an unfiltered import; the 2026-09-28 live E2E results (P14/P15/
+  P16 A+B/P17a/P19b passed) written back into docs/qa/phase3-live-verification.md, closing the gap
+  between the committed doc and what actually ran; D6 (IB error-code resubscription) and the
+  owner_epoch pre-submit fencing gap ride into Epic 5 as named debt, not actioned now; the stranded-
+  ACCEPTED-order stall (re-routed 4.3->4.5, never reproduced live, in tension with PO ruling 1A which
+  keeps the native open-order consistency check off) gets a real story instead of a third re-route --
+  Story 4.8 drafted ready-for-dev this session; sma_momentum's trade_size default (1,000,000 shares,
+  now live-dangerous since Story 4.4 fixed the SMA-never-moves bug) fixed to 100 across Settings,
+  MomentumParameters and the strategy registry default, TDD'd, full unit suite (3258) green; weekend/
+  RTH live-verification gating (re-deferred from the Epic 3 retro) deferred again, to Epic 5 planning.
+  A distinct pre-existing bug found while fixing trade_size, not separately ruled on: src/services/
+  data_catalog.py's unconditional load_dotenv() at import time leaks this worktree's real .env values
+  into os.environ for the rest of any test process that imports it, defeating every
+  Settings(_env_file=None) "bypass environment" test -- invisible until trade_size's new default
+  actually differed from the leaked value. Fixed narrowly (one monkeypatch.delenv); the systemic leak
+  is unowned, flagged for Epic 5 triage. Epic 3 retro follow-through: 6 applied (D2/D3/D4 pre-work,
+  P13 run, flatten_position.py fixed, _STDLIB_AND_FIRST_PARTY confirmed), 1 re-deferred with a ruling
+  (weekend/RTH gating), 3 still not addressed after two epics (suppression-feedback owner, the three
+  log.error-inside-except sites, project-context.md's staleness). No Epic-5-blocking discovery, but
+  Story 5.1 inherits a hard constraint from 4.1 (never read AccountState/NetLiquidation as cash) and
+  Story 5.4's price_basis field may be under-scoped against 4.7's corporate-action finding (unadjusted
+  P&L, a never-recorded synthetic trade) -- both flagged for explicit check at Epic 5 drafting, not a
+  re-plan. epic-4 stays done; only the retrospective key changed.)
   2026-09-22 (STORY 3.7 DONE, EPIC 3 DONE: 3-7-keep-trading-after-a-rejection review -> done, epic-3
   in-progress -> done. Live Procedure P13 ran inside RTH (09:37-09:44 ET) against the reachable paper
   Gateway and passed all seven criteria -- session p13-0922, a real IBKR margin rejection (code 201)
@@ -2615,15 +2644,20 @@ development_status:
   # FR32–FR39 · Standalone: a session survives a full process stop/restart WHILE holding
   # an open position and resumes mid-position with warm indicators and broker-confirmed
   # state, no artificial exit. The phase's truth-test (external-authority check).
-  epic-4: backlog
-  4-1-read-the-brokers-authoritative-view-of-positions-and-cash: backlog
-  4-2-reconcile-against-the-broker-before-any-strategy-trades: backlog
-  4-3-keep-runtime-state-aligned-with-the-broker: backlog
-  4-4-warm-indicators-from-history-before-the-live-stream-starts: backlog
-  4-5-resume-a-strategy-mid-position: backlog
-  4-6-check-positions-and-cash-against-ibkr-on-demand: backlog
-  4-7-absorb-corporate-actions-through-broker-authoritative-state: backlog
-  epic-4-retrospective: optional
+  # epic-4 reopened to in-progress 2026-09-28: Story 4.8 added post-retro (not in the original
+  # FR32-39 scope) commissioning the stranded-ACCEPTED-order fix. Per this file's own status
+  # definition an epic is done only when ALL its stories are; the retrospective itself already
+  # ran and stays done regardless of 4.8's outcome.
+  epic-4: in-progress
+  4-1-read-the-brokers-authoritative-view-of-positions-and-cash: done
+  4-2-reconcile-against-the-broker-before-any-strategy-trades: done
+  4-3-keep-runtime-state-aligned-with-the-broker: done
+  4-4-warm-indicators-from-history-before-the-live-stream-starts: done
+  4-5-resume-a-strategy-mid-position: done
+  4-6-check-positions-and-cash-against-ibkr-on-demand: done
+  4-7-absorb-corporate-actions-through-broker-authoritative-state: done
+  4-8-clear-a-stranded-order-after-a-broker-confirmed-fill-or-cancel: ready-for-dev
+  epic-4-retrospective: done
 
   # Epic 5: Seal a Session & Compare It Against Its Backtest
   # FR40–FR47 · Standalone: a sealed paper session sits next to its backtest in the same
@@ -2637,4 +2671,7 @@ development_status:
   5-4-record-the-conditions-the-session-actually-ran-under: backlog
   5-5-handle-open-positions-at-seal-time-explicitly: backlog
   5-6-read-a-paper-session-beside-its-backtest-in-the-existing-views: backlog
+  # Added 2026-09-30 from PR #35's code review (Epic 4 integration), PO rulings D2 and D3.
+  5-7-name-holdings-the-adapter-cannot-express-instead-of-refusing-or-hiding-them: backlog
+  5-8-act-on-a-persistent-runtime-reconciliation-failure: backlog
   epic-5-retrospective: optional

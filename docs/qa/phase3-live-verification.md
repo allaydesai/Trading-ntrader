@@ -16,6 +16,48 @@ actually run against a live gateway. A dry run — the script parses its argumen
 cleanly, or fails the gate as expected with no gateway running — is not evidence that the
 procedure passed; it is evidence that the tooling exists to run it.
 
+## Phase-gate evidence index
+
+> Added by Story 4.7 (AC #4; NFR33, AR22). This is the map from the phase gate's five
+> categories to the procedures that evidence them. Each result below is copied from that
+> procedure's own Result log, which stays the source of truth: update the procedure first, then
+> this row. ✅ passed live · ⚠️ partial · ⏳ defined, not run · ℹ️ prepared, not run. The
+> evidence is operator-run and cannot live in CI (NFR32/NFR33). Every behaviour here is also
+> proven against broker doubles in the unit, component and integration tiers.
+
+| Category | Procedure | What it proves live | Latest result |
+|---|---|---|---|
+| **Connectivity** | P1 | A node builds, connects to IBKR paper, starts and stops cleanly | ✅ 2026-08-28 |
+| | P3 | Real-time RTH bars arrive for a configured instrument | ✅ 2026-08-28 |
+| | P4 | A real disconnect withholds trading permission | ⚠️ 2026-08-28: criteria evidenced, probe exits 1 on its own assertion |
+| | P5 | `ntrader live check`: connectivity from the CLI, exit 4 when unreachable | ✅ 2026-08-28 |
+| **Gate refusal** | P2 | `gate:account` verifies the connected account is paper | ✅ 2026-08-28 |
+| | P5 | The static gate refuses a real-money config (exit 3) before any socket | ✅ 2026-08-28 |
+| **A complete round trip** | P7 | The first strategy-owned position, and a clean Ctrl-C stop | ✅ 2026-09-01 (criterion 2 closed). Later rows: ⚠️ 2026-09-01 (later), the `flatten_position.py` dry-run incident; the criterion stays closed on its transcripts. ℹ️ 2026-09-10, NFR1 ruled, no run |
+| | P11 | A closed position recorded at its volume-weighted prices and full commission | ✅ 2026-09-21 |
+| | P12 | A `kill -9` mid-run loses no trade that had closed | ✅ 2026-09-21 |
+| | P13 | A session rejected on every order stays up and says so | ✅ 2026-09-22 |
+| **Restart resume** | P9 | `live status` against a live session, then a `kill -9` read as stale | ✅ 2026-08-28 |
+| | P10 | A restarted, already-traded session restores its evidence | ✅ 2026-09-11 |
+| | P14 | A restarted session is warm before its first live bar | ✅ 2026-09-28 |
+| | P17 | Startup reconciliation against the real broker (P17a read-only; P17b refusal) | ⚠️ 2026-09-28: P17a ✅; P17b still ⏳ (operator only) |
+| | P19 | Resume mid-position: stop and restart across an open position, no artificial exit | ⚠️ 2026-09-28: P19b ✅; P19a criterion 1 not literally met, accepted by PO ruling (see Result log) |
+| **Reconciliation** | P15 | The broker's positions and cash, matched against TWS | ✅ 2026-09-28 |
+| | P16 | `ntrader live reconcile` on demand, including against a running session | ✅ 2026-09-28 |
+| | P17 | Startup reconciliation, as above | ⚠️ 2026-09-28: P17a ✅; P17b still ⏳ (operator only) |
+| | P18 | Runtime alignment: a TWS change corrected, a reconnect re-established | ⏳ 2026-09-27 (operator only) |
+| | P20 | Corporate actions absorbed and named; a reverse split refused | ⏳ 2026-09-28 (operator only) |
+
+**Where the gate stands (2026-09-28, updated at the Epic 4 retrospective).** Connectivity, gate
+refusal and the complete round trip have passed live, with P4 partial. A live E2E pass on
+2026-09-28 (14:17–14:41 ET, `p3-epic4-base` worktree, f892d56) closed most of Epic 4's read-only
+and resume procedures: **P14, P15, P16 (A+B), P17a and P19b passed live**; **P19a's criterion 1**
+printed a non-zero `EXTERNAL` grep count on a position-holding account and was accepted as a
+documented exception by PO ruling rather than re-run (see P19's Result log — the filter's own
+discard-lines, not an unfiltered import, are what matched). **Still genuinely not run**: P17b,
+P18, P20 (all operator-only — they start strategies or change a broker position by hand) and the
+09:25 ET NFR3 variants. Running those remains the operator's phase-gate step.
+
 ## Procedure P1: build, start and stop a node against IBKR paper
 
 **Introduced by**: Story 1.3 — Assemble and Start a TradingNode Against IBKR Paper
@@ -1627,3 +1669,846 @@ session: p13-<date> (<uuid>)
 | ---- | -------- | ------ | ----- |
 | 2026-09-22 | Allay (Claude Code session) | ✅ **pass — all seven criteria met live** | Run inside RTH (Tuesday, 09:37–09:44 ET / 13:37–13:44Z). Preflight: Gateway paper port 4002 open only (4001/7496/7497 closed); Redis and Postgres up; `alembic current` = `85c949ac0374` before **and** after (no migration); no other live session running; `risk/engine.pyx:652` re-measured unchanged (`if account.is_margin_account: return True`). Fresh session `p13-0922` (`session_id=44c0b4df-da9d-465c-8312-2802daae57aa`, `trader_id=PAPER-44c0b4df`), same recipe as drafted. `BuyingPower` read from the first `ExecClient-INTERACTIVE_BROKERS` line = **108,490.67 USD** (P12-era measurement was 108,475.14) — comfortably below the ~$500k order size, so nothing filled. **Criterion 1** — first `order.rejected` at 13:41:05.567Z, non-empty `venue_reason`, not `UNKNOWN`, `reconciliation` absent from the event and confirmed `false` in the DB row; the adapter's own line names the code: `[ERROR] ... Order rejected - reason:...margin requirements... (code: 201, req_id=109)` — the predicted 201, no fact-5 caveat (`Unhandled order warning or error code` never appears). **Criterion 2** — the next crossover's `order.submitted` (`...-000-2`) fired at 13:42:05.525Z, after the first rejection; the session kept heartbeating and kept submitting through four crossovers (all rejected, none denied) until the operator's SIGINT — it never stopped itself. **Criterion 3** — zero `order.rejection_tally_failed`, zero `order.observer_failed`, zero `strategy.failed`, zero `session.rejection_record_failed` anywhere in the transcript. **Criterion 4** — from a second terminal after the second rejection, `live status p13-0922` read `health: degraded` with the refusal block (`2 rejected` at that point, `4 rejected` by the time of the later checks — the criterion allows "or more"), `first_at`/most-recent timestamp, instrument and `client_order_id` populated; `live list` showed `degraded` in the Health column with no reason text; `live status --json \| jq keys` is exactly the seven AR29 keys with `"health": "degraded"` (operational note: the CLI's `logging_configured` line also goes to stdout ahead of the JSON, so `grep '^{'` is needed before piping to `jq` non-interactively). **Criterion 5** — `psql`'s `runtime_flags->'order_rejections'` matched the transcript exactly (`rejected: 4, consecutive: 4, reconciliation: false`, last `client_order_id=...-000-4`) both before and after a clean `SIGINT`; the block survived the stop (`live status` post-stop read `state: stopped, health: stopped` with the same 4-rejection block still rendered). **Criterion 6** — `SELECT count(*) FROM trades ...` = 0 before and after the stop; `live status` read `closed trades: 0, open positions: 0` throughout. **Criterion 7** — `grep -c -E "162\|10182\|366"` inspected first, D6 rule: 1 hit before trading began (`...T13:37:17.408162000Z`, a timestamp digit, not a code), 3 total by the end, the extra two from the controlled-teardown line `Historical Market Data Service error message:API historical data query cancelled: 10005 (code: 162, req_id=10005)` plus its `Unhandled error: 162` echo — the same benign shutdown pattern P12's row documents (message text is a cancelled historical-data query on unsubscribe, not a duplicate-session signal); zero `superseded`/`different IP address` anywhere. `net_position=0` at the end, nothing left open at the broker. Story 3.7 can move from `review` to `done`. Log: `logs/p13-0922.log`. |
 | — | — | ⛔ *(superseded by the row above)* | Written and first attempted 2026-09-21. **Gateway check, recorded rather than assumed**: at 15:56 ET (Monday, still inside RTH) ports 4001, 4002, 7496 and 7497 were all closed — no Gateway or TWS running — with ~4 minutes of RTH left, so the two crossovers this recipe needs could not have completed even had one been started. The story therefore went to `review`, not `done` — the standing Epic 2 retro rule (3.2–3.6 precedent). |
+
+## Procedure P14: a restarted session is warm before its first live bar
+
+**Introduced by**: Story 4.4 — Warm Indicators from History Before the Live Stream Starts
+**Verifies**: AC #4 live (every registered indicator initialised at the first live bar, and
+`warmup.completed` logged before any bar reaches the strategy), AC #5 live (the history request's
+duration string and the absence of an IB pacing error), AC #6 live (the 09:25 ET variant is
+subscribed and trading by 09:30), and AC #7's absence case (zero `warmup.failed` on a healthy run).
+
+> **Numbering note.** Epic 4's stories are implemented in parallel worktrees. If another Epic 4
+> story also appended a "Procedure P14", the integrator renumbers one of them; the content of this
+> section does not depend on its number.
+
+### What it does — and does not — do
+
+A normal `live start` of `sma_crossover`. On start, the strategy registers its two SMAs, asks IBKR
+for history (`request_bars`), and subscribes to live bars only from that request's callback. The
+runner's warm-up watch logs `warmup.completed` inside the callback, *before* the strategy's own
+code subscribes, so the record necessarily precedes every live bar — this run is evidence that the
+shape holds against the real adapter, not that the ordering is timing-dependent.
+
+What this run is **not** evidence for, stated rather than left implicit: backtest parity (AC #3 —
+integration tier, `tests/integration/core/test_warmup_backtest_parity.py`, fill lists byte-identical
+to the pre-change code); the never-answering history request (AC #7's contained path — component
+tier; staging a real IB failure means provoking a pacing violation or a competing login, which is
+the NFR6/D6 hazard this file exists to avoid); `momentum` (the paper account has no business
+running its default `trade_size` of 1,000,000 shares — see `deferred-work.md`, story-4.4).
+
+### Preconditions
+
+- Inside RTH for the main run (live bars arrive only in RTH, `ibkr_use_rth=True`); the NFR3
+  variant starts at **09:25 ET**.
+- The bare non-compose paper Gateway, **no other IBKR login** (error 162); Redis and Postgres up;
+  `uv run alembic current` unchanged (this story adds no migration).
+- A **fresh session name**. Paper orders may result from a crossover — the P10–P13 precedent;
+  `flatten_position.py --confirm` works again as of the Epic 4 pre-work if a position is left open.
+- Run the `live_bars_probe.py` preflight first (P11/P12's standing rule): 3 bars, zero
+  competing-login text.
+
+### Command
+
+```bash
+uv run python -m src.cli.main live create --name p14-<date> \
+  --strategy sma_crossover \
+  --bar-type NVDA.NASDAQ-1-MINUTE-LAST-EXTERNAL \
+  --param fast_period=10 --param slow_period=20
+
+uv run python -m src.cli.main live start p14-<date> > logs/p14-<date>.log 2>&1 &
+
+# D6's standing rule — inspected BEFORE anything else is recorded. An IB historical pacing
+# violation also surfaces as code 162 ("Historical Market Data Service error message").
+grep -c -E "162|10182|366" logs/p14-<date>.log
+
+# The history request as the data client logs it at INFO: `Request <bar_type> bars <start> to
+# <end>` (`live/data_client.py:858-864`). The adapter derives IB's duration string from that range
+# (`timedelta_to_duration_str`), which it logs only at DEBUG.
+grep -n "Request NVDA.NASDAQ-1-MINUTE-LAST-EXTERNAL bars" logs/p14-<date>.log
+
+# The milestone, its fields, and its position relative to the first bar and session.started.
+grep -n "warmup\.\|session.started\|session.phase" logs/p14-<date>.log
+grep -n -m1 "Bar(NVDA\|bar.received\|last_bar_at" logs/p14-<date>.log
+
+# Then SIGINT the run.
+kill -INT "$(pgrep -f 'live start p14-<date>')"
+```
+
+For the NFR3 variant, start the same command (fresh name, `p14-open-<date>`) at 09:25 ET and read
+the `session.started` timestamp and the first `order.*`/bar record against 09:30:00 ET.
+
+### Pass criteria
+
+1. **D6's grep inspected first**; every hit explained (timestamp digits, or the benign teardown
+   `query cancelled (code: 162)` P12/P13 document). **No** pacing-violation text.
+2. **The history request spans whole days** — the `Request … bars` range is at least one day
+   (five, for this recipe), so the adapter sends `N D`/`N W`, never `N S` — AC #5, D-H.
+3. **Exactly one `warmup.completed`** for `sma_crossover`, at `info` level, with
+   `indicators_initialized=true`, `not_initialized=[]`, a plausible `elapsed_ms` (record it), and
+   `requested_from` about five calendar days before the start — AC #4.
+4. **Order of records:** `phase=warmup status=ok` → `warmup.completed` → `session.started` → the
+   first live bar — AC #4's "logged before the first bar was processed", and D-B's
+   "`session.started` only after warm-up".
+5. **Zero `warmup.failed`, zero `warmup.discarded`, zero `strategy.start_failed`** — AC #7's absence
+   case.
+6. *(NFR3 variant only)* `session.started` before **09:30:00 ET**, and the strategy's first bar is
+   the 09:30 bar — AC #6.
+7. **Informational, not pass/fail — the history/live seam** (code review 2026-09-22, deferred to
+   Story 4.5). Record the last history bar's close (`requested_from` + the window, or the
+   `Received <Bar[N]>` line) and the strategy's first live bar's `ts_event`. Exactly one bar step
+   apart is the clean case; two steps is a **gap** (a bar closed while the request was in flight
+   and was published before the strategy subscribed); zero is a **duplicate** (a bar already in
+   the history was published after it subscribed, and was fed to the SMAs twice). Either reading
+   is expected occasionally — record which one this run shows.
+
+### Result log
+
+| Date | Operator | Result | Notes |
+| ---- | -------- | ------ | ----- |
+| 2026-09-22 | Story 4.4 dev session | ⏳ **defined, not run** | Gateway check recorded rather than assumed: at 16:39 ET (Tuesday, after the RTH close) ports 4001, 4002, 7496 and 7497 were all closed — no Gateway or TWS running; Redis (6379) and Postgres (5432) were up. No live bar can arrive outside RTH in any case. Informational evidence only, never a gate for this story; the broker-double proofs are `test_strategy_warmup_engine.py` (real `DataEngine`, AC #4), `test_session_runner_warmup.py` (runner, AC #7) and `test_warmup_backtest_parity.py` (AC #3). |
+| 2026-09-28 | Epic 4 retro live E2E (14:17–14:41 ET, Mon) | ✅ **passed** | Run from the `p3-epic4-base` worktree (f892d56), against a real paper Gateway. 5-day warm-up before the first live bar, seam clean (no `warmup.seam_gap`/`warmup.seam_duplicate_dropped`). D6's grep run first (162/10182/366, with the timestamp-digit false-positive fixed by requiring a `code[: =]+`/`error[ =:]+` prefix): only the benign teardown `query cancelled (code: 162)` hit. Logs: `logs/*-0928.log` in that worktree. |
+
+## Procedure P15: read the broker's positions and cash, and match them against TWS
+
+**Introduced by**: Story 4.1 — Read the Broker's Authoritative View of Positions and Cash
+**Verifies**:
+- AC #1 live: positions (instrument, quantity, average price) and `TotalCashValue` are read for
+  the configured account, and they match what TWS shows.
+- AC #3 live: on a flat account, the read is a success reading `positions=0 flat=True`, not a
+  failure.
+- AC #5 live: the read completes in well under 30 s against the real Gateway.
+- NFR26: the account is masked in every line this code prints.
+
+**Tool**: `scripts/diagnostics/live_node_probe.py --verify-account --read-broker-state`
+
+> **Numbering note.** Epic 4's stories are implemented in parallel worktrees. If another Epic 4
+> story also appended a "Procedure P15", the integrator renumbers one of them. The content of this
+> section does not depend on its number.
+
+### What it does, and what it does not do
+
+This procedure is strictly a read. The probe:
+- builds a node, with Layer 1 before any socket and Layer 2 (`gate:account`) after connecting;
+- adds **no strategy**, so nothing on this node can submit an order;
+- uses an in-memory cache, so it writes nothing to Redis.
+
+Once connected it calls `read_broker_state(node)`. That sends a fresh `reqPositions` through the IB
+adapter and reads cash from the account-summary push the exec client received at connect. The
+positions answer is classified from the adapter's own request future, because the adapter's return
+value conflates a flat account with a failed read (Story 4.1, F1). Cash comes from IBKR's
+`TotalCashValue`, never from Nautilus's `AccountBalance`, which is net liquidation or an invented
+`400000` (F5).
+
+Positions and cash can be read outside RTH. Only a running, logged-in Gateway is needed.
+
+This run is **not** evidence for the failure paths:
+- a timed-out read;
+- a dropped socket;
+- an unresolvable contract;
+- a cash tag that never arrives.
+
+Staging any of them against a real Gateway means disturbing the connection, which this file
+avoids. Those paths are proven against the real adapter code at component tier:
+`tests/component/core/test_live_broker_state_adapter.py`.
+
+### Preconditions
+
+- The bare, non-compose paper Gateway, logged in, and **no other IBKR login** (error 162).
+- **No live session running.** The probe connects on `ibkr_live_client_id`. The Gateway would
+  refuse the probe's connection (client id in use); it would not evict the session. Stop the
+  session first anyway so that the reading is not taken mid-trade.
+- Run from a checkout whose `.env` carries `TWS_ACCOUNT`, `IBKR_PORT` and `IBKR_TRADING_MODE=paper`.
+  Without them the probe stops at `config_error` before any socket opens.
+- TWS (or the Gateway's account window) open beside it, showing the same account's Portfolio and
+  Account panes.
+
+### Command
+
+```bash
+PYTHONPATH=. uv run python scripts/diagnostics/live_node_probe.py \
+  --run-seconds 1 --verify-account --read-broker-state | tee logs/p15-<date>.log
+```
+
+### Expected output (shape)
+
+```
+[probe] connected (data + exec)
+[probe] verifying connected account (phase=gate:account)...
+[probe] gate:account ok mode=paper accounts=***NNN
+[probe] reading broker state (positions + cash)...
+… [info] reconcile.broker_state_retrieved account=***NNN cash={'USD': '<C>'} elapsed_ms=<ms> position_count=<N> positions={…}
+[probe] broker state account=***NNN positions=<N> flat=<True|False>
+[probe] position <INSTRUMENT> qty=<+/-Q> avg_price=<P>        # one line per open position
+[probe] cash USD total_cash=<C>
+[probe] broker state read in <T> ms
+RESULT: ok mode=build-connect-run-stop loop_closed=True gate_account=paper broker_state=ok positions=<N> elapsed=<E>
+```
+
+A failed read prints `[probe] broker state failed: <detail>` and then
+`RESULT: fail reason=broker_state_unavailable failure=<reason>`, and exits `1`. It never prints a
+flat reading. For adapter drift (`failure=adapter_incompatible`) the detail names the exception
+type and where it was raised.
+
+### Pass criteria
+
+1. `RESULT: ok … broker_state=ok positions=<N>`, exit `0`, with the `gate:account ok` line before
+   the broker-state lines (AR39's order).
+2. **Positions match TWS.** Every `position` line matches TWS's Portfolio window, instrument for
+   instrument and share for share, with the sign giving long or short. No TWS position is missing.
+   A position printed as `IB-CONID-<n> (unresolved …)` still counts as present. Record the list.
+   On a flat account: `positions=0 flat=True`, and TWS shows no position.
+3. **Cash matches TWS.** The `cash USD total_cash=` line equals TWS's *Total Cash Value* for the
+   base currency. Record both values.
+4. **Timed (AC #5).** The reader's own `elapsed_ms` on the `reconcile.broker_state_retrieved`
+   record is under 30000. That is the number AC #5 is judged on, measured on the loop's clock over
+   the whole read. Record it together with the probe's wall-clock `broker state read in <T> ms`,
+   which should agree to within a few ms. A healthy local Gateway should read in well under a
+   second.
+5. **Masked (NFR26).** `grep '^\[probe\]' logs/p15-<date>.log | grep -c '<full account id>'`
+   prints `0`. The unscoped grep will not be `0`, because the adapter prints the raw account itself
+   (P2's criterion 3 explains why).
+6. **Nothing traded.** `grep -c "order.submitted\|SubmitOrder" logs/p15-<date>.log` prints `0`.
+7. **Informational, not pass/fail: IBKR's average price.** For any open position, record the
+   printed `avg_price` beside TWS's *Avg Price* and the fill price in the session transcript that
+   opened it. IBKR documents a stock's `avgCost` as commission-inclusive, and Nautilus's
+   `avg_px_open` is not. This reading tells Story 4.6 how far apart they are (D-G).
+
+### Result log
+
+| Date | Operator | Result | Notes |
+| ---- | -------- | ------ | ----- |
+| 2026-09-22 | Story 4.1 dev session | ⏳ **defined, not run** | Attempted at 21:15 ET (Tuesday). This procedure does not need RTH, but the story's harness worktree has no `.env`: it is gitignored, and the charter forbids creating or reading one. The attempt, `live_node_probe.py --run-seconds 1 --verify-account --read-broker-state`, therefore stopped exactly where it should, before any socket was opened: `RESULT: fail reason=config_error msg=Cannot build an IBKR execution client: TWS_ACCOUNT is not set …`. That is evidence the tooling runs and fails closed, not that P15 passes. Whether a Gateway was listening could not be checked: the session's sandbox refused every port probe (`nc`, `lsof`). Informational only, never a gate for Story 4.1. The broker-double proofs are `test_live_broker_state_adapter.py`, which uses the real IB client, exec client, instrument provider and `ExecutionEngine` with only the socket stood in. It covers AC #1, #3 and #5 and the D-C no-cancel property. `test_live_broker_state.py` covers every AC #4 reason. Run P15 from a checkout that has `.env` the next time a Gateway is up. |
+| 2026-09-28 | Epic 4 retro live E2E (14:17–14:41 ET, Mon) | ✅ **passed** | Run from the `p3-epic4-base` worktree (f892d56), which does carry `.env`. Broker read completed in 71 ms. Positions and cash matched TWS; nothing traded. Alembic stayed at `85c949ac0374`. Logs: `logs/p15-0928.log`. |
+
+## Procedure P16: check a session's positions and cash against IBKR on demand
+
+**Introduced by**: Story 4.6 — Check Positions and Cash Against IBKR on Demand
+**Verifies**:
+- AC #1 live: `ntrader live reconcile <session>` connects, reads IBKR's positions and cash, reads
+  the session's own view, prints an explicit result and disconnects.
+- AC #2 live (Variant B): it runs on `ibkr_live_client_id + 1` beside a running session without
+  evicting it.
+- AC #3/#5 live: every line names an instrument (or currency) with the session's value, IBKR's value
+  and the difference; a clean account exits `0`.
+- AC #6 live: the whole command completes in under 30 s.
+- NFR26: the account is masked in every line the command prints.
+
+**Tool**: `uv run python -m src.cli.main live reconcile <name-or-id>`
+
+> **Numbering note.** Epic 4's stories are implemented in parallel worktrees. If another Epic 4
+> story also appended a "Procedure P16", the integrator renumbers one of them. The content of this
+> section does not depend on its number.
+
+### What it does, and what it does not do
+
+It is strictly a read, on both sides:
+
+- **Broker side.** It builds its own node on `IBKR_LIVE_CLIENT_ID + 1`. The node carries no
+  strategy, controller or bar observer, so nothing on it can submit an order, and it uses an
+  in-memory cache, so it writes no Redis. Layer 1 of the gate runs before any socket and Layer 2
+  (`gate:account`) after connecting. Once connected it calls Story 4.1's `read_broker_state`.
+- **Session side.** It reads the session's durable engine cache in Redis
+  (`trader-PAPER-<8hex>:`) through Nautilus's own adapter, with load methods only. That covers the
+  net of its open positions per instrument, and the last `TotalCashValue` its engine received.
+  This read is proven write-free by `MONITOR` at integration tier
+  (`tests/integration/core/test_live_session_view_redis.py`).
+
+It then compares both sides exactly and prints every line. It changes **nothing** anywhere: no
+transition, no record, no Redis key, no order.
+
+A session whose engine cache is empty has no view to compare. That covers a session that never ran,
+or one whose Redis was flushed. It exits `1` with `no_engine_state`, never "flat". The check
+happens right after Layer 1 and before any IBKR socket (the order is gate → session-state precheck
+→ node), so it costs no Gateway connection.
+
+This run is **not** evidence for the failure paths:
+- a never-answering broker;
+- an unreadable cache;
+- the budget clamp.
+
+Those are proven at component tier (`tests/component/core/test_live_reconcile.py`,
+`test_live_session_view.py`).
+
+### Preconditions
+
+- The bare, non-compose paper Gateway, logged in, and **no other IBKR login** (error 162). RTH is
+  not needed.
+- A session that **has run at least once against this Redis**. `live list` names it; an empty
+  namespace reads `no_engine_state`.
+- A checkout whose `.env` carries `TWS_ACCOUNT`, `IBKR_PORT` and `IBKR_TRADING_MODE=paper`. Without
+  `TWS_ACCOUNT` the command stops at `config_error` before any socket opens.
+- TWS (or the Gateway's account window) open beside it, showing the account's Portfolio and
+  Account panes.
+- **Variant A:** the session is stopped. **Variant B (operator only):** the session is running.
+  The session itself may trade, per the P10–P13 precedent; the reconcile never does.
+
+### Command
+
+```bash
+time uv run python -m src.cli.main live reconcile <session> 2>&1 | tee logs/p16-<date>.log
+echo "exit=${PIPESTATUS[0]}"
+
+# Variant B only, run against the *session's* log, around the reconcile's timestamp: the session
+# must show no eviction and no disconnect.
+grep -n -E "326|1100|connection\.lost" logs/<session-log>
+```
+
+### Expected output (shape)
+
+```
+reconcile: session <name> (status=<status>) against IBKR on client_id=<live+1>
+… [info] gate.static … status=ok
+… [info] live_check.building … client_id=<live+1> trader_id=PAPER-RECONCILE
+… [info] reconcile.broker_state_retrieved account=***NNN … elapsed_ms=<ms>
+… [info] reconcile.session_view_read trader_id=PAPER-<8hex> … elapsed_ms=<ms>
+reconcile session=<name> trader_id=PAPER-<8hex> account=***NNN broker_read_at=<iso>
+position <INSTRUMENT> session=<+/-Q|0> broker=<+/-Q|0> avg_price=<P> match|difference=<D> DISCREPANCY
+cash USD session=<C|unknown> broker=<C> match|difference=<D> DISCREPANCY
+RESULT: clean — positions and cash match IBKR exactly (positions=<N> currencies=1) elapsed_ms=<ms>
+   or
+RESULT: discrepancy — positions=<n> cash=<n> line(s) differ from IBKR (…); nothing was changed elapsed_ms=<ms>
+```
+
+### Pass criteria
+
+1. **An explicit result and the right exit code.** `RESULT: clean` with exit `0`, or
+   `RESULT: discrepancy` with exit `5`. The `gate.static` line comes before the build line, and the
+   build line before the broker-state line (AR39's order).
+2. **Positions match TWS.** Every `position` line's `broker=` value matches TWS's Portfolio,
+   instrument for instrument and share for share, with the sign giving long or short. Every
+   `session=` value is what the session last believed. Record each discrepancy line and say whether
+   it is expected, for example an `EXTERNAL` position opened since the session last ran.
+3. **Cash explained.** The `cash USD broker=` value equals TWS's *Total Cash Value*. For a stopped
+   session, a cash difference is expected if the account moved since it last ran; record the
+   reason.
+4. **Timed (AC #6).** The `time` output's *real* value is under 30 s, and no
+   `reconcile.budget_exceeded` record was logged. Also record the report's
+   `elapsed_ms` (start to verdict) and the reader's own `elapsed_ms` on
+   `reconcile.broker_state_retrieved`.
+5. **Masked (NFR26).** `grep -c '<full account id>'` over the lines the command itself prints
+   (`reconcile:`, `reconcile session=`, `position`, `cash`, `RESULT:`, `live reconcile failed:`)
+   is `0`. The adapter's own log lines print the raw account (P2's criterion 3 explains why), so the
+   unscoped grep will not be `0`.
+6. **Nothing traded.** `grep -c "order.submitted\|SubmitOrder" logs/p16-<date>.log` prints `0`.
+7. **The reservation.** The build line reads `client_id=<IBKR_LIVE_CLIENT_ID + 1>` and
+   `trader_id=PAPER-RECONCILE`. *(Variant B)* The session's log shows no `326`, no `1100` and no
+   `connection.lost` at the reconcile's timestamp, and `live status <session>` still reads
+   `trading` or `idle`.
+
+### Result log
+
+| Date | Operator | Result | Notes |
+| ---- | -------- | ------ | ----- |
+| 2026-09-27 | Story 4.6 dev session | ⏳ **defined, not run** | No Gateway: at 11:22 ET (Sunday) a TCP connect to ports 4001, 4002, 7496 and 7497 was refused on all four. Two attempts ran the real CLI, after the code review's gate-first reorder:
+(1) `live reconcile p13-0922` printed `reconcile: session p13-0922 (status=stopped) against IBKR on client_id=11` (the `+ 1` reservation), then `gate.static … status=ok`, then `reconcile.session_view_failed reason=no_engine_state` in 5.5 ms, and `live reconcile failed: … (no_engine_state) …`, exit `1`, before any IBKR socket. The session row was read from PostgreSQL and Redis was PINGed; no Gateway connection was attempted.
+(2) `live reconcile p7-fill-0901` passed the same header, `gate.static` and the session-state precheck, then stopped at the builder, before any IBKR socket: `live reconcile failed: Cannot build an IBKR execution client: TWS_ACCOUNT is not set …`, exit `1`.
+The worktree has no `.env`, and the charter forbids creating or reading one. **Session side, read for real (load-only, no broker needed):** `p7-fill-0901`'s engine cache (18 keys) holds **AAPL.NASDAQ +4 and NVDA.NASDAQ +22**. That is the namespace the Epic 3 retro cites for a phantom position the broker did not hold, so a Variant A run against it should name any line IBKR no longer carries. Its `accountSummary` key exists, but it was read here with a placeholder account, so cash read `unknown`. The namespaces of `p12-0921`, `p13-0922` and `rth-day-1` are **empty** on this Redis, and the reader reported `no_engine_state` for each rather than "flat". Pick a session that has run against this Redis for Variant A. Informational only, never a gate for Story 4.6. The broker-double proofs are `test_live_reconcile.py` (driver, including the `+ 1` pin on the real builder), `test_live_session_view.py`, `test_live_session_view_redis.py` (real Redis and `MONITOR`), `test_reconciliation_service.py` and `test_live_reconcile_cli.py`. |
+| 2026-09-28 | Epic 4 retro live E2E (14:17–14:41 ET, Mon) | ✅ **passed (A and B)** | Run from the `p3-epic4-base` worktree (f892d56). Variant A: `live reconcile` on a genuinely stale session exited `5` (`EXIT_DISCREPANCY`) in ~11 s. Variant B: run on `ibkr_live_client_id + 1` beside a running session, clean, no disturbance to the running session. Logs: `logs/p16-0928.log`. |
+
+## Procedure P17: startup reconciliation against the real broker
+
+> Written as P16 by Story 4.2 in parallel with Story 4.6's P16; renumbered to P17 at integration.
+
+**Introduced by**: Story 4.2 — Reconcile Against the Broker Before Any Strategy Trades
+**Verifies**:
+- AC #2 / #5 live (P17a): after Nautilus's own startup pass, the `reconcile` phase's body proves
+  the cache matches IBKR exactly (`reconcile.ok`, 0 discrepancy), naming whatever the framework
+  imported (`reconcile.discrepancy resolution="framework"`), inside NFR5's 30 s.
+- AC #3 / D-D live (P17b): a session whose Redis cache holds a strategy position the broker does
+  not hold — the `p7-fill-0901` shape — **refuses to start**, naming the instrument and both
+  quantities, and submits nothing.
+
+**Tools**: `scripts/diagnostics/live_node_probe.py --verify-account --reconcile` (P17a);
+`ntrader live start <session>` (P17b).
+
+
+### What it does, and what it does not do
+
+**P17a is strictly read-only against the broker.** The probe builds a node (Layer 1 before any
+socket, Layer 2 after connecting), adds **no strategy**, and uses an **in-memory** cache — so the
+snapshot taken before the node runs is empty, Nautilus's own pass imports every broker position —
+as `INTERNAL-DIFF` since Story 4.5 (the adapter's fabricated `EXTERNAL` order is filtered, D-A;
+before it, as `EXTERNAL`) — inside `run_async`, and `reconcile_at_startup` then compares the cache against a fresh
+`read_broker_state`. Any broker-ward correction the phase makes lands in that throwaway cache,
+never in a session's Redis namespace. Nothing can submit an order. It does not need RTH.
+
+**P17b is not read-only**: `live start` starts strategies if reconciliation passes. It is written
+for the operator and is **never** run by an automated story session.
+
+### Preconditions
+
+- A running, logged-in paper Gateway on the configured paper port; no session running on
+  `ibkr_live_client_id` (the probe shares it — P15's precondition).
+- P17a: nothing else. It works on a flat account (`positions=0`) and on one holding positions.
+- P17b: a session whose Redis namespace holds a strategy-owned position the broker does **not**
+  hold. `p7-fill-0901` was such a session on 2026-09-11 (P10's result row: its cache logged
+  `NVDA.NASDAQ net_position=22` on a flat broker). Confirm the broker side read-only first
+  (P17a, or TWS). **Do not run P17b inside RTH on a session whose cache might agree with the
+  broker** — if reconciliation passes, its strategies start and may trade.
+
+### Command
+
+```bash
+# P17a — read-only.
+uv run python scripts/diagnostics/live_node_probe.py --run-seconds 1 --verify-account \
+  --reconcile > logs/p17a-<date>.log 2>&1
+grep -E "^\[probe\]|RESULT|reconcile\.(ok|discrepancy)" logs/p17a-<date>.log
+
+# P17b — operator only; starts strategies if reconciliation passes.
+uv run python -m src.cli.main live start p7-fill-0901 > logs/p17b-<date>.log 2>&1
+echo "exit=$?"
+grep -E "session.phase|reconcile\.(ok|discrepancy)|live start failed" logs/p17b-<date>.log
+grep -c -E "162|10182|366" logs/p17b-<date>.log   # D6's standing rule, checked first
+```
+
+### Expected output
+
+```
+# P17a
+[probe] gate:account ok mode=paper accounts=['***626']
+[probe] waiting for Nautilus's own reconciliation (trader started)...
+[probe] reconciling against the broker (phase=reconcile)...
+[probe] reconciled AAPL.NASDAQ qty=+4          # one line per broker position, if any
+[probe] reconcile ok positions=1 discrepancies=1 open_orders=0 synthetic_positions=1 elapsed_ms=...
+RESULT: ok mode=build-connect-run-stop loop_closed=True gate_account=paper reconcile=ok positions=1 discrepancies=1 ...
+
+# P17b
+session.phase phase=reconcile status=started
+reconcile.discrepancy instrument_id=NVDA.NASDAQ kind=strategy_position resolution=refused
+  local_quantity=22 strategy_quantity=22 broker_quantity=0 reason=strategy_position_contradicted
+session.phase phase=reconcile status=failed error_type=ReconciliationFailedError
+live start failed: Startup reconciliation refused to let this session trade (strategy_position_contradicted): ...
+exit=1
+```
+
+### Pass criteria
+
+1. **P17a:** `RESULT: ok … reconcile=ok positions=<N> discrepancies=<M>`, exit `0`, with
+   `gate:account ok` before the reconcile lines (AR39's order). On a flat account `positions=0`.
+2. **P17a — the framework's imports are named, not silent.** Every broker position appears as one
+   `reconcile.discrepancy` record — `resolution="framework"` for each the framework imported (the
+   in-memory cache knew nothing), `resolution="broker"` for any the phase had to correct itself —
+   and `discrepancies` equals the number of those records. `positions` matches TWS instrument for instrument, share for
+   share (P15's criterion 2).
+3. **P17a — timed (NFR5).** `reconcile.ok`'s `elapsed_ms` is under 30000. Record it.
+4. **P17a — masked (NFR26).** `grep '^\[probe\]' logs/p17a-<date>.log | grep -c '<full account
+   id>'` prints `0`.
+5. **Both — nothing traded.** `grep -c "order.submitted\|SubmitOrder"` prints `0` in each log.
+6. **P17b — refused, not resolved.** `phase=reconcile status=failed`, no `warmup`/`subscribe`/
+   `trading` phase record after it, one `resolution=refused` record naming the instrument with
+   `strategy_quantity` ≠ `broker_quantity`, the operator message names the instrument and both
+   quantities, and exit is `1`. `live list` shows the session `stopped`.
+
+### Result log
+
+| Date | Operator | Result | Notes |
+| ---- | -------- | ------ | ----- |
+| 2026-09-27 | Story 4.2 dev session | ⏳ **P17a defined, not run; P17b defined, not run (operator only)** | P17a attempted: `live_node_probe.py --run-seconds 1 --verify-account --reconcile` stopped at `RESULT: fail reason=config_error msg=Cannot build an IBKR execution client: TWS_ACCOUNT is not set…` before any socket opened — the story's harness worktree has no `.env` (gitignored; the charter forbids creating or reading one), the Story 4.1 P15 precedent. Note for the operator: the probe needs the repo root importable (`PYTHONPATH=.` or run it via `python -m`/`runpy`), a pre-existing property of the script. P17b needs a session with a stale strategy position and starts strategies if reconciliation passes, so it is never run by an automated session. Both are informational evidence only (NFR33), never a gate: the same logic is proven against broker doubles and a real `LiveExecutionEngine` in `tests/component/core/test_live_startup_reconcile_engine.py` and `test_session_runner_phases.py`. |
+| 2026-09-28 | Epic 4 retro live E2E (14:17–14:41 ET, Mon) | ✅ **P17a passed**; P17b still not run | Run from the `p3-epic4-base` worktree (f892d56). P17a on a flat account: `reconcile.ok`, 0 discrepancies. P17b (needs a stale strategy position and starts strategies if reconciliation passes) remains operator-only and was not run this session. Logs: `logs/p17a-0928.log`. |
+
+## Procedure P18: runtime state stays aligned with the broker
+
+> Written by Story 4.3. If a story running in parallel also appended a "Procedure P18", the
+> integrator renumbers one of them; the content of this procedure does not depend on its number.
+
+**Introduced by**: Story 4.3 — Keep Runtime State Aligned with the Broker
+**Verifies**:
+- AC #1 / D-B live (P18a): a strategy entry produces **one** round trip — the IB adapter's
+  "External position change detected" report, and its phantom `INTERNAL-DIFF` round trip
+  (P11/P12), are gone.
+- AC #2 live (P18b): a position change the session did not make, on an instrument a session
+  strategy trades but does not hold, is corrected broker-ward within two runtime cycles and logged
+  `reconcile.discrepancy scope=runtime resolution=broker` with the instrument and quantities.
+- AC #3 live (P18c): a clean hour logs at most two `reconcile.ok scope=runtime` records.
+- AC #4 live (P18d): after a Gateway restart mid-session, no order is sent until
+  `reconcile.ok scope=reconnect` and then `connection.restored` appear, in that order.
+- D-D live (P18e, PO ruling 2A): closing a strategy's own position in TWS stops the session,
+  exit `1`, naming the instrument and both quantities; the positions left at IBKR are untouched.
+
+**Tools**: `ntrader live start <session>`; TWS (P18b, P18e); the Gateway's own restart (P18d).
+
+### What it does, and what it does not do
+
+**None of P18 is read-only.** Every part runs `live start`, whose strategies may trade, and P18b /
+P18e change a position at the broker by hand in TWS. It is written for the operator and is
+**never** run by an automated story session. It does not need `--real-money` and must never be
+run with it.
+
+### Preconditions
+
+- A running, logged-in paper Gateway on the configured paper port, inside RTH (so bars arrive and a
+  strategy can enter). No IBKR mobile app or client portal session while it runs (the 162 rule).
+- A session whose strategy trades an instrument you are willing to trade by hand in TWS (P18b uses
+  a second instrument from the same session spec, or a fresh session on it).
+- **Know before starting (Story 4.5, amended by PR #35 D5a):** P18b's hand-bought share is a
+  holding no strategy owns. At the session's **next** start, if the strategy trading that
+  instrument is flat there it is not started (`strategy.resume_refused reason=unowned_position`,
+  PO ruling D-C: B) until you remove the share by hand in TWS; if it holds the same side it
+  resumes beside the share (`strategy.resumed_beside_excess`) and never trades it. Sibling
+  strategies start either way. That is the intended behaviour, not a P18 failure.
+- D6's standing rule first: grep every transcript for `162`, `10182`, `366` before reading it.
+
+### Command
+
+```bash
+uv run python -m src.cli.main live start <session> > logs/p18-<date>.log 2>&1 &
+# P18a: wait for an entry, then:
+grep -c "External position change detected" logs/p18-<date>.log          # expect 0
+grep -c "reconcile.position_update_deferred" logs/p18-<date>.log         # expect >= 1 per fill
+grep -c "trade.aggregated" logs/p18-<date>.log                           # one per round trip
+# P18b: in TWS, buy 1 share of an instrument the session trades but holds nothing in; wait 2-3 min.
+grep -E "reconcile\.(discrepancy|ok)" logs/p18-<date>.log | grep "scope=runtime"
+# P18c: leave it clean for an hour.
+grep -c "reconcile.ok.*scope=runtime" logs/p18-<date>.log
+# P18d: restart the Gateway (not the session); wait for it to come back.
+grep -nE "connection\.(lost|restored|halted)|scope=reconnect|order\.(submitted|suppressed)" \
+  logs/p18-<date>.log
+# P18e: in TWS, close the strategy's own position by hand; wait 2-3 min.
+wait; echo "exit=$?"
+grep -E "resolution=refused|live start failed" logs/p18-<date>.log
+```
+
+### Expected output
+
+```
+# P18b (about two minutes after the TWS trade)
+reconcile.discrepancy scope=runtime instrument_id=MSFT.NASDAQ kind=position resolution=broker
+  local_quantity=0 strategy_quantity=0 broker_quantity=1
+reconcile.ok scope=runtime cycles=1 positions=... instruments=...
+
+# P18d
+connection.lost ...
+connection.state_changed previous=connected current=lost
+connection.state_changed previous=lost current=recovering
+reconcile.ok scope=reconnect cycles=1 ...
+connection.restored downtime_seconds=... reconnect_seconds=...
+
+# P18e
+reconcile.discrepancy scope=runtime instrument_id=NVDA.NASDAQ kind=strategy_position
+  resolution=refused reason=strategy_position_contradicted local_quantity=22 ... broker_quantity=0
+live start failed: Runtime reconciliation stopped this session (runtime, strategy_position_contradicted): ...
+exit=1
+```
+
+### Pass criteria
+
+1. **P18a:** zero `External position change detected` lines; one `trade.aggregated` per real round
+   trip (P11/P12 recorded two per entry, one of them `INTERNAL-DIFF`); no `trade.persist_skipped
+   reason=reconciliation_owned` for an entry that nobody changed at the broker.
+2. **P18b:** within ~3 minutes of the TWS trade, one `reconcile.discrepancy scope=runtime
+   resolution=broker` naming the instrument, `local_quantity=0` and the broker's quantity; then a
+   `reconcile.ok scope=runtime`. Record the minutes between the trade and the record (the accepted
+   1–2 cycle lag).
+3. **P18c:** at most two `reconcile.ok scope=runtime` records in the clean hour, and no
+   `reconcile.broker_state_retrieved` line from the runtime cycle.
+4. **P18d:** between `connection.lost` and `connection.restored`: zero `order.submitted`; any order
+   the strategy attempted appears as `order.suppressed`; `reconcile.ok scope=reconnect` precedes
+   `connection.restored`. If the Gateway took longer than 60 s, `connection.halted` appears too —
+   expected, and it must still be followed by `connection.restored`.
+5. **P18e:** exit `1`; the message names the instrument and both quantities and says positions at
+   IBKR were not touched; TWS shows no order from the session after the manual close; `live list`
+   shows the session `stopped`.
+
+### Result log
+
+| Date | Operator | Result | Notes |
+| ---- | -------- | ------ | ----- |
+| 2026-09-27 | Story 4.3 dev session | ⏳ **Defined, not run (operator only)** | Every part needs `live start` (strategies may trade), and P18b/P18e change a broker position by hand — the story charter forbids submitting orders or opening, closing or flattening positions, so no part is read-only. The one read-only surface this story touches — the exec-client factory, which now installs the D-B patch, reached by `live check` — was attempted: `ntrader live check` stopped at `Cannot build an IBKR execution client: TWS_ACCOUNT is not set` in 0.00 s, before any socket opened, because the harness worktree has no `.env` (the P15/P17a precedent; the charter forbids creating or reading one). Informational evidence only (NFR33), never a gate: the same logic is proven against broker doubles and a real `LiveExecutionEngine` in `tests/unit/core/test_live_runtime_reconcile.py`, `tests/component/core/test_live_runtime_reconcile_engine.py`, `test_session_runner_runtime_reconcile.py` and `test_live_exec_position_reports.py`. |
+
+## Procedure P19: a session restarted across an open position resumes it
+
+> Written by Story 4.5. Story 4.7, in parallel, also appended a "Procedure P19"; the integration
+> merge (2026-09-28) kept this one as P19 and renumbered 4.7's P20.
+
+**Introduced by**: Story 4.5 — Resume a Strategy Mid-Position
+**Verifies**:
+- D-A live (P19a): Nautilus's own startup pass imports a broker position **once**, as
+  `INTERNAL-DIFF`, with no `EXTERNAL` order — the IB adapter's fabricated per-position order is
+  filtered (`filter_unclaimed_external_orders=True`).
+- AC #1 / #2 live (P19b): a session stopped holding a position resumes it — `strategy.resumed`
+  with `quantity == broker_quantity` and `opened_before_this_run=True`, `reconcile.ok` with
+  `synthetic_positions=0` — and the strategy enters nothing on a same-side signal.
+- AC #3 / #5 live (P19b): the eventual exit is **one** order of the resumed quantity, and the round
+  trip is **one** `trade.persisted` whose `ts_opened` is the first run's, in the same `session_id`.
+- AC #4 live (P19b): `reconcile.ok` → `strategy.resumed` → `warmup.completed` → the first bar, in
+  that order, before any `order.submitted`.
+- D-F (informational, P19b): the history/live seam reading — `warmup.seam_duplicate_dropped` /
+  `warmup.seam_gap` — replaces P14 criterion 7's hand comparison.
+
+**Tools**: `scripts/diagnostics/live_node_probe.py --verify-account --reconcile` (P19a);
+`ntrader live start <session>` and TWS (P19b).
+
+### What it does, and what it does not do
+
+**P19a is strictly read-only against the broker** — P17a's command, read for a different fact: the
+probe adds no strategy and uses an in-memory cache, so nothing can submit an order and no session's
+Redis namespace is touched. It needs an account that **holds** a position (a flat account shows
+nothing to import). It does not need RTH.
+
+**P19b is not read-only**: `live start` starts strategies, which enter and exit at IBKR paper. It
+is written for the operator and is **never** run by an automated story session. It does not need
+`--real-money` and must never be run with it.
+
+### Preconditions
+
+- A running, logged-in paper Gateway on the configured paper port, inside RTH for P19b. No IBKR
+  mobile app or client portal session while it runs (the 162 rule). D6's standing rule first:
+  grep every transcript for `162`, `10182`, `366` before reading it.
+- **P19b: a fresh session** created after Story 4.5 (`live create --name p19-<date> --strategy
+  sma_crossover --bar-type NVDA.NASDAQ-1-MINUTE-LAST-EXTERNAL`). A session restarted mid-position
+  *before* Story 4.5 refuses to start (`session.resume_refused reason=legacy_position_import`,
+  exit 1, D-D) — that refusal is itself worth recording once, on such a session, but it is not P19b.
+- The account holds **nothing** on the session's instrument that the session did not open —
+  a same-side excess would make run 2 resume beside it (`strategy.resumed_beside_excess`, PR #35
+  D5a) and muddy the "same position" proof, and an opposite-side or flat-beside-unowned holding
+  means the strategy is not started (`strategy.resume_refused`, D-C); either way P19b cannot run.
+- **Know before starting:** `custom/sma_crossover_long_only` still flattens in `on_stop()`
+  (`deferred-work.md:2196`, owner: the submodule repo). Use the built-in `sma_crossover`.
+- P19b leaves a position open between its two runs, by design, and possibly at the end if no exit
+  signal comes. Close a leftover **by hand in TWS** or with `scripts/flatten_position.py --confirm`
+  (whose first live use is still to be recorded — `deferred-work.md:3043-3052`).
+
+### Command
+
+```bash
+# P19a — read-only, on an account holding a position.
+uv run python scripts/diagnostics/live_node_probe.py --run-seconds 1 --verify-account \
+  --reconcile > logs/p19a-<date>.log 2>&1
+grep -E "^\[probe\]|RESULT|reconcile\.(ok|discrepancy)|EXTERNAL|INTERNAL-DIFF" logs/p19a-<date>.log
+
+# P19b run 1 — wait for an entry (`order.filled`), then Ctrl-C once.
+uv run python -m src.cli.main live start p19-<date> > logs/p19b-1-<date>.log 2>&1
+# Record the IBKR position in TWS. It must be unchanged by the stop.
+
+# P19b run 2 — the same session, by name.
+uv run python -m src.cli.main live start p19-<date> > logs/p19b-2-<date>.log 2>&1
+grep -nE "reconcile\.(ok|discrepancy)|strategy\.resum|warmup\.(completed|seam)|order\.submitted|\
+trade\.(aggregated|persisted)|session\.started" logs/p19b-2-<date>.log
+# After the exit fills, Ctrl-C once, then:
+psql "$DATABASE_URL" -c "SELECT session_id, trade_id, venue_order_id, client_order_id, \
+  entry_timestamp, exit_timestamp FROM trades WHERE session_id = \
+  (SELECT id FROM trading_sessions WHERE name = 'p19-<date>') ORDER BY exit_timestamp;"
+```
+
+### Expected output
+
+```
+# P19a
+[probe] reconciled NVDA.NASDAQ qty=+22
+[probe] reconcile ok positions=1 discrepancies=1 open_orders=0 synthetic_positions=1 elapsed_ms=...
+RESULT: ok ... reconcile=ok positions=1 discrepancies=1 ...
+# and no "EXTERNAL" line from Nautilus's own reconciliation of the position
+
+# P19b run 2
+session.phase phase=reconcile status=ok
+reconcile.ok scope=startup positions=1 instruments={'NVDA.NASDAQ': '22'} discrepancies=0 synthetic_positions=0
+strategy.resumed strategy_id=SMACrossover-000 instrument_id=NVDA.NASDAQ side=LONG quantity=22
+  broker_quantity=22 opened_before_this_run=True open_orders=0 ...
+warmup.completed strategy_id=sma_crossover indicators_initialized=True ...
+session.started ...
+order.submitted ... side=SELL quantity=22          # only on the opposite crossover
+trade.aggregated strategy_id=SMACrossover-000 opening_order_id=<run 1's> ...
+trade.persisted ...
+```
+
+### Pass criteria
+
+1. **P19a:** every broker position appears once, and the framework's import of it is
+   `INTERNAL-DIFF` — `grep -c EXTERNAL` on Nautilus's reconciliation lines prints `0`.
+   `RESULT: ok`. Nothing traded (`grep -c "order.submitted\|SubmitOrder"` prints `0`).
+2. **P19b, the stop:** TWS shows the same position before and after the Ctrl-C; run 1's log has
+   no `order.submitted` after `session.stopped`.
+3. **P19b, the resume:** run 2's `reconcile.ok` has `discrepancies=0` and `synthetic_positions=0`;
+   exactly one `strategy.resumed`, with `quantity == broker_quantity` and
+   `opened_before_this_run=True`; its line precedes `warmup.completed`, which precedes the first bar
+   and any `order.submitted`.
+4. **P19b, no fresh entry:** no `order.submitted` with the entry's side while the position is open.
+5. **P19b, one exit:** on the opposite crossover, exactly one `order.submitted` of the resumed
+   quantity, and TWS goes flat.
+6. **P19b, one trade:** exactly one `trade.aggregated` for the round trip (none for a synthetic
+   owner), its `opening_order_id` is run 1's entry order, and the `trades` query shows one row for
+   it with run 1's `entry_timestamp`, in the same `session_id` as every earlier row of this
+   session.
+7. **Informational, not pass/fail — the seam:** record any `warmup.seam_duplicate_dropped` /
+   `warmup.seam_gap` line from either run. A gap is named, never replayed (PO ruling D-F: B). The
+   duplicate record's `ts_event` equal to `last_history_ts_event` is also the first live evidence
+   that IB stamps a republished history bar and its live twin alike (`deferred-work.md`, story-4.5
+   review deferral) — record it.
+
+### Variants
+
+- **P19b day two — the signature journey (Journey 2).** Run 1 near the close; stop it (Ctrl-C) with
+  the position open; let the Gateway take its **overnight restart** with nothing running; start
+  run 2 the next morning. The pass criteria are the same, and in addition run 2's `node:connect`
+  reconnects to a Gateway process that never saw run 1. `session.phase phase=reconcile
+  status=ok` with `synthetic_positions=0` is the whole point: the broker's answer, not any
+  in-memory state, is what the resume rests on.
+- **P19b at 09:25 ET (NFR3).** Start run 2 five minutes before the open. Record the time of
+  `session.started` and of the first `strategy`-owned bar: the resumed strategy must be
+  reconciled, warm and subscribed by 09:30. The lookback is whole days for `>= 1 minute` bars
+  (Story 4.4), so a pre-open start never sends a seconds window that returns nothing.
+- **P19c, the covered excess (PO ruling D-C, 2026-09-28; amended by PR #35 D5a, 2026-09-30 —
+  operator only).** Between runs, buy a few extra shares of the strategy's instrument by hand in
+  TWS. Run 2's `reconcile` phase ends `ok` (a holding that covers the strategy's own is not a
+  contradiction at startup); the strategy **is started** and resumes beside the excess — one
+  `strategy.resumed_beside_excess` names the instrument, `unowned_quantity`, `strategy_quantity`
+  and `broker_quantity`, then `strategy.resumed` names its own lot — and its next opposite signal
+  sells **only its own quantity**: TWS still shows the extra shares afterwards. (Before D5a the
+  strategy was not started here, `strategy.resume_refused reason=unowned_position`; that record
+  now belongs to the flat and opposite-side shapes only.) To see the refusal, instead leave the
+  strategy flat and buy by hand: the strategy is not started, its siblings are, and the console
+  prints the remedy. Selling shares by hand (IBKR below the strategy's own) must refuse the
+  **whole** start at `reconcile`, exit 1.
+
+### Result log
+
+| Date | Operator | Result | Notes |
+| ---- | -------- | ------ | ----- |
+| 2026-09-28 | Story 4.5 dev session | ⏳ **P19a defined, not run; P19b defined, not run (operator only)** | Port check at 11:31 ET Monday: 4001/4002/7496/7497 **closed** — no Gateway was running; Redis 6379 and Postgres 5432 open. P19a also needs `TWS_ACCOUNT`, and this harness worktree has no `.env` (the charter forbids creating or reading one — the P15/P17a/P18 precedent). P19b needs a position opened and closed at the broker, which the charter forbids an automated session to do. Informational evidence only (NFR33), never a gate: the same logic is proven against broker doubles and real engines in `tests/component/core/test_live_session_resume_engine.py` (process A → B across a shared cache database, under the session's own exec config), `tests/component/core/test_session_runner_resume.py`, `tests/component/core/test_strategy_own_book.py`, `tests/component/core/test_warmup_seam.py`, `tests/integration/core/test_resume_round_trip_redis.py` (real Redis) and `tests/integration/db/test_trade_record.py` (FR19, real Postgres). |
+| 2026-09-28 | Epic 4 retro live E2E (14:17–14:41 ET, Mon) | ⚠️ **P19a criterion 1 not literally met (accepted, PO ruling); P19b passed** | Run from the `p3-epic4-base` worktree (f892d56). **P19a**, on an account holding a (short) position: `grep -c EXTERNAL` on the reconciliation lines printed `3`, not `0` — `Filtering unclaimed EXTERNAL orders`, an inferred `OrderFilled` at `position_id=NVDA.NASDAQ-EXTERNAL`, and `Filtered 1 unclaimed EXTERNAL orders`; `INTERNAL-DIFF` import still happened and nothing traded. On a flat account the same run read `0`, as specified. **PO ruling (Epic 4 retro, 2026-09-28): accepted as a documented exception, not a blocker** — these are the filter's own log lines naming what it discarded, not an unfiltered `EXTERNAL` order reaching the cache; D-A's actual guarantee (no fabricated `EXTERNAL` order reaches the cache) held. The pass criterion's literal wording should be read as "no unclaimed `EXTERNAL` order is imported", not "the substring `EXTERNAL` never appears in the log." **P19b**: `reconcile.ok` with `discrepancies=0`/`synthetic_positions=0`, one `strategy.resumed` with `opened_before_this_run=True`, one `trade.aggregated`/`trade.persisted` on the exit, and the `trades` row carried run 1's `entry_timestamp` in the same `session_id`. `flatten_position.py` also exercised live for the first time: dry-run wrong-side/wrong-qty refused with zero orders, `--confirm` filled a 21-share BUY and the broker read back flat. Logs: `logs/p19a-0928.log`, `logs/p19b-*-0928.log`. |
+
+## Procedure P20: corporate actions are absorbed through broker-authoritative state
+
+> Written by Story 4.7 as "Procedure P19". Story 4.5, in parallel, also appended a P19, so the
+> integration merge (2026-09-28) renumbered this one P20; its content does not depend on its
+> number. The same merge updated the parts Story 4.5 changed: the ⚠️ precondition, the expected
+> `synthetic_positions` and the `strategy.resume_refused` that now follows an absorbed start.
+
+**Introduced by**: Story 4.7 — Absorb Corporate Actions Through Broker-Authoritative State
+**Verifies**:
+- AC #1 / #2 live (P20a): a forward split or stock dividend on an instrument a session's strategy
+  holds, across an overnight stop, is absorbed at the next start without manual intervention. It
+  is named as one `reconcile.discrepancy` with the before and after quantities, and the
+  `reconcile` phase is not refused. (Since Story 4.5 the strategy on that instrument is then not
+  started, because the split's extra shares belong to no strategy — see the ⚠️ precondition.)
+- AC #1 / #2 live (P20b): a cash dividend credited while the session was stopped is named at the
+  next start as `reconcile.cash_changed`. On demand, `live reconcile` shows the difference with
+  "session cash as of <time>".
+- The NFR14 floor live (P20c, only if one occurs): a reverse split on a held position refuses the
+  start, naming the likely cause.
+
+**Tools**: `ntrader live start <session>` (P20a/b/c); `ntrader live reconcile <session>` (P20b,
+read-only, `IBKR_LIVE_CLIENT_ID + 1`); IBKR's corporate-actions notices / the issuer's
+announcement for the ex-date.
+
+### What it does, and what it does not do
+
+**It cannot be staged.** A corporate action happens at the issuer's schedule, not ours. Paper
+accounts receive IBKR's processing of real corporate actions, but a paper account's handling is
+itself unverified. If the paper account never reflects the action, **that is the finding**:
+record it rather than a pass or a fail.
+
+**P20a and P20c are not read-only.** `live start` starts strategies, and a position must already
+be held across the ex-date. They are written for the operator and are **never** run by an
+automated story session. **P20b's `live reconcile` half is read-only** against a stopped session
+and may be run at any time; it never evicts a running session.
+
+### Preconditions
+
+- A running, logged-in paper Gateway on the configured paper port; no IBKR mobile app or client
+  portal session (the 162 rule); a populated `.env` in the operator's checkout.
+- P20a: a session whose strategy holds a position in an instrument with an announced **forward
+  split** or **stock dividend** ex-date. Stop the session (Ctrl-C) the trading day before the
+  ex-date; leave the position open at IBKR.
+- **⚠️ P20a: the strategy holding the split is not started after the absorbed start.**
+  - Since Story 4.5 a split absorbed at startup leaves strategy +10 beside `INTERNAL-DIFF` +10
+    (the engine no longer imports the adapter's `EXTERNAL` order), and the +10 belongs to no
+    strategy. Since PR #35 D5a (PO ruling 2026-09-30) the per-strategy resume check starts the
+    strategy beside that same-side excess (`strategy.resumed_beside_excess`, P19c's shape) —
+    before it, the strategy was refused (`strategy.resume_refused reason=unowned_position`).
+  - The extra shares are never traded: the strategy manages its own +10 only. The remedy for the
+    orphan shares is manual: remove them in TWS (`docs/agent/nautilus.md`, "Corporate actions").
+  - SIGINT the run as soon as `phase=reconcile status=ok` is read. The criteria below need
+    nothing after that line.
+- P20b: any held instrument with a **cash dividend** paid while the session is stopped, or any
+  other credit to the account's cash (interest). Note the cash in TWS, and the time of the
+  session's last fill, before stopping.
+  - IBKR pushes the account summary only every few minutes, so a fill in the last minutes before
+    the stop can be part of the difference too. Compare it with the note's `as of` time.
+  - A `live start` that fails *after* connecting (a `gate:account` refusal, a failed broker read)
+    uses up the "before": the retried start names nothing. Run P20b's `live reconcile` first.
+- D6's standing rule first: grep every transcript for `162`, `10182`, `366` before reading it.
+
+### Command
+
+```bash
+# P20b, read-only, before the next start: the stopped session's cash against IBKR's.
+uv run python -m src.cli.main live reconcile <session> > logs/p20b-<date>.log 2>&1; echo "exit=$?"
+grep -E "^cash |^note:|RESULT" logs/p20b-<date>.log
+
+# P20a / P20b / P20c — operator only; starts strategies if reconciliation passes.
+uv run python -m src.cli.main live start <session> > logs/p20-<date>.log 2>&1 &
+RUNNER_PID=$!   # the `live start` process itself: nothing is piped
+# Wait until the reconcile phase has settled before reading anything.
+until grep -qE "phase=reconcile status=(ok|failed)" logs/p20-<date>.log \
+      || ! kill -0 "$RUNNER_PID" 2>/dev/null; do sleep 2; done
+grep -c -E "162|10182|366" logs/p20-<date>.log            # D6's standing rule, checked first
+grep -E "session.phase phase=reconcile|reconcile\.(discrepancy|cash_changed|ok)|strategy\.resume" \
+  logs/p20-<date>.log
+kill -INT "$RUNNER_PID"; wait "$RUNNER_PID"; echo "exit=$?"   # before any signal (see the ⚠️ above)
+```
+
+### Expected output
+
+```
+# P20b (live reconcile on the stopped session)
+cash USD session=100000.52 broker=100123.97 difference=+123.45 DISCREPANCY
+note: session cash as of 2026-10-02T20:00:01.250000+00:00 is the last TotalCashValue ...
+RESULT: discrepancy — positions=0 cash=1 line(s) differ from IBKR ...; nothing was changed
+exit=5
+
+# P20a / P20b (the next live start)
+session.phase phase=reconcile status=started
+reconcile.cash_changed scope=startup currency=USD before=100000.52 after=100123.97
+  difference=123.45 recorded_at=2026-10-02T20:00:01.250000+00:00
+reconcile.discrepancy scope=startup instrument_id=NVDA.NASDAQ kind=position resolution=framework
+  local_quantity=10 strategy_quantity=10 broker_quantity=20
+reconcile.ok scope=startup ... discrepancies=1 synthetic_positions=1
+session.phase phase=reconcile status=ok
+strategy.resumed_beside_excess spec_strategy_id=... instrument_id=NVDA.NASDAQ
+  unowned_quantity=10 strategy_quantity=10 broker_quantity=20      # P20a, since PR #35 D5a
+strategy.resumed strategy_id=SMACrossover-000 instrument_id=NVDA.NASDAQ quantity=10 ...
+
+# P20c (a reverse split)
+reconcile.discrepancy ... kind=strategy_position resolution=refused local_quantity=10
+  strategy_quantity=10 broker_quantity=5 likely_cause="the broker holds fewer shares than the
+  strategy believes — a reverse split, a partial sale outside the session, or a lost fill; or,
+  because the session's net already matches the broker, ..."
+live start failed: Startup reconciliation refused to let this session trade ...
+exit=1
+```
+
+### Pass criteria
+
+1. **P20a:** the `reconcile` phase is **not** refused. Exactly one `reconcile.discrepancy` names
+   the instrument, with `local_quantity` = the pre-split quantity, `broker_quantity` = TWS's
+   post-split quantity, and `resolution` `framework` or `broker`. `reconcile.ok` follows with
+   `discrepancies` ≥ 1. `live reconcile` right after the start reports the position clean. One
+   `strategy.resumed_beside_excess` names the split's extra shares as `unowned_quantity` beside
+   the strategy's own, and the strategy **is** started (PR #35 D5a, PO ruling 2026-09-30 —
+   before it, this read `strategy.resume_refused reason=unowned_position` and the strategy was
+   not started; a transcript from before that date shows the old record).
+2. **P20a — the lot is untouched.** The run is stopped before any signal (the ⚠️ precondition),
+   and no `order.submitted` appears in the transcript. `reconcile.ok`'s `synthetic_positions`
+   counts the reconciliation-owned positions holding the split's extra shares, and TWS shows
+   the post-split quantity. The split's unadjusted P&L and those unmanaged extra shares are the
+   documented costs (`docs/agent/nautilus.md`, "Corporate actions"), not a failure.
+3. **P20b:** `live reconcile` before the start exits `5`, names the cash difference, and its
+   note says `session cash as of <time>`, where the time is the previous run's last summary.
+   The next start logs one `reconcile.cash_changed` with the same before, after and difference,
+   and still reaches `phase=reconcile status=ok`. Before calling it a dividend, check that the
+   session's last fill predates the `as of` time.
+4. **P20c (only if one occurs):** exit `1`. The refusal names the instrument, both quantities
+   and "reverse split". Nothing is written, and TWS shows no order from the session. Since Story
+   4.5 a namespace created after it never caches the order behind the 1.4S abort, and one that
+   did is refused before the framework runs (`session.resume_refused
+   reason=legacy_position_import`, exit 1). If the process instead aborts inside `node:connect`
+   (a Rust panic), record it against Story 4.5's 1.4S item. This procedure does not own it.
+5. **All parts:** in every transcript, `grep -c '<full account id>'` prints `0` (NFR26).
+
+### Result log
+
+| Date | Operator | Result | Notes |
+| ---- | -------- | ------ | ----- |
+| 2026-09-28 | Story 4.7 dev session | ⏳ **Defined, not run** | A corporate action cannot be staged, and P20a/P20c need `live start` across a position held at the broker. The story charter forbids submitting orders or opening, closing or flattening positions, so they are operator-only. P20b's read-only half (`live reconcile`) needs a configured account. The one read-only attempt, `ntrader live check`, stopped at `Cannot build an IBKR execution client: TWS_ACCOUNT is not set` in 0.00 s, with `gate:static ok` and no socket opened: this harness worktree has no `.env`, and the charter forbids creating or reading one (the P15/P17a/P18 precedent). This is informational evidence only (NFR33), never a gate. The same logic is proven against broker doubles and a real `LiveExecutionEngine`:<br>• `tests/component/core/test_live_corporate_actions_engine.py`: forward split absorbed at startup and at runtime, the lot untouched; a reverse split refused and stopped;<br>• `tests/unit/core/test_live_startup_reconcile.py`: `reconcile.cash_changed`, the likely cause, the emitted-name pin;<br>• `tests/component/core/test_session_runner_phases.py` / `test_session_runner_runtime_reconcile.py`: through `runner.run()`;<br>• `tests/component/core/test_live_session_view.py`: "session cash as of";<br>• `tests/integration/core/test_live_startup_cash_redis.py`: against a real Redis, together with the `MONITOR` load-only proof in `test_live_session_view_redis.py`. |

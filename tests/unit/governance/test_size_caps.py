@@ -86,6 +86,10 @@ FILE_ALLOWLIST: dict[str, int] = {
 #: report were independently re-measured against this implementation and
 #: match it exactly (`src/config.py::IBKRSettings` measures 101, confirming
 #: metric ruling 1 — field annotations count).
+#:
+#: 93 since 2026-09-22 (Story 4.4 test fix): the two ``custom/`` submodule
+#: entries (``apolo_rsi``, ``bollinger_reversal``) left with the submodule's
+#: exclusion from the walk — see ``_iter_src_files``.
 SIZE_BASELINE: dict[str, int] = {
     "src/api/models/backtest_detail.py::build_metrics_panel": 99,
     "src/api/rest/indicators.py::_compute_bollinger_indicators": 54,
@@ -128,22 +132,44 @@ SIZE_BASELINE: dict[str, int] = {
     "src/core/backtest_runner.py::MinimalBacktestRunner.run_from_config_with_catalog_data": 66,
     "src/core/backtest_runner.py::MinimalBacktestRunner.run_sma_backtest": 56,
     "src/core/live_bar_observer.py::LiveBarObserver": 120,
-    "src/core/live_connection_monitor.py::ConnectionMonitor": 118,
-    "src/core/live_node_builder.py::build_trading_node_config": 128,
+    # Story 4.3, 118 -> 116: `submission_withheld` is now `not trading_permitted` (D-F).
+    "src/core/live_connection_monitor.py::ConnectionMonitor": 116,
+    # Story 4.3, 128 -> 129: `open_check_interval_secs` passed explicitly as off (PO ruling 1A).
+    # Story 4.5, 129 -> 130: `filter_unclaimed_external_orders` passed explicitly as on (D-A).
+    "src/core/live_node_builder.py::build_trading_node_config": 130,
     "src/core/live_order_path.py::OrderEventObserver": 165,
-    "src/core/live_session_runner.py::LiveSessionRunner": 400,
+    # Story 4.4, 400 -> 414: warm-up wiring (arm in `_phase_warmup`, instrument
+    # + settle per strategy, the stop/reclaim predicate the wait reads); the
+    # watch itself is its own module. Story 4.2, 414 -> 424: reconcile seam,
+    # pre-reconciliation snapshot, trading latch; the logic is live_startup_reconcile.py
+    # (file budget made first by moving stop_degraded_strategies out, 499 -> 481).
+    # Story 4.3, 424 -> 412: budget split first (decision D-I) — the two teardown
+    # flush bodies moved to live_session_steady_state.py (file 495 -> 470) — then
+    # the startup grant and the runtime reconciler's construction (-> 485); the
+    # logic is live_runtime_reconcile.py.
+    # Story 4.5, 412 -> 416: the resume wiring (pre-`run_async` refusal, the
+    # per-start `ResumeCheck` and its two calls); the policy is live_session_resume.py.
+    # PR #35 code review D4, 416 -> 417: the one line that hands `ResumeCheck` the
+    # session's resolved strategy ids (`session_strategy_ids`, live_session_node.py).
+    "src/core/live_session_runner.py::LiveSessionRunner": 417,
     "src/core/live_session_runner.py::LiveSessionRunner.run": 66,
-    "src/core/live_session_steady_state.py::SessionSteadyState": 120,
+    # Story 4.3, 120 -> 114: the no-bars watchdog's test and emit moved to module
+    # level (decision D-I, -9) to make room for the runtime reconciler's tick call.
+    "src/core/live_session_steady_state.py::SessionSteadyState": 114,
     "src/core/live_strategy_guard.py::StrategyGuard": 121,
     "src/core/live_trade_recorder.py::TradeRecorder": 164,
     "src/core/metrics.py::PerformanceCalculator": 128,
     "src/core/metrics.py::PerformanceCalculator.calculate_metrics_from_data": 55,
     "src/core/results_extractor.py::ResultsExtractor": 154,
     "src/core/results_extractor.py::ResultsExtractor.extract_results": 85,
-    "src/core/strategies/custom/apolo_rsi.py::ApoloRSI.on_bar": 53,
-    "src/core/strategies/custom/bollinger_reversal.py::BollingerReversalStrategy": 110,
-    "src/core/strategies/sma_crossover.py::SMACrossover": 103,
-    "src/core/strategies/sma_momentum.py::SMAMomentum.on_bar": 58,
+    # Story 4.4, 103 -> 110: AR40 warm-up inline in `on_start` + the history
+    # callback, deliberately not hidden in a helper so AC #2's inspection reads
+    # the three Nautilus calls in the strategy file itself. Story 4.5, 110 -> 106
+    # (shrank): the own-book read is `positions_open(...)`, no `is_open` re-checks.
+    "src/core/strategies/sma_crossover.py::SMACrossover": 106,
+    # Story 4.4, 58 -> 52 (shrank): registered SMAs replaced the deque average.
+    # Story 4.5, 52 -> 51 (shrank): the own-book net replaced three portfolio reads.
+    "src/core/strategies/sma_momentum.py::SMAMomentum.on_bar": 51,
     "src/core/strategy_registry.py::StrategyRegistry": 101,
     "src/db/repositories/backtest_repository.py::BacktestRepository": 236,
     "src/db/repositories/backtest_repository_sync.py::SyncBacktestRepository": 153,
@@ -325,8 +351,15 @@ def measure_module(path: Path) -> Measurement:
     return Measurement(file_lines=total_file, classes=classes, functions=functions)
 
 
-def _iter_src_files():
-    return sorted(SRC_ROOT.rglob("*.py"))
+def _iter_src_files(src_root: Path = SRC_ROOT) -> list[Path]:
+    """Every ``.py`` under ``src_root`` except the ``custom/`` strategies
+    submodule — an unversioned git submodule this repo cannot pin (the
+    ``STRATEGY_MODULES`` precedent in ``test_live_stop_path_is_inert.py``).
+    Walking into it made the verdict depend on whether the submodule was
+    checked out: a fresh worktree saw its baseline entries as deleted.
+    """
+    submodule = src_root / "core" / "strategies" / "custom"
+    return sorted(path for path in src_root.rglob("*.py") if not path.is_relative_to(submodule))
 
 
 def _print_baseline() -> None:
@@ -413,6 +446,25 @@ class TestMeasureModuleMetric:
         assert measurement.functions["outer"] == 24
         assert "inner" not in measurement.functions
         assert "outer.inner" not in measurement.functions
+
+
+class TestScannedTree:
+    """Which files the guard walks — pinned so its verdict cannot depend on
+    whether the ``custom/`` submodule happens to be checked out.
+    """
+
+    def test_the_custom_submodule_is_excluded_from_the_walk(self, tmp_path):
+        strategies = tmp_path / "core" / "strategies"
+        (strategies / "custom").mkdir(parents=True)
+        (strategies / "custom" / "private.py").write_text("x = 1\n")
+        (strategies / "builtin.py").write_text("x = 1\n")
+
+        assert _iter_src_files(tmp_path) == [strategies / "builtin.py"]
+
+    def test_the_real_walk_is_not_vacuous(self):
+        # Without this, a walk that found nothing — a moved SRC_ROOT, a
+        # renamed tree — would pass every cap below vacuously.
+        assert len(_iter_src_files()) > 100
 
 
 class TestFileCap:

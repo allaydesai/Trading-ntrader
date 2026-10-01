@@ -72,6 +72,48 @@ NODE_FACING_MODULES = (
     # Added in the commit that created the module, because this list is
     # hand-maintained and an omission is invisible (CLAUDE.md, Anti-Patterns).
     "src/core/live_order_rejections.py",
+    # Story 4.4. The warm-up watch's wrapped callback runs inline inside the
+    # history response dispatch (`Actor._finish_response`, on
+    # `LiveDataEngine`'s response queue), where a raise shuts the whole node
+    # down — the same shape as the three above. Added in the creating commit.
+    "src/core/live_session_warmup.py",
+    # Story 4.1. The broker-state reader drives the node's own IB exec client
+    # and adapter (`get_positions`, the instrument provider) on the node's
+    # loop, and Story 4.2 calls it from the runner's `reconcile` phase — a
+    # failure here must surface as `BrokerStateUnavailableError`, never an exit.
+    # Added in the creating commit.
+    "src/core/live_broker_state.py",
+    # Story 4.6. The on-demand reconcile driver builds, runs and tears down its
+    # own read-only node (`ibkr_live_client_id + 1`) and drives the broker
+    # read on it; every failure must surface as a typed exception the CLI maps
+    # to AR28's table — raising is fine here, exiting never is. Added in the
+    # creating commit.
+    "src/core/live_reconcile.py",
+    # Story 4.6. Reached from the driver above, between the broker read and
+    # the node's teardown: an exit here would skip that teardown and strand
+    # the `+ 1` client id on the Gateway. Added in the creating commit.
+    "src/core/live_session_view.py",
+    # Story 4.2. The `reconcile` phase's body: it reads the node's exec engine
+    # and cache and hands the engine broker-ward `PositionStatusReport`s on the
+    # node's loop — every refusal must surface as `ReconciliationFailedError`
+    # (exit 1), never an exit. Added in the creating commit.
+    "src/core/live_startup_reconcile.py",
+    # Story 4.3. The runtime reconciler runs on every heartbeat tick for the
+    # session's whole life, reading the broker and correcting the cache through
+    # the exec engine on the node's loop; its one deliberate way out is a typed
+    # `ReconciliationFailedError` that the runner's `finally` must receive —
+    # raising is fine here, exiting never is. Added in the creating commit.
+    "src/core/live_runtime_reconcile.py",
+    # Story 4.3. Runs inside `node.build()` (the exec-client factory, beside
+    # `live_exec_avg_px.py`) and then inside the adapter's position-update task
+    # for the whole session. Added in the creating commit.
+    "src/core/live_exec_position_reports.py",
+    # Story 4.5. Called by the runner inside `node:connect` (before
+    # `run_async()`) and inside `trading`'s per-strategy containment: its
+    # refusals are a typed `ResumeRefusedError` the runner's `finally` (or the
+    # start-failure path) must receive — raising is fine here, exiting never
+    # is. Added in the creating commit.
+    "src/core/live_session_resume.py",
     "src/services/session_record.py",
     "src/services/session_service.py",
 )
@@ -92,12 +134,15 @@ NODE_FACING_MODULES = (
 #: *process* is exactly this layer's job; the rule is that nothing **below**
 #: it may. ``live_status.py`` (Story 2.8) joined at creation: `status`/`list`
 #: exit through the same ``EXIT_CODES``-derived ``SystemExit`` `live_start.py`
-#: does, for the same reason.
+#: does, for the same reason. ``live_reconcile.py`` (Story 4.6) joined at
+#: creation for the same reason again: `reconcile` exits 0/5, or through
+#: ``EXIT_CODES`` on a failure.
 EXEMPT_MODULES = (
     "src/core/live_session_signals.py",
     "src/cli/commands/live.py",
     "src/cli/commands/live_start.py",
     "src/cli/commands/live_status.py",
+    "src/cli/commands/live_reconcile.py",
 )
 
 

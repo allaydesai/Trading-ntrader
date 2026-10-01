@@ -22,9 +22,24 @@ here at all — it imports ``nautilus_trader`` at its line 18 — which is why
 rather than shared by import.
 
 Known, accepted limit: this module logs *that* a phase started and how it
-ended. It makes no claim about what the phase did. ``reconcile`` and ``warmup``
-are no-op placeholders in Epic 2 and log ``ok`` having done nothing at all — a
-clean phase log is not evidence that reconciliation happened.
+ended. It makes no claim about what the phase did. ``reconcile``'s ``ok``
+(Story 4.2) means the cache was proven to match the broker exactly — but
+Nautilus's *own* reconciliation pass runs earlier, inside ``node:connect``
+(``kernel.py:1008-1027``), which is why the phase verifies and completes it
+rather than running one; ``reconcile.ok`` is the record that says it matched,
+and a hard native failure stops the session at ``node:connect``. Since Story
+4.3 the ``reconcile`` phase's ``ok`` also marks the first trading-permission
+grant — issued inside it, only once the cache is proven — and the running
+session's own re-checks log ``reconcile.*`` records with ``scope="runtime"`` /
+``"reconnect"``, outside any phase. ``warmup``'s ``ok``
+(Story 4.4) means the runner's warm-up watch is armed, not that anything is
+warm: strategies warm in their own ``on_start`` during ``trading``, and
+``warmup.completed`` is the record that says so. Story 4.5 adds work inside two
+phases without adding a phase: ``node:connect`` refuses a pre-4.5 engine cache
+before Nautilus's own pass runs (``session.resume_refused``), and ``trading``
+contains a strategy whose instrument carries a holding no strategy owns
+(``strategy.resume_refused``) and names one that restarts holding its own
+position (``strategy.resumed``).
 """
 
 from collections.abc import Iterator

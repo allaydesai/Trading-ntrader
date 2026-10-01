@@ -394,8 +394,12 @@ class Settings(BaseSettings):
         default=Decimal("10.0"),
         description="Position size as percentage of portfolio (e.g., 10.0 = 10%)",
     )
+    # 100, not the old 1,000,000: this is the live default a momentum session resolves to when
+    # --param trade_size is not given (via MomentumParameters._settings_map), and 1,000,000
+    # shares reaching a real paper account is a real-money-scale order, not a safe placeholder
+    # (Epic 4 retro, 2026-09-28).
     trade_size: Decimal = Field(
-        default=Decimal("1000000"),
+        default=Decimal("100"),
         description="Default trade size in SHARES (not USD notional)",
     )
 

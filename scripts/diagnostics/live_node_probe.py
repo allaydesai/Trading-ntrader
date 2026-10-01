@@ -22,9 +22,27 @@ looks like trading — and reports what the gateway said the account is. It is
 opt-in so that Procedure P1, which this probe is the tool for, keeps exactly the
 behaviour it was verified with.
 
+``--read-broker-state`` (Story 4.1, Procedure P15) additionally asks IBKR what
+the account actually holds — positions and ``TotalCashValue`` — through
+``src.core.live_broker_state.read_broker_state``, and prints it masked. Strictly
+a read: the probe adds no strategy, so nothing on this node can submit an order.
+Also opt-in, so P1's and P2's documented output is unchanged without it.
+
+``--reconcile`` (Story 4.2, Procedure P17a) additionally runs the session's own
+``reconcile`` phase body — ``src.core.live_startup_reconcile.reconcile_at_startup`` —
+against this node, after Nautilus's own reconciliation has finished (the trader
+has started). Read-only against the broker: no strategy is added, and this
+node's cache is in memory, so any broker-ward correction it makes is to a
+throwaway cache, never to a session's Redis namespace. Its snapshot is taken
+before the node runs, so every broker position the framework imported shows as
+``resolution="framework"`` (the empty in-memory cache knew nothing); one it could
+not import is corrected by the phase (``resolution="broker"``) or refused.
+Requires ``--verify-account``: AR39 puts ``reconcile`` after ``gate:account``.
+
 Usage::
 
-    uv run python scripts/diagnostics/live_node_probe.py [--run-seconds 5] [--verify-account]
+    uv run python scripts/diagnostics/live_node_probe.py [--run-seconds 5] [--verify-account] \
+        [--read-broker-state] [--reconcile]
 
 Preconditions:
     - IB Gateway or TWS running on the configured paper port (see .env)
@@ -45,6 +63,7 @@ import time
 import traceback
 from pathlib import Path
 
+import structlog
 from dotenv import load_dotenv
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -55,11 +74,25 @@ from src.core.live_account_gate import (  # noqa: E402
     masked_accounts,
     verify_connected_account,
 )
+from src.core.live_broker_state import (  # noqa: E402
+    BrokerStateUnavailableError,
+    read_broker_state,
+    render_broker_state,
+)
 from src.core.live_gate import GateFlags, GateRefusal  # noqa: E402
 from src.core.live_node_builder import (  # noqa: E402
     GateRefusedError,
     LiveNodeConfigError,
     build_trading_node,
+)
+from src.core.live_session_node import (  # noqa: E402
+    DEFAULT_SESSION_CONNECT_TIMEOUT_SECONDS,
+    await_trader_started,
+)
+from src.core.live_startup_reconcile import (  # noqa: E402
+    ReconciliationFailedError,
+    capture_local_state,
+    reconcile_at_startup,
 )
 
 # A fixed diagnostic identity — not a derivation pattern. The real
@@ -182,7 +215,54 @@ def _verify_account(node, settings: IBKRSettings, loop: asyncio.AbstractEventLoo
     return mode
 
 
-def _run(run_seconds: int, *, verify_account: bool) -> str:
+def _read_broker_state(node, loop: asyncio.AbstractEventLoop) -> int:
+    """Ask IBKR what the account holds (Story 4.1), and print it masked.
+
+    Driven through ``run_until_complete`` on the node's own loop, like
+    ``_verify_account``. A failure raises ``BrokerStateUnavailableError`` —
+    never a flat reading — and ``main`` turns it into its own RESULT reason.
+    """
+    print("[probe] reading broker state (positions + cash)...", flush=True)
+    t0 = time.monotonic()
+    state = loop.run_until_complete(read_broker_state(node))
+    for line in render_broker_state(state):
+        print(f"[probe] {line}", flush=True)
+    print(f"[probe] broker state read in {(time.monotonic() - t0) * 1000:.0f} ms", flush=True)
+    return len(state.positions)
+
+
+def _reconcile(node, run_task, settings, loop: asyncio.AbstractEventLoop, local_before) -> str:
+    """Run the ``reconcile`` phase's body (Story 4.2) once Nautilus's own pass is done.
+
+    Waits for ``trader.is_running`` first — the session's own ``node:connect``
+    post-condition — because the framework reconciles inside ``start_async``
+    *before* starting the trader, and the phase must compare against its result.
+    A refusal raises ``ReconciliationFailedError``; ``main`` gives it its own
+    RESULT reason.
+    """
+    log = structlog.get_logger("live_node_probe")
+    timeout = DEFAULT_SESSION_CONNECT_TIMEOUT_SECONDS
+    print("[probe] waiting for Nautilus's own reconciliation (trader started)...", flush=True)
+    loop.run_until_complete(
+        await_trader_started(node, run_task, time.monotonic() + timeout, timeout, settings, log)
+    )
+    print("[probe] reconciling against the broker (phase=reconcile)...", flush=True)
+    result = loop.run_until_complete(reconcile_at_startup(node, log=log, local_before=local_before))
+    for position in result.broker.positions:
+        print(f"[probe] reconciled {position.instrument_id} qty={position.quantity:+}", flush=True)
+    print(
+        f"[probe] reconcile ok positions={len(result.broker.positions)} "
+        f"discrepancies={result.discrepancy_count} open_orders={result.open_orders} "
+        f"synthetic_positions={result.synthetic_positions} elapsed_ms={result.elapsed_ms:.0f}",
+        flush=True,
+    )
+    positions, discrepancies = len(result.broker.positions), result.discrepancy_count
+    return f" reconcile=ok positions={positions} discrepancies={discrepancies}"
+
+
+def _run(
+    run_seconds: int, *, verify_account: bool, read_state: bool = False, reconcile: bool = False
+) -> str:
     """Drive the node's lifecycle on a loop this function owns end to end.
 
     ``TradingNode.dispose()`` calls ``loop.stop()`` synchronously whenever it
@@ -217,9 +297,15 @@ def _run(run_seconds: int, *, verify_account: bool) -> str:
     print("[probe] node built (config + LogGuard); building clients...", flush=True)
     node.build()
 
+    # Before the node runs: the framework reconciles inside `run_async`.
+    local_before = (
+        capture_local_state(node, structlog.get_logger("live_node_probe")) if reconcile else None
+    )
     print("[probe] starting node...", flush=True)
     run_task = loop.create_task(node.run_async())
     gate_account: str | None = None
+    broker_positions: int | None = None
+    reconciled = ""
 
     try:
         print(
@@ -232,6 +318,9 @@ def _run(run_seconds: int, *, verify_account: bool) -> str:
         print("[probe] connected (data + exec)", flush=True)
 
         gate_account = _verify_account(node, settings, loop) if verify_account else None
+        broker_positions = _read_broker_state(node, loop) if read_state else None
+        if reconcile:
+            reconciled = _reconcile(node, run_task, settings, loop, local_before)
 
         print(f"[probe] running for {run_seconds}s...", flush=True)
         loop.run_until_complete(asyncio.sleep(run_seconds))
@@ -254,7 +343,11 @@ def _run(run_seconds: int, *, verify_account: bool) -> str:
     # line is byte-for-byte what it was before this flag existed.
     if gate_account is not None:
         detail += f" gate_account={gate_account}"
-    return detail
+    # Likewise only with --read-broker-state, so P1/P2's lines are unchanged.
+    if broker_positions is not None:
+        detail += f" broker_state=ok positions={broker_positions}"
+    # And only with --reconcile (Story 4.2), for the same reason.
+    return detail + reconciled
 
 
 def _positive_seconds(raw: str) -> int:
@@ -283,7 +376,27 @@ def main() -> int:
             "Off by default so Procedure P1's behaviour is unchanged."
         ),
     )
+    parser.add_argument(
+        "--read-broker-state",
+        action="store_true",
+        help=(
+            "After connecting (and after --verify-account, if given), read the positions and "
+            "cash IBKR reports for the account (Procedure P15). Read-only; off by default."
+        ),
+    )
+    parser.add_argument(
+        "--reconcile",
+        action="store_true",
+        help=(
+            "After connecting, run the session's reconcile phase body against this node "
+            "(Procedure P17a). No strategy, in-memory cache; off by default."
+        ),
+    )
     args = parser.parse_args()
+    if args.reconcile and not args.verify_account:
+        parser.error(
+            "--reconcile requires --verify-account (AR39: reconcile runs after gate:account)"
+        )
 
     # Loaded here, not at import time: load_dotenv() mutates os.environ
     # process-wide, which should not be a side effect of importing this module.
@@ -293,7 +406,12 @@ def main() -> int:
 
     t0 = time.monotonic()
     try:
-        detail = _run(args.run_seconds, verify_account=args.verify_account)
+        detail = _run(
+            args.run_seconds,
+            verify_account=args.verify_account,
+            read_state=args.read_broker_state,
+            reconcile=args.reconcile,
+        )
         print(
             f"RESULT: ok mode=build-connect-run-stop {detail} elapsed={time.monotonic() - t0:.2f}",
             flush=True,
@@ -307,6 +425,28 @@ def main() -> int:
         # not what does that, and must not be relied on for it.
         print(
             f"RESULT: fail reason=account_gate_refused refusal={e.refusal.reason.value} "
+            f"elapsed={time.monotonic() - t0:.2f}",
+            flush=True,
+        )
+        return 1
+    except BrokerStateUnavailableError as e:
+        # Its own reason, so a failed read can never be mistaken for a flat
+        # account (NFR20): the node connected, the broker's view did not arrive.
+        # The detail is the reader's own text (masked, no broker text) and, for
+        # adapter drift, names the exception type and where it was raised.
+        print(f"[probe] broker state failed: {e.detail}", flush=True)
+        print(
+            f"RESULT: fail reason=broker_state_unavailable failure={e.reason.value} "
+            f"elapsed={time.monotonic() - t0:.2f}",
+            flush=True,
+        )
+        return 1
+    except ReconciliationFailedError as e:
+        # Story 4.2: the cache could not be proven to match the broker. Our own
+        # text, naming instruments and quantities only.
+        print(f"[probe] reconcile refused: {e}", flush=True)
+        print(
+            f"RESULT: fail reason=reconcile_refused failure={e.reason.value} "
             f"elapsed={time.monotonic() - t0:.2f}",
             flush=True,
         )

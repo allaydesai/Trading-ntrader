@@ -619,6 +619,21 @@ Non-blocking findings from the three-layer adversarial review. Blocking items (2
   `trading` phase of the startup sequence — **and for Epic 4**, which owns the reconciliation that
   makes the confirmation truthful after a reconnect. A runner that calls it straight after
   observing a live socket would satisfy the type signature while defeating the design.
+  **Story 4.2 sanity check (2026-09-27, decision D-J): still no production caller, deliberately.**
+  Startup reconciliation is genuine now, but the first call sets `_has_ever_connected`, which arms
+  the monitor's own `connection.lost` → `_unavailable_since` → `connection.halted` path; the halt
+  clock is cleared only by a *later* confirm; the steady state narrates transitions precisely
+  because the monitor is silent; and `trading_permitted` has no production reader (the order gate
+  is `submission_withheld`). A startup-only grant would make every later outage log
+  `connection.halted` 60 s after the loss even if it reconnected in 5 s. So the call goes live
+  with **Story 4.3**'s reconnect re-confirm, together; `live_startup_reconcile` joined the zero-callers
+  scan (`test_confirm_state_reestablished_is_never_called_in_this_story`), which 4.3 changes
+  deliberately.
+  **✅ LIVE — Story 4.3 (2026-09-27), decision D-F.** Both calls ship together in
+  `src/core/live_runtime_reconcile.py`: the startup grant at the end of `reconcile` (after the cache is
+  proven) and the reconnect re-confirm after a clean runtime cycle with nothing in flight. The scan
+  became an exact caller-set pin (`test_confirm_state_reestablished_has_exactly_one_production_caller`,
+  over every module under `src/`). `submission_withheld` is now `not trading_permitted`.
 
 - ~~**Nothing polls the monitor yet, and the halt deadline is only evaluated inside `observe()`.**~~
   — **RESOLVED in story-2.5, 2026-08-21**, by exactly the carrier this item recommends: the
@@ -1220,7 +1235,13 @@ New items:
   conflict, but no code detects or resolves a divergence between cached and broker state. This is by
   design — AC #5 asks only that the design be inspectable, and startup reconciliation is Epic 4
   (FR35, AR25). **Action for Epic 4:** the claim in those two docstrings becomes false-by-omission if
-  Epic 4 ships without it; check them when the reconcile path lands.
+  Epic 4 ships without it; check them when the reconcile path lands. *Story 4.1 (2026-09-22): the
+  independent broker read this needs now exists (`src/core/live_broker_state.read_broker_state`);
+  comparing it against the cache and acting on a divergence is still Story 4.2's, so the entry
+  stays open.* **CLOSED by Story 4.2 (2026-09-27):** the `reconcile` phase
+  (`src/core/live_startup_reconcile.py`) compares the cache against that read at every session start,
+  corrects broker-ward what no strategy believes, and refuses the start when a strategy's own
+  position is contradicted; `live_cache.py` and `docs/agent/nautilus.md` now say so.
 
 ## Deferred from: code review of story-2.4 (2026-08-19)
 
@@ -1354,7 +1375,8 @@ one superseded) and five were read and left open with updated notes. The items b
   called (*Judgment call #6*: `reconcile` is a no-op placeholder, so there is no genuine
   reconciliation for the confirmation to follow). A reader could reasonably assume feeding the
   monitor means acting on it. **Action for Epic 4**, which owns reconciliation and is the only place
-  the confirmation can be truthful.
+  the confirmation can be truthful. *Story 4.2 (2026-09-27): still unread in production — see the
+  D-J sanity check on the `confirm_state_reestablished` entry above; routed to Story 4.3.*
 
 - **The heartbeat's `asyncio.to_thread` runs on the kernel's own thread pool.**
   `TradingNode.__init__` installs the kernel's `ThreadPoolExecutor` as the loop's default
@@ -1849,11 +1871,13 @@ tracked in that story's `### Review Findings` section, not here.
   printed, no traceback. No repo strategy uses timers today, so this is latent. Story 2.7 does not
   wrap them (there is no `handle_*` seam to wrap). **Action:** whenever a strategy first uses a timer.
 
-- **`Actor.handle_bar` runs `_handle_indicators_for_bar` OUTSIDE its `try`.** A `handle_*` wrapper
+- ~~**`Actor.handle_bar` runs `_handle_indicators_for_bar` OUTSIDE its `try`.** A `handle_*` wrapper
   contains a raising registered indicator; an `on_*` wrapper would not (`actor.pyx:3735-3744`). Story
   2.7 chose `handle_*` for exactly this forward reason. **Relevant to Story 4.4**, which rewrites
   `on_start` to register indicators and is the first story where this stops being hypothetical —
-  `grep -rn register_indicator src/core/strategies/` returns zero today.
+  `grep -rn register_indicator src/core/strategies/` returns zero today.~~ **DISPOSITIONED by Story
+  4.4 (2026-09-22)** — proven on the live-bar path, residual on the history path; see "Deferred from:
+  story-4.4" below.
 
 - **`StrategyRegistry.discover()` catches only `ImportError`.** `src/core/strategy_registry.py:271-275`
   swallows it into `warnings.warn`; any *other* exception at strategy-module import time aborts
@@ -2126,7 +2150,7 @@ already been re-argued between three and five times. Every recommendation was ac
 | **D3** | AR28 exit-code **marker protocol** | **4** | **`exit_outcome` marker attribute, now**, before a sixth hand-maintained string. | ✅ Landed in the Epic 4 pre-work (2026-09-22): `LiveCheckOutcome`/`EXIT_*`/`EXIT_CODES` moved to a new stdlib-only leaf module, `src/core/exit_outcome.py`; every exception from the table (`GateRefusedError`, `BrokerUnreachableError`, `LiveNodeConfigError`, `LiveMarketDataError`, `InvalidCheckWindowError`, `RedisUnreachableError`, `InvalidSessionTransition`, `RecordNotFoundError`, `LiveCheckError`, `SessionReclaimedError`, `NoStrategyStartedError`) now carries `exit_outcome`/`operator_safe_message` class attributes directly, found by `classify_failure`/`failure_message` via `getattr` off the MRO — no import of the class needed, so `live_check.py`'s purity is untouched and `src/db/exceptions.py` still has no imports of its own beyond the new leaf module. Both string-keyed maps (`_OUTCOME_BY_EXCEPTION_NAME`, `_SAFE_MESSAGE_EXCEPTION_NAMES`) are deleted. The `sqlalchemy.exc.TimeoutError` → exit 4 collision is fixed: the residual builtin map is now keyed by class **identity**, not name, so a same-named-but-different class no longer matches (`tests/component/core/test_live_check_driver.py::test_the_sqlalchemy_timeout_collision_is_gone`, against the real library). No already-documented exit code changed (README unchanged). A new drift guard (`tests/unit/core/test_exit_outcome_markers.py`) fails on any future typed failure with neither marker. |
 | **D4** | What the size caps mean | — | **Keep them, measure on executable statements**, enforce with a unit-tier AST guard in the AR37 shape + a sanctioned-exception allowlist. | ✅ Landed in the Epic 4 pre-work (2026-09-22): `tests/unit/governance/test_size_caps.py`, same shape as the AR37 guard. File cap is hard with a 3-entry allowlist (`backtest_runner.py` 952, `data_catalog.py` 635, `backtests.py` 524, matching the honest executable-statement metric exactly). Class/function caps are a shrink-only ratchet baseline, generated from the tree via `python -m tests.unit.governance.test_size_caps --print-baseline`: 95 entries, not the pre-work reconnaissance's estimated 98 — every one of the 11 named examples and all 3 file totals that reconnaissance reported were independently re-measured against the finished tool and match exactly (`IBKRSettings` 101, confirming field annotations count), so the tool's own count is now authoritative. `CLAUDE.md` and `docs/agent/conventions.md` wording updated. Metric pinned by 5 fixtures; the ratchet's four failure shapes (new overage, grown ceiling, stale entry, removed-but-still-over entry) hand-verified by injecting each and reverting. |
 | **D5** | Should an all-strategies-failed session stop? | — | **Leave as-is.** `session.all_strategies_failed` + `runtime_flags.all_failed` make it visible and 2.8 renders it `degraded`. | ✅ Closed on its merits — no change. Revisit only if observed in practice |
-| **D6** | Resubscription after a subscription-killing IB error | 3 instances | **Epic 4**, with the broker-authoritative reconciliation work. | ✅ Routed. Interim rule stands: "zero bars inside RTH" is a red flag, not a quiet outcome; grep every transcript for **162**, **10182**, **366** |
+| **D6** | Resubscription after a subscription-killing IB error | 3 instances | **Epic 4**, with the broker-authoritative reconciliation work. | ✅ Routed. Interim rule stands: "zero bars inside RTH" is a red flag, not a quiet outcome; grep every transcript for **162**, **10182**, **366**. **Story 4.3 (2026-09-27): re-routed by PO ruling 3A to the Epic 4 retrospective as a dedicated story, per-code mechanism measured — see "Deferred from: story-4.3".** |
 
 **Note for readers of the older entries above.** D1's original item text still reads "moves to the
 first Epic 3/Epic 4 story that owns a write on that port" and D2's still offers two options. Those are
@@ -2157,8 +2181,9 @@ adopted: **give each item a named owning story, not a priority label.** Items re
   recorded in `epics.md` under Epic 3 so it is not tidied away as premature.
 - Widening `GUARDED_HANDLERS` → the first story shipping a strategy that overrides an unwrapped
   handler, with a per-handler containment test.
-- `Actor.handle_bar` running `_handle_indicators_for_bar` outside its `try` → **Story 4.4**, the
-  first story to register indicators.
+- ~~`Actor.handle_bar` running `_handle_indicators_for_bar` outside its `try` → **Story 4.4**, the
+  first story to register indicators.~~ **DONE by Story 4.4** (2026-09-22) — see "Deferred from:
+  story-4.4".
 - Re-validating a persisted spec on read, and `model_copy(update=…)` → **Epic 5**, unchanged.
 - P4's unreachable probe assertion → a diagnostics fix, unowned by any story; see Action Item 15.
 - `StrategyRegistry.discover()` swallowing only `ImportError`, the `live_check.*` prefix question,
@@ -2261,6 +2286,10 @@ adopted: **give each item a named owning story, not a priority label.** Items re
   which is Epic 4's broker-authoritative-state scope. Action when Epic 4 lands reconciliation: add
   the dispatch entry, or state in the module docstring why triggered transitions are deliberately
   invisible.
+  **✅ CLOSED — Story 4.3 (2026-09-27): unreachable through the IB adapter**, stated in
+  `live_order_path.py`'s module docstring and pinned by
+  `tests/component/core/test_live_order_path_triggered_canary.py` (no IB status maps to
+  `TRIGGERED`; the adapter never generates one; its report parser never sets `ts_triggered`).
 
 - **`order.submitted` is the only lifecycle record without `strategy_id`.** Pre-existing from Story
   3.2; surfaced here because Story 3.3 made it visible. `_log_submitted`
@@ -2399,6 +2428,12 @@ adopted: **give each item a named owning story, not a priority label.** Items re
   `generate_position_status_reports` *is* implemented (`execution.py:454-505`) and is the
   mechanism 4.3 would reconcile against; this story does not solve it, only routes it, as the Epic
   2 retro's standing rule requires for any hazard found outside a story's own scope.
+  **Story 4.3 (2026-09-27) — dispositioned, consequence caught.** The position a lost fill leaves
+  behind is a runtime discrepancy: detected, logged and corrected broker-ward (or, when it
+  contradicts a strategy's own position, refused with the session stopped — PO ruling 2A). The
+  *order record* stays "canceled": the adapter's `generate_fill_reports` returns `[]`, so no fill
+  evidence exists to correct it with. **Unowned, named** as an upstream adapter limit. See "Deferred
+  from: story-4.3" below.
 
 - **Measured correction to the Story 3.4 draft's own test design** (both found by fresh-interpreter
   probes, Task 1, before any test was written — see the module docstring of
@@ -2563,7 +2598,13 @@ at 200s with zero orders), `logs/p10-fresh-leg1-*.log` and `logs/p10-fresh-leg2-
   for whoever picks up Story 4.2: `p7-fill-0901` is a live, still-existing reproduction of the
   "reconciliation didn't correct a stale non-zero position" case — cheaper to test against than
   constructing a new one.** Not fixed or worked around here; the session was stopped at 200s with
-  zero orders and left exactly as found.
+  zero orders and left exactly as found. **Dispositioned by Story 4.2 (2026-09-27):** the mechanism
+  is now measured (the framework's per-cached-position sweep filters by the IB client's venue, so
+  it never asks about NVDA, and the adapter never reports a flat instrument anyway), and this shape
+  — a *strategy-owned* position the broker contradicts — now **refuses the start** at `reconcile`
+  (PO ruling 2026-09-27, option A), naming the instrument and both quantities; a merely synthetic
+  stale position is corrected broker-ward instead. Live confirmation is Procedure P17b (operator
+  only — it starts strategies if reconciliation passes).
 
 - **Housekeeping, not a defect.** A pre-existing `LONG 4 AAPL.NASDAQ` position was found still
   open at the broker during this session's sweep (unrelated instrument, unrelated to today's
@@ -2673,13 +2714,21 @@ at 200s with zero orders), `logs/p10-fresh-leg1-*.log` and `logs/p10-fresh-leg2-
   `src/core/live_order_path.py`'s submit path, which this story deliberately does not touch (Task
   10's zero-diff evidence contract). **Owner: Story 4.3** (broker-aligned runtime state) — named
   in the story's own D-C decision, repeated here as the durable record.
+  **Story 4.3 (2026-09-27) — RE-ROUTED by PO ruling 3A** to the Epic 4 retrospective, as a
+  dedicated story (measurements in "Deferred from: story-4.3" below).
 - **D-D's reconciliation-owned-position policy may need to flip.** Story 3.6 skips persisting any
   `PositionClosed` whose `strategy_id` renders `"EXTERNAL"` or `"INTERNAL-DIFF"` (`trade.
   persist_skipped reason="reconciliation_owned"`), because `trades` has no `strategy_id` column
   and a persisted row would silently join a strategy's own comparison sample. This is a
   string-comparison filter, not a reconciliation policy — Story 4.2 owns what reconciliation
   actually does with a disagreement and can flip this with a one-line change plus a named test.
-  **Owner: Story 4.2**, to confirm or flip.
+  **Owner: Story 4.2**, to confirm or flip. **CONFIRMED by Story 4.2 (2026-09-27), not flipped
+  (decision D-L):** every broker-ward correction reconciliation makes is a fill attributed to
+  `EXTERNAL`/`INTERNAL-DIFF`, landing in that owner's position and never a strategy's (measured),
+  and Story 4.2 refuses rather than rewrites a contradicted strategy position — so a synthetic
+  position's round trip is never a strategy decision and must never join a strategy's comparison
+  sample. `live_trade_recorder.py` is zero-diff; the new models module's duplicated
+  `SYNTHETIC_STRATEGY_IDS` is pinned equal to `RECONCILIATION_STRATEGY_IDS` by import.
 - **`trades` has no `strategy_id` column — a multi-strategy session's rows cannot be attributed
   per strategy.** Not fixed here (AR43 forbids inventing new metrics tables/columns for paper
   results without an epic-level decision) and not urgent within Epic 3 (today's sessions run one
@@ -2805,6 +2854,11 @@ are recorded here; neither reopens either story, and neither was actioned.
   future live transcript: **a strategy-owned entry produces two `trade.aggregated` records, not
   one** — its own eventual round trip, plus reconciliation's immediate phantom — and only the first
   is a real trade.
+  **✅ FIXED — Story 4.3 (2026-09-27), decision D-B (PO ruling 1A).** The adapter's
+  position-update reports are switched off (`src/core/live_exec_position_reports.py`, installed by
+  the exec-client factory); the mechanism was reproduced against the adapter's real code
+  (`TestTheAdapterDefect`). From 4.3 on, an entry produces one `trade.aggregated`; Procedure P18a
+  checks it live.
   Evidence: `logs/p11-20260921.log:235-274`, `logs/p12-20260921.log:254-270`.
 
 - **Story 3.6 Procedure P12's criterion 7 is phrased so it cannot be read, and D-A's cost figure
@@ -2873,6 +2927,7 @@ are recorded here; neither reopens either story, and neither was actioned.
   *delay* is unaddressed, and the real reason exists only in the adapter's own log line, never in
   a structured record. Procedure P13's criterion 1 says what to grep for so a run that hits this
   is still evidence. **Owner: Story 4.3 or the Epic 3 retrospective, whichever Allay rules.**
+  **Story 4.3 (2026-09-27) — measured and bounded, no code change.** See "Deferred from: story-4.3".
 - **`OrderTriggered` is still unhandled** — cross-reference only, not a new entry: see *Deferred
   from: code review of story-3.3 (2026-08-30)* above. Story 3.7's tally keeps the same closed set
   for the same reason (decision D-J): a triggered stop is not a refusal, and Epic 4 owns the
@@ -3039,3 +3094,742 @@ place above; this heading records the closing summary per item.
   and `docs/agent/conventions.md`'s Code Size Limits section updated to point at the guard. Strikes
   D4's row in the Epic 2 retro table and the Story 2.6 "enforce it or amend the guideline" entry.
   `make test-unit` runtime grew by under a second (12 new AST-only tests, no I/O).
+
+## Deferred from: story-4.4 (2026-09-22)
+
+Story 4.4 (warm indicators from history before the live stream starts). Each item names an owner;
+none blocks the story.
+
+- **The Story 2.7 debt routed here — dispositioned.** `Actor.handle_bar` feeding registered
+  indicators outside its own `try` (`actor.pyx:3735-3744`) is now proven contained on the **live**
+  bar path: `tests/component/core/test_strategy_warmup_engine.py::
+  TestARaisingRegisteredIndicatorIsContained` registers a raising `Indicator` subclass on a real,
+  guarded `Strategy`, and one published bar gives `strategy.failed handler=handle_bar`, the raiser
+  `DEGRADED`, and the sibling still receiving the bar — with an unguarded twin in which the raise
+  escapes `MessageBus.publish`. **Residual, not closed:** the **history** path. A registered
+  indicator raising on a historical bar raises inside `Actor.handle_bars` (the `request_bars`
+  response), before any callback, outside every boundary this repo installs; on
+  `LiveDataEngine`'s response queue that is `_handle_queue_exception("DataResponse")`, i.e. a
+  graceful shutdown of the **whole node** (`graceful_shutdown_on_exception=True`). The built-in
+  `SimpleMovingAverage` cannot raise on a valid bar, so this is latent. `GUARDED_HANDLERS` was
+  deliberately not widened (its pin is exact, and each handler needs its own dispatch measurement).
+  **Owner:** whoever first ships an indicator that can raise.
+- **`momentum`'s `trade_size` default is now live-relevant.** `MomentumParameters.trade_size`
+  defaults to `1000000` shares. That never mattered while the strategy could not cross (the F8
+  cumulative-sum defect Story 4.4 fixed under ruling D-G: A). A default-parameter `momentum` session
+  would now submit million-share market orders, which IBKR rejects (Story 3.7's path handles that
+  loudly, not safely-by-design). **Owner:** before any `momentum` session is created, or the next
+  story that touches `MomentumParameters`.
+- **Sub-minute bars cannot warm pre-open.** `warmup_lookback` asks in seconds below one minute
+  (IB's small-bar rules refuse a days-long 5-second request), and a seconds window ending before
+  the open covers no RTH bar — the adapter answers with nothing, and the runner contains the
+  strategy (`warmup.failed reason=no_response`) rather than letting it sit silent. Safe, but such a
+  strategy never trades a run started pre-open. IB's identical-request pacing rule (15 s) also
+  applies to small bars and is not addressed for two strategies sharing a sub-minute bar type.
+  **Owner:** whoever first runs a sub-minute strategy live.
+- **A failed warm-up costs the full deadline (default 75 s) even when IB already said "Failed".**
+  The IB adapter publishes `{"status": "Failed"}` on `requests.{id}` for an empty history
+  (`adapters/interactive_brokers/data.py:536-546`); the watch does not listen for it, to avoid
+  coupling to adapter internals. Worst case with two strategies both failing is 150 s — inside
+  NFR3's five minutes. **Owner:** whoever first observes a slow failed warm-up eating into NFR3.
+- **`custom/` submodule strategies stay cold.** They are not edited (submodule); one that issues no
+  `request_bars` in `on_start` is logged `warmup.skipped` and starts exactly as before. One that
+  *does* call `request_bars` gets the same bounded wait and containment, because the watch wraps
+  `request_bars` on every strategy. **Owner:** the submodule's maintainer.
+- **The size-cap guard fails in any checkout without the `custom/` submodule.** Two
+  `SIZE_BASELINE` entries (`ApoloRSI.on_bar`, `BollingerReversalStrategy`) name submodule files,
+  so `test_no_baseline_entry_has_dropped_to_or_under_its_cap` and
+  `test_regenerating_the_baseline_reproduces_it_exactly` fail wherever the submodule is not
+  populated — true of this story's harness worktree before any edit (measured at Task 0, recorded,
+  not "fixed" by deleting entries that are correct in a full checkout). CI checks the submodule out
+  or it does not; either way the guard should say which. **Owner:** unowned, named — the next
+  person to touch `test_size_caps.py`.
+- **`warmup.completed`'s `elapsed_ms` has never been read live.** It measures request issue → the
+  history callback on the loop; the P14 procedure reads it, but no Gateway was reachable during
+  this story (ports 4001/4002/7496/7497 closed, after RTH). **Owner:** whoever next runs P14.
+
+## Deferred from: code review of 4-4-warm-indicators-from-history-before-the-live-stream-starts (2026-09-22)
+
+- **The history/live seam can lose or double-count one bar — ruled A by the PO (defer).** The
+  live IB stream is open from `_phase_subscribe` (the bar observer); a strategy joins the bus only
+  in its history callback. A bar that closes after the history request's `end` but is published
+  before the callback is never seen (gap); a bar inside the history that the adapter publishes
+  after the callback — it publishes bar X on X+1's first update, or `duration+1s` later
+  (`adapters/interactive_brokers/client/market_data.py:1068-1073, 1163-1168`) — is fed to the
+  SMAs twice, because `Actor.handle_bar` feeds registered indicators before the strategy's code
+  runs and AC #1 mandates registration. Probability ≈ publication lag ÷ bar interval per start
+  (a few percent on 1-minute bars); effect: the SMAs are off by one bar for at most
+  `slow_period` bars — never a trade on cold indicators, but one crossover can shift by a bar,
+  which is exactly the resume-correctness question Story 4.5 exists for. A fix needs a seam
+  guard outside the strategy (a per-strategy monotonic-`ts_event` filter at the runner's
+  `handle_bar` boundary, plus a gap fill from the cache in the callback). **Owner:** Story 4.5.
+  P14 criterion 7 records which reading each live run shows. **✅ DISPOSITIONED — Story 4.5
+  (2026-09-28), PO ruling D-F: B:** the duplicate is dropped (`warmup.seam_duplicate_dropped`) and
+  every missed bar is named (`warmup.seam_gap`, WARNING) — **not** replayed (a replayed bar could
+  signal on a stale price). See "Deferred from: story-4.5".
+- **Serialized warm-up scales as N × (`ibkr_request_timeout` + 15 s).** D-B starts one strategy at
+  a time so at most one history request is in flight (NFR15, and F2's same-second dedup). The cost
+  is that a session whose strategies *all* fail to warm takes N × 75 s by default to fail: two is
+  150 s, inside NFR3's five minutes; four or more would not be. **Owner:** the first session
+  specified with four or more strategies.
+- **A strategy that stops itself in `on_start` is logged `warmup.skipped` and counted as started.**
+  `momentum`'s missing-instrument path calls `self.stop()` and makes no history request; the watch
+  sees no request and the runner counts it, exactly as Story 2.7's start loop already did before
+  this story. **Owner:** unowned, named — whoever next touches `_start_strategy`'s success test.
+- **Only `request_bars` on the instance is watched.** A custom strategy that warms through
+  `request_aggregated_bars`, `request_data`, a tick request or `super().request_bars(...)` gets
+  `warmup.skipped` and no deadline. **Owner:** the `custom/` submodule's maintainer, or the first
+  story that ships such a strategy in-repo.
+- **IB's small-bar duration caps are unverified.** The published table caps a 5-second request at
+  3,600 s; `warmup_lookback` would ask 3,750 s for 5-second bars at period 250. A refusal would be
+  IB error 162 — the same code D6's grep reads as a competing login — and the strategy would be
+  contained after the deadline. **Owner:** whoever first runs a sub-minute strategy live (the
+  story-4.4 section above already routes sub-minute pre-open warm-up to the same owner).
+
+## Deferred from: story-4.1 (2026-09-22)
+
+Story 4.1 (read the broker's authoritative view of positions and cash). Every item below was
+measured against the installed `nautilus-trader 1.220.0` while building
+`src/core/live_broker_state.py`. Each names an owner; none blocks the story.
+
+- **Nautilus's native startup reconciliation cannot fail on a failed position read.** → **Story 4.2.**
+  The adapter's `get_positions` returns `None` for a timeout, a lost connection *and* an empty
+  account (`client/account.py:166-171`). `generate_position_status_reports` turns all three into
+  `[]` (`execution.py:463-464`). `generate_mass_status` turns any raise into `None`
+  (`live/execution_client.py:505-507`). `reconcile_execution_state` logs a warning for a `None` mass
+  status and does not count it as a failure (`live/execution_engine.py:915-920`). Its
+  `timeout_secs` (`NODE_TIMEOUT_RECONCILIATION`) is validated positive and never enforced (`:874`).
+  So the framework's "Execution state reconciled" proves nothing about positions. Story 4.2's
+  0-discrepancy check must compare against `read_broker_state`, never lean on the framework's log
+  line. **CLOSED by Story 4.2 (2026-09-27):** it does — `reconcile_at_startup` compares the cache
+  against `read_broker_state` and reports `reconcile.ok` only at 0 discrepancy.
+- **The adapter's own 30 s timeout poisons every joiner of the shared request.** → **Story 4.2.**
+  Measured at Task 1: `_await_request`'s `wait_for(request.future, 30)` *cancels* the shared
+  `OpenPositions` future on timeout, so every other awaiter of the same request gets
+  `CancelledError`, a `BaseException` that `generate_mass_status`'s `except Exception` does not
+  catch. Nautilus's own startup reconciliation runs two joiners concurrently (orders and positions
+  both call `get_positions`). `read_broker_state` classifies a cancelled future as
+  `POSITIONS_UNANSWERED` and never cancels anything itself. What Nautilus's reconciliation does
+  with that `CancelledError` was not measured. **Story 4.2 (2026-09-27):** at the `reconcile` phase
+  this surfaces as `BrokerStateUnavailableError(POSITIONS_UNANSWERED)`, which fails the phase
+  explicitly (exit 4) — never "flat". Not measured further; the runtime read inherits it
+  (→ **Story 4.3**).
+- **A mid-session broker read diverts real position updates for its duration.** → **Story 4.3.**
+  While any `OpenPositions` request is in flight, `process_position` appends streaming updates to
+  that request's result instead of routing them to the exec client's `_on_position_update`
+  (`client/account.py:223-234`). A fill landing during a read is absorbed into the read and never
+  reaches the external-change detector. At startup, before trading, that is harmless. A periodic
+  runtime read inherits it. Cash freshness mid-session belongs here too: cash is the latest
+  account-summary push, and re-requesting it would re-send `reqAccountSummary` with the same reqId,
+  which is unmeasured IB behaviour (D-J).
+- **Compare quantities exactly; treat average price as informational.** → **Story 4.6.** IBKR
+  documents a stock's `avgCost` as commission-inclusive. Nautilus's `avg_px_open` excludes
+  commission, and the adapter's own position report does not divide by the multiplier while its
+  order report does (`execution.py:487-490` vs `:410-414`). `BrokerPosition.average_price` is IBKR's
+  number divided by the contract multiplier. P15 criterion 7 records one live reading. Also size
+  4.6's `timeout_seconds` inside its own NFR5 budget: the default 20 s leaves about 10 s for
+  connect/compare/disconnect. The reader takes a node, so 4.6's `ibkr_live_client_id + 1` node
+  works unchanged.
+- **Never read IB `AccountState` balances as cash or equity.** → **Story 5.1.** The adapter's
+  `AccountBalance.total` is `NetLiquidation`. When maintenance margin exceeds half of it the adapter
+  substitutes a literal `400000` (`execution.py:814-815`, `# TODO: Bug`); this is pinned by
+  `TestAdapterCanaries::test_the_summary_keeps_cash_per_currency_and_nautilus_balance_is_not_cash`.
+  The live-host `ResultsExtractor` widening must not reuse the backtest path's
+  `account_for_venue(...).balance_total(USD)` for a live session.
+- **P15 has not run.** The procedure is defined in `docs/qa/phase3-live-verification.md`. The
+  harness worktree has no `.env`, so the probe stops at `config_error` before any socket opens. It
+  was attempted and recorded. **Owner:** whoever next has a Gateway up and a checkout with `.env`.
+  It does not need RTH.
+
+## Deferred from: code review of 4-1-read-the-brokers-authoritative-view-of-positions-and-cash (2026-09-22)
+
+- **A cancelled awaiter strands a registered `OpenPositions` request, and every later positions read
+  fails until restart.** → **Story 4.2 / 4.3.** The adapter's `_await_request` catches only
+  `TimeoutError` and `ConnectionError`. When the *task awaiting* `get_positions` is cancelled (for
+  example Nautilus's reconciliation cancelled at shutdown), its `wait_for` cancels the shared future
+  and propagates `CancelledError` without calling `_end_request`
+  (`adapters/interactive_brokers/client/client.py:522-534`). The request then stays in the
+  registry with a cancelled future. Every later `get_positions` joins it and raises
+  `CancelledError` at once, and `read_broker_state` reports `POSITIONS_UNANSWERED` at once, every
+  time. That is explicit and never "flat", but it cannot recover within the process. Recovering
+  would mean removing the dead request, which writes adapter state; D-B keeps the reader read-only.
+  Pre-existing adapter defect. **Owner:** Story 4.2 (whose phase fails on it) or 4.3 (a runtime
+  read), whichever first observes it live. **Story 4.2 (2026-09-27):** the phase fails on it
+  explicitly (`POSITIONS_UNANSWERED`, exit 4) and a process restart clears it; not observed live
+  (P17a could not run), so it stays routed to **Story 4.3**, whose periodic read would hit it
+  mid-session with no restart to clear it.
+- **Multi-currency cash would be returned partially.** → **Story 4.7** (or whoever requests
+  `$LEDGER`). `_read_cash` returns as soon as any one currency has `TotalCashValue`. Only the
+  account's base currency arrives, because the adapter's `AllTags` subscription omits `$LEDGER`
+  (F7), so no second currency can be in flight today. There is no `accountSummaryEnd` signal to
+  wait on. **Owner:** the first change that widens the account-summary tags. **Story 4.7
+  (2026-09-28): unchanged, re-affirmed.** Nothing in 4.7 widens the tags. Its startup
+  `reconcile.cash_changed` compares per currency against the same single-currency read, so it
+  inherits the limit and adds no new partial-read path. The owner rule stands.
+
+## Deferred from: story-4.6 (2026-09-27)
+
+Story 4.6 (`ntrader live reconcile`). Every item was measured while building
+`src/core/live_session_view.py` / `live_reconcile.py`. Each names an owner, and none blocks the
+story.
+
+- **Architecture G3's "trades-derived local view" cannot represent an open position.** →
+  **Architecture / Epic 4 retro.** `TradeRecorder` persists `PositionClosed` only, and
+  reconciliation-stamped positions never; every live `trades` row nets to zero. So a trades-derived
+  position is always flat, the exact "failure reads as flat" shape NFR20 forbids. Nothing in
+  PostgreSQL records a session's cash. Story 4.6 compares against the session's **engine cache**
+  instead (Redis, load-only, D-A). `architecture.md:696-700` should be amended to say so.
+- **Story 4.2 can reuse the comparison rather than grow a second one.** → **Story 4.2 (the
+  integrator).** `reconciliation_service.compare(broker: BrokerState, local: SessionView, …)` takes
+  two domain values. A `SessionView` built from the live node's `cache.positions_open()` (net
+  `signed_decimal_qty()` per instrument) gives 4.2's startup 0-discrepancy check the same exact,
+  tolerance-free line-by-line verdict. Note that `live_reconcile` receives `compare` as a port
+  because `TestImportPurity` forbids `src.services` in the runner's family; 4.2 must do the same.
+- **`live list` / `live status` "Open Positions" is always `0` for a live session.**
+  → **Unowned, named: the next story that touches `trade_counts_by_session`.**
+  `trade_counts_by_session` counts `trades` rows with a null exit, which only the backtest path
+  writes, so its "every session honestly reports zero today" docstring
+  (`trading_session_repository_sync.py:162-164`) is stale for the wrong reason. Measured
+  2026-09-27: `p7-fill-0901` lists `0` open positions while its engine cache holds AAPL.NASDAQ +4 and
+  NVDA.NASDAQ +22. `live reconcile` is where a session's open positions are now answered.
+- **A session's local cash carries no timestamp.** → **Story 4.7.** The
+  `general:accountSummary:<acct>` key holds the values without a time, so a cash discrepancy
+  cannot say *since when*. The last `AccountState` event's `ts_event` in `accounts:<id>` would
+  give it. **✅ Closed by Story 4.7 (2026-09-28, D-C, PO ruling A):** `live reconcile` now
+  reports "session cash as of <time>". The time is the account's last *reported* `AccountState`,
+  read load-only through `CacheDatabaseAdapter.load_account`.
+  - `LOAD_METHODS` widened to four, in the constant and its pin.
+  - The `MONITOR` proof now asserts the account read and still sees only read verbs.
+  - The startup phase's `reconcile.cash_changed` carries the same time (`recorded_at`).
+- **`msgspec` is now a declared dependency.** → **Recorded, closed.** The PO approved it on
+  2026-09-27 (Story 4.6, option 1). `CacheDatabaseAdapter` needs a `MsgSpecSerializer` to decode a
+  session's positions. The msgspec-free alternative, the Rust-side `load_all()`, was measured to
+  return **no positions** for Python-written data, which is a silent flat. `msgspec 0.19.0` was
+  already installed as a hard requirement of `nautilus-trader` (`>=0.19.0,<1.0.0`), so nothing new
+  was installed. `pyproject.toml` gained `msgspec>=0.19.0,<1.0.0`, and `uv.lock` records it as a
+  direct dependency. Of the two AR3 guards, `test_live_dependency_invariance.py` was **not
+  edited**: it passes because `msgspec` is now declared, which is exactly what it checks.
+  `test_epic1_ac_node.py` was edited deliberately: its `PERMITTED_THIRD_PARTY`, its
+  declared-distribution loop and its docstring now name `msgspec` and the approval.
+- **The engine caches of `p12-0921` and `p13-0922` are empty on the local Redis.** → **Whoever
+  next runs P16, and Story 4.2's Redis-disposability enforcement.** Both sessions ran recently
+  (`p12-0921` recorded a closed trade), yet `trader-PAPER-064feace:*` and `trader-PAPER-44c0b4df:*`
+  hold no keys. Either Redis was flushed after they ran, or they ran against a different Redis
+  (compose versus Homebrew). `live reconcile` reports `no_engine_state` (exit 1) for them, never
+  "flat". The cause was not investigated.
+- **The connect budget is not a hard bound when the Gateway is down.** → **P16's operator.**
+  `node.build()` runs the adapter's own connect attempt synchronously. `live_check_node`'s comment
+  measures a failed attempt at about 20 s: a 15 s `managedAccounts` wait plus a 5 s reconnect
+  delay. The 10 s `CONNECT_TIMEOUT_SECONDS` is enforced only after `build()` returns, so a down
+  Gateway costs about 20 s before exit `4`. That is inside NFR5's 30 s but outside the connect
+  budget. Record the wall clock of one run with the Gateway stopped.
+- **P16 has not run.** → **Whoever next has a Gateway up and a checkout with `.env`.** It does not
+  need RTH. Variant A needs a session whose namespace exists on the local Redis; `p7-fill-0901`
+  qualifies.
+
+## Deferred from: code review of 4-6-check-positions-and-cash-against-ibkr-on-demand (2026-09-27)
+
+- **Partial Redis eviction would read as a flat session view.** → **Story 4.2
+  (Redis-disposability enforcement).** `read_session_view` refuses only a wholly empty namespace.
+  If an eviction policy (for example `allkeys-lru`) or a partial delete removed the `positions:*`
+  lists but kept other keys, the view would read as a valid flat session. Detecting that needs a
+  cross-check against `index:positions`. The project's Redis runs with the default `noeviction`,
+  so the case is not reachable today.
+- **Two concurrent `live reconcile` runs collide on the one `+ 1` client id.** → **Documented; no
+  owner.** AR34 reserves exactly one reconcile id. The second run's connection is refused, and it
+  reads as broker-unreachable (exit 4, "is the Gateway running?"), which is misleading. Run one at
+  a time.
+- **Ctrl-C after the reconcile node is built never maps to INTERRUPTED.** → **Pre-existing; the
+  owner of `live_check_node`.** `NautilusKernel._setup_loop` installs loop signal handlers
+  (`system/kernel.py:557-561`), so SIGINT calls `node.stop()` instead of raising
+  `KeyboardInterrupt`. The pending step then fails as broker-unreachable, and a signal during the
+  synchronous view read is only seen afterwards. `live check` behaves the same.
+- **A changed `IBKR_LIVE_CLIENT_ID` can put reconcile on a running session's id.** →
+  **Pre-existing; the first story that records a session's client id.** Neither the session row
+  nor Redis stores the client id a session connected with, so a config change between the
+  session's start and a reconcile can make the new `+ 1` equal the old live id.
+## Deferred from: story-4.2 (2026-09-27)
+
+Story 4.2 (reconcile against the broker before any strategy trades). Every item below was measured
+against the installed `nautilus-trader 1.220.0` with a real `LiveExecutionEngine` + `Cache` +
+`Portfolio` and an IB-shaped NETTING client (Task 1; pinned as named canaries in
+`tests/component/core/test_live_startup_reconcile_engine.py`). Each names an owner; none blocks the story.
+
+- **A normal mid-position restart leaves three open positions on the instrument.** → **Story 4.5.**
+  With strategy S holding +10 in the Redis cache and the broker at +10, the IB adapter's
+  fabricated `FILLED` order report (keyed `client_order_id = instrument id`) is unknown to the
+  cache, so the framework imports it as `EXTERNAL +10`; its position pass then sees net 20 against
+  the broker's 10 and adds `INTERNAL-DIFF −10`. Net is right (Story 4.2's check passes); the
+  strategy's own view is not the broker's position, it is its old one beside two synthetics.
+  **✅ FIXED — Story 4.5 (D-A):** the session's engine runs with
+  `filter_unclaimed_external_orders=True`; a restart leaves only the strategy's own position.
+- **`sma_crossover` reads every strategy's positions on its instrument — an NFR14 hazard whenever a
+  synthetic position shares a traded instrument.** → **Story 4.5.** `_generate_buy_signal`/
+  `_generate_sell_signal` call `cache.positions(venue, instrument_id)` with no strategy filter and
+  `close_position()` every opposite-side open position — including `EXTERNAL`/`INTERNAL-DIFF`
+  ones. In the triple above, a SELL crossover closes S +10 **and** `EXTERNAL` +10 (sells 20 against
+  a broker at 10); a BUY closes `INTERNAL-DIFF −10` (buys 10 more). Story 4.2 refuses only a
+  *contradicted* strategy position (D-D); a consistent strategy beside synthetics passes, and the
+  hazard is the resume path's to close (e.g. a strategy-filtered read, or adopting the broker's
+  position via `external_order_claims`). **Story 4.7 (2026-09-28) adds a path into this
+  state.** Under the coverage rule, a forward split absorbed at startup is no longer refused, so it
+  reaches the triple too: S +10, `EXTERNAL` +20, `INTERNAL-DIFF` −10 (measured 1.1a). A SELL
+  crossover then closes 30 against a broker at 20, leaving the account short 10. The mid-session
+  shape (S +10, `INTERNAL-DIFF` +10) sells 20 against 20 and ends flat. `sma_momentum`, which
+  reads the net, sells the split's extra shares and ends S −10 beside a synthetic +10, and the
+  next cycle stops the session. 4.7's `likely_cause` now names that self-inflicted shape. The fix
+  here closes all of them. Until then, `docs/agent/nautilus.md` ("Corporate actions") and P20
+  tell the operator not to let `sma_crossover` trade after an absorbed start.
+  **✅ FIXED — Story 4.5 (D-B):** both built-ins read their own book only (`strategy_id=self.id`);
+  backtest fills unchanged (Story 4.4's fingerprint). *(Integration merge of 4.5 and 4.7,
+  2026-09-28: with D-A the startup split leaves S +10 beside `INTERNAL-DIFF` +10, and D-C then
+  refuses the strategy on that instrument; the `nautilus.md` caveat and 4.7's procedure — now
+  **P20**, renumbered — were updated to say so.)*
+- **A restart after the broker position *shrank* aborts the process inside Nautilus's own pass.** →
+  **Story 4.5 (HIGH).** After a first restart imported `EXTERNAL "NVDA.NASDAQ"` filled 10, a later
+  restart with the broker at 4 makes `_reconcile_order_report` see `_should_update` → `True` and
+  call `_generate_order_updated` with quantity 4 on an order filled 10; `leaves_qty` underflows and
+  the process dies on a Rust panic (`raw outside valid range`) — uncatchable, inside `node:connect`,
+  before any phase of ours runs, leaving the row `running` until its heartbeat goes stale. The
+  code reading predicted a `False` return (`report.filled_qty < order.filled_qty`); the measurement
+  found the abort first. Pinned in a subprocess by
+  `TestTheShrunkReEntryAbortCanary::test_the_second_restart_aborts_the_process`, which goes red by
+  name when an upgrade fixes it. The ordinary resume journey reaches it: restart mid-position,
+  let the strategy reduce, stop, restart. **✅ FIXED — Story 4.5:** new namespaces never cache the
+  fabricated order (D-A; the canary's session-config twin exits 0), and a pre-4.5 namespace that
+  already did is refused before `run_async()` (D-D, `session.resume_refused`, exit 1).
+- **`node:connect`'s timeout message cannot say which of the three pre-trader waits failed.** →
+  unowned, named: whoever next touches `await_trader_started`. The kernel ordering
+  (`kernel.py:1015-1027`: reconciliation, then `_emulator.start()`, then portfolio, then
+  `trader.start()`) would allow it — an emulator not yet running after engines connected means the
+  framework's reconciliation is what never finished. Today all three causes are named together.
+- **The stranded-`ACCEPTED`-order startup stall (`p7-position-test`) is not fixed here.** →
+  **Story 4.3.** It is a portfolio-initialisation timeout on an order the broker filled but the
+  cache still holds open — open-order reconciliation, which is the adapter's not-open/cancelled
+  conflation already routed to 4.3. It fails at `node:connect` (the trader never starts), before
+  `reconcile` runs.
+- **Two story-text corrections, recorded rather than silently absorbed.** (1) F2/F3's mechanism is
+  stronger than drafted: the framework's sweep of cached positions calls
+  `self._cache.positions_open(venue)` with the IB client's venue (`INTERACTIVE_BROKERS`) while
+  positions carry the exchange (`NASDAQ`), so it never asks about a phantom at all
+  (`position_calls == [None]`) — the adapter ignoring its filter is a second, independent reason.
+  (2) F14 counted eight runner-building test files; five construct `LiveSessionRunner`
+  (`test_session_runner_{phases,stop,strategy_failure,order_path,warmup}.py`) — the two
+  `test_epic1_ac_*` integration files drive `run_live_check` and needed no seam.
+
+## Deferred from: code review of 4-2-reconcile-against-the-broker-before-any-strategy-trades (2026-09-27)
+
+- A normal mid-position restart passes with `S +10 / EXTERNAL +10 / INTERNAL-DIFF −10` (net matches) although this story's own deferred notes call that state an order hazard for `sma_crossover` [src/models/position_reconciliation.py] — deferred, routed to Story 4.5 (strategy adoption)
+- Open orders are counted, never compared with the broker's; a stale open order passes [src/core/live_startup_reconcile.py:268] — deferred, routed to Story 4.3 (open-order reconciliation)
+- A cached working order that fills, or a manual TWS trade, between the broker read and the cache comparison makes the phase correct toward a stale snapshot; `framework_resolved` mislabels such changes [src/core/live_startup_reconcile.py:240] — deferred, runtime alignment is Story 4.3's
+- A broker-only position with no average price is imported by the framework at a fill price of 0 (F5's fallback) [src/core/live_startup_reconcile.py:361] — deferred, rare (IB reports `avgCost` for every held position); revisit with 4.3
+- The D-B settings check runs after `node:connect`; with `generate_missing_orders=False` the kernel's own pass fails first and the session exits 4 blaming the broker [src/core/live_startup_reconcile.py:188] — deferred, config-time check belongs in the node builder
+- Any unresolvable broker position — including a manual holding in an instrument this session never trades — refuses every start of every session (D-E, as specified) [src/core/live_startup_reconcile.py:313] — deferred, policy revisit with Story 4.5
+- Duplicate broker rows for one instrument id collapse in `held = {…}` [src/models/position_reconciliation.py:154] — deferred, pre-existing in Story 4.1's reader contract
+- A stop signal that arrives while `reconcile` refuses demotes the refusal to a clean stop (exit 0) [src/core/live_session_runner.py:421] — deferred, pre-existing (Story 3.1 stop semantics; nothing trades either way)
+
+## Deferred from: story-4.3 (2026-09-27)
+
+Story 4.3 (keep runtime state aligned with the broker). Every item routed to 4.3 by
+`prd-epic4-scope.md`, the Epic 2/3 retrospectives and Stories 4.1/4.2 is dispositioned here, with
+the PO's rulings (Allay, 2026-09-27: **1A 2A 3A** at story creation; **1A 2A** at the Task 1 gate).
+Measured against the installed `nautilus-trader 1.220.0` (Task 1, probes and canaries in
+`tests/component/core/test_live_runtime_reconcile_engine.py` /
+`test_live_exec_position_reports.py` / `test_live_order_path_triggered_canary.py`).
+
+- **D6 — resubscription after a subscription-killing IB error (162 / 10182 / 366; also 1101).** →
+  **RE-ROUTED by PO ruling 3A to the Epic 4 retrospective, as a dedicated story.** Not in 4.3's ACs
+  (market-data subscription state, not order/position alignment), and none of the codes reaches any
+  code of ours. Measured mechanism, the new story's starting point
+  (`adapters/interactive_brokers/client/error.py:90-190`, `client/client.py:292-391`): **366 / 10189
+  / 102** — the adapter cancels **and re-issues** the subscription itself
+  (`_handle_subscription_error`); **10182** — clears `_is_ib_connected`, and the 1 s connection
+  watchdog then degrades, sleeps 5 s, reconnects and `_resume`s (`_resubscribe_all`) — **unless**
+  the flag is set again first (the P5 shape: farm-restored codes 2104/2106 are warnings and set
+  nothing, so what re-set it there is unmeasured); **162** — "Unknown subscription error", logged,
+  nothing done (environmental: a competing login evicts the entitlement; resubscribing fails until
+  it ends); **1101** ("restored, data lost") — sets `_is_ib_connected` with **no** resubscription.
+  Fix shape: an instance-level hook on the shared `InteractiveBrokersClient` error path (the
+  `live_exec_avg_px` / `live_exec_position_reports` precedent) that calls `_resubscribe_all()` on
+  1101 and logs a `connection.market_data_lost` record on 162; verification needs broker-side fault
+  injection (162 is reproducible with a mobile login). Interim rule unchanged: grep every transcript
+  for 162/10182/366; zero bars inside RTH is a red flag.
+- **The pre-submit reclaim window `owner_epoch` does not fence (Story 3.6 D-C).** → **RE-ROUTED by
+  PO ruling 3A to the Epic 4 retrospective, as a dedicated story.** Not in 4.3's ACs (session
+  ownership, not broker alignment). Measured shape: the fence is checked at every trade write
+  (`SqlTradeRecord.persist`) and by the heartbeat (`record_activity`, every 30 s, detection ≤ 90 s),
+  but `live_order_path._wrap` consults only `monitor.submission_withheld` — an incumbent whose row
+  was reclaimed can submit until its next heartbeat or trade write. Fix shape: an ownership probe
+  (`record.record_activity(at=now)`, which already raises `SessionReclaimedError` on an epoch
+  mismatch) called by the wrapper before each order, suppressing and requesting a stop on a
+  reclaim. Cost: one synchronous DB round trip per submission on the loop thread (~6 ms measured
+  live, P12) — Story 3.6 D-A's stall exposure — and it needs its own two-process AC.
+- **The IB adapter double-counts the session's own fresh fill (P11/P12 phantom).** → **FIXED**
+  (D-B, PO ruling 1A): the adapter's position-update reports are switched off; runtime positions are
+  `live_runtime_reconcile`'s. **Accepted cost (1A):** a position change the execution stream did not
+  explain is corrected one to two cycles (~60–120 s) after it happens, not on arrival.
+- **The not-open/cancelled conflation on `generate_order_status_report`.** → **Consequence caught,
+  order record not correctable; unowned, named (upstream).** The in-flight sweep's query answers
+  "not found" with a local `Cancelled`; a lost *fill* therefore reads as a cancel. The position it
+  leaves behind is a runtime discrepancy — detected, logged, corrected broker-ward, or (if it
+  contradicts a strategy's own position) refused with the session stopped. The order record cannot
+  be corrected: the adapter's `generate_fill_reports` returns `[]`.
+- **An `ACCEPTED` order stays open forever after a restart (Task 1.5, measured; PO ruling 2A).**
+  With the broker holding the position, the framework's startup pass returns `True`, imports
+  `EXTERNAL`, and leaves the stranded order `ACCEPTED` — nothing native clears it with IB (the
+  consistency check only reconciles venue-open orders, and is off). No stall at component tier (the
+  live `p7-position-test` stall was a portfolio-initialisation timeout a kernel-less harness cannot
+  reproduce). Consequence handled by 2A: the runtime cycle defers only *in-flight* orders, so a
+  stranded open order never makes its instrument unverifiable. → **Story 4.5** (the restart path)
+  owns the stranded order itself and the live stall, if P18/P17b reproduce it.
+- **The open-order consistency check.** → **Stays off (PO ruling 1A), measured:** a locally-cancelled
+  order IB still lists open is never corrected — the engine republishes an `OrderAccepted` for it
+  on every check, forever (the event is published even after `apply` fails), resetting Story 3.7's
+  refusal streak each time. Pinned as a canary; no workaround of ours compensates.
+- **An IB error code outside `ORDER_REJECTION_CODES` (RULED to 4.3 by the Epic 3 retro).** →
+  **Measured and bounded, no code change.** A `SUBMITTED` order resolves as `OrderCanceled` within
+  `inflight_check_threshold_ms` + one sweep interval (~7 s: the query → "not found" → local
+  `Cancelled`), not minutes; the real reason exists only in the adapter's log line. Mapping unknown
+  codes to rejections is refused: IB sends many informational per-order codes (399, 404, 2109, …),
+  and treating a live order as dead invites a duplicate order (NFR14).
+- **`OrderTriggered` unhandled.** → **Closed: unreachable** through the IB adapter (see the struck
+  item under story-3.3 code review).
+- **Open orders counted, never compared (4.2 review).** → The venue-open direction would need the
+  consistency check (off, above); the cache-open/venue-gone direction has no native path with IB.
+  Their position consequences are the runtime cycle's. Recorded, no further owner.
+- **A cached order fills between the broker read and the compare (4.2 review).** → **Fixed for
+  runtime:** the cycle skips when the cache moves during the read, defers in-flight instruments,
+  and acts only on a row identical across two checks ≥ 60 s apart.
+- **A broker-only position with no average price is imported at 0 (4.2 review).** → Unchanged: the
+  runtime path reuses Story 4.2's report builder, which passes the broker's average whenever known.
+- **A mid-session broker read diverts position updates (4.1).** → **Moot** under D-B: no report
+  depends on the adapter's position stream any more.
+- **A cancelled awaiter strands `OpenPositions` (4.1 review).** → **Fails closed** under the runtime
+  cycle: one `reconcile.cycle_failed reason=positions_unanswered` per streak; a reconnect cannot
+  re-grant, so the session stays withheld and the monitor reports `connection.halted`. Recovery
+  still needs a restart (writing adapter state stays out of bounds).
+- **`confirm_state_reestablished` sanity check (4.2 D-J).** → **Live** (D-F), struck in place above.
+- **New, found here — the steady state skips the reconciler for one tick when `observe` itself
+  moves `RECOVERING → HALTED`** (the halt deadline is evaluated inside `observe`). The next tick's
+  observation moves `HALTED → RECOVERING` and the reconnect cycle runs, so a halted session
+  restores one tick (≤ 30 s) later than it could. Accepted: the halt is reported, nothing trades.
+  **Owner:** none unless observed live (P18d).
+
+## Deferred from: code review of 4-3-keep-runtime-state-aligned-with-the-broker (2026-09-28)
+
+- **An `ACCEPTED` order filled while disconnected, with `execDetails` never replayed,** is corrected broker-ward as a synthetic `INTERNAL-DIFF` position while the order itself stays `ACCEPTED` — the strategy still believes it is flat with a working order. A consequence of rulings 1A/2A (open check off; defer only in-flight), not a coding error. **Owner:** Story 4.5 (resume mid-position), which owns strategy-vs-broker ownership.
+- **A drop-and-reconnect inside one 30 s tick is never observed as a loss** — the connection reading has no generation counter, so the monitor stays `CONNECTED` and no reconnect cycle runs (NFR10's re-check is skipped; the next runtime cycle still verifies within 60 s). Pre-existing Story 3.2 monitor design.
+- **D-B's suppression is proven only on a stand-in** (`SimpleNamespace`), never on a real `InteractiveBrokersExecutionClient` instance. P18 exercises it live.
+- **The D-D `runner.run()` component test sets `DEBOUNCE_SECONDS` to 0** — the two-observation rule is proven at unit tier only.
+- **Repeated cache-moved skips are silent** — a cycle starved by constant fills leaves no record (a skip now forces the next `reconcile.ok`, so the gap is visible afterwards).
+- **Story 4.6 timing flake:** `tests/component/core/test_live_reconcile.py::TestTheCheckIsBounded::test_the_connect_deadline_never_outlives_the_budget` failed once under the full `-n auto` component run with three review agents loading the machine; 5/5 green alone. The 1.2 s budget is tight under load.
+
+## Deferred from: story-4.5 (2026-09-28)
+
+Story 4.5 (resume a strategy mid-position). Every item routed to 4.5 by Stories 4.2, 4.3 and 4.4
+(and Story 3.4's hand-off) is dispositioned here, with the PO's rulings (Allay, 2026-09-28:
+**D-C: B**, **D-F: B**; D-A, D-B, D-D, D-E approved as drafted). Measured against the installed
+`nautilus-trader 1.220.0` (Task 1, probes in `/tmp/p45/`, not committed; pinned by tests).
+
+- **The triple-position restart shape (4.2, :3347).** → **FIXED (D-A).**
+  `EXEC_ENGINE_FILTER_UNCLAIMED_EXTERNAL_ORDERS = True`, enforced on the running engine through
+  `BROKER_WARD_SETTINGS`. Measured: S +10 against broker +10 now leaves exactly S +10; an empty
+  cache against broker +10 imports `INTERNAL-DIFF +10` at the broker's price. **Accepted trade-off:**
+  a working order the cache never knew (a manual TWS order, a lost cache) is no longer imported at
+  startup; its fills still reach the cache as a net correction. A strategy's own working orders are
+  unaffected (AR25; the 4.2 AR25 test passes under the filter).
+- **`sma_crossover`'s unfiltered position read (4.2, :3353).** → **FIXED (D-B)**, and `momentum`'s
+  portfolio-net read with it. Backtest parity proven: `test_warmup_backtest_parity.py` and
+  `test_sma_strategy_nautilus.py` unchanged and green.
+- **The shrunk-re-entry process abort (4.2, :3362, HIGH).** → **FIXED for every namespace created
+  after this story (D-A)** — the canary's session-config twin exits 0 — and **refused explicitly for
+  a pre-4.5 namespace (D-D)**: a cached order with strategy `EXTERNAL` and `client_order_id ==
+  instrument id` refuses the start inside `node:connect`, before `run_async()`
+  (`session.resume_refused reason=legacy_position_import`, exit 1, remedy: a new session). Measured:
+  the filter does not help a namespace that already cached the order (known orders never reach
+  `_generate_order`), so D-D is load-bearing. **Consequence, accepted:** every session restarted
+  mid-position before Story 4.5 (P7–P13-era paper sessions, e.g. `p7-fill-0901`) now refuses to
+  start. Owner: none — the remedy is a new session.
+- **D-D's contradicted-strategy refusal (4.2), "which 4.5 may relax".** → **Relaxed at startup
+  for one shape only (code review Decision 2, PO ruling A, 2026-09-28), otherwise kept.** When IBKR
+  holds everything the strategies own on the same side *and more*, the startup phase no longer
+  refuses the session: the excess is unowned, and D-C refuses only that strategy. IBKR holding
+  less, nothing or the opposite side still refuses the whole start. The runtime cycle is
+  unchanged: it still stops the session on all of them, pinned by
+  `test_a_covering_broker_holding_still_stops_the_running_session`. A real contradiction still
+  cannot be rewritten (the framework's corrections never land in a strategy's position).
+  *(Superseded in part at the integration merge with Story 4.7, 2026-09-28 — see that section
+  below: 4.7's coverage rule made single-side covered growth an ordinary row at runtime too, so the
+  pin now covers only the mixed-sides shape.)*
+- **Any unresolvable (`IB-CONID-*`) broker position refuses every start (4.2 review, :3399).** →
+  **Kept (D-G).** An unresolved row cannot be tied to, or excluded from, any strategy's instrument;
+  refusing is the only reading that cannot trade blind. Owner for a narrower rule: unowned, named
+  — whoever first meets an unresolvable holding live.
+- **A holding no strategy owns on a traded instrument (new, D-C, PO ruling B).** The strategy on
+  that instrument is refused (`strategy.resume_refused`, contained, siblings start, fail closed if
+  none can); the holding is never traded or adjusted. **Consequence:** P18b's hand-bought share, or
+  the paper account's old `AAPL +4`, blocks that instrument's strategy until removed by hand in TWS
+  (P18's "Know before starting" note records it).
+- **The stranded `ACCEPTED` order and the `p7-position-test` stall (4.3, :3449).** → **Carried
+  forward, still conditional:** neither P17b nor P18 has been run, so the live stall has never been
+  reproduced. Owner unchanged: the first operator run of P17b/P18/P19b that reproduces it.
+- **An `ACCEPTED` order filled while disconnected, corrected as `INTERNAL-DIFF` (4.3 review,
+  :3492).** → **Next start: governed by D-C** (the unowned `INTERNAL-DIFF` refuses that strategy,
+  loudly). **Mid-run: not fixed** — re-attributing a synthetic position to a strategy needs cache
+  surgery, which Story 4.2's PO ruling rejected. The strategy keeps running flat beside it until
+  the next start. **Owner: Epic 4 retrospective.**
+- **A strategy consults `orders_open` before a fresh signal (Story 3.4's hand-off).** → **Not built
+  (D-H a).** A stranded `ACCEPTED` order (above) would silence the strategy forever; the framework
+  already denies a same-`client_order_id` duplicate; both built-ins place market orders.
+  Visibility instead: `strategy.resumed` carries the strategy's own `open_orders`. Owner: unowned,
+  named — the first strategy that places resting orders.
+- **Strategy-visible suppression feedback (Epic 3 retro Action Item 1).** → **Unchanged (D-H d).**
+  The built-ins keep no private position state and, since D-B, read their own book from the cache
+  on every signal. The action item's general owner question stays with the retro.
+- **The history/live seam (4.4 review, :3153).** → **Dispositioned (D-F, PO ruling B)** — struck
+  in place above. **Residual, accepted:** a missed bar is named, not replayed, so the averages can
+  still lag one bar for up to `slow_period` bars after a gap; the WARNING says when.
+- **`on_stop` flattening in `custom/sma_crossover_long_only` (:2196).** → **Unchanged, owner the
+  submodule repo**; P19b's preconditions say to use the built-in `sma_crossover`.
+- **P19 is defined, not run.** No Gateway was reachable (ports closed at 11:31 ET Monday) and the
+  harness worktree has no `.env`. **Owner:** the operator, P19a (read-only) first.
+
+## Deferred from: code review of 4-5-resume-a-strategy-mid-position (2026-09-28)
+
+The three review deferrals, each dispositioned with an owner (PO instruction, 2026-09-28). The
+review's 19 patches, including the HIGH order-id renumbering, are applied, not deferred. See the
+story's Review Findings.
+
+- **The seam assumes history and live bars share one `ts_event` convention.** The IB adapter's
+  history trims the forming bar (`_check_bounds`, measured by Story 4.4), so the watermark is always
+  a completed bar. But the claim that a republished live bar carries the *same* `ts_event` as its
+  history twin is unverifiable offline: every harness builds both from one helper. If the
+  conventions differ, the first genuine live bar is dropped and logged only at INFO
+  (`warmup.seam_duplicate_dropped`). **Owner:** whoever runs P19 first — criterion 7 reads it.
+- **The built-ins ignore their own working orders restored from Redis** (a signal while an own
+  entry or close is still working). This is D-H (a), disclosed and routed above; the review
+  re-raised it. **Owner:** unchanged.
+- **An unowned holding that appears after a strategy's start check is never refused.** A manual
+  trade or a late fill arrives through Story 4.3's runtime cycle as `INTERNAL-DIFF`, and the
+  strategy keeps trading its own book beside it with no refusal record. **Owner:** Epic 4
+  retrospective (runtime alignment; pairs with the mid-run re-attribution item above).
+
+## Deferred from: story-4.7 (2026-09-28)
+
+Story 4.7 (corporate actions). Every item below is a disclosed cost of the PO's coverage rule
+(D-A (A), 2026-09-28) or a neighbouring hazard it reaches. Each names an owner, and none blocks
+the story.
+
+- **A lot held across a split records its round trip at unadjusted prices.** → **Epic 5 (Story
+  5.4, `session_conditions`).** A strategy that bought 10 @ 200 before a 2:1 split and sells its
+  10 @ 100 after it records a ~50 % loss on that trade. The split's other 10 shares sit in a
+  reconciliation-owned (`INTERNAL-DIFF` / `EXTERNAL`) position, which `TradeRecorder` never
+  persists (Story 3.6 D-D), so their gain is never recorded as a trade. This is the
+  adjusted-vs-unadjusted price-basis divergence AC #3 records as **an expected structural
+  property, not a defect to chase** (`docs/agent/nautilus.md`, "Corporate actions"). Epic 5 should
+  carry it in `session_conditions`: `price_basis = "ibkr_unadjusted_smart"`, and ideally a named
+  note, or the corporate actions a session held through, so a seal-time comparison can attribute
+  the difference rather than read it as strategy decay.
+- **The split's extra shares are unmanaged once the strategy exits.** → **Epic 5 (Story 5.4's
+  `open_positions_at_seal`), and Story 4.5.** After absorption they belong to a synthetic owner.
+  - A strategy-filtered exit leaves them held at IBKR. They are visible in `reconcile.ok`
+    (`instruments`, `synthetic_positions`) and in `live reconcile`, but no strategy closes them.
+  - `sma_crossover`'s *unfiltered* read (below) closes them too.
+  - Which is right is 4.5's ownership question.
+- **Covered-growth absorption reaches the 1.4A synthetic triple and `sma_crossover`'s
+  close-everything hazard.** → **Story 4.5 (the existing HIGH entries above, "A normal
+  mid-position restart leaves three open positions" and "`sma_crossover` reads every strategy's
+  positions").** This adds a new *path* into the same state, not a new hazard class:
+  - measured 1.1a: a split at startup leaves S +10, `EXTERNAL` +20, `INTERNAL-DIFF` −10;
+  - a SELL crossover then closes S +10 **and** `EXTERNAL` +20, 30 shares against a broker at 20.
+  Before 4.7 the session refused to start there. Now it reaches the same state every
+  mid-position restart already reaches, so 4.5's fix covers both.
+- **A reverse split after a prior mid-position restart can abort the next start inside
+  Nautilus.** → **Story 4.5 (1.4S, HIGH; `TestTheShrunkReEntryAbortCanary`).** The coverage rule
+  refuses a reverse split cleanly when the phase gets to run. But once an earlier restart has
+  imported the `EXTERNAL` order, a shrink trips `_generate_order_updated`'s underflow first, and
+  the process aborts in `node:connect` before our phase exists. P20c's pass criterion 4 tells the
+  operator how to record it.
+- **The runtime cash is never compared.** → **Recorded, accepted.** `reconcile.cash_changed` is
+  startup-only by design: a running session's cash *is* IBKR's push, so no local copy can drift
+  while the process runs. A dividend credited during an always-on session (never stopped
+  overnight) is absorbed natively but not named. Nothing owns it unless an always-on session
+  becomes the operating model.
+
+## Deferred from: code review of 4-7-absorb-corporate-actions-through-broker-authoritative-state (2026-09-28)
+
+- **`load_account` replays every `AccountState` in `accounts:<id>`.** Every reported summary push
+  and every portfolio recalculation over a multi-week session is replayed, and nobody has measured
+  that cost on `live reconcile`'s 30 s (NFR5) path. It is the same list Nautilus itself loads at
+  every kernel init (`cache_accounts`). **Owner:** P16's operator, who records `elapsed_ms`
+  against a long-lived session's account.
+- **The coverage rule also absorbs a broker position that leads or lags the session's own fill by
+  more than the debounce.** The shapes: a fill whose `execDetails` arrives after a reconnect, or an
+  IB position read lagging a partial reduce across two cycles ≥ 60 s apart. These used to stop the
+  session. Now they are corrected into a synthetic owner and re-corrected when the fill lands, with
+  no order in between. **Owner:** Story 4.3's debounce design, and Story 4.5's strategy/broker
+  ownership. The earlier "ACCEPTED order filled while disconnected" entry above is the same family.
+- **The real-engine test harnesses end with `asyncio.set_event_loop(None)`.** Any later test file
+  on the same xdist worker that reads the implicit current loop fails with "There is no current
+  event loop". Story 4.7 fixed `test_live_order_recovery.py` locally with an autouse loop fixture.
+  **Owner:** whoever next touches the shared harnesses. The fix is a conftest-level loop fixture.
+- **A currency missing from a partial broker cash read would be named `after=None` by
+  `reconcile.cash_changed`.** Latent: only the base currency arrives today (Story 4.1 F7).
+  **Owner:** the existing "multi-currency cash would be returned partially" entry, meaning the
+  first change that widens the account-summary tags.
+
+## Deferred from: integration merge of story-4.5 and story-4.7 (2026-09-28)
+
+Stories 4.5 and 4.7 ran in parallel and each relaxed Story 4.2's `S != B` refusal for a broker
+holding *more* than the strategy on the same side: 4.5 with a startup-only exemption
+(`broker_covers_strategy`, PO ruling 2026-09-28), 4.7 by redefining `strategy_contradicted` as the
+coverage rule at startup **and** runtime (PO ruling A, 2026-09-28). Both rulings are kept as ruled.
+How they compose, and the one pin that could not survive:
+
+- **4.5's runtime pin contradicted 4.7's ruling A, and was rewritten.**
+  `test_a_covering_broker_holding_still_stops_the_running_session` asserted that strategy +10 /
+  `INTERNAL-DIFF` +5 against a broker at +15 stops a running session "exactly as before". That is
+  the very state 4.7's runtime correction leaves, and 4.7's
+  `test_a_forward_split_is_corrected_named_and_the_session_continues` asserts it is clean — both
+  cannot hold. 4.7's ruling explicitly governs runtime; 4.5's pin said 4.5 had not changed runtime.
+  The pin now asserts what stays true of 4.5's intent — its exemption is never read at runtime —
+  on the mixed-sides shape (A +20, B −10, broker +15), which still stops the session; the
+  single-side shape is pinned clean at runtime
+  (`test_a_covering_holding_the_net_already_absorbed_is_clean_while_running`).
+- **⚠️ For the PO — a forward split while stopped absorbs the split, then refuses the
+  strategy.** At startup, 4.7 absorbs the split (`reconcile.ok`, the start is not refused), and
+  4.5's D-C then refuses the strategy on that instrument, because the split's extra shares
+  (`INTERNAL-DIFF` +N) belong to no strategy (`strategy.resume_refused reason=unowned_position`;
+  its siblings start, a single-strategy session exits 1). The remedy is manual (remove the shares
+  in TWS). This meets 4.7 AC #1's "absorbed without manual intervention" for the **reconcile**
+  phase but not for the strategy's resumption. Mid-session, the split is absorbed and the strategy
+  keeps running (4.7), and the next start refuses it the same way. Neither ruling anticipated the
+  other; the merge changes neither. Docs now say so (`nautilus.md` both sections, README, P20).
+  **Owner: the PO** — e.g. whether D-C should exempt an excess the pre-run snapshot shows arrived
+  as covered growth on a strategy-held instrument.
+- **4.5's startup exemption now decides only mixed-sides rows.** Under 4.7's rule every single-side
+  covered row is not contradicted at all, so `broker_covers_strategy` changes the outcome only when
+  strategies hold both sides of one instrument — where 4.7's code review kept the equality rule
+  ("their net cannot tell whether each lot is covered"). At startup such a row passes the phase
+  and D-C refuses every strategy on the instrument, so nothing trades on it; at runtime it still
+  stops the session. Pinned at startup by
+  `test_a_covered_excess_over_mixed_sides_passes_only_by_this_exemption`, so the exemption stays
+  load-bearing. **Owner: the PO**, to confirm (refusing the whole session there instead would be
+  4.7's reading).
+- **Procedure numbering.** Both stories appended "Procedure P19"; 4.5's stays P19, 4.7's is now
+  **P20** (evidence index, cross-references — including the two in 4.7's entries above — and log
+  names updated; the 4.7 story file keeps its original "P19" as history).
+
+## Deferred from: code review of PR #35, Epic 4 integration (2026-09-30)
+
+The review's full text is on the PR (`p3-epic4-base` → `015-paper-trading`). Its patches P1, P2,
+P3 and P5 landed in `2e275c8`; P4 and P6–P9 in `a714eb2`. What follows is what the review deferred
+(W1–W11) and the five decisions it put to the PO.
+
+**Decisions D1–D5 — all ruled by the PO (Allay) on 2026-09-30, each on the reviewer's recommended
+option.** The problem statements below are kept as reviewed; this table is what was decided and where
+it landed.
+
+| | Ruling | Landed |
+|---|---|---|
+| **D1** | Symbol-scoped **and** bounded hold-back: an unresolved `IB-CONID-*` row holds back only the cache row with the same symbol (`PositionDiscrepancy.broker_symbol` / `symbol_key`, IB's `BRK B` matching Nautilus's `BRK-B`), for at most `HOLD_BACK_CYCLES` (3) consecutive cycles; past that `reconcile.hold_back_expired` is logged once and the row is acted on — a contradiction underneath is refused, fail closed. | This PR (`live_runtime_reconcile._HoldBack`; unit tests for the unrelated-symbol refusal, the bound, the restart and the spelling) |
+| **D2** | Same-symbol rule everywhere, name the rest: an unresolved row matters only to a same-symbol cached row at startup and for the reconnect grant too; a fractional remainder below the size increment is named once and clean at the expressible precision in the session, while `live reconcile` stays exact (exit 5). | **Epic 5, Story 5.7** (`epics.md`, `sprint-status.yaml`) |
+| **D3** | Withhold after 3, drift stops: three consecutive failed cycles move the monitor to `RECOVERING` (orders withheld) with one ERROR, re-granted by the next clean cycle; a `BrokerStateAdapterError` stops the session on first occurrence, as startup treats drift; the withheld period is recorded in `session_conditions`. | **Epic 5, Story 5.8** |
+| **D4** | A non-synthetic strategy id the session's spec does not resolve to is unowned: `split_by_owner(..., session_strategy_ids=)` with the ids from `live_session_node.session_strategy_ids`; the strategy that resolves to the new id is refused through the existing `strategy.resume_refused reason=unowned_position` path. `LiveSessionRunner` 416 → 417, disclosed. | This PR |
+| **D5a** | Covered growth resumes beside the excess: when the strategy's own position is non-zero and the unowned part is on the same side, D-C does not refuse — `strategy.resumed_beside_excess` names both, the strategy manages its own lot, the excess stays `INTERNAL-DIFF` and is never traded. Flat-beside-unowned, opposite side and **mixed sides** (`strategies_on_both_sides`) are still refused. Supersedes the two "Owner: the PO" items in the 4.5/4.7 integration-merge section above. Docs: nautilus.md, README, `live start` help, P18/P19c/P20. | This PR |
+| **D5b** | The startup/runtime asymmetry on mixed-sides rows is confirmed (per-strategy containment exists at startup, none at runtime); the visibility gap is closed — the row `_to_act_on` exempts is logged `reconcile.discrepancy resolution=covered` (WARNING) from the reconcile phase. | This PR |
+
+- **D1 [HIGH] A permanent unresolvable broker row masks a "broker 0" strategy contradiction for
+  the life of the session.** `live_runtime_reconcile.py`'s `_act` holds back every cache row
+  reading "broker 0" while any `IB-CONID-*` row exists, with no bound. If the account acquires a
+  contract the IB provider cannot build (bond, warrant/rights stub, BAG, delisted symbol —
+  reachable mid-session by a corporate action or a manual trade) and the strategy's own `+22` is
+  then sold by hand, the contradicted row is never refused, `trading_permitted` stays granted, and
+  the strategy's next opposite signal closes 22 shares the account does not hold (NFR14).
+  `test_an_unresolved_broker_row_holds_back_only_the_rows_it_could_mask` asserts the hold-back
+  across 3 cycles; nothing asserts it ends. Options: bound the hold-back (N cycles, then treat the
+  unresolved row as permanent and act on the held-back rows); hold back only rows whose symbol
+  matches the unresolved contract's; or stop the session on a persistent unresolved row. The
+  reviewer's recommendation: rule this one before merge, bounded hold-back as the least invasive
+  fix. **Owner: the PO.**
+- **D2 [MEDIUM] No policy for holdings the adapter cannot express** (non-equity contracts,
+  fractional shares). Startup refuses forever with the remedy "retry the start"; a fractional
+  broker excess (`+22.5` vs `+22`, a DRIP) is `UNRESOLVABLE` at startup but inert-and-clean at
+  runtime (`reconcile.ok` with a standing 0.5-share discrepancy — `Equity.make_qty(Decimal("22.5"))`
+  rounds silently to 22, verified against the wheel); and while an unresolved row exists the
+  reconnect grant is never issued, so after any disconnect orders are withheld for the rest of the
+  session. Needs one ruling covering startup, runtime and reconnect. **Owner: the PO**; suggested
+  routing: Epic 5 planning, beside the `owner_epoch` debt.
+- **D3 [MEDIUM] A persistent runtime cycle failure is only an hourly warning.**
+  `RuntimeReconciler._run` turns every non-`ReconciliationFailedError` — including
+  `BrokerStateAdapterError` for the real account condition "two IB contracts resolve to one
+  instrument id" — into `reconcile.cycle_failed` at most hourly. With the adapter's own position
+  reports switched off (4.3, ruling 1A), the session then trades for its whole life with no runtime
+  alignment and, after a disconnect, no reconnect grant. `_FailureStreak.count` exists but nothing
+  acts on it. Should a streak beyond N withdraw permission or stop the session? **Owner: the PO**;
+  suggested routing: Epic 5 planning.
+- **D4 [MEDIUM] The ownership predicate treats any non-synthetic `strategy_id` as owned.**
+  `split_by_owner` and `ResumeCheck.refuse_unowned` refuse only when the synthetic net is non-zero.
+  A cached position under an id no spec entry resolves to (e.g. `SMACrossover-000` left by a
+  pre-fix run in which an earlier entry was refused) passes 4.2 and D-C, and the restarted
+  `SMACrossover-001` reads its own book as flat and re-enters — the FR38 double exposure D-C option
+  B was chosen to prevent. The `order_id_tags` patch prevents new orphans; no test seeds a stale
+  own-id. Option: refuse when a non-synthetic id is not in the session's resolved id set.
+  **Owner: the PO**; suggested routing: Epic 5 planning.
+- **D5 [MEDIUM] Two behaviours the PR codifies are still "Owner: the PO" above (integration
+  merge section) and unruled by the retro.** (a) A forward split while stopped is absorbed by
+  `reconcile` and then the strategy is refused (`strategy.resume_refused`, remedy manual in TWS);
+  `live start` help, README and nautilus.md now document this as intended. (b) Mixed-sides rows
+  pass the startup phase (`broker_covers_strategy` exemption in `_to_act_on`) but stop the running
+  session, and when the net already matches no `reconcile.discrepancy` is emitted at all at
+  startup — visibility depends on `strategy.resume_refused`. Confirm both or change before merge.
+  **Owner: the PO.**
+
+**Deferred (W1–W11).**
+
+- **W1 Runtime corrections write the Redis namespace without an ownership check**
+  (`live_runtime_reconcile.py`, the correction write). The `owner_epoch` fencing gap the retro
+  routed to Epic 5; the worst case here is a 20 s broker read between the tick's reclaim check and
+  the write. **Owner:** Epic 5's `owner_epoch` story.
+- **W2 A broker row that changes every cycle** (scaling in by hand, a resting order part-filling)
+  restarts the debounce forever, with no record and no `reconcile.ok` — silently never clean.
+  **Owner:** Story 4.3's debounce design; the first operator report of a session that never logs
+  `reconcile.ok`.
+- **W3 A stop landing while `on_tick` awaits the broker read** leaves the detached
+  `get_positions` task pending at loop close and can log `reconcile.cycle_failed
+  reason=connection_lost` on a clean exit-0 stop (`live_broker_state.py`, the timeout path); the
+  detached task can also issue a second, unread `reqPositions`. **Owner:** whoever next touches
+  the broker reader's timeout; cancel the detached task on the stop path.
+- **W4 `read_broker_state` is not read-only:** `provider.get_instrument` →
+  `load_with_return_async` → `cache.add_instrument`, so every runtime cycle and every
+  `live reconcile` adds account-held instruments to the node cache and, on the session node,
+  `instruments:*` keys to the Redis namespace. The module docstring and `live_reconcile.py`'s
+  "read-only is structural" are inaccurate for this write. It is also why an unrelated broker
+  holding does not refuse startup: the instrument is loaded before `position_report` runs.
+  **Owner:** Story 4.1's module docstring, when next edited; no behaviour change wanted without
+  a PO look.
+- **W5 Concurrent `live reconcile` invocations share `ibkr_live_client_id + 1`;** the first is
+  evicted mid-read and fails as `BROKER_UNREACHABLE` with no hint. **Owner:** the README's
+  `live reconcile` row (document: one at a time).
+- **W6 Two empty `positionEnd` answers ≥ 60 s apart after a Gateway re-login** stop the session
+  `STRATEGY_POSITION_CONTRADICTED` — the fail-closed direction, positions untouched; there is no
+  quorum on an all-flat answer. **Owner:** the first live observation; P19/P20's operator.
+- **W7 A strategy that stops itself in `on_start`** (momentum with `cache.instrument` None) is
+  counted as started and warm (`warmup.skipped`); pre-existing strategy behaviour, the shortfall
+  is reported at `subscribe`. **Owner:** the strategy-author guide, if one is written.
+- **W8 Sub-minute bar types with a period ≥ 28,800** snap to a whole-day IB duration IB rejects;
+  contained at the deadline rather than refused at config time (`strategy_warmup.py`, the
+  duration mapping). **Owner:** the first sub-minute live strategy.
+- **W9 P16's "✅ passed (A and B)" row in `docs/qa/phase3-live-verification.md`** records none of
+  the values criteria 2–7 require (discrepancy lines, cash values, `elapsed_ms`, grep counts,
+  `live status`); the index promotes it to ✅ on assertion. A provenance gap in the phase-gate
+  evidence, not a code defect. **Owner:** the next P16 run records the values.
+- **W10 Proof-scope caveats already recorded by the story reviews:** the warm-up parity test
+  compares indicator state, not orders, under `OmsType.NETTING` with a hand-captured fingerprint;
+  4.5 AC #4's "runner tier" chain is proven at engine tier; 4.3 D-D's runner test disables the
+  debounce; D-B's factory proof uses a `SimpleNamespace` stand-in. **Owner:** the story entries
+  above; listed here so the integration review's reader sees them in one place.
+- **W11 Minor:** `require_engine_state` and `_read` each run `keys("*")` (two full SCANs inside
+  the 30 s budget); `SessionView.cash_known` has no caller in `src/`; budget exhaustion in
+  `live reconcile` is reported as exit 4 "broker unreachable". **Owner:** whoever next touches
+  `live_session_view.py` / `live_reconcile.py`.

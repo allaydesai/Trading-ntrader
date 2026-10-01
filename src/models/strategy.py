@@ -68,7 +68,9 @@ class MomentumParameters(BaseModel):
     Matches src.core.strategies.sma_momentum.SMAMomentumConfig.
     """
 
-    trade_size: Decimal = Field(default=Decimal("1000000"), gt=0, description="Size of each trade")
+    # 100, not the old 1,000,000 backtest-scale value: this default is live-relevant now that
+    # Story 4.4 fixed the SMA-never-moves bug, so momentum can actually signal (Epic 4 retro).
+    trade_size: Decimal = Field(default=Decimal("100"), gt=0, description="Size of each trade")
     order_id_tag: str = Field(default="002", description="Tag for order IDs")
     fast_period: int = Field(default=20, ge=1, description="Fast SMA period")
     slow_period: int = Field(default=50, ge=1, description="Slow SMA period")

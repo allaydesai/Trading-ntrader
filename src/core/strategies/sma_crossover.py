@@ -2,6 +2,7 @@
 
 from decimal import Decimal
 
+from nautilus_trader.core.uuid import UUID4
 from nautilus_trader.indicators import SimpleMovingAverage
 from nautilus_trader.model.data import Bar, BarType
 from nautilus_trader.model.enums import OrderSide, PriceType
@@ -10,6 +11,7 @@ from nautilus_trader.model.objects import Quantity
 from nautilus_trader.trading.strategy import Strategy, StrategyConfig
 
 from src.core.strategy_registry import StrategyRegistry, register_strategy
+from src.core.strategy_warmup import warmup_lookback
 from src.models.strategy import SMAParameters
 
 
@@ -77,7 +79,38 @@ class SMACrossover(Strategy):
         self._current_bar: Bar | None = None
 
     def on_start(self) -> None:
-        """Actions to be performed on strategy start."""
+        """Register the SMAs and ask for enough history to warm them (Story 4.4).
+
+        ``subscribe_bars`` is deliberately **not** called here: it runs last in
+        :meth:`_on_history_loaded`, so the live stream starts only once the
+        history has loaded. The seam between the two is guarded outside the
+        strategy, by the session's warm-up watch (Story 4.5, D-F): a live bar
+        at or before the last history bar is dropped once, and each bar missed
+        while the request was in flight is named (``warmup.seam_gap``), not
+        replayed — see ``live_session_warmup.py``. Mode-agnostic by
+        construction (AR40) — a backtest answers the request
+        with nothing, synchronously, so there the callback subscribes before
+        this method returns and the strategy behaves exactly as before.
+        """
+        self.register_indicator_for_bars(self.bar_type, self.fast_sma)
+        self.register_indicator_for_bars(self.bar_type, self.slow_sma)
+        period = max(self.fast_sma.period, self.slow_sma.period)
+        start = self.clock.utc_now() - warmup_lookback(self.bar_type, period)
+        self.request_bars(self.bar_type, start=start, callback=self._on_history_loaded)
+
+    def _on_history_loaded(self, request_id: UUID4) -> None:
+        """Carry the crossover baseline over from history, then go live.
+
+        History reaches the registered indicators but never ``on_bar``, so
+        without this the strategy would be warm and still deaf for one bar
+        (and, on daily bars, lose a last-history-to-first-live crossover
+        outright). Only the baseline is taken: no signal is ever evaluated on
+        a historical bar. Cold indicators (a backtest's empty history) record
+        nothing, which leaves the first bars exactly as they were.
+        """
+        if self.fast_sma.initialized and self.slow_sma.initialized:
+            self._prev_fast_sma = self.fast_sma.value
+            self._prev_slow_sma = self.slow_sma.value
         self.subscribe_bars(self.bar_type)
 
     def on_stop(self) -> None:
@@ -96,9 +129,9 @@ class SMACrossover(Strategy):
         # Store current bar for position sizing
         self._current_bar = bar
 
-        # Update indicators with new bar
-        self.fast_sma.handle_bar(bar)
-        self.slow_sma.handle_bar(bar)
+        # Both SMAs are registered in `on_start`, so `Actor.handle_bar` has
+        # already fed them this bar before calling here — feeding them again
+        # would count every bar twice.
 
         # Wait for both indicators to be initialized
         if not (self.fast_sma.initialized and self.slow_sma.initialized):
@@ -192,14 +225,16 @@ class SMACrossover(Strategy):
 
     def _generate_buy_signal(self) -> None:
         """Generate a buy signal."""
-        # Get current positions from cache (always up-to-date)
-        positions = self.cache.positions(
-            venue=self.instrument_id.venue, instrument_id=self.instrument_id
-        )
+        # This strategy's own open positions only (Story 4.5): the cache can
+        # also hold positions reconciliation owns (`EXTERNAL`/`INTERNAL-DIFF`)
+        # on this instrument, and acting on those trades a holding this
+        # strategy never opened (NFR14). Backtests run one strategy per
+        # instrument, so there the set is unchanged.
+        positions = self.cache.positions_open(instrument_id=self.instrument_id, strategy_id=self.id)
 
         # Check for open positions
-        has_short = any(p.is_short and p.is_open for p in positions)
-        has_long = any(p.is_long and p.is_open for p in positions)
+        has_short = any(p.is_short for p in positions)
+        has_long = any(p.is_long for p in positions)
 
         # Close any existing short position first. A signal either closes the
         # opposite side or opens a new position -- never both: closing does
@@ -212,7 +247,7 @@ class SMACrossover(Strategy):
         # run, story-3.4 closeout").
         if has_short:
             for position in positions:
-                if position.is_short and position.is_open:
+                if position.is_short:
                     self.close_position(position)
                     self.log.info(f"Closed SHORT position: {position.id}")
 
@@ -236,20 +271,18 @@ class SMACrossover(Strategy):
 
     def _generate_sell_signal(self) -> None:
         """Generate a sell signal."""
-        # Get current positions from cache
-        positions = self.cache.positions(
-            venue=self.instrument_id.venue, instrument_id=self.instrument_id
-        )
+        # Own positions only -- see `_generate_buy_signal`.
+        positions = self.cache.positions_open(instrument_id=self.instrument_id, strategy_id=self.id)
 
         # Check for open positions
-        has_long = any(p.is_long and p.is_open for p in positions)
-        has_short = any(p.is_short and p.is_open for p in positions)
+        has_long = any(p.is_long for p in positions)
+        has_short = any(p.is_short for p in positions)
 
         # Close any existing long position first. Mirror of
         # `_generate_buy_signal`'s close/open split -- see its comment.
         if has_long:
             for position in positions:
-                if position.is_long and position.is_open:
+                if position.is_long:
                     self.close_position(position)
                     self.log.info(f"Closed LONG position: {position.id}")
 

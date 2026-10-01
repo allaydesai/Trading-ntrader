@@ -33,7 +33,7 @@ from src.core.live_session_runner import LiveSessionRunner, stop_degraded_strate
 from src.core.live_session_signals import FORCE_EXIT_CODE, SessionStopSignals
 from src.core.live_trader_id import derive_trader_id
 from src.models.session import SessionSpec, StrategySpec
-from tests.component.doubles import TestLiveNode
+from tests.component.doubles import TestLiveNode, flat_broker_state_reader
 
 pytestmark = pytest.mark.component
 
@@ -184,6 +184,8 @@ async def _never_sleeps(seconds: float) -> None:
 def _runner(
     node: TestLiveNode, *, record=None, session_id=SESSION_ID, **overrides
 ) -> LiveSessionRunner:
+    node.run_seconds_from_first_strategy = True  # Story 4.2: see the double's docstring
+
     def _factory(settings_arg, **kwargs):
         return node
 
@@ -195,6 +197,7 @@ def _runner(
         "connect_timeout": 2.0,
         "node_factory": _factory,
         "account_verifier": _permitting_verifier,
+        "broker_state_reader": flat_broker_state_reader,
         "client_builder": lambda *a, **k: None,
         "sleeper": _never_sleeps,
     }

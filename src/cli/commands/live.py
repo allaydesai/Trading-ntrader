@@ -36,6 +36,7 @@ from rich.console import Console
 from rich.markup import escape
 from sqlalchemy.exc import SQLAlchemyError
 
+from src.cli.commands.live_reconcile import reconcile
 from src.cli.commands.live_start import (
     build_session_ports,
     claim_session,
@@ -89,6 +90,7 @@ def live() -> None:
 
 live.add_command(status)
 live.add_command(list_sessions)
+live.add_command(reconcile)
 
 
 def _validate_strategy(ctx: click.Context, param: click.Parameter, value: str) -> str:
@@ -358,12 +360,33 @@ def start(session: str, connect_timeout: float) -> None:
     Startup runs in this order, each phase logging `phase=<name> status=...`:
       gate:static -> node:build -> node:connect -> gate:account
       -> reconcile -> warmup -> subscribe -> trading
-    `reconcile` and `warmup` are no-op placeholders until Epic 4.
+    `reconcile` compares the engine cache against IBKR's own view of the
+    account before any strategy starts: what only the net disagrees on is
+    corrected broker-ward, a strategy position the broker does not cover
+    (fewer shares, none, or the opposite side) refuses the start naming the
+    likely cause, and `ok` means 0 discrepancy remains; only then is trading
+    permitted. A split that grows a strategy's position is absorbed and
+    logged; cash that moved while stopped is logged `reconcile.cash_changed`.
+    A strategy restarted while holding its own position resumes it
+    (`strategy.resumed`) and acts only on its own positions. Shares beyond
+    its own on the same side — a split's, or a manual add — it resumes
+    beside, named once (`strategy.resumed_beside_excess`) and never traded;
+    a holding no strategy of the session owns on an instrument where it is
+    flat, or on the opposite side, means it is not started
+    (`strategy.resume_refused`), and the holding is left alone. Each
+    strategy warms its indicators from history as it starts, before it
+    subscribes to live bars. While running, the session re-checks its
+    positions against IBKR every minute and corrects a disagreement seen
+    twice broker-ward (`reconcile.discrepancy`); a strategy position the broker
+    no longer covers stops the session, positions untouched. After a
+    disconnect, no order is sent until a clean check re-establishes state.
 
     \b
     Exit codes:
       0  the session ran and stopped cleanly
-      1  a configuration, state or database failure
+      1  a configuration, state or database failure — including
+         reconciliation refusing to let the session trade, at startup or
+         while it runs
       2  usage error
       3  the safety gate refused the connection (scriptably distinct)
       4  the broker was unreachable, or the trader never started
@@ -569,6 +592,12 @@ def _print_contained_failures(runner: LiveSessionRunner) -> None:
             markup=False,
             highlight=False,
         )
+        # Story 4.5 (code review): a strategy refused at start — a holding it
+        # cannot attribute (D-C), a warm-up that never arrived — is only
+        # actionable with its own remedy. Its detail is the guard's already
+        # redacted first line, capped; a runtime failure's stays in the log.
+        if failure.handler == "start" and failure.detail:
+            console.print(f"        {failure.detail}", markup=False, highlight=False)
     # Branch on the runner's own fact (review fix, 2026-08-23): the old
     # unconditional "the other strategies were unaffected" was false in the
     # most common trigger — a single-strategy session has no other strategies,

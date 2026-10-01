@@ -180,6 +180,37 @@ class TestOrderIdTagCollision:
         assert any(error["type"] == "value_error" for error in exc_info.value.errors())
 
 
+class TestOrderIdTagsAreResolvedBySpecPosition:
+    """Story 4.5 (code review HIGH): the tags the runner materialises each
+    strategy with, so a refusal before registration never renumbers a sibling."""
+
+    @pytest.mark.unit
+    def test_a_positional_tag_counts_every_earlier_entry(self):
+        first = _spec(strategy_id="momentum", bar_types=("MSFT.NASDAQ-1-MINUTE-LAST-EXTERNAL",))
+        second = _spec(bar_types=("AAPL.NASDAQ-1-MINUTE-LAST-EXTERNAL",))
+
+        tags = SessionSpec(strategies=(first, second)).order_id_tags
+
+        assert tags == {"momentum": "002", "sma_crossover": "001"}
+
+    @pytest.mark.unit
+    def test_it_is_the_walk_the_collision_validator_takes(self):
+        """The same resolution the create-time validator proves collision-free:
+        with ``momentum`` explicitly ``"000"`` first, ``sma_crossover`` is
+        ``"001"`` — the case ``test_reordering_the_same_two_strategies_…`` accepts."""
+        first = _spec(
+            strategy_id="momentum",
+            overrides={"order_id_tag": "000"},
+            bar_types=("MSFT.NASDAQ-1-MINUTE-LAST-EXTERNAL",),
+        )
+        second = _spec(bar_types=("AAPL.NASDAQ-1-MINUTE-LAST-EXTERNAL",))
+
+        tags = SessionSpec(strategies=(first, second)).order_id_tags
+
+        assert tags == {"momentum": "000", "sma_crossover": "001"}
+        assert len(set(tags.values())) == 2
+
+
 class TestStrategyCanonicalisation:
     """AC #2: strategy identifiers resolve through StrategyRegistry to canonical form."""
 

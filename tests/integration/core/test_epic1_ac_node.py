@@ -61,9 +61,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 #: live create` persists a session through the same SQLAlchemy repository stack
 #: `src/db` already uses, and validates its spec through the same Pydantic
 #: models `src/models` already uses — both already-declared dependencies
-#: (`pyproject.toml`), neither a new one.
+#: (`pyproject.toml`), neither a new one. Story 4.6 widened it with `msgspec`,
+#: declared in `pyproject.toml` with the PO's approval (2026-09-27): the session
+#: view reader must build Nautilus's own `MsgSpecSerializer` to decode a
+#: session's Redis-held positions, and `msgspec` was already installed as a hard
+#: requirement of `nautilus-trader` (`>=0.19.0,<1.0.0`) — declared, not added.
 PERMITTED_THIRD_PARTY = frozenset(
-    {"nautilus_trader", "structlog", "ibapi", "pydantic", "sqlalchemy"}
+    {"nautilus_trader", "structlog", "ibapi", "pydantic", "sqlalchemy", "msgspec"}
 )
 
 #: The settings the subprocess probes below build a node from, inlined into the
@@ -407,8 +411,12 @@ def test_no_new_dependency_was_added_for_the_live_path():
     with the installed nautilus-trader 1.220.0 (AR3)."
 
     Stated as a property rather than as a diff, so it holds for any future edit:
-    every third-party module the live path imports must already be supplied by a
-    dependency the project declared before this epic.
+    every third-party module the live path imports must be supplied by a
+    dependency the project **declares**. The quoted criterion was true for Epic
+    1. Story 4.6 (Epic 4) changed `pyproject.toml`/`uv.lock` once, deliberately
+    and with the PO's approval: it declared `msgspec`, which `nautilus-trader`
+    already required and installed, so nothing new was installed. That is why
+    `msgspec` appears in `PERMITTED_THIRD_PARTY` and in the loop below.
     """
     assert nautilus_trader.__version__ == "1.220.0"
 
@@ -441,7 +449,7 @@ def test_no_new_dependency_was_added_for_the_live_path():
     # `ibapi` has no requirement of its own and must not acquire one: it arrives
     # through that extra, which is exactly what "no new dependency" means here.
     assert "ibapi" not in distributions
-    for distribution in ("structlog", "click", "rich", "pydantic", "sqlalchemy"):
+    for distribution in ("structlog", "click", "rich", "pydantic", "sqlalchemy", "msgspec"):
         assert distribution in distributions, f"{distribution} is not a declared dependency"
 
 

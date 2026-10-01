@@ -67,6 +67,52 @@ STOP_PATH_MODULES = (
 #: callable — so it should never trip this scan, and a future change that
 #: added a forbidden call here would now be caught.
 
+#: ``src/core/live_session_warmup.py`` (Story 4.4) is **NOT** on the list: it
+#: runs only during startup — the ``warmup`` phase arms it and ``trading``
+#: waits on it — and nothing in the teardown ``finally`` calls into it. Like the
+#: order path above, its wrapper's whole job is to call a wrapped original
+#: (``base(**bound)``, here ``request_bars``), and it calls no order or
+#: position method at all, so membership would be inert, not protective.
+
+#: ``src/core/live_broker_state.py`` (Story 4.1) is **NOT** on the list: it is a
+#: read — at startup (Story 4.2's ``reconcile`` phase) and on demand (Story
+#: 4.6) — and nothing in the teardown ``finally`` calls into it. It calls no
+#: order or position method at all (``get_positions`` and ``get_instrument``
+#: only), so membership would be inert, not protective.
+
+#: ``src/core/live_reconcile.py`` and ``src/core/live_session_view.py`` (Story
+#: 4.6) are **NOT** on the list either: ``ntrader live reconcile`` is an
+#: on-demand check with no session stop path — it runs its own read-only node,
+#: never a session's — and neither module calls any ``FORBIDDEN_ORDER_METHODS``
+#: name. (The view reader does *read* positions — the cache adapter's
+#: ``load_position`` and a ``Position``'s ``is_open``/``signed_decimal_qty`` —
+#: but reads nothing that submits, cancels, modifies or closes.) Membership
+#: would be inert, not protective; the scan that does cover all five new
+#: reconcile modules is ``TestTheReconcileModulesSubmitNothing`` in
+#: ``tests/unit/cli/commands/test_live_reconcile_cli.py``.
+#: ``src/core/live_startup_reconcile.py`` (Story 4.2) is **NOT** on the list: it is the
+#: ``reconcile`` phase's body, run once at startup before any strategy exists,
+#: and nothing in the teardown ``finally`` calls into it. Its only engine write
+#: is ``reconcile_execution_report`` — not an order or position method — so
+#: membership would be inert, not protective. ``LIVE_MODULE_GLOBS`` still scans
+#: it for every forbidden order method.
+
+#: ``src/core/live_runtime_reconcile.py`` (Story 4.3) is **NOT** on the list: it
+#: runs on the heartbeat tick, and the teardown ``finally`` cancels that tick
+#: (``join_heartbeat``) before anything else — nothing in the stop path calls
+#: into it. Its only engine write is ``reconcile_execution_report``; when it
+#: stops a session it *raises* and leaves the stop to the runner's ordinary
+#: teardown (PO ruling 2A). Membership would be inert, not protective;
+#: ``LIVE_MODULE_GLOBS`` still scans it for every forbidden order method.
+#: ``src/core/live_exec_position_reports.py`` (Story 4.3) is **NOT** on it
+#: either, for ``live_exec_avg_px.py``'s reason below: build-time only (plus an
+#: adapter task that sends nothing), and it calls no order or position method.
+#: ``src/core/live_session_resume.py`` (Story 4.5) is **NOT** on it: it runs
+#: only at startup (``node:connect`` and ``trading``), nothing in the teardown
+#: ``finally`` calls into it, and it only *reads* the cache — its refusal leaves
+#: every holding untouched by design (PO ruling D-C: B). ``LIVE_MODULE_GLOBS``
+#: still scans it for every forbidden order method.
+
 #: ``src/core/live_exec_avg_px.py`` (2026-09-01) is likewise **NOT** on the list,
 #: for a simpler reason: it is build-time only. It runs once inside
 #: ``node.build()``, replaces one adapter-private dict, and is never reached
@@ -446,6 +492,10 @@ class TestTheVocabularyRuleAr36:
         # reason: an operator reading a contained failure must not see it
         # described as a kill or a halt. (`strategy.halted` would fail here.)
         "src/core/live_strategy_guard.py",
+        # Story 4.5's resume module writes operator-facing refusals of its own
+        # (`strategy.resume_refused`, `session.resume_refused`) about holdings
+        # it must never touch — an operator must not read them as a close.
+        "src/core/live_session_resume.py",
         # Story 3.2's `src/core/live_order_path.py` is deliberately **NOT**
         # added here — it is not a stop-path module (see the STOP_PATH_MODULES
         # comment above for why it is excluded from that list too). Hygiene

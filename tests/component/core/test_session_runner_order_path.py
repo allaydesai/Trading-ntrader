@@ -24,7 +24,7 @@ from src.core.live_order_rejections import RejectionTally
 from src.core.live_session_runner import LiveSessionRunner
 from src.core.live_trade_recorder import POSITION_EVENTS_TOPIC, TradeRecorder
 from src.models.session import SessionSpec, StrategySpec
-from tests.component.doubles import TestLiveNode
+from tests.component.doubles import TestLiveNode, flat_broker_state_reader
 
 pytestmark = pytest.mark.component
 
@@ -159,6 +159,8 @@ async def _never_sleeps(seconds: float) -> None:
 def _runner(
     node: TestLiveNode, *, record=None, connection_reader=None, **overrides
 ) -> LiveSessionRunner:
+    node.run_seconds_from_first_strategy = True  # Story 4.2: see the double's docstring
+
     def _factory(settings_arg, **kwargs):
         return node
 
@@ -170,6 +172,7 @@ def _runner(
         "connect_timeout": 2.0,
         "node_factory": _factory,
         "account_verifier": _permitting_verifier,
+        "broker_state_reader": flat_broker_state_reader,
         "client_builder": lambda *a, **k: None,
         "sleeper": _never_sleeps,
     }
@@ -186,6 +189,10 @@ class TestConnectionObservedBeforeTrading:
     """
 
     def test_the_monitor_is_no_longer_awaiting_connection_when_trading_starts(self, monkeypatch):
+        """Changed deliberately by Story 4.3 (decision D-F): this read
+        ``RECOVERING`` while the grant had no production caller. The
+        ``reconcile`` phase now grants once the cache is proven, so a healthy
+        start reaches ``trading`` already ``CONNECTED`` — permitted."""
         observed_state_at_trading = []
         original_trading = LiveSessionRunner._phase_trading
 
@@ -201,7 +208,7 @@ class TestConnectionObservedBeforeTrading:
 
         runner.run()
 
-        assert observed_state_at_trading == [ConnectionState.RECOVERING]
+        assert observed_state_at_trading == [ConnectionState.CONNECTED]
 
     def test_submission_is_permitted_when_trading_starts_on_a_healthy_connection(self, monkeypatch):
         """Review fix, 2026-08-30 — the positive half of this class's own claim.

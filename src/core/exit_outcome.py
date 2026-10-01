@@ -29,6 +29,9 @@ class LiveCheckOutcome(str, Enum):
     CONFIG_ERROR = "config_error"
     INTERRUPTED = "interrupted"
     ERROR = "error"
+    #: ``live reconcile`` (Story 4.6) completed and the session's view disagrees
+    #: with IBKR's. A finding of a check that ran, not a failure to run one.
+    DISCREPANCY = "discrepancy"
 
 
 #: AR28's exit codes. Named here rather than inlined so the whole table is
@@ -39,6 +42,9 @@ EXIT_ERROR = 1
 EXIT_USAGE = 2  # Click's own default; named so the table below is complete
 EXIT_GATE_REFUSED = 3
 EXIT_BROKER_UNREACHABLE = 4
+#: Story 4.6: distinct from every failure code, so a script can tell "the check
+#: ran and found a discrepancy" from "the check could not run".
+EXIT_DISCREPANCY = 5
 
 #: Outcome → process exit code. Total over ``LiveCheckOutcome`` by construction,
 #: and a test loops the enum to keep it that way: an outcome added without a code
@@ -53,6 +59,7 @@ EXIT_CODES: Mapping[LiveCheckOutcome, int] = {
     # interrupted check proved nothing — which is exactly what `1` says.
     LiveCheckOutcome.INTERRUPTED: EXIT_ERROR,
     LiveCheckOutcome.ERROR: EXIT_ERROR,
+    LiveCheckOutcome.DISCREPANCY: EXIT_DISCREPANCY,
 }
 
 

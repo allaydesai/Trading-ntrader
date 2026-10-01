@@ -9,14 +9,16 @@ Does not own: the ``trader_id`` that names the key namespace
 (``src/core/live_node_builder.py`` and Story 2.5's runner), the session record
 (``src/services/session_service.py``), or reconciliation.
 
-**Redis is a disposable cache, and nothing here enforces that.** It holds engine
-*cache* state — orders, positions, accounts, instruments — all of which is
-rebuildable from IBKR. IBKR is authoritative on any conflict. Flushing this
-Redis loses no system of record: closed trades live in PostgreSQL and the
-session's own identity lives in ``trading_sessions``. What this module does
-*not* do is detect or resolve a conflict between cached state and broker state;
-startup reconciliation is Epic 4's (FR35, AR25). Stating the policy is AC #5;
-implementing it is not this story.
+**Redis is a disposable cache; this module states that, and Story 4.2 enforces
+it.** It holds engine *cache* state — orders, positions, accounts, instruments —
+all of which is rebuildable from IBKR. IBKR is authoritative on any conflict.
+Flushing this Redis loses no system of record: closed trades live in PostgreSQL
+and the session's own identity lives in ``trading_sessions``. This module does
+*not* detect or resolve a conflict between cached state and broker state: the
+``reconcile`` phase does (``src/core/live_startup_reconcile.py``, FR35, AR25) — it
+compares the cache against IBKR's own view before any strategy starts, corrects
+broker-ward what no strategy believes, and refuses the start when a strategy's
+own cached position is not covered by the broker (Story 4.7's coverage rule).
 
 Two Nautilus facts this module is built around, both executed against the
 installed 1.220.0 rather than read from documentation:

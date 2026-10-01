@@ -165,6 +165,14 @@ def _new_strategy():
 
 #: Drives one bullish crossover at bar index 5 (see Task 1's probe for the
 #: arithmetic this sequence is built from).
+#:
+#: Fed through ``handle_bar``, not ``on_bar`` (Story 4.4): the strategy's SMAs
+#: are registered indicators now, which ``Actor.handle_bar`` updates before it
+#: calls ``on_bar`` — exactly what the message bus calls in a live session.
+#: ``on_bar`` alone no longer moves them. There is no data engine behind this
+#: bus, so ``on_start``'s history request is never answered and the strategy
+#: never subscribes; driving ``handle_bar`` directly is what stands in for the
+#: subscription.
 CLOSES = ["100.00", "95.00", "90.00", "85.00", "90.00", "95.00"]
 
 
@@ -175,7 +183,7 @@ class TestSuppressionWhenWithheld:
         strategy.start()
 
         for index, close in enumerate(CLOSES):
-            strategy.on_bar(make_bar(index, close))
+            strategy.handle_bar(make_bar(index, close))
 
         assert list(strategy.cache.orders()) == []
         strategy.stop()
@@ -188,7 +196,7 @@ class TestSuppressionWhenWithheld:
 
         with capture_logs() as logs:
             for index, close in enumerate(CLOSES):
-                strategy.on_bar(make_bar(index, close))
+                strategy.handle_bar(make_bar(index, close))
 
         suppressed = [entry for entry in logs if entry["event"] == "order.suppressed"]
         assert len(suppressed) == 1
@@ -219,7 +227,7 @@ class TestSuppressionWhenWithheld:
 
         with capture_logs() as logs:
             for index, close in enumerate(CLOSES):
-                strategy.on_bar(make_bar(index, close))
+                strategy.handle_bar(make_bar(index, close))
 
         suppressed = [entry for entry in logs if entry["event"] == "order.suppressed"]
         assert len(suppressed) == 1
@@ -240,7 +248,7 @@ class TestSuppressionWhenWithheld:
 
         with capture_logs() as logs:
             for index, close in enumerate(CLOSES):
-                strategy.on_bar(make_bar(index, close))
+                strategy.handle_bar(make_bar(index, close))
 
         suppressed = [entry for entry in logs if entry["event"] == "order.suppressed"]
         assert suppressed[0]["strategy_id"] == "SMACrossover-007"
@@ -263,7 +271,7 @@ class TestSuppressionWhenWithheld:
         strategy.start()
         with capture_logs() as logs:
             for index, close in enumerate(CLOSES):
-                strategy.on_bar(make_bar(index, close))
+                strategy.handle_bar(make_bar(index, close))
 
         assert len([e for e in logs if e["event"] == "order.suppressed"]) == 1
         strategy.stop()
@@ -277,7 +285,7 @@ class TestSuppressionWhenWithheld:
         strategy.start()
 
         for index, close in enumerate(CLOSES):
-            strategy.on_bar(make_bar(index, close))
+            strategy.handle_bar(make_bar(index, close))
 
         assert len(list(strategy.cache.orders())) == 1
         strategy.stop()
@@ -336,7 +344,7 @@ class TestTheProbeCanActuallyFail:
         strategy.start()
 
         for index, close in enumerate(CLOSES):
-            strategy.on_bar(make_bar(index, close))
+            strategy.handle_bar(make_bar(index, close))
 
         assert len(list(strategy.cache.orders())) == 1
         strategy.stop()

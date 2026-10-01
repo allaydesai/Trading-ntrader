@@ -14,8 +14,17 @@ static gate (``live_check``) or the account gate (``live_account_gate``) — eac
 of which logs its own half of the phase it owns — the database
 (``src/services/session_record.py``, reached only through AR32's port), the
 stop-signal *policy* (``live_session_signals`` — Judgment call #8), strategy-
-failure containment (Story 2.7), ``status``/``list`` (Story 2.8), reconcile and
-warm-up (Epic 4, no-op placeholders here), or orders and trades (Epic 3).
+failure containment (Story 2.7), ``status``/``list`` (Story 2.8), the
+reconciliation policy (``live_startup_reconcile`` — Story 4.2; the runner only
+snapshots the cache before the node runs, awaits the phase and latches
+``trading`` on its result), runtime alignment and the trading-permission grant
+(``live_runtime_reconcile`` — Story 4.3; the runner calls the startup grant at
+the end of ``reconcile`` and hands the reconciler to the steady state), the
+resume policy (``live_session_resume`` — Story 4.5; the runner calls its
+pre-``run_async`` refusal in ``node:connect`` and its per-strategy check in
+``trading``), the warm-up itself (each strategy's own
+``on_start``; the runner only arms and waits on ``live_session_warmup`` —
+Story 4.4), or orders and trades (Epic 3).
 
 **No SQLAlchemy, ever** (AR38). The runner holds a ``SessionRecordPort``, never
 a session, a repository or an engine. Kept true in both forms by an AST scan
@@ -50,11 +59,14 @@ architecture's intent (foreground, no daemon, one process) is unchanged.
 runner's logger and ``structlog.contextvars`` — so every structlog record
 carries it. It does **not** reach Nautilus's own stdout, which is Rust-side.
 
-Known, accepted limits, stated rather than implied: a clean phase log does
-**not** mean reconciliation happened; a heartbeat proves a process is writing,
-not that it is trading; and ``confirm_state_reestablished`` is deliberately
-never called until Epic 4 has a real reconciliation to follow (*Judgment call
-#6*). Stopping leaves positions alone (Story 3.1): the strategy's own
+Known, accepted limits, stated rather than implied: Nautilus's own
+reconciliation pass runs inside ``node:connect``, so a *hard* native failure
+stops the session there, not at ``reconcile`` (Story 4.2, decision D-A); a
+heartbeat proves a process is writing, not that it is trading; and trading
+permission is granted only after a reconciliation — at the end of ``reconcile``,
+and after a loss only by the runtime reconciler's clean reconnect cycle (Story
+4.3, decision D-F), so a runtime refusal ends the session through the same
+teardown as any other failure. Stopping leaves positions alone (Story 3.1): the strategy's own
 ``on_stop()`` no longer flattens, and ``finally`` explicitly stops any
 ``DEGRADED`` strategy too, via :func:`stop_degraded_strategies`, so its own
 teardown still runs — though on the dominant signal path the engines are
@@ -72,12 +84,13 @@ from uuid import UUID
 import structlog
 from nautilus_trader.config import CacheConfig, LoggingConfig
 from nautilus_trader.live.node import TradingNode
-from nautilus_trader.trading.trader import Trader
 from structlog.contextvars import bind_contextvars, unbind_contextvars
 
 from src.config import IBKRSettings
+from src.core import live_startup_reconcile
 from src.core.live_account_gate import verify_connected_account
 from src.core.live_bar_observer import LiveBarObserver, build_bar_observer_config
+from src.core.live_broker_state import read_broker_state
 from src.core.live_check import GATE_PHASE, preflight_gate
 from src.core.live_check_driver import AccountVerifier, NodeFactory
 from src.core.live_check_node import (
@@ -91,6 +104,7 @@ from src.core.live_connection_probe import read_ibkr_connection_status
 from src.core.live_node_builder import GateRefusedError, build_trading_node
 from src.core.live_order_path import ORDER_EVENTS_TOPIC, OrderEventObserver, install_order_path
 from src.core.live_order_rejections import RejectionSnapshot, RejectionTally
+from src.core.live_runtime_reconcile import RuntimeReconciler, grant_after_reconciliation
 from src.core.live_session_controller import build_session_controller_config
 from src.core.live_session_node import (
     BAR_TOPIC,
@@ -103,21 +117,27 @@ from src.core.live_session_node import (
     refusal_from_report,
     report_instrument_shortfall,
     request_node_stop,
+    session_strategy_ids,
+    stop_degraded_strategies,
     unsubscribe_runner_topics,
     validate_spec_is_materialisable,
 )
 from src.core.live_session_phases import PHASE_EVENT, phase
 from src.core.live_session_record import SessionReclaimedError, SessionRecordPort
+from src.core.live_session_resume import ResumeCheck, refuse_imported_position_orders
 from src.core.live_session_signals import SessionStopRequested, SessionStopSignals
 from src.core.live_session_steady_state import (
     DEFAULT_NO_BARS_AFTER_SECONDS,
-    REJECTION_RECORD_FAILED_EVENT,
     ConnectionReader,
     SessionSteadyState,
     StartupHeartbeat,
+    flush_contained_failures,
+    flush_rejection_snapshot,
     join_heartbeat,
     release_record,
 )
+from src.core.live_session_warmup import WarmupWatch, warmup_deadline_seconds
+from src.core.live_startup_reconcile import capture_local_state
 from src.core.live_strategy_guard import (
     GUARD_FAILED_EVENT,
     NoStrategyStartedError,
@@ -126,6 +146,7 @@ from src.core.live_strategy_guard import (
 )
 from src.core.live_trade_recorder import POSITION_EVENTS_TOPIC, RecordedTrade, TradeRecorder
 from src.core.live_trader_id import derive_trader_id
+from src.models.position_reconciliation import LocalSnapshot, StartupReconciliation
 from src.models.session import DEFAULT_HEARTBEAT_INTERVAL_SECONDS, SessionSpec
 
 ClientBuilder = Callable[..., None]
@@ -158,6 +179,8 @@ class LiveSessionRunner:
             780 ticks without waiting 6.5 hours.
         node_factory, account_verifier, client_builder, connection_reader: The
             four broker-facing seams (``live_check_driver.py:124-125``).
+        broker_state_reader: The fifth (Story 4.2): how ``reconcile`` asks the
+            broker what it holds — Story 4.1's ``read_broker_state``.
         stop_signals: The stop-signal policy (Story 2.6), injected so a test
             needs no real signal or event loop; ``None`` builds the production
             :class:`~src.core.live_session_signals.SessionStopSignals`.
@@ -187,6 +210,7 @@ class LiveSessionRunner:
         account_verifier: AccountVerifier = verify_connected_account,
         client_builder: ClientBuilder = build_clients,
         connection_reader: ConnectionReader = read_ibkr_connection_status,
+        broker_state_reader: live_startup_reconcile.BrokerStateReader = read_broker_state,
         stop_signals: SessionStopSignals | None = None,
         trade_sink: Callable[[RecordedTrade], bool] | None = None,
     ) -> None:
@@ -207,6 +231,7 @@ class LiveSessionRunner:
         self._account_verifier = account_verifier
         self._client_builder = client_builder
         self._connection_reader = connection_reader
+        self._broker_state_reader = broker_state_reader
         self._trader_id = derive_trader_id(session_id)
         self._log = structlog.get_logger(__name__).bind(session_id=str(session_id))
         # Story 2.7. The runner *wires* the containment; the policy is the
@@ -235,6 +260,10 @@ class LiveSessionRunner:
         self._order_observer: OrderEventObserver | None = None
         self._trade_recorder: TradeRecorder | None = None
         self._rejection_tally: RejectionTally | None = None
+        self._warmup: WarmupWatch | None = None
+        #: Story 4.2/4.7: the cache (and its cash) before Nautilus's own pass; the proof.
+        self._local_state: LocalSnapshot | None = None
+        self._reconciliation: StartupReconciliation | None = None
         self._subscriptions: list[tuple[str, Any]] = []
         self._deadline, self._trader_started, self._ownership_lost = 0.0, False, False
         #: Set once teardown's own drain starts (review 2026-09-12): a reclaim
@@ -379,7 +408,7 @@ class LiveSessionRunner:
             self._signals.raise_if_requested()
             loop.run_until_complete(self._phase_gate_account())
             self._signals.raise_if_requested()
-            self._phase_reconcile()
+            loop.run_until_complete(self._phase_reconcile())
             self._signals.raise_if_requested()
             self._phase_warmup()
             self._signals.raise_if_requested()
@@ -543,9 +572,19 @@ class LiveSessionRunner:
             )
 
     def _phase_node_connect(self) -> None:
-        """Start the node; wait for a post-condition of the whole startup."""
+        """Start the node; wait for a post-condition of the whole startup.
+
+        Nautilus's own startup reconciliation runs inside this wait
+        (``kernel.py:1008-1027``), so the cache is snapshotted first: the last
+        instant it holds only what Redis gave it (Story 4.2, decision D-F).
+        Before even that, a pre-4.5 cache the framework's pass would abort the
+        process on is refused (Story 4.5, D-D) — nothing after ``run_async()``
+        could catch that abort.
+        """
         with phase(self._log, "node:connect"):
             assert self._loop is not None and self._node is not None
+            refuse_imported_position_orders(self._node.cache, self._log)
+            self._local_state = capture_local_state(self._node, self._log)
             self._run_task = self._loop.create_task(self._node.run_async())
             wait = await_trader_started(
                 self._node,
@@ -569,17 +608,54 @@ class LiveSessionRunner:
             # an unverified account — same fail-closed reading as `live_check_driver`.
             raise GateRefusedError(decision.refusal or UNEXPLAINED_ACCOUNT_REFUSAL)
 
-    def _phase_reconcile(self) -> None:
-        """Epic 4 (FR35, AR25). A no-op placeholder — deliberately does
-        nothing (``deferred-work.md:542-548``).
+    async def _phase_reconcile(self) -> None:
+        """Prove the cache matches the broker before any strategy exists (Story 4.2).
+
+        Verifies and completes Nautilus's own pass rather than running one —
+        that pass already ran inside ``node:connect`` and is read-only against
+        the broker. Policy in :func:`~src.core.live_startup_reconcile.reconcile_at_startup`:
+        enforce the broker-ward engine settings, read the broker, refuse a
+        strategy position it does not cover (Story 4.7: a split that grows one
+        is absorbed), correct the rest broker-ward, and re-verify 0
+        discrepancy (FR33, FR35, NFR9). Every refusal raises, so
+        this phase logs ``failed`` and no later phase runs (AR39).
+
+        Then — and only then — the first trading-permission grant (Story 4.3,
+        decision D-F): the state check has passed, so
+        ``confirm_state_reestablished`` is truthful. A refused grant is not a
+        phase failure; the running session's reconnect cycle grants later.
         """
         with phase(self._log, "reconcile"):
-            pass
+            self._reconciliation = await live_startup_reconcile.reconcile_at_startup(
+                self._node,
+                log=self._log,
+                local_before=self._local_state,
+                read_state=self._broker_state_reader,
+            )
+            assert self._monitor is not None
+            grant_after_reconciliation(
+                self._monitor, self._connection_reader, self._settings, self._log
+            )
 
     def _phase_warmup(self) -> None:
-        """Epic 4. A no-op placeholder; nothing warmed."""
+        """Arm the warm-up watch (Story 4.4). Warms nothing, touches no node.
+
+        AR40 puts warm-up in each strategy's ``on_start``, which runs in
+        ``trading``, after this phase; AR39 forbids moving it. So this phase
+        only builds the :class:`~src.core.live_session_warmup.WarmupWatch` that
+        ``_start_strategy`` installs on every strategy and then waits on — the
+        warming itself is ``warmup.completed``'s to report, not this record's.
+        While it waits, the watch re-observes the connection once a second: an
+        earlier strategy is already live and may trade (NFR10), and the steady
+        state that normally does this is not running yet.
+        """
         with phase(self._log, "warmup"):
-            pass
+            self._warmup = WarmupWatch(
+                log=self._log,
+                deadline_seconds=warmup_deadline_seconds(self._settings),
+                stop_requested=self._stopping,
+                on_poll=self._observe_connection_once,
+            )
 
     def _phase_subscribe(self) -> None:
         """Register the bar observer and start watching the bus for bars."""
@@ -621,10 +697,9 @@ class LiveSessionRunner:
             # process can tell a session rejected on every order from one
             # seeing no signals.
             self._subscribe(ORDER_EVENTS_TOPIC, self._rejection_tally.handle_order_event)
-            # Story 3.5. Attaches after reconciliation (Epic 4, still a no-op
-            # today), so a position already open at attach time is first
-            # seen mid-life — the `live_order_path.py:645-651` caveat applies
-            # identically here.
+            # Story 3.5. Attaches after reconciliation, so a position already
+            # open at attach time — a resumed one (Story 4.5) — is first seen
+            # at its close; the closing event carries the whole round trip.
             self._trade_recorder = TradeRecorder(
                 self._node.cache,
                 self._log,
@@ -673,20 +748,34 @@ class LiveSessionRunner:
             self._log.error("session.connection_read_failed", error_type=type(exc).__name__)
 
     def _phase_trading(self) -> None:
-        """Materialise and start the strategies, then declare the trader started."""
+        """Materialise and start the strategies, then declare the trader started.
+
+        Opens with Story 4.2's latch (decision D-I, NFR18): no strategy is
+        materialised unless ``reconcile`` produced its proof — ordering alone
+        guarantees it today, and the latch turns a later edit that no-ops or
+        swallows reconciliation into a refusal rather than unverified trading.
+        """
         with phase(self._log, "trading"):
+            reconciled = live_startup_reconcile.require_reconciled(self._reconciliation)
             assert self._node is not None
-            # A session reclaimed during the earlier phases must never trade.
+            ids = session_strategy_ids(self._spec)  # D4: any other own-id is unowned
+            resume = ResumeCheck(self._node.cache, reconciled, self._started_at, self._log, ids)
+            self._guard.expect(len(self._spec.strategies))
+            started = [spec for spec in self._spec.strategies if self._start_strategy(spec, resume)]
+            # A session reclaimed during the earlier phases — or during a
+            # warm-up wait, which runs the loop for up to a deadline per
+            # strategy (code review 2026-09-22) — must never trade.
+            # `_start_strategy` refuses to start anything once `_stopping()`
+            # reads the reclaim, so checking after the loop is not late.
             if self._startup_heartbeat is not None and self._startup_heartbeat.reclaim is not None:
                 raise self._startup_heartbeat.reclaim
-            self._guard.expect(len(self._spec.strategies))
-            started = [spec for spec in self._spec.strategies if self._start_strategy(spec)]
             if not started:
                 names = ", ".join(s.strategy_id for s in self._spec.strategies)
                 raise NoStrategyStartedError(
                     "No strategy in this session started, so it cannot trade. Every "
-                    f"specification failed: {names}. See the `strategy.start_failed` records "
-                    "for each one's error and traceback."
+                    f"specification failed or was interrupted before it warmed: {names}. See "
+                    "the `strategy.start_failed`, `strategy.resume_refused` and `warmup.*` "
+                    "records, and whatever stopped the node, for each one's cause."
                 )
             self._trader_started = True
             self._log.info(
@@ -696,8 +785,14 @@ class LiveSessionRunner:
                 started_at=self._started_at.isoformat(),
             )
 
-    def _start_strategy(self, strategy_spec) -> bool:
+    def _start_strategy(self, strategy_spec, resume: ResumeCheck) -> bool:
         """Materialise, guard, register and start one spec — contained (AC #5).
+
+        Story 4.5: a spec whose instrument carries a holding no strategy owns
+        is refused first, inside the same ``try`` — contained like any start
+        failure, never materialised (PO ruling D-C: B); a strategy that
+        restarts holding its own position is named (``strategy.resumed``)
+        after ``add_strategy`` fixes its id and before ``on_start`` runs.
 
         The ``try`` is **per spec and inside** ``with phase(...)``, never around
         the phase: wrapping the phase would defeat AR39's *"a failure in any
@@ -713,27 +808,48 @@ class LiveSessionRunner:
         ``install_order_path`` (Story 3.2) is wired here too, for the same
         reason: the strategy's own order-creating calls are plain instance
         attributes Nautilus reads directly, with no later re-binding to
-        intercept.
+        intercept. So is the warm-up watch (Story 4.4), which wraps
+        ``request_bars`` the same way, and then waits for the history the
+        strategy's ``on_start`` asked for — one strategy at a time, so at most
+        one warm-up request is ever in flight (NFR15). A warm-up that never
+        settles raises ``WarmupFailedError`` into the ``except`` below, which
+        contains it exactly as it contains a raising ``on_start``. An earlier
+        strategy is already live — it may trade — while a later one warms.
 
         Returns:
-            ``True`` when the strategy is live. ``False`` when it was contained
-            — the caller counts these, because a session where *none* returned
-            ``True`` cannot trade and must not report itself started.
+            ``True`` when the strategy is live and warm (or asked for no
+            history). ``False`` when it was contained, when its wait was ended
+            by a stop, a reclaim or the node's run task ending, or when one of
+            those came first and it was never started — the caller counts these,
+            because a session where *none* returned ``True`` cannot trade and
+            must not report itself started.
         """
+        if self._stopping():
+            return False
         strategy = None
         try:
-            strategy = materialise_strategy(strategy_spec)
+            resume.refuse_unowned(strategy_spec)
+            strategy = materialise_strategy(strategy_spec, self._spec)
             self._guard.wrap(strategy, spec_strategy_id=strategy_spec.strategy_id)
-            assert self._monitor is not None
+            assert self._monitor is not None and self._warmup is not None
             install_order_path(strategy, self._monitor, self._log)
+            self._warmup.instrument(strategy, spec_strategy_id=strategy_spec.strategy_id)
             assert self._node is not None
             self._node.trader.add_strategy(strategy)
+            resume.note_resumed(strategy)
             self._node.trader.start_strategy(strategy.id)
-            return True
+            return self._warmup.settle_blocking(self._loop, strategy_spec.strategy_id)
         except Exception as exc:  # noqa: BLE001 - AC #5: one bad spec is not the session
             self._guard.record_start_failure(spec_strategy_id=strategy_spec.strategy_id, exc=exc)
             self._fault_quietly(strategy, strategy_spec.strategy_id)
             return False
+
+    def _stopping(self) -> bool:
+        """Whether startup must stop: a stop signal, a reclaim observed by the
+        startup heartbeat, or the node's run task having ended (Story 4.4)."""
+        heartbeat, task = self._startup_heartbeat, self._run_task
+        reclaimed = heartbeat is not None and heartbeat.reclaim is not None
+        return reclaimed or self._signals.requested or bool(task and task.done())
 
     def _fault_quietly(self, strategy: object | None, spec_strategy_id: str) -> None:
         """Isolate a strategy that failed to start. ``fault()``, not the others.
@@ -780,8 +896,9 @@ class LiveSessionRunner:
         tasks (``live/node.py:343-370``), so it returns when the node stops
         (Story 2.6's ``node.stop()``, called from the signal handler's
         callback) and raises if the node died. The heartbeat is waited on
-        *alongside* it rather than fired and forgotten, because its one fatal
-        outcome (this process no longer owns the session) has to reach the
+        *alongside* it rather than fired and forgotten, because its two fatal
+        outcomes (this process no longer owns the session; Story 4.3's runtime
+        reconciliation refusing to let it keep trading) have to reach the
         caller rather than sit unretrieved on a task nobody inspects until the
         ``finally``.
         """
@@ -813,6 +930,16 @@ class LiveSessionRunner:
             connection_reader=self._connection_reader,
             guard=self._guard,
             tally=self._rejection_tally,
+            # Story 4.3: keeps the running cache aligned with the broker and is
+            # the only path that returns trading permission after a loss.
+            reconciler=RuntimeReconciler(
+                node=self._node,
+                monitor=self._monitor,
+                log=self._log,
+                connection_reader=self._connection_reader,
+                settings=self._settings,
+                read_state=self._broker_state_reader,
+            ),
         )
 
     def _stop_heartbeat(self, loop: asyncio.AbstractEventLoop) -> None:
@@ -847,34 +974,16 @@ class LiveSessionRunner:
 
         Guarded per failure, AR42: a DB hiccup here must not replace the run's
         primary outcome. A reclaim stops the flush entirely — the remaining
-        facts belong in the successor's log, not its row.
+        facts belong in the successor's log, not its row. The body lives in
+        :func:`~src.core.live_session_steady_state.flush_contained_failures`
+        (Story 4.3's budget split, decision D-I); the slot stays here.
         """
         if self._ownership_lost:
             return
-        pending = self._guard.drain_pending()
-        if not pending:
-            return
-        all_failed = bool(self._guard.all_failed)
-        for failure in pending:
-            try:
-                self._record.record_strategy_failure(
-                    strategy_id=failure.strategy_id,
-                    spec_strategy_id=failure.spec_strategy_id,
-                    error_type=failure.error_type,
-                    handler=failure.handler,
-                    at=failure.at,
-                    detail=failure.detail,
-                    all_failed=all_failed,
-                )
-            except SessionReclaimedError:
-                self._ownership_lost = True
-                return
-            except Exception as exc:  # noqa: BLE001 - AR42: must not replace the outcome
-                self._log.error(
-                    GUARD_FAILED_EVENT,
-                    spec_strategy_id=failure.spec_strategy_id,
-                    error_type=type(exc).__name__,
-                )
+        try:
+            flush_contained_failures(self._record, self._guard, self._log)
+        except SessionReclaimedError:
+            self._ownership_lost = True
 
     def _flush_order_rejections(self) -> None:
         """Write the last refusal summary, while the row is still ours (3.7).
@@ -897,24 +1006,19 @@ class LiveSessionRunner:
         ``_flush_pending_trades`` uses, so a lost final summary reaches the
         operator's stop report (code review 2026-09-21). A reclaim stops the
         flush — the remaining facts belong in the successor's log, not its row.
+        The body lives in
+        :func:`~src.core.live_session_steady_state.flush_rejection_snapshot`
+        (Story 4.3's budget split, decision D-I); the slot stays here.
         """
         if self._ownership_lost or self._rejection_tally is None:
             return
-        snapshot = self._rejection_tally.pending()
-        if snapshot is None:
-            return
         try:
-            self._record.record_order_rejections(**snapshot.as_port_kwargs())
+            problem = flush_rejection_snapshot(self._record, self._rejection_tally, self._log)
         except SessionReclaimedError:
             self._ownership_lost = True
             return
-        except Exception as exc:  # noqa: BLE001 - AR42: must not replace the outcome
-            self._log.error(
-                REJECTION_RECORD_FAILED_EVENT, error_type=type(exc).__name__, exc_info=True
-            )
-            self._shutdown_problems.append(f"flush_order_rejections: {type(exc).__name__}")
-            return
-        self._rejection_tally.mark_written(snapshot.version)
+        if problem is not None:
+            self._shutdown_problems.append(problem)
 
     def _note_ownership_lost(self) -> None:
         """``TradeRecorder``'s ``on_ownership_lost`` callback (Story 3.6, D-C).
@@ -1002,83 +1106,3 @@ class LiveSessionRunner:
             trader_id=self._trader_id,
             ownership_lost=self._ownership_lost,
         )
-
-
-def stop_degraded_strategies(trader: Trader, log: Any) -> list[str]:
-    """Explicitly stop every ``DEGRADED`` strategy at teardown (Story 3.1, AC #6).
-
-    ``Trader._stop()`` guards on ``is_running`` — ``state == RUNNING``
-    exactly — so a ``DEGRADED`` strategy's ``on_stop()`` never runs on the
-    normal teardown path. Before Story 3.1 that was strictly *safer*:
-    ``on_stop()`` still flattened positions, and skipping it stopped an
-    unrelated ``on_bar`` bug from manufacturing an exit (NFR14, AR43). After
-    Story 3.1 removes the flatten, the same skip inverts into a leak — no
-    strategy-owned cleanup at all — which this closes.
-
-    **What this does and does not deliver** (review correction, 2026-08-29;
-    the first wording claimed the whole leak was closed). On the dominant
-    **signal** stop path, ``request_node_stop`` has already driven
-    ``node.stop()`` before ``run()``'s ``finally`` reaches this function, so
-    the engines are down and ``unsubscribe_bars`` does **not** reach a live
-    data engine. What is delivered on every path is the contained ``on_stop()``
-    itself and the terminal ``STOPPED`` state. The unsubscribe flows through a
-    running engine only on the phase-failure paths where the node is still up.
-    The call site cannot be moved earlier (see ``run()``'s ``finally``), so
-    this is the accepted scope, stated rather than implied.
-
-    **Class-agnostic, deliberately** (review disclosure, 2026-08-29): this
-    stops every ``DEGRADED`` strategy whatever its class, including one from
-    the unversioned ``src/core/strategies/custom/`` submodule that AC #3's
-    lifecycle scan cannot reach. ``custom/sma_crossover_long_only.py:86``
-    still flattens in its ``on_stop()``, so stopping it here runs that
-    flatten where ``Trader._stop()``'s ``is_running`` skip previously
-    suppressed it. On the signal path the exec engine's queue is already
-    stopped and the order does not leave; on the phase-failure paths it can.
-    Accepted rather than gated: the fix belongs in the submodule, and gating
-    would put strategy-class knowledge in the runner, which has none today.
-
-    Measured (installed nautilus-trader 1.220.0): ``(DEGRADED, STOP) ->
-    STOPPING`` is a legal FSM transition (``common/component.pyx:1594``), an
-    explicit ``strategy.stop()`` runs ``on_stop()`` and ends ``STOPPED``, and
-    a raise inside ``on_stop()`` during that explicit stop PROPAGATES and
-    strands the strategy in ``STOPPING`` — hence the per-strategy
-    ``BaseException`` containment below; one bad strategy's teardown must
-    never abort the rest, nor prevent the remaining degraded strategies from
-    being stopped.
-
-    Module level, not a method (the class is already at its sanctioned
-    over-cap size). ``trader.strategies()`` is a plain method returning
-    ``list[Strategy]`` — NOT a property (``trading/trader.py:160``) —
-    iterating the un-called attribute would be a ``TypeError`` this
-    function's own containment would otherwise silently swallow.
-
-    Returns a ``shutdown()``-shaped problems list (one entry per failed stop,
-    carrying only the exception **type**, per NFR26); empty when every
-    degraded strategy stopped cleanly.
-
-    The ``strategy_stop:`` prefix is load-bearing (review fix, 2026-08-29):
-    these entries are concatenated into ``_shutdown_problems`` alongside
-    ``shutdown()``'s own, and ``shutdown()`` reports a failed ``node.stop()``
-    as ``"stop: {type}"`` (``live_check_node.py:240``). Byte-identical strings
-    made a strategy's teardown raise indistinguishable from the broker socket
-    failing to close, which is what the CLI tells the operator about.
-    """
-    problems: list[str] = []
-    for strategy in trader.strategies():
-        if not strategy.is_degraded:
-            continue
-        try:
-            strategy.stop()
-        except BaseException as exc:  # noqa: BLE001 - one bad strategy must not abort teardown
-            problems.append(f"strategy_stop: {type(exc).__name__}")
-            log.warning(
-                "strategy.stop_failed",
-                error_type=type(exc).__name__,
-                strategy_id=str(getattr(strategy, "id", "unknown")),
-            )
-        else:
-            log.info(
-                "strategy.stopped_while_degraded",
-                strategy_id=str(getattr(strategy, "id", "unknown")),
-            )
-    return problems

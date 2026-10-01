@@ -24,8 +24,31 @@ do not add a class here without one.
 import asyncio
 import time
 from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime
+from decimal import Decimal
+from typing import Any
 
 from src.core.live_bar_observer import LiveBarObserver, LiveBarObserverConfig
+from src.models.broker_state import BrokerState, CashBalance
+
+#: What :func:`flat_broker_state_reader` returns: a flat account, masked.
+FLAT_BROKER_STATE = BrokerState(
+    account="***626",
+    positions=(),
+    cash=(CashBalance(currency="USD", total_cash=Decimal("100000")),),
+    retrieved_at=datetime(2026, 9, 27, 13, 25, tzinfo=UTC),
+)
+
+
+async def flat_broker_state_reader(node: Any, *, log: Any = None) -> BrokerState:
+    """The runner's fifth broker-facing seam (Story 4.2), answering "flat".
+
+    Every runner-building test helper passes it beside its stub
+    ``account_verifier``: ``read_broker_state`` would look for an IB exec
+    client this double does not have. With the double's empty cache this is a
+    clean reconciliation, so ``reconcile`` logs ``ok`` exactly as before.
+    """
+    return FLAT_BROKER_STATE
 
 
 class TestInstrument:
@@ -67,6 +90,15 @@ class TestBarObserver(LiveBarObserver):
         self.delayed_data_suspected = delayed_data
 
 
+class _TestExecClient:
+    """The IB exec client as ``live_broker_state.find_ib_exec_client`` sees it."""
+
+    def __init__(self) -> None:
+        from nautilus_trader.model.identifiers import AccountId
+
+        self.account_id = AccountId("INTERACTIVE_BROKERS-DU4076626")
+
+
 class _TestEngine:
     """One of the node's two engines, as far as the driver is concerned.
 
@@ -81,10 +113,31 @@ class _TestEngine:
         self._connects_after = connects_after
         self.poll_count = 0
         self.registered_clients = {"IB": object()}
+        # Story 4.2: the broker-ward reconciliation settings the `reconcile`
+        # phase enforces on the running exec engine (decision D-B), at the
+        # values a real `LiveExecEngineConfig()` gives. Present on both
+        # engines, harmlessly — the phase reads only the exec engine's.
+        self.reconciliation = True
+        self.generate_missing_orders = True
+        self.filter_position_reports = False
+        self.reconciliation_instrument_ids: list[object] = []
+        # Story 4.5 (D-A): the session's own value, not Nautilus's default.
+        self.filter_unclaimed_external_orders = True
+        self.reconcile_reports: list[object] = []
+        self.reconcile_returns = True
+        # `find_ib_exec_client` reads this; only a correcting `reconcile` needs it.
+        self._clients = {"INTERACTIVE_BROKERS": _TestExecClient()}
 
     def check_connected(self) -> bool:
         self.poll_count += 1
         return self._connects_after >= 0 and self.poll_count > self._connects_after
+
+    def reconcile_execution_report(self, report: object) -> bool:
+        """Recorded, never applied: a phase test with a disagreeing cache is
+        about the refusal, and the real engine's behaviour is proven in
+        ``test_live_startup_reconcile_engine.py``."""
+        self.reconcile_reports.append(report)
+        return self.reconcile_returns
 
 
 class _TestKernel:
@@ -132,6 +185,9 @@ class _TestTrader:
         self.unsubscriptions: list[tuple[str, object]] = []
         self.strategy_state_override: dict[str, str] = {}
         self.raise_on_unsubscribe: BaseException | None = None
+        #: Set by the first ``start_strategy`` — when ``TestLiveNode``'s
+        #: ``run_seconds`` countdown begins (Story 4.2; see its docstring).
+        self.first_strategy_started = asyncio.Event()
 
     @property
     def is_running(self) -> bool:
@@ -176,6 +232,7 @@ class _TestTrader:
 
     def start_strategy(self, strategy_id: object) -> None:
         self.started_strategies.append(strategy_id)
+        self.first_strategy_started.set()
 
     def subscribe(self, topic: str, handler: object) -> None:
         self.subscriptions.append((topic, handler))
@@ -189,9 +246,70 @@ class _TestTrader:
 class _TestCache:
     def __init__(self, instrument_ids: Sequence[str]) -> None:
         self._instruments = [TestInstrument(name) for name in instrument_ids]
+        #: Story 4.2: open positions as the `reconcile` phase reads them —
+        #: objects exposing `instrument_id`, `strategy_id` and
+        #: `signed_decimal_qty()`. Empty by default, which with
+        #: :func:`flat_broker_state_reader` is a clean reconciliation.
+        self.open_positions: list[object] = []
+        self.open_orders: list[object] = []
+        #: Story 4.3: orders still in flight (``SUBMITTED``/``PENDING_*``) — the
+        #: runtime cycle defers their instruments and the reconnect grant waits
+        #: for them. Empty by default.
+        self.inflight_orders: list[object] = []
+        #: What ``instrument()`` resolves; empty, so nothing is correctable.
+        self.instruments_by_id: dict[object, object] = {}
+        #: Story 4.5: every cached order, open or not — what the pre-`run_async`
+        #: scan for a pre-4.5 fabricated order reads. Empty by default.
+        self.all_orders: list[object] = []
+        #: Story 4.7: the general cache and accounts Redis restored at init —
+        #: what the pre-run snapshot reads the previous run's cash from. Empty
+        #: by default: a fresh session, so no ``reconcile.cash_changed``.
+        self.general: dict[str, bytes] = {}
+        self.accounts: dict[object, object] = {}
+
+    def get(self, key: str) -> bytes | None:
+        return self.general.get(key)
+
+    def account(self, account_id: object) -> object | None:
+        return self.accounts.get(account_id)
 
     def instruments(self) -> list[TestInstrument]:
         return list(self._instruments)
+
+    def positions_open(
+        self, instrument_id: object = None, strategy_id: object = None
+    ) -> list[object]:
+        """Filtered the way ``Cache.positions_open`` filters (Story 4.5 reads
+        a strategy's own book); unfiltered with no arguments, as before."""
+        return [
+            position
+            for position in self.open_positions
+            if _matches(position, instrument_id=instrument_id, strategy_id=strategy_id)
+        ]
+
+    def orders_open(self, instrument_id: object = None, strategy_id: object = None) -> list[object]:
+        return [
+            order
+            for order in self.open_orders
+            if _matches(order, instrument_id=instrument_id, strategy_id=strategy_id)
+        ]
+
+    def orders(self) -> list[object]:
+        return list(self.all_orders)
+
+    def orders_inflight(self) -> list[object]:
+        return list(self.inflight_orders)
+
+    def instrument(self, instrument_id: object) -> object | None:
+        return self.instruments_by_id.get(instrument_id)
+
+
+def _matches(item: object, **wanted: object) -> bool:
+    """``Cache``'s keyword filters: ``None`` means any; compared as strings."""
+    return all(
+        value is None or str(getattr(item, name, None)) == str(value)
+        for name, value in wanted.items()
+    )
 
 
 class TestLiveNode:
@@ -216,7 +334,18 @@ class TestLiveNode:
         run_seconds: When set (and ``run_forever`` is True), ``run_async()``
             returns after this long instead of blocking — a node that stops
             itself mid-run, which is what the observer's delayed-feed shutdown
-            does to a live session.
+            does to a live session. Counted from ``run_async()``'s own start,
+            unless :attr:`run_seconds_from_first_strategy` is set.
+        run_seconds_from_first_strategy: (attribute, Story 4.2) count
+            ``run_seconds`` from the trader's first ``start_strategy`` instead.
+            The session-runner test helpers set it: counted from
+            ``run_async()``, a 10 ms node raced the whole startup sequence, and
+            the ``reconcile`` phase's extra loop turn let it end before
+            ``trading`` under parallel load — which the runner correctly reads
+            as "the node died, start nothing". The connectivity-check tests
+            keep the default: a check never starts a strategy. With it set, a
+            node that never starts one never ends by itself; ``stop()`` still
+            ends it at once.
         trader_starts: Whether ``trader.is_running`` ever becomes True. ``False``
             is the "connected, but the trader never started" shape — a
             reconciliation failure or a portfolio-init timeout — which
@@ -258,6 +387,7 @@ class TestLiveNode:
         self.built = False
         self.stopped = False
         self.disposed = False
+        self.run_seconds_from_first_strategy = False
         # Story 2.6: `stop()` must release `run_async()`, the way a real
         # node's `stop()` ends `_serve()`'s wait (Pre-verified finding #6) —
         # without this, a runner that calls `node.stop()` from its signal
@@ -284,6 +414,9 @@ class TestLiveNode:
                 # the full duration whether or not it was ever asked to stop.
                 # "Ends after N seconds OR when stopped" is also what a real
                 # node does; `run_async` returns once the kernel stops it.
+                if self.run_seconds_from_first_strategy:
+                    await self._wait_live_then_run(self._run_seconds)
+                    return
                 try:
                     await asyncio.wait_for(self._stop_event.wait(), timeout=self._run_seconds)
                 except asyncio.TimeoutError:
@@ -292,6 +425,19 @@ class TestLiveNode:
             await self._stop_event.wait()
         finally:
             self._running = False
+
+    async def _wait_live_then_run(self, run_seconds: float) -> None:
+        """Wait for the first strategy start (or a stop), then run for
+        ``run_seconds`` (or until a stop) — see ``run_seconds``."""
+        stopped = asyncio.ensure_future(self._stop_event.wait())
+        live = asyncio.ensure_future(self.trader.first_strategy_started.wait())
+        try:
+            await asyncio.wait({stopped, live}, return_when=asyncio.FIRST_COMPLETED)
+            if not stopped.done():
+                await asyncio.wait({stopped}, timeout=run_seconds)
+        finally:
+            for waiter in (stopped, live):
+                waiter.cancel()
 
     def is_running(self) -> bool:
         return self._running

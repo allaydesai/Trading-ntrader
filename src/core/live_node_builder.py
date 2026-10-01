@@ -61,6 +61,7 @@ from src.core.exit_outcome import LiveCheckOutcome
 from src.core.live_bar_observer import LiveBarObserverConfig
 from src.core.live_cache import check_redis_reachable
 from src.core.live_exec_avg_px import install_avg_px_serialization_fix
+from src.core.live_exec_position_reports import install_position_report_suppression
 from src.core.live_gate import GateFlags, GateRefusal, evaluate_gate, mask_account
 from src.core.live_market_data import (
     LiveMarketDataError,
@@ -145,16 +146,56 @@ ENGINE_GRACEFUL_SHUTDOWN_ON_EXCEPTION = True
 # set these values, and that the wheel's own stock defaults still equal them,
 # so an upgrade that moves one becomes a decision rather than a silent drift.
 #
-# `open_check_interval_secs` is deliberately left unset (`None`, the
-# default): continuous open-order checking is Story 4.3's, and with the IB
-# adapter it is not free — `generate_order_status_reports` ignores
-# `open_only`, calls `get_positions`, and fabricates a `FILLED` report per
-# position on every tick (`execution.py:374-445`) — a 4.3 design decision,
-# not a default to flip here.
+#
+# Story 4.3 (PO ruling 1A, 2026-09-27): the open-order consistency check
+# (`open_check_interval_secs`) stays OFF — passed explicitly as `None`, the
+# wheel's default. MEASURED against 1.220.0 with a real `LiveExecutionEngine`
+# (Task 1.1b): a cached order the in-flight sweep already cancelled LOCALLY
+# (the IB adapter answers "not found" with a local `Cancelled`,
+# `execution.py:286-296`) that IB still lists open is never corrected —
+# `_reconcile_order_report` generates `OrderAccepted`, the order's `apply`
+# fails with `InvalidStateTrigger` and it stays CANCELED, and the engine
+# publishes the event anyway (`execution/engine.pyx:1165-1178`). So every check
+# republishes an `OrderAccepted` for that order, forever: an `order.accepted`
+# record and a Nautilus warning per check, and a reset of Story 3.7's refusal
+# streak each time. Its only other effect — importing an order the cache never
+# knew — is already covered at startup by the framework's own pass. With the
+# IB adapter the check is not free either: `generate_order_status_reports`
+# ignores `open_only`, calls `get_positions` and fabricates a `FILLED` report
+# per position (`execution.py:374-445`). Runtime alignment is therefore the
+# in-flight sweep above (native, running for the whole session) plus Story
+# 4.3's verified position cycle, whose every correction goes through the
+# framework's own `reconcile_execution_report` (`live_runtime_reconcile.py`).
+# Nothing of ours compensates for the check being off.
 EXEC_ENGINE_RECONCILIATION = True
 EXEC_ENGINE_INFLIGHT_CHECK_INTERVAL_MS = 2_000
 EXEC_ENGINE_INFLIGHT_CHECK_THRESHOLD_MS = 5_000
 EXEC_ENGINE_INFLIGHT_CHECK_RETRIES = 5
+EXEC_ENGINE_OPEN_CHECK_INTERVAL_SECS: float | None = None
+
+# Story 4.5 (D-A): a deliberate departure from Nautilus's default (`False`).
+# The IB adapter FABRICATES one `FILLED` order report per broker position,
+# keyed `client_order_id = instrument id` (`execution.py:374-433`). The cache
+# never knows that order, so under the default the framework imports it as
+# `EXTERNAL` — and its position pass then adds `INTERNAL-DIFF` to undo the
+# double count. Every restart holding a position therefore left the strategy
+# beside `EXTERNAL +N / INTERNAL-DIFF −N` (measured, Story 4.2 Task 1.4A), which
+# both built-in strategies acted on; and a later restart after the position
+# shrank aborted the process on a Rust panic inside the framework's own pass
+# (1.4S). With the filter on, `_generate_order` returns `None` for an unclaimed
+# `EXTERNAL` order (`live/execution_engine.py:1723-1728`), the position pass
+# alone aligns net (as `INTERNAL-DIFF`, which is never filtered), and a restart
+# leaves exactly the strategy's own position. Accepted trade-off: the switch is
+# an engine setting, so it holds for the session's whole life, not only at
+# startup — an order the cache never knew is not imported at startup, nor later
+# when the adapter reports one it cannot match (an order another API client
+# placed; a manual TWS order carries no `orderRef` and never reaches the engine
+# at all, `execution.py:909-912`). Its fills still reach the cache as a net
+# correction, through the startup pass and Story 4.3's runtime cycle. A
+# strategy's own working orders come back from Redis by `client_order_id` and
+# are untouched (AR25). Enforced on the running engine by the `reconcile` phase
+# (`live_startup_reconcile.BROKER_WARD_SETTINGS`).
+EXEC_ENGINE_FILTER_UNCLAIMED_EXTERNAL_ORDERS = True
 
 logger = structlog.get_logger(__name__)
 
@@ -450,6 +491,8 @@ def build_trading_node_config(
             inflight_check_interval_ms=EXEC_ENGINE_INFLIGHT_CHECK_INTERVAL_MS,
             inflight_check_threshold_ms=EXEC_ENGINE_INFLIGHT_CHECK_THRESHOLD_MS,
             inflight_check_retries=EXEC_ENGINE_INFLIGHT_CHECK_RETRIES,
+            open_check_interval_secs=EXEC_ENGINE_OPEN_CHECK_INTERVAL_SECS,
+            filter_unclaimed_external_orders=EXEC_ENGINE_FILTER_UNCLAIMED_EXTERNAL_ORDERS,
         ),
         risk_engine=LiveRiskEngineConfig(
             graceful_shutdown_on_exception=ENGINE_GRACEFUL_SHUTDOWN_ON_EXCEPTION
@@ -659,4 +702,7 @@ class InteractiveBrokersLiveExecClientFactory(_StockIBExecClientFactory):
     def create(**kwargs):  # type: ignore[override]
         client = _StockIBExecClientFactory.create(**kwargs)
         install_avg_px_serialization_fix(client)
+        # Story 4.3, D-B (PO ruling 1A): the adapter's own position-update
+        # reports are off; runtime positions are `live_runtime_reconcile`'s.
+        install_position_report_suppression(client)
         return client

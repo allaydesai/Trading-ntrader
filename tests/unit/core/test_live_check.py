@@ -98,6 +98,23 @@ class TestExitCodeTable:
         """AR28's table has no 130; an interrupted check proved nothing, so it is a failure."""
         assert EXIT_CODES[LiveCheckOutcome.INTERRUPTED] == EXIT_ERROR
 
+    def test_a_reconcile_discrepancy_exits_five(self):
+        """Story 4.6 D-D: a completed check that found a discrepancy is its own code.
+
+        Distinct from every other code, so a script can tell "the check ran and
+        the system's view disagrees with IBKR" from "the check could not run".
+        """
+        from src.core.exit_outcome import EXIT_DISCREPANCY
+
+        assert EXIT_DISCREPANCY == 5
+        assert EXIT_CODES[LiveCheckOutcome.DISCREPANCY] == EXIT_DISCREPANCY
+        others = [
+            code
+            for outcome, code in EXIT_CODES.items()
+            if outcome is not LiveCheckOutcome.DISCREPANCY
+        ]
+        assert EXIT_DISCREPANCY not in (*others, EXIT_USAGE)
+
 
 class TestReport:
     """The report is frozen and derives its exit code rather than storing one."""
