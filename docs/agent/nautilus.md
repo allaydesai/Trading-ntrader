@@ -400,7 +400,13 @@ startup. So runtime alignment is split three ways:
    two checks at least 60 s apart**. A net disagreement is corrected broker-ward
    through `reconcile_execution_report` (the Story 4.2 path) and logged
    `reconcile.discrepancy scope=runtime resolution=broker`. An instrument the
-   cache cannot express is logged `resolution=unresolved` once. A strategy's
+   cache cannot express is logged `resolution=unresolved` once. A broker row
+   the adapter could not resolve (`IB-CONID-*`) holds back only the cache row
+   with the **same symbol** — the one holding it could be — and only for
+   `HOLD_BACK_CYCLES` (3) consecutive cycles; past that it is a holding the
+   adapter will never resolve (`reconcile.hold_back_expired`, once) and the
+   held-back row is acted on, so a contradiction underneath it is refused rather
+   than masked for the life of the session (PO ruling, PR #35 D1). A strategy's
    own position the broker no longer covers **stops the session** before
    anything is written (PO ruling 2A, narrowed by Story 4.7's coverage rule) —
    `ReconciliationFailedError` out of the tick, the ordinary teardown,
@@ -455,15 +461,25 @@ Four rules make that true:
    quantity, the strategies' own quantity and the broker's quantity; the strategy
    is contained through the start-failure path, its siblings start, and a session
    where none can fails closed (exit 1). The holding is **never** traded, flattened
-   or resized — the remedy is manual, in TWS. **Startup only** (PO ruling
-   2026-09-28): a broker holding that covers the strategies' own position on the
-   same side, *and more* (+10 owned, IBKR +15 — a manual add, or a forward split
-   while stopped), is not a contradiction at `reconcile` — the +5 is left to this
-   rule, so that strategy is not started. IBKR holding less, nothing, or the
-   opposite side still refuses the whole session, and the running session's
-   cycle still stops on any of them. While the session runs, a covering excess is
-   absorbed and the strategy keeps running (Story 4.7's coverage rule, below);
-   this rule meets it at the next start.
+   or resized — the remedy is manual, in TWS. Two amendments from PR #35's code
+   review (PO rulings, 2026-09-30):
+   - **Covered growth resumes beside the excess (D5a).** When the strategy's own
+     position is non-zero and the unowned part is on the *same side* (+10 owned,
+     IBKR +15 — a manual add, or a forward split while stopped), the strategy is
+     started and resumes managing its own lot; the excess stays `INTERNAL-DIFF`,
+     never traded, and one `strategy.resumed_beside_excess` WARNING names both
+     quantities. That is the shape the running session already absorbs with the
+     strategy left running (Story 4.7's coverage rule, below), so a stop no
+     longer makes it stricter. A flat strategy beside an unowned holding, one on
+     the opposite side, and strategies on **both** sides of the instrument are
+     still refused — those are the FR38 and NFR14 shapes.
+   - **A stale own-id is unowned (D4).** A position under a strategy id this
+     session's spec does not resolve to (one a pre-fix run left under an id an
+     earlier refusal renumbered) belongs to no strategy that will start; it is
+     judged as above, so the entry that resolves to the new id cannot read its
+     own book as flat and enter beside it.
+   At `reconcile`, IBKR holding less, nothing, or the opposite side still refuses
+   the whole session, and the running session's cycle still stops on any of them.
 4. **A pre-4.5 namespace is refused before the framework runs** (D-D). One that
    cached the fabricated order would abort the process inside `node:connect`
    after a shrink (a Rust panic, uncatchable). `session.resume_refused
@@ -488,11 +504,11 @@ position is refused only when the broker does not *cover* it:
 
 | Broker vs the strategy's own net | Typical cause | What happens |
 |---|---|---|
-| more, same side (+10 → +20) | forward split, stock dividend, a manual add in TWS | **absorbed**: corrected broker-ward, `reconcile.discrepancy` names the before and after quantities; at a start, the strategy on that instrument is then not started (Story 4.5, below) |
+| more, same side (+10 → +20) | forward split, stock dividend, a manual add in TWS | **absorbed**: corrected broker-ward, `reconcile.discrepancy` names the before and after quantities; at a start, the strategy resumes beside the excess (`strategy.resumed_beside_excess`, PR #35 D5a) |
 | fewer, same side (+10 → +5) | reverse split, a partial sale outside the session, a lost fill | **refused**: the start is refused, or a running session is stopped |
 | none (+10 → 0) | cash merger, symbol change, a close outside the session | **refused** |
 | the opposite side (+10 → −5) | a trade outside the session | **refused** |
-| strategies on **both** sides of one instrument | — | the pre-4.7 rule: refused unless the strategies' net equals the broker's exactly |
+| strategies on **both** sides of one instrument | — | the pre-4.7 rule: refused unless the strategies' net equals the broker's exactly. At a start a covered row passes `reconcile` (logged `resolution=covered`, PR #35 D5b) and D-C then refuses each strategy on the instrument; a running session stops on it |
 
 - **Why covered growth is safe, and where that stops.** When a strategy closes
   **its own lot**, the broker is left at `broker − strategy`, on the broker's
@@ -501,20 +517,23 @@ position is refused only when the broker does not *cover* it:
   uncovered strategy is refused.
   - With strategies on both sides of one instrument, their net says nothing
     about each lot, so the equality rule stays (the last table row).
-  - **At startup, the strategy is not started** (since Story 4.5, integration
-    merge 2026-09-28). A split absorbed at startup leaves strategy +10 beside
+  - **At startup, the strategy resumes beside the split's shares** (PR #35 D5a,
+    PO ruling 2026-09-30; from the 4.5/4.7 integration merge until then it was
+    refused). A split absorbed at startup leaves strategy +10 beside
     `INTERNAL-DIFF` +10 — the engine no longer imports the adapter's `EXTERNAL`
-    order — and the +10 belongs to no strategy, so the per-strategy resume check
-    refuses the strategy on that instrument (`strategy.resume_refused`; see
-    "Resuming Mid-Position"). Its siblings start; nothing is traded for it. The
-    remedy is manual: remove the extra shares in TWS. (Before 4.5 this was the
-    triple strategy +10, `EXTERNAL` +20, `INTERNAL-DIFF` −10, on which
-    `sma_crossover`'s next SELL closed 30 against a broker at 20.)
-  - A split absorbed *mid-session* leaves strategy +10 beside `INTERNAL-DIFF`
-    +10, and the strategy keeps running. Since Story 4.5 the built-ins act on
-    their own book only, so `sma_crossover` sells its own 10 and the split's 10
-    stay at IBKR, unowned — which the next start then refuses the strategy for,
-    as above.
+    order — and the +10 belongs to no strategy. It is same-side growth beside
+    the strategy's own lot, so the per-strategy resume check starts the
+    strategy and names the excess once (`strategy.resumed_beside_excess`; see
+    "Resuming Mid-Position"); the strategy manages its own 10 and the split's
+    10 stay at IBKR, unowned and never traded, until removed by hand in TWS.
+    (Before 4.5 this was the triple strategy +10, `EXTERNAL` +20,
+    `INTERNAL-DIFF` −10, on which `sma_crossover`'s next SELL closed 30 against
+    a broker at 20.)
+  - A split absorbed *mid-session* leaves the same shape — strategy +10 beside
+    `INTERNAL-DIFF` +10 — and the strategy keeps running. Since Story 4.5 the
+    built-ins act on their own book only, so `sma_crossover` sells its own 10
+    and the split's 10 stay at IBKR, unowned; the next start resumes beside
+    them exactly as above.
 - **How it is absorbed.** Nautilus's reconciliation writes the difference as a
   fill on a synthetic owner (`EXTERNAL` / `INTERNAL-DIFF`), exactly as for any
   net correction. The strategy's own lot is **never** adjusted, closed or

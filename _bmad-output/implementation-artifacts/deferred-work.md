@@ -3723,10 +3723,21 @@ How they compose, and the one pin that could not survive:
 ## Deferred from: code review of PR #35, Epic 4 integration (2026-09-30)
 
 The review's full text is on the PR (`p3-epic4-base` → `015-paper-trading`). Its patches P1, P2,
-P3 and P5 landed in `2e275c8`; P4 and P6–P9 in the commit that adds this section. What follows is
-what the review deferred (W1–W11) and the five decisions it put to the PO, which are **open**.
+P3 and P5 landed in `2e275c8`; P4 and P6–P9 in `a714eb2`. What follows is what the review deferred
+(W1–W11) and the five decisions it put to the PO.
 
-**Decisions for the PO (D1–D5) — none ruled at the time of writing.**
+**Decisions D1–D5 — all ruled by the PO (Allay) on 2026-09-30, each on the reviewer's recommended
+option.** The problem statements below are kept as reviewed; this table is what was decided and where
+it landed.
+
+| | Ruling | Landed |
+|---|---|---|
+| **D1** | Symbol-scoped **and** bounded hold-back: an unresolved `IB-CONID-*` row holds back only the cache row with the same symbol (`PositionDiscrepancy.broker_symbol` / `symbol_key`, IB's `BRK B` matching Nautilus's `BRK-B`), for at most `HOLD_BACK_CYCLES` (3) consecutive cycles; past that `reconcile.hold_back_expired` is logged once and the row is acted on — a contradiction underneath is refused, fail closed. | This PR (`live_runtime_reconcile._HoldBack`; unit tests for the unrelated-symbol refusal, the bound, the restart and the spelling) |
+| **D2** | Same-symbol rule everywhere, name the rest: an unresolved row matters only to a same-symbol cached row at startup and for the reconnect grant too; a fractional remainder below the size increment is named once and clean at the expressible precision in the session, while `live reconcile` stays exact (exit 5). | **Epic 5, Story 5.7** (`epics.md`, `sprint-status.yaml`) |
+| **D3** | Withhold after 3, drift stops: three consecutive failed cycles move the monitor to `RECOVERING` (orders withheld) with one ERROR, re-granted by the next clean cycle; a `BrokerStateAdapterError` stops the session on first occurrence, as startup treats drift; the withheld period is recorded in `session_conditions`. | **Epic 5, Story 5.8** |
+| **D4** | A non-synthetic strategy id the session's spec does not resolve to is unowned: `split_by_owner(..., session_strategy_ids=)` with the ids from `live_session_node.session_strategy_ids`; the strategy that resolves to the new id is refused through the existing `strategy.resume_refused reason=unowned_position` path. `LiveSessionRunner` 416 → 417, disclosed. | This PR |
+| **D5a** | Covered growth resumes beside the excess: when the strategy's own position is non-zero and the unowned part is on the same side, D-C does not refuse — `strategy.resumed_beside_excess` names both, the strategy manages its own lot, the excess stays `INTERNAL-DIFF` and is never traded. Flat-beside-unowned, opposite side and **mixed sides** (`strategies_on_both_sides`) are still refused. Supersedes the two "Owner: the PO" items in the 4.5/4.7 integration-merge section above. Docs: nautilus.md, README, `live start` help, P18/P19c/P20. | This PR |
+| **D5b** | The startup/runtime asymmetry on mixed-sides rows is confirmed (per-strategy containment exists at startup, none at runtime); the visibility gap is closed — the row `_to_act_on` exempts is logged `reconcile.discrepancy resolution=covered` (WARNING) from the reconcile phase. | This PR |
 
 - **D1 [HIGH] A permanent unresolvable broker row masks a "broker 0" strategy contradiction for
   the life of the session.** `live_runtime_reconcile.py`'s `_act` holds back every cache row

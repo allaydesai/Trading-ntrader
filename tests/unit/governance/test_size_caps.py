@@ -149,7 +149,9 @@ SIZE_BASELINE: dict[str, int] = {
     # logic is live_runtime_reconcile.py.
     # Story 4.5, 412 -> 416: the resume wiring (pre-`run_async` refusal, the
     # per-start `ResumeCheck` and its two calls); the policy is live_session_resume.py.
-    "src/core/live_session_runner.py::LiveSessionRunner": 416,
+    # PR #35 code review D4, 416 -> 417: the one line that hands `ResumeCheck` the
+    # session's resolved strategy ids (`session_strategy_ids`, live_session_node.py).
+    "src/core/live_session_runner.py::LiveSessionRunner": 417,
     "src/core/live_session_runner.py::LiveSessionRunner.run": 66,
     # Story 4.3, 120 -> 114: the no-bars watchdog's test and emit moved to module
     # level (decision D-I, -9) to make room for the runtime reconciler's tick call.

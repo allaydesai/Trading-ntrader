@@ -41,6 +41,8 @@ from src.models.position_reconciliation import (
     compare_positions,
     count_synthetic,
     split_by_owner,
+    strategies_on_both_sides,
+    symbol_key,
 )
 
 pytestmark = pytest.mark.unit
@@ -622,6 +624,84 @@ class TestSplitByOwner:
         cached = [_cached(NVDA, "10"), _cached(NVDA, "-4", "SMAMomentum-002")]
 
         assert split_by_owner(cached, NVDA) == (Decimal("6"), Decimal("0"))
+
+    def test_with_the_sessions_ids_a_stale_own_id_is_unowned(self):
+        """PR #35 code review, D4 (PO ruling 2026-09-30): a position under an id
+        no entry of this session resolves to belongs to no strategy that will
+        start, so it is judged with the synthetics."""
+        cached = [_cached(NVDA, "10", "SMACrossover-001"), _cached(NVDA, "4", "SMACrossover-000")]
+
+        assert split_by_owner(cached, NVDA, session_strategy_ids={"SMACrossover-001"}) == (
+            Decimal("10"),
+            Decimal("4"),
+        )
+
+    def test_without_the_sessions_ids_every_non_synthetic_id_is_owned(self):
+        cached = [_cached(NVDA, "10", "SMACrossover-001"), _cached(NVDA, "4", "SMACrossover-000")]
+
+        assert split_by_owner(cached, NVDA, session_strategy_ids=None) == (
+            Decimal("14"),
+            Decimal("0"),
+        )
+
+    def test_an_empty_session_id_set_owns_nothing(self):
+        """Explicitly empty is not "unknown": nothing of this session will start."""
+        assert split_by_owner([_cached(NVDA, "10")], NVDA, session_strategy_ids=()) == (
+            Decimal("0"),
+            Decimal("10"),
+        )
+
+
+class TestStrategiesOnBothSides:
+    """The resume check's guard on D5a's exemption: a net cannot say whether
+    each lot is covered when the session's own lots are long and short."""
+
+    def test_long_and_short_lots_are_mixed(self):
+        cached = [_cached(NVDA, "20"), _cached(NVDA, "-10", "SMAMomentum-001")]
+
+        assert strategies_on_both_sides(cached, NVDA)
+
+    def test_one_side_is_not(self):
+        cached = [_cached(NVDA, "20"), _cached(NVDA, "10", "SMAMomentum-001")]
+
+        assert not strategies_on_both_sides(cached, NVDA)
+
+    def test_synthetics_and_other_instruments_do_not_count(self):
+        cached = [_cached(NVDA, "20"), _cached(NVDA, "-5", "INTERNAL-DIFF"), _cached(AAPL, "-3")]
+
+        assert not strategies_on_both_sides(cached, NVDA)
+
+    def test_a_stale_own_id_does_not_count_when_the_sessions_ids_are_known(self):
+        cached = [_cached(NVDA, "20", "SMACrossover-001"), _cached(NVDA, "-10", "SMACrossover-000")]
+
+        assert not strategies_on_both_sides(cached, NVDA, session_strategy_ids={"SMACrossover-001"})
+        assert strategies_on_both_sides(cached, NVDA)
+
+
+class TestSymbolKey:
+    """PR #35 code review, D1: the broker's and Nautilus's spellings of one
+    symbol compare equal; nothing else does."""
+
+    @pytest.mark.parametrize("spelling", ["BRK B", "BRK-B", "brk.b", " BRK B "])
+    def test_class_share_spellings_agree(self, spelling):
+        assert symbol_key(spelling) == "BRKB"
+
+    def test_distinct_symbols_stay_distinct(self):
+        assert symbol_key("NVDA") != symbol_key("NVDL")
+
+    def test_none_and_empty_read_empty(self):
+        assert symbol_key(None) == "" and symbol_key("") == ""
+
+    def test_the_rows_key_is_its_instruments_symbol(self):
+        (row,) = compare_positions([_cached("BRK-B.NYSE", "4")], _broker())
+
+        assert row.symbol_key == "BRKB"
+        assert row.broker_symbol is None
+
+    def test_a_broker_row_carries_the_brokers_symbol(self):
+        (row,) = compare_positions([], _broker(_held(NVDA, "10")))
+
+        assert row.broker_symbol == "NVDA"
 
 
 class TestStartupReconciliation:

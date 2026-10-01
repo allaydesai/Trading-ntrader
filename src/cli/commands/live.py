@@ -368,10 +368,12 @@ def start(session: str, connect_timeout: float) -> None:
     permitted. A split that grows a strategy's position is absorbed and
     logged; cash that moved while stopped is logged `reconcile.cash_changed`.
     A strategy restarted while holding its own position resumes it
-    (`strategy.resumed`) and acts only on its own positions; one whose
-    instrument carries a holding no strategy of the session owns — including
-    shares beyond its own on the same side, a split's among them — is not
-    started (`strategy.resume_refused`), and the holding is left alone. Each
+    (`strategy.resumed`) and acts only on its own positions. Shares beyond
+    its own on the same side — a split's, or a manual add — it resumes
+    beside, named once (`strategy.resumed_beside_excess`) and never traded;
+    a holding no strategy of the session owns on an instrument where it is
+    flat, or on the opposite side, means it is not started
+    (`strategy.resume_refused`), and the holding is left alone. Each
     strategy warms its indicators from history as it starts, before it
     subscribes to live bars. While running, the session re-checks its
     positions against IBKR every minute and corrects a disagreement seen

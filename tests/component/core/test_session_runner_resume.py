@@ -30,6 +30,7 @@ import src.core.live_session_warmup as warmup_module
 from src.core.live_session_resume import (
     LEGACY_POSITION_IMPORT,
     RESUME_REFUSED_EVENT,
+    RESUMED_BESIDE_EXCESS_EVENT,
     RESUMED_EVENT,
     SESSION_RESUME_REFUSED_EVENT,
     UNOWNED_POSITION,
@@ -279,14 +280,17 @@ class TestAnUnownedHoldingContainsOnlyItsStrategy:
         # order method (`LIVE_MODULE_GLOBS`), and the refused strategy was
         # never materialised, so it holds no order method to call.
 
-    def test_an_excess_beside_the_strategys_own_position_contains_only_that_strategy(
+    def test_an_excess_beside_the_strategys_own_position_resumes_beside_it(
         self, registered_accounts, monkeypatch
     ):
-        """PO ruling 2026-09-28 (review Decision 2: A). The strategy holds +10,
-        IBKR +15 (+5 bought by hand): startup reconciliation passes, D-C refuses
-        just this strategy naming both quantities, and its sibling starts."""
+        """PO ruling 2026-09-28 (review Decision 2: A), amended by PR #35's D5a
+        (2026-09-30). The strategy holds +10, IBKR +15 (+5 bought by hand, or
+        a split's extra shares while stopped): startup reconciliation passes,
+        and the strategy resumes beside the excess — named once, not refused —
+        exactly as Story 4.7 leaves it running mid-session. Before D5a this
+        test pinned a refusal here."""
         registered_accounts(_settings())
-        _History({"SMAMomentum": 0.01}).install(monkeypatch)
+        _History({"SMACrossover": 0.01, "SMAMomentum": 0.01}).install(monkeypatch)
         node = TestLiveNode(run_seconds=RUN_SECONDS)
         _start_issues_a_history_request(node)
         node.cache.open_positions = [
@@ -301,14 +305,43 @@ class TestAnUnownedHoldingContainsOnlyItsStrategy:
             runner.run()
 
         assert ("reconcile", "ok") in _phases(logs)
+        assert RESUME_REFUSED_EVENT not in _events(logs)
+        (beside,) = [e for e in logs if e["event"] == RESUMED_BESIDE_EXCESS_EVENT]
+        assert (beside["spec_strategy_id"], beside["instrument_id"]) == ("sma_crossover", NVDA)
+        assert (beside["unowned_quantity"], beside["strategy_quantity"]) == ("5", "10")
+        assert beside["broker_quantity"] == "15"
+        assert [type(s).__name__ for s in node.trader.added_strategies] == [
+            "SMACrossover",
+            "SMAMomentum",
+        ]
+        assert runner.trader_started
+        assert not runner.contained_failures
+
+    def test_a_stale_own_id_is_unowned_and_refuses_the_strategy_that_replaced_it(
+        self, registered_accounts, monkeypatch
+    ):
+        """D4 (PR #35 code review, PO ruling 2026-09-30). A position under
+        ``SMACrossover-007`` — an id no entry of this spec resolves to — is not
+        this session's; the entry that resolves to ``SMACrossover-000`` would
+        otherwise read its own book as flat and enter beside it (FR38)."""
+        registered_accounts(_settings())
+        _History({"SMAMomentum": 0.01}).install(monkeypatch)
+        node = TestLiveNode(run_seconds=RUN_SECONDS)
+        _start_issues_a_history_request(node)
+        node.cache.open_positions = [_Position(NVDA, "SMACrossover-007", "10")]
+        runner = _runner(
+            node, _spec(("sma_crossover", NVDA), ("momentum", AAPL)), _broker((NVDA, "10"))
+        )
+
+        with capture_logs() as logs:
+            runner.run()
+
         (refused,) = [e for e in logs if e["event"] == RESUME_REFUSED_EVENT]
         assert (refused["spec_strategy_id"], refused["instrument_id"]) == ("sma_crossover", NVDA)
-        assert (refused["unowned_quantity"], refused["strategy_quantity"]) == ("5", "10")
-        assert refused["broker_quantity"] == "15"
+        assert (refused["unowned_quantity"], refused["strategy_quantity"]) == ("10", "0")
         assert [type(s).__name__ for s in node.trader.added_strategies] == ["SMAMomentum"]
-        assert runner.trader_started
         (failure,) = runner.contained_failures
-        assert "+10" in failure.detail and "+5" in failure.detail
+        assert failure.spec_strategy_id == "sma_crossover"
 
     def test_when_no_strategy_can_start_the_session_fails_closed(self, registered_accounts):
         registered_accounts(_settings())

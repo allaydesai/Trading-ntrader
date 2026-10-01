@@ -2141,11 +2141,12 @@ run with it.
   strategy can enter). No IBKR mobile app or client portal session while it runs (the 162 rule).
 - A session whose strategy trades an instrument you are willing to trade by hand in TWS (P18b uses
   a second instrument from the same session spec, or a fresh session on it).
-- **Know before starting (Story 4.5):** P18b's hand-bought share is a holding no strategy owns. At
-  the session's **next** start, the strategy trading that instrument is not started
-  (`strategy.resume_refused reason=unowned_position`, PO ruling D-C: B) until you remove the share
-  by hand in TWS; its sibling strategies still start. That is the intended behaviour, not a P18
-  failure.
+- **Know before starting (Story 4.5, amended by PR #35 D5a):** P18b's hand-bought share is a
+  holding no strategy owns. At the session's **next** start, if the strategy trading that
+  instrument is flat there it is not started (`strategy.resume_refused reason=unowned_position`,
+  PO ruling D-C: B) until you remove the share by hand in TWS; if it holds the same side it
+  resumes beside the share (`strategy.resumed_beside_excess`) and never trades it. Sibling
+  strategies start either way. That is the intended behaviour, not a P18 failure.
 - D6's standing rule first: grep every transcript for `162`, `10182`, `366` before reading it.
 
 ### Command
@@ -2259,7 +2260,9 @@ is written for the operator and is **never** run by an automated story session. 
   *before* Story 4.5 refuses to start (`session.resume_refused reason=legacy_position_import`,
   exit 1, D-D) — that refusal is itself worth recording once, on such a session, but it is not P19b.
 - The account holds **nothing** on the session's instrument that the session did not open —
-  otherwise the strategy is not started (`strategy.resume_refused`, D-C) and P19b cannot run.
+  a same-side excess would make run 2 resume beside it (`strategy.resumed_beside_excess`, PR #35
+  D5a) and muddy the "same position" proof, and an opposite-side or flat-beside-unowned holding
+  means the strategy is not started (`strategy.resume_refused`, D-C); either way P19b cannot run.
 - **Know before starting:** `custom/sma_crossover_long_only` still flattens in `on_stop()`
   (`deferred-work.md:2196`, owner: the submodule repo). Use the built-in `sma_crossover`.
 - P19b leaves a position open between its two runs, by design, and possibly at the end if no exit
@@ -2345,14 +2348,18 @@ trade.persisted ...
   `session.started` and of the first `strategy`-owned bar: the resumed strategy must be
   reconciled, warm and subscribed by 09:30. The lookback is whole days for `>= 1 minute` bars
   (Story 4.4), so a pre-open start never sends a seconds window that returns nothing.
-- **P19c, the covered excess (PO ruling D-C, 2026-09-28 — operator only).** Between runs, buy a
-  few extra shares of the strategy's instrument by hand in TWS. Run 2's `reconcile` phase ends
-  `ok` (a holding that covers the strategy's own is not a contradiction at startup); the strategy
-  is **not started** — `strategy.resume_refused reason=unowned_position` names the instrument,
-  `unowned_quantity`, `strategy_quantity` and `broker_quantity`, and the console prints the
-  remedy — its sibling strategies start, and nothing is traded for the refused one. Remove the
-  extra shares by hand in TWS and restart: the strategy resumes. Selling shares by hand instead
-  (IBKR below the strategy's own) must refuse the **whole** start at `reconcile`, exit 1.
+- **P19c, the covered excess (PO ruling D-C, 2026-09-28; amended by PR #35 D5a, 2026-09-30 —
+  operator only).** Between runs, buy a few extra shares of the strategy's instrument by hand in
+  TWS. Run 2's `reconcile` phase ends `ok` (a holding that covers the strategy's own is not a
+  contradiction at startup); the strategy **is started** and resumes beside the excess — one
+  `strategy.resumed_beside_excess` names the instrument, `unowned_quantity`, `strategy_quantity`
+  and `broker_quantity`, then `strategy.resumed` names its own lot — and its next opposite signal
+  sells **only its own quantity**: TWS still shows the extra shares afterwards. (Before D5a the
+  strategy was not started here, `strategy.resume_refused reason=unowned_position`; that record
+  now belongs to the flat and opposite-side shapes only.) To see the refusal, instead leave the
+  strategy flat and buy by hand: the strategy is not started, its siblings are, and the console
+  prints the remedy. Selling shares by hand (IBKR below the strategy's own) must refuse the
+  **whole** start at `reconcile`, exit 1.
 
 ### Result log
 
@@ -2407,12 +2414,11 @@ and may be run at any time; it never evicts a running session.
 - **⚠️ P20a: the strategy holding the split is not started after the absorbed start.**
   - Since Story 4.5 a split absorbed at startup leaves strategy +10 beside `INTERNAL-DIFF` +10
     (the engine no longer imports the adapter's `EXTERNAL` order), and the +10 belongs to no
-    strategy. The per-strategy resume check therefore refuses that strategy
-    (`strategy.resume_refused reason=unowned_position`, P19c's shape): its siblings start, and a
-    session with no other strategy fails closed, exit 1, after `phase=reconcile status=ok`.
-  - Nothing is traded for the refused strategy. The remedy is manual: remove the extra shares
-    in TWS, or run the strategy on another instrument (`docs/agent/nautilus.md`, "Corporate
-    actions").
+    strategy. Since PR #35 D5a (PO ruling 2026-09-30) the per-strategy resume check starts the
+    strategy beside that same-side excess (`strategy.resumed_beside_excess`, P19c's shape) —
+    before it, the strategy was refused (`strategy.resume_refused reason=unowned_position`).
+  - The extra shares are never traded: the strategy manages its own +10 only. The remedy for the
+    orphan shares is manual: remove them in TWS (`docs/agent/nautilus.md`, "Corporate actions").
   - SIGINT the run as soon as `phase=reconcile status=ok` is read. The criteria below need
     nothing after that line.
 - P20b: any held instrument with a **cash dividend** paid while the session is stopped, or any
@@ -2460,8 +2466,9 @@ reconcile.discrepancy scope=startup instrument_id=NVDA.NASDAQ kind=position reso
   local_quantity=10 strategy_quantity=10 broker_quantity=20
 reconcile.ok scope=startup ... discrepancies=1 synthetic_positions=1
 session.phase phase=reconcile status=ok
-strategy.resume_refused spec_strategy_id=... instrument_id=NVDA.NASDAQ reason=unowned_position
-  unowned_quantity=10 strategy_quantity=10 broker_quantity=20      # P20a, since Story 4.5
+strategy.resumed_beside_excess spec_strategy_id=... instrument_id=NVDA.NASDAQ
+  unowned_quantity=10 strategy_quantity=10 broker_quantity=20      # P20a, since PR #35 D5a
+strategy.resumed strategy_id=SMACrossover-000 instrument_id=NVDA.NASDAQ quantity=10 ...
 
 # P20c (a reverse split)
 reconcile.discrepancy ... kind=strategy_position resolution=refused local_quantity=10
@@ -2478,8 +2485,10 @@ exit=1
    the instrument, with `local_quantity` = the pre-split quantity, `broker_quantity` = TWS's
    post-split quantity, and `resolution` `framework` or `broker`. `reconcile.ok` follows with
    `discrepancies` ≥ 1. `live reconcile` right after the start reports the position clean. One
-   `strategy.resume_refused reason=unowned_position` names the split's extra shares (the ⚠️
-   precondition) — expected, not a failure.
+   `strategy.resumed_beside_excess` names the split's extra shares as `unowned_quantity` beside
+   the strategy's own, and the strategy **is** started (PR #35 D5a, PO ruling 2026-09-30 —
+   before it, this read `strategy.resume_refused reason=unowned_position` and the strategy was
+   not started; a transcript from before that date shows the old record).
 2. **P20a — the lot is untouched.** The run is stopped before any signal (the ⚠️ precondition),
    and no `order.submitted` appears in the transcript. `reconcile.ok`'s `synthetic_positions`
    counts the reconciliation-owned positions holding the split's extra shares, and TWS shows

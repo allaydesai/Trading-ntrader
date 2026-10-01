@@ -234,6 +234,30 @@ def validate_spec_is_materialisable(spec: SessionSpec) -> None:
             )
 
 
+def session_strategy_ids(session_spec: SessionSpec) -> frozenset[str]:
+    """The Nautilus ``StrategyId`` each entry of the spec resolves to.
+
+    ``f"{type(strategy).__name__}-{order_id_tag}"`` is how Nautilus names a
+    strategy, with the tag resolved by spec position (``SessionSpec.
+    order_id_tags``, Story 4.5) — so the set is known before any strategy is
+    materialised. The resume check reads it (PR #35 code review, D4 ruling): a
+    cached position under any other non-synthetic id belongs to no strategy
+    this session will start. An entry whose strategy the registry does not
+    know contributes nothing; ``materialise_strategy`` refuses it per spec.
+    """
+    from src.core.strategy_registry import StrategyRegistry
+
+    tags = session_spec.order_id_tags
+    ids = set()
+    for strategy_spec in session_spec.strategies:
+        try:
+            class_name = StrategyRegistry.get(strategy_spec.strategy_id).strategy_class.__name__
+        except KeyError:
+            continue
+        ids.add(f"{class_name}-{tags[strategy_spec.strategy_id]}")
+    return frozenset(ids)
+
+
 def materialise_strategy(
     strategy_spec: StrategySpec, session_spec: SessionSpec | None = None
 ) -> Any:

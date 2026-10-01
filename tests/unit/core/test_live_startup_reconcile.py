@@ -153,13 +153,15 @@ def _node(cache: _Cache | None = None, **engine_kwargs):
     return SimpleNamespace(cache=cache, kernel=SimpleNamespace(exec_engine=engine))
 
 
-def _held(instrument_id: str, quantity: str, *, resolved=True, price="101.25") -> BrokerPosition:
+def _held(
+    instrument_id: str, quantity: str, *, resolved=True, price="101.25", symbol=None
+) -> BrokerPosition:
     return BrokerPosition(
         instrument_id=instrument_id,
         quantity=Decimal(quantity),
         average_price=None if price is None else Decimal(price),
         con_id=4815747,
-        symbol=instrument_id.split(".")[0],
+        symbol=instrument_id.split(".")[0] if symbol is None else symbol,
         instrument_resolved=resolved,
     )
 
@@ -453,10 +455,18 @@ class TestABrokerHoldingThatCoversTheStrategyIsNotAContradiction:
         )
         node = _node(cache)
 
-        result = _reconcile(node, _reader(_state(_held(NVDA, "15"))))
+        with capture_logs() as logs:
+            result = _reconcile(node, _reader(_state(_held(NVDA, "15"))))
 
         assert node.kernel.exec_engine.reports == []
         assert result.synthetic_positions == 1
+        # D5b (PR #35 code review, PO ruling 2026-09-30): the exempted row is
+        # named from this phase, not only by the refusal that follows in `trading`.
+        (covered,) = _events(logs, DISCREPANCY_EVENT)
+        assert (covered["resolution"], covered["log_level"]) == ("covered", "warning")
+        assert (covered["instrument_id"], covered["kind"]) == (NVDA, "strategy_position")
+        assert (covered["strategy_quantity"], covered["broker_quantity"]) == ("10", "15")
+        assert "reason" not in covered
 
     @pytest.mark.parametrize(
         ("synthetic", "broker"),

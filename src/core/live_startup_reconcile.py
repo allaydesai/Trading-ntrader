@@ -360,7 +360,13 @@ async def reconcile_at_startup(
     broker = await read_state(node, log=log)
     if local_before is not None:
         _log_cash_changes(log, local_before, broker)
-    rows = _to_act_on(compare_positions(cached_positions(node.cache), broker))
+    observed = compare_positions(cached_positions(node.cache), broker)
+    rows = _to_act_on(observed)
+    for row in observed:
+        if row not in rows:
+            # Named from this phase, not only by the resume check that refuses
+            # the strategies on it later (PR #35 code review, D5b ruling).
+            log_discrepancy(log, row, "covered")
     framework = _framework_resolved(local_before, broker, rows)
     for row in framework:
         log_discrepancy(log, row, "framework")

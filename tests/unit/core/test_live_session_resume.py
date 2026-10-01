@@ -25,6 +25,7 @@ from src.core.live_session_resume import (
     LEGACY_POSITION_IMPORT,
     RECORD_FAILED_EVENT,
     RESUME_REFUSED_EVENT,
+    RESUMED_BESIDE_EXCESS_EVENT,
     RESUMED_EVENT,
     SESSION_RESUME_REFUSED_EVENT,
     UNOWNED_POSITION,
@@ -125,7 +126,9 @@ def _spec(bar_type: str = f"{NVDA}-1-MINUTE-LAST-EXTERNAL", strategy_id: str = "
     return SimpleNamespace(strategy_id=strategy_id, bar_types=(bar_type,))
 
 
-def _check(cache: _Cache, reconciliation: StartupReconciliation, log=None) -> ResumeCheck:
+def _check(
+    cache: _Cache, reconciliation: StartupReconciliation, log=None, *, strategy_ids=None
+) -> ResumeCheck:
     import structlog
 
     return ResumeCheck(
@@ -133,6 +136,7 @@ def _check(cache: _Cache, reconciliation: StartupReconciliation, log=None) -> Re
         reconciliation,
         started_at=STARTED_AT,
         log=log if log is not None else structlog.get_logger("test"),
+        strategy_ids=strategy_ids,
     )
 
 
@@ -253,6 +257,126 @@ class TestAnUnownedHoldingRefusesOnlyItsInstrumentsStrategy:
         cache = _Cache(positions=[_Position(NVDA, STRATEGY, "10")])
 
         _check(cache, _reconciliation((NVDA, "10", "100"))).refuse_unowned(_spec())
+
+
+class TestCoveredGrowthResumesBesideTheExcess:
+    """D5a (PR #35 code review, PO ruling 2026-09-30): same-side growth no
+    strategy owns beside the strategy's own position — a forward split or
+    stock dividend while stopped, or by the same arithmetic a manual add — is
+    what Story 4.7 absorbs mid-session with the strategy left running. At a
+    start it now resumes beside it too: named once, never refused, the excess
+    never traded. The FR38 shapes — a flat strategy beside an unowned
+    holding, or one on the opposite side — are still refused."""
+
+    @pytest.mark.parametrize(
+        ("own", "excess", "broker"),
+        [("10", "10", "20"), ("-10", "-10", "-20"), ("10", "5", "15")],
+        ids=["split-long", "split-short", "manual-add"],
+    )
+    def test_same_side_growth_is_named_and_not_refused(self, own, excess, broker):
+        cache = _Cache(
+            positions=[_Position(NVDA, STRATEGY, own), _Position(NVDA, "INTERNAL-DIFF", excess)]
+        )
+
+        with capture_logs() as logs:
+            _check(cache, _reconciliation((NVDA, broker, "100"))).refuse_unowned(_spec())
+
+        assert not _events(logs, RESUME_REFUSED_EVENT)
+        (record,) = _events(logs, RESUMED_BESIDE_EXCESS_EVENT)
+        assert record["log_level"] == "warning"
+        assert record["spec_strategy_id"] == "sma_crossover"
+        assert record["instrument_id"] == NVDA
+        assert (record["strategy_quantity"], record["unowned_quantity"]) == (own, excess)
+        assert record["broker_quantity"] == broker
+
+    @pytest.mark.parametrize(
+        ("own", "excess", "broker"),
+        [("0", "10", "10"), ("10", "-4", "6"), ("-10", "4", "-6")],
+        ids=["strategy-flat", "opposite-under-long", "opposite-under-short"],
+    )
+    def test_the_fr38_shapes_are_still_refused(self, own, excess, broker):
+        positions = [_Position(NVDA, "INTERNAL-DIFF", excess)]
+        if own != "0":
+            positions.insert(0, _Position(NVDA, STRATEGY, own))
+
+        with capture_logs() as logs, pytest.raises(ResumeRefusedError) as caught:
+            _check(
+                _Cache(positions=positions), _reconciliation((NVDA, broker, "100"))
+            ).refuse_unowned(_spec())
+
+        assert caught.value.reason == UNOWNED_POSITION
+        assert not _events(logs, RESUMED_BESIDE_EXCESS_EVENT)
+
+    def test_strategies_on_both_sides_are_still_refused(self):
+        """The mixed-sides rule (4.7's code review): A +20 and B −10 net +10
+        beside an unowned +5 against a broker at +15 reads like covered growth
+        off the net, yet A closing its 20 carries the account through zero —
+        so the exemption never reads the net when the sides are mixed."""
+        cache = _Cache(
+            positions=[
+                _Position(NVDA, STRATEGY, "20"),
+                _Position(NVDA, "SMAMomentum-001", "-10"),
+                _Position(NVDA, "INTERNAL-DIFF", "5"),
+            ]
+        )
+
+        with capture_logs() as logs, pytest.raises(ResumeRefusedError) as caught:
+            _check(cache, _reconciliation((NVDA, "15", "100"))).refuse_unowned(_spec())
+
+        assert caught.value.reason == UNOWNED_POSITION
+        assert not _events(logs, RESUMED_BESIDE_EXCESS_EVENT)
+
+
+class TestAStaleOwnIdIsUnowned:
+    """D4 (PR #35 code review, PO ruling 2026-09-30): a position under a
+    strategy id this session will not start — one a pre-fix run left under an
+    id no spec entry resolves to any more — is unowned, so the strategy that
+    now resolves to the new id does not read its own book as flat and enter
+    beside it (FR38)."""
+
+    SESSION_IDS = frozenset({"SMACrossover-001"})
+
+    def test_a_stale_own_id_beside_a_flat_strategy_refuses(self):
+        cache = _Cache(positions=[_Position(NVDA, "SMACrossover-000", "10")])
+
+        with capture_logs() as logs, pytest.raises(ResumeRefusedError) as caught:
+            _check(
+                cache, _reconciliation((NVDA, "10", "100")), strategy_ids=self.SESSION_IDS
+            ).refuse_unowned(_spec())
+
+        assert caught.value.reason == UNOWNED_POSITION
+        (record,) = _events(logs, RESUME_REFUSED_EVENT)
+        assert (record["unowned_quantity"], record["strategy_quantity"]) == ("10", "0")
+
+    def test_the_sessions_own_id_is_still_owned(self):
+        cache = _Cache(positions=[_Position(NVDA, "SMACrossover-001", "10")])
+
+        _check(
+            cache, _reconciliation((NVDA, "10", "100")), strategy_ids=self.SESSION_IDS
+        ).refuse_unowned(_spec())
+
+    def test_without_the_session_ids_every_strategy_id_is_owned(self):
+        """Story 4.5's rule, kept for a caller that passes none."""
+        cache = _Cache(positions=[_Position(NVDA, "SMACrossover-000", "10")])
+
+        _check(cache, _reconciliation((NVDA, "10", "100"))).refuse_unowned(_spec())
+
+    def test_a_stale_own_id_beside_the_resumed_lot_is_judged_as_growth(self):
+        """Same side as the strategy's own lot: D5a's rule, not a refusal."""
+        cache = _Cache(
+            positions=[
+                _Position(NVDA, "SMACrossover-001", "10"),
+                _Position(NVDA, "SMACrossover-000", "10"),
+            ]
+        )
+
+        with capture_logs() as logs:
+            _check(
+                cache, _reconciliation((NVDA, "20", "100")), strategy_ids=self.SESSION_IDS
+            ).refuse_unowned(_spec())
+
+        (record,) = _events(logs, RESUMED_BESIDE_EXCESS_EVENT)
+        assert (record["strategy_quantity"], record["unowned_quantity"]) == ("10", "10")
 
 
 class TestAResumedPositionIsNamedOnce:

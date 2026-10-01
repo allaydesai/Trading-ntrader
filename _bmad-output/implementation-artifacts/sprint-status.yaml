@@ -1,5 +1,5 @@
 # generated: 2026-08-03
-# last_updated: 2026-08-03 (Phase 3 sprint board generated from planning-artifacts/epics.md — Paper Trading. 5 epics, 35 stories, all backlog; no story files created yet. Phase 1 (Stocks) and Phase 2 (ETFs) sprint boards are archived under archive/phase-1-stocks/ and archive/phase-2-etfs/. NOTE: epic-1..epic-5 keys are REUSED for Phase 3 paper-trading work — they are NOT the completed Phase 1/2 epics; those done-records live in the archive + epic-N-retro-*.md files.)
+# last_updated: 2026-09-30 (Stories 5.7 and 5.8 added to Epic 5 from PR #35's code-review rulings D2 and D3 — 37 stories now); 2026-08-03 (Phase 3 sprint board generated from planning-artifacts/epics.md — Paper Trading. 5 epics, 35 stories, all backlog; no story files created yet. Phase 1 (Stocks) and Phase 2 (ETFs) sprint boards are archived under archive/phase-1-stocks/ and archive/phase-2-etfs/. NOTE: epic-1..epic-5 keys are REUSED for Phase 3 paper-trading work — they are NOT the completed Phase 1/2 epics; those done-records live in the archive + epic-N-retro-*.md files.)
 # project: Trading-ntrader
 # project_key: NOKEY
 # tracking_system: file-system
@@ -2671,4 +2671,7 @@ development_status:
   5-4-record-the-conditions-the-session-actually-ran-under: backlog
   5-5-handle-open-positions-at-seal-time-explicitly: backlog
   5-6-read-a-paper-session-beside-its-backtest-in-the-existing-views: backlog
+  # Added 2026-09-30 from PR #35's code review (Epic 4 integration), PO rulings D2 and D3.
+  5-7-name-holdings-the-adapter-cannot-express-instead-of-refusing-or-hiding-them: backlog
+  5-8-act-on-a-persistent-runtime-reconciliation-failure: backlog
   epic-5-retrospective: optional

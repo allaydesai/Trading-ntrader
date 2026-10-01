@@ -39,9 +39,13 @@ cannot express (an instrument the cache does not hold, an unresolved broker
 row) is logged ``resolution="unresolved"`` once and the session continues — no
 strategy can act on an instrument the cache lacks, so such a row never withholds
 the reconnect grant. An unresolved broker row does withhold it (fail closed), and
-while one stands only the rows it could be masking — the cache's rows reading
-"broker 0" — are held back; every other instrument is still checked and
-corrected (PO ruling, code review 2026-09-28). A strategy's own position
+while one stands only the row it could be masking — the cache's "broker 0" row
+for the **same symbol** — is held back, and only for :data:`HOLD_BACK_CYCLES`
+consecutive cycles; past that the holding is one the adapter will never resolve
+(``reconcile.hold_back_expired``, once) and the held-back row is acted on, so a
+contradiction underneath it is refused rather than masked for the life of the
+session. Every other instrument is checked and corrected throughout (PO rulings:
+code review 2026-09-28; PR #35 D1, 2026-09-30). A strategy's own position
 the broker does not cover — less in its direction, none, or the opposite side
 (Story 4.7's coverage rule) — is **refused and the session stopped**, before
 anything is written (D-D, PO ruling 2A), naming the likely cause: the
@@ -95,6 +99,7 @@ from src.models.position_reconciliation import (
     PositionDiscrepancy,
     compare_positions,
     count_synthetic,
+    symbol_key,
 )
 
 SCOPE_RUNTIME = "runtime"
@@ -107,9 +112,15 @@ RUNTIME_RECONCILE_EVERY_TICKS = 2
 DEBOUNCE_SECONDS = 60.0
 #: ``reconcile.ok`` (and a persisting ``reconcile.cycle_failed``) at most this often.
 RUNTIME_OK_LOG_INTERVAL_SECONDS = 3600.0
+#: An unresolved broker row holds back the same-symbol "broker 0" cache row for
+#: at most this many consecutive cycles (~3 minutes) before the row is acted on
+#: (PO ruling, PR #35 D1, 2026-09-30).
+HOLD_BACK_CYCLES = 3
 
 CYCLE_FAILED_EVENT = "reconcile.cycle_failed"
 CONNECTION_READ_FAILED_EVENT = "session.connection_read_failed"
+#: D1: an unresolved row outlived the hold-back; its same-symbol cache row is now acted on.
+HOLD_BACK_EXPIRED_EVENT = "reconcile.hold_back_expired"
 
 ConnectionReader = Callable[[Any], ConnectionStatus]
 
@@ -243,6 +254,7 @@ class RuntimeReconciler:
         self._recovering = False
         self._debounce = _Debounce()
         self._unresolved = _Unresolved()
+        self._hold_back = _HoldBack()
         self._ok = _OkLog()
         self._failures = _FailureStreak()
 
@@ -305,12 +317,19 @@ class RuntimeReconciler:
         confirmed = self._debounce.confirm(observation.rows, self._clock())
         lookup_misses = [row for row in confirmed if not row.broker_resolved]
         actionable = [row for row in confirmed if row.broker_resolved]
-        if any(not row.broker_resolved for row in observation.rows):
-            # An `IB-CONID-*` row may be the holding a cache row reads as
-            # "broker 0": hold only those back until it resolves, so a lookup
-            # miss neither stops the session nor blinds every other instrument
-            # (PO ruling, code review 2026-09-28).
-            actionable = [row for row in actionable if row.broker_quantity != 0]
+        # An `IB-CONID-*` row may be the holding a cache row reads as "broker
+        # 0": hold back only the cache row with the *same symbol*, and only for
+        # `HOLD_BACK_CYCLES` consecutive cycles — a lookup miss then neither
+        # stops the session nor blinds any other instrument, and a holding the
+        # adapter can never resolve stops masking a real contradiction (PO
+        # rulings: code review 2026-09-28, PR #35 D1 2026-09-30).
+        masking = self._hold_back.masking(observation.rows, self._log, scope)
+        if masking:
+            actionable = [
+                row
+                for row in actionable
+                if not (row.broker_quantity == 0 and row.symbol_key in masking)
+            ]
         contradicted = [row for row in actionable if row.strategy_contradicted]
         if contradicted:
             refuse(
@@ -505,6 +524,39 @@ class _Unresolved:
                 log_discrepancy(log, row, "unresolved", scope=scope)
         # Forget only rows the broker no longer shows, not rows merely still debouncing.
         self.logged = {row for row in self.logged if row in observed} | set(rows)
+
+
+class _HoldBack:
+    """Which symbols an unresolved broker row may still be masking (D1).
+
+    Counts the consecutive cycles each unresolved symbol has been observed;
+    while the count is within :data:`HOLD_BACK_CYCLES` the cache's "broker 0"
+    row for that symbol is held back. Past it the row is treated as a holding
+    the adapter will never resolve — logged once as ``reconcile.hold_back_expired``
+    — and the held-back row is acted on (refused if contradicted, fail closed).
+    A symbol absent from one observation starts over."""
+
+    def __init__(self) -> None:
+        self.cycles: dict[str, int] = {}
+
+    def masking(self, observed: Sequence[PositionDiscrepancy], log: Any, scope: str) -> set[str]:
+        present = {
+            symbol_key(row.broker_symbol): row for row in observed if not row.broker_resolved
+        }
+        cycles = {key: self.cycles.get(key, 0) + 1 for key in present}
+        for key, count in cycles.items():
+            if count == HOLD_BACK_CYCLES + 1:
+                _emit(
+                    log,
+                    "warning",
+                    HOLD_BACK_EXPIRED_EVENT,
+                    scope=scope,
+                    instrument_id=present[key].instrument_id,
+                    symbol=present[key].broker_symbol,
+                    cycles=HOLD_BACK_CYCLES,
+                )
+        self.cycles = cycles
+        return {key for key, count in cycles.items() if count <= HOLD_BACK_CYCLES}
 
 
 class _OkLog:

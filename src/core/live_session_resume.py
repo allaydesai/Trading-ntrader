@@ -33,6 +33,25 @@ remedy is manual, in TWS. Synthetic positions that net to zero — the
 ``EXTERNAL +N / INTERNAL-DIFF −N`` pair a pre-4.5 restart left — own nothing
 and refuse nothing.
 
+**Two amendments from PR #35's code review (PO rulings, 2026-09-30).**
+
+- **D5a — covered growth resumes beside the excess.** When the strategy's own
+  position is non-zero and the unowned part is on the *same side*, the holding
+  is growth the broker already covers — a forward split or stock dividend
+  while stopped, or by the same arithmetic a manual add — exactly the shape
+  Story 4.7 absorbs mid-session with the strategy left running. Refusing it at
+  a start made the stopped case stricter than the running one for no gain: the
+  strategy resumes managing its own lot, the excess stays ``INTERNAL-DIFF``
+  (never traded), and one ``strategy.resumed_beside_excess`` WARNING names
+  both. An unowned holding where the strategy is flat, or on the opposite side,
+  is still refused: that is the shape FR38 is about.
+- **D4 — a stale own-id is unowned.** A position under a strategy id this
+  session will not start (one a pre-fix run left under an id no spec entry
+  resolves to any more) used to count as owned, so the strategy that now
+  resolves to the new id read its own book as flat and could enter beside it.
+  The runner passes the session's resolved ids (``live_session_node.
+  session_strategy_ids``); anything else is unowned and judged as above.
+
 **D-D.** Before this story every restart holding a position imported the
 adapter's fabricated ``FILLED`` order (``client_order_id == instrument id``) as
 ``EXTERNAL``. Once cached, a later restart after that position shrank makes the
@@ -49,7 +68,7 @@ a spec's bar type exactly as ``materialise_strategy`` does. Calls no order
 method (``LIVE_MODULE_GLOBS`` scans it) and never writes the cache.
 """
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Collection, Iterable, Sequence
 from datetime import datetime
 from decimal import Decimal
 from typing import Any, ClassVar
@@ -59,12 +78,19 @@ from nautilus_trader.model.data import BarType
 from src.core.exit_outcome import LiveCheckOutcome
 from src.core.live_startup_reconcile import cached_positions
 from src.core.live_trade_recorder import unix_nanos_to_utc
-from src.models.position_reconciliation import StartupReconciliation, split_by_owner
+from src.models.position_reconciliation import (
+    StartupReconciliation,
+    split_by_owner,
+    strategies_on_both_sides,
+)
 
 #: D-E. A strategy that restarts holding its own position (AR41 ``strategy.*``).
 RESUMED_EVENT = "strategy.resumed"
 #: D-C. One strategy refused for a holding no strategy owns on its instrument.
 RESUME_REFUSED_EVENT = "strategy.resume_refused"
+#: D5a. One strategy resumed beside same-side growth no strategy owns (a split
+#: while stopped): named once, never refused, the excess never traded.
+RESUMED_BESIDE_EXCESS_EVENT = "strategy.resumed_beside_excess"
 #: D-D. The whole start refused, before the framework's pass, for a pre-4.5 cache.
 SESSION_RESUME_REFUSED_EVENT = "session.resume_refused"
 #: D-E's diagnostic: the record could not be written. Never raised past.
@@ -169,6 +195,9 @@ class ResumeCheck:
         reconciliation: The ``reconcile`` phase's proof — the broker's view.
         started_at: This process run's ``-> running`` instant.
         log: The session-bound logger.
+        strategy_ids: The Nautilus strategy ids this session's spec resolves
+            to (D4); a cached position under any other non-synthetic id is
+            unowned. ``None`` keeps every non-synthetic id owned (Story 4.5).
     """
 
     def __init__(
@@ -177,24 +206,45 @@ class ResumeCheck:
         reconciliation: StartupReconciliation,
         started_at: datetime,
         log: Any,
+        strategy_ids: Collection[str] | None = None,
     ) -> None:
         self._cache = cache
         self._held = {held.instrument_id: held for held in reconciliation.broker.positions}
         self._started_at = started_at
         self._log = log
+        self._strategy_ids = None if strategy_ids is None else frozenset(strategy_ids)
 
     def refuse_unowned(self, strategy_spec: Any) -> None:
-        """Refuse the strategy if its instrument carries a holding no strategy owns.
+        """Refuse the strategy if its instrument carries a holding no strategy owns —
+        unless that holding is same-side growth beside the strategy's own
+        position, which it resumes beside (D5a).
 
         Raises:
             ResumeRefusedError: :data:`UNOWNED_POSITION` — raised inside
                 ``_start_strategy``'s ``try``, whose ``except`` contains it.
         """
         instrument_id = str(BarType.from_str(strategy_spec.bar_types[0]).instrument_id)
-        owned, unowned = split_by_owner(cached_positions(self._cache), instrument_id)
+        owned, unowned = split_by_owner(
+            cached_positions(self._cache), instrument_id, session_strategy_ids=self._strategy_ids
+        )
         if unowned == _ZERO:
             return
         broker = self._broker_quantity(instrument_id)
+        mixed = strategies_on_both_sides(
+            cached_positions(self._cache), instrument_id, session_strategy_ids=self._strategy_ids
+        )
+        if not mixed and owned != _ZERO and (owned > _ZERO) == (unowned > _ZERO):
+            _emit(
+                self._log,
+                "warning",
+                RESUMED_BESIDE_EXCESS_EVENT,
+                spec_strategy_id=strategy_spec.strategy_id,
+                instrument_id=instrument_id,
+                unowned_quantity=str(unowned),
+                strategy_quantity=str(owned),
+                broker_quantity=str(broker),
+            )
+            return
         _emit(
             self._log,
             "error",

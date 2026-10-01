@@ -26,6 +26,8 @@ from src.core.live_connection_monitor import ConnectionMonitor, ConnectionState,
 from src.core.live_runtime_reconcile import (
     CYCLE_FAILED_EVENT,
     DEBOUNCE_SECONDS,
+    HOLD_BACK_CYCLES,
+    HOLD_BACK_EXPIRED_EVENT,
     RUNTIME_OK_LOG_INTERVAL_SECONDS,
     RUNTIME_RECONCILE_EVERY_TICKS,
     SCOPE_RECONNECT,
@@ -389,18 +391,92 @@ class TestUnresolvableRows:
     def test_an_unresolved_broker_row_holds_back_only_the_rows_it_could_mask(self):
         """An ``IB-CONID-*`` row makes the cache's own row for the same holding
         read "broker 0" — acting on that would stop a session over a lookup
-        miss. Every other instrument is still corrected (PO ruling 2026-09-28)."""
+        miss. Every other instrument is still corrected (PO ruling 2026-09-28).
+        The hold-back is by symbol and lasts ``HOLD_BACK_CYCLES`` (PR #35 D1)."""
         world = _World(
             [_Position(NVDA, STRATEGY, "22")],
-            state=_state(_held("IB-CONID-4815747", "22", resolved=False), _held(AAPL, "5")),
+            state=_state(
+                _held("IB-CONID-4815747", "22", resolved=False, symbol="NVDA"), _held(AAPL, "5")
+            ),
         )
 
         with capture_logs() as logs:
-            world.cycles(3)
+            world.cycles(HOLD_BACK_CYCLES)
 
         assert [str(r.instrument_id) for r in world.engine.reports] == [AAPL]
         records = {(r["instrument_id"], r["resolution"]) for r in _events(logs, DISCREPANCY_EVENT)}
         assert records == {(AAPL, "broker"), ("IB-CONID-4815747", "unresolved")}
+        assert not _events(logs, HOLD_BACK_EXPIRED_EVENT)
+
+    def test_an_unresolved_row_of_another_symbol_holds_nothing_back(self):
+        """D1 (PR #35 code review, PO ruling 2026-09-30): a bond, a warrant or a
+        delisted symbol the adapter cannot build is not the holding behind
+        NVDA's "broker 0" — so a strategy's +22 sold by hand is refused, not
+        masked for the life of the session (NFR14)."""
+        world = _World(
+            [_Position(NVDA, STRATEGY, "22")],
+            state=_state(_held("IB-CONID-99", "1000", resolved=False, symbol="T 4.5 02/15/36")),
+        )
+
+        with capture_logs() as logs, pytest.raises(ReconciliationFailedError) as caught:
+            world.cycles(2)
+
+        assert caught.value.reason is ReconciliationFailure.STRATEGY_POSITION_CONTRADICTED
+        assert [row.instrument_id for row in caught.value.discrepancies] == [NVDA]
+        assert world.engine.reports == []
+        refused = [r for r in _events(logs, DISCREPANCY_EVENT) if r["resolution"] == "refused"]
+        assert [r["instrument_id"] for r in refused] == [NVDA]
+
+    def test_the_hold_back_ends_after_the_bound_and_the_masked_row_is_acted_on(self):
+        """The same-symbol hold-back is bounded: on the cycle after
+        ``HOLD_BACK_CYCLES`` the expiry is named once and the held-back row is
+        refused — fail closed, rather than masked forever."""
+        world = _World(
+            [_Position(NVDA, STRATEGY, "22")],
+            state=_state(_held("IB-CONID-4815747", "22", resolved=False, symbol="NVDA")),
+        )
+
+        with capture_logs() as logs, pytest.raises(ReconciliationFailedError) as caught:
+            world.cycles(HOLD_BACK_CYCLES + 1)
+
+        assert caught.value.reason is ReconciliationFailure.STRATEGY_POSITION_CONTRADICTED
+        (expired,) = _events(logs, HOLD_BACK_EXPIRED_EVENT)
+        assert expired["log_level"] == "warning"
+        assert (expired["instrument_id"], expired["symbol"], expired["cycles"]) == (
+            "IB-CONID-4815747",
+            "NVDA",
+            HOLD_BACK_CYCLES,
+        )
+        assert expired["scope"] == SCOPE_RUNTIME
+
+    def test_a_cleared_then_returning_unresolved_row_starts_the_bound_over(self):
+        world = _World(
+            [_Position(NVDA, STRATEGY, "22")],
+            state=_state(_held("IB-CONID-4815747", "22", resolved=False, symbol="NVDA")),
+        )
+        world.cycles(HOLD_BACK_CYCLES - 1)
+        world.reader.state = _state(_held(NVDA, "22"))  # resolved again: clean
+        world.cycles(1)
+        world.reader.state = _state(_held("IB-CONID-4815747", "22", resolved=False, symbol="NVDA"))
+
+        with capture_logs() as logs:
+            world.cycles(HOLD_BACK_CYCLES)
+
+        assert not _events(logs, HOLD_BACK_EXPIRED_EVENT)
+        assert world.engine.reports == []
+
+    @pytest.mark.parametrize("ib_symbol", ["BRK B", "BRK-B", "brk b", "BRK.B"])
+    def test_the_symbol_match_survives_the_brokers_spelling(self, ib_symbol):
+        """IB writes class shares ``BRK B`` where Nautilus writes ``BRK-B``."""
+        brk = "BRK-B.NYSE"
+        world = _World(
+            [_Position(brk, STRATEGY, "4")],
+            state=_state(_held("IB-CONID-7", "4", resolved=False, symbol=ib_symbol)),
+        )
+
+        world.cycles(HOLD_BACK_CYCLES)  # held back: no refusal, nothing written
+
+        assert world.engine.reports == []
 
     def test_an_unresolved_broker_row_is_logged_only_once_confirmed(self):
         world = _World(state=_state(_held("IB-CONID-4815747", "22", resolved=False)))

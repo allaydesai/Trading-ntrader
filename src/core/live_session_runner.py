@@ -117,6 +117,7 @@ from src.core.live_session_node import (
     refusal_from_report,
     report_instrument_shortfall,
     request_node_stop,
+    session_strategy_ids,
     stop_degraded_strategies,
     unsubscribe_runner_topics,
     validate_spec_is_materialisable,
@@ -757,7 +758,8 @@ class LiveSessionRunner:
         with phase(self._log, "trading"):
             reconciled = live_startup_reconcile.require_reconciled(self._reconciliation)
             assert self._node is not None
-            resume = ResumeCheck(self._node.cache, reconciled, self._started_at, self._log)
+            ids = session_strategy_ids(self._spec)  # D4: any other own-id is unowned
+            resume = ResumeCheck(self._node.cache, reconciled, self._started_at, self._log, ids)
             self._guard.expect(len(self._spec.strategies))
             started = [spec for spec in self._spec.strategies if self._start_strategy(spec, resume)]
             # A session reclaimed during the earlier phases — or during a

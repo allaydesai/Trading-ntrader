@@ -43,7 +43,7 @@ Stdlib only (plus the equally stdlib-only ``broker_state``), pinned by
 layer reuses :func:`compare_positions` and must never import Nautilus (AR38).
 """
 
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -144,6 +144,11 @@ class PositionDiscrepancy:
         strategy_mixed_sides: ``True`` when the strategies' own lots on this
             instrument are on both sides (one long, another short), so their
             net says nothing about whether any one lot is covered.
+        broker_symbol: The broker's own symbol for its row (IB's
+            ``contract.symbol``), or ``None`` when the broker holds none. What
+            an unresolved ``IB-CONID-*`` row still says about *which* holding
+            it is — the runtime cycle holds back only the cache row with the
+            same symbol (PR #35 code review, D1 ruling).
     """
 
     instrument_id: str
@@ -152,6 +157,14 @@ class PositionDiscrepancy:
     broker_quantity: Decimal
     broker_resolved: bool = True
     strategy_mixed_sides: bool = False
+    broker_symbol: str | None = None
+
+    @property
+    def symbol_key(self) -> str:
+        """The instrument's symbol as the broker would spell it, normalised for
+        matching: IB writes class shares ``BRK B`` where Nautilus writes
+        ``BRK-B``, so spaces, hyphens and dots are dropped and case ignored."""
+        return symbol_key(self.instrument_id.split(".", 1)[0])
 
     @property
     def strategy_contradicted(self) -> bool:
@@ -262,10 +275,19 @@ def compare_positions(
             broker_quantity=_ZERO if broker_row is None else broker_row.quantity,
             broker_resolved=True if broker_row is None else broker_row.instrument_resolved,
             strategy_mixed_sides=len(sides.get(instrument_id, ())) > 1,
+            broker_symbol=None if broker_row is None else broker_row.symbol,
         )
         if row.local_quantity != row.broker_quantity or row.strategy_contradicted:
             rows.append(row)
     return tuple(rows)
+
+
+def symbol_key(symbol: str | None) -> str:
+    """A symbol normalised for matching across the broker's and Nautilus's
+    spellings (``BRK B`` / ``BRK-B`` / ``BRK.B`` → ``BRKB``); ``""`` for none."""
+    if not symbol:
+        return ""
+    return "".join(ch for ch in symbol.upper() if ch not in " -.")
 
 
 def count_synthetic(cached: Iterable[CachedPosition]) -> int:
@@ -273,13 +295,50 @@ def count_synthetic(cached: Iterable[CachedPosition]) -> int:
     return sum(1 for position in cached if position.is_synthetic)
 
 
-def split_by_owner(cached: Iterable[CachedPosition], instrument_id: str) -> tuple[Decimal, Decimal]:
+def strategies_on_both_sides(
+    cached: Iterable[CachedPosition],
+    instrument_id: str,
+    *,
+    session_strategy_ids: Collection[str] | None = None,
+) -> bool:
+    """Whether the session's own lots on ``instrument_id`` are long *and* short.
+
+    Their net then says nothing about whether any one lot is covered (the
+    mixed-sides rule, Story 4.7's code review), so the resume check must not
+    read same-side growth off it: A +20 and B −10 net +10 beside an unowned +5
+    against a broker at +15 looks like covered growth, yet A closing its 20
+    carries the account through zero. Ownership follows :func:`split_by_owner`.
+    """
+    sides = set()
+    for position in cached:
+        if position.instrument_id != instrument_id or position.is_synthetic:
+            continue
+        if session_strategy_ids is not None and position.strategy_id not in session_strategy_ids:
+            continue
+        sides.add(position.quantity > 0)
+    return len(sides) > 1
+
+
+def split_by_owner(
+    cached: Iterable[CachedPosition],
+    instrument_id: str,
+    *,
+    session_strategy_ids: Collection[str] | None = None,
+) -> tuple[Decimal, Decimal]:
     """The strategies' signed net on ``instrument_id``, and the part no strategy owns.
 
     Story 4.5 (D-C): a holding reconciliation imported because no strategy's
     position explains it — a manual trade, an engine cache that lost it — is
     the **unowned** part. Synthetic positions that net to zero (the triple a
     pre-4.5 restart left, ``EXTERNAL +N / INTERNAL-DIFF −N``) own nothing.
+
+    ``session_strategy_ids`` (PR #35 code review, D4 ruling): when given, a
+    position under a strategy id **this session will not start** — one a
+    pre-fix run left under an id no spec entry resolves to any more — is
+    unowned too. Nothing of this session will manage it, and the strategy that
+    resolves to the new id would otherwise read its own book as flat and enter
+    beside it (FR38). ``None`` keeps Story 4.5's rule: every non-synthetic id
+    is owned.
 
     Returns:
         ``(owned, unowned)``, each exact.
@@ -288,7 +347,10 @@ def split_by_owner(cached: Iterable[CachedPosition], instrument_id: str) -> tupl
     for position in cached:
         if position.instrument_id != instrument_id:
             continue
-        if position.is_synthetic:
+        stale = (
+            session_strategy_ids is not None and position.strategy_id not in session_strategy_ids
+        )
+        if position.is_synthetic or stale:
             unowned += position.quantity
         else:
             owned += position.quantity
