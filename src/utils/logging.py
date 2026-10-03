@@ -14,7 +14,7 @@ import logging
 import logging.handlers
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 import structlog
 from structlog.types import Processor
@@ -27,13 +27,17 @@ from src.config import get_settings
 _nautilus_log_guard: Any = None
 
 
-def configure_logging() -> None:
+def configure_logging(stream: TextIO | None = None) -> None:
     """
     Configure structured logging for the application.
 
     Sets up:
     1. Console handler with colored output (INFO level by default)
     2. File handler with JSON output (DEBUG level by default)
+
+    Args:
+        stream: Where console output goes; stdout when omitted. The research MCP
+            server passes stderr, because its stdout carries the protocol.
     """
     settings = get_settings()
     log_level = getattr(logging, settings.log_level.upper(), logging.INFO)
@@ -58,13 +62,13 @@ def configure_logging() -> None:
     ]
 
     # Configure standard library logging
-    logging.basicConfig(format="%(message)s", stream=sys.stdout, level=log_level)
+    logging.basicConfig(format="%(message)s", stream=stream or sys.stdout, level=log_level)
 
     root_logger = logging.getLogger()
     root_logger.handlers = []  # Clear existing handlers
 
     # 1. Console Handler (Human readable)
-    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler = logging.StreamHandler(stream or sys.stdout)
     console_handler.setLevel(log_level)
 
     # Use ConsoleRenderer for colorful output in development
