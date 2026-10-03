@@ -23,18 +23,26 @@ src/
 │   ├── backtest_runner.py     # Legacy: MinimalBacktestRunner, direct params
 │   ├── results_extractor.py  # Nautilus metrics + custom calcs (drawdown, CAGR, Calmar)
 │   ├── analytics.py / metrics.py / fee_models.py / position_sizing.py / risk_management.py
+│   ├── benchmarks/        # buy_and_hold: backtest-only, NOT in StrategyRegistry (never live)
 │   └── strategies/
 │       ├── sma_crossover.py / sma_momentum.py  # Built-in strategies
 │       └── custom/            # GIT SUBMODULE (private strategies)
 ├── db/                    # → see docs/agent/persistence.md
 │   ├── session.py / session_sync.py   # Async (web) + sync (CLI) sessions
 │   ├── exceptions.py / models/ / repositories/
+├── mcp_server/            # Research MCP (stdio): python -m src.mcp_server
+│   ├── server.py          # build_server + REGISTERED_TOOLS (pinned by test)
+│   ├── tools/             # thin tool wrappers; failures returned as {code, message, fix}
+│   ├── request.py         # spec → named-catalog BacktestRequest + config hash (one path)
+│   ├── jobs/              # file-backed store + single-worker runner (process per job)
+│   └── worker.py          # child process: load_from_catalog → orchestrator → verify row
 ├── models/                # Domain Pydantic models (request, result, trade, strategy)
 ├── services/              # → see docs/agent/data-pipeline.md
 │   ├── data_catalog.py / data_service.py / data_fetcher.py
 │   ├── ibkr_client.py / kraken_client.py
 │   ├── exceptions.py / csv_loader.py / nautilus_converter.py
 │   ├── backtest_persistence.py / backtest_query.py
+│   ├── provenance.py      # git commit/dirty + compute_config_hash, stamped on every run
 │   └── reports/           # CSV, JSON, text exporters
 └── utils/
     ├── logging.py         # structlog config + Nautilus LogGuard

@@ -75,3 +75,29 @@ async def test_missing_data_fails_fast_without_queueing(server_params):
         )
     assert result["ok"] is False
     assert result["error"]["details"]["errors"][0]["code"] == "symbol_not_in_catalog"
+
+
+def test_stdout_stays_clean_while_a_worker_runs(server_params, created_runs):
+    """The engine, its logger and Rich all write to stdout: none of it may reach the protocol."""
+    import time
+
+    from tests.component.mcp_server.raw_stdio import RawStdioServer, non_protocol_lines
+
+    server = RawStdioServer(server_params.env)
+    try:
+        server.initialize()
+        submitted = server.call_tool("submit_backtest", {"strategy": "sma_crossover", **WINDOW})
+        assert submitted["ok"], submitted
+        deadline = time.monotonic() + 180
+        while time.monotonic() < deadline:
+            job = server.call_tool("get_job", {"job_id": submitted["job_id"]})
+            if job["state"] not in ("queued", "running"):
+                break
+            time.sleep(0.25)
+        if job.get("result"):
+            created_runs.append(job["result"]["run_id"])
+        assert job["state"] == "succeeded", job
+        assert job["log_tail"], "worker output belongs in the job log"
+    finally:
+        lines = server.close()
+    assert non_protocol_lines(lines) == []

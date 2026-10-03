@@ -30,6 +30,7 @@ make typecheck          # mypy src/core src/services
 make install-hooks      # Install git pre-commit hook (run once per clone)
 
 uv run python -m src.cli.main          # CLI entry point
+uv run python -m src.mcp_server        # Research MCP server (stdio; Claude Desktop launches it)
 make web                                # Web UI (http://127.0.0.1:8000)
 ./scripts/build-css.sh                  # Build Tailwind CSS (required first time)
 ```

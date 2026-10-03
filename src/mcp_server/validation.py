@@ -70,7 +70,8 @@ def validate(spec: BacktestSpec, *, default_catalog: str) -> dict[str, Any]:
         resolved = resolve(spec, default_catalog=default_catalog)
     except ToolFailure as failure:
         errors.append(failure)
-    coverage, warnings = None, []
+    coverage: dict[str, Any] | None = None
+    warnings: list[str] = []
     catalog = spec.catalog or default_catalog
     if catalog:
         coverage, data_errors, warnings = _coverage(spec, catalog)

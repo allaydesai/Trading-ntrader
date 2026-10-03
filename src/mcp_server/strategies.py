@@ -22,7 +22,7 @@ class StrategyRef:
     description: str
     aliases: tuple[str, ...]
     strategy_path: str
-    config_path: str
+    config_path: str | None
     param_model: type[BaseModel] | None
 
 

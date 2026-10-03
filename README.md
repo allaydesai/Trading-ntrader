@@ -49,6 +49,15 @@ NTrader is a comprehensive backtesting platform designed for traders, quants, an
 - Dark theme with responsive design
 - HTMX-powered dynamic updates
 
+### Research MCP Server
+- Local stdio [MCP](https://modelcontextprotocol.io) server so Claude can validate, run,
+  compare and file backtests from a chat (spec: `docs/product/NTrader MCP Server — Spec.md`)
+- Every backtest runs in a fresh worker process on the same path as `backtest run --catalog`;
+  no IBKR fetch, no fake instruments: missing data fails fast with the fix
+- Every run records its git commit, dirty state and config hash
+- Built-in `buy_and_hold` benchmark for side-by-side comparison
+- Never trades, never starts or stops sessions, never imports data
+
 ## Quick Start
 
 ### Prerequisites
@@ -384,6 +393,56 @@ works straight from the nav. To target a different catalog, start from the explo
 (pick a ticker → *Run Backtest*) or pass `?catalog=<name>` in the URL. Selecting a
 non-catalog data source (mock / ibkr / kraken) ignores the catalog field.
 
+### 8. Research with Claude (MCP server)
+
+The research MCP server exposes NTrader to Claude Desktop (or any MCP client) over
+stdio. It must run natively on the Mac, where Postgres and the Parquet catalogs live.
+
+```bash
+# Run it by hand (it waits for an MCP client on stdin)
+uv run python -m src.mcp_server
+
+# Inspect it interactively
+npx @modelcontextprotocol/inspector uv --directory "$PWD" run python -m src.mcp_server
+```
+
+Add it to Claude Desktop's `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "ntrader-research": {
+      "command": "uv",
+      "args": ["--directory", "/Users/<you>/dev/Trading-ntrader", "run", "python", "-m", "src.mcp_server"],
+      "env": {
+        "NTRADER_MCP_VAULT_PATH": "/Users/<you>/Library/Mobile Documents/com~apple~CloudDocs/Trading Research"
+      }
+    }
+  }
+}
+```
+
+**Tools (phase 1):** `server_info`, `list_strategies`, `describe_strategy`, `list_catalogs`,
+`catalog_availability`, `validate_config`, `submit_backtest`, `get_job`, `list_jobs`,
+`cancel_job`, `get_run`, `compare_runs`, `export_results`.
+
+A typical session: `validate_config` → `submit_backtest` for the strategy and for
+`buy_and_hold` on the same window → `get_job` until both finish → `compare_runs` →
+`export_results` (writes `<slug>.json` and `<slug>.trades.csv` to `Lab/results/` in the
+vault, in the same format as the vault's queue runner). Runs appear in
+`backtest history` and the web UI like any other run.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `NTRADER_MCP_VAULT_PATH` | unset (export disabled) | Trading Research vault root |
+| `NTRADER_MCP_EXPORT_FOLDERS` | `["Lab/results"]` | Vault folders export may write to |
+| `NTRADER_MCP_JOBS_DIR` | `~/.ntrader/mcp/jobs` | One directory per job (request, status, log, result) |
+| `NTRADER_MCP_DEFAULT_CATALOG` | `DEFAULT_CATALOG_NAME` | Catalog used when a request names none |
+| `NTRADER_MCP_JOB_TIMEOUT_S` | `3600` | Worker wall-clock limit |
+
+One job runs at a time; `cancel_job` stops a running worker within five seconds. Apply
+migrations first (`alembic upgrade head`): runs store their provenance in new columns.
+
 ## Available Strategies
 
 ### Built-in Example Strategies
@@ -498,7 +557,9 @@ src/
 ├── api/              # FastAPI web application
 ├── cli/              # Command line interface
 ├── core/             # Core business logic
+│   ├── benchmarks/   # Backtest-only benchmarks (buy_and_hold); not live-selectable
 │   └── strategies/   # Trading strategy implementations
+├── mcp_server/       # Research MCP server (stdio) and its backtest worker
 ├── models/           # Pydantic data models
 ├── services/         # Business services (IBKR, Kraken, analytics)
 ├── db/               # Database models and migrations
