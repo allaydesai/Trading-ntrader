@@ -58,7 +58,8 @@ def compute_config_hash(request: BacktestRequest) -> str:
     return hashlib.sha256(encoded.encode()).hexdigest()
 
 
-def _git(cwd: Path, *args: str) -> str | None:
+def git_output(cwd: Path, *args: str) -> str | None:
+    """Stdout of a git command run in ``cwd``; None when git fails or is missing."""
     try:
         proc = subprocess.run(
             ["git", *args], cwd=cwd, capture_output=True, text=True, timeout=_GIT_TIMEOUT_S
@@ -70,14 +71,15 @@ def _git(cwd: Path, *args: str) -> str | None:
 
 def git_provenance(repo_root: Path = REPO_ROOT) -> RunProvenance:
     """Read HEAD, dirty state and the custom-strategies submodule HEAD."""
-    if _git(repo_root, "rev-parse", "--show-toplevel") is None:
+    if git_output(repo_root, "rev-parse", "--show-toplevel") is None:
         return RunProvenance()
-    status = _git(repo_root, "status", "--porcelain")
+    status = git_output(repo_root, "status", "--porcelain")
     submodule = repo_root / STRATEGIES_SUBMODULE
+    strategies_commit = git_output(submodule, "rev-parse", "HEAD") if submodule.is_dir() else None
     return RunProvenance(
-        git_commit=_git(repo_root, "rev-parse", "HEAD"),
+        git_commit=git_output(repo_root, "rev-parse", "HEAD"),
         git_dirty=None if status is None else bool(status),
-        strategies_commit=_git(submodule, "rev-parse", "HEAD") if submodule.is_dir() else None,
+        strategies_commit=strategies_commit,
     )
 
 

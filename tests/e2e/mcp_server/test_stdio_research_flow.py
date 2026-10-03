@@ -1,7 +1,8 @@
 """Scenario steps 4-5 through the real server over stdio (research MCP phase-1 exit check).
 
-validate -> submit strategy and buy-and-hold -> poll -> read runs, against the
-real e2e-test catalog and Postgres, with a real worker process per job.
+validate -> submit strategy and buy-and-hold -> poll -> read and compare runs ->
+file them in a (temporary) vault, against the real e2e-test catalog and Postgres,
+with a real worker process per job.
 """
 
 import asyncio
@@ -25,7 +26,7 @@ async def _finish(client: Client, job_id: str, timeout_s: float = 180) -> dict:
     raise AssertionError(f"job {job_id} did not finish: {job}")
 
 
-async def test_validate_run_and_benchmark(server_params, created_runs):
+async def test_validate_run_compare_and_file(server_params, created_runs, vault):
     async with Client(server_params) as client:
         info = await call(client, "server_info")
         assert info["database"]["ok"] and "e2e-test" in info["catalogs"]["names"]
@@ -49,6 +50,22 @@ async def test_validate_run_and_benchmark(server_params, created_runs):
             assert job["state"] == "succeeded", job
             assert job["result"]["config_hash"] == job["request"]["config_hash"]
         assert jobs[1]["result"]["headline"]["total_trades"] == 1
+
+        run_ids = [job["result"]["run_id"] for job in jobs]
+        run = await call(client, "get_run", {"run_id": run_ids[0]})
+        assert run["provenance"]["git_commit"]
+        comparison = await call(client, "compare_runs", {"run_ids": run_ids})
+        assert [r["kind"] for r in comparison["rows"]] == ["strategy", "benchmark"]
+
+        exported = await call(client, "export_results", {"run_ids": run_ids, "slug": "e2e-phase1"})
+        assert exported["ok"], exported
+        assert (vault / "Lab" / "results" / "e2e-phase1.json").is_file()
+        refused = await call(
+            client,
+            "export_results",
+            {"run_ids": run_ids, "slug": "x", "folder": "Strategies"},
+        )
+        assert refused["error"]["code"] == "folder_not_allowed"
 
 
 async def test_missing_data_fails_fast_without_queueing(server_params):

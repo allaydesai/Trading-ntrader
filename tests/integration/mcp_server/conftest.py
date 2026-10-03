@@ -95,7 +95,8 @@ def isolated_results(request, monkeypatch):
             yield session
 
     monkeypatch.setattr("src.db.session_sync.get_sync_session", sync_session)
-    monkeypatch.setattr("src.mcp_server.catalogs.get_sync_session", sync_session)
+    for module in ("catalogs", "runs", "export"):
+        monkeypatch.setattr(f"src.mcp_server.{module}.get_sync_session", sync_session)
     monkeypatch.setattr("src.core.backtest_orchestrator.get_session", async_session)
     yield sync_maker
 
@@ -108,8 +109,8 @@ def isolated_results(request, monkeypatch):
 def job_dir(tmp_path):
     """Write a worker job directory for a spec dict."""
 
-    def make(spec: dict) -> Path:
-        path = tmp_path / "job"
+    def make(spec: dict, name: str = "job") -> Path:
+        path = tmp_path / name
         path.mkdir()
         (path / "request.json").write_text(json.dumps({"kind": "backtest", "spec": spec}))
         return path

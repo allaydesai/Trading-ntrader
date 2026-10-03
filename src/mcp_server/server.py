@@ -8,12 +8,12 @@ from mcp.server import MCPServer
 from src.mcp_server.context import ServerContext
 from src.mcp_server.jobs.runner import JobRunner
 from src.mcp_server.jobs.store import JobStore
-from src.mcp_server.tools import catalogue, info, jobs
+from src.mcp_server.tools import catalogue, info, jobs, runs
 
 #: Every tool this server registers. Pinned by test against the live registration
 #: and a literal, so adding or dropping a tool is always a deliberate, visible edit.
 REGISTERED_TOOLS: frozenset[str] = frozenset(
-    (*info.TOOL_NAMES, *catalogue.TOOL_NAMES, *jobs.TOOL_NAMES)
+    (*info.TOOL_NAMES, *catalogue.TOOL_NAMES, *jobs.TOOL_NAMES, *runs.TOOL_NAMES)
 )
 
 INSTRUCTIONS = """\
@@ -46,4 +46,5 @@ def build_server(ctx: ServerContext | None = None) -> MCPServer:
     info.register(server, ctx, capabilities=sorted(REGISTERED_TOOLS))
     catalogue.register(server, ctx)
     jobs.register(server, ctx)
+    runs.register(server, ctx)
     return server
