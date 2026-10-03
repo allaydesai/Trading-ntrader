@@ -1,0 +1,110 @@
+"""Job tools through an in-memory MCP client, with a fake worker process."""
+
+import asyncio
+import json
+import sys
+from pathlib import Path
+
+import pytest
+from mcp import Client
+
+from src.mcp_server import validation
+from src.mcp_server.context import ServerContext
+from src.mcp_server.jobs.runner import JobRunner
+from src.mcp_server.jobs.store import JobStore
+from src.mcp_server.server import build_server
+from src.mcp_server.settings import McpSettings
+
+pytestmark = pytest.mark.component
+
+FAKE = Path(__file__).with_name("fake_worker.py")
+COVERAGE = {
+    "symbol": "AAPL",
+    "catalog": "e2e-test",
+    "nautilus_id": "AAPL.NASDAQ",
+    "backtestable": True,
+    "timeframes": {
+        "1-DAY": {
+            "start": "2000-01-03T00:00:00+00:00",
+            "end": "2026-05-01T00:00:00+00:00",
+            "bars": 9,
+        }
+    },
+}
+REQUEST = {
+    "strategy": "sma",
+    "symbol": "AAPL",
+    "start": "2018-01-01",
+    "end": "2019-12-31",
+    "catalog": "e2e-test",
+}
+
+
+def _fake_command(job_dir: Path) -> list[str]:
+    # The fake reads its behaviour from spec.behaviour; inject it for real specs.
+    request = json.loads((job_dir / "request.json").read_text())
+    request["spec"].setdefault("behaviour", "ok-run")
+    (job_dir / "request.json").write_text(json.dumps(request))
+    return [sys.executable, str(FAKE), str(job_dir)]
+
+
+@pytest.fixture
+def ctx(tmp_path, monkeypatch):
+    monkeypatch.setattr(validation, "catalog_availability", lambda symbol, catalog: COVERAGE)
+    settings = McpSettings(_env_file=None, jobs_dir=tmp_path / "jobs")
+    runner = JobRunner(JobStore(settings.jobs_dir), timeout_s=30, worker_command=_fake_command)
+    return ServerContext(settings=settings, runner=runner)
+
+
+async def _call(client, name, args=None):
+    result = await client.call_tool(name, args or {})
+    assert not result.is_error, result.content
+    return result.structured_content
+
+
+async def test_submit_then_poll_to_success(ctx):
+    async with Client(build_server(ctx)) as client:
+        submitted = await _call(client, "submit_backtest", REQUEST)
+        assert submitted["ok"] is True, submitted
+        assert submitted["resolved"]["strategy"] == "sma_crossover"
+        job_id = submitted["job_id"]
+        for _ in range(200):
+            job = await _call(client, "get_job", {"job_id": job_id})
+            if job["state"] not in ("queued", "running"):
+                break
+            await asyncio.sleep(0.05)
+        assert job["state"] == "succeeded", job
+        assert job["result"]["run_id"] == "ok-run"
+        assert job["request"]["strategy"] == "sma_crossover"
+        listed = await _call(client, "list_jobs")
+        assert [j["job_id"] for j in listed["jobs"]] == [job_id]
+
+
+async def test_stored_spec_pins_the_catalog(ctx, monkeypatch):
+    ctx.settings.default_catalog = "e2e-test"
+    async with Client(build_server(ctx)) as client:
+        submitted = await _call(client, "submit_backtest", {**REQUEST, "catalog": None})
+    request = ctx.runner.store.request(submitted["job_id"])
+    assert request["spec"]["catalog"] == "e2e-test"
+
+
+async def test_invalid_request_queues_nothing(ctx):
+    async with Client(build_server(ctx)) as client:
+        result = await _call(client, "submit_backtest", {**REQUEST, "strategy": "nope"})
+        assert result["ok"] is False
+        assert result["error"]["code"] == "validation_failed"
+        assert result["error"]["details"]["errors"][0]["code"] == "unknown_strategy"
+        assert (await _call(client, "list_jobs"))["jobs"] == []
+
+
+async def test_unknown_job_ids(ctx):
+    async with Client(build_server(ctx)) as client:
+        for tool in ("get_job", "cancel_job"):
+            result = await _call(client, tool, {"job_id": "../etc"})
+            assert result["error"]["code"] == "unknown_job"
+
+
+async def test_list_jobs_rejects_unknown_state(ctx):
+    async with Client(build_server(ctx)) as client:
+        result = await _call(client, "list_jobs", {"state": "exploded"})
+    assert result["error"]["code"] == "invalid_state"
