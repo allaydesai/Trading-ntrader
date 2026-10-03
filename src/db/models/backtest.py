@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     ForeignKey,
     Index,
@@ -124,6 +125,15 @@ class BacktestRun(Base, TimestampMixin):
     # PG enum type — AR6 asks for one column, and every enum type is another
     # create/drop pair in every migration that follows.
     run_type: Mapped[str] = mapped_column(String(20), nullable=False, server_default="backtest")
+
+    # Provenance (research MCP spec, S2.3): which code and which configuration
+    # produced this run. Nullable — rows written before the columns existed, and
+    # runs outside a git checkout, have no value. Stamped by the orchestrator for
+    # every caller (CLI, web UI, MCP worker).
+    git_commit: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    git_dirty: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    strategies_commit: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    config_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
 
     # Relationships
     metrics: Mapped[Optional["PerformanceMetrics"]] = relationship(

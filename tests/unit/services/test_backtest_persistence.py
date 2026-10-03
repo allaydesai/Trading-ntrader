@@ -12,6 +12,7 @@ from src.db.exceptions import (
     DuplicateRecordError,
     ValidationError,
 )
+from src.models.run_provenance import RunProvenance
 from src.services.backtest_persistence import BacktestPersistenceService
 
 
@@ -392,3 +393,63 @@ class TestBacktestPersistenceServiceMetricCalculation:
         metrics_call_kwargs = mock_repository.create_performance_metrics.call_args.kwargs
         assert metrics_call_kwargs["win_rate"] is None  # Cannot calculate with 0 trades
         assert metrics_call_kwargs["total_trades"] == 0
+
+
+class TestBacktestPersistenceServiceProvenance:
+    """Provenance (git commit, dirty state, config hash) reaches the repository (S2.3)."""
+
+    PROVENANCE = RunProvenance(
+        git_commit="a" * 40, git_dirty=True, strategies_commit="b" * 40, config_hash="c" * 64
+    )
+
+    @staticmethod
+    def _common_kwargs(sample_config_snapshot):
+        return dict(
+            run_id=uuid4(),
+            strategy_name="SMA Crossover",
+            strategy_type="sma_crossover",
+            instrument_symbol="QQQ",
+            start_date=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            end_date=datetime(2023, 12, 31, tzinfo=timezone.utc),
+            initial_capital=Decimal("100000.00"),
+            data_source="catalog:firstrate-etf",
+            execution_duration_seconds=Decimal("1.0"),
+            config_snapshot=sample_config_snapshot,
+        )
+
+    @pytest.mark.asyncio
+    async def test_success_passes_provenance(
+        self, persistence_service, mock_repository, sample_backtest_result, sample_config_snapshot
+    ):
+        mock_repository.create_backtest_run.return_value = Mock(id=1)
+        await persistence_service.save_backtest_results(
+            **self._common_kwargs(sample_config_snapshot),
+            backtest_result=sample_backtest_result,
+            provenance=self.PROVENANCE,
+        )
+        call_kwargs = mock_repository.create_backtest_run.call_args.kwargs
+        assert call_kwargs["provenance"] == self.PROVENANCE
+
+    @pytest.mark.asyncio
+    async def test_failure_passes_provenance(
+        self, persistence_service, mock_repository, sample_config_snapshot
+    ):
+        mock_repository.create_backtest_run.return_value = Mock(id=1)
+        await persistence_service.save_failed_backtest(
+            **self._common_kwargs(sample_config_snapshot),
+            error_message="boom",
+            provenance=self.PROVENANCE,
+        )
+        call_kwargs = mock_repository.create_backtest_run.call_args.kwargs
+        assert call_kwargs["provenance"] == self.PROVENANCE
+
+    @pytest.mark.asyncio
+    async def test_provenance_defaults_to_none(
+        self, persistence_service, mock_repository, sample_backtest_result, sample_config_snapshot
+    ):
+        mock_repository.create_backtest_run.return_value = Mock(id=1)
+        await persistence_service.save_backtest_results(
+            **self._common_kwargs(sample_config_snapshot),
+            backtest_result=sample_backtest_result,
+        )
+        assert mock_repository.create_backtest_run.call_args.kwargs["provenance"] is None

@@ -120,8 +120,9 @@ SIZE_BASELINE: dict[str, int] = {
     "src/config.py::IBKRSettings": 101,
     "src/core/analytics.py::PortfolioAnalytics": 150,
     "src/core/analytics.py::PortfolioAnalytics.calculate_performance_attribution": 55,
-    "src/core/backtest_orchestrator.py::BacktestOrchestrator": 325,
-    "src/core/backtest_orchestrator.py::BacktestOrchestrator._persist_results": 57,
+    # MCP phase 1, 325 -> 282: persistence record fields extracted to `_run_record_fields`
+    # (and `_persist_results` dropped under its cap) while adding run provenance.
+    "src/core/backtest_orchestrator.py::BacktestOrchestrator": 282,
     "src/core/backtest_runner.py::MinimalBacktestRunner": 926,
     "src/core/backtest_runner.py::MinimalBacktestRunner._extract_results": 111,
     "src/core/backtest_runner.py::MinimalBacktestRunner._persist_backtest_results": 100,
@@ -171,13 +172,15 @@ SIZE_BASELINE: dict[str, int] = {
     # Story 4.5, 52 -> 51 (shrank): the own-book net replaced three portfolio reads.
     "src/core/strategies/sma_momentum.py::SMAMomentum.on_bar": 51,
     "src/core/strategy_registry.py::StrategyRegistry": 101,
-    "src/db/repositories/backtest_repository.py::BacktestRepository": 236,
+    # MCP phase 1, 236 -> 237: `create_backtest_run` takes run provenance (S2.3).
+    "src/db/repositories/backtest_repository.py::BacktestRepository": 237,
     "src/db/repositories/backtest_repository_sync.py::SyncBacktestRepository": 153,
     "src/db/repositories/catalog_instrument_repository.py::CatalogInstrumentRepository": 122,
     "src/db/repositories/catalog_instrument_repository.py::SyncCatalogInstrumentRepository": 107,
     "src/models/backtest_request.py::BacktestRequest": 176,
     "src/models/price_validation_report.py::evaluate_ticker_deviation": 64,
-    "src/services/backtest_persistence.py::BacktestPersistenceService": 274,
+    # MCP phase 1, 274 -> 276: both save paths take run provenance (S2.3).
+    "src/services/backtest_persistence.py::BacktestPersistenceService": 276,
     "src/services/backtest_persistence.py::BacktestPersistenceService._extract_and_validate_metrics": 58,  # noqa: E501
     "src/services/backtest_persistence.py::BacktestPersistenceService.save_trades_from_positions": 137,  # noqa: E501
     "src/services/backtest_query.py::BacktestQueryService": 108,

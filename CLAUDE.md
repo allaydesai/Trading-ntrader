@@ -58,7 +58,7 @@ make web                                # Web UI (http://127.0.0.1:8000)
 2. **`--forked` tests** — integration tests need `--forked` because Nautilus C/Rust extensions corrupt state across `fork()`. Already configured in `make test-integration`
 3. **Strategies submodule** — `src/core/strategies/custom/` is a git submodule. Update: `git submodule update --remote`
 4. **BacktestEngine is single-use** — cannot be reused after a run; create a new instance each time
-5. **Alembic migrations** — run `alembic upgrade head` before first use. 17 migrations in `alembic/versions/`, single head (`85c949ac0374`)
+5. **Alembic migrations** — run `alembic upgrade head` before first use. 18 migrations in `alembic/versions/`, single head (`6377e1ce0bf9`)
 
 ## Anti-Patterns (things that break)
 

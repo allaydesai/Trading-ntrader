@@ -19,6 +19,7 @@ from src.db.models.backtest import BacktestRun
 from src.db.repositories.backtest_repository import BacktestRepository
 from src.models.backtest_result import BacktestResult
 from src.models.config_snapshot import StrategyConfigSnapshot
+from src.models.run_provenance import RunProvenance
 
 logger = structlog.get_logger(__name__)
 
@@ -83,6 +84,7 @@ class BacktestPersistenceService:
         config_snapshot: dict,
         backtest_result: BacktestResult,
         reproduced_from_run_id: Optional[UUID] = None,
+        provenance: Optional[RunProvenance] = None,
     ) -> BacktestRun:
         """
         Save successful backtest execution results.
@@ -100,6 +102,7 @@ class BacktestPersistenceService:
             config_snapshot: Strategy configuration
             backtest_result: Backtest execution results
             reproduced_from_run_id: Original run if reproduction
+            provenance: Git commit, dirty state and config hash of the run
 
         Returns:
             Created BacktestRun instance
@@ -133,6 +136,7 @@ class BacktestPersistenceService:
             config_snapshot=validated_config,
             error_message=None,
             reproduced_from_run_id=reproduced_from_run_id,
+            provenance=provenance,
         )
 
         # Extract and validate metrics from backtest result
@@ -164,6 +168,7 @@ class BacktestPersistenceService:
         execution_duration_seconds: Decimal,
         config_snapshot: dict,
         error_message: str,
+        provenance: Optional[RunProvenance] = None,
     ) -> BacktestRun:
         """
         Save failed backtest execution.
@@ -183,6 +188,7 @@ class BacktestPersistenceService:
             execution_duration_seconds: Time taken before failure
             config_snapshot: Strategy configuration
             error_message: Error description
+            provenance: Git commit, dirty state and config hash of the run
 
         Returns:
             Created BacktestRun instance
@@ -211,6 +217,7 @@ class BacktestPersistenceService:
             execution_duration_seconds=execution_duration_seconds,
             config_snapshot=validated_config,
             error_message=error_message,
+            provenance=provenance,
         )
 
         logger.info("Failed backtest saved", run_id=str(run_id))

@@ -33,7 +33,9 @@ from src.db.repositories.backtest_repository import BacktestRepository
 from src.db.session import get_session
 from src.models.backtest_request import BacktestRequest
 from src.models.backtest_result import BacktestResult
+from src.models.run_provenance import RunProvenance
 from src.services.backtest_persistence import BacktestPersistenceService
+from src.services.provenance import run_provenance
 
 logger = structlog.get_logger(__name__)
 
@@ -55,6 +57,30 @@ def _make_json_serializable(obj: Any) -> Any:
     elif isinstance(obj, Decimal):
         return str(obj)
     return obj
+
+
+def _utc(value: datetime) -> datetime:
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def _run_record_fields(request: BacktestRequest) -> dict[str, Any]:
+    """Run-row fields shared by the success and failure persistence paths."""
+    return {
+        "strategy_name": request.strategy_type.replace("_", " ").title(),
+        "strategy_type": request.strategy_type,
+        "instrument_symbol": request.symbol,
+        "start_date": _utc(request.start_date),
+        "end_date": _utc(request.end_date),
+        "initial_capital": request.starting_balance,
+        "data_source": request.to_persistence_data_source(),
+        "config_snapshot": {
+            "strategy_path": request.strategy_path,
+            "config_path": request.config_path,
+            "version": "1.0",
+            "config": _make_json_serializable(request.strategy_config),
+            "bar_type": request.bar_type,
+        },
+    }
 
 
 class BacktestOrchestrator:
@@ -89,6 +115,7 @@ class BacktestOrchestrator:
         request: BacktestRequest,
         bars: list[Bar],
         instrument: Instrument,
+        provenance: RunProvenance | None = None,
     ) -> tuple[BacktestResult, UUID | None]:
         """
         Execute backtest with optional persistence.
@@ -97,6 +124,8 @@ class BacktestOrchestrator:
             request: Unified backtest request containing all parameters
             bars: Pre-loaded Bar objects from catalog
             instrument: Instrument object for the backtest
+            provenance: Git state and config hash to record; computed from the
+                working tree and ``request`` when omitted
 
         Returns:
             Tuple of (BacktestResult, run_id if persisted else None)
@@ -109,6 +138,8 @@ class BacktestOrchestrator:
 
         if not bars:
             raise ValueError("No bars provided for backtest")
+        if request.persist and provenance is None:
+            provenance = run_provenance(request)
 
         try:
             # Setup engine
@@ -142,6 +173,7 @@ class BacktestOrchestrator:
                     request=request,
                     result=result,
                     execution_duration=execution_duration,
+                    provenance=provenance,
                 )
                 logger.info(
                     "Backtest completed and persisted",
@@ -160,6 +192,7 @@ class BacktestOrchestrator:
                     request=request,
                     error_message=str(e),
                     execution_duration=execution_duration,
+                    provenance=provenance,
                 )
             raise
 
@@ -515,40 +548,16 @@ class BacktestOrchestrator:
         request: BacktestRequest,
         result: BacktestResult,
         execution_duration: Decimal,
+        provenance: RunProvenance | None = None,
     ) -> None:
         """Persist successful backtest results to database."""
         try:
-            # Build config snapshot (convert Decimals for JSON serialization)
-            config_snapshot: dict[str, Any] = {
-                "strategy_path": request.strategy_path,
-                "config_path": request.config_path,
-                "version": "1.0",
-                "config": _make_json_serializable(request.strategy_config),
-                "bar_type": request.bar_type,
-            }
-
-            # Add equity curve if available
+            fields = _run_record_fields(request)
             equity_curve = self._extract_equity_curve(float(request.starting_balance))
             if equity_curve:
-                config_snapshot["equity_curve"] = equity_curve
-
-            # Add config file path if available
+                fields["config_snapshot"]["equity_curve"] = equity_curve
             if request.config_file_path:
-                config_snapshot["config_file_path"] = request.config_file_path
-
-            # Ensure dates are timezone-aware
-            start_tz = (
-                request.start_date
-                if request.start_date.tzinfo
-                else request.start_date.replace(tzinfo=timezone.utc)
-            )
-            end_tz = (
-                request.end_date
-                if request.end_date.tzinfo
-                else request.end_date.replace(tzinfo=timezone.utc)
-            )
-
-            strategy_display_name = request.strategy_type.replace("_", " ").title()
+                fields["config_snapshot"]["config_file_path"] = request.config_file_path
 
             async with get_session() as session:
                 repository = BacktestRepository(session)
@@ -556,16 +565,10 @@ class BacktestOrchestrator:
 
                 backtest_run = await service.save_backtest_results(
                     run_id=run_id,
-                    strategy_name=strategy_display_name,
-                    strategy_type=request.strategy_type,
-                    instrument_symbol=request.symbol,
-                    start_date=start_tz,
-                    end_date=end_tz,
-                    initial_capital=request.starting_balance,
-                    data_source=request.to_persistence_data_source(),
+                    **fields,
                     execution_duration_seconds=execution_duration,
-                    config_snapshot=config_snapshot,
                     backtest_result=result,
+                    provenance=provenance,
                 )
 
                 # Capture trades from positions report. Trade capture is best-effort
@@ -601,48 +604,21 @@ class BacktestOrchestrator:
         request: BacktestRequest,
         error_message: str,
         execution_duration: Decimal,
+        provenance: RunProvenance | None = None,
     ) -> None:
         """Persist failed backtest to database."""
         try:
             run_id = uuid4()
-
-            config_snapshot: dict[str, Any] = {
-                "strategy_path": request.strategy_path,
-                "config_path": request.config_path,
-                "version": "1.0",
-                "config": _make_json_serializable(request.strategy_config),
-                "bar_type": request.bar_type,
-            }
-
-            start_tz = (
-                request.start_date
-                if request.start_date.tzinfo
-                else request.start_date.replace(tzinfo=timezone.utc)
-            )
-            end_tz = (
-                request.end_date
-                if request.end_date.tzinfo
-                else request.end_date.replace(tzinfo=timezone.utc)
-            )
-
-            strategy_display_name = request.strategy_type.replace("_", " ").title()
-
             async with get_session() as session:
                 repository = BacktestRepository(session)
                 service = BacktestPersistenceService(repository)
 
                 await service.save_failed_backtest(
                     run_id=run_id,
-                    strategy_name=strategy_display_name,
-                    strategy_type=request.strategy_type,
-                    instrument_symbol=request.symbol,
-                    start_date=start_tz,
-                    end_date=end_tz,
-                    initial_capital=request.starting_balance,
-                    data_source=request.to_persistence_data_source(),
+                    **_run_record_fields(request),
                     execution_duration_seconds=execution_duration,
-                    config_snapshot=config_snapshot,
                     error_message=error_message,
+                    provenance=provenance,
                 )
 
                 await session.commit()
