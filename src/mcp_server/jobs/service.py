@@ -70,7 +70,8 @@ def job_view(runner: JobRunner, job_id: str, log_lines: int) -> dict[str, Any]:
     }
     result = store.result(job_id)
     if result and result.get("status") == "ok":
-        view["result"] = {k: result.get(k) for k in ("run_id", "config_hash", "headline")}
+        keys = ("run_id", "config_hash", "headline", "reproduction")
+        view["result"] = {k: result[k] for k in keys if k in result}
     return view
 
 

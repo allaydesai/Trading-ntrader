@@ -113,6 +113,22 @@ async def submit_in_study(runner: JobRunner, job: StudyJob) -> dict[str, Any]:
     return recorded
 
 
+async def queue_study_job(runner: JobRunner, job: StudyJob, warnings: list[str]) -> dict:
+    """Record a prepared study job in its ledger, queue it, and report it as a tool result."""
+    try:
+        recorded = await submit_in_study(runner, job)
+    except ToolFailure as failure:
+        return failure.to_dict()
+    return {
+        "ok": True,
+        **recorded,
+        "state": "queued",
+        "resolved": job.payload["resolved"],
+        "warnings": warnings,
+        "queue": runner.queue_state(),
+    }
+
+
 def _same(given: str | None, expected: str, what: str, study: ResearchStudy) -> None:
     if given is not None and given.strip().upper() != expected.upper():
         raise ToolFailure(

@@ -10,7 +10,7 @@ from src.mcp_server.context import ServerContext
 from src.mcp_server.errors import ToolFailure
 from src.mcp_server.jobs import service
 from src.mcp_server.jobs.runner import JobRunner
-from src.mcp_server.studies.submit import prepare_in_sample, submit_in_study
+from src.mcp_server.studies.submit import prepare_in_sample, queue_study_job
 from src.mcp_server.tools import build_spec, call
 
 TOOL_NAMES = ("submit_backtest", "get_job", "list_jobs", "cancel_job")
@@ -131,19 +131,3 @@ async def _submit_in_study(
     if not prepared.pop("ok"):
         return {"ok": False, **prepared}
     return await queue_study_job(runner, prepared["job"], prepared["warnings"])
-
-
-async def queue_study_job(runner: JobRunner, job: Any, warnings: list[str]) -> dict[str, Any]:
-    """Record a prepared study job in its ledger, queue it, and report it."""
-    try:
-        recorded = await submit_in_study(runner, job)
-    except ToolFailure as failure:
-        return failure.to_dict()
-    return {
-        "ok": True,
-        **recorded,
-        "state": "queued",
-        "resolved": job.payload["resolved"],
-        "warnings": warnings,
-        "queue": runner.queue_state(),
-    }

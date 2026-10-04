@@ -32,6 +32,13 @@ PINNED_TOOLS = frozenset(
         "get_study",
         "list_studies",
         "update_study",
+        "submit_benchmark",
+        "reproduce_run",
+        "get_trades",
+        "get_equity_curve",
+        "get_regime_breakdown",
+        "export_bars",
+        "search_runs",
     }
 )
 

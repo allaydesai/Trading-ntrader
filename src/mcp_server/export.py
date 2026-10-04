@@ -55,10 +55,8 @@ class ExportTarget:
     csv_path: Path
 
 
-def export_target(
-    settings: McpSettings, folder: str, slug: str, *, overwrite: bool
-) -> ExportTarget:
-    """Where an export goes, after every check that it may be written there."""
+def vault_directory(settings: McpSettings, folder: str, slug: str) -> Path:
+    """An allow-listed, existing vault folder, after checking the slug that names files in it."""
     if settings.vault_path is None:
         raise ToolFailure(
             "vault_not_configured", "No vault is configured.", fix="Set NTRADER_MCP_VAULT_PATH."
@@ -80,13 +78,28 @@ def export_target(
         raise ToolFailure(
             "folder_missing", f"Vault folder '{folder}' does not exist.", fix="Create it first."
         )
-    target = ExportTarget(directory / f"{slug}.json", directory / f"{slug}.trades.csv")
-    if not overwrite and (target.json_path.exists() or target.csv_path.exists()):
+    return directory
+
+
+def refuse_existing(paths: list[Path], *, slug: str, folder: str, overwrite: bool) -> None:
+    """Refuse to replace an earlier export unless asked to."""
+    if not overwrite and any(p.exists() for p in paths):
         raise ToolFailure(
             "file_exists",
             f"'{slug}' already exists in '{folder}'.",
             fix="Choose another slug, or pass overwrite=true.",
         )
+
+
+def export_target(
+    settings: McpSettings, folder: str, slug: str, *, overwrite: bool
+) -> ExportTarget:
+    """Where an export goes, after every check that it may be written there."""
+    directory = vault_directory(settings, folder, slug)
+    target = ExportTarget(directory / f"{slug}.json", directory / f"{slug}.trades.csv")
+    refuse_existing(
+        [target.json_path, target.csv_path], slug=slug, folder=folder, overwrite=overwrite
+    )
     return target
 
 

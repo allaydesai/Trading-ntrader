@@ -78,12 +78,14 @@ async def _load(resolved: ResolvedRequest):
         )
 
 
-async def _execute(resolved: ResolvedRequest, data) -> UUID:
+async def _execute(resolved: ResolvedRequest, data, reproduces: UUID | None = None) -> UUID:
     from src.core.backtest_orchestrator import BacktestOrchestrator
 
     orchestrator = BacktestOrchestrator()
     try:
-        _, run_id = await orchestrator.execute(resolved.request, data.bars, data.instrument)
+        _, run_id = await orchestrator.execute(
+            resolved.request, data.bars, data.instrument, reproduced_from_run_id=reproduces
+        )
     finally:
         orchestrator.dispose()
     if run_id is None:
@@ -109,6 +111,25 @@ def _verify(run_id: UUID) -> dict[str, Any]:
         return to_jsonable({"config_hash": run.config_hash, "headline": headline})
 
 
+def _compare(original_id: UUID, run_id: UUID) -> dict[str, Any]:
+    """Whether a reproduction's metrics equal the original's, to stored precision (S2.3)."""
+    from src.db.repositories.backtest_repository_sync import SyncBacktestRepository
+    from src.db.session_sync import get_sync_session
+    from src.mcp_server.jsonable import to_jsonable
+    from src.mcp_server.metrics import METRIC_SPECS
+
+    with get_sync_session() as session:
+        repo = SyncBacktestRepository(session)
+        runs = {r.run_id: r for r in repo.find_by_run_ids([original_id, run_id])}
+        before, after = runs[original_id].metrics, runs[run_id].metrics
+        differences = {
+            name: {"original": getattr(before, name), "reproduced": getattr(after, name)}
+            for name in METRIC_SPECS
+            if getattr(before, name) != getattr(after, name)
+        }
+    return to_jsonable({"of": original_id, "matches": not differences, "differences": differences})
+
+
 def _failure(code: str, exc: Exception, fix: str) -> dict[str, Any]:
     return {"status": "failed", "error": {"code": code, "message": str(exc), "fix": fix}}
 
@@ -118,14 +139,19 @@ async def run_job(job_dir: Path) -> int:
     job = _Job(job_dir)
     try:
         job.phase("resolving")
-        spec = BacktestSpec(**job.request()["spec"])
+        request = job.request()
+        spec = BacktestSpec(**request["spec"])
+        reproduces = request.get("reproduced_from_run_id")
+        reproduces = UUID(reproduces) if reproduces else None
         resolved = resolve(spec, default_catalog="")
         job.phase("loading_data")
         data = await _load(resolved)
         job.phase("running")
-        run_id = await _execute(resolved, data)
+        run_id = await _execute(resolved, data, reproduces)
         job.phase("verifying")
         verified = _verify(run_id)
+        if reproduces is not None:
+            verified["reproduction"] = _compare(reproduces, run_id)
         job.phase("done")
         job.finish({"status": "ok", "run_id": str(run_id), **verified})
         return 0
