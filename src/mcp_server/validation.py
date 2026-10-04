@@ -45,10 +45,11 @@ def _window_problems(
             f"Requested {spec.start} to {spec.end}, but {timeframe} data covers {covers}; "
             "the run will use the overlap only."
         )
-    if coverage.get("start_is_earliest_across_timeframes") and timeframe != "1-DAY":
+    if span.get("start_is_exact") is False:
         warnings.append(
-            f"The start date is the earliest across all timeframes; {timeframe} bars may start "
-            "later. A window with no bars fails the job with data_not_found."
+            f"The start date is not {timeframe}'s own; its bars may start earlier or later. "
+            "A window with no bars fails the job with data_not_found. "
+            "Fix: run `ntrader catalog backfill-coverage-starts` for this catalog."
         )
     return [], warnings
 

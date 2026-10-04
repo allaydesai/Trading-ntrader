@@ -17,6 +17,34 @@ from src.db.models.catalog_instrument import CatalogInstrument
 from src.db.models.instrument_metadata import InstrumentMetadata
 from src.models.instrument_metadata import ResolutionStatus
 
+_TIMEFRAME_SUFFIXES = ("daily", "hourly", "minute", "5min", "30min")
+
+#: Every field an upsert copies onto an existing row. One list for both twins, so
+#: a new coverage column cannot be copied by one repository and dropped by the other.
+_UPSERT_FIELDS = (
+    "nautilus_id",
+    "asset_class",
+    "exchange",
+    "name",
+    "sector",
+    "industry",
+    "ipo_date",
+    "country",
+    "state",
+    "date_range_start",
+    "date_range_end",
+    *(
+        f"{prefix}_{suffix}"
+        for prefix in ("date_range_start", "date_range_end", "bar_count")
+        for suffix in _TIMEFRAME_SUFFIXES
+    ),
+)
+
+
+def _copy_upsert_fields(existing: CatalogInstrument, instrument: CatalogInstrument) -> None:
+    for name in _UPSERT_FIELDS:
+        setattr(existing, name, getattr(instrument, name))
+
 
 class CatalogInstrumentRepository:
     """Async repository for catalog instrument operations.
@@ -46,27 +74,7 @@ class CatalogInstrumentRepository:
         try:
             existing = await self.get_by_ticker(instrument.catalog_name, instrument.ticker)
             if existing:
-                existing.nautilus_id = instrument.nautilus_id
-                existing.asset_class = instrument.asset_class
-                existing.exchange = instrument.exchange
-                existing.name = instrument.name
-                existing.sector = instrument.sector
-                existing.industry = instrument.industry
-                existing.ipo_date = instrument.ipo_date
-                existing.country = instrument.country
-                existing.state = instrument.state
-                existing.date_range_start = instrument.date_range_start
-                existing.date_range_end = instrument.date_range_end
-                existing.date_range_end_daily = instrument.date_range_end_daily
-                existing.date_range_end_hourly = instrument.date_range_end_hourly
-                existing.date_range_end_minute = instrument.date_range_end_minute
-                existing.date_range_end_5min = instrument.date_range_end_5min
-                existing.date_range_end_30min = instrument.date_range_end_30min
-                existing.bar_count_daily = instrument.bar_count_daily
-                existing.bar_count_hourly = instrument.bar_count_hourly
-                existing.bar_count_minute = instrument.bar_count_minute
-                existing.bar_count_5min = instrument.bar_count_5min
-                existing.bar_count_30min = instrument.bar_count_30min
+                _copy_upsert_fields(existing, instrument)
                 await self.session.flush()
                 await self.session.refresh(existing)
                 return existing
@@ -288,27 +296,7 @@ class SyncCatalogInstrumentRepository:
         try:
             existing = self.get_by_ticker(instrument.catalog_name, instrument.ticker)
             if existing:
-                existing.nautilus_id = instrument.nautilus_id
-                existing.asset_class = instrument.asset_class
-                existing.exchange = instrument.exchange
-                existing.name = instrument.name
-                existing.sector = instrument.sector
-                existing.industry = instrument.industry
-                existing.ipo_date = instrument.ipo_date
-                existing.country = instrument.country
-                existing.state = instrument.state
-                existing.date_range_start = instrument.date_range_start
-                existing.date_range_end = instrument.date_range_end
-                existing.date_range_end_daily = instrument.date_range_end_daily
-                existing.date_range_end_hourly = instrument.date_range_end_hourly
-                existing.date_range_end_minute = instrument.date_range_end_minute
-                existing.date_range_end_5min = instrument.date_range_end_5min
-                existing.date_range_end_30min = instrument.date_range_end_30min
-                existing.bar_count_daily = instrument.bar_count_daily
-                existing.bar_count_hourly = instrument.bar_count_hourly
-                existing.bar_count_minute = instrument.bar_count_minute
-                existing.bar_count_5min = instrument.bar_count_5min
-                existing.bar_count_30min = instrument.bar_count_30min
+                _copy_upsert_fields(existing, instrument)
                 self.session.flush()
                 self.session.refresh(existing)
                 return existing

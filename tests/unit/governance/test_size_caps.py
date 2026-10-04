@@ -177,8 +177,7 @@ SIZE_BASELINE: dict[str, int] = {
     # MCP phase 1, 236 -> 237: `create_backtest_run` takes run provenance (S2.3).
     "src/db/repositories/backtest_repository.py::BacktestRepository": 237,
     "src/db/repositories/backtest_repository_sync.py::SyncBacktestRepository": 153,
-    "src/db/repositories/catalog_instrument_repository.py::CatalogInstrumentRepository": 122,
-    "src/db/repositories/catalog_instrument_repository.py::SyncCatalogInstrumentRepository": 107,
+    "src/db/repositories/catalog_instrument_repository.py::CatalogInstrumentRepository": 102,
     # Phase 2 pre-work, 176 -> 177: `fill_seed` makes the fill model's draws part of the request.
     "src/models/backtest_request.py::BacktestRequest": 177,
     "src/models/price_validation_report.py::evaluate_ticker_deviation": 64,
@@ -197,7 +196,7 @@ SIZE_BASELINE: dict[str, int] = {
     "src/services/data_catalog.py::DataCatalogService.query_bars": 61,
     "src/services/database_repository.py::DatabaseRepository": 128,
     "src/services/firstrate/backtest_loader.py::load_from_catalog": 70,
-    "src/services/firstrate/import_service.py::ImportService": 373,
+    "src/services/firstrate/import_service.py::ImportService": 372,
     "src/services/firstrate/import_service.py::ImportService._import_ticker": 135,
     "src/services/firstrate/import_service.py::ImportService.import_directory": 59,
     "src/services/firstrate/venue_restamp_plan.py::build_restamp_plan": 71,

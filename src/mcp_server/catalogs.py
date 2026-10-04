@@ -50,7 +50,15 @@ def timeframe_coverage(row: Any, timeframe: str) -> dict[str, Any] | None:
         return None
     end_field = count_field.replace("bar_count_", "date_range_end_")
     end = getattr(row, end_field, None) or row.date_range_end
-    return {"start": _iso(row.date_range_start), "end": _iso(end), "bars": bars}
+    # Rows imported before the per-timeframe start columns only have the shared
+    # start, which is some timeframe's first bar but not necessarily this one's.
+    own_start = getattr(row, count_field.replace("bar_count_", "date_range_start_"), None)
+    return {
+        "start": _iso(own_start or row.date_range_start),
+        "start_is_exact": own_start is not None,
+        "end": _iso(end),
+        "bars": bars,
+    }
 
 
 def describe_coverage(row: Any) -> dict[str, Any]:
@@ -66,9 +74,6 @@ def describe_coverage(row: Any) -> dict[str, Any]:
         "name": row.name,
         "backtestable": bool(row.nautilus_id),
         "timeframes": timeframes,
-        # Metadata keeps an end per timeframe but one start for all of them, so
-        # with several timeframes a "start" is only the earliest of them.
-        "start_is_earliest_across_timeframes": len(timeframes) > 1,
     }
 
 

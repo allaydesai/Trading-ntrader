@@ -27,6 +27,11 @@ def _row(**overrides):
         name="Invesco QQQ",
         date_range_start=datetime(2000, 1, 3, tzinfo=UTC),
         date_range_end=datetime(2026, 5, 1, tzinfo=UTC),
+        date_range_start_daily=datetime(2000, 1, 4, tzinfo=UTC),
+        date_range_start_hourly=None,
+        date_range_start_minute=None,
+        date_range_start_5min=None,
+        date_range_start_30min=None,
         date_range_end_daily=datetime(2026, 4, 30, tzinfo=UTC),
         date_range_end_hourly=None,
         date_range_end_minute=None,
@@ -60,7 +65,8 @@ def test_coverage_lists_only_timeframes_with_bars():
     assert coverage["backtestable"] is True
     assert list(coverage["timeframes"]) == ["1-DAY"]
     assert coverage["timeframes"]["1-DAY"] == {
-        "start": "2000-01-03T00:00:00+00:00",
+        "start": "2000-01-04T00:00:00+00:00",
+        "start_is_exact": True,
         "end": "2026-04-30T00:00:00+00:00",
         "bars": 6600,
     }
@@ -80,15 +86,15 @@ def test_unqualified_instrument_is_not_backtestable():
     assert describe_coverage(_row(nautilus_id=None))["backtestable"] is False
 
 
-def test_shared_start_is_declared_when_several_timeframes_have_bars():
-    """The table has one start for all timeframes: say so rather than imply it is exact."""
-    one = describe_coverage(_row())
-    several = describe_coverage(_row(bar_count_minute=500))
-    assert one["start_is_earliest_across_timeframes"] is False
-    assert several["start_is_earliest_across_timeframes"] is True
+def test_a_timeframe_without_its_own_start_falls_back_to_the_shared_one_and_says_so():
+    """Rows not yet backfilled only have the shared start, which is not this timeframe's."""
+    coverage = timeframe_coverage(_row(bar_count_minute=500), "1-MINUTE")
+    assert coverage is not None
+    assert coverage["start"] == "2000-01-03T00:00:00+00:00"
+    assert coverage["start_is_exact"] is False
 
 
 def test_missing_start_is_reported_as_none():
-    coverage = timeframe_coverage(_row(date_range_start=None), "1-DAY")
+    coverage = timeframe_coverage(_row(date_range_start=None, date_range_start_daily=None), "1-DAY")
     assert coverage is not None
     assert coverage["start"] is None

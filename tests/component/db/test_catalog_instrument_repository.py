@@ -33,6 +33,11 @@ CREATE TABLE IF NOT EXISTS catalog_instruments (
     date_range_end_minute TIMESTAMP,
     date_range_end_5min TIMESTAMP,
     date_range_end_30min TIMESTAMP,
+    date_range_start_daily TIMESTAMP,
+    date_range_start_hourly TIMESTAMP,
+    date_range_start_minute TIMESTAMP,
+    date_range_start_5min TIMESTAMP,
+    date_range_start_30min TIMESTAMP,
     bar_count_daily INTEGER NOT NULL DEFAULT 0,
     bar_count_hourly INTEGER NOT NULL DEFAULT 0,
     bar_count_minute INTEGER NOT NULL DEFAULT 0,
@@ -204,6 +209,33 @@ class TestAsyncCatalogInstrumentRepository:
         # SQLite stores TIMESTAMP tz-naive; compare on the naive instant
         # (Postgres TIMESTAMP(timezone=True) preserves the tz in production).
         assert result.date_range_end_hourly == hourly_end.replace(tzinfo=None)
+
+    async def test_upsert_persists_per_timeframe_start_on_existing(self, async_session):
+        """upsert update-branch must copy per-timeframe date_range_start fields."""
+        from datetime import datetime, timezone
+
+        repo = CatalogInstrumentRepository(async_session)
+        base_counts = {
+            "bar_count_daily": 0,
+            "bar_count_hourly": 0,
+            "bar_count_minute": 0,
+            "bar_count_5min": 0,
+            "bar_count_30min": 0,
+        }
+        await repo.upsert(CatalogInstrument(**_make_instrument(**base_counts)))
+        await async_session.commit()
+
+        minute_start = datetime(2005, 6, 1, 14, 30, 0, tzinfo=timezone.utc)
+        await repo.upsert(
+            CatalogInstrument(
+                **_make_instrument(date_range_start_minute=minute_start, **base_counts)
+            )
+        )
+        await async_session.commit()
+
+        result = await repo.get_by_ticker("firstrate-etf", "SPY")
+        assert result is not None
+        assert result.date_range_start_minute == minute_start.replace(tzinfo=None)
 
     async def test_get_by_ticker(self, async_session):
         """get_by_ticker returns matching instrument."""

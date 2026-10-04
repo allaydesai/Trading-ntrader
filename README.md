@@ -198,6 +198,7 @@ Exit codes: `0` success · `1` partial (some bar files failed) · `2` fatal (bad
 |---------|-------------|
 | `catalog restamp-venues --catalog <name> --dry-run` | Preview moving a named catalog's bar partitions onto their IBKR-corrected venues (writes a rollback-manifest plan JSON, moves nothing) |
 | `catalog restamp-venues --catalog <name>` | Apply a venue re-stamp plan (partition dirs + parquet footer metadata) |
+| `catalog backfill-coverage-starts --catalog <name> [--dry-run]` | Record where each timeframe's bars begin (read from parquet file names, no re-import) for instruments imported before per-timeframe starts were stored |
 | `catalog validate-fmp` | Spot-check the default named catalog's daily ETF closes against FMP's independent historical prices for 8 liquid ETFs (SPY, QQQ, IWM, GLD, XLF, TLT, VTI, ARKK), last 12 months |
 | `catalog validate-fmp --catalog <name> --tickers SPY,QQQ` | Validate a specific catalog and ticker subset |
 | `catalog validate-fmp --months 6 --mean-tol-pct 0.2 --max-tol-pct 2` | Override the lookback window and deviation tolerances |
