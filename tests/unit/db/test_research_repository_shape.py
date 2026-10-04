@@ -22,6 +22,7 @@ EXPECTED_CAPABILITIES = frozenset(
         "events",
         "add_trial",
         "trials",
+        "pending_trials",
         "settle_trial",
         "trials_of_runs",
         "add_candidate",

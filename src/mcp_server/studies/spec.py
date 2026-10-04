@@ -7,6 +7,7 @@ range is refused when the study is opened, not after a sweep.
 
 from datetime import date
 from decimal import Decimal
+from itertools import islice, product
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
@@ -84,20 +85,43 @@ def build_study_spec(**fields: Any) -> StudySpec:
         ) from None
 
 
+#: Most combinations of the other parameters tried before a value is judged invalid.
+MAX_COMBINATIONS = 1000
+
+
+def _first_failure(
+    ref: StrategyRef, name: str, value: Any, others: dict[str, list[Any]]
+) -> ToolFailure | None:
+    """None when ``value`` resolves beside some setting of the other declared parameters.
+
+    Parameters may constrain each other (a slow period above the fast one), so a
+    value is judged with the others in the space, not beside the model defaults.
+    """
+    failure = None
+    for combo in islice(product(*others.values()), MAX_COMBINATIONS):
+        try:
+            resolve_params(ref, {**dict(zip(others, combo)), name: value})
+            return None
+        except ToolFailure as exc:
+            failure = exc
+    return failure
+
+
 def check_param_space(ref: StrategyRef, space: dict[str, ParamRange]) -> None:
-    """Refuse names the strategy does not take and values its parameter model rejects."""
-    for name, param_range in space.items():
-        for value in param_range.probes():
-            try:
-                resolve_params(ref, {name: value})
-            except ToolFailure as failure:
+    """Refuse names the strategy does not take and values no setting of the space allows."""
+    probes = {name: param_range.probes() for name, param_range in space.items()}
+    for name, values in probes.items():
+        others = {k: v for k, v in probes.items() if k != name}
+        for value in values:
+            failure = _first_failure(ref, name, value, others)
+            if failure is not None:
                 raise ToolFailure(
                     "invalid_param_space",
-                    f"param_space.{name}: {value!r} is not valid for '{ref.name}'. "
-                    f"{failure.message}",
+                    f"param_space.{name}: {value!r} is not valid for '{ref.name}' with any "
+                    f"setting of the other declared parameters. {failure.message}",
                     fix=failure.fix,
                     details=failure.details,
-                ) from None
+                )
 
 
 def outside_space(space: dict[str, Any], params: dict[str, Any]) -> list[str]:

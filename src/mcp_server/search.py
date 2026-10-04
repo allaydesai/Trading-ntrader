@@ -1,7 +1,8 @@
 """``search_runs``: find runs by strategy, symbol, study, role and date (S8.2).
 
-Headline metrics only. A run's study and role come from the research ledger;
-a run with neither is unattributed.
+Headline metrics only. A run's study and role come from the research ledger,
+settled first so a just-finished run shows its study; a run with neither is
+unattributed.
 """
 
 from datetime import date
@@ -12,9 +13,12 @@ from sqlalchemy import func, select
 
 from src.db.models.backtest import BacktestRun, PerformanceMetrics
 from src.db.models.research import ResearchStudy, ResearchTrial
+from src.db.repositories.research_repository import SyncResearchRepository
 from src.db.session_sync import get_sync_session
+from src.mcp_server.jobs.store import JobStore
 from src.mcp_server.jsonable import to_jsonable
 from src.mcp_server.strategies import resolve_strategy
+from src.mcp_server.studies import ledger
 
 HEADLINE = ("total_return", "cagr", "sharpe_ratio", "max_drawdown", "profit_factor", "total_trades")
 
@@ -28,6 +32,7 @@ def study_filter(key: str) -> Any:
 
 
 def search_runs(
+    store: JobStore,
     *,
     strategy: str | None = None,
     symbol: str | None = None,
@@ -63,6 +68,7 @@ def search_runs(
     stmt = stmt.order_by(BacktestRun.created_at.desc(), BacktestRun.id.desc())
     stmt = stmt.limit(max(1, min(limit, 200)))
     with get_sync_session() as session:
+        ledger.settle_pending(SyncResearchRepository(session), store)
         rows = session.execute(stmt).all()
     runs = [
         {

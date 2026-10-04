@@ -74,3 +74,24 @@ def test_slug_and_budget_are_validated():
         with pytest.raises(ToolFailure) as exc:
             build_study_spec(**{**FIELDS, **bad})
         assert exc.value.code == "invalid_study"
+
+
+def test_a_value_valid_with_some_setting_of_the_others_is_accepted():
+    """fast 20 fails beside the default slow 20, but the space lets slow be 30."""
+    check_param_space(
+        SMA,
+        {
+            "fast_period": ParamRange(values=[5, 10, 20]),
+            "slow_period": ParamRange(min=30, max=100),
+        },
+    )
+
+
+def test_a_value_no_setting_of_the_others_allows_is_refused():
+    with pytest.raises(ToolFailure) as exc:
+        check_param_space(
+            SMA,
+            {"fast_period": ParamRange(values=[10, 50]), "slow_period": ParamRange(min=20, max=40)},
+        )
+    assert "fast_period: 50" in exc.value.message
+    assert exc.value.details["fields"][0]["field"] == "slow_period"

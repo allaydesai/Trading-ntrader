@@ -88,8 +88,10 @@ def register(server: MCPServer, ctx: ServerContext) -> None:
     ) -> dict[str, Any]:
         """Runs matching every filter, newest first, with headline metrics, study and
         role (in_sample, benchmark, out_of_sample, reproduction; none = unattributed)."""
+        assert ctx.runner is not None, "build_server always creates the runner"
         return await call(
             search.search_runs,
+            ctx.runner.store,
             strategy=strategy,
             symbol=symbol,
             study=study,

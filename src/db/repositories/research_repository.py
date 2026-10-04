@@ -117,6 +117,11 @@ class SyncResearchRepository:
         stmt = select(ResearchTrial).where(ResearchTrial.study_pk == study.id)
         return list(self.session.scalars(stmt.order_by(ResearchTrial.id)))
 
+    def pending_trials(self) -> list[ResearchTrial]:
+        """Every trial, in any study, whose job has not been settled yet."""
+        stmt = select(ResearchTrial).where(ResearchTrial.state == "pending")
+        return list(self.session.scalars(stmt.order_by(ResearchTrial.id)))
+
     def settle_trial(self, trial: ResearchTrial, *, state: str, run_id: UUID | None) -> None:
         """Move a pending trial to ``completed`` (with its run) or ``void``."""
         if trial.state != "pending":

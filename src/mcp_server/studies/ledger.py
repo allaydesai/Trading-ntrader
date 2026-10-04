@@ -53,6 +53,14 @@ def settle(repo: SyncResearchRepository, store: JobStore, study: ResearchStudy) 
             move(repo, study, "tested", kind="tested", details=details)
 
 
+def settle_pending(repo: SyncResearchRepository, store: JobStore) -> None:
+    """Settle pending trials in every study, so a read across studies sees finished runs."""
+    for study_pk in dict.fromkeys(t.study_pk for t in repo.pending_trials()):
+        study = repo.session.get(ResearchStudy, study_pk, with_for_update=True)
+        if study is not None:
+            settle(repo, store, study)
+
+
 def used(trials: list[ResearchTrial]) -> int:
     """Trials that count against the budget: counted roles, not voided."""
     return sum(1 for t in trials if t.counted and t.state != "void")

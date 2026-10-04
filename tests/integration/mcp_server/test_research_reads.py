@@ -15,6 +15,7 @@ from src.db.models.research import ResearchTrial
 from src.db.repositories.research_repository import SyncResearchRepository
 from src.mcp_server.analysis import bar_export, run_reads
 from src.mcp_server.errors import ToolFailure
+from src.mcp_server.jobs.store import JobStore
 from src.mcp_server.search import search_runs
 from src.mcp_server.studies import lifecycle, references
 from src.mcp_server.studies.submit import reserve_trial
@@ -82,8 +83,8 @@ async def test_regime_breakdown_splits_by_year_trend_volatility_and_period(run_i
     assert result["notes"] == []  # 300 days of warm-up bars were read
 
 
-async def test_search_finds_the_run_as_unattributed(run_id):
-    found = search_runs(strategy="sma", symbol="aapl")["runs"]
+async def test_search_finds_the_run_as_unattributed(run_id, tmp_path):
+    found = search_runs(JobStore(tmp_path / "jobs"), strategy="sma", symbol="aapl")["runs"]
     row = next(r for r in found if r["run_id"] == run_id)
     assert row["study"] is None and row["role"] is None
     assert row["headline"]["total_trades"] > 0
@@ -162,7 +163,14 @@ async def test_a_study_run_is_reproduced_as_an_uncounted_trial(
     recorded = reserve_trial(ctx.runner, job)
     assert recorded["role"] == "reproduction"
     assert recorded["budget"]["used"] == 1  # only the original in-sample trial counts
-    assert search_runs(study="sma-aapl")["runs"][0]["role"] == "in_sample"
+    store = ctx.runner.store
+    assert await run_job(store.job_dir(recorded["job_id"])) == 0
+    store.update(
+        recorded["job_id"], state="succeeded", run_id=store.result(recorded["job_id"])["run_id"]
+    )
+    # The search settles the just-finished trial itself: no study read needed first.
+    roles = [r["role"] for r in search_runs(store, study="sma-aapl")["runs"]]
+    assert roles == ["reproduction", "in_sample"]
 
 
 def test_bars_export_is_clamped_to_in_sample_and_recorded(tmp_path, monkeypatch, isolated_results):
