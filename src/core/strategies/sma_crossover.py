@@ -46,7 +46,7 @@ class SMAConfig(StrategyConfig):
 
 @register_strategy(
     name="sma_crossover",
-    description="SMA Crossover, one-sided: trades only the side of its first cross",
+    description="Simple Moving Average Crossover (one-sided: trades the side of its first cross)",
     aliases=["sma", "smacrossover"],
 )
 class SMACrossover(Strategy):
