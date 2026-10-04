@@ -161,8 +161,10 @@ SIZE_BASELINE: dict[str, int] = {
     "src/core/live_trade_recorder.py::TradeRecorder": 164,
     "src/core/metrics.py::PerformanceCalculator": 128,
     "src/core/metrics.py::PerformanceCalculator.calculate_metrics_from_data": 55,
-    "src/core/results_extractor.py::ResultsExtractor": 154,
-    "src/core/results_extractor.py::ResultsExtractor.extract_results": 85,
+    # MCP phase 1 review, 154 -> 145 and 85 -> 81 (shrank): risk metrics and the equity
+    # curve moved to module functions when they became mark-to-market.
+    "src/core/results_extractor.py::ResultsExtractor": 145,
+    "src/core/results_extractor.py::ResultsExtractor.extract_results": 81,
     # Story 4.4, 103 -> 110: AR40 warm-up inline in `on_start` + the history
     # callback, deliberately not hidden in a helper so AC #2's inspection reads
     # the three Nautilus calls in the strategy file itself. Story 4.5, 110 -> 106

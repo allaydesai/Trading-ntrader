@@ -77,3 +77,12 @@ class TestStrategyConfigSnapshot:
         assert isinstance(snapshot_dict, dict)
         assert snapshot_dict["strategy_path"] == "src.strategies.sma_crossover.SMAStrategyConfig"
         assert "config" in snapshot_dict
+
+
+def test_metrics_basis_survives_validation():
+    """The persistence service stores ``model_dump()``: an unknown key would be dropped."""
+    snapshot = StrategyConfigSnapshot(
+        strategy_path="a.b:C", config_path="a.b:D", metrics_basis="mark_to_market"
+    )
+    assert snapshot.model_dump()["metrics_basis"] == "mark_to_market"
+    assert StrategyConfigSnapshot(strategy_path="a.b:C", config_path="a.b:D").metrics_basis is None

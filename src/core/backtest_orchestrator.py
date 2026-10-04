@@ -5,6 +5,7 @@ This module provides a single entry point for executing backtests with optional
 persistence, regardless of whether the request comes from CLI arguments or YAML config.
 """
 
+import asyncio
 import time
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -26,7 +27,7 @@ from nautilus_trader.trading.strategy import Strategy
 
 from src.config import get_settings
 from src.core.fee_models import IBKRCommissionModel
-from src.core.results_extractor import ResultsExtractor
+from src.core.results_extractor import ResultsExtractor, metrics_basis
 from src.core.strategy_factory import StrategyFactory, StrategyLoader
 from src.core.strategy_registry import StrategyRegistry
 from src.db.repositories.backtest_repository import BacktestRepository
@@ -109,6 +110,7 @@ class BacktestOrchestrator:
         self._backtest_start_date: datetime | None = None
         self._backtest_end_date: datetime | None = None
         self._starting_balance: float | None = None
+        self._extractor: ResultsExtractor | None = None
 
     async def execute(
         self,
@@ -139,7 +141,8 @@ class BacktestOrchestrator:
         if not bars:
             raise ValueError("No bars provided for backtest")
         if request.persist and provenance is None:
-            provenance = run_provenance(request)
+            # Off the event loop: several git subprocesses, each with a timeout.
+            provenance = await asyncio.to_thread(run_provenance, request)
 
         try:
             # Setup engine
@@ -163,6 +166,7 @@ class BacktestOrchestrator:
             self.engine.run()
 
             # Extract results
+            self._extractor = self._make_extractor({instrument.id: bars})
             result = self._extract_results(self._starting_balance)
 
             # Persist if requested
@@ -261,6 +265,7 @@ class BacktestOrchestrator:
 
         self.engine.run()
 
+        self._extractor = self._make_extractor({i.id: bars for bars, i in instruments_data})
         result = self._extract_results(self._starting_balance)
         result = self._aggregate_multi_venue_balance(result, instruments_data)
         return result, None
@@ -492,52 +497,30 @@ class BacktestOrchestrator:
             logger.error(f"Failed to create strategy: {e}")
             raise ValueError(f"Failed to create strategy {request.strategy_type}: {e}")
 
-    def _extract_results(self, starting_balance: float) -> BacktestResult:
-        """
-        Extract comprehensive results from the backtest engine.
-
-        Args:
-            starting_balance: The actual starting balance used in the backtest
-
-        Returns:
-            BacktestResult with all available metrics
-        """
-        if not self.engine:
-            return BacktestResult()
-
-        extractor = ResultsExtractor(
+    def _make_extractor(self, bars_by_instrument: dict[Any, list[Bar]]) -> ResultsExtractor:
+        """The run's results extractor; given the bars, it marks risk metrics to market."""
+        return ResultsExtractor(
             engine=self.engine,
             venue=self._venue,
             settings=self.settings,
-            starting_balance=starting_balance,
+            starting_balance=self._starting_balance,
+            bars_by_instrument=bars_by_instrument,
         )
 
-        return extractor.extract_results(
+    def _extract_results(self, starting_balance: float) -> BacktestResult:
+        """Extract comprehensive results from the finished engine run."""
+        if not self.engine or self._extractor is None:
+            return BacktestResult()
+        return self._extractor.extract_results(
             start_date=self._backtest_start_date,
             end_date=self._backtest_end_date,
         )
 
     def _extract_equity_curve(self, starting_balance: float) -> list[dict[str, int | float]]:
-        """
-        Extract equity curve for chart visualization.
-
-        Args:
-            starting_balance: The actual starting balance used in the backtest
-
-        Returns:
-            List of equity points: [{"time": unix_ts, "value": equity}, ...]
-        """
-        if not self.engine:
+        """Equity points for the chart: ``[{"time": unix_ts, "value": equity}, ...]``."""
+        if not self.engine or self._extractor is None:
             return []
-
-        extractor = ResultsExtractor(
-            engine=self.engine,
-            venue=self._venue,
-            settings=self.settings,
-            starting_balance=starting_balance,
-        )
-
-        return extractor.extract_equity_curve(
+        return self._extractor.extract_equity_curve(
             start_date=self._backtest_start_date,
             end_date=self._backtest_end_date,
         )
@@ -556,6 +539,7 @@ class BacktestOrchestrator:
             equity_curve = self._extract_equity_curve(float(request.starting_balance))
             if equity_curve:
                 fields["config_snapshot"]["equity_curve"] = equity_curve
+            fields["config_snapshot"]["metrics_basis"] = metrics_basis(self._extractor)
             if request.config_file_path:
                 fields["config_snapshot"]["config_file_path"] = request.config_file_path
 

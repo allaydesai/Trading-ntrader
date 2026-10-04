@@ -29,17 +29,24 @@ END = datetime(2018, 1, 11, tzinfo=timezone.utc)
 BALANCE = Decimal("100000")
 
 
-async def _run(catalog: Path, **params):
+async def _run(
+    catalog: Path,
+    *,
+    symbol: str = "AAPL",
+    nautilus_id: str = "AAPL.NASDAQ",
+    end: datetime = END,
+    **params,
+):
     from src.core.backtest_orchestrator import BacktestOrchestrator
 
     metadata = MagicMock()
-    metadata.get_instrument_sync.return_value = _make_instrument_row("AAPL", "AAPL.NASDAQ")
+    metadata.get_instrument_sync.return_value = _make_instrument_row(symbol, nautilus_id)
     data = await load_from_catalog(
         catalog_name="e2e-test",
-        ticker="AAPL",
+        ticker=symbol,
         bar_type_spec="1-DAY-LAST",
         start=START,
-        end=END,
+        end=end,
         catalog_manager=CatalogManager(catalog),
         metadata_service=metadata,
     )
@@ -49,10 +56,10 @@ async def _run(catalog: Path, **params):
         strategy_path=benchmark.strategy_path,
         config_path=benchmark.config_path,
         strategy_config=params,
-        symbol="AAPL",
-        instrument_id="AAPL.NAMED_CATALOG",
+        symbol=symbol,
+        instrument_id=f"{symbol}.NAMED_CATALOG",
         start_date=START,
-        end_date=END,
+        end_date=end,
         bar_type="1-DAY-LAST",
         persist=False,
         starting_balance=BALANCE,
@@ -98,3 +105,24 @@ async def test_allocation_pct_scales_the_position(synthetic_catalog):  # noqa: F
 
     first_close = float(bars[0].close)
     assert float(positions[0].peak_qty) == floor(float(BALANCE) * 0.5 / first_close)
+
+
+@pytest.mark.asyncio
+async def test_risk_metrics_are_marked_to_market(synthetic_catalog):  # noqa: F811
+    """A held position's drawdown is the price drawdown, not zero (one realised trade)."""
+    result, _, bars = await _run(
+        synthetic_catalog,
+        symbol="IVV",
+        nautilus_id="IVV.ARCA",
+        end=datetime(2018, 2, 20, tzinfo=timezone.utc),
+    )
+
+    closes = [float(b.close) for b in bars]
+    peak, price_drawdown = closes[0], 0.0
+    for close in closes:
+        peak = max(peak, close)
+        price_drawdown = min(price_drawdown, close / peak - 1)
+    assert price_drawdown < -0.05, "the zigzag series must actually draw down"
+    assert result.max_drawdown == pytest.approx(price_drawdown, rel=0.02)
+    assert result.volatility is not None and result.volatility > 0
+    assert result.sharpe_ratio is not None

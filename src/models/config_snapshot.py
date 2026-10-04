@@ -25,6 +25,9 @@ class StrategyConfigSnapshot(BaseModel):
             detail-page "Back to Explorer" fallback can recover the explorer
             timeframe label. Nullable for back-compat with rows written before
             the field was added.
+        metrics_basis: What drawdown, Sharpe, Sortino and volatility were computed
+            from: ``"mark_to_market"`` (daily equity at bar closes) or ``"realised"``
+            (closed-position returns). Nullable: rows before the field are realised.
 
     Example:
         >>> snapshot = StrategyConfigSnapshot(
@@ -47,6 +50,12 @@ class StrategyConfigSnapshot(BaseModel):
     config: Dict[str, Any] = Field(default_factory=dict, description="Strategy-specific parameters")
     bar_type: str | None = Field(
         default=None, description="Bar-type spec (e.g. '1-DAY-LAST') for explorer round-trip"
+    )
+
+    metrics_basis: str | None = Field(
+        default=None,
+        description="What risk metrics were computed from: 'mark_to_market' or 'realised'. "
+        "None on rows written before the field existed (realised).",
     )
 
     model_config = {
