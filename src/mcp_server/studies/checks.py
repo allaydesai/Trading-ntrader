@@ -187,12 +187,22 @@ def oos_sharpe_vs_is(ev: Evidence, threshold: Any) -> Row:
         return _missing(threshold, "No out-of-sample run yet (run_out_of_sample).")
     if oos is None or ins is None:
         return _row(MISSING, None, threshold, runs, "Sharpe is not available for both runs.")
-    if ins <= 0:
-        return _row(
-            FAIL, {"oos": oos, "is": ins}, threshold, runs, "in-sample Sharpe is not positive"
+    # Either a bare ratio, or {ratio, min_is_sharpe}: a ratio over a near-zero in-sample
+    # Sharpe is noise, so below the floor it fails rather than passes by a mile.
+    limits = threshold if isinstance(threshold, dict) else {"ratio": threshold}
+    if limits.get("ratio") is None:
+        return _row(MISSING, None, threshold, runs, "The gates block gives no ratio.")
+    floor = float(limits.get("min_is_sharpe") or 0)
+    if ins <= 0 or ins < floor:
+        note = (
+            "in-sample Sharpe is not positive"
+            if ins <= 0
+            else f"in-sample Sharpe {ins:g} is too small for a ratio (min_is_sharpe {floor:g})"
         )
+        return _row(FAIL, {"oos": oos, "is": ins}, threshold, runs, note)
     ratio = oos / ins
-    return _row(PASS if ratio >= float(threshold) else FAIL, round(ratio, 4), threshold, runs)
+    passed = ratio >= float(limits["ratio"])
+    return _row(PASS if passed else FAIL, round(ratio, 4), threshold, runs)
 
 
 def oos_run_once(ev: Evidence, threshold: Any) -> Row:

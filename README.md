@@ -484,6 +484,8 @@ Known checks: `min_trades`, `clean_tree`, `benchmark_present`, `is_profit_factor
 `is_expectancy_gt`, `beats_benchmark_on_one`, `equity_stays_positive`, `positive_sub_periods`,
 `oos_sharpe_vs_is`, `oos_profit_factor`, `trials_warn_above`, and the phase-4 placeholders
 `neighbourhood_sharpe`, `cost_stress_multiplier`, `breadth`, `walk_forward_efficiency`.
+`oos_sharpe_vs_is` takes a bare ratio or `{ratio: 0.5, min_is_sharpe: 0.3}`: below the
+floor the in-sample Sharpe is too small for a ratio to mean anything, so the check fails.
 `server_info` reports whether the block was found.
 
 | Variable | Default | Meaning |

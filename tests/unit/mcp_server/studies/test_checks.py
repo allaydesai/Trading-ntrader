@@ -170,3 +170,28 @@ def test_g0_always_checks_that_the_equity_stayed_above_zero():
 def test_solvency_without_a_drawdown_is_missing():
     ev = _evidence(in_sample=_run(max_drawdown=None))
     assert judge("G0", G0, ev)["checks"]["equity_stays_positive"]["status"] == "missing"
+
+
+FLOOR = {"oos_sharpe_vs_is": {"ratio": 0.5, "min_is_sharpe": 0.3}}
+
+
+def test_a_tiny_in_sample_sharpe_cannot_carry_the_ratio():
+    """In-sample 0.13, out-of-sample 0.70: a ratio of 5.4 says nothing, so it fails."""
+    weak = _run(sharpe_ratio=0.13)
+    ev = _evidence(in_sample=weak, out_of_sample=_run("oos", sharpe_ratio=0.7))
+    row = judge("G2", FLOOR, ev)["checks"]["oos_sharpe_vs_is"]
+    assert row["status"] == "fail" and "too small" in row["note"]
+    assert row["value"] == {"oos": 0.7, "is": 0.13}
+
+
+def test_above_the_floor_the_ratio_is_judged_as_before():
+    ev = _evidence(out_of_sample=_run("oos", sharpe_ratio=0.5))
+    row = judge("G2", FLOOR, ev)["checks"]["oos_sharpe_vs_is"]
+    assert row["status"] == "pass" and row["value"] == pytest.approx(0.625)
+    assert row["threshold"] == FLOOR["oos_sharpe_vs_is"]
+
+
+def test_a_floor_without_a_ratio_is_missing_not_pass():
+    ev = _evidence(out_of_sample=_run("oos", sharpe_ratio=0.5))
+    row = judge("G2", {"oos_sharpe_vs_is": {"min_is_sharpe": 0.3}}, ev)["checks"]
+    assert row["oos_sharpe_vs_is"]["status"] == "missing"
