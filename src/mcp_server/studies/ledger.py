@@ -43,6 +43,13 @@ def settle(repo: SyncResearchRepository, store: JobStore, study: ResearchStudy) 
             repo.settle_trial(trial, state="completed", run_id=UUID(run_id))
         else:
             repo.settle_trial(trial, state="void", run_id=None)
+        if (
+            trial.role == "out_of_sample"
+            and trial.state == "completed"
+            and study.status == "frozen"
+        ):
+            study.status = "tested"
+            repo.add_event(study, "tested", None, {"run_id": run_id, "version": trial.version})
 
 
 def used(trials: list[ResearchTrial]) -> int:

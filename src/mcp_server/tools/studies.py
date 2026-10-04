@@ -1,5 +1,6 @@
-"""Study tools: open, read, search and decide on studies (S1.1-S1.3, S6.4, S8.2)."""
+"""Study tools: open, read, search, freeze and decide (S1.1-S1.3, S5.1, S6.3, S6.4, S8.2)."""
 
+from collections.abc import Callable
 from datetime import date
 from decimal import Decimal
 from typing import Any
@@ -8,11 +9,18 @@ from mcp.server import MCPServer
 
 from src.mcp_server.context import ServerContext
 from src.mcp_server.jobs.store import JobStore
-from src.mcp_server.studies import lifecycle
+from src.mcp_server.studies import candidates, lifecycle
 from src.mcp_server.studies.spec import build_study_spec
 from src.mcp_server.tools import call
 
-TOOL_NAMES = ("create_study", "get_study", "list_studies", "update_study")
+TOOL_NAMES = (
+    "create_study",
+    "get_study",
+    "list_studies",
+    "update_study",
+    "freeze_candidate",
+    "new_candidate_version",
+)
 
 
 def register(server: MCPServer, ctx: ServerContext) -> None:
@@ -106,6 +114,14 @@ def register(server: MCPServer, ctx: ServerContext) -> None:
             created_to=created_to,
         )
 
+    _register_decisions(server, ctx, store)
+
+
+def _register_decisions(
+    server: MCPServer, ctx: ServerContext, store: Callable[[], JobStore]
+) -> None:
+    """Tools that decide on a study: status, budget, freezing and versioning."""
+
     @server.tool()
     async def update_study(
         study: str,
@@ -127,3 +143,23 @@ def register(server: MCPServer, ctx: ServerContext) -> None:
             status=status,
             extend_budget_by=extend_budget_by,
         )
+
+    @server.tool()
+    async def freeze_candidate(study: str, run_id: str, note: str | None = None) -> dict[str, Any]:
+        """Freeze the current version's candidate from one of its completed in-sample runs.
+
+        Records its parameters, code commit and candidate hash; it never changes
+        afterwards. Exploration of this version ends: run_out_of_sample tests it
+        once, new_candidate_version reopens exploration.
+        """
+        return await call(candidates.freeze_candidate, store(), study, run_id, note)
+
+    @server.tool()
+    async def new_candidate_version(study: str, reason: str, change: str) -> dict[str, Any]:
+        """Start the next candidate version in the same study after a failed check.
+
+        The ledger keeps counting. If the out-of-sample window was already seen, the
+        study is marked contaminated: the new version's evidence must then come from
+        walk-forward and paper, not the holdout.
+        """
+        return await call(candidates.new_candidate_version, store(), study, reason, change)

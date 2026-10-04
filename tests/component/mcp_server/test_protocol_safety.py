@@ -39,6 +39,10 @@ PINNED_TOOLS = frozenset(
         "get_regime_breakdown",
         "export_bars",
         "search_runs",
+        "freeze_candidate",
+        "new_candidate_version",
+        "run_out_of_sample",
+        "get_scorecard",
     }
 )
 

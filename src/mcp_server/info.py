@@ -11,6 +11,7 @@ from src.db.session_sync import get_sync_engine
 from src.mcp_server.catalogs import catalog_manager
 from src.mcp_server.context import ServerContext
 from src.mcp_server.errors import ToolFailure
+from src.mcp_server.studies.gates import load_gates
 from src.services.provenance import git_provenance
 
 
@@ -56,7 +57,7 @@ def server_info(ctx: ServerContext, capabilities: list[str]) -> dict[str, Any]:
     s = ctx.settings
     return {
         "server": "ntrader-research",
-        "phase": 1,
+        "phase": 2,
         "versions": {p: _version(p) for p in ("nautilus_trader", "mcp", "pydantic")},
         "git": {k: v for k, v in asdict(git_provenance()).items() if k != "config_hash"},
         "database": _database(),
@@ -70,5 +71,6 @@ def server_info(ctx: ServerContext, capabilities: list[str]) -> dict[str, Any]:
             "log_tail_lines": s.log_tail_lines,
         },
         "vault": _vault(ctx),
+        "gates": load_gates(ctx.settings).status(),
         "capabilities": sorted(capabilities),
     }

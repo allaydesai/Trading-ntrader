@@ -152,3 +152,17 @@ async def test_create_study_rejects_bad_fields_before_touching_the_database(ctx)
         assert refused["ok"] is False
         assert refused["error"]["code"] == "invalid_study"
         assert refused["error"]["message"].startswith("slug:")
+
+
+async def test_server_info_reports_phase_2_and_where_the_gates_come_from(tmp_path, ctx):
+    vault = tmp_path / "vault"
+    (vault / "System").mkdir(parents=True)
+    (vault / "System" / "Gates.md").write_text(
+        "```yaml ntrader-gates\nG0:\n  min_trades: 30\n```\n"
+    )
+    ctx.settings = ctx.settings.model_copy(update={"vault_path": vault})
+    async with Client(build_server(ctx)) as client:
+        info = await _call(client, "server_info")
+    assert info["phase"] == 2
+    assert info["gates"]["gate_ids"] == ["G0"] and info["gates"]["problem"] is None
+    assert "get_scorecard" in info["capabilities"]

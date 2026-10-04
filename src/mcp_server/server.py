@@ -29,10 +29,15 @@ REGISTERED_TOOLS: frozenset[str] = frozenset(
 INSTRUCTIONS = """\
 NTrader research server. Backtests run natively on the Mac against NTrader's
 Parquet catalogs and are persisted in NTrader's database (visible in its web UI).
-Typical flow: list_strategies / describe_strategy -> catalog_availability ->
-validate_config -> submit_backtest (returns a job id at once) -> get_job until it
-finishes -> get_run / compare_runs (always beside a buy_and_hold benchmark) ->
-export_results to file the evidence in the vault. Failures come back as
+Research happens in studies (one per idea): create_study locks the out-of-sample
+window and sets a trial budget. Then, inside the study: submit_backtest(study=...)
+for in-sample trials (counted; poll get_job), submit_benchmark beside them,
+get_regime_breakdown / get_equity_curve / get_trades / compare_runs to read them,
+export_bars for in-sample concept probes. freeze_candidate on the chosen run,
+run_out_of_sample once, then get_scorecard against the vault's gates;
+new_candidate_version or update_study (rejected / parked / promoted) to decide.
+export_results(study=...) files the record in the vault. Ad-hoc runs without a
+study are allowed but never count as evidence. Failures come back as
 {ok: false, error: {code, message, fix}}. This server never trades, never starts
 or stops sessions, and never fetches or imports data.
 """
