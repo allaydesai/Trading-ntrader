@@ -2,7 +2,7 @@
 
 import pytest
 
-from src.mcp_server.studies.checks import Evidence, RunFacts, judge
+from src.mcp_server.studies.checks import Evidence, PaperFacts, RunFacts, judge
 
 pytestmark = pytest.mark.unit
 
@@ -115,7 +115,7 @@ def test_phase_4_checks_are_always_missing():
 
 
 def test_paper_gate_and_unknown_checks_and_absent_thresholds_are_missing():
-    assert judge("G4", {"weeks": 8}, _evidence())["status"] == "missing"
+    assert judge("G4", {"min_weeks": 8}, _evidence())["status"] == "missing"
     unknown = judge("G1", {"is_sortino": 1.0}, _evidence())["checks"]["is_sortino"]
     assert unknown["status"] == "missing" and "no check named" in unknown["note"]
     assert judge("G1", None, _evidence())["status"] == "missing"
@@ -195,3 +195,62 @@ def test_a_floor_without_a_ratio_is_missing_not_pass():
     ev = _evidence(out_of_sample=_run("oos", sharpe_ratio=0.5))
     row = judge("G2", {"oos_sharpe_vs_is": {"min_is_sharpe": 0.3}}, ev)["checks"]
     assert row["oos_sharpe_vs_is"]["status"] == "missing"
+
+
+G4 = {"min_weeks": 8, "min_trades": 20}
+INSIDE = {"win_rate": "inside", "avg_trade_return": "inside"}
+
+
+def _paper(**overrides) -> PaperFacts:
+    fields = dict(
+        session="crsi-qqq-v1-paper",
+        weeks=9.0,
+        trades=24,
+        reached=True,
+        positions=INSIDE,
+        problems=[],
+        others=[],
+    )
+    return PaperFacts(**{**fields, **overrides})
+
+
+def test_without_a_linked_session_every_paper_check_is_missing():
+    result = judge("G4", G4, _evidence())
+    assert result["status"] == "missing"
+    assert set(result["checks"]) == {"min_weeks", "min_trades", "paper_inside_band", "paper_clean"}
+    assert "paper_commands" in result["checks"]["min_weeks"]["note"]
+
+
+def test_g4_min_trades_counts_paper_trades_and_g0_still_counts_run_trades():
+    early = judge("G4", G4, _evidence(paper=_paper(weeks=3.5, trades=7, reached=False)))
+    assert early["status"] == "missing"
+    assert early["checks"]["min_trades"]["value"] == 7
+    assert "7 of 20" in early["checks"]["min_trades"]["note"]
+    assert "3.5 of 8" in early["checks"]["min_weeks"]["note"]
+    assert "both" in early["checks"]["paper_inside_band"]["note"]
+    g0 = judge("G0", {"min_trades": 30}, _evidence(paper=_paper(trades=1)))
+    assert g0["checks"]["min_trades"]["value"] == {"is": 40}
+
+
+def test_a_session_past_the_horizon_inside_its_band_and_clean_passes():
+    result = judge("G4", G4, _evidence(paper=_paper()))
+    assert result["status"] == "pass"
+    assert result["checks"]["paper_clean"]["evidence"] == ["session:crsi-qqq-v1-paper"]
+
+
+def test_results_outside_the_band_fail_and_problems_fail_clean():
+    outside = _paper(positions={"win_rate": "below", "avg_trade_return": "inside"})
+    result = judge("G4", G4, _evidence(paper=outside))
+    assert result["checks"]["paper_inside_band"]["status"] == "fail"
+    assert "win_rate below" in result["checks"]["paper_inside_band"]["note"]
+    dirty = judge("G4", G4, _evidence(paper=_paper(problems=["order_rejections"])))
+    assert dirty["checks"]["paper_clean"]["status"] == "fail"
+    assert "vault" in dirty["checks"]["paper_clean"]["note"]
+
+
+def test_an_unjudgeable_band_is_missing_and_other_sessions_are_noted():
+    unknown = _paper(positions={"win_rate": "n/a", "avg_trade_return": "inside"})
+    result = judge("G4", G4, _evidence(paper=unknown))
+    assert result["checks"]["paper_inside_band"]["status"] == "missing"
+    noted = judge("G4", G4, _evidence(paper=_paper(others=["crsi-qqq-v1-paper-2"])))
+    assert "crsi-qqq-v1-paper-2" in noted["checks"]["paper_clean"]["note"]

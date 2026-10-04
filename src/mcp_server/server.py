@@ -10,7 +10,7 @@ from src.mcp_server.context import ServerContext
 from src.mcp_server.jobs import service
 from src.mcp_server.jobs.runner import JobRunner
 from src.mcp_server.jobs.store import JobStore
-from src.mcp_server.tools import analysis, catalogue, info, jobs, research, runs, studies
+from src.mcp_server.tools import analysis, catalogue, info, jobs, paper, research, runs, studies
 
 #: Every tool this server registers. Pinned by test against the live registration
 #: and a literal, so adding or dropping a tool is always a deliberate, visible edit.
@@ -23,6 +23,7 @@ REGISTERED_TOOLS: frozenset[str] = frozenset(
         *studies.TOOL_NAMES,
         *research.TOOL_NAMES,
         *analysis.TOOL_NAMES,
+        *paper.TOOL_NAMES,
     )
 )
 
@@ -36,10 +37,14 @@ get_regime_breakdown / get_equity_curve / get_trades / compare_runs to read them
 export_bars for in-sample concept probes. freeze_candidate on the chosen run,
 run_out_of_sample once, then get_scorecard against the vault's gates;
 new_candidate_version or update_study (rejected / parked / promoted) to decide.
-export_results(study=...) files the record in the vault. Ad-hoc runs without a
-study are allowed but never count as evidence. Failures come back as
-{ok: false, error: {code, message, fix}}. This server never trades, never starts
-or stops sessions, and never fetches or imports data.
+export_results(study=...) files the record in the vault. Paper loop, after the
+out-of-sample run: paper_commands gives the live check / create / start commands
+for Allay to run (linked to that run); list_sessions and get_session read a session
+against its expectation band each week, with drift flags and G4 progress;
+export_results(session=...) files the reading. Ad-hoc runs without a study are
+allowed but never count as evidence. Failures come back as
+{ok: false, error: {code, message, fix}}. This server never trades, never starts,
+stops or creates sessions, and never fetches or imports data.
 """
 
 
@@ -70,4 +75,5 @@ def build_server(ctx: ServerContext | None = None) -> MCPServer:
     studies.register(server, ctx)
     research.register(server, ctx)
     analysis.register(server, ctx)
+    paper.register(server, ctx)
     return server

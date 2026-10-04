@@ -136,7 +136,8 @@ async def test_explore_freeze_test_once_score_and_iterate(ctx, tmp_path):
     assert card["gates"]["G2"]["checks"]["neighbourhood_sharpe"]["status"] == "missing"
     assert card["gates"]["G3"]["status"] == "missing"
     assert card["gates"]["G0"]["checks"]["benchmark_present"]["status"] == "pass"
-    assert card["expectation_band"]["status"] == "missing"
+    assert card["expectation_band"]["source_run"] == oos_id
+    assert card["expectation_band"]["status"] in ("ok", "thin", "unavailable")
     for gate in card["gates"].values():
         for check in gate["checks"].values():
             assert check["status"] in ("pass", "fail", "missing")

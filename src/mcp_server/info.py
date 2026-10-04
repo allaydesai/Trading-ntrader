@@ -57,7 +57,7 @@ def server_info(ctx: ServerContext, capabilities: list[str]) -> dict[str, Any]:
     s = ctx.settings
     return {
         "server": "ntrader-research",
-        "phase": 2,
+        "phase": 3,
         "versions": {p: _version(p) for p in ("nautilus_trader", "mcp", "pydantic")},
         "git": {k: v for k, v in asdict(git_provenance()).items() if k != "config_hash"},
         "database": _database(),

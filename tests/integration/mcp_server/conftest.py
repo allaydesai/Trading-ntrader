@@ -28,6 +28,7 @@ from src.db.models.research import (
     ResearchTrial,
 )
 from src.db.models.trade import Trade
+from src.db.models.trading_session import TradingSession
 
 E2E_CATALOG = "e2e-test"
 
@@ -95,6 +96,9 @@ def isolated_results(request, monkeypatch):
         tables = [
             BacktestRun.__table__,
             PerformanceMetrics.__table__,
+            # Before trades: their session_id foreign key must resolve to this
+            # schema's table, not public's.
+            TradingSession.__table__,
             Trade.__table__,
             RunEquityCurve.__table__,
             ResearchStudy.__table__,

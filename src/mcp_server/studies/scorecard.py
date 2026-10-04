@@ -6,6 +6,7 @@ window. Unattributed runs never count. Thresholds come only from the vault's
 gates block (``gates.py``); whatever cannot be judged yet is ``missing``.
 """
 
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
@@ -23,11 +24,13 @@ from src.mcp_server.errors import ToolFailure
 from src.mcp_server.jobs.store import JobStore
 from src.mcp_server.jsonable import to_jsonable
 from src.mcp_server.metrics import METRIC_SPECS
+from src.mcp_server.paper.evidence import expectation_band, paper_facts
+from src.mcp_server.paper.reads import oos_runs
 from src.mcp_server.settings import McpSettings
 from src.mcp_server.studies import ledger
 from src.mcp_server.studies.candidates import current_candidate
 from src.mcp_server.studies.checks import FAIL, MISSING, PASS, Evidence, RunFacts, judge
-from src.mcp_server.studies.gates import load_gates
+from src.mcp_server.studies.gates import Gates, load_gates
 from src.mcp_server.studies.lifecycle import load_study
 from src.mcp_server.studies.views import candidate_view
 
@@ -104,7 +107,10 @@ def gather(
     )
 
 
-def _candidate_of(repo: SyncResearchRepository, study: ResearchStudy, version: int | None):
+def candidate_of(
+    repo: SyncResearchRepository, study: ResearchStudy, version: int | None
+) -> ResearchCandidate:
+    """The frozen candidate of ``version``, or of the study's current version."""
     if version is None:
         return current_candidate(repo, study)
     for candidate in repo.candidates(study):
@@ -127,11 +133,33 @@ def _evidence_view(evidence: Evidence) -> dict[str, Any]:
         "out_of_sample": run_id(evidence.out_of_sample),
         "out_of_sample_benchmark": run_id(evidence.out_of_sample_benchmark),
         "trials_used": evidence.trials_used,
+        "paper_session": evidence.paper.session if evidence.paper else None,
     }
 
 
+def _paper(
+    session: Session,
+    candidate: ResearchCandidate,
+    gates: Gates,
+    evidence: Evidence,
+    horizon: tuple[float | None, int | None],
+) -> dict[str, Any]:
+    """Fill G4's evidence from the linked paper session; return the expectation band."""
+    g4 = dict((gates.thresholds or {}).get("G4") or {})
+    evidence.paper = paper_facts(session, candidate.id, g4, now=datetime.now(timezone.utc))
+    runs = oos_runs(session, candidate.id)
+    weeks, trades = horizon
+    return expectation_band(session, runs[-1] if runs else None, g4, weeks=weeks, trades=trades)
+
+
 def get_scorecard(
-    settings: McpSettings, store: JobStore, key: str, version: int | None
+    settings: McpSettings,
+    store: JobStore,
+    key: str,
+    version: int | None,
+    *,
+    band_weeks: float | None = None,
+    band_trades: int | None = None,
 ) -> dict[str, Any]:
     """Every gate in the study's pass criteria: pass, fail or missing, with its evidence."""
     gates = load_gates(settings)
@@ -139,11 +167,12 @@ def get_scorecard(
         repo = SyncResearchRepository(session)
         study = load_study(repo, key, for_update=True)
         ledger.settle(repo, store, study)
-        candidate = _candidate_of(repo, study, version)
+        candidate = candidate_of(repo, study, version)
         periods = int(
             (gates.thresholds.get("G1", {}).get("positive_sub_periods") or {}).get("of", 4)
         )
         evidence = gather(session, repo.trials(study), candidate, periods=periods)
+        band = _paper(session, candidate, gates, evidence, (band_weeks, band_trades))
         judged = {
             gate: judge(gate, gates.thresholds.get(gate) if gates.thresholds else None, evidence)
             for gate in study.pass_criteria
@@ -165,7 +194,7 @@ def get_scorecard(
             "gates": judged,
             "summary": summary,
             "evidence": _evidence_view(evidence),
-            "expectation_band": {"status": MISSING, "note": "Arrives in phase 3 (paper loop)."},
+            "expectation_band": band,
             "gates_source": gates.source,
             "warnings": warnings,
         }

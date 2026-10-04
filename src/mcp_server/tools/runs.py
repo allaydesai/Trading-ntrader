@@ -6,6 +6,8 @@ from mcp.server import MCPServer
 
 from src.mcp_server import export, runs
 from src.mcp_server.context import ServerContext
+from src.mcp_server.errors import ToolFailure
+from src.mcp_server.paper.record import export_session
 from src.mcp_server.studies import record
 from src.mcp_server.tools import call
 
@@ -39,14 +41,33 @@ def register(server: MCPServer, ctx: ServerContext) -> None:
         study: str | None = None,
         folder: str = "Lab/results",
         overwrite: bool = False,
+        session: str | None = None,
     ) -> dict[str, Any]:
         """Write runs to the vault as <slug>.json and <slug>.trades.csv (runner format).
 
         With study, also writes <slug>.study.json (study, ledger, candidates,
         decisions and scorecard); run_ids then default to the study's completed
-        runs. Only folders in NTRADER_MCP_EXPORT_FOLDERS are writable; an existing
-        slug needs overwrite=true.
+        runs. With session (a paper session's name or id, alone), writes
+        <slug>.session.json (get_session's report and every trade) and
+        <slug>.session.trades.csv, and its compare-to run as <slug>.json. Only
+        folders in NTRADER_MCP_EXPORT_FOLDERS are writable; an existing slug
+        needs overwrite=true.
         """
+        if session is not None:
+            if study is not None or run_ids:
+                return ToolFailure(
+                    "invalid_request",
+                    "Export a session on its own, not with study or run_ids.",
+                    fix="Make one export_results call per session.",
+                ).to_dict()
+            return await call(
+                export_session,
+                ctx.settings,
+                session,
+                slug=slug,
+                folder=folder,
+                overwrite=overwrite,
+            )
         if study is not None:
             assert ctx.runner is not None, "build_server always creates the runner"
             return await call(

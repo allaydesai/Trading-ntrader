@@ -43,8 +43,14 @@ PINNED_TOOLS = frozenset(
         "new_candidate_version",
         "run_out_of_sample",
         "get_scorecard",
+        # phase 3
+        "paper_commands",
+        "list_sessions",
+        "get_session",
     }
 )
+#: The only tools whose names may say "session": they read, never manage one.
+READ_ONLY_SESSION_TOOLS = frozenset({"list_sessions", "get_session"})
 
 
 async def test_registered_tools_are_exactly_the_pinned_set(tmp_path, monkeypatch):
@@ -59,9 +65,14 @@ async def test_registered_tools_are_exactly_the_pinned_set(tmp_path, monkeypatch
 
 
 def test_no_tool_can_trade_or_manage_sessions():
-    """Spec: "Not provided, on purpose" — no orders, sessions, reconcile, import or fetch."""
-    words = ("order", "session", "reconcile", "import", "fetch", "live", "flatten")
+    """Spec: "Not provided, on purpose": no orders, no starting, stopping or creating
+    sessions, no reconcile, import or fetch. Reading a session is phase 3's job, so
+    exactly the two read tools may name one, and nothing else may.
+    """
+    words = ("order", "reconcile", "import", "fetch", "live", "flatten", "start", "stop")
     assert [t for t in REGISTERED_TOOLS if any(w in t for w in words)] == []
+    assert {t for t in REGISTERED_TOOLS if "session" in t} == READ_ONLY_SESSION_TOOLS
+    assert all(t.startswith(("list_", "get_")) for t in READ_ONLY_SESSION_TOOLS)
 
 
 def test_stdout_carries_only_protocol_messages(tmp_path):

@@ -160,7 +160,7 @@ async def test_create_study_rejects_bad_fields_before_touching_the_database(ctx)
         assert refused["error"]["message"].startswith("slug:")
 
 
-async def test_server_info_reports_phase_2_and_where_the_gates_come_from(tmp_path, ctx):
+async def test_server_info_reports_phase_3_and_where_the_gates_come_from(tmp_path, ctx):
     vault = tmp_path / "vault"
     (vault / "System").mkdir(parents=True)
     (vault / "System" / "Gates.md").write_text(
@@ -169,6 +169,6 @@ async def test_server_info_reports_phase_2_and_where_the_gates_come_from(tmp_pat
     ctx.settings = ctx.settings.model_copy(update={"vault_path": vault})
     async with Client(build_server(ctx)) as client:
         info = await _call(client, "server_info")
-    assert info["phase"] == 2
+    assert info["phase"] == 3
     assert info["gates"]["gate_ids"] == ["G0"] and info["gates"]["problem"] is None
-    assert "get_scorecard" in info["capabilities"]
+    assert {"get_scorecard", "paper_commands", "get_session"} <= set(info["capabilities"])

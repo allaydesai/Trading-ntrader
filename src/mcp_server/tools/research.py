@@ -122,10 +122,27 @@ def _register_holdout(
         return await queue_study_job(runner(), prepared["job"], prepared["warnings"])
 
     @server.tool()
-    async def get_scorecard(study: str, version: int | None = None) -> dict[str, Any]:
+    async def get_scorecard(
+        study: str,
+        version: int | None = None,
+        band_weeks: float | None = None,
+        band_trades: int | None = None,
+    ) -> dict[str, Any]:
         """A candidate against every gate in the study's pass criteria: pass, fail or
         missing, the number behind each check, its threshold (from the vault's
-        System/Gates.md) and the run ids it was judged on. Checks that need phase 3
-        or 4 (paper, sensitivity, walk-forward, breadth) are always missing.
+        System/Gates.md) and the run ids it was judged on. G4 (paper) is judged on the
+        newest paper session linked to the candidate's out-of-sample run: missing until
+        it has run min_weeks and min_trades. expectation_band is what a paper session
+        should produce over band_weeks / band_trades (default: G4's min_weeks and
+        min_trades), from the out-of-sample run's trades. Phase 4 checks (sensitivity,
+        walk-forward, breadth, cost stress) are always missing.
         """
-        return await call(scorecard.get_scorecard, ctx.settings, runner().store, study, version)
+        return await call(
+            scorecard.get_scorecard,
+            ctx.settings,
+            runner().store,
+            study,
+            version,
+            band_weeks=band_weeks,
+            band_trades=band_trades,
+        )
