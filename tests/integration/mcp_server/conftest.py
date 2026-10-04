@@ -5,8 +5,10 @@ catalog's rows); runs, metrics and trades are written to a per-worker schema
 that is dropped afterwards, so tests never add rows to the results database.
 """
 
+import importlib
 import json
 import os
+import pkgutil
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 
@@ -15,9 +17,16 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
+import src.mcp_server
 from src.config import CatalogSettings, get_settings
 from src.db.base import Base
 from src.db.models.backtest import BacktestRun, PerformanceMetrics, RunEquityCurve
+from src.db.models.research import (
+    ResearchCandidate,
+    ResearchStudy,
+    ResearchStudyEvent,
+    ResearchTrial,
+)
 from src.db.models.trade import Trade
 
 E2E_CATALOG = "e2e-test"
@@ -44,10 +53,28 @@ def _postgres_up() -> bool:
     return is_postgres_available()
 
 
+requires_postgres = pytest.mark.skipif(not _postgres_up(), reason="needs Postgres")
+
 requires_e2e_data = pytest.mark.skipif(
     not (_e2e_catalog_present() and _postgres_up()),
     reason="needs Postgres and the local e2e-test catalog",
 )
+
+
+def _modules_binding_sync_session() -> list:
+    """Every ``src.mcp_server`` module that imported ``get_sync_session`` by name.
+
+    Globbed, not listed: a new module that opens a session is patched the day it
+    appears, so it can never write to the real ``public`` schema from a test.
+    """
+    found = []
+    for info in pkgutil.walk_packages(src.mcp_server.__path__, "src.mcp_server."):
+        if info.name.endswith("__main__"):
+            continue
+        module = importlib.import_module(info.name)
+        if hasattr(module, "get_sync_session"):
+            found.append(module)
+    return found
 
 
 @pytest.fixture
@@ -70,6 +97,10 @@ def isolated_results(request, monkeypatch):
             PerformanceMetrics.__table__,
             Trade.__table__,
             RunEquityCurve.__table__,
+            ResearchStudy.__table__,
+            ResearchCandidate.__table__,
+            ResearchTrial.__table__,
+            ResearchStudyEvent.__table__,
         ]
         # checkfirst=False: with public on the search_path, the existence check
         # would find the real tables and silently create nothing here.
@@ -100,8 +131,8 @@ def isolated_results(request, monkeypatch):
             yield session
 
     monkeypatch.setattr("src.db.session_sync.get_sync_session", sync_session)
-    for module in ("catalogs", "runs", "export"):
-        monkeypatch.setattr(f"src.mcp_server.{module}.get_sync_session", sync_session)
+    for module in _modules_binding_sync_session():
+        monkeypatch.setattr(module, "get_sync_session", sync_session)
     monkeypatch.setattr("src.core.backtest_orchestrator.get_session", async_session)
     yield sync_maker
 
