@@ -53,6 +53,7 @@ def compute_config_hash(request: BacktestRequest) -> str:
         "end_date": request.end_date,
         "starting_balance": request.starting_balance,
         "data_source": request.to_persistence_data_source(),
+        "fill_seed": request.fill_seed,
     }
     encoded = json.dumps(_canonical(payload), sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode()).hexdigest()

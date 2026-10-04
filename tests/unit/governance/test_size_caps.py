@@ -122,16 +122,16 @@ SIZE_BASELINE: dict[str, int] = {
     "src/core/analytics.py::PortfolioAnalytics.calculate_performance_attribution": 55,
     # MCP phase 1, 325 -> 282: persistence record fields extracted to `_run_record_fields`
     # (and `_persist_results` dropped under its cap) while adding run provenance.
-    "src/core/backtest_orchestrator.py::BacktestOrchestrator": 282,
-    "src/core/backtest_runner.py::MinimalBacktestRunner": 926,
+    "src/core/backtest_orchestrator.py::BacktestOrchestrator": 276,
+    "src/core/backtest_runner.py::MinimalBacktestRunner": 902,
     "src/core/backtest_runner.py::MinimalBacktestRunner._extract_results": 111,
     "src/core/backtest_runner.py::MinimalBacktestRunner._persist_backtest_results": 100,
-    "src/core/backtest_runner.py::MinimalBacktestRunner.run_backtest_with_catalog_data": 123,
-    "src/core/backtest_runner.py::MinimalBacktestRunner.run_backtest_with_database": 76,
-    "src/core/backtest_runner.py::MinimalBacktestRunner.run_backtest_with_strategy_type": 74,
-    "src/core/backtest_runner.py::MinimalBacktestRunner.run_from_config_object": 107,
-    "src/core/backtest_runner.py::MinimalBacktestRunner.run_from_config_with_catalog_data": 66,
-    "src/core/backtest_runner.py::MinimalBacktestRunner.run_sma_backtest": 56,
+    "src/core/backtest_runner.py::MinimalBacktestRunner.run_backtest_with_catalog_data": 119,
+    "src/core/backtest_runner.py::MinimalBacktestRunner.run_backtest_with_database": 72,
+    "src/core/backtest_runner.py::MinimalBacktestRunner.run_backtest_with_strategy_type": 70,
+    "src/core/backtest_runner.py::MinimalBacktestRunner.run_from_config_object": 103,
+    "src/core/backtest_runner.py::MinimalBacktestRunner.run_from_config_with_catalog_data": 62,
+    "src/core/backtest_runner.py::MinimalBacktestRunner.run_sma_backtest": 52,
     "src/core/live_bar_observer.py::LiveBarObserver": 120,
     # Story 4.3, 118 -> 116: `submission_withheld` is now `not trading_permitted` (D-F).
     "src/core/live_connection_monitor.py::ConnectionMonitor": 116,
@@ -179,7 +179,8 @@ SIZE_BASELINE: dict[str, int] = {
     "src/db/repositories/backtest_repository_sync.py::SyncBacktestRepository": 153,
     "src/db/repositories/catalog_instrument_repository.py::CatalogInstrumentRepository": 122,
     "src/db/repositories/catalog_instrument_repository.py::SyncCatalogInstrumentRepository": 107,
-    "src/models/backtest_request.py::BacktestRequest": 176,
+    # Phase 2 pre-work, 176 -> 177: `fill_seed` makes the fill model's draws part of the request.
+    "src/models/backtest_request.py::BacktestRequest": 177,
     "src/models/price_validation_report.py::evaluate_ticker_deviation": 64,
     # MCP phase 1, 274 -> 276: both save paths take run provenance (S2.3).
     "src/services/backtest_persistence.py::BacktestPersistenceService": 276,

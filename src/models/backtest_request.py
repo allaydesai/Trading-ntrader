@@ -15,6 +15,9 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 logger = structlog.get_logger(__name__)
 
+#: Seed of the fill model's random draws when a request names none.
+DEFAULT_FILL_SEED = 42
+
 
 def _resolve_instrument_id(symbol: str) -> str:
     """Resolve a bare symbol to a full instrument ID using the catalog.
@@ -72,6 +75,7 @@ class BacktestRequest(BaseModel):
         persist: Whether to persist results to database
         config_file_path: Source config file path (for tracking)
         starting_balance: Initial account balance
+        fill_seed: Seed of the fill model's random draws; part of what defines the run
     """
 
     strategy_type: str = Field(..., min_length=1, description="Strategy identifier")
@@ -85,6 +89,8 @@ class BacktestRequest(BaseModel):
     start_date: datetime = Field(..., description="Backtest start date")
     end_date: datetime = Field(..., description="Backtest end date")
     bar_type: str = Field(..., min_length=1, description="Bar type specification")
+
+    fill_seed: int = DEFAULT_FILL_SEED
 
     # Execution options
     persist: bool = Field(default=True, description="Persist results to database")

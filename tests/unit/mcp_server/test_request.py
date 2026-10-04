@@ -7,6 +7,7 @@ import pytest
 
 from src.mcp_server.errors import ToolFailure
 from src.mcp_server.request import BacktestSpec, resolve
+from src.models.backtest_request import DEFAULT_FILL_SEED
 from src.services.provenance import compute_config_hash
 
 pytestmark = pytest.mark.unit
@@ -41,6 +42,7 @@ def test_resolves_a_strategy_run():
     assert request.strategy_config["fast_period"] == 5
     assert "position_size_pct" in request.strategy_config  # defaults filled in
     assert resolved.config_hash == compute_config_hash(request)
+    assert request.fill_seed == DEFAULT_FILL_SEED
 
 
 def test_resolves_a_benchmark():

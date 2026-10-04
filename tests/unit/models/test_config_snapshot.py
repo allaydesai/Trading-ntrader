@@ -86,3 +86,10 @@ def test_metrics_basis_survives_validation():
     )
     assert snapshot.model_dump()["metrics_basis"] == "mark_to_market"
     assert StrategyConfigSnapshot(strategy_path="a.b:C", config_path="a.b:D").metrics_basis is None
+
+
+def test_fill_seed_survives_validation():
+    """A seed that did not survive ``model_dump()`` could not be used to reproduce the run."""
+    snapshot = StrategyConfigSnapshot(strategy_path="a.b:C", config_path="a.b:D", fill_seed=42)
+    assert snapshot.model_dump()["fill_seed"] == 42
+    assert StrategyConfigSnapshot(strategy_path="a.b:C", config_path="a.b:D").fill_seed is None

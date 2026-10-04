@@ -8,7 +8,6 @@ from uuid import UUID, uuid4
 
 import structlog
 from nautilus_trader.backtest.engine import BacktestEngine, BacktestEngineConfig
-from nautilus_trader.backtest.models import FillModel
 from nautilus_trader.model.currencies import USD
 from nautilus_trader.model.data import BarType
 from nautilus_trader.model.enums import AccountType, OmsType
@@ -17,11 +16,13 @@ from nautilus_trader.model.objects import Money
 
 from src.config import get_settings
 from src.core.fee_models import IBKRCommissionModel
+from src.core.fill_model import make_fill_model
 from src.core.strategies.sma_crossover import SMAConfig, SMACrossover
 from src.core.strategy_factory import StrategyFactory
 from src.core.strategy_registry import StrategyRegistry
 from src.db.repositories.backtest_repository import BacktestRepository
 from src.db.session import get_session
+from src.models.backtest_request import DEFAULT_FILL_SEED
 from src.models.backtest_result import BacktestResult
 from src.services.backtest_persistence import BacktestPersistenceService
 from src.services.data_service import DataService
@@ -368,11 +369,7 @@ class MinimalBacktestRunner:
         self.engine = BacktestEngine(config=config)
 
         # Create fill model for realistic execution simulation
-        fill_model = FillModel(
-            prob_fill_on_limit=0.95,  # 95% fill probability on limit orders
-            prob_fill_on_stop=0.95,  # 95% fill probability on stop orders
-            prob_slippage=0.01,  # 1% slippage probability
-        )
+        fill_model = make_fill_model(DEFAULT_FILL_SEED)
 
         # Create commission model
         fee_model = IBKRCommissionModel(
@@ -526,11 +523,7 @@ class MinimalBacktestRunner:
         self.engine = BacktestEngine(config=config)
 
         # Create fill model for realistic execution simulation
-        fill_model = FillModel(
-            prob_fill_on_limit=0.95,  # 95% fill probability on limit orders
-            prob_fill_on_stop=0.95,  # 95% fill probability on stop orders
-            prob_slippage=0.01,  # 1% slippage probability
-        )
+        fill_model = make_fill_model(DEFAULT_FILL_SEED)
 
         # Create commission model
         fee_model = IBKRCommissionModel(
@@ -854,11 +847,7 @@ class MinimalBacktestRunner:
         self.engine = BacktestEngine(config=config)
 
         # Create fill model for realistic execution simulation
-        fill_model = FillModel(
-            prob_fill_on_limit=0.95,
-            prob_fill_on_stop=0.95,
-            prob_slippage=0.01,
-        )
+        fill_model = make_fill_model(DEFAULT_FILL_SEED)
 
         # Create commission model
         fee_model = IBKRCommissionModel(
@@ -1250,11 +1239,7 @@ class MinimalBacktestRunner:
         self.engine = BacktestEngine(config=config)
 
         # Create fill model for realistic execution simulation
-        fill_model = FillModel(
-            prob_fill_on_limit=0.95,  # 95% fill probability on limit orders
-            prob_fill_on_stop=0.95,  # 95% fill probability on stop orders
-            prob_slippage=0.01,  # 1% slippage probability
-        )
+        fill_model = make_fill_model(DEFAULT_FILL_SEED)
 
         # Create commission model
         fee_model = IBKRCommissionModel(
@@ -1455,11 +1440,7 @@ class MinimalBacktestRunner:
         self.engine = BacktestEngine(config=config)
 
         # Create fill model for realistic execution simulation
-        fill_model = FillModel(
-            prob_fill_on_limit=0.95,  # 95% fill probability on limit orders
-            prob_fill_on_stop=0.95,  # 95% fill probability on stop orders
-            prob_slippage=0.01,  # 1% slippage probability
-        )
+        fill_model = make_fill_model(DEFAULT_FILL_SEED)
 
         # Create commission model
         fee_model = IBKRCommissionModel(
@@ -1609,11 +1590,7 @@ class MinimalBacktestRunner:
         self.engine = BacktestEngine(config=config)
 
         # Reason: Create fill model for realistic execution simulation
-        fill_model = FillModel(
-            prob_fill_on_limit=0.95,  # 95% fill probability on limit orders
-            prob_fill_on_stop=0.95,  # 95% fill probability on stop orders
-            prob_slippage=0.01,  # 1% slippage probability
-        )
+        fill_model = make_fill_model(DEFAULT_FILL_SEED)
 
         # Reason: Create commission model
         fee_model = IBKRCommissionModel(

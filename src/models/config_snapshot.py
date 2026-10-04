@@ -28,6 +28,8 @@ class StrategyConfigSnapshot(BaseModel):
         metrics_basis: What drawdown, Sharpe, Sortino and volatility were computed
             from: ``"mark_to_market"`` (daily equity at bar closes) or ``"realised"``
             (closed-position returns). Nullable: rows before the field are realised.
+        fill_seed: Seed of the fill model's random draws. Nullable: rows before the
+            field ran unseeded and cannot be reproduced exactly.
 
     Example:
         >>> snapshot = StrategyConfigSnapshot(
@@ -56,6 +58,12 @@ class StrategyConfigSnapshot(BaseModel):
         default=None,
         description="What risk metrics were computed from: 'mark_to_market' or 'realised'. "
         "None on rows written before the field existed (realised).",
+    )
+
+    fill_seed: int | None = Field(
+        default=None,
+        description="Seed of the fill model's random draws. None on rows written before "
+        "the field existed (unseeded, not exactly reproducible).",
     )
 
     model_config = {

@@ -67,6 +67,7 @@ class TestComputeConfigHash:
             {"starting_balance": Decimal("500000")},
             {"catalog_name": "firstrate-stocks"},
             {"strategy_path": "src.core.strategies.sma_momentum:SMAMomentum"},
+            {"fill_seed": 7},
         ],
     )
     def test_changes_when_a_run_defining_field_changes(self, override):

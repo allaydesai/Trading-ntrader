@@ -14,7 +14,6 @@ from uuid import UUID, uuid4
 
 import structlog
 from nautilus_trader.backtest.engine import BacktestEngine, BacktestEngineConfig
-from nautilus_trader.backtest.models import FillModel
 from nautilus_trader.common.component import is_logging_initialized
 from nautilus_trader.config import LoggingConfig
 from nautilus_trader.model.currencies import USD
@@ -27,6 +26,7 @@ from nautilus_trader.trading.strategy import Strategy
 
 from src.config import get_settings
 from src.core.fee_models import IBKRCommissionModel
+from src.core.fill_model import make_fill_model
 from src.core.results_extractor import ResultsExtractor, metrics_basis
 from src.core.strategy_factory import StrategyFactory, StrategyLoader
 from src.core.strategy_registry import StrategyRegistry
@@ -80,6 +80,7 @@ def _run_record_fields(request: BacktestRequest) -> dict[str, Any]:
             "version": "1.0",
             "config": _make_json_serializable(request.strategy_config),
             "bar_type": request.bar_type,
+            "fill_seed": request.fill_seed,
         },
     }
 
@@ -308,14 +309,6 @@ class BacktestOrchestrator:
             result.total_return = (total_final - total_start) / total_start
         return result
 
-    def _make_fill_model(self) -> FillModel:
-        """Construct the shared fill model (identical for single- and multi-instrument runs)."""
-        return FillModel(
-            prob_fill_on_limit=0.95,
-            prob_fill_on_stop=0.95,
-            prob_slippage=0.01,
-        )
-
     def _make_fee_model(self) -> IBKRCommissionModel:
         """Construct the shared IBKR commission model from settings."""
         return IBKRCommissionModel(
@@ -347,7 +340,7 @@ class BacktestOrchestrator:
         )
 
         # Create fill + commission models (shared construction — see helpers)
-        fill_model = self._make_fill_model()
+        fill_model = make_fill_model(request.fill_seed)
         fee_model = self._make_fee_model()
 
         self.engine = BacktestEngine(config=config)
@@ -393,7 +386,7 @@ class BacktestOrchestrator:
             trader_id=TraderId("BACKTESTER-001"),
             logging=logging_config,
         )
-        fill_model = self._make_fill_model()
+        fill_model = make_fill_model(request.fill_seed)
         fee_model = self._make_fee_model()
         engine = BacktestEngine(config=config)
 
