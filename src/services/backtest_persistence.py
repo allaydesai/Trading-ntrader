@@ -13,15 +13,35 @@ from uuid import UUID
 
 import pandas as pd
 import structlog
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.exceptions import ValidationError
 from src.db.models.backtest import BacktestRun
 from src.db.repositories.backtest_repository import BacktestRepository
+from src.db.repositories.equity_curve_repository import EquityCurveRepository, EquityPoints
 from src.models.backtest_result import BacktestResult
 from src.models.config_snapshot import StrategyConfigSnapshot
 from src.models.run_provenance import RunProvenance
 
 logger = structlog.get_logger(__name__)
+
+
+async def store_equity_curve(
+    session: AsyncSession, backtest_run_id: int, points: EquityPoints | None
+) -> None:
+    """Store a run's equity curve, best-effort, without endangering the run itself.
+
+    The run and its metrics are the primary record. A failed flush would leave
+    the session unusable and lose them at commit, so the write sits in a
+    savepoint and a failure is logged, not raised.
+    """
+    if not points:
+        return
+    try:
+        async with session.begin_nested():
+            await EquityCurveRepository(session).save(backtest_run_id, points)
+    except Exception as e:
+        logger.warning(f"Failed to store equity curve (run still persisted): {e}", exc_info=True)
 
 
 def _to_utc(value) -> datetime:

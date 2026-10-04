@@ -122,7 +122,7 @@ SIZE_BASELINE: dict[str, int] = {
     "src/core/analytics.py::PortfolioAnalytics.calculate_performance_attribution": 55,
     # MCP phase 1, 325 -> 282: persistence record fields extracted to `_run_record_fields`
     # (and `_persist_results` dropped under its cap) while adding run provenance.
-    "src/core/backtest_orchestrator.py::BacktestOrchestrator": 276,
+    "src/core/backtest_orchestrator.py::BacktestOrchestrator": 275,
     "src/core/backtest_runner.py::MinimalBacktestRunner": 902,
     "src/core/backtest_runner.py::MinimalBacktestRunner._extract_results": 111,
     "src/core/backtest_runner.py::MinimalBacktestRunner._persist_backtest_results": 100,
@@ -186,7 +186,8 @@ SIZE_BASELINE: dict[str, int] = {
     "src/services/backtest_persistence.py::BacktestPersistenceService": 276,
     "src/services/backtest_persistence.py::BacktestPersistenceService._extract_and_validate_metrics": 58,  # noqa: E501
     "src/services/backtest_persistence.py::BacktestPersistenceService.save_trades_from_positions": 137,  # noqa: E501
-    "src/services/backtest_query.py::BacktestQueryService": 108,
+    # Phase 2 pre-work, 108 -> 110: `get_equity_curve` reads the run's stored curve.
+    "src/services/backtest_query.py::BacktestQueryService": 110,
     "src/services/comparison_renderer.py::render_comparison_table": 66,
     "src/services/csv_loader.py::CSVLoader": 205,
     "src/services/csv_loader.py::CSVLoader.load_file": 65,

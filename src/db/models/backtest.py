@@ -23,6 +23,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    func,
 )
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
@@ -180,6 +181,36 @@ class BacktestRun(Base, TimestampMixin):
             f"strategy={self.strategy_name}, "
             f"status={self.execution_status})>"
         )
+
+
+class RunEquityCurve(Base):
+    """
+    The equity curve of one backtest run.
+
+    Kept out of ``backtest_runs`` on purpose: a curve is thousands of points and
+    the run row is loaded by every list, detail and comparison read. Nothing
+    loads this table unless it asks for the curve.
+
+    Attributes:
+        id: Internal database primary key
+        backtest_run_id: The run the curve belongs to; one curve per run
+        points: ``[{"time": unix_seconds, "value": equity}, ...]`` in time order
+        created_at: When the curve was stored
+    """
+
+    __tablename__ = "run_equity_curves"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    backtest_run_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("backtest_runs.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+    points: Mapped[list[dict[str, float]]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
 
 
 class PerformanceMetrics(Base, TimestampMixin):

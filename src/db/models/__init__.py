@@ -1,6 +1,6 @@
 """Database models for backtesting persistence."""
 
-from src.db.models.backtest import BacktestRun, PerformanceMetrics
+from src.db.models.backtest import BacktestRun, PerformanceMetrics, RunEquityCurve
 from src.db.models.catalog_dividend import CatalogDividend
 from src.db.models.catalog_instrument import CatalogInstrument
 from src.db.models.catalog_stock_split import CatalogStockSplit
@@ -15,6 +15,7 @@ __all__ = [
     "CatalogStockSplit",
     "InstrumentMetadata",
     "PerformanceMetrics",
+    "RunEquityCurve",
     "Trade",
     "TradingSession",
 ]

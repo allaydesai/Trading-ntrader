@@ -4,7 +4,7 @@ Tests for GET /api/equity/{run_id} endpoint.
 Tests equity curve and drawdown data retrieval.
 """
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
@@ -22,19 +22,18 @@ class TestEquityEndpoint:
         mock_service = MagicMock()
         mock_backtest = MagicMock()
         mock_backtest.run_id = run_id
-        mock_backtest.config_snapshot = {
-            "equity_curve": [
-                {"time": 1704067200, "value": 100000.0},  # 2024-01-01
-                {"time": 1705276800, "value": 100000.0},  # 2024-01-15
-                {"time": 1705708800, "value": 100450.0},  # 2024-01-20
-                {"time": 1706659200, "value": 100450.0},  # 2024-01-31
-            ]
-        }
+        stored_curve = [
+            {"time": 1704067200, "value": 100000.0},  # 2024-01-01
+            {"time": 1705276800, "value": 100000.0},  # 2024-01-15
+            {"time": 1705708800, "value": 100450.0},  # 2024-01-20
+            {"time": 1706659200, "value": 100450.0},  # 2024-01-31
+        ]
 
         async def mock_get_backtest(rid):
             return mock_backtest
 
         mock_service.get_backtest_by_id = mock_get_backtest
+        mock_service.get_equity_curve = AsyncMock(return_value=stored_curve)
 
         app.dependency_overrides[get_backtest_query_service] = lambda: mock_service
 
@@ -57,19 +56,18 @@ class TestEquityEndpoint:
         mock_backtest = MagicMock()
         mock_backtest.run_id = run_id
         # Equity: 100000 -> 105000 (peak) -> 100000 (5% drawdown) -> 110000 (new peak)
-        mock_backtest.config_snapshot = {
-            "equity_curve": [
-                {"time": 1704067200, "value": 100000.0},  # 2024-01-01
-                {"time": 1704844800, "value": 105000.0},  # 2024-01-10
-                {"time": 1705276800, "value": 100000.0},  # 2024-01-15
-                {"time": 1705708800, "value": 110000.0},  # 2024-01-20
-            ]
-        }
+        stored_curve = [
+            {"time": 1704067200, "value": 100000.0},  # 2024-01-01
+            {"time": 1704844800, "value": 105000.0},  # 2024-01-10
+            {"time": 1705276800, "value": 100000.0},  # 2024-01-15
+            {"time": 1705708800, "value": 110000.0},  # 2024-01-20
+        ]
 
         async def mock_get_backtest(rid):
             return mock_backtest
 
         mock_service.get_backtest_by_id = mock_get_backtest
+        mock_service.get_equity_curve = AsyncMock(return_value=stored_curve)
 
         app.dependency_overrides[get_backtest_query_service] = lambda: mock_service
 
@@ -96,17 +94,16 @@ class TestEquityEndpoint:
         mock_service = MagicMock()
         mock_backtest = MagicMock()
         mock_backtest.run_id = run_id
-        mock_backtest.config_snapshot = {
-            "equity_curve": [
-                {"time": 1704067200, "value": 100000.0},  # 2024-01-01
-                {"time": 1706659200, "value": 100450.0},  # 2024-01-31
-            ]
-        }
+        stored_curve = [
+            {"time": 1704067200, "value": 100000.0},  # 2024-01-01
+            {"time": 1706659200, "value": 100450.0},  # 2024-01-31
+        ]
 
         async def mock_get_backtest(rid):
             return mock_backtest
 
         mock_service.get_backtest_by_id = mock_get_backtest
+        mock_service.get_equity_curve = AsyncMock(return_value=stored_curve)
 
         app.dependency_overrides[get_backtest_query_service] = lambda: mock_service
 
@@ -161,13 +158,14 @@ class TestEquityEmptyData:
         mock_service = MagicMock()
         mock_backtest = MagicMock()
         mock_backtest.run_id = run_id
-        mock_backtest.config_snapshot = {}  # No equity_curve key
+        stored_curve = []  # nothing stored for this run
         mock_backtest.metrics = None  # No metrics to prevent fallback
 
         async def mock_get_backtest(rid):
             return mock_backtest
 
         mock_service.get_backtest_by_id = mock_get_backtest
+        mock_service.get_equity_curve = AsyncMock(return_value=stored_curve)
 
         app.dependency_overrides[get_backtest_query_service] = lambda: mock_service
 

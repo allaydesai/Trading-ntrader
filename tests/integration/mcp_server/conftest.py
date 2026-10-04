@@ -17,7 +17,7 @@ from sqlalchemy.orm import sessionmaker
 
 from src.config import CatalogSettings, get_settings
 from src.db.base import Base
-from src.db.models.backtest import BacktestRun, PerformanceMetrics
+from src.db.models.backtest import BacktestRun, PerformanceMetrics, RunEquityCurve
 from src.db.models.trade import Trade
 
 E2E_CATALOG = "e2e-test"
@@ -65,7 +65,12 @@ def isolated_results(request, monkeypatch):
     with sync_engine.begin() as conn:
         conn.execute(text(f"DROP SCHEMA IF EXISTS {schema} CASCADE"))
         conn.execute(text(f"CREATE SCHEMA {schema}"))
-        tables = [BacktestRun.__table__, PerformanceMetrics.__table__, Trade.__table__]
+        tables = [
+            BacktestRun.__table__,
+            PerformanceMetrics.__table__,
+            Trade.__table__,
+            RunEquityCurve.__table__,
+        ]
         # checkfirst=False: with public on the search_path, the existence check
         # would find the real tables and silently create nothing here.
         Base.metadata.create_all(conn, tables=tables, checkfirst=False)

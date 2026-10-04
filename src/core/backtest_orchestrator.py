@@ -35,7 +35,7 @@ from src.db.session import get_session
 from src.models.backtest_request import BacktestRequest
 from src.models.backtest_result import BacktestResult
 from src.models.run_provenance import RunProvenance
-from src.services.backtest_persistence import BacktestPersistenceService
+from src.services.backtest_persistence import BacktestPersistenceService, store_equity_curve
 from src.services.provenance import run_provenance
 
 logger = structlog.get_logger(__name__)
@@ -530,8 +530,6 @@ class BacktestOrchestrator:
         try:
             fields = _run_record_fields(request)
             equity_curve = self._extract_equity_curve(float(request.starting_balance))
-            if equity_curve:
-                fields["config_snapshot"]["equity_curve"] = equity_curve
             fields["config_snapshot"]["metrics_basis"] = metrics_basis(self._extractor)
             if request.config_file_path:
                 fields["config_snapshot"]["config_file_path"] = request.config_file_path
@@ -547,6 +545,7 @@ class BacktestOrchestrator:
                     backtest_result=result,
                     provenance=provenance,
                 )
+                await store_equity_curve(session, backtest_run.id, equity_curve)
 
                 # Capture trades from positions report. Trade capture is best-effort
                 # — the run and its metrics are the primary record — but the failure

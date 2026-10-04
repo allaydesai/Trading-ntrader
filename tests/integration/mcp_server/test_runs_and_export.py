@@ -6,9 +6,11 @@ Results live in a throwaway schema (see conftest). Requires --forked.
 import csv
 import json
 from datetime import datetime, timedelta, timezone
+from uuid import UUID
 
 import pytest
 
+from src.db.repositories.equity_curve_repository import SyncEquityCurveRepository
 from src.mcp_server import runs
 from src.mcp_server.export import export_results
 from src.mcp_server.settings import McpSettings
@@ -37,6 +39,12 @@ async def test_read_compare_and_export(isolated_results, job_dir, tmp_path):
     assert detail["metrics"]["total_return"]["unit"] == "fraction"
     assert detail["metrics_basis"] == "mark_to_market"
     assert detail["warnings"] == [] or "uncommitted" in detail["warnings"][0]
+
+    # The run's mark-to-market equity curve is stored, one point per trading day.
+    with isolated_results() as session:
+        curve = SyncEquityCurveRepository(session).find_points(UUID(strategy))
+    assert curve is not None and len(curve) > 400
+    assert set(curve[0]) == {"time", "value"}
 
     # A job cancelled after its commit finds its run by config hash and start time.
     config_hash = detail["provenance"]["config_hash"]

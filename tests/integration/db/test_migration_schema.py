@@ -160,3 +160,12 @@ def test_resolution_status_enum_includes_excluded(migrated):
     denominator.
     """
     assert migrated["resolution_status"] == _EXPECTED_RESOLUTION_STATUSES
+
+
+def test_run_equity_curves_holds_one_curve_per_run(migrated):
+    """The curve table: one row per run, removed with the run, points never NULL."""
+    table = migrated["run_equity_curves"]
+    assert table["columns"]["points"] is False
+    assert table["columns"]["backtest_run_id"] is False
+    assert table["unique"] == ["backtest_run_id"]
+    assert table["on_delete"] == ["CASCADE"]

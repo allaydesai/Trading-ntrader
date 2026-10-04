@@ -101,3 +101,21 @@ async def test_execute_uses_given_provenance(service):
         )
     computed.assert_not_called()
     assert service.save_failed_backtest.call_args.kwargs["provenance"] == PROVENANCE
+
+
+async def test_the_equity_curve_is_stored_beside_the_run_not_in_the_snapshot(service):
+    """The snapshot model drops unknown keys, so a curve placed there was never saved."""
+    points = [{"time": 1, "value": 2.0}]
+    orchestrator = BacktestOrchestrator()
+    with (
+        patch.object(orchestrator, "_extract_equity_curve", return_value=points),
+        patch(f"{MODULE}.store_equity_curve", new_callable=AsyncMock) as store,
+    ):
+        await orchestrator._persist_results(
+            run_id=uuid4(),
+            request=_request(),
+            result=MagicMock(),
+            execution_duration=Decimal("1"),
+        )
+    assert "equity_curve" not in service.save_backtest_results.call_args.kwargs["config_snapshot"]
+    assert store.call_args.args[1:] == (1, points)

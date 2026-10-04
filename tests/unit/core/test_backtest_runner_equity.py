@@ -1,7 +1,7 @@
 """Unit tests for BacktestRunner equity curve extraction."""
 
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pandas as pd
 import pytest
@@ -178,7 +178,7 @@ class TestPersistBacktestResultsEquityCurve:
     async def test_persist_backtest_results_includes_equity_curve(
         self, backtest_runner_with_engine
     ):
-        """Persist method adds equity curve to config_snapshot."""
+        """Persist method stores the equity curve beside the run."""
         # Arrange
         from src.core.backtest_runner import BacktestResult
 
@@ -201,11 +201,16 @@ class TestPersistBacktestResultsEquityCurve:
                 mock_repo = Mock()
                 mock_repo_cls.return_value = mock_repo
 
-                with patch(
-                    "src.core.backtest_runner.BacktestPersistenceService"
-                ) as mock_service_cls:
+                with (
+                    patch(
+                        "src.core.backtest_runner.BacktestPersistenceService"
+                    ) as mock_service_cls,
+                    patch(
+                        "src.core.backtest_runner.store_equity_curve", new_callable=AsyncMock
+                    ) as mock_store,
+                ):
                     mock_service = Mock()
-                    mock_service.save_backtest_results = MagicMock()
+                    mock_service.save_backtest_results = AsyncMock(return_value=Mock(id=1))
                     mock_service_cls.return_value = mock_service
 
                     # Act
@@ -220,12 +225,9 @@ class TestPersistBacktestResultsEquityCurve:
                         strategy_config={"fast_period": 10},
                     )
 
-                    # Assert
+                    # Assert: the curve goes to its own table, not the snapshot
                     call_kwargs = mock_service.save_backtest_results.call_args[1]
-                    config_snapshot = call_kwargs["config_snapshot"]
-
-                    assert "equity_curve" in config_snapshot
-                    assert len(config_snapshot["equity_curve"]) == 3
-                    assert (
-                        config_snapshot["equity_curve"][0]["time"] == 1704067200
-                    )  # 2024-01-01 Unix timestamp
+                    assert "equity_curve" not in call_kwargs["config_snapshot"]
+                    points = mock_store.call_args.args[2]
+                    assert len(points) == 3
+                    assert points[0]["time"] == 1704067200  # 2024-01-01 Unix timestamp

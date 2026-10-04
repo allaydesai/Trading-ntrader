@@ -24,7 +24,7 @@ from src.db.repositories.backtest_repository import BacktestRepository
 from src.db.session import get_session
 from src.models.backtest_request import DEFAULT_FILL_SEED
 from src.models.backtest_result import BacktestResult
-from src.services.backtest_persistence import BacktestPersistenceService
+from src.services.backtest_persistence import BacktestPersistenceService, store_equity_curve
 from src.services.data_service import DataService
 from src.utils.config_loader import ConfigLoader, StrategyConfigWrapper
 from src.utils.mock_data import create_test_instrument, generate_mock_bars
@@ -117,13 +117,12 @@ class MinimalBacktestRunner:
                 "config": strategy_config,
             }
 
-            # Extract and store equity curve if engine is available
+            # Extract the equity curve if engine is available (stored beside the run below)
+            equity_curve: list[dict[str, Any]] = []
             if self.engine:
                 analyzer = self.engine.portfolio.analyzer
                 starting_balance = float(self.settings.default_balance)
                 equity_curve = self._extract_equity_curve(analyzer, starting_balance)
-                if equity_curve:
-                    config_snapshot["equity_curve"] = equity_curve
 
             async with get_session() as session:
                 repository = BacktestRepository(session)
@@ -143,6 +142,7 @@ class MinimalBacktestRunner:
                     backtest_result=result,
                     reproduced_from_run_id=reproduced_from_run_id,
                 )
+                await store_equity_curve(session, backtest_run.id, equity_curve)
 
                 # Capture individual trades from fills report
                 try:
