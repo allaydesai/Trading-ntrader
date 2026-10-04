@@ -108,3 +108,18 @@ async def test_list_jobs_rejects_unknown_state(ctx):
     async with Client(build_server(ctx)) as client:
         result = await _call(client, "list_jobs", {"state": "exploded"})
     assert result["error"]["code"] == "invalid_state"
+
+
+async def test_second_server_refuses_to_submit_but_still_reads(ctx, tmp_path):
+    async with Client(build_server(ctx)) as owner:
+        job_id = (await _call(owner, "submit_backtest", REQUEST))["job_id"]
+        other = JobRunner(
+            JobStore(ctx.settings.jobs_dir), timeout_s=30, worker_command=_fake_command
+        )
+        second = ServerContext(settings=ctx.settings, runner=other)
+        async with Client(build_server(second)) as client:
+            refused = await _call(client, "submit_backtest", REQUEST)
+            assert refused["ok"] is False
+            assert refused["error"]["code"] == "another_server_active"
+            assert (await _call(client, "get_job", {"job_id": job_id}))["job_id"] == job_id
+            assert (await _call(client, "server_info"))["jobs"]["owner"] is False

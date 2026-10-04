@@ -56,7 +56,10 @@ def register(server: MCPServer, ctx: ServerContext) -> None:
         prepared = await call(prepare)
         if not prepared.pop("ok"):
             return {"ok": False, **prepared}
-        job_id = await runner().submit(prepared)
+        try:
+            job_id = await runner().submit(prepared)
+        except ToolFailure as failure:  # another server owns the job queue
+            return failure.to_dict()
         return {
             "ok": True,
             "job_id": job_id,

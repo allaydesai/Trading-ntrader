@@ -91,3 +91,28 @@ def test_not_backtestable(availability):
     result = validation.validate(_spec(), default_catalog="")
     assert result["errors"][0]["code"] == "not_backtestable"
     assert result["errors"][0]["message"] == "venue unresolved"
+
+
+def test_shared_start_warns_for_a_timeframe_that_may_begin_later(availability):
+    span = {"start": "2000-01-03T00:00:00+00:00", "end": "2026-05-01T00:00:00+00:00", "bars": 9}
+    availability["result"] = {
+        **COVERAGE,
+        "timeframes": {"1-DAY": span, "1-MINUTE": span},
+        "start_is_earliest_across_timeframes": True,
+    }
+    intraday = validation.validate(_spec(timeframe="1-MINUTE"), default_catalog="")
+    daily = validation.validate(_spec(), default_catalog="")
+    assert intraday["ok"] is True
+    assert any("may start later" in w for w in intraday["warnings"])
+    assert daily["warnings"] == []
+
+
+def test_unknown_start_does_not_crash(availability):
+    span = {"start": None, "end": "2026-05-01T00:00:00+00:00", "bars": 9}
+    availability["result"] = {**COVERAGE, "timeframes": {"1-DAY": span}}
+    result = validation.validate(_spec(), default_catalog="")
+    assert result["ok"] is True
+    late = validation.validate(
+        _spec(start=date(2027, 1, 1), end=date(2027, 2, 1)), default_catalog=""
+    )
+    assert late["errors"][0]["code"] == "window_outside_coverage"

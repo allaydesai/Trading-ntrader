@@ -6,7 +6,7 @@ from typing import Any
 
 from src.mcp_server.errors import ToolFailure
 from src.mcp_server.jobs.runner import JobRunner
-from src.mcp_server.jobs.store import STATES
+from src.mcp_server.jobs.store import STATES, JobStore
 from src.mcp_server.request import BacktestSpec
 from src.mcp_server.validation import validate
 
@@ -33,6 +33,17 @@ def prepare_backtest(spec: BacktestSpec, default_catalog: str) -> dict[str, Any]
         "resolved": resolved,
         "warnings": check["warnings"],
     }
+
+
+def saved_run_of(store: JobStore, job_id: str) -> str | None:
+    """The run a job persisted, looked up in the database by config hash and start time."""
+    from src.mcp_server.runs import find_saved_run
+
+    config_hash = (store.request(job_id).get("resolved") or {}).get("config_hash")
+    started_at = store.status(job_id).get("started_at")
+    if not config_hash or not started_at:
+        return None
+    return find_saved_run(config_hash, datetime.fromisoformat(started_at))
 
 
 def _elapsed(status: dict[str, Any]) -> float | None:

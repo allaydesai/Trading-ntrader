@@ -134,3 +134,40 @@ def test_write_export_without_trades_writes_no_csv(vault):
     files = write_export(target, slug="empty", runs=[], trades=[], missing=[], git={})
     assert files["trades_csv"] is None
     assert not target.csv_path.exists()
+
+
+def test_overwrite_without_trades_removes_the_stale_csv(vault):
+    """The old CSV holds another run's trades; leaving it beside the new JSON misleads."""
+    first = export_target(_settings(vault), "Lab/results", "again", overwrite=False)
+    trades = [{"run_id": "r1", "profit_loss": 5.0}]
+    write_export(first, slug="again", runs=[], trades=trades, missing=[], git={})
+    assert first.csv_path.exists()
+
+    second = export_target(_settings(vault), "Lab/results", "again", overwrite=True)
+    files = write_export(second, slug="again", runs=[], trades=[], missing=[], git={})
+
+    assert files["trades_csv"] is None
+    assert not second.csv_path.exists()
+    assert json.loads(second.json_path.read_text())["trades_csv"] is None
+
+
+def test_export_leaves_no_temporary_files(vault):
+    target = export_target(_settings(vault), "Lab/results", "tidy", overwrite=False)
+    trades = [{"run_id": "r1", "profit_loss": 5.0}]
+    write_export(target, slug="tidy", runs=[], trades=trades, missing=[], git={})
+    names = sorted(p.name for p in target.json_path.parent.iterdir())
+    assert names == ["tidy.json", "tidy.trades.csv"]
+
+
+def test_failed_json_write_leaves_the_previous_export_intact(vault, monkeypatch):
+    target = export_target(_settings(vault), "Lab/results", "safe", overwrite=False)
+    old = [{"run_id": "old", "profit_loss": 1.0}]
+    write_export(target, slug="safe", runs=[], trades=old, missing=[], git={})
+    before = (target.json_path.read_text(), target.csv_path.read_text())
+
+    monkeypatch.setattr(json, "dumps", lambda *a, **k: (_ for _ in ()).throw(TypeError("boom")))
+    with pytest.raises(TypeError):
+        new = [{"run_id": "new", "profit_loss": 2.0}]
+        write_export(target, slug="safe", runs=[], trades=new, missing=[], git={})
+
+    assert (target.json_path.read_text(), target.csv_path.read_text()) == before

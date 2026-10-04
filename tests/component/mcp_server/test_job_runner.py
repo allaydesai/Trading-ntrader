@@ -1,12 +1,17 @@
 """JobRunner: one worker process at a time, cancel, timeout, restart recovery (S2.1, S2.2)."""
 
 import asyncio
+import os
+import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
 
 import pytest
 
+from src.mcp_server.errors import ToolFailure
+from src.mcp_server.jobs.recovery import worker_alive
 from src.mcp_server.jobs.runner import JobRunner
 from src.mcp_server.jobs.store import JobStore
 
@@ -15,12 +20,25 @@ pytestmark = pytest.mark.component
 FAKE = Path(__file__).with_name("fake_worker.py")
 
 
-def _runner(store: JobStore, timeout_s: float = 30) -> JobRunner:
-    return JobRunner(
-        store,
-        timeout_s=timeout_s,
-        worker_command=lambda job_dir: [sys.executable, str(FAKE), str(job_dir)],
+def _command(job_dir: Path) -> list[str]:
+    return [sys.executable, str(FAKE), str(job_dir)]
+
+
+def _runner(store: JobStore, timeout_s: float = 30, **kwargs) -> JobRunner:
+    return JobRunner(store, timeout_s=timeout_s, worker_command=_command, **kwargs)
+
+
+def _orphan(store: JobStore, behaviour: str) -> tuple[str, subprocess.Popen]:
+    """A job a previous server left running: its worker is alive in its own session."""
+    job_id = store.create(_payload(behaviour))
+    proc = subprocess.Popen(
+        _command(store.job_dir(job_id)),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
     )
+    store.update(job_id, state="running", started_at="2026-10-03T00:00:00+00:00", pid=proc.pid)
+    return job_id, proc
 
 
 def _payload(behaviour: str) -> dict:
@@ -135,3 +153,164 @@ async def test_cancel_while_the_worker_is_spawning_still_stops_it(store):
     status = await runner.cancel(job_id)
     assert time.monotonic() - started < 5
     assert status["state"] == "cancelled"
+
+
+# --- one owning server per jobs directory -----------------------------------------
+
+
+async def test_second_server_leaves_the_first_ones_jobs_alone(store):
+    first = _runner(store)
+    running = await first.submit(_payload("sleep"))
+    queued = await first.submit(_payload("ok-mine"))
+    while store.status(running)["state"] != "running":
+        await asyncio.sleep(0.05)
+
+    second = _runner(store)
+    second.start()
+    await asyncio.sleep(0.3)
+
+    assert store.status(running)["state"] == "running"
+    assert store.status(queued)["state"] == "queued"
+    assert second.queue_state()["owner"] is False
+    with pytest.raises(ToolFailure) as exc:
+        await second.submit(_payload("ok-theirs"))
+    assert exc.value.code == "another_server_active"
+    with pytest.raises(ToolFailure) as exc:
+        await second.cancel(running)
+    assert exc.value.code == "another_server_active"
+    await first.cancel(running)
+
+
+async def test_a_server_takes_over_once_the_owner_is_gone(store):
+    first = _runner(store)
+    second = _runner(store)
+    assert second.queue_state()["owner"] is False
+
+    first.release()
+    status = await _wait(store, await second.submit(_payload("ok-after")))
+
+    assert status["state"] == "succeeded"
+    assert second.queue_state()["owner"] is True
+
+
+# --- recovery of jobs a previous server left running -------------------------------
+
+
+async def test_live_orphan_worker_is_adopted_and_finishes_before_the_queue(store):
+    orphan, proc = _orphan(store, "slow_ok")
+    queued = store.create(_payload("ok-next"))
+    try:
+        runner = _runner(store)
+        assert store.status(orphan)["state"] == "running"
+        runner.start()
+
+        first, second = await _wait(store, orphan), await _wait(store, queued)
+
+        assert first["state"] == "succeeded"
+        assert first["run_id"] == "slow_ok"
+        assert first["finished_at"] <= second["started_at"]
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+async def test_adopted_worker_can_be_cancelled(store):
+    orphan, proc = _orphan(store, "sleep")
+    try:
+        runner = _runner(store)
+        runner.start()
+        while runner.queue_state()["running"] != orphan:
+            await asyncio.sleep(0.05)
+        proc_reaper = asyncio.get_running_loop().run_in_executor(None, proc.wait)
+        status = await runner.cancel(orphan)
+        await proc_reaper
+        assert status["state"] == "cancelled"
+    finally:
+        proc.kill()
+
+
+async def test_finished_orphan_is_finalised_from_its_result(store):
+    job_id = store.create(_payload("ok-done"))
+    store.update(job_id, state="running", pid=999999)
+    store.write_json(job_id, "result.json", {"status": "ok", "run_id": "saved-by-orphan"})
+
+    _runner(store)
+
+    status = store.status(job_id)
+    assert status["state"] == "succeeded"
+    assert status["run_id"] == "saved-by-orphan"
+
+
+async def test_lost_job_whose_run_was_saved_is_reported_succeeded(store):
+    job_id = store.create(_payload("ok-x"))
+    store.update(job_id, state="running", pid=999999)
+
+    _runner(store, find_run=lambda job: "run-in-db")
+
+    status = store.status(job_id)
+    assert status["state"] == "succeeded"
+    assert status["run_id"] == "run-in-db"
+
+
+def test_a_reused_pid_is_not_mistaken_for_the_worker():
+    assert worker_alive(os.getpid(), "20261003T000000000000-abcdef") is False
+
+
+# --- a saved run is never reported cancelled ---------------------------------------
+
+
+async def test_cancel_after_the_worker_saved_its_run_reports_success(store):
+    runner = _runner(store)
+    job_id = await runner.submit(_payload("ok_then_hang"))
+    while store.result(job_id) is None:
+        await asyncio.sleep(0.05)
+
+    status = await runner.cancel(job_id)
+
+    assert status["state"] == "succeeded"
+    assert status["run_id"] == "ok_then_hang"
+    assert status["cancel_requested"] is True
+
+
+async def test_cancel_of_a_run_already_in_the_database_reports_success(store):
+    """Killed between the commit and result.json: the run exists, so say so."""
+    runner = _runner(store, find_run=lambda job: "run-in-db")
+    job_id = await runner.submit(_payload("sleep"))
+    while store.status(job_id).get("pid") is None:
+        await asyncio.sleep(0.05)
+
+    status = await runner.cancel(job_id)
+
+    assert status["state"] == "succeeded"
+    assert status["run_id"] == "run-in-db"
+    assert status["cancel_requested"] is True
+
+
+# --- the queue survives a broken job ------------------------------------------------
+
+
+async def test_deleted_job_directory_does_not_stop_the_queue(store):
+    runner = _runner(store)
+    blocker = await runner.submit(_payload("sleep"))
+    victim = await runner.submit(_payload("ok-victim"))
+    survivor = await runner.submit(_payload("ok-survivor"))
+    shutil.rmtree(store.root / victim)
+
+    await runner.cancel(blocker)
+
+    assert (await _wait(store, survivor))["state"] == "succeeded"
+
+
+async def test_spawn_failure_fails_the_job_and_the_queue_carries_on(store):
+    def command(job_dir: Path) -> list[str]:
+        if "bad" in (job_dir / "request.json").read_text():
+            return ["/nonexistent/interpreter"]
+        return _command(job_dir)
+
+    runner = JobRunner(store, timeout_s=30, worker_command=command)
+    bad = await runner.submit(_payload("bad"))
+    good = await runner.submit(_payload("ok-good"))
+
+    assert (await _wait(store, bad))["error"]["code"] == "runner_error"
+    assert (await _wait(store, good))["state"] == "succeeded"
+    assert (await runner.cancel(bad))["state"] == "failed"

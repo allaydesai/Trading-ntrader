@@ -12,6 +12,7 @@ resolved through symlinks and checked to stay inside the vault.
 
 import csv
 import json
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -160,6 +161,10 @@ def load_runs(run_ids: list[str]) -> tuple[list[dict[str, Any]], list[dict[str, 
     return runs, all_trades
 
 
+def _tmp(path: Path) -> Path:
+    return path.with_name(f".{path.name}.tmp")
+
+
 def write_export(
     target: ExportTarget,
     *,
@@ -169,13 +174,13 @@ def write_export(
     missing: list[str],
     git: dict[str, Any],
 ) -> dict[str, str | None]:
-    """Write the JSON and (when there are trades) the CSV; returns the paths written."""
+    """Write the JSON and (when there are trades) the CSV; returns the paths written.
+
+    Both files are written under temporary names and renamed only once both are
+    complete, so a failure leaves any previous export untouched. An export with
+    no trades removes a CSV left by an earlier export of the same slug.
+    """
     started = utc_now()
-    if trades:
-        with target.csv_path.open("w", newline="", encoding="utf-8") as handle:
-            writer = csv.DictWriter(handle, fieldnames=list(trades[0].keys()))
-            writer.writeheader()
-            writer.writerows(to_jsonable(trades))
     payload = {
         "job": slug,
         "kind": "export-runs",
@@ -188,7 +193,22 @@ def write_export(
         "missing": missing,
         "trades_csv": target.csv_path.name if trades else None,
     }
-    target.json_path.write_text(json.dumps(to_jsonable(payload), indent=2), encoding="utf-8")
+    text = json.dumps(to_jsonable(payload), indent=2)
+    json_tmp, csv_tmp = _tmp(target.json_path), _tmp(target.csv_path)
+    try:
+        json_tmp.write_text(text, encoding="utf-8")
+        if trades:
+            with csv_tmp.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=list(trades[0].keys()))
+                writer.writeheader()
+                writer.writerows(to_jsonable(trades))
+            os.replace(csv_tmp, target.csv_path)
+        else:
+            target.csv_path.unlink(missing_ok=True)
+        os.replace(json_tmp, target.json_path)
+    finally:
+        json_tmp.unlink(missing_ok=True)
+        csv_tmp.unlink(missing_ok=True)
     return {"json": str(target.json_path), "trades_csv": str(target.csv_path) if trades else None}
 
 

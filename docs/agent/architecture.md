@@ -22,6 +22,7 @@ src/
 │   ├── backtest_orchestrator.py  # Preferred: takes BacktestRequest, handles persistence
 │   ├── backtest_runner.py     # Legacy: MinimalBacktestRunner, direct params
 │   ├── results_extractor.py  # Nautilus metrics + custom calcs (drawdown, CAGR, Calmar)
+│   ├── mark_to_market.py     # daily equity from fills + bar closes; risk metrics computed from it
 │   ├── analytics.py / metrics.py / fee_models.py / position_sizing.py / risk_management.py
 │   ├── benchmarks/        # buy_and_hold: backtest-only, NOT in StrategyRegistry (never live)
 │   └── strategies/
@@ -34,7 +35,8 @@ src/
 │   ├── server.py          # build_server + REGISTERED_TOOLS (pinned by test)
 │   ├── tools/             # thin tool wrappers; failures returned as {code, message, fix}
 │   ├── request.py         # spec → named-catalog BacktestRequest + config hash (one path)
-│   ├── jobs/              # file-backed store + single-worker runner (process per job)
+│   ├── jobs/              # file-backed store + single-worker runner (process per job);
+│   │                      #   recovery.py: one owning server (flock) + adoption of live workers
 │   └── worker.py          # child process: load_from_catalog → orchestrator → verify row
 ├── models/                # Domain Pydantic models (request, result, trade, strategy)
 ├── services/              # → see docs/agent/data-pipeline.md

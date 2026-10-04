@@ -1,6 +1,7 @@
 """File-backed job store: one directory per job (S2.1, S2.2)."""
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -76,3 +77,19 @@ def test_progress_and_result_are_optional(store):
 
 def test_request_round_trips(store):
     assert store.request(store.create(PAYLOAD)) == PAYLOAD
+
+
+def test_log_tail_of_a_large_log_reads_only_its_end(store, monkeypatch):
+    job_id = store.create(PAYLOAD)
+    lines = [f"line {i} " + "x" * 200 for i in range(5000)]  # about 1 MB
+    store.log_path(job_id).write_text("\n".join(lines) + "\n")
+    monkeypatch.setattr(
+        Path, "read_text", lambda *a, **k: pytest.fail("log_tail must not read the whole log")
+    )
+    assert store.log_tail(job_id, 3) == lines[-3:]
+
+
+def test_log_tail_returns_everything_when_the_log_is_short(store):
+    job_id = store.create(PAYLOAD)
+    store.log_path(job_id).write_text("only\ntwo")
+    assert store.log_tail(job_id, 50) == ["only", "two"]

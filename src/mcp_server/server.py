@@ -2,10 +2,12 @@
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from functools import partial
 
 from mcp.server import MCPServer
 
 from src.mcp_server.context import ServerContext
+from src.mcp_server.jobs import service
 from src.mcp_server.jobs.runner import JobRunner
 from src.mcp_server.jobs.store import JobStore
 from src.mcp_server.tools import catalogue, info, jobs, runs
@@ -32,14 +34,19 @@ def build_server(ctx: ServerContext | None = None) -> MCPServer:
     """A server with every tool in ``REGISTERED_TOOLS`` registered."""
     ctx = ctx or ServerContext()
     if ctx.runner is None:
+        store = JobStore(ctx.settings.jobs_dir)
         ctx.runner = JobRunner(
-            JobStore(ctx.settings.jobs_dir), timeout_s=ctx.settings.job_timeout_s
+            store,
+            timeout_s=ctx.settings.job_timeout_s,
+            find_run=partial(service.saved_run_of, store),
         )
     runner = ctx.runner
 
     @asynccontextmanager
     async def lifespan(_server: MCPServer) -> AsyncIterator[None]:
-        runner.start()  # resumes jobs a previous server left queued
+        # Resumes jobs a previous server left queued and adopts its live worker.
+        # No shutdown step: a worker outlives the server, and the next one adopts it.
+        runner.start()
         yield
 
     server = MCPServer("ntrader-research", instructions=INSTRUCTIONS, lifespan=lifespan)

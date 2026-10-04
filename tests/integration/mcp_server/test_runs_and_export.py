@@ -5,6 +5,7 @@ Results live in a throwaway schema (see conftest). Requires --forked.
 
 import csv
 import json
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -26,6 +27,7 @@ async def _run(job_dir, name: str, spec: dict) -> str:
 
 
 async def test_read_compare_and_export(isolated_results, job_dir, tmp_path):
+    before = datetime.now(timezone.utc) - timedelta(seconds=5)
     strategy = await _run(job_dir, "strategy", {**WINDOW, "strategy": "sma_crossover"})
     benchmark = await _run(job_dir, "benchmark", {**WINDOW, "strategy": "buy_and_hold"})
 
@@ -33,11 +35,22 @@ async def test_read_compare_and_export(isolated_results, job_dir, tmp_path):
     assert detail["strategy"] == "sma_crossover"
     assert detail["provenance"]["config_hash"]
     assert detail["metrics"]["total_return"]["unit"] == "fraction"
+    assert detail["metrics_basis"] == "mark_to_market"
+    assert detail["warnings"] == [] or "uncommitted" in detail["warnings"][0]
+
+    # A job cancelled after its commit finds its run by config hash and start time.
+    config_hash = detail["provenance"]["config_hash"]
+    assert runs.find_saved_run(config_hash, before) == strategy
+    assert runs.find_saved_run(config_hash, datetime.now(timezone.utc)) is None
+    assert runs.find_saved_run("0" * 64, before) is None
 
     comparison = runs.compare_runs([strategy, benchmark], maximum=20)
     assert [r["kind"] for r in comparison["rows"]] == ["strategy", "benchmark"]
     assert comparison["best"]["total_return"]["run_ids"]
     assert comparison["missing"] == []
+    held = runs.get_run(benchmark)["metrics"]
+    assert held["max_drawdown"]["value"] < 0, "a two-year hold has a mark-to-market drawdown"
+    assert held["volatility"]["value"] > 0
 
     vault = tmp_path / "vault"
     (vault / "Lab" / "results").mkdir(parents=True)

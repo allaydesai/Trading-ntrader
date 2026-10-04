@@ -443,6 +443,21 @@ vault, in the same format as the vault's queue runner). Runs appear in
 One job runs at a time; `cancel_job` stops a running worker within five seconds. Apply
 migrations first (`alembic upgrade head`): runs store their provenance in new columns.
 
+- **One server owns the job queue.** The first server to start takes a lock on the jobs
+  directory. A second one (for example a second MCP client) can still read jobs and runs,
+  but `submit_backtest` and `cancel_job` return `another_server_active` until the first exits.
+- **A worker outlives its server.** If the client restarts mid-run, the worker carries on;
+  the next server waits for it before starting anything else, then reports its result.
+- **A saved run is never reported cancelled.** If `cancel_job` arrives after the run was
+  written to the database, the job ends `succeeded` with `cancel_requested: true`.
+
+**Risk metrics are marked to market.** For every run made through the orchestrator (CLI
+`backtest run`, web UI and MCP), max drawdown, Sharpe, Sortino, volatility and Calmar are
+computed from daily account equity at bar closes, so a drawdown inside an open trade counts.
+Runs saved before this change used closed-position returns and understate those numbers:
+`get_run` reports `metrics_basis` and warns on such runs, and `compare_runs` warns when
+bases are mixed. Re-run an old run before comparing its risk metrics with a new one.
+
 ## Available Strategies
 
 ### Built-in Example Strategies

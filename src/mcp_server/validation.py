@@ -8,8 +8,8 @@ from src.mcp_server.errors import ToolFailure
 from src.mcp_server.request import BacktestSpec, ResolvedRequest, resolve
 
 
-def _day(iso: str) -> date:
-    return datetime.fromisoformat(iso).date()
+def _day(iso: str | None) -> date | None:
+    return datetime.fromisoformat(iso).date() if iso else None
 
 
 def _window_problems(
@@ -30,21 +30,27 @@ def _window_problems(
             )
         ], []
     first, last = _day(span["start"]), _day(span["end"])
-    if spec.end < first or spec.start > last:
+    covers = f"{first or 'an unknown start'} to {last or 'an unknown end'}"
+    if (first and spec.end < first) or (last and spec.start > last):
         return [
             ToolFailure(
                 "window_outside_coverage",
-                f"{spec.start} to {spec.end} has no {timeframe} bars; "
-                f"data covers {first} to {last}.",
-                fix=f"Choose a window inside {first} to {last}.",
+                f"{spec.start} to {spec.end} has no {timeframe} bars; data covers {covers}.",
+                fix=f"Choose a window inside {covers}.",
             )
         ], []
-    if spec.start < first or spec.end > last:
-        return [], [
-            f"Requested {spec.start} to {spec.end}, but {timeframe} data covers {first} to "
-            f"{last}; the run will use the overlap only."
-        ]
-    return [], []
+    warnings = []
+    if (first and spec.start < first) or (last and spec.end > last):
+        warnings.append(
+            f"Requested {spec.start} to {spec.end}, but {timeframe} data covers {covers}; "
+            "the run will use the overlap only."
+        )
+    if coverage.get("start_is_earliest_across_timeframes") and timeframe != "1-DAY":
+        warnings.append(
+            f"The start date is the earliest across all timeframes; {timeframe} bars may start "
+            "later. A window with no bars fails the job with data_not_found."
+        )
+    return [], warnings
 
 
 def _coverage(

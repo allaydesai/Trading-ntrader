@@ -66,6 +66,9 @@ def describe_coverage(row: Any) -> dict[str, Any]:
         "name": row.name,
         "backtestable": bool(row.nautilus_id),
         "timeframes": timeframes,
+        # Metadata keeps an end per timeframe but one start for all of them, so
+        # with several timeframes a "start" is only the earliest of them.
+        "start_is_earliest_across_timeframes": len(timeframes) > 1,
     }
 
 

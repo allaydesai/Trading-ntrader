@@ -78,3 +78,17 @@ def test_missing_timeframe_has_no_coverage():
 
 def test_unqualified_instrument_is_not_backtestable():
     assert describe_coverage(_row(nautilus_id=None))["backtestable"] is False
+
+
+def test_shared_start_is_declared_when_several_timeframes_have_bars():
+    """The table has one start for all timeframes: say so rather than imply it is exact."""
+    one = describe_coverage(_row())
+    several = describe_coverage(_row(bar_count_minute=500))
+    assert one["start_is_earliest_across_timeframes"] is False
+    assert several["start_is_earliest_across_timeframes"] is True
+
+
+def test_missing_start_is_reported_as_none():
+    coverage = timeframe_coverage(_row(date_range_start=None), "1-DAY")
+    assert coverage is not None
+    assert coverage["start"] is None

@@ -21,6 +21,8 @@ from src.mcp_server.errors import ToolFailure
 
 STATES = ("queued", "running", "succeeded", "failed", "cancelled", "lost")
 TERMINAL_STATES = frozenset({"succeeded", "failed", "cancelled", "lost"})
+_TAIL_BLOCK = 64 * 1024
+_TAIL_LIMIT = 4 * 1024 * 1024  # most log_tail will read, however long the lines
 _JOB_ID = re.compile(r"^\d{8}T\d{6}\d{6}-[0-9a-f]{6}$")
 
 
@@ -78,11 +80,27 @@ class JobStore:
         return self.job_dir(job_id) / "worker.log"
 
     def log_tail(self, job_id: str, lines: int) -> list[str]:
-        """The last ``lines`` lines of the worker log (empty before the worker starts)."""
-        path = self.log_path(job_id)
-        if not path.exists():
+        """The last ``lines`` lines of the worker log (empty before the worker starts).
+
+        Reads backwards from the end in blocks, so polling a job with a very
+        large log never loads the whole file.
+        """
+        try:
+            handle = self.log_path(job_id).open("rb")
+        except FileNotFoundError:
             return []
-        return path.read_text(encoding="utf-8", errors="replace").splitlines()[-lines:]
+        with handle:
+            position = handle.seek(0, os.SEEK_END)
+            tail = b""
+            while position > 0 and tail.count(b"\n") <= lines and len(tail) < _TAIL_LIMIT:
+                step = min(_TAIL_BLOCK, position)
+                position -= step
+                handle.seek(position)
+                tail = handle.read(step) + tail
+        found = tail.decode("utf-8", errors="replace").splitlines()
+        if position > 0:
+            found = found[1:]  # the first line was cut by the block boundary
+        return found[-lines:] if lines > 0 else []
 
     def write_json(self, job_id: str, name: str, data: dict[str, Any]) -> None:
         self._write(self.job_dir(job_id) / name, data)

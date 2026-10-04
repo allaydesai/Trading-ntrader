@@ -1,9 +1,13 @@
 """Read persisted runs: detail with units, and side-by-side comparison (S3.3)."""
 
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from sqlalchemy import select
+
 from src.core.benchmarks import BENCHMARKS
+from src.db.models.backtest import BacktestRun
 from src.db.repositories.backtest_repository_sync import SyncBacktestRepository
 from src.db.session_sync import get_sync_session
 from src.mcp_server.errors import ToolFailure
@@ -12,17 +16,22 @@ from src.mcp_server.metrics import METRIC_SPECS
 
 
 def parse_run_ids(run_ids: list[str], *, minimum: int, maximum: int) -> list[str]:
-    """Validate and de-duplicate run ids, keeping their order."""
-    unique = list(dict.fromkeys(r.strip() for r in run_ids))
-    for run_id in unique:
+    """Validate and de-duplicate run ids, keeping their order.
+
+    Ids come back in canonical form, the form rows are keyed by, so an
+    upper-case or un-hyphenated spelling still matches its run.
+    """
+    canonical = []
+    for run_id in run_ids:
         try:
-            UUID(run_id)
+            canonical.append(str(UUID(run_id.strip())))
         except ValueError:
             raise ToolFailure(
                 "invalid_run_id",
                 f"'{run_id}' is not a run id.",
                 fix="Use the UUID get_job returns.",
             ) from None
+    unique = list(dict.fromkeys(canonical))
     if len(unique) < minimum:
         raise ToolFailure("too_few_runs", f"Give at least {minimum} run ids.", fix="Add runs.")
     if len(unique) > maximum:
@@ -30,6 +39,14 @@ def parse_run_ids(run_ids: list[str], *, minimum: int, maximum: int) -> list[str
             "too_many_runs", f"At most {maximum} runs at once.", fix="Compare fewer runs."
         )
     return unique
+
+
+MARK_TO_MARKET = "mark_to_market"
+
+
+def _metrics_basis(run: Any) -> str:
+    """What the run's risk metrics were computed from; runs before the field are realised."""
+    return (run.config_snapshot or {}).get("metrics_basis") or "realised"
 
 
 def _metric_values(run: Any) -> dict[str, Any]:
@@ -45,6 +62,11 @@ def run_view(run: Any) -> dict[str, Any]:
         warnings.append("Run was made from uncommitted code (git_dirty); treat as provisional.")
     if run.execution_status != "success":
         warnings.append(f"Run failed: {run.error_message}")
+    elif _metrics_basis(run) != MARK_TO_MARKET:
+        warnings.append(
+            "Risk metrics are on the realised basis (run predates mark-to-market): drawdown, "
+            "Sharpe, Sortino and volatility ignore moves inside open trades. Re-run to compare."
+        )
     snapshot = run.config_snapshot or {}
     metrics = {
         name: {"value": value, "unit": METRIC_SPECS[name].unit}
@@ -66,6 +88,7 @@ def run_view(run: Any) -> dict[str, Any]:
             "created_at": run.created_at,
             "run_type": run.run_type,
             "reproduced_from_run_id": run.reproduced_from_run_id,
+            "metrics_basis": _metrics_basis(run),
             "provenance": {
                 "git_commit": run.git_commit,
                 "git_dirty": run.git_dirty,
@@ -111,6 +134,11 @@ def compare_view(runs: list[Any], *, requested: list[str]) -> dict[str, Any]:
     warnings = []
     if len({(r.instrument_symbol, r.start_date, r.end_date) for r in ordered}) > 1:
         warnings.append("Runs cover different symbols or windows; compare with care.")
+    if len({_metrics_basis(r) for r in ordered}) > 1:
+        warnings.append(
+            "Runs compute risk metrics on different bases (see metrics_basis); drawdown, "
+            "Sharpe, Sortino and volatility are not comparable across them."
+        )
     return {
         "rows": rows,
         "differing_params": differing,
@@ -141,3 +169,24 @@ def compare_runs(run_ids: list[str], *, maximum: int) -> dict[str, Any]:
     with get_sync_session() as session:
         runs = SyncBacktestRepository(session).find_by_run_ids([UUID(r) for r in ids])
         return compare_view(runs, requested=ids)
+
+
+def find_saved_run(config_hash: str, since: datetime) -> str | None:
+    """The newest successful run with ``config_hash`` created at or after ``since``.
+
+    How a job whose worker was killed after its commit, but before it could
+    write its result, is recognised as having saved its run.
+    """
+    stmt = (
+        select(BacktestRun.run_id)
+        .where(
+            BacktestRun.config_hash == config_hash,
+            BacktestRun.created_at >= since,
+            BacktestRun.execution_status == "success",
+        )
+        .order_by(BacktestRun.created_at.desc())
+        .limit(1)
+    )
+    with get_sync_session() as session:
+        run_id = session.scalars(stmt).first()
+    return str(run_id) if run_id else None

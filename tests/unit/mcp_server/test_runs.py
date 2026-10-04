@@ -24,7 +24,12 @@ def _metrics(**values):
     return SimpleNamespace(**base)
 
 
-def _run(strategy="sma_crossover", params=None, dirty=False, **metric_values):
+def _run(
+    strategy="sma_crossover", params=None, dirty=False, basis="mark_to_market", **metric_values
+):
+    snapshot = {"config": params or {}, "bar_type": "1-DAY-LAST"}
+    if basis:
+        snapshot["metrics_basis"] = basis
     return SimpleNamespace(
         run_id=uuid4(),
         strategy_name=strategy.replace("_", " ").title(),
@@ -44,7 +49,7 @@ def _run(strategy="sma_crossover", params=None, dirty=False, **metric_values):
         git_dirty=dirty,
         strategies_commit="b" * 40,
         config_hash="c" * 64,
-        config_snapshot={"config": params or {}, "bar_type": "1-DAY-LAST"},
+        config_snapshot=snapshot,
         metrics=_metrics(**metric_values),
     )
 
@@ -123,3 +128,29 @@ def test_parse_run_ids():
     with pytest.raises(ToolFailure) as exc:
         parse_run_ids([str(uuid4()) for _ in range(3)], minimum=2, maximum=2)
     assert exc.value.code == "too_many_runs"
+
+
+def test_run_ids_are_canonicalised_so_any_spelling_matches():
+    run_id = uuid4()
+    spellings = [str(run_id).upper(), run_id.hex, f"{{{run_id}}}", f" {run_id} "]
+    assert parse_run_ids(spellings, minimum=1, maximum=20) == [str(run_id)]
+
+
+def test_compare_finds_a_run_given_in_another_spelling():
+    a, b = _run(), _run()
+    requested = parse_run_ids([str(a.run_id).upper(), b.run_id.hex], minimum=2, maximum=20)
+    view = compare_view([a, b], requested=requested)
+    assert view["missing"] == []
+    assert len(view["rows"]) == 2
+
+
+@pytest.mark.parametrize("basis", [None, "realised"])
+def test_run_without_mark_to_market_metrics_is_flagged(basis):
+    warnings = run_view(_run(basis=basis))["warnings"]
+    assert any("realised" in w and "drawdown" in w for w in warnings)
+
+
+def test_compare_warns_when_metric_bases_differ():
+    a, b = _run(), _run(basis=None)
+    view = compare_view([a, b], requested=[str(a.run_id), str(b.run_id)])
+    assert any("different bases" in w for w in view["warnings"])

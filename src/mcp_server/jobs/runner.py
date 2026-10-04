@@ -5,24 +5,35 @@ Nautilus' log guard panics if initialised twice, and its output would corrupt
 the protocol on stdout. Each job gets a child process in its own session (so a
 cancel can signal the whole group), with stdout and stderr in the job's log.
 
+One server owns the jobs directory at a time (``recovery.ServerLock``); a
+second server reads jobs but refuses to submit or cancel. A worker outlives the
+server that started it, so a new owner adopts a worker that is still alive and
+waits for it before running anything else (``recovery.recover_jobs``).
+
 Cancelling a running job sends SIGTERM to its process group and SIGKILL after
 ``kill_grace_s``. A run is written to the database in one transaction at the end
-of the engine run, so a worker killed before that commit leaves no run behind.
+of the engine run, so a worker killed before that commit leaves no run behind;
+one killed after it is reported as succeeded, never as cancelled.
 """
 
 import asyncio
-import os
-import signal
-import subprocess
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from pathlib import Path
 from typing import Any
 
 import structlog
 
-from src.mcp_server.errors import ToolFailure
+from src.mcp_server.jobs.process import Worker, spawn
+from src.mcp_server.jobs.recovery import (
+    FindRun,
+    ServerLock,
+    job_outcome,
+    not_owner,
+    recover_jobs,
+    saved_run,
+)
 from src.mcp_server.jobs.store import TERMINAL_STATES, JobStore, utc_now
 from src.services.provenance import REPO_ROOT
 
@@ -34,65 +45,13 @@ def default_worker_command(job_dir: Path) -> list[str]:
     return [sys.executable, "-m", "src.mcp_server.worker", str(job_dir)]
 
 
-def recover_jobs(store: JobStore) -> list[str]:
-    """Jobs left by a previous server: running ones are lost, queued ones run again.
-
-    A lost job's worker may still be alive (it runs in its own session) and may
-    yet save its run; the recorded pid lets the operator check.
-    """
-    jobs = store.list(limit=10_000)
-    lost = {
-        "code": "server_restarted",
-        "message": "The server stopped while this job was running.",
-        "fix": "Resubmit it. Check backtest history first: the worker (pid in this "
-        "status) may have finished on its own.",
-    }
-    for status in jobs:
-        if status["state"] == "running":
-            store.update(status["job_id"], state="lost", finished_at=utc_now(), error=lost)
-    return [s["job_id"] for s in reversed(jobs) if s["state"] == "queued"]
-
-
-def job_outcome(
-    result: dict[str, Any] | None,
-    returncode: int | None,
-    *,
-    cancelled: bool,
-    timed_out: bool,
-    timeout_s: float,
-) -> dict[str, Any]:
-    """Final status fields from how the worker ended and what it wrote."""
-    if cancelled:
-        return {"state": "cancelled"}
-    if timed_out:
-        fix = "Shorten the window or raise NTRADER_MCP_JOB_TIMEOUT_S."
-        failure = ToolFailure("timeout", f"Worker exceeded {timeout_s:g}s.", fix=fix)
-        return {"state": "failed", "error": failure.to_dict()["error"]}
-    result = result or {}
-    if returncode == 0 and result.get("status") == "ok":
-        return {"state": "succeeded", "run_id": result.get("run_id")}
-    error = result.get("error") or {
-        "code": "worker_crashed",
-        "message": f"Worker exited with code {returncode} without a result.",
-        "fix": "Read log_tail in get_job for the cause.",
-    }
-    return {"state": "failed", "error": error}
-
-
-async def terminate(proc: asyncio.subprocess.Process | None, grace_s: float) -> None:
-    """SIGTERM a worker's process group; SIGKILL it if it outlives ``grace_s``."""
-    if proc is None or proc.returncode is not None:
-        return
-    for sig in (signal.SIGTERM, signal.SIGKILL):
-        try:
-            os.killpg(proc.pid, sig)
-        except ProcessLookupError:
-            return
-        try:
-            await asyncio.wait_for(proc.wait(), timeout=grace_s)
-            return
-        except asyncio.TimeoutError:
-            continue
+def record_failure(store: JobStore, job_id: str, exc: Exception) -> None:
+    """Mark a job failed by the runner itself; never raises."""
+    error = {"code": "runner_error", "message": str(exc), "fix": "See server log."}
+    try:
+        store.update(job_id, state="failed", error=error, finished_at=utc_now())
+    except Exception:  # e.g. the job's directory is gone: nothing left to record
+        logger.exception("mcp_job_failure_not_recorded", job_id=job_id)
 
 
 class JobRunner:
@@ -106,25 +65,47 @@ class JobRunner:
         worker_command: Callable[[Path], list[str]] = default_worker_command,
         cwd: Path = REPO_ROOT,
         kill_grace_s: float = 3.0,
+        find_run: FindRun | None = None,
     ) -> None:
         self.store = store
         self._timeout_s = timeout_s
         self._worker_command = worker_command
         self._cwd = cwd
         self._kill_grace_s = kill_grace_s
-        self._pending = recover_jobs(store)
+        self._find_run = find_run
+        self._lock = ServerLock(store.root)
+        self._pending: list[str] = []
+        self._adopted: list[tuple[str, int]] = []
         self._queue: asyncio.Queue[str] | None = None
         self._task: asyncio.Task[None] | None = None
         self._running: str | None = None
-        self._proc: asyncio.subprocess.Process | None = None
+        self._worker: Worker | None = None
         self._cancelled: set[str] = set()
         self._finished: dict[str, asyncio.Event] = {}
+        self._claim()
+
+    def _claim(self) -> bool:
+        """Own the jobs directory, recovering its jobs on first taking the lock."""
+        if self._lock.held:
+            return True
+        if not self._lock.acquire():
+            return False
+        recovery = recover_jobs(self.store, self._find_run)
+        self._pending, self._adopted = recovery.queued, recovery.adopted
+        return True
+
+    def release(self) -> None:
+        """Give up the jobs directory so another server can own it."""
+        if self._task is not None:
+            self._task.cancel()
+        self._lock.release()
 
     def start(self) -> None:
-        """Start the drain task if it is not running (needs a running event loop)."""
-        if self._task is not None and not self._task.done():
+        """Start the drain task if this server owns the queue (needs a running event loop)."""
+        if not self._claim() or (self._task is not None and not self._task.done()):
             return
-        self._queue = asyncio.Queue()
+        if self._queue is None:  # kept across a restarted task: waiting jobs are not dropped
+            self._queue = asyncio.Queue()
         for job_id in self._pending:
             self._queue.put_nowait(job_id)
         self._pending = []
@@ -132,6 +113,8 @@ class JobRunner:
 
     async def submit(self, payload: dict[str, Any]) -> str:
         """Queue a job and return its id at once."""
+        if not self._claim():
+            raise not_owner()
         job_id = self.store.create(payload)
         self.start()
         assert self._queue is not None
@@ -139,69 +122,88 @@ class JobRunner:
         return job_id
 
     def queue_state(self) -> dict[str, Any]:
-        """The running job and how many are waiting."""
-        return {"running": self._running, "queued": self._queue.qsize() if self._queue else 0}
+        """The running job, how many are waiting, and whether this server owns the queue."""
+        waiting = (self._queue.qsize() if self._queue else 0) + len(self._pending)
+        return {"running": self._running, "queued": waiting, "owner": self._lock.held}
 
     async def cancel(self, job_id: str) -> dict[str, Any]:
         """Cancel a queued or running job; a finished job is returned unchanged."""
         status = self.store.status(job_id)
         if status["state"] in TERMINAL_STATES:
             return status
-        self._cancelled.add(job_id)
+        if not self._claim():
+            raise not_owner()
         if job_id != self._running:
             return self.store.update(job_id, state="cancelled", finished_at=utc_now())
+        self._cancelled.add(job_id)
         finished = self._finished.setdefault(job_id, asyncio.Event())
-        await self._terminate()
-        await asyncio.wait_for(finished.wait(), timeout=self._kill_grace_s + 1)
+        if self._worker is not None:
+            await self._worker.terminate(self._kill_grace_s)
+        try:
+            await asyncio.wait_for(finished.wait(), timeout=self._kill_grace_s + 1)
+        except asyncio.TimeoutError:
+            pass  # report the job as it stands rather than fail the cancel
         return self.store.status(job_id)
 
     async def _drain(self) -> None:
         assert self._queue is not None
+        adopted, self._adopted = self._adopted, []
+        for job_id, pid in adopted:
+            await self._guarded(job_id, self._follow(job_id, pid))
         while True:
             job_id = await self._queue.get()
-            try:
-                if self.store.status(job_id).get("state") == "queued":
-                    await self._run(job_id)
-            except Exception as exc:  # one broken job must not stop the queue
-                logger.exception("mcp_job_runner_error", job_id=job_id)
-                error = {"code": "runner_error", "message": str(exc), "fix": "See server log."}
-                self.store.update(job_id, state="failed", error=error, finished_at=utc_now())
+            await self._guarded(job_id, self._run(job_id))
+
+    async def _guarded(self, job_id: str, work: Coroutine[Any, Any, None]) -> None:
+        """Run one job's work; whatever happens, the queue carries on and waiters wake."""
+        try:
+            await work
+        except Exception as exc:  # one broken job must not stop the queue
+            logger.exception("mcp_job_runner_error", job_id=job_id)
+            record_failure(self.store, job_id, exc)
+        finally:
+            self._worker, self._running = None, None
+            self._cancelled.discard(job_id)
+            if (finished := self._finished.pop(job_id, None)) is not None:
+                finished.set()
 
     async def _run(self, job_id: str) -> None:
+        if self.store.status(job_id).get("state") != "queued":
+            return
         self._running = job_id
         started = time.monotonic()
         self.store.update(job_id, state="running", started_at=utc_now())
-        timed_out = False
-        try:
-            with open(self.store.log_path(job_id), "ab") as log:
-                self._proc = await asyncio.create_subprocess_exec(
-                    *self._worker_command(self.store.job_dir(job_id)),
-                    stdin=subprocess.DEVNULL,
-                    stdout=log,
-                    stderr=subprocess.STDOUT,
-                    cwd=self._cwd,
-                    start_new_session=True,
-                )
-            self.store.update(job_id, pid=self._proc.pid)
-            if job_id in self._cancelled:  # cancelled while the process was spawning
-                await self._terminate()
-            try:
-                await asyncio.wait_for(self._proc.wait(), timeout=self._timeout_s)
-            except asyncio.TimeoutError:
-                timed_out = True
-                await self._terminate()
-            outcome = job_outcome(
-                self.store.result(job_id),
-                self._proc.returncode,
-                cancelled=job_id in self._cancelled,
-                timed_out=timed_out,
-                timeout_s=self._timeout_s,
-            )
-        finally:
-            self._proc, self._running = None, None
-        elapsed = round(time.monotonic() - started, 3)
-        self.store.update(job_id, **outcome, finished_at=utc_now(), elapsed_s=elapsed)
-        self._finished.setdefault(job_id, asyncio.Event()).set()
+        command = self._worker_command(self.store.job_dir(job_id))
+        self._worker = await spawn(job_id, command, self.store.log_path(job_id), self._cwd)
+        self.store.update(job_id, pid=self._worker.pid)
+        if job_id in self._cancelled:  # cancelled while the process was spawning
+            await self._worker.terminate(self._kill_grace_s)
+        await conclude(self, self._worker, started)
 
-    async def _terminate(self) -> None:
-        await terminate(self._proc, self._kill_grace_s)
+    async def _follow(self, job_id: str, pid: int) -> None:
+        """Wait for a worker a previous server started, then finalise its job."""
+        self._running, self._worker = job_id, Worker(job_id, pid)
+        await conclude(self, self._worker, None)
+
+
+async def conclude(runner: JobRunner, worker: Worker, started: float | None) -> None:
+    """Wait for the worker to end (or time out) and write the job's final status."""
+    job_id = worker.job_id
+    timed_out = not await worker.exited(runner._timeout_s)
+    if timed_out:
+        await worker.terminate(runner._kill_grace_s)
+    outcome = job_outcome(
+        runner.store.result(job_id),
+        worker.returncode,
+        cancelled=job_id in runner._cancelled,
+        timed_out=timed_out,
+        timeout_s=runner._timeout_s,
+    )
+    if outcome["state"] == "cancelled":
+        # Killed between the database commit and result.json: the run exists.
+        run_id = await asyncio.to_thread(saved_run, runner._find_run, job_id)
+        if run_id:
+            outcome = {"state": "succeeded", "run_id": run_id, "cancel_requested": True}
+    if started is not None:
+        outcome["elapsed_s"] = round(time.monotonic() - started, 3)
+    runner.store.update(job_id, **outcome, finished_at=utc_now())

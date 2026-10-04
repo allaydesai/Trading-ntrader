@@ -23,6 +23,12 @@ elif behaviour == "fail":
     error = {"code": "data_not_found", "message": "no bars", "fix": "import"}
     (job_dir / "result.json").write_text(json.dumps({"status": "failed", "error": error}))
     sys.exit(1)
+elif behaviour == "slow_ok":
+    time.sleep(1.5)
+    (job_dir / "result.json").write_text(json.dumps({"status": "ok", "run_id": behaviour}))
+elif behaviour == "ok_then_hang":
+    (job_dir / "result.json").write_text(json.dumps({"status": "ok", "run_id": behaviour}))
+    time.sleep(60)
 elif behaviour.startswith("ok"):
     time.sleep(0.2)
     (job_dir / "result.json").write_text(json.dumps({"status": "ok", "run_id": behaviour}))
