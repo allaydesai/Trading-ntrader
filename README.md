@@ -54,6 +54,8 @@ NTrader is a comprehensive backtesting platform designed for traders, quants, an
   compare and file backtests from a chat (spec: `docs/product/NTrader MCP Server — Spec.md`)
 - Every backtest runs in a fresh worker process on the same path as `backtest run --catalog`;
   no IBKR fetch, no fake instruments: missing data fails fast with the fix
+- Research studies: a locked out-of-sample window, a counted trial budget, frozen candidates
+  tested out-of-sample once, regime splits and a scorecard against the vault's gates
 - Every run records its git commit, dirty state and config hash
 - Built-in `buy_and_hold` benchmark for side-by-side comparison
 - Never trades, never starts or stops sessions, never imports data
@@ -427,11 +429,55 @@ Add it to Claude Desktop's `claude_desktop_config.json`:
 `catalog_availability`, `validate_config`, `submit_backtest`, `get_job`, `list_jobs`,
 `cancel_job`, `get_run`, `compare_runs`, `export_results`.
 
-A typical session: `validate_config` → `submit_backtest` for the strategy and for
-`buy_and_hold` on the same window → `get_job` until both finish → `compare_runs` →
+**Tools (phase 2, studies):** `create_study`, `get_study`, `list_studies`, `update_study`,
+`freeze_candidate`, `new_candidate_version`, `submit_benchmark`, `reproduce_run`,
+`run_out_of_sample`, `get_scorecard`, `get_trades`, `get_equity_curve`,
+`get_regime_breakdown`, `export_bars`, `search_runs`.
+
+A quick, unattributed check: `validate_config` → `submit_backtest` for the strategy and
+for `buy_and_hold` on the same window → `get_job` until both finish → `compare_runs` →
 `export_results` (writes `<slug>.json` and `<slug>.trades.csv` to `Lab/results/` in the
 vault, in the same format as the vault's queue runner). Runs appear in
 `backtest history` and the web UI like any other run.
+
+Research proper happens in a **study**, one per vault Idea:
+
+1. `create_study` names the strategy, symbols, parameter space, an in-sample and a later
+   out-of-sample window, the gates to pass and a trial budget. The out-of-sample window is
+   locked from then on.
+2. `submit_backtest(study=…)` runs an in-sample trial; it is counted against the budget the
+   moment it is queued (past the budget it needs `over_budget_reason`, which is recorded),
+   and any window reaching past the in-sample end is refused. `submit_benchmark` runs
+   buy-and-hold (or an incumbent) beside it, uncounted. `export_bars` writes in-sample bars
+   to the vault for a concept probe, always clamped to the in-sample window.
+3. `get_regime_breakdown`, `get_equity_curve`, `get_trades` and `compare_runs` read the runs.
+4. `freeze_candidate` freezes the chosen run's parameters, code commit and candidate hash.
+   `run_out_of_sample` tests it once on the locked window; a second run needs
+   `override_reason` and marks the study contaminated.
+5. `get_scorecard` judges the candidate against every gate: pass, fail or missing, with the
+   number, threshold and runs behind each check. Checks that need later phases (paper,
+   sensitivity, walk-forward, breadth) are always missing, never passed.
+6. `new_candidate_version` iterates in the same study (contaminated if the holdout was
+   already seen); `update_study` rejects, parks, resumes or promotes, always with a reason.
+   `export_results(study=…)` files `<slug>.study.json` with the ledger and scorecard.
+
+Gate thresholds are read from the vault's `System/Gates.md`, from a fenced block the
+server parses (the prose stays the human copy):
+
+````markdown
+```yaml ntrader-gates
+G0:
+  min_trades: 30
+G1:
+  is_profit_factor: 1.3
+```
+````
+
+Known checks: `min_trades`, `clean_tree`, `benchmark_present`, `is_profit_factor`,
+`is_expectancy_gt`, `beats_benchmark_on_one`, `positive_sub_periods`, `oos_sharpe_vs_is`,
+`oos_profit_factor`, `trials_warn_above`, and the phase-4 placeholders
+`neighbourhood_sharpe`, `cost_stress_multiplier`, `breadth`, `walk_forward_efficiency`.
+`server_info` reports whether the block was found.
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -440,9 +486,14 @@ vault, in the same format as the vault's queue runner). Runs appear in
 | `NTRADER_MCP_JOBS_DIR` | `~/.ntrader/mcp/jobs` | One directory per job (request, status, log, result) |
 | `NTRADER_MCP_DEFAULT_CATALOG` | `DEFAULT_CATALOG_NAME` | Catalog used when a request names none |
 | `NTRADER_MCP_JOB_TIMEOUT_S` | `3600` | Worker wall-clock limit |
+| `NTRADER_MCP_GATES_FILE` | `System/Gates.md` | Vault file holding the `ntrader-gates` block |
+| `NTRADER_MCP_MAX_BAR_ROWS` | `200000` | Most rows `export_bars` writes |
+| `NTRADER_MCP_MAX_EQUITY_POINTS` | `1000` | Most points `get_equity_curve` returns |
+| `NTRADER_MCP_MAX_TRADES_PAGE` | `500` | Most trades `get_trades` returns per page |
 
 One job runs at a time; `cancel_job` stops a running worker within five seconds. Apply
-migrations first (`alembic upgrade head`): runs store their provenance in new columns.
+migrations first (`alembic upgrade head`): runs store their provenance in new columns, and
+studies live in the `research_*` tables.
 
 - **One server owns the job queue.** The first server to start takes a lock on the jobs
   directory. A second one (for example a second MCP client) can still read jobs and runs,

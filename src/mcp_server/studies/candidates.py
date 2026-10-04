@@ -9,7 +9,6 @@ contaminated. A new version reopens exploration in the same study; if the
 holdout has already been seen, the study is marked contaminated.
 """
 
-from datetime import datetime, timezone
 from typing import Any
 
 from src.db.models.research import ResearchCandidate, ResearchStudy, ResearchTrial
@@ -23,6 +22,7 @@ from src.mcp_server.request import resolve
 from src.mcp_server.studies import ledger
 from src.mcp_server.studies.lifecycle import load_study
 from src.mcp_server.studies.split import Split
+from src.mcp_server.studies.status import move
 from src.mcp_server.studies.submit import StudyJob, require_status
 from src.mcp_server.studies.views import candidate_view, study_view
 from src.mcp_server.tools import build_spec
@@ -118,8 +118,7 @@ def freeze_candidate(store: JobStore, key: str, run_id: str, note: str | None) -
         candidate, warnings = _new_candidate(study, load_run(session, str(trial.run_id)))
         repo.add_candidate(candidate)
         details = {"version": candidate.version, "run_id": str(candidate.source_run_id)}
-        repo.add_event(study, "frozen", note, details)
-        study.status, study.updated_at = "frozen", datetime.now(timezone.utc)
+        move(repo, study, "frozen", kind="frozen", reason=note, details=details)
         session.flush()
         return {"candidate": candidate_view(candidate), "warnings": warnings}
 
@@ -137,17 +136,15 @@ def new_candidate_version(store: JobStore, key: str, reason: str, change: str) -
         require_status(study, TESTABLE, "a new candidate version")
         seen = any(t.role == "out_of_sample" and t.state != "void" for t in repo.trials(study))
         before = study.current_version
-        study.current_version, study.status = before + 1, "exploring"
-        repo.add_event(
-            study, "new_version", reason, {"from": before, "to": before + 1, "change": change}
-        )
+        study.current_version = before + 1
+        details = {"version": before + 1, "change": change}
+        move(repo, study, "exploring", kind="new_version", reason=reason, details=details)
         if seen and not study.contaminated:
             study.contaminated = True
             study.contamination_reason = (
                 f"Version {before + 1} was created after the out-of-sample window was seen."
             )
             repo.add_event(study, "contaminated", study.contamination_reason)
-        study.updated_at = datetime.now(timezone.utc)
         session.flush()
         return {"study": study_view(session, repo, study)}
 

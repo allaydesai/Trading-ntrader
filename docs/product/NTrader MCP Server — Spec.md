@@ -316,8 +316,8 @@ The green row is in use today; the blue row is the next build.
 
 **Open questions**
 
-- Where should studies live — new Postgres tables (queryable, one migration) or JSON files beside the job store? Proposal: Postgres, since scorecards join runs and studies.
-- Should the server read gate thresholds from the vault's `System/Gates.md` or keep its own copy?
+- ~~Where should studies live?~~ **Resolved (phase 2):** Postgres, in the `research_studies`, `research_trials`, `research_candidates` and `research_study_events` tables.
+- ~~Should the server read gate thresholds from the vault or keep its own copy?~~ **Resolved (phase 2):** from the vault only, through a fenced `yaml ntrader-gates` block in `System/Gates.md`; a missing block or key makes the affected rows "missing", never "pass".
 - Which asset types come first after US stocks and ETFs — crypto (Kraken data already exists in NTrader) or futures?
 - Are daily scans part of NTrader (shared by research and live trading) or a separate tool feeding both? This decides where phase 5's scan stories live.
 - Monte Carlo on trades ignores serial correlation; is a block bootstrap on daily returns needed in phase 4 or later?

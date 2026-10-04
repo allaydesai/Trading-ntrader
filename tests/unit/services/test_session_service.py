@@ -595,8 +595,14 @@ class TestTheAR37StatusAssignmentGuard:
     #: Pre-existing ``self.status =`` writes on Pydantic models — catalog
     #: metadata and strategy definitions. Neither is a ``trading_sessions`` row,
     #: and neither is this story's to change (Pre-verified finding 8).
+    #: Research MCP phase 2 adds ``studies/status.py``: the one place a research
+    #: study's status changes (``exploring`` … ``promoted``), never a session's.
     UNRELATED_STATUS_MODELS = frozenset(
-        {"src/models/catalog_metadata.py", "src/models/strategy.py"}
+        {
+            "src/models/catalog_metadata.py",
+            "src/models/strategy.py",
+            "src/mcp_server/studies/status.py",
+        }
     )
 
     @staticmethod

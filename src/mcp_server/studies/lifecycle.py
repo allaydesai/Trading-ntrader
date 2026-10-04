@@ -1,6 +1,5 @@
 """Open, read, search and decide on studies (S1.1, S1.2, S1.3, S6.4, S8.2)."""
 
-from datetime import datetime, timezone
 from typing import Any
 
 from src.db.models.research import ResearchStudy
@@ -16,6 +15,7 @@ from src.mcp_server.studies import ledger
 from src.mcp_server.studies.gates import FALLBACK_GATE_IDS, load_gates
 from src.mcp_server.studies.spec import StudySpec, check_param_space
 from src.mcp_server.studies.split import Split, check_split
+from src.mcp_server.studies.status import move, touch
 from src.mcp_server.studies.views import study_view, summary_view
 from src.mcp_server.validation import validate
 
@@ -198,8 +198,7 @@ def _change_status(repo: SyncResearchRepository, study: ResearchStudy, target: s
             "parked study.",
         )
     new = _resume_status(repo, study) if target == "active" else target
-    repo.add_event(study, "status_changed", reason, {"from": study.status, "to": new})
-    study.status, study.status_reason = new, reason
+    move(repo, study, new, kind="status_changed", reason=reason)
 
 
 def update_study(
@@ -235,6 +234,6 @@ def update_study(
             )
         if status is not None:
             _change_status(repo, study, status, reason)
-        study.updated_at = datetime.now(timezone.utc)
+        touch(study)
         session.flush()
         return {"study": study_view(session, repo, study)}

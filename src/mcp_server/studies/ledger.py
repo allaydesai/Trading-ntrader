@@ -20,6 +20,7 @@ from src.db.repositories.research_repository import SyncResearchRepository
 from src.mcp_server.errors import ToolFailure
 from src.mcp_server.jobs.store import TERMINAL_STATES, JobStore
 from src.mcp_server.jsonable import to_jsonable
+from src.mcp_server.studies.status import move
 
 #: Roles that count against the trial budget.
 COUNTED_ROLES = frozenset({"in_sample"})
@@ -48,8 +49,8 @@ def settle(repo: SyncResearchRepository, store: JobStore, study: ResearchStudy) 
             and trial.state == "completed"
             and study.status == "frozen"
         ):
-            study.status = "tested"
-            repo.add_event(study, "tested", None, {"run_id": run_id, "version": trial.version})
+            details = {"run_id": run_id, "version": trial.version}
+            move(repo, study, "tested", kind="tested", details=details)
 
 
 def used(trials: list[ResearchTrial]) -> int:
