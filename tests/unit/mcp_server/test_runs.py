@@ -91,6 +91,15 @@ def test_compare_marks_best_per_metric_by_direction():
     assert "total_trades" not in view["best"]  # no direction
 
 
+def test_a_metric_one_run_lacks_has_no_best():
+    """A lone value is not a winner: buy-and-hold has no profit factor to compare against."""
+    a = _run(profit_factor=Decimal("0.81"), total_return=Decimal("0.30"))
+    b = _run(profit_factor=None, total_return=Decimal("0.10"))
+    view = compare_view([a, b], requested=[str(a.run_id), str(b.run_id)])
+    assert "profit_factor" not in view["best"]
+    assert view["best"]["total_return"]["run_ids"] == [str(a.run_id)]
+
+
 def test_compare_lists_differing_params_and_ties():
     a = _run(params={"fast_period": 10, "slow_period": 20}, sharpe_ratio=Decimal("1"))
     b = _run(params={"fast_period": 5, "slow_period": 20}, sharpe_ratio=Decimal("1"))

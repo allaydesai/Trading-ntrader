@@ -27,6 +27,7 @@ def register(server: MCPServer, ctx: ServerContext) -> None:
         """Compare 2-20 runs side by side: differing params, best run per metric.
 
         Include a buy_and_hold run on the same window so no result is read in isolation.
+        A metric that any of the runs lacks has no best.
         """
         return await call(runs.compare_runs, run_ids, maximum=ctx.settings.max_compare)
 

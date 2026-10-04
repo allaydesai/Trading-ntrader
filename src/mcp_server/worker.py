@@ -125,7 +125,9 @@ async def run_job(job_dir: Path) -> int:
         job.phase("running")
         run_id = await _execute(resolved, data)
         job.phase("verifying")
-        job.finish({"status": "ok", "run_id": str(run_id), **_verify(run_id)})
+        verified = _verify(run_id)
+        job.phase("done")
+        job.finish({"status": "ok", "run_id": str(run_id), **verified})
         return 0
     except ToolFailure as failure:
         job.finish({"status": "failed", **failure.to_dict()})

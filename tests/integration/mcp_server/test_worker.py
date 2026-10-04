@@ -54,7 +54,7 @@ async def test_strategy_run_is_persisted_with_provenance(isolated_results, job_d
     expected_hash = resolve(BacktestSpec(**SPEC), default_catalog="").config_hash
     assert result["config_hash"] == expected_hash
     assert set(result["headline"]) >= {"total_return", "sharpe_ratio", "total_trades"}
-    assert json.loads((path / "progress.json").read_text())["phase"] == "verifying"
+    assert json.loads((path / "progress.json").read_text())["phase"] == "done"
 
     with isolated_results() as session:
         from uuid import UUID

@@ -110,7 +110,8 @@ def _best(runs: list[Any]) -> dict[str, Any]:
         values = {
             str(r.run_id): float(v) for r in runs if (v := _metric_values(r).get(name)) is not None
         }
-        if not values:
+        # A metric some run lacks has no winner: a lone value would be marked best by default.
+        if len(values) < len(runs):
             continue
         pick = max if spec.direction == "higher" else min
         top = pick(values.values())
