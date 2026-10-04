@@ -46,7 +46,7 @@ class SMAConfig(StrategyConfig):
 
 @register_strategy(
     name="sma_crossover",
-    description="Simple Moving Average Crossover Strategy (Long/Short)",
+    description="SMA Crossover, one-sided: trades only the side of its first cross",
     aliases=["sma", "smacrossover"],
 )
 class SMACrossover(Strategy):
@@ -55,6 +55,11 @@ class SMACrossover(Strategy):
 
     Generates buy signals when fast SMA crosses above slow SMA.
     Generates sell signals when fast SMA crosses below slow SMA.
+
+    One-sided in practice: a signal either closes the opposite position or opens
+    a new one, never both, and crosses alternate. So the first cross picks the
+    side (long if bullish, short if bearish) and every later trade is on that
+    side. For a long-only baseline use ``sma_crossover_long_only``.
     """
 
     def __init__(self, config: SMAConfig) -> None:

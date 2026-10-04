@@ -465,7 +465,7 @@ bases are mixed. Re-run an old run before comparing its risk metrics with a new 
 
 | Strategy | Type | Key Parameters | Description |
 |----------|------|----------------|-------------|
-| `sma_crossover` | Trend Following | fast_period, slow_period | Classic moving average crossover |
+| `sma_crossover` | Trend Following | fast_period, slow_period | Moving average crossover; one-sided — trades only the side of its first cross (use `sma_crossover_long_only` for a long-only baseline) |
 | `momentum` | Momentum | fast_period, slow_period | Golden/death cross detection |
 
 ### Adding Custom Strategies
