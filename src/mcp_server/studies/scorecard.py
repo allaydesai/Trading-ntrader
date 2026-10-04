@@ -115,6 +115,21 @@ def _candidate_of(repo: SyncResearchRepository, study: ResearchStudy, version: i
     )
 
 
+def _evidence_view(evidence: Evidence) -> dict[str, Any]:
+    """The run ids each part of the evidence came from."""
+
+    def run_id(facts: RunFacts | None) -> str | None:
+        return facts.run_id if facts else None
+
+    return {
+        "in_sample": run_id(evidence.in_sample),
+        "in_sample_benchmark": run_id(evidence.in_sample_benchmark),
+        "out_of_sample": run_id(evidence.out_of_sample),
+        "out_of_sample_benchmark": run_id(evidence.out_of_sample_benchmark),
+        "trials_used": evidence.trials_used,
+    }
+
+
 def get_scorecard(
     settings: McpSettings, store: JobStore, key: str, version: int | None
 ) -> dict[str, Any]:
@@ -149,15 +164,7 @@ def get_scorecard(
             **view,
             "gates": judged,
             "summary": summary,
-            "evidence": {
-                "in_sample": evidence.in_sample and evidence.in_sample.run_id,
-                "in_sample_benchmark": evidence.in_sample_benchmark
-                and evidence.in_sample_benchmark.run_id,
-                "out_of_sample": evidence.out_of_sample and evidence.out_of_sample.run_id,
-                "out_of_sample_benchmark": evidence.out_of_sample_benchmark
-                and evidence.out_of_sample_benchmark.run_id,
-                "trials_used": evidence.trials_used,
-            },
+            "evidence": _evidence_view(evidence),
             "expectation_band": {"status": MISSING, "note": "Arrives in phase 3 (paper loop)."},
             "gates_source": gates.source,
             "warnings": warnings,
