@@ -123,7 +123,7 @@ class JobRunner:
         must be cancelled, or the next server to own the directory would run it.
         """
         if not self._claim():
-            raise not_owner()
+            raise not_owner(self._lock.holder())
         return self.store.create(payload)
 
     def enqueue(self, job_id: str) -> str:
@@ -136,7 +136,7 @@ class JobRunner:
     def queue_state(self) -> dict[str, Any]:
         """The running job, how many are waiting, and whether this server owns the queue."""
         waiting = (self._queue.qsize() if self._queue else 0) + len(self._pending)
-        return {"running": self._running, "queued": waiting, "owner": self._lock.held}
+        return {"running": self._running, "queued": waiting, **self._lock.ownership()}
 
     async def cancel(self, job_id: str) -> dict[str, Any]:
         """Cancel a queued or running job; a finished job is returned unchanged."""
@@ -144,7 +144,7 @@ class JobRunner:
         if status["state"] in TERMINAL_STATES:
             return status
         if not self._claim():
-            raise not_owner()
+            raise not_owner(self._lock.holder())
         if job_id != self._running:
             return self.store.update(job_id, state="cancelled", finished_at=utc_now())
         self._cancelled.add(job_id)

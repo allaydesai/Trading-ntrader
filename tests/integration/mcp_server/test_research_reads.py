@@ -80,7 +80,11 @@ async def test_regime_breakdown_splits_by_year_trend_volatility_and_period(run_i
         == sum(c["days"] for c in result["trend"])
         == sum(c["days"] for c in result["sub_periods"])
     )
-    assert result["notes"] == []  # 300 days of warm-up bars were read
+    # 300 days of warm-up bars were read, so no day lacks its 200-day average.
+    assert not any("unknown" in n for n in result["notes"])
+    totals = result["trades"]
+    assert totals["total"] == totals["closed"] + totals["open"]
+    assert sum(c["trades"] for c in result["trend"]) == totals["total"]
 
 
 async def test_search_finds_the_run_as_unattributed(run_id, tmp_path):
@@ -191,7 +195,11 @@ def test_bars_export_is_clamped_to_in_sample_and_recorded(tmp_path, monkeypatch,
     assert rows[-1]["time"] < "2020-01-01"
     assert set(rows[0]) == {"time", "open", "high", "low", "close", "volume"}
     study = lifecycle.get_study(ctx.runner.store, "sma-aapl")["study"]
-    assert study["events"][-1]["kind"] == "bars_exported"
+    event = study["events"][-1]
+    assert event["kind"] == "bars_exported"
+    assert event["details"]["requested"] == {"start": "2019-06-01", "end": "2021-01-01"}
+    assert event["details"]["end"] == "2019-12-31"
+    assert event["details"]["clamped"] == result["clamped"]
     with pytest.raises(ToolFailure) as exc:
         bar_export.export_bars(ctx.settings, "sma-aapl", slug="aapl-probe", folder="Lab/results")
     assert exc.value.code == "file_exists"
@@ -208,6 +216,7 @@ def test_benchmarks_are_never_the_study_strategy_and_wait_for_a_freeze(
     )
     recorded = reserve_trial(ctx.runner, job)
     assert recorded["role"] == "benchmark" and recorded["budget"]["used"] == 0
+    assert (recorded["entry"], recorded["trial"]) == (1, None)  # a ledger entry, not a trial
     for strategy, window, code in [
         ("sma", "in_sample", "study_mismatch"),
         ("buy_and_hold", "out_of_sample", "invalid_study_state"),

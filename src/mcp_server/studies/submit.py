@@ -91,10 +91,12 @@ def reserve_trial(runner: JobRunner, job: StudyJob) -> dict[str, Any]:
             )
             if over:
                 repo.add_event(study, "over_budget", job.reason, {"job_id": job_id})
+            entry, number = ledger.numbering([*trials, trial])[-1]
             result = {
                 "job_id": job_id,
                 "study": study.slug,
-                "trial": len(trials) + 1,
+                "entry": entry,
+                "trial": number,
                 "role": job.role,
                 "version": trial.version,
                 "budget": ledger.budget(study, [*trials, trial]),

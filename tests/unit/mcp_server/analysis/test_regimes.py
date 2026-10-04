@@ -103,3 +103,12 @@ def test_open_trades_count_but_have_no_win_rate():
     closes = pd.Series(100.0, index=_days("2017-01-02", "2018-03-30"))
     cell = breakdown(equity, [_trade("2018-02-01", 0, closed=False)], closes)["by_year"][0]
     assert cell["trades"] == 1 and cell["win_rate"] is None
+
+
+def test_the_totals_say_how_many_trades_were_still_open(run):
+    equity, trades, closes = run
+    result = breakdown(equity, [*trades, _trade("2019-12-20", 0, closed=False)], closes)
+    assert result["trades"] == {"total": 4, "closed": 3, "open": 1}
+    assert any("still open" in n and "total_trades" in n for n in result["notes"])
+    assert sum(c["trades"] for c in result["trend"]) == 4
+    assert breakdown(*run)["trades"]["open"] == 0

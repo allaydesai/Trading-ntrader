@@ -159,7 +159,14 @@ def breakdown(
             f"Some days have no {SMA_DAYS}-day average yet (too little history); "
             "they are labelled unknown."
         )
+    still_open = sum(1 for t in trades if not t.closed)
+    if still_open:
+        notes.append(
+            f"{still_open} trade(s) still open at the end: counted in each cell's trades, but "
+            "not in the run's total_trades, nor in any win_rate or pnl."
+        )
     return {
+        "trades": {"total": len(trades), "closed": len(trades) - still_open, "open": still_open},
         "by_year": by_year(returns, trades),
         "trend": _split(returns, trades, trend, ["above_sma200", "below_sma200", UNKNOWN]),
         "volatility": _split(

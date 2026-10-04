@@ -66,6 +66,21 @@ def used(trials: list[ResearchTrial]) -> int:
     return sum(1 for t in trials if t.counted and t.state != "void")
 
 
+def numbering(trials: list[ResearchTrial]) -> list[tuple[int, int | None]]:
+    """``(entry, trial)`` per row: its place in the ledger, and its trial number if counted.
+
+    Only counted roles get a trial number, so benchmarks and out-of-sample runs
+    never look like spent budget. A voided trial keeps its number: numbers never
+    shift, which is why the last number can exceed ``used``.
+    """
+    numbers: list[tuple[int, int | None]] = []
+    counted = 0
+    for entry, trial in enumerate(trials, start=1):
+        counted += trial.counted
+        numbers.append((entry, counted if trial.counted else None))
+    return numbers
+
+
 def budget(study: ResearchStudy, trials: list[ResearchTrial]) -> dict[str, int]:
     spent = used(trials)
     return {"used": spent, "budget": study.trial_budget, "remaining": study.trial_budget - spent}
@@ -131,11 +146,14 @@ def headlines(session: Session, run_ids: list[UUID]) -> dict[UUID, dict[str, Any
     return found
 
 
-def trial_view(number: int, trial: ResearchTrial, headline: dict[str, Any] | None) -> dict:
+def trial_view(
+    number: tuple[int, int | None], trial: ResearchTrial, headline: dict[str, Any] | None
+) -> dict:
     """One ledger row as JSON."""
     return to_jsonable(
         {
-            "trial": number,
+            "entry": number[0],
+            "trial": number[1],
             "job_id": trial.job_id,
             "role": trial.role,
             "version": trial.version,
@@ -155,9 +173,9 @@ def trial_view(number: int, trial: ResearchTrial, headline: dict[str, Any] | Non
 
 
 def ledger_view(session: Session, trials: list[ResearchTrial]) -> list[dict[str, Any]]:
-    """The whole ledger, numbered in submission order, with each run's headline."""
+    """The whole ledger in submission order, numbered, with each run's headline."""
     found = headlines(session, [t.run_id for t in trials if t.run_id])
     return [
         trial_view(n, t, found.get(t.run_id) if t.run_id else None)
-        for n, t in enumerate(trials, start=1)
+        for n, t in zip(numbering(trials), trials)
     ]

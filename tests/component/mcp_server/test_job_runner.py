@@ -171,10 +171,14 @@ async def test_second_server_leaves_the_first_ones_jobs_alone(store):
 
     assert store.status(running)["state"] == "running"
     assert store.status(queued)["state"] == "queued"
-    assert second.queue_state()["owner"] is False
+    state = second.queue_state()
+    assert state["owner"] is False
+    assert state["owner_process"]["pid"] == os.getpid()  # both runners live in this process
+    assert state["owner_process"]["command"]
     with pytest.raises(ToolFailure) as exc:
         await second.submit(_payload("ok-theirs"))
     assert exc.value.code == "another_server_active"
+    assert f"pid {os.getpid()}" in exc.value.message and str(os.getpid()) in exc.value.fix
     with pytest.raises(ToolFailure) as exc:
         await second.cancel(running)
     assert exc.value.code == "another_server_active"
@@ -187,6 +191,7 @@ async def test_a_server_takes_over_once_the_owner_is_gone(store):
     assert second.queue_state()["owner"] is False
 
     first.release()
+    assert second.queue_state()["owner_process"] is None  # free: the next submit takes it
     status = await _wait(store, await second.submit(_payload("ok-after")))
 
     assert status["state"] == "succeeded"

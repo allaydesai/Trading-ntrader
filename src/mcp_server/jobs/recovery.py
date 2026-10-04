@@ -73,13 +73,76 @@ class ServerLock:
             self._handle.close()  # closing the descriptor drops the flock
             self._handle = None
 
+    def ownership(self) -> dict[str, Any]:
+        """``owner``, and when another server owns the queue, which process it is.
 
-def not_owner() -> ToolFailure:
+        ``owner_process`` is None when the lock is free: the next submit takes it.
+        """
+        if self._handle is not None:
+            return {"owner": True}
+        return {"owner": False, "owner_process": self.holder()}
+
+    def holder(self) -> dict[str, Any] | None:
+        """The process holding the lock when another one does; None when it is free or ours.
+
+        Probes with a second open file description: ``flock`` conflicts across
+        descriptions even within one process, and the probe is dropped at once.
+        """
+        if self._handle is not None or not self._path.exists():
+            return None
+        with self._path.open("r") as probe:
+            try:
+                fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                pid_text = probe.read().strip()
+            else:
+                fcntl.flock(probe, fcntl.LOCK_UN)
+                return None
+        return describe_process(int(pid_text)) if pid_text.isdigit() else {"pid": None}
+
+
+def _ps(pid: int) -> tuple[int | None, str] | None:
+    try:
+        proc = subprocess.run(
+            ["ps", "-o", "ppid=,command=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    ppid, _, command = proc.stdout.strip().partition(" ")
+    if proc.returncode != 0 or not ppid.isdigit():
+        return None
+    return int(ppid), command.strip()
+
+
+def describe_process(pid: int) -> dict[str, Any]:
+    """A server's pid, command line and the client that launched it (its parent)."""
+    found = _ps(pid)
+    if found is None:
+        return {"pid": pid}
+    ppid, command = found
+    parent = _ps(ppid) if ppid else None
+    return {"pid": pid, "command": command[:200], "client": parent[1][:200] if parent else None}
+
+
+def not_owner(holder: dict[str, Any] | None = None) -> ToolFailure:
+    who = "Another NTrader research server"
+    if holder and holder.get("pid"):
+        who += f" (pid {holder['pid']}"
+        who += f", launched by {holder['client']})" if holder.get("client") else ")"
+    stop = (
+        f"quit that client (or `kill {holder['pid']}`)"
+        if holder and holder.get("pid")
+        else ("close it")
+    )
     return ToolFailure(
         "another_server_active",
-        "Another NTrader research server owns the job queue.",
-        fix="Submit and cancel jobs from the client that started first, or close it and retry. "
-        "get_job, list_jobs and the run tools work from here.",
+        f"{who} owns the job queue; only one server runs jobs.",
+        fix=f"Submit and cancel jobs from that client, or {stop} and retry: this server takes "
+        "the queue over on its next submit. get_job, list_jobs and the run tools work from here.",
+        details={"owner_process": holder},
     )
 
 

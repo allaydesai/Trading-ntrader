@@ -448,18 +448,25 @@ Research proper happens in a **study**, one per vault Idea:
 2. `submit_backtest(study=…)` runs an in-sample trial; it is counted against the budget the
    moment it is queued (past the budget it needs `over_budget_reason`, which is recorded),
    and any window reaching past the in-sample end is refused. `submit_benchmark` runs
-   buy-and-hold (or an incumbent) beside it, uncounted. `export_bars` writes in-sample bars
-   to the vault for a concept probe, always clamped to the in-sample window.
+   buy-and-hold (or an incumbent) beside it, uncounted. Every ledger row has an `entry`
+   number; only in-sample trials have a `trial` number. `export_bars` writes in-sample bars
+   to the vault for a concept probe, always clamped to the in-sample window (the clamp is
+   recorded on the study). `describe_strategy` and `validate_config` warn when a `.env`
+   setting (such as `TRADE_SIZE`) overrides a parameter's schema default.
 3. `get_regime_breakdown`, `get_equity_curve`, `get_trades` and `compare_runs` read the runs.
-4. `freeze_candidate` freezes the chosen run's parameters, code commit and candidate hash.
+4. `freeze_candidate` freezes the chosen run's parameters, code commit and candidate hash,
+   with an optional `benchmark_rationale`: G1's `beats_benchmark_on_one` stays missing
+   without one.
    `run_out_of_sample` tests it once on the locked window; a second run needs
    `override_reason` and marks the study contaminated.
 5. `get_scorecard` judges the candidate against every gate: pass, fail or missing, with the
    number, threshold and runs behind each check. Checks that need later phases (paper,
-   sensitivity, walk-forward, breadth) are always missing, never passed.
+   sensitivity, walk-forward, breadth) are always missing, never passed. G0 always checks
+   `equity_stays_positive`: a run whose drawdown reaches -100% fails it.
 6. `new_candidate_version` iterates in the same study (contaminated if the holdout was
    already seen); `update_study` rejects, parks, resumes or promotes, always with a reason.
-   `export_results(study=…)` files `<slug>.study.json` with the ledger and scorecard.
+   `export_results(study=…)` files `<slug>.study.json` with the ledger, the current
+   scorecard and one scorecard per frozen version.
 
 Gate thresholds are read from the vault's `System/Gates.md`, from a fenced block the
 server parses (the prose stays the human copy):
@@ -474,8 +481,8 @@ G1:
 ````
 
 Known checks: `min_trades`, `clean_tree`, `benchmark_present`, `is_profit_factor`,
-`is_expectancy_gt`, `beats_benchmark_on_one`, `positive_sub_periods`, `oos_sharpe_vs_is`,
-`oos_profit_factor`, `trials_warn_above`, and the phase-4 placeholders
+`is_expectancy_gt`, `beats_benchmark_on_one`, `equity_stays_positive`, `positive_sub_periods`,
+`oos_sharpe_vs_is`, `oos_profit_factor`, `trials_warn_above`, and the phase-4 placeholders
 `neighbourhood_sharpe`, `cost_stress_multiplier`, `breadth`, `walk_forward_efficiency`.
 `server_info` reports whether the block was found.
 
@@ -498,6 +505,8 @@ studies live in the `research_*` tables.
 - **One server owns the job queue.** The first server to start takes a lock on the jobs
   directory. A second one (for example a second MCP client) can still read jobs and runs,
   but `submit_backtest` and `cancel_job` return `another_server_active` until the first exits.
+  `server_info`'s `jobs.owner_process` (and the refusal) name the owner's pid and the client
+  that launched it.
 - **A worker outlives its server.** If the client restarts mid-run, the worker carries on;
   the next server waits for it before starting anything else, then reports its result.
 - **A saved run is never reported cancelled.** If `cancel_job` arrives after the run was

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from src.mcp_server.errors import ToolFailure
-from src.mcp_server.studies.ledger import budget, require_budget, used
+from src.mcp_server.studies.ledger import budget, numbering, require_budget, used
 
 pytestmark = pytest.mark.unit
 
@@ -38,3 +38,10 @@ def test_a_blank_reason_is_no_reason(reason):
 
 def test_a_reason_allows_going_over():
     require_budget(STUDY, [_trial()] * 3, 1, "one more on a hunch, recorded")
+
+
+def test_every_row_has_an_entry_and_only_counted_roles_have_a_trial_number():
+    roles = ["in_sample", "benchmark", "benchmark", "in_sample", "out_of_sample", "in_sample"]
+    trials = [SimpleNamespace(role=r, counted=r == "in_sample", state="completed") for r in roles]
+    trials[3].state = "void"  # a voided trial keeps its number, so later numbers never shift
+    assert numbering(trials) == [(1, 1), (2, None), (3, None), (4, 2), (5, None), (6, 3)]
