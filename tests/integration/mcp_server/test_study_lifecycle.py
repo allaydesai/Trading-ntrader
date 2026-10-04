@@ -85,7 +85,8 @@ def test_an_in_sample_trial_is_recorded_before_it_runs(ctx):
     recorded, warnings = _submit(ctx, params={"fast_period": 7})
     assert recorded["trial"] == 1 and recorded["role"] == "in_sample"
     assert recorded["budget"] == {"used": 1, "budget": 3, "remaining": 2}
-    assert ctx.runner.store.status(recorded["job_id"])["state"] == "queued"
+    # Recorded but not released: no server may run it until the ledger row commits.
+    assert ctx.runner.store.status(recorded["job_id"])["state"] == "reserved"
     assert any("outside the study's declared space" in w for w in warnings)
     study = lifecycle.get_study(ctx.runner.store, "sma-aapl")["study"]
     row = study["ledger"][0]

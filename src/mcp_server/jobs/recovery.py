@@ -1,9 +1,10 @@
-"""Who owns a jobs directory, and what to do with jobs a previous server left running.
+"""Who runs a jobs directory's queue, and what to do with jobs a previous server left running.
 
-Two servers over one directory (a second MCP client, or a restart while a
-worker is alive) used to mark each other's running jobs lost and re-run each
-other's queue. So exactly one server owns the directory, by an exclusive lock,
-and a job left ``running`` is settled by what actually happened to its worker:
+Two servers over one directory (Claude Desktop starts one per consumer of a
+config entry, and a restart can leave a worker alive) used to mark each other's
+running jobs lost and re-run each other's queue. So exactly one server runs the
+queue, by an exclusive lock (every server may add to it), and a job left
+``running`` is settled by what actually happened to its worker:
 
 - it wrote ``result.json``: finalise the job from it;
 - it is still alive: adopt it, and let it finish before the queue moves on;
@@ -74,9 +75,9 @@ class ServerLock:
             self._handle = None
 
     def ownership(self) -> dict[str, Any]:
-        """``owner``, and when another server owns the queue, which process it is.
+        """``owner``, and when another server runs the queue, which process it is.
 
-        ``owner_process`` is None when the lock is free: the next submit takes it.
+        ``owner_process`` is None when the lock is free: a serving server takes it within a poll.
         """
         if self._handle is not None:
             return {"owner": True}
@@ -125,25 +126,6 @@ def describe_process(pid: int) -> dict[str, Any]:
     ppid, command = found
     parent = _ps(ppid) if ppid else None
     return {"pid": pid, "command": command[:200], "client": parent[1][:200] if parent else None}
-
-
-def not_owner(holder: dict[str, Any] | None = None) -> ToolFailure:
-    who = "Another NTrader research server"
-    if holder and holder.get("pid"):
-        who += f" (pid {holder['pid']}"
-        who += f", launched by {holder['client']})" if holder.get("client") else ")"
-    stop = (
-        f"quit that client (or `kill {holder['pid']}`)"
-        if holder and holder.get("pid")
-        else ("close it")
-    )
-    return ToolFailure(
-        "another_server_active",
-        f"{who} owns the job queue; only one server runs jobs.",
-        fix=f"Submit and cancel jobs from that client, or {stop} and retry: this server takes "
-        "the queue over on its next submit. get_job, list_jobs and the run tools work from here.",
-        details={"owner_process": holder},
-    )
 
 
 def worker_alive(pid: int, job_id: str) -> bool:
@@ -209,9 +191,8 @@ def job_outcome(
 
 @dataclass
 class Recovery:
-    """What a new owner found: jobs to run, and live workers to wait for."""
+    """What a new owner found: live workers to wait for (queued jobs stay in the queue)."""
 
-    queued: list[str] = field(default_factory=list)
     adopted: list[tuple[str, int]] = field(default_factory=list)
 
 
@@ -235,9 +216,7 @@ def recover_jobs(store: JobStore, find_run: FindRun | None = None) -> Recovery:
     """Settle jobs a previous server left behind. Call only while holding the lock."""
     recovery = Recovery()
     for status in reversed(store.list(limit=10_000)):  # oldest first
-        if status.get("state") == "queued":
-            recovery.queued.append(status["job_id"])
-        elif status.get("state") == "running":
+        if status.get("state") == "running":
             pid = _settle(store, status, find_run)
             if pid is not None:
                 recovery.adopted.append((status["job_id"], pid))

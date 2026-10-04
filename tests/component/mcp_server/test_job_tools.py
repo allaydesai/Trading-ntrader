@@ -110,18 +110,24 @@ async def test_list_jobs_rejects_unknown_state(ctx):
     assert result["error"]["code"] == "invalid_state"
 
 
-async def test_second_server_refuses_to_submit_but_still_reads(ctx, tmp_path):
+async def test_a_second_server_submits_and_the_owner_runs_the_job(ctx, tmp_path):
+    """Claude Desktop starts one server per consumer: the second must not be read-only."""
     async with Client(build_server(ctx)) as owner:
-        job_id = (await _call(owner, "submit_backtest", REQUEST))["job_id"]
         other = JobRunner(
             JobStore(ctx.settings.jobs_dir), timeout_s=30, worker_command=_fake_command
         )
         second = ServerContext(settings=ctx.settings, runner=other)
         async with Client(build_server(second)) as client:
-            refused = await _call(client, "submit_backtest", REQUEST)
-            assert refused["ok"] is False
-            assert refused["error"]["code"] == "another_server_active"
-            assert (await _call(client, "get_job", {"job_id": job_id}))["job_id"] == job_id
+            submitted = await _call(client, "submit_backtest", REQUEST)
+            assert submitted["ok"] is True, submitted
+            assert submitted["queue"]["owner"] is False
+            for _ in range(200):
+                job = await _call(client, "get_job", {"job_id": submitted["job_id"]})
+                if job["state"] not in ("queued", "running"):
+                    break
+                await asyncio.sleep(0.05)
+            assert job["state"] == "succeeded", job
+            assert (await _call(owner, "server_info"))["jobs"]["owner"] is True
             assert (await _call(client, "server_info"))["jobs"]["owner"] is False
 
 

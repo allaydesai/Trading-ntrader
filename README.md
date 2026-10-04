@@ -502,11 +502,12 @@ One job runs at a time; `cancel_job` stops a running worker within five seconds.
 migrations first (`alembic upgrade head`): runs store their provenance in new columns, and
 studies live in the `research_*` tables.
 
-- **One server owns the job queue.** The first server to start takes a lock on the jobs
-  directory. A second one (for example a second MCP client) can still read jobs and runs,
-  but `submit_backtest` and `cancel_job` return `another_server_active` until the first exits.
-  `server_info`'s `jobs.owner_process` (and the refusal) name the owner's pid and the client
-  that launched it.
+- **Every server can submit; one runs the jobs.** The jobs directory is the queue. Claude
+  Desktop starts one server per consumer of the same config entry (the chat and a linked
+  session), so a second server is normal: it submits and cancels jobs like the first. The
+  server holding the lock on the directory runs them one at a time, oldest first; the
+  others take over within a second of it exiting. `server_info`'s `jobs.owner` says whether
+  this server is the one running jobs, and `jobs.owner_process` names the one that is.
 - **A worker outlives its server.** If the client restarts mid-run, the worker carries on;
   the next server waits for it before starting anything else, then reports its result.
 - **A saved run is never reported cancelled.** If `cancel_job` arrives after the run was

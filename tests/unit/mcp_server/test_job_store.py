@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from src.mcp_server.errors import ToolFailure
-from src.mcp_server.jobs.store import JobStore
+from src.mcp_server.jobs.store import JobStore, first_queued
 
 pytestmark = pytest.mark.unit
 
@@ -93,3 +93,30 @@ def test_log_tail_returns_everything_when_the_log_is_short(store):
     job_id = store.create(PAYLOAD)
     store.log_path(job_id).write_text("only\ntwo")
     assert store.log_tail(job_id, 50) == ["only", "two"]
+
+
+def test_a_reserved_job_is_not_queued_until_released(store):
+    job_id = store.create({"kind": "backtest"}, state="reserved")
+    assert store.status(job_id)["state"] == "reserved"
+    assert first_queued(store)[0] is None
+    assert store.transition(job_id, {"reserved"}, state="queued")["state"] == "queued"
+    assert first_queued(store)[0] == job_id
+
+
+def test_transition_only_moves_a_job_from_the_listed_states(store):
+    job_id = store.create({"kind": "backtest"})
+    store.update(job_id, state="cancelled")
+    assert store.transition(job_id, {"queued"}, state="running") is None
+    assert store.status(job_id)["state"] == "cancelled"
+
+
+def test_first_queued_is_the_oldest_and_the_floor_skips_finished_jobs(store):
+    done, first, second = (store.create({"kind": "backtest"}) for _ in range(3))
+    store.update(done, state="succeeded")
+    found, floor = first_queued(store)
+    assert (found, floor) == (first, first)
+    store.update(first, state="succeeded")
+    assert first_queued(store, floor) == (second, second)
+    store.update(second, state="failed")
+    found, floor = first_queued(store, floor)
+    assert found is None and floor >= second  # nothing left to look at below it

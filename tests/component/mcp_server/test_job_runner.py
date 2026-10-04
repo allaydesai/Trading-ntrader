@@ -10,7 +10,6 @@ from pathlib import Path
 
 import pytest
 
-from src.mcp_server.errors import ToolFailure
 from src.mcp_server.jobs.recovery import worker_alive
 from src.mcp_server.jobs.runner import JobRunner
 from src.mcp_server.jobs.store import JobStore
@@ -155,44 +154,77 @@ async def test_cancel_while_the_worker_is_spawning_still_stops_it(store):
     assert status["state"] == "cancelled"
 
 
-# --- one owning server per jobs directory -----------------------------------------
+# --- one server runs jobs; every server may queue and cancel them ------------------
+# Claude Desktop starts one server per consumer of the same config entry, so a
+# second server is normal, not a mistake: it must be able to do everything.
 
 
-async def test_second_server_leaves_the_first_ones_jobs_alone(store):
-    first = _runner(store)
+async def test_a_second_server_queues_jobs_the_owner_runs_in_order(store):
+    first = _runner(store, poll_s=0.05)
     running = await first.submit(_payload("sleep"))
-    queued = await first.submit(_payload("ok-mine"))
     while store.status(running)["state"] != "running":
         await asyncio.sleep(0.05)
 
-    second = _runner(store)
+    second = _runner(store, poll_s=0.05)
     second.start()
-    await asyncio.sleep(0.3)
-
-    assert store.status(running)["state"] == "running"
-    assert store.status(queued)["state"] == "queued"
+    theirs = await second.submit(_payload("ok-theirs"))
     state = second.queue_state()
-    assert state["owner"] is False
+    assert state["owner"] is False and state["queued"] == 1 and state["running"] == running
     assert state["owner_process"]["pid"] == os.getpid()  # both runners live in this process
-    assert state["owner_process"]["command"]
-    with pytest.raises(ToolFailure) as exc:
-        await second.submit(_payload("ok-theirs"))
-    assert exc.value.code == "another_server_active"
-    assert f"pid {os.getpid()}" in exc.value.message and str(os.getpid()) in exc.value.fix
-    with pytest.raises(ToolFailure) as exc:
-        await second.cancel(running)
-    assert exc.value.code == "another_server_active"
+    assert store.status(running)["state"] == "running"  # never run twice
+
     await first.cancel(running)
+    status = await _wait(store, theirs)
+    assert status["state"] == "succeeded" and status["run_id"] == "ok-theirs"
+    assert store.status(running)["finished_at"] <= status["started_at"]
 
 
-async def test_a_server_takes_over_once_the_owner_is_gone(store):
-    first = _runner(store)
-    second = _runner(store)
+async def test_a_second_server_cancels_the_owners_running_job(store):
+    first = _runner(store, poll_s=0.05)
+    job_id = await first.submit(_payload("ignore_term"))
+    while store.status(job_id).get("pid") is None:
+        await asyncio.sleep(0.05)
+
+    second = _runner(store, poll_s=0.05)
+    started = time.monotonic()
+    status = await second.cancel(job_id)
+
+    assert time.monotonic() - started < 5
+    assert status["state"] == "cancelled"
+
+
+async def test_a_second_server_cancels_a_queued_job(store):
+    first = _runner(store, poll_s=0.05)
+    blocker = await first.submit(_payload("sleep"))
+    queued = await first.submit(_payload("ok-never"))
+    second = _runner(store, poll_s=0.05)
+
+    assert (await second.cancel(queued))["state"] == "cancelled"
+    await first.cancel(blocker)
+    await asyncio.sleep(0.3)
+    assert store.result(queued) is None
+
+
+async def test_a_reserved_job_waits_until_it_is_released(store):
+    runner = _runner(store, poll_s=0.05)
+    runner.start()
+    job_id = runner.reserve(_payload("ok-held"))
+    await asyncio.sleep(0.3)
+    assert store.status(job_id)["state"] == "reserved"
+
+    runner.enqueue(job_id)
+    assert (await _wait(store, job_id))["state"] == "succeeded"
+
+
+async def test_a_server_takes_the_queue_over_by_itself_once_the_owner_is_gone(store):
+    first = _runner(store, poll_s=0.05)
+    second = _runner(store, poll_s=0.05)
+    second.start()
     assert second.queue_state()["owner"] is False
+    waiting = await second.submit(_payload("ok-after"))  # queued while first owns it
 
-    first.release()
-    assert second.queue_state()["owner_process"] is None  # free: the next submit takes it
-    status = await _wait(store, await second.submit(_payload("ok-after")))
+    first.release()  # as when its process exits
+    status = await _wait(store, waiting)
 
     assert status["state"] == "succeeded"
     assert second.queue_state()["owner"] is True

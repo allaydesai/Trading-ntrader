@@ -7,19 +7,27 @@
 ``result.json``    the worker's outcome: run id and headline, or an error with its fix
 
 Files survive a server restart, so ``get_job`` keeps answering for old jobs.
+The directory is also the queue: every server may add or cancel jobs, and the
+one that owns the queue runs the oldest ``queued`` job. Status changes take a
+per-job lock, so two servers never overwrite each other's change.
 """
 
+import fcntl
 import json
 import os
 import re
 import secrets
+from collections.abc import Collection, Iterator
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from src.mcp_server.errors import ToolFailure
 
-STATES = ("queued", "running", "succeeded", "failed", "cancelled", "lost")
+#: ``reserved``: written but not yet released to the queue (its study ledger row is
+#: being recorded); the owner never runs it.
+STATES = ("reserved", "queued", "running", "succeeded", "failed", "cancelled", "lost")
 TERMINAL_STATES = frozenset({"succeeded", "failed", "cancelled", "lost"})
 _TAIL_BLOCK = 64 * 1024
 _TAIL_LIMIT = 4 * 1024 * 1024  # most log_tail will read, however long the lines
@@ -46,23 +54,52 @@ class JobStore:
             )
         return path
 
-    def create(self, payload: dict[str, Any]) -> str:
-        """Write a new queued job and return its id (sortable by creation time)."""
+    def create(self, payload: dict[str, Any], *, state: str = "queued") -> str:
+        """Write a new job and return its id (sortable by creation time)."""
         self.root.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f")
         job_id = f"{stamp}-{secrets.token_hex(3)}"
         path = self.root / job_id
         path.mkdir()
         self._write(path / "request.json", payload)
-        status = {"job_id": job_id, "kind": payload.get("kind"), "state": "queued"}
+        status = {"job_id": job_id, "kind": payload.get("kind"), "state": state}
         self._write(path / "status.json", {**status, "created_at": utc_now()})
         return job_id
 
     def update(self, job_id: str, **fields: Any) -> dict[str, Any]:
         """Merge ``fields`` into the job's status and return it."""
-        status = {**self.status(job_id), **fields}
-        self._write(self.job_dir(job_id) / "status.json", status)
+        with self._locked(job_id):
+            status = {**self.status(job_id), **fields}
+            self._write(self.job_dir(job_id) / "status.json", status)
         return status
+
+    def transition(
+        self, job_id: str, from_states: Collection[str], **fields: Any
+    ) -> dict[str, Any] | None:
+        """Merge ``fields`` only if the job is in one of ``from_states``; None otherwise."""
+        with self._locked(job_id):
+            status = self.status(job_id)
+            if status.get("state") not in from_states:
+                return None
+            status = {**status, **fields}
+            self._write(self.job_dir(job_id) / "status.json", status)
+        return status
+
+    def names(self) -> list[str]:
+        """Every job id, oldest first."""
+        if not self.root.is_dir():
+            return []
+        return sorted(n for n in os.listdir(self.root) if _JOB_ID.match(n))
+
+    def state_of(self, job_id: str) -> str | None:
+        """The job's state, or None if it has no status (any more)."""
+        return (self._read(self.root / job_id / "status.json") or {}).get("state")
+
+    @contextmanager
+    def _locked(self, job_id: str) -> Iterator[None]:
+        with (self.job_dir(job_id) / ".status.lock").open("a") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            yield  # closing the handle releases the lock
 
     def status(self, job_id: str) -> dict[str, Any]:
         return self._read(self.job_dir(job_id) / "status.json") or {}
@@ -132,3 +169,31 @@ class JobStore:
             return json.loads(path.read_text(encoding="utf-8"))
         except FileNotFoundError:
             return None
+
+
+def first_queued(store: JobStore, floor: str = "") -> tuple[str | None, str]:
+    """The oldest ``queued`` job at or after ``floor``, and the next floor.
+
+    The floor is the oldest job that has not finished, so a server polling the
+    queue never re-reads the long tail of finished jobs.
+    """
+    names = [n for n in store.names() if n >= floor]
+    next_floor: str | None = None
+    for name in names:
+        state = store.state_of(name)
+        if state in TERMINAL_STATES:
+            continue
+        next_floor = next_floor or name
+        if state == "queued":
+            return name, next_floor
+    return None, next_floor or (names[-1] if names else floor)
+
+
+def active(store: JobStore, floor: str = "") -> dict[str, Any]:
+    """The running job (if any) and how many are queued, at or after ``floor``."""
+    running, queued = None, 0
+    for name in (n for n in store.names() if n >= floor):
+        state = store.state_of(name)
+        running = name if state == "running" else running
+        queued += state == "queued"
+    return {"running": running, "queued": queued}

@@ -105,10 +105,7 @@ async def _submit_unattributed(
     prepared = await call(_unattributed, default_catalog, fields)
     if not prepared.pop("ok"):
         return {"ok": False, **prepared}
-    try:
-        job_id = await runner.submit(prepared)
-    except ToolFailure as failure:  # another server owns the job queue
-        return failure.to_dict()
+    job_id = await runner.submit(prepared)
     return {
         "ok": True,
         "job_id": job_id,
