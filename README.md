@@ -56,6 +56,8 @@ NTrader is a comprehensive backtesting platform designed for traders, quants, an
   no IBKR fetch, no fake instruments: missing data fails fast with the fix
 - Research studies: a locked out-of-sample window, a counted trial budget, frozen candidates
   tested out-of-sample once, regime splits and a scorecard against the vault's gates
+- Paper loop: the exact `live create` / `live start` commands for a tested candidate, and a
+  read-only weekly check of the session against the band its out-of-sample run sets
 - Every run records its git commit, dirty state and config hash
 - Built-in `buy_and_hold` benchmark for side-by-side comparison
 - Never trades, never starts or stops sessions, never imports data
@@ -434,6 +436,8 @@ Add it to Claude Desktop's `claude_desktop_config.json`:
 `run_out_of_sample`, `get_scorecard`, `get_trades`, `get_equity_curve`,
 `get_regime_breakdown`, `export_bars`, `search_runs`.
 
+**Tools (phase 3, paper):** `paper_commands`, `list_sessions`, `get_session`.
+
 A quick, unattributed check: `validate_config` → `submit_backtest` for the strategy and
 for `buy_and_hold` on the same window → `get_job` until both finish → `compare_runs` →
 `export_results` (writes `<slug>.json` and `<slug>.trades.csv` to `Lab/results/` in the
@@ -460,13 +464,31 @@ Research proper happens in a **study**, one per vault Idea:
    `run_out_of_sample` tests it once on the locked window; a second run needs
    `override_reason` and marks the study contaminated.
 5. `get_scorecard` judges the candidate against every gate: pass, fail or missing, with the
-   number, threshold and runs behind each check. Checks that need later phases (paper,
-   sensitivity, walk-forward, breadth) are always missing, never passed. G0 always checks
+   number, threshold and runs behind each check. Checks that need phase 4 (sensitivity,
+   walk-forward, breadth, cost stress) are always missing, never passed. G0 always checks
    `equity_stays_positive`: a run whose drawdown reaches -100% fails it.
 6. `new_candidate_version` iterates in the same study (contaminated if the holdout was
    already seen); `update_study` rejects, parks, resumes or promotes, always with a reason.
    `export_results(study=…)` files `<slug>.study.json` with the ledger, the current
    scorecard and one scorecard per frozen version.
+7. `paper_commands` gives the commands that start a paper session of the tested candidate:
+   `live check`, `live create` with every frozen parameter passed explicitly (so `.env` cannot
+   change one) and `--compare-to` the candidate's out-of-sample run, `live start`. It is
+   refused until that run exists; failing gates, code changed since freezing and parameters a
+   setting would change come back as warnings. You run the commands; the server never
+   starts, stops or creates a session.
+8. `get_session` (weekly) reads the session, in a read-only transaction, against its
+   **expectation band**: percentiles over the compare-to run's own rolling windows, trade
+   count over stretches as long as the session has run, win rate, average trade and drawdown
+   over runs of as many trades as it has closed. A trade's return is its net P&L over its
+   entry notional, so a session trading another size still compares. Drift flags name a
+   likely cause from what NTrader stores: signals (trade count outside the band, stale bars,
+   a dead node, a failed strategy), execution (rejections, lost connection, commission),
+   config (the stored spec differs from the frozen candidate) or strategy/regime. Slippage
+   is not measurable: trades store only average fill prices. `get_scorecard` judges G4 on the
+   newest linked session (missing until `min_weeks` and `min_trades` are met) and carries the
+   band for G4's horizon; `export_results(session=…)` files `<slug>.session.json` and
+   `<slug>.session.trades.csv` beside the compare-to run.
 
 Gate thresholds are read from the vault's `System/Gates.md`, from a fenced block the
 server parses (the prose stays the human copy):
@@ -482,7 +504,9 @@ G1:
 
 Known checks: `min_trades`, `clean_tree`, `benchmark_present`, `is_profit_factor`,
 `is_expectancy_gt`, `beats_benchmark_on_one`, `equity_stays_positive`, `positive_sub_periods`,
-`oos_sharpe_vs_is`, `oos_profit_factor`, `trials_warn_above`, and the phase-4 placeholders
+`oos_sharpe_vs_is`, `oos_profit_factor`, `trials_warn_above`, G4's `min_weeks` and
+`min_trades` (paper weeks and trades; G4 also always checks `paper_inside_band` and
+`paper_clean`), and the phase-4 placeholders
 `neighbourhood_sharpe`, `cost_stress_multiplier`, `breadth`, `walk_forward_efficiency`.
 `oos_sharpe_vs_is` takes a bare ratio or `{ratio: 0.5, min_is_sharpe: 0.3}`: below the
 floor the in-sample Sharpe is too small for a ratio to mean anything, so the check fails.

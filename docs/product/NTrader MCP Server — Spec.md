@@ -318,6 +318,8 @@ The green row is in use today; the blue row is the next build.
 
 - ~~Where should studies live?~~ **Resolved (phase 2):** Postgres, in the `research_studies`, `research_trials`, `research_candidates` and `research_study_events` tables.
 - ~~Should the server read gate thresholds from the vault or keep its own copy?~~ **Resolved (phase 2):** from the vault only, through a fenced `yaml ntrader-gates` block in `System/Gates.md`; a missing block or key makes the affected rows "missing", never "pass".
+- ~~Which run is a paper session compared against?~~ **Resolved (phase 3):** the frozen candidate's completed out-of-sample run. `paper_commands` is refused until it exists, and the expectation band is built from that run's own closed trades (rolling windows; Monte Carlo replaces this in phase 4).
+- ~~How are drift causes found without signal prices?~~ **Resolved (phase 3):** from what NTrader stores, with no live-path change. Signals: trade count outside the band, stale bars, a dead node, a failed strategy. Execution: rejections, a lost connection, commission. Config: the stored spec differs from the frozen candidate. Slippage is reported as not measurable until NTrader records decision prices.
 - Which asset types come first after US stocks and ETFs — crypto (Kraken data already exists in NTrader) or futures?
 - Are daily scans part of NTrader (shared by research and live trading) or a separate tool feeding both? This decides where phase 5's scan stories live.
 - Monte Carlo on trades ignores serial correlation; is a block bootstrap on daily returns needed in phase 4 or later?

@@ -37,6 +37,9 @@ src/
 │   ├── request.py         # spec → named-catalog BacktestRequest + config hash (one path)
 │   ├── jobs/              # file-backed store + single-worker runner (process per job);
 │   │                      #   recovery.py: one owning server (flock) + adoption of live workers
+│   ├── studies/           # studies: holdout split, trial ledger, candidates, gates, scorecard
+│   ├── analysis/          # reads of stored runs: trades, equity, regimes, bar export
+│   ├── paper/             # paper loop: commands text, read-only session reads, band, drift
 │   └── worker.py          # child process: load_from_catalog → orchestrator → verify row
 ├── models/                # Domain Pydantic models (request, result, trade, strategy)
 ├── services/              # → see docs/agent/data-pipeline.md
