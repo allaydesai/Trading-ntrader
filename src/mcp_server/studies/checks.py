@@ -163,10 +163,12 @@ def equity_stays_positive(ev: Evidence, threshold: Any) -> Row:
     drawdowns = {r.run_id: r.metrics.get("max_drawdown") for r in runs}
     if any(v is None for v in drawdowns.values()):
         return _row(MISSING, drawdowns, threshold, runs, "max_drawdown is not available.")
+    value = {
+        run_id: {"stayed_positive": not insolvent(dd), "max_drawdown": dd}
+        for run_id, dd in drawdowns.items()
+    }
     broke = any(insolvent(v) for v in drawdowns.values())
-    return _row(
-        FAIL if broke else PASS, drawdowns, threshold, runs, INSOLVENT_NOTE if broke else ""
-    )
+    return _row(FAIL if broke else PASS, value, threshold, runs, INSOLVENT_NOTE if broke else "")
 
 
 def positive_sub_periods(ev: Evidence, threshold: Any) -> Row:

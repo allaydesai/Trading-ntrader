@@ -160,7 +160,10 @@ def test_g0_always_checks_that_the_equity_stayed_above_zero():
     result = judge("G0", G0, broke)
     row = result["checks"]["equity_stays_positive"]
     assert result["status"] == "fail" and row["status"] == "fail"
-    assert row["value"] == {"is": -0.2, "oos": -2.08}
+    assert row["value"] == {
+        "is": {"stayed_positive": True, "max_drawdown": -0.2},
+        "oos": {"stayed_positive": False, "max_drawdown": -2.08},
+    }
     assert "position size" in row["note"]
 
 
