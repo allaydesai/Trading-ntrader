@@ -104,8 +104,8 @@ class JobRunner:
         """Start the drain task if this server owns the queue (needs a running event loop)."""
         if not self._claim() or (self._task is not None and not self._task.done()):
             return
-        if self._queue is None:  # kept across a restarted task: waiting jobs are not dropped
-            self._queue = asyncio.Queue()
+        # Kept across a restarted task, so waiting jobs are not dropped.
+        self._queue = self._queue or asyncio.Queue()
         for job_id in self._pending:
             self._queue.put_nowait(job_id)
         self._pending = []
@@ -113,9 +113,21 @@ class JobRunner:
 
     async def submit(self, payload: dict[str, Any]) -> str:
         """Queue a job and return its id at once."""
+        return self.enqueue(self.reserve(payload))
+
+    def reserve(self, payload: dict[str, Any]) -> str:
+        """Write a queued job without starting it (callable from a worker thread).
+
+        A study records the job in its ledger in the same transaction that checks
+        its budget, then calls ``enqueue``; a reserved job that is never enqueued
+        must be cancelled, or the next server to own the directory would run it.
+        """
         if not self._claim():
             raise not_owner()
-        job_id = self.store.create(payload)
+        return self.store.create(payload)
+
+    def enqueue(self, job_id: str) -> str:
+        """Hand a reserved job to the drain task (needs the running event loop)."""
         self.start()
         assert self._queue is not None
         self._queue.put_nowait(job_id)

@@ -10,9 +10,9 @@ from tests.component.mcp_server.raw_stdio import RawStdioServer, non_protocol_li
 
 pytestmark = pytest.mark.component
 
-#: The phase-1 tool set, written out by hand. Adding or removing a tool means
-#: editing this literal and REGISTERED_TOOLS together, deliberately.
-PHASE_1_TOOLS = frozenset(
+#: The tool set, written out by hand. Adding or removing a tool means editing
+#: this literal and REGISTERED_TOOLS together, deliberately.
+PINNED_TOOLS = frozenset(
     {
         "server_info",
         "list_strategies",
@@ -27,6 +27,11 @@ PHASE_1_TOOLS = frozenset(
         "get_run",
         "compare_runs",
         "export_results",
+        # phase 2
+        "create_study",
+        "get_study",
+        "list_studies",
+        "update_study",
     }
 )
 
@@ -39,7 +44,7 @@ async def test_registered_tools_are_exactly_the_pinned_set(tmp_path, monkeypatch
     # so a tool registered without being declared (or declared, not registered)
     # goes red in both directions.
     assert listed == REGISTERED_TOOLS
-    assert REGISTERED_TOOLS == PHASE_1_TOOLS
+    assert REGISTERED_TOOLS == PINNED_TOOLS
 
 
 def test_no_tool_can_trade_or_manage_sessions():

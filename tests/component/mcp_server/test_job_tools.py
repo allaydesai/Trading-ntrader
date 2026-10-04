@@ -123,3 +123,32 @@ async def test_second_server_refuses_to_submit_but_still_reads(ctx, tmp_path):
             assert refused["error"]["code"] == "another_server_active"
             assert (await _call(client, "get_job", {"job_id": job_id}))["job_id"] == job_id
             assert (await _call(client, "server_info"))["jobs"]["owner"] is False
+
+
+async def test_an_unattributed_run_needs_its_fields_and_says_it_is_unattributed(ctx):
+    async with Client(build_server(ctx)) as client:
+        missing = await _call(client, "submit_backtest", {"strategy": "sma", "symbol": "AAPL"})
+        assert missing["ok"] is False
+        assert missing["error"]["code"] == "invalid_request"
+        assert "start, end" in missing["error"]["message"]
+        submitted = await _call(client, "submit_backtest", REQUEST)
+        assert "Unattributed: not in a study." in submitted["warnings"]
+
+
+async def test_create_study_rejects_bad_fields_before_touching_the_database(ctx):
+    async with Client(build_server(ctx)) as client:
+        study = {
+            "slug": "Not A Slug",
+            "title": "t",
+            "hypothesis": "h",
+            "strategy": "sma",
+            "symbols": ["AAPL"],
+            "in_sample_start": "2018-01-01",
+            "in_sample_end": "2019-12-31",
+            "out_of_sample_start": "2020-01-01",
+            "out_of_sample_end": "2020-12-31",
+        }
+        refused = await _call(client, "create_study", study)
+        assert refused["ok"] is False
+        assert refused["error"]["code"] == "invalid_study"
+        assert refused["error"]["message"].startswith("slug:")
