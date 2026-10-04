@@ -103,7 +103,20 @@ def _new_candidate(study: ResearchStudy, run: Any) -> tuple[ResearchCandidate, l
     return candidate, warnings
 
 
-def freeze_candidate(store: JobStore, key: str, run_id: str, note: str | None) -> dict[str, Any]:
+NO_RATIONALE = (
+    "No benchmark_rationale: if the study's gates use beats_benchmark_on_one (G1), that "
+    "check stays missing for this version, since a frozen candidate never changes."
+)
+
+
+def freeze_candidate(
+    store: JobStore,
+    key: str,
+    run_id: str,
+    note: str | None,
+    *,
+    benchmark_rationale: str | None = None,
+) -> dict[str, Any]:
     """Freeze the current version's candidate from one of its in-sample runs."""
     with get_sync_session() as session:
         repo = SyncResearchRepository(session)
@@ -116,6 +129,9 @@ def freeze_candidate(store: JobStore, key: str, run_id: str, note: str | None) -
                 "not_finished", f"Run of job {trial.job_id} has not finished.", fix="Wait for it."
             )
         candidate, warnings = _new_candidate(study, load_run(session, str(trial.run_id)))
+        candidate.benchmark_rationale = (benchmark_rationale or "").strip() or None
+        if candidate.benchmark_rationale is None:
+            warnings.append(NO_RATIONALE)
         repo.add_candidate(candidate)
         details = {"version": candidate.version, "run_id": str(candidate.source_run_id)}
         move(repo, study, "frozen", kind="frozen", reason=note, details=details)

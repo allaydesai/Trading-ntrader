@@ -100,6 +100,7 @@ def gather(
         sub_period_returns=_sub_period_returns(session, candidate.source_run_id, periods),
         trials_used=ledger.used(trials),
         candidate_dirty=candidate.git_dirty,
+        benchmark_rationale=candidate.benchmark_rationale,
     )
 
 

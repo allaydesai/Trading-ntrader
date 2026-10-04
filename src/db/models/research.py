@@ -123,6 +123,8 @@ class ResearchCandidate(Base):
     git_dirty: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
     strategies_commit: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
     candidate_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Why beating buy-and-hold on whichever metric it beats is worth it: G1 needs it.
+    benchmark_rationale: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     frozen_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )

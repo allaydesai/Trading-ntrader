@@ -10,6 +10,8 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from src.mcp_server.metrics import INSOLVENT_NOTE, insolvent
+
 PASS, FAIL, MISSING = "pass", "fail", "missing"
 
 
@@ -35,6 +37,7 @@ class Evidence:
     sub_period_returns: list[float] | None = None
     trials_used: int = 0
     candidate_dirty: bool | None = None
+    benchmark_rationale: str | None = None
     notes: list[str] = field(default_factory=list)
 
 
@@ -139,9 +142,31 @@ def beats_benchmark_on_one(ev: Evidence, threshold: Any) -> Row:
         compared[name] = {"run": mine, "benchmark": theirs}
         if mine is not None and theirs is not None and mine > theirs:
             beaten.append(name)
-    status = PASS if beaten else FAIL
-    note = f"beats on: {', '.join(beaten)}; say why that is worth it" if beaten else ""
-    return _row(status, compared, names, [ev.in_sample, ev.in_sample_benchmark], note)
+    runs = [ev.in_sample, ev.in_sample_benchmark]
+    if not beaten:
+        return _row(FAIL, compared, names, runs)
+    rationale = (ev.benchmark_rationale or "").strip()
+    if not rationale:
+        note = (
+            f"beats on: {', '.join(beaten)}, but the frozen candidate records no "
+            "benchmark_rationale saying why that is worth it (freeze_candidate)"
+        )
+        return _row(MISSING, compared, names, runs, note)
+    value = {**compared, "rationale": rationale}
+    return _row(PASS, value, names, runs, f"beats on: {', '.join(beaten)}")
+
+
+def equity_stays_positive(ev: Evidence, threshold: Any) -> Row:
+    runs = [r for r in (ev.in_sample, ev.out_of_sample) if r is not None]
+    if not runs:
+        return _missing(threshold, "No in-sample candidate run.")
+    drawdowns = {r.run_id: r.metrics.get("max_drawdown") for r in runs}
+    if any(v is None for v in drawdowns.values()):
+        return _row(MISSING, drawdowns, threshold, runs, "max_drawdown is not available.")
+    broke = any(insolvent(v) for v in drawdowns.values())
+    return _row(
+        FAIL if broke else PASS, drawdowns, threshold, runs, INSOLVENT_NOTE if broke else ""
+    )
 
 
 def positive_sub_periods(ev: Evidence, threshold: Any) -> Row:
@@ -196,6 +221,7 @@ CHECKS: dict[str, Check] = {
     "is_profit_factor": is_profit_factor,
     "is_expectancy_gt": is_expectancy_gt,
     "beats_benchmark_on_one": beats_benchmark_on_one,
+    "equity_stays_positive": equity_stays_positive,
     "positive_sub_periods": positive_sub_periods,
     "oos_sharpe_vs_is": oos_sharpe_vs_is,
     "oos_profit_factor": oos_profit_factor,
@@ -206,8 +232,12 @@ CHECKS: dict[str, Check] = {
     "breadth": later_phase(4, "Breadth on untuned instruments"),
     "walk_forward_efficiency": later_phase(4, "Walk-forward"),
 }
-#: Checks every gate gets whatever the vault lists: the holdout is run once.
-IMPLIED: dict[str, tuple[str, Any]] = {"G2": ("oos_run_once", 1)}
+#: Checks a gate gets whatever the vault lists: no run whose equity went to zero is
+#: evidence, and the holdout is run once.
+IMPLIED: dict[str, tuple[str, Any]] = {
+    "G0": ("equity_stays_positive", True),
+    "G2": ("oos_run_once", 1),
+}
 #: Gates the server cannot judge at all yet.
 LATER_GATES: dict[str, int] = {"G4": 3}
 

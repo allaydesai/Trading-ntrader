@@ -1,8 +1,9 @@
 """Export a study's record to the vault beside its runs (S8.1).
 
 ``<slug>.study.json`` holds the study, its numbered ledger, candidates, every
-recorded decision and the current scorecard; the runs themselves go to the
-usual ``<slug>.json`` and ``<slug>.trades.csv``.
+recorded decision, the current scorecard and one scorecard per frozen version,
+so the card a decision was made on survives the next version; the runs
+themselves go to the usual ``<slug>.json`` and ``<slug>.trades.csv``.
 """
 
 import json
@@ -35,6 +36,9 @@ def export_study(
         card: dict[str, Any] = scorecard.get_scorecard(settings, store, key, None)
     except ToolFailure as failure:
         card = {"status": "missing", "reason": failure.message}
+    cards = [
+        scorecard.get_scorecard(settings, store, key, c["version"]) for c in study["candidates"]
+    ]
     ids = run_ids or [r["run_id"] for r in study["ledger"] if r["state"] == "completed"]
     out: dict[str, Any] = (
         export_results(settings, ids, slug, folder, overwrite)
@@ -45,7 +49,10 @@ def export_study(
     tmp = path.with_name(f".{path.name}.tmp")
     try:
         tmp.write_text(
-            json.dumps({**record, "study": study, "scorecard": card}, indent=2), encoding="utf-8"
+            json.dumps(
+                {**record, "study": study, "scorecard": card, "scorecards": cards}, indent=2
+            ),
+            encoding="utf-8",
         )
         os.replace(tmp, path)
     finally:

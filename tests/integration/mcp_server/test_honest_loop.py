@@ -98,9 +98,14 @@ async def test_explore_freeze_test_once_score_and_iterate(ctx, tmp_path):
         "not_a_trial"
     )
 
-    frozen = candidates.freeze_candidate(store, "sma-aapl", run_id, "first look")
+    why = "a shallower drawdown than holding is the point of this sleeve"
+    frozen = candidates.freeze_candidate(
+        store, "sma-aapl", run_id, "first look", benchmark_rationale=why
+    )
     candidate = frozen["candidate"]
     assert candidate["version"] == 1 and candidate["params"]["fast_period"] == 5
+    assert candidate["benchmark_rationale"] == why
+    assert not any("benchmark_rationale" in w for w in frozen["warnings"])
     assert len(candidate["candidate_hash"]) == 64
     assert _code(prepare_in_sample, "sma-aapl", params=PARAMS, **IN_SAMPLE) == (
         "invalid_study_state"
@@ -112,6 +117,8 @@ async def test_explore_freeze_test_once_score_and_iterate(ctx, tmp_path):
     before = scorecard.get_scorecard(ctx.settings, store, "sma-aapl", None)
     assert before["gates"]["G2"]["status"] == "missing"
     assert before["evidence"]["in_sample_benchmark"] == benchmark_id
+    beats = before["gates"]["G1"]["checks"]["beats_benchmark_on_one"]
+    assert beats["status"] == "fail" or beats["value"]["rationale"] == why
 
     job, _ = candidates.prepare_out_of_sample("sma-aapl", None)
     oos_id = await _finish(ctx, reserve_trial(ctx.runner, job))
@@ -162,6 +169,9 @@ async def test_explore_freeze_test_once_score_and_iterate(ctx, tmp_path):
     record = json.loads(Path(out["files"]["study"]).read_text())
     assert record["study"]["slug"] == "sma-aapl"
     assert record["scorecard"]["status"] == "missing"  # version 2 has no candidate yet
+    # The scorecard the decision was made on is kept: one per frozen version.
+    assert [c["version"] for c in record["scorecards"]] == [1]
+    assert record["scorecards"][0]["gates"]["G2"]["checks"]["oos_run_once"]["status"] == "fail"
     assert out["runs"] >= 5 and Path(out["files"]["json"]).exists()
     old = scorecard.get_scorecard(ctx.settings, store, "sma-aapl", 1)
     assert old["warnings"][0].startswith("CONTAMINATED")
@@ -172,7 +182,8 @@ async def test_explore_freeze_test_once_score_and_iterate(ctx, tmp_path):
 async def test_a_new_version_before_the_holdout_is_seen_stays_clean(ctx):
     store = ctx.runner.store
     run_id = await _in_sample(ctx)
-    candidates.freeze_candidate(store, "sma-aapl", run_id, None)
+    frozen = candidates.freeze_candidate(store, "sma-aapl", run_id, None)
+    assert any("benchmark_rationale" in w for w in frozen["warnings"])
     study = candidates.new_candidate_version(store, "sma-aapl", "wider grid", "slow 30")["study"]
     assert not study["contaminated"] and study["current_version"] == 2
     assert _code(candidates.freeze_candidate, store, "sma-aapl", run_id, None) == "not_a_trial"

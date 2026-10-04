@@ -12,7 +12,7 @@ from src.db.repositories.backtest_repository_sync import SyncBacktestRepository
 from src.db.session_sync import get_sync_session
 from src.mcp_server.errors import ToolFailure
 from src.mcp_server.jsonable import to_jsonable
-from src.mcp_server.metrics import METRIC_SPECS
+from src.mcp_server.metrics import INSOLVENT_NOTE, METRIC_SPECS, insolvent
 
 
 def parse_run_ids(run_ids: list[str], *, minimum: int, maximum: int) -> list[str]:
@@ -67,6 +67,8 @@ def run_view(run: Any) -> dict[str, Any]:
             "Risk metrics are on the realised basis (run predates mark-to-market): drawdown, "
             "Sharpe, Sortino and volatility ignore moves inside open trades. Re-run to compare."
         )
+    if insolvent(_metric_values(run).get("max_drawdown")):
+        warnings.append(f"Not evidence: {INSOLVENT_NOTE}")
     snapshot = run.config_snapshot or {}
     metrics = {
         name: {"value": value, "unit": METRIC_SPECS[name].unit}

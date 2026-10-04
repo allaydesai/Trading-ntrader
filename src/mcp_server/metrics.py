@@ -8,6 +8,7 @@ stored negative, so "higher" (nearer zero) is better. ``direction`` is what
 """
 
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Literal
 
 Direction = Literal["higher", "lower"] | None
@@ -50,3 +51,16 @@ METRIC_SPECS: dict[str, MetricSpec] = {
     "min_winner": MetricSpec(_C, None),
     "min_loser": MetricSpec(_C, None),
 }
+
+
+#: Why a run whose equity reached zero is not evidence of anything.
+INSOLVENT_NOTE = (
+    "equity reached zero or below (max drawdown at or beyond -100%): the position size "
+    "exceeds the account, so this run's returns, drawdown and ratios are meaningless. "
+    "Check the resolved trade_size against the starting balance."
+)
+
+
+def insolvent(max_drawdown: float | Decimal | None) -> bool:
+    """True when a drawdown says the equity went to zero or below (drawdown is a fraction)."""
+    return max_drawdown is not None and float(max_drawdown) <= -1.0

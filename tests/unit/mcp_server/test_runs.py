@@ -163,3 +163,12 @@ def test_compare_warns_when_metric_bases_differ():
     a, b = _run(), _run(basis=None)
     view = compare_view([a, b], requested=[str(a.run_id), str(b.run_id)])
     assert any("different bases" in w for w in view["warnings"])
+
+
+@pytest.mark.parametrize(
+    "drawdown, flagged",
+    [(Decimal("-2.08"), True), (Decimal("-1"), True), (Decimal("-0.99"), False), (None, False)],
+)
+def test_a_run_whose_equity_reached_zero_is_flagged(drawdown, flagged):
+    warnings = run_view(_run(max_drawdown=drawdown))["warnings"]
+    assert any("equity reached zero" in w for w in warnings) is flagged

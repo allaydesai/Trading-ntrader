@@ -32,6 +32,7 @@ def _evidence(**overrides) -> Evidence:
         in_sample_benchmark=_run("bh", sharpe_ratio=0.6, calmar_ratio=0.2, max_drawdown=-0.5),
         sub_period_returns=[0.1, 0.05, -0.02, 0.2],
         trials_used=12,
+        benchmark_rationale="a shallower drawdown is the point of a mean-reversion sleeve",
     )
     return Evidence(**{**fields, **overrides})
 
@@ -132,3 +133,37 @@ def test_a_metric_the_run_lacks_is_missing():
     assert judge("G1", {"is_profit_factor": 1.3}, ev)["checks"]["is_profit_factor"]["status"] == (
         "missing"
     )
+
+
+def test_beating_the_benchmark_needs_the_rationale_recorded_at_freeze():
+    beats = judge("G1", G1, _evidence(benchmark_rationale=None))["checks"]["beats_benchmark_on_one"]
+    assert beats["status"] == "missing"
+    assert "benchmark_rationale" in beats["note"] and "sharpe_ratio" in beats["note"]
+    recorded = judge("G1", G1, _evidence())["checks"]["beats_benchmark_on_one"]
+    assert recorded["value"]["rationale"].startswith("a shallower drawdown")
+
+
+def test_beating_nothing_fails_whatever_the_rationale():
+    weak = _run(sharpe_ratio=0.1, calmar_ratio=0.1, max_drawdown=-0.9)
+    assert (
+        judge("G1", G1, _evidence(in_sample=weak))["checks"]["beats_benchmark_on_one"]["status"]
+        == "fail"
+    )
+
+
+G0 = {"min_trades": 30, "clean_tree": True, "benchmark_present": True}
+
+
+def test_g0_always_checks_that_the_equity_stayed_above_zero():
+    assert judge("G0", G0, _evidence())["checks"]["equity_stays_positive"]["status"] == "pass"
+    broke = _evidence(out_of_sample=_run("oos", max_drawdown=-2.08))
+    result = judge("G0", G0, broke)
+    row = result["checks"]["equity_stays_positive"]
+    assert result["status"] == "fail" and row["status"] == "fail"
+    assert row["value"] == {"is": -0.2, "oos": -2.08}
+    assert "position size" in row["note"]
+
+
+def test_solvency_without_a_drawdown_is_missing():
+    ev = _evidence(in_sample=_run(max_drawdown=None))
+    assert judge("G0", G0, ev)["checks"]["equity_stays_positive"]["status"] == "missing"

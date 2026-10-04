@@ -79,6 +79,41 @@ def _defaults(ref: StrategyRef) -> dict[str, Any]:
     return ref.param_model().model_dump()
 
 
+def _settings_map(ref: StrategyRef) -> dict[str, str]:
+    """Fields whose default a global setting supplies (strategies only; see ``_defaults``)."""
+    if ref.kind != "strategy" or ref.param_model is None:
+        return {}
+    mapping = getattr(ref.param_model, "_settings_map", {})
+    if not isinstance(mapping, dict):  # pydantic may wrap the private attribute
+        mapping = getattr(mapping, "default", {}) or {}
+    return dict(mapping)
+
+
+def default_sources(
+    ref: StrategyRef, explicit: frozenset[str] = frozenset()
+) -> tuple[dict[str, str], list[str]]:
+    """Where each default comes from, and a warning per setting that overrides the schema.
+
+    A mapped global setting always beats the parameter model's default (the CLI's
+    precedence), so the schema's ``default`` is not what a run gets for that field.
+    Fields named in ``explicit`` were given by the caller and are not warned about.
+    """
+    if ref.param_model is None:
+        return {}, []
+    mapping, resolved = _settings_map(ref), _defaults(ref)
+    sources: dict[str, str] = {}
+    warnings: list[str] = []
+    for name, field in ref.param_model.model_fields.items():
+        setting = mapping.get(name)
+        sources[name] = f"setting {setting.upper()}" if setting else "model"
+        if setting and name not in explicit and resolved.get(name) != field.default:
+            warnings.append(
+                f"{name} resolves to {resolved.get(name)} from the {setting.upper()} setting "
+                f"(.env), not the schema default {field.default}. Pass it in params to be explicit."
+            )
+    return sources, warnings
+
+
 def resolve_params(ref: StrategyRef, overrides: dict[str, Any]) -> dict[str, Any]:
     """Validate ``overrides`` against the parameter model and return the full parameter set.
 
@@ -120,6 +155,7 @@ def describe_strategy(name: str) -> dict[str, Any]:
     """Parameter schema, resolved defaults and a minimal submit_backtest request."""
     ref = resolve_strategy(name)
     schema = ref.param_model.model_json_schema() if ref.param_model else {"properties": {}}
+    sources, warnings = default_sources(ref)
     return {
         "name": ref.name,
         "kind": ref.kind,
@@ -127,6 +163,7 @@ def describe_strategy(name: str) -> dict[str, Any]:
         "aliases": list(ref.aliases),
         "param_schema": schema,
         "defaults": to_jsonable(_defaults(ref)),
+        "default_sources": sources,
         "example_request": {
             "strategy": ref.name,
             "symbol": "QQQ",
@@ -136,4 +173,5 @@ def describe_strategy(name: str) -> dict[str, Any]:
             "catalog": "firstrate-etf",
             "params": {},
         },
+        "warnings": warnings,
     }

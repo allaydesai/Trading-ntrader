@@ -28,6 +28,7 @@ def candidate_view(candidate: ResearchCandidate) -> dict[str, Any]:
             "git_dirty": candidate.git_dirty,
             "strategies_commit": candidate.strategies_commit,
             "candidate_hash": candidate.candidate_hash,
+            "benchmark_rationale": candidate.benchmark_rationale,
             "frozen_at": candidate.frozen_at,
         }
     )

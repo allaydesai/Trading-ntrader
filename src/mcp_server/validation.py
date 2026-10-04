@@ -6,6 +6,7 @@ from typing import Any
 from src.mcp_server.catalogs import SUPPORTED_TIMEFRAMES, catalog_availability
 from src.mcp_server.errors import ToolFailure
 from src.mcp_server.request import BacktestSpec, ResolvedRequest, resolve
+from src.mcp_server.strategies import default_sources, resolve_strategy
 
 
 def _day(iso: str | None) -> date | None:
@@ -73,16 +74,20 @@ def validate(spec: BacktestSpec, *, default_catalog: str) -> dict[str, Any]:
     """Resolve the request and check its data, reporting every problem found."""
     errors: list[ToolFailure] = []
     resolved: ResolvedRequest | None = None
+    warnings: list[str] = []
     try:
         resolved = resolve(spec, default_catalog=default_catalog)
     except ToolFailure as failure:
         errors.append(failure)
+    else:
+        given = frozenset(k for k, v in spec.params.items() if v is not None)
+        warnings += default_sources(resolve_strategy(spec.strategy), given)[1]
     coverage: dict[str, Any] | None = None
-    warnings: list[str] = []
     catalog = spec.catalog or default_catalog
     if catalog:
-        coverage, data_errors, warnings = _coverage(spec, catalog)
+        coverage, data_errors, data_warnings = _coverage(spec, catalog)
         errors += data_errors
+        warnings += data_warnings
     return {
         "ok": not errors,
         "resolved": resolved.summary() if resolved else None,

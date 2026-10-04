@@ -145,14 +145,25 @@ def _register_decisions(
         )
 
     @server.tool()
-    async def freeze_candidate(study: str, run_id: str, note: str | None = None) -> dict[str, Any]:
+    async def freeze_candidate(
+        study: str, run_id: str, note: str | None = None, benchmark_rationale: str | None = None
+    ) -> dict[str, Any]:
         """Freeze the current version's candidate from one of its completed in-sample runs.
 
         Records its parameters, code commit and candidate hash; it never changes
         afterwards. Exploration of this version ends: run_out_of_sample tests it
-        once, new_candidate_version reopens exploration.
+        once, new_candidate_version reopens exploration. ``benchmark_rationale``
+        says why beating buy-and-hold on the metric(s) it beats is worth it; G1's
+        beats_benchmark_on_one stays missing, never pass, without one.
         """
-        return await call(candidates.freeze_candidate, store(), study, run_id, note)
+        return await call(
+            candidates.freeze_candidate,
+            store(),
+            study,
+            run_id,
+            note,
+            benchmark_rationale=benchmark_rationale,
+        )
 
     @server.tool()
     async def new_candidate_version(study: str, reason: str, change: str) -> dict[str, Any]:

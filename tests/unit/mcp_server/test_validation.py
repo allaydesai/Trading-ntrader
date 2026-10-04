@@ -128,3 +128,17 @@ def test_unknown_start_does_not_crash(availability):
         _spec(start=date(2027, 1, 1), end=date(2027, 2, 1)), default_catalog=""
     )
     assert late["errors"][0]["code"] == "window_outside_coverage"
+
+
+def test_a_default_a_setting_overrides_is_flagged_unless_given_explicitly(
+    availability, monkeypatch
+):
+    from src.config import Settings
+
+    monkeypatch.setattr(
+        "src.mcp_server.strategies.get_settings", lambda: Settings(fast_ema_period=7)
+    )
+    implicit = validation.validate(_spec(), default_catalog="")
+    assert any("FAST_EMA_PERIOD" in w for w in implicit["warnings"])
+    explicit = validation.validate(_spec(params={"fast_period": 7}), default_catalog="")
+    assert not any("FAST_EMA_PERIOD" in w for w in explicit["warnings"])
