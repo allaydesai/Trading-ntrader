@@ -12,6 +12,8 @@ from sqlalchemy import delete
 from src.config import CatalogSettings
 from src.db.models.backtest import BacktestRun
 from src.db.models.research import ResearchStudy
+from src.db.models.trade import Trade
+from src.db.models.trading_session import TradingSession
 from src.db.session_sync import get_sync_session
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -102,6 +104,24 @@ def created_studies():
         with get_sync_session() as session:
             for study in session.query(ResearchStudy).filter(ResearchStudy.slug.in_(slugs)):
                 session.delete(study)
+
+
+@pytest.fixture
+def created_sessions():
+    """Paper session names a test inserted; deleted with their trades afterwards.
+
+    Request it after ``created_runs``: fixtures tear down in reverse, and a session
+    must go before the run its compare-to key points at.
+    """
+    names: list[str] = []
+    yield names
+    if names:
+        with get_sync_session() as session:
+            rows = session.query(TradingSession).filter(TradingSession.name.in_(names)).all()
+            ids = [row.id for row in rows]
+            session.execute(delete(Trade).where(Trade.session_id.in_(ids)))
+            for row in rows:
+                session.delete(row)
 
 
 async def call(client: Client, name: str, args: dict | None = None) -> dict:
