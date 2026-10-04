@@ -151,12 +151,12 @@ class ResultsExtractor:
         total_pnl = _safe_float(stats_pnls.get("PnL (total)"))
         total_pnl_percentage = _safe_float(stats_pnls.get("PnL% (total)"))
         expectancy = _safe_float(stats_pnls.get("Expectancy"))
-        avg_win = _safe_float(stats_pnls.get("Avg Winner"))
-        avg_loss = _safe_float(stats_pnls.get("Avg Loser"))
-        max_winner = _safe_float(stats_pnls.get("Max Winner"))
-        max_loser = _safe_float(stats_pnls.get("Max Loser"))
-        min_winner = _safe_float(stats_pnls.get("Min Winner"))
-        min_loser = _safe_float(stats_pnls.get("Min Loser"))
+        avg_win = _side_stat(stats_pnls, "Avg Winner", traded=largest_win > 0)
+        avg_loss = _side_stat(stats_pnls, "Avg Loser", traded=largest_loss < 0)
+        max_winner = _side_stat(stats_pnls, "Max Winner", traded=largest_win > 0)
+        max_loser = _side_stat(stats_pnls, "Max Loser", traded=largest_loss < 0)
+        min_winner = _side_stat(stats_pnls, "Min Winner", traded=largest_win > 0)
+        min_loser = _side_stat(stats_pnls, "Min Loser", traded=largest_loss < 0)
 
         # Calculate custom metrics
         cagr = None
@@ -402,6 +402,15 @@ def _curve_points(equity: pd.Series) -> list[dict[str, int | float]]:
             continue
         points.append({"time": time_unix, "value": round(float(value), 2)})
     return points
+
+
+def _side_stat(stats: dict[str, Any], name: str, *, traded: bool) -> float | None:
+    """A winners-only or losers-only statistic; None when that side never traded.
+
+    Nautilus reports 0.0 for e.g. "Avg Loser" when there were no losers, which
+    reads as a real average and wins any "smallest loss" comparison by default.
+    """
+    return _safe_float(stats.get(name)) if traded else None
 
 
 def _safe_float(value) -> float | None:

@@ -85,6 +85,10 @@ async def test_buys_once_and_ends_flat(synthetic_catalog):  # noqa: F811
     first_close = float(bars[0].close)
     assert float(position.peak_qty) == floor(float(BALANCE) / first_close)
     assert result.total_trades == 1
+    # One winning trade and no losers: the loss statistics are absent, not zero.
+    assert result.avg_loss is None
+    assert result.max_loser is None
+    assert result.min_loser is None
 
 
 @pytest.mark.asyncio

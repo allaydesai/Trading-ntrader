@@ -11,6 +11,7 @@ from src.core.results_extractor import (
     _calculate_calmar_ratio,
     _calculate_max_drawdown,
     _safe_float,
+    _side_stat,
 )
 
 
@@ -49,6 +50,20 @@ class TestSafeFloat:
     def test_safe_float_with_invalid_string(self):
         """Test safe_float with invalid string."""
         assert _safe_float("not_a_number") is None
+
+
+class TestSideStat:
+    """A winners-only or losers-only statistic means nothing when that side never traded."""
+
+    def test_no_trades_on_that_side_is_none_not_zero(self):
+        """Nautilus reports 0.0 for 'Avg Loser' with no losers: that reads as a real average."""
+        assert _side_stat({"Avg Loser": 0.0}, "Avg Loser", traded=False) is None
+
+    def test_a_side_that_traded_keeps_its_value(self):
+        assert _side_stat({"Avg Loser": -850.25}, "Avg Loser", traded=True) == -850.25
+
+    def test_a_missing_statistic_is_none(self):
+        assert _side_stat({}, "Avg Loser", traded=True) is None
 
 
 class TestCalculateCagr:
