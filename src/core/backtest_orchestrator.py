@@ -119,6 +119,7 @@ class BacktestOrchestrator:
         bars: list[Bar],
         instrument: Instrument,
         provenance: RunProvenance | None = None,
+        reproduced_from_run_id: UUID | None = None,
     ) -> tuple[BacktestResult, UUID | None]:
         """
         Execute backtest with optional persistence.
@@ -129,6 +130,8 @@ class BacktestOrchestrator:
             instrument: Instrument object for the backtest
             provenance: Git state and config hash to record; computed from the
                 working tree and ``request`` when omitted
+            reproduced_from_run_id: The run this one reproduces, recorded on the
+                persisted run (MCP ``reproduce_run``)
 
         Returns:
             Tuple of (BacktestResult, run_id if persisted else None)
@@ -179,6 +182,7 @@ class BacktestOrchestrator:
                     result=result,
                     execution_duration=execution_duration,
                     provenance=provenance,
+                    reproduced_from_run_id=reproduced_from_run_id,
                 )
                 logger.info(
                     "Backtest completed and persisted",
@@ -525,6 +529,7 @@ class BacktestOrchestrator:
         result: BacktestResult,
         execution_duration: Decimal,
         provenance: RunProvenance | None = None,
+        reproduced_from_run_id: UUID | None = None,
     ) -> None:
         """Persist successful backtest results to database."""
         try:
@@ -543,6 +548,7 @@ class BacktestOrchestrator:
                     **fields,
                     execution_duration_seconds=execution_duration,
                     backtest_result=result,
+                    reproduced_from_run_id=reproduced_from_run_id,
                     provenance=provenance,
                 )
                 await store_equity_curve(session, backtest_run.id, equity_curve)

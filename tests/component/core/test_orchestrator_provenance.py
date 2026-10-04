@@ -119,3 +119,43 @@ async def test_the_equity_curve_is_stored_beside_the_run_not_in_the_snapshot(ser
         )
     assert "equity_curve" not in service.save_backtest_results.call_args.kwargs["config_snapshot"]
     assert store.call_args.args[1:] == (1, points)
+
+
+async def test_a_reproduction_records_the_run_it_reproduces(service):
+    """MCP reproduce_run (S2.3): the new run points back at the original."""
+    original = uuid4()
+    orchestrator = BacktestOrchestrator()
+    with patch.object(orchestrator, "_extract_equity_curve", return_value=None):
+        await orchestrator._persist_results(
+            run_id=uuid4(),
+            request=_request(),
+            result=MagicMock(),
+            execution_duration=Decimal("1"),
+            provenance=PROVENANCE,
+            reproduced_from_run_id=original,
+        )
+    assert service.save_backtest_results.call_args.kwargs["reproduced_from_run_id"] == original
+
+
+async def test_execute_passes_the_reproduced_run_through(service):
+    original = uuid4()
+    orchestrator = BacktestOrchestrator()
+
+    def setup(*_args):
+        orchestrator.engine = MagicMock()
+
+    with (
+        patch.object(orchestrator, "_setup_engine", side_effect=setup),
+        patch.object(orchestrator, "_create_strategy", return_value=MagicMock()),
+        patch.object(orchestrator, "_make_extractor", return_value=MagicMock()),
+        patch.object(orchestrator, "_extract_results", return_value=MagicMock()),
+        patch.object(orchestrator, "_persist_results", new_callable=AsyncMock) as persist,
+    ):
+        await orchestrator.execute(
+            _request(),
+            bars=[MagicMock()],
+            instrument=MagicMock(),
+            provenance=PROVENANCE,
+            reproduced_from_run_id=original,
+        )
+    assert persist.call_args.kwargs["reproduced_from_run_id"] == original

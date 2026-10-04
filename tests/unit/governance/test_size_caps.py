@@ -122,7 +122,9 @@ SIZE_BASELINE: dict[str, int] = {
     "src/core/analytics.py::PortfolioAnalytics.calculate_performance_attribution": 55,
     # MCP phase 1, 325 -> 282: persistence record fields extracted to `_run_record_fields`
     # (and `_persist_results` dropped under its cap) while adding run provenance.
-    "src/core/backtest_orchestrator.py::BacktestOrchestrator": 275,
+    # MCP phase 2, 275 -> 277: `reproduced_from_run_id` threaded through `execute`
+    # and `_persist_results` so `reproduce_run` uses the orchestrator, not the legacy runner.
+    "src/core/backtest_orchestrator.py::BacktestOrchestrator": 277,
     "src/core/backtest_runner.py::MinimalBacktestRunner": 902,
     "src/core/backtest_runner.py::MinimalBacktestRunner._extract_results": 111,
     "src/core/backtest_runner.py::MinimalBacktestRunner._persist_backtest_results": 100,

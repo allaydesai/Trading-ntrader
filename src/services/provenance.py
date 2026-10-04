@@ -37,26 +37,42 @@ def _canonical(value: Any) -> Any:
     return value
 
 
+def _identity(request: BacktestRequest) -> dict[str, Any]:
+    return {
+        "strategy_path": request.strategy_path,
+        "strategy_config": request.strategy_config,
+        "symbol": request.symbol,
+        "instrument_id": request.instrument_id,
+        "bar_type": request.bar_type,
+        "starting_balance": request.starting_balance,
+        "data_source": request.to_persistence_data_source(),
+        "fill_seed": request.fill_seed,
+    }
+
+
+def _digest(payload: dict[str, Any]) -> str:
+    encoded = json.dumps(_canonical(payload), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode()).hexdigest()
+
+
 def compute_config_hash(request: BacktestRequest) -> str:
     """Return the sha256 hex digest of the fields that define a run's result.
 
     Execution options (``persist``, ``config_file_path``) are excluded: they do
     not change what the engine computes.
     """
-    payload = {
-        "strategy_path": request.strategy_path,
-        "strategy_config": request.strategy_config,
-        "symbol": request.symbol,
-        "instrument_id": request.instrument_id,
-        "bar_type": request.bar_type,
-        "start_date": request.start_date,
-        "end_date": request.end_date,
-        "starting_balance": request.starting_balance,
-        "data_source": request.to_persistence_data_source(),
-        "fill_seed": request.fill_seed,
-    }
-    encoded = json.dumps(_canonical(payload), sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(encoded.encode()).hexdigest()
+    return _digest(
+        {**_identity(request), "start_date": request.start_date, "end_date": request.end_date}
+    )
+
+
+def compute_candidate_hash(request: BacktestRequest) -> str:
+    """The digest of what a frozen research candidate is: the config hash without the window.
+
+    The same candidate run in-sample and out-of-sample has one candidate hash and
+    two config hashes. A ``kind`` marker keeps it from ever equalling a config hash.
+    """
+    return _digest({**_identity(request), "kind": "candidate"})
 
 
 def git_output(cwd: Path, *args: str) -> str | None:

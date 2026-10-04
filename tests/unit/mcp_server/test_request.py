@@ -88,3 +88,16 @@ def test_summary_is_json_ready():
     assert summary["start"] == "2000-01-01"
     assert summary["end"] == "2015-12-31"
     assert isinstance(summary["starting_balance"], float)
+
+
+def test_a_stored_fill_seed_is_used_and_changes_the_hash():
+    """reproduce_run re-runs a stored config with its own seed (S2.3)."""
+    seeded = resolve(_spec(fill_seed=7), default_catalog="")
+    assert seeded.request.fill_seed == 7
+    assert seeded.config_hash != resolve(_spec(), default_catalog="").config_hash
+
+
+def test_no_fill_seed_keeps_phase_1_hashes():
+    unseeded = resolve(_spec(fill_seed=None), default_catalog="")
+    explicit = resolve(_spec(fill_seed=DEFAULT_FILL_SEED), default_catalog="")
+    assert unseeded.config_hash == explicit.config_hash

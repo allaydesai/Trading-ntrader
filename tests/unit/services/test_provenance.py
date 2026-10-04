@@ -9,7 +9,12 @@ import pytest
 
 from src.models.backtest_request import BacktestRequest
 from src.models.run_provenance import RunProvenance
-from src.services.provenance import compute_config_hash, git_provenance, run_provenance
+from src.services.provenance import (
+    compute_candidate_hash,
+    compute_config_hash,
+    git_provenance,
+    run_provenance,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -111,3 +116,32 @@ def test_run_provenance_combines_git_and_hash(tmp_path):
     assert isinstance(prov, RunProvenance)
     assert prov.config_hash == compute_config_hash(_request())
     assert prov.git_commit is None
+
+
+class TestComputeCandidateHash:
+    """A frozen candidate's identity: everything in the config hash except the window."""
+
+    def test_same_candidate_on_another_window_has_the_same_hash(self):
+        oos = _request(
+            start_date=datetime(2016, 1, 1, tzinfo=timezone.utc),
+            end_date=datetime(2025, 12, 31, tzinfo=timezone.utc),
+        )
+        assert compute_candidate_hash(oos) == compute_candidate_hash(_request())
+        assert compute_config_hash(oos) != compute_config_hash(_request())
+
+    @pytest.mark.parametrize(
+        "change",
+        [
+            {"strategy_config": {"fast_period": 11, "slow_period": 20}},
+            {"symbol": "SPY", "instrument_id": "SPY.NAMED_CATALOG"},
+            {"bar_type": "1-HOUR-LAST"},
+            {"fill_seed": 7},
+            {"starting_balance": Decimal("50000")},
+            {"catalog_name": "firstrate-stocks"},
+        ],
+    )
+    def test_anything_that_changes_the_strategy_changes_the_hash(self, change):
+        assert compute_candidate_hash(_request(**change)) != compute_candidate_hash(_request())
+
+    def test_differs_from_the_config_hash(self):
+        assert compute_candidate_hash(_request()) != compute_config_hash(_request())

@@ -18,7 +18,7 @@ from src.mcp_server.catalogs import timeframe_spec
 from src.mcp_server.errors import ToolFailure
 from src.mcp_server.jsonable import to_jsonable
 from src.mcp_server.strategies import resolve_params, resolve_strategy
-from src.models.backtest_request import BacktestRequest
+from src.models.backtest_request import DEFAULT_FILL_SEED, BacktestRequest
 from src.services.provenance import compute_config_hash
 
 
@@ -35,6 +35,9 @@ class BacktestSpec(BaseModel):
     catalog: str | None = Field(default=None, description="Named catalog; server default if unset")
     params: dict[str, Any] = Field(default_factory=dict, description="Strategy parameters")
     starting_balance: Decimal = Field(default=Decimal("1000000"), gt=0)
+    fill_seed: int | None = Field(
+        default=None, ge=0, description="Fill-model seed; NTrader's default when unset"
+    )
 
 
 @dataclass(frozen=True)
@@ -109,6 +112,7 @@ def resolve(spec: BacktestSpec, *, default_catalog: str) -> ResolvedRequest:
             starting_balance=spec.starting_balance,
             data_source="catalog",
             catalog_name=catalog,
+            fill_seed=DEFAULT_FILL_SEED if spec.fill_seed is None else spec.fill_seed,
         )
     except ValidationError as exc:
         raise ToolFailure(
