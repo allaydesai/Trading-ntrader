@@ -7,13 +7,16 @@ nor its orders:
 - **signals** (missed or extra): the trade count outside its band, bars that
   stopped arriving, a session marked running whose heartbeat stopped, a
   strategy the node contained after it raised;
-- **execution** (fills and costs): order rejections, a lost broker
-  connection, commission per trade well above the backtest's;
+- **execution** (costs and refusals): order rejections, commission per trade
+  well above the backtest's, and a lost broker connection once NTrader records
+  one (``connection_lost_at`` has a reader here and no writer yet);
 - **config**: the session's stored spec differs from the frozen candidate;
 - **strategy or regime**: win rate, average trade or drawdown outside the band
   while nothing above explains it.
 
-Slippage cannot be measured: trades store only average fill prices.
+Slippage and fill quality cannot be measured: trades store only average fill
+prices. A result *above* the band is still flagged here (too good can be a
+config error); only the scorecard's G4 treats it as not a failure.
 """
 
 import re
@@ -25,8 +28,9 @@ from src.models.session import DEFAULT_HEARTBEAT_INTERVAL_SECONDS
 
 #: Below this many closed trades, win rate and average trade say nothing yet.
 MIN_TRADES_TO_JUDGE = 5
-#: Bars may pause this long (a long weekend) before a running session is stale.
-STALE_FLOOR = timedelta(days=4)
+#: Bars may pause this long before a running session is stale: a holiday weekend
+#: is four days from one daily bar to the next, plus the wait for that bar.
+STALE_FLOOR = timedelta(days=5)
 STALE_BARS = 3
 DEAD_HEARTBEATS = 3
 #: Paper commission per notional must exceed the backtest's by this factor, and one bp.
@@ -70,6 +74,7 @@ def position(value: float | None, band: dict[str, float] | None) -> str:
     """``below``, ``inside`` or ``above`` the 5th-95th percentile range, or ``n/a``."""
     if value is None or band is None:
         return "n/a"
+    value = round(value, 6)  # the band's own precision: a value on an edge is inside
     if value < band["p5"]:
         return "below"
     return "above" if value > band["p95"] else "inside"

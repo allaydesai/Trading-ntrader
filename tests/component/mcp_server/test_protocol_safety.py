@@ -1,6 +1,7 @@
 """Pinned tool set and a clean protocol stream (spec: phase exit check safety tests)."""
 
 import os
+from pathlib import Path
 
 import pytest
 from mcp import Client
@@ -70,9 +71,20 @@ def test_no_tool_can_trade_or_manage_sessions():
     exactly the two read tools may name one, and nothing else may.
     """
     words = ("order", "reconcile", "import", "fetch", "live", "flatten", "start", "stop")
+    words += ("seal", "resume", "launch", "restart", "kill")
     assert [t for t in REGISTERED_TOOLS if any(w in t for w in words)] == []
     assert {t for t in REGISTERED_TOOLS if "session" in t} == READ_ONLY_SESSION_TOOLS
-    assert all(t.startswith(("list_", "get_")) for t in READ_ONLY_SESSION_TOOLS)
+    # The only other tool that names paper trading returns text and runs nothing.
+    assert {t for t in REGISTERED_TOOLS if "paper" in t} == {"paper_commands"}
+
+
+def test_the_paper_package_cannot_run_a_command():
+    """paper_commands returns text: nothing in the package can execute it."""
+    paper = Path(__file__).resolve().parents[3] / "src" / "mcp_server" / "paper"
+    runners = ("subprocess", "os.system", "os.exec", "os.popen", "pty.", "asyncio.create_sub")
+    for path in sorted(paper.glob("*.py")) + [paper.parent / "tools" / "paper.py"]:
+        source = path.read_text(encoding="utf-8")
+        assert [r for r in runners if r in source] == [], path.name
 
 
 def test_stdout_carries_only_protocol_messages(tmp_path):

@@ -138,6 +138,8 @@ async def test_commands_link_the_session_to_the_out_of_sample_run(ctx, tested):
     assert out["bar_type"] == "AAPL.NASDAQ-1-DAY-LAST-EXTERNAL"
     create = next(c["command"] for c in out["commands"] if c["step"] == "create")
     assert create.endswith(f"--compare-to {tested}")
+    steps = out["script"].split(" &&\n")  # a failed check stops the script
+    assert [s.split()[0] for s in steps] == ["cd", "uv", "uv", "uv"] and " check " in steps[1]
     for key in out["params"]:
         assert f"--param {key}=" in create
     assert out["expectation_band"]["source_run"] == tested
@@ -281,6 +283,7 @@ async def test_a_weeks_argument_counts_only_the_trades_of_that_stretch(ctx, test
     assert longer["horizon"]["band_days"] == 21  # never past the time it has run
     assert "trades_in_window" not in longer["paper"]
     assert _code(get_session, ctx.settings, "sma-aapl-v1-paper", weeks=10**6) == "invalid_request"
+    assert _code(list_sessions, limit=0) == "invalid_request"
 
 
 async def test_a_thin_band_leaves_the_results_unjudged_not_failed(ctx, tested):
@@ -294,6 +297,13 @@ async def test_a_thin_band_leaves_the_results_unjudged_not_failed(ctx, tested):
     assert "trade windows" in facts.unjudgeable
     row = judge("G4", g4, Evidence(paper=facts))["checks"]["paper_inside_band"]
     assert row["status"] == "missing" and "trade windows" in row["note"]
+
+
+async def test_a_session_whose_name_reads_as_an_id_is_found_by_name(ctx, tested):
+    name = "0123456789abcdef0123456789abcdef"
+    _seed_session(ctx, compare_to=tested, name=name)
+    assert get_session(ctx.settings, name, now=NOW)["session"]["name"] == name
+    assert get_session(ctx.settings, f"  {name} ", now=NOW)["session"]["name"] == name
 
 
 @pytest.mark.parametrize("bad", ["min_weeks:", "min_weeks: eight"])

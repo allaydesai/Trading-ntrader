@@ -54,8 +54,19 @@ def spec_differences(
     if entry.get("strategy_id") != strategy:
         found.append(f"strategy: session {entry.get('strategy_id')!r}, frozen {strategy!r}")
     found += _param_differences(entry.get("parameters"), params, normalise)
-    expected = f"-{timeframe.removesuffix('-LAST')}-"
-    for bar_type in entry.get("bar_types") or []:
-        if not (str(bar_type).startswith(f"{symbol}.") and expected in str(bar_type)):
-            found.append(f"bar type {bar_type!r} is not {symbol} {timeframe}")
-    return found
+    return found + _bar_type_differences(entry.get("bar_types"), symbol, timeframe)
+
+
+def _bar_type_differences(bar_types: Any, symbol: str, timeframe: str) -> list[str]:
+    """The session must trade the candidate's symbol on the broker's own last-price bars.
+
+    The venue is not compared: the candidate records a symbol, not an instrument id.
+    """
+    ending = f"-{timeframe.removesuffix('-LAST')}-LAST-EXTERNAL"
+    if not isinstance(bar_types, list) or not bar_types:
+        return [f"bar type: the session has none; frozen {symbol} {ending.strip('-')}"]
+    return [
+        f"bar type {bar_type!r} is not {symbol} {ending.strip('-')}"
+        for bar_type in bar_types
+        if not (str(bar_type).startswith(f"{symbol}.") and str(bar_type).endswith(ending))
+    ]

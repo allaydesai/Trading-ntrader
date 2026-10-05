@@ -9,6 +9,7 @@ import pytest
 from src.mcp_server.errors import ToolFailure
 from src.mcp_server.paper import report
 from src.mcp_server.paper.band import ClosedTrade
+from src.mcp_server.paper.handoff import _standing_warnings
 from src.mcp_server.paper.report import _paper_stats, check_horizon, g4_progress, horizon
 
 pytestmark = pytest.mark.unit
@@ -104,6 +105,14 @@ def test_paper_rates_are_those_of_the_newest_judged_trades_and_the_count_is_all(
     assert (capped["trades"], capped["judged_trades"], capped["win_rate"]) == (10, 4, 1.0)
     whole = _paper_stats(trades, 10)
     assert (whole["judged_trades"], whole["win_rate"]) == (10, 0.4)
+
+
+def test_a_closed_study_or_an_old_version_is_a_warning():
+    study = SimpleNamespace(status="rejected", status_reason="curve fit", current_version=2)
+    found = _standing_warnings(study, SimpleNamespace(version=1))
+    assert "rejected: curve fit" in found[0] and "not the study's current version" in found[1]
+    live = SimpleNamespace(status="tested", status_reason=None, current_version=1)
+    assert _standing_warnings(live, SimpleNamespace(version=1)) == []
 
 
 def _reading_trades(monkeypatch, *, run: int, paper: int):

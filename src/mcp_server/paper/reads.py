@@ -86,11 +86,15 @@ def trade_rows(session: Session, session_pk: int, limit: int | None = None) -> l
 
 def resolve_session(session: Session, key: str) -> TradingSession:
     """The session named by name or session id, or a failure saying where to find one."""
+    key = key.strip()
+    row = None
     try:
-        stmt = select(TradingSession).where(TradingSession.session_id == UUID(key.strip()))
+        by_id = select(TradingSession).where(TradingSession.session_id == UUID(key))
+        row = session.scalars(by_id).first()
     except ValueError:
-        stmt = select(TradingSession).where(TradingSession.name == key)
-    row = session.scalars(stmt).first()
+        pass
+    if row is None:  # a name may itself read as a UUID
+        row = session.scalars(select(TradingSession).where(TradingSession.name == key)).first()
     if row is None:
         raise ToolFailure("unknown_session", f"No paper session {key!r}.", fix="list_sessions.")
     return row
@@ -109,12 +113,13 @@ def session_names(session: Session) -> set[str]:
 
 
 def closed_counts(session: Session, pks: list[int]) -> dict[int, int]:
-    """Closed trades per session primary key."""
+    """Closed trades per session primary key, counted as ``closed_trades`` reads them."""
     if not pks:
         return {}
+    closed = (Trade.exit_timestamp.is_not(None), Trade.profit_loss.is_not(None))
     stmt = (
         select(Trade.session_id, func.count())
-        .where(Trade.session_id.in_(pks), Trade.exit_timestamp.is_not(None))
+        .where(Trade.session_id.in_(pks), *closed)
         .group_by(Trade.session_id)
     )
     return {pk: count for pk, count in session.execute(stmt).all()}
@@ -125,7 +130,8 @@ def sessions_linked_to(session: Session, run_ids: list[UUID]) -> list[TradingSes
     if not run_ids:
         return []
     stmt = select(TradingSession).where(TradingSession.linked_backtest_run_id.in_(run_ids))
-    return list(session.scalars(stmt.order_by(TradingSession.created_at.desc())))
+    newest_first = (TradingSession.created_at.desc(), TradingSession.id.desc())
+    return list(session.scalars(stmt.order_by(*newest_first)))
 
 
 @dataclass(frozen=True)

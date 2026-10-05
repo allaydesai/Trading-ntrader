@@ -122,7 +122,7 @@ def test_two_kinds_of_problem_are_mixed():
 
 
 def test_a_running_session_with_old_bars_or_heartbeat_is_flagged():
-    stale = health_flags(_health(last_bar_at=NOW - timedelta(days=5)), NOW)
+    stale = health_flags(_health(last_bar_at=NOW - timedelta(days=6)), NOW)
     assert _kinds(stale) == {"stale_bars"}
     assert stale[0]["cause"] == "signals"
     dead = health_flags(_health(last_heartbeat_at=NOW - timedelta(minutes=10)), NOW)
@@ -155,3 +155,16 @@ def test_commission_is_flagged_only_when_well_above_the_backtest():
     assert commission_flag(0.0003, 0.0002) is None
     assert commission_flag(0.00005, 0.00001) is None  # under one basis point
     assert commission_flag(None, 0.0002) is None
+
+
+def test_a_holiday_weekend_without_a_daily_bar_is_not_stale():
+    # Friday's bar, Monday a holiday, read late on Tuesday before the bar lands.
+    quiet = _health(last_bar_at=NOW - timedelta(days=4, hours=6))
+    assert health_flags(quiet, NOW) == []
+
+
+def test_a_value_on_the_rounded_band_edge_is_inside():
+    third = {"p5": round(1 / 3, 6), "p50": round(1 / 3, 6), "p95": round(1 / 3, 6)}
+    assert position(1 / 3, third) == "inside"
+    two_thirds = {"p5": round(2 / 3, 6), "p50": round(2 / 3, 6), "p95": round(2 / 3, 6)}
+    assert position(2 / 3, two_thirds) == "inside"

@@ -1,9 +1,9 @@
 """The text of the commands that start a paper session for a frozen candidate (S7.1).
 
-Pure. The server never runs them: Allay does, in a terminal. Every parameter of
-the frozen candidate is passed explicitly, so neither a strategy default nor a
-setting in ``.env`` (``TRADE_SIZE``) can change what is traded. Every argument
-is shell-quoted.
+Pure. The server never runs them: Allay does, in a terminal. Every parameter the
+frozen candidate sets is passed explicitly, so neither a strategy default nor a
+setting in ``.env`` (``TRADE_SIZE``) can change it; a parameter frozen as None
+cannot be passed and is left out with a warning. Every argument is shell-quoted.
 """
 
 import shlex
@@ -40,10 +40,11 @@ def live_bar_type(instrument_id: str, bar_spec: str) -> str:
 
 def check_name(name: str, *, taken: set[str]) -> str:
     """The session name, refused when ``live create`` would refuse it."""
-    if not name.strip() or len(name) > MAX_NAME:
+    if not name.strip() or len(name) > MAX_NAME or name.startswith("-"):
         raise ToolFailure(
             "invalid_session_name",
-            f"Session name {name!r} is blank or longer than {MAX_NAME} characters.",
+            f"Session name {name!r} is blank, longer than {MAX_NAME} characters, or starts "
+            "with '-' (live start would read it as an option).",
             fix="Pass another name, or none for the default.",
         )
     if name in taken:
@@ -62,6 +63,12 @@ def default_name(slug: str, version: int, *, taken: set[str]) -> str:
     while name in taken:
         n += 1
         name = f"{base}-{n}"
+    if len(name) > MAX_NAME:
+        raise ToolFailure(
+            "invalid_session_name",
+            f"The default name {name!r} is longer than {MAX_NAME} characters.",
+            fix="Pass a shorter name.",
+        )
     return name
 
 

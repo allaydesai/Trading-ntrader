@@ -57,3 +57,18 @@ def test_params_the_model_refuses_are_a_difference():
 
     found = spec_differences(_spec(), normalise=refuse, **FROZEN)
     assert any("not a number" in f for f in found)
+
+
+@pytest.mark.parametrize(
+    "bar_types",
+    [
+        [],
+        None,
+        ["QQQ.NASDAQ-1-DAY-BID-EXTERNAL"],
+        ["QQQ.NASDAQ-1-DAY-LAST-INTERNAL"],
+        ["QQQ.NASDAQ-1-DAY-LAST-EXTERNAL", "SPY.ARCA-1-DAY-LAST-EXTERNAL"],
+    ],
+)
+def test_bar_types_that_are_not_the_candidates_broker_bars_are_a_difference(bar_types):
+    found = spec_differences(_spec(bar_types=bar_types), normalise=_numeric, **FROZEN)
+    assert any("bar type" in f for f in found)

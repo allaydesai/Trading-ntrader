@@ -4,7 +4,10 @@ Refused until the candidate has a completed out-of-sample run, because that run
 is what the session is compared against (``--compare-to``) and where its band
 comes from. Everything else that should give Allay pause is a warning: failing
 or missing gates, contamination, code that changed since freezing, parameters a
-setting would change, a thin band, sessions already linked. Nothing is written.
+setting would change, a thin band, sessions already linked, a study that was
+rejected or parked, a version that is no longer current. No session row is
+written or touched; the study's ledger is settled first, as every study tool
+does.
 """
 
 from typing import Any
@@ -35,8 +38,8 @@ from src.services.provenance import REPO_ROOT, git_provenance
 
 NOTES = [
     "The research server never runs these: run them in a terminal on the Mac.",
-    "live check comes first: it proves the gateway, the paper account and the bar "
-    "subscription before anything is created.",
+    "live check comes first: it proves the gateway and the paper account before anything "
+    "is created. The script chains the steps with &&, so a failed check stops it.",
     "get_session(<name>) reads the session against its band; check it weekly.",
 ]
 
@@ -76,7 +79,7 @@ def _settings_drift(candidate: ResearchCandidate, rendered: dict[str, str]) -> l
     )
     return [
         f"live create would store {key}={live.get(key)!r}, the frozen value is "
-        f"{frozen.get(key)!r} (a setting in .env overrides it)."
+        f"{frozen.get(key)!r} (a setting in .env or a strategy default changes it)."
         for key in sorted(set(frozen) | set(live))
         if frozen.get(key) != live.get(key)
     ]
@@ -109,6 +112,19 @@ def _gate_warnings(settings, store: JobStore, key: str, version: int) -> tuple[l
     if band.get("status") != "ok":
         warnings.append(f"Expectation band is {band.get('status')}: {band.get('note', '')}".strip())
     return warnings, band
+
+
+def _standing_warnings(study, candidate: ResearchCandidate) -> list[str]:
+    """A study that was closed, or a version the study has moved on from."""
+    found = []
+    if study.status in ("rejected", "parked"):
+        found.append(f"The study is {study.status}: {study.status_reason or 'no reason recorded'}.")
+    if candidate.version != study.current_version:
+        found.append(
+            f"Version {candidate.version} is not the study's current version "
+            f"({study.current_version})."
+        )
+    return found
 
 
 def _live_bar_type(candidate: ResearchCandidate, bar_spec: str) -> str:
@@ -151,7 +167,8 @@ def paper_commands(
     )
     rendered = {k: v for k, raw in candidate.params.items() if (v := param_value(raw)) is not None}
     warnings, band = _gate_warnings(settings, store, study.slug, candidate.version)
-    warnings += _code_drift(candidate) + _settings_drift(candidate, rendered) + unset
+    warnings += _standing_warnings(study, candidate) + _code_drift(candidate)
+    warnings += _settings_drift(candidate, rendered) + unset
     if frozen["linked"]:
         warnings.append(
             f"Sessions already linked to this candidate: {', '.join(frozen['linked'])}."
@@ -165,7 +182,7 @@ def paper_commands(
         "bar_type": bar_type,
         "params": candidate.params,
         "commands": commands,
-        "script": "\n".join(c["command"] for c in commands if c["step"] != "status"),
+        "script": " &&\n".join(c["command"] for c in commands if c["step"] != "status"),
         "expectation_band": band,
         "already_linked": frozen["linked"],
         "warnings": warnings,

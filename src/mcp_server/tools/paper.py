@@ -26,9 +26,10 @@ def register(server: MCPServer, ctx: ServerContext) -> None:
 
         Text only: Allay runs them. Every frozen parameter is passed explicitly and the
         session is linked (--compare-to) to the candidate's newest out-of-sample run,
-        which must exist. name defaults to <study>-v<version>-paper. Failing or missing
-        gates, contamination, code changed since freezing and .env settings that would
-        change a parameter come back as warnings, with the expectation band.
+        which must exist. name defaults to <study>-v<version>-paper. `script` chains the
+        steps with &&. Failing or missing gates, contamination, code changed since
+        freezing, .env settings that would change a parameter, a rejected or parked study
+        and a version that is not current come back as warnings, with the expectation band.
         """
         assert ctx.runner is not None, "build_server always creates the runner"
         return await call(
@@ -52,9 +53,10 @@ def register(server: MCPServer, ctx: ServerContext) -> None:
         """A paper session (name or id) beside its expectation band, for the weekly check.
 
         The band comes from the compare-to run's own trades: trade count over stretches as
-        long as the session has run (or `weeks`), win rate, average trade and drawdown over
-        runs of as many trades as it has closed; each is inside, below or above. Drift
-        flags name a likely cause: signals (missed or extra), execution (rejections,
+        long as the session has run (or its last `weeks`), win rate, average trade and
+        drawdown over runs of as many trades as it has closed (capped so the run gives 20
+        windows); each is inside, below or above. Weeks run from the session's creation.
+        Drift flags name a likely cause: signals (missed or extra), execution (rejections,
         costs), config (spec differs from the frozen candidate) or strategy_or_regime.
         Slippage is not measurable. Includes G4 progress and the newest trades.
         """

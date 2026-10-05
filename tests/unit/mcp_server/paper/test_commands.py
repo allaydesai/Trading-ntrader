@@ -98,3 +98,15 @@ def test_the_live_bar_type_is_the_instrument_and_the_runs_bar_spec_from_external
 
 def test_the_name_limit_is_the_session_table_column():
     assert TradingSession.__table__.c.name.type.length == MAX_NAME
+
+
+def test_a_name_the_cli_would_read_as_an_option_is_refused():
+    with pytest.raises(ToolFailure) as exc:
+        check_name("-x", taken=set())
+    assert exc.value.code == "invalid_session_name"
+
+
+def test_a_default_name_longer_than_the_column_is_refused():
+    with pytest.raises(ToolFailure) as exc:
+        default_name("s" * 95, 1, taken=set())
+    assert exc.value.code == "invalid_session_name"
