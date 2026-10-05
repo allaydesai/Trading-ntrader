@@ -137,7 +137,8 @@ async def test_explore_freeze_test_once_score_and_iterate(ctx, tmp_path):
     assert card["gates"]["G3"]["status"] == "missing"
     assert card["gates"]["G0"]["checks"]["benchmark_present"]["status"] == "pass"
     assert card["expectation_band"]["source_run"] == oos_id
-    assert card["expectation_band"]["status"] in ("ok", "thin", "unavailable")
+    # Five out-of-sample trades cannot give 20 windows of 20.
+    assert card["expectation_band"]["status"] == "thin"
     for gate in card["gates"].values():
         for check in gate["checks"].values():
             assert check["status"] in ("pass", "fail", "missing")

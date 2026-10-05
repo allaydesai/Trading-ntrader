@@ -26,6 +26,7 @@ from src.mcp_server.jsonable import to_jsonable
 from src.mcp_server.metrics import METRIC_SPECS
 from src.mcp_server.paper.evidence import expectation_band, paper_facts
 from src.mcp_server.paper.reads import oos_runs
+from src.mcp_server.paper.report import check_horizon
 from src.mcp_server.settings import McpSettings
 from src.mcp_server.studies import ledger
 from src.mcp_server.studies.candidates import current_candidate
@@ -162,6 +163,7 @@ def get_scorecard(
     band_trades: int | None = None,
 ) -> dict[str, Any]:
     """Every gate in the study's pass criteria: pass, fail or missing, with its evidence."""
+    check_horizon(weeks=band_weeks, trades=band_trades)
     gates = load_gates(settings)
     with get_sync_session() as session:
         repo = SyncResearchRepository(session)

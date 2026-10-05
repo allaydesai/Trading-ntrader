@@ -11,6 +11,7 @@ run and session is deleted afterwards.
 import json
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
@@ -35,6 +36,7 @@ def _insert_session(name: str, compare_to: str, params: dict, bar_type: str) -> 
         row = TradingSession(
             name=name,
             status=SessionStatus.RUNNING,
+            created_at=now - timedelta(weeks=2),
             spec={
                 "schema_version": 1,
                 "strategies": [
@@ -126,7 +128,10 @@ async def test_a_tested_candidate_goes_to_paper_and_is_read_back(
         assert report["link"]["study"] == slug and report["spec_check"]["matches"]
         assert report["paper"]["trades"] == 1
         assert report["band"]["source_run"] == oos_id
-        assert report["drift"]["status"] in ("too_early", "flagged")
+        # One trade is inside the count band; its seeded commission is far above the run's.
+        assert report["drift"]["status"] == "flagged"
+        assert [f["kind"] for f in report["drift"]["flags"]] == ["commission_high"]
+        assert report["drift"]["likely_cause"] == "execution"
         assert report["drift"]["slippage"]["measurable"] is False
 
         card = await call(client, "get_scorecard", study)
@@ -137,6 +142,11 @@ async def test_a_tested_candidate_goes_to_paper_and_is_read_back(
 
         exported = await call(client, "export_results", {"slug": name, "session": name})
         assert exported["ok"], exported
-    record = json.loads((vault / "Lab" / "results" / f"{name}.session.json").read_text())
+    session_file = Path(exported["files"]["session"])
+    assert session_file.parent == (vault / "Lab" / "results").resolve()
+    assert session_file.name.startswith(f"{name}.20") and session_file.name.endswith(
+        ".session.json"
+    )
+    record = json.loads(session_file.read_text())
     assert record["kind"] == "paper-session" and record["link"]["compare_to"] == oos_id
     assert (vault / "Lab" / "results" / f"{name}.json").is_file()

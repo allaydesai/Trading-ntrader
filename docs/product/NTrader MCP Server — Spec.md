@@ -101,7 +101,7 @@ Over about a week of short sessions, one idea goes from a link to a paper-tradin
 **Weeks 2–9 — paper trading**
 
 12. **Hand off to paper.** Claude prepares the exact `live create … --compare-to <run_id>` and `live start` commands; Allay runs them. *S7.1*
-13. **Weekly check.** Claude compares the session's trades with the expectation band: inside the band → carry on; outside → flagged with the likely cause (fills, slippage, missed signals, regime). After 8 weeks or 20 trades the scorecard's paper gate is filled in. *S7.2, S7.3*
+13. **Weekly check.** Claude compares the session's trades with the expectation band: inside the band → carry on; outside → flagged with the likely cause (execution, missed or extra signals, config, strategy or regime). After 8 weeks **and** 20 trades the scorecard's paper gate is filled in. *S7.2, S7.3*
 14. **Record.** Every run, decision and scorecard is exported into the vault (Experiment notes, the Strategy note, the weekly research review). *S8.1, S8.2*
 
 **Later — joining the portfolio** *(phase 5)*
@@ -172,7 +172,7 @@ Thirty-four stories in nine epics cover the scenario end to end (the phased deli
 | --- | --- | --- |
 | S7.1 | I want the exact commands to start a paper session linked to my candidate, so that I start it myself with no typing errors | Commands include the frozen params and `--compare-to` the candidate's run; the MCP never starts or stops sessions |
 | S7.2 | I want my paper results compared with the expectation band each week, so that drift is caught early | Trades, win rate, average trade and drawdown vs band; inside / outside per metric |
-| S7.3 | I want drift flagged with its likely cause, so that I know whether the strategy or the execution is off | Flags separate slippage and fills, missed or extra signals, and results outside the band with fills as expected |
+| S7.3 | I want drift flagged with its likely cause, so that I know whether the strategy or the execution is off | Flags separate execution (rejections, costs), missed or extra signals, a session that differs from the frozen candidate, and results outside the band with none of those to explain them. Slippage and fill quality are reported as not measurable until NTrader records decision prices |
 
 **E8 — Keep the record**
 
@@ -223,8 +223,8 @@ The accented stage is the end of the product's job: going live is Allay's decisi
 **F4 — Weekly paper check** *(S7.1–S7.3)*
 
 1. Allay starts the session himself from the generated commands.
-2. Each week Claude reads the session, compares trades, win rate, average trade and drawdown with the expectation band, and files a row in the vault's paper note.
-3. Outside the band, Claude flags the likely cause — execution (fills, slippage), signals (missed or extra), or the strategy itself.
+2. Each week Claude reads the session, compares trades, win rate, average trade and drawdown with the expectation band, and exports the dated reading to the vault (`export_results(session=…)`). The row in the vault's paper note is written from that reading by the vault's research skill, not by the server.
+3. Outside the band, Claude flags the likely cause — execution (rejections, costs), signals (missed or extra), config, or the strategy itself.
 4. Stopping or continuing the session is Allay's call, made in the CLI.
 
 ## Guardrails against overfitting, and how variability is shown
@@ -319,7 +319,8 @@ The green row is in use today; the blue row is the next build.
 - ~~Where should studies live?~~ **Resolved (phase 2):** Postgres, in the `research_studies`, `research_trials`, `research_candidates` and `research_study_events` tables.
 - ~~Should the server read gate thresholds from the vault or keep its own copy?~~ **Resolved (phase 2):** from the vault only, through a fenced `yaml ntrader-gates` block in `System/Gates.md`; a missing block or key makes the affected rows "missing", never "pass".
 - ~~Which run is a paper session compared against?~~ **Resolved (phase 3):** the frozen candidate's completed out-of-sample run. `paper_commands` is refused until it exists, and the expectation band is built from that run's own closed trades (rolling windows; Monte Carlo replaces this in phase 4).
-- ~~How are drift causes found without signal prices?~~ **Resolved (phase 3):** from what NTrader stores, with no live-path change. Signals: trade count outside the band, stale bars, a dead node, a failed strategy. Execution: rejections, a lost connection, commission. Config: the stored spec differs from the frozen candidate. Slippage is reported as not measurable until NTrader records decision prices.
+- ~~How are drift causes found without signal prices?~~ **Resolved (phase 3):** from what NTrader stores, with no live-path change. Signals: trade count outside the band, stale bars, a dead node, a failed strategy. Execution: rejections and commission (a lost connection once NTrader records one). Config: the stored spec differs from the frozen candidate. Slippage is reported as not measurable until NTrader records decision prices.
+- ~~When is the paper gate judged, and on what?~~ **Resolved (phase 3 review):** G4 is filled once `min_weeks` **and** `min_trades` are both met, on the newest linked session that has been started; weeks run from the session's creation. It fails only on the bad side (win rate, average trade or drawdown below the band); a band with fewer than 20 windows judges nothing and leaves the row missing.
 - Which asset types come first after US stocks and ETFs — crypto (Kraken data already exists in NTrader) or futures?
 - Are daily scans part of NTrader (shared by research and live trading) or a separate tool feeding both? This decides where phase 5's scan stories live.
 - Monte Carlo on trades ignores serial correlation; is a block bootstrap on daily returns needed in phase 4 or later?

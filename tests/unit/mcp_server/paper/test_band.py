@@ -13,6 +13,7 @@ from src.mcp_server.paper.band import (
     time_window_counts,
     trade_drawdown,
     trade_window_stats,
+    window_size,
     window_stats,
 )
 
@@ -140,3 +141,15 @@ def test_too_few_windows_make_a_thin_band_and_no_trades_none():
     empty = build_band([], span_end=T0, days=28, n=10)
     assert empty["status"] == "unavailable"
     assert empty["time_windows"]["trades"] is None
+
+
+def test_the_trade_window_is_capped_so_the_band_keeps_enough_windows():
+    # 100 run trades leave 20 windows of at most 81 trades.
+    assert window_size(30, run_trades=100, floor=5) == 30
+    assert window_size(95, run_trades=100, floor=5) == 81
+    assert window_size(2, run_trades=100, floor=5) == 5
+
+
+def test_a_run_too_small_for_any_cap_keeps_the_wanted_window():
+    # 20 run trades cannot give 20 windows of 5: the band stays thin and says so.
+    assert window_size(12, run_trades=20, floor=5) == 12

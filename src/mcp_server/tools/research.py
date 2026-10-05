@@ -131,10 +131,11 @@ def _register_holdout(
         """A candidate against every gate in the study's pass criteria: pass, fail or
         missing, the number behind each check, its threshold (from the vault's
         System/Gates.md) and the run ids it was judged on. G4 (paper) is judged on the
-        newest paper session linked to the candidate's out-of-sample run: missing until
-        it has run min_weeks and min_trades. expectation_band is what a paper session
-        should produce over band_weeks / band_trades (default: G4's min_weeks and
-        min_trades), from the out-of-sample run's trades. Phase 4 checks (sensitivity,
+        newest started paper session linked to the candidate's out-of-sample run: missing
+        until it has run min_weeks and min_trades (both), then failed only by results
+        below the band or by signal, execution or config flags. expectation_band is what
+        a paper session should produce over band_weeks / band_trades (default: G4's
+        min_weeks and min_trades), from the out-of-sample run's trades. Phase 4 checks (sensitivity,
         walk-forward, breadth, cost stress) are always missing.
         """
         return await call(

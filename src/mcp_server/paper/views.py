@@ -12,9 +12,12 @@ DEFINITIONS = {
     "trade_drawdown": "Worst fall of the running sum of trade returns from its peak.",
     "band": "5th / 50th / 95th percentiles over the compare-to run's rolling windows: trade "
     "count over stretches as long as the session has run, the rest over runs of as many "
-    "trades as it has closed.",
-    "runtime_flags": "Rejections, failures and lost connections cover the session's current "
-    "run only: NTrader clears them on every start.",
+    "trades as it has closed, capped (trade_windows.n) so the run still gives 20 windows. "
+    "The paper rates and drawdown are then those of its newest judged_trades trades.",
+    "weeks": "Elapsed since the session was created, stopped time included; a session never "
+    "started has run for no time.",
+    "runtime_flags": "Rejections and failures cover the session's current run only: NTrader "
+    "clears them on every start.",
 }
 
 

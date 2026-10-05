@@ -11,7 +11,7 @@ from src.mcp_server.errors import ToolFailure
 from src.mcp_server.jsonable import to_jsonable
 from src.mcp_server.paper import reads
 from src.mcp_server.paper.drift import health_flags
-from src.mcp_server.paper.report import horizon, session_health, session_report
+from src.mcp_server.paper.report import check_horizon, horizon, session_health, session_report
 from src.mcp_server.paper.views import summary_view
 from src.mcp_server.settings import McpSettings
 from src.mcp_server.studies.gates import load_gates
@@ -50,6 +50,8 @@ def list_sessions(
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """Paper sessions, newest first, with their progress and the study they test."""
+    if limit < 1:
+        raise ToolFailure("invalid_request", "limit must be at least 1.", fix="Omit it.")
     now = now or datetime.now(timezone.utc)
     with reads.read_only_session() as db:
         rows = reads.sessions(db, status=_status(status))
@@ -59,13 +61,13 @@ def list_sessions(
             link = reads.link_of(db, row.linked_backtest_run_id)
             if study is not None and not _tests(link, study):
                 continue
-            weeks = horizon(row, [], now, None)["weeks"]
+            weeks = horizon(row, now, None)["weeks"]
             alive = None
             if str(row.status) == "running":
                 flags = health_flags(session_health(row), now)
                 alive = not any(f["kind"] == "not_alive" for f in flags)
             found.append(summary_view(row, link, counts.get(row.id, 0), weeks, alive))
-    return to_jsonable({"sessions": found[: max(1, limit)], "total": len(found)})
+    return to_jsonable({"sessions": found[:limit], "total": len(found)})
 
 
 def get_session(
@@ -77,8 +79,7 @@ def get_session(
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """One session read against its band, with drift flags and G4 progress."""
-    if weeks is not None and weeks <= 0:
-        raise ToolFailure("invalid_request", "weeks must be positive.", fix="Omit it, or pass > 0.")
+    check_horizon(weeks=weeks, trades=None)
     g4 = g4_thresholds(settings)
     with reads.read_only_session() as db:
         row = reads.resolve_session(db, key)

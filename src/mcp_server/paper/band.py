@@ -118,6 +118,18 @@ def trade_window_stats(trades: list[ClosedTrade], n: int) -> list[dict[str, Any]
     return windows
 
 
+def window_size(wanted: int, *, run_trades: int, floor: int) -> int:
+    """The trade-window length: ``wanted``, capped so the run still gives ``MIN_WINDOWS`` of them.
+
+    A session that has closed nearly as many trades as the run, or more, would
+    otherwise be measured against one window or none. A run too small for any
+    cap at or above ``floor`` keeps the wanted length, and its band reads thin.
+    """
+    wanted = max(wanted, floor)
+    most = run_trades - MIN_WINDOWS + 1
+    return min(wanted, most) if most >= floor else wanted
+
+
 def pct(values: list[float | None]) -> dict[str, float] | None:
     """The 5th, 50th and 95th percentiles, or None with nothing to rank."""
     present = [float(v) for v in values if v is not None]

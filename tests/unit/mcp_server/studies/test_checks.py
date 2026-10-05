@@ -198,7 +198,7 @@ def test_a_floor_without_a_ratio_is_missing_not_pass():
 
 
 G4 = {"min_weeks": 8, "min_trades": 20}
-INSIDE = {"win_rate": "inside", "avg_trade_return": "inside"}
+INSIDE = {"win_rate": "inside", "avg_trade_return": "inside", "trade_drawdown": "inside"}
 
 
 def _paper(**overrides) -> PaperFacts:
@@ -239,7 +239,7 @@ def test_a_session_past_the_horizon_inside_its_band_and_clean_passes():
 
 
 def test_results_outside_the_band_fail_and_problems_fail_clean():
-    outside = _paper(positions={"win_rate": "below", "avg_trade_return": "inside"})
+    outside = _paper(positions={**INSIDE, "win_rate": "below"})
     result = judge("G4", G4, _evidence(paper=outside))
     assert result["checks"]["paper_inside_band"]["status"] == "fail"
     assert "win_rate below" in result["checks"]["paper_inside_band"]["note"]
@@ -249,8 +249,52 @@ def test_results_outside_the_band_fail_and_problems_fail_clean():
 
 
 def test_an_unjudgeable_band_is_missing_and_other_sessions_are_noted():
-    unknown = _paper(positions={"win_rate": "n/a", "avg_trade_return": "inside"})
+    unknown = _paper(positions={**INSIDE, "win_rate": "n/a"})
     result = judge("G4", G4, _evidence(paper=unknown))
     assert result["checks"]["paper_inside_band"]["status"] == "missing"
     noted = judge("G4", G4, _evidence(paper=_paper(others=["crsi-qqq-v1-paper-2"])))
     assert "crsi-qqq-v1-paper-2" in noted["checks"]["paper_clean"]["note"]
+
+
+def test_a_drawdown_deeper_than_the_band_fails_the_gate():
+    deep = _paper(positions={**INSIDE, "trade_drawdown": "below"})
+    row = judge("G4", G4, _evidence(paper=deep))["checks"]["paper_inside_band"]
+    assert row["status"] == "fail" and "trade_drawdown below" in row["note"]
+
+
+def test_results_better_than_the_band_are_noted_not_failed():
+    better = _paper(positions={**INSIDE, "win_rate": "above", "trade_drawdown": "above"})
+    row = judge("G4", G4, _evidence(paper=better))["checks"]["paper_inside_band"]
+    assert row["status"] == "pass"
+    assert "win_rate above" in row["note"] and "not a failure" in row["note"]
+
+
+def test_a_band_that_cannot_judge_is_missing_with_its_reason_never_a_fail():
+    thin = _paper(
+        positions={**INSIDE, "win_rate": "below"},
+        unjudgeable="Only 30 time windows and 1 trade windows (fewer than 20).",
+    )
+    row = judge("G4", G4, _evidence(paper=thin))["checks"]["paper_inside_band"]
+    assert row["status"] == "missing" and "1 trade windows" in row["note"]
+
+
+@pytest.mark.parametrize("threshold", [None, "8 weeks", True])
+def test_a_threshold_that_is_not_a_number_is_missing_not_a_crash(threshold):
+    result = judge(
+        "G4", {"min_weeks": threshold, "min_trades": threshold}, _evidence(paper=_paper())
+    )
+    for name in ("min_weeks", "min_trades"):
+        assert result["checks"][name]["status"] == "missing"
+        assert "not a number" in result["checks"][name]["note"]
+
+
+def test_the_weeks_row_agrees_with_reached_just_short_of_the_minimum():
+    short = _paper(weeks=7.96, reached=False)
+    row = judge("G4", G4, _evidence(paper=short))["checks"]["min_weeks"]
+    assert row["status"] == "missing" and "7.96 of 8" in row["note"]
+
+
+def test_a_restarted_session_says_so_on_the_weeks_and_clean_rows():
+    checks = judge("G4", G4, _evidence(paper=_paper(restarted=True)))["checks"]
+    assert "stopped counts as elapsed" in checks["min_weeks"]["note"]
+    assert "since its last start" in checks["paper_clean"]["note"]

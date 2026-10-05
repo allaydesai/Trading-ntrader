@@ -48,10 +48,11 @@ def register(server: MCPServer, ctx: ServerContext) -> None:
         With study, also writes <slug>.study.json (study, ledger, candidates,
         decisions and scorecard); run_ids then default to the study's completed
         runs. With session (a paper session's name or id, alone), writes
-        <slug>.session.json (get_session's report and every trade) and
-        <slug>.session.trades.csv, and its compare-to run as <slug>.json. Only
-        folders in NTRADER_MCP_EXPORT_FOLDERS are writable; an existing slug
-        needs overwrite=true.
+        <slug>.<date>.session.json (get_session's report and every trade) and
+        <slug>.<date>.session.trades.csv, one reading per day, and its compare-to
+        run as <slug>.json once. Only folders in NTRADER_MCP_EXPORT_FOLDERS are
+        writable; an existing slug (or a second reading the same day) needs
+        overwrite=true.
         """
         if session is not None:
             if study is not None or run_ids:

@@ -35,12 +35,16 @@ class PaperFacts:
     trades: int
     #: Both the weeks and the trades the gate asks for have been met.
     reached: bool
-    #: Win rate and average trade against the band: below, inside, above or n/a.
+    #: Win rate, average trade and drawdown against the band: below, inside, above or n/a.
     positions: dict[str, str]
     #: Signal, execution and config flags (the strategy-or-regime flag is not one).
     problems: list[str]
-    #: Older sessions linked to the same candidate, never judged instead of the newest.
+    #: Other sessions linked to the same candidate, never judged instead of this one.
     others: list[str] = field(default_factory=list)
+    #: Why the band cannot judge the results (too thin, too few trades); empty when it can.
+    unjudgeable: str = ""
+    #: The session is in a run that began after a stop.
+    restarted: bool = False
 
 
 @dataclass
@@ -59,6 +63,16 @@ class Evidence:
     benchmark_rationale: str | None = None
     paper: PaperFacts | None = None
     notes: list[str] = field(default_factory=list)
+
+
+def as_number(value: Any) -> float | None:
+    """A threshold as a number, or None for a blank, a flag or text."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 Row = dict[str, Any]
@@ -240,10 +254,15 @@ def trials_warn_above(ev: Evidence, threshold: Any) -> Row:
 
 
 NO_SESSION = (
-    "No paper session is linked to the candidate's out-of-sample run: paper_commands gives "
-    "the commands to start one."
+    "No started paper session is linked to the candidate's out-of-sample run: "
+    "paper_commands gives the commands to start one."
 )
 NOT_YET = "Judged once min_weeks and min_trades are both met."
+STOPPED_TIME = "The session was restarted: time it spent stopped counts as elapsed."
+SINCE_START = (
+    "The session was restarted: flags cover only the run since its last start (earlier "
+    "runs are in the weekly exports)."
+)
 
 
 def _paper_row(status: str, value: Any, threshold: Any, paper: PaperFacts, note: str = "") -> Row:
@@ -252,17 +271,22 @@ def _paper_row(status: str, value: Any, threshold: Any, paper: PaperFacts, note:
     return row
 
 
-def _progress(value: float, threshold: Any, paper: PaperFacts, unit: str) -> Row:
-    if value >= float(threshold):
-        return _paper_row(PASS, value, threshold, paper)
-    note = f"in progress: {value:g} of {threshold} {unit}"
-    return _paper_row(MISSING, value, threshold, paper, note)
+def _progress(value: float, threshold: Any, paper: PaperFacts, unit: str, extra: str = "") -> Row:
+    wanted = as_number(threshold)
+    if wanted is None:
+        note = f"The threshold {threshold!r} is not a number."
+        return _paper_row(MISSING, value, threshold, paper, note)
+    if value >= wanted:
+        return _paper_row(PASS, value, threshold, paper, extra)
+    note = f"in progress: {value:g} of {threshold} {unit}. {extra}".strip()
+    return _paper_row(MISSING, value, threshold, paper, note.removesuffix("."))
 
 
 def paper_min_weeks(ev: Evidence, threshold: Any) -> Row:
     if ev.paper is None:
         return _missing(threshold, NO_SESSION)
-    return _progress(round(ev.paper.weeks, 1), threshold, ev.paper, "weeks")
+    extra = STOPPED_TIME if ev.paper.restarted else ""
+    return _progress(ev.paper.weeks, threshold, ev.paper, "weeks", extra)
 
 
 def paper_min_trades(ev: Evidence, threshold: Any) -> Row:
@@ -272,36 +296,43 @@ def paper_min_trades(ev: Evidence, threshold: Any) -> Row:
 
 
 def paper_inside_band(ev: Evidence, threshold: Any) -> Row:
+    """Fails only on the bad side: a win rate, average trade or drawdown below the band."""
     paper = ev.paper
     if paper is None:
         return _missing(threshold, NO_SESSION)
     if not paper.reached:
         return _paper_row(MISSING, paper.positions, threshold, paper, NOT_YET)
+    if paper.unjudgeable:
+        return _paper_row(MISSING, paper.positions, threshold, paper, paper.unjudgeable)
     if "n/a" in paper.positions.values():
         note = "The band could not judge every metric (see get_session)."
         return _paper_row(MISSING, paper.positions, threshold, paper, note)
-    outside = [f"{k} {v}" for k, v in paper.positions.items() if v != "inside"]
-    status = FAIL if outside else PASS
-    return _paper_row(status, paper.positions, threshold, paper, ", ".join(outside))
+    worse = [f"{k} below" for k, v in paper.positions.items() if v == "below"]
+    better = [f"{k} above" for k, v in paper.positions.items() if v == "above"]
+    notes = [", ".join(worse)] if worse else []
+    if better:
+        notes.append(f"{', '.join(better)} the band (better than expected, not a failure)")
+    return _paper_row(FAIL if worse else PASS, paper.positions, threshold, paper, "; ".join(notes))
 
 
 def paper_clean(ev: Evidence, threshold: Any) -> Row:
     paper = ev.paper
     if paper is None:
         return _missing(threshold, NO_SESSION)
-    others = (
-        f"Other linked sessions, not judged: {', '.join(paper.others)}." if paper.others else ""
-    )
+    notes = [SINCE_START] if paper.restarted else []
+    if paper.others:
+        notes.append(f"Other linked sessions, not judged: {', '.join(paper.others)}.")
     if not paper.reached:
-        return _paper_row(MISSING, paper.problems, threshold, paper, f"{NOT_YET} {others}".strip())
-    note = (
-        "Unexplained behaviour; explanations are recorded in the vault, the server cannot "
-        "judge them."
-        if paper.problems
-        else ""
-    )
+        note = " ".join([NOT_YET, *notes])
+        return _paper_row(MISSING, paper.problems, threshold, paper, note)
+    if paper.problems:
+        unexplained = (
+            "Unexplained behaviour; explanations are recorded in the vault, the server "
+            "cannot judge them."
+        )
+        notes.insert(0, unexplained)
     status = FAIL if paper.problems else PASS
-    return _paper_row(status, paper.problems, threshold, paper, f"{note} {others}".strip())
+    return _paper_row(status, paper.problems, threshold, paper, " ".join(notes))
 
 
 def later_phase(phase: int, what: str) -> Check:

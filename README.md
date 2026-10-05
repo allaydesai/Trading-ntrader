@@ -472,23 +472,42 @@ Research proper happens in a **study**, one per vault Idea:
    `export_results(study=…)` files `<slug>.study.json` with the ledger, the current
    scorecard and one scorecard per frozen version.
 7. `paper_commands` gives the commands that start a paper session of the tested candidate:
-   `live check`, `live create` with every frozen parameter passed explicitly (so `.env` cannot
-   change one) and `--compare-to` the candidate's out-of-sample run, `live start`. It is
-   refused until that run exists; failing gates, code changed since freezing and parameters a
-   setting would change come back as warnings. You run the commands; the server never
-   starts, stops or creates a session.
+   `live check`, `live create` with every parameter the candidate sets passed explicitly (so
+   `.env` cannot change one; a parameter frozen as `None` cannot be passed and is left out
+   with a warning) and `--compare-to` the candidate's out-of-sample run, `live start`. The
+   `script` chains them with `&&`, so a failed `live check` stops it. It is refused until
+   that run exists; failing gates, code changed since freezing, parameters a setting would
+   change, a rejected or parked study and a version that is no longer current come back as
+   warnings. You run the commands; the server never starts, stops or creates a session.
 8. `get_session` (weekly) reads the session, in a read-only transaction, against its
    **expectation band**: percentiles over the compare-to run's own rolling windows, trade
    count over stretches as long as the session has run, win rate, average trade and drawdown
-   over runs of as many trades as it has closed. A trade's return is its net P&L over its
-   entry notional, so a session trading another size still compares. Drift flags name a
-   likely cause from what NTrader stores: signals (trade count outside the band, stale bars,
-   a dead node, a failed strategy), execution (rejections, lost connection, commission),
-   config (the stored spec differs from the frozen candidate) or strategy/regime. Slippage
-   is not measurable: trades store only average fill prices. `get_scorecard` judges G4 on the
-   newest linked session (missing until `min_weeks` and `min_trades` are met) and carries the
-   band for G4's horizon; `export_results(session=…)` files `<slug>.session.json` and
-   `<slug>.session.trades.csv` beside the compare-to run.
+   over runs of as many trades as it has closed. That run length is capped so the
+   out-of-sample run still gives 20 windows; the session's rates are then those of its
+   newest trades of that length. A trade's return is its net P&L over its entry notional,
+   so a session trading another size still compares. Weeks run from the session's creation
+   (the row keeps only its last start), so time spent stopped counts and is warned about.
+   Drift flags name a likely cause from what NTrader stores: signals (trade count outside
+   the band, stale bars, a dead node, a failed strategy), execution (rejections,
+   commission), config (the stored spec differs from the frozen candidate) or
+   strategy/regime. Slippage and fill quality are not measurable: trades store only average
+   fill prices. A lost broker connection is not reported yet: NTrader does not record one.
+   Rejections and failures cover only the session's current run, since NTrader clears them
+   on every start.
+9. `get_scorecard` judges **G4** on the newest linked session that has been started, and
+   carries the band for G4's horizon. G4 is missing until `min_weeks` **and** `min_trades`
+   are both met (8 weeks and 20 trades when the vault sets none). `paper_inside_band` then
+   fails only on the bad side: a win rate, average trade or drawdown *below* the band; a
+   result above it is noted, not failed. A band with fewer than 20 windows judges nothing:
+   the row stays missing and says why. `paper_clean` fails on any signal, execution or
+   config flag, a trade count outside the band in either direction included.
+   The scorecard and `paper_commands` read sessions inside the study's own transaction
+   (they settle the ledger first); only `list_sessions`, `get_session` and the session
+   export run in a transaction Postgres itself refuses to write in.
+10. `export_results(session=…)` files one reading per day, so the weekly checks accumulate:
+   `<slug>.<date>.session.json` and `<slug>.<date>.session.trades.csv`, beside the
+   compare-to run (`<slug>.json`, written once). The weekly row in the vault's paper note
+   is written by the vault's research skill from that reading, not by the server.
 
 Gate thresholds are read from the vault's `System/Gates.md`, from a fenced block the
 server parses (the prose stays the human copy):
