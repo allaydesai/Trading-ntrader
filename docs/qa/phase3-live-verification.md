@@ -2512,3 +2512,132 @@ exit=1
 | Date | Operator | Result | Notes |
 | ---- | -------- | ------ | ----- |
 | 2026-09-28 | Story 4.7 dev session | ⏳ **Defined, not run** | A corporate action cannot be staged, and P20a/P20c need `live start` across a position held at the broker. The story charter forbids submitting orders or opening, closing or flattening positions, so they are operator-only. P20b's read-only half (`live reconcile`) needs a configured account. The one read-only attempt, `ntrader live check`, stopped at `Cannot build an IBKR execution client: TWS_ACCOUNT is not set` in 0.00 s, with `gate:static ok` and no socket opened: this harness worktree has no `.env`, and the charter forbids creating or reading one (the P15/P17a/P18 precedent). This is informational evidence only (NFR33), never a gate. The same logic is proven against broker doubles and a real `LiveExecutionEngine`:<br>• `tests/component/core/test_live_corporate_actions_engine.py`: forward split absorbed at startup and at runtime, the lot untouched; a reverse split refused and stopped;<br>• `tests/unit/core/test_live_startup_reconcile.py`: `reconcile.cash_changed`, the likely cause, the emitted-name pin;<br>• `tests/component/core/test_session_runner_phases.py` / `test_session_runner_runtime_reconcile.py`: through `runner.run()`;<br>• `tests/component/core/test_live_session_view.py`: "session cash as of";<br>• `tests/integration/core/test_live_startup_cash_redis.py`: against a real Redis, together with the `MONITOR` load-only proof in `test_live_session_view_redis.py`. |
+
+## Procedure P21: a stranded order is cleared by the running session
+
+**Introduced by**: Story 4.8 — Clear a Stranded Order After a Broker-Confirmed Fill or Cancel
+**Verifies**:
+- AC #1 live (P21a): a strategy's order that the cache still shows open after IBKR cancelled or
+  filled it while the session was stopped clears to `CANCELED` within two runtime cycles of the
+  session first seeing it gone. One `reconcile.stale_order_cleared` names it.
+- AC #3 (P21b, informational only): a session with no resting order does not ask IBKR for its
+  open orders.
+- Story 4.8's open question (P21c, only if it can be arranged): whether a restart straight into a
+  poisoned `p7-position-test`-shaped namespace still stalls inside `node:connect`.
+- The false-clear guard (P21d, **a pass condition before Story 4.8 is `done`** — code review
+  ruling D1, 2026-10-06): an order IBKR still holds across a **Gateway restart** is **not**
+  cleared. IBKR's `reqOpenOrders` answers only "the open orders placed from this client"; if a
+  restarted Gateway stops attributing the order to the session's client id, the order reads as
+  absent and would be cleared `CANCELED` locally while it is still live at IBKR.
+
+**Tools**: `ntrader live start <session>`; TWS (to cancel the resting order by hand while the
+session is stopped); `redis-cli` (read-only, to confirm the order's status in the namespace).
+
+### What it does, and what it does not do
+
+**It is not read-only.** It needs a session holding a **resting** order: a limit order away from
+the market, which the built-in strategies never place (market orders only). The order must then be
+cancelled in TWS while the session is stopped. It is written for the operator and is **never** run
+by an automated story session.
+
+**P21b cannot be fully observed from the logs.** The stale-order check logs nothing on a cycle with
+no candidate. With no candidate it never asks IBKR, so it can never log
+`reconcile.stale_order_check_failed`. The only check is that the record is absent. The proof that
+IBKR is not asked is the unit and component tests (AC #3), not this procedure.
+
+**P21c may never be runnable.** The historical stall happened inside `node:connect`, before any
+code from this story runs. If the operator cannot rebuild a namespace in that shape, record that
+and leave the question open. Do not claim P21a closes it.
+
+### Preconditions
+
+- A running, logged-in paper Gateway on the configured paper port; no IBKR mobile app or client
+  portal session (the 162 rule); a populated `.env` in the operator's checkout.
+- A session whose strategy leaves a resting `LIMIT` order at IBKR (a custom test strategy, or a
+  strategy parameter that places one). Read its `client_order_id` from the session's
+  `order.submitted` / `order.accepted` records.
+- Stop the session (Ctrl-C) while the order is still `ACCEPTED`, then **cancel the order in TWS**.
+  Confirm TWS shows no open order from the session's client id.
+- D6's standing rule first: grep every transcript for `162`, `10182`, `366` before reading it.
+
+### Command
+
+```bash
+uv run python -m src.cli.main live start <session> > logs/p21-<date>.log 2>&1 &
+RUNNER_PID=$!   # the `live start` process itself: nothing is piped
+until grep -q "session.started" logs/p21-<date>.log || ! kill -0 "$RUNNER_PID" 2>/dev/null; do
+  sleep 2
+done
+grep -c -E "162|10182|366" logs/p21-<date>.log            # D6's standing rule, checked first
+# Runtime cycles run every 60 s; the clear needs two conclusive reads 60 s apart. If the order
+# was filled by hand, the position correction comes first (its instrument is skipped while its
+# row stands), so the clear lands on about the fourth cycle: allow 300 s for either variant.
+sleep 300
+grep -E "reconcile\.(ok|stale_order_cleared|stale_order_clear_failed|stale_order_check_failed)|order\.canceled" \
+  logs/p21-<date>.log
+kill -INT "$RUNNER_PID"; wait "$RUNNER_PID"; echo "exit=$?"
+```
+
+### Expected output
+
+```
+reconcile.ok scope=startup ... open_orders=1
+session.phase phase=reconcile status=ok
+...
+reconcile.ok scope=runtime ... open_orders=1
+order.canceled ... client_order_id=O-... reconciliation=True
+reconcile.stale_order_cleared scope=runtime instrument_id=AAPL.NASDAQ strategy_id=...
+  client_order_id=O-... side=BUY quantity=10
+  detail="the broker no longer lists this order as open; whether it filled or was cancelled
+  could not be determined from here"
+...
+exit=0
+```
+
+### Pass criteria
+
+1. **P21a:** exactly one `reconcile.stale_order_cleared` names the order's `client_order_id`:
+   for the cancelled-in-TWS variant on about the second runtime cycle (~2–3 minutes after
+   `session.started`); for the filled-by-hand variant on about the fourth (~4–5 minutes), because
+   the position correction comes first. No `reconcile.stale_order_clear_failed` appears. The
+   order's only `order.canceled` carries `reconciliation=True` — the engine's own reconciliation
+   event, logged by the order observer, not a cancel the strategy sent. Nothing is sent to IBKR:
+   no `order.submitted` for that order, and TWS shows no new order activity. The runtime
+   `reconcile.ok` is throttled to at most hourly after the first clean cycle, so the lower
+   `open_orders` count is read from the **next restart's** `reconcile.ok scope=startup` (or from
+   the order's status in the namespace with `redis-cli`), not from this transcript.
+2. **P21a — never a fill.** No `order.filled` for the order appears, and the transcript holds no
+   price or commission for it. If the order was filled by hand in TWS rather than cancelled, the
+   position step's `reconcile.discrepancy scope=runtime resolution=broker` carries the holding.
+   The order still clears `CANCELED`; that is ruling D-C's documented cost, not a failure.
+3. **P21b (informational):** on a clean session with no resting order, no
+   `reconcile.stale_order_*` record appears at all.
+4. **P21c (only if arranged):** record whether `phase=node:connect` reaches `status=ok`, and how
+   long it took. Either result is a finding for the deferred-work item, not a pass or a fail.
+5. **P21d (pass condition before `done`):** see the sub-procedure below. **No**
+   `reconcile.stale_order_cleared` names the order, and it is still `ACCEPTED` in the namespace.
+6. **All parts:** in every transcript, `grep -c '<full account id>'` prints `0` (NFR26).
+
+### P21d: a Gateway restart does not strand a live order (ruling D1)
+
+Run it **before** P21a: its cleanup step is P21a's precondition.
+
+1. Start the session and let its strategy leave a resting `LIMIT` order at IBKR, **GTC**, so it
+   survives the restart. Read its `client_order_id`. Stop the session (Ctrl-C).
+2. Restart the paper Gateway (log out and back in, or wait for its daily restart). In TWS, confirm
+   the order is still working, and note the client id it shows against the order.
+3. Start the session and wait 300 s, exactly as in P21a's command.
+4. **Pass:** no `reconcile.stale_order_cleared` and no `reconcile.stale_order_clear_failed` name
+   the order; a `reconcile.stale_order_check_failed` streak (if any) is not a failure. The order is
+   still `ACCEPTED` in the namespace (`redis-cli`, read-only).
+5. **Fail:** the order is cleared while TWS still shows it working. That is the false clear D1
+   names. Stop, record the TWS client id against the session's `IBKR_LIVE_CLIENT_ID`, and do not
+   mark Story 4.8 `done`: the code needs a guard (D1 option 2, a recorded client id).
+6. Cleanup: stop the session and cancel the order in TWS. That is P21a's precondition.
+
+### Result log
+
+| Date | Operator | Result | Notes |
+| ---- | -------- | ------ | ----- |
+| 2026-10-06 | Story 4.8 dev session | ⏳ **Defined, not run** | P21 needs a resting order left at IBKR and cancelled in TWS while the session is stopped. The story charter forbids submitting or cancelling orders, so P21 is operator-only. The same logic is proven against broker doubles, a real `LiveExecutionEngine`, and the real IB adapter's `get_open_orders`:<br>• `tests/unit/core/test_live_stranded_orders.py`: candidates, the debounce, containment, the never-`FILLED` AST scan, the emitted-name pin;<br>• `tests/component/core/test_live_stranded_orders_engine.py`: the clear as the framework's own `OrderCanceled(reconciliation=True)`, the inconclusive read against the real adapter, and the canaries for why `generate_order_status_reports` is not used;<br>• `tests/component/core/test_live_runtime_reconcile_engine.py`: end to end through `RuntimeReconciler`, including the filled-while-away case. Task 1.4's stall probe, re-run at component tier, still does not reproduce the `p7-position-test` stall. |
+| 2026-10-06 | Story 4.8 code review | ⏳ **P21d added, not run** | Ruling D1: P21d (a Gateway restart does not strand a live order) is a pass condition before 4.8 is `done`. Also corrected: the `order.canceled … reconciliation=True` line the clear produces, the 300 s wait for the filled-by-hand variant, and where the lower `open_orders` count can be observed. |

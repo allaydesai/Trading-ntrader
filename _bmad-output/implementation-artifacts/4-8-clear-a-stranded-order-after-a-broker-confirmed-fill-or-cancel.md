@@ -1,6 +1,6 @@
 # Story 4.8: Clear a Stranded Order After a Broker-Confirmed Fill or Cancel
 
-Status: ready-for-dev
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -201,7 +201,25 @@ at drafting and does not need re-measuring, only re-citing.
     `reconcile.ok`'s `open_orders` count stays permanently wrong, and nothing closes the story's
     own stated goal.
 
-- **D-D — Detection: a defensive, targeted `generate_order_status_reports(open_only=True)`
+- **D-D — AMENDED by PO ruling (Allay, 2026-10-06, Task 1 gate): read `get_open_orders`, not
+  `generate_order_status_reports`.** Task 1.2b/1.2c measured that `generate_order_status_reports`
+  returns `[]` on a **flat account without ever asking for open orders**, and the same `[]` when a
+  positions read times out — so "absent from its response" is not evidence, and D-D as drafted
+  would cancel, locally, a resting order still live at IB ~2 minutes after it was placed. Ruled:
+  read the exec client's own `get_open_orders` (the evidence Nautilus's in-flight sweep already
+  acts on, `execution.py:262-297`), compare raw `orderRef` strings (so F12's `ValueError` cannot
+  occur), and treat a read that did not get IBKR's own answer as **inconclusive**. Implemented with
+  `live_broker_state`'s stricter precedent rather than the ruling's "≥ 30 s elapsed" test: the
+  verdict is read from the adapter's own `OpenOrders` request **future** (a list — even `[]` — is
+  IBKR's `openOrderEnd`; pending at our deadline, cancelled, or an exception is inconclusive),
+  because a read that *joins* a request another caller started can return a fast `[]` after that
+  caller's timeout, which an elapsed-time test would accept. The original D-D text below stands
+  only where it does not conflict (skip-when-no-candidates, the candidate filter).
+  **Both deviations RATIFIED (Allay, 2026-10-06, code review D2, option 1):** the verdict read
+  from the request future, in place of the "≥ 30 s elapsed" test; and `BrokerOpenOrders.lists`
+  also treating a match on the IB `orderId` (`venue_order_id`) as listed, in addition to the raw
+  `orderRef`. The second key only makes "listed" easier to satisfy, so it can only stop a clear.
+- **D-D (as drafted) — Detection: a defensive, targeted `generate_order_status_reports(open_only=True)`
   call, never the general check.**
   - `broker_open_order_ids(node, log)` in the new module: finds the IB exec client
     (`find_ib_exec_client`, already imported by `live_runtime_reconcile.py`), calls
@@ -285,6 +303,13 @@ This story was authorised at the Epic 4 retrospective, not drawn from `epics.md`
 below are this story's own, covering FR34 (maintain alignment throughout the session), FR35
 (resolve in favor of the broker), NFR14 (no artificial trades) and NFR26 (masked, safe records).
 
+> **Amended 2026-10-06 (code review), per the D-D ruling of the same day.** As drafted, AC #1–#3
+> named `generate_order_status_reports` as the broker read. The ruling retired it (it returns `[]`
+> on a flat account without asking for open orders). The read is now `broker_open_orders`: the
+> exec client's `get_open_orders`, with the verdict taken from the adapter's own `OpenOrders`
+> request future, and an `Inconclusive` answer when IBKR did not answer. The criteria below are
+> rewritten to that mechanism; their intent is unchanged.
+
 1. **Given a cached order whose status is `ACCEPTED` (or `PARTIALLY_FILLED`/`TRIGGERED`) and whose
    `venue_order_id` is set, When the broker's own open-orders response, read defensively, does not
    list it on two consecutive runtime cycles at least `STALE_ORDER_DEBOUNCE_SECONDS` apart, Then
@@ -292,27 +317,28 @@ below are this story's own, covering FR34 (maintain alignment throughout the ses
    `reconcile.stale_order_cleared` WARNING is logged naming the instrument, side, quantity and
    `client_order_id` (FR35).**
    - Real-engine component test (`live_runtime_reconcile.py`'s harness shape): a cached `ACCEPTED`
-     order absent from a stubbed `generate_order_status_reports(open_only=True)` response, seen on
+     order absent from a stubbed open-orders answer (`BrokerOpenOrders`), seen on
      two cycles ≥ 60 s apart (an injected clock), transitions to `CANCELED` in the cache; a single
      sighting changes nothing (debounce, mutation-tested).
    - An order present in the broker's response is never touched, on any number of cycles
      (`order.status` unchanged; no `reconcile_execution_report` call for it).
    - An order with no `venue_order_id` (never reached the broker) is never a candidate.
-2. **Given `generate_order_status_reports` raises for any reason (the empty-`orderRef`
-   `ValueError`, or anything else), When a runtime cycle runs, Then the cycle is not affected: no
+2. **Given the open-orders read raises or is inconclusive for any reason (a timeout, a lost
+   connection, a cancelled or failed request, or anything else), When a runtime cycle runs, Then the cycle is not affected: no
    order is cleared, no exception escapes `RuntimeReconciler.on_tick`, and at most one
    `reconcile.stale_order_check_failed` WARNING is logged per failure streak (never one per
    cycle) (NFR20's "fail closed, never crash" reading applied to hygiene, not correctness).**
-   - Unit test with a stub client whose `generate_order_status_reports` raises `ValueError`,
-     `TimeoutError` and a bare `Exception`: each is contained; the position-comparison half of the
+   - Unit test with a stub reader that raises `ValueError`, `TimeoutError` and a bare
+     `Exception`, and an imitation IB client whose request fails or is never answered: each is
+     contained; the position-comparison half of the
      same cycle still runs and still corrects/refuses as Story 4.3 already proves (this story adds
      a test, not a change, to that half).
    - Mutation: remove the `try/except` → the target test goes red (a cycle-killing exception).
 3. **Given no candidate stale order this cycle, When a runtime cycle runs, Then
-   `generate_order_status_reports` is never called (NFR5's spirit: no broker round trip this
+   IBKR is never asked for its open orders (NFR5's spirit: no broker round trip this
    codebase does not need).**
-   - `stale_accepted_orders(cache) == ()` on a cycle → the stub client records zero calls to
-     `generate_order_status_reports`. Mutation: call it unconditionally → the target test goes red.
+   - `stale_accepted_orders(cache) == ()` on a cycle → the stub reader records zero calls.
+     Mutation: call it unconditionally → the target test goes red.
 4. **Given a resolved-broker-ward order was in fact filled while the session was down or
    disconnected, When it is cleared, Then the record discloses that the outcome could not be
    determined here, and the true position effect is left entirely to the existing position-level
@@ -343,34 +369,34 @@ below are this story's own, covering FR34 (maintain alignment throughout the ses
 
 ## Tasks / Subtasks
 
-- [ ] **Task 0 — Standing checks (record in the Debug Log)**
-  - [ ] 0.1 Head, clean tree; `uv run ruff check .` and `make typecheck` clean before the first
+- [x] **Task 0 — Standing checks (record in the Debug Log)**
+  - [x] 0.1 Head, clean tree; `uv run ruff check .` and `make typecheck` clean before the first
     edit.
-  - [ ] 0.2 Baselines: `make test-unit`, `make test-component` (passed/failed/skipped).
-  - [ ] 0.3 Re-measure F17 with `measure_module` (`live_runtime_reconcile.py`,
+  - [x] 0.2 Baselines: `make test-unit`, `make test-component` (passed/failed/skipped).
+  - [x] 0.3 Re-measure F17 with `measure_module` (`live_runtime_reconcile.py`,
     `RuntimeReconciler`, `live_startup_reconcile.py`, `live_session_runner.py`,
     `live_session_steady_state.py`) — confirm nothing has drifted since drafting.
 
-- [ ] **Task 1 — Measure before building (probes in `/tmp/p48/`, not committed) — the gate**
-  - [ ] 1.1 F4/F5(a) re-confirmed: seed a cached `ACCEPTED` order (`venue_order_id` set) against
+- [x] **Task 1 — Measure before building (probes in `/tmp/p48/`, not committed) — the gate**
+  - [x] 1.1 F4/F5(a) re-confirmed: seed a cached `ACCEPTED` order (`venue_order_id` set) against
     Story 4.3's real-engine harness (`test_live_runtime_reconcile_engine.py`'s shape), run a
     runtime cycle with the broker holding the corresponding position, and confirm the order is
     still `ACCEPTED` afterward and no stall occurs at this tier (re-proving F5(a), not assuming
     it). Record the exact statuses `stale_accepted_orders` should target
     (`ACCEPTED`/`PARTIALLY_FILLED`/`TRIGGERED` expected — confirm, do not assume).
-  - [ ] 1.2 F12 re-confirmed on a stand-in IB-shaped client: a `generate_order_status_reports`
+  - [x] 1.2 F12 re-confirmed on a stand-in IB-shaped client: a `generate_order_status_reports`
     call with one order whose `orderRef=""` raises `ValueError` for the **whole** call, not just
     that one order — confirm no partial-result path exists to salvage.
-  - [ ] 1.3 D-D's construction: build a synthetic `OrderStatusReport(order_status=CANCELED, ...)`
+  - [x] 1.3 D-D's construction: build a synthetic `OrderStatusReport(order_status=CANCELED, ...)`
     from a real cached `Order`'s own fields and hand it to a real `LiveExecutionEngine`'s
     `reconcile_execution_report`; confirm it lands as `OrderCanceled(reconciliation=True)` and the
     order's `status` becomes `CANCELED` — this is D-E's mechanism, proven once here before the
     module is built around it.
-  - [ ] 1.4 The stall-reproduction attempt (D-G, RULED (A)): re-run Story 4.3's Task 1.5 probe
+  - [x] 1.4 The stall-reproduction attempt (D-G, RULED (A)): re-run Story 4.3's Task 1.5 probe
     once more, unchanged premise, and record whether anything has changed since (it should not
     have — no code between the two measurements touches this path). State the result plainly in
     the Debug Log: reproduced, or still not reproduced.
-  - [ ] **Gate:** a result contradicting D-A/D-D/D-E's premises (e.g. 1.3 shows the engine refuses
+  - [x] **Gate:** a result contradicting D-A/D-D/D-E's premises (e.g. 1.3 shows the engine refuses
     a synthetic `CANCELED` report for an `ACCEPTED` order for a reason not yet understood, or 1.1
     shows a status this design did not anticipate) reopens that decision **before** Task 3.
     Record, and ask before proceeding.
@@ -380,97 +406,127 @@ below are this story's own, covering FR34 (maintain alignment throughout the ses
     4.3's finding, do not attempt a full-kernel reproduction. Both recorded above the decisions
     they amend; Task 3 may proceed.
 
-- [ ] **Task 3 — `src/core/live_stranded_orders.py` (new) — TDD, unit tier first**
-  - [ ] 3.1 Red (`tests/unit/core/test_live_stranded_orders.py`, duck-typed doubles, no
+- [x] **Task 3 — `src/core/live_stranded_orders.py` (new) — TDD, unit tier first**
+  - [x] 3.1 Red (`tests/unit/core/test_live_stranded_orders.py`, duck-typed doubles, no
     `nautilus_trader` engine): `stale_accepted_orders` filters correctly (status set, in-flight
-    exclusion, no-`venue_order_id` exclusion); `broker_open_order_ids` returns `None` and never
-    raises on any exception from the stubbed client; the `OrderStatusReport` builder produces a
+    exclusion, no-`venue_order_id` exclusion); `broker_open_orders` (as amended by D-D; drafted
+    as `broker_open_order_ids`) returns `Inconclusive` and never raises on any failure of the
+    imitation client; the `OrderStatusReport` builder produces a
     `CANCELED` report using only the order's own fields (AC #4's AST scan pinned here too); the
     debounce (`StaleOrderWatch`) acts only on two identical sightings ≥ `STALE_ORDER_DEBOUNCE_SECONDS`
     apart; `EMITTED_STALE_ORDER_EVENTS`'s dispatch-driven, two-directional pin (D-F).
-  - [ ] 3.2 Green. Module docstring: owns/does-not-own, Why #1–#6 in miniature, D-B's "stays off"
+  - [x] 3.2 Green. Module docstring: owns/does-not-own, Why #1–#6 in miniature, D-B's "stays off"
     restated as a constraint this module does not touch.
 
-- [ ] **Task 4 — Component tier, real engine (AC #1, #2, #3, #4, #5)**
-  - [ ] 4.1 Red (`tests/component/core/test_live_stranded_orders_engine.py`, Story 4.2/4.3's
+- [x] **Task 4 — Component tier, real engine (AC #1, #2, #3, #4, #5)**
+  - [x] 4.1 Red (`tests/component/core/test_live_stranded_orders_engine.py`, Story 4.2/4.3's
     IB-shaped `_Harness`/`_session_exec_config()` precedent): AC #1's two-cycle clear; AC #2's
     three exception shapes contained; AC #3's zero-call-when-nothing-to-check; AC #4's field-set
     and AST assertions; AC #5's per-instrument skip.
-  - [ ] 4.2 Green.
+  - [x] 4.2 Green.
 
-- [ ] **Task 5 — Wire into `RuntimeReconciler` (AC #1 end-to-end, #6, #7)**
-  - [ ] 5.1 Red: `RuntimeReconciler`'s `_run` calls the new module's orchestration function once
+- [x] **Task 5 — Wire into `RuntimeReconciler` (AC #1 end-to-end, #6, #7)**
+  - [x] 5.1 Red: `RuntimeReconciler`'s `_run` calls the new module's orchestration function once
     per `SCOPE_RUNTIME` cycle only (never `SCOPE_RECONNECT`), contained (AR42 — an exception here
     must not stop position handling or the tick). Extend `test_live_runtime_reconcile_engine.py`
     and/or `test_live_runtime_reconcile.py` rather than duplicating Task 4's proofs.
-  - [ ] 5.2 Green. Measure `RuntimeReconciler` immediately after wiring (F17: 77 → ?). If it grows
+  - [x] 5.2 Green. Measure `RuntimeReconciler` immediately after wiring (F17: 77 → ?). If it grows
     past 100, move the tick-level glue to a module-level function first (the `_OkLog`/
     `_FailureStreak` precedent already in this file), then re-measure. Add or update the
     `SIZE_BASELINE` entry in the same commit, with a one-line reason, only if still needed after
     the split.
-  - [ ] 5.3 Docstring: `live_runtime_reconcile.py`'s module docstring gains one paragraph on what
+  - [x] 5.3 Docstring: `live_runtime_reconcile.py`'s module docstring gains one paragraph on what
     this story adds and where it stops (D-A's cost paragraph, condensed).
 
-- [ ] **Task 6 — Guard lists (same commit as the new module, CLAUDE.md Anti-Patterns)**
-  - [ ] 6.1 `src/core/live_stranded_orders.py` added to `NODE_FACING_MODULES`
+- [x] **Task 6 — Guard lists (same commit as the new module, CLAUDE.md Anti-Patterns)**
+  - [x] 6.1 `src/core/live_stranded_orders.py` added to `NODE_FACING_MODULES`
     (`tests/unit/core/test_live_node_never_exits.py`) and `TestImportPurity.MODULES`
     (`tests/component/core/test_session_runner_phases.py`), each with a reason. **Not** added to
     `STOP_PATH_MODULES` — add a comment there saying why (not reached from teardown; the
     `live_runtime_reconcile`/`live_broker_state` precedent).
-  - [ ] 6.2 `FORBIDDEN_ORDER_METHODS`: confirm (do not assume) that `reconcile_execution_report` is
+  - [x] 6.2 `FORBIDDEN_ORDER_METHODS`: confirm (do not assume) that `reconcile_execution_report` is
     absent from the set and that the new module calls nothing else order-mutating —
     `test_live_stop_path_is_inert.py`'s existing scan covers this automatically once
     `live_runtime_reconcile.py` (which now transitively reaches the new module) is on
     `LIVE_MODULE_GLOBS`'s glob; confirm it is, by running the suite, not by reading the glob.
-  - [ ] 6.3 `_STDLIB_AND_FIRST_PARTY`: **run** `tests/integration/core/test_epic1_ac_node.py`; add
+  - [x] 6.3 `_STDLIB_AND_FIRST_PARTY`: **run** `tests/integration/core/test_epic1_ac_node.py`; add
     any new stdlib import by hand if it fails.
-  - [ ] 6.4 `test_exit_outcome_markers.py` passes without growing `UNMARKED` (this story raises no
+  - [x] 6.4 `test_exit_outcome_markers.py` passes without growing `UNMARKED` (this story raises no
     new typed failure the runner must classify — clearing is contained, never raised).
-  - [ ] 6.5 Size caps: `tests/unit/governance/test_size_caps.py` green; any baseline change
+  - [x] 6.5 Size caps: `tests/unit/governance/test_size_caps.py` green; any baseline change
     disclosed with a reason in the same commit.
 
-- [ ] **Task 7 — Operator surface, docs, live verification**
-  - [ ] 7.1 `README.md`/`live start --help`: one sentence on stranded-order clearing (cadence, what
+- [x] **Task 7 — Operator surface, docs, live verification**
+  - [x] 7.1 `README.md`/`live start --help`: one sentence on stranded-order clearing (cadence, what
     is logged, the `CANCELED`-only caveat from D-C).
-  - [ ] 7.2 `docs/agent/nautilus.md`: a short addition under "Runtime reconciliation" (F1–F5, D-A
+  - [x] 7.2 `docs/agent/nautilus.md`: a short addition under "Runtime reconciliation" (F1–F5, D-A
     through D-E) — point readers here from the "Startup reconciliation" section's existing note
     about the stranded-order history.
-  - [ ] 7.3 **Procedure P21** in `docs/qa/phase3-live-verification.md`, after P20 (confirm P20 is
+  - [x] 7.3 **Procedure P21** in `docs/qa/phase3-live-verification.md`, after P20 (confirm P20 is
     still the highest before appending — F20; renumber if a parallel story also claims P21). It
     needs a session that genuinely strands an order (a resting limit order, manually cancelled in
     TWS while the session is stopped, or disconnected at the right moment) — **not read-only**, so
     it is **defined, not run** by the harness, the same as every other Epic 4 live procedure:
     (a) the order clears to `CANCELED` within two runtime cycles of the session confirming the
     broker no longer lists it, with one `reconcile.stale_order_cleared`; (b) a clean session with
-    no resting orders shows zero `generate_order_status_reports` calls attributable to this check
+    no resting orders shows zero open-orders reads attributable to this check
     (AC #3, informational only — not directly observable from logs alone; note this honestly
     rather than overclaiming what the procedure can show); (c) if the operator can arrange a
     restart directly into a poisoned `p7-position-test`-shaped namespace, record whether
     `node:connect` still stalls — this is the only way F14/point 5's open question can ever be
     closed, and it may never be run.
 
-- [ ] **Task 8 — Routed debt (`deferred-work.md`, new "Deferred from: story-4.8")**
-  - [ ] 8.1 Strike the "stranded `ACCEPTED` order and the `p7-position-test` stall" item (carried
+- [x] **Task 8 — Routed debt (`deferred-work.md`, new "Deferred from: story-4.8")**
+  - [x] 8.1 Strike the "stranded `ACCEPTED` order and the `p7-position-test` stall" item (carried
     since Story 4.2/4.3/4.5) with this story's disposition: the order-record half fixed; the
     `node:connect`-stall half still unconfirmed, owner unchanged (the first operator run of
     P17b/P18/P19b/P21 that reproduces it).
-  - [ ] 8.2 Strike the "An `ACCEPTED` order filled while disconnected … mid-run: not fixed" item
+  - [x] 8.2 Strike the "An `ACCEPTED` order filled while disconnected … mid-run: not fixed" item
     (Story 4.3 review, carried through 4.5) with this story's disposition per the D-C ruling.
 
-- [ ] **Task 9 — Mutation sweep (apply, run the target tests, restore; record kill/survive)**
+- [x] **Task 9 — Mutation sweep (apply, run the target tests, restore; record kill/survive)**
   M1 debounce removed (act on one sighting). M2 the `try/except` around
-  `generate_order_status_reports` removed. M3 the "skip when no candidates" check removed
+  the open-orders read removed (drafted against `generate_order_status_reports`; run against
+  `broker_open_orders`, split M2a/M2b in the Debug Log). M3 the "skip when no candidates" check removed
   (unconditional call). M4 the per-instrument outstanding-issue skip removed. M5 `order_status`
   built as `FILLED` instead of `CANCELED`. M6 the re-read verification removed (log before
   confirming it took). M7 `STOP_PATH_MODULES`/`NODE_FACING_MODULES` membership dropped. M8 the
   `SCOPE_RECONNECT` exclusion removed (runs on reconnect cycles too). M9 the raw exception text
   logged instead of `type(exc).__name__` (NFR26).
 
-- [ ] **Task 10 — Gates**
-  - [ ] 10.1 `uv run ruff format .`, `uv run ruff check .`, `make typecheck`.
-  - [ ] 10.2 `make test-unit`, `make test-component`, `tests/integration/core/ --forked`.
-  - [ ] 10.3 `git diff --stat` shows nothing outside this story's file list touched; the D-B
+- [x] **Task 10 — Gates**
+  - [x] 10.1 `uv run ruff format .`, `uv run ruff check .`, `make typecheck`.
+  - [x] 10.2 `make test-unit`, `make test-component`, `tests/integration/core/ --forked`.
+  - [x] 10.3 `git diff --stat` shows nothing outside this story's file list touched; the D-B
     zero-diff claim (no `live_node_builder.py` open-check lines) holds.
+
+### Review Findings
+
+Code review 2026-10-06 (Blind Hunter / Edge Case Hunter / Acceptance Auditor, parallel; reviewer's
+own read, lint/typecheck and unit 265 / component 151 / integration 8 all green before triage).
+34 raw findings → 21 after merging duplicates and dropping 6 as noise. Both decisions ruled
+2026-10-06 (D1 → option 1, D2 → option 1); each is now a patch item below.
+**All 13 patches applied 2026-10-06 (batch, option 0)**, plus one defect found while fixing (below). Code fixes TDD: each test went red first; mutation-checked by reverting each guard (in-flight re-check, `forget()` on a loss, the streak reset, log-once, `ts_accepted`, `trigger_type`) — all six killed, files restored byte-identical. After: unit 3367, component 1928/16 skipped, integration core 100/2 skipped; ruff, format, mypy clean.
+
+- [x] [Review][Patch] **D1 RULED (Allay, 2026-10-06, code review): option 1 — P21 gains a Gateway-restart leg as a pass condition before `done`; the env-var residual stays.** `reqOpenOrders` is client-id scoped, so an order IBKR still holds can read as "absent" and be reconciled `CANCELED` locally — the false-clear D-C/D-D exist to prevent — `ibapi.reqOpenOrders` returns only "the open orders that were placed from this client"; the live client id is the `ibkr_live_client_id` setting, not pinned in the session spec. The deferred-work residual covers only a changed `IBKR_LIVE_CLIENT_ID`. Nothing measures whether an API order placed by client *N* still answers `reqOpenOrders` from client *N* after a **TWS/Gateway restart** (the paper Gateway restarts daily; a GTC order can rest across it). P21 as written (stop → cancel in TWS → restart) never exercises either case. Options: (a) P21 gains a Gateway-restart leg (order resting, Gateway restarted, session restarted, assert the order is **not** cleared) before 4.8 is `done`; (b) code guard — stamp the exec client id into `runtime_flags` at first start and return `Inconclusive("client_id_changed")` on mismatch; (c) accept as a disclosed residual. [src/core/live_stranded_orders.py:159-163]
+- [x] [Review][Patch] **D2 RULED (Allay, 2026-10-06, code review): option 1 — both ratified as written; record the ratification beside the D-D amendment.** D-D implemented stricter than ruled, with a second key the ruling did not name — the ruling says "read `get_open_orders`, compare raw `orderRef` strings, inconclusive when IBKR did not answer"; the code reads the verdict from the adapter's private `OpenOrders` request future instead of the ruling's "≥ 30 s elapsed" test, and `BrokerOpenOrders.lists` also counts a match on IB `orderId` (`venue_order_ids`). Both are disclosed as dev decisions in the story, neither is recorded as ruled (the standing rule: a ruling's literal conditions go back to the PO). Options: (a) ratify both as written; (b) ratify the future verdict, drop the `orderId` key; (c) revert to the ruling's elapsed-time test. [src/core/live_stranded_orders.py:84-89, 131-163]
+- [x] [Review][Patch] In-flight state is not re-checked after the awaited read: a strategy cancel/modify issued during the ≤10 s read is followed by a synthetic `OrderCanceled(reconciliation=True)` on a `PENDING_CANCEL`/`PENDING_UPDATE` order — `clear_stale_order` re-checks `is_open` only; both pending states are open (Task 1.1 table). Guard: `or current.is_inflight`, plus a unit test. [src/core/live_stranded_orders.py:200-202]
+- [x] [Review][Patch] `failing` is never reset when the candidate set empties, so a second inconclusive streak logs nothing — the no-candidates return wipes `pending` but leaves `failing=True`; it clears only after a conclusive read. AC #2's "at most one per streak" fails in the other direction. Reset `failing` on the no-candidates path; test that ends a streak via an empty candidate set. [src/core/live_stranded_orders.py:250-252]
+- [x] [Review][Patch] A refused clear (`returned_false`/`not_canceled`/exception) is re-sent and re-logged every runtime cycle for the life of the session — the order stays a candidate with its old `first`, so `reconcile.stale_order_clear_failed` is one WARNING per 60 s, unlike every other streak record in this codebase. Keep retrying silently; log once per order per failure streak (re-log when the reason changes or the order leaves the candidate set). [src/core/live_stranded_orders.py:197-223, 265-276]
+- [x] [Review][Patch] `pending` survives a connection loss while the position debounce does not — `on_tick`'s `RECOVERING` branch rebuilds `_debounce` ("a row seen before the loss must be seen twice again after it") but not `_stale_orders.pending`, so the first runtime cycle after a reconnect can clear on a single post-reconnect read. Reset `pending` there; test. [src/core/live_runtime_reconcile.py:291-300]
+- [x] [Review][Patch] `check` says "Never raises" but `_confirm` and the `clear_stale_order` loop sit outside its `try` — a raise there is caught by `_run` as `reconcile.cycle_failed` after `_failures.count` was already reset and before the clean-cycle bookkeeping. Extend the containment to the whole body. [src/core/live_stranded_orders.py:261-263]
+- [x] [Review][Patch] `canceled_report` invents `ts_accepted` (= now) despite "built only from the order's own fields"; `Order.ts_accepted` exists — use it. `test_every_field_is_the_orders_own` asserts neither `ts_accepted`, `ts_init` nor `trigger_price`, and no `TRIGGERED` order is built anywhere although `TestCandidates`'s docstring claims it and the stop-order branch (`trigger_price`) exists for it. [src/core/live_stranded_orders.py:186-193; tests/unit/core/test_live_stranded_orders.py:284-299, 423-467]
+- [x] [Review][Patch] The story's ACs and tasks still specify the mechanism the D-D amendment retired — AC #1–#3, Task 3.1 (`broker_open_order_ids`), Task 7.3(b) and Task 9 M2/M3 name `generate_order_status_reports`; the code never calls it. Rewrite those lines to the ruled mechanism with a dated "amended per D-D ruling 2026-10-06" note so the checked boxes match the code. [story file: Acceptance Criteria, Tasks 3.1/7.3/9]
+- [x] [Review][Patch] P21 text contradicts what the code emits and what the window can observe — (a) criterion 1 says "no `order.canceled` from the strategy", but `OrderEventObserver._log_terminal` logs `order.canceled … reconciliation=True` for the engine's own reconciliation event, so a passing run fails the criterion as written; (b) "the next `reconcile.ok` shows `open_orders` one lower" is unobservable within `sleep 200` (runtime `ok` is at most hourly after the first clean cycle) — only the next restart's `scope=startup` ok, or `redis-cli`, can show it; (c) the "~3 minutes" bound (also in deferred-work: "within ~3 minutes") holds for the cancel-in-TWS variant only; the filled-by-hand variant criterion 2 admits clears on cycle 4 (two position-skip cycles first), so `sleep 200` is too short for it. [docs/qa/phase3-live-verification.md:2568-2600; deferred-work.md:3847-3848]
+- [x] [Review][Patch] Test hygiene — (a) assertion message at :559 says "the inconclusive reads reset the count" while the test proves they did not; (b) the NFR26 test (:653-662) passes trivially if nothing is logged — assert `CHECK_FAILED_EVENT` was emitted first; (c) `test_a_raise_anywhere_in_the_read_is_contained` parametrizes five exceptions that all collapse to `Inconclusive("unanswered")` because the double raises after registering — one case should raise before registering (a send failure). [tests/unit/core/test_live_stranded_orders.py:362-369, 559, 653-662]
+- [x] [Review][Patch] The heartbeat tick can now block 30 s sleep + 20 s broker-state read + 10 s open-orders read = 60 s between activity stamps against the 90 s staleness window — the margin shrank from 40 s to 30 s and nothing pins it. Add a unit pin `DEFAULT_HEARTBEAT_INTERVAL_SECONDS + DEFAULT_BROKER_STATE_TIMEOUT_SECONDS + OPEN_ORDERS_DEADLINE_SECONDS < DEFAULT_HEARTBEAT_STALE_AFTER_SECONDS` and a deferred-work line. [src/core/live_runtime_reconcile.py:319-324; src/core/live_stranded_orders.py:61]
+- [x] [Review][Patch] Docstring half-truth: "`asyncio.wait`, never `wait_for`: cancelling would cancel a request Nautilus's own sweep may be sharing" — the module's own detached `get_open_orders` task still runs the adapter's internal 30 s `wait_for`, which cancels the shared future at 30 s. Say so: the adapter's own timeout is unavoidable for any caller; what this module avoids is adding an earlier one. [src/core/live_stranded_orders.py:31-32]
+- [x] [Review][Patch] **Found while fixing (TDD red, 2026-10-06): a stranded stop order could never clear.** `canceled_report` passed `trigger_price` without `trigger_type`, and `OrderStatusReport` refuses a trigger price with `NO_TRIGGER` (`ValueError`) — so every `TRIGGERED` stop-limit (or accepted stop) candidate logged `stale_order_clear_failed reason=ValueError` and stayed open. The unit test `TestCandidates` claimed `TRIGGERED` but no tier ever built one. Fixed: the order's own `trigger_type`; proven against the real engine (`test_a_triggered_stop_limit_is_canceled_with_no_amendment`, mutation-killed). [src/core/live_stranded_orders.py:186-195]
+- [x] [Review][Defer] AC #5's skip set omits the "unresolvable" rows — `_act` returns `outstanding` without `inert = set(unresolvable)` (framework-inexpressible rows, instrument not in cache), so a stale order on such an instrument is not skipped the cycle its row is logged unresolved. Harmless in practice: the engine refuses the report (`instrument … not found` → `returned_false`). [src/core/live_runtime_reconcile.py:319-324, 376-377] — deferred, literal AC gap with no harmful path
+- [x] [Review][Defer] The detached `get_open_orders` task can outlive a session stop by up to 30 s (the adapter's own timeout) → "Task was destroyed but it is pending" at loop close. [src/core/live_stranded_orders.py:132-133] — deferred, pre-existing adapter shape
+
+Dismissed as noise (6): pre-captured request answering from a millisecond-old completion (same cycle, deliberate per the comment); debounce "jitter" at the 60 s boundary (the tick sleeps a full 30 s, so cycle gaps are ≥ 60 s by construction); AST-scan bypasses for the never-`FILLED` pin (require deliberate evasion; matches the 4.3 style); `BrokerOpenOrders.lists` dereferencing `venue_order_id` unconditionally (documented precondition, pre-filtered); a stranded `PENDING_CANCEL` being invisible (in flight belongs to Nautilus's own sweep, by design and documented); the `_emit` AST scan assuming a positional event (a crash is still red).
+
 
 ## Dev Notes
 
@@ -581,9 +637,215 @@ it.
 - `docs/agent/nautilus.md` — "Startup reconciliation", "Runtime Reconciliation" sections this
   story extends.
 
+## Dev Agent Record
+
+### Agent Model Used
+
+Claude Opus 5.5 (`claude-opus-5-5`), dev-story, 2026-10-06, branch `015-paper-trading` at
+`bfdc3cd` (PR #35 merge — the story was drafted on `p3-epic4-base` at `f892d56`).
+
+### Debug Log
+
+**Task 0 — standing checks (2026-10-06, head `bfdc3cd`, clean tree).**
+- 0.1 `uv run ruff check .` clean; `make typecheck` clean (119 files).
+- 0.2 `make test-unit` **3301 passed**; `make test-component` **1906 passed, 16 skipped**.
+- 0.3 F17 has **drifted** since drafting (PR #35's review patches landed after it):
+  `live_runtime_reconcile.py` file 271 → **319**, `RuntimeReconciler` 77 → **83** (headroom 17,
+  not 23); `live_startup_reconcile.py` 318 → 334; `live_session_runner.py` 490 → 492,
+  `LiveSessionRunner` 417 (matches its baseline entry); `live_session_steady_state.py` 260 /
+  `SessionSteadyState` 114 (unchanged); `live_exec_position_reports.py` 34 (unchanged).
+
+**Task 1 — measurements (probes in the session scratchpad `p48/`, not committed; the story's
+`/tmp/p48/` path moved to the scratchpad per harness policy).**
+- 1.1 Status sets, measured on a real `Cache` (status → in `orders_open` / in `orders_inflight` /
+  has `venue_order_id`): `SUBMITTED` F/T/F, `ACCEPTED` T/F/T, `PENDING_CANCEL` T/T/T,
+  `PENDING_UPDATE` T/T/T, `PARTIALLY_FILLED` T/F/T, `TRIGGERED` T/F/T, `INITIALIZED` F/F/F.
+  So `orders_open() − orders_inflight()` with a venue id is exactly
+  `ACCEPTED`/`PARTIALLY_FILLED`/`TRIGGERED` — as the story expected. F4/F5(a) re-proved: a cached
+  `ACCEPTED` order with the broker holding the position stays `ACCEPTED` after four runtime cycles
+  of the real `RuntimeReconciler`, the position is corrected into `INTERNAL-DIFF +10`, no stall.
+- 1.2 F12 re-confirmed on the real `InteractiveBrokersExecutionClient.generate_order_status_reports`
+  (driven unbound on a stand-in `self`): one open order with `orderRef=""` raises
+  `ValueError("'value' string was invalid, was ''")` for the **whole** call, after both
+  `get_positions` and `get_open_orders` ran — no partial result to salvage.
+  **New, premise-breaking (1.2b/1.2c):** the same method begins
+  `positions = await self._client.get_positions(...)`; **`if not positions: return []`**. On a
+  **flat account** it returns `[]` without ever calling `get_open_orders` — so a resting order that
+  is live at IB is "absent from the response" every cycle. A positions read that times out or hits
+  a `ConnectionError` returns `None` from the IB client (`client.py:_await_request` swallows both
+  to `default_value`) and takes the same early return. And `get_open_orders` itself returns `[]` on
+  a timeout/`ConnectionError` (`client/order.py:121-129`). Absence from this response is therefore
+  **not evidence** that the broker no longer lists an order — D-D's premise.
+- 1.3 D-E's mechanism holds: a synthetic `OrderStatusReport(order_status=CANCELED)` built from a
+  real cached `ACCEPTED` order (and a `PARTIALLY_FILLED` one) → `reconcile_execution_report`
+  returns `True`, the order becomes `CANCELED`, `OrderCanceled(reconciliation=True)` published.
+  **Refinement (not a premise change):** with only D-E's listed fields the engine *also* publishes
+  an `OrderUpdated` first — `_should_update` (`execution_engine.py:1893-1911`) compares the
+  report's `price`/`trigger_price` with the order's for `LIMIT`/`STOP_*` types, and the report
+  carried `None`. The report must also carry the order's own `price`/`trigger_price` when it has
+  them.
+- 1.4 Stall probe (D-G, RULED (A)), Story 4.3 Task 1.5's premise unchanged: real
+  `LiveExecutionEngine` + `Cache` + `Portfolio`, a stranded `ACCEPTED` order cached, the broker
+  holding the position. The native pass returns `True` in ~0 ms, the order stays `ACCEPTED`, the
+  position lands in `INTERNAL-DIFF +10`, portfolio initialisation completes. **Still not
+  reproduced** — the live `p7-position-test` stall remains unexplained.
+- Also read: the adapter's single-order `generate_order_status_report` (`execution.py:262-297`,
+  what Nautilus's own in-flight sweep calls) treats "absent from `get_open_orders`" as cancelled —
+  it emits `_on_order_status(order_ref, "Cancelled", reason="Not found in query")` on one sighting.
+  So the framework already accepts absence from `get_open_orders` (not from
+  `generate_order_status_reports`) as evidence. The live exec client id is the fixed
+  `ibkr_live_client_id` setting, so `reqOpenOrders` (F18) does return a previous run's orders.
+- **Gate (Task 1):** 1.2b/1.2c contradict D-D's premise. Recorded; put to the PO before Task 3.
+  **Ruled 2026-10-06 (Allay): read `get_open_orders`, raw `orderRef` strings, inconclusive when
+  IBKR did not answer** — recorded above D-D as its amendment. Implemented with the stricter
+  request-future verdict (`live_broker_state`'s precedent): a read *joined* to another caller's
+  request can return a fast `[]` after that caller's timeout, which the ruling's "≥ 30 s elapsed"
+  test would have accepted. That case is proven against the real adapter
+  (`test_the_adapters_own_timeout_on_a_joined_request_is_inconclusive`).
+
+**Task 3 — the new module (TDD).** Red: `tests/unit/core/test_live_stranded_orders.py` written
+first, failing at collection (`ModuleNotFoundError: src.core.live_stranded_orders`). Green:
+`src/core/live_stranded_orders.py`, 49 unit tests, then 50 with Task 6.2's scan. One design change
+against D-E's field list: the report also carries the order's own `price` / `trigger_price`
+(Task 1.3's refinement), so the engine publishes `OrderCanceled` alone and no `OrderUpdated`
+first. The real engine proves it (`test_a_partly_filled_order_is_canceled_with_no_fill_and_no_amendment`).
+`reconcile.stale_order_check_failed` is logged **once per streak**, AC #2's literal reading,
+rather than re-logged hourly like `_FailureStreak`. That is recorded as accepted debt in
+`deferred-work.md`. The clear also names `strategy_id`, and an order that closed between the read
+and the clear is left alone silently. A fill landing meanwhile is not a failure.
+
+**Task 4 — component tier.** `tests/component/core/test_live_stranded_orders_engine.py`, 17
+tests. The engine half covers the real `LiveExecutionEngine` + `Cache`: the clear is exactly one
+`OrderCanceled(reconciliation=True)`, a partly-filled order keeps its 4 with no `OrderFilled` or
+`OrderUpdated`, and the skipped instrument waits. The adapter half uses the real
+`InteractiveBrokersClient` / `InteractiveBrokersExecutionClient` with a socket stand-in answering
+`reqOpenOrders` through the adapter's own handlers. It covers: our order read beside a manual
+`orderRef=""` one; IBKR's empty answer is conclusive; a dropped socket is
+`Inconclusive("ConnectionError")`, while the adapter's own return value is `[]` (premise
+sibling); a joined request the adapter times out is `Inconclusive("cancelled")` and issues
+nothing; a silent broker is `timed_out` and its request is left running; a down socket issues
+nothing. Canaries: `get_open_orders` registers `OpenOrders` before its first await; the IBOrder
+fields; **`generate_order_status_reports` never asks a flat account for orders** (Task 1.2b,
+pinned); one manual order makes it raise (F12, pinned). Plus Story 4.2's engine-method scan
+(`{"reconcile_execution_report"}`).
+
+**Task 5 — wiring.** Red: 4 of 6 new tests in `test_live_runtime_reconcile.py` failed (no
+`read_open_orders` kwarg, no call). Green: `RuntimeReconciler.__init__` composes
+`StaleOrderWatch(read_open_orders)`. `_run` calls it once per `SCOPE_RUNTIME` cycle, after `_act`
+and before the outstanding-rows return. The skip set is `{row.instrument_id for row in
+outstanding} | set(observation.deferred)`, so it never runs on a reconnect cycle or on a cycle
+whose cache moved. It is contained twice: the watch itself never raises, and the cycle's existing
+`except Exception` is defense in depth (a raise there is a `reconcile.cycle_failed`, with
+positions already handled — tested). End to end through the real engine
+(`test_live_runtime_reconcile_engine.py`, +3): cleared after two cycles, a listed order left
+open, and Task 1.1's filled-while-away case. There, the position is corrected on cycle 2 while
+the order waits, the order is first seen absent on cycle 3 and cleared `CANCELED` on cycle 4,
+`filled_qty` stays 0, and `INTERNAL-DIFF +10` is kept. **Size (5.2):** `RuntimeReconciler`
+83 → **89** (cap 100), file 319 → 330, largest function 30. `live_stranded_orders.py` file 158,
+`StaleOrderWatch` 37, largest function 23. No baseline entry needed.
+
+**Task 6 — guard lists.** 6.1: added to `NODE_FACING_MODULES` and `TestImportPurity.MODULES`
+with reasons; not on `STOP_PATH_MODULES`, with a comment saying why. **6.2, confirmed by
+mutation, and it was false.** An unreachable `node.trader.cancel_order(current)` planted in the
+module passed **all 4458** unit + component tests. No glob-driven `FORBIDDEN_ORDER_METHODS` scan
+exists: `LIVE_MODULE_GLOBS` drives the dependency-invariance and no-retry scans, and
+`_engine_method_calls` follows only the exec engine. The module now carries its own scan
+(`TestNoOrderMethodIsCalled`, using the stop-path constant and helper), which goes red on the
+same mutation. `FORBIDDEN_ORDER_METHODS` was re-read and `reconcile_execution_report` is not in
+it. The same false sentence stands in the stop-path file's comments for
+`live_startup_reconcile`, `live_runtime_reconcile` and `live_session_resume`. That gap predates
+this story and is routed to Epic 5 pre-work in `deferred-work.md`. 6.3:
+`tests/integration/core/test_epic1_ac_node.py --forked` 8/8 with no `_STDLIB_AND_FIRST_PARTY`
+edit. 6.4/6.5: `test_exit_outcome_markers` and `test_size_caps` green, `UNMARKED` and the
+baseline unchanged.
+
+**Task 7 — docs.** README (the runtime paragraph), `live start --help`, `docs/agent/nautilus.md`
+("Stranded orders (Story 4.8)" under Runtime Reconciliation, plus a pointer from Startup
+Reconciliation), and **Procedure P21** appended after P20, which was still the highest. P21 is
+**defined, not run** (operator-only: it needs a resting order left at IBKR and cancelled in TWS).
+
+**Task 8 — routed debt.** Both carried items are struck in place, with "Deferred from: story-4.8"
+added. That section holds the order-record half fixed, the stall half still unconfirmed (owner
+unchanged), "mid-run: not fixed" closed per D-C (A), the D-D amendment and its client-id-scoping
+residual, once-per-streak silence, and the false `LIVE_MODULE_GLOBS` claim.
+
+**Task 9 — mutation sweep** (scratchpad `p48/mutate.py`, files copied and restored; no
+`git stash`). Target suite: the two new test files, the two runtime-reconcile test files and the
+three guard-list files.
+
+| Mutation | Result | Killed by (count) |
+|---|---|---|
+| M1 debounce removed | killed | 11 |
+| M2a the read's `try/except` removed | killed | 1 |
+| M2b the watch's `try/except` removed | killed | 5 |
+| M3 broker asked unconditionally | killed | 2 |
+| M4 per-instrument skip removed | killed | 5 |
+| M5 `FILLED` built instead of `CANCELED` | killed | 9 |
+| M6 re-read verification removed | killed | 1 |
+| M7a `NODE_FACING_MODULES` entry dropped | **survived** | 0 |
+| M7b `TestImportPurity.MODULES` entry dropped | **survived** | 0 |
+| M8 runs on reconnect cycles too | killed | 1 |
+| M9a raw exception text in the check record | killed | 4 |
+| M9b raw exception text in the clear record | killed | 1 |
+
+M7a/M7b survive by construction: CLAUDE.md's Anti-Patterns already record that "nothing asserts
+the lists are complete". That is disclosed, not fixed here; a completeness pin is outside this
+story's file list. (`STOP_PATH_MODULES` is deliberately not a member, so it has no M7 to run.)
+
+**Task 10 — gates (final, after the import re-sort).** `ruff format` (1 file reformatted), `ruff
+check` clean after `--fix --select I` sorted 5 import blocks, `make typecheck` clean (120 files).
+`make test-unit` **3359 passed** (baseline 3301, +58). `make test-component` **1927 passed, 16
+skipped** (baseline 1906, +21). `tests/integration/core/ --forked` **100 passed, 2 skipped**.
+`git diff --quiet` holds for `live_node_builder.py` (D-B zero-diff), `live_startup_reconcile.py`,
+`live_session_runner.py`, `live_session_steady_state.py`, `src/models/`, `src/db/`, `alembic/`,
+`src/services/` and `src/api/`.
+
+### Completion Notes List
+
+- Story 4.8 implemented. A cached open order (`ACCEPTED`/`PARTIALLY_FILLED`/`TRIGGERED`, not in
+  flight, with a venue order id) that IBKR's own open-orders answer omits on two conclusive reads
+  ≥ 60 s apart is reconciled `CANCELED` through `reconcile_execution_report`, on runtime cycles
+  only, skipping any instrument with a position row standing or deferred. It is logged
+  `reconcile.stale_order_cleared` once the re-read proves it took.
+- **The Task 1 gate fired and was ruled (2026-10-06):** D-D's `generate_order_status_reports`
+  read would have locally cancelled live resting orders on any flat account. Detection now reads
+  the adapter's `OpenOrders` request future via `get_open_orders`.
+- **Found, outside the story's premise:** the "`LIVE_MODULE_GLOBS` scans it for forbidden order
+  methods" claim is false. The new module has its own scan; three sibling modules don't, and that
+  is routed to Epic 5 pre-work.
+- **Not closed, by construction:** the `p7-position-test` `node:connect` stall. It is still
+  unreproduced at component tier (Task 1.4). P21c is the only live route.
+- Two mutations survive (M7a/M7b, guard-list completeness), already a CLAUDE.md-documented gap.
+- P21 is defined, not run. All new behaviour is proven against a real `LiveExecutionEngine` and
+  the real IB adapter with a socket stand-in.
+
+### File List
+
+- `src/core/live_stranded_orders.py` (new)
+- `src/core/live_runtime_reconcile.py` (composition, one call site, docstring paragraph)
+- `src/cli/commands/live.py` (`live start --help` sentence)
+- `tests/unit/core/test_live_stranded_orders.py` (new)
+- `tests/component/core/test_live_stranded_orders_engine.py` (new)
+- `tests/unit/core/test_live_runtime_reconcile.py` (wiring tests)
+- `tests/component/core/test_live_runtime_reconcile_engine.py` (end-to-end tests, `_reconciler`
+  gains the open-orders read)
+- `tests/unit/core/test_live_node_never_exits.py` (`NODE_FACING_MODULES`)
+- `tests/component/core/test_session_runner_phases.py` (`TestImportPurity.MODULES`)
+- `tests/unit/core/test_live_stop_path_is_inert.py` (comment only: why not on `STOP_PATH_MODULES`)
+- `README.md`
+- `docs/agent/nautilus.md`
+- `docs/qa/phase3-live-verification.md` (Procedure P21)
+- `_bmad-output/implementation-artifacts/deferred-work.md` ("Deferred from: story-4.8", two
+  items struck)
+- `_bmad-output/implementation-artifacts/sprint-status.yaml`
+- `_bmad-output/implementation-artifacts/4-8-clear-a-stranded-order-after-a-broker-confirmed-fill-or-cancel.md`
+
+
 ## Change Log
 
 | Date | Change |
 | ---- | ------ |
 | 2026-09-28 | Story drafted (research + create-story), ready-for-dev. D-C (CANCELED-only vs. inferring FILLED) and D-G (scope of the stall-reproduction attempt) are open PO rulings, recorded above the decisions they gate. Every cited file:line, including F13's kernel sequence, was re-read directly against the current tree/wheel at drafting; none is carried forward unverified. |
 | 2026-09-29 | D-C and D-G ruled by Allay (both (A), as recommended): stranded orders always resolve to `CANCELED` with a disclosed caveat, never a fabricated `FILLED`; Task 1 re-confirms Story 4.3's existing stall-reproduction finding and does not attempt a full-kernel harness. Task 2 marked done. No open PO rulings remain — Task 3 may proceed. |
+| 2026-10-06 | Implemented (dev-story, `015-paper-trading`). Task 1 gate fired: `generate_order_status_reports` returns `[]` on a flat account without asking for orders. PO ruled D-D amended to a `get_open_orders` read, implemented via the adapter's request future. New `src/core/live_stranded_orders.py`, wired into `RuntimeReconciler` (runtime cycles only). Found by mutation: no glob-driven forbidden-order-method scan exists, so the new module carries its own; the sibling gap is routed to Epic 5 pre-work. P21 defined, not run. Status → review. |
+| 2026-10-06 | Code review (Blind Hunter / Edge Case Hunter / Acceptance Auditor): 34 raw → 21 findings; D1 (P21d Gateway-restart leg, pass condition before `done`) and D2 (D-D deviations ratified) ruled by Allay; 13 patches + 1 defect found while fixing (stop orders could never clear: missing `trigger_type`) applied; 2 deferred; 6 dismissed. ACs #1–#3 rewritten to the amended D-D mechanism. Status stays `review`: P21 (including P21d) is not run. |

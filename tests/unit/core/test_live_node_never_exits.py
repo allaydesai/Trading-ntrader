@@ -104,6 +104,12 @@ NODE_FACING_MODULES = (
     # `ReconciliationFailedError` that the runner's `finally` must receive —
     # raising is fine here, exiting never is. Added in the creating commit.
     "src/core/live_runtime_reconcile.py",
+    # Story 4.8. Called from the runtime reconciler's cycle on every second
+    # heartbeat tick: it asks the node's IB client for its open orders and
+    # hands the exec engine a `CANCELED` report on the node's loop. Every
+    # failure is contained and logged — it never raises, and never exits.
+    # Added in the creating commit.
+    "src/core/live_stranded_orders.py",
     # Story 4.3. Runs inside `node.build()` (the exec-client factory, beside
     # `live_exec_avg_px.py`) and then inside the adapter's position-update task
     # for the whole session. Added in the creating commit.

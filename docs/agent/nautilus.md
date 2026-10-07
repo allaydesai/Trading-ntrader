@@ -364,6 +364,13 @@ session's `trader-PAPER-<id>:*` keys with the process stopped. Doing so also
 loses the restored client-order-id counter (Story 3.4), so prefer a new session.
 Never use `flush()`, which is `FLUSHDB`.
 
+**Orders are not checked here.** The phase counts the cache's open orders
+(`open_orders`) but never asks IBKR about them, and Nautilus's own pass inside
+`node:connect` reconciles only orders IBKR's report contains. An order `ACCEPTED`
+before a restart and filled or cancelled at IBKR meanwhile stays `ACCEPTED`
+through startup. The running session clears it; see "Stranded orders (Story 4.8)"
+below.
+
 ## Runtime Reconciliation (Story 4.3)
 
 Nautilus 1.220.0 has **no continuous position reconciliation**. Its one
@@ -417,6 +424,61 @@ startup. So runtime alignment is split three ways:
 TWS trade, a split) is corrected one to two cycles after it happens, not on
 arrival. `reconcile.ok scope=runtime` is logged on the first clean cycle, after
 any problem, and otherwise at most hourly (`cycles` says how many it covers).
+
+### Stranded orders (Story 4.8)
+
+An order `ACCEPTED` (or `PARTIALLY_FILLED`/`TRIGGERED`) before a restart or a
+disconnect, then filled or cancelled at IBKR while the session was away, used to
+stay open in the cache forever. Nothing native resolves it: Nautilus's startup
+pass and its open-order check reconcile only orders a broker report contains,
+never a cached order missing from one. The runtime reconciler's own position
+cycle deferred only in-flight orders, so it never looked at this one either.
+`src/core/live_stranded_orders.py` now runs on every **runtime** cycle (never a
+reconnect cycle) after the position step:
+
+- **Candidates** are the cache's open orders that are not in flight and carry
+  a venue order id. When there are none, IBKR is not asked.
+- **IBKR is asked through the exec client's own `get_open_orders`**, never
+  `generate_order_status_reports`. That method returns `[]` on a flat account
+  without asking for open orders at all, so a resting order still live at IBKR
+  would look gone. One manual TWS order (empty `orderRef`) also makes it raise
+  for the whole account. The verdict is read from the adapter's `OpenOrders`
+  request **future**, the `live_broker_state` precedent. The adapter turns a
+  timeout or a dropped socket into `[]`, so only IBKR's own `openOrderEnd`
+  counts. Anything else is inconclusive, and an inconclusive read confirms
+  nothing: one `reconcile.stale_order_check_failed` WARNING per streak.
+- **An order absent on two conclusive reads at least 60 s apart** is reconciled
+  `CANCELED`. The cycle hands the engine a synthetic `OrderStatusReport` built
+  from the order's own fields — its price, and for a stop order its trigger
+  price **and trigger type** (`OrderStatusReport` refuses a trigger price
+  without one) — through
+  `reconcile_execution_report`, so the clear is an `OrderCanceled(reconciliation=True)`.
+  It never calls `cancel_order`. The clear is logged `reconcile.stale_order_cleared`
+  (WARNING, naming the instrument, side, quantity and `client_order_id`) only
+  once the re-read shows `CANCELED`. A refusal is retried every cycle, logged
+  `reconcile.stale_order_clear_failed` once per reason, and is contained.
+  Clearing is hygiene and never stops a session.
+- **An order the strategy put in flight during the read** (`PENDING_CANCEL`,
+  `PENDING_UPDATE`) is left alone: IBKR's answer to that command is coming, and
+  Nautilus's own sweep owns it. A connection loss forgets every sighting, as it
+  restarts the position debounce.
+- **An instrument with a position row still standing this cycle, or deferred,
+  is skipped**, so order hygiene never runs ahead of position correctness.
+- **Always `CANCELED`, never a fabricated `FILLED`** (PO ruling D-C (A)). Whether
+  the order filled or was cancelled at IBKR cannot be told from here, and the
+  record says so. If it filled, the position cycle has already corrected the
+  holding broker-ward (`INTERNAL-DIFF`). The cost is that the order's own history
+  reads "cancelled" for what may have been a fill.
+- **`reqOpenOrders` is client-id scoped**: it lists only orders placed from the
+  session's own client id. A changed `IBKR_LIVE_CLIENT_ID` makes every older
+  order read as absent. Whether a Gateway restart does the same is unmeasured;
+  P21d is the check.
+
+**What it does not close:** the historical `p7-position-test` stall happened
+inside `node:connect`, before any of this code runs. It is still unreproduced
+(Story 4.8 Task 1.4, as in 4.3 Task 1.5). A namespace that is already poisoned
+heals only once a session runs past the debounce with this code. Procedure P21
+in `docs/qa/phase3-live-verification.md` is the live check.
 
 **Trading permission** (`ConnectionMonitor`): granted at the end of the
 startup `reconcile` phase, and after a loss **only** by a clean reconnect cycle

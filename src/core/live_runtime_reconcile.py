@@ -69,6 +69,16 @@ clean cycle after anything else, and otherwise at most hourly, each carrying
 ``cycles`` — the clean cycles it summarises. A failing read is one
 ``reconcile.cycle_failed`` per streak (re-logged at most hourly), never one per
 cycle.
+
+**Stranded orders** (Story 4.8). Each runtime cycle — never a reconnect cycle,
+whose grant stays exactly as ruled — also runs
+:class:`~src.core.live_stranded_orders.StaleOrderWatch`, skipping every
+instrument with a row still standing or deferred: a cached open order IBKR has
+stopped listing is reconciled ``CANCELED`` after two conclusive reads a
+debounce apart, so a stale order no longer rides into every restart. It cannot
+prevent or explain a stall inside ``node:connect``, which happens before any
+cycle exists, and a namespace already poisoned heals only once a session runs
+past the debounce with this code.
 """
 
 import time
@@ -92,6 +102,11 @@ from src.core.live_startup_reconcile import (
     cached_positions,
     log_discrepancy,
     position_report,
+)
+from src.core.live_stranded_orders import (
+    OpenOrdersReader,
+    StaleOrderWatch,
+    broker_open_orders,
 )
 from src.models.broker_state import BrokerState
 from src.models.position_reconciliation import (
@@ -230,6 +245,8 @@ class RuntimeReconciler:
         read_state: The broker read — Story 4.1's ``read_broker_state``.
         clock: Monotonic seconds, for the debounce, the throttle and
             ``elapsed_ms``.
+        read_open_orders: The open-orders read behind the stale-order check
+            (Story 4.8) — ``broker_open_orders``.
     """
 
     def __init__(
@@ -242,6 +259,7 @@ class RuntimeReconciler:
         settings: Any,
         read_state: BrokerStateReader = read_broker_state,
         clock: Callable[[], float] = time.monotonic,
+        read_open_orders: OpenOrdersReader = broker_open_orders,
     ) -> None:
         self._node = node
         self._monitor = monitor
@@ -257,6 +275,7 @@ class RuntimeReconciler:
         self._hold_back = _HoldBack()
         self._ok = _OkLog()
         self._failures = _FailureStreak()
+        self._stale_orders = StaleOrderWatch(read_open_orders)
 
     @property
     def unreported_clean_cycles(self) -> int:
@@ -280,6 +299,7 @@ class RuntimeReconciler:
                 # RECOVERING with the socket up, and that must not restart it.
                 self._recovering = True
                 self._debounce = _Debounce()
+                self._stale_orders.forget()
                 self._ok.needed = True
             await self._run(SCOPE_RECONNECT)
         elif state is ConnectionState.CONNECTED:
@@ -297,6 +317,12 @@ class RuntimeReconciler:
             outstanding = self._act(observation, scope)
             self._failures.count = 0
             self._ok.deferred.update(observation.deferred)
+            if scope == SCOPE_RUNTIME:
+                # Story 4.8: an order on an instrument with a row still standing waits.
+                skip = {row.instrument_id for row in outstanding} | set(observation.deferred)
+                await self._stale_orders.check(
+                    self._node, self._log, self._clock(), skip=skip, scope=scope
+                )
             if outstanding:
                 self._ok.needed = True
                 return

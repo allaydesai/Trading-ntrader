@@ -3570,11 +3570,15 @@ Story 4.5 (resume a strategy mid-position). Every item routed to 4.5 by Stories 
   none can); the holding is never traded or adjusted. **Consequence:** P18b's hand-bought share, or
   the paper account's old `AAPL +4`, blocks that instrument's strategy until removed by hand in TWS
   (P18's "Know before starting" note records it).
-- **The stranded `ACCEPTED` order and the `p7-position-test` stall (4.3, :3449).** → **Carried
+- ~~**The stranded `ACCEPTED` order and the `p7-position-test` stall (4.3, :3449).**~~ —
+  **Order-record half RESOLVED by Story 4.8 (2026-10-06); stall half still open** — see "Deferred
+  from: story-4.8" below. Original entry: → **Carried
   forward, still conditional:** neither P17b nor P18 has been run, so the live stall has never been
   reproduced. Owner unchanged: the first operator run of P17b/P18/P19b that reproduces it.
-- **An `ACCEPTED` order filled while disconnected, corrected as `INTERNAL-DIFF` (4.3 review,
-  :3492).** → **Next start: governed by D-C** (the unowned `INTERNAL-DIFF` refuses that strategy,
+- ~~**An `ACCEPTED` order filled while disconnected, corrected as `INTERNAL-DIFF` (4.3 review,
+  :3492).**~~ — **Order record RESOLVED by Story 4.8 (2026-10-06), per PO ruling D-C (A)**: the
+  order now clears `CANCELED` mid-run; re-attributing the fill to the strategy stays refused — see
+  "Deferred from: story-4.8" below. Original entry: → **Next start: governed by D-C** (the unowned `INTERNAL-DIFF` refuses that strategy,
   loudly). **Mid-run: not fixed** — re-attributing a synthetic position to a strategy needs cache
   surgery, which Story 4.2's PO ruling rejected. The strategy keeps running flat beside it until
   the next start. **Owner: Epic 4 retrospective.**
@@ -3833,3 +3837,76 @@ it landed.
   the 30 s budget); `SessionView.cash_known` has no caller in `src/`; budget exhaustion in
   `live reconcile` is reported as exit 4 "broker unreachable". **Owner:** whoever next touches
   `live_session_view.py` / `live_reconcile.py`.
+
+## Deferred from: story-4.8 (2026-10-06)
+
+- **The stranded `ACCEPTED` order (carried from 4.2 → 4.3 → 4.5 → the Epic 4 retro).** →
+  **Order-record half FIXED.** `src/core/live_stranded_orders.py`, on every runtime cycle: a
+  cached open order (not in flight, with a venue order id) that IBKR's own `get_open_orders`
+  answer omits on two conclusive reads ≥ 60 s apart is reconciled `CANCELED` through
+  `reconcile_execution_report`. `reconcile.ok`'s `open_orders` count is now true to the broker
+  within about two runtime cycles of the session first seeing the order gone (~2–3 minutes after
+  start for an order cancelled while away; ~4–5 for one filled while away, whose position
+  correction comes first).
+- **The `p7-position-test` stall inside `node:connect`.** → **Still unconfirmed, not fixed.** It
+  happens before any code of ours runs (F13). Story 4.8 Task 1.4 re-ran Story 4.3 Task 1.5's
+  component-tier probe: the native pass returns `True` at once and portfolio initialisation
+  completes, so it is still not reproduced. A namespace poisoned *before* 4.8 heals only once a
+  session runs past the debounce. If restarts into it stall before then, 4.8 does not help it.
+  **Owner unchanged:** the first operator run of P17b/P18/P19b/P21 (P21c) that reproduces it.
+- **"An `ACCEPTED` order filled while disconnected … mid-run: not fixed" (4.3 review → 4.5).** →
+  **Closed per PO ruling D-C (A).** The order clears `CANCELED`, never a fabricated `FILLED`, and
+  `reconcile.stale_order_cleared` says the outcome could not be determined. The holding is carried
+  by the position cycle's `INTERNAL-DIFF`. **Accepted residual:** the strategy still does not learn
+  that its order filled, and the order history reads "cancelled" for a fill. Re-attribution stays
+  refused (Story 4.2's PO ruling). The next start's resume check names the unowned holding.
+- **D-D amended (PO ruling, 2026-10-06, Task 1 gate).** `generate_order_status_reports` returns
+  `[]` on a flat account without asking for open orders, and on a timed-out positions read. It
+  was replaced by a read of the adapter's own `OpenOrders` request future. A canary
+  (`test_generate_order_status_reports_never_asks_a_flat_account_for_orders`) goes red by name if
+  an upgrade changes this. **Residual, accepted:** the read relies on `reqOpenOrders`'s client-id
+  scoping (F18), so an order placed under a different `ibkr_live_client_id` than the one running
+  now is not listed and would be cleared. **Owner:** whoever changes `IBKR_LIVE_CLIENT_ID` for an
+  existing session (do not, with resting orders open). **The Gateway-restart case is not
+  residual (code review ruling D1, 2026-10-06):** whether `reqOpenOrders` still lists an order
+  across a Gateway restart is unmeasured, and P21d is a pass condition before 4.8 is `done`. If
+  P21d fails, the guard is a client id recorded at first start (`Inconclusive` on mismatch).
+- **Inconclusive reads are silent after the first.** `reconcile.stale_order_check_failed` logs
+  once per streak, and a streak that never ends (e.g. an adapter drift that always raises) is not
+  re-logged hourly the way `reconcile.cycle_failed` is. **Owner:** the first operator who sees one
+  in a transcript and wants the reminder.
+
+- **"`LIVE_MODULE_GLOBS` still scans it for every forbidden order method" is false (found by
+  mutation, Story 4.8 Task 6.2).** An unreachable `node.trader.cancel_order(...)` planted in
+  `live_stranded_orders.py` passed every unit and component test (4458). `LIVE_MODULE_GLOBS`
+  drives the dependency-invariance and no-retry scans, not a `FORBIDDEN_ORDER_METHODS` scan, and
+  `_engine_method_calls` follows only the exec engine. 4.8's module now carries its own scan
+  (`TestNoOrderMethodIsCalled`). The same false sentence still stands in
+  `test_live_stop_path_is_inert.py`'s comments for `live_startup_reconcile.py`,
+  `live_runtime_reconcile.py` and `live_session_resume.py`, none of which is scanned for these
+  names. **Owner:** Epic 5 pre-work. The fix is a globbed scan over `src/core/live_*.py` with an
+  explicit, reasoned allowlist for the order path's legitimate `submit_order`.
+
+## Deferred from: code review of 4-8-clear-a-stranded-order-after-a-broker-confirmed-fill-or-cancel (2026-10-06)
+
+- **AC #5's skip set omits the "unresolvable" rows.** `RuntimeReconciler._act` returns
+  `outstanding` without `inert = set(unresolvable)` — the framework-inexpressible rows
+  (`position_report` returned `None`, instrument not in the cache) — so the stale-order check does
+  not skip such an instrument the cycle its row is logged unresolved. No harmful path: the engine
+  refuses the `CANCELED` report for an instrument it cannot look up (`returned_false`,
+  `reconcile.stale_order_clear_failed`). A literal gap in the AC, untested either way.
+  **Owner:** whoever next touches `_act`'s return value.
+- **The detached `get_open_orders` task can outlive a session stop.** `broker_open_orders` leaves
+  its `ensure_future(ib_client.get_open_orders(...))` running after the 10 s deadline; the
+  adapter's own `_await_request(request, 30)` keeps it alive up to 30 s, so a stop inside that
+  window closes the loop over a pending task ("Task was destroyed but it is pending"). Teardown
+  noise only; the adapter's own in-flight sweep has the same shape. **Owner:** nobody until a
+  transcript shows it.
+- **The heartbeat tick's worst case is now 60 s between activity stamps, against a 90 s
+  staleness window.** A runtime tick stamps activity, then runs the cycle: the broker-state read
+  (20 s deadline) and the stale-order read (10 s) can both run to their deadlines before the next
+  stamp, 30 s later. Pinned at the defaults
+  (`test_a_runtime_tick_with_both_reads_timing_out_still_stamps_inside_the_staleness_window`:
+  the worst gap must leave one heartbeat interval of margin). Not pinned: a session started with a
+  non-default heartbeat interval, and the DB writes inside the tick. **Owner:** whoever adds a
+  third read to the tick, or makes the interval configurable per session.

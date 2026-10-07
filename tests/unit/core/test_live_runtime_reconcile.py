@@ -41,6 +41,7 @@ from src.core.live_startup_reconcile import (
     ReconciliationFailedError,
     ReconciliationFailure,
 )
+from src.core.live_stranded_orders import StaleOrderWatch
 from tests.unit.core.test_live_startup_reconcile import (
     AAPL,
     NVDA,
@@ -954,6 +955,120 @@ class TestGrantAfterReconciliation:
         assert state is None
         assert monitor.submission_withheld is True
         assert _events(logs, "session.connection_read_failed")
+
+
+class _SpyWatch:
+    """Story 4.8's stale-order watch, as the reconciler sees it: one call per cycle."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, frozenset[str]]] = []
+        self.raises: BaseException | None = None
+
+    def forget(self) -> None:
+        pass
+
+    async def check(self, node, log, now, *, skip, scope) -> None:
+        self.calls.append((scope, frozenset(skip)))
+        if self.raises is not None:
+            raise self.raises
+
+
+def _watched(world: _World) -> _SpyWatch:
+    spy = _SpyWatch()
+    world.reconciler._stale_orders = spy
+    return spy
+
+
+class TestStaleOrdersAreCheckedOnRuntimeCyclesOnly:
+    """Story 4.8, D-A: once per runtime cycle, never on a reconnect cycle."""
+
+    def test_each_runtime_cycle_checks_once(self):
+        world = _World()
+        spy = _watched(world)
+
+        world.cycles(3)
+
+        assert spy.calls == [(SCOPE_RUNTIME, frozenset())] * 3
+
+    def test_a_reconnect_cycle_never_checks(self):
+        world = _World()
+        spy = _watched(world)
+        world.lose_and_recover()
+        world.cache.inflight = [SimpleNamespace(instrument_id=InstrumentId.from_str(NVDA))]
+
+        for _ in range(4):
+            world.clock.now += TICK
+            asyncio.run(world.reconciler.on_tick())
+
+        assert len(world.reader.calls) == 4, "premise: the reconnect cycles ran"
+        assert spy.calls == []
+
+    def test_a_cycle_whose_cache_moved_does_not_check(self):
+        world = _World()
+        spy = _watched(world)
+        world.reader.during = lambda: world.cache.positions.append(_Position(NVDA, STRATEGY, "1"))
+
+        world.cycles(1)
+
+        assert spy.calls == []
+
+    def test_instruments_with_a_row_still_standing_or_deferred_are_skipped(self):
+        """AC #5: the row's instrument (debouncing, then corrected this cycle)
+        and an instrument deferred for an in-flight order."""
+        world = _World(
+            state=_state(_held(NVDA, "5")),
+            inflight=[SimpleNamespace(instrument_id=InstrumentId.from_str(AAPL))],
+        )
+        spy = _watched(world)
+
+        world.cycles(2)
+
+        assert spy.calls == [(SCOPE_RUNTIME, frozenset({NVDA, AAPL}))] * 2
+
+    def test_a_check_that_raises_never_leaves_the_tick_and_positions_were_handled(self):
+        world = _World(state=_state(_held(NVDA, "5")))
+        spy = _watched(world)
+        spy.raises = RuntimeError("boom")
+
+        with capture_logs() as logs:
+            world.cycles(2)
+
+        assert len(spy.calls) == 2, "premise: the check ran and raised"
+        assert len(world.engine.reports) == 1, "the position half still corrected"
+        assert _events(logs, CYCLE_FAILED_EVENT)
+
+    def test_a_connection_loss_makes_the_watch_forget_its_sightings(self):
+        """The position debounce restarts on a loss; so must the order one —
+        an absence seen before it must be seen twice again after it."""
+        world = _World()
+        forgotten = []
+        world.reconciler._stale_orders.forget = lambda: forgotten.append(True)
+
+        world.lose_and_recover()
+        for _ in range(3):
+            world.clock.now += TICK
+            asyncio.run(world.reconciler.on_tick())
+
+        assert forgotten == [True], "once per loss, not once per reconnect cycle"
+
+    def test_the_reconciler_builds_its_watch_from_the_injected_read(self):
+        calls = []
+
+        async def _read(node):
+            calls.append(node)
+            raise AssertionError("never asked: no candidate")
+
+        reconciler = RuntimeReconciler(
+            node=SimpleNamespace(),
+            monitor=ConnectionMonitor(session_id="s-1"),
+            log=_log(),
+            connection_reader=lambda settings: UP,
+            settings=object(),
+            read_open_orders=_read,
+        )
+
+        assert isinstance(reconciler._stale_orders, StaleOrderWatch)
+        assert reconciler._stale_orders._read is _read
 
 
 def test_the_unit_doubles_are_what_the_cycle_reads():

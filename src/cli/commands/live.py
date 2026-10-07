@@ -378,8 +378,11 @@ def start(session: str, connect_timeout: float) -> None:
     subscribes to live bars. While running, the session re-checks its
     positions against IBKR every minute and corrects a disagreement seen
     twice broker-ward (`reconcile.discrepancy`); a strategy position the broker
-    no longer covers stops the session, positions untouched. After a
-    disconnect, no order is sent until a clean check re-establishes state.
+    no longer covers stops the session, positions untouched. An order the
+    cache still shows open that IBKR no longer lists, checked twice a minute
+    apart, is reconciled CANCELED (`reconcile.stale_order_cleared`) — never
+    an invented fill. After a disconnect, no order is sent until a clean
+    check re-establishes state.
 
     \b
     Exit codes:

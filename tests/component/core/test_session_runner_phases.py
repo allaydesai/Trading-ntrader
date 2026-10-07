@@ -1701,6 +1701,11 @@ class TestImportPurity:
         # same domain values and corrects through the exec engine — no
         # `src.db`/`src.services` import (AR38). Added in the creating commit.
         "src.core.live_runtime_reconcile",
+        # Story 4.8. Imported by `live_runtime_reconcile` and run on its
+        # runtime cycle: reads the cache's orders and IBKR's open orders and
+        # clears through the exec engine — no `src.db`/`src.services` import
+        # (AR38). Added in the creating commit.
+        "src.core.live_stranded_orders",
         # Story 4.3. Imported by `live_node_builder` and executed during
         # `node.build()`, beside `live_exec_avg_px`. Added in the creating commit.
         "src.core.live_exec_position_reports",
