@@ -76,6 +76,41 @@ async def get_backtest_service(session: DbSession) -> BacktestQueryService:
 
 Extract results **before engine goes out of scope** — engine is single-use.
 
+**Live hosts (Story 5.1, FR41).** The same extractor computes a paper session's metrics —
+there is no second metrics path. Settle the host first, then pass it as `engine=`:
+
+```python
+host = LiveHost.settle(source, starting_balance=Decimal("100000"))  # source: .portfolio + .cache
+result = ResultsExtractor(engine=host).extract_results(start, end)
+```
+
+`settle` is the live analogue of `BacktestEngine.end()`. It collects the session's legs —
+`cache.positions()` + `cache.position_snapshots()`, less reconciliation-owned (`EXTERNAL` /
+`INTERNAL-DIFF`) positions, which `trades` never records either — copies them in close order
+(open legs last, the order a HEDGING backtest presents), and primes a **copy** of the source
+portfolio's analyzer with a **ledger** (starting capital + Σ realized P&L) in place of an
+account. The settled host is a snapshot: nothing done to the source afterwards changes it, and
+`settle` never writes to the source. Four rules follow:
+
+- **Never an IB balance.** IB's `AccountBalance.total` is `NetLiquidation`, or a literal
+  `400000` under margin stress. A live host's final balance and `PnL (total)` come from the
+  ledger only. Neither its `cache` nor its `portfolio` has an account accessor, and a raw
+  `TradingNode` passed as `engine=` is a `TypeError`. On a finished backtest the ledger equals
+  the account's balance to the cent, which is why the two paths agree.
+- **NETTING legs count.** A re-entered NETTING position keeps its earlier closed legs in
+  `position_snapshots()`; the settled host's `cache.positions_closed()` returns them.
+- **Capital is the session's own.** `starting_balance` is a required `Decimal`, positive, in
+  whole cents. The extractor never falls back to `settings.default_balance` for a live host, and
+  refuses a different one.
+- **The source decides completeness.** `settle` reads whatever legs its source holds, and a
+  node's cache is **not** a complete record of a NETTING session. A flip in one order replaces
+  the closed position with no snapshot, a redelivered closing fill is snapshotted twice, and a
+  restart drops every snapshot. A seal builds its source from `trades` rows (one per
+  `PositionClosed`, deduplicated by `insert_trade_if_absent`), not from a node.
+
+The dispatch lives in two helpers (`_starting_balance`, `_final_balance`); every metric formula
+is shared.
+
 ## Exceptions
 
 **DB exceptions** (`src/db/exceptions.py`): `DatabaseConnectionError`, `DuplicateRecordError`, `ValidationError`.

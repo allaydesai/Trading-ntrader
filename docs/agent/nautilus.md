@@ -96,6 +96,17 @@ positions_report = engine.trader.generate_positions_report()
 
 **Custom metrics** calculated by `ResultsExtractor` (Nautilus doesn't provide): max drawdown, CAGR, Calmar ratio, max drawdown duration. Starting balance must be passed separately.
 
+**The analyzer is primed by `BacktestEngine.end()` only.** `PortfolioAnalyzer.calculate_statistics(account, positions)` is called in exactly one place in the 1.220 wheel — `BacktestEngine._log_post_run`, with `cache.positions() + cache.position_snapshots()`. Nothing on the live path calls it, so a `TradingNode`'s analyzer is empty: unprimed, the returns statistics read `None` and the PnL statistics a silent `0.0`. `calculate_statistics` reads only `account.starting_balances()` and `account.balances_total()`. For a live host, use `LiveHost.settle` (`src/core/results_extractor.py`, Story 5.1). It primes a copy of the analyzer from the session's own legs and a realized-P&L ledger — never from IB's `AccountState`, whose total is `NetLiquidation`.
+
+**A NETTING cache is not a complete record of closed legs.** Every production backtest venue is HEDGING (one position per round trip), so the backtest path never meets any of this:
+
+- **Re-entry after flat.** The engine calls `cache.snapshot_position()` (a pickled copy with id `{position_id}-{uuid4}`, kept in an in-memory dict), then reopens the same object in place. `positions_closed()` never returns the snapshots.
+- **Flip in one order.** `ExecutionEngine._flip_position` calls `_open_position(instrument, None, …)`, which builds a *new* `Position` and overwrites the closed one in `cache._positions`, with **no snapshot**. The closed leg is gone (`execution/engine.pyx:1440-1442, 1600`; `cache.pyx:2124`). Pinned by `test_canary_a_netting_flip_leaves_no_closed_leg_in_the_cache`.
+- **Redelivered closing fill.** `_open_position` snapshots *before* `position.apply` raises `KeyError` on the duplicate trade id, so the same closed leg is snapshotted twice (`engine.pyx:1444-1450`).
+- **Restart.** Snapshots are never written to the cache database, and a Redis-loaded position replays to its current leg.
+
+So a session's closed legs are complete only in the `trades` table (one row per `PositionClosed`).
+
 ### Venue Configuration
 
 ```python
