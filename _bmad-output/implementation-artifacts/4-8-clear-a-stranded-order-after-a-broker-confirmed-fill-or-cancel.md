@@ -1,6 +1,6 @@
 # Story 4.8: Clear a Stranded Order After a Broker-Confirmed Fill or Cancel
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -818,6 +818,11 @@ skipped** (baseline 1906, +21). `tests/integration/core/ --forked` **100 passed,
 - Two mutations survive (M7a/M7b, guard-list completeness), already a CLAUDE.md-documented gap.
 - P21 is defined, not run. All new behaviour is proven against a real `LiveExecutionEngine` and
   the real IB adapter with a socket stand-in.
+- **P21 run live 2026-10-07 and passed** (P21d, P21a, P21b; P21c not arranged). After a real
+  Gateway restart, IBKR still attributed the resting GTC order to client id 10 and the session did
+  not clear it. Once it was cancelled at IBKR with the session stopped, the order cleared
+  `CANCELED` on runtime cycle 2 with exactly one `reconcile.stale_order_cleared`. Full evidence is in
+  the P21 result log.
 
 ### File List
 
@@ -849,3 +854,4 @@ skipped** (baseline 1906, +21). `tests/integration/core/ --forked` **100 passed,
 | 2026-09-29 | D-C and D-G ruled by Allay (both (A), as recommended): stranded orders always resolve to `CANCELED` with a disclosed caveat, never a fabricated `FILLED`; Task 1 re-confirms Story 4.3's existing stall-reproduction finding and does not attempt a full-kernel harness. Task 2 marked done. No open PO rulings remain — Task 3 may proceed. |
 | 2026-10-06 | Implemented (dev-story, `015-paper-trading`). Task 1 gate fired: `generate_order_status_reports` returns `[]` on a flat account without asking for orders. PO ruled D-D amended to a `get_open_orders` read, implemented via the adapter's request future. New `src/core/live_stranded_orders.py`, wired into `RuntimeReconciler` (runtime cycles only). Found by mutation: no glob-driven forbidden-order-method scan exists, so the new module carries its own; the sibling gap is routed to Epic 5 pre-work. P21 defined, not run. Status → review. |
 | 2026-10-06 | Code review (Blind Hunter / Edge Case Hunter / Acceptance Auditor): 34 raw → 21 findings; D1 (P21d Gateway-restart leg, pass condition before `done`) and D2 (D-D deviations ratified) ruled by Allay; 13 patches + 1 defect found while fixing (stop orders could never clear: missing `trigger_type`) applied; 2 deferred; 6 dismissed. ACs #1–#3 rewritten to the amended D-D mechanism. Status stays `review`: P21 (including P21d) is not run. |
+| 2026-10-07 | Procedure P21 run live inside RTH and passed: P21d (D1's pass condition: a GTC order resting across a real Gateway restart is not cleared, still attributed to client id 10), P21a (cleared `CANCELED` on runtime cycle 2, one `reconcile.stale_order_cleared`, nothing sent to IBKR, next startup `open_orders=0`), P21b (no `stale_order_*` without a candidate). P21c not arranged. PO ruled the NFR26 criterion met (our records 0; unscoped hits are Nautilus's own logger) and rescoped the P20/P21 wording. Status → done. |

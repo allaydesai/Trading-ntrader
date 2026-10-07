@@ -36,7 +36,7 @@
 
 generated: 2026-08-03
 last_updated: >-
-  2026-10-06 (STORY 4.8 CODE REVIEW DONE: stays review. Three parallel layers (Blind Hunter / Edge Case Hunter / Acceptance Auditor): 34 raw -> 21 findings. Allay ruled D1 (reqOpenOrders is client-id scoped: new P21d Gateway-restart leg is a pass condition before done) and D2 (the request-future verdict and the orderId key ratified). 13 patches applied TDD, plus a defect found while fixing: a stranded stop order could never clear (OrderStatusReport refuses a trigger price without trigger_type). 2 deferred, 6 dismissed. Unit 3367, component 1928/16 skipped, integration core 100/2 skipped. STAYS review: P21 incl. P21d not run. epic-4 stays in-progress.); 2026-10-06 (Story 4.8 ready-for-dev -> in-progress -> review: dev-story on 015-paper-trading. Task 1 gate fired -- generate_order_status_reports returns [] on a flat account without asking for orders -- and Allay ruled D-D amended to a get_open_orders read (implemented via the adapter request future). New src/core/live_stranded_orders.py wired into RuntimeReconciler, runtime cycles only; unit 3359, component 1927/16 skipped, integration core 100/2 skipped; mutation sweep 10/12 killed (M7a/M7b guard-list completeness survive, documented gap); P21 defined, not run. Found: no glob-driven forbidden-order-method scan exists for live_* modules -- routed to Epic 5 pre-work. epic-4 stays in-progress until 4.8 is done.); 2026-09-28 (EPIC 4 RETROSPECTIVE DONE: epic-4-retrospective optional -> done. Documentation-driven
+  2026-10-07 (STORY 4.8 DONE, EPIC 4 DONE: 4-8 review -> done, epic-4 in-progress -> done. Procedure P21 run live inside RTH (15:03-15:33 ET) against the paper Gateway and passed. P21d (D1's pass condition): a GTC resting order survived a real Gateway restart still attributed to client id 10, and the session did not clear it in 300 s. P21a: once the order was cancelled at IBKR with the session stopped, it cleared CANCELED on runtime cycle 2 with exactly one reconcile.stale_order_cleared, nothing was sent to IBKR, and the next startup read open_orders=0. P21b: no stale_order_* without a candidate. P21c not arranged. Allay ruled the NFR26 criterion met (our records 0; the unscoped hits are Nautilus's own logger) and the P20/P21 wording was rescoped. A temporary uncommitted probe strategy placed the resting order and was removed afterwards. Epic 5 is next.); 2026-10-06 (STORY 4.8 CODE REVIEW DONE: stays review. Three parallel layers (Blind Hunter / Edge Case Hunter / Acceptance Auditor): 34 raw -> 21 findings. Allay ruled D1 (reqOpenOrders is client-id scoped: new P21d Gateway-restart leg is a pass condition before done) and D2 (the request-future verdict and the orderId key ratified). 13 patches applied TDD, plus a defect found while fixing: a stranded stop order could never clear (OrderStatusReport refuses a trigger price without trigger_type). 2 deferred, 6 dismissed. Unit 3367, component 1928/16 skipped, integration core 100/2 skipped. STAYS review: P21 incl. P21d not run. epic-4 stays in-progress.); 2026-10-06 (Story 4.8 ready-for-dev -> in-progress -> review: dev-story on 015-paper-trading. Task 1 gate fired -- generate_order_status_reports returns [] on a flat account without asking for orders -- and Allay ruled D-D amended to a get_open_orders read (implemented via the adapter request future). New src/core/live_stranded_orders.py wired into RuntimeReconciler, runtime cycles only; unit 3359, component 1927/16 skipped, integration core 100/2 skipped; mutation sweep 10/12 killed (M7a/M7b guard-list completeness survive, documented gap); P21 defined, not run. Found: no glob-driven forbidden-order-method scan exists for live_* modules -- routed to Epic 5 pre-work. epic-4 stays in-progress until 4.8 is done.); 2026-09-28 (EPIC 4 RETROSPECTIVE DONE: epic-4-retrospective optional -> done. Documentation-driven
   method per the Epic 1-3 precedent, synthesized from all 7 story records, deferred-work.md's Epic-4
   entries and the Epic 3 retro; full document at implementation-artifacts/epic-4-retro-2026-09-28.md.
   Run against the p3-epic4-base worktree, NOT 015-paper-trading (Epic 4 is unmerged there). Seven
@@ -2648,7 +2648,8 @@ development_status:
   # FR32-39 scope) commissioning the stranded-ACCEPTED-order fix. Per this file's own status
   # definition an epic is done only when ALL its stories are; the retrospective itself already
   # ran and stays done regardless of 4.8's outcome.
-  epic-4: in-progress
+  # 2026-10-07: 4.8 done (P21 passed live), so epic-4 is done again.
+  epic-4: done
   4-1-read-the-brokers-authoritative-view-of-positions-and-cash: done
   4-2-reconcile-against-the-broker-before-any-strategy-trades: done
   4-3-keep-runtime-state-aligned-with-the-broker: done
@@ -2656,7 +2657,7 @@ development_status:
   4-5-resume-a-strategy-mid-position: done
   4-6-check-positions-and-cash-against-ibkr-on-demand: done
   4-7-absorb-corporate-actions-through-broker-authoritative-state: done
-  4-8-clear-a-stranded-order-after-a-broker-confirmed-fill-or-cancel: review
+  4-8-clear-a-stranded-order-after-a-broker-confirmed-fill-or-cancel: done
   epic-4-retrospective: done
 
   # Epic 5: Seal a Session & Compare It Against Its Backtest
