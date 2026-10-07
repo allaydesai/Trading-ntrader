@@ -3910,3 +3910,77 @@ it landed.
   the worst gap must leave one heartbeat interval of margin). Not pinned: a session started with a
   non-default heartbeat interval, and the DB writes inside the tick. **Owner:** whoever adds a
   third read to the tick, or makes the interval configurable per session.
+
+## Deferred from: story-5.1 (2026-10-07)
+
+- **The seal's live host cannot come from the session's Redis namespace or a node's cache.** →
+  **Story 5.2 / 5.3.** A NETTING cache loses or duplicates closed legs three ways (the last two
+  found by 5.1's code review, verified in source and by an integration canary):
+  - `Cache.snapshot_position` keeps re-entered legs in an in-memory dict
+    (`cache/cache.pyx:2219-2252`) that is never written to the database, and a Redis-loaded
+    position replays to its current leg (`live_session_view.py:16-19`).
+  - A flip in one order (`SMAMomentum(allow_short=True)`) opens a *new* `Position` over the
+    closed one with no snapshot (`execution/engine.pyx:1440-1442, 1600`; `cache.pyx:2124`).
+    Measured: 32 closed legs, 0 in the cache, and the ledger reads 100000.00 against an account
+    of 112478.00. Pinned by `test_canary_a_netting_flip_leaves_no_closed_leg_in_the_cache`.
+  - A redelivered closing fill is snapshotted before `apply` raises `KeyError`
+    (`engine.pyx:1444-1450`), so one leg counts twice.
+
+  Build the seal's legs from `trades` rows (one per `PositionClosed`, deduplicated by
+  `insert_trade_if_absent`) into a fresh `Cache` and a real `Portfolio`, then `LiveHost.settle`
+  that pair. A real `Portfolio` registers the same 17 statistics a backtest's does
+  (`portfolio/portfolio.pyx:163-179`). Do not read the namespace.
+- **`analyzer.returns()` is per-leg realized return keyed by close time, and an open leg sits at
+  the epoch.** → **Story 5.2.** `add_positions` adds `realized_return` at
+  `unix_nanos_to_dt(ts_closed)`. A still-open position has `ts_closed == 0`, a 1970 entry, and
+  `calculate_statistics`' `self._returns.sort_index()` discards its result, so that entry stays
+  wherever it was inserted. `LiveHost.settle` mirrors the backtest path exactly, for parity. AR35's
+  reconstruction must decide whether its equity series *is* this one; the backtest side cannot
+  change (AR44).
+- **A backtest's stored equity curve ends with a `time: 0` point when a position is open at the
+  end of data.** Pre-existing backtest behaviour, the previous item's consequence:
+  `extract_equity_curve` walks `analyzer.returns()` in insertion order and emits the open leg's
+  epoch entry last. Pinned as-is in `EQUITY_CURVE_BEFORE`
+  (`tests/integration/core/test_results_extractor_parity.py`). Not this story's to change (the
+  backtest path is bit-identical by AC #3). **Owner:** a UI story, if the chart ever shows it.
+- **A settled analyzer's `_positions` carries the source's as well as the legs.** `settle`
+  deep-copies the source analyzer, so its copy keeps whatever `_positions` the source had
+  (`end()`'s, on a backtest). `add_positions` then appends without a reset, and `reset()` does not
+  clear it either. Only `get_performance_stats_general` reads it (`LongRatio`), and the extractor
+  never calls that. Wheel code, recorded rather than worked around. **Owner:** nobody unless a
+  caller of the general statistics appears.
+- **The backtest path would undercount trades on a NETTING venue.** `positions_closed()` does not
+  return snapshotted legs (measured: 16 closed legs, `positions_closed()` = 0). Moot today:
+  every production backtest venue is `OmsType.HEDGING` (`backtest_orchestrator.py:330, 368`,
+  `backtest_runner.py`). Recorded so a future NETTING backtest does not rediscover it; the live
+  path already handles it (`_ClosedLegs`). **Owner:** whoever adds a NETTING backtest venue.
+
+## Deferred from: code review of story-5.1 (2026-10-07)
+
+All three are pre-existing on the backtest path. `LiveHost.settle` reproduces them on purpose:
+AC #3 (backtest bit-identical) and AC #8 (one engine, two paths, identical results) forbid fixing
+one side. Fix both sides together or neither, the way Story 5.6's `profit_pct` item is handled.
+
+- **An open position's return is filed at the epoch, and the 1970 daily resample wrecks Sharpe,
+  volatility and Sortino.** `add_positions` files `realized_return` at
+  `unix_nanos_to_dt(ts_closed)`, and an open position has `ts_closed == 0`. The returns
+  statistics then run `resample("1D").sum()` (`analysis/statistic.py:140`), filling ~20,600
+  zero-return days from 1970 to the session. Measured with four identical closed trades plus one
+  open leg (its only P&L is $1 commission): Sharpe 6.61→0.12, volatility 0.77→0.014, Sortino
+  18.64→0.34. The backtest golden's own Sharpe (0.160) is only computable because of this
+  artifact. It matters most for paper: a session stops with positions open by design (stop ≠
+  flatten), so a sealed session that stopped mid-position reads a near-zero Sharpe.
+  **Owner:** Story 5.5 (open positions at seal) to surface it, then an epic-level decision to fix
+  both sides.
+- **An open position's entry commission is scored as a losing trade by the analyzer's PnL
+  statistics but not by `losing_trades`.** `AvgLoser`/`MinLoser`/`Expectancy` count every P&L at or
+  below zero (`loser_avg.py:35`, `loser_min.py:35`, `expectancy.py:43`), and an open leg's
+  realized P&L is its commission. Measured on the 5.1 component session plus one reopened leg:
+  `avg_loss` −502.0→−251.5, `min_loser` −502.0→−1.0, `expectancy` 398.0→318.2, win/loss (3, 1)
+  unchanged. The backtest golden's `min_loser: 0.0` is the same artifact.
+  **Owner:** Story 5.5, then the same both-sides decision.
+- **The stored equity curve compounds per-leg price returns on starting capital, so its last point
+  disagrees with `final_balance`.** `extract_equity_curve` is `(1 + returns).cumprod() × starting`
+  over position realized returns, which are price returns that take no account of position size.
+  Backtest golden: last point 177,094.46 against `final_balance` 159,404.73. **Owner:** Story 5.2
+  (AR35 reconstructs the series from the closed-trade P&L sequence, which is dollar-based).

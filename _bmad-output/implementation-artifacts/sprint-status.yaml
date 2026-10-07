@@ -2666,7 +2666,7 @@ development_status:
   # omission. Scope discipline: any new metrics table/model/view invented for paper
   # results is an FR42 violation and must be rejected in review.
   epic-5: backlog
-  5-1-compute-metrics-for-a-live-host-through-the-existing-extractor: backlog
+  5-1-compute-metrics-for-a-live-host-through-the-existing-extractor: done
   5-2-reconstruct-a-sealed-sessions-equity-curve-from-its-trades: backlog
   5-3-seal-a-stopped-session-into-a-comparable-run-record: backlog
   5-4-record-the-conditions-the-session-actually-ran-under: backlog

@@ -2,25 +2,267 @@
 Backtest results extraction utilities.
 
 This module provides functions for extracting comprehensive results and metrics
-from a Nautilus Trader backtest engine after execution.
+from a Nautilus Trader backtest engine after execution — or from a live host
+settled for results (Story 5.1, FR41). There is one calculation path: a live
+host differs from a finished backtest only in where its two balances come from,
+and that difference lives in ``_starting_balance`` and ``_final_balance``.
+
+**Why a live host is settled first.** Three things a finished ``BacktestEngine``
+has and a live node does not (story F2, F3, F6):
+
+- Its analyzer is primed — ``BacktestEngine.end()`` calls
+  ``PortfolioAnalyzer.calculate_statistics``; nothing in Nautilus's live path
+  ever does, so every statistic would read ``None``.
+- Its account balance is the run's cash. A live IB account's total is
+  ``NetLiquidation``, or a literal ``400000`` the adapter substitutes under
+  margin stress (Story 4.1 F5) — never read as cash or equity here.
+- Its venues are HEDGING, one position per round trip. A live session is
+  NETTING: a re-entered position keeps its earlier closed legs in
+  ``cache.position_snapshots()``, which ``positions_closed()`` never returns.
+
+:meth:`LiveHost.settle` supplies all three from the session's own legs, into a
+snapshot of its own — it never writes to its source.
+
+**A node's cache is not a complete record of a NETTING session** (code review,
+2026-10-07, measured against the 1.220 engine). A flip in one order replaces
+the closed position with a new one and snapshots nothing; a redelivered closing
+fill is snapshotted twice; a restart drops every snapshot. ``settle`` reads
+whatever legs its source holds, so a seal builds its source from ``trades``
+rows (Stories 5.2/5.3), not from a node.
 """
 
+import copy
+from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
+from typing import Any, Protocol
 
 import structlog
 from nautilus_trader.backtest.engine import BacktestEngine
 from nautilus_trader.model.currencies import USD
 from nautilus_trader.model.identifiers import Venue
+from nautilus_trader.model.objects import Currency, Money
 
 from src.config import get_settings
+from src.core.live_trade_recorder import RECONCILIATION_STRATEGY_IDS
 from src.models.backtest_result import BacktestResult
 
 logger = structlog.get_logger(__name__)
 
 
+class ResultsHost(Protocol):
+    """What results are read from: a Nautilus ``portfolio`` and ``cache``.
+
+    ``BacktestEngine`` and ``TradingNode`` both expose the two, as does any
+    pair built offline over a fresh ``Cache`` and a real ``Portfolio`` — whose
+    constructor registers the same statistics every backtest's carries.
+    """
+
+    @property
+    def portfolio(self) -> Any: ...
+
+    @property
+    def cache(self) -> Any: ...
+
+
+@dataclass(frozen=True)
+class _Ledger:
+    """A live session's own balances, standing in for an account.
+
+    ``PortfolioAnalyzer.calculate_statistics`` reads exactly two members of its
+    account — ``starting_balances()`` and ``balances_total()`` — and this offers
+    exactly those, built from the session's realized P&L. On a finished backtest
+    that sum equals the account's own balance change to the cent (story F4).
+    Not a ``CashAccount``: that refuses a negative balance, and a session that
+    lost more than its capital still produces a record.
+    """
+
+    starting: Money
+    final: Money
+
+    @classmethod
+    def over(cls, legs: Iterable[Any], starting_balance: Decimal) -> "_Ledger":
+        """The ledger over ``legs``: starting capital, plus every realized P&L.
+
+        Raises:
+            ValueError: A leg realized P&L in a currency other than USD — the
+                extractor reads USD only, so it would be summed into a USD balance.
+        """
+        realized = Decimal(0)
+        for leg in legs:
+            # Never ``None``: ``Position.apply`` always sets it (position.pyx:715-718).
+            pnl = leg.realized_pnl
+            if pnl.currency != USD:
+                raise ValueError(
+                    f"a live host's results are in USD, but a leg realized P&L in "
+                    f"{pnl.currency.code}; refusing to sum it into a USD balance"
+                )
+            realized += pnl.as_decimal()
+        return cls(Money(starting_balance, USD), Money(starting_balance + realized, USD))
+
+    def starting_balances(self) -> dict[Currency, Money]:
+        return {USD: self.starting}
+
+    def balances_total(self) -> dict[Currency, Money]:
+        return {USD: self.final}
+
+
+@dataclass(frozen=True)
+class _ClosedLegs:
+    """A settled live host's ``cache``: the one read the extractor makes.
+
+    Answers ``positions_closed()`` from every leg, so a NETTING position's
+    snapshotted legs count exactly as a HEDGING backtest's separate positions
+    do. It offers no ``account_for_venue``, ``account`` or ``accounts``:
+    reading an account through a live host is an ``AttributeError``.
+    """
+
+    legs: tuple[Any, ...]
+
+    def positions_closed(self) -> list[Any]:
+        return [leg for leg in self.legs if leg.is_closed]
+
+
+@dataclass(frozen=True)
+class _SettledPortfolio:
+    """A settled live host's ``portfolio``: its own analyzer, and nothing else.
+
+    No ``account``: the source portfolio's would return the IB account.
+    """
+
+    analyzer: Any
+
+
+_CENT = Decimal("0.01")
+
+
+def _chronological(leg: Any) -> tuple[bool, int]:
+    """Closed legs in close order, then open ones — the order a HEDGING
+    backtest's cache presents (code review, 2026-10-07: NETTING presents them
+    by position id, snapshots after, which scrambles the returns series)."""
+    return (bool(leg.is_open), int(leg.ts_closed))
+
+
+def _require_capital(starting_balance: Any) -> None:
+    """Refuse capital a results record cannot carry as-is (AR7)."""
+    if not isinstance(starting_balance, Decimal):
+        raise TypeError(
+            f"starting_balance must be a Decimal, not {type(starting_balance).__name__}"
+        )
+    if not starting_balance.is_finite() or starting_balance <= 0:
+        raise ValueError(f"starting capital must be positive, not {starting_balance}")
+    if starting_balance != starting_balance.quantize(_CENT):
+        raise ValueError(
+            f"starting capital must be whole cents; USD Money would round {starting_balance}"
+        )
+
+
+@dataclass(frozen=True)
+class LiveHost:
+    """A live host settled for results, as ``BacktestEngine.end()`` settles a backtest.
+
+    Build one with :meth:`settle` and pass it as ``ResultsExtractor(engine=...)``.
+    It is a snapshot taken at settle time: its ``portfolio`` holds a private,
+    primed analyzer; its ``cache`` answers copies of the session's
+    strategy-owned closed legs; its balances are the session's own ledger.
+    Nothing done to the source afterwards changes it. The extractor's ``venue``
+    is not used for one.
+    """
+
+    portfolio: _SettledPortfolio
+    cache: _ClosedLegs
+    starting_balance: Decimal
+    final_balance: Money
+
+    @classmethod
+    def settle(cls, source: ResultsHost, *, starting_balance: Decimal) -> "LiveHost":
+        """Settle ``source`` for results — the live analogue of ``BacktestEngine.end()``.
+
+        Collects the legs ``end()`` analyses — every position and every position
+        snapshot — less its venue filter (a session's cache is its own) and less
+        reconciliation-owned positions, which the trades table never records
+        either (Story 3.6 D-D). Copies them in chronological order, builds the
+        ledger over them, and primes a copy of ``source.portfolio.analyzer`` —
+        same registered statistics — with it. Writes nothing to ``source``.
+
+        Reads only the legs the source holds: a node's cache is not a complete
+        record of a NETTING session (see the module docstring).
+
+        Args:
+            source: Anything exposing a Nautilus ``portfolio`` and ``cache``.
+            starting_balance: The session's own starting capital, whole cents.
+                Required — there is no default (AR7: stored as-is, never
+                normalised).
+
+        Returns:
+            The settled host.
+
+        Raises:
+            TypeError: ``starting_balance`` is not a ``Decimal``.
+            ValueError: Capital that is not positive or not whole cents, or a leg
+                realized P&L in a currency other than USD.
+        """
+        _require_capital(starting_balance)
+        legs = sorted(
+            (
+                copy.deepcopy(position)
+                for position in [*source.cache.positions(), *source.cache.position_snapshots()]
+                if str(position.strategy_id) not in RECONCILIATION_STRATEGY_IDS
+            ),
+            key=_chronological,
+        )
+        ledger = _Ledger.over(legs, starting_balance)
+        analyzer = copy.deepcopy(source.portfolio.analyzer)
+        analyzer.calculate_statistics(ledger, legs)
+        return cls(
+            _SettledPortfolio(analyzer), _ClosedLegs(tuple(legs)), starting_balance, ledger.final
+        )
+
+
+def _starting_balance(host: Any, given: float | None, settings: Any) -> float:
+    """The balance the extractor computes returns from.
+
+    A backtest host keeps the rule it always had: the explicit balance, else
+    ``settings.default_balance``. A live host carries its own capital, and a
+    different explicit one is refused rather than silently preferred. A raw
+    ``TradingNode`` is refused outright — its account balance is IB's
+    ``NetLiquidation`` (matched by class name, so this backtest-path module
+    imports nothing live).
+    """
+    if any(klass.__name__ == "TradingNode" for klass in type(host).__mro__):
+        raise TypeError(
+            "a TradingNode's account balance is IB's NetLiquidation, never cash; "
+            "settle it with LiveHost.settle(node, starting_balance=...) first"
+        )
+    if isinstance(host, LiveHost):
+        own = float(host.starting_balance)
+        if given is not None and float(given) != own:
+            raise ValueError(
+                f"a live host carries its own starting capital ({own}); "
+                f"refusing a different starting_balance ({given})"
+            )
+        return own
+    return given if given is not None else float(settings.default_balance)
+
+
+def _final_balance(host: Any, venue: Venue) -> float | None:
+    """The host's ending balance; ``None`` when a backtest host has no account.
+
+    A live host's is its ledger — never IB's ``AccountState``, whose total is
+    ``NetLiquidation`` or an invented ``400000`` (Story 4.1 F5).
+    """
+    if isinstance(host, LiveHost):
+        return float(host.final_balance.as_double())
+    account = host.cache.account_for_venue(venue)
+    if not account:
+        return None
+    return float(account.balance_total(USD).as_double())
+
+
 class ResultsExtractor:
     """
-    Extracts comprehensive results from a backtest engine.
+    Extracts comprehensive results from a backtest engine or a settled live host.
 
     This class handles all results extraction logic including:
     - Basic metrics (returns, trades, win/loss)
@@ -28,14 +270,19 @@ class ResultsExtractor:
     - Equity curve extraction
     - CAGR and Calmar ratio calculations
 
+    The same code computes both: a :class:`LiveHost` differs only in where its
+    starting and final balances come from (Story 5.1, FR41).
+
     Example:
         >>> extractor = ResultsExtractor(engine, venue)
         >>> result = extractor.extract_results(start_date, end_date)
+        >>> live = LiveHost.settle(node, starting_balance=Decimal("100000"))
+        >>> result = ResultsExtractor(live).extract_results(start_date, end_date)
     """
 
     def __init__(
         self,
-        engine: BacktestEngine,
+        engine: BacktestEngine | LiveHost | None,
         venue: Venue | None = None,
         settings=None,
         starting_balance: float | None = None,
@@ -44,20 +291,20 @@ class ResultsExtractor:
         Initialize the results extractor.
 
         Args:
-            engine: The backtest engine to extract results from
-            venue: The venue used in the backtest (defaults to SIM)
+            engine: The finished backtest engine to extract results from, or a
+                    live host settled with :meth:`LiveHost.settle`
+            venue: The venue used in the backtest (defaults to SIM; unused for
+                   a live host)
             settings: Application settings (defaults to get_settings())
             starting_balance: Actual starting balance used in backtest
-                              (defaults to settings.default_balance)
+                              (defaults to settings.default_balance). A live
+                              host carries its own; a different value here
+                              raises ``ValueError``.
         """
         self.engine = engine
         self.venue = venue if venue else Venue("SIM")
         self.settings = settings if settings else get_settings()
-        self._starting_balance = (
-            starting_balance
-            if starting_balance is not None
-            else float(self.settings.default_balance)
-        )
+        self._starting_balance = _starting_balance(engine, starting_balance, self.settings)
 
     def extract_results(
         self,
@@ -77,13 +324,12 @@ class ResultsExtractor:
         if not self.engine:
             return BacktestResult()
 
-        account = self.engine.cache.account_for_venue(self.venue)
-        if not account:
+        final_balance = _final_balance(self.engine, self.venue)
+        if final_balance is None:
             return BacktestResult()
 
         # Calculate basic metrics
         starting_balance = self._starting_balance
-        final_balance = float(account.balance_total(USD).as_double())
         total_return = (final_balance - starting_balance) / starting_balance
 
         # Get trade statistics
