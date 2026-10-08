@@ -363,10 +363,40 @@ The phase's rules:
 - **Anything else is corrected broker-ward** through
   `exec_engine.reconcile_execution_report(PositionStatusReport)`, and must then
   re-compare clean.
+- **A holding the adapter cannot express is named, not refused** (Story 5.7, PO
+  ruling D2, "same-symbol rule everywhere, name the rest"). Two shapes:
+  - **An unresolved contract** (`IB-CONID-*`: a bond, a warrant, a BAG, a
+    delisted symbol) refuses the start (`unresolvable_discrepancy`) only when
+    its symbol is *held*: one a cached position (any owner) is held under —
+    that row could be the holding the cache reads as "broker 0" — or one an
+    instrument the session's strategies trade is (code review R1, PO ruling
+    2026-10-07: a flat strategy must not buy on top of a holding it cannot
+    see). Any other unresolved row is logged `resolution=unresolved` once and
+    left out of the judgement. The match is the D1 normaliser (`BRK B` ≡
+    `BRK-B`), on the symbol before the instrument id's **last** dot
+    (`BRK.B.NYSE` is `BRK.B`). A row with no symbol matches whenever anything is
+    held (fail closed), and its refusal says so rather than claiming a match.
+  - **A broker quantity the instrument's size precision cannot express** (a
+    DRIP's `+22.5` against a whole-share equity) is judged **truncated toward
+    zero** to whole steps of `10**-size_precision`, and the remainder is named
+    once (`reconcile.inexpressible_remainder`, WARNING, both quantities and
+    `size_step`). The step is `size_precision`, never `size_increment`:
+    `make_qty` rounds to the precision, and an increment can be coarser (FX,
+    futures, lots), so truncating to it would cut an exact `150` to `100` (code
+    review R2). It is never
+    rounded: `Instrument.make_qty` rounds half-even, so it reads `23.5` as `24`,
+    a share the account does not hold. Nautilus's own pass inside
+    `node:connect` imports a whole extra share for that half
+    (`INTERNAL-DIFF +1`, measured 2026-10-07; the IB adapter builds its report
+    at the string's precision). The phase corrects that down like any other net
+    disagreement. Records that *report* the broker (`reconcile.ok`'s
+    `instruments`, the resume check's `broker_quantity`) keep its exact read.
+    `reconcile.ok` carries `inexpressible_remainders`. `live reconcile` stays
+    exact: the half share is a discrepancy there, exit `5` (FR36).
 
-The records are `reconcile.discrepancy` (`resolution` is `framework`, `broker`
-or `refused`) and `reconcile.ok`. A refusal is `ReconciliationFailedError`,
-exit 1.
+The records are `reconcile.discrepancy` (`resolution` is `framework`, `broker`,
+`covered`, `unresolved` or `refused`), `reconcile.inexpressible_remainder` and
+`reconcile.ok`. A refusal is `ReconciliationFailedError`, exit 1.
 
 **Operator remedy for a refused start** (`strategy_position_contradicted`):
 create a new session for the strategy. The alternative is clearing the
@@ -419,12 +449,22 @@ startup. So runtime alignment is split three ways:
    through `reconcile_execution_report` (the Story 4.2 path) and logged
    `reconcile.discrepancy scope=runtime resolution=broker`. An instrument the
    cache cannot express is logged `resolution=unresolved` once. A broker row
-   the adapter could not resolve (`IB-CONID-*`) holds back only the cache row
-   with the **same symbol** — the one holding it could be — and only for
+   the adapter could not resolve (`IB-CONID-*`) matters only when its symbol is
+   held — a cached position's or a traded instrument's (Story 5.7; code review
+   R1). Any other is logged `resolution=unresolved` once and never withholds the
+   reconnect grant — from its first sighting, not once debounced (code review
+   P4). One that matches withholds the grant (fail closed) and holds back only the cache
+   row with the **same symbol** — the one holding it could be — and only for
    `HOLD_BACK_CYCLES` (3) consecutive cycles; past that it is a holding the
    adapter will never resolve (`reconcile.hold_back_expired`, once) and the
    held-back row is acted on, so a contradiction underneath it is refused rather
-   than masked for the life of the session (PO ruling, PR #35 D1). A strategy's
+   than masked for the life of the session (PO ruling, PR #35 D1). A broker
+   quantity the instrument's size precision cannot express is judged at whole
+   steps, truncated toward zero, as at startup. Its remainder is named once per
+   standing value per instrument (`reconcile.inexpressible_remainder
+   scope=runtime`) — a strategy's own trade that leaves the same remainder
+   standing (22.5 → 23.5) is not named again (code review P2) — and carried by
+   every `reconcile.ok` while it stands (Story 5.7). A strategy's
    own position the broker no longer covers **stops the session** before
    anything is written (PO ruling 2A, narrowed by Story 4.7's coverage rule) —
    `ReconciliationFailedError` out of the tick, the ordinary teardown,

@@ -47,6 +47,7 @@ procedure passed; it is evidence that the tooling exists to run it.
 | | P17 | Startup reconciliation, as above | ⚠️ 2026-09-28: P17a ✅; P17b still ⏳ (operator only) |
 | | P18 | Runtime alignment: a TWS change corrected, a reconnect re-established | ⏳ 2026-09-27 (operator only) |
 | | P20 | Corporate actions absorbed and named; a reverse split refused | ⏳ 2026-09-28 (operator only) |
+| | P22 | Holdings the adapter cannot express (a fractional share, an unresolvable contract) are named, not refused; `live reconcile` stays exact | ⏳ 2026-10-07: defined, not run (operator only) |
 
 **Where the gate stands (2026-09-28, updated at the Epic 4 retrospective).** Connectivity, gate
 refusal and the complete round trip have passed live, with P4 partial. A live E2E pass on
@@ -2650,3 +2651,164 @@ Run it **before** P21a: its cleanup step is P21a's precondition.
 | 2026-10-06 | Story 4.8 dev session | ⏳ **Defined, not run** | P21 needs a resting order left at IBKR and cancelled in TWS while the session is stopped. The story charter forbids submitting or cancelling orders, so P21 is operator-only. The same logic is proven against broker doubles, a real `LiveExecutionEngine`, and the real IB adapter's `get_open_orders`:<br>• `tests/unit/core/test_live_stranded_orders.py`: candidates, the debounce, containment, the never-`FILLED` AST scan, the emitted-name pin;<br>• `tests/component/core/test_live_stranded_orders_engine.py`: the clear as the framework's own `OrderCanceled(reconciliation=True)`, the inconclusive read against the real adapter, and the canaries for why `generate_order_status_reports` is not used;<br>• `tests/component/core/test_live_runtime_reconcile_engine.py`: end to end through `RuntimeReconciler`, including the filled-while-away case. Task 1.4's stall probe, re-run at component tier, still does not reproduce the `p7-position-test` stall. |
 | 2026-10-06 | Story 4.8 code review | ⏳ **P21d added, not run** | Ruling D1: P21d (a Gateway restart does not strand a live order) is a pass condition before 4.8 is `done`. Also corrected: the `order.canceled … reconciliation=True` line the clear produces, the 300 s wait for the filled-by-hand variant, and where the lower `open_orders` count can be observed. |
 | 2026-10-07 | Allay (Claude Code session) | ✅ **pass — P21d, P21a and P21b met live; P21c not arranged** | Run inside RTH (Wednesday, 15:03–15:33 ET) against the paper Gateway on `127.0.0.1:4002`, live client id 10. `live check` passed first (gate, paper account, 2 live bars). **The resting order.** No built-in strategy rests an order, so a **temporary, uncommitted** probe strategy (`p21_probe`, removed after the run) placed one GTC `LIMIT` BUY 1 NVDA at 80% of the first bar's close, only when its own cache held no order that reached the broker, so a restart could never place a second. Session `p21-1007` (`session_id=a8eeda77-ec93-4456-9c10-8fecdfa5bd89`, `trader_id=PAPER-a8eeda77`). Run 1 placed `O-20261007-190510-a8eeda77-921-1` (`venue_order_id=117`, lmt 189.24) and was stopped while it was `ACCEPTED`. **IBKR's view was read independently throughout** with a one-off read-only `reqAllOpenOrders` on a separate client id (77), which lists every client's orders with the `clientId` that placed them. Before the restart: `orderId=117 permId=1201235994 clientId=10 ... tif=GTC status=Submitted`. **P21d (D1).** Allay restarted the paper Gateway. Afterwards the same read showed the order still working and **still attributed to `clientId=10`**. Run 2: startup `reconcile.ok ... open_orders=1 discrepancies=0`, then 300 s of runtime cycles with **zero** `reconcile.stale_order_*` records, zero `order.canceled`/`submitted`/`filled`, no second probe order. Redis still held the order in `index:orders_open`, last status event `OrderAccepted`. On this Gateway restart, `reqOpenOrders` kept attributing the order to its placing client, so no false clear happened. **P21a.** With the session stopped, the order was cancelled at IBKR by a one-off `cancelOrder(117)` from client id 10 (Allay's choice: the operator was on Gateway, not TWS, and a TWS or mobile login alongside it would cause a 162 competing-login error). The IBKR read then listed no open orders. P21a run: startup `reconcile.ok ... open_orders=1` (the stranded local order), runtime cycle 1 at 19:22:13Z `reconcile.ok scope=runtime open_orders=1`, and **on cycle 2 (19:23:13Z, 2 min after `session.started`)** the engine's `Reconciling OrderStatusReport(... venue_order_id=117 ...)`, then `order.canceled ... reconciliation=True strategy_id=P21RestingLimitProbe-921`, then **exactly one** `reconcile.stale_order_cleared scope=runtime instrument_id=NVDA.NASDAQ side=BUY quantity=1 client_order_id=O-20261007-190510-a8eeda77-921-1` with the AC's `detail` text. Zero `stale_order_clear_failed`, zero `stale_order_check_failed`, zero `order.submitted` or `order.filled`, no price or commission for the order. Redis moved it from `orders_open` to `orders_closed`, and **the next restart's `reconcile.ok scope=startup` read `open_orders=0`**. **P21b (informational).** That next run went about three runtime cycles with no resting order: zero `stale_order_*` records, zero order records. **P21c**: not arranged (no `p7-position-test`-shaped namespace was rebuilt); the question stays open. **D6**: zero `(code: 162\|10182\|366)` hits in any transcript. **NFR26**: zero hits in this codebase's structured records in every transcript. The unscoped grep printed 8/4/7, every hit a Nautilus C-logger line (`ExecClient` ``Account `…` found``, `Portfolio` `AccountState`, `[EVT]` prints). Allay ruled criterion 6 met and rescoped the P20/P21 wording to match P15–P17. ⚠️ **Operator gotcha, not a defect.** The first three stops used `pkill -INT -f "...live start p21-1007"`. That pattern matches both the `uv run` wrapper and its Python child, so the child got two SIGINTs and logged `session.force_exit ... a second stop signal arrived`, leaving the row `running`. The next start was then refused inside the 90 s staleness window (`session.reclaim_refused`, twice) and reclaimed after it. That is the documented double-signal behaviour. Strategies and node had already `STOPPED`, and no order was touched. Signal only the `live start` PID (as this procedure's `$!` does). The final run did that and stopped cleanly (`live status`: `state: stopped`). IBKR ended with no open orders and no position. Side note: the Gateway warns that build 1045.1 is desupported on 2026-12-15 (minimum 1050.1). Logs: `logs/p21-check-1007.log`, `logs/p21d-run1-1007.log`, `logs/p21d-run2-1007.log`, `logs/p21a-1007.log` (+ `-refused`), `logs/p21b-1007.log` (+ `-refused`). |
+
+## Procedure P22: holdings the adapter cannot express are named, not refused
+
+**Introduced by**: Story 5.7 — Name Holdings the Adapter Cannot Express Instead of Refusing or Hiding
+Them (PR #35 code review, PO ruling D2: "same-symbol rule everywhere, name the rest")
+**Verifies**:
+- AC #5 live (P22a, read-only): `ntrader live reconcile` against an account holding a fractional
+  share stays exact. The remainder is a discrepancy line, and the check exits `5`.
+- AC #4 live (P22b): `live start` on a session whose instrument the broker holds with a fractional
+  remainder is **not** refused. The remainder is named once at startup and once by the running
+  session's cycle, never again while it stands, and every `reconcile.ok` carries it.
+- AC #1 live (P22c): a contract the IB adapter cannot resolve (`IB-CONID-*`: a bond, a warrant or
+  rights stub, a BAG, a delisted symbol), under a symbol no position of the session is held under
+  and no instrument of the session's strategies trades (code review R1, PO ruling 2026-10-07),
+  does not refuse the start. It is logged `reconcile.discrepancy resolution=unresolved` once.
+- AC #2 live (P22d): with that contract held, a recovered disconnect is re-granted. Orders are not
+  withheld for the rest of the session.
+- AC #3 (an unresolvable contract under the **same** symbol as a cached position — or, since code
+  review R1, a traded instrument — still refuses the start, and at runtime is held back for
+  `HOLD_BACK_CYCLES` before the masked row is acted on) is
+  **not** run live: arranging a same-symbol lookup miss on demand is not practical. It is proven
+  against broker doubles only.
+
+**Tools**: `ntrader live reconcile`, `ntrader live start`, TWS **read-only** (to confirm what the
+account holds), and for P22d a Gateway restart (the P21d method).
+
+### What it does, and what it does not do
+
+**P22a is read-only. P22b–P22d start a session**, whose strategies may trade on their own signals.
+The whole procedure is written for the operator and is **never** run by an automated story session.
+
+**It needs a holding the paper account may not have.** P22a/P22b need a fractional share on an
+instrument the session's strategy trades (a DRIP, or a fractional buy). P22c/P22d need a contract
+the IB adapter cannot build, under a symbol the session neither holds nor trades. Arranging either is an order
+the **operator places by hand in TWS**. No story session submits one. If neither can be arranged,
+record "not arrangeable" and leave the row ⏳. The logic is proven without a broker:
+
+- `tests/unit/models/test_position_reconciliation.py`: truncation toward zero (never `make_qty`'s
+  half-even, which reads `23.5` as `24`), the expressible view, the same-symbol rule.
+- `tests/unit/core/test_live_startup_reconcile.py` and `test_live_runtime_reconcile.py`: every AC
+  against duck-typed doubles.
+- `tests/component/core/test_live_startup_reconcile_engine.py` and
+  `test_live_runtime_reconcile_engine.py`: a real `LiveExecutionEngine`, including the canary for
+  Nautilus's own over-import (its pass inside `node:connect` adds `INTERNAL-DIFF +1` for a
+  half share, which the phase corrects down).
+- `tests/unit/services/test_reconciliation_service.py` and
+  `tests/component/core/test_live_reconcile.py`: `live reconcile` stays exact, exit `5`.
+
+**What to expect from Nautilus's own pass.** For a `+22.5` broker holding beside a strategy's `+22`,
+the framework's pass inside `node:connect` imports a whole extra share (`INTERNAL-DIFF +1`, measured
+2026-10-07). The `reconcile` phase then judges at whole shares and corrects it down: one
+`reconcile.discrepancy resolution=broker` with `local_quantity=23 broker_quantity=22`. That line is
+expected, not a failure.
+
+### Preconditions
+
+- A running, logged-in paper Gateway on the configured paper port; no IBKR mobile app or client
+  portal session (the 162 rule); a populated `.env` in the operator's checkout. `live check` passes.
+- For P22b–P22d: inside RTH, and the bars preflight passes (P11/P12's rule).
+- Read the account's holdings in TWS and note each one's symbol and quantity. Confirm the
+  fractional holding is on the strategy's instrument, and the unresolvable contract's symbol is not
+  one the session holds or any of its strategies trades.
+- D6's standing rule first: grep every transcript for `162`, `10182`, `366` before reading it —
+  as whole words, so a nanosecond timestamp or a price containing those digits does not
+  false-hit (P10's criterion 4 inspected exactly such false positives).
+
+### Command
+
+```bash
+# P22a — read-only, exact
+uv run python -m src.cli.main live reconcile <session> ; echo "exit=$?"
+
+# P22b / P22c — start, let three runtime cycles pass, stop
+uv run python -m src.cli.main live start <session> > logs/p22-<date>.log 2>&1 &
+# `$!` is the `uv run` wrapper, not the Python runner: `uv run` spawns its own child and does
+# not forward signals to a backgrounded `&` (P7, P10). Resolve the runner itself by pattern, and
+# signal only it — never `pkill -f`, which matches the wrapper too (P21's double-SIGINT gotcha).
+sleep 5   # let `uv run` spawn the runner before resolving it (P9's harness note)
+RUNNER_PID=$(pgrep -f "bin/python3 -m src.cli.main live start <session>")
+until grep -q "session.started" logs/p22-<date>.log || ! kill -0 "$RUNNER_PID" 2>/dev/null; do
+  sleep 2
+done
+grep -c -w -E "162|10182|366" logs/p22-<date>.log         # D6's standing rule, checked first
+sleep 180
+grep -E "phase=reconcile|reconcile\.(ok|discrepancy|inexpressible_remainder|hold_back_expired)" \
+  logs/p22-<date>.log
+
+# P22d — with the session still running:
+# 1. restart the paper Gateway now (the P21d method), and let it log back in;
+# 2. wait for the reconnect cycle to restore the connection (up to ~3 minutes);
+until grep -q "connection.restored" logs/p22-<date>.log || ! kill -0 "$RUNNER_PID" 2>/dev/null; do
+  sleep 5
+done
+# 3. only then read the reconnect evidence.
+grep -E "connection\.(lost|restored)|reconcile\.ok .*scope=reconnect|order\.suppressed" \
+  logs/p22-<date>.log
+grep -c -w -E "162|10182|366" logs/p22-<date>.log         # D6 again: the restart is a new login
+kill -INT "$RUNNER_PID"; wait "$RUNNER_PID" 2>/dev/null; echo "exit=$?"
+```
+
+### Expected output
+
+```
+# P22a
+position NVDA.NASDAQ session=+22 broker=+22.5 avg_price=... difference=+0.5 DISCREPANCY
+RESULT: discrepancy — positions=1 cash=0 line(s) differ from IBKR (...); nothing was changed ...
+exit=5
+
+# P22b / P22c
+reconcile.inexpressible_remainder scope=startup instrument_id=NVDA.NASDAQ broker_quantity=22.5
+  expressible_quantity=22 remainder=0.5 size_step=1
+reconcile.discrepancy scope=startup instrument_id=IB-CONID-<n> resolution=unresolved ...
+reconcile.discrepancy scope=startup instrument_id=NVDA.NASDAQ resolution=broker
+  local_quantity=23 broker_quantity=22          # only if the framework over-imported
+reconcile.ok scope=startup ... inexpressible_remainders={'NVDA.NASDAQ': '0.5'}
+session.phase phase=reconcile status=ok
+...
+reconcile.inexpressible_remainder scope=runtime instrument_id=NVDA.NASDAQ ...
+reconcile.ok scope=runtime ... inexpressible_remainders={'NVDA.NASDAQ': '0.5'}
+
+# P22d
+connection.lost ...
+reconcile.ok scope=reconnect ...
+connection.restored ...
+```
+
+### Pass criteria
+
+1. **P22a:** the fractional line reads `difference=+<remainder> DISCREPANCY`, the result line is
+   `RESULT: discrepancy`, and the exit code is `5`. No `reconcile.inexpressible_remainder` appears:
+   `live reconcile` never judges at whole shares.
+2. **P22b:** `phase=reconcile status=ok`, with no `unresolvable_discrepancy`. Exactly one
+   `reconcile.inexpressible_remainder scope=startup` names both quantities. The startup
+   `reconcile.ok` carries `inexpressible_remainders` and reports the broker's **exact** quantity
+   in `instruments`. The instrument's strategy starts (no `strategy.resume_refused` for it). Across
+   the runtime cycles, exactly one `reconcile.inexpressible_remainder scope=runtime` appears —
+   still one if the strategy trades the instrument meanwhile and the remainder itself is
+   unchanged (22.5 → 23.5 leaves 0.5; code review P2).
+   Reconciliation sends nothing to IBKR: every `order.submitted` in the transcript belongs to a
+   strategy's own signal.
+3. **P22c:** exactly one `reconcile.discrepancy scope=startup resolution=unresolved` names the
+   `IB-CONID-*` row, and the start is not refused. A runtime `reconcile.ok` appears while the row
+   stands, and no `reconcile.hold_back_expired` names it.
+4. **P22d:** after the Gateway restart, `reconcile.ok scope=reconnect` then `connection.restored`
+   appear. No `order.suppressed` appears after `connection.restored`.
+5. **All parts:** `grep -c '<full account id>'` over this codebase's own structured records prints
+   `0` (NFR26). Nautilus's own C-logger lines carry the raw account, so the unscoped grep is not
+   `0` (P2's criterion 3, P21's criterion 6).
+6. **After the run:** P22a run again still exits `5` on the same line. The session's whole-share
+   judgement never changes what `live reconcile` reports.
+
+**Fail:** a `reconcile ... (unresolvable_discrepancy)` refusal for a fractional holding or for an
+unresolvable contract of an unrelated symbol, a second remainder record for an unchanged
+remainder, or orders still suppressed after `connection.restored`. Record the transcript and leave
+Story 5.7's live row ⚠️.
+
+### Result log
+
+| Date | Operator | Result | Notes |
+| ---- | -------- | ------ | ----- |
+| 2026-10-07 | Story 5.7 dev session | ⏳ **Defined, not run** | P22a is read-only but needs a fractional holding the paper account was not known to have. P22b–P22d start a session and need holdings arranged by hand in TWS. The story charter forbids submitting orders and running `live start` against real sessions, so P22 is operator-only. The same logic is proven against broker doubles and a real `LiveExecutionEngine`: see "What it does" above. Numbered P22 while Story 5.8 may also add a procedure in parallel. If both land as P22, renumber at merge (the Story 4.5/4.7 P19/P20 precedent). |

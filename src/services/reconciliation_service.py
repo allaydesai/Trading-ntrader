@@ -24,6 +24,12 @@ honestly reads as a discrepancy; the rendered note says why, and since when
 Nautilus's is not (Story 4.1, D-G), so it is printed beside the broker's
 quantity and never compared.
 
+**Exact even where the running session is not** (Story 5.7, FR36). The
+session's own reconciliation judges a quantity its instrument's size precision
+cannot express — a DRIP's ``+22.5`` — at whole steps and names the
+remainder. This comparison deliberately does not: the half share is a
+discrepancy line here, and the check exits 5.
+
 Pure: no Nautilus, no SQL, no I/O (AR38). The live driver receives
 :func:`compare` as an injected port rather than importing this module.
 """

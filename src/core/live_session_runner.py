@@ -117,6 +117,7 @@ from src.core.live_session_node import (
     refusal_from_report,
     report_instrument_shortfall,
     request_node_stop,
+    session_instrument_ids,
     session_strategy_ids,
     stop_degraded_strategies,
     unsubscribe_runner_topics,
@@ -230,8 +231,7 @@ class LiveSessionRunner:
         self._node_factory = node_factory
         self._account_verifier = account_verifier
         self._client_builder = client_builder
-        self._connection_reader = connection_reader
-        self._broker_state_reader = broker_state_reader
+        self._connection_reader, self._broker_state_reader = connection_reader, broker_state_reader
         self._trader_id = derive_trader_id(session_id)
         self._log = structlog.get_logger(__name__).bind(session_id=str(session_id))
         # Story 2.7. The runner *wires* the containment; the policy is the
@@ -266,10 +266,9 @@ class LiveSessionRunner:
         self._reconciliation: StartupReconciliation | None = None
         self._subscriptions: list[tuple[str, Any]] = []
         self._deadline, self._trader_started, self._ownership_lost = 0.0, False, False
-        #: Set once teardown's own drain starts (review 2026-09-12): a reclaim
-        #: observed there has nothing left to stop.
-        self._tearing_down = False
-        self._record_release_failed = False
+        #: `_tearing_down` is set once teardown's own drain starts (review
+        #: 2026-09-12): a reclaim observed there has nothing left to stop.
+        self._tearing_down, self._record_release_failed = False, False
         self._shutdown_problems: list[str] = []
 
     @property
@@ -631,6 +630,7 @@ class LiveSessionRunner:
                 log=self._log,
                 local_before=self._local_state,
                 read_state=self._broker_state_reader,
+                traded_instruments=session_instrument_ids(self._spec),  # 5.7 review R1
             )
             assert self._monitor is not None
             grant_after_reconciliation(
@@ -939,6 +939,7 @@ class LiveSessionRunner:
                 connection_reader=self._connection_reader,
                 settings=self._settings,
                 read_state=self._broker_state_reader,
+                traded_instruments=session_instrument_ids(self._spec),  # 5.7 review R1
             ),
         )
 

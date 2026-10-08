@@ -38,15 +38,27 @@ discrepancy either: :func:`cash_changes` only *names* cash that differs from
 what the previous run last recorded, against the pre-run
 :class:`LocalSnapshot` (Story 4.7, D-B) — informational, never a refusal.
 
+**Exact over the state it is given** (Story 5.7, PO ruling D2). The live
+session's two phases hand :func:`compare_positions` the broker's state *at each
+instrument's expressible precision* (:func:`at_expressible_precision`): a
+broker ``+22.5`` the instrument's size precision cannot express is judged as
+``+22`` and its ``0.5`` remainder named once, because no order the session can
+send could ever close that gap. ``live reconcile`` never does this — it stays
+exact, and a fractional remainder is a discrepancy there (FR36). An unresolved
+``IB-CONID-*`` row matters only when its symbol is *held*: one a cached
+position is held under, or one an instrument the session's strategies trade
+is (:func:`held_symbols`, :func:`may_mask_a_cached_position`; code review R1,
+PO ruling 2026-10-07).
+
 Stdlib only (plus the equally stdlib-only ``broker_state``), pinned by
 ``tests/unit/models/test_position_reconciliation.py`` — Story 4.6's service
 layer reuses :func:`compare_positions` and must never import Nautilus (AR38).
 """
 
-from collections.abc import Collection, Iterable
-from dataclasses import dataclass
+from collections.abc import Collection, Iterable, Mapping
+from dataclasses import dataclass, replace
 from datetime import datetime
-from decimal import Decimal
+from decimal import ROUND_DOWN, Decimal
 
 from src.models.broker_state import BrokerState, CashBalance, is_currency_code
 
@@ -164,7 +176,7 @@ class PositionDiscrepancy:
         """The instrument's symbol as the broker would spell it, normalised for
         matching: IB writes class shares ``BRK B`` where Nautilus writes
         ``BRK-B``, so spaces, hyphens and dots are dropped and case ignored."""
-        return symbol_key(self.instrument_id.split(".", 1)[0])
+        return instrument_symbol_key(self.instrument_id)
 
     @property
     def strategy_contradicted(self) -> bool:
@@ -288,6 +300,151 @@ def symbol_key(symbol: str | None) -> str:
     if not symbol:
         return ""
     return "".join(ch for ch in symbol.upper() if ch not in " -.")
+
+
+def instrument_symbol_key(instrument_id: str) -> str:
+    """The :func:`symbol_key` of a Nautilus instrument id's symbol — everything
+    before the **last** dot, which is the venue: ``BRK.B.NYSE`` is ``BRK.B``
+    at ``NYSE`` (code review P1 — the first dot read it as ``BRK``)."""
+    return symbol_key(instrument_id.rsplit(".", 1)[0])
+
+
+def held_symbols(
+    cached: Iterable[CachedPosition], traded_instrument_ids: Iterable[str] = ()
+) -> frozenset[str]:
+    """The symbols an unresolved broker row is judged against (Story 5.7, D-A).
+
+    Every open cached position's, any owner, **and** every instrument's the
+    session's strategies trade (code review R1, PO ruling 2026-10-07): a flat
+    strategy that trades NVDA would otherwise start or be re-granted beside an
+    unresolvable NVDA-symbol row and buy on top of a holding it cannot see.
+    """
+    ids = [position.instrument_id for position in cached]
+    return frozenset(instrument_symbol_key(i) for i in (*ids, *traded_instrument_ids))
+
+
+def may_mask_a_cached_position(row: PositionDiscrepancy, held: Collection[str]) -> bool:
+    """Whether an unresolved broker row could be the holding behind a held
+    symbol (Story 5.7, PO ruling D2: "same-symbol rule everywhere").
+
+    ``held`` is :func:`held_symbols` — the cached positions' symbols and,
+    since code review R1, the traded instruments'. Only a matching row keeps
+    today's fail-closed rules — a refused start, a withheld reconnect grant,
+    D1's bounded hold-back. Any other unresolved row is named once and left out
+    of what reconciliation judges. A row with no symbol cannot say which
+    holding it is, so it matches whenever anything is held (D-B). A resolved
+    row never masks: it is compared as itself.
+    """
+    if row.broker_resolved:
+        return False
+    key = symbol_key(row.broker_symbol)
+    return bool(held) if not key else key in held
+
+
+def expressible_quantity(quantity: Decimal, step: Decimal) -> Decimal:
+    """``quantity`` truncated toward zero to a whole number of ``step`` (Story 5.7, D-C).
+
+    Never rounded: ``Instrument.make_qty`` rounds half-even, so it reads a
+    broker ``23.5`` as ``24`` — a share the account does not hold (F1). The
+    result carries the step's exponent, so the instrument expresses it
+    exactly. The live phases pass ``10**-size_precision`` — what ``make_qty``
+    rounds to — never ``size_increment``, which can be coarser (code review
+    R2, PO ruling 2026-10-07).
+
+    Raises:
+        TypeError: Either value is not a ``Decimal``.
+        ValueError: Either value is not finite, or the step is not positive.
+    """
+    _require_decimal("quantity", quantity)
+    if _require_decimal("step", step) <= 0:
+        raise ValueError(f"step must be positive, got {step}")
+    result = (quantity / step).to_integral_value(rounding=ROUND_DOWN) * step
+    return result.copy_abs() if result == 0 else result  # never "-0"
+
+
+@dataclass(frozen=True, slots=True)
+class InexpressibleRemainder:
+    """A broker quantity finer than its instrument's size precision (Story 5.7).
+
+    A DRIP's ``+22.5`` against a whole-share equity: the live phases judge the
+    instrument at :attr:`expressible_quantity` and name the remainder once
+    (``reconcile.inexpressible_remainder``). ``live reconcile`` never does —
+    it stays exact (FR36).
+
+    Attributes:
+        instrument_id: The instrument.
+        broker_quantity: The broker's signed quantity, exactly as reported.
+        expressible_quantity: ``broker_quantity`` truncated toward zero to whole
+            size steps (:func:`expressible_quantity`).
+        size_step: The finest quantity the instrument expresses,
+            ``10**-size_precision`` (code review R2: not ``size_increment``).
+    """
+
+    instrument_id: str
+    broker_quantity: Decimal
+    expressible_quantity: Decimal
+    size_step: Decimal
+
+    def __post_init__(self) -> None:
+        if not self.instrument_id:
+            raise ValueError("instrument_id is required")
+        broker = _require_decimal("broker_quantity", self.broker_quantity)
+        expressible = _require_decimal("expressible_quantity", self.expressible_quantity)
+        if _require_decimal("size_step", self.size_step) <= 0:
+            raise ValueError("size_step must be positive")
+        if expressible == broker:
+            raise ValueError("no remainder: the broker's quantity is expressible")
+        crosses = expressible != 0 and (expressible > 0) != (broker > 0)
+        if crosses or abs(expressible) > abs(broker):
+            raise ValueError("the expressible quantity must lie between zero and the broker's")
+
+    @property
+    def remainder(self) -> Decimal:
+        """What the broker holds beyond the expressible quantity, signed."""
+        return self.broker_quantity - self.expressible_quantity
+
+
+def at_expressible_precision(
+    broker: BrokerState, steps: Mapping[str, Decimal]
+) -> tuple[BrokerState, tuple[InexpressibleRemainder, ...]]:
+    """The broker's state as the live phases judge it, and what that left out (Story 5.7).
+
+    Each **resolved** row with a known size step is truncated toward zero to
+    whole steps (:func:`expressible_quantity`); a row that truncates to ``0``
+    is dropped, so a ``0.5``-only holding reads flat. Every other row — an
+    unresolved ``IB-CONID-*`` row, an instrument with no known step — is left
+    exact, and today's path decides it. Account, cash and read time are kept:
+    only positions are judged here.
+
+    Returns:
+        ``(state, remainders)`` — ``broker`` itself when nothing was
+        inexpressible; the remainders sorted by instrument.
+    """
+    positions = []
+    remainders = []
+    for position in broker.positions:
+        step = steps.get(position.instrument_id) if position.instrument_resolved else None
+        if step is None:
+            positions.append(position)
+            continue
+        quantity = expressible_quantity(position.quantity, step)
+        if quantity == position.quantity:
+            positions.append(position)
+            continue
+        remainders.append(
+            InexpressibleRemainder(
+                instrument_id=position.instrument_id,
+                broker_quantity=position.quantity,
+                expressible_quantity=quantity,
+                size_step=step,
+            )
+        )
+        if quantity != 0:
+            positions.append(replace(position, quantity=quantity))
+    if not remainders:
+        return broker, ()
+    ordered = tuple(sorted(remainders, key=lambda remainder: remainder.instrument_id))
+    return replace(broker, positions=tuple(positions)), ordered
 
 
 def count_synthetic(cached: Iterable[CachedPosition]) -> int:
@@ -453,7 +610,9 @@ class StartupReconciliation:
     strategy (decision D-I); its fields are what ``reconcile.ok`` renders.
 
     Attributes:
-        broker: The broker's view the cache now matches exactly.
+        broker: The broker's exact read. The cache now matches it exactly at
+            each instrument's expressible precision (Story 5.7): any remainder
+            finer than that is in ``inexpressible``.
         framework_resolved: Disagreements between the pre-reconciliation
             snapshot and the broker that Nautilus's own pass (inside
             ``node:connect``) corrected.
@@ -462,6 +621,8 @@ class StartupReconciliation:
         open_orders: Working orders in the cache after reconciliation (AR25).
         synthetic_positions: Open positions reconciliation owns.
         elapsed_ms: How long the phase's own work took (NFR5).
+        inexpressible: Broker quantities finer than their instrument's size
+            precision (Story 5.7) — named, and left out of the judgement.
     """
 
     broker: BrokerState
@@ -470,6 +631,7 @@ class StartupReconciliation:
     open_orders: int
     synthetic_positions: int
     elapsed_ms: float
+    inexpressible: tuple[InexpressibleRemainder, ...] = ()
 
     @property
     def discrepancy_count(self) -> int:

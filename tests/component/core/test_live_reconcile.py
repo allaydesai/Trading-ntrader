@@ -14,6 +14,7 @@ import asyncio
 import time
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 from uuid import UUID
 
 import pytest
@@ -21,6 +22,7 @@ from nautilus_trader.adapters.interactive_brokers.factories import IB_CLIENTS
 from nautilus_trader.common.component import is_logging_initialized
 
 from src.config import IBKRSettings, RedisSettings
+from src.core import live_reconcile
 from src.core.exit_outcome import EXIT_DISCREPANCY
 from src.core.live_broker_state import BrokerStateFailure, BrokerStateUnavailableError
 from src.core.live_cache import RedisUnreachableError
@@ -657,3 +659,36 @@ class TestTheVerdictIsRecorded:
         harness.run()
 
         assert PAPER_ACCOUNT not in repr(harness.log.records)
+
+
+class TestAFractionalRemainderStaysExact:
+    """Story 5.7, AC #5 (FR36): the running session judges a DRIP's ``+22.5``
+    at whole shares; ``live reconcile`` reads the same account exactly — the
+    half share is a discrepancy line, and the check exits 5."""
+
+    def test_a_half_share_is_a_discrepancy_and_exits_five(self):
+        harness = Harness(
+            broker=_broker(("NVDA.NASDAQ", "22.5")), view=_view(("NVDA.NASDAQ", "22"))
+        )
+
+        report = harness.run()
+
+        assert report.is_clean is False
+        assert exit_code_for(report) == EXIT_DISCREPANCY == 5
+        [record] = [r for r in harness.log.records if r[1] == "reconcile.discrepancy"]
+        assert (
+            record[2]["local_quantity"],
+            record[2]["broker_quantity"],
+            record[2]["difference"],
+        ) == ("22", "22.5", "0.5")
+        assert not [r for r in harness.log.records if r[1] == "reconcile.inexpressible_remainder"]
+
+    def test_the_driver_has_no_path_to_the_expressible_precision(self):
+        """Structural, and only this: the driver's own source never names the
+        live phases' expressible-precision helpers (Story 5.7, D-D). What the
+        comparison it is handed does is pinned by the service's own tests
+        (code review P6: the docstring claimed more than the scan checks)."""
+        source = Path(live_reconcile.__file__).read_text(encoding="utf-8")
+
+        for name in ("at_expressible_precision", "expressible_broker", "expressible_quantity"):
+            assert name not in source

@@ -38,14 +38,24 @@ resolution="broker"`` once the re-read proves it took. A row the framework
 cannot express (an instrument the cache does not hold, an unresolved broker
 row) is logged ``resolution="unresolved"`` once and the session continues — no
 strategy can act on an instrument the cache lacks, so such a row never withholds
-the reconnect grant. An unresolved broker row does withhold it (fail closed), and
-while one stands only the row it could be masking — the cache's "broker 0" row
-for the **same symbol** — is held back, and only for :data:`HOLD_BACK_CYCLES`
-consecutive cycles; past that the holding is one the adapter will never resolve
-(``reconcile.hold_back_expired``, once) and the held-back row is acted on, so a
-contradiction underneath it is refused rather than masked for the life of the
-session. Every other instrument is checked and corrected throughout (PO rulings:
-code review 2026-09-28; PR #35 D1, 2026-09-30). A strategy's own position
+the reconnect grant. An unresolved broker row under a *held* symbol — one a
+cached position is held under, or one an instrument the session's strategies
+trade is (code review R1, PO ruling 2026-10-07) — does withhold it (fail
+closed); any other is named and left out (Story 5.7, PO ruling D2), inert from
+its first sighting rather than once debounced (code review P4) — and while a
+matching one stands only the row it could be
+masking — the cache's "broker 0" row for the **same symbol** — is held back, and
+only for :data:`HOLD_BACK_CYCLES` consecutive cycles; past that the holding is
+one the adapter will never resolve (``reconcile.hold_back_expired``, once) and
+the held-back row is acted on, so a contradiction underneath it is refused
+rather than masked for the life of the session. Every other instrument is
+checked and corrected throughout (PO rulings: code review 2026-09-28; PR #35 D1,
+2026-09-30). A broker quantity the instrument's size precision cannot express (a
+DRIP's ``+22.5``) is judged at whole steps of ``10**-size_precision``, truncated
+toward zero, and its remainder named once per standing value per instrument —
+the same remainder beside the strategy's own trade is not news (code review P2)
+— (``reconcile.inexpressible_remainder``, Story 5.7) and carried by every
+``reconcile.ok`` while it stands. A strategy's own position
 the broker does not cover — less in its direction, none, or the opposite side
 (Story 4.7's coverage rule) — is **refused and the session stopped**, before
 anything is written (D-D, PO ruling 2A), naming the likely cause: the
@@ -82,7 +92,7 @@ past the debounce with this code.
 """
 
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -100,7 +110,10 @@ from src.core.live_startup_reconcile import (
     ReconciliationFailedError,
     ReconciliationFailure,
     cached_positions,
+    expressible_broker,
+    inexpressible_remainders,
     log_discrepancy,
+    log_remainder,
     position_report,
 )
 from src.core.live_stranded_orders import (
@@ -111,9 +124,12 @@ from src.core.live_stranded_orders import (
 from src.models.broker_state import BrokerState
 from src.models.position_reconciliation import (
     CachedPosition,
+    InexpressibleRemainder,
     PositionDiscrepancy,
     compare_positions,
     count_synthetic,
+    held_symbols,
+    may_mask_a_cached_position,
     symbol_key,
 )
 
@@ -193,12 +209,22 @@ class _Quiet:
 @dataclass(frozen=True, slots=True)
 class _Observation:
     """One completed read-and-compare: the broker, the rows still to answer
-    for, and the instruments deferred for an in-flight order."""
+    for, and the instruments deferred for an in-flight order.
+
+    Story 5.7 (D-D): ``broker`` is the exact read — what ``reconcile.ok``
+    reports; ``expressible`` is the same read at each instrument's expressible
+    precision — what every comparison, correction and re-verify judges
+    against; ``remainders`` is what that left out; ``held`` the cached
+    positions' symbols, for the same-symbol rule — joined with the traded
+    instruments' by :func:`_unresolved_rows` (code review R1)."""
 
     broker: BrokerState
+    expressible: BrokerState
     rows: tuple[PositionDiscrepancy, ...]
     deferred: tuple[str, ...]
     started: float
+    remainders: tuple[InexpressibleRemainder, ...]
+    held: frozenset[str]
 
 
 def grant_after_reconciliation(
@@ -247,6 +273,8 @@ class RuntimeReconciler:
             ``elapsed_ms``.
         read_open_orders: The open-orders read behind the stale-order check
             (Story 4.8) — ``broker_open_orders``.
+        traded_instruments: The instrument ids the session's strategies trade;
+            their symbols count as held for an unresolved row (code review R1).
     """
 
     def __init__(
@@ -260,6 +288,7 @@ class RuntimeReconciler:
         read_state: BrokerStateReader = read_broker_state,
         clock: Callable[[], float] = time.monotonic,
         read_open_orders: OpenOrdersReader = broker_open_orders,
+        traded_instruments: Collection[str] = (),
     ) -> None:
         self._node = node
         self._monitor = monitor
@@ -272,10 +301,12 @@ class RuntimeReconciler:
         self._recovering = False
         self._debounce = _Debounce()
         self._unresolved = _Unresolved()
+        self._remainders = _Remainders()
         self._hold_back = _HoldBack()
         self._ok = _OkLog()
         self._failures = _FailureStreak()
         self._stale_orders = StaleOrderWatch(read_open_orders)
+        self._traded = held_symbols((), traded_instruments)
 
     @property
     def unreported_clean_cycles(self) -> int:
@@ -318,8 +349,9 @@ class RuntimeReconciler:
             self._failures.count = 0
             self._ok.deferred.update(observation.deferred)
             if scope == SCOPE_RUNTIME:
-                # Story 4.8: an order on an instrument with a row still standing waits.
-                skip = {row.instrument_id for row in outstanding} | set(observation.deferred)
+                # Story 4.8: an order on an instrument with a row still standing
+                # waits — an inert row's too (Story 5.7, D-H).
+                skip = {row.instrument_id for row in observation.rows} | set(observation.deferred)
                 await self._stale_orders.check(
                     self._node, self._log, self._clock(), skip=skip, scope=scope
                 )
@@ -339,7 +371,9 @@ class RuntimeReconciler:
 
     def _act(self, observation: _Observation, scope: str) -> list[PositionDiscrepancy]:
         """Act on the confirmed rows; return the rows that still stand between
-        this cycle and clean — all but those the framework cannot express."""
+        this cycle and clean — all but those the framework cannot express and
+        the unresolved rows under no held symbol (Story 5.7; R1, P4)."""
+        self._remainders.log(self._log, observation.remainders, scope)
         confirmed = self._debounce.confirm(observation.rows, self._clock())
         lookup_misses = [row for row in confirmed if not row.broker_resolved]
         actionable = [row for row in confirmed if row.broker_resolved]
@@ -348,8 +382,10 @@ class RuntimeReconciler:
         # `HOLD_BACK_CYCLES` consecutive cycles — a lookup miss then neither
         # stops the session nor blinds any other instrument, and a holding the
         # adapter can never resolve stops masking a real contradiction (PO
-        # rulings: code review 2026-09-28, PR #35 D1 2026-09-30).
-        masking = self._hold_back.masking(observation.rows, self._log, scope)
+        # rulings: code review 2026-09-28, PR #35 D1 2026-09-30). Only a row
+        # under a held symbol is counted (Story 5.7, D-G; code review R1).
+        may_mask, harmless = _unresolved_rows(observation, self._traded)
+        masking = self._hold_back.masking(may_mask, self._log, scope)
         if masking:
             actionable = [
                 row
@@ -362,14 +398,16 @@ class RuntimeReconciler:
                 self._log, ReconciliationFailure.STRATEGY_POSITION_CONTRADICTED, contradicted, scope
             )
         corrected, unresolvable = correct(
-            self._node, actionable, observation.broker, self._log, scope
+            self._node, actionable, observation.expressible, self._log, scope
         )
         self._unresolved.log(self._log, [*lookup_misses, *unresolvable], observation.rows, scope)
         if corrected:
-            verify_corrected(self._node, corrected, observation.broker, self._log, scope)
+            verify_corrected(self._node, corrected, observation.expressible, self._log, scope)
         # No strategy can act on an instrument the cache does not hold, so such a
-        # row never withholds a grant; a lookup miss still does (fails closed).
-        inert = set(unresolvable)
+        # row never withholds a grant; a lookup miss under a held symbol still
+        # does (fails closed), and any other — from its first sighting, never
+        # acted on so never debounced (code review P4) — does not (Story 5.7).
+        inert = {*unresolvable, *harmless}
         return [row for row in observation.rows if row not in inert]
 
     def _grant(self, observation: _Observation) -> None:
@@ -403,11 +441,33 @@ async def observe(
     cached = cached_positions(cache)
     if _fingerprint(cached) != before:
         return None
+    judged, remainders = expressible_broker(cache, broker)  # Story 5.7, D-D
     deferred = sorted({str(order.instrument_id) for order in cache.orders_inflight()})
     rows = tuple(
-        row for row in compare_positions(cached, broker) if row.instrument_id not in deferred
+        row for row in compare_positions(cached, judged) if row.instrument_id not in deferred
     )
-    return _Observation(broker, rows, tuple(deferred), started)
+    return _Observation(
+        broker, judged, rows, tuple(deferred), started, remainders, held_symbols(cached)
+    )
+
+
+def _unresolved_rows(
+    observation: _Observation, traded: frozenset[str]
+) -> tuple[list[PositionDiscrepancy], list[PositionDiscrepancy]]:
+    """Every unresolved row this observation saw — raw, not debounced (code
+    review P4) — as ``(may_mask, harmless)``.
+
+    ``may_mask``: under a held symbol — a cached position's or a traded
+    instrument's (Story 5.7, D-A; code review R1). Only these keep D1's
+    hold-back and withhold a grant. ``harmless``: every other, inert from its
+    first sighting: it is never acted on, so there is nothing to debounce, and
+    judging it from the debounced rows withheld a reconnect grant for a window
+    — or, flickering, forever (AC #2).
+    """
+    held = observation.held | traded
+    unresolved = [row for row in observation.rows if not row.broker_resolved]
+    may_mask = [row for row in unresolved if may_mask_a_cached_position(row, held)]
+    return may_mask, [row for row in unresolved if row not in may_mask]
 
 
 def correct(
@@ -552,6 +612,26 @@ class _Unresolved:
         self.logged = {row for row in self.logged if row in observed} | set(rows)
 
 
+class _Remainders:
+    """``reconcile.inexpressible_remainder`` once per standing value per
+    instrument (Story 5.7, D-F): a remainder that changes — another DRIP lands
+    — or clears and returns is a new fact and is named again. Keyed on
+    ``(instrument, remainder)``, not the whole record (code review P2): a
+    strategy buying a share moves the broker 22.5 -> 23.5 and leaves the same
+    0.5 standing, which is not news (P22b's Fail criterion). No debounce: it is
+    an observation, never acted on."""
+
+    def __init__(self) -> None:
+        self.named: set[tuple[str, Any]] = set()
+
+    def log(self, log: Any, remainders: Sequence[InexpressibleRemainder], scope: str) -> None:
+        standing = {(r.instrument_id, r.remainder): r for r in remainders}
+        for key, remainder in standing.items():
+            if key not in self.named:
+                log_remainder(log, remainder, scope=scope)
+        self.named = set(standing)
+
+
 class _HoldBack:
     """Which symbols an unresolved broker row may still be masking (D1).
 
@@ -616,6 +696,7 @@ class _OkLog:
             cycles=self.clean,
             deferred_instruments=sorted(self.deferred | set(observation.deferred)),
             synthetic_positions=count_synthetic(cached_positions(cache)),
+            inexpressible_remainders=inexpressible_remainders(observation.remainders),
             open_orders=len(cache.orders_open()),
             elapsed_ms=round((now - observation.started) * 1000, 3),
         )
