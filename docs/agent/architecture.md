@@ -22,6 +22,7 @@ src/
 │   ├── backtest_orchestrator.py  # Preferred: takes BacktestRequest, handles persistence
 │   ├── backtest_runner.py     # Legacy: MinimalBacktestRunner, direct params
 │   ├── results_extractor.py  # Nautilus metrics + custom calcs (drawdown, CAGR, Calmar)
+│   ├── session_equity.py     # Sealed paper session: trade rows → the same extractor (Epic 5)
 │   ├── analytics.py / metrics.py / fee_models.py / position_sizing.py / risk_management.py
 │   └── strategies/
 │       ├── sma_crossover.py / sma_momentum.py  # Built-in strategies

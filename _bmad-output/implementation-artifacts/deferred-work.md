@@ -4067,3 +4067,89 @@ its reason and owner:
   startup.** It has no size step to judge it by, so it keeps today's path (the story's scope
   boundary: "no change to the instrument-not-in-cache path"). The broker reader's `get_instrument`
   normally loads the instrument first. Owner: whoever first meets it live.
+
+## Deferred from: story-5.2 (2026-10-07)
+
+Story 5.2 reconstructs a sealed session's results from its trade rows
+(`src/core/session_equity.py`), under PO rulings R1b / R2a / R3a / R4a. What it measured and
+deliberately left, each with an owner:
+
+- **(a) No backtest has ever persisted its equity curve.** `BacktestPersistenceService
+  ._validate_config_snapshot` runs the snapshot through `StrategyConfigSnapshot(...).model_dump()`,
+  which ignores unknown keys, so the orchestrator's and the runner's `config_snapshot["equity_curve"]`
+  is dropped and `/equity/{run_id}` always draws its two-point `initial_capital → final_balance`
+  fallback (the Phase 2 archive noted the strip; nobody routed it). 5.2 kept it that way on
+  purpose: `equity_curve` is still not a model field, so backtest rows stay byte-identical
+  (pinned by `tests/unit/models/test_config_snapshot.py::TestSessionConditions` and the
+  integration/db `test_a_backtest_row_is_stored_exactly_as_before`). Keeping it would change every
+  new backtest row and its chart, the stored curve would carry the epoch `time: 0` point when a
+  run ends mid-position (story-5.1 item above), and the config panel prints every top-level key,
+  so the curve would render as one long list. **Owner:** an epic-level both-sides decision.
+- **(b) `_calculate_max_drawdown` never sees the starting capital** (R4a: kept, pinned).
+  `(1 + r).cumprod()` starts after the first trade, so a loss before the first peak is invisible:
+  returns `[−10%, −5%]` read −5% (true −14.5%); `[−10%, +5%]` read 0.0 (true −10%). Same on the
+  backtest and the paper side. Pinned by `tests/unit/core/test_session_equity.py::
+  TestPreExistingDrawdownBehaviour`. A fix (prepend `1.0` to the compounded series) changes every
+  future backtest whose first trade loses, while stored rows keep the old value. **Owner:** an
+  epic-level both-sides decision.
+- **(c) A backtest's max drawdown is size-independent price compounding, not an account
+  drawdown.** It compounds each position's `realized_return` (a price return) as if all capital
+  were in every trade. Measured on one price path at 10% and 2% sizing: −1.59% both times, where
+  the account fell 0.15% / 0.03%; the curve ends at 177,488 while the account ends at 105,948 /
+  101,160. PO ruling R1b keeps the paper side on the same definition, so the comparison is like
+  for like, and records it as `session_conditions.equity_series.basis =
+  "per_trade_price_return"`. Any "account drawdown" metric would have to be added to both sides at
+  once. **Owner:** an epic-level both-sides decision.
+- **(d) → Story 5.4: whether *this* session absorbed reconciliation-owned activity.** 5.2 records
+  the structural limitation: `equity_series.excludes` names `reconciliation_owned_activity`,
+  because `EXTERNAL` / `INTERNAL-DIFF` positions, including a corporate action reconciliation
+  absorbed, are never trades (Story 3.6 D-D). What it cannot record is whether a given session
+  had any. Nothing durable says so: `runtime_flags` carries only `failed_strategies` and
+  `order_rejections`, and the evidence is in the `reconcile.*` logs only. A per-session flag needs
+  a writer. **Owner:** Story 5.4 (its `session_conditions`, beside `open_positions_at_seal` and
+  the split's extra shares).
+- **(e) → Story 5.3: how the seal calls this.** Read the session's `trades` rows (both twins'
+  read path is 5.3's; `EXPECTED_CAPABILITIES` is an exact-set pin) and call
+  `reconstruct_session_results(rows, starting_capital=…, start=<first start>, end=<seal time>)`.
+  Pass the snapshot through `SessionResults.merged_into(snapshot)` before handing it to
+  `save_backtest_results`. Where the starting capital comes from is 5.3/5.4's: no session field
+  holds one today. The `session_conditions` field on `StrategyConfigSnapshot` exists now. 5.4's
+  flat AR7 keys and `schema_version` go into the same mapping, beside `equity_series`.
+- **(f) → Story 5.5: open rows are not in the series.** A row with no exit is left out of the
+  closed-trade sequence. A backtest that ends mid-position keeps its open leg, filing a return at
+  the epoch and scoring the entry commission as a loser (story-5.1 code-review items). Measured on
+  the 5.1 golden run: the paper record differs from the backtest in exactly `sharpe_ratio`,
+  `volatility`, `risk_return_ratio`, `expectancy`, `avg_loss` and `min_loser`. That set is pinned
+  by `tests/integration/core/test_session_equity_parity.py::
+  test_a_run_that_ends_mid_position_differs_only_by_the_open_leg`. `equity_series.excludes` names
+  `open_positions`. **Owner:** Story 5.5 (open positions at seal), then the both-sides decision the
+  5.1 items already name.
+
+## Deferred from: code review of 5-2-reconstruct-a-sealed-sessions-equity-curve-from-its-trades (2026-10-07)
+
+Three-layer review (Blind Hunter / Edge Case Hunter / Acceptance Auditor). These four are left,
+each with its reason and owner:
+
+- **A `None` `commission_currency` is accepted as USD.** `session_equity._readable` uses the
+  commission currency as a proxy for the P&L currency, because trade rows carry none, and it
+  allows `None`. The recorder writes `None` on every leg no cached position vouched for (a flip,
+  a redelivered fill: `live_trade_recorder.py:268-275`). So an unvouched row on a non-USD
+  instrument would be summed into the USD ledger. Phase 3 trades US equities and ETFs only.
+  **Owner:** the first story to add a non-USD instrument (the 5.7 W4 precedent).
+- **A leg return of −1 or below breaks the compounded series on both sides.** A short whose exit
+  is at least twice its entry returns ≤ −100%. `(1 + r).cumprod()` then goes to zero or below,
+  and every later loss draws as a recovery. Measured: a short 10 → 25, then a long losing 50%:
+  the curve reads `−50000 → −25000` and `max_drawdown` reads `0.0`. When that is the first leg,
+  `_calculate_max_drawdown` computes 0/0 = NaN, and `nan < 0` is False, so it returns `0.0`.
+  5.2's non-finite guard never sees the NaN. This is the extractor's arithmetic, and PO ruling
+  R4a forbids a metric-math change in 5.2. **Owner:** the epic-level both-sides decision already
+  named in "Deferred from: story-5.2" (b)/(c).
+- **Repeated `time` values in the curve.** `extract_equity_curve` truncates each close to whole
+  seconds, but `PortfolioAnalyzer.add_return` sums only *identical* timestamps. Two closes in one
+  second, microseconds apart, give two points with the same `time`. Pre-existing on the backtest
+  path. Harmless while nothing charts `session_conditions.equity_series.curve`; a time-series
+  chart needs strictly increasing times. **Owner:** Story 5.6, or whoever first charts it.
+- **5.4's `closed_trade_count` will duplicate `equity_series.closed_trades`.** AR7's flat key and
+  5.2's namespaced count are two sources for one number, and nothing ties them. **Owner:** Story
+  5.4. When it adds the key, pin the two equal: CLAUDE.md, "a duplicated literal needs its own
+  equality pin".

@@ -59,8 +59,16 @@ async def get_backtest_service(session: DbSession) -> BacktestQueryService:
 `src/services/backtest_persistence.py`:
 - Validates metrics don't contain NaN or Infinity before storage (`_validate_metrics()`)
 - Handles `DuplicateRecordError` if `run_id` already exists
-- Equity curve stored as JSON array on `PerformanceMetrics`
 - Starting balance must be passed separately (Nautilus doesn't retain it)
+- **No equity curve is stored for a backtest** (corrected by Story 5.2; this line used to say it
+  was a JSON array on `PerformanceMetrics`, which has no JSON column at all). The backtest paths
+  put `equity_curve` into `config_snapshot`, but `_validate_config_snapshot` runs the snapshot
+  through `StrategyConfigSnapshot(...).model_dump()`, which ignores unknown keys — so the curve
+  is dropped, and the equity chart (`/equity/{run_id}`) draws its two-point
+  `initial_capital → final_balance` fallback. Beyond its five base keys (`strategy_path`,
+  `config_path`, `version`, `config`, `bar_type` — the last dumped as `null` when absent), the
+  model keeps exactly one more: `session_conditions` (a sealed paper session's), omitted from
+  the dump when empty so every backtest row is byte-identical to before.
 
 ## Results Extraction
 
@@ -110,6 +118,41 @@ account. The settled host is a snapshot: nothing done to the source afterwards c
 
 The dispatch lives in two helpers (`_starting_balance`, `_final_balance`); every metric formula
 is shared.
+
+**A sealed session's source: its trade rows (Story 5.2, AR35).** `src/core/session_equity.py`
+turns the session's `trades` rows into the legs `settle` reads and runs the unmodified extractor
+over them — it computes no metric itself:
+
+```python
+sealed = reconstruct_session_results(
+    rows, starting_capital=Decimal("100000"), start=first_start, end=sealed_at  # tz-aware
+)
+sealed.result                     # BacktestResult — the one results vocabulary
+sealed.merged_into(snapshot)      # snapshot + session_conditions["equity_series"], beside 5.4's keys
+```
+
+- **One leg per closed row**, carrying the row's `profit_loss` and the return Nautilus would have
+  computed for that position, `(exit − entry) / entry`, side-adjusted. Open rows (no exit) are
+  not part of the closed-trade sequence and are left out. Each of these is refused with a
+  `ValueError` that names it:
+  - a closed row with no P&L or exit price;
+  - a row with an exit price but no exit timestamp;
+  - a repeated row id;
+  - a non-positive entry price, an unknown side, or a non-USD commission;
+  - a naive or non-forward period;
+  - closed trades that produced no series.
+- **The curve has a point per distinct close instant, not per trade.** Legs closing at the
+  identical timestamp are summed into one return, exactly as a backtest's are, and times are
+  whole seconds.
+- **Read a drawdown with its definition.** A backtest's max drawdown compounds each position's
+  *price* return as if all capital were in every trade, so it does not depend on position size
+  (measured: −1.59% at 10% and at 2% sizing, where the account fell 0.15% / 0.03%). A sealed
+  session's uses the same definition (PO ruling R1b), so the two compare like for like — and
+  neither is the account's dollar drawdown. `session_conditions.equity_series` records the basis
+  (`per_trade_price_return`), the granularity (`closed_trade`, not bar), the closed-trade count,
+  what the series excludes (`open_positions`, `reconciliation_owned_activity`) and the series.
+- **Zero closed trades** is an explicit record: 0 trades, an empty series, no drawdown or Calmar.
+  A non-finite metric is refused rather than written.
 
 ## Exceptions
 
