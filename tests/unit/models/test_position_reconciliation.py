@@ -34,12 +34,17 @@ from src.models.position_reconciliation import (
     SYNTHETIC_STRATEGY_IDS,
     CachedPosition,
     CashChange,
+    InexpressibleRemainder,
     LocalSnapshot,
     PositionDiscrepancy,
     StartupReconciliation,
+    at_expressible_precision,
     cash_changes,
     compare_positions,
     count_synthetic,
+    expressible_quantity,
+    held_symbols,
+    may_mask_a_cached_position,
     split_by_owner,
     strategies_on_both_sides,
     symbol_key,
@@ -704,6 +709,254 @@ class TestSymbolKey:
         assert row.broker_symbol == "NVDA"
 
 
+def _unresolved(symbol: str | None, quantity: str = "22") -> PositionDiscrepancy:
+    """An ``IB-CONID-*`` broker row as ``compare_positions`` builds it."""
+    return PositionDiscrepancy(
+        instrument_id="IB-CONID-4815747",
+        local_quantity=Decimal(0),
+        strategy_quantity=Decimal(0),
+        broker_quantity=Decimal(quantity),
+        broker_resolved=False,
+        broker_symbol=symbol,
+    )
+
+
+class TestExpressibleQuantity:
+    """Story 5.7, D-C: truncated toward zero to whole size increments — never
+    ``make_qty``'s half-even rounding, which reads a broker ``23.5`` as ``24``
+    and would let a strategy sell a share the account does not hold (F1)."""
+
+    @pytest.mark.parametrize(
+        ("quantity", "increment", "expected"),
+        [
+            ("22.5", "1", "22"),
+            ("23.5", "1", "23"),
+            ("-22.5", "1", "-22"),
+            ("0.5", "1", "0"),
+            ("-0.5", "1", "0"),
+            ("22", "1", "22"),
+            ("1.005", "0.01", "1.00"),
+            ("150", "100", "100"),
+            ("22.9999", "1", "22"),
+        ],
+    )
+    def test_it_truncates_toward_zero(self, quantity, increment, expected):
+        result = expressible_quantity(Decimal(quantity), Decimal(increment))
+
+        assert result == Decimal(expected)
+        assert abs(result) <= abs(Decimal(quantity))
+
+    def test_23_5_is_never_rounded_up_to_24(self):
+        """The F1 hazard named: half-even reads 23.5 as 24."""
+        assert expressible_quantity(Decimal("23.5"), Decimal(1)) == Decimal(23)
+
+    def test_the_result_carries_the_increments_exponent(self):
+        assert str(expressible_quantity(Decimal("1.005"), Decimal("0.01"))) == "1.00"
+
+    @pytest.mark.parametrize("increment", [Decimal(0), Decimal(-1), Decimal("NaN"), Decimal("Inf")])
+    def test_a_non_positive_or_non_finite_increment_is_refused(self, increment):
+        with pytest.raises(ValueError):
+            expressible_quantity(Decimal("22.5"), increment)
+
+    def test_a_float_is_refused(self):
+        with pytest.raises(TypeError):
+            expressible_quantity(22.5, Decimal(1))  # type: ignore[arg-type]
+
+
+class TestInexpressibleRemainder:
+    def test_the_remainder_is_the_broker_quantity_beyond_the_expressible_one(self):
+        remainder = InexpressibleRemainder(
+            instrument_id=NVDA,
+            broker_quantity=Decimal("22.5"),
+            expressible_quantity=Decimal("22"),
+            size_step=Decimal("1"),
+        )
+
+        assert remainder.remainder == Decimal("0.5")
+
+    def test_a_short_remainder_is_signed(self):
+        remainder = InexpressibleRemainder(
+            instrument_id=NVDA,
+            broker_quantity=Decimal("-22.5"),
+            expressible_quantity=Decimal("-22"),
+            size_step=Decimal("1"),
+        )
+
+        assert remainder.remainder == Decimal("-0.5")
+
+    @pytest.mark.parametrize(
+        ("broker", "expressible"),
+        [
+            ("22", "22"),  # no remainder at all
+            ("22.5", "23"),  # farther from zero than the broker
+            ("22.5", "-22"),  # the other side
+            ("-22.5", "22"),
+        ],
+    )
+    def test_an_impossible_remainder_is_refused(self, broker, expressible):
+        with pytest.raises(ValueError):
+            InexpressibleRemainder(
+                instrument_id=NVDA,
+                broker_quantity=Decimal(broker),
+                expressible_quantity=Decimal(expressible),
+                size_step=Decimal("1"),
+            )
+
+    def test_a_non_decimal_quantity_is_refused(self):
+        with pytest.raises(TypeError):
+            InexpressibleRemainder(
+                instrument_id=NVDA,
+                broker_quantity=22.5,  # type: ignore[arg-type]
+                expressible_quantity=Decimal("22"),
+                size_step=Decimal("1"),
+            )
+
+
+class TestAtExpressiblePrecision:
+    """Story 5.7, D-C/D-D: the state the live phases judge against."""
+
+    def test_a_fractional_holding_is_judged_at_whole_shares_and_named(self):
+        state, remainders = at_expressible_precision(
+            _broker(_held(NVDA, "22.5")), {NVDA: Decimal(1)}
+        )
+
+        (position,) = state.positions
+        assert position.quantity == Decimal(22)
+        assert position.average_price == Decimal("100")
+        assert remainders == (
+            InexpressibleRemainder(
+                instrument_id=NVDA,
+                broker_quantity=Decimal("22.5"),
+                expressible_quantity=Decimal(22),
+                size_step=Decimal(1),
+            ),
+        )
+
+    def test_a_holding_below_one_increment_reads_flat(self):
+        state, remainders = at_expressible_precision(
+            _broker(_held(AAPL, "0.5")), {AAPL: Decimal(1)}
+        )
+
+        assert state.positions == ()
+        assert [(r.instrument_id, r.remainder) for r in remainders] == [(AAPL, Decimal("0.5"))]
+
+    def test_an_exact_holding_is_left_alone_and_names_nothing(self):
+        broker = _broker(_held(NVDA, "22"))
+
+        state, remainders = at_expressible_precision(broker, {NVDA: Decimal(1)})
+
+        assert state == broker and remainders == ()
+
+    def test_unresolved_and_unknown_increment_rows_stay_exact(self):
+        """No increment to judge them by: today's path decides them."""
+        broker = _broker(_held("IB-CONID-1", "0.5", resolved=False), _held(AAPL, "0.5"))
+
+        state, remainders = at_expressible_precision(broker, {"IB-CONID-1": Decimal(1)})
+
+        assert state == broker and remainders == ()
+
+    def test_the_account_cash_and_read_time_are_kept(self):
+        broker = _broker(_held(NVDA, "22.5"))
+
+        state, _ = at_expressible_precision(broker, {NVDA: Decimal(1)})
+
+        assert (state.account, state.cash, state.retrieved_at) == (
+            broker.account,
+            broker.cash,
+            broker.retrieved_at,
+        )
+
+    def test_remainders_are_sorted_by_instrument(self):
+        broker = _broker(_held(NVDA, "1.5"), _held(AAPL, "2.25"))
+
+        _, remainders = at_expressible_precision(broker, {NVDA: Decimal(1), AAPL: Decimal(1)})
+
+        assert [r.instrument_id for r in remainders] == [AAPL, NVDA]
+
+    def test_the_judged_state_compares_clean_against_the_strategys_whole_shares(self):
+        state, _ = at_expressible_precision(_broker(_held(NVDA, "22.5")), {NVDA: Decimal(1)})
+
+        assert compare_positions([_cached(NVDA, "22")], state) == ()
+
+    def test_a_flat_account_is_returned_unchanged(self):
+        broker = _broker()
+
+        assert at_expressible_precision(broker, {}) == (broker, ())
+
+
+class TestTheSameSymbolRule:
+    """Story 5.7, D-A/D-B: an unresolved broker row matters only when its symbol
+    is one a cached position — any owner — is held under."""
+
+    def test_held_symbols_are_every_cached_positions_symbol_any_owner(self):
+        cached = [_cached(NVDA, "22"), _cached("BRK-B.NYSE", "4", "EXTERNAL")]
+
+        assert held_symbols(cached) == frozenset({"NVDA", "BRKB"})
+
+    def test_an_unresolved_row_of_an_unrelated_symbol_masks_nothing(self):
+        assert not may_mask_a_cached_position(_unresolved("T 4.5 02/15/36"), frozenset({"NVDA"}))
+
+    def test_an_unresolved_row_of_a_held_symbol_may_mask_it(self):
+        assert may_mask_a_cached_position(_unresolved("NVDA"), frozenset({"NVDA"}))
+
+    @pytest.mark.parametrize("spelling", ["BRK B", "BRK-B", "brk b", "BRK.B"])
+    def test_the_brokers_spelling_still_matches(self, spelling):
+        held = held_symbols([_cached("BRK-B.NYSE", "4")])
+
+        assert may_mask_a_cached_position(_unresolved(spelling), held)
+
+    def test_nothing_masks_when_the_cache_holds_nothing(self):
+        assert not may_mask_a_cached_position(_unresolved("NVDA"), frozenset())
+
+    @pytest.mark.parametrize("symbol", [None, "", " "])
+    def test_an_unknown_symbol_fails_closed_whenever_anything_is_held(self, symbol):
+        """D-B: "cannot tell which holding" never reads as "matches none"."""
+        assert may_mask_a_cached_position(_unresolved(symbol), frozenset({"NVDA"}))
+        assert not may_mask_a_cached_position(_unresolved(symbol), frozenset())
+
+    def test_a_resolved_row_never_masks(self):
+        (row,) = compare_positions([], _broker(_held(NVDA, "5")))
+
+        assert not may_mask_a_cached_position(row, frozenset({"NVDA"}))
+
+    def test_a_dotted_symbol_keeps_everything_before_the_venue(self):
+        """Code review P1: ``BRK.B.NYSE`` is symbol ``BRK.B`` at venue ``NYSE``
+        — splitting on the *first* dot read it as ``BRK`` and never matched
+        IB's ``BRK B``. The venue is the last dot-separated part."""
+        (row,) = compare_positions([_cached("BRK.B.NYSE", "4")], _broker())
+        held = held_symbols([_cached("BRK.B.NYSE", "4")])
+
+        assert row.symbol_key == "BRKB"
+        assert held == frozenset({"BRKB"})
+        assert may_mask_a_cached_position(_unresolved("BRK B"), held)
+
+
+class TestTradedInstrumentsCountAsHeld:
+    """Code review R1 (PO ruling 2026-10-07): a flat strategy that trades NVDA
+    must not start or be re-granted beside an unresolvable NVDA-symbol broker
+    row — it could buy on top of a holding it cannot see. The symbols of every
+    instrument the session's strategies trade count as held."""
+
+    def test_a_traded_instrument_is_held_with_nothing_cached(self):
+        held = held_symbols([], traded_instrument_ids=[NVDA])
+
+        assert held == frozenset({"NVDA"})
+        assert may_mask_a_cached_position(_unresolved("NVDA"), held)
+
+    def test_the_held_set_is_the_union_of_both(self):
+        held = held_symbols([_cached(AAPL, "5")], traded_instrument_ids=["BRK.B.NYSE"])
+
+        assert held == frozenset({"AAPL", "BRKB"})
+
+    def test_a_row_matching_neither_still_masks_nothing(self):
+        held = held_symbols([_cached(AAPL, "5")], traded_instrument_ids=[NVDA])
+
+        assert not may_mask_a_cached_position(_unresolved("T 4.5 02/15/36"), held)
+
+    def test_no_traded_instruments_is_todays_rule(self):
+        assert held_symbols([_cached(NVDA, "22")]) == frozenset({"NVDA"})
+
+
 class TestStartupReconciliation:
     def test_it_holds_what_reconcile_ok_renders(self):
         result = StartupReconciliation(
@@ -717,6 +970,7 @@ class TestStartupReconciliation:
 
         assert result.discrepancy_count == 0
         assert result.broker.positions[0].instrument_id == NVDA
+        assert result.inexpressible == (), "Story 5.7: no remainder unless one is named"
 
     def test_the_discrepancy_count_spans_both_resolutions(self):
         row = PositionDiscrepancy(

@@ -40,6 +40,8 @@ from src.core.live_runtime_reconcile import (
 )
 from src.core.live_startup_reconcile import (
     DISCREPANCY_EVENT,
+    INEXPRESSIBLE_REMAINDER_EVENT,
+    OK_EVENT,
     ReconciliationFailedError,
     ReconciliationFailure,
 )
@@ -321,6 +323,59 @@ class TestRuntimeCorrectionsAreBrokerWard:
             _cycles(h, reconciler, clock, 2)
 
         assert caught.value.reason is ReconciliationFailure.STRATEGY_POSITION_CONTRADICTED
+        assert h.open_positions() == {str(STRATEGY): Decimal(22)}
+
+
+class TestAFractionalRemainderWhileRunning:
+    """Story 5.7, AC #4 against the real engine and cache: judged at whole
+    shares, never sent to the engine, named once."""
+
+    @staticmethod
+    def _spy(h: _Harness) -> list:
+        sent: list = []
+        apply = h.engine.reconcile_execution_report
+        h.engine.reconcile_execution_report = lambda report: sent.append(report) or apply(report)
+        return sent
+
+    def test_the_spy_records_a_report_that_is_sent(self, harness):
+        """The sibling that makes ``sent == []`` below able to fail."""
+        h = harness()
+        h.seed(NVDA, 22)
+        reconciler, clock = _reconciler(h, _state((NVDA.id, "23.5", "100")))
+        sent = self._spy(h)
+
+        _cycles(h, reconciler, clock, 2)
+
+        (report,) = sent
+        assert report.quantity.as_decimal() == Decimal(23), "whole shares, truncated"
+
+    def test_a_drip_half_share_beside_the_strategys_shares_writes_nothing(self, harness):
+        h = harness()
+        h.seed(NVDA, 22)
+        reconciler, clock = _reconciler(h, _state((NVDA.id, "22.5", "100")))
+        sent = self._spy(h)
+
+        with capture_logs() as logs:
+            _cycles(h, reconciler, clock, 4)
+
+        assert sent == []
+        assert h.open_positions() == {str(STRATEGY): Decimal(22)}
+        assert not [e for e in logs if e["event"] == DISCREPANCY_EVENT]
+        assert len([e for e in logs if e["event"] == INEXPRESSIBLE_REMAINDER_EVENT]) == 1
+        (ok,) = [e for e in logs if e["event"] == OK_EVENT]
+        assert ok["inexpressible_remainders"] == {str(NVDA.id): "0.5"}
+
+    def test_the_frameworks_over_import_is_corrected_down_and_verifies(self, harness):
+        """F3's leftover at runtime: the correction re-verifies against the
+        whole-share view, not the exact read, so the session keeps running."""
+        h = harness()
+        h.seed(NVDA, 22)
+        h.seed(NVDA, 1, StrategyId("INTERNAL-DIFF"))
+        reconciler, clock = _reconciler(h, _state((NVDA.id, "22.5", "100")))
+
+        _cycles(h, reconciler, clock, 2)
+
+        assert h.net(NVDA) == 22
         assert h.open_positions() == {str(STRATEGY): Decimal(22)}
 
 

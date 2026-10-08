@@ -134,7 +134,11 @@ make web                                # Web UI (http://127.0.0.1:8000)
 - **`EMITTED_RECONCILE_EVENTS`** (`src/core/live_startup_reconcile.py`) joined the discipline at
   Story 4.7: `reconcile.ok`, `reconcile.discrepancy`, `reconcile.cash_changed` — the startup
   phase's records, with `reconcile.local_snapshot_failed` deliberately outside it as a
-  diagnostic. There is no dispatch map to drive, so
+  diagnostic. **Widened 3 → 4 at Story 5.7**: `reconcile.inexpressible_remainder` (a broker
+  quantity finer than the instrument's size precision, named once; its `size_step` field is
+  `10**-size_precision`, never the possibly coarser `size_increment` — code review R2) joined
+  it, in the constant, its exact-set pin and the NFR26 parametrized scenario together. There
+  is no dispatch map to drive, so
   `TestEveryEmittedReconcileRecordIsPinned` (`tests/unit/core/test_live_startup_reconcile.py`)
   pins it **against the code both ways**:
   - an AST scan of every `_emit` in the module, which catches a name never added;

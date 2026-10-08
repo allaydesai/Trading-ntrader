@@ -37,6 +37,7 @@ from src.core.live_runtime_reconcile import (
 )
 from src.core.live_startup_reconcile import (
     DISCREPANCY_EVENT,
+    INEXPRESSIBLE_REMAINDER_EVENT,
     OK_EVENT,
     ReconciliationFailedError,
     ReconciliationFailure,
@@ -44,6 +45,7 @@ from src.core.live_startup_reconcile import (
 from src.core.live_stranded_orders import StaleOrderWatch
 from tests.unit.core.test_live_startup_reconcile import (
     AAPL,
+    BOND,
     NVDA,
     NVDA_EQUITY,
     RAW_ACCOUNT,
@@ -51,6 +53,7 @@ from tests.unit.core.test_live_startup_reconcile import (
     _Cache,
     _Engine,
     _held,
+    _net,
     _Position,
     _state,
 )
@@ -113,7 +116,9 @@ class _Connection:
 class _World:
     """One session's worth of doubles, with the monitor already granted."""
 
-    def __init__(self, positions=(), *, state=None, inflight=(), **engine_kwargs) -> None:
+    def __init__(
+        self, positions=(), *, state=None, inflight=(), traded=None, **engine_kwargs
+    ) -> None:
         self.clock = _Clock()
         self.cache = _RuntimeCache(positions, inflight=inflight)
         self.engine = _Engine(self.cache, **engine_kwargs)
@@ -132,6 +137,8 @@ class _World:
             settings=object(),
             read_state=self.reader,
             clock=self.clock,
+            # Code review R1: the session's traded instruments; omitted, the default.
+            **({} if traded is None else {"traded_instruments": traded}),
         )
 
     def tick(self, times: int = 1) -> None:
@@ -500,16 +507,269 @@ class TestUnresolvableRows:
 
         assert world.monitor.state is ConnectionState.CONNECTED
 
-    def test_an_unresolved_broker_row_withholds_the_grant(self):
-        """The sibling: a lookup miss may hide a holding, so it fails closed."""
-        world = _World(state=_state(_held("IB-CONID-4815747", "22", resolved=False)))
+    def test_an_unresolved_broker_row_of_a_held_symbol_withholds_the_grant(self):
+        """The sibling: a lookup miss may hide a holding, so it fails closed.
+        Story 5.7 (AC #3, D-A) narrows it to the row that *could* — one under a
+        symbol a cached position is held under; before 5.7 any unresolved row
+        withheld it, on an empty cache too (that case is now AC #2's)."""
+        world = _World(
+            [_Position(NVDA, STRATEGY, "22")],
+            state=_state(
+                _held(NVDA, "22"), _held("IB-CONID-4815747", "3", resolved=False, symbol="NVDA")
+            ),
+        )
         world.lose_and_recover()
 
-        for _ in range(4):
+        for _ in range(HOLD_BACK_CYCLES + 3):
             world.tick()
 
         assert world.monitor.state is not ConnectionState.CONNECTED
         assert world.monitor.submission_withheld is True
+
+
+class TestAnUnresolvedHoldingOfAnUnrelatedSymbolNeverWithholdsTheGrant:
+    """Story 5.7, AC #2 (PO ruling D2): an ``IB-CONID-*`` row under a symbol no
+    cached position is held under is named once and left out — a recovered
+    disconnect is re-granted beside it, and the running session reports clean."""
+
+    def test_a_recovered_disconnect_is_re_granted_beside_it(self):
+        world = _World([_Position(AAPL, STRATEGY, "5")], state=_state(_held(AAPL, "5"), BOND))
+        world.cycles(2)  # confirmed and named before the loss
+        world.lose_and_recover()
+
+        with capture_logs() as logs:
+            for _ in range(4):
+                world.tick()
+
+        assert world.monitor.state is ConnectionState.CONNECTED
+        assert world.monitor.submission_withheld is False
+        assert [e["scope"] for e in _events(logs, OK_EVENT)] == [SCOPE_RECONNECT]
+
+    def test_a_row_first_seen_after_the_loss_is_re_granted_on_the_first_cycle(self):
+        """Code review P4: an unrelated row is inert from its first sighting —
+        it is never acted on, so it has nothing to debounce. Judging inertness
+        from the *debounced* rows withheld the grant for at least one debounce
+        window (>= 60 s), and a flickering row could withhold it forever (AC #2)."""
+        world = _World(state=_state(BOND))
+        world.lose_and_recover()
+
+        world.tick()
+
+        assert world.monitor.state is ConnectionState.CONNECTED
+        assert world.monitor.submission_withheld is False
+
+    def test_a_flickering_unrelated_row_never_withholds_the_grant(self):
+        """Each sighting is a first sighting to the debounce; inert regardless."""
+        world = _World(state=_state(BOND))
+        world.cycles(1)
+        world.reader.state = _state()
+        world.cycles(1)
+        world.reader.state = _state(BOND)
+        world.lose_and_recover()
+
+        world.tick()
+
+        assert world.monitor.state is ConnectionState.CONNECTED
+        assert world.monitor.submission_withheld is False
+
+    def test_it_is_named_once_and_never_expires_a_hold_back_it_never_held(self):
+        """D-G: D1's counter runs only for rows that could mask a cached position."""
+        world = _World(state=_state(BOND))
+
+        with capture_logs() as logs:
+            world.cycles(HOLD_BACK_CYCLES + 3)
+
+        records = [(r["instrument_id"], r["resolution"]) for r in _events(logs, DISCREPANCY_EVENT)]
+        assert records == [("IB-CONID-99", "unresolved")]
+        assert not _events(logs, HOLD_BACK_EXPIRED_EVENT)
+        assert _events(logs, OK_EVENT), "the running session reports clean beside it"
+        assert world.engine.reports == []
+
+
+class TestATradedInstrumentCountsAsHeldWhileRunning:
+    """Code review R1 (PO ruling 2026-10-07): the reconnect grant and D1's
+    hold-back count the symbols of the instruments the session's strategies
+    trade as held, beside the cached positions' own."""
+
+    LOOKUP_MISS = _held("IB-CONID-4815747", "3", resolved=False, symbol="NVDA")
+
+    def test_a_flat_strategy_beside_a_same_symbol_row_withholds_the_grant(self):
+        world = _World(state=_state(self.LOOKUP_MISS), traded=[NVDA])
+        world.lose_and_recover()
+
+        for _ in range(HOLD_BACK_CYCLES + 3):
+            world.tick()
+
+        assert world.monitor.state is not ConnectionState.CONNECTED
+        assert world.monitor.submission_withheld is True
+
+    def test_another_traded_symbol_does_not_withhold_it(self):
+        """Non-vacuity: the withholding above is the traded set's doing."""
+        world = _World(state=_state(self.LOOKUP_MISS), traded=[AAPL])
+        world.lose_and_recover()
+
+        world.tick()
+
+        assert world.monitor.state is ConnectionState.CONNECTED
+
+    def test_a_row_matching_neither_never_withholds_it(self):
+        world = _World([_Position(AAPL, STRATEGY, "5")], state=_state(_held(AAPL, "5"), BOND))
+        world.reconciler = RuntimeReconciler(
+            node=world.node,
+            monitor=world.monitor,
+            log=_log(),
+            connection_reader=world.connection,
+            settings=object(),
+            read_state=world.reader,
+            clock=world.clock,
+            traded_instruments=[NVDA, AAPL],
+        )
+        world.lose_and_recover()
+
+        world.tick()
+
+        assert world.monitor.state is ConnectionState.CONNECTED
+        assert world.monitor.submission_withheld is False
+
+    def test_d1s_hold_back_counts_a_traded_symbol(self):
+        """D-G feeds the hold-back only rows that may mask; a traded symbol is
+        one, so its bound runs (and is named when it ends)."""
+        world = _World(state=_state(self.LOOKUP_MISS), traded=[NVDA])
+
+        with capture_logs() as logs:
+            world.cycles(HOLD_BACK_CYCLES + 1)
+
+        (expired,) = _events(logs, HOLD_BACK_EXPIRED_EVENT)
+        assert expired["symbol"] == "NVDA"
+
+
+class TestAFractionalRemainderIsNamedOnceWhileRunning:
+    """Story 5.7, AC #4: judged at whole shares, named once at WARNING, and
+    carried by every ``reconcile.ok`` while it stands — never a silent ok."""
+
+    def _world(self, broker: str = "22.5", *positions) -> _World:
+        return _World(
+            list(positions) or [_Position(NVDA, STRATEGY, "22")],
+            state=_state(_held(NVDA, broker)),
+        )
+
+    def test_it_is_clean_named_once_and_carried_by_reconcile_ok(self):
+        world = self._world()
+
+        with capture_logs() as logs:
+            world.cycles(5)
+
+        assert world.engine.reports == []
+        assert _events(logs, DISCREPANCY_EVENT) == []
+        (named,) = _events(logs, INEXPRESSIBLE_REMAINDER_EVENT)
+        assert (named["scope"], named["log_level"]) == (SCOPE_RUNTIME, "warning")
+        assert (named["broker_quantity"], named["expressible_quantity"], named["remainder"]) == (
+            "22.5",
+            "22",
+            "0.5",
+        )
+        (ok,) = _events(logs, OK_EVENT)
+        assert ok["inexpressible_remainders"] == {NVDA: "0.5"}
+        assert ok["instruments"] == {NVDA: "22.5"}, "D-D: the broker is reported exact"
+
+    def test_a_clean_session_with_nothing_inexpressible_says_so(self):
+        world = self._world("22")
+
+        with capture_logs() as logs:
+            world.cycles(2)
+
+        assert _events(logs, OK_EVENT)[0]["inexpressible_remainders"] == {}
+        assert _events(logs, INEXPRESSIBLE_REMAINDER_EVENT) == []
+
+    def test_a_changed_remainder_is_named_again(self):
+        world = self._world()
+        world.cycles(2)
+        world.reader.state = _state(_held(NVDA, "22.7"))
+
+        with capture_logs() as logs:
+            world.cycles(3)
+
+        assert [r["remainder"] for r in _events(logs, INEXPRESSIBLE_REMAINDER_EVENT)] == ["0.7"]
+
+    def test_an_unchanged_remainder_is_not_renamed_when_the_strategy_trades(self):
+        """Code review P2 (P22b's Fail criterion): a strategy buying one share
+        on a DRIP instrument moves the broker 22.5 -> 23.5 and leaves the
+        remainder at 0.5 — the same standing fact, so it is not named again.
+        Keying "already named" on the whole record (both quantities) did."""
+        world = self._world()
+        world.cycles(2)
+        world.cache.positions = [_Position(NVDA, STRATEGY, "23")]
+        world.reader.state = _state(_held(NVDA, "23.5"))
+
+        with capture_logs() as logs:
+            world.cycles(3)
+
+        assert _events(logs, INEXPRESSIBLE_REMAINDER_EVENT) == []
+        assert _events(logs, DISCREPANCY_EVENT) == []
+
+    def test_a_remainder_whose_value_changes_is_named_again(self):
+        world = self._world()
+        world.cycles(2)
+        world.reader.state = _state(_held(NVDA, "22.75"))
+
+        with capture_logs() as logs:
+            world.cycles(3)
+
+        assert [r["remainder"] for r in _events(logs, INEXPRESSIBLE_REMAINDER_EVENT)] == ["0.75"]
+
+    def test_a_cleared_then_returning_remainder_is_named_again(self):
+        world = self._world()
+        world.cycles(1)
+        world.reader.state = _state(_held(NVDA, "22"))
+        world.cycles(1)
+        world.reader.state = _state(_held(NVDA, "22.5"))
+
+        with capture_logs() as logs:
+            world.cycles(2)
+
+        assert len(_events(logs, INEXPRESSIBLE_REMAINDER_EVENT)) == 1
+
+    def test_a_remainder_first_seen_on_a_reconnect_cycle_is_named_and_grants(self):
+        world = self._world("22")
+        world.cycles(1)
+        world.reader.state = _state(_held(NVDA, "22.5"))
+        world.lose_and_recover()
+
+        with capture_logs() as logs:
+            world.tick()
+
+        assert world.monitor.state is ConnectionState.CONNECTED
+        (named,) = _events(logs, INEXPRESSIBLE_REMAINDER_EVENT)
+        assert named["scope"] == SCOPE_RECONNECT
+        (ok,) = _events(logs, OK_EVENT)
+        assert ok["inexpressible_remainders"] == {NVDA: "0.5"}
+
+    def test_the_frameworks_over_import_is_corrected_down_and_verifies_clean(self):
+        """The re-verify judges at the same precision, or it would read the
+        corrected ``22`` against the exact ``22.5`` and stop the session."""
+        world = self._world(
+            "22.5", _Position(NVDA, STRATEGY, "22"), _Position(NVDA, "INTERNAL-DIFF", "1")
+        )
+
+        with capture_logs() as logs:
+            world.cycles(2)
+
+        (report,) = world.engine.reports
+        assert report.signed_decimal_qty == Decimal(22)
+        assert _net(world.cache, NVDA) == Decimal(22)
+        resolutions = [r["resolution"] for r in _events(logs, DISCREPANCY_EVENT)]
+        assert resolutions == ["broker"]
+
+    def test_truncation_never_rounds_a_shortfall_into_cover_and_names_it_first(self):
+        world = self._world("23.5", _Position(NVDA, STRATEGY, "24"))
+
+        with capture_logs() as logs, pytest.raises(ReconciliationFailedError) as caught:
+            world.cycles(2)
+
+        assert caught.value.reason is ReconciliationFailure.STRATEGY_POSITION_CONTRADICTED
+        assert caught.value.discrepancies[0].broker_quantity == Decimal(23)
+        assert len(_events(logs, INEXPRESSIBLE_REMAINDER_EVENT)) == 1
+        assert world.engine.reports == []
 
 
 class TestAFrameworkRefusalStopsTheSession:
@@ -1024,6 +1284,18 @@ class TestStaleOrdersAreCheckedOnRuntimeCyclesOnly:
         world.cycles(2)
 
         assert spy.calls == [(SCOPE_RUNTIME, frozenset({NVDA, AAPL}))] * 2
+
+    def test_an_instrument_whose_row_is_inert_is_skipped_too(self):
+        """Story 5.7, D-H — the Story 4.8 code review's deferred gap ("AC #5's
+        skip set omits the unresolvable rows", owner: whoever next touches
+        ``_act``'s return value): an instrument the cache does not hold is
+        logged ``unresolved`` and inert from its second cycle, and still skipped."""
+        world = _World(state=_state(_held("MSFT.NASDAQ", "3"), BOND))
+        spy = _watched(world)
+
+        world.cycles(3)
+
+        assert spy.calls == [(SCOPE_RUNTIME, frozenset({"MSFT.NASDAQ", "IB-CONID-99"}))] * 3
 
     def test_a_check_that_raises_never_leaves_the_tick_and_positions_were_handled(self):
         world = _World(state=_state(_held(NVDA, "5")))

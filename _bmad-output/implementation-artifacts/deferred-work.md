@@ -3561,10 +3561,12 @@ Story 4.5 (resume a strategy mid-position). Every item routed to 4.5 by Stories 
   *(Superseded in part at the integration merge with Story 4.7, 2026-09-28 — see that section
   below: 4.7's coverage rule made single-side covered growth an ordinary row at runtime too, so the
   pin now covers only the mixed-sides shape.)*
-- **Any unresolvable (`IB-CONID-*`) broker position refuses every start (4.2 review, :3399).** →
+- ~~**Any unresolvable (`IB-CONID-*`) broker position refuses every start (4.2 review, :3399).**~~ →
   **Kept (D-G).** An unresolved row cannot be tied to, or excluded from, any strategy's instrument;
   refusing is the only reading that cannot trade blind. Owner for a narrower rule: unowned, named
-  — whoever first meets an unresolvable holding live.
+  — whoever first meets an unresolvable holding live. — **SUPERSEDED by Story 5.7 (2026-10-07,
+  PO ruling D2 of PR #35):** only a row whose symbol a cached position is held under still refuses;
+  any other is named once and left out.
 - **A holding no strategy owns on a traded instrument (new, D-C, PO ruling B).** The strategy on
   that instrument is refused (`strategy.resume_refused`, contained, siblings start, fail closed if
   none can); the holding is never traded or adjusted. **Consequence:** P18b's hand-bought share, or
@@ -3737,7 +3739,7 @@ it landed.
 | | Ruling | Landed |
 |---|---|---|
 | **D1** | Symbol-scoped **and** bounded hold-back: an unresolved `IB-CONID-*` row holds back only the cache row with the same symbol (`PositionDiscrepancy.broker_symbol` / `symbol_key`, IB's `BRK B` matching Nautilus's `BRK-B`), for at most `HOLD_BACK_CYCLES` (3) consecutive cycles; past that `reconcile.hold_back_expired` is logged once and the row is acted on — a contradiction underneath is refused, fail closed. | This PR (`live_runtime_reconcile._HoldBack`; unit tests for the unrelated-symbol refusal, the bound, the restart and the spelling) |
-| **D2** | Same-symbol rule everywhere, name the rest: an unresolved row matters only to a same-symbol cached row at startup and for the reconnect grant too; a fractional remainder below the size increment is named once and clean at the expressible precision in the session, while `live reconcile` stays exact (exit 5). | **Epic 5, Story 5.7** (`epics.md`, `sprint-status.yaml`) |
+| **D2** | Same-symbol rule everywhere, name the rest: an unresolved row matters only to a same-symbol cached row at startup and for the reconnect grant too; a fractional remainder below the size increment is named once and clean at the expressible precision in the session, while `live reconcile` stays exact (exit 5). | **Epic 5, Story 5.7** (`epics.md`, `sprint-status.yaml`) — ✅ **landed 2026-10-07** (see "Deferred from: story-5.7" below) |
 | **D3** | Withhold after 3, drift stops: three consecutive failed cycles move the monitor to `RECOVERING` (orders withheld) with one ERROR, re-granted by the next clean cycle; a `BrokerStateAdapterError` stops the session on first occurrence, as startup treats drift; the withheld period is recorded in `session_conditions`. | **Epic 5, Story 5.8** |
 | **D4** | A non-synthetic strategy id the session's spec does not resolve to is unowned: `split_by_owner(..., session_strategy_ids=)` with the ids from `live_session_node.session_strategy_ids`; the strategy that resolves to the new id is refused through the existing `strategy.resume_refused reason=unowned_position` path. `LiveSessionRunner` 416 → 417, disclosed. | This PR |
 | **D5a** | Covered growth resumes beside the excess: when the strategy's own position is non-zero and the unowned part is on the same side, D-C does not refuse — `strategy.resumed_beside_excess` names both, the strategy manages its own lot, the excess stays `INTERNAL-DIFF` and is never traded. Flat-beside-unowned, opposite side and **mixed sides** (`strategies_on_both_sides`) are still refused. Supersedes the two "Owner: the PO" items in the 4.5/4.7 integration-merge section above. Docs: nautilus.md, README, `live start` help, P18/P19c/P20. | This PR |
@@ -3763,7 +3765,8 @@ it landed.
   rounds silently to 22, verified against the wheel); and while an unresolved row exists the
   reconnect grant is never issued, so after any disconnect orders are withheld for the rest of the
   session. Needs one ruling covering startup, runtime and reconnect. **Owner: the PO**; suggested
-  routing: Epic 5 planning, beside the `owner_epoch` debt.
+  routing: Epic 5 planning, beside the `owner_epoch` debt. — **RESOLVED by Story 5.7
+  (2026-10-07)**, per the ruling in the table above.
 - **D3 [MEDIUM] A persistent runtime cycle failure is only an hourly warning.**
   `RuntimeReconciler._run` turns every non-`ReconciliationFailedError` — including
   `BrokerStateAdapterError` for the real account condition "two IB contracts resolve to one
@@ -3889,13 +3892,16 @@ it landed.
 
 ## Deferred from: code review of 4-8-clear-a-stranded-order-after-a-broker-confirmed-fill-or-cancel (2026-10-06)
 
-- **AC #5's skip set omits the "unresolvable" rows.** `RuntimeReconciler._act` returns
+- ~~**AC #5's skip set omits the "unresolvable" rows.**~~ `RuntimeReconciler._act` returns
   `outstanding` without `inert = set(unresolvable)` — the framework-inexpressible rows
   (`position_report` returned `None`, instrument not in the cache) — so the stale-order check does
   not skip such an instrument the cycle its row is logged unresolved. No harmful path: the engine
   refuses the `CANCELED` report for an instrument it cannot look up (`returned_false`,
   `reconcile.stale_order_clear_failed`). A literal gap in the AC, untested either way.
-  **Owner:** whoever next touches `_act`'s return value.
+  **Owner:** whoever next touches `_act`'s return value. — **RESOLVED by Story 5.7 (2026-10-07,
+  D-H)**, which widened that return: the skip set is now every observed row's instrument (standing
+  or inert) plus the deferred ones, pinned by
+  `test_an_instrument_whose_row_is_inert_is_skipped_too`.
 - **The detached `get_open_orders` task can outlive a session stop.** `broker_open_orders` leaves
   its `ensure_future(ib_client.get_open_orders(...))` running after the 10 s deadline; the
   adapter's own `_await_request(request, 30)` keeps it alive up to 30 s, so a stop inside that
@@ -3910,3 +3916,80 @@ it landed.
   the worst gap must leave one heartbeat interval of margin). Not pinned: a session started with a
   non-default heartbeat interval, and the DB writes inside the tick. **Owner:** whoever adds a
   third read to the tick, or makes the interval configurable per session.
+
+## Deferred from: story-5.7 (2026-10-07)
+
+Story 5.7 landed PR #35's D2 ruling ("same-symbol rule everywhere, name the rest"). What it
+deliberately left, each with an owner:
+
+- **D-A's literal reading of "matches a cached position" (owner: the PO, if a live account ever
+  meets it).** An unresolved `IB-CONID-*` row's symbol is compared with every open cached
+  position's, any owner. So an unresolvable contract that shares a symbol with a position the broker
+  *also* reports resolved still refuses the start and still withholds a reconnect grant. Example: a
+  strategy's NVDA stock beside an unresolvable NVDA-symbol contract. That is the AC's literal rule
+  and the pre-5.7 behaviour for that shape. The narrower reading would match only a cache row that
+  reads "broker 0". IB gives warrants and rights their own symbols (`XYZ WS`, `XYZ RT`) and options
+  resolve, so this is expected to be rare. Pinned by
+  `test_an_unresolved_broker_row_of_a_held_symbol_withholds_the_grant`. — **CLOSED by the code
+  review (PO ruling R3, 2026-10-07): keep the literal reading.** No code change; no longer an open
+  question. The same review widened "held" to the traded instruments' symbols too (R1), so the
+  literal rule now also covers a flat strategy's own symbol.
+- **A correction can make an inert unresolved row count again (fail closed, accepted).** At
+  startup, hydrating a broker-only NVDA position puts NVDA in the cache. An unresolved NVDA-symbol
+  row that matched nothing before the correction then matches, and the re-verify refuses
+  `DISCREPANCY_REMAINS`. The next start refuses `UNRESOLVABLE_DISCREPANCY`, consistently. Pinned by
+  `test_a_correction_that_puts_the_symbol_in_the_cache_makes_the_row_count_again`. Owner: D-A's
+  owner, with the same ruling.
+- **The instrument-not-in-cache path is unchanged.** A *resolved* broker row whose instrument the
+  cache lacks has no size step, so it is judged exact. It is still refused at startup
+  (`UNRESOLVABLE_DISCREPANCY`) and inert at runtime, as before this story. The broker reader's
+  `get_instrument` (W4) normally loads it first. Owner: whoever first meets it live.
+- **"Once per instrument" is once per reconciliation, per standing value (D-F).** The startup phase
+  names a remainder once (`scope=startup`). The running session's cycle names it once more
+  (`scope=runtime` or `reconnect`), then never again while it is unchanged. A changed remainder, or
+  one that clears and returns, is named again. Owner: none, unless an operator finds the second
+  record noisy. — **RULED keep by the code review (PO ruling R4, 2026-10-07).** The review keyed
+  "unchanged" on `(instrument, remainder)` (P2), so a strategy's own trade that leaves the same
+  remainder standing (22.5 → 23.5) is not named again.
+- **Procedure P22 is defined, not run.** It needs a fractional holding or an unresolvable contract
+  that only the operator can arrange by hand in TWS. Owner: the operator's phase-gate run.
+
+## Deferred from: code review of 5-7-name-holdings-the-adapter-cannot-express-instead-of-refusing-or-hiding-them (2026-10-07)
+
+Three-layer review (Blind Hunter / Edge Case Hunter / Acceptance Auditor), triaged and ruled by the
+PO the same day. Rulings R1–R4 and patches P1–P9 landed with the story; these are left, each with
+its reason and owner:
+
+- **W1 — a same-symbol unresolved row keeps withholding the reconnect grant after D1's hold-back
+  expires, for the rest of the session.** The hold-back bounds only which *cache row* is held
+  back; the matching row itself still stands between the cycle and clean, so no
+  `connection.restored` follows a disconnect while it stands. Deliberate: D2's ruling and AC #3
+  say the fail-closed rules apply "unchanged", and since R1 a traded symbol is one too. Owner: the
+  PO, beside Story 5.8 (runtime failure policy).
+- **W2 — an unrelated unresolved row is logged at ERROR while the start proceeds, and
+  `reconcile.ok` reports `discrepancies=0`.** Severity and outcome disagree: `resolution=unresolved`
+  keeps `log_discrepancy`'s ERROR level (shared with the runtime cycle's unresolvable rows), yet the
+  row is inert and not counted. Owner: the PO (whether an inert row should log at WARNING, or be
+  counted in `reconcile.ok`).
+- **W3 — D-H's widened stale-order skip set covers a held-back same-symbol instrument
+  indefinitely,** so a stranded order on it is never cleared while the unresolved row stands.
+  Fail-closed in the right direction (no order state is guessed beside a holding the adapter cannot
+  read) but unbounded. Owner: Story 4.8's follow-up / the PO.
+- **W4 — non-equity symbol matching.** `symbol_key` compares the instrument id's symbol with IB's
+  `contract.symbol`: a future (`ESZ5` vs `ES`), an FX pair (`EUR/USD` vs `EUR`) or an option vs its
+  underlying would not match as intended. Phase 3 trades equities and ETFs only. Owner: whichever
+  story first adds a non-equity instrument.
+- **W5 — `live reconcile` exits 5 forever on a healthy DRIP account,** and nothing marks the line
+  as an inexpressible remainder rather than a real disagreement. By design (FR36 exactness, AC #5),
+  but an operator cannot tell the two apart from the output. Owner: the PO (e.g. an annotation on
+  the line, never a change to the exit code).
+- **W6 — a correction can make an inert row count again and refuse `DISCREPANCY_REMAINS`; every
+  later start then refuses `UNRESOLVABLE_DISCREPANCY`, with no operator remedy text for that
+  shape.** Already recorded in the story's Dev Agent Record (Debug Log, "One defect found while
+  going green") and in "Deferred from: story-5.7" above
+  (`test_a_correction_that_puts_the_symbol_in_the_cache_makes_the_row_count_again`). Owner: the PO,
+  with D-A's ruling (R3).
+- **W7 — a fractional row whose instrument the cache lacks still refuses `UNRESOLVABLE` at
+  startup.** It has no size step to judge it by, so it keeps today's path (the story's scope
+  boundary: "no change to the instrument-not-in-cache path"). The broker reader's `get_instrument`
+  normally loads the instrument first. Owner: whoever first meets it live.
