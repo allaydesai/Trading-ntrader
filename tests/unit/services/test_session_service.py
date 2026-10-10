@@ -1579,3 +1579,88 @@ class TestRecordOrderRejections:
 
         assert row.runtime_flags["order_rejections"]["last"]["reconciliation"] is True
         assert row.runtime_flags["order_rejections"]["last"]["reason"] == "UNKNOWN"
+
+
+class TestRecordSealedRun:
+    """Story 5.3, D-B (amended by the PO's AR37 note): the seal moves the row
+    through ``transition(to=SEALED)`` alone; this write only links the run the
+    session was sealed into. It never assigns ``status``, follows a
+    ``transition()`` in the same transaction, and is write-once like ``spec``.
+    """
+
+    RUN_ID = UUID("55555555-5555-5555-5555-555555555555")
+
+    def _sealed_row(self, **overrides) -> TradingSession:
+        row = _session_row(SessionStatus.SEALED)
+        row.sealed_at = datetime(2026, 10, 9, 20, 0, tzinfo=timezone.utc)
+        for name, value in overrides.items():
+            setattr(row, name, value)
+        return row
+
+    def test_a_sealed_row_gets_its_run_id_and_nothing_else(self):
+        row = self._sealed_row()
+        sealed_at = row.sealed_at
+        service = SessionService(_repository(row), time_source=FakeClock())
+
+        result = service.record_sealed_run(SESSION_ID, sealed_run_id=self.RUN_ID)
+
+        assert result is row
+        assert row.sealed_run_id == self.RUN_ID
+        assert row.status is SessionStatus.SEALED
+        assert row.sealed_at == sealed_at
+
+    @pytest.mark.parametrize(
+        "status", [SessionStatus.CREATED, SessionStatus.RUNNING, SessionStatus.STOPPED]
+    )
+    def test_a_row_that_is_not_sealed_refuses_the_write(self, status):
+        """Only a ``transition()`` to ``sealed`` earlier in the same transaction
+        can make this write legal — a run id on a live or stopped row would
+        claim a seal that never happened."""
+        row = _session_row(status)
+        service = SessionService(_repository(row), time_source=FakeClock())
+
+        with pytest.raises(InvalidSessionTransition, match="not sealed"):
+            service.record_sealed_run(SESSION_ID, sealed_run_id=self.RUN_ID)
+
+        assert row.sealed_run_id is None
+        assert row.status is status
+
+    def test_a_second_write_over_an_existing_run_id_is_refused(self):
+        first = UUID("66666666-6666-6666-6666-666666666666")
+        row = self._sealed_row(sealed_run_id=first)
+        service = SessionService(_repository(row), time_source=FakeClock())
+
+        with pytest.raises(InvalidSessionTransition, match="already sealed into"):
+            service.record_sealed_run(SESSION_ID, sealed_run_id=self.RUN_ID)
+
+        assert row.sealed_run_id == first
+
+    def test_the_row_is_read_locked(self):
+        repository = _repository(self._sealed_row())
+
+        SessionService(repository, time_source=FakeClock()).record_sealed_run(
+            SESSION_ID, sealed_run_id=self.RUN_ID
+        )
+
+        (_args, kwargs) = repository.find_by_session_id.call_args
+        assert kwargs.get("for_update", False) is True
+
+    def test_an_unknown_session_raises_record_not_found(self):
+        service = SessionService(_repository(None), time_source=FakeClock())
+
+        with pytest.raises(RecordNotFoundError):
+            service.record_sealed_run(SESSION_ID, sealed_run_id=self.RUN_ID)
+
+    def test_a_seal_is_transition_then_link(self):
+        """The whole seal, as the seal service runs it: the edge through
+        ``transition()`` (AR37's one path), then the link."""
+        clock = FakeClock()
+        row = _session_row(SessionStatus.STOPPED)
+        service = SessionService(_repository(row), time_source=clock)
+
+        service.transition(SESSION_ID, to=SessionStatus.SEALED)
+        service.record_sealed_run(SESSION_ID, sealed_run_id=self.RUN_ID)
+
+        assert row.status is SessionStatus.SEALED
+        assert row.sealed_at == clock.now
+        assert row.sealed_run_id == self.RUN_ID

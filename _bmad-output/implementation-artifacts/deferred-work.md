@@ -4153,3 +4153,88 @@ each with its reason and owner:
   5.2's namespaced count are two sources for one number, and nothing ties them. **Owner:** Story
   5.4. When it adds the key, pin the two equal: CLAUDE.md, "a duplicated literal needs its own
   equality pin".
+
+## Deferred from: story-5.3 (2026-10-09)
+
+Story 5.3 seals a stopped session into one `backtest_runs` row (`src/services/session_seal_service.py`,
+`ntrader live seal`), under PO rulings R1a / R2a / R3a / R4a (R4 refined). What it measured and
+deliberately left, each with an owner:
+
+- **(a) `commissions[0]` (story-3.5's item, routed here) — dispositioned: not fixed, on either
+  side (PO-accepted 2026-10-09).** `save_trades_from_positions` still keeps only the first
+  commission entry of a backtest position. No metric reads a commission column: `profit_loss` is
+  net, and a backtest's metrics come from its engine, a paper record's from its rows' `profit_loss`.
+  Paper rows already carry the recorder's settlement-currency `select_commission`. Changing the
+  backtest side would break 5.2's zero-diff persistence and AR12's "verbatim". The only effect is
+  the commission *displayed* on a mixed-currency backtest trade. **Owner:** none, unless a
+  non-USD instrument arrives (the 5.7 W4 / 5.2 code-review precedent).
+- **(b) → Story 5.4: a truncated session seals the same as a complete one (PO-accepted).** No fifth
+  status (needs a migration). The last process run's `runtime_flags` (`failed_strategies`,
+  `all_failed`, `order_rejections`) stay readable on the sealed row; recording them in
+  `session_conditions` is 5.4's, beside 5.8's withheld period.
+- **(c) → Story 5.4: the run's `start_date` is `trading_sessions.created_at` (PO ruling R3a).**
+  Nothing durable records a first start: `last_started_at` is overwritten on every claim,
+  `owner_epoch` counts reclaims too, and `runtime_flags` is cleared every run. `created_at` is never
+  after the first start, so the period can include the create→first-start gap and CAGR reads low,
+  never high. One function owns it (`session_seal_service.period_start`), so 5.4 ("the session's
+  first start") can replace the source.
+- **(d) A future run delete would cascade into a session's trades.** `trades.backtest_run_id` is
+  `ON DELETE CASCADE`. The UI's `DELETE /backtests/{run_id}` is a no-op today
+  (`src/api/ui/backtests.py:728-763`), but whoever implements it would delete a sealed session's
+  trade rows — its system of record — with the run. **Owner:** whoever implements run deletion
+  (refuse `run_type = 'paper'`, or detach first). AR44 forbids touching it here.
+- **(e) → Story 5.5: where `--force` plugs in.** 5.3 refuses any open position (R2a) through the
+  injected `read_open_positions` reader and reports `open_positions: []` with the disposition
+  `none open at seal` (`NONE_OPEN_DISPOSITION`). 5.5's `--force` replaces the refusal in
+  `_refuse_unless_flat`, persists the view's positions as null-exit trades, and sets the
+  disposition wording; `SealReport.open_positions` already carries `ViewPosition`s to the report.
+- **(f) → Story 5.4: `data_source = "ibkr_live"`** (`PAPER_DATA_SOURCE`) is 5.3's placeholder for
+  "identifies the live IBKR source"; 5.4 may refine it.
+- **(g) `run_type` is stamped after the verbatim write.** `create_backtest_run` takes no
+  `run_type`, so the seal sets `run.run_type = "paper"` on the returned row and flushes, in the
+  same transaction. If a later story adds `run_type` to the repository/persistence signature, the
+  stamp should move there and the post-write assignment go. **Owner:** whoever next changes
+  `save_backtest_results`'s signature.
+
+## Deferred from: code review of 5-3-seal-a-stopped-session-into-a-comparable-run-record (2026-10-09)
+
+Three-layer review (Blind Hunter / Edge Case Hunter / Acceptance Auditor). These six are left,
+each with its reason and owner:
+
+- **An open strategy leg netted to zero by an opposite `EXTERNAL` leg reads as flat at seal.**
+  `read_session_view` reports the net per instrument and drops a zero net (Story 4.6, by design),
+  so the seal's R2a check sees `()` and seals. The broker is flat in that state, so nothing is
+  orphaned at IBKR; the strategy's phantom leg is simply not recorded. **Owner:** Story 5.5 (open
+  positions at seal), if it reads per-position legs for its null-exit rows.
+- **A UUID-shaped session name resolves to another session's id first.** `SessionService.resolve`
+  tries the UUID before the name (AR36), and `live create` accepts a UUID-shaped `--name`. Shared
+  by every `live` command; only `live seal` makes the mistake irreversible. **Owner:**
+  `SessionService.resolve` / `live create`'s name validation.
+- **The linked-backtest check eager-loads every trade of the baseline.** `BacktestRun.trades` is
+  `lazy="selectin"`, so `find_by_run_id` reads them all just to check status and metrics, while
+  the seal holds the session row lock. Both backtest repositories are on 5.3's zero-diff list.
+  **Owner:** whoever adds a metrics-only run lookup.
+- **"Database not configured" is reported by type only.** `failure_message` withholds every
+  unmarked exception's text (NFR26), so `live seal` (like `live status`) prints "RuntimeError was
+  raised…" where `live create` / `live start` print the database error. **Owner:** whoever unifies
+  the `live` commands' database-error rendering.
+- **`live status --json` has the same Rich emoji substitution** 5.3's review fixed in `live seal`:
+  `console.print(..., markup=False)` still turns `:100:` into an emoji, so a session name holding
+  an emoji code breaks `json.loads`. **Owner:** whoever next edits `live_status.py`.
+- **Extreme CAGR/Calmar cannot be stored on either side.** `performance_metrics` holds ratios in
+  `Numeric(15,6)` (< 1e9); a 1-day session at +6% computes CAGR ≈ 1.75e9 (Edge Case Hunter probe).
+  A backtest over a short period hits the same bound. 5.3 makes the seal's refusal name the field
+  and bound; representing such values needs a migration or a both-sides rule. **Owner:** an
+  epic-level both-sides decision.
+- **(DN1a, PO ruling 2026-10-09) A resting order at IBKR is not checked at seal time.** R2a's
+  check reads the session's positions (`read_session_view`), not its orders, and the stop path
+  sends no order method — so a GTC/stop order a stopped session left working is invisible to the
+  seal. If it fills after the seal, the position belongs to no session. Recorded in `live seal
+  --help`, the README and `docs/agent/persistence.md` ("cancel it in TWS before sealing"). No order
+  read was added to `LOAD_METHODS` (exact-pinned). **Owner:** Story 5.5 (open positions — and
+  orders — at seal).
+- **(DN2a, PO ruling 2026-10-09) A session with no engine state can never be sealed yet.** R2a's
+  fail-closed reading refuses an unreadable cache, and `read_session_view` raises
+  `NO_ENGINE_STATE` for an empty namespace: a session whose every start failed before the node was
+  built, or whose Redis was flushed, stays `stopped` and refused. No exception for "no trade rows"
+  or "never started". **Owner:** Story 5.5 — its `--force` is the way out.

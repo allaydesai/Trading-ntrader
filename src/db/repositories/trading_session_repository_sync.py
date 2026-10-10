@@ -277,3 +277,42 @@ class SyncTradingSessionRepository:
         )
         result = self.session.execute(stmt)
         return result.rowcount == 1
+
+    def find_session_trades(self, session_pk: int) -> List[Trade]:
+        """Every trade row a session owns, in DB id order (Story 5.3).
+
+        The seal's results source: one row per ``PositionClosed`` (Story 3.6),
+        read in insertion order so the reconstruction's tie-break is stable.
+
+        Args:
+            session_pk: The row's internal ``TradingSession.id``.
+
+        Returns:
+            The session's ``Trade`` rows, oldest first; empty when it has none.
+        """
+        stmt = select(Trade).where(Trade.session_id == session_pk).order_by(Trade.id)
+        result = self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    def backfill_trades_run_id(self, session_pk: int, backtest_run_id: int) -> int:
+        """Link a session's trades to the run its seal created (Story 5.3, AR8).
+
+        Only rows not yet linked are touched — the qualifier is what lets the
+        seal check the count against the rows it read, so a row a concurrent
+        writer slipped in, or one already linked elsewhere, refuses the seal
+        rather than being re-pointed or missed silently.
+
+        Args:
+            session_pk: The row's internal ``TradingSession.id``.
+            backtest_run_id: The internal ``BacktestRun.id`` of the sealed record.
+
+        Returns:
+            How many rows were linked.
+        """
+        stmt = (
+            update(Trade)
+            .where(Trade.session_id == session_pk, Trade.backtest_run_id.is_(None))
+            .values(backtest_run_id=backtest_run_id)
+        )
+        result = self.session.execute(stmt)
+        return result.rowcount

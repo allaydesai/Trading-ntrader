@@ -154,9 +154,58 @@ sealed.merged_into(snapshot)      # snapshot + session_conditions["equity_series
 - **Zero closed trades** is an explicit record: 0 trades, an empty series, no drawdown or Calmar.
   A non-finite metric is refused rather than written.
 
+**The seal: one transaction across the async/sync seam (Story 5.3).**
+`src/services/session_seal_service.py`'s `seal_session(db: AsyncSession, …)` is the only place a
+paper session becomes a `backtest_runs` row. The backtest write (`BacktestPersistenceService`) is
+async-only; the session's state machine (`SessionService`) is sync-only and must stay Nautilus-free.
+`AsyncSession.run_sync(fn)` runs `fn` with a sync `Session` on the async session's **own
+connection**, so both halves share one transaction:
+
+```python
+claimed = await db.run_sync(_claim, …)  # SessionService.transition(to=SEALED) — FOR UPDATE, first
+read_open_positions(session_id)         # the session's Redis view; any position → SealRefusedError
+trades = await db.run_sync(_trades_of, pk)                  # find_session_trades, DB id order
+run = await BacktestPersistenceService(BacktestRepository(db)).save_backtest_results(…)  # verbatim
+run.run_type = "paper"; await db.flush()                    # create_backtest_run has no run_type
+await db.run_sync(_backfill, pk, run.id, len(trades))       # count must equal the rows read
+```
+
+- **The seal never commits.** The caller does: `live seal` commits only when `seal_session`
+  returns and rolls back explicitly otherwise, so any raise leaves nothing — no orphan run row a
+  list view would show (AR5), no `sealed` session without its record. Tests drive it on the
+  rolled-back `db_session` fixture. Once the commit lands the seal is permanent: a failure in the
+  cleanup after it is noted beside the report, never reported as a failed seal.
+- **Judged before it is written** (code review):
+  - the starting capital first, before the lock: 5.1's positive/whole-cent rule plus Nautilus's
+    `MONEY_MAX` (`require_sealable_capital`; the CLI applies it as a usage error, exit 2);
+  - the seal instant is read by `transition()` itself, after the row lock, and the same instant
+    is `end_date`;
+  - a metric its `performance_metrics` column cannot hold (`Numeric(15,6)` ratios stay under
+    1e9 — a 1-day session at +6% computes a CAGR of ~1.75e9) is refused by name rather than left
+    to an unexplained Postgres `DataError`;
+  - NaN/Infinity stays the persistence service's own refusal (AR12).
+- **What the open-position check cannot see** (PO rulings DN1a / DN2a, 2026-10-09):
+  - **a resting order at IBKR** — the session view reads positions, not orders, so cancel one in
+    TWS before sealing; open orders at seal are Story 5.5's;
+  - **a session with no engine state** (it never connected, or its Redis was flushed) is refused
+    as unreadable — never read as flat — and stays so until 5.5's `--force`.
+- **Status moves through `SessionService.transition()` only** (AR37);
+  `SessionService.record_sealed_run` then writes `sealed_run_id` and nothing else — refused unless
+  the row is already `sealed`, and write-once.
+- **The run row's identity comes from the spec as stored** (one strategy; `strategy_name` is the
+  backtest path's `strategy_type.replace("_", " ").title()`; symbols joined with `,`); `start_date`
+  is the session's `created_at` (nothing durable records its first start, so CAGR can read low but
+  never high); `end_date` is the instant `sealed_at` was stamped with; `data_source` is
+  `ibkr_live`; `initial_capital` is the operator's `--starting-capital`, as given.
+- **⚠️ `run_sync` shares the identity map.** A test reading back must `expire_all()` and use fresh
+  queries; touching an expired ORM attribute in async code raises `MissingGreenlet`.
+- **⚠️ A delete would cascade.** `trades.backtest_run_id` is `ON DELETE CASCADE`, so deleting a
+  sealed paper run would delete the session's trades — the system of record. The UI's delete is a
+  no-op today; whoever implements it must refuse `run_type = 'paper'` or detach the trades first.
+
 ## Exceptions
 
-**DB exceptions** (`src/db/exceptions.py`): `DatabaseConnectionError`, `DuplicateRecordError`, `ValidationError`.
+**DB exceptions** (`src/db/exceptions.py`): `DatabaseConnectionError`, `DuplicateRecordError`, `ValidationError`, `InvalidSessionTransition`, `SealRefusedError` (a seal that cannot proceed as the session stands — operator-safe text, exit 1).
 
 **Service exceptions** (`src/services/exceptions.py`): `DataNotFoundError`, `CatalogCorruptionError`, connection errors, rate limit errors (with `retry_after`).
 

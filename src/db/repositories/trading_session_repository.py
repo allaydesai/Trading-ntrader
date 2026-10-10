@@ -238,3 +238,36 @@ class TradingSessionRepository:
         )
         result = await self.session.execute(stmt)
         return result.rowcount == 1
+
+    async def find_session_trades(self, session_pk: int) -> List[Trade]:
+        """The async twin of the sync repository's method of the same name —
+        see there for the rationale (DB id order, the seal's results source).
+
+        Args:
+            session_pk: The row's internal ``TradingSession.id``.
+
+        Returns:
+            The session's ``Trade`` rows, oldest first.
+        """
+        stmt = select(Trade).where(Trade.session_id == session_pk).order_by(Trade.id)
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def backfill_trades_run_id(self, session_pk: int, backtest_run_id: int) -> int:
+        """The async twin of the sync repository's method of the same name —
+        see there for the rationale (only unlinked rows; the count is checked).
+
+        Args:
+            session_pk: The row's internal ``TradingSession.id``.
+            backtest_run_id: The internal ``BacktestRun.id`` of the sealed record.
+
+        Returns:
+            How many rows were linked.
+        """
+        stmt = (
+            update(Trade)
+            .where(Trade.session_id == session_pk, Trade.backtest_run_id.is_(None))
+            .values(backtest_run_id=backtest_run_id)
+        )
+        result = await self.session.execute(stmt)
+        return result.rowcount
