@@ -15,7 +15,8 @@ src/
 │   └── ui/                # HTML routes: backtests, dashboard (Jinja2 + HTMX)
 ├── cli/
 │   ├── main.py            # Click CLI entry point
-│   └── commands/          # backtest, compare, data, history, report, reproduce, run, show, strategy
+│   └── commands/          # backtest, compare, data, history, report, reproduce, run, show, strategy;
+│                          # live (+ live_start/status/reconcile/seal — `ntrader live …`)
 ├── core/                  # → see docs/agent/nautilus.md for engine details
 │   ├── strategy_registry.py   # @register_strategy decorator + StrategyRegistry
 │   ├── strategy_factory.py    # StrategyFactory + StrategyLoader (dynamic import)
@@ -36,6 +37,8 @@ src/
 │   ├── ibkr_client.py / kraken_client.py
 │   ├── exceptions.py / csv_loader.py / nautilus_converter.py
 │   ├── backtest_persistence.py / backtest_query.py
+│   ├── session_service.py     # The session state machine (AR37) + sealed_run_id link
+│   ├── session_seal_service.py  # `live seal`: stopped session → one paper run row (Epic 5)
 │   └── reports/           # CSV, JSON, text exporters
 └── utils/
     ├── logging.py         # structlog config + Nautilus LogGuard

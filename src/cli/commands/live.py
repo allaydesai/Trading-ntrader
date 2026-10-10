@@ -37,6 +37,7 @@ from rich.markup import escape
 from sqlalchemy.exc import SQLAlchemyError
 
 from src.cli.commands.live_reconcile import reconcile
+from src.cli.commands.live_seal import seal
 from src.cli.commands.live_start import (
     build_session_ports,
     claim_session,
@@ -91,6 +92,7 @@ def live() -> None:
 live.add_command(status)
 live.add_command(list_sessions)
 live.add_command(reconcile)
+live.add_command(seal)
 
 
 def _validate_strategy(ctx: click.Context, param: click.Parameter, value: str) -> str:

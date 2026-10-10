@@ -91,3 +91,24 @@ class InvalidSessionTransition(BacktestStorageError):
 
     exit_outcome: ClassVar[LiveCheckOutcome] = LiveCheckOutcome.CONFIG_ERROR
     operator_safe_message: ClassVar[bool] = True
+
+
+class SealRefusedError(BacktestStorageError):
+    """
+    Raised when a stopped session cannot be sealed as it stands (Story 5.3).
+
+    The seal runs in one transaction, so a refusal leaves nothing behind once
+    the caller rolls back. Every message is this codebase's own text — an
+    instrument and a quantity, a trade id, a strategy name — never a raw
+    account identifier, so it is shown to the operator verbatim.
+
+    Examples:
+        - The session's engine cache still holds a position, or holds
+          positions for another account, so it is not known to be flat.
+        - A trade row the results reconstruction cannot read honestly.
+        - A spec the run record cannot carry (more than one strategy, an
+          unregistered strategy, symbols longer than the column).
+    """
+
+    exit_outcome: ClassVar[LiveCheckOutcome] = LiveCheckOutcome.CONFIG_ERROR
+    operator_safe_message: ClassVar[bool] = True

@@ -131,6 +131,10 @@ make web                                # Web UI (http://127.0.0.1:8000)
   same story). Neither name starts with a forbidden mutator prefix
   (`update/set_/save/patch/merge/upsert/replace`), and neither writes `spec` — AC #7 of Story 2.2
   is about there being no write path to `spec`, not about there being no write path at all.
+  **Changed deliberately again at Story 5.3**: `find_session_trades` (the seal reads a session's
+  trade rows in DB id order) and `backfill_trades_run_id` (the seal links them to the run it
+  creates, AR8 — only rows not yet linked, and the seal checks the count) joined it, both twins,
+  same rules.
 - **`EMITTED_RECONCILE_EVENTS`** (`src/core/live_startup_reconcile.py`) joined the discipline at
   Story 4.7: `reconcile.ok`, `reconcile.discrepancy`, `reconcile.cash_changed` — the startup
   phase's records, with `reconcile.local_snapshot_failed` deliberately outside it as a
