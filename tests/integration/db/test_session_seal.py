@@ -46,6 +46,7 @@ from src.models.reconciliation import SessionView, ViewPosition
 from src.models.session import SessionSpec, SessionStatus, StrategySpec
 from src.services import session_seal_service as seal_module
 from src.services.backtest_persistence import BacktestPersistenceService
+from src.services.session_conditions import AR7_KEYS, LAST_RUN_FLAGS_KEY, START_DATE_BASIS_KEY
 from src.services.session_seal_service import PAPER_DATA_SOURCE, seal_json_payload, seal_session
 from src.services.session_service import SessionService
 
@@ -322,6 +323,189 @@ class TestASealWritesOneComparableRecord:
         assert tuple(metrics) == (0, None, None)
         assert report.closed_trade_count == 0
         assert report.trades_backfilled == 0
+
+
+async def _sealed_row(db: AsyncSession):
+    """The one run row's columns and conditions, straight from Postgres."""
+    db.expire_all()
+    return (
+        await db.execute(
+            text(
+                "SELECT r.initial_capital, r.start_date, r.end_date, r.data_source, "
+                "r.config_snapshot, r.config_snapshot -> 'session_conditions' AS conditions, "
+                "m.total_trades FROM backtest_runs r "
+                "JOIN performance_metrics m ON m.backtest_run_id = r.id "
+                "WHERE r.run_type = 'paper'"
+            )
+        )
+    ).one()
+
+
+class TestTheRecordCarriesItsConditions:
+    """Story 5.4 (FR43, FR45, AR7) against Postgres: what the record says it
+    ran under, read back through fresh SQL — never the identity map."""
+
+    @pytest.mark.acceptance_criterion(
+        "5.4a",
+        "a sealed session's config_snapshot holds session_conditions with starting_capital, "
+        "rth_only, price_basis, market_data_tier, closed_trade_count, open_positions_at_seal "
+        "and schema_version: 1",
+        SOURCE,
+    )
+    async def test_every_condition_is_stored_beside_the_series(self, db_session):
+        row = await _seed(db_session)
+
+        await _seal(db_session, row)
+        await db_session.commit()
+
+        conditions = (await _sealed_row(db_session)).conditions
+        assert set(conditions) == set(AR7_KEYS) | {
+            START_DATE_BASIS_KEY,
+            LAST_RUN_FLAGS_KEY,
+            "equity_series",
+        }
+        assert conditions["schema_version"] == 1
+        assert conditions["starting_capital"] == "100000.00"
+        assert conditions["rth_only"] is True
+        assert conditions["market_data_tier"] == "REALTIME"
+        assert conditions["open_positions_at_seal"] == []
+        assert conditions["last_run_flags"] is None
+
+    @pytest.mark.acceptance_criterion(
+        "5.4b",
+        "price_basis records ibkr_unadjusted_smart for a paper session, distinct from a "
+        "backtest's firstrate_adjusted",
+        SOURCE,
+    )
+    async def test_the_paper_basis_is_stored_and_a_backtest_carries_no_conditions(self, db_session):
+        row = await _seed(db_session)
+        await BacktestPersistenceService(BacktestRepository(db_session)).save_backtest_results(
+            run_id=uuid4(),
+            strategy_name="Sma Crossover",
+            strategy_type="sma_crossover",
+            instrument_symbol="AAPL",
+            start_date=datetime(2016, 1, 1, tzinfo=UTC),
+            end_date=datetime(2024, 1, 1, tzinfo=UTC),
+            initial_capital=CAPITAL,
+            data_source="catalog",
+            execution_duration_seconds=Decimal("1"),
+            config_snapshot={"strategy_path": "m:S", "config_path": "m:C", "config": {}},
+            backtest_result=BacktestResult(total_trades=0, final_balance=100000.0),
+        )
+
+        await _seal(db_session, row)
+        await db_session.commit()
+
+        db_session.expire_all()
+        snapshots = dict(
+            (
+                await db_session.execute(
+                    text("SELECT run_type, config_snapshot FROM backtest_runs")
+                )
+            ).all()
+        )
+        assert snapshots["paper"]["session_conditions"]["price_basis"] == "ibkr_unadjusted_smart"
+        assert "session_conditions" not in snapshots["backtest"]
+
+    @pytest.mark.acceptance_criterion(
+        "5.4c",
+        "the closed-trade count travels with the record so a difference can be read against "
+        "sampling noise",
+        SOURCE,
+    )
+    @pytest.mark.parametrize("legs", [LEGS, []], ids=["four_closed", "none_closed"])
+    async def test_the_closed_trade_count_is_one_number_in_three_places(self, db_session, legs):
+        row = await _seed(db_session, legs=legs)
+
+        report = await _seal(db_session, row)
+        await db_session.commit()
+
+        stored = await _sealed_row(db_session)
+        conditions = stored.conditions
+        assert (
+            conditions["closed_trade_count"]
+            == conditions["equity_series"]["closed_trades"]
+            == stored.total_trades
+            == report.closed_trade_count
+            == len(legs)
+        )
+
+    @pytest.mark.acceptance_criterion(
+        "5.4d",
+        "initial_capital matches the starting capital, start_date is the session's creation "
+        "(R1a, recorded as start_date_basis), end_date is the seal time, data_source "
+        "identifies the live IBKR source",
+        SOURCE,
+    )
+    async def test_the_run_columns_agree_with_the_conditions(self, db_session):
+        row = await _seed(db_session)
+
+        report = await _seal(db_session, row, starting_capital=Decimal("123456.78"))
+        await db_session.commit()
+
+        stored = await _sealed_row(db_session)
+        assert stored.initial_capital == Decimal(stored.conditions["starting_capital"])
+        assert stored.start_date == row.created_at
+        assert stored.conditions["start_date_basis"] == "session_created_at"
+        assert stored.end_date == report.sealed_at
+        assert stored.data_source == "ibkr_live"
+
+    @pytest.mark.acceptance_criterion(
+        "5.4e",
+        "the paper session's own starting balance is stored as-is, with no normalization",
+        SOURCE,
+    )
+    async def test_a_capital_typed_as_an_exponent_is_stored_as_the_column_stores_it(
+        self, db_session
+    ):
+        row = await _seed(db_session)
+
+        await _seal(db_session, row, starting_capital=Decimal("1E+5"))
+        await db_session.commit()
+
+        stored = await _sealed_row(db_session)
+        assert stored.conditions["starting_capital"] == "100000.00" == str(stored.initial_capital)
+
+    @pytest.mark.acceptance_criterion(
+        "5.4i",
+        "last_run_flags is the sealed row's runtime_flags as stored, or null",
+        # Story 5.4's own AC #9 (from the routed debt), not the PRD's.
+        "_bmad-output/implementation-artifacts/"
+        "5-4-record-the-conditions-the-session-actually-ran-under.md",
+    )
+    async def test_the_last_runs_flags_are_copied_as_stored(self, db_session):
+        """PO ruling R2a, written through the real ``SessionService`` while the
+        session ran, then stopped and sealed."""
+        row = await _seed(db_session, status=SessionStatus.RUNNING)
+
+        def fail_then_stop(sync_session):
+            service = SessionService(SyncTradingSessionRepository(sync_session))
+            service.record_strategy_failure(
+                row.session_id,
+                owner_epoch=1,
+                strategy_id="SMACrossover-000",
+                spec_strategy_id="sma_crossover",
+                error_type="ValueError",
+                handler="on_bar",
+                at=row.created_at + timedelta(days=2),
+                detail="indicator not ready",
+                all_failed=True,
+            )
+            service.transition(row.session_id, to=SessionStatus.STOPPED)
+
+        await db_session.run_sync(fail_then_stop)
+        await db_session.commit()
+        db_session.expire_all()
+        flags = await _scalar(
+            db_session, "SELECT runtime_flags FROM trading_sessions WHERE id = :pk", pk=row.id
+        )
+
+        await _seal(db_session, row)
+        await db_session.commit()
+
+        recorded = (await _sealed_row(db_session)).conditions["last_run_flags"]
+        assert flags["all_failed"] is True
+        assert recorded == flags
 
 
 class TestRefusalsWriteNothing:

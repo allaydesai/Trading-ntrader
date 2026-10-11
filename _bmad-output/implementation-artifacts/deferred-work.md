@@ -4238,3 +4238,63 @@ each with its reason and owner:
   `NO_ENGINE_STATE` for an empty namespace: a session whose every start failed before the node was
   built, or whose Redis was flushed, stays `stopped` and refused. No exception for "no trade rows"
   or "never started". **Owner:** Story 5.5 — its `--force` is the way out.
+
+## Deferred from: story-5.4 (2026-10-11)
+
+Story 5.4 records AR7's `session_conditions` keys on every sealed record
+(`src/services/session_conditions.py`), under PO rulings R1a / R2a / R3a (2026-10-11). What it
+deliberately left, each with an owner:
+
+- **(a) Per-session detection of reconciliation-owned activity — PO ruling R3a: not this
+  story.** 5.2's (d) and 4.7's split items asked whether *this* session absorbed a corporate
+  action or a reconciliation correction (activity outside the trades table the equity curve is
+  built from). 5.4 states it **structurally** on every record:
+  - `price_basis = "ibkr_unadjusted_smart"`, the permanent divergence source;
+  - `equity_series.excludes` already names `reconciliation_owned_activity`.
+
+  Nothing durable records it per session: `runtime_flags` holds no such key, and the evidence
+  sits in `reconcile.*` logs only. The considered alternative was to read the session's engine
+  cache at seal and list every instrument with an `EXTERNAL`/`INTERNAL-DIFF`-owned position, open
+  or closed (`LOAD_METHODS` unchanged, one new `SessionView` field). It was not taken, for three
+  reasons:
+  - it is one-directional: absence is no proof;
+  - whether a 4.5-era restart leaves such positions behind (false positives) is unmeasured;
+  - it would widen the view Story 5.5 extends in parallel.
+
+  **Owner:** an epic-level decision. Either a durable writer on the reconcile path (fenced by
+  `owner_epoch`, surviving the `→ running` clear), or the cache-derived flag after a component
+  measurement of restart behaviour.
+- **(b) The run's `start_date` is the session's creation, not its first start — PO ruling R1a,
+  a disclosed deviation.** Epic AC 5.4 #4 says "first start". Nothing durable records one, and
+  there is no migration this phase. The record says so in `session_conditions.start_date_basis =
+  "session_created_at"`. CAGR can read low by the create→first-start gap, never high. **Owner:**
+  the first phase that may migrate (a write-once `first_started_at`, stamped on the
+  `CREATED → RUNNING` edge).
+- **(c) `last_run_flags` covers the last process run only** (PO ruling R2a). `runtime_flags` is
+  cleared on every `→ running`, so a strategy failure or rejection streak from an earlier run of
+  the same session is not in the record. **Owner:** Story 5.8 (its withheld period has the same
+  shape), or whoever adds a session-lifetime flag history.
+- **(d) → Story 5.6: the detail page's "CLI Command to Replicate" is nonsense for a paper
+  record.** `ConfigurationSnapshot.cli_command` appends every `config_snapshot` key as a flag,
+  so a sealed record shows `ntrader backtest run … --session-conditions {…}`. That is
+  pre-existing behaviour of an AR44 file (`src/api/models/backtest_detail.py:166-183`); the
+  config panel itself renders the conditions correctly (5.4's render test). **Owner:** Story 5.6
+  (view verification), within AR44 — disposition, do not fix.
+
+## Deferred from: code review of 5-4-record-the-conditions-the-session-actually-ran-under (2026-10-11)
+
+Three-layer review (Blind Hunter / Edge Case Hunter / Acceptance Auditor). These two are left,
+each with its reason and owner:
+
+- **W1 — `open_positions_at_seal` cannot say "unknown" or "skipped".** Under Story 5.5's
+  `--force`, a view with `positions_skipped > 0` (positions on another account), or no readable
+  engine state, could only be recorded as `[]` or as a partial list. Both read as flat.
+  Unreachable in 5.4, because R2a refuses first. **Owner:** Story 5.5. Widen
+  `build_session_conditions` by keyword (e.g. `positions_skipped`, or `None` meaning unknown),
+  and record it beside `open_positions_at_seal`.
+- **W2 — `rth_only`, `market_data_tier` and `price_basis` are asserted at seal time, not
+  recorded per run.** They state the policy every Phase-3 build enforces: the node builder
+  refuses non-RTH or non-REALTIME, and a delayed feed stops the session. A future build that
+  relaxed either policy would make a later seal state the new policy for a session run under the
+  old one, with `schema_version` unchanged. **Owner:** whoever relaxes either policy. Record the
+  value per run (e.g. a `runtime_flags` key) before relaxing it.

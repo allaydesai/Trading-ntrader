@@ -279,6 +279,33 @@ class TestTheSessionsPositionsAreRead:
 
         assert view.positions == ()
 
+    @pytest.mark.acceptance_criterion(
+        "5.4h",
+        "a synthetic owner's split shares held after the strategy exits are an open position at "
+        "seal: the seal refuses naming them, and open_positions_at_seal is built from the same "
+        "view",
+        # Story 5.4's own AC #8 (from the routed debt), not the PRD's.
+        "_bmad-output/implementation-artifacts/"
+        "5-4-record-the-conditions-the-session-actually-ran-under.md",
+    )
+    def test_a_synthetic_owners_split_shares_stay_held_after_the_strategy_exits(self):
+        """Story 5.4 (Story 4.7's routed debt). The strategy bought 10 before a
+        2:1 split and sold its 10 after it; the split's other 10 sit in the
+        ``EXTERNAL`` position reconciliation absorbed. The strategy is flat, the
+        account is not — and the view, which the seal reads for both its R2a
+        refusal and ``open_positions_at_seal``, says so."""
+        adapter = FakeAdapter(
+            positions={
+                "AAPL.NASDAQ-S-001": _position(AAPL, (OrderSide.BUY, 10), (OrderSide.SELL, 10)),
+                "AAPL.NASDAQ-EXTERNAL": _position(AAPL, (OrderSide.BUY, 10), strategy="EXTERNAL"),
+            },
+            general=_summary(USD={"TotalCashValue": 1}),
+        )
+
+        view, _ = _read(adapter)
+
+        assert view.positions == (ViewPosition("AAPL.NASDAQ", Decimal("10")),)
+
     def test_a_flat_session_with_state_is_a_successful_empty_view(self):
         adapter = FakeAdapter(general=_summary(USD={"TotalCashValue": 1}))
 

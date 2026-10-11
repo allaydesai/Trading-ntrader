@@ -35,6 +35,7 @@ from src.db.exceptions import (
     ValidationError,
 )
 from src.models.reconciliation import SessionView
+from src.services.session_conditions import AR7_KEYS, build_session_conditions
 from src.services.session_seal_service import (
     LINKED_BACKTEST_WARNING_EVENT,
     SealReport,
@@ -65,14 +66,21 @@ def _report(**overrides) -> SealReport:
         initial_capital=Decimal("100000.00"),
         start_date=datetime(2026, 9, 1, 13, 0, tzinfo=UTC),
         end_date=WHEN,
+        # Story 5.4: the document a seal now stores — AR7's keys beside 5.2's series.
         session_conditions={
+            **build_session_conditions(
+                starting_capital=Decimal("100000.00"),
+                closed_trade_count=3,
+                open_positions=(),
+                last_run_flags=None,
+            ),
             "equity_series": {
                 "granularity": "closed_trade",
                 "basis": "per_trade_price_return",
                 "closed_trades": 3,
                 "excludes": ["open_positions", "reconciliation_owned_activity"],
                 "curve": [{"time": 1, "value": 1.0}],
-            }
+            },
         },
     )
     values.update(overrides)
@@ -384,6 +392,60 @@ class TestTheReport:
             result = runner.invoke(live, ARGV)
 
         assert "closed_trade" in result.output, "the scrub below must have something to scrub"
+        assert _ar36_violations(result.output.replace("closed_trade", "")) == []
+
+    @pytest.mark.parametrize("as_json", [False, True], ids=["human", "json"])
+    def test_every_condition_and_the_last_runs_flags_print_with_no_ar36_synonym(
+        self, runner, as_json
+    ):
+        """Story 5.4: the conditions reach the operator in both forms, the
+        last run's flags included — and none of the new keys, nor a realistic
+        flags document, trips AR36's lifecycle-synonym scan."""
+        conditions = dict(_report().session_conditions)
+        # The free-text fields too (code review P12): `detail` and the refusal
+        # `reason` are copied as stored. AR36 governs this codebase's own
+        # vocabulary; the scan below proves the report adds no lifecycle stem.
+        # Verbatim broker/exception text is the operator's own data, recorded
+        # as stored (R2a), and is not this test's subject.
+        conditions["last_run_flags"] = {
+            "v": 1,
+            "all_failed": False,
+            "failed_strategies": [
+                {
+                    "strategy_id": "SMACrossover-000",
+                    "spec_strategy_id": "sma_crossover",
+                    "error_type": "ValueError",
+                    "handler": "on_bar",
+                    "at": "2026-10-02T15:30:00+00:00",
+                    "detail": "indicator not ready",
+                }
+            ],
+            "order_rejections": {
+                "rejected": 2,
+                "denied": 0,
+                "consecutive": 2,
+                "first_at": "2026-10-02T15:00:00+00:00",
+                "last": {
+                    "at": "2026-10-02T15:10:00+00:00",
+                    "kind": "rejected",
+                    "reason": "Order rejected - insufficient buying power",
+                },
+            },
+        }
+        extras = {"start_date_basis", "last_run_flags"}
+        argv = [*ARGV, "--json"] if as_json else ARGV
+        with _Harness(report=_report(session_conditions=conditions)):
+            result = runner.invoke(live, argv)
+
+        assert result.exit_code == 0
+        if as_json:
+            printed = json.loads(result.stdout)["execution_conditions"]["session_conditions"]
+            assert set(AR7_KEYS) | extras <= set(printed)
+            assert printed["last_run_flags"] == conditions["last_run_flags"]
+        else:
+            labels = {line.strip().split(":", 1)[0] for line in result.stdout.splitlines()}
+            assert set(AR7_KEYS) | extras <= labels
+            assert "insufficient buying power" in result.stdout
         assert _ar36_violations(result.output.replace("closed_trade", "")) == []
 
 
