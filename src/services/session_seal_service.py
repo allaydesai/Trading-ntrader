@@ -13,9 +13,22 @@ back: no orphan run row a list view would show (AR5), no ``sealed`` session
 without its record.
 
 Does not own: committing or rolling back (the caller does — ``SessionService``'s
-rule), the results computation (``src.core.session_equity``, Story 5.2), the
-open-position read (injected: the CLI passes the session's own engine-cache
-view, Story 4.6 — PO ruling R2a), or ``--force`` and open trades (Story 5.5).
+rule), the results computation (``src.core.session_equity``, Story 5.2), or the
+holdings read (injected: the CLI passes the session's own engine-cache read,
+Story 4.6 / 5.5 — PO ruling R2a).
+
+**Open positions are the operator's decision** (Story 5.5, FR47, AR30). Without
+``force`` a held position refuses the seal, listing each one. With it, each open
+position the cache holds becomes an **open trade with no exit** — the backtest's
+own shape for a position open at the end of data — written in the seal's
+transaction before the trades are read, so 5.2's reconstruction leaves it out of
+the metrics and the backfill links it with the rest. The report states the
+disposition: the positions remain at the broker, owned by no session. ``force``
+also seals past positions held for another account (counted, not recorded) and
+past an engine cache that holds nothing at all (DN2a: the holdings are then
+*unknown*, never "none open"); any other unreadable cache still refuses
+(PO ruling R2a). Orders the cache still holds working are reported, never a
+refusal and never cancelled (PO ruling R3b).
 
 **Never the broker, never an order.** Sealing reads the database and, through
 the injected reader, the session's own Redis view. It calls no order method,
@@ -36,10 +49,11 @@ from uuid import UUID, uuid4
 
 from nautilus_trader.model.data import BarType
 from nautilus_trader.model.objects import MONEY_MAX
-from sqlalchemy import Numeric
+from sqlalchemy import Numeric, String
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
+from src.core.live_session_view import SessionViewFailure, SessionViewUnavailableError
 from src.core.results_extractor import _require_capital  # Story 5.1's rule — its one home
 from src.core.session_equity import (
     EQUITY_SERIES_KEY,
@@ -50,11 +64,13 @@ from src.core.session_equity import (
 from src.core.strategy_registry import StrategyRegistry
 from src.db.exceptions import SealRefusedError
 from src.db.models.backtest import BacktestRun, PerformanceMetrics
+from src.db.models.trade import Trade
 from src.db.repositories.backtest_repository import BacktestRepository
 from src.db.repositories.trading_session_repository_sync import SyncTradingSessionRepository
 from src.models.backtest_result import BacktestResult
-from src.models.reconciliation import SessionView, ViewPosition
+from src.models.reconciliation import OpenLeg, SessionHoldings, ViewPosition, WorkingOrder
 from src.models.session import SessionStatus
+from src.models.trade import TradeCreate
 from src.services.backtest_persistence import BacktestPersistenceService
 from src.services.session_service import SessionService
 
@@ -73,18 +89,63 @@ PAPER_RUN_TYPE = "paper"
 PAPER_DATA_SOURCE = "ibkr_live"
 #: The ``config_snapshot`` version every backtest path writes.
 SNAPSHOT_VERSION = "1.0"
-#: The disposition a clean seal reports. Under PO ruling R2a a seal with any
-#: open position is refused, so this is the only one 5.3 can report; Story
-#: 5.5's ``--force`` adds the other.
-NONE_OPEN_DISPOSITION = "none open at seal"
+#: Every disposition names its basis — the session's engine cache, read
+#: load-only — never the broker's own state (code review P2). No AR36 stem: an
+#: open trade has "no exit", never a "close".
+#: The disposition a seal reports when the session held nothing (Story 5.3).
+NONE_OPEN_DISPOSITION = "none open in the session's engine cache at seal"
+#: AC 5.5c: what a forced seal says of the open positions it recorded (D-D, D-E;
+#: code review P3 — P&L already realized on a partly reduced position lives only
+#: on its open row, so it is outside the metrics too).
+RECORDED_OPEN_DISPOSITION = (
+    "recorded, as the session's engine cache last held them, as open trades with no exit; "
+    "they, and any P&L already realized on them, are outside the record's metrics; they "
+    "remain at the broker and are no longer owned by any session"
+)
+#: PO ruling R2a: positions held for another account, sealed past with ``force``.
+OTHER_ACCOUNT_DISPOSITION = (
+    "held for another account in the session's engine cache and not recorded; they remain "
+    "at the broker and are no longer owned by any session"
+)
+#: PO ruling R2a (DN2a): a forced seal of a session whose engine cache held
+#: nothing. Code review DN2a: a reachable but wrong Redis reads exactly so.
+UNKNOWN_HOLDINGS_DISPOSITION = (
+    "unknown: the session's engine cache held nothing to read (confirm REDIS_HOST and "
+    "REDIS_PORT point at the session's own Redis); anything held at the broker is no longer "
+    "owned by any session"
+)
+#: PO ruling R3b: no order was working in the session's cache.
+NONE_WORKING_DISPOSITION = "none working in the session's engine cache at seal"
+#: PO ruling R3b: orders the cache held working — reported, never cancelled,
+#: with the limitation R3b states.
+WORKING_ORDERS_DISPOSITION = (
+    "working in the session's engine cache, which cannot see a fill or cancel made at IBKR "
+    "while the session was stopped; left as they are at IBKR and owned by no session; the "
+    "seal cancels nothing, so check them in TWS and cancel any that should not fill"
+)
+#: Code review DN1a: orders the cache holds but could not read — named, never a refusal.
+UNREADABLE_ORDERS_DISPOSITION = (
+    "could not be read from the session's engine cache; check them in TWS, as any that is "
+    "still working is owned by no session"
+)
+#: PO ruling R3b with R2a: the orders of a session whose engine cache held nothing.
+UNKNOWN_ORDERS_DISPOSITION = (
+    "unknown: the session's engine cache held nothing to read; any order working at "
+    "IBKR is owned by no session"
+)
+#: Logged by the command after its commit when a forced seal found no engine
+#: state (code review P1): it follows the reader's ERROR record and says why
+#: the seal still stands.
+HOLDINGS_UNKNOWN_EVENT = "session.seal_holdings_unknown"
 #: ``backtest_runs.instrument_symbol`` is ``String(50)``; a test pins the two equal.
 INSTRUMENT_SYMBOL_MAX = 50
 #: Logged by the command **after** its commit — never for a seal that rolls back.
 LINKED_BACKTEST_WARNING_EVENT = "session.seal_linked_backtest_warning"
 
-#: The open-position reader the seal is handed: the session's own view of
-#: what it holds, by ``session_id``. Raises rather than ever reading as flat.
-OpenPositionsReader = Callable[[UUID], SessionView]
+#: The holdings reader the seal is handed: the session's own view of what it
+#: holds, with the legs and working orders behind it, by ``session_id``.
+#: Raises rather than ever reading as flat.
+OpenPositionsReader = Callable[[UUID], SessionHoldings]
 
 
 def _utc_now() -> datetime:
@@ -111,6 +172,17 @@ class SealReport:
     open_positions_disposition: str = NONE_OPEN_DISPOSITION
     data_source: str = PAPER_DATA_SOURCE
     run_type: str = PAPER_RUN_TYPE
+    #: Story 5.5: whether the operator sealed with ``--force``.
+    forced: bool = False
+    #: Code review P1: ``False`` when a forced seal found no engine state — the
+    #: holdings fields below are then unknown, never "none".
+    holdings_known: bool = True
+    open_trades_recorded: int = 0
+    positions_on_another_account: int = 0
+    working_orders: tuple[WorkingOrder, ...] = ()
+    #: Code review DN1a: orders the cache holds but could not read, by id.
+    unreadable_orders: tuple[str, ...] = ()
+    working_orders_disposition: str = NONE_WORKING_DISPOSITION
 
 
 @dataclass(frozen=True)
@@ -321,20 +393,157 @@ def _claim(
     )
 
 
-def _refuse_unless_flat(name: str, view: SessionView) -> None:
-    """PO ruling R2a: fail closed on anything but a known-flat session."""
-    if view.positions:
-        held = ", ".join(f"{p.instrument_id} {p.quantity}" for p in view.positions)
+def _refuse_unless_flat(name: str, holdings: SessionHoldings) -> None:
+    """PO ruling R2a: without ``force``, fail closed on anything but a known-flat
+    session — naming each open position (AC 5.5a: R1a's position, one per leg,
+    with its owner; code review P4) and ``--force`` as the other way."""
+    if holdings.legs:
+        held = ", ".join(
+            f"{leg.instrument_id} {leg.quantity} ({leg.strategy_id})" for leg in holdings.legs
+        )
         raise SealRefusedError(
             f"Session {name!r} still holds open positions ({held}). A seal never exits or "
             "modifies a position: restart the session so its strategy can exit it, then stop "
-            "the session and seal."
+            "the session and seal; or seal with --force to record each one as an open trade "
+            "with no exit, owned by no session from then on."
         )
-    if view.positions_skipped:
+    skipped = holdings.view.positions_skipped
+    if skipped:
         raise SealRefusedError(
-            f"Session {name!r}'s engine cache holds {view.positions_skipped} position(s) on "
-            "another account than TWS_ACCOUNT, so it is not known to be flat."
+            f"Session {name!r}'s engine cache holds {skipped} position(s) on another account "
+            "than TWS_ACCOUNT, so it is not known to be flat. Check TWS_ACCOUNT is the account "
+            "this session traded: a changed TWS_ACCOUNT is the usual cause. Only if it is, seal "
+            "with --force to seal past them, unrecorded and owned by no session."
         )
+
+
+def _holdings_at_seal(
+    claimed: _Claimed, read: OpenPositionsReader, *, force: bool
+) -> SessionHoldings | None:
+    """What the seal proceeds on (PO ruling R2a): the holdings, ``None`` when a
+    forced seal found no engine state at all (unknown, DN2a), or a refusal."""
+    try:
+        holdings = read(claimed.session_id)
+    except SessionViewUnavailableError as failure:
+        if force and failure.reason is SessionViewFailure.NO_ENGINE_STATE:
+            return None
+        raise
+    if not force:
+        _refuse_unless_flat(claimed.name, holdings)
+    return holdings
+
+
+def open_trade(leg: OpenLeg, session_pk: int) -> Trade:
+    """AC 5.5b: one open position as an open trade with a null exit.
+
+    The backtest's own open row (``save_trades_from_positions``): ``trade_id`` is
+    the position id, ``venue_order_id`` the opening order, no closing order, no
+    exit price, time, holding period or ``profit_pct``, and ``profit_loss`` the
+    position's realized P&L — column for column, pinned against a real
+    positions report in ``tests/component/services/test_open_trade_parity.py``.
+    The paths part only on a partly reduced position (D-B): the backtest keeps
+    ``peak_qty`` and the reduction's price as an exit price with no exit time;
+    this row keeps what remains (PO ruling R1a) and no exit at all.
+    Validated through ``TradeCreate`` first, as both other trade writes are.
+
+    Raises:
+        SealRefusedError: The leg is not a valid trade row (e.g. a quantity
+            finer than ``trades.quantity``'s 8 decimal places, or an id longer
+            than its column), by position.
+    """
+    _require_ids_fit(leg)
+    try:
+        validated = TradeCreate(
+            session_id=session_pk,
+            instrument_id=leg.instrument_id,
+            trade_id=leg.position_id,
+            venue_order_id=leg.opening_order_id,
+            client_order_id=None,
+            order_side=leg.side,
+            quantity=abs(leg.quantity),
+            entry_price=leg.avg_px_open,
+            exit_price=None,
+            commission_amount=leg.commission_amount,
+            commission_currency=leg.commission_currency,
+            fees_amount=Decimal("0.00"),
+            entry_timestamp=leg.opened_at,
+            exit_timestamp=None,
+        )
+    except ValueError as exc:  # pydantic's ValidationError is one
+        raise SealRefusedError(
+            f"Position {leg.position_id} cannot be recorded as an open trade: {exc}"
+        ) from exc
+    return Trade(
+        **validated.model_dump(),
+        profit_loss=leg.realized_pnl,
+        profit_pct=None,
+        holding_period_seconds=None,
+    )
+
+
+def _require_ids_fit(leg: OpenLeg) -> None:
+    """Code review P8: ``TradeCreate`` sets no length on these ids, so one past
+    its ``String`` column would reach Postgres as a truncation error naming
+    nothing. The bound is read from the column itself."""
+    named = leg.position_id if len(leg.position_id) <= 60 else f"{leg.position_id[:60]}…"
+    for column, value in (("trade_id", leg.position_id), ("venue_order_id", leg.opening_order_id)):
+        column_type = Trade.__table__.c[column].type
+        length = column_type.length if isinstance(column_type, String) else None
+        if length is not None and len(value) > length:
+            raise SealRefusedError(
+                f"Position {named} cannot be recorded as an open trade: its {column} is "
+                f"{len(value)} characters, more than the column's {length}."
+            )
+
+
+def _record_open_legs(sync_session: Session, session_pk: int, legs: Sequence[OpenLeg]) -> int:
+    """Each open position as an open trade, before the trades are read (D-G)."""
+    repository = SyncTradingSessionRepository(sync_session)
+    for leg in legs:
+        if not repository.insert_trade_if_absent(open_trade(leg, session_pk)):
+            raise SealRefusedError(
+                f"The open trade for position {leg.position_id} was not written; refusing a "
+                "record that would leave a held position unrecorded."
+            )
+    return len(legs)
+
+
+def open_positions_disposition(holdings: SessionHoldings | None) -> str:
+    """D-D: what became of what the session held — one function, every outcome."""
+    if holdings is None:
+        return UNKNOWN_HOLDINGS_DISPOSITION
+    parts = [RECORDED_OPEN_DISPOSITION] if holdings.legs else []
+    skipped = holdings.view.positions_skipped
+    if skipped:
+        parts.append(f"{skipped} position(s) {OTHER_ACCOUNT_DISPOSITION}")
+    return "; and ".join(parts) or NONE_OPEN_DISPOSITION
+
+
+def working_orders_disposition(holdings: SessionHoldings | None) -> str:
+    """PO ruling R3b: what becomes of the orders the session's cache held working
+    — and of any it held but could not read (code review DN1a)."""
+    if holdings is None:
+        return UNKNOWN_ORDERS_DISPOSITION
+    parts = [WORKING_ORDERS_DISPOSITION] if holdings.working_orders else []
+    unreadable = len(holdings.unreadable_orders)
+    if unreadable:
+        parts.append(f"{unreadable} order(s) {UNREADABLE_ORDERS_DISPOSITION}")
+    return "; and ".join(parts) or NONE_WORKING_DISPOSITION
+
+
+def _holdings_report(holdings: SessionHoldings | None) -> dict[str, Any]:
+    """The report's holdings fields — what was held, and what became of it."""
+    fields: dict[str, Any] = {
+        "holdings_known": holdings is not None,
+        "open_positions_disposition": open_positions_disposition(holdings),
+        "working_orders_disposition": working_orders_disposition(holdings),
+    }
+    if holdings is not None:  # unknown holdings keep the empty defaults, flagged above
+        fields["open_positions"] = holdings.view.positions
+        fields["positions_on_another_account"] = holdings.view.positions_skipped
+        fields["working_orders"] = holdings.working_orders
+        fields["unreadable_orders"] = holdings.unreadable_orders
+    return fields
 
 
 def _trades_of(sync_session: Session, session_pk: int) -> Sequence[SessionTradeRow]:
@@ -414,6 +623,7 @@ async def seal_session(
     *,
     starting_capital: Decimal,
     read_open_positions: OpenPositionsReader,
+    force: bool = False,
     clock: Callable[[], datetime] = _utc_now,
     new_run_id: Callable[[], UUID] = uuid4,
 ) -> SealReport:
@@ -424,7 +634,11 @@ async def seal_session(
         identifier: The session's name or ``session_id``.
         starting_capital: The operator's stated starting balance, stored as
             given (PO ruling R1a) once :func:`require_sealable_capital` passes.
-        read_open_positions: The session's own view of what it holds.
+        read_open_positions: The session's own holdings read.
+        force: The operator's ``--force`` (Story 5.5): seal past open
+            positions — recording each as an open trade with no exit — past
+            positions on another account, and past an engine cache that holds
+            nothing (PO ruling R2a).
         clock: When the seal happens — read once, after the row lock, for
             ``sealed_at`` and ``end_date`` alike.
         new_run_id: The new run's ``run_id`` (a test seam).
@@ -432,11 +646,12 @@ async def seal_session(
     Raises:
         InvalidSessionTransition: The session is not ``stopped``.
         RecordNotFoundError: No session matches ``identifier``.
-        SealRefusedError: The capital cannot be carried, the session is not
-            known to be flat, a row, the spec or a metric cannot be sealed
-            honestly, or the backfill missed a row.
+        SealRefusedError: The capital cannot be carried, the session holds a
+            position and ``force`` is off, an open position or a row, the spec
+            or a metric cannot be sealed honestly, or the backfill missed a row.
         SessionViewUnavailableError: The reader could not read the view —
-            never read as flat (the reader's own).
+            never read as flat (the reader's own); under ``force`` only an
+            empty engine cache is sealed past.
         RedisUnreachableError: The reader could not reach Redis (its own).
         ValidationError: A metric is NaN/Infinity (the backtest path's own).
         DuplicateRecordError: ``run_id`` exists (the backtest path's own).
@@ -444,8 +659,9 @@ async def seal_session(
     require_sealable_capital(starting_capital)
     started, run_id = time.monotonic(), new_run_id()
     claimed = await db.run_sync(_claim, identifier, clock, run_id)
-    view = read_open_positions(claimed.session_id)
-    _refuse_unless_flat(claimed.name, view)
+    holdings = _holdings_at_seal(claimed, read_open_positions, force=force)
+    legs = holdings.legs if holdings is not None else ()
+    recorded = await db.run_sync(_record_open_legs, claimed.pk, legs) if legs else 0
     trades = await db.run_sync(_trades_of, claimed.pk)
     results = _reconstruct(trades, starting_capital, claimed.period_start, claimed.sealed_at)
     warning = await _linked_backtest_warning(db, claimed)
@@ -473,7 +689,9 @@ async def seal_session(
         session_conditions=conditions,
         linked_backtest_run_id=claimed.linked_backtest_run_id,
         linked_backtest_warning=warning,
-        open_positions=view.positions,
+        forced=force,
+        open_trades_recorded=recorded,
+        **_holdings_report(holdings),
     )
 
 
@@ -501,11 +719,28 @@ def seal_json_payload(report: SealReport) -> dict[str, Any]:
         "sealed_at": _iso(report.sealed_at),
         "closed_trade_count": report.closed_trade_count,
         "trades_backfilled": report.trades_backfilled,
+        "forced": report.forced,
+        "holdings_known": report.holdings_known,
         "open_positions": [
             {"instrument_id": p.instrument_id, "quantity": str(p.quantity)}
             for p in report.open_positions
         ],
         "open_positions_disposition": report.open_positions_disposition,
+        "open_trades_recorded": report.open_trades_recorded,
+        "positions_on_another_account": report.positions_on_another_account,
+        "working_orders": [
+            {
+                "client_order_id": order.client_order_id,
+                "instrument_id": order.instrument_id,
+                "side": order.side,
+                "quantity": str(order.quantity),
+                "order_type": order.order_type,
+                "status": order.status,
+            }
+            for order in report.working_orders
+        ],
+        "unreadable_orders": list(report.unreadable_orders),
+        "working_orders_disposition": report.working_orders_disposition,
         "linked_backtest_run_id": None if linked is None else str(linked),
         "linked_backtest_warning": report.linked_backtest_warning,
         "execution_conditions": {

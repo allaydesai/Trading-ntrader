@@ -38,7 +38,7 @@ src/
 │   ├── exceptions.py / csv_loader.py / nautilus_converter.py
 │   ├── backtest_persistence.py / backtest_query.py
 │   ├── session_service.py     # The session state machine (AR37) + sealed_run_id link
-│   ├── session_seal_service.py  # `live seal`: stopped session → one paper run row (Epic 5)
+│   ├── session_seal_service.py  # `live seal`: stopped session → one paper run row; `--force` records open positions as open trades (Epic 5)
 │   └── reports/           # CSV, JSON, text exporters
 └── utils/
     ├── logging.py         # structlog config + Nautilus LogGuard

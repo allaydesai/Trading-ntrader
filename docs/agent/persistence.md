@@ -163,7 +163,9 @@ connection**, so both halves share one transaction:
 
 ```python
 claimed = await db.run_sync(_claim, …)  # SessionService.transition(to=SEALED) — FOR UPDATE, first
-read_open_positions(session_id)         # the session's Redis view; any position → SealRefusedError
+holdings = read_open_positions(session_id)  # Redis: view + legs + working orders (Story 5.5)
+                                        # held position, no --force → SealRefusedError
+await db.run_sync(_record_open_legs, pk, holdings.legs)  # --force: one open trade per leg
 trades = await db.run_sync(_trades_of, pk)                  # find_session_trades, DB id order
 run = await BacktestPersistenceService(BacktestRepository(db)).save_backtest_results(…)  # verbatim
 run.run_type = "paper"; await db.flush()                    # create_backtest_run has no run_type
@@ -184,11 +186,33 @@ await db.run_sync(_backfill, pk, run.id, len(trades))       # count must equal t
     1e9 — a 1-day session at +6% computes a CAGR of ~1.75e9) is refused by name rather than left
     to an unexplained Postgres `DataError`;
   - NaN/Infinity stays the persistence service's own refusal (AR12).
-- **What the open-position check cannot see** (PO rulings DN1a / DN2a, 2026-10-09):
-  - **a resting order at IBKR** — the session view reads positions, not orders, so cancel one in
-    TWS before sealing; open orders at seal are Story 5.5's;
-  - **a session with no engine state** (it never connected, or its Redis was flushed) is refused
-    as unreadable — never read as flat — and stays so until 5.5's `--force`.
+- **Open positions at seal are the operator's decision** (Story 5.5, FR47, AR30; PO rulings
+  R1a / R2a / R3b, 2026-10-11):
+  - the reader is `read_session_holdings` (`src/core/live_session_view.py`): the same load-only
+    read as `read_session_view`, plus one `OpenLeg` per open position on the account
+    (strategy- *and* reconciliation-owned; legs netting to zero leave no row and no leg) and every
+    `WorkingOrder` the cache holds (`load_order`, the fifth `LOAD_METHODS` member);
+  - without `force` a held position refuses, listing each instrument and quantity;
+  - with `force` each leg becomes an **open trade with no exit** through `open_trade` →
+    `insert_trade_if_absent` (`client_order_id` NULL, so it never conflicts), written **before**
+    `find_session_trades` so 5.2 leaves it out of the metrics and the backfill links it — its
+    count check covers the open rows too. It is the backtest's own open row, column for column
+    (`tests/component/services/test_open_trade_parity.py`); a *partly reduced* position is where
+    they part: the backtest keeps `peak_qty` and the reduction's price as an exit price with no
+    exit time, the seal keeps what remains and no exit;
+  - `force` also seals past positions on another account (counted, not recorded) and past
+    `NO_ENGINE_STATE` (holdings reported **unknown**, never "none open"); an unreadable cache, an
+    unreachable Redis or an unset `TWS_ACCOUNT` still refuses;
+  - working orders are **reported** with their disposition, never a refusal, never cancelled.
+    The cache cannot see what changed at IBKR while the session was stopped. An order the cache
+    cannot rebuild or read is **named** (`unreadable_orders`), never a refusal (code review DN1a);
+    an open order with nothing left to fill is not working;
+  - every disposition names the session's engine cache as its basis; an unknown holding is
+    `holdings_known: false`, never a concrete "none", and the unknown disposition tells the
+    operator to confirm `REDIS_HOST`/`REDIS_PORT` (a reachable but wrong Redis reads as empty);
+  - P&L already realized on a partly reduced, still-open position lives only on its open row's
+    `profit_loss`, so it is outside the record's metrics (5.2 reads closed rows only) — the
+    disposition says so; the fix is the epic-level both-sides decision.
 - **Status moves through `SessionService.transition()` only** (AR37);
   `SessionService.record_sealed_run` then writes `sealed_run_id` and nothing else — refused unless
   the row is already `sealed`, and write-once.
