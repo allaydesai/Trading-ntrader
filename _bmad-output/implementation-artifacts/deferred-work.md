@@ -2627,7 +2627,9 @@ at 200s with zero orders), `logs/p10-fresh-leg1-*.log` and `logs/p10-fresh-leg2-
   a profitable SHORT trade's `profit_pct` reads negative. `aggregate_closed_position` reproduces it
   verbatim (Hazard #6) rather than fixing one side alone, which would make the two sides
   incomparable. **Owner: Story 5.6**, the comparison views — both sides must change together, if
-  at all.
+  at all. → **Dispositioned by Story 5.6 (2026-10-11): a disposition, not a fix** — both
+  production formulas pinned equal on a real SHORT (`tests/component/services/
+  test_profit_pct_parity.py`); see "Deferred from: story-5.6".
 - **NETTING `PositionId` reuse and `trade_key`.** Fact 3, measured by this story's Task 1.3: one
   `PositionId` (`{instrument_id}-{strategy_id}`) hosts every successive round trip on an
   instrument+strategy under NETTING, so `TradeBase.trade_id` (`str(position_id)`, kept for backtest
@@ -2734,7 +2736,8 @@ at 200s with zero orders), `logs/p10-fresh-leg1-*.log` and `logs/p10-fresh-leg2-
   results without an epic-level decision) and not urgent within Epic 3 (today's sessions run one
   strategy). Becomes load-bearing once Epic 5 builds the paper-vs-backtest comparison across a
   session that ran more than one strategy. **Owner: Epic 5's comparison stories** — named as
-  unowned-within-Epic-3, not labelled low priority.
+  unowned-within-Epic-3, not labelled low priority. → **Dispositioned by Story 5.6 (2026-10-11):
+  a disposition, not a fix** — see "Deferred from: story-5.6".
 - **`_bmad-output/project-context.md`'s "4 migration versions" is stale**, and has been since
   Phase 2 (the phase now has 17 migrations, single head `85c949ac0374`). Not this story's file to
   correct (Task 2.4) — **owner: whoever next edits that document for an unrelated reason**, named
@@ -4152,6 +4155,8 @@ each with its reason and owner:
   second, microseconds apart, give two points with the same `time`. Pre-existing on the backtest
   path. Harmless while nothing charts `session_conditions.equity_series.curve`; a time-series
   chart needs strictly increasing times. **Owner:** Story 5.6, or whoever first charts it.
+  → **Dispositioned by Story 5.6 (2026-10-11): still nothing charts it** — the owner stays
+  "whoever first charts it"; see "Deferred from: story-5.6".
 - **5.4's `closed_trade_count` will duplicate `equity_series.closed_trades`.** AR7's flat key and
   5.2's namespaced count are two sources for one number, and nothing ties them. **Owner:** Story
   5.4. When it adds the key, pin the two equal: CLAUDE.md, "a duplicated literal needs its own
@@ -4286,7 +4291,9 @@ deliberately left, each with an owner:
   so a sealed record shows `ntrader backtest run … --session-conditions {…}`. That is
   pre-existing behaviour of an AR44 file (`src/api/models/backtest_detail.py:166-183`); the
   config panel itself renders the conditions correctly (5.4's render test). **Owner:** Story 5.6
-  (view verification), within AR44 — disposition, do not fix.
+  (view verification), within AR44 — disposition, do not fix. → **Dispositioned by Story 5.6
+  (2026-10-11, PO ruling R1a): a known presentation limit for later UI work** — see "Deferred
+  from: story-5.6".
 
 ## Deferred from: code review of 5-4-record-the-conditions-the-session-actually-ran-under (2026-10-11)
 
@@ -4368,6 +4375,8 @@ Found and left:
   is the Nautilus position id, which names the owner. No metric reads an open row, so the
   comparison sample is unchanged, but any future per-strategy attribution of `trades` (story-5.6's
   missing `strategy_id` item) must account for them. **Owner:** whoever adds strategy attribution.
+  → **Checked by Story 5.6 (2026-10-11):** they render in the existing views as a backtest's open
+  row does and stay out of statistics and the equity curve; the owner is unchanged.
 
 ## Deferred from: code review of 5-5-handle-open-positions-at-seal-time-explicitly (2026-10-11)
 
@@ -4402,3 +4411,67 @@ DN3a. These five are left or disclosed, each with its reason and owner:
   now says so ("they, and any P&L already realized on them, are outside the record's metrics"),
   and so do the README and `persistence.md`. **Owner:** the epic-level both-sides decision that
   story-5.1's open-leg items already name.
+
+## Deferred from: story-5.6 (2026-10-11)
+
+Story 5.6 is verification only. It changed no production code and no AR44 path (PO rulings R1a,
+R2b). The six debt items routed to it are dispositioned below. Items 1–4 and 6 are also marked in
+place; item 5 was handed over in Story 5.2's own Dev Agent Record, not here.
+
+- **(1) The side-unaware `profit_pct` — a disposition, not a fix.** A profitable SHORT gets a
+  negative `profit_pct` from **both** production formulas. This is pinned on one real closed
+  Nautilus `Position` by `tests/component/services/test_profit_pct_parity.py`, which drives
+  `save_trades_from_positions` and `aggregate_closed_position` (added by code review P3: the
+  integration test reads hand-seeded rows, so it proves only that the views show the stored sign).
+  A one-sided fix turns it red, as mutation-checked. Fixing it means changing
+  `backtest_persistence.py`, the recorder and the seal's open row together, and the views stay
+  frozen (AR44). **Owner:** the epic-level both-sides decision.
+- **(2) `trades` has no `strategy_id` — a disposition, not a fix.** It is unreachable for a sealed
+  record: `run_identity` (Story 5.3) refuses a spec with more than one strategy, so a sealed run's
+  rows are one strategy's, plus R1a's reconciliation-owned open rows, whose `trade_id` names the
+  owner. AR43 forbids the column without an epic-level decision. **Owner:** whoever first lets a
+  multi-strategy session seal.
+- **(3) Repeated `time` values in `equity_series.curve`: still uncharted.** The detail page's equity
+  chart is the trades-based `/api/equity-curve/{id}`, and the legacy `/api/equity/{run_id}` reads a
+  top-level `equity_curve` that no record has. **Owner:** whoever first charts the stored series.
+- **(4) "CLI Command to Replicate" is meaningless for a paper record: PO ruling R1a, a known
+  presentation limit.** `ConfigurationSnapshot.cli_command` (an AR44 file) turns every top-level
+  snapshot key into a flag, so a paper record shows `--session-conditions {…}`; a backtest's
+  `--strategy-path`/`--config` flags are just as literal. **Owner:** later UI work (Growth's
+  "Paper" view).
+- **(5) The long "Session Conditions" row (5.2's handed observation): PO ruling R1a, correct
+  rendering.** The row holds the whole document, including about one curve point per closed trade.
+  It is proven to render with status 200, every stored value present and HTML-escaped, and a
+  60-trade case pinned. 5.2's stored document is **not** reopened. The row's length is a known
+  presentation limit. **Owner:** later UI work.
+- **(6) Reconciliation-owned open rows in `trades`: checked.** They come back like a backtest's
+  open row: in the trades list and export with a null exit, one entry marker and no exit marker,
+  and outside statistics and the equity curve. The attribution owner is unchanged.
+
+New, found while verifying:
+
+- **The price chart of a paper record reads FirstRate catalog bars.** `/api/timeseries/run/{run_id}`
+  resolves no named catalog for `data_source = 'ibkr_live'`, so it reads the default
+  `NAUTILUS_PATH` catalog: adjusted FirstRate bars, which may not cover the session's dates. When
+  they do not, it degrades to no candles by design (pinned). When they do, the candles the trade
+  markers sit on are adjusted while the fills are unadjusted IBKR prices: the structural
+  divergence `price_basis` already names. **Owner:** later UI work.
+- **Nothing marks a row as paper in the list.** The detail page shows Data Source `ibkr_live`, and
+  `run_type` is on the row; the list, dashboard and comparison show neither. Accepted for Phase 3
+  (architecture: a costless "Paper" badge is Growth work). **Owner:** Growth.
+- **`FROZEN_VIEWS` will block the first legitimate view change.** By design (R2b); retiring or
+  regenerating it is a recorded PO decision. **Owner:** the first story allowed to change a view.
+
+## Deferred from: code review of 5-6-read-a-paper-session-beside-its-backtest-in-the-existing-views (2026-10-11)
+
+- **W1 — The trades-table route calls itself over HTTP at a hard-coded address.**
+  `GET /backtests/{id}/trades-table` (`src/api/ui/backtests.py:832-844`) opens an
+  `httpx.AsyncClient` to `http://localhost:8000/api/backtests/{id}/trades` instead of calling the
+  query itself, so it breaks whenever the app serves on another host or port, or behind a proxy.
+  Story 5.6's test answers that call in-process (`ASGITransport`). Pre-existing, and the file is
+  frozen by AR44. **Owner:** the first story allowed to change a view.
+- **W2 — CLI and web show one record's timestamps in different zones.** The CLI views (`backtest
+  compare`, `history`, `show`) read through pg8000 and show the Postgres server's zone; the local
+  server is `America/Toronto`. The web views read through asyncpg and show UTC, so late in the
+  evening a record's "Date" in `backtest compare` is a day behind its date on `/backtests`. It
+  applies to every record, not just paper ones. **Owner:** Growth UI work.

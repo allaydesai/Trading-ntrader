@@ -249,6 +249,20 @@ await db.run_sync(_backfill, pk, run.id, len(trades))       # count must equal t
 - **⚠️ A delete would cascade.** `trades.backtest_run_id` is `ON DELETE CASCADE`, so deleting a
   sealed paper run would delete the session's trades — the system of record. The UI's delete is a
   no-op today; whoever implements it must refuse `run_type = 'paper'` or detach the trades first.
+- **The sealed record in the existing views (Story 5.6, FR46, AR8).** The read side has no paper
+  code at all. Once `backtest_run_id` is backfilled, every trade query keyed on it in
+  `src/api/rest/trades.py` returns the session's rows exactly as a backtest's: markers, the
+  paginated list, statistics, drawdown, the equity curve and export. Open rows from a `--force`
+  seal come back as a backtest's open row does, with a null exit, one entry marker and no exit
+  marker, and outside statistics and the curve. Two dispositions, not fixes: the side-unaware
+  `profit_pct` (a profitable SHORT reads negative) is the same on both sides, kept for parity —
+  both writers are pinned on one real SHORT by `tests/component/services/test_profit_pct_parity.py`,
+  while the views only show the stored value; and
+  `trades` has no `strategy_id`, which a sealed record never needs, because `run_identity` refuses
+  a spec with more than one strategy. Proven against Postgres by
+  `tests/integration/db/test_sealed_record_in_existing_views.py`, each query compared row by row
+  (the drawdown by its hand-computed amount); the views themselves are frozen
+  (`docs/agent/web-ui.md`, "Sealed Paper Sessions in These Views").
 
 ## Exceptions
 
