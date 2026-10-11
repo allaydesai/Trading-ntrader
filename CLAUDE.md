@@ -161,6 +161,15 @@ make web                                # Web UI (http://127.0.0.1:8000)
   and a second `MONITOR` proof (`read_session_holdings`, asserting an `:orders:` read) together.
   Only the seal's `read_session_holdings` calls it; `read_session_view` (`live reconcile`) loads
   no order.
+- **`FROZEN_VIEWS`** (`tests/unit/governance/test_ar44_frozen_views.py`, Story 5.6): Phase 3's
+  zero-UI-change criterion (AR44), pinned byte for byte. It holds a SHA-256 for every file under
+  `src/api/**` and `templates/**`, plus `src/services/backtest_query.py` and
+  `src/cli/commands/compare.py` (the comparison view). It covers the AC's four surfaces only (PO
+  ruling R2b): `static/js` and the CLI's `show`/`history` are deliberately outside it. Any changed,
+  added or removed file goes red: that is a success-criterion violation, not a judgment call.
+  **Never regenerate the manifest to make it pass.** Only a recorded PO decision may regenerate
+  it (`python -m tests.unit.governance.test_ar44_frozen_views --print-manifest`), and the first
+  story allowed to change a view (Growth's "Paper" badge) retires it deliberately.
 
 ## Editing with Auto-Linter
 
