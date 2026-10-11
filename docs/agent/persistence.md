@@ -195,8 +195,30 @@ await db.run_sync(_backfill, pk, run.id, len(trades))       # count must equal t
 - **The run row's identity comes from the spec as stored** (one strategy; `strategy_name` is the
   backtest path's `strategy_type.replace("_", " ").title()`; symbols joined with `,`); `start_date`
   is the session's `created_at` (nothing durable records its first start, so CAGR can read low but
-  never high); `end_date` is the instant `sealed_at` was stamped with; `data_source` is
+  never high; the record says so in `session_conditions.start_date_basis`); `end_date` is the
+  instant `sealed_at` was stamped with; `data_source` is
   `ibkr_live`; `initial_capital` is the operator's `--starting-capital`, as given.
+- **The record states what it ran under (Story 5.4, FR43/FR45, AR7).**
+  `src/services/session_conditions.py`'s `build_session_conditions(...)` writes the flat keys of
+  `config_snapshot["session_conditions"]`. They join the base snapshot **before** `merged_into`,
+  so 5.2's `equity_series` lands beside them. The keys:
+
+  | Key | Value | Source |
+  |---|---|---|
+  | `schema_version` | `1` | — |
+  | `starting_capital` | `"100000.00"` | `--starting-capital`, at the column's own scale (`1E+5` → `"100000.00"`), never scaled against a backtest |
+  | `rth_only` | `true` | `resolve_live_use_rth` refuses anything else on every start |
+  | `market_data_tier` | `"REALTIME"` | imported `REQUIRED_LIVE_MARKET_DATA_TYPE_NAME`; a delayed feed stops the session |
+  | `price_basis` | `"ibkr_unadjusted_smart"` | structural; a backtest's would be `"firstrate_adjusted"`, but a backtest writes no `session_conditions` at all |
+  | `closed_trade_count` | int | `equity_series.closed_trades`, never recounted (pinned equal, and equal to `total_trades`) |
+  | `open_positions_at_seal` | `[{instrument_id, quantity}]` | the session view, every owner netted. It is `[]` today, because the seal refuses any open position; Story 5.5's `--force` fills it |
+  | `start_date_basis` | `"session_created_at"` | PO ruling R1a: `start_date` is `created_at`, a disclosed deviation from "first start" |
+  | `last_run_flags` | `runtime_flags` as stored, or `null` | PO ruling R2a. Holds the **last process run's** facts only, because the flags are cleared on every start |
+
+  The config-snapshot panel renders the document unchanged (AR7, zero UI change). Nothing here is
+  recorded during the run, and no writer exists on the live path. **Reconciliation-owned activity
+  is stated structurally only** (PO ruling R3a): by `price_basis` and by
+  `equity_series.excludes`. A per-session flag has no durable source (see deferred-work).
 - **⚠️ `run_sync` shares the identity map.** A test reading back must `expire_all()` and use fresh
   queries; touching an expired ORM attribute in async code raises `MissingGreenlet`.
 - **⚠️ A delete would cascade.** `trades.backtest_run_id` is `ON DELETE CASCADE`, so deleting a

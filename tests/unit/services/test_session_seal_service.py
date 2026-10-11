@@ -27,7 +27,7 @@ from nautilus_trader.model.objects import MONEY_MAX
 from structlog.testing import capture_logs
 
 from src.core.live_session_view import SessionViewFailure, SessionViewUnavailableError
-from src.core.session_equity import SessionResults
+from src.core.session_equity import EQUITY_SERIES_KEY, SessionResults
 from src.core.strategy_registry import StrategyRegistry
 from src.db.exceptions import InvalidSessionTransition, SealRefusedError
 from src.db.models.backtest import BacktestRun
@@ -37,6 +37,13 @@ from src.models.backtest_result import BacktestResult
 from src.models.reconciliation import SessionView, ViewPosition
 from src.models.session import SessionSpec, SessionStatus, StrategySpec
 from src.services import session_seal_service as seal_module
+from src.services.session_conditions import (
+    AR7_KEYS,
+    LAST_RUN_FLAGS_KEY,
+    PAPER_PRICE_BASIS,
+    START_DATE_BASIS,
+    START_DATE_BASIS_KEY,
+)
 from src.services.session_seal_service import (
     INSTRUMENT_SYMBOL_MAX,
     LINKED_BACKTEST_WARNING_EVENT,
@@ -63,6 +70,17 @@ SOURCE = "_bmad-output/planning-artifacts/prd-epic5-scope.md"
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 SEAL_MODULE = "src/services/session_seal_service.py"
 SEAL_CLI_MODULE = "src/cli/commands/live_seal.py"
+#: Story 5.4: on the seal path, so hand-listed in the broker pins below (D-F).
+CONDITIONS_MODULE = "src/services/session_conditions.py"
+#: Story 5.4's ACs 7–9 are the story's own, not the PRD's (code review P12).
+STORY = (
+    "_bmad-output/implementation-artifacts/"
+    "5-4-record-the-conditions-the-session-actually-ran-under.md"
+)
+AC_8 = (
+    "a synthetic owner's split shares held after the strategy exits are an open position at "
+    "seal: the seal refuses naming them, and open_positions_at_seal is built from the same view"
+)
 
 SESSION_ID = UUID("33333333-3333-3333-3333-333333333333")
 SESSION_PK = 7
@@ -497,6 +515,10 @@ class TestTheWriteIsTheBacktestPathsOwn:
         assert reconstructed == {"starting_capital": CAPITAL, "start": CREATED, "end": SEALED_AT}
 
     async def test_the_snapshot_carries_the_series_beside_the_base_keys(self, harness):
+        """Widened deliberately by Story 5.4: ``session_conditions`` was
+        ``{"equity_series": …}`` alone; AR7's keys and the two ruled extras now
+        sit beside the series, which is unchanged. The exact set is pinned —
+        never a subset — so a key added or lost on either side goes red."""
         await harness.seal()
 
         snapshot = harness.save_kwargs["config_snapshot"]
@@ -508,7 +530,13 @@ class TestTheWriteIsTheBacktestPathsOwn:
             "bar_type",
             "session_conditions",
         }
-        assert snapshot["session_conditions"] == {"equity_series": EQUITY_SERIES}
+        conditions = snapshot["session_conditions"]
+        assert set(conditions) == set(AR7_KEYS) | {
+            START_DATE_BASIS_KEY,
+            LAST_RUN_FLAGS_KEY,
+            EQUITY_SERIES_KEY,
+        }
+        assert conditions[EQUITY_SERIES_KEY] == EQUITY_SERIES
 
     async def test_a_row_the_reconstruction_refuses_becomes_a_seal_refusal(self, harness):
         cause = ValueError("trade 17 has no exit_price; refusing to reconstruct a leg from it")
@@ -629,6 +657,189 @@ class TestLinkedBacktestIsReportedNeverAGate:
         report = await harness.seal()
 
         assert "not found" in report.linked_backtest_warning
+
+
+#: The last process run's ``runtime_flags`` as ``SessionService`` stores them.
+RUNTIME_FLAGS = {
+    "v": 1,
+    "all_failed": False,
+    "failed_strategies": [
+        {
+            "strategy_id": "SMACrossover-000",
+            "spec_strategy_id": "sma_crossover",
+            "error_type": "ValueError",
+            "handler": "on_bar",
+            "at": "2026-10-02T15:30:00+00:00",
+            "detail": "indicator not ready",
+        }
+    ],
+}
+
+
+class TestTheConditionsTheSessionRanUnder:
+    """Story 5.4 (FR43, FR45, AR7): the record carries what produced it."""
+
+    def _stored(self, harness) -> dict[str, Any]:
+        return harness.save_kwargs["config_snapshot"]["session_conditions"]
+
+    @pytest.mark.acceptance_criterion(
+        "5.4a",
+        "a sealed session's config_snapshot holds session_conditions with starting_capital, "
+        "rth_only, price_basis, market_data_tier, closed_trade_count, open_positions_at_seal "
+        "and schema_version: 1",
+        SOURCE,
+    )
+    async def test_the_written_snapshot_states_every_ar7_condition(self, harness):
+        await harness.seal()
+
+        conditions = self._stored(harness)
+        assert conditions["starting_capital"] == "100000.00"
+        assert conditions["rth_only"] is True
+        assert conditions["price_basis"] == PAPER_PRICE_BASIS
+        assert conditions["market_data_tier"] == "REALTIME"
+        assert conditions["closed_trade_count"] == EQUITY_SERIES["closed_trades"]
+        assert conditions["open_positions_at_seal"] == []
+        assert conditions["schema_version"] == 1
+
+    @pytest.mark.acceptance_criterion(
+        "5.4c",
+        "the closed-trade count travels with the record so a difference can be read against "
+        "sampling noise",
+        SOURCE,
+    )
+    async def test_the_closed_trade_count_is_the_series_own_in_both_places(self, harness):
+        """One computation, two keys, pinned equal (5.2's deferred pin). Five
+        rows read, the series built from the three closed ones: the record says
+        three — never the five rows read."""
+        harness.trades = ["trade-1", "trade-2", "trade-3", "open-4", "open-5"]
+
+        report = await harness.seal()
+
+        conditions = self._stored(harness)
+        assert conditions["closed_trade_count"] == conditions[EQUITY_SERIES_KEY]["closed_trades"]
+        assert report.closed_trade_count == conditions["closed_trade_count"] == 3
+        assert report.session_conditions["closed_trade_count"] == 3
+        assert harness.save_kwargs["backtest_result"].total_trades == 3
+
+    async def test_metrics_that_count_other_trades_than_the_series_refuse(self, harness):
+        """Code review P5: ``performance_metrics.total_trades`` and
+        ``closed_trade_count`` describe one sequence. If they ever disagree the
+        record would contradict itself, so the seal refuses, naming both — the
+        backfill-count precedent."""
+        harness.result = _result(total_trades=99)
+
+        with pytest.raises(SealRefusedError, match=r"99 trade\(s\).*3 closed trade\(s\)"):
+            await harness.seal()
+
+        harness.save.assert_not_called()
+
+    async def test_a_key_the_results_would_overwrite_refuses(self, harness):
+        """Code review P7: ``merged_into`` guards only ``equity_series``; a
+        results key named like a condition would silently replace it."""
+        harness.reconstruct.side_effect = lambda trades, **kwargs: SessionResults(
+            harness.result, {EQUITY_SERIES_KEY: dict(EQUITY_SERIES), "price_basis": "other"}
+        )
+
+        with pytest.raises(SealRefusedError, match="price_basis"):
+            await harness.seal()
+
+        harness.save.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "stored", [["odd", {"v": 1}], "a string", {}], ids=["list", "str", "empty"]
+    )
+    async def test_flags_of_any_stored_shape_still_seal(self, harness, stored):
+        """Code review P4: a stopped session must always be sealable; a
+        hand-edited or restored ``runtime_flags`` is recorded as stored (R2a)."""
+        harness.row = _row(runtime_flags=stored)
+
+        await harness.seal()
+
+        assert self._stored(harness)[LAST_RUN_FLAGS_KEY] == stored
+
+    async def test_the_last_runs_flags_are_copied_from_the_locked_row(self, harness):
+        """PO ruling R2a: the sealed row's ``runtime_flags``, as stored — a copy,
+        so nothing that later touches the row can change the record."""
+        harness.row = _row(runtime_flags=json.loads(json.dumps(RUNTIME_FLAGS)))
+
+        await harness.seal()
+
+        recorded = self._stored(harness)[LAST_RUN_FLAGS_KEY]
+        assert recorded == RUNTIME_FLAGS
+        assert recorded is not harness.row.runtime_flags
+
+    async def test_a_row_with_no_flags_records_null(self, harness):
+        await harness.seal()
+
+        assert self._stored(harness)[LAST_RUN_FLAGS_KEY] is None
+
+    @pytest.mark.acceptance_criterion(
+        "5.4e",
+        "the paper session's own starting balance is stored as-is, with no normalization",
+        SOURCE,
+    )
+    async def test_the_capital_is_the_operators_never_the_linked_backtests(self, harness):
+        """AC #5: comparability comes from matching the accounts, not from
+        arithmetic — a linked backtest run on a different balance changes
+        nothing about this record's."""
+        harness.row = _row(linked_backtest_run_id=LINKED_RUN_ID)
+        harness.linked = SimpleNamespace(
+            execution_status="success", metrics=object(), initial_capital=Decimal("50000.00")
+        )
+
+        await harness.seal(capital=Decimal("1E+5"))
+
+        stored = self._stored(harness)["starting_capital"]
+        assert stored == "100000.00" == str(harness.db.run.initial_capital)
+        assert harness.save_kwargs["initial_capital"] == Decimal("100000")
+
+    @pytest.mark.acceptance_criterion(
+        "5.4d",
+        "initial_capital matches the starting capital, start_date is the session's creation "
+        "(R1a, recorded as start_date_basis), end_date is the seal time, data_source "
+        "identifies the live IBKR source",
+        SOURCE,
+    )
+    async def test_the_run_rows_own_columns_and_their_stated_basis(self, harness):
+        await harness.seal()
+
+        kwargs = harness.save_kwargs
+        conditions = self._stored(harness)
+        assert kwargs["initial_capital"] == Decimal(conditions["starting_capital"])
+        assert kwargs["start_date"] == CREATED
+        assert conditions[START_DATE_BASIS_KEY] == START_DATE_BASIS == "session_created_at"
+        assert kwargs["end_date"] == SEALED_AT == harness.row.sealed_at
+        assert kwargs["data_source"] == PAPER_DATA_SOURCE == "ibkr_live"
+
+    @pytest.mark.acceptance_criterion("5.4h", AC_8, STORY)
+    async def test_a_synthetic_owners_split_shares_refuse_the_seal_by_name(self, harness):
+        """Story 4.7's debt: the strategy sold its 10, the split's other 10 sit
+        with ``EXTERNAL``. The view nets every owner, so the seal sees them,
+        refuses (R2a) and names them — never "none open at seal"."""
+        harness.view = SessionView(
+            "PAPER-33333333", (ViewPosition("AAPL.NASDAQ", Decimal("10")),), ()
+        )
+
+        with pytest.raises(SealRefusedError, match=r"AAPL\.NASDAQ 10"):
+            await harness.seal()
+
+        harness.save.assert_not_called()
+
+    async def test_a_condition_the_builder_refuses_becomes_a_seal_refusal(
+        self, harness, monkeypatch
+    ):
+        cause = ValueError("the starting capital 1.005 has fractions of a cent")
+
+        def refuse(**kwargs):
+            raise cause
+
+        monkeypatch.setattr(seal_module, "build_session_conditions", refuse)
+
+        with pytest.raises(SealRefusedError, match="fractions of a cent") as raised:
+            await harness.seal()
+
+        assert raised.value.__cause__ is cause
+        harness.save.assert_not_called()
 
 
 class TestRunIdentity:
@@ -785,12 +996,38 @@ class TestTheReport:
         assert series["granularity"] == "closed_trade"
 
     async def test_the_closed_trade_count_is_the_series_own(self, harness):
-        """One source for one number: the count the series was built from."""
-        harness.result = _result(total_trades=99)
+        """One source for one number: the count the series was built from —
+        not the rows read. (Story 5.4's code review P5 made a result counting
+        other trades a refusal, so the series and result now agree here.)"""
+        harness.trades = ["trade-1", "trade-2", "trade-3", "open-4"]
 
         report = await harness.seal()
 
         assert report.closed_trade_count == EQUITY_SERIES["closed_trades"]
+
+    async def test_stored_flags_of_any_shape_render_one_line_per_key(self, harness):
+        """Code review P2/P3: ``last_run_flags`` is arbitrary stored JSONB, so
+        the human form must render any JSON shape — a mixed list, an empty
+        mapping, free text with a newline — without raising (it renders after
+        the commit) and without a line that reads as a top-level key."""
+        harness.row = _row(
+            runtime_flags={
+                "v": 1,
+                "failed_strategies": [{"strategy_id": "S-1"}, "garbage", 7],
+                "order_rejections": {"last": {"reason": "rejected\nline two: market shut"}},
+                "empty": {},
+            }
+        )
+
+        report = await harness.seal()
+        lines = render_seal_report(report)
+
+        top = {line.split(":", 1)[0] for line in lines if not line.startswith(" ")}
+        assert top == set(seal_json_payload(report))
+        human = "\n".join(lines)
+        assert "- garbage" in human and "- 7" in human
+        assert "reason: rejected\\nline two: market shut" in human
+        assert "empty: {}" in human
 
     async def test_a_linked_backtest_warning_appears_in_both_forms(self, harness):
         harness.row = _row(linked_backtest_run_id=LINKED_RUN_ID)
@@ -874,7 +1111,7 @@ class TestTheSealReachesNoBroker:
     """D-J (AR31, NFR14, PO ruling R2a): nothing on the seal path can flatten,
     close or modify a position or an order, or open a broker connection."""
 
-    MODULES = (SEAL_MODULE, SEAL_CLI_MODULE)
+    MODULES = (SEAL_MODULE, SEAL_CLI_MODULE, CONDITIONS_MODULE)
     BROKER_IMPORTS = ("ibapi", "nautilus_trader.adapters", "nautilus_trader.live")
 
     @pytest.mark.parametrize("relative", MODULES)

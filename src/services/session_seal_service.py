@@ -14,8 +14,10 @@ without its record.
 
 Does not own: committing or rolling back (the caller does — ``SessionService``'s
 rule), the results computation (``src.core.session_equity``, Story 5.2), the
-open-position read (injected: the CLI passes the session's own engine-cache
-view, Story 4.6 — PO ruling R2a), or ``--force`` and open trades (Story 5.5).
+conditions document's keys and vocabulary (``src.services.session_conditions``,
+Story 5.4 — this module only hands it what the seal read), the open-position
+read (injected: the CLI passes the session's own engine-cache view, Story 4.6 —
+PO ruling R2a), or ``--force`` and open trades (Story 5.5).
 
 **Never the broker, never an order.** Sealing reads the database and, through
 the injected reader, the session's own Redis view. It calls no order method,
@@ -56,6 +58,7 @@ from src.models.backtest_result import BacktestResult
 from src.models.reconciliation import SessionView, ViewPosition
 from src.models.session import SessionStatus
 from src.services.backtest_persistence import BacktestPersistenceService
+from src.services.session_conditions import build_session_conditions
 from src.services.session_service import SessionService
 
 #: The largest amount a USD ``Money`` holds — a starting capital past it cannot
@@ -68,8 +71,9 @@ _RESULT_FIELDS = frozenset(inspect.signature(BacktestResult.__init__).parameters
 #: FR44/AR6: the one column that tells a sealed session from a backtest.
 PAPER_RUN_TYPE = "paper"
 #: ``backtest_runs.data_source`` for a sealed session: live IBKR market data,
-#: beside a backtest's ``catalog``/``ibkr``/``kraken``/``mock`` (Story 5.4 may
-#: refine the wording).
+#: beside a backtest's ``catalog``/``ibkr``/``kraken``/``mock``. Kept as worded
+#: by Story 5.4 (PO-confirmed 2026-10-11): it identifies the live IBKR source and
+#: is distinct from every backtest value.
 PAPER_DATA_SOURCE = "ibkr_live"
 #: The ``config_snapshot`` version every backtest path writes.
 SNAPSHOT_VERSION = "1.0"
@@ -134,6 +138,9 @@ class _Claimed:
     period_start: datetime
     sealed_at: datetime
     linked_backtest_run_id: UUID | None
+    #: The last process run's ``runtime_flags``, a copy, as stored (Story 5.4,
+    #: R2a). Required — a default would let a missed wiring record a clean run.
+    runtime_flags: Any
 
 
 class _ReadOnce:
@@ -213,7 +220,9 @@ def period_start(trading_session: Any) -> datetime:
     (``last_started_at`` is overwritten on every claim, ``runtime_flags`` is
     cleared on every run), and creation is never after it. The period may so
     include the gap before the first start — CAGR reads low, never high.
-    Story 5.4 owns "the session's first start" and may replace this source.
+    Story 5.4 kept this source (PO ruling R1a, 2026-10-11) and states it in the
+    record: ``session_conditions.start_date_basis`` is ``"session_created_at"``,
+    a disclosed deviation from the epic's "first start".
 
     Raises:
         SealRefusedError: The row carries no ``created_at``.
@@ -318,6 +327,7 @@ def _claim(
         period_start=period_start(row),
         sealed_at=stamp(),
         linked_backtest_run_id=row.linked_backtest_run_id,
+        runtime_flags=copy.deepcopy(row.runtime_flags),
     )
 
 
@@ -366,16 +376,65 @@ def _reconstruct(
     return results
 
 
+def _conditions(
+    claimed: _Claimed,
+    results: SessionResults,
+    capital: Decimal,
+    open_positions: Sequence[ViewPosition],
+) -> dict[str, Any]:
+    """AR7's flat keys for this record (Story 5.4) — the series' own count,
+    never a recount (5.2's deferred equality pin).
+
+    Refuses (code review P5, P7) a result whose ``total_trades`` is not the
+    series' closed-trade count — the record would contradict itself — and any
+    key the results' own fragment also holds, which ``merged_into`` would
+    otherwise overwrite silently. Only data refusals become ``SealRefusedError``;
+    a ``TypeError`` is a code defect and propagates (code review P6, the
+    ``_reconstruct`` precedent).
+    """
+    closed = results.session_conditions[EQUITY_SERIES_KEY]["closed_trades"]
+    if results.result.total_trades != closed:
+        raise SealRefusedError(
+            f"The session's metrics count {results.result.total_trades} trade(s) but its equity "
+            f"series {closed} closed trade(s); refusing a record whose counts disagree."
+        )
+    try:
+        conditions = build_session_conditions(
+            starting_capital=capital,
+            closed_trade_count=closed,
+            open_positions=open_positions,
+            last_run_flags=claimed.runtime_flags,
+        )
+    except (ValueError, ArithmeticError) as exc:
+        raise SealRefusedError(f"The session's conditions cannot be recorded: {exc}") from exc
+    overlap = sorted(conditions.keys() & results.session_conditions.keys())
+    if overlap:
+        raise SealRefusedError(
+            f"The session's results already hold {', '.join(overlap)}; refusing to let one "
+            "source overwrite the other in its conditions."
+        )
+    return conditions
+
+
 async def _write_run(
-    db: AsyncSession, claimed: _Claimed, results: SessionResults, **columns: Any
+    db: AsyncSession,
+    claimed: _Claimed,
+    results: SessionResults,
+    conditions: dict[str, Any],
+    **columns: Any,
 ) -> BacktestRun:
-    """The verbatim backtest write (AR12), then ``run_type`` — D-D."""
+    """The verbatim backtest write (AR12), then ``run_type`` — D-D.
+
+    The conditions join the base snapshot **before** ``merged_into``, so the
+    series lands beside them and neither replaces the other (Story 5.4).
+    """
     identity = run_identity(claimed.spec)
+    snapshot = {**identity.config_snapshot, "session_conditions": conditions}
     run = await BacktestPersistenceService(BacktestRepository(db)).save_backtest_results(
         strategy_name=identity.strategy_name,
         strategy_type=identity.strategy_type,
         instrument_symbol=identity.instrument_symbol,
-        config_snapshot=results.merged_into(identity.config_snapshot),
+        config_snapshot=results.merged_into(snapshot),
         backtest_result=results.result,
         data_source=PAPER_DATA_SOURCE,
         start_date=claimed.period_start,
@@ -453,6 +512,7 @@ async def seal_session(
         db,
         claimed,
         results,
+        _conditions(claimed, results, starting_capital, view.positions),
         run_id=run_id,
         end_date=claimed.sealed_at,
         initial_capital=starting_capital,
@@ -465,7 +525,7 @@ async def seal_session(
         name=claimed.name,
         run_id=run_id,
         sealed_at=claimed.sealed_at,
-        closed_trade_count=conditions[EQUITY_SERIES_KEY]["closed_trades"],
+        closed_trade_count=conditions["closed_trade_count"],
         trades_backfilled=backfilled,
         initial_capital=run.initial_capital,  # as stored, never as typed
         start_date=claimed.period_start,
@@ -525,19 +585,31 @@ def render_seal_report(report: SealReport) -> list[str]:
 
 
 def _render(payload: Mapping[str, Any], *, depth: int) -> list[str]:
+    """Any JSON shape, without raising: ``last_run_flags`` is stored JSONB, and
+    this runs after the commit — a crash here would report a committed seal as
+    failed (Story 5.4 code review P2). Every line is one key (P3)."""
     indent = "  " * depth
     lines: list[str] = []
     for key, value in payload.items():
-        if isinstance(value, Mapping):
+        if isinstance(value, Mapping) and value:
             lines.append(f"{indent}{key}:")
             lines.extend(_render(value, depth=depth + 1))
-        elif isinstance(value, list) and value and isinstance(value[0], Mapping):
+        elif isinstance(value, list) and any(isinstance(item, Mapping) for item in value):
             lines.append(f"{indent}{key}:")
-            for item in value:
-                pairs = ", ".join(f"{k}={v}" for k, v in item.items())
-                lines.append(f"{indent}  - {pairs}")
+            lines.extend(f"{indent}  - {_item(item)}" for item in value)
         elif isinstance(value, list):
-            lines.append(f"{indent}{key}: {', '.join(map(str, value)) if value else 'none'}")
+            lines.append(f"{indent}{key}: {', '.join(map(_text, value)) if value else 'none'}")
         else:
-            lines.append(f"{indent}{key}: {'none' if value is None else value}")
+            lines.append(f"{indent}{key}: {'none' if value is None else _text(value)}")
     return lines
+
+
+def _item(item: Any) -> str:
+    if isinstance(item, Mapping):
+        return ", ".join(f"{k}={_text(v)}" for k, v in item.items())
+    return _text(item)
+
+
+def _text(value: Any) -> str:
+    """One line: a stored line break is shown escaped, never as a new line."""
+    return str(value).replace("\r", "\\r").replace("\n", "\\n")
