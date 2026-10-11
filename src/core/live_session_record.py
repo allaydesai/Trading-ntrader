@@ -1,8 +1,8 @@
 """AR32's record port: the only way a running session touches its own row.
 
-Owns: :class:`SessionRecordPort`, the four-method Protocol
-``LiveSessionRunner`` writes its liveness timestamps and its final ``stopped``
-transition through.
+Owns: :class:`SessionRecordPort`, the five-method Protocol
+``LiveSessionRunner`` writes its liveness timestamps, its run's facts and its
+final ``stopped`` transition through.
 
 Does not own: the implementation (``src/services/session_record.py``, which
 holds the SQLAlchemy), the validation those writes go through
@@ -210,5 +210,46 @@ class SessionRecordPort(Protocol):
                 the transcript keeps Story 3.3's verbatim copy.
             last_reconciliation: Whether the most recent refusal was
                 reconciliation-generated rather than a fresh venue answer.
+        """
+        ...
+
+    def record_trading_withheld(
+        self,
+        *,
+        withheld_from: datetime,
+        withheld_until: datetime | None,
+        reason: str | None,
+        error_type: str,
+        failed_cycles: int,
+    ) -> None:
+        """Record a period the running session withheld trading for a failing
+        reconciliation, so a later seal can carry it (Story 5.8, AC #3).
+
+        **Why a session-row fact** — Story 3.7's argument, unchanged: the
+        period is about *this session*, it lives in the same ``runtime_flags``
+        document as the refusal summary, and it is written on the same tick by
+        the same executor through the same two guards. Unlike every other key
+        there it is **session-lifetime**: the ``-> running`` edge carries it
+        forward (PO ruling Q1, 2026-10-11), and the ``-> stopped`` edge closes
+        a period a stop cut short — so a seal sees the periods of every run:
+        the most recent 50, with ``count`` the true total (NFR2).
+
+        **Idempotent, keyed by ``withheld_from``.** A call carries the period's
+        newest version — its start alone, or its start and its end — and
+        replaces an earlier write of the same period, so a retried write and a
+        write that carries both halves at once are the same write.
+
+        Every argument is a standard-library primitive (AR38). Record-keeping
+        only: nothing here grants or withholds trading.
+
+        Args:
+            withheld_from: When permission was withdrawn — the period's start.
+            withheld_until: When a clean cycle granted it back, or ``None``
+                while it stands.
+            reason: The withdrawing failure's own reason (a
+                ``BrokerStateFailure`` value), or ``None`` for an exception
+                that carries none. Never exception text (NFR26).
+            error_type: The withdrawing failure's class name.
+            failed_cycles: The streak that withdrew it — the threshold.
         """
         ...

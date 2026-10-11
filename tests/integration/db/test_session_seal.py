@@ -19,7 +19,7 @@ after writing them leaves none behind.
 """
 
 import asyncio
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
@@ -33,6 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from src.cli.commands import live_seal
 from src.cli.commands.live import live
 from src.config import get_settings
+from src.core.live_session_record import SessionReclaimedError
 from src.core.live_session_view import SessionViewFailure, SessionViewUnavailableError
 from src.db.exceptions import (
     DuplicateRecordError,
@@ -49,11 +50,13 @@ from src.models.reconciliation import OpenLeg, SessionHoldings, SessionView, Vie
 from src.models.session import SessionSpec, SessionStatus, StrategySpec
 from src.services import session_seal_service as seal_module
 from src.services.backtest_persistence import BacktestPersistenceService
+from src.services.reconcile_withheld import RECONCILE_WITHHELD_KEY
 from src.services.seal_open_positions import (
     RECORDED_OPEN_DISPOSITION,
     UNKNOWN_HOLDINGS_DISPOSITION,
 )
 from src.services.session_conditions import AR7_KEYS, LAST_RUN_FLAGS_KEY, START_DATE_BASIS_KEY
+from src.services.session_record import SqlSessionRecord
 from src.services.session_seal_service import PAPER_DATA_SOURCE, seal_json_payload, seal_session
 from src.services.session_service import SessionService
 
@@ -397,9 +400,11 @@ class TestTheRecordCarriesItsConditions:
         await db_session.commit()
 
         conditions = (await _sealed_row(db_session)).conditions
+        # Widened deliberately by Story 5.8 (AC #3): `reconcile_withheld`.
         assert set(conditions) == set(AR7_KEYS) | {
             START_DATE_BASIS_KEY,
             LAST_RUN_FLAGS_KEY,
+            RECONCILE_WITHHELD_KEY,
             "equity_series",
         }
         assert conditions["schema_version"] == 1
@@ -408,6 +413,7 @@ class TestTheRecordCarriesItsConditions:
         assert conditions["market_data_tier"] == "REALTIME"
         assert conditions["open_positions_at_seal"] == []
         assert conditions["last_run_flags"] is None
+        assert conditions[RECONCILE_WITHHELD_KEY] == {"count": 0, "periods": []}
 
     @pytest.mark.acceptance_criterion(
         "5.4b",
@@ -544,6 +550,178 @@ class TestTheRecordCarriesItsConditions:
         recorded = (await _sealed_row(db_session)).conditions["last_run_flags"]
         assert flags["all_failed"] is True
         assert recorded == flags
+
+
+#: Story 5.8's AC #3, as ``prd-epic5-scope.md`` words it.
+AC_5_8C = (
+    "a withheld period, when the session is later sealed, is recorded in session_conditions "
+    "with its start, end and cause"
+)
+
+
+def _bound(sync_session):
+    """``get_sync_session``'s shape over the seal test's own connection, so the
+    real ``SqlSessionRecord`` writes into this test's schema."""
+
+    @contextmanager
+    def factory():
+        yield sync_session
+
+    return factory
+
+
+def _withhold(row, *, epoch: int, start: datetime, end: datetime | None = None):
+    """The running session's own write: ``SqlSessionRecord.record_trading_withheld``."""
+
+    def write(sync_session):
+        record = SqlSessionRecord(
+            row.session_id, owner_epoch=epoch, session_factory=_bound(sync_session)
+        )
+        record.record_trading_withheld(
+            withheld_from=start,
+            withheld_until=end,
+            reason="positions_unanswered",
+            error_type="BrokerStateUnavailableError",
+            failed_cycles=3,
+        )
+
+    return write
+
+
+def _to(row, target: SessionStatus, at: datetime):
+    def move(sync_session):
+        service = SessionService(SyncTradingSessionRepository(sync_session), time_source=lambda: at)
+        service.transition(row.session_id, to=target)
+
+    return move
+
+
+class TestEveryWithheldPeriodReachesTheRecord:
+    """Story 5.8, AC #3, against Postgres: a period written by the running
+    session through the real record adapter, closed by the real stop edge,
+    carried by the real ``-> running`` edge (PO ruling Q1) into a second run,
+    and recorded by the real seal — read back through fresh SQL."""
+
+    @pytest.mark.acceptance_criterion("5.8c", AC_5_8C, SOURCE)
+    async def test_two_runs_two_periods_one_record(self, db_session):
+        row = await _seed(db_session, status=SessionStatus.RUNNING)  # run 1, epoch 1
+        day = row.created_at + timedelta(days=1)
+        first = day + timedelta(hours=1)
+        stop_1 = first + timedelta(minutes=5)
+        second = day + timedelta(days=2)
+        regranted = second + timedelta(minutes=4)
+
+        await db_session.run_sync(_withhold(row, epoch=1, start=first))
+        await db_session.run_sync(_to(row, SessionStatus.STOPPED, stop_1))
+        await db_session.run_sync(_to(row, SessionStatus.RUNNING, day + timedelta(days=1)))
+        await db_session.run_sync(_withhold(row, epoch=2, start=second))
+        await db_session.run_sync(_withhold(row, epoch=2, start=second, end=regranted))
+        await db_session.run_sync(_to(row, SessionStatus.STOPPED, day + timedelta(days=3)))
+        await db_session.commit()
+
+        report = await _seal(db_session, row)
+        await db_session.commit()
+
+        recorded = (await _sealed_row(db_session)).conditions[RECONCILE_WITHHELD_KEY]
+        assert recorded["count"] == 2
+        assert [(p["start"], p["end"], p["ended_by"]) for p in recorded["periods"]] == [
+            (first.isoformat(), stop_1.isoformat(), "session_stopped"),
+            (second.isoformat(), regranted.isoformat(), "reconciled"),
+        ]
+        assert all(p["cause"] == "runtime_reconciliation_failing" for p in recorded["periods"])
+        assert all(p["reason"] == "positions_unanswered" for p in recorded["periods"])
+        payload = seal_json_payload(report)["execution_conditions"]["session_conditions"]
+        assert payload[RECONCILE_WITHHELD_KEY] == recorded
+
+    async def test_the_running_edge_carries_the_history_and_clears_every_other_flag(
+        self, db_session
+    ):
+        row = await _seed(db_session, status=SessionStatus.RUNNING)
+        start = row.created_at + timedelta(days=1)
+
+        def fail(sync_session):
+            SessionService(SyncTradingSessionRepository(sync_session)).record_strategy_failure(
+                row.session_id,
+                owner_epoch=1,
+                strategy_id="SMACrossover-000",
+                spec_strategy_id="sma_crossover",
+                error_type="ValueError",
+                handler="on_bar",
+                at=start,
+            )
+
+        await db_session.run_sync(_withhold(row, epoch=1, start=start))
+        await db_session.run_sync(fail)
+        await db_session.run_sync(_to(row, SessionStatus.STOPPED, start + timedelta(hours=1)))
+        await db_session.run_sync(_to(row, SessionStatus.RUNNING, start + timedelta(days=1)))
+        await db_session.commit()
+
+        db_session.expire_all()
+        flags = await _scalar(
+            db_session, "SELECT runtime_flags FROM trading_sessions WHERE id = :pk", pk=row.id
+        )
+        assert set(flags) == {"v", RECONCILE_WITHHELD_KEY}
+        (period,) = flags[RECONCILE_WITHHELD_KEY]["periods"]
+        assert period["ended_by"] == "session_stopped"
+
+    async def test_a_dead_processes_period_ends_at_its_last_heartbeat(self, db_session):
+        """``kill -9`` while withheld, then a reclaim: the period ends at the
+        dead process's last heartbeat (``process_lost``), never "now"."""
+        row = await _seed(db_session, status=SessionStatus.RUNNING)
+        start = row.created_at + timedelta(days=1)
+        heartbeat = start + timedelta(minutes=2)
+
+        def beat(sync_session):
+            SessionService(
+                SyncTradingSessionRepository(sync_session), time_source=lambda: heartbeat
+            ).record_activity(row.session_id, owner_epoch=1, at=heartbeat)
+
+        await db_session.run_sync(_withhold(row, epoch=1, start=start))
+        await db_session.run_sync(beat)
+        await db_session.run_sync(_to(row, SessionStatus.RUNNING, start + timedelta(hours=1)))
+        await db_session.run_sync(_to(row, SessionStatus.STOPPED, start + timedelta(hours=2)))
+        await db_session.commit()
+
+        await _seal(db_session, row)
+        await db_session.commit()
+
+        recorded = (await _sealed_row(db_session)).conditions[RECONCILE_WITHHELD_KEY]
+        (period,) = recorded["periods"]
+        assert (period["end"], period["ended_by"]) == (heartbeat.isoformat(), "process_lost")
+
+    async def test_the_running_sessions_own_stop_closes_its_open_period(self, db_session):
+        """Code review P8: through ``SqlSessionRecord.mark_stopped`` — the
+        runner's own stop path, epoch-fenced — not the service directly. The
+        period began before the stop's real clock, so it ends at the stop."""
+        row = await _seed(db_session, status=SessionStatus.RUNNING)
+        start = datetime.now(UTC) - timedelta(minutes=5)
+
+        def stop(sync_session):
+            SqlSessionRecord(
+                row.session_id, owner_epoch=1, session_factory=_bound(sync_session)
+            ).mark_stopped()
+
+        await db_session.run_sync(_withhold(row, epoch=1, start=start))
+        await db_session.run_sync(stop)
+        await db_session.commit()
+
+        db_session.expire_all()
+        flags = await _scalar(
+            db_session, "SELECT runtime_flags FROM trading_sessions WHERE id = :pk", pk=row.id
+        )
+        stopped_at = await _scalar(
+            db_session, "SELECT last_stopped_at FROM trading_sessions WHERE id = :pk", pk=row.id
+        )
+        (period,) = flags[RECONCILE_WITHHELD_KEY]["periods"]
+        assert (period["end"], period["ended_by"]) == (stopped_at.isoformat(), "session_stopped")
+
+    async def test_a_stopped_row_refuses_a_late_period_write(self, db_session):
+        """Fail closed: after the stop, the running session's writer is refused
+        by the row itself — nothing reopens what the stop closed."""
+        row = await _seed(db_session, status=SessionStatus.STOPPED)
+
+        with pytest.raises(SessionReclaimedError, match="not running"):
+            await db_session.run_sync(_withhold(row, epoch=1, start=row.created_at))
 
 
 class TestRefusalsWriteNothing:

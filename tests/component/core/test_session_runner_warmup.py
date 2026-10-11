@@ -113,7 +113,7 @@ def _spec(*names: str) -> SessionSpec:
 
 
 class SpyRecord:
-    """A ``SessionRecordPort`` double — all four methods, kwargs-only."""
+    """A ``SessionRecordPort`` double — all five methods, kwargs-only."""
 
     def __init__(self) -> None:
         self.calls: list[str] = []
@@ -129,6 +129,9 @@ class SpyRecord:
 
     def record_order_rejections(self, **fields) -> None:
         self.calls.append("record_order_rejections")
+
+    def record_trading_withheld(self, **fields) -> None:
+        self.calls.append("record_trading_withheld")
 
 
 async def _never_sleeps(seconds: float) -> None:

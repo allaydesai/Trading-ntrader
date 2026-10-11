@@ -11,7 +11,10 @@ Does not own: *taking* the reading (``read_ibkr_connection_status`` in
 must be kept in step by hand), the poll schedule (Epic 2's runner —
 AR38), re-establishing state after a reconnect (Story 4.3's
 ``live_runtime_reconcile``, the only production caller of
-:meth:`ConnectionMonitor.confirm_state_reestablished`), or consuming the flag
+:meth:`ConnectionMonitor.confirm_state_reestablished`), deciding when a
+persistently failing reconciliation must withhold trading (Story 5.8's
+``live_runtime_reconcile`` again, the only production caller of
+:meth:`ConnectionMonitor.withhold_for_reconciliation`), or consuming the flag
 on an order path (Epic 3's ``live_order_path`` reads
 :attr:`ConnectionMonitor.submission_withheld`).
 
@@ -169,6 +172,8 @@ class ConnectionMonitor:
         self._last_observed_at: float | None = None
         self._has_ever_connected = False
         self._halt_reported = False
+        #: Story 5.8: the current unavailability is a reconciliation withhold, not an outage.
+        self._withheld_by_reconciliation = False
         self._log = structlog.get_logger(__name__).bind(session_id=session_id)
 
     @property
@@ -284,6 +289,32 @@ class ConnectionMonitor:
         self._grant_permission()
         return self._state
 
+    def withhold_for_reconciliation(self) -> ConnectionState:
+        """Withdraw trading permission while the socket stays up (Story 5.8, D-A).
+
+        The runtime reconciler's one call, once its broker read has failed on
+        three consecutive cycles: a granted session moves back to
+        ``RECOVERING``, so every order is withheld, and only a clean
+        reconciliation cycle grants again — through
+        :meth:`confirm_state_reestablished`, exactly as after a reconnect.
+        Unavailability is anchored here, so :attr:`downtime_seconds` measures
+        the withheld time, ``connection.restored`` reports it, and the halt
+        clock runs as it does for any outage; the socket never left, so
+        :attr:`reconnect_seconds` reads ``0.0``. A real disconnect while
+        withheld is a new outage, anchored and narrated at the drop (code
+        review P1, :meth:`_observe_disconnected`). From any other state
+        permission is already withheld, or not yet granted, and nothing
+        changes. Logs nothing — the reconciler's own record is the narration —
+        and never raises.
+        """
+        if self._state is ConnectionState.CONNECTED:
+            self._state = ConnectionState.RECOVERING
+            if self._unavailable_since is None:
+                self._unavailable_since = self._now()
+            self._reconnected_at = self._unavailable_since
+            self._withheld_by_reconciliation = True
+        return self._state
+
     def _grant_permission(self) -> None:
         """Move to CONNECTED, reporting the outage this closes (if any)."""
         downtime = self.downtime_seconds
@@ -308,6 +339,7 @@ class ConnectionMonitor:
         self._unavailable_since = None
         self._reconnected_at = None
         self._halt_reported = False
+        self._withheld_by_reconciliation = False
 
     def _observe_connected(self) -> None:
         """A live reading moves to RECOVERING — never straight to permitted."""
@@ -337,12 +369,16 @@ class ConnectionMonitor:
         if self._state in (ConnectionState.CONNECTED, ConnectionState.RECOVERING):
             self._state = ConnectionState.LOST
             self._reconnected_at = None
-            if self._unavailable_since is None:
+            if self._unavailable_since is None or self._withheld_by_reconciliation:
                 # Anchored once per outage, not per entry to LOST — a flapping
                 # gateway must accumulate one continuous outage rather than
                 # restart the halt clock on every blip. Cleared only by a
                 # successful confirmation, which is also what makes
-                # `connection.lost` fire exactly once per outage.
+                # `connection.lost` fire exactly once per outage. A drop during
+                # a reconciliation withhold (Story 5.8, code review P1) is the
+                # outage's start: re-anchored, the halt re-armed, and narrated.
+                self._withheld_by_reconciliation = False
+                self._halt_reported = False
                 self._unavailable_since = self._now()
                 self._log.warning(
                     "connection.lost",

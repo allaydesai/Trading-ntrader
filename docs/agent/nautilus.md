@@ -476,6 +476,42 @@ TWS trade, a split) is corrected one to two cycles after it happens, not on
 arrival. `reconcile.ok scope=runtime` is logged on the first clean cycle, after
 any problem, and otherwise at most hourly (`cycles` says how many it covers).
 
+**A cycle that keeps failing is acted on** (Story 5.8, PO ruling PR #35 D3:
+"withhold after 3, drift stops"):
+
+- **The broker read keeps failing** (a positions request IBKR does not answer, a
+  timeout, cash not yet reported). The first failure is one
+  `reconcile.cycle_failed` WARNING. The **third consecutive** failed cycle
+  (`WITHHOLD_AFTER_FAILED_CYCLES`) **withdraws trading permission**: the monitor
+  moves `CONNECTED → RECOVERING` (`withhold_for_reconciliation`), every order is
+  withheld (`order.suppressed`), and one `reconcile.cycle_failed` is logged at
+  ERROR (`consecutive=3 action=trading_withheld`), past the hourly throttle.
+  The next clean cycle (a reconnect cycle, every tick) grants permission back
+  through `confirm_state_reestablished`, exactly as after a reconnect:
+  `reconcile.ok scope=reconnect`, then `connection.restored`. While withheld,
+  the halt clock runs as for any outage, so `connection.halted` may appear. A
+  real disconnect while withheld is narrated as its own outage
+  (`connection.lost`), and its downtime, reconnect time and halt clock are
+  measured from the drop. If the session is already `RECOVERING` after a real
+  disconnect, the outage owns that withhold: the third failure withdraws
+  nothing and logs no ERROR. Only the reader's own failure reason is logged
+  or persisted, never a third party's exception text.
+- **Adapter drift** (`BrokerStateAdapterError`, e.g. two IB contracts resolving
+  to one instrument id). It is never a streak: one `reconcile.cycle_failed` at
+  ERROR (`action=session_stopped reason=adapter_incompatible`), then the session
+  stops through the ordinary teardown, exit 1, positions untouched — as at
+  startup.
+- **The withheld period is recorded for the seal.** The tick writes each
+  period (start, end, cause) to `runtime_flags["reconcile_withheld"]` through
+  the record port. That is the one `runtime_flags` key the `-> running` edge
+  carries forward (PO ruling Q1); every other key still clears per run. The
+  runner's teardown writes any period the tick could not, then the stop closes
+  a period it cut short (`ended_by: "session_stopped"`). A restart after
+  a `kill -9` closes the dead process's open period at its last heartbeat
+  (`"process_lost"`). A seal copies the whole history into
+  `session_conditions.reconcile_withheld`, so a comparison can see when a
+  session was not trading and why. Procedure P23 is the operator half.
+
 ### Stranded orders (Story 4.8)
 
 An order `ACCEPTED` (or `PARTIALLY_FILLED`/`TRIGGERED`) before a restart or a

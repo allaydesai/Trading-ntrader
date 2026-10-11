@@ -30,6 +30,7 @@ class _HandWrittenRecord:
         self.stopped = 0
         self.failures: list[str] = []
         self.rejections: list[dict] = []
+        self.withheld: list[dict] = []
 
     def record_activity(self, *, at: datetime, bar_seen_at: datetime | None = None) -> None:
         self.activity.append((at, bar_seen_at))
@@ -67,6 +68,17 @@ class _HandWrittenRecord:
     ) -> None:
         self.rejections.append({"rejected": rejected, "consecutive": consecutive})
 
+    def record_trading_withheld(
+        self,
+        *,
+        withheld_from: datetime,
+        withheld_until: datetime | None,
+        reason: str | None,
+        error_type: str,
+        failed_cycles: int,
+    ) -> None:
+        self.withheld.append({"withheld_from": withheld_from, "withheld_until": withheld_until})
+
 
 class _MissingMarkStopped:
     def record_activity(self, *, at: datetime, bar_seen_at: datetime | None = None) -> None:
@@ -76,7 +88,7 @@ class _MissingMarkStopped:
 class TestTheProtocolShape:
     """AR32's *"record port"*, in the narrowest shape that satisfies AR38."""
 
-    def test_the_port_declares_exactly_four_methods(self):
+    def test_the_port_declares_exactly_five_methods(self):
         """An exact set, not a subset: a further method is a design change the
         runner and every adapter would otherwise silently inherit.
 
@@ -92,6 +104,14 @@ class TestTheProtocolShape:
         cost — six hand-written doubles in the test tree plus this pin, all
         edited in the one commit — is the deliberate, visible edit that cost
         is meant to buy.
+
+        ``record_trading_withheld`` is **Story 5.8's** (4 → 5, PO-sanctioned
+        2026-10-11), on 3.7's terms: a period in which the running session
+        withheld trading for a failing reconciliation is a session-row fact, in
+        the same ``runtime_flags`` document, written on the same tick by the
+        same executor through the same two guards. Every hand-written double
+        (``grep -rn "def record_strategy_failure" tests/``) grew it in the same
+        commit.
         """
         declared = {name for name in vars(SessionRecordPort) if not name.startswith("_")}
         assert declared == {
@@ -99,6 +119,7 @@ class TestTheProtocolShape:
             "mark_stopped",
             "record_strategy_failure",
             "record_order_rejections",
+            "record_trading_withheld",
         }
         # `Protocol` synthesises `__init__` and `_is_protocol`; the public
         # surface is what a caller and an adapter have to agree on.
@@ -160,6 +181,34 @@ class TestTheProtocolShape:
         annotations = {p.annotation for p in list(signature.parameters.values())[1:]}
 
         assert annotations <= {int, str, bool, datetime}
+
+    def test_record_trading_withheld_is_keyword_only_with_no_defaults(self):
+        """Story 5.8: a period is written whole — its start, its end (``None``
+        while it stands), and the failure that caused it. No default: a
+        silently defaulted end would close an open period."""
+        import inspect
+
+        signature = inspect.signature(SessionRecordPort.record_trading_withheld)
+        parameters = list(signature.parameters.values())[1:]  # drop `self`
+
+        assert [p.name for p in parameters] == [
+            "withheld_from",
+            "withheld_until",
+            "reason",
+            "error_type",
+            "failed_cycles",
+        ]
+        assert all(p.kind is inspect.Parameter.KEYWORD_ONLY for p in parameters)
+        assert all(p.default is inspect.Parameter.empty for p in parameters)
+
+    def test_record_trading_withheld_takes_primitives_only(self):
+        """AR38, as for the refusal summary."""
+        import inspect
+
+        signature = inspect.signature(SessionRecordPort.record_trading_withheld)
+        annotations = {p.annotation for p in list(signature.parameters.values())[1:]}
+
+        assert annotations <= {int, str, datetime, datetime | None, str | None}
 
     def test_the_port_takes_no_session_id_and_no_started_at(self):
         """Both are bound into the adapter at construction.

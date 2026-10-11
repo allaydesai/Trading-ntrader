@@ -133,7 +133,7 @@ from src.core.live_session_steady_state import (
     SessionSteadyState,
     StartupHeartbeat,
     flush_contained_failures,
-    flush_rejection_snapshot,
+    flush_run_snapshots,
     join_heartbeat,
     release_record,
 )
@@ -467,7 +467,7 @@ class LiveSessionRunner:
                 # leaving `_finish_record()`'s Postgres round trip unprotected.
                 self._signals.rearm_process_handlers()
                 self._flush_contained_failures()
-                self._flush_order_rejections()
+                self._flush_run_snapshots()
                 self._flush_pending_trades()
                 self._finish_record()
                 restore_event_loop(previous_loop)
@@ -986,8 +986,15 @@ class LiveSessionRunner:
         except SessionReclaimedError:
             self._ownership_lost = True
 
-    def _flush_order_rejections(self) -> None:
-        """Write the last refusal summary, while the row is still ours (3.7).
+    def _flush_run_snapshots(self) -> None:
+        """Write the last refusal summary (3.7) and any withheld period the tick
+        could not (Story 5.8, code review DN1), while the row is still ours.
+
+        The withheld periods ride in this slot for the runner's file budget,
+        and must land before :meth:`_finish_record`: its ``-> stopped`` edge
+        closes whatever period it finds open at the stop instant, so a re-grant
+        whose end-write failed would otherwise be sealed as "withheld until
+        the stop". Everything below holds for both.
 
         The same end-of-run window :meth:`_flush_contained_failures` closes,
         for the same reason and in the same slot: after :meth:`_stop_heartbeat`
@@ -1008,18 +1015,18 @@ class LiveSessionRunner:
         operator's stop report (code review 2026-09-21). A reclaim stops the
         flush — the remaining facts belong in the successor's log, not its row.
         The body lives in
-        :func:`~src.core.live_session_steady_state.flush_rejection_snapshot`
+        :func:`~src.core.live_session_steady_state.flush_run_snapshots`
         (Story 4.3's budget split, decision D-I); the slot stays here.
         """
-        if self._ownership_lost or self._rejection_tally is None:
+        if self._ownership_lost:
             return
+        withheld = None if self._steady_state is None else self._steady_state.withheld
         try:
-            problem = flush_rejection_snapshot(self._record, self._rejection_tally, self._log)
+            problems = flush_run_snapshots(self._record, self._rejection_tally, withheld, self._log)
         except SessionReclaimedError:
             self._ownership_lost = True
             return
-        if problem is not None:
-            self._shutdown_problems.append(problem)
+        self._shutdown_problems.extend(problems)
 
     def _note_ownership_lost(self) -> None:
         """``TradeRecorder``'s ``on_ownership_lost`` callback (Story 3.6, D-C).

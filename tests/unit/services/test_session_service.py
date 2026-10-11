@@ -10,6 +10,7 @@ injected ``FakeClock`` returning an aware ``datetime`` — there is no
 """
 
 import ast
+import copy
 import re
 import subprocess
 import sys
@@ -1102,6 +1103,245 @@ class TestRuntimeFlagsAreClearedOnEveryRunningEdge:
         self._service(row, clock).transition(SESSION_ID, to=SessionStatus.RUNNING)
 
         assert row.runtime_flags is None
+
+
+def _withheld_document(start: datetime, end: datetime | None = None) -> dict:
+    """A stored ``reconcile_withheld`` document holding one period."""
+    return {
+        "count": 1,
+        "periods": [
+            {
+                "start": start.isoformat(),
+                "end": None if end is None else end.isoformat(),
+                "cause": "runtime_reconciliation_failing",
+                "reason": "timeout",
+                "error_type": "BrokerStateUnavailableError",
+                "failed_cycles": 3,
+                "ended_by": None if end is None else "reconciled",
+            }
+        ],
+    }
+
+
+class TestTheWithheldHistorySurvivesEveryRunningEdge:
+    """Story 5.8 (AC #3; PO ruling Q1, 2026-10-11): ``reconcile_withheld`` is
+    the one session-lifetime key in ``runtime_flags``. Every other key still
+    clears on ``-> running`` (Story 2.7 AC #4, unchanged); the stop edge closes
+    a period a stop cut short; a reclaim closes one a dead process left open.
+    All of it record-keeping only — no edge here grants trading."""
+
+    @staticmethod
+    def _service(row, clock):
+        return SessionService(_repository(row), time_source=clock)
+
+    @pytest.mark.parametrize("current", [SessionStatus.CREATED, SessionStatus.STOPPED])
+    def test_a_running_edge_carries_the_history_and_clears_everything_else(self, current):
+        clock = FakeClock()
+        history = _withheld_document(clock.now - timedelta(hours=2), clock.now - timedelta(hours=1))
+        row = _session_row(
+            current,
+            runtime_flags={
+                "v": 1,
+                "all_failed": True,
+                "failed_strategies": [{"a": 1}],
+                "order_rejections": {"rejected": 3},
+                "reconcile_withheld": history,
+            },
+        )
+
+        self._service(row, clock).transition(SESSION_ID, to=SessionStatus.RUNNING)
+
+        assert row.runtime_flags == {"v": 1, "reconcile_withheld": history}
+
+    def test_a_reclaim_closes_a_dead_processes_open_period_at_its_last_heartbeat(self):
+        clock = FakeClock()
+        heartbeat = clock.now - timedelta(seconds=DEFAULT_HEARTBEAT_STALE_AFTER_SECONDS + 1)
+        start = heartbeat - timedelta(minutes=5)
+        row = _session_row(
+            SessionStatus.RUNNING,
+            last_heartbeat_at=heartbeat,
+            runtime_flags={"v": 1, "reconcile_withheld": _withheld_document(start)},
+        )
+
+        self._service(row, clock).transition(SESSION_ID, to=SessionStatus.RUNNING)
+
+        (period,) = row.runtime_flags["reconcile_withheld"]["periods"]
+        assert (period["end"], period["ended_by"]) == (heartbeat.isoformat(), "process_lost")
+        assert row.last_heartbeat_at == clock.now  # the edge's own stamp, read after
+
+    def test_a_stop_closes_an_open_period_at_the_stop_instant(self):
+        clock = FakeClock()
+        row = _session_row(
+            SessionStatus.RUNNING,
+            last_heartbeat_at=clock.now,
+            runtime_flags={
+                "v": 1,
+                "order_rejections": {"rejected": 1},
+                "reconcile_withheld": _withheld_document(clock.now - timedelta(minutes=3)),
+            },
+        )
+
+        self._service(row, clock).transition(
+            SESSION_ID, to=SessionStatus.STOPPED, owner_epoch=OWNER_EPOCH
+        )
+
+        (period,) = row.runtime_flags["reconcile_withheld"]["periods"]
+        assert (period["end"], period["ended_by"]) == (clock.now.isoformat(), "session_stopped")
+        assert row.runtime_flags["order_rejections"] == {"rejected": 1}
+
+    def test_the_stop_reassigns_the_document_never_mutates_it_in_place(self):
+        clock = FakeClock()
+        flags = {"v": 1, "reconcile_withheld": _withheld_document(clock.now)}
+        row = _session_row(SessionStatus.RUNNING, last_heartbeat_at=clock.now, runtime_flags=flags)
+
+        self._service(row, clock).transition(SESSION_ID, to=SessionStatus.STOPPED)
+
+        assert row.runtime_flags is not flags
+        assert flags["reconcile_withheld"]["periods"][0]["end"] is None
+
+    def test_a_seal_edge_leaves_the_history_as_it_is(self):
+        """Against a deep copy taken first (code review P8): comparing the
+        row's document with itself could not see an in-place change."""
+        clock = FakeClock()
+        flags = {"v": 1, "reconcile_withheld": _withheld_document(clock.now)}
+        before = copy.deepcopy(flags)
+        row = _session_row(SessionStatus.STOPPED, runtime_flags=flags)
+
+        self._service(row, clock).transition(SESSION_ID, to=SessionStatus.SEALED)
+
+        assert row.runtime_flags == before
+
+
+class TestRecordTradingWithheld:
+    """Story 5.8, AC #3 — the fifth write a running session may make. Same two
+    guards, same ``FOR UPDATE`` read, same ``**existing``-first rebuild as
+    :class:`TestRecordOrderRejections`."""
+
+    @staticmethod
+    def _service(row, clock):
+        return SessionService(_repository(row), time_source=clock)
+
+    @staticmethod
+    def _period(clock, **overrides):
+        fields = {
+            "withheld_from": clock.now,
+            "withheld_until": None,
+            "reason": "positions_unanswered",
+            "error_type": "BrokerStateUnavailableError",
+            "failed_cycles": 3,
+        }
+        fields.update(overrides)
+        return fields
+
+    def test_the_first_write_creates_the_document(self):
+        clock = FakeClock()
+        row = _session_row(SessionStatus.RUNNING)
+
+        self._service(row, clock).record_trading_withheld(
+            SESSION_ID, owner_epoch=OWNER_EPOCH, **self._period(clock)
+        )
+
+        assert row.runtime_flags["v"] == 1
+        document = row.runtime_flags["reconcile_withheld"]
+        assert document["count"] == 1
+        (period,) = document["periods"]
+        assert period["start"] == clock.now.isoformat()
+        assert period["end"] is None
+        assert period["cause"] == "runtime_reconciliation_failing"
+        assert (period["reason"], period["error_type"], period["failed_cycles"]) == (
+            "positions_unanswered",
+            "BrokerStateUnavailableError",
+            3,
+        )
+
+    def test_its_end_replaces_the_same_period(self):
+        clock = FakeClock()
+        row = _session_row(SessionStatus.RUNNING)
+        service = self._service(row, clock)
+        service.record_trading_withheld(SESSION_ID, owner_epoch=OWNER_EPOCH, **self._period(clock))
+        end = clock.now + timedelta(minutes=2)
+
+        service.record_trading_withheld(
+            SESSION_ID, owner_epoch=OWNER_EPOCH, **self._period(clock, withheld_until=end)
+        )
+
+        document = row.runtime_flags["reconcile_withheld"]
+        assert document["count"] == 1
+        assert document["periods"][0]["end"] == end.isoformat()
+        assert document["periods"][0]["ended_by"] == "reconciled"
+
+    def test_every_other_key_survives(self):
+        clock = FakeClock()
+        row = _session_row(
+            SessionStatus.RUNNING,
+            runtime_flags={"v": 1, "failed_strategies": [{"a": 1}], "order_rejections": {"r": 1}},
+        )
+
+        self._service(row, clock).record_trading_withheld(
+            SESSION_ID, owner_epoch=OWNER_EPOCH, **self._period(clock)
+        )
+
+        assert row.runtime_flags["failed_strategies"] == [{"a": 1}]
+        assert row.runtime_flags["order_rejections"] == {"r": 1}
+
+    def test_the_document_is_reassigned_not_mutated_in_place(self):
+        clock = FakeClock()
+        flags = {"v": 1, "reconcile_withheld": _withheld_document(clock.now)}
+        row = _session_row(SessionStatus.RUNNING, runtime_flags=flags)
+
+        self._service(row, clock).record_trading_withheld(
+            SESSION_ID,
+            owner_epoch=OWNER_EPOCH,
+            **self._period(clock, withheld_until=clock.now + timedelta(minutes=1)),
+        )
+
+        assert row.runtime_flags is not flags
+        assert flags["reconcile_withheld"]["periods"][0]["end"] is None
+
+    @pytest.mark.parametrize("status", [SessionStatus.STOPPED, SessionStatus.SEALED])
+    def test_a_row_that_is_not_running_is_refused(self, status):
+        clock = FakeClock()
+        row = _session_row(status)
+
+        with pytest.raises(InvalidSessionTransition, match="not running"):
+            self._service(row, clock).record_trading_withheld(
+                SESSION_ID, owner_epoch=OWNER_EPOCH, **self._period(clock)
+            )
+
+        assert row.runtime_flags is None
+
+    def test_a_foreign_owner_epoch_is_refused(self):
+        clock = FakeClock()
+        row = _session_row(SessionStatus.RUNNING, owner_epoch=OWNER_EPOCH + 1)
+
+        with pytest.raises(InvalidSessionTransition, match="reclaimed"):
+            self._service(row, clock).record_trading_withheld(
+                SESSION_ID, owner_epoch=OWNER_EPOCH, **self._period(clock)
+            )
+
+        assert row.runtime_flags is None
+
+    def test_the_row_is_read_for_update(self):
+        clock = FakeClock()
+        row = _session_row(SessionStatus.RUNNING)
+        repository = _repository(row)
+
+        SessionService(repository, time_source=clock).record_trading_withheld(
+            SESSION_ID, owner_epoch=OWNER_EPOCH, **self._period(clock)
+        )
+
+        repository.find_by_session_id.assert_called_once_with(SESSION_ID, for_update=True)
+
+    def test_it_never_assigns_status_or_spec(self):
+        clock = FakeClock()
+        row = _session_row(SessionStatus.RUNNING)
+
+        self._service(row, clock).record_trading_withheld(
+            SESSION_ID, owner_epoch=OWNER_EPOCH, **self._period(clock)
+        )
+
+        assert row.status is SessionStatus.RUNNING
+        assert row.spec == {}
 
 
 class TestRecordStrategyFailure:
