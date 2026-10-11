@@ -259,6 +259,11 @@ class TestOpenPositionsAtSeal:
     def test_a_flat_view_records_an_empty_list(self):
         assert _conditions(open_positions=())["open_positions_at_seal"] == []
 
+    def test_unknown_holdings_record_null_never_an_empty_list(self):
+        """Code review W1 (closed at the 5-4/5-5 merge): a forced seal past an
+        empty engine cache records ``null``, so unknown never reads as flat."""
+        assert _conditions(open_positions=None)["open_positions_at_seal"] is None
+
     @pytest.mark.acceptance_criterion("5.4h", AC_8, STORY)
     def test_each_view_position_is_recorded_verbatim(self):
         """Every owner's net — the strategy's and a synthetic one's alike —

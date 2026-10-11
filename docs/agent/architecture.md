@@ -38,8 +38,9 @@ src/
 │   ├── exceptions.py / csv_loader.py / nautilus_converter.py
 │   ├── backtest_persistence.py / backtest_query.py
 │   ├── session_service.py     # The session state machine (AR37) + sealed_run_id link
-│   ├── session_seal_service.py  # `live seal`: stopped session → one paper run row (Epic 5)
+│   ├── session_seal_service.py  # `live seal`: stopped session → one paper run row; `--force` records open positions as open trades (Epic 5)
 │   ├── session_conditions.py  # AR7's `session_conditions` keys a seal records (Story 5.4)
+│   ├── seal_open_positions.py  # what a seal does with held positions/orders: dispositions, the open-trade row (Story 5.5)
 │   └── reports/           # CSV, JSON, text exporters
 └── utils/
     ├── logging.py         # structlog config + Nautilus LogGuard

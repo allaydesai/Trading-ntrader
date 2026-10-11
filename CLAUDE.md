@@ -151,7 +151,11 @@ make web                                # Web UI (http://127.0.0.1:8000)
   The NFR26 scan is parametrized from the constant. **`LOAD_METHODS`**
   (`src/core/live_session_view.py`) went from three reads to four at Story 4.7 (`load_account`,
   PO ruling). It was widened in the constant and in its exact pin together. The Redis `MONITOR`
-  proof now asserts the account read is inside it.
+  proof now asserts the account read is inside it. **Widened 4 → 5 at Story 5.5**: `load_order`
+  (PO ruling R3b — the seal reports the session's working orders), in the constant, its exact pin
+  and a second `MONITOR` proof (`read_session_holdings`, asserting an `:orders:` read) together.
+  Only the seal's `read_session_holdings` calls it; `read_session_view` (`live reconcile`) loads
+  no order.
 
 ## Editing with Auto-Linter
 

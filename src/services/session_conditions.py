@@ -38,7 +38,10 @@ value per run first (deferred-work, Story 5.4 code review W2).
   computation, two keys, pinned equal by the seal's tests.
 - ``open_positions_at_seal`` — the session's own view, every owner netted, so a
   split's extra shares held by a synthetic owner after the strategy exits are
-  in it (Story 4.7's debt). Empty under R2a, which refuses any.
+  in it (Story 4.7's debt). Empty unless Story 5.5's ``--force`` sealed past
+  held positions, and ``None`` (JSON ``null``) when the seal's holdings are
+  unknown — a forced seal past an empty engine cache — so unknown never reads
+  as flat (5.4 code review W1).
 
 PO rulings (2026-10-11): **R1a** — ``start_date_basis`` states that the run's
 ``start_date`` is the session's creation, a disclosed deviation from "first
@@ -136,7 +139,9 @@ def _count(closed_trade_count: int) -> int:
     return closed_trade_count
 
 
-def _positions(open_positions: Sequence[ViewPosition]) -> list[dict[str, str]]:
+def _positions(open_positions: Sequence[ViewPosition] | None) -> list[dict[str, str]] | None:
+    if open_positions is None:  # unknown holdings — never recorded as flat (W1)
+        return None
     recorded = []
     for position in open_positions:
         if not isinstance(position, ViewPosition):
@@ -153,7 +158,7 @@ def build_session_conditions(
     *,
     starting_capital: Decimal,
     closed_trade_count: int,
-    open_positions: Sequence[ViewPosition],
+    open_positions: Sequence[ViewPosition] | None,
     last_run_flags: Any,
 ) -> dict[str, Any]:
     """The flat ``session_conditions`` keys of one sealed record (FR43, FR45, AR7).
@@ -161,7 +166,8 @@ def build_session_conditions(
     Args:
         starting_capital: The operator's stated balance, whole cents (R1a).
         closed_trade_count: ``equity_series.closed_trades`` — never recounted.
-        open_positions: The session's view at seal, every owner netted.
+        open_positions: The session's view at seal, every owner netted, or
+            ``None`` when the seal's holdings are unknown (recorded as ``null``).
         last_run_flags: The sealed row's ``runtime_flags`` **as stored** (R2a):
             whatever JSON the column holds, or ``None``. Never judged — JSONB
             has no schema, and a stopped session must always be sealable, so a

@@ -6,13 +6,14 @@ registration line (``live_status.py``'s and ``live_reconcile.py``'s precedent).
 Owns: the option surface, the composition, the report and the exit code. The
 composition root is here — the only place that holds the database session, the
 settings and the clock at once: it opens one async session, hands the seal the
-session's own engine-cache view as its open-position reader (PO ruling R2a),
-**commits only when the seal returns**, and always disposes the async engine.
-Every decision lives in ``src/services/session_seal_service.py``.
+session's own engine-cache holdings as its reader (PO ruling R2a; Story 5.5's
+legs and working orders), passes the operator's ``--force`` through (Story
+5.5), **commits only when the seal returns**, and always disposes the async
+engine. Every decision lives in ``src/services/session_seal_service.py``.
 
 **It reaches no broker.** The one external read is the session's Redis view,
-load-only (Story 4.6); nothing here, or below, sends an order or touches a
-position (AR31). There is no real-money flag and none may be added.
+load-only (Story 4.6); nothing here, or below, sends or cancels an order or
+touches a position (AR31). There is no real-money flag and none may be added.
 """
 
 import asyncio
@@ -32,11 +33,12 @@ from rich.console import Console
 
 from src.config import get_settings
 from src.core.live_check import EXIT_CODES, EXIT_ERROR, classify_failure, failure_message
-from src.core.live_session_view import read_session_view
+from src.core.live_session_view import read_session_holdings
 from src.db.exceptions import DuplicateRecordError, SealRefusedError, ValidationError
 from src.db.session import dispose_all_connections, get_session
-from src.models.reconciliation import SessionView
+from src.models.reconciliation import SessionHoldings
 from src.services.session_seal_service import (
+    HOLDINGS_UNKNOWN_EVENT,
     LINKED_BACKTEST_WARNING_EVENT,
     SealReport,
     render_seal_report,
@@ -67,11 +69,13 @@ def _parse_capital(ctx: click.Context, param: click.Parameter, value: str) -> De
     return capital
 
 
-def read_open_positions(session_id: UUID) -> SessionView:
-    """The session's own view of what it holds — its engine cache, read-only.
+def read_open_positions(session_id: UUID) -> SessionHoldings:
+    """The session's own view of what it holds — its engine cache, read-only —
+    with the open positions and working orders behind it (Story 5.5).
 
     The configured account picks the positions to count. Without one, the
-    view cannot say the session is flat, so the seal refuses (fail closed).
+    view cannot say the session is flat, so the seal refuses (fail closed),
+    ``--force`` or not (PO ruling R2a).
     """
     settings = get_settings()
     account = settings.ibkr.tws_account
@@ -80,7 +84,7 @@ def read_open_positions(session_id: UUID) -> SessionView:
             "TWS_ACCOUNT is not set, so the session's engine cache cannot be read for the "
             "account it traded and the session is not known to be flat."
         )
-    return read_session_view(session_id, account, settings.redis)
+    return read_session_holdings(session_id, account, settings.redis)
 
 
 @contextmanager
@@ -120,7 +124,7 @@ class _Outcome:
     cleanup_problem: str | None = None
 
 
-async def _seal(identifier: str, starting_capital: Decimal, outcome: _Outcome) -> None:
+async def _seal(identifier: str, starting_capital: Decimal, force: bool, outcome: _Outcome) -> None:
     """One async session: committed only if the seal returns, rolled back
     explicitly otherwise; the engine is always disposed."""
     try:
@@ -131,6 +135,7 @@ async def _seal(identifier: str, starting_capital: Decimal, outcome: _Outcome) -
                     identifier,
                     starting_capital=starting_capital,
                     read_open_positions=read_open_positions,
+                    force=force,
                 )
                 await db.commit()
             except BaseException:
@@ -153,7 +158,20 @@ def _log_sealed(report: SealReport) -> None:
         session_id=str(report.session_id),
         run_id=str(report.run_id),
         closed_trade_count=report.closed_trade_count,
+        forced=report.forced,
+        holdings_known=report.holdings_known,
+        open_trades_recorded=report.open_trades_recorded,
+        positions_on_another_account=report.positions_on_another_account,
+        working_orders=len(report.working_orders),
+        unreadable_orders=len(report.unreadable_orders),
     )
+    if not report.holdings_known:
+        # Code review P1: the reader logged an ERROR before this seal stood.
+        logger.warning(
+            HOLDINGS_UNKNOWN_EVENT,
+            session_id=str(report.session_id),
+            disposition=report.open_positions_disposition,
+        )
     if report.linked_backtest_warning is not None:
         logger.warning(
             LINKED_BACKTEST_WARNING_EVENT,
@@ -201,31 +219,59 @@ def _print_report(outcome: _Outcome, *, as_json: bool) -> None:
     help="The paper account's starting balance, stored exactly as given (e.g. 100000.00).",
 )
 @click.option(
+    "--force",
+    is_flag=True,
+    default=False,
+    help=(
+        "Seal even though the session still holds open positions: each is recorded as an "
+        "open trade with no exit, and they remain at the broker, no longer owned by any "
+        "session."
+    ),
+)
+@click.option(
     "--json",
     "as_json",
     is_flag=True,
     default=False,
     help="Emit the seal report as machine-readable JSON.",
 )
-def seal(session: str, starting_capital: Decimal, as_json: bool) -> None:
+def seal(session: str, starting_capital: Decimal, force: bool, as_json: bool) -> None:
     """Seal a stopped session into one run record beside its backtests.
 
     Computes the session's metrics from its trades through the backtest
     results path, writes one run record (run_type 'paper') and its metrics,
     links the session's trades to it, and moves the session to 'sealed' — all
     in one transaction. Sealing is permanent and is never done to a running
-    session. A session whose engine cache still holds a position, or cannot
-    be read, is refused: a seal never exits, flattens or modifies a position,
-    and never contacts the broker. An order still resting at IBKR is not
-    checked — cancel it in TWS before sealing.
+    session. A seal never exits, flattens or modifies a position, never
+    cancels an order, and never contacts the broker: it reads the session's
+    own engine cache.
+
+    A session whose engine cache still holds a position is refused, naming
+    each one. With --force it is sealed anyway: each open position is
+    recorded as an open trade with no exit (outside the record's metrics),
+    and the positions remain at the broker, no longer owned by any session.
+    --force also seals past positions held for another account (counted, not
+    recorded; check TWS_ACCOUNT first) and past an engine cache that holds
+    nothing at all (the holdings are then reported unknown). A reachable but
+    wrong Redis reads exactly like an empty one, so before forcing past an
+    empty engine cache, confirm REDIS_HOST and REDIS_PORT point at the
+    session's own Redis. An unreadable engine cache, an unreachable Redis or
+    an unset TWS_ACCOUNT is refused even with --force: fix it and retry.
+
+    Every working order the engine cache still holds is listed in the report
+    and left working at IBKR, owned by no session. The engine cache cannot see
+    a fill or cancel made at IBKR while the session was stopped, so check
+    them in TWS. An order the engine cache cannot read is named in the report
+    and never stops the seal. The seal cancels nothing, so cancel such an
+    order in TWS if it should not fill.
 
     \b
     Exit codes:
       0  the session was sealed (a cleanup failure after the commit is
          noted beside the report, never reported as a failed seal)
-      1  refused (not stopped, open positions, an unreadable engine cache,
-         a trade, spec or metric the record cannot carry) or a database
-         failure
+      1  refused (not stopped, open positions without --force, an
+         unreadable engine cache, a trade, spec or metric the record cannot
+         carry) or a database failure
       2  usage error, including a starting capital the record cannot carry
       4  a database failure whose exception name collides with the socket
          errors AR28 reserves 4 for (e.g. a refused Postgres connection).
@@ -234,7 +280,7 @@ def seal(session: str, starting_capital: Decimal, as_json: bool) -> None:
     outcome = _Outcome()
     try:
         with _stdout_reserved_for_json(as_json):
-            asyncio.run(_seal(session, starting_capital, outcome))
+            asyncio.run(_seal(session, starting_capital, force, outcome))
     except (ValidationError, DuplicateRecordError) as exc:
         # AR12: the backtest path's own failures, unchanged. Their text is this
         # codebase's own, so it is shown — with the type, as raised.

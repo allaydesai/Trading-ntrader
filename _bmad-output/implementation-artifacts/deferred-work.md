@@ -3977,14 +3977,16 @@ one side. Fix both sides together or neither, the way Story 5.6's `profit_pct` i
   artifact. It matters most for paper: a session stops with positions open by design (stop ≠
   flatten), so a sealed session that stopped mid-position reads a near-zero Sharpe.
   **Owner:** Story 5.5 (open positions at seal) to surface it, then an epic-level decision to fix
-  both sides.
+  both sides. → **Dispositioned by Story 5.5 (2026-10-11): surfaced, not fixed** — see "Deferred
+  from: story-5.5".
 - **An open position's entry commission is scored as a losing trade by the analyzer's PnL
   statistics but not by `losing_trades`.** `AvgLoser`/`MinLoser`/`Expectancy` count every P&L at or
   below zero (`loser_avg.py:35`, `loser_min.py:35`, `expectancy.py:43`), and an open leg's
   realized P&L is its commission. Measured on the 5.1 component session plus one reopened leg:
   `avg_loss` −502.0→−251.5, `min_loser` −502.0→−1.0, `expectancy` 398.0→318.2, win/loss (3, 1)
   unchanged. The backtest golden's `min_loser: 0.0` is the same artifact.
-  **Owner:** Story 5.5, then the same both-sides decision.
+  **Owner:** Story 5.5, then the same both-sides decision. → **Dispositioned by Story 5.5
+  (2026-10-11): surfaced, not fixed** — see "Deferred from: story-5.5".
 - **The stored equity curve compounds per-leg price returns on starting capital, so its last point
   disagrees with `final_balance`.** `extract_equity_curve` is `(1 + returns).cumprod() × starting`
   over position realized returns, which are price returns that take no account of position size.
@@ -4123,7 +4125,8 @@ deliberately left, each with an owner:
   by `tests/integration/core/test_session_equity_parity.py::
   test_a_run_that_ends_mid_position_differs_only_by_the_open_leg`. `equity_series.excludes` names
   `open_positions`. **Owner:** Story 5.5 (open positions at seal), then the both-sides decision the
-  5.1 items already name.
+  5.1 items already name. → **Dispositioned by Story 5.5 (2026-10-11): surfaced, not fixed** — see
+  "Deferred from: story-5.5".
 
 ## Deferred from: code review of 5-2-reconstruct-a-sealed-sessions-equity-curve-from-its-trades (2026-10-07)
 
@@ -4188,6 +4191,7 @@ deliberately left, each with an owner:
   `none open at seal` (`NONE_OPEN_DISPOSITION`). 5.5's `--force` replaces the refusal in
   `_refuse_unless_flat`, persists the view's positions as null-exit trades, and sets the
   disposition wording; `SealReport.open_positions` already carries `ViewPosition`s to the report.
+  → **CLOSED by Story 5.5 (2026-10-11)** — see "Deferred from: story-5.5".
 - **(f) → Story 5.4: `data_source = "ibkr_live"`** (`PAPER_DATA_SOURCE`) is 5.3's placeholder for
   "identifies the live IBKR source"; 5.4 may refine it.
 - **(g) `run_type` is stamped after the verbatim write.** `create_backtest_run` takes no
@@ -4205,7 +4209,8 @@ each with its reason and owner:
   `read_session_view` reports the net per instrument and drops a zero net (Story 4.6, by design),
   so the seal's R2a check sees `()` and seals. The broker is flat in that state, so nothing is
   orphaned at IBKR; the strategy's phantom leg is simply not recorded. **Owner:** Story 5.5 (open
-  positions at seal), if it reads per-position legs for its null-exit rows.
+  positions at seal), if it reads per-position legs for its null-exit rows. → **Dispositioned by
+  Story 5.5 (2026-10-11): kept by design (D-C)** — see "Deferred from: story-5.5".
 - **A UUID-shaped session name resolves to another session's id first.** `SessionService.resolve`
   tries the UUID before the name (AR36), and `live create` accepts a UUID-shaped `--name`. Shared
   by every `live` command; only `live seal` makes the mistake irreversible. **Owner:**
@@ -4232,12 +4237,14 @@ each with its reason and owner:
   seal. If it fills after the seal, the position belongs to no session. Recorded in `live seal
   --help`, the README and `docs/agent/persistence.md` ("cancel it in TWS before sealing"). No order
   read was added to `LOAD_METHODS` (exact-pinned). **Owner:** Story 5.5 (open positions — and
-  orders — at seal).
+  orders — at seal). → **CLOSED by Story 5.5 (2026-10-11, PO ruling R3b)** — see "Deferred from:
+  story-5.5".
 - **(DN2a, PO ruling 2026-10-09) A session with no engine state can never be sealed yet.** R2a's
   fail-closed reading refuses an unreadable cache, and `read_session_view` raises
   `NO_ENGINE_STATE` for an empty namespace: a session whose every start failed before the node was
   built, or whose Redis was flushed, stays `stopped` and refused. No exception for "no trade rows"
-  or "never started". **Owner:** Story 5.5 — its `--force` is the way out.
+  or "never started". **Owner:** Story 5.5 — its `--force` is the way out. → **CLOSED by Story 5.5
+  (2026-10-11, PO ruling R2a)** — see "Deferred from: story-5.5".
 
 ## Deferred from: story-5.4 (2026-10-11)
 
@@ -4291,10 +4298,107 @@ each with its reason and owner:
   engine state, could only be recorded as `[]` or as a partial list. Both read as flat.
   Unreachable in 5.4, because R2a refuses first. **Owner:** Story 5.5. Widen
   `build_session_conditions` by keyword (e.g. `positions_skipped`, or `None` meaning unknown),
-  and record it beside `open_positions_at_seal`.
+  and record it beside `open_positions_at_seal`. → **CLOSED at the 5-4/5-5 integration merge
+  (2026-10-11)**: `build_session_conditions(open_positions=None)` records `open_positions_at_seal:
+  null` when the seal's holdings are unknown (a forced seal past an empty engine cache); positions
+  on another account stay in the seal report (`positions_on_another_account`), not the conditions.
 - **W2 — `rth_only`, `market_data_tier` and `price_basis` are asserted at seal time, not
   recorded per run.** They state the policy every Phase-3 build enforces: the node builder
   refuses non-RTH or non-REALTIME, and a delayed feed stops the session. A future build that
   relaxed either policy would make a later seal state the new policy for a session run under the
   old one, with `schema_version` unchanged. **Owner:** whoever relaxes either policy. Record the
   value per run (e.g. a `runtime_flags` key) before relaxing it.
+
+## Deferred from: story-5.5 (2026-10-11)
+
+Story 5.5 makes open positions at seal the operator's decision (`live seal --force`), under PO
+rulings R1a / R2a / R3b (2026-10-11). How it dispositions the items routed to it, then what it
+found and deliberately left, each with an owner:
+
+- **Closed — story-5.3 (e), where `--force` plugs in.** `_refuse_unless_flat` now runs only
+  without `force`; with it, each open position the session's engine cache holds becomes an open
+  trade with no exit (`open_trade` → `insert_trade_if_absent`), written before the trades are read,
+  so 5.2 leaves it out of the metrics and the existing backfill links it. The disposition comes
+  from one function (`open_positions_disposition`).
+- **Closed — DN2a, a session with no engine state.** `--force` seals past `NO_ENGINE_STATE` (R2a):
+  no open rows, and the report says the holdings are **unknown**, never "none open". An unreadable
+  cache, an unreachable Redis or an unset `TWS_ACCOUNT` still refuses under `--force`.
+- **Closed — DN1a, a resting order at seal (R3b).** The seal now reads the session's own orders
+  from its engine cache (`load_order` joined `LOAD_METHODS`, 4 → 5, with its exact pin and a second
+  Redis `MONITOR` proof) and reports every order `is_open or is_inflight` with its disposition
+  ("left working at IBKR and owned by no session"). Never a refusal (AC 5.5e holds literally) and
+  never a cancel. An order the cache holds but cannot rebuild or read is named
+  (`unreadable_orders`), never a refusal either (code review DN1a, 2026-10-11). What remains is
+  below.
+- **Kept, by design — 5.3 code review, a strategy leg netted to zero by an `EXTERNAL` leg.** 5.5
+  reads per-position legs, but legs of an instrument whose net is zero leave no row and no leg
+  (D-C, pinned by `SessionHoldings`' invariant): the broker is flat there, so nothing "remains at
+  the broker". The strategy's phantom leg stays unrecorded, as 5.3 accepted.
+- **Surfaced, not fixed — story-5.1's two open-leg items and story-5.2 (f).** The forced
+  disposition says the open trades are "outside the record's metrics"; `equity_series.excludes`
+  already names `open_positions`. A backtest that ends mid-position still keeps its open leg in
+  Sharpe/volatility/Sortino (filed at the epoch) and scores its entry commission as a loser.
+  **Owner:** the epic-level both-sides decision those items already name (AR44, FR41).
+
+Found and left:
+
+- **A backtest's partly reduced open position is written as a row 5.2 would refuse.** Measured
+  through `ReportProvider.generate_positions_report` + `save_trades_from_positions`
+  (`tests/component/services/test_open_trade_parity.py`): bought 10, sold 4, still open → the
+  backtest row has `quantity = peak_qty` (10, not the 6 held), `exit_price = avg_px_close`
+  (the reduction's price) with **no** `exit_timestamp`, and a `profit_pct` computed from it.
+  5.2's `_legs_from` refuses exactly that shape ("neither open nor closed"). The seal's open row
+  is the 6 that remain and no exit (R1a). AR12/AR44 forbid touching the backtest path.
+  **Owner:** the same both-sides decision.
+- **Working orders: what the cache cannot see.** The engine cache holds what the session last
+  knew. An order filled or cancelled at IBKR while the session was stopped still reads as working,
+  and an order IBKR holds but the cache lost is invisible. Closing that gap needs a broker read at
+  seal time, which "sealing never touches the broker" forbids. **Owner:** none in Phase 3. Every
+  disposition names the session's engine cache as its basis, and the working-orders disposition,
+  `--help` and the README say what it cannot see (code review P2, 2026-10-11).
+- **→ Story 5.4 (parallel): `open_positions_at_seal` for a forced seal with unknown holdings.**
+  `SealReport.open_positions` is `()` both when nothing was held and when the engine cache held
+  nothing to read. The disposition tells them apart (`UNKNOWN_HOLDINGS_DISPOSITION`), so 5.4's key
+  must read it too, or it would record "none" for a session whose holdings are unknown. The
+  split's extra shares (5.4's own item) are now rows: an `EXTERNAL` / `INTERNAL-DIFF` open leg is
+  recorded beside the strategy's (R1a), its `trade_id` naming the owner (`…-EXTERNAL`).
+  → **CLOSED at the 5-4/5-5 integration merge (2026-10-11):** unknown holdings record
+  `open_positions_at_seal: null` (see 5.4's code-review W1).
+- **Reconciliation-owned open rows now exist in `trades`.** R1a records them; their `trade_id`
+  is the Nautilus position id, which names the owner. No metric reads an open row, so the
+  comparison sample is unchanged, but any future per-strategy attribution of `trades` (story-5.6's
+  missing `strategy_id` item) must account for them. **Owner:** whoever adds strategy attribution.
+
+## Deferred from: code review of 5-5-handle-open-positions-at-seal-time-explicitly (2026-10-11)
+
+Three-layer review (Blind Hunter / Edge Case Hunter / Acceptance Auditor), PO rulings DN1a / DN2a /
+DN3a. These five are left or disclosed, each with its reason and owner:
+
+- **An instrument with long and short legs records them gross.** Strategy +10, `EXTERNAL` −10 and
+  a second strategy +3 become three open rows for a net of 3. The rows sum to what the report
+  lists, as R1a requires. Remove the +3 and the +10/−10 pair alone records nothing (D-C: a zero net
+  leaves no row and no leg), so whether a netted pair is recorded depends on a third position.
+  A consequence of R1a + D-C as ruled. **Owner:** the PO, if a live session ever meets it.
+- **A mixed-currency commission's diagnostics are dropped.** The seal's leg conversion discards
+  `select_commission`'s third element, where the recorder logs `trade.commission_mixed_currency`.
+  Phase 3 trades US equities and ETFs only. **Owner:** the first story to add a non-USD instrument
+  (the story-5.2 code-review precedent).
+- **Working orders are not filtered by account.** Positions held for another account than
+  `TWS_ACCOUNT` are counted apart; orders are reported as the session's engine cache holds them,
+  whatever the account. Report-only: nothing acts on them, and the wording names the engine cache
+  as the basis. **Owner:** none unless a `TWS_ACCOUNT` change between run and seal is met.
+- **(DN3a, PO ruling 2026-10-11) A position with a zero entry price cannot be sealed, even with
+  `--force`.** Nautilus reconciliation's MARKET fallback fill is priced 0 when IB reports `avgCost`
+  0 and there is no quote and no current position (`live/execution_engine.py:1631-1633`). The
+  seal's leg conversion refuses `avg_px_open <= 0` (`OpenLeg`), and `trades.entry_price > 0` is a
+  CHECK, so no open row can hold it. The holdings read is then `UNREADABLE` and every seal of that
+  session refuses; `live reconcile` reads the same cache fine. No check is loosened. **Owner:** the
+  PO, if a live session ever meets it.
+- **(P3, disclosed) Realized P&L on a partly reduced, still-open position is outside the forced
+  record's metrics.** The recorder persists `PositionClosed` alone, so a strategy that bought 10
+  and sold 4 writes no row for the 4. Their realized P&L lives only on the position, and from a
+  forced seal only on the open row's `profit_loss`. 5.2 reads closed rows only. A backtest that
+  ends the same way counts it, because its analyzer reads every position. The forced disposition
+  now says so ("they, and any P&L already realized on them, are outside the record's metrics"),
+  and so do the README and `persistence.md`. **Owner:** the epic-level both-sides decision that
+  story-5.1's open-leg items already name.

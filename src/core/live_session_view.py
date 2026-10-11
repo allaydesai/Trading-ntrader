@@ -46,6 +46,15 @@ and ``close()`` — nothing that writes — and the component suite pins both th
 set and the absence of any mutator: a second writer into a running session's
 namespace would be the auto-resolution FR35 forbids.
 
+**What a seal needs behind the view** (Story 5.5). :func:`read_session_holdings`
+reads the same namespace in the same pass and returns the view plus one
+``OpenLeg`` per open position on the account — the fields a null-exit trade row
+is built from, converted with the trade recorder's own helpers (PO ruling R1a:
+strategy- and reconciliation-owned alike; legs netting to zero leave no row and
+no leg) — and every order the cache still holds working (``orders:*`` through
+``load_order``, PO ruling R3b). Only the seal reads them: ``read_session_view``
+loads no order and converts no leg, so ``live reconcile`` gains no failure mode.
+
 **A missing or unreadable view is a failure, never "flat".** An empty
 namespace (the session never started, or Redis was flushed), a position that
 cannot be rebuilt (``load_positions()`` would drop it silently — so this module
@@ -62,6 +71,7 @@ import json
 import time
 from collections import defaultdict
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass, replace
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
@@ -73,7 +83,7 @@ import structlog
 from nautilus_trader.cache.config import CacheConfig
 from nautilus_trader.cache.database import CacheDatabaseAdapter
 from nautilus_trader.core.uuid import UUID4
-from nautilus_trader.model.identifiers import AccountId, PositionId, TraderId
+from nautilus_trader.model.identifiers import AccountId, ClientOrderId, PositionId, TraderId
 from nautilus_trader.serialization.serializer import MsgSpecSerializer
 
 from src.config import RedisSettings
@@ -93,9 +103,16 @@ from src.core.live_broker_state import (
     cash_recorded_at,
 )
 from src.core.live_cache import build_cache_config, check_redis_reachable
+from src.core.live_trade_recorder import select_commission, to_price_decimal, unix_nanos_to_utc
 from src.core.live_trader_id import derive_trader_id
 from src.models.broker_state import CashBalance
-from src.models.reconciliation import SessionView, ViewPosition
+from src.models.reconciliation import (
+    OpenLeg,
+    SessionHoldings,
+    SessionView,
+    ViewPosition,
+    WorkingOrder,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -103,10 +120,15 @@ T = TypeVar("T")
 
 #: The collection the adapter keeps each position's fill list in.
 POSITIONS_COLLECTION = "positions"
-#: The adapter members this module reads through. ``close()`` releases the
-#: handle; nothing else is called. Pinned as an exact set, mutator-free.
+#: The collection the adapter keeps each order's event list in (Story 5.5).
+ORDERS_COLLECTION = "orders"
+#: The members ``read_session_view`` (``live reconcile``) reads through.
 #: ``load_account`` joined deliberately at Story 4.7 (D-C, PO ruling A).
-LOAD_METHODS = ("keys", "load_position", "load", "load_account")
+VIEW_LOAD_METHODS = ("keys", "load_position", "load", "load_account")
+#: Every adapter member this module reads through. ``close()`` releases the
+#: handle; nothing else is called. Pinned as an exact set, mutator-free.
+#: ``load_order`` joined at Story 5.5 (PO ruling R3b) — the seal's read only.
+LOAD_METHODS = (*VIEW_LOAD_METHODS, "load_order")
 
 READ_EVENT = "reconcile.session_view_read"
 FAILED_EVENT = "reconcile.session_view_failed"
@@ -114,6 +136,9 @@ OTHER_ACCOUNT_EVENT = "reconcile.session_view_other_account"
 #: Story 4.7 code review: the account (for "session cash as of") could not be
 #: read; the view is still complete, its cash time unknown.
 ACCOUNT_UNREADABLE_EVENT = "reconcile.session_view_account_unreadable"
+#: Story 5.5 code review DN1a: orders the cache holds but could not rebuild or
+#: read — named in the holdings and here, never a refusal.
+ORDER_UNREADABLE_EVENT = "reconcile.session_view_order_unreadable"
 
 
 class SessionViewFailure(StrEnum):
@@ -245,28 +270,104 @@ def read_session_view(
             adapter is built, because its constructor blocks forever.
         SessionViewUnavailableError: The view is missing or unreadable.
     """
+    found = _read_logged(session_id, account, redis, log, adapter_factory, reachability, _read)
+    return found.view
+
+
+def read_session_holdings(
+    session_id: UUID,
+    account: str,
+    redis: RedisSettings,
+    *,
+    log: Any = None,
+    adapter_factory: Callable[[str, CacheConfig], Any] = _open_adapter,
+    reachability: Callable[[str | None, int | None], None] = _reachable,
+) -> SessionHoldings:
+    """The session's view plus what a seal needs behind it (Story 5.5).
+
+    The same read as :func:`read_session_view` — same arguments, same
+    failures, same records — in the same adapter session, plus one leg per
+    open position on the account (R1a) and every working order (R3b).
+
+    Raises:
+        RedisUnreachableError: Redis cannot be reached.
+        SessionViewUnavailableError: The view is missing or unreadable, a leg
+            cannot be read honestly, or an order cannot be rebuilt — never
+            "flat" and never "no orders".
+    """
+    found = _read_logged(
+        session_id, account, redis, log, adapter_factory, reachability, _read_holdings
+    )
+    if found.holdings is None:  # pragma: no cover - `_read_holdings` always sets it
+        raise RuntimeError("the holdings read returned no holdings")
+    return found.holdings
+
+
+@dataclass(frozen=True)
+class _Found:
+    """One pass over the namespace: the view, what the records say about it,
+    the open positions it was netted from and — for a seal — the holdings."""
+
+    view: SessionView
+    skipped: int
+    account_unreadable: str | None
+    held: tuple[Any, ...]
+    holdings: SessionHoldings | None = None
+
+
+def _read_logged(
+    session_id: UUID,
+    account: str,
+    redis: RedisSettings,
+    log: Any,
+    adapter_factory: Callable[[str, CacheConfig], Any],
+    reachability: Callable[[str | None, int | None], None],
+    read: Callable[[Any, str, str], _Found],
+) -> _Found:
+    """Preflight, read through ``read`` in one adapter session, and record it."""
     log = logger if log is None else log
     trader_id = derive_trader_id(session_id)
     started = time.monotonic()
     reachability(redis.redis_host, redis.redis_port)
     target = normalised_account(account)
     try:
-        view, skipped, account_unreadable = _using(
-            adapter_factory, trader_id, redis, lambda adapter: _read(adapter, trader_id, target)
+        found = _using(
+            adapter_factory, trader_id, redis, lambda adapter: read(adapter, trader_id, target)
         )
     except SessionViewUnavailableError as failure:
         _log_failure(log, failure, trader_id, started)
         raise
+    _log_read(log, found, trader_id, started)
+    return found
+
+
+def _log_read(log: Any, found: _Found, trader_id: str, started: float) -> None:
+    view, skipped = found.view, found.skipped
     if skipped:
         _emit(log, "warning", OTHER_ACCOUNT_EVENT, trader_id=trader_id, positions_skipped=skipped)
-    if account_unreadable is not None:
+    if found.account_unreadable is not None:
         _emit(
             log,
             "warning",
             ACCOUNT_UNREADABLE_EVENT,
             trader_id=trader_id,
-            error_type=account_unreadable,
+            error_type=found.account_unreadable,
         )
+    holdings: dict[str, int] = {}
+    if found.holdings is not None:
+        holdings = {
+            "legs": len(found.holdings.legs),
+            "working_orders": len(found.holdings.working_orders),
+            "unreadable_orders": len(found.holdings.unreadable_orders),
+        }
+        if found.holdings.unreadable_orders:
+            _emit(
+                log,
+                "warning",
+                ORDER_UNREADABLE_EVENT,
+                trader_id=trader_id,
+                client_order_ids=list(found.holdings.unreadable_orders),
+            )
     _emit(
         log,
         "info",
@@ -276,9 +377,9 @@ def read_session_view(
         positions={p.instrument_id: str(p.quantity) for p in view.positions},
         currencies=[balance.currency for balance in view.cash],
         cash={balance.currency: str(balance.total_cash) for balance in view.cash},
+        **holdings,
         elapsed_ms=_elapsed_ms(started),
     )
-    return view
 
 
 def _using(
@@ -307,14 +408,14 @@ def _require_state(adapter: Any, trader_id: str) -> None:
         )
 
 
-def _read(adapter: Any, trader_id: str, account: str) -> tuple[SessionView, int, str | None]:
-    keys, load_position, load, load_account = (_member(adapter, name) for name in LOAD_METHODS)
+def _read(adapter: Any, trader_id: str, account: str) -> _Found:
+    keys, load_position, load, load_account = (_member(adapter, name) for name in VIEW_LOAD_METHODS)
     _require_state(adapter, trader_id)
     # SCAN may return a key more than once; a position counts once.
     position_keys = _call(
         lambda: sorted(set(keys(f"{POSITIONS_COLLECTION}:*"))), "listing positions"
     )
-    positions, skipped = _net_positions(load_position, position_keys, account)
+    positions, skipped, held = _net_positions(load_position, position_keys, account)
     general = _call(load, "reading the general cache")
     if not isinstance(general, Mapping):
         raise SessionViewUnavailableError(
@@ -329,7 +430,95 @@ def _read(adapter: Any, trader_id: str, account: str) -> tuple[SessionView, int,
         cash_recorded_at=recorded_at,
         positions_skipped=skipped,
     )
-    return view, skipped, unreadable
+    return _Found(view=view, skipped=skipped, account_unreadable=unreadable, held=held)
+
+
+def _read_holdings(adapter: Any, trader_id: str, account: str) -> _Found:
+    """:func:`_read`, then the legs behind its rows and the working orders (Story 5.5)."""
+    found = _read(adapter, trader_id, account)
+    listed = {position.instrument_id for position in found.view.positions}
+    legs = [
+        _call(lambda: _leg(position), f"reading position {position_id}")
+        for position_id, instrument_id, position in found.held
+        if instrument_id in listed  # D-C: a zero net leaves no row and no leg
+    ]
+    legs.sort(key=lambda leg: (leg.instrument_id, leg.position_id))
+    orders, unreadable = _working_orders(_member(adapter, "keys"), _member(adapter, "load_order"))
+    holdings = _call(
+        lambda: SessionHoldings(
+            view=found.view,
+            legs=tuple(legs),
+            working_orders=orders,
+            unreadable_orders=unreadable,
+        ),
+        "matching the legs to the view",
+    )
+    return replace(found, holdings=holdings)
+
+
+def _leg(position: Any) -> OpenLeg:
+    """An open position as its null-exit row reads it — the recorder's own
+    conversions (``live_trade_recorder``), so one formula serves both rows."""
+    commission, currency, _ = select_commission(
+        position.commissions(), position.settlement_currency.code
+    )
+    realized = position.realized_pnl
+    return OpenLeg(
+        position_id=str(position.id),
+        instrument_id=str(position.instrument_id),
+        strategy_id=str(position.strategy_id),
+        side=position.entry.name,
+        quantity=Decimal(position.signed_decimal_qty()),
+        avg_px_open=to_price_decimal(float(position.avg_px_open)),
+        opened_at=unix_nanos_to_utc(position.ts_opened),
+        opening_order_id=str(position.opening_order_id),
+        realized_pnl=None if realized is None else realized.as_decimal(),
+        commission_amount=commission,
+        commission_currency=currency,
+    )
+
+
+def _working_orders(
+    keys: Callable[[str], Any], load_order: Callable[[ClientOrderId], Any]
+) -> tuple[tuple[WorkingOrder, ...], tuple[str, ...]]:
+    """Every order the cache holds working, and every order it holds but could
+    not rebuild or read — named, never a refusal and never silently left out
+    (code review DN1a: an order changes nothing the record holds). Listing the
+    orders at all is still the namespace's read, and fails as one."""
+    order_keys = _call(lambda: sorted(set(keys(f"{ORDERS_COLLECTION}:*"))), "listing orders")
+    working: list[WorkingOrder] = []
+    unreadable: list[str] = []
+    for key in order_keys:
+        client_order_id = _key_id(key, ORDERS_COLLECTION, "order")
+        try:
+            converted = _working(load_order(ClientOrderId(client_order_id)))
+        except Exception:  # noqa: BLE001 - DN1a: an unreadable order is named, not raised
+            unreadable.append(client_order_id)
+            continue
+        if converted is not None:
+            working.append(converted)
+    return tuple(working), tuple(unreadable)
+
+
+def _working(order: Any) -> WorkingOrder | None:
+    """An order the broker may still hold — open or in flight, with something
+    left to fill (code review P9) — or ``None``.
+
+    Raises:
+        ValueError: The order could not be rebuilt (``load_order`` gave ``None``).
+    """
+    if order is None:
+        raise ValueError("the order is in the engine cache but could not be rebuilt")
+    if not (order.is_open or order.is_inflight) or order.leaves_qty.as_decimal() <= 0:
+        return None
+    return WorkingOrder(
+        client_order_id=str(order.client_order_id),
+        instrument_id=str(order.instrument_id),
+        side=order.side.name,
+        quantity=order.leaves_qty.as_decimal(),
+        order_type=order.order_type.name,
+        status=order.status.name,
+    )
 
 
 def _cash_recorded(
@@ -371,13 +560,14 @@ def _call(read: Callable[[], T], what: str) -> T:
         ) from None
 
 
-def _position_id(key: Any) -> str:
-    _, found, position_id = str(key).partition(f":{POSITIONS_COLLECTION}:")
-    if not isinstance(key, str) or not found or not position_id:
+def _key_id(key: Any, collection: str, noun: str) -> str:
+    """The id a ``<prefix>:<collection>:<id>`` key names, or "unreadable"."""
+    _, found, identifier = str(key).partition(f":{collection}:")
+    if not isinstance(key, str) or not found or not identifier:
         raise SessionViewUnavailableError(
-            SessionViewFailure.UNREADABLE, "a position key has an unexpected shape"
+            SessionViewFailure.UNREADABLE, f"a {noun} key has an unexpected shape"
         )
-    return position_id
+    return identifier
 
 
 def _held(position: Any) -> tuple[str, str, Decimal] | None:
@@ -393,14 +583,16 @@ def _held(position: Any) -> tuple[str, str, Decimal] | None:
 
 def _net_positions(
     load_position: Callable[[PositionId], Any], position_keys: list[str], account: str
-) -> tuple[tuple[ViewPosition, ...], int]:
+) -> tuple[tuple[ViewPosition, ...], int, tuple[tuple[str, str, Any], ...]]:
     """Rebuild every position key — each one, or fail — and net the open ones
-    held on ``account``. Returns the rows and how many other-account ones were
-    left out."""
+    held on ``account``. Returns the rows, how many other-account ones were
+    left out, and the open ones netted, as ``(position_id, instrument_id,
+    position)`` — what the seal's legs are read from (Story 5.5)."""
     net: dict[str, Decimal] = defaultdict(Decimal)
     skipped = 0
+    netted: list[tuple[str, str, Any]] = []
     for key in position_keys:
-        position_id = _position_id(key)
+        position_id = _key_id(key, POSITIONS_COLLECTION, "position")
         position = _call(
             lambda: load_position(PositionId(position_id)), f"rebuilding position {position_id}"
         )
@@ -419,12 +611,13 @@ def _net_positions(
             skipped += 1
             continue
         net[instrument_id] += quantity
+        netted.append((position_id, instrument_id, position))
     rows = tuple(
         ViewPosition(instrument_id=instrument_id, quantity=quantity)
         for instrument_id, quantity in sorted(net.items())
         if quantity != 0
     )
-    return rows, skipped
+    return rows, skipped, tuple(netted)
 
 
 def _cash(summary: Any) -> tuple[CashBalance, ...]:

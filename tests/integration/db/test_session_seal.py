@@ -10,9 +10,12 @@ Trade rows are written through ``insert_trade_if_absent`` — the recorder's own
 insert path (Story 3.6) — with the column mapping ``SqlTradeRecord.persist``
 uses: session-owned, ``backtest_run_id`` NULL until the seal links it.
 
-The open-position reader is a double (an empty view unless a test says
-otherwise): the real one reads Redis and is proven against a real Redis by
-Story 4.6's ``tests/integration/core/test_live_session_view_redis.py``.
+The holdings reader is a double (flat unless a test says otherwise): the real
+one reads Redis and is proven against a real Redis by
+``tests/integration/core/test_live_session_view_redis.py`` (Stories 4.6, 5.5).
+Story 5.5's open trades are proven here, against Postgres: a forced seal's rows,
+their link to the run, that they change no metric, and that a seal which fails
+after writing them leaves none behind.
 """
 
 import asyncio
@@ -42,10 +45,14 @@ from src.db.repositories.backtest_repository import BacktestRepository
 from src.db.repositories.trading_session_repository import TradingSessionRepository
 from src.db.repositories.trading_session_repository_sync import SyncTradingSessionRepository
 from src.models.backtest_result import BacktestResult
-from src.models.reconciliation import SessionView, ViewPosition
+from src.models.reconciliation import OpenLeg, SessionHoldings, SessionView, ViewPosition
 from src.models.session import SessionSpec, SessionStatus, StrategySpec
 from src.services import session_seal_service as seal_module
 from src.services.backtest_persistence import BacktestPersistenceService
+from src.services.seal_open_positions import (
+    RECORDED_OPEN_DISPOSITION,
+    UNKNOWN_HOLDINGS_DISPOSITION,
+)
 from src.services.session_conditions import AR7_KEYS, LAST_RUN_FLAGS_KEY, START_DATE_BASIS_KEY
 from src.services.session_seal_service import PAPER_DATA_SOURCE, seal_json_payload, seal_session
 from src.services.session_service import SessionService
@@ -67,8 +74,39 @@ LEGS = [
 ]
 
 
-def _flat(session_id: UUID) -> SessionView:
-    return SessionView("PAPER-flat", (), ())
+def _holdings(*legs: OpenLeg, skipped: int = 0) -> SessionHoldings:
+    """Holdings whose view is the legs' own net — the reader's invariant."""
+    net: dict[str, Decimal] = {}
+    for leg in legs:
+        net[leg.instrument_id] = net.get(leg.instrument_id, Decimal(0)) + leg.quantity
+    positions = tuple(ViewPosition(i, q) for i, q in sorted(net.items()) if q != 0)
+    view = SessionView("PAPER-held", positions, (), positions_skipped=skipped)
+    return SessionHoldings(view=view, legs=legs)
+
+
+def _leg(quantity: str, owner: str = "SMACrossover-000", instrument: str = "AAPL.NASDAQ"):
+    signed = Decimal(quantity)
+    return OpenLeg(
+        position_id=f"{instrument}-{owner}",
+        instrument_id=instrument,
+        strategy_id=owner,
+        side="BUY" if signed > 0 else "SELL",
+        quantity=signed,
+        avg_px_open=Decimal("187.25000000"),
+        opened_at=datetime(2026, 9, 2, 14, 30, tzinfo=UTC),
+        opening_order_id=f"O-open-{owner}",
+        realized_pnl=Decimal("-1.00"),
+        commission_amount=Decimal("1.00"),
+        commission_currency="USD",
+    )
+
+
+#: Story 5.5: the strategy's own long and a reconciliation-owned one beside it (R1a).
+HELD = _holdings(_leg("10"), _leg("5", owner="EXTERNAL"))
+
+
+def _flat(session_id: UUID) -> SessionHoldings:
+    return _holdings()
 
 
 #: Every non-schema status path a test seeds a session through, as transitions.
@@ -537,15 +575,30 @@ class TestRefusalsWriteNothing:
 
         await _refused(db_session, row, InvalidSessionTransition)
 
+    @pytest.mark.acceptance_criterion(
+        "5.5a",
+        "seal without --force refuses a stopped session with open positions, listing each "
+        "open position with its instrument and quantity",
+        SOURCE,
+    )
     async def test_an_open_position_refuses_and_writes_nothing(self, db_session):
         row = await _seed(db_session)
-        held = SessionView("PAPER-held", (ViewPosition("AAPL.NASDAQ", Decimal("10")),), ())
+        trades_before = await _scalar(db_session, "SELECT count(*) FROM trades")
 
-        await _refused(db_session, row, SealRefusedError, read_open_positions=lambda _: held)
+        with pytest.raises(SealRefusedError) as raised:
+            await _seal(db_session, row, read_open_positions=lambda _: HELD)
+        await db_session.rollback()
+
+        message = str(raised.value)
+        assert "AAPL.NASDAQ 10 (SMACrossover-000)" in message
+        assert "AAPL.NASDAQ 5 (EXTERNAL)" in message
+        assert "--force" in message
+        assert await _counts(db_session, row.id) == (0, 0, "stopped")
+        assert await _scalar(db_session, "SELECT count(*) FROM trades") == trades_before
 
     async def test_positions_on_another_account_refuse(self, db_session):
         row = await _seed(db_session)
-        skipped = SessionView("PAPER-other", (), (), positions_skipped=1)
+        skipped = _holdings(skipped=1)
 
         await _refused(db_session, row, SealRefusedError, read_open_positions=lambda _: skipped)
 
@@ -581,6 +634,160 @@ class TestRefusalsWriteNothing:
             )
         await db_session.rollback()
         assert await _counts(db_session, row.id) == before
+
+
+async def _open_rows(db: AsyncSession, session_pk: int) -> list:
+    db.expire_all()
+    return (
+        await db.execute(
+            text(
+                "SELECT trade_id, venue_order_id, client_order_id, order_side, quantity, "
+                "entry_price, exit_price, exit_timestamp, profit_loss, profit_pct, "
+                "holding_period_seconds, backtest_run_id FROM trades "
+                "WHERE session_id = :pk AND exit_timestamp IS NULL ORDER BY id"
+            ),
+            {"pk": session_pk},
+        )
+    ).all()
+
+
+async def _metrics(db: AsyncSession, run_id: UUID) -> dict:
+    """Every ``performance_metrics`` value of one run, ids and timestamps aside."""
+    db.expire_all()
+    row = (
+        await db.execute(
+            text(
+                "SELECT m.* FROM performance_metrics m JOIN backtest_runs r "
+                "ON r.id = m.backtest_run_id WHERE r.run_id = :run"
+            ),
+            {"run": run_id},
+        )
+    ).one()
+    return {
+        key: value
+        for key, value in row._mapping.items()
+        if key not in {"id", "backtest_run_id", "created_at", "updated_at"}
+    }
+
+
+class TestOpenPositionsAtSeal:
+    """Story 5.5 (FR47, AR30) against Postgres: ``--force`` records, never exits."""
+
+    @pytest.mark.acceptance_criterion(
+        "5.5b",
+        "seal --force seals and persists each open position as an open trade with a null exit, "
+        "the shape backtests use for positions open at the end of data",
+        SOURCE,
+    )
+    async def test_a_forced_seal_records_each_open_position_as_an_open_trade(self, db_session):
+        row = await _seed(db_session)
+
+        report = await _seal(db_session, row, read_open_positions=lambda _: HELD, force=True)
+        await db_session.commit()
+
+        rows = await _open_rows(db_session, row.id)
+        run_pk = await _scalar(db_session, "SELECT id FROM backtest_runs")
+        assert [tuple(r) for r in rows] == [
+            (
+                "AAPL.NASDAQ-SMACrossover-000",
+                "O-open-SMACrossover-000",
+                None,
+                "BUY",
+                Decimal("10"),
+                Decimal("187.25"),
+                None,
+                None,
+                Decimal("-1.00"),
+                None,
+                None,
+                run_pk,
+            ),
+            (
+                "AAPL.NASDAQ-EXTERNAL",
+                "O-open-EXTERNAL",
+                None,
+                "BUY",
+                Decimal("5"),
+                Decimal("187.25"),
+                None,
+                None,
+                Decimal("-1.00"),
+                None,
+                None,
+                run_pk,
+            ),
+        ]
+        counts = await db_session.run_sync(
+            lambda sync: SyncTradingSessionRepository(sync).trade_counts_by_session([row.id])
+        )
+        assert counts == {row.id: (len(LEGS), 2)}
+        assert report.trades_backfilled == len(LEGS) + 2
+        assert report.closed_trade_count == len(LEGS)
+        assert report.open_trades_recorded == 2
+        assert report.open_positions_disposition == RECORDED_OPEN_DISPOSITION
+        _, linked, status = await _counts(db_session, row.id)
+        assert (linked, status) == (len(LEGS) + 2, "sealed")
+
+    async def test_open_trades_change_no_metric(self, db_session):
+        """F9 / D-E: the same closed trades seal to the same metrics, open rows or not."""
+        flat = await _seed(db_session, name="seal-flat")
+        held = await _seed(db_session, name="seal-held")
+
+        plain = await _seal(db_session, flat)
+        forced = await _seal(db_session, held, read_open_positions=lambda _: HELD, force=True)
+        await db_session.commit()
+
+        assert await _metrics(db_session, forced.run_id) == await _metrics(db_session, plain.run_id)
+        assert len(await _open_rows(db_session, held.id)) == 2
+
+    async def test_a_forced_seal_that_fails_later_leaves_no_open_trade_behind(self, db_session):
+        """D-G: the rows are written in the seal's own transaction."""
+        row = await _seed(db_session)
+        taken = uuid4()
+        await _failed_backtest(db_session, taken)
+
+        with pytest.raises(DuplicateRecordError):
+            await _seal(
+                db_session,
+                row,
+                read_open_positions=lambda _: HELD,
+                force=True,
+                new_run_id=lambda: taken,
+            )
+        await db_session.rollback()
+
+        assert await _open_rows(db_session, row.id) == []
+        assert await _counts(db_session, row.id) == (1, 0, "stopped")
+
+    async def test_no_engine_state_with_force_seals_with_unknown_holdings(self, db_session):
+        """PO ruling R2a (DN2a's way out): sealed, nothing recorded, never "none open"."""
+        row = await _seed(db_session)
+
+        def empty(_):
+            raise SessionViewUnavailableError(
+                SessionViewFailure.NO_ENGINE_STATE, "no keys under the namespace"
+            )
+
+        report = await _seal(db_session, row, read_open_positions=empty, force=True)
+        await db_session.commit()
+
+        assert report.open_positions_disposition == UNKNOWN_HOLDINGS_DISPOSITION
+        assert report.session_conditions["open_positions_at_seal"] is None
+        assert await _open_rows(db_session, row.id) == []
+        assert (await _counts(db_session, row.id))[1:] == (len(LEGS), "sealed")
+
+    @pytest.mark.acceptance_criterion(
+        "5.5e", "a stopped session with no open positions seals without requiring --force", SOURCE
+    )
+    async def test_a_flat_session_seals_without_force(self, db_session):
+        row = await _seed(db_session)
+
+        report = await _seal(db_session, row)
+        await db_session.commit()
+
+        assert report.forced is False
+        assert await _open_rows(db_session, row.id) == []
+        assert (await _counts(db_session, row.id))[2] == "sealed"
 
 
 class TestTheBacktestPathsOwnFailuresRollEverythingBack:
@@ -819,3 +1026,47 @@ class TestTheCommandEndToEnd:
         assert payload["closed_trade_count"] == 4
         assert payload["open_positions"] == []
         assert payload["execution_conditions"]["initial_capital"] == "100000.00"
+
+    @pytest.mark.acceptance_criterion(
+        "5.5c",
+        "a --force seal's report states the disposition explicitly: the positions remain at "
+        "the broker and are no longer owned by any session",
+        SOURCE,
+    )
+    def test_live_seal_force_json_reports_the_open_trades_it_committed(
+        self, test_db_schema, monkeypatch
+    ):
+        import json
+
+        schema, _ = test_db_schema
+
+        async def seed(session):
+            row = await _seed(session, name="seal-cli-force")
+            return row.id
+
+        session_pk = _in_fresh_loop(schema, seed)
+        monkeypatch.setattr(live_seal, "get_session", lambda: _schema_session(schema))
+        monkeypatch.setattr(live_seal, "read_open_positions", lambda _: HELD)
+
+        result = CliRunner().invoke(
+            live,
+            ["seal", "seal-cli-force", "--starting-capital", "100000.00", "--force", "--json"],
+        )
+
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.stdout)
+
+        async def stored(session):
+            return await _scalar(
+                session,
+                "SELECT count(*) FROM trades WHERE session_id = :pk AND exit_timestamp IS NULL "
+                "AND backtest_run_id IS NOT NULL",
+                pk=session_pk,
+            )
+
+        assert _in_fresh_loop(schema, stored) == 2
+        assert payload["forced"] is True
+        assert payload["open_trades_recorded"] == 2
+        assert payload["open_positions"] == [{"instrument_id": "AAPL.NASDAQ", "quantity": "15"}]
+        assert "remain at the broker" in payload["open_positions_disposition"]
+        assert "no longer owned by any session" in payload["open_positions_disposition"]

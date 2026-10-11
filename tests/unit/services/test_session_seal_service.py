@@ -26,17 +26,35 @@ import pytest
 from nautilus_trader.model.objects import MONEY_MAX
 from structlog.testing import capture_logs
 
+from src.core.live_cache import RedisUnreachableError
 from src.core.live_session_view import SessionViewFailure, SessionViewUnavailableError
 from src.core.session_equity import EQUITY_SERIES_KEY, SessionResults
 from src.core.strategy_registry import StrategyRegistry
 from src.db.exceptions import InvalidSessionTransition, SealRefusedError
 from src.db.models.backtest import BacktestRun
+from src.db.models.trade import Trade
 from src.db.models.trading_session import TradingSession
 from src.db.repositories.trading_session_repository_sync import SyncTradingSessionRepository
 from src.models.backtest_result import BacktestResult
-from src.models.reconciliation import SessionView, ViewPosition
+from src.models.reconciliation import (
+    OpenLeg,
+    SessionHoldings,
+    SessionView,
+    ViewPosition,
+    WorkingOrder,
+)
 from src.models.session import SessionSpec, SessionStatus, StrategySpec
 from src.services import session_seal_service as seal_module
+from src.services.seal_open_positions import (
+    NONE_OPEN_DISPOSITION,
+    NONE_WORKING_DISPOSITION,
+    OTHER_ACCOUNT_DISPOSITION,
+    RECORDED_OPEN_DISPOSITION,
+    UNKNOWN_HOLDINGS_DISPOSITION,
+    UNKNOWN_ORDERS_DISPOSITION,
+    WORKING_ORDERS_DISPOSITION,
+    open_trade,
+)
 from src.services.session_conditions import (
     AR7_KEYS,
     LAST_RUN_FLAGS_KEY,
@@ -47,7 +65,6 @@ from src.services.session_conditions import (
 from src.services.session_seal_service import (
     INSTRUMENT_SYMBOL_MAX,
     LINKED_BACKTEST_WARNING_EVENT,
-    NONE_OPEN_DISPOSITION,
     PAPER_DATA_SOURCE,
     PAPER_RUN_TYPE,
     period_start,
@@ -59,6 +76,7 @@ from src.services.session_seal_service import (
     strategy_display_name,
 )
 from src.services.session_service import SessionService
+from tests.unit.cli.commands.test_live_status_cli import _ar36_violations
 from tests.unit.core.test_live_stop_path_is_inert import (
     FORBIDDEN_FLATTEN_FRAGMENT,
     FORBIDDEN_ORDER_METHODS,
@@ -72,6 +90,9 @@ SEAL_MODULE = "src/services/session_seal_service.py"
 SEAL_CLI_MODULE = "src/cli/commands/live_seal.py"
 #: Story 5.4: on the seal path, so hand-listed in the broker pins below (D-F).
 CONDITIONS_MODULE = "src/services/session_conditions.py"
+#: Story 5.5's open-position half of the seal, split out at the 5-4/5-5 merge
+#: (size cap): on the seal path, so hand-listed in the broker pins below too.
+OPEN_POSITIONS_MODULE = "src/services/seal_open_positions.py"
 #: Story 5.4's ACs 7–9 are the story's own, not the PRD's (code review P12).
 STORY = (
     "_bmad-output/implementation-artifacts/"
@@ -131,6 +152,55 @@ def _row(status: SessionStatus = SessionStatus.STOPPED, **overrides) -> TradingS
     return row
 
 
+OPENED = datetime(2026, 9, 2, 14, 30, tzinfo=UTC)
+
+
+def _leg(instrument: str = "AAPL.NASDAQ", quantity: str = "-25", **overrides) -> OpenLeg:
+    """One open position as the session's engine cache holds it (Story 5.5)."""
+    signed = Decimal(quantity)
+    owner = overrides.pop("strategy_id", "SMACrossover-000")
+    fields: dict[str, Any] = {
+        "position_id": f"{instrument}-{owner}",
+        "instrument_id": instrument,
+        "strategy_id": owner,
+        "side": "BUY" if signed > 0 else "SELL",
+        "quantity": signed,
+        "avg_px_open": Decimal("187.25000000"),
+        "opened_at": OPENED,
+        "opening_order_id": f"O-20260902-143000-33333333-000-{owner}",
+        "realized_pnl": Decimal("-1.00"),
+        "commission_amount": Decimal("1.00"),
+        "commission_currency": "USD",
+    }
+    fields.update(overrides)
+    return OpenLeg(**fields)
+
+
+def _holding(
+    *legs: OpenLeg, skipped: int = 0, orders: tuple = (), unreadable: tuple = ()
+) -> SessionHoldings:
+    """Holdings whose view is the legs' own net — the reader's invariant."""
+    net: dict[str, Decimal] = {}
+    for leg in legs:
+        net[leg.instrument_id] = net.get(leg.instrument_id, Decimal(0)) + leg.quantity
+    positions = tuple(ViewPosition(i, q) for i, q in sorted(net.items()) if q != 0)
+    view = SessionView("PAPER-33333333", positions, (), positions_skipped=skipped)
+    return SessionHoldings(
+        view=view, legs=legs, working_orders=orders, unreadable_orders=unreadable
+    )
+
+
+def _working(number: int = 1) -> WorkingOrder:
+    return WorkingOrder(
+        client_order_id=f"O-20261009-150000-33333333-000-{number}",
+        instrument_id="AAPL.NASDAQ",
+        side="SELL",
+        quantity=Decimal("25"),
+        order_type="LIMIT",
+        status="ACCEPTED",
+    )
+
+
 def _result(**overrides) -> BacktestResult:
     values = dict(
         total_return=0.007,
@@ -173,8 +243,11 @@ class Harness:
 
     monkeypatch: pytest.MonkeyPatch
     row: TradingSession = field(default_factory=_row)
-    view: SessionView = field(default_factory=lambda: SessionView("PAPER-33333333", (), ()))
+    holdings: SessionHoldings = field(default_factory=_holding)
     trades: list = field(default_factory=lambda: ["trade-1", "trade-2", "trade-3"])
+    #: Story 5.5: the open-trade rows a forced seal wrote, in order.
+    inserted: list = field(default_factory=list)
+    insert_result: bool = True
     backfilled: int | None = None
     linked: Any = None
     result: BacktestResult = field(default_factory=_result)
@@ -192,6 +265,7 @@ class Harness:
         self.repository.find_by_name.side_effect = lambda *a, **k: self.row
         self.repository.find_session_trades.side_effect = self._trades
         self.repository.backfill_trades_run_id.side_effect = self._backfill
+        self.repository.insert_trade_if_absent.side_effect = self._insert
         self.monkeypatch.setattr(
             seal_module, "SyncTradingSessionRepository", lambda sync: self.repository
         )
@@ -227,17 +301,25 @@ class Harness:
 
         return read
 
-    def _read(self, session_id: UUID) -> SessionView:
+    def _read(self, session_id: UUID) -> SessionHoldings:
         self.events.append("read_view")
-        return self.view
+        return self.holdings
+
+    def _insert(self, trade: Trade) -> bool:
+        self.events.append("insert_open")
+        self.inserted.append(trade)
+        return self.insert_result
 
     def _trades(self, session_pk: int) -> list:
+        """The rows a real read would return: the closed ones, then any open rows
+        this seal wrote in the same transaction (DB id order)."""
         self.events.append("find_trades")
-        return list(self.trades)
+        return [*self.trades, *self.inserted]
 
     def _backfill(self, session_pk: int, run_pk: int) -> int:
         self.events.append("backfill")
-        return len(self.trades) if self.backfilled is None else self.backfilled
+        linked = len(self.trades) + len(self.inserted)
+        return linked if self.backfilled is None else self.backfilled
 
     def _reconstruct(self, trades, *, starting_capital, start, end) -> SessionResults:
         self.events.append("reconstruct")
@@ -257,12 +339,13 @@ class Harness:
         )
         return self.db.run
 
-    async def seal(self, *, clock=None, capital: Decimal = CAPITAL):
+    async def seal(self, *, clock=None, capital: Decimal = CAPITAL, force: bool = False):
         return await seal_session(
             self.db,
             "paper-alpha",
             starting_capital=capital,
             read_open_positions=self.reader,
+            force=force,
             clock=clock or self.clock(),
             new_run_id=lambda: RUN_ID,
         )
@@ -419,9 +502,7 @@ class TestOpenPositionsFailClosed:
     """PO ruling R2a: read-only on the engine cache, fail closed, never the broker."""
 
     async def test_a_held_position_refuses_naming_instrument_and_quantity(self, harness):
-        harness.view = SessionView(
-            "PAPER-33333333", (ViewPosition("AAPL.NASDAQ", Decimal("-25")),), ()
-        )
+        harness.holdings = _holding(_leg("AAPL.NASDAQ", "-25"))
 
         with pytest.raises(SealRefusedError) as raised:
             await harness.seal()
@@ -435,9 +516,7 @@ class TestOpenPositionsFailClosed:
         """Code review: flattening at the broker leaves the engine cache as it
         was (the seal still refuses) and makes the next start refuse — so the
         text names the one path that clears it, the strategy's own exit."""
-        harness.view = SessionView(
-            "PAPER-33333333", (ViewPosition("AAPL.NASDAQ", Decimal("10")),), ()
-        )
+        harness.holdings = _holding(_leg("AAPL.NASDAQ", "10"))
 
         with pytest.raises(SealRefusedError) as raised:
             await harness.seal()
@@ -448,11 +527,16 @@ class TestOpenPositionsFailClosed:
         assert "flatten" not in message
 
     async def test_positions_on_another_account_refuse(self, harness):
-        harness.view = SessionView("PAPER-33333333", (), (), positions_skipped=2)
+        harness.holdings = _holding(skipped=2)
 
-        with pytest.raises(SealRefusedError, match="another account"):
+        with pytest.raises(SealRefusedError, match="another account") as raised:
             await harness.seal()
 
+        # Code review P7: a changed TWS_ACCOUNT is the likely cause — check it
+        # before reaching for --force.
+        message = str(raised.value)
+        assert "Check TWS_ACCOUNT" in message
+        assert message.index("Check TWS_ACCOUNT") < message.index("--force")
         harness.save.assert_not_called()
 
     async def test_an_unreadable_view_refuses_and_is_never_read_as_flat(self, harness):
@@ -471,6 +555,426 @@ class TestOpenPositionsFailClosed:
         harness.reader.assert_called_once_with(SESSION_ID)
         assert report.open_positions == ()
         assert report.open_positions_disposition == NONE_OPEN_DISPOSITION
+
+
+class TestOpenPositionsAreTheOperatorsDecision:
+    """Story 5.5 (FR47, AR30, PO rulings R1a/R2a): refuse by default, record with ``--force``."""
+
+    @pytest.mark.acceptance_criterion(
+        "5.5a",
+        "seal without --force refuses a stopped session with open positions, listing each "
+        "open position with its instrument and quantity",
+        SOURCE,
+    )
+    async def test_without_force_every_open_position_is_listed_and_nothing_is_written(
+        self, harness
+    ):
+        harness.holdings = _holding(
+            _leg("AAPL.NASDAQ", "10"),
+            _leg("AAPL.NASDAQ", "5", strategy_id="EXTERNAL"),
+            _leg("NVDA.NASDAQ", "-3"),
+        )
+
+        with pytest.raises(SealRefusedError) as raised:
+            await harness.seal()
+
+        # Code review P4: each open position — R1a's Nautilus position — with its
+        # instrument, quantity and owner, not the instrument's net.
+        message = str(raised.value)
+        assert "AAPL.NASDAQ 10 (SMACrossover-000)" in message
+        assert "AAPL.NASDAQ 5 (EXTERNAL)" in message
+        assert "NVDA.NASDAQ -3 (SMACrossover-000)" in message
+        assert "AAPL.NASDAQ 15" not in message
+        assert "--force" in message
+        assert harness.events == ["read_view"]
+        assert harness.inserted == []
+        harness.save.assert_not_called()
+
+    async def test_the_refusal_names_force_without_any_lifecycle_synonym(self, harness):
+        harness.holdings = _holding(_leg("AAPL.NASDAQ", "10"))
+
+        with pytest.raises(SealRefusedError) as raised:
+            await harness.seal()
+
+        assert _ar36_violations(str(raised.value)) == []
+
+    @pytest.mark.acceptance_criterion(
+        "5.5b",
+        "seal --force seals and persists each open position as an open trade with a null exit, "
+        "the shape backtests use for positions open at the end of data",
+        SOURCE,
+    )
+    async def test_with_force_each_open_position_is_one_open_trade_with_no_exit(self, harness):
+        legs = (
+            _leg("AAPL.NASDAQ", "10"),
+            _leg("AAPL.NASDAQ", "5", strategy_id="EXTERNAL"),
+            _leg("NVDA.NASDAQ", "-3"),
+        )
+        harness.holdings = _holding(*legs)
+
+        report = await harness.seal(force=True)
+
+        assert harness.row.status is SessionStatus.SEALED
+        assert [row.trade_id for row in harness.inserted] == [leg.position_id for leg in legs]
+        for row, leg in zip(harness.inserted, legs):
+            assert isinstance(row, Trade)
+            assert row.exit_price is None
+            assert row.exit_timestamp is None
+            assert row.session_id == SESSION_PK
+            assert row.backtest_run_id is None  # linked by the backfill, with the rest
+            assert row.instrument_id == leg.instrument_id
+            assert row.quantity == abs(leg.quantity)
+        assert report.open_trades_recorded == 3
+        assert report.forced is True
+
+    async def test_the_open_rows_are_written_before_the_trades_are_read(self, harness):
+        """D-G: so the reconstruction sees them (and leaves them out, 5.2) and the
+        backfill links them — its count check covers them too."""
+        harness.holdings = _holding(_leg("AAPL.NASDAQ", "10"))
+
+        report = await harness.seal(force=True)
+
+        assert harness.events == [
+            "read_view",
+            "insert_open",
+            "find_trades",
+            "reconstruct",
+            "save",
+            "flush",
+            "backfill",
+        ]
+        (trades,) = harness.reconstruct.call_args.args
+        assert trades == [*harness.trades, *harness.inserted]
+        assert report.trades_backfilled == 4
+        assert report.closed_trade_count == EQUITY_SERIES["closed_trades"]
+
+    async def test_the_open_row_is_the_backtests_open_shape(self, harness):
+        """F7 and D-B: the backtest's mapping, field by field. The parity against a
+        real backtest row is pinned in the component tier."""
+        leg = _leg("NVDA.NASDAQ", "-3")
+        harness.holdings = _holding(leg)
+
+        await harness.seal(force=True)
+
+        [row] = harness.inserted
+        assert {
+            "trade_id": row.trade_id,
+            "venue_order_id": row.venue_order_id,
+            "client_order_id": row.client_order_id,
+            "order_side": row.order_side,
+            "quantity": row.quantity,
+            "entry_price": row.entry_price,
+            "exit_price": row.exit_price,
+            "commission_amount": row.commission_amount,
+            "commission_currency": row.commission_currency,
+            "fees_amount": row.fees_amount,
+            "profit_loss": row.profit_loss,
+            "profit_pct": row.profit_pct,
+            "holding_period_seconds": row.holding_period_seconds,
+            "entry_timestamp": row.entry_timestamp,
+            "exit_timestamp": row.exit_timestamp,
+        } == {
+            "trade_id": "NVDA.NASDAQ-SMACrossover-000",
+            "venue_order_id": leg.opening_order_id,
+            "client_order_id": None,
+            "order_side": "SELL",
+            "quantity": Decimal("3"),
+            "entry_price": Decimal("187.25000000"),
+            "exit_price": None,
+            "commission_amount": Decimal("1.00"),
+            "commission_currency": "USD",
+            "fees_amount": Decimal("0.00"),
+            "profit_loss": Decimal("-1.00"),
+            "profit_pct": None,
+            "holding_period_seconds": None,
+            "entry_timestamp": OPENED,
+            "exit_timestamp": None,
+        }
+
+    async def test_an_open_row_that_is_not_written_refuses(self, harness):
+        harness.holdings = _holding(_leg("AAPL.NASDAQ", "10"))
+        harness.insert_result = False
+
+        with pytest.raises(SealRefusedError, match="AAPL.NASDAQ-SMACrossover-000"):
+            await harness.seal(force=True)
+
+        harness.save.assert_not_called()
+
+    def test_an_open_row_the_trade_model_refuses_is_a_seal_refusal_by_position(self):
+        """``trades.quantity`` holds 8 decimal places; a finer one is refused by
+        name, never rounded or left to Postgres."""
+        leg = _leg("BTCUSDT.BINANCE", "0.000000001")
+
+        with pytest.raises(SealRefusedError, match="BTCUSDT.BINANCE-SMACrossover-000"):
+            open_trade(leg, SESSION_PK)
+
+    @pytest.mark.parametrize(
+        "field, column", [("position_id", "trade_id"), ("opening_order_id", "venue_order_id")]
+    )
+    def test_an_id_longer_than_its_column_is_refused_by_name(self, field, column):
+        """Code review P8: ``TradeCreate`` sets no length on these, and Postgres
+        would answer ``StringDataRightTruncation`` naming nothing."""
+        length = Trade.__table__.c[column].type.length
+        leg = _leg("AAPL.NASDAQ", "10", **{field: "X" * (length + 1)})
+
+        with pytest.raises(SealRefusedError, match=rf"{column}.*{length}"):
+            open_trade(leg, SESSION_PK)
+
+    def test_an_id_exactly_its_columns_length_is_written(self):
+        length = Trade.__table__.c["trade_id"].type.length
+
+        row = open_trade(_leg("AAPL.NASDAQ", "10", position_id="X" * length), SESSION_PK)
+
+        assert len(row.trade_id) == length
+
+    @pytest.mark.acceptance_criterion(
+        "5.5c",
+        "a --force seal's report states the disposition explicitly: the positions remain at "
+        "the broker and are no longer owned by any session",
+        SOURCE,
+    )
+    async def test_a_forced_seal_states_the_disposition_in_both_forms(self, harness):
+        harness.holdings = _holding(_leg("AAPL.NASDAQ", "10"), _leg("NVDA.NASDAQ", "-3"))
+
+        report = await harness.seal(force=True)
+
+        payload = seal_json_payload(report)
+        human = render_seal_report(report)
+        assert report.open_positions_disposition == RECORDED_OPEN_DISPOSITION
+        assert "remain at the broker" in RECORDED_OPEN_DISPOSITION
+        assert "no longer owned by any session" in RECORDED_OPEN_DISPOSITION
+        assert payload["open_positions_disposition"] == RECORDED_OPEN_DISPOSITION
+        assert f"open_positions_disposition: {RECORDED_OPEN_DISPOSITION}" in human
+        assert payload["open_positions"] == [
+            {"instrument_id": "AAPL.NASDAQ", "quantity": "10"},
+            {"instrument_id": "NVDA.NASDAQ", "quantity": "-3"},
+        ]
+        assert payload["forced"] is True
+        assert payload["open_trades_recorded"] == 2
+
+    async def test_the_report_says_open_trades_and_realized_pnl_are_outside_the_metrics(
+        self, harness
+    ):
+        """D-E and code review P3: the 5.1/5.2 open-leg debt, surfaced in the
+        report the operator reads — including P&L already realized on a partly
+        reduced position, which lives only on its open row."""
+        harness.holdings = _holding(_leg("AAPL.NASDAQ", "10"))
+
+        human = "\n".join(render_seal_report(await harness.seal(force=True)))
+
+        assert "outside the record's metrics" in human
+        assert "P&L already realized on them" in human
+
+    ALL_DISPOSITIONS = (
+        NONE_OPEN_DISPOSITION,
+        RECORDED_OPEN_DISPOSITION,
+        OTHER_ACCOUNT_DISPOSITION,
+        UNKNOWN_HOLDINGS_DISPOSITION,
+        NONE_WORKING_DISPOSITION,
+        WORKING_ORDERS_DISPOSITION,
+        UNKNOWN_ORDERS_DISPOSITION,
+    )
+
+    @pytest.mark.parametrize("text", ALL_DISPOSITIONS)
+    def test_no_disposition_uses_a_lifecycle_synonym(self, text):
+        assert _ar36_violations(text) == []
+
+    @pytest.mark.parametrize("text", ALL_DISPOSITIONS)
+    def test_every_disposition_names_the_engine_cache_as_its_basis(self, text):
+        """Code review P2: the seal reads a cache, not the broker — no disposition
+        states broker state as fact without saying where it came from."""
+        assert "the session's engine cache" in text
+
+    def test_working_orders_say_what_the_cache_cannot_see(self):
+        """R3b's stated limitation, in the report itself (code review P2)."""
+        assert "cannot see" in WORKING_ORDERS_DISPOSITION
+        assert "while the session was stopped" in WORKING_ORDERS_DISPOSITION
+
+    def test_unknown_holdings_tell_the_operator_to_check_the_redis_it_read(self):
+        """Code review DN2a: a reachable but wrong Redis reads exactly like a
+        flushed one — the report names the settings to confirm."""
+        assert "REDIS_HOST" in UNKNOWN_HOLDINGS_DISPOSITION
+        assert "REDIS_PORT" in UNKNOWN_HOLDINGS_DISPOSITION
+
+    @pytest.mark.acceptance_criterion(
+        "5.5e", "a stopped session with no open positions seals without requiring --force", SOURCE
+    )
+    async def test_no_open_positions_seal_without_force(self, harness):
+        report = await harness.seal()
+
+        assert harness.row.status is SessionStatus.SEALED
+        assert harness.inserted == []
+        assert report.forced is False
+        assert report.open_trades_recorded == 0
+        assert report.open_positions_disposition == NONE_OPEN_DISPOSITION
+
+    async def test_force_with_nothing_held_seals_exactly_as_without(self, monkeypatch):
+        """D-F: only ``forced`` differs — the operator's choice, reported honestly.
+        Each harness patches the module's seams, so each is built just before its seal."""
+        plain = seal_json_payload(await Harness(monkeypatch).seal())
+        forced_harness = Harness(monkeypatch)
+        forced = seal_json_payload(await forced_harness.seal(force=True))
+
+        assert forced.pop("forced") is True
+        assert plain.pop("forced") is False
+        assert forced == plain
+        assert forced_harness.inserted == []
+
+
+class TestWhatForceOverrides:
+    """PO ruling R2a (DN2a): what ``--force`` may seal past, and what it may not."""
+
+    async def test_positions_on_another_account_are_counted_not_recorded(self, harness):
+        harness.holdings = _holding(skipped=2)
+
+        report = await harness.seal(force=True)
+
+        assert report.positions_on_another_account == 2
+        assert harness.inserted == []
+        assert "another account" in report.open_positions_disposition
+        assert "no longer owned by any session" in report.open_positions_disposition
+        assert seal_json_payload(report)["positions_on_another_account"] == 2
+
+    async def test_held_and_other_account_positions_are_both_disposed_of(self, harness):
+        harness.holdings = _holding(_leg("AAPL.NASDAQ", "10"), skipped=1)
+
+        report = await harness.seal(force=True)
+
+        assert RECORDED_OPEN_DISPOSITION in report.open_positions_disposition
+        assert "1 position(s) held for another account" in report.open_positions_disposition
+
+    async def test_no_engine_state_seals_with_unknown_holdings_never_none_open(self, harness):
+        """DN2a's way out: nothing to read is *unknown*, never "none open"."""
+        harness.reader.side_effect = SessionViewUnavailableError(
+            SessionViewFailure.NO_ENGINE_STATE, "no keys under the namespace"
+        )
+
+        report = await harness.seal(force=True)
+
+        assert harness.row.status is SessionStatus.SEALED
+        assert harness.inserted == []
+        assert report.open_positions == ()
+        assert report.open_positions_disposition == UNKNOWN_HOLDINGS_DISPOSITION
+        assert report.working_orders_disposition == UNKNOWN_ORDERS_DISPOSITION
+        assert report.open_positions_disposition != NONE_OPEN_DISPOSITION
+
+    @pytest.mark.parametrize(
+        "failure",
+        [
+            SessionViewUnavailableError(SessionViewFailure.UNREADABLE, "a corrupt fill list"),
+            SessionViewUnavailableError(SessionViewFailure.ADAPTER_INCOMPATIBLE, "moved"),
+            RedisUnreachableError("Redis is not reachable"),
+            SealRefusedError("TWS_ACCOUNT is not set"),
+        ],
+        ids=["unreadable", "adapter_incompatible", "redis_unreachable", "no_account"],
+    )
+    async def test_a_fixable_read_failure_still_refuses_under_force(self, harness, failure):
+        """A retry reads holdings a forced seal would otherwise drop unrecorded."""
+        harness.reader.side_effect = failure
+
+        with pytest.raises(type(failure)):
+            await harness.seal(force=True)
+
+        harness.save.assert_not_called()
+        assert harness.inserted == []
+
+
+class TestWorkingOrdersAreReported:
+    """PO ruling R3b (DN1a): named with their disposition — never a refusal, never a cancel."""
+
+    async def test_a_working_order_is_reported_and_the_flat_session_still_seals(self, harness):
+        harness.holdings = _holding(orders=(_working(1), _working(2)))
+
+        report = await harness.seal()
+
+        assert harness.row.status is SessionStatus.SEALED
+        assert report.working_orders == (_working(1), _working(2))
+        assert report.working_orders_disposition == WORKING_ORDERS_DISPOSITION
+        assert seal_json_payload(report)["working_orders"] == [
+            {
+                "client_order_id": _working(1).client_order_id,
+                "instrument_id": "AAPL.NASDAQ",
+                "side": "SELL",
+                "quantity": "25",
+                "order_type": "LIMIT",
+                "status": "ACCEPTED",
+            },
+            {
+                "client_order_id": _working(2).client_order_id,
+                "instrument_id": "AAPL.NASDAQ",
+                "side": "SELL",
+                "quantity": "25",
+                "order_type": "LIMIT",
+                "status": "ACCEPTED",
+            },
+        ]
+
+    async def test_the_report_says_they_stay_working_and_the_seal_cancels_nothing(self, harness):
+        """Code review P10: read from the rendered report, not from the constant."""
+        harness.holdings = _holding(orders=(_working(1),))
+
+        human = "\n".join(render_seal_report(await harness.seal()))
+
+        assert "owned by no session" in human
+        assert "the seal cancels nothing" in human
+        assert _working(1).client_order_id in human
+
+    async def test_no_working_order_reads_none_working(self, harness):
+        report = await harness.seal()
+
+        assert report.working_orders == ()
+        assert report.unreadable_orders == ()
+        assert report.working_orders_disposition == NONE_WORKING_DISPOSITION
+
+    async def test_an_unreadable_order_is_named_and_the_flat_session_still_seals(self, harness):
+        """Code review DN1a: never a refusal, with or without --force — and named,
+        never silently left out."""
+        harness.holdings = _holding(orders=(_working(1),), unreadable=("O-broken-9",))
+
+        report = await harness.seal()
+
+        assert harness.row.status is SessionStatus.SEALED
+        assert report.unreadable_orders == ("O-broken-9",)
+        assert "1 order(s) could not be read" in report.working_orders_disposition
+        assert WORKING_ORDERS_DISPOSITION in report.working_orders_disposition
+        payload = seal_json_payload(report)
+        assert payload["unreadable_orders"] == ["O-broken-9"]
+        assert "O-broken-9" in "\n".join(render_seal_report(report))
+
+    async def test_only_unreadable_orders_still_name_the_engine_cache_and_tws(self, harness):
+        harness.holdings = _holding(unreadable=("O-broken-9",))
+
+        report = await harness.seal(force=True)
+
+        disposition = report.working_orders_disposition
+        assert NONE_WORKING_DISPOSITION not in disposition
+        assert "the session's engine cache" in disposition
+        assert "check them in TWS" in disposition
+
+
+class TestTheHoldingsAreKnownOrSaidToBeUnknown:
+    """Code review P1: an unknown holding never reads as a concrete "none"."""
+
+    async def test_a_read_holding_is_known(self, harness):
+        report = await harness.seal()
+
+        assert report.holdings_known is True
+        assert seal_json_payload(report)["holdings_known"] is True
+        assert report.session_conditions["open_positions_at_seal"] == []
+
+    async def test_no_engine_state_under_force_is_unknown_in_every_form(self, harness):
+        harness.reader.side_effect = SessionViewUnavailableError(
+            SessionViewFailure.NO_ENGINE_STATE, "no keys under the namespace"
+        )
+
+        report = await harness.seal(force=True)
+
+        payload = seal_json_payload(report)
+        assert report.holdings_known is False
+        assert payload["holdings_known"] is False
+        assert "holdings_known: False" in render_seal_report(report)
+        # 5.4 code review W1: the recorded conditions say unknown too, never "[]".
+        assert report.session_conditions["open_positions_at_seal"] is None
 
 
 class TestTheWriteIsTheBacktestPathsOwn:
@@ -816,14 +1320,24 @@ class TestTheConditionsTheSessionRanUnder:
         """Story 4.7's debt: the strategy sold its 10, the split's other 10 sit
         with ``EXTERNAL``. The view nets every owner, so the seal sees them,
         refuses (R2a) and names them — never "none open at seal"."""
-        harness.view = SessionView(
-            "PAPER-33333333", (ViewPosition("AAPL.NASDAQ", Decimal("10")),), ()
-        )
+        harness.holdings = _holding(_leg("AAPL.NASDAQ", "10", strategy_id="EXTERNAL"))
 
         with pytest.raises(SealRefusedError, match=r"AAPL\.NASDAQ 10"):
             await harness.seal()
 
         harness.save.assert_not_called()
+
+    @pytest.mark.acceptance_criterion("5.4h", AC_8, STORY)
+    async def test_a_forced_seal_records_a_synthetic_owners_split_shares(self, harness):
+        """The same holding sealed with ``--force`` (Story 5.5): the conditions
+        name it — the view's net, every owner — never "none open at seal"."""
+        harness.holdings = _holding(_leg("AAPL.NASDAQ", "10", strategy_id="EXTERNAL"))
+
+        report = await harness.seal(force=True)
+
+        assert report.session_conditions["open_positions_at_seal"] == [
+            {"instrument_id": "AAPL.NASDAQ", "quantity": "10"}
+        ]
 
     async def test_a_condition_the_builder_refuses_becomes_a_seal_refusal(
         self, harness, monkeypatch
@@ -941,8 +1455,15 @@ class TestTheReport:
         "sealed_at",
         "closed_trade_count",
         "trades_backfilled",
+        "forced",
+        "holdings_known",
         "open_positions",
         "open_positions_disposition",
+        "open_trades_recorded",
+        "positions_on_another_account",
+        "working_orders",
+        "unreadable_orders",
+        "working_orders_disposition",
         "linked_backtest_run_id",
         "linked_backtest_warning",
         "execution_conditions",
@@ -1107,19 +1628,73 @@ class TestARunRowExistsOnlyFromSealOnward:
         assert "save_backtest_results" in _called_names(_module_tree(SEAL_MODULE))
 
 
+#: Story 5.5 (AR31): how a Nautilus ``Position`` or ``Order`` is changed in place —
+#: by applying an event to it. The seal reads both and must never call it.
+POSITION_MUTATORS = frozenset({"apply"})
+#: The seal's read of what the session holds (Story 5.5): on the seal path too.
+SESSION_VIEW_MODULE = "src/core/live_session_view.py"
+
+
 class TestTheSealReachesNoBroker:
     """D-J (AR31, NFR14, PO ruling R2a): nothing on the seal path can flatten,
     close or modify a position or an order, or open a broker connection."""
 
-    MODULES = (SEAL_MODULE, SEAL_CLI_MODULE, CONDITIONS_MODULE)
+    MODULES = (
+        SEAL_MODULE,
+        SEAL_CLI_MODULE,
+        CONDITIONS_MODULE,
+        OPEN_POSITIONS_MODULE,
+        SESSION_VIEW_MODULE,
+    )
     BROKER_IMPORTS = ("ibapi", "nautilus_trader.adapters", "nautilus_trader.live")
 
+    @pytest.mark.acceptance_criterion(
+        "5.5d",
+        "no seal path flattens, closes or modifies a position — sealing never manufactures an exit",
+        SOURCE,
+    )
     @pytest.mark.parametrize("relative", MODULES)
     def test_no_order_method_or_flatten_is_called(self, relative):
         called = _called_names(_module_tree(relative))
 
+        assert called, "the scan found no call; it is not reading the module"
         assert not called & FORBIDDEN_ORDER_METHODS
+        assert not called & POSITION_MUTATORS
         assert not [name for name in called if FORBIDDEN_FLATTEN_FRAGMENT in name.lower()]
+
+    @pytest.mark.parametrize(
+        "planted",
+        [
+            "strategy.close_position(position)",
+            "self.close_all_positions(instrument_id)",
+            "strategy.cancel_order(order)",
+            "position.apply(fill)",
+            "flatten_everything()",
+        ],
+    )
+    def test_the_scan_can_fail(self, planted):
+        called = _called_names(ast.parse(planted))
+
+        assert called & (FORBIDDEN_ORDER_METHODS | POSITION_MUTATORS) or [
+            name for name in called if FORBIDDEN_FLATTEN_FRAGMENT in name.lower()
+        ]
+
+    async def test_a_forced_seal_writes_only_open_trade_rows_and_links(self, harness):
+        """Task 5.2: the repository calls a forced seal makes are the read, the
+        open-row insert and the backfill — and the state machine's own lookups."""
+        harness.holdings = _holding(_leg("AAPL.NASDAQ", "10"))
+
+        await harness.seal(force=True)
+
+        called = {name for name, _, _ in harness.repository.method_calls}
+        assert "insert_trade_if_absent" in called, "the forced seal wrote no open row"
+        assert called <= {
+            "find_by_name",
+            "find_by_session_id",
+            "insert_trade_if_absent",
+            "find_session_trades",
+            "backfill_trades_run_id",
+        }
 
     @pytest.mark.parametrize("relative", MODULES)
     def test_no_broker_module_is_imported(self, relative):

@@ -34,9 +34,11 @@ from src.db.exceptions import (
     SealRefusedError,
     ValidationError,
 )
-from src.models.reconciliation import SessionView
+from src.models.reconciliation import SessionHoldings, SessionView, ViewPosition
+from src.services.seal_open_positions import RECORDED_OPEN_DISPOSITION
 from src.services.session_conditions import AR7_KEYS, build_session_conditions
 from src.services.session_seal_service import (
+    HOLDINGS_UNKNOWN_EVENT,
     LINKED_BACKTEST_WARNING_EVENT,
     SealReport,
     render_seal_report,
@@ -125,10 +127,50 @@ class TestTheCommandSurface:
         assert result.exit_code == 0
         assert "seal" in result.output
 
-    def test_the_options_are_the_session_the_capital_and_json(self):
+    def test_the_options_are_the_session_the_capital_force_and_json(self):
         names = {param.name for param in live_seal.seal.params}
 
-        assert names == {"session", "starting_capital", "as_json"}
+        assert names == {"session", "starting_capital", "force", "as_json"}
+
+    def test_force_is_off_unless_given(self, runner):
+        """AC 5.5a: refusing open positions is the default; sealing past them is a
+        decision the operator types."""
+        with _Harness() as harness:
+            runner.invoke(live, ARGV)
+
+        assert harness.seal.call_args.kwargs["force"] is False
+
+    def test_force_reaches_the_seal(self, runner):
+        with _Harness() as harness:
+            result = runner.invoke(live, [*ARGV, "--force"])
+
+        assert result.exit_code == 0, result.output
+        assert harness.seal.call_args.kwargs["force"] is True
+
+    def test_the_help_says_what_force_does_and_what_it_never_does(self, runner):
+        result = runner.invoke(live, ["seal", "--help"])
+
+        text = " ".join(result.output.split())
+        assert "--force" in text
+        assert "open trade with no exit" in text
+        assert "remain at the broker" in text
+        assert "no longer owned by any session" in text
+        assert "never exits, flattens or modifies a position" in text
+        assert "working order" in text
+        assert "cancels nothing" in text
+        # 5.3's DN1a limitation is replaced by R3b's report, not left beside it.
+        assert "is not checked" not in text
+        assert _ar36_violations(text.replace("closed-trade", "")) == []
+
+    def test_the_help_says_what_the_engine_cache_cannot_see_and_what_to_confirm(self, runner):
+        """Code review P2 (R3b's limitation), DN2a (confirm the Redis before forcing
+        past an empty cache) and DN1a (an unreadable order is named, never a refusal)."""
+        result = runner.invoke(live, ["seal", "--help"])
+
+        text = " ".join(result.output.split())
+        assert "cannot see a fill or cancel made at IBKR while the session was stopped" in text
+        assert "confirm REDIS_HOST and REDIS_PORT point at the session's own Redis" in text
+        assert "An order the engine cache cannot read is named" in text
 
     def test_starting_capital_is_required(self, runner):
         with _Harness() as harness:
@@ -258,18 +300,19 @@ class TestComposition:
         assert result.exit_code == EXIT_ERROR
         assert [log for log in logs if log["event"] == LINKED_BACKTEST_WARNING_EVENT] == []
 
-    def test_the_open_position_reader_is_the_sessions_own_view(self):
-        """PO ruling R2a: the engine cache, read-only, on the configured account."""
-        view = SessionView("PAPER-33333333", (), ())
+    def test_the_open_position_reader_is_the_sessions_own_holdings(self):
+        """PO ruling R2a: the engine cache, read-only, on the configured account —
+        with the legs and working orders behind the view (Story 5.5)."""
+        holdings = SessionHoldings(view=SessionView("PAPER-33333333", (), ()), legs=())
         settings = SimpleNamespace(
             ibkr=SimpleNamespace(tws_account="DU1234567"), redis=SimpleNamespace()
         )
-        reader = MagicMock(return_value=view)
+        reader = MagicMock(return_value=holdings)
         with (
             patch.object(live_seal, "get_settings", return_value=settings),
-            patch.object(live_seal, "read_session_view", reader),
+            patch.object(live_seal, "read_session_holdings", reader),
         ):
-            assert live_seal.read_open_positions(SESSION_ID) is view
+            assert live_seal.read_open_positions(SESSION_ID) is holdings
 
         reader.assert_called_once_with(SESSION_ID, "DU1234567", settings.redis)
 
@@ -280,12 +323,80 @@ class TestComposition:
         settings = SimpleNamespace(ibkr=SimpleNamespace(tws_account=account), redis=None)
         with (
             patch.object(live_seal, "get_settings", return_value=settings),
-            patch.object(live_seal, "read_session_view") as reader,
+            patch.object(live_seal, "read_session_holdings") as reader,
             pytest.raises(SealRefusedError, match="TWS_ACCOUNT"),
         ):
             live_seal.read_open_positions(SESSION_ID)
 
         reader.assert_not_called()
+
+    def test_the_sealed_record_says_whether_it_was_forced_and_what_it_recorded(self, runner):
+        report = _report(
+            forced=True,
+            open_trades_recorded=2,
+            positions_on_another_account=1,
+            working_orders=(),
+            unreadable_orders=("O-broken-9",),
+        )
+        with _Harness(report=report), capture_logs() as logs:
+            runner.invoke(live, [*ARGV, "--force"])
+
+        [sealed] = [log for log in logs if log["event"] == "session.sealed"]
+        assert sealed["forced"] is True
+        assert sealed["open_trades_recorded"] == 2
+        # Code review P1: what was left owned by no session reaches the record too.
+        assert sealed["holdings_known"] is True
+        assert sealed["positions_on_another_account"] == 1
+        assert sealed["working_orders"] == 0
+        assert sealed["unreadable_orders"] == 1
+
+    def test_unknown_holdings_are_warned_once_after_the_commit(self, runner):
+        """Code review P1: a forced seal past an empty engine cache follows an
+        ERROR ``reconcile.session_view_failed``; the warning says why it sealed."""
+        report = _report(forced=True, holdings_known=False)
+        with _Harness(report=report) as harness, capture_logs() as logs:
+            runner.invoke(live, [*ARGV, "--force"])
+
+        warnings = [log for log in logs if log["event"] == HOLDINGS_UNKNOWN_EVENT]
+        assert len(warnings) == 1
+        assert warnings[0]["log_level"] == "warning"
+        harness.db.commit.assert_awaited_once()
+
+    def test_known_holdings_warn_nothing(self, runner):
+        with _Harness(), capture_logs() as logs:
+            runner.invoke(live, ARGV)
+
+        assert [log for log in logs if log["event"] == HOLDINGS_UNKNOWN_EVENT] == []
+
+    def test_no_unknown_holdings_warning_is_logged_when_the_commit_fails(self, runner):
+        report = _report(forced=True, holdings_known=False)
+        with _Harness(report=report) as harness, capture_logs() as logs:
+            harness.db.commit.side_effect = RuntimeError("commit lost")
+            runner.invoke(live, [*ARGV, "--force"])
+
+        assert [log for log in logs if log["event"] == HOLDINGS_UNKNOWN_EVENT] == []
+
+    @pytest.mark.parametrize("as_json", [False, True], ids=["human", "json"])
+    def test_a_forced_seal_prints_its_disposition(self, runner, as_json):
+        """AC 5.5c at the command: the disposition reaches stdout in both forms."""
+        report = _report(
+            forced=True,
+            open_trades_recorded=1,
+            open_positions=(ViewPosition("AAPL.NASDAQ", Decimal("10")),),
+            open_positions_disposition=RECORDED_OPEN_DISPOSITION,
+        )
+        argv = [*ARGV, "--force", *(["--json"] if as_json else [])]
+        with _Harness(report=report):
+            result = runner.invoke(live, argv)
+
+        assert result.exit_code == 0, result.output
+        if as_json:
+            payload = json.loads(result.stdout)
+            assert payload["open_positions_disposition"] == RECORDED_OPEN_DISPOSITION
+            assert payload["forced"] is True
+        else:
+            line = f"open_positions_disposition: {RECORDED_OPEN_DISPOSITION}"
+            assert line in result.stdout.splitlines()
 
 
 class TestTheReport:

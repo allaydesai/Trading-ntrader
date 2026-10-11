@@ -20,15 +20,49 @@ from src.models import reconciliation as reconciliation_module
 from src.models.broker_state import CashBalance
 from src.models.reconciliation import (
     CashLine,
+    OpenLeg,
     PositionLine,
     ReconciliationReport,
+    SessionHoldings,
     SessionView,
     ViewPosition,
+    WorkingOrder,
 )
 
 pytestmark = pytest.mark.unit
 
 AT = datetime(2026, 9, 27, 15, 0, tzinfo=UTC)
+
+
+def _leg(**overrides) -> OpenLeg:
+    fields = {
+        "position_id": "NVDA.NASDAQ-SMACrossover-000",
+        "instrument_id": "NVDA.NASDAQ",
+        "strategy_id": "SMACrossover-000",
+        "side": "BUY",
+        "quantity": Decimal("10"),
+        "avg_px_open": Decimal("120.50"),
+        "opened_at": AT,
+        "opening_order_id": "O-20260927-150000-0e8f1c2a-000-1",
+        "realized_pnl": Decimal("-1.00"),
+        "commission_amount": Decimal("1.00"),
+        "commission_currency": "USD",
+    }
+    fields.update(overrides)
+    return OpenLeg(**fields)
+
+
+def _order(**overrides) -> WorkingOrder:
+    fields = {
+        "client_order_id": "O-20260927-150000-0e8f1c2a-000-2",
+        "instrument_id": "NVDA.NASDAQ",
+        "side": "SELL",
+        "quantity": Decimal("10"),
+        "order_type": "LIMIT",
+        "status": "ACCEPTED",
+    }
+    fields.update(overrides)
+    return WorkingOrder(**fields)
 
 
 def _view(**overrides) -> SessionView:
@@ -125,6 +159,161 @@ class TestSessionView:
     def test_a_naive_recorded_time_is_refused(self):
         with pytest.raises(ValueError, match="timezone"):
             _view(cash_recorded_at=datetime(2026, 9, 27, 15, 0))
+
+
+class TestOpenLeg:
+    """Story 5.5, R1a: one open position as the seal's null-exit row reads it."""
+
+    def test_a_long_and_a_short_leg_are_representable(self):
+        assert _leg().quantity == 10
+        assert _leg(side="SELL", quantity=Decimal("-4")).quantity == -4
+
+    @pytest.mark.parametrize(("side", "quantity"), [("BUY", "-1"), ("SELL", "1")])
+    def test_the_side_must_agree_with_the_quantitys_sign(self, side, quantity):
+        with pytest.raises(ValueError, match="side"):
+            _leg(side=side, quantity=Decimal(quantity))
+
+    def test_an_open_leg_is_never_flat(self):
+        with pytest.raises(ValueError, match="non-zero"):
+            _leg(quantity=Decimal("0"))
+
+    def test_the_side_is_the_backtests_vocabulary(self):
+        with pytest.raises(ValueError, match="side"):
+            _leg(side="LONG")
+
+    @pytest.mark.parametrize("price", ["0", "-1"])
+    def test_the_entry_price_is_positive_as_the_trades_check_requires(self, price):
+        with pytest.raises(ValueError, match="avg_px_open"):
+            _leg(avg_px_open=Decimal(price))
+
+    @pytest.mark.parametrize(
+        "field", ["quantity", "avg_px_open", "realized_pnl", "commission_amount"]
+    )
+    def test_every_amount_is_a_finite_decimal(self, field):
+        with pytest.raises((TypeError, ValueError)):
+            _leg(**{field: Decimal("NaN")})
+        with pytest.raises(TypeError):
+            _leg(**{field: 1.5})
+
+    def test_unknown_pnl_and_commission_are_none_never_zero(self):
+        leg = _leg(realized_pnl=None, commission_amount=None, commission_currency=None)
+        assert leg.realized_pnl is None
+        assert leg.commission_amount is None
+
+    def test_the_commission_currency_is_a_three_letter_code(self):
+        with pytest.raises(ValueError, match="currency"):
+            _leg(commission_currency="DOLLARS")
+
+    def test_the_open_time_is_timezone_aware(self):
+        with pytest.raises(ValueError, match="timezone"):
+            _leg(opened_at=datetime(2026, 9, 27, 15, 0))
+
+    @pytest.mark.parametrize(
+        "field", ["position_id", "instrument_id", "strategy_id", "opening_order_id"]
+    )
+    def test_its_identifiers_are_required(self, field):
+        with pytest.raises(ValueError, match=field):
+            _leg(**{field: ""})
+
+
+class TestWorkingOrder:
+    """Story 5.5, R3b: an order the session's cache still holds working."""
+
+    def test_a_working_order_is_representable(self):
+        assert _order().quantity == 10
+
+    @pytest.mark.parametrize("quantity", ["0", "-1"])
+    def test_the_remaining_quantity_is_positive(self, quantity):
+        with pytest.raises(ValueError, match="quantity"):
+            _order(quantity=Decimal(quantity))
+
+    def test_the_side_is_buy_or_sell(self):
+        with pytest.raises(ValueError, match="side"):
+            _order(side="SHORT")
+
+    @pytest.mark.parametrize("field", ["client_order_id", "instrument_id", "order_type", "status"])
+    def test_its_fields_are_required(self, field):
+        with pytest.raises(ValueError, match=field):
+            _order(**{field: ""})
+
+
+class TestSessionHoldings:
+    """Story 5.5, R1a: the legs behind the view, pinned to it."""
+
+    def test_legs_that_sum_to_the_view_are_the_holdings(self):
+        strategy = _leg()
+        external = _leg(
+            position_id="NVDA.NASDAQ-EXTERNAL",
+            strategy_id="EXTERNAL",
+            quantity=Decimal("5"),
+        )
+        view = _view(positions=(ViewPosition("NVDA.NASDAQ", Decimal("15")),))
+
+        holdings = SessionHoldings(view=view, legs=(strategy, external))
+
+        assert holdings.legs == (strategy, external)
+        assert holdings.working_orders == ()
+
+    def test_a_flat_view_has_no_legs(self):
+        assert SessionHoldings(view=_view(positions=()), legs=()).legs == ()
+
+    def test_legs_that_do_not_sum_to_the_view_are_refused(self):
+        view = _view(positions=(ViewPosition("NVDA.NASDAQ", Decimal("15")),))
+
+        with pytest.raises(ValueError, match="sum"):
+            SessionHoldings(view=view, legs=(_leg(),))
+
+    def test_a_listed_instrument_with_no_leg_is_refused(self):
+        """The rows must say what remains: a view row nothing would record is refused."""
+        with pytest.raises(ValueError, match="sum"):
+            SessionHoldings(view=_view(), legs=())
+
+    def test_a_leg_on_an_instrument_the_view_does_not_list_is_refused(self):
+        """D-C: legs netting to zero leave no row, so they must leave no leg either."""
+        long_leg = _leg()
+        short_leg = _leg(
+            position_id="NVDA.NASDAQ-EXTERNAL",
+            strategy_id="EXTERNAL",
+            side="SELL",
+            quantity=Decimal("-10"),
+        )
+
+        with pytest.raises(ValueError, match="sum"):
+            SessionHoldings(view=_view(positions=()), legs=(long_leg, short_leg))
+
+    def test_a_position_counts_once(self):
+        view = _view(positions=(ViewPosition("NVDA.NASDAQ", Decimal("20")),))
+
+        with pytest.raises(ValueError, match="once"):
+            SessionHoldings(view=view, legs=(_leg(), _leg()))
+
+    def test_an_order_counts_once(self):
+        with pytest.raises(ValueError, match="once"):
+            SessionHoldings(view=_view(), legs=(_leg(),), working_orders=(_order(), _order()))
+
+    def test_orders_that_could_not_be_read_are_named_and_default_to_none(self):
+        """Code review DN1a: an unreadable order is named, never a refusal."""
+        assert SessionHoldings(view=_view(), legs=(_leg(),)).unreadable_orders == ()
+        holdings = SessionHoldings(view=_view(), legs=(_leg(),), unreadable_orders=("O-1", "O-2"))
+        assert holdings.unreadable_orders == ("O-1", "O-2")
+
+    @pytest.mark.parametrize("named", [("",), ("O-1", "O-1"), ["O-1"], (7,)])
+    def test_an_unreadable_order_is_named_once_by_a_non_empty_id(self, named):
+        with pytest.raises((TypeError, ValueError)):
+            SessionHoldings(view=_view(), legs=(_leg(),), unreadable_orders=named)
+
+    def test_collections_must_be_tuples_of_the_domain_types(self):
+        with pytest.raises(TypeError):
+            SessionHoldings(view=_view(), legs=[_leg()])  # type: ignore[arg-type]
+        with pytest.raises(TypeError):
+            SessionHoldings(view=_view(), legs=(_leg(),), working_orders=("order",))  # type: ignore[arg-type]
+        with pytest.raises(TypeError):
+            SessionHoldings(view="view", legs=())  # type: ignore[arg-type]
+
+    def test_it_is_immutable(self):
+        holdings = SessionHoldings(view=_view(), legs=(_leg(),))
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            holdings.legs = ()  # type: ignore[misc]
 
 
 class TestPositionLine:
