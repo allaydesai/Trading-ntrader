@@ -26,6 +26,11 @@ from src.core.live_market_data import (
 )
 from src.db.models.backtest import BacktestRun
 from src.models.reconciliation import ViewPosition
+from src.services.reconcile_withheld import (
+    OPEN_AT_SEAL,
+    RECONCILE_WITHHELD_KEY,
+    empty_document,
+)
 from src.services.session_conditions import (
     AR7_KEYS,
     BACKTEST_PRICE_BASIS,
@@ -68,8 +73,10 @@ PRD_AR7_KEYS = {
     "open_positions_at_seal",
     "schema_version",
 }
-#: PO rulings R1a and R2a (2026-10-11): the two keys beside AR7's own.
-RULED_EXTRAS = {"start_date_basis", "last_run_flags"}
+#: PO rulings R1a and R2a (2026-10-11): the two keys beside AR7's own. Widened
+#: deliberately by Story 5.8 (AC #3, PO ruling Q1): ``reconcile_withheld``, the
+#: session's withheld periods — outside AR7's seven, ``schema_version`` unchanged.
+RULED_EXTRAS = {"start_date_basis", "last_run_flags", "reconcile_withheld"}
 
 #: The last process run's ``runtime_flags`` exactly as ``SessionService`` writes
 #: them: a contained strategy failure and a refusal summary (Stories 2.7, 3.7).
@@ -126,7 +133,7 @@ class TestTheDocumentHoldsAR7sKeys:
         assert len(AR7_KEYS) == len(PRD_AR7_KEYS)
 
     def test_the_extra_keys_are_named_constants(self):
-        assert {START_DATE_BASIS_KEY, LAST_RUN_FLAGS_KEY} == RULED_EXTRAS
+        assert {START_DATE_BASIS_KEY, LAST_RUN_FLAGS_KEY, RECONCILE_WITHHELD_KEY} == RULED_EXTRAS
 
     def test_every_value_is_json_native_and_typed(self):
         doc = _conditions(
@@ -325,3 +332,97 @@ class TestTheLastRunsFlags:
         always be sealable — a hand-edited or restored ``runtime_flags`` is
         recorded as stored (R2a), never a reason to refuse forever."""
         assert _conditions(last_run_flags=stored)["last_run_flags"] == stored
+
+
+#: Story 5.8's AC #3, as ``prd-epic5-scope.md`` words it.
+AC_5_8C = (
+    "a withheld period, when the session is later sealed, is recorded in session_conditions "
+    "with its start, end and cause"
+)
+
+#: A withheld history exactly as ``SessionService`` stores it (Story 5.8): one
+#: period a clean cycle ended, one a stop cut short.
+WITHHELD = {
+    "count": 2,
+    "periods": [
+        {
+            "start": "2026-10-02T15:00:00+00:00",
+            "end": "2026-10-02T15:04:30+00:00",
+            "cause": "runtime_reconciliation_failing",
+            "reason": "positions_unanswered",
+            "error_type": "BrokerStateUnavailableError",
+            "failed_cycles": 3,
+            "ended_by": "reconciled",
+        },
+        {
+            "start": "2026-10-03T19:40:00+00:00",
+            "end": "2026-10-03T19:52:00+00:00",
+            "cause": "runtime_reconciliation_failing",
+            "reason": "timeout",
+            "error_type": "BrokerStateUnavailableError",
+            "failed_cycles": 3,
+            "ended_by": "session_stopped",
+        },
+    ],
+}
+
+
+class TestTheWithheldPeriods:
+    """Story 5.8, AC #3 (D-I): every withheld period of every run reaches the
+    sealed record — read from the row's ``runtime_flags``, where the
+    ``-> running`` edge carried it (PO ruling Q1) — as stored, never judged."""
+
+    @pytest.mark.acceptance_criterion("5.8c", AC_5_8C, SOURCE)
+    def test_every_period_is_recorded_with_its_start_end_and_cause(self):
+        doc = _conditions(last_run_flags={"v": 1, RECONCILE_WITHHELD_KEY: WITHHELD})
+
+        recorded = doc[RECONCILE_WITHHELD_KEY]
+        assert recorded == WITHHELD
+        for period in recorded["periods"]:
+            assert {"start", "end", "cause"} <= set(period)
+            assert period["cause"] == "runtime_reconciliation_failing"
+
+    def test_no_history_is_an_explicit_empty_document(self):
+        assert _conditions(last_run_flags=None)[RECONCILE_WITHHELD_KEY] == empty_document()
+        assert _conditions(last_run_flags=RUNTIME_FLAGS)[RECONCILE_WITHHELD_KEY] == {
+            "count": 0,
+            "periods": [],
+        }
+
+    def test_a_period_open_at_seal_says_so(self):
+        """PO condition (2026-10-11): never a silent open end."""
+        open_period = copy.deepcopy(WITHHELD)
+        open_period["periods"][1].update(end=None, ended_by=None)
+
+        doc = _conditions(last_run_flags={RECONCILE_WITHHELD_KEY: open_period})
+
+        last = doc[RECONCILE_WITHHELD_KEY]["periods"][1]
+        assert (last["end"], last["ended_by"]) == (None, OPEN_AT_SEAL)
+
+    def test_it_is_a_deep_copy(self):
+        flags = {RECONCILE_WITHHELD_KEY: copy.deepcopy(WITHHELD)}
+        recorded = _conditions(last_run_flags=flags)[RECONCILE_WITHHELD_KEY]
+
+        flags[RECONCILE_WITHHELD_KEY]["periods"][0]["end"] = "changed afterwards"
+
+        assert recorded == WITHHELD
+
+    @pytest.mark.parametrize("stored", ["hand-edited", 3, ["x"]], ids=["str", "int", "list"])
+    def test_a_malformed_history_is_recorded_never_refused(self, stored):
+        doc = _conditions(last_run_flags={RECONCILE_WITHHELD_KEY: stored})
+
+        assert doc[RECONCILE_WITHHELD_KEY] == stored
+
+    def test_last_run_flags_still_records_the_row_as_stored(self):
+        """R2a unchanged (PO ruling Q1): the history appears there too."""
+        flags = {"v": 1, RECONCILE_WITHHELD_KEY: WITHHELD}
+
+        assert _conditions(last_run_flags=flags)[LAST_RUN_FLAGS_KEY] == flags
+
+    def test_the_schema_version_is_unchanged(self):
+        assert _conditions()["schema_version"] == SCHEMA_VERSION == 1
+
+    def test_it_is_json_native(self):
+        doc = _conditions(last_run_flags={RECONCILE_WITHHELD_KEY: WITHHELD})
+
+        assert json.loads(json.dumps(doc)) == doc

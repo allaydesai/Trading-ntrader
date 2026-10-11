@@ -48,6 +48,7 @@ procedure passed; it is evidence that the tooling exists to run it.
 | | P18 | Runtime alignment: a TWS change corrected, a reconnect re-established | ⏳ 2026-09-27 (operator only) |
 | | P20 | Corporate actions absorbed and named; a reverse split refused | ⏳ 2026-09-28 (operator only) |
 | | P22 | Holdings the adapter cannot express (a fractional share, an unresolvable contract) are named, not refused; `live reconcile` stays exact | ⏳ 2026-10-07: defined, not run (operator only) |
+| | P23 | A persistent runtime reconciliation failure withholds trading after three cycles and is re-granted by a clean cycle; drift stops; the withheld period reaches the sealed record | ⏳ 2026-10-11: defined, not run (operator only) |
 
 **Where the gate stands (2026-09-28, updated at the Epic 4 retrospective).** Connectivity, gate
 refusal and the complete round trip have passed live, with P4 partial. A live E2E pass on
@@ -2812,3 +2813,155 @@ Story 5.7's live row ⚠️.
 | Date | Operator | Result | Notes |
 | ---- | -------- | ------ | ----- |
 | 2026-10-07 | Story 5.7 dev session | ⏳ **Defined, not run** | P22a is read-only but needs a fractional holding the paper account was not known to have. P22b–P22d start a session and need holdings arranged by hand in TWS. The story charter forbids submitting orders and running `live start` against real sessions, so P22 is operator-only. The same logic is proven against broker doubles and a real `LiveExecutionEngine`: see "What it does" above. Numbered P22 while Story 5.8 may also add a procedure in parallel. If both land as P22, renumber at merge (the Story 4.5/4.7 P19/P20 precedent). |
+
+## Procedure P23: a persistent runtime reconciliation failure withholds trading; drift stops
+
+> Written by Story 5.8. If a story running in parallel also appended a "Procedure P23", the
+> integrator renumbers one of them; the content of this procedure does not depend on its number.
+
+**Introduced by**: Story 5.8 — Act on a Persistent Runtime Reconciliation Failure (PR #35 code
+review, PO ruling D3: "withhold after 3, drift stops")
+**Verifies**:
+- AC #1 live (P23a): three consecutive failed runtime cycles withdraw trading permission. One
+  `reconcile.cycle_failed` is logged at ERROR with `consecutive=3 action=trading_withheld`, and
+  any order a strategy asks for meanwhile is `order.suppressed`. The next clean cycle grants it
+  back: `reconcile.ok scope=reconnect`, then `connection.restored`.
+- AC #3 live (P23c, optional): sealing a **throwaway** session afterwards records the period in
+  `session_conditions.reconcile_withheld`, with its start, end and cause.
+- AC #2 (adapter drift stops the session, exit `1`) is **not** run live: two IB contracts
+  resolving to one instrument id cannot be arranged on demand. P23b is observational only.
+- AC #4 (the threshold is three) is a code pin, proven in CI only.
+
+**Tools**: `ntrader live start`, `kill -STOP` / `kill -CONT` on the **Gateway's own** process
+(never on the session), and for P23c `ntrader live seal --json` on a throwaway session.
+
+### What it does, and what it does not do
+
+**P23a starts a session**, whose strategies may trade on their own signals. The operator then
+suspends the paper Gateway's process for about three minutes. The API socket stays open, so the
+connection probe still reads "connected", but the positions request goes unanswered and each
+runtime cycle's broker read times out. That is the failure this story acts on. Resuming the
+process lets the next cycle succeed. **The whole procedure is written for the operator and is
+never run by an automated story session.** It submits no order of its own, and the withhold
+cancels, closes or flattens nothing (NFR14).
+
+**It may not be arrangeable.** If the Gateway drops the API connection while suspended, the
+session sees a real disconnect: `connection.lost`, then the reconnect path (P4, P18d), and no
+`action=trading_withheld` record (decision D-J, the outage owns that withhold). Record
+"not arranged", not "failed". The logic is proven without a broker:
+
+- `tests/unit/core/test_live_connection_monitor.py` (`TestWithholdForReconciliation`): the
+  monitor's withdrawal, its anchor, its halt clock and its re-grant.
+- `tests/unit/core/test_live_runtime_reconcile.py`:
+  - `TestAPersistentFailureWithholdsTrading`: two failed cycles do not withhold; three do; one
+    ERROR; `order.suppressed` through the real order-path wrapper; the re-grant.
+  - `TestAdapterDriftStopsTheSession`: drift stops on the first occurrence, exit `1`, past the
+    hourly throttle, in either scope.
+  - `TestTheWithheldPeriodLedger`.
+- `tests/component/core/test_session_steady_state.py` (`TestTheTickWritesWithheldPeriods`): the
+  tick writes a period in the tick that opened or closed it. A failing write never masks a drift
+  stop.
+- `tests/unit/services/test_reconcile_withheld.py` and `test_session_service.py`: the document,
+  its carry across `-> running`, and its close on `-> stopped`.
+- `tests/integration/db/test_session_seal.py` (`TestEveryWithheldPeriodReachesTheRecord`): two
+  runs, two periods, one sealed record, against Postgres.
+
+### Preconditions
+
+- A running, logged-in paper Gateway on the configured paper port, with no IBKR mobile app or
+  client portal session (the 162 rule) and a populated `.env` in the operator's checkout.
+  `live check` passes.
+- Inside RTH, and the bars preflight passes (P11/P12's rule).
+- The Gateway's process id, from `pgrep -f` on its own launcher (the IB Gateway Java process).
+  Never resolve it by a pattern that could match the session's runner.
+- For P23c: a **throwaway** session created for this procedure. Sealing is permanent and must
+  never be run on a session whose forward test matters.
+- D6's standing rule first: grep every transcript for `162`, `10182`, `366` as whole words before
+  reading it.
+
+### Command
+
+```bash
+# P23a — start, let two clean runtime cycles pass, suspend the Gateway, resume it, stop
+uv run python -m src.cli.main live start <session> > logs/p23-<date>.log 2>&1 &
+sleep 5   # let `uv run` spawn the runner before resolving it (P9's harness note)
+RUNNER_PID=$(pgrep -f "bin/python3 -m src.cli.main live start <session>")
+until grep -q "session.started" logs/p23-<date>.log || ! kill -0 "$RUNNER_PID" 2>/dev/null; do
+  sleep 2
+done
+grep -c -w -E "162|10182|366" logs/p23-<date>.log         # D6's standing rule, checked first
+sleep 150                                                  # two clean runtime cycles
+
+GATEWAY_PID=<the Gateway's own java pid>
+kill -STOP "$GATEWAY_PID"                                  # reads now time out; socket stays up
+until grep -q "action=trading_withheld" logs/p23-<date>.log || ! kill -0 "$RUNNER_PID" 2>/dev/null; do
+  sleep 10                                                 # ~3 runtime cycles, ~3-4 minutes
+done
+kill -CONT "$GATEWAY_PID"
+until grep -q "connection.restored" logs/p23-<date>.log || ! kill -0 "$RUNNER_PID" 2>/dev/null; do
+  sleep 5
+done
+grep -E "reconcile\.cycle_failed|connection\.(halted|restored|lost)|reconcile\.ok .*scope=reconnect|order\.suppressed" \
+  logs/p23-<date>.log
+grep -c -w -E "162|10182|366" logs/p23-<date>.log         # D6 again
+kill -INT "$RUNNER_PID"; wait "$RUNNER_PID" 2>/dev/null; echo "exit=$?"
+
+# P23c — throwaway session only: the stop closed nothing (the period already ended); seal it
+uv run python -m src.cli.main live seal <throwaway-session> --starting-capital <capital> --json \
+  | python -c "import json,sys; print(json.dumps(json.load(sys.stdin)['execution_conditions']['session_conditions']['reconcile_withheld'], indent=2))"
+```
+
+### Expected output
+
+```
+# P23a
+reconcile.cycle_failed scope=runtime reason=timeout error_type=BrokerStateUnavailableError consecutive=1   [warning]
+reconcile.cycle_failed scope=runtime reason=timeout error_type=BrokerStateUnavailableError consecutive=3
+  action=trading_withheld                                                                                   [error]
+order.suppressed method=submit_order ...          # only if a strategy signalled meanwhile
+connection.halted ...                             # possible, if withheld past the 60 s window
+reconcile.ok scope=reconnect ...
+connection.restored downtime_seconds=... reconnect_seconds=0.0 ...
+
+# P23c
+{
+  "count": 1,
+  "periods": [
+    {"start": "...", "end": "...", "cause": "runtime_reconciliation_failing",
+     "reason": "timeout", "error_type": "BrokerStateUnavailableError",
+     "failed_cycles": 3, "ended_by": "reconciled"}
+  ]
+}
+```
+
+### Pass criteria
+
+1. **P23a — the threshold:** no `action=trading_withheld` after the first or second failed cycle.
+   Exactly one `reconcile.cycle_failed` at ERROR, with `consecutive=3` and
+   `action=trading_withheld`. It is logged only when this streak withdrew trading: a streak that
+   follows a real disconnect logs no such ERROR (the outage already withheld).
+2. **P23a — withheld:** every order-creating call between that ERROR and `connection.restored` is
+   `order.suppressed`, and no `order.submitted` appears in that window. Nothing is cancelled,
+   closed or flattened by the withhold.
+3. **P23a — re-granted:** after `kill -CONT`, `reconcile.ok scope=reconnect` precedes
+   `connection.restored`, and orders flow again after it.
+4. **P23c (if run):** the sealed record's `reconcile_withheld` holds one period with `start`,
+   `end`, `cause`, `reason`, `error_type` and `ended_by: "reconciled"`, and `count: 1`.
+5. **All parts:** `grep -c '<full account id>'` over this codebase's own structured records prints
+   `0` (NFR26). Nautilus's own C-logger lines carry the raw account, so the unscoped grep is not
+   `0` (P2's criterion 3).
+
+**P23b — drift (observational).** If a live session ever logs `reconcile.cycle_failed
+action=session_stopped reason=adapter_incompatible`, the session must have stopped right after,
+`live start` must have exited `1` with "Broker state unavailable (adapter_incompatible)", and the
+positions at IBKR must be untouched. Record the transcript here when seen.
+
+**Fail:** an order submitted while withheld, a withhold after two failures, no re-grant after a
+clean cycle, or a sealed record without the period. Record the transcript and leave Story 5.8's
+live row ⚠️.
+
+### Result log
+
+| Date | Operator | Result | Notes |
+| ---- | -------- | ------ | ----- |
+| 2026-10-11 | Story 5.8 dev session | ⏳ **Defined, not run** | P23a starts a session and suspends the Gateway, and P23c seals a session. The story charter forbids `live start` and `live seal` against real sessions and any touch of the connection-loss diagnostics, so P23 is operator-only. Every AC is proven against broker doubles (unit, component) and AC #3 against Postgres (integration/db): see "What it does" above. |

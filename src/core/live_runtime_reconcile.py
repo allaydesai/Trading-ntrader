@@ -77,8 +77,24 @@ halt clock may report ``connection.halted`` meanwhile (NFR20).
 **Volume** (AC #3): ``reconcile.ok`` on the first clean cycle, on the first
 clean cycle after anything else, and otherwise at most hourly, each carrying
 ``cycles`` — the clean cycles it summarises. A failing read is one
-``reconcile.cycle_failed`` per streak (re-logged at most hourly), never one per
-cycle.
+``reconcile.cycle_failed`` WARNING per streak (re-logged at most hourly), never
+one per cycle — plus the one ERROR below.
+
+**A failure that persists is acted on** (Story 5.8, PO ruling PR #35 D3:
+"withhold after 3, drift stops"). The :data:`WITHHOLD_AFTER_FAILED_CYCLES`-th
+consecutive failed cycle withdraws trading permission through the monitor's
+``RECOVERING`` (orders withheld, ``order.suppressed``) and logs one
+``reconcile.cycle_failed`` at ERROR (``action="trading_withheld"``), past the
+hourly throttle; the next clean cycle — a reconnect cycle, every tick — grants
+it back through ``confirm_state_reestablished``, exactly as after a reconnect.
+The period is kept in :class:`WithheldPeriods`, which the steady state's tick
+writes to the session row so a seal can record it. Already ``RECOVERING`` after
+a loss, there is nothing to withdraw, so no period and no ERROR (code review
+P5): the outage owns that withhold, and the streak's WARNING throttle covers
+it. Only the reader's own ``BrokerStateFailure`` reason is logged or persisted
+(code review P4). Adapter drift (``BrokerStateAdapterError``) is never a streak: it is
+logged once at ERROR (``action="session_stopped"``) and stops the session on
+its first occurrence, exit 1, as at startup.
 
 **Stranded orders** (Story 4.8). Each runtime cycle — never a reconnect cycle,
 whose grant stays exactly as ruled — also runs
@@ -93,12 +109,18 @@ past the debounce with this code.
 
 import time
 from collections.abc import Callable, Collection, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from typing import Any
 
 from src.core.live_broker_state import FAILED_EVENT as READER_FAILED_EVENT
 from src.core.live_broker_state import RETRIEVED_EVENT as READER_RETRIEVED_EVENT
-from src.core.live_broker_state import find_ib_exec_client, read_broker_state
+from src.core.live_broker_state import (
+    BrokerStateAdapterError,
+    BrokerStateFailure,
+    find_ib_exec_client,
+    read_broker_state,
+)
 from src.core.live_connection_monitor import (
     ConnectionMonitor,
     ConnectionState,
@@ -147,8 +169,16 @@ RUNTIME_OK_LOG_INTERVAL_SECONDS = 3600.0
 #: at most this many consecutive cycles (~3 minutes) before the row is acted on
 #: (PO ruling, PR #35 D1, 2026-09-30).
 HOLD_BACK_CYCLES = 3
+#: Story 5.8 (AC #4; PO ruling PR #35 D3, "withhold after 3"): this many
+#: consecutive failed cycles withdraw trading permission through the monitor's
+#: ``RECOVERING``; the next clean cycle grants it back, as after a reconnect.
+WITHHOLD_AFTER_FAILED_CYCLES = 3
 
 CYCLE_FAILED_EVENT = "reconcile.cycle_failed"
+#: ``reconcile.cycle_failed``'s ``action`` on its two ERROR records (Story 5.8):
+#: a streak reached the threshold, or adapter drift stopped the session.
+ACTION_TRADING_WITHHELD = "trading_withheld"
+ACTION_SESSION_STOPPED = "session_stopped"
 CONNECTION_READ_FAILED_EVENT = "session.connection_read_failed"
 #: D1: an unresolved row outlived the hold-back; its same-symbol cache row is now acted on.
 HOLD_BACK_EXPIRED_EVENT = "reconcile.hold_back_expired"
@@ -165,6 +195,10 @@ _CONTRADICTED = (
     "docs/agent/nautilus.md, 'Startup reconciliation', for clearing its disposable engine cache"
 )
 _REMAINS = "after the correction, the cache still disagrees with the broker"
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
 
 
 class _Quiet:
@@ -275,6 +309,13 @@ class RuntimeReconciler:
             (Story 4.8) — ``broker_open_orders``.
         traded_instruments: The instrument ids the session's strategies trade;
             their symbols count as held for an unresolved row (code review R1).
+        wall_clock: Aware UTC time, for the withheld periods' persisted
+            stamps only (Story 5.8) — every interval stays on ``clock``.
+
+    Attributes:
+        withheld: Story 5.8's :class:`WithheldPeriods` — the periods this
+            reconciler withheld trading for, which the steady state's tick
+            writes through the record port.
     """
 
     def __init__(
@@ -289,6 +330,7 @@ class RuntimeReconciler:
         clock: Callable[[], float] = time.monotonic,
         read_open_orders: OpenOrdersReader = broker_open_orders,
         traded_instruments: Collection[str] = (),
+        wall_clock: Callable[[], datetime] = _utc_now,
     ) -> None:
         self._node = node
         self._monitor = monitor
@@ -304,7 +346,8 @@ class RuntimeReconciler:
         self._remainders = _Remainders()
         self._hold_back = _HoldBack()
         self._ok = _OkLog()
-        self._failures = _FailureStreak()
+        self.withheld = WithheldPeriods(wall_clock)
+        self._failures = _FailureStreak(monitor, self.withheld)
         self._stale_orders = StaleOrderWatch(read_open_orders)
         self._traded = held_symbols((), traded_instruments)
 
@@ -319,7 +362,10 @@ class RuntimeReconciler:
         Raises:
             ReconciliationFailedError: A confirmed strategy-position
                 contradiction, a framework refusal, or a correction that did
-                not take — the session must stop (D-D). Nothing else leaves.
+                not take — the session must stop (D-D).
+            BrokerStateAdapterError: Adapter drift, on its first occurrence —
+                the session must stop, exit 1, as at startup (Story 5.8).
+                Nothing else leaves.
         """
         state = self._monitor.state
         if state is ConnectionState.RECOVERING:
@@ -364,6 +410,11 @@ class RuntimeReconciler:
             elif self._ok.due(self._clock()):
                 self._ok.emit(self._log, self._node, observation, scope, self._clock())
         except ReconciliationFailedError:
+            raise
+        except BrokerStateAdapterError as drift:
+            # Story 5.8 (AC #2, D-C): drift stops the session on its first
+            # occurrence, as at startup — never a streak, never throttled.
+            _log_drift(self._log, scope, drift, self._failures.count + 1)
             raise
         except Exception as exc:  # noqa: BLE001 - AR42: a cycle must never kill a session
             self._ok.needed = True
@@ -415,14 +466,17 @@ class RuntimeReconciler:
 
         ``reconcile.ok`` precedes the attempt so it lands before the monitor's
         ``connection.restored``; a refused attempt does not repeat it next tick.
+        A grant that took ends a period this reconciler withheld (Story 5.8).
         """
         if observation.deferred:
             return
         if self._ok.needed:
             self._ok.emit(self._log, self._node, observation, SCOPE_RECONNECT, self._clock())
-        grant_after_reconciliation(
+        state = grant_after_reconciliation(
             self._monitor, self._connection_reader, self._settings, self._log
         )
+        if state is ConnectionState.CONNECTED:
+            self.withheld.end()
 
 
 async def observe(
@@ -705,29 +759,141 @@ class _OkLog:
 
 
 class _FailureStreak:
-    """One ``reconcile.cycle_failed`` per streak, re-logged at most hourly.
-    Only the failure's type and the reader's own reason — never ``str(exc)``,
-    which may carry the raw account (NFR26)."""
+    """One ``reconcile.cycle_failed`` per streak, re-logged at most hourly —
+    and, at :data:`WITHHOLD_AFTER_FAILED_CYCLES`, one at ERROR, past the
+    throttle, that withdraws trading permission (Story 5.8, AC #1). Only the
+    failure's type and the reader's own reason — never ``str(exc)``, which
+    may carry the raw account (NFR26)."""
 
-    def __init__(self) -> None:
+    def __init__(self, monitor: ConnectionMonitor, withheld: "WithheldPeriods") -> None:
         self.count = 0
         self.logged_at = 0.0
+        self._monitor = monitor
+        self._withheld = withheld
 
     def note(self, log: Any, scope: str, exc: Exception, now: float) -> None:
         self.count += 1
+        # Code review P4: only the reader's own reason — a third party's
+        # `.reason` is free text, and this one is persisted too (NFR26).
+        raw_reason = getattr(exc, "reason", None)
+        reason = raw_reason.value if isinstance(raw_reason, BrokerStateFailure) else None
+        error_type = type(exc).__name__
+        fields = {
+            "scope": scope,
+            "reason": reason,
+            "error_type": error_type,
+            "consecutive": self.count,
+        }
+        # Code review P5: the ERROR only when this record withdrew permission;
+        # a loss's own withhold (D-J) follows the WARNING throttle below.
+        if self.count == WITHHOLD_AFTER_FAILED_CYCLES and self._withhold(reason, error_type):
+            self.logged_at = now
+            _emit(log, "error", CYCLE_FAILED_EVENT, **fields, action=ACTION_TRADING_WITHHELD)
+            return
         if self.count > 1 and now - self.logged_at < RUNTIME_OK_LOG_INTERVAL_SECONDS:
             return
         self.logged_at = now
-        reason = getattr(exc, "reason", None)
-        _emit(
-            log,
-            "warning",
-            CYCLE_FAILED_EVENT,
-            scope=scope,
-            reason=None if reason is None else str(reason),
-            error_type=type(exc).__name__,
-            consecutive=self.count,
-        )
+        _emit(log, "warning", CYCLE_FAILED_EVENT, **fields)
+
+    def _withhold(self, reason: str | None, error_type: str) -> bool:
+        """Withdraw a granted session's permission, and open a period for it.
+
+        Withdrawn first, stamped second: the safe half never waits on the
+        record. Already withheld — a loss's ``RECOVERING`` — this rule has
+        nothing to withdraw and opens no period; the outage owns that
+        withhold (D-J). Returns whether this call withdrew permission.
+        """
+        if self._monitor.state is not ConnectionState.CONNECTED:
+            return False
+        self._monitor.withhold_for_reconciliation()
+        self._withheld.start(reason=reason, error_type=error_type, failed_cycles=self.count)
+        return True
+
+
+@dataclass(frozen=True, slots=True)
+class WithheldPeriod:
+    """One withdrawal of trading permission for a failing reconciliation
+    (Story 5.8, D-E): when it began and why, and — once a clean cycle granted
+    permission back — when it ended. Standard-library values only: it crosses
+    the record port as they are (AR38)."""
+
+    started_at: datetime
+    reason: str | None
+    error_type: str
+    failed_cycles: int
+    ended_at: datetime | None = None
+
+    def as_port_kwargs(self) -> dict[str, Any]:
+        """``SessionRecordPort.record_trading_withheld``'s keyword arguments."""
+        return {
+            "withheld_from": self.started_at,
+            "withheld_until": self.ended_at,
+            "reason": self.reason,
+            "error_type": self.error_type,
+            "failed_cycles": self.failed_cycles,
+        }
+
+
+class WithheldPeriods:
+    """The withheld periods not yet written (Story 5.8, D-F).
+
+    Opened by the streak's withdrawal, closed by the next grant that took, and
+    read and acknowledged by the steady state's tick, which writes each through
+    the record port. A dirty flag per period, not a queue: a newer version
+    supersedes an unwritten older one — one write then carries both the start
+    and the end — and acknowledging a superseded version leaves the newer one
+    pending. A period a stop cuts short is closed by the session row's own
+    ``-> stopped`` edge, never here (record-keeping only: nothing here grants
+    or withholds anything).
+    """
+
+    def __init__(self, wall_clock: Callable[[], datetime] = _utc_now) -> None:
+        self._wall_clock = wall_clock
+        self._open: WithheldPeriod | None = None
+        self._dirty: dict[datetime, WithheldPeriod] = {}
+
+    def start(self, *, reason: str | None, error_type: str, failed_cycles: int) -> WithheldPeriod:
+        """Open a period, stamped now."""
+        period = WithheldPeriod(self._wall_clock(), reason, error_type, failed_cycles)
+        self._open = self._dirty[period.started_at] = period
+        return period
+
+    def end(self) -> WithheldPeriod | None:
+        """Close the open period, stamped now — never before its start, even
+        across a wall-clock step back (code review P7); ``None`` when none is open."""
+        if self._open is None:
+            return None
+        closed = replace(self._open, ended_at=max(self._wall_clock(), self._open.started_at))
+        self._open = None
+        self._dirty[closed.started_at] = closed
+        return closed
+
+    def pending(self) -> tuple[WithheldPeriod, ...]:
+        """Every period whose newest version is not yet written, oldest first."""
+        return tuple(self._dirty.values())
+
+    def mark_written(self, period: WithheldPeriod) -> None:
+        """Acknowledge ``period`` — only if it is still the newest version."""
+        if self._dirty.get(period.started_at) == period:
+            del self._dirty[period.started_at]
+
+
+def _log_drift(log: Any, scope: str, drift: BrokerStateAdapterError, consecutive: int) -> None:
+    """The one record of a drift stop (Story 5.8, AC #2, D-C): ERROR, never
+    throttled. ``detail`` is the reader's own operator-safe text: it names
+    contracts and raise sites, never the account or a third party's exception
+    message (NFR26, pinned on both drift paths)."""
+    _emit(
+        log,
+        "error",
+        CYCLE_FAILED_EVENT,
+        scope=scope,
+        reason=drift.reason.value,
+        error_type=drift.error_type or type(drift).__name__,
+        consecutive=consecutive,
+        detail=drift.detail,
+        action=ACTION_SESSION_STOPPED,
+    )
 
 
 def _fingerprint(positions: Sequence[CachedPosition]) -> list[tuple[str, str, Any]]:

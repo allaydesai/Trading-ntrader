@@ -24,10 +24,22 @@ from structlog.testing import capture_logs
 
 from src.core import live_runtime_reconcile
 from src.core.exit_outcome import EXIT_CODES
+from src.core.live_broker_state import (
+    BrokerStateAdapterError,
+    BrokerStateFailure,
+    BrokerStateUnavailableError,
+)
 from src.core.live_check import classify_failure
 from src.core.live_connection_monitor import ConnectionMonitor, ConnectionState, ConnectionStatus
 from src.core.live_order_path import install_order_path
-from src.core.live_runtime_reconcile import SCOPE_RECONNECT, SCOPE_RUNTIME, RuntimeReconciler
+from src.core.live_runtime_reconcile import (
+    ACTION_SESSION_STOPPED,
+    ACTION_TRADING_WITHHELD,
+    CYCLE_FAILED_EVENT,
+    SCOPE_RECONNECT,
+    SCOPE_RUNTIME,
+    RuntimeReconciler,
+)
 from src.core.live_startup_reconcile import (
     DISCREPANCY_EVENT,
     OK_EVENT,
@@ -260,6 +272,118 @@ class TestARuntimeStrategyContradictionStopsTheSession:
         # The ordinary teardown ran: node stopped and disposed, row released.
         assert node.disposed is True
         assert record.calls[-1] == "mark_stopped"
+
+
+AC_5_8B = (
+    "a BrokerStateAdapterError stops the session with exit 1 on its first occurrence, as "
+    "startup treats adapter drift; the hourly throttle does not apply"
+)
+SOURCE = "_bmad-output/planning-artifacts/prd-epic5-scope.md"
+
+
+def _drift() -> BrokerStateAdapterError:
+    return BrokerStateAdapterError(
+        "distinct contracts resolve to one instrument, so positions cannot be told apart"
+    )
+
+
+class _WithheldWriteFailsOnTheTick(SpyRecord):
+    """The tick's write of a withheld period fails (a DB hiccup); every later
+    write — the teardown's — succeeds, and is recorded with its fields."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.withheld_attempts = 0
+        self.withheld_written: list[dict] = []
+
+    def record_trading_withheld(self, **fields) -> None:
+        self.withheld_attempts += 1
+        if self.withheld_attempts == 1:
+            raise RuntimeError("postgres is down")
+        self.calls.append("record_trading_withheld")
+        self.withheld_written.append(fields)
+
+
+class TestAdapterDriftStopsTheSession:
+    """Story 5.8, AC #2, through ``runner.run()`` (code review P3): drift
+    found by the running session's cycle stops it on its first occurrence,
+    exit 1, through the ordinary teardown — positions untouched — and (code
+    review DN1, PO ruling 1a) the teardown writes the withheld period the tick
+    could not, before ``-> stopped`` closes what it finds open."""
+
+    @staticmethod
+    def _run(reads, record):
+        settings = _settings()
+        node = TestLiveNode(run_seconds=30.0)
+        position = _open_position(NVDA, STRATEGY, "22")
+        node.cache.open_positions = [position]
+        script = iter(reads)
+
+        async def _broker(node_arg, *, log):
+            outcome = next(script)
+            if isinstance(outcome, BaseException):
+                raise outcome
+            return outcome
+
+        async def _yield(seconds: float) -> None:
+            await asyncio.sleep(0)
+
+        runner = _runner(
+            node,
+            settings=settings,
+            record=record,
+            broker_state_reader=_broker,
+            connection_reader=lambda s: UP,
+            sleeper=_yield,
+        )
+        return node, position, runner, settings
+
+    @pytest.mark.acceptance_criterion("5.8b", AC_5_8B, SOURCE)
+    def test_drift_on_the_first_runtime_cycle_stops_with_exit_1(self, registered_accounts):
+        record = SpyRecord()
+        node, position, runner, settings = self._run([_state((NVDA, "22")), _drift()], record)
+        registered_accounts(settings)
+
+        with capture_logs() as logs:
+            with pytest.raises(BrokerStateAdapterError) as caught:
+                runner.run()
+
+        assert EXIT_CODES[classify_failure(caught.value)] == 1
+        assert ("trading", "ok") in _pairs(logs), "a runtime stop, not a startup refusal"
+        (failed,) = [e for e in logs if e["event"] == CYCLE_FAILED_EVENT]
+        assert (failed["log_level"], failed["action"], failed["scope"]) == (
+            "error",
+            ACTION_SESSION_STOPPED,
+            SCOPE_RUNTIME,
+        )
+        # The ordinary teardown, positions untouched: nothing reached the
+        # framework, the cache still holds the strategy's own position.
+        assert node.kernel.exec_engine.reconcile_reports == []
+        assert node.cache.open_positions == [position]
+        assert node.disposed is True
+        assert record.calls[-1] == "mark_stopped"
+
+    def test_the_teardown_writes_the_withheld_period_before_the_stop(self, registered_accounts):
+        record = _WithheldWriteFailsOnTheTick()
+        unanswered = BrokerStateUnavailableError(
+            BrokerStateFailure.POSITIONS_UNANSWERED, "the positions request was not answered"
+        )
+        reads = [_state((NVDA, "22")), unanswered, unanswered, unanswered, _drift()]
+        node, _, runner, settings = self._run(reads, record)
+        registered_accounts(settings)
+
+        with capture_logs() as logs:
+            with pytest.raises(BrokerStateAdapterError):
+                runner.run()
+
+        withheld = [e for e in logs if e.get("action") == ACTION_TRADING_WITHHELD]
+        assert len(withheld) == 1, "three failed cycles withdrew trading"
+        assert record.withheld_attempts == 2  # the tick's (failed), then the teardown's
+        (period,) = record.withheld_written
+        assert (period["failed_cycles"], period["reason"]) == (3, "positions_unanswered")
+        calls = record.calls
+        assert calls.index("record_trading_withheld") < calls.index("mark_stopped")
+        assert runner.shutdown_problems == []
 
 
 class TestARuntimeForwardSplitDoesNotStopTheSession:

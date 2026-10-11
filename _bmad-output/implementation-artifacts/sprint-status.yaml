@@ -2675,5 +2675,5 @@ development_status:
   5-6-read-a-paper-session-beside-its-backtest-in-the-existing-views: backlog
   # Added 2026-09-30 from PR #35's code review (Epic 4 integration), PO rulings D2 and D3.
   5-7-name-holdings-the-adapter-cannot-express-instead-of-refusing-or-hiding-them: done
-  5-8-act-on-a-persistent-runtime-reconciliation-failure: backlog
+  5-8-act-on-a-persistent-runtime-reconciliation-failure: done
   epic-5-retrospective: optional

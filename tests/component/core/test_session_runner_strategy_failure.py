@@ -201,6 +201,10 @@ class SpyRecord:
         self.calls.append("record_order_rejections")
         self.rejections.append(fields)
 
+    def record_trading_withheld(self, **fields) -> None:
+        """Story 5.8's fifth port method, in this file's kwargs-only style."""
+        self.calls.append("record_trading_withheld")
+
 
 def _pairs(logs) -> list[tuple[str, str]]:
     """The ordered ``(phase, status)`` pairs, the idiom this suite asserts on."""

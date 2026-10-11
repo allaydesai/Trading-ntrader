@@ -125,6 +125,11 @@ make web                                # Web UI (http://127.0.0.1:8000)
   widening was argued, not inherited: Story 3.6's D-F refused the same widening for the trade sink
   because *a trade is not a session-row fact*; a refusal summary is one, lives in the same
   `runtime_flags` document, and is written on the same tick by the same executor.
+  **Widened 4 → 5 at Story 5.8** (PO-sanctioned 2026-10-11): `record_trading_withheld`, on the
+  same terms. The doubles now number six component `SpyRecord`s plus the unit `_HandWrittenRecord`;
+  the grep is still the list. Its key, `runtime_flags["reconcile_withheld"]`, is the **one
+  `runtime_flags` key the `-> running` edge carries forward** (PO ruling Q1). Every other key
+  still clears per run. The shape lives in `src/services/reconcile_withheld.py`.
 - **`EXPECTED_CAPABILITIES`** (`tests/unit/db/test_trading_session_repository_shape.py`) — an
   exact-set allowlist for both `TradingSessionRepository` twins, **changed deliberately at Story
   3.6**: `stamp_activity_if_owner` and `insert_trade_if_absent` joined it (AR9, both twins in the

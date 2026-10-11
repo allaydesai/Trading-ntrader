@@ -284,3 +284,48 @@ class SqlSessionRecord:
                 )
             except InvalidSessionTransition as exc:
                 raise SessionReclaimedError(str(exc)) from exc
+
+    def record_trading_withheld(
+        self,
+        *,
+        withheld_from: datetime,
+        withheld_until: datetime | None,
+        reason: str | None,
+        error_type: str,
+        failed_cycles: int,
+    ) -> None:
+        """Write one withheld period into ``runtime_flags`` (Story 5.8, AC #3).
+
+        One short-lived transaction, like its four siblings. Bounded by the
+        caller: the steady state's tick writes a period twice when healthy —
+        when it opens, and when a clean cycle ends it — once more per tick
+        while a write keeps failing, and once at teardown if one is still
+        pending; a session that never withholds costs nothing. Never assigns
+        ``status`` (AR37); a session withholding trading is still ``running``.
+        The service is constructed with ``time_source=lambda: withheld_from``,
+        so no wall-clock reading
+        can leak into a write whose every timestamp the caller chose.
+
+        Every ``InvalidSessionTransition`` is translated to
+        :class:`~src.core.live_session_record.SessionReclaimedError`, for the
+        reasons ``record_activity`` documents.
+
+        Raises:
+            RecordNotFoundError: The session's row is gone.
+            SessionReclaimedError: This process no longer owns the session.
+        """
+        with self._session_factory() as db_session:
+            repository = SyncTradingSessionRepository(db_session)  # type: ignore[arg-type]
+            service = SessionService(repository, time_source=lambda: withheld_from)
+            try:
+                service.record_trading_withheld(
+                    self._session_id,
+                    owner_epoch=self._owner_epoch,
+                    withheld_from=withheld_from,
+                    withheld_until=withheld_until,
+                    reason=reason,
+                    error_type=error_type,
+                    failed_cycles=failed_cycles,
+                )
+            except InvalidSessionTransition as exc:
+                raise SessionReclaimedError(str(exc)) from exc

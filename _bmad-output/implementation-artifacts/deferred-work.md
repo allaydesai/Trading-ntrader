@@ -3740,7 +3740,7 @@ it landed.
 |---|---|---|
 | **D1** | Symbol-scoped **and** bounded hold-back: an unresolved `IB-CONID-*` row holds back only the cache row with the same symbol (`PositionDiscrepancy.broker_symbol` / `symbol_key`, IB's `BRK B` matching Nautilus's `BRK-B`), for at most `HOLD_BACK_CYCLES` (3) consecutive cycles; past that `reconcile.hold_back_expired` is logged once and the row is acted on — a contradiction underneath is refused, fail closed. | This PR (`live_runtime_reconcile._HoldBack`; unit tests for the unrelated-symbol refusal, the bound, the restart and the spelling) |
 | **D2** | Same-symbol rule everywhere, name the rest: an unresolved row matters only to a same-symbol cached row at startup and for the reconnect grant too; a fractional remainder below the size increment is named once and clean at the expressible precision in the session, while `live reconcile` stays exact (exit 5). | **Epic 5, Story 5.7** (`epics.md`, `sprint-status.yaml`) — ✅ **landed 2026-10-07** (see "Deferred from: story-5.7" below) |
-| **D3** | Withhold after 3, drift stops: three consecutive failed cycles move the monitor to `RECOVERING` (orders withheld) with one ERROR, re-granted by the next clean cycle; a `BrokerStateAdapterError` stops the session on first occurrence, as startup treats drift; the withheld period is recorded in `session_conditions`. | **Epic 5, Story 5.8** |
+| **D3** | Withhold after 3, drift stops: three consecutive failed cycles move the monitor to `RECOVERING` (orders withheld) with one ERROR, re-granted by the next clean cycle; a `BrokerStateAdapterError` stops the session on first occurrence, as startup treats drift; the withheld period is recorded in `session_conditions`. | **Epic 5, Story 5.8** — ✅ **landed 2026-10-11** (see "Deferred from: story-5.8" below) |
 | **D4** | A non-synthetic strategy id the session's spec does not resolve to is unowned: `split_by_owner(..., session_strategy_ids=)` with the ids from `live_session_node.session_strategy_ids`; the strategy that resolves to the new id is refused through the existing `strategy.resume_refused reason=unowned_position` path. `LiveSessionRunner` 416 → 417, disclosed. | This PR |
 | **D5a** | Covered growth resumes beside the excess: when the strategy's own position is non-zero and the unowned part is on the same side, D-C does not refuse — `strategy.resumed_beside_excess` names both, the strategy manages its own lot, the excess stays `INTERNAL-DIFF` and is never traded. Flat-beside-unowned, opposite side and **mixed sides** (`strategies_on_both_sides`) are still refused. Supersedes the two "Owner: the PO" items in the 4.5/4.7 integration-merge section above. Docs: nautilus.md, README, `live start` help, P18/P19c/P20. | This PR |
 | **D5b** | The startup/runtime asymmetry on mixed-sides rows is confirmed (per-strategy containment exists at startup, none at runtime); the visibility gap is closed — the row `_to_act_on` exempts is logged `reconcile.discrepancy resolution=covered` (WARNING) from the reconcile phase. | This PR |
@@ -3774,7 +3774,8 @@ it landed.
   reports switched off (4.3, ruling 1A), the session then trades for its whole life with no runtime
   alignment and, after a disconnect, no reconnect grant. `_FailureStreak.count` exists but nothing
   acts on it. Should a streak beyond N withdraw permission or stop the session? **Owner: the PO**;
-  suggested routing: Epic 5 planning.
+  suggested routing: Epic 5 planning. — **RESOLVED by Story 5.8 (2026-10-11)**, per the ruling in
+  the table above.
 - **D4 [MEDIUM] The ownership predicate treats any non-synthetic `strategy_id` as owned.**
   `split_by_owner` and `ResumeCheck.refuse_unowned` refuse only when the synthetic net is non-zero.
   A cached position under an id no spec entry resolves to (e.g. `SMACrossover-000` left by a
@@ -4402,3 +4403,79 @@ DN3a. These five are left or disclosed, each with its reason and owner:
   now says so ("they, and any P&L already realized on them, are outside the record's metrics"),
   and so do the README and `persistence.md`. **Owner:** the epic-level both-sides decision that
   story-5.1's open-leg items already name.
+
+## Deferred from: story-5.8 (2026-10-11)
+
+Story 5.8 acts on a persistent runtime reconciliation failure (PR #35 D3: "withhold after 3, drift
+stops") and records each withheld period for the seal. The PO ruled Q1 (a): `reconcile_withheld`
+is the one `runtime_flags` key the `-> running` edge carries forward. The PO ruled Q2 (a): no
+`live status` change. How the story dispositions the items routed to it, then what it leaves, each
+with an owner:
+
+- **Closed: PR #35 D3.** Three consecutive failed cycles withdraw trading permission through the
+  monitor's `RECOVERING` (`withhold_for_reconciliation`, one production caller, pinned), with one
+  ERROR `reconcile.cycle_failed action=trading_withheld`. The next clean cycle re-grants through
+  `confirm_state_reestablished`. A `BrokerStateAdapterError` stops the session on its first
+  occurrence (exit 1). Each period reaches the sealed record as `session_conditions.reconcile_withheld`.
+- **Closed for this key only: story-5.4 (c), "`last_run_flags` covers the last process run only".**
+  The withheld history now survives every `-> running` edge. `failed_strategies`, `all_failed` and
+  `order_rejections` still clear per run (Story 2.7 AC #4 unchanged), so those stay last-run-only
+  in the record. **Owner:** whoever adds a session-lifetime history for them; the carry in
+  `session_service._apply_transition` / `reconcile_withheld.carried_forward` is the pattern.
+- **Not touched: story-5.7 W1 (a same-symbol unresolved row withholds the reconnect grant for the
+  rest of the session).** That row is a clean read with a standing row, not a cycle *failure*, so
+  the streak never counts it and this story's rule does not apply. The owner stays the PO.
+- **(Q2 (a), PO ruling) `live status` / `live list` do not show a withheld session as
+  `degraded`.** A session withholding trading for a failing read still reads by its existing
+  health senses. An open period in the current run's `runtime_flags["reconcile_withheld"]` is the
+  signal a future `_is_degraded` sense would read. **Owner:** the PO, if an operator is ever
+  surprised by a `trading` health on a withheld session.
+- **(D-F, narrowed by code review DN1, PO ruling 1a) Only a `kill -9`, or a database that is down
+  through the teardown, can still lose or overstate a withheld period.** The tick writes each period
+  right after the cycle that opened or closed it. The runner's teardown then writes any period the
+  tick could not, before the `-> stopped` edge closes what it finds open (`flush_run_snapshots`,
+  in the existing `_flush_run_snapshots` slot; the runner's size is unchanged). Two cases remain:
+  - **Lost start:** a period whose start never reached Postgres before a `kill -9` is not recorded.
+    The transcript's ERROR record still names it.
+  - **Overstated end:** a period whose *end* never reached Postgres before a `kill -9` is closed by
+    the next start at the dead process's last heartbeat (`process_lost`), later than its real end.
+
+  **Owner:** none, unless a lost or overstated period is ever met.
+- **(D-C, disclosed) A drift stop is as broad as startup's.** `read_broker_state` wraps *any*
+  unexpected exception inside the read as `BrokerStateAdapterError`. So such an exception now
+  stops a running session on its first occurrence, where it used to be one more streak failure.
+  That is the literal ruling and matches startup. **Owner:** the PO, if a transient adapter
+  exception is ever seen stopping a live session (P23b's observational row).
+- **(D-J) A withhold owned by a connection loss is not a recorded period.** When the third
+  failure arrives in a reconnect cycle after a real disconnect, the ERROR is logged, but no period
+  opens: the outage withheld trading first. Connection outages reach no durable record at all
+  (`connection_lost_at` is still a dormant `runtime_flags` reader). **Owner:** an epic-level
+  decision to record outages in `session_conditions` beside withheld periods.
+- **Procedure P23 is defined, not run.** It starts a session and suspends the paper Gateway, which
+  only the operator may do. **Owner:** the operator's phase-gate run.
+
+## Deferred from: code review of 5-8-act-on-a-persistent-runtime-reconciliation-failure (2026-10-11)
+
+- **W1 — A `RECOVERING → LOST → RECOVERING` flap does not reset the reconnect debounce.**
+  `RuntimeReconciler.on_tick` clears `_recovering` only on `CONNECTED`. A real loss *inside* a
+  `RECOVERING` episode therefore keeps the pre-loss debounce, stale-order sightings and
+  `_ok.needed`, so a row first seen before the loss can be acted on after it. This is Story 4.3's
+  behaviour for any reconnect flap, but a reconciliation withhold makes long `RECOVERING` episodes
+  more common. The fix is one `elif state is ConnectionState.LOST: self._recovering = False`;
+  `RuntimeReconciler` is at 99/100 statements, so budget it first. **Owner:** the next story that
+  touches `RuntimeReconciler`.
+- **W2 — A sustained database outage logs one `session.withheld_record_failed` ERROR per tick.**
+  The period stays pending and is retried every tick. This is the same shape as Story 3.7's
+  `session.rejection_record_failed`. **Owner:** whoever throttles the steady state's write-failure
+  records; do both together.
+- **(Code review DN2, PO ruling 2c) A standing same-symbol unresolved row turns a reconciliation
+  withhold into one that lasts until the session stops.**
+  - **While `CONNECTED`.** A runtime cycle with an outstanding `IB-CONID-*` row under a held or
+    traded symbol withdraws nothing, and trading continues.
+  - **After a withhold.** Once three failed reads withhold trading, every reconnect cycle sees that
+    row as outstanding and never grants.
+
+  This is story-5.7 W1's trap ("a same-symbol unresolved row keeps withholding the reconnect
+  grant"), which a disconnect already reached and three failed reads now reach as well. It fails
+  closed, and the withheld period stays open until the stop closes it. **Reason for deferring:**
+  same root cause as 5.7 W1, decided together. **Owner:** the PO, with story-5.7 W1.

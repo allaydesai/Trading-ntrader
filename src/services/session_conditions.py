@@ -47,9 +47,18 @@ PO rulings (2026-10-11): **R1a** — ``start_date_basis`` states that the run's
 ``start_date`` is the session's creation, a disclosed deviation from "first
 start" (nothing durable records one, and there is no migration). **R2a** —
 ``last_run_flags`` is the sealed row's ``runtime_flags`` as stored, or ``None``:
-the **last process run's** facts only, since they are cleared on every start.
+the **last process run's** facts only, since they are cleared on every start —
+except, since Story 5.8 (PO ruling Q1), the session-lifetime
+``reconcile_withheld`` history, which the start carries and so appears here too.
 **R3a** — nothing per-session is claimed about reconciliation-owned activity;
 ``price_basis`` and ``equity_series.excludes`` state it structurally.
+
+**Story 5.8 (AC #3; PO ruling Q1, 2026-10-11)** adds ``reconcile_withheld``:
+every period the running session withheld trading because its reconciliation
+kept failing, with its start, end and cause. It *is* recorded during the run —
+the one session-lifetime key in ``runtime_flags``, carried across every
+``-> running`` edge — so it reaches the record from every run, not only the
+last. Its shape is :mod:`src.services.reconcile_withheld`'s.
 """
 
 import copy
@@ -62,6 +71,7 @@ from sqlalchemy import Numeric
 from src.core.live_market_data import REQUIRED_LIVE_MARKET_DATA_TYPE_NAME
 from src.db.models.backtest import BacktestRun
 from src.models.reconciliation import ViewPosition
+from src.services.reconcile_withheld import RECONCILE_WITHHELD_KEY, withheld_for_record
 
 #: The document's version — bumped only when a key's meaning changes.
 SCHEMA_VERSION = 1
@@ -177,8 +187,13 @@ def build_session_conditions(
     Returns:
         A new, JSON-native mapping: AR7's seven keys, ``start_date_basis``
         (always :data:`START_DATE_BASIS` — the run's ``start_date`` is
-        ``period_start``'s, so no caller may state another; code review P9)
-        and ``last_run_flags``. Nothing given is kept by reference.
+        ``period_start``'s, so no caller may state another; code review P9),
+        ``last_run_flags``, and ``reconcile_withheld`` (Story 5.8, AC #3):
+        every period the session withheld trading for a failing
+        reconciliation, in every run — read from the same flags, where the
+        ``-> running`` edge carries it (PO ruling Q1) — as stored, an
+        explicit empty document when there was none, and a period still open
+        marked ``open_at_seal``. Nothing given is kept by reference.
 
     Raises:
         TypeError: A capital, count or position of the wrong type.
@@ -195,4 +210,5 @@ def build_session_conditions(
         "open_positions_at_seal": _positions(open_positions),
         START_DATE_BASIS_KEY: START_DATE_BASIS,
         LAST_RUN_FLAGS_KEY: copy.deepcopy(last_run_flags),
+        RECONCILE_WITHHELD_KEY: withheld_for_record(last_run_flags),
     }

@@ -45,6 +45,7 @@ from src.models.reconciliation import (
 )
 from src.models.session import SessionSpec, SessionStatus, StrategySpec
 from src.services import session_seal_service as seal_module
+from src.services.reconcile_withheld import RECONCILE_WITHHELD_KEY
 from src.services.seal_open_positions import (
     NONE_OPEN_DISPOSITION,
     NONE_WORKING_DISPOSITION,
@@ -1022,7 +1023,9 @@ class TestTheWriteIsTheBacktestPathsOwn:
         """Widened deliberately by Story 5.4: ``session_conditions`` was
         ``{"equity_series": …}`` alone; AR7's keys and the two ruled extras now
         sit beside the series, which is unchanged. The exact set is pinned —
-        never a subset — so a key added or lost on either side goes red."""
+        never a subset — so a key added or lost on either side goes red.
+        Widened deliberately again by Story 5.8 (AC #3): ``reconcile_withheld``,
+        the session's withheld periods (PO ruling Q1)."""
         await harness.seal()
 
         snapshot = harness.save_kwargs["config_snapshot"]
@@ -1038,6 +1041,7 @@ class TestTheWriteIsTheBacktestPathsOwn:
         assert set(conditions) == set(AR7_KEYS) | {
             START_DATE_BASIS_KEY,
             LAST_RUN_FLAGS_KEY,
+            RECONCILE_WITHHELD_KEY,
             EQUITY_SERIES_KEY,
         }
         assert conditions[EQUITY_SERIES_KEY] == EQUITY_SERIES

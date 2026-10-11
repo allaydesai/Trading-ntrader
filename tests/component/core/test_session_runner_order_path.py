@@ -149,6 +149,18 @@ class SpyRecord:
         self.calls.append("record_order_rejections")
         self.rejections.append({"rejected": rejected, "consecutive": consecutive})
 
+    def record_trading_withheld(
+        self,
+        *,
+        withheld_from: datetime,
+        withheld_until: datetime | None,
+        reason: str | None,
+        error_type: str,
+        failed_cycles: int,
+    ) -> None:
+        """Story 5.8's fifth port method, kept complete for the same reason."""
+        self.calls.append("record_trading_withheld")
+
 
 async def _never_sleeps(seconds: float) -> None:
     import asyncio
