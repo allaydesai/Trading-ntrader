@@ -4631,7 +4631,7 @@ review P1 of 5.8, the `write_rejection_snapshot` precedent). **Both decisions ru
 Found running P23a/P23c and the live seal on `015-paper-trading` (d7c59af). Full transcript
 references are in `docs/qa/phase3-live-verification.md`, P23's 2026-10-12 Result-log row.
 
-- [ ] [Live][Defect] L1 — **After any reconnect the session never receives a bar again.**
+- [x] [Live][Defect] L1 — **Routed to Story 5.9 (2026-10-12; PO rulings: local shim, no trading on catch-up bars; live proof is P24).** **After any reconnect the session never receives a bar again.**
   Nautilus 1.220's IB adapter `_resubscribe_all` raises
   `TypeError: subscribe_historical_bars() got an unexpected keyword argument 'start'`.
   `client/market_data.py:456-465` registers the bar subscription's handle with `start=start`,

@@ -120,6 +120,18 @@ NODE_FACING_MODULES = (
     # start-failure path) must receive — raising is fine here, exiting never
     # is. Added in the creating commit.
     "src/core/live_session_resume.py",
+    # Story 5.9. Installed inside `node.build()` (the exec-client factory,
+    # beside `live_exec_position_reports.py`), then run inside the adapter's
+    # reconnect task for the whole session; its watch is awaited by the
+    # heartbeat tick. A lost bar feed is a typed `BarFeedLostError` the
+    # runner's `finally` must receive — raising is fine, exiting never is.
+    # Added in the creating commit.
+    "src/core/live_bar_resubscribe.py",
+    # Story 5.9. Installed by `live_order_path.install_order_path` on the
+    # strategy's own `handle_bar`, so it runs inside every bar the strategy
+    # handles — the same position as `live_order_path.py` above. It contains
+    # its own failures and never raises. Added in the creating commit.
+    "src/core/live_catch_up_gate.py",
     "src/services/session_record.py",
     "src/services/session_service.py",
 )

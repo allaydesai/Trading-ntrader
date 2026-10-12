@@ -789,3 +789,39 @@ it on every sealed session as
 `session_conditions.price_basis = "ibkr_unadjusted_smart"`, against a backtest's
 `"firstrate_adjusted"` (Story 5.4, architecture AR7). Read a live-vs-backtest
 difference near a corporate action against that property first.
+
+## Reconnect: the bar feed (Story 5.9)
+
+**Upstream defect (nautilus-trader 1.220.0, IB adapter).** On every reconnect,
+`InteractiveBrokersClient._resubscribe_all` calls each subscription's stored handle.
+`_subscribe` stores the historical-bars handle as `partial(subscribe_historical_bars, bar_type=,
+contract=, use_rth=, handle_revised_bars=, start=)`, but the method takes no `start` and
+requires `params` (`client/market_data.py:147-152, 416-465`). So the call raises `TypeError`,
+`_resubscribe_all` logs and swallows it, and **the session never receives another bar**. It stays
+connected, reconciled and permitted to trade, and `live status` reads only `idle` (live, P23
+2026-10-12).
+
+**The shim:** `src/core/live_bar_resubscribe.py`.
+- It replaces `subscribe_historical_bars` with an instance attribute on the shared IB client.
+  `_subscribe` compares by call-time lookup, so the stored partial wraps it.
+- It is installed from the exec factory's `create`, because data and exec share one client
+  (`factories.py:112-127`).
+- **It must be installed before the first `subscribe_bars`**: one installed later leaves the stored
+  partial pointing at the stock method (measured).
+- A resubscribe it cannot restore stops the session with exit `1` (`BarFeedLostError`, via
+  `watched_reconciler` around the runtime reconciler).
+- Canaries: `TestTheAdapterDefect` in `tests/component/core/test_live_bar_resubscribe.py`. When
+  they fail on an upgrade, the shim is deletable.
+
+**The catch-up burst it exposes.** The resubscribe's history request replays every bar that closed
+during the outage. The adapter's only guard drops bars older than the last one it saw, and
+`_bar_type_to_last_bar` is never cleared. Each replayed bar is stamped with its **own period end**
+as `ts_init`, not its arrival (`market_data.py:1175-1176`). So neither `ts_init` nor the
+freshness guard can tell one from a live bar.
+
+`src/core/live_catch_up_gate.py`:
+- installed by `install_order_path` on the strategy's own `handle_bar`;
+- judges each bar against the wall clock at handling;
+- withholds any order raised on a bar handled more than 120 s past its close.
+
+The indicators still see the bar (PO ruling 2026-10-12).

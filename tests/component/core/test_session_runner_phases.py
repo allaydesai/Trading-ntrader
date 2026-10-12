@@ -40,7 +40,7 @@ from nautilus_trader.test_kit.providers import TestInstrumentProvider
 from structlog.testing import capture_logs
 
 from src.config import IBKRSettings
-from src.core import live_session_runner
+from src.core import live_bar_resubscribe
 from src.core.exit_outcome import EXIT_CODES
 from src.core.live_account_gate import verify_connected_account
 from src.core.live_broker_state import (
@@ -1729,6 +1729,14 @@ class TestImportPurity:
         # reads the cache and the reconciliation proof in domain values — no
         # `src.db`/`src.services` import (AR38). Added in the creating commit.
         "src.core.live_session_resume",
+        # Story 5.9. Imported by `live_node_builder` (the bar-resubscribe patch,
+        # installed during `node.build()`) and by the runner (the watch around
+        # the runtime reconciler) — no `src.db`/`src.services` import (AR38).
+        # Added in the creating commit.
+        "src.core.live_bar_resubscribe",
+        # Story 5.9. Imported by `live_order_path`; standard library only.
+        # Added in the creating commit.
+        "src.core.live_catch_up_gate",
     )
 
     @pytest.mark.parametrize("module_name", MODULES)
@@ -2197,13 +2205,15 @@ class TestTheRunnerHandsReconciliationTheTradedInstruments:
         settings = _settings()
         registered_accounts(settings)
         built: list[dict] = []
-        real = live_session_runner.RuntimeReconciler
+        # Story 5.9: the runner builds it through `watched_reconciler`, which
+        # looks the class up in its own module.
+        real = live_bar_resubscribe.RuntimeReconciler
 
         def _spy(**kwargs):
             built.append(kwargs)
             return real(**kwargs)
 
-        monkeypatch.setattr(live_session_runner, "RuntimeReconciler", _spy)
+        monkeypatch.setattr(live_bar_resubscribe, "RuntimeReconciler", _spy)
 
         _runner(TestLiveNode(run_seconds=0.01), settings=settings).run()
 

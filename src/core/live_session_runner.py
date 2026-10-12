@@ -90,6 +90,7 @@ from src.config import IBKRSettings
 from src.core import live_startup_reconcile
 from src.core.live_account_gate import verify_connected_account
 from src.core.live_bar_observer import LiveBarObserver, build_bar_observer_config
+from src.core.live_bar_resubscribe import watched_reconciler
 from src.core.live_broker_state import read_broker_state
 from src.core.live_check import GATE_PHASE, preflight_gate
 from src.core.live_check_driver import AccountVerifier, NodeFactory
@@ -104,7 +105,7 @@ from src.core.live_connection_probe import read_ibkr_connection_status
 from src.core.live_node_builder import GateRefusedError, build_trading_node
 from src.core.live_order_path import ORDER_EVENTS_TOPIC, OrderEventObserver, install_order_path
 from src.core.live_order_rejections import RejectionSnapshot, RejectionTally
-from src.core.live_runtime_reconcile import RuntimeReconciler, grant_after_reconciliation
+from src.core.live_runtime_reconcile import grant_after_reconciliation
 from src.core.live_session_controller import build_session_controller_config
 from src.core.live_session_node import (
     BAR_TOPIC,
@@ -930,9 +931,9 @@ class LiveSessionRunner:
             connection_reader=self._connection_reader,
             guard=self._guard,
             tally=self._rejection_tally,
-            # Story 4.3: keeps the running cache aligned with the broker and is
-            # the only path that returns trading permission after a loss.
-            reconciler=RuntimeReconciler(
+            # Story 4.3: keeps the cache aligned with the broker; the only path that re-grants
+            # trading after a loss. Story 5.9 (R2): a lost bar feed stops the session first.
+            reconciler=watched_reconciler(
                 node=self._node,
                 monitor=self._monitor,
                 log=self._log,
