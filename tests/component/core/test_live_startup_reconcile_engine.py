@@ -72,6 +72,7 @@ from src.core.live_node_builder import build_trading_node_config
 from src.core.live_startup_reconcile import (
     BROKER_WARD_SETTINGS,
     DISCREPANCY_EVENT,
+    INEXPRESSIBLE_REMAINDER_EVENT,
     OK_EVENT,
     ReconciliationFailedError,
     ReconciliationFailure,
@@ -465,6 +466,85 @@ class TestTheBrokersViewWins:
             "EXTERNAL": Decimal("10"),
             "INTERNAL-DIFF": Decimal("-10"),
         }
+
+
+def _remainders(logs) -> list[dict]:
+    return [e for e in logs if e["event"] == INEXPRESSIBLE_REMAINDER_EVENT]
+
+
+class TestHoldingsTheAdapterCannotExpressAgainstTheRealEngine:
+    """Story 5.7 (PO ruling D2) on the real engine and cache: a fractional broker
+    quantity is judged at whole shares — correcting the framework's own
+    over-import — and an unresolvable contract of another symbol is left out."""
+
+    def test_f3_the_frameworks_own_pass_over_imports_a_whole_share(self, harness):
+        """Canary (measured 2026-10-07, 1.220.0): given the IB adapter's
+        precision-1 ``22.5`` report against a precision-0 equity, Nautilus's
+        pass inside ``node:connect`` adds ``INTERNAL-DIFF +1`` — the cache then
+        holds *more* than the broker. Fails by name if an upgrade changes it."""
+        h = harness({NVDA.id: (22.5, 100.0)})
+        h.seed(NVDA, 22)
+
+        assert h.native() is True
+
+        assert h.open_positions() == {str(STRATEGY): Decimal(22), "INTERNAL-DIFF": Decimal(1)}
+
+    def test_the_phase_corrects_the_over_import_to_whole_shares_and_names_the_half(self, harness):
+        h = harness({NVDA.id: (22.5, 100.0)})
+        h.seed(NVDA, 22)
+        assert h.native() is True
+
+        with capture_logs() as logs:
+            result = h.reconcile(_state((NVDA.id, "22.5", "100")))
+
+        assert h.open_positions() == {str(STRATEGY): Decimal(22)}, "the strategy's lot untouched"
+        assert h.portfolio.net_position(NVDA.id) == 22
+        (row,) = result.reconcile_resolved
+        assert (row.local_quantity, row.broker_quantity) == (Decimal(23), Decimal(22))
+        (named,) = _remainders(logs)
+        assert (named["broker_quantity"], named["expressible_quantity"]) == ("22.5", "22")
+        (ok,) = [e for e in logs if e["event"] == OK_EVENT]
+        assert ok["inexpressible_remainders"] == {str(NVDA.id): "0.5"}
+
+    def test_a_half_share_alone_ends_flat(self, harness):
+        h = harness({AAPL.id: (0.5, 100.0)})
+        assert h.native() is True
+        assert h.net(AAPL) == 1, "premise (F3): the framework imported a whole share"
+
+        h.reconcile(_state((AAPL.id, "0.5", "100")))
+
+        assert h.net(AAPL) == 0
+        assert h.cache.positions_open() == []
+
+    def test_an_unresolvable_contract_of_another_symbol_beside_a_matched_position(self, harness):
+        h = harness({NVDA.id: (10, 100.0)})
+        h.seed(NVDA, 10)
+        assert h.native() is True
+        bond = BrokerPosition(
+            instrument_id="IB-CONID-99",
+            quantity=Decimal(1000),
+            average_price=None,
+            con_id=99,
+            symbol="T 4.5 02/15/36",
+            instrument_resolved=False,
+        )
+        state = _state((NVDA.id, "10", "100"))
+        state = BrokerState(
+            account=state.account,
+            positions=(*state.positions, bond),
+            cash=state.cash,
+            retrieved_at=state.retrieved_at,
+        )
+
+        with capture_logs() as logs:
+            result = h.reconcile(state)
+
+        assert h.open_positions() == {str(STRATEGY): Decimal(10)}
+        assert result.reconcile_resolved == ()
+        records = [
+            (e["instrument_id"], e["resolution"]) for e in logs if e["event"] == DISCREPANCY_EVENT
+        ]
+        assert records == [("IB-CONID-99", "unresolved")]
 
 
 class TestTheFrameworkLoadsWorkingOrdersAndPositions:

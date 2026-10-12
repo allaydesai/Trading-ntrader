@@ -142,13 +142,15 @@ NODE_FACING_MODULES = (
 #: exit through the same ``EXIT_CODES``-derived ``SystemExit`` `live_start.py`
 #: does, for the same reason. ``live_reconcile.py`` (Story 4.6) joined at
 #: creation for the same reason again: `reconcile` exits 0/5, or through
-#: ``EXIT_CODES`` on a failure.
+#: ``EXIT_CODES`` on a failure. ``live_seal.py`` (Story 5.3) joined at creation
+#: too: `seal` exits 0, or 1 through ``EXIT_CODES`` on a refusal or failure.
 EXEMPT_MODULES = (
     "src/core/live_session_signals.py",
     "src/cli/commands/live.py",
     "src/cli/commands/live_start.py",
     "src/cli/commands/live_status.py",
     "src/cli/commands/live_reconcile.py",
+    "src/cli/commands/live_seal.py",
 )
 
 

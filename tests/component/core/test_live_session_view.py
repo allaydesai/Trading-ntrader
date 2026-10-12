@@ -24,7 +24,13 @@ from uuid import UUID
 import pytest
 from nautilus_trader.common.component import is_logging_initialized
 from nautilus_trader.model.enums import OrderSide
-from nautilus_trader.model.identifiers import AccountId, PositionId, StrategyId, TradeId
+from nautilus_trader.model.identifiers import (
+    AccountId,
+    ClientOrderId,
+    PositionId,
+    StrategyId,
+    TradeId,
+)
 from nautilus_trader.model.objects import Price, Quantity
 from nautilus_trader.model.position import Position
 from nautilus_trader.test_kit.providers import TestInstrumentProvider
@@ -41,12 +47,13 @@ from src.core.live_session_view import (
     SessionViewFailure,
     SessionViewUnavailableError,
     normalised_account,
+    read_session_holdings,
     read_session_view,
     require_engine_state,
 )
 from src.core.live_trader_id import derive_trader_id
 from src.models.broker_state import CashBalance
-from src.models.reconciliation import ViewPosition
+from src.models.reconciliation import ORDERS_NOT_LISTED, OpenLeg, ViewPosition, WorkingOrder
 
 pytestmark = pytest.mark.component
 
@@ -122,8 +129,11 @@ class FakeAdapter:
         other_keys=("instruments:AAPL.NASDAQ",),
         repeat_keys: bool = False,
         accounts=None,
+        orders=None,
     ):
         self.positions: dict[str, object] = dict(positions or {})
+        #: Story 5.5, R3b: ``orders:<client_order_id>`` — a real ``Order`` or an exception.
+        self.orders: dict[str, object] = dict(orders or {})
         #: A dict normally; anything else stands in for a drifted `load()` answer.
         self.general: object = dict(general) if isinstance(general, dict) else general or {}
         self.other_keys = tuple(other_keys)
@@ -137,6 +147,7 @@ class FakeAdapter:
     def _all_keys(self) -> list[str]:
         prefix = f"trader-{TRADER_ID}:"
         keys = [f"{prefix}positions:{pid}" for pid in self.positions]
+        keys += [f"{prefix}orders:{oid}" for oid in self.orders]
         general = self.general if isinstance(self.general, dict) else {}
         keys += [f"{prefix}general:{name}" for name in general]
         keys += [f"{prefix}{key}" for key in self.other_keys]
@@ -162,6 +173,13 @@ class FakeAdapter:
     def load_account(self, account_id):
         self.calls.append(("load_account", str(account_id)))
         value = self.accounts.get(str(account_id))
+        if isinstance(value, BaseException):
+            raise value
+        return value
+
+    def load_order(self, client_order_id):
+        self.calls.append(("load_order", str(client_order_id)))
+        value = self.orders[str(client_order_id)]
         if isinstance(value, BaseException):
             raise value
         return value
@@ -205,6 +223,38 @@ def _read(adapter: FakeAdapter, *, log=None, reachability=None, account: str = A
         reachability=reachability or (lambda host, port: None),
     )
     return view, opened
+
+
+def _holdings(adapter: FakeAdapter, *, log=None, account: str = ACCOUNT):
+    return read_session_holdings(
+        SESSION_ID,
+        account,
+        _redis(),
+        log=log or RecordingLog(),
+        adapter_factory=lambda trader_id, config: adapter,
+        reachability=lambda host, port: None,
+    )
+
+
+def _order(instrument, side: OrderSide, qty: int, number: int, *events: str):
+    """A real limit order with a distinct id, moved through ``events`` in turn."""
+    order = TestExecStubs.limit_order(
+        instrument=instrument,
+        order_side=side,
+        price=Price.from_str("90.00"),
+        quantity=Quantity.from_int(qty),
+        client_order_id=ClientOrderId(f"O-20261011-000000-0e8f1c2a-000-{number}"),
+    )
+    stubs = {
+        "submitted": lambda: TestEventStubs.order_submitted(order),
+        "accepted": lambda: TestEventStubs.order_accepted(order),
+        "filled": lambda: TestEventStubs.order_filled(
+            order, instrument=instrument, trade_id=TradeId(f"OT-{number}")
+        ),
+    }
+    for event in events:
+        order.apply(stubs[event]())
+    return order
 
 
 class TestTheSessionsPositionsAreRead:
@@ -278,6 +328,33 @@ class TestTheSessionsPositionsAreRead:
         view, _ = _read(adapter)
 
         assert view.positions == ()
+
+    @pytest.mark.acceptance_criterion(
+        "5.4h",
+        "a synthetic owner's split shares held after the strategy exits are an open position at "
+        "seal: the seal refuses naming them, and open_positions_at_seal is built from the same "
+        "view",
+        # Story 5.4's own AC #8 (from the routed debt), not the PRD's.
+        "_bmad-output/implementation-artifacts/"
+        "5-4-record-the-conditions-the-session-actually-ran-under.md",
+    )
+    def test_a_synthetic_owners_split_shares_stay_held_after_the_strategy_exits(self):
+        """Story 5.4 (Story 4.7's routed debt). The strategy bought 10 before a
+        2:1 split and sold its 10 after it; the split's other 10 sit in the
+        ``EXTERNAL`` position reconciliation absorbed. The strategy is flat, the
+        account is not — and the view, which the seal reads for both its R2a
+        refusal and ``open_positions_at_seal``, says so."""
+        adapter = FakeAdapter(
+            positions={
+                "AAPL.NASDAQ-S-001": _position(AAPL, (OrderSide.BUY, 10), (OrderSide.SELL, 10)),
+                "AAPL.NASDAQ-EXTERNAL": _position(AAPL, (OrderSide.BUY, 10), strategy="EXTERNAL"),
+            },
+            general=_summary(USD={"TotalCashValue": 1}),
+        )
+
+        view, _ = _read(adapter)
+
+        assert view.positions == (ViewPosition("AAPL.NASDAQ", Decimal("10")),)
 
     def test_a_flat_session_with_state_is_a_successful_empty_view(self):
         adapter = FakeAdapter(general=_summary(USD={"TotalCashValue": 1}))
@@ -828,6 +905,378 @@ class TestTheEngineStatePrecheck:
         assert built == [], "the adapter's constructor blocks forever on a dead Redis"
 
 
+EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
+
+
+class TestTheHoldingsStandBehindTheView:
+    """Story 5.5, R1a: one leg per open position, read in the same pass as the net."""
+
+    def test_each_open_position_on_the_account_is_one_leg(self):
+        nvda = _position(NVDA, (OrderSide.SELL, 10))
+        adapter = FakeAdapter(
+            positions={"NVDA.NASDAQ-S-001": nvda},
+            general=_summary(USD={"TotalCashValue": 1}),
+        )
+
+        holdings = _holdings(adapter)
+
+        assert holdings.view.positions == (ViewPosition("NVDA.NASDAQ", Decimal("-10")),)
+        assert holdings.legs == (
+            OpenLeg(
+                position_id="NVDA.NASDAQ-S-001",
+                instrument_id="NVDA.NASDAQ",
+                strategy_id="S-001",
+                side="SELL",
+                quantity=Decimal("-10"),
+                avg_px_open=Decimal("100.00000000"),
+                opened_at=EPOCH,
+                opening_order_id=str(nvda.opening_order_id),
+                realized_pnl=Decimal("0.00"),
+                commission_amount=Decimal("0.00"),
+                commission_currency="USD",
+            ),
+        )
+
+    def test_a_strategy_leg_and_a_reconciliation_leg_are_both_held(self):
+        """R1a: reconciliation-owned positions are legs too, and the legs sum to the net."""
+        adapter = FakeAdapter(
+            positions={
+                "AAPL.NASDAQ-S-001": _position(AAPL, (OrderSide.BUY, 10)),
+                "AAPL.NASDAQ-EXTERNAL": _position(AAPL, (OrderSide.BUY, 4), strategy="EXTERNAL"),
+            },
+            general=_summary(USD={"TotalCashValue": 1}),
+        )
+
+        holdings = _holdings(adapter)
+
+        assert holdings.view.positions == (ViewPosition("AAPL.NASDAQ", Decimal("14")),)
+        assert [(leg.position_id, leg.strategy_id, leg.quantity) for leg in holdings.legs] == [
+            ("AAPL.NASDAQ-EXTERNAL", "EXTERNAL", Decimal("4")),
+            ("AAPL.NASDAQ-S-001", "S-001", Decimal("10")),
+        ]
+
+    def test_the_leg_quantity_is_what_remains_not_the_peak(self):
+        """R1a: a partially reduced position's leg is its current quantity."""
+        position = _position(AAPL, (OrderSide.BUY, 10), (OrderSide.SELL, 4))
+        adapter = FakeAdapter(
+            positions={"AAPL.NASDAQ-S-001": position},
+            general=_summary(USD={"TotalCashValue": 1}),
+        )
+
+        [leg] = _holdings(adapter).legs
+
+        assert position.peak_qty == Quantity.from_int(10)
+        assert leg.quantity == Decimal("6")
+
+    def test_legs_netting_to_zero_leave_no_row_and_no_leg(self):
+        """D-C (5.3 code review): the broker is flat on the instrument."""
+        adapter = FakeAdapter(
+            positions={
+                "AAPL.NASDAQ-S-001": _position(AAPL, (OrderSide.BUY, 5)),
+                "AAPL.NASDAQ-EXTERNAL": _position(AAPL, (OrderSide.SELL, 5), strategy="EXTERNAL"),
+                "NVDA.NASDAQ-S-001": _position(NVDA, (OrderSide.BUY, 2)),
+            },
+            general=_summary(USD={"TotalCashValue": 1}),
+        )
+
+        holdings = _holdings(adapter)
+
+        assert holdings.view.positions == (ViewPosition("NVDA.NASDAQ", Decimal("2")),)
+        assert [leg.instrument_id for leg in holdings.legs] == ["NVDA.NASDAQ"]
+
+    def test_closed_and_other_account_positions_are_not_legs(self):
+        adapter = FakeAdapter(
+            positions={
+                "AAPL.NASDAQ-S-001": _position(AAPL, (OrderSide.BUY, 7), (OrderSide.SELL, 7)),
+                "NVDA.NASDAQ-S-001": _position(NVDA, (OrderSide.BUY, 3), account=OTHER_ACCOUNT),
+            },
+            general=_summary(USD={"TotalCashValue": 1}),
+        )
+
+        holdings = _holdings(adapter)
+
+        assert holdings.legs == ()
+        assert holdings.view.positions_skipped == 1
+
+    def test_a_leg_that_cannot_be_read_honestly_is_unreadable_never_dropped(self):
+        held = _position(AAPL, (OrderSide.BUY, 5))
+        broken = SimpleNamespace(
+            is_open=True,
+            account_id=held.account_id,
+            instrument_id=held.instrument_id,
+            signed_decimal_qty=held.signed_decimal_qty,
+            id=held.id,
+            strategy_id=held.strategy_id,
+            entry=held.entry,
+            avg_px_open=float("nan"),
+            ts_opened=0,
+            opening_order_id=held.opening_order_id,
+            realized_pnl=None,
+            commissions=lambda: [],
+            settlement_currency=held.settlement_currency,
+        )
+        adapter = FakeAdapter(
+            positions={"AAPL.NASDAQ-S-001": broken},
+            general=_summary(USD={"TotalCashValue": 1}),
+        )
+
+        with pytest.raises(SessionViewUnavailableError) as raised:
+            _holdings(adapter)
+
+        assert raised.value.reason is SessionViewFailure.UNREADABLE
+        assert raised.value.error_type == "ValueError"
+
+    def test_the_view_inside_the_holdings_is_read_session_views_own(self):
+        positions = {
+            "AAPL.NASDAQ-S-001": _position(AAPL, (OrderSide.BUY, 10)),
+            "NVDA.NASDAQ-S-001": _position(NVDA, (OrderSide.BUY, 3), account=OTHER_ACCOUNT),
+        }
+        general = _summary(USD={"TotalCashValue": 1})
+
+        view, _ = _read(FakeAdapter(positions=positions, general=general))
+        holdings = _holdings(FakeAdapter(positions=positions, general=general))
+
+        assert holdings.view == view
+
+
+class TestTheSessionsWorkingOrdersAreRead:
+    """Story 5.5, R3b: the cache's working orders, reported at seal — never acted on."""
+
+    def test_an_accepted_and_an_in_flight_order_are_working(self):
+        accepted = _order(NVDA, OrderSide.BUY, 5, 1, "submitted", "accepted")
+        in_flight = _order(AAPL, OrderSide.SELL, 2, 2, "submitted")
+        adapter = FakeAdapter(
+            orders={
+                str(accepted.client_order_id): accepted,
+                str(in_flight.client_order_id): in_flight,
+            },
+            general=_summary(USD={"TotalCashValue": 1}),
+        )
+
+        holdings = _holdings(adapter)
+
+        assert holdings.working_orders == (
+            WorkingOrder(
+                client_order_id=str(accepted.client_order_id),
+                instrument_id="NVDA.NASDAQ",
+                side="BUY",
+                quantity=Decimal("5"),
+                order_type="LIMIT",
+                status="ACCEPTED",
+            ),
+            WorkingOrder(
+                client_order_id=str(in_flight.client_order_id),
+                instrument_id="AAPL.NASDAQ",
+                side="SELL",
+                quantity=Decimal("2"),
+                order_type="LIMIT",
+                status="SUBMITTED",
+            ),
+        )
+
+    def test_filled_and_never_sent_orders_are_not_working(self):
+        filled = _order(NVDA, OrderSide.BUY, 5, 1, "submitted", "accepted", "filled")
+        never_sent = _order(NVDA, OrderSide.BUY, 5, 2)
+        adapter = FakeAdapter(
+            orders={
+                str(filled.client_order_id): filled,
+                str(never_sent.client_order_id): never_sent,
+            },
+            general=_summary(USD={"TotalCashValue": 1}),
+        )
+
+        assert _holdings(adapter).working_orders == ()
+
+    def test_an_order_the_scan_returns_twice_is_read_once(self):
+        accepted = _order(NVDA, OrderSide.BUY, 5, 1, "submitted", "accepted")
+        adapter = FakeAdapter(
+            orders={str(accepted.client_order_id): accepted},
+            general=_summary(USD={"TotalCashValue": 1}),
+            repeat_keys=True,
+        )
+
+        holdings = _holdings(adapter)
+
+        assert len(holdings.working_orders) == 1
+        assert [call for call in adapter.calls if call[0] == "load_order"] == [
+            ("load_order", str(accepted.client_order_id))
+        ]
+
+    @pytest.mark.parametrize("stored", [None, RuntimeError("corrupt")], ids=["none", "raises"])
+    def test_an_order_that_cannot_be_rebuilt_is_named_never_blocking(self, stored):
+        """Code review DN1a: an unreadable order is named, never a refusal — and
+        never silently skipped either."""
+        log = RecordingLog()
+        accepted = _order(NVDA, OrderSide.BUY, 5, 1, "submitted", "accepted")
+        broken = "O-20261011-000000-0e8f1c2a-000-9"
+        adapter = FakeAdapter(
+            orders={str(accepted.client_order_id): accepted, broken: stored},
+            general=_summary(USD={"TotalCashValue": 1}),
+        )
+
+        holdings = _holdings(adapter, log=log)
+
+        assert holdings.unreadable_orders == (broken,)
+        assert [order.client_order_id for order in holdings.working_orders] == [
+            str(accepted.client_order_id)
+        ]
+        [(level, _, fields)] = [
+            r for r in log.records if r[1] == "reconcile.session_view_order_unreadable"
+        ]
+        assert level == "warning"
+        assert fields["client_order_ids"] == [broken]
+        assert "corrupt" not in repr(log.records) + repr(holdings)
+        assert ACCOUNT not in repr(log.records)
+
+    def test_an_order_key_of_an_unexpected_shape_is_named_never_blocking(self):
+        """PR #36 review P4: DN1a reaches the key too — a malformed key is named by
+        the key itself, and the flat session's holdings still read."""
+        accepted = _order(NVDA, OrderSide.BUY, 5, 1, "submitted", "accepted")
+        adapter = FakeAdapter(
+            orders={str(accepted.client_order_id): accepted},
+            general=_summary(USD={"TotalCashValue": 1}),
+            other_keys=("orders:",),
+        )
+
+        holdings = _holdings(adapter)
+
+        assert holdings.unreadable_orders == (f"trader-{TRADER_ID}:orders:",)
+        assert [order.client_order_id for order in holdings.working_orders] == [
+            str(accepted.client_order_id)
+        ]
+
+    def test_orders_that_cannot_be_listed_are_named_never_blocking(self):
+        """PR #36 review DN1 (PO ruling: proceed, name it): DN1a's "never blocks a
+        seal" covers the listing too — the positions were read through the same
+        Redis, and an order changes nothing the record holds."""
+
+        class OrdersUnlisted(FakeAdapter):
+            def keys(self, pattern: str = "*") -> list[str]:
+                if pattern.startswith("orders"):
+                    raise RuntimeError("scan failed")
+                return super().keys(pattern)
+
+        adapter = OrdersUnlisted(
+            positions={"AAPL.NASDAQ-S-001": _position(AAPL, (OrderSide.BUY, 4))},
+            general=_summary(USD={"TotalCashValue": 1}),
+        )
+
+        holdings = _holdings(adapter)
+
+        assert holdings.unreadable_orders == (ORDERS_NOT_LISTED,)
+        assert holdings.working_orders == ()
+        assert [leg.instrument_id for leg in holdings.legs] == ["AAPL.NASDAQ"]
+        assert "scan failed" not in repr(holdings)
+
+    def test_an_order_whose_fields_cannot_be_read_is_named_too(self):
+        class Drifted:
+            @property
+            def is_open(self):
+                raise AttributeError("moved")
+
+        adapter = FakeAdapter(
+            orders={"O-20261011-000000-0e8f1c2a-000-9": Drifted()},
+            general=_summary(USD={"TotalCashValue": 1}),
+        )
+
+        holdings = _holdings(adapter)
+
+        assert holdings.unreadable_orders == ("O-20261011-000000-0e8f1c2a-000-9",)
+        assert holdings.working_orders == ()
+
+    def test_an_open_order_with_nothing_left_to_fill_is_not_working(self):
+        """Code review P9: ``PARTIALLY_FILLED`` after an ``OrderUpdated`` down to
+        the filled quantity is open with zero ``leaves_qty`` — nothing is working."""
+        order = _order(NVDA, OrderSide.BUY, 5, 1, "submitted", "accepted")
+        order.apply(
+            TestEventStubs.order_filled(
+                order, instrument=NVDA, trade_id=TradeId("OT-1"), last_qty=Quantity.from_int(2)
+            )
+        )
+        order.apply(TestEventStubs.order_updated(order, quantity=Quantity.from_int(2)))
+        assert order.is_open and order.leaves_qty == Quantity.from_int(0)
+        adapter = FakeAdapter(
+            orders={str(order.client_order_id): order},
+            general=_summary(USD={"TotalCashValue": 1}),
+        )
+
+        holdings = _holdings(adapter)
+
+        assert holdings.working_orders == ()
+        assert holdings.unreadable_orders == ()
+
+    def test_read_session_view_never_reads_an_order(self):
+        """``live reconcile``'s read is unchanged: no order load, no new failure mode."""
+        adapter = FakeAdapter(
+            orders={"O-20261011-000000-0e8f1c2a-000-9": RuntimeError("corrupt")},
+            general=_summary(USD={"TotalCashValue": 1}),
+        )
+
+        view, _ = _read(adapter)
+
+        assert view.positions == ()
+        assert "load_order" not in {call[0] for call in adapter.calls}
+
+
+class TestTheHoldingsRead:
+    def test_one_record_counts_the_legs_and_orders_and_names_no_account(self):
+        log = RecordingLog()
+        accepted = _order(NVDA, OrderSide.BUY, 5, 1, "submitted", "accepted")
+        adapter = FakeAdapter(
+            positions={"AAPL.NASDAQ-S-001": _position(AAPL, (OrderSide.BUY, 4))},
+            orders={str(accepted.client_order_id): accepted},
+            general=_summary(USD={"TotalCashValue": 1}),
+        )
+
+        _holdings(adapter, log=log)
+
+        [(level, event, fields)] = [r for r in log.records if r[1] == "reconcile.session_view_read"]
+        assert level == "info"
+        assert fields["legs"] == 1
+        assert fields["working_orders"] == 1
+        assert fields["unreadable_orders"] == 0
+        assert ACCOUNT not in repr(log.records)
+
+    def test_read_session_views_record_keeps_its_story_4_6_fields(self):
+        """``live reconcile``'s record is unchanged: the seal's counts are the seal's."""
+        log = RecordingLog()
+        adapter = FakeAdapter(
+            positions={"AAPL.NASDAQ-S-001": _position(AAPL, (OrderSide.BUY, 4))},
+            general=_summary(USD={"TotalCashValue": 1}),
+        )
+
+        _read(adapter, log=log)
+
+        [(_, _, fields)] = [r for r in log.records if r[1] == "reconcile.session_view_read"]
+        assert set(fields) == {
+            "trader_id",
+            "position_count",
+            "positions",
+            "currencies",
+            "cash",
+            "elapsed_ms",
+        }
+
+    def test_the_holdings_read_saw_only_reads_and_closed_the_adapter(self):
+        accepted = _order(NVDA, OrderSide.BUY, 5, 1, "submitted", "accepted")
+        adapter = FakeAdapter(
+            positions={"AAPL.NASDAQ-S-001": _position(AAPL, (OrderSide.BUY, 2))},
+            orders={str(accepted.client_order_id): accepted},
+            general=_summary(USD={"TotalCashValue": 1}),
+        )
+
+        _holdings(adapter)
+
+        assert {call[0] for call in adapter.calls} <= {*live_session_view.LOAD_METHODS, "close"}
+        assert adapter.closed is True
+
+    def test_an_empty_namespace_is_no_engine_state_here_too(self):
+        with pytest.raises(SessionViewUnavailableError) as raised:
+            _holdings(FakeAdapter(other_keys=()))
+
+        assert raised.value.reason is SessionViewFailure.NO_ENGINE_STATE
+
+
 def _adapter_members(source: str) -> set[str]:
     """Every adapter member the module names: ``adapter.<x>(...)`` calls and the
     string names it dispatches through ``_member(adapter, "<x>")``."""
@@ -854,11 +1303,32 @@ def _adapter_members(source: str) -> set[str]:
 class TestTheLoadSurfaceIsPinned:
     """Review fix: the members this module reaches are an exact, mutator-free set."""
 
-    def test_load_methods_are_exactly_the_four_reads(self):
+    def test_load_methods_are_exactly_the_five_reads(self):
         """Story 4.7, D-C (PO ruling A): ``load_account`` joins deliberately, in
-        the constant and in this pin together."""
-        assert live_session_view.LOAD_METHODS == ("keys", "load_position", "load", "load_account")
+        the constant and in this pin together. Story 5.5, R3b: ``load_order``
+        joins the same way."""
+        assert live_session_view.LOAD_METHODS == (
+            "keys",
+            "load_position",
+            "load",
+            "load_account",
+            "load_order",
+        )
         assert not [m for m in live_session_view.LOAD_METHODS if m.startswith(ADAPTER_MUTATORS)]
+
+    def test_the_views_own_reads_are_the_pinned_constant_less_the_order_read(self):
+        """Code review P5: ``read_session_view`` binds its members from the pinned
+        constant — never a second hand-written literal — and never ``load_order``."""
+        assert live_session_view.VIEW_LOAD_METHODS == (
+            "keys",
+            "load_position",
+            "load",
+            "load_account",
+        )
+        assert live_session_view.LOAD_METHODS == (
+            *live_session_view.VIEW_LOAD_METHODS,
+            "load_order",
+        )
 
     def test_every_adapter_member_named_is_a_load_method_or_close(self):
         source = Path(live_session_view.__file__).read_text(encoding="utf-8")

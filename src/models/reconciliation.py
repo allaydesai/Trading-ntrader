@@ -8,7 +8,11 @@ resolves anything (FR36). These are the shapes that crosses AR38's boundary in:
 - ``SessionView`` — the session's engine-cache view, built from Nautilus
   objects by ``src/core/live_session_view.py`` and converted here;
 - ``PositionLine`` / ``CashLine`` / ``ReconciliationReport`` — the verdict
-  ``src/services/reconciliation_service.py`` produces.
+  ``src/services/reconciliation_service.py`` produces;
+- ``SessionHoldings`` (Story 5.5) — the same view with what the seal needs
+  behind it: one ``OpenLeg`` per open position, and one ``WorkingOrder`` per
+  order the cache still holds working. Read-side boundary values, not a results structure: a
+  sealed session's result is the existing ``trades`` row (FR42).
 
 **Exactness is structural.** Every quantity and amount is a finite ``Decimal``
 and every ``matches`` is ``==``: there is no tolerance to configure, because
@@ -49,6 +53,26 @@ def _tuple_of(name: str, values: object, member_type: type) -> None:
 def _require_masked(account: str) -> None:
     if not account.startswith(MASK_PREFIX) or len(account) > len(MASK_PREFIX) + MASKED_TAIL_MAX:
         raise ValueError("account must be the masked form, never a raw identifier")
+
+
+#: An entry or order side, in the ``trades.order_side`` vocabulary.
+SIDES = ("BUY", "SELL")
+
+
+def _require_present(value: object, *names: str) -> None:
+    for name in names:
+        if not getattr(value, name):
+            raise ValueError(f"{name} is required")
+
+
+def _require_side(side: str) -> None:
+    if side not in SIDES:
+        raise ValueError(f"side must be one of {SIDES}, got {side!r}")
+
+
+def _require_unique(name: str, keys: list[str]) -> None:
+    if len(set(keys)) != len(keys):
+        raise ValueError(f"each {name} counts once, got {sorted(keys)}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,6 +142,141 @@ class SessionView:
     def cash_known(self) -> bool:
         """Whether the session's engine recorded any cash at all."""
         return bool(self.cash)
+
+
+@dataclass(frozen=True, slots=True)
+class OpenLeg:
+    """One open position the session's engine cache holds (Story 5.5, R1a).
+
+    What a seal with ``--force`` records as an open trade with no exit — the
+    fields the backtest's own open row is built from (``save_trades_from_positions``).
+
+    Attributes:
+        position_id: The Nautilus position id — the row's ``trade_id``. It names
+            its owner (``NVDA.NASDAQ-EXTERNAL`` for reconciliation's own).
+        instrument_id: The instrument (``NVDA.NASDAQ``).
+        strategy_id: The position's owner, strategy or reconciliation stamp.
+        side: The entry side, ``BUY`` or ``SELL``; agrees with ``quantity``.
+        quantity: Signed **current** open quantity — what remains. Never zero.
+        avg_px_open: The volume-weighted entry price; positive.
+        opened_at: When the position opened (timezone-aware).
+        opening_order_id: The order that opened it — the row's ``venue_order_id``.
+        realized_pnl: Realized so far (an open leg's is minus its commission);
+            ``None`` when the position carries none.
+        commission_amount: Commission charged so far; ``None`` when unknown.
+        commission_currency: Its currency code; ``None`` when unknown.
+    """
+
+    position_id: str
+    instrument_id: str
+    strategy_id: str
+    side: str
+    quantity: Decimal
+    avg_px_open: Decimal
+    opened_at: datetime
+    opening_order_id: str
+    realized_pnl: Decimal | None = None
+    commission_amount: Decimal | None = None
+    commission_currency: str | None = None
+
+    def __post_init__(self) -> None:
+        _require_present(self, "position_id", "instrument_id", "strategy_id", "opening_order_id")
+        _require_side(self.side)
+        quantity = _finite_decimal("quantity", self.quantity)
+        if quantity == 0:
+            raise ValueError("an open leg's quantity must be non-zero")
+        if (quantity > 0) != (self.side == "BUY"):
+            raise ValueError(f"side {self.side} disagrees with the quantity {quantity}")
+        if _finite_decimal("avg_px_open", self.avg_px_open) <= 0:
+            raise ValueError(f"avg_px_open must be positive, got {self.avg_px_open}")
+        if self.opened_at.utcoffset() is None:
+            raise ValueError("opened_at must be timezone-aware")
+        for name in ("realized_pnl", "commission_amount"):
+            if getattr(self, name) is not None:
+                _finite_decimal(name, getattr(self, name))
+        currency = self.commission_currency
+        if currency is not None and not is_currency_code(currency):
+            raise ValueError(f"commission_currency must be a three-letter code, got {currency!r}")
+
+
+@dataclass(frozen=True, slots=True)
+class WorkingOrder:
+    """An order the session's engine cache still holds working (Story 5.5, R3b).
+
+    Reported at seal time, never acted on: the seal cancels nothing.
+
+    Attributes:
+        client_order_id: The session's own order id.
+        instrument_id: The instrument.
+        side: ``BUY`` or ``SELL``.
+        quantity: What is left to fill; positive.
+        order_type: ``MARKET``, ``LIMIT``, ``STOP_MARKET``, …
+        status: Its last status in the cache (``ACCEPTED``, ``SUBMITTED``, …).
+    """
+
+    client_order_id: str
+    instrument_id: str
+    side: str
+    quantity: Decimal
+    order_type: str
+    status: str
+
+    def __post_init__(self) -> None:
+        _require_present(self, "client_order_id", "instrument_id", "order_type", "status")
+        _require_side(self.side)
+        if _finite_decimal("quantity", self.quantity) <= 0:
+            raise ValueError(f"quantity must be positive, got {self.quantity}")
+
+
+#: PR #36 review DN1 (PO ruling): what ``SessionHoldings.unreadable_orders``
+#: holds, alone, when the engine cache's orders could not be listed at all.
+ORDERS_NOT_LISTED = "<orders not listed>"
+
+
+@dataclass(frozen=True, slots=True)
+class SessionHoldings:
+    """A session's view plus what stands behind it (Story 5.5).
+
+    Read once, by ``src/core/live_session_view.py``, so the legs and the net
+    cannot disagree — and pinned here so they never can: every instrument's
+    legs sum to its ``ViewPosition.quantity``, and no leg stands on an
+    instrument the view does not list (legs netting to zero leave no row, D-C).
+
+    Attributes:
+        view: The session's view, exactly as ``read_session_view`` returns it.
+        legs: One per open position on the configured account.
+        working_orders: The orders the cache still holds working.
+        unreadable_orders: The client order ids of orders the cache holds but
+            that could not be rebuilt or read — named, never a refusal and never
+            silently left out (code review DN1a).
+    """
+
+    view: SessionView
+    legs: tuple[OpenLeg, ...]
+    working_orders: tuple[WorkingOrder, ...] = ()
+    unreadable_orders: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.view, SessionView):
+            raise TypeError(f"view must be a SessionView, got {type(self.view).__name__}")
+        _tuple_of("legs", self.legs, OpenLeg)
+        _tuple_of("working_orders", self.working_orders, WorkingOrder)
+        _tuple_of("unreadable_orders", self.unreadable_orders, str)
+        if not all(self.unreadable_orders):
+            raise ValueError("an unreadable order is named by a non-empty client order id")
+        _require_unique("position", [leg.position_id for leg in self.legs])
+        _require_unique(
+            "order",
+            [order.client_order_id for order in self.working_orders] + list(self.unreadable_orders),
+        )
+        net: dict[str, Decimal] = {}
+        for leg in self.legs:
+            net[leg.instrument_id] = net.get(leg.instrument_id, Decimal(0)) + leg.quantity
+        listed = {position.instrument_id: position.quantity for position in self.view.positions}
+        if net != listed:
+            raise ValueError(
+                f"the legs must sum to the view's net per instrument: legs {net}, view {listed}"
+            )
 
 
 @dataclass(frozen=True, slots=True)

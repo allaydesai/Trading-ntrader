@@ -125,16 +125,29 @@ make web                                # Web UI (http://127.0.0.1:8000)
   widening was argued, not inherited: Story 3.6's D-F refused the same widening for the trade sink
   because *a trade is not a session-row fact*; a refusal summary is one, lives in the same
   `runtime_flags` document, and is written on the same tick by the same executor.
+  **Widened 4 → 5 at Story 5.8** (PO-sanctioned 2026-10-11): `record_trading_withheld`, on the
+  same terms. The doubles now number six component `SpyRecord`s plus the unit `_HandWrittenRecord`;
+  the grep is still the list. Its key, `runtime_flags["reconcile_withheld"]`, is the **one
+  `runtime_flags` key the `-> running` edge carries forward** (PO ruling Q1). Every other key
+  still clears per run. The shape lives in `src/services/reconcile_withheld.py`.
 - **`EXPECTED_CAPABILITIES`** (`tests/unit/db/test_trading_session_repository_shape.py`) — an
   exact-set allowlist for both `TradingSessionRepository` twins, **changed deliberately at Story
   3.6**: `stamp_activity_if_owner` and `insert_trade_if_absent` joined it (AR9, both twins in the
   same story). Neither name starts with a forbidden mutator prefix
   (`update/set_/save/patch/merge/upsert/replace`), and neither writes `spec` — AC #7 of Story 2.2
   is about there being no write path to `spec`, not about there being no write path at all.
+  **Changed deliberately again at Story 5.3**: `find_session_trades` (the seal reads a session's
+  trade rows in DB id order) and `backfill_trades_run_id` (the seal links them to the run it
+  creates, AR8 — only rows not yet linked, and the seal checks the count) joined it, both twins,
+  same rules.
 - **`EMITTED_RECONCILE_EVENTS`** (`src/core/live_startup_reconcile.py`) joined the discipline at
   Story 4.7: `reconcile.ok`, `reconcile.discrepancy`, `reconcile.cash_changed` — the startup
   phase's records, with `reconcile.local_snapshot_failed` deliberately outside it as a
-  diagnostic. There is no dispatch map to drive, so
+  diagnostic. **Widened 3 → 4 at Story 5.7**: `reconcile.inexpressible_remainder` (a broker
+  quantity finer than the instrument's size precision, named once; its `size_step` field is
+  `10**-size_precision`, never the possibly coarser `size_increment` — code review R2) joined
+  it, in the constant, its exact-set pin and the NFR26 parametrized scenario together. There
+  is no dispatch map to drive, so
   `TestEveryEmittedReconcileRecordIsPinned` (`tests/unit/core/test_live_startup_reconcile.py`)
   pins it **against the code both ways**:
   - an AST scan of every `_emit` in the module, which catches a name never added;
@@ -143,7 +156,20 @@ make web                                # Web UI (http://127.0.0.1:8000)
   The NFR26 scan is parametrized from the constant. **`LOAD_METHODS`**
   (`src/core/live_session_view.py`) went from three reads to four at Story 4.7 (`load_account`,
   PO ruling). It was widened in the constant and in its exact pin together. The Redis `MONITOR`
-  proof now asserts the account read is inside it.
+  proof now asserts the account read is inside it. **Widened 4 → 5 at Story 5.5**: `load_order`
+  (PO ruling R3b — the seal reports the session's working orders), in the constant, its exact pin
+  and a second `MONITOR` proof (`read_session_holdings`, asserting an `:orders:` read) together.
+  Only the seal's `read_session_holdings` calls it; `read_session_view` (`live reconcile`) loads
+  no order.
+- **`FROZEN_VIEWS`** (`tests/unit/governance/test_ar44_frozen_views.py`, Story 5.6): Phase 3's
+  zero-UI-change criterion (AR44), pinned byte for byte. It holds a SHA-256 for every file under
+  `src/api/**` and `templates/**`, plus `src/services/backtest_query.py` and
+  `src/cli/commands/compare.py` (the comparison view). It covers the AC's four surfaces only (PO
+  ruling R2b): `static/js` and the CLI's `show`/`history` are deliberately outside it. Any changed,
+  added or removed file goes red: that is a success-criterion violation, not a judgment call.
+  **Never regenerate the manifest to make it pass.** Only a recorded PO decision may regenerate
+  it (`python -m tests.unit.governance.test_ar44_frozen_views --print-manifest`), and the first
+  story allowed to change a view (Growth's "Paper" badge) retires it deliberately.
 
 ## Editing with Auto-Linter
 

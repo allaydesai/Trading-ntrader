@@ -70,7 +70,9 @@ Known, accepted limits, stated rather than implied:
 Since Story 4.3 the tick also drives the runtime reconciler
 (``live_runtime_reconcile``) right after observing the connection: it keeps the
 cache aligned with the broker and is the only path that returns trading
-permission after a loss.
+permission after a loss. Since Story 5.8 the same tick then writes any period
+the reconciler withheld trading for (:func:`write_withheld_periods`), so a seal
+can record it.
 """
 
 import asyncio
@@ -109,6 +111,43 @@ Sleeper = Callable[[float], Awaitable[None]]
 #: session continues (AR42). Logged only on the failure path — a successful
 #: write is silent, the ``_write_strategy_failures`` precedent.
 REJECTION_RECORD_FAILED_EVENT = "session.rejection_record_failed"
+#: Story 5.8, the same shape: a withheld period's write failed, the session
+#: continues (AR42), and the period stays pending for the next tick.
+WITHHELD_RECORD_FAILED_EVENT = "session.withheld_record_failed"
+
+
+async def write_withheld_periods(
+    record: SessionRecordPort, ledger: Any, executor: ThreadPoolExecutor, log: Any
+) -> None:
+    """Write every withheld period not yet written (Story 5.8, AC #3, D-F).
+
+    Called right after the reconciler's ``on_tick`` in the same tick, so a
+    period reaches the session row on the tick that opened or closed it. The
+    ledger is the reconciler's ``WithheldPeriods``, duck-typed to two members
+    (``pending()`` and ``mark_written(period)``); ``None`` writes nothing. Story
+    3.7's dirty-flag shape: a clean ledger costs zero round trips, and a period
+    whose write fails stays pending — the next tick writes its *then-newest*
+    version, never a stale replay. On this object's **private executor**, never
+    ``asyncio.to_thread`` (decision D2). Record-keeping only: nothing here
+    grants or withholds trading, and a failure here never stops the session.
+
+    Raises:
+        SessionReclaimedError: Another process owns this session now — the one
+            failure AR42 does not survive, re-raised as its siblings do.
+    """
+    if ledger is None:
+        return
+    loop = asyncio.get_running_loop()
+    for period in ledger.pending():
+        write = functools.partial(record.record_trading_withheld, **period.as_port_kwargs())
+        try:
+            await loop.run_in_executor(executor, write)
+        except SessionReclaimedError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - AR42: a DB hiccup must not kill a session
+            log.error(WITHHELD_RECORD_FAILED_EVENT, error_type=type(exc).__name__)
+            return
+        ledger.mark_written(period)
 
 
 async def write_rejection_snapshot(
@@ -207,7 +246,8 @@ def flush_contained_failures(record: SessionRecordPort, guard: Any, log: Any) ->
 def flush_rejection_snapshot(record: SessionRecordPort, tally: Any, log: Any) -> str | None:
     """Write the tally's last pending refusal summary, synchronously (Story 3.7).
 
-    The body of ``LiveSessionRunner._flush_order_rejections``, moved here by
+    The body of ``LiveSessionRunner._flush_order_rejections`` (since Story 5.8
+    ``_flush_run_snapshots``, through :func:`flush_run_snapshots`), moved here by
     Story 4.3's budget split (decision D-I), beside the tick's own
     :func:`write_rejection_snapshot`. Guarded, AR42: a failed write is logged
     with its traceback and returned as a problem string, which the runner
@@ -233,6 +273,38 @@ def flush_rejection_snapshot(record: SessionRecordPort, tally: Any, log: Any) ->
         return f"flush_order_rejections: {type(exc).__name__}"
     tally.mark_written(snapshot.version)
     return None
+
+
+def flush_run_snapshots(record: SessionRecordPort, tally: Any, ledger: Any, log: Any) -> list[str]:
+    """Write a run's last unwritten snapshots, synchronously, at teardown.
+
+    The runner's one teardown slot for both, called after the heartbeat is
+    joined and before ``-> stopped`` (its file budget): Story 3.7's refusal
+    summary (:func:`flush_rejection_snapshot`, unchanged) and — Story 5.8,
+    code review DN1 (PO ruling 1a) — every withheld period the tick could not
+    write. Without the second, a re-grant whose end-write failed would be
+    closed by the stop edge at the stop instant and sealed as "withheld until
+    the stop". A ``None`` tally or ledger has nothing to write.
+
+    Returns:
+        The ``shutdown_problems`` entries for writes that failed (AR42: logged,
+        never raised).
+
+    Raises:
+        SessionReclaimedError: Another process owns the row.
+    """
+    problems = [] if tally is None else [flush_rejection_snapshot(record, tally, log)]
+    for period in () if ledger is None else ledger.pending():
+        try:
+            record.record_trading_withheld(**period.as_port_kwargs())
+        except SessionReclaimedError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - AR42: must not replace the outcome
+            log.error(WITHHELD_RECORD_FAILED_EVENT, error_type=type(exc).__name__, exc_info=True)
+            problems.append(f"flush_withheld_periods: {type(exc).__name__}")
+            break
+        ledger.mark_written(period)
+    return [problem for problem in problems if problem is not None]
 
 
 def no_bars_overdue(
@@ -295,9 +367,12 @@ class SessionSteadyState:
         reconciler: Story 4.3's ``RuntimeReconciler``, awaited right after the
             connection is observed so a reconnect is re-established in the tick
             that saw it. Optional, defaulted and duck-typed to one member
-            (``on_tick()``) for the same reasons as ``guard``. It contains its
-            own failures (AR42); the one it lets out — a runtime
-            ``ReconciliationFailedError`` — ends the session, like a reclaim.
+            (``on_tick()``) for the same reasons as ``guard``, plus an optional
+            second (``withheld``, Story 5.8's ledger, written right after
+            ``on_tick``). It contains its own failures (AR42); the two it lets
+            out — a runtime ``ReconciliationFailedError`` and, since Story 5.8,
+            adapter drift (``BrokerStateAdapterError``) — end the session, like
+            a reclaim.
     """
 
     def __init__(
@@ -319,6 +394,7 @@ class SessionSteadyState:
         self._guard = guard
         self._tally = tally
         self._reconciler = reconciler
+        self._withheld = getattr(reconciler, "withheld", None)  # Story 5.8's ledger
         self._record = record
         self._settings = settings
         self._monitor = monitor
@@ -341,6 +417,11 @@ class SessionSteadyState:
         self._executor = ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="session-heartbeat-write"
         )
+
+    @property
+    def withheld(self) -> Any:
+        """The reconciler's withheld-period ledger, or ``None`` (the teardown flush's)."""
+        return self._withheld
 
     @property
     def bars_seen(self) -> int:
@@ -405,6 +486,10 @@ class SessionSteadyState:
                 refused (a strategy's own position the broker no longer covers,
                 or a correction the framework would not make). The session
                 must stop, positions untouched (decision D-D).
+            BrokerStateAdapterError: Story 5.8 — the broker reader's adapter
+                has drifted. The session must stop, exit 1, positions
+                untouched; the withheld-period write after ``on_tick`` is never
+                reached, so its failure cannot mask this.
         """
         self._started_at = self._time_source()
         while True:
@@ -417,6 +502,9 @@ class SessionSteadyState:
             self._observe_connection()
             if self._reconciler is not None:
                 await self._reconciler.on_tick()
+                await write_withheld_periods(
+                    self._record, self._withheld, self._executor, self._log
+                )
             self._warn_if_no_bars(now)
 
     async def _write_strategy_failures(self) -> None:

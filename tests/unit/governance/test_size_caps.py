@@ -133,7 +133,10 @@ SIZE_BASELINE: dict[str, int] = {
     "src/core/backtest_runner.py::MinimalBacktestRunner.run_sma_backtest": 56,
     "src/core/live_bar_observer.py::LiveBarObserver": 120,
     # Story 4.3, 118 -> 116: `submission_withheld` is now `not trading_permitted` (D-F).
-    "src/core/live_connection_monitor.py::ConnectionMonitor": 116,
+    # Story 5.8, 116 -> 123: `withhold_for_reconciliation`, the reconciler's withdrawal (D-A).
+    # Code review P1, 123 -> 128: a real drop during that withhold is its own narrated outage.
+    # PR #36 review DN2, 128 -> 134: the same drop while the withhold stands HALTED (PO ruling).
+    "src/core/live_connection_monitor.py::ConnectionMonitor": 134,
     # Story 4.3, 128 -> 129: `open_check_interval_secs` passed explicitly as off (PO ruling 1A).
     # Story 4.5, 129 -> 130: `filter_unclaimed_external_orders` passed explicitly as on (D-A).
     "src/core/live_node_builder.py::build_trading_node_config": 130,
@@ -155,13 +158,16 @@ SIZE_BASELINE: dict[str, int] = {
     "src/core/live_session_runner.py::LiveSessionRunner.run": 66,
     # Story 4.3, 120 -> 114: the no-bars watchdog's test and emit moved to module
     # level (decision D-I, -9) to make room for the runtime reconciler's tick call.
-    "src/core/live_session_steady_state.py::SessionSteadyState": 114,
+    # Story 5.8, 114 -> 118: the withheld-period write after `on_tick` and its ledger
+    # (D-F); the write's body is module-level `write_withheld_periods`. Code review DN1,
+    # 118 -> 120: the `withheld` accessor the runner's teardown flush reads.
+    "src/core/live_session_steady_state.py::SessionSteadyState": 120,
     "src/core/live_strategy_guard.py::StrategyGuard": 121,
     "src/core/live_trade_recorder.py::TradeRecorder": 164,
     "src/core/metrics.py::PerformanceCalculator": 128,
     "src/core/metrics.py::PerformanceCalculator.calculate_metrics_from_data": 55,
-    "src/core/results_extractor.py::ResultsExtractor": 154,
-    "src/core/results_extractor.py::ResultsExtractor.extract_results": 85,
+    "src/core/results_extractor.py::ResultsExtractor": 149,
+    "src/core/results_extractor.py::ResultsExtractor.extract_results": 84,
     # Story 4.4, 103 -> 110: AR40 warm-up inline in `on_start` + the history
     # callback, deliberately not hidden in a helper so AC #2's inspection reads
     # the three Nautilus calls in the strategy file itself. Story 4.5, 110 -> 106

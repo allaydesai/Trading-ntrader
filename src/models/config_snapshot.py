@@ -6,7 +6,7 @@ This module defines the validation model for JSONB-stored strategy configuration
 
 from typing import Any, Dict
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SerializerFunctionWrapHandler, model_serializer
 
 
 class StrategyConfigSnapshot(BaseModel):
@@ -48,6 +48,31 @@ class StrategyConfigSnapshot(BaseModel):
     bar_type: str | None = Field(
         default=None, description="Bar-type spec (e.g. '1-DAY-LAST') for explorer round-trip"
     )
+    session_conditions: dict[str, Any] | None = Field(
+        default=None,
+        description="A sealed paper session's execution conditions (Epic 5, AR7); "
+        "absent on a backtest",
+    )
+
+    @model_serializer(mode="wrap")
+    def _omit_empty_session_conditions(
+        self, handler: SerializerFunctionWrapHandler
+    ) -> dict[str, Any]:
+        """Drop ``session_conditions`` when it is empty (Story 5.2, PO ruling R2a).
+
+        A backtest never carries it, so every backtest snapshot dumps exactly the
+        keys it always has — byte-identical rows, no ``null`` row in the config
+        panel, which renders every top-level key. A sealed session's survives.
+
+        ``equity_curve`` is deliberately **not** a field: unknown keys are still
+        ignored, so a backtest's curve is dropped here exactly as it always has
+        been (Story 5.2 F3). Keeping it would change every new backtest row and
+        its chart — a both-sides decision routed in deferred-work, not this one.
+        """
+        data = handler(self)
+        if not self.session_conditions:
+            data.pop("session_conditions", None)
+        return data
 
     model_config = {
         "json_schema_extra": {

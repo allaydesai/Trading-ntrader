@@ -22,6 +22,7 @@ tests use stub verifiers, where the phase's own records are not the subject.
 """
 
 import asyncio
+import dataclasses
 import json
 import signal
 import time
@@ -39,6 +40,7 @@ from nautilus_trader.test_kit.providers import TestInstrumentProvider
 from structlog.testing import capture_logs
 
 from src.config import IBKRSettings
+from src.core import live_session_runner
 from src.core.exit_outcome import EXIT_CODES
 from src.core.live_account_gate import verify_connected_account
 from src.core.live_broker_state import (
@@ -56,6 +58,7 @@ from src.core.live_session_node import (
     DEFAULT_SESSION_CONNECT_TIMEOUT_SECONDS,
     SESSION_CONNECTION_ATTEMPTS,
     SESSION_LOGGING,
+    session_instrument_ids,
 )
 from src.core.live_session_phases import PHASE_SEQUENCE
 from src.core.live_session_runner import LiveSessionRunner
@@ -63,6 +66,7 @@ from src.core.live_startup_reconcile import DISCREPANCY_EVENT as RECONCILE_DISCR
 from src.core.live_startup_reconcile import OK_EVENT as RECONCILE_OK_EVENT
 from src.core.live_startup_reconcile import ReconciliationFailedError, ReconciliationFailure
 from src.core.live_strategy_guard import NoStrategyStartedError
+from src.models.broker_state import BrokerPosition
 from src.models.position_reconciliation import CachedPosition, LocalSnapshot
 from src.models.session import SessionSpec, StrategySpec
 from tests.component.doubles import TestIBAccountsClient, TestLiveNode, flat_broker_state_reader
@@ -216,6 +220,18 @@ class SpyRecord:
         """
         self.calls.append("record_order_rejections")
         self.rejections.append({"rejected": rejected, "consecutive": consecutive})
+
+    def record_trading_withheld(
+        self,
+        *,
+        withheld_from: datetime,
+        withheld_until: datetime | None,
+        reason: str | None,
+        error_type: str,
+        failed_cycles: int,
+    ) -> None:
+        """Story 5.8's fifth port method, kept complete for the same reason."""
+        self.calls.append("record_trading_withheld")
 
 
 def _permitting_verifier(mode: GateMode = GateMode.PAPER):
@@ -2126,3 +2142,70 @@ class TestASwallowedReclaimStillSkipsTheRelease:
 
         runner._finish_record()
         assert record.calls == ["mark_stopped"]
+
+
+class TestTheRunnerHandsReconciliationTheTradedInstruments:
+    """Story 5.7 code review R1 (PO ruling 2026-10-07): both reconciliations
+    count the symbols of the instruments the session's strategies trade as
+    held. The runner is the only place that knows them — the spec's bar types —
+    so the wiring is pinned here, through ``runner.run()``."""
+
+    def test_every_strategys_bar_type_instruments_are_the_traded_set(self):
+        spec = SessionSpec(
+            strategies=(
+                StrategySpec(
+                    strategy_id="sma_crossover",
+                    parameters={},
+                    bar_types=(AAPL_1MIN, "NVDA.NASDAQ-5-MINUTE-LAST-EXTERNAL"),
+                ),
+            )
+        )
+
+        assert session_instrument_ids(spec) == frozenset({AAPL_INSTRUMENT, "NVDA.NASDAQ"})
+
+    def test_a_flat_session_refuses_beside_an_unresolved_row_of_its_traded_symbol(
+        self, registered_accounts
+    ):
+        """The spec trades AAPL; the cache is empty; the broker holds an
+        ``IB-CONID-*`` row under symbol AAPL — the start is refused rather than
+        letting a flat strategy buy beside a holding it cannot see."""
+        settings = _settings()
+        registered_accounts(settings)
+        node = TestLiveNode(run_seconds=0.01)
+        lookup_miss = BrokerPosition(
+            instrument_id="IB-CONID-265598",
+            quantity=Decimal(3),
+            average_price=None,
+            con_id=265598,
+            symbol="AAPL",
+            instrument_resolved=False,
+        )
+
+        async def _reader(node_arg, *, log):
+            flat = await flat_broker_state_reader(node_arg, log=log)
+            return dataclasses.replace(flat, positions=(lookup_miss,))
+
+        with pytest.raises(ReconciliationFailedError) as caught:
+            _runner(node, settings=settings, broker_state_reader=_reader).run()
+
+        assert caught.value.reason is ReconciliationFailure.UNRESOLVABLE_DISCREPANCY
+        assert node.trader.added_strategies == []
+
+    def test_the_running_sessions_reconciler_is_handed_the_traded_instruments(
+        self, monkeypatch, registered_accounts
+    ):
+        settings = _settings()
+        registered_accounts(settings)
+        built: list[dict] = []
+        real = live_session_runner.RuntimeReconciler
+
+        def _spy(**kwargs):
+            built.append(kwargs)
+            return real(**kwargs)
+
+        monkeypatch.setattr(live_session_runner, "RuntimeReconciler", _spy)
+
+        _runner(TestLiveNode(run_seconds=0.01), settings=settings).run()
+
+        (kwargs,) = built
+        assert kwargs["traded_instruments"] == frozenset({AAPL_INSTRUMENT})

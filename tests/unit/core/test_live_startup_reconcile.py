@@ -34,6 +34,7 @@ from src.core.live_startup_reconcile import (
     CASH_CHANGED_EVENT,
     DISCREPANCY_EVENT,
     EMITTED_RECONCILE_EVENTS,
+    INEXPRESSIBLE_REMAINDER_EVENT,
     OK_EVENT,
     SNAPSHOT_FAILED_EVENT,
     ReconciliationFailedError,
@@ -43,6 +44,7 @@ from src.core.live_startup_reconcile import (
     reconcile_at_startup,
     require_broker_ward_reconciliation,
     require_reconciled,
+    size_steps,
 )
 from src.models.broker_state import BrokerPosition, BrokerState, CashBalance
 from src.models.position_reconciliation import (
@@ -188,10 +190,12 @@ def _reader(state: BrokerState | None = None, *, raises: BaseException | None = 
     return _read
 
 
-def _reconcile(node, reader, *, local_before=None, clock=None):
+def _reconcile(node, reader, *, local_before=None, clock=None, traded=None):
     """``local_before=None`` is "no snapshot" — the framework-resolved records
-    are exercised only where a test supplies one."""
+    are exercised only where a test supplies one. ``traded`` is the session's
+    traded instrument ids (code review R1); omitted, the phase's default."""
     ticks = iter([10.0, 10.0125]) if clock is None else clock
+    extra = {} if traded is None else {"traded_instruments": traded}
     return asyncio.run(
         reconcile_at_startup(
             node,
@@ -199,6 +203,7 @@ def _reconcile(node, reader, *, local_before=None, clock=None):
             local_before=local_before,
             read_state=reader,
             clock=lambda: next(ticks),
+            **extra,
         )
     )
 
@@ -662,14 +667,25 @@ class TestEverythingElseResolvesBrokerWard:
         (report,) = node.kernel.exec_engine.reports
         assert report.avg_px_open is None
 
-    def test_an_unresolved_broker_row_is_refused_without_writing(self):
+    def test_an_unresolved_broker_row_no_cached_position_shares_is_named_not_refused(self):
+        """Story 5.7, AC #1 — reversed from Story 4.2's refusal (PO ruling D2,
+        "same-symbol rule everywhere, name the rest"): with nothing cached under
+        its symbol, the row cannot be hiding a position of this session's, so it
+        is logged ``unresolved`` once and the start goes ahead."""
         node = _node()
 
-        with pytest.raises(ReconciliationFailedError) as caught:
-            _reconcile(node, _reader(_state(_held("IB-CONID-265598", "3", resolved=False))))
+        with capture_logs() as logs:
+            result = _reconcile(
+                node, _reader(_state(_held("IB-CONID-265598", "3", resolved=False)))
+            )
 
-        assert caught.value.reason is ReconciliationFailure.UNRESOLVABLE_DISCREPANCY
+        records = _events(logs, DISCREPANCY_EVENT)
+        assert [(r["instrument_id"], r["resolution"], r["log_level"]) for r in records] == [
+            ("IB-CONID-265598", "unresolved", "error")
+        ]
         assert node.kernel.exec_engine.reports == []
+        assert result.reconcile_resolved == () and result.framework_resolved == ()
+        assert len(_events(logs, OK_EVENT)) == 1
 
     def test_an_instrument_the_cache_does_not_hold_is_refused_without_writing(self):
         node = _node(_Cache(instruments=(NVDA_EQUITY,)))
@@ -705,17 +721,20 @@ class TestEverythingElseResolvesBrokerWard:
 class TestReviewFindings:
     """Code review 2026-09-27 (see the story's Review Findings)."""
 
-    def test_an_unrepresentable_broker_quantity_is_refused_before_any_write(self):
-        """0.5 of a precision-0 equity would be rounded, and the correction miss
-        the broker; the NVDA row must not be written first either."""
+    def test_an_inexpressible_broker_quantity_is_named_and_the_rest_corrected(self):
+        """Story 5.7, AC #4 — reversed from this review's refusal. 0.5 of a
+        precision-0 equity is still never *written* (``make_qty`` would round
+        it); it is judged at whole shares — flat — and named once, and the NVDA
+        row is corrected as any other (PO ruling D2)."""
         node = _node()
 
-        with pytest.raises(ReconciliationFailedError) as caught:
+        with capture_logs() as logs:
             _reconcile(node, _reader(_state(_held(AAPL, "0.5"), _held(NVDA, "1"))))
 
-        assert caught.value.reason is ReconciliationFailure.UNRESOLVABLE_DISCREPANCY
-        assert [row.instrument_id for row in caught.value.discrepancies] == [AAPL]
-        assert node.kernel.exec_engine.reports == []
+        (report,) = node.kernel.exec_engine.reports
+        assert (str(report.instrument_id), report.signed_decimal_qty) == (NVDA, Decimal(1))
+        (named,) = _events(logs, INEXPRESSIBLE_REMAINDER_EVENT)
+        assert (named["instrument_id"], named["remainder"]) == (AAPL, "0.5")
 
     def test_an_unresolvable_refusal_carries_and_logs_only_the_unresolvable_rows(self):
         node = _node(_Cache(instruments=(NVDA_EQUITY,)))
@@ -730,14 +749,32 @@ class TestReviewFindings:
     def test_an_unresolved_broker_row_beside_a_strategy_position_is_not_a_contradiction(self):
         """The broker's NVDA arrived as ``IB-CONID-*``: the cache's NVDA row reads
         "broker 0". Refusing it as contradicted would tell the operator to
-        abandon a session over a lookup miss."""
+        abandon a session over a lookup miss. Story 5.7 makes the symbol
+        explicit: it is the *same-symbol* row that keeps this refusal (AC #3)."""
         node = _node(_Cache(positions=[_Position(NVDA, STRATEGY, "22")]))
+        lookup_miss = _held("IB-CONID-4815747", "22", resolved=False, symbol="NVDA")
 
         with pytest.raises(ReconciliationFailedError) as caught:
-            _reconcile(node, _reader(_state(_held("IB-CONID-4815747", "22", resolved=False))))
+            _reconcile(node, _reader(_state(lookup_miss)))
 
         assert caught.value.reason is ReconciliationFailure.UNRESOLVABLE_DISCREPANCY
         assert "new session" not in str(caught.value)
+        assert node.kernel.exec_engine.reports == []
+
+    def test_an_unresolved_row_of_another_symbol_does_not_hide_a_contradiction(self):
+        """Story 5.7, AC #1's other side: a bond the adapter cannot build is not
+        the holding behind NVDA's "broker 0", so the strategy's ``+22`` the broker
+        no longer holds is refused as itself — and the bond named once."""
+        node = _node(_Cache(positions=[_Position(NVDA, STRATEGY, "22")]))
+        bond = _held("IB-CONID-99", "1000", resolved=False, symbol="T 4.5 02/15/36")
+
+        with capture_logs() as logs, pytest.raises(ReconciliationFailedError) as caught:
+            _reconcile(node, _reader(_state(bond)))
+
+        assert caught.value.reason is ReconciliationFailure.STRATEGY_POSITION_CONTRADICTED
+        assert [row.instrument_id for row in caught.value.discrepancies] == [NVDA]
+        records = [(r["instrument_id"], r["resolution"]) for r in _events(logs, DISCREPANCY_EVENT)]
+        assert records == [("IB-CONID-99", "unresolved"), (NVDA, "refused")]
         assert node.kernel.exec_engine.reports == []
 
     def test_a_framework_refusal_mid_loop_names_what_was_already_corrected(self):
@@ -816,6 +853,466 @@ class TestReviewFindings:
 
         (ok,) = _events(logs, OK_EVENT)
         assert 50 <= ok["elapsed_ms"] < 5000
+
+
+#: Story 5.7: a contract the adapter cannot build, under a symbol no strategy trades.
+BOND = _held("IB-CONID-99", "1000", resolved=False, symbol="T 4.5 02/15/36")
+
+
+def _net(cache: _Cache, instrument_id: str) -> Decimal:
+    return sum(
+        (
+            p.signed_decimal_qty()
+            for p in cache.positions_open()
+            if str(p.instrument_id) == instrument_id
+        ),
+        Decimal(0),
+    )
+
+
+class TestAnUnresolvedHoldingOfAnUnrelatedSymbolIsNamedNotRefused:
+    """Story 5.7, AC #1 (PO ruling D2): an ``IB-CONID-*`` row whose symbol no
+    cached position is held under cannot be hiding one of this session's
+    positions — logged ``resolution=unresolved`` once, never refused."""
+
+    def test_beside_a_matched_strategy_position_of_another_symbol(self):
+        node = _node(_Cache(positions=[_Position(AAPL, STRATEGY, "5")]))
+
+        with capture_logs() as logs:
+            result = _reconcile(node, _reader(_state(_held(AAPL, "5"), BOND)))
+
+        records = _events(logs, DISCREPANCY_EVENT)
+        assert [(r["instrument_id"], r["resolution"]) for r in records] == [
+            ("IB-CONID-99", "unresolved")
+        ]
+        assert node.kernel.exec_engine.reports == []
+        assert result.discrepancy_count == 0
+        (ok,) = _events(logs, OK_EVENT)
+        assert ok["instruments"] == {AAPL: "5", "IB-CONID-99": "1000"}, "reported, not hidden"
+
+    def test_it_is_logged_once_even_beside_a_correction(self):
+        node = _node(_Cache(positions=[_Position(AAPL, "EXTERNAL", "4")]))
+
+        with capture_logs() as logs:
+            _reconcile(node, _reader(_state(BOND)))
+
+        records = [(r["instrument_id"], r["resolution"]) for r in _events(logs, DISCREPANCY_EVENT)]
+        assert records == [("IB-CONID-99", "unresolved"), (AAPL, "broker")]
+
+    def test_a_snapshot_never_reads_it_as_framework_resolved(self):
+        """``_framework_resolved`` sees it as a row still standing, not one the
+        framework's own pass fixed."""
+        with capture_logs() as logs:
+            result = _reconcile(_node(), _reader(_state(BOND)), local_before=_snapshot())
+
+        assert result.framework_resolved == ()
+        assert "framework" not in {r["resolution"] for r in _events(logs, DISCREPANCY_EVENT)}
+
+
+class TestAnUnresolvedHoldingOfAHeldSymbolStillRefusesTheStart:
+    """Story 5.7, AC #3: the fail-closed rule, unchanged, for the one row that
+    could be masking a cached position — the same symbol, any owner (D-A)."""
+
+    @pytest.mark.parametrize("owner", [STRATEGY, "EXTERNAL", "INTERNAL-DIFF"])
+    def test_a_held_symbol_is_refused_writing_nothing(self, owner):
+        node = _node(_Cache(positions=[_Position(NVDA, owner, "22")]))
+        lookup_miss = _held("IB-CONID-4815747", "22", resolved=False, symbol="NVDA")
+
+        with capture_logs() as logs, pytest.raises(ReconciliationFailedError) as caught:
+            _reconcile(node, _reader(_state(lookup_miss, BOND)))
+
+        assert caught.value.reason is ReconciliationFailure.UNRESOLVABLE_DISCREPANCY
+        assert [row.instrument_id for row in caught.value.discrepancies] == ["IB-CONID-4815747"]
+        assert "same symbol" in str(caught.value)
+        assert node.kernel.exec_engine.reports == []
+        # A list, not a set (code review P7): each row is logged exactly once.
+        records = [(r["instrument_id"], r["resolution"]) for r in _events(logs, DISCREPANCY_EVENT)]
+        assert records == [("IB-CONID-99", "unresolved"), ("IB-CONID-4815747", "refused")]
+
+    @pytest.mark.parametrize("ib_symbol", ["BRK B", "brk.b", "BRK-B"])
+    def test_the_brokers_spelling_still_matches(self, ib_symbol):
+        node = _node(_Cache(positions=[_Position("BRK-B.NYSE", STRATEGY, "4")]))
+        lookup_miss = _held("IB-CONID-7", "4", resolved=False, symbol=ib_symbol)
+
+        with pytest.raises(ReconciliationFailedError) as caught:
+            _reconcile(node, _reader(_state(lookup_miss)))
+
+        assert caught.value.reason is ReconciliationFailure.UNRESOLVABLE_DISCREPANCY
+
+    def test_a_correction_that_puts_the_symbol_in_the_cache_makes_the_row_count_again(self):
+        """The re-verify judges against the corrected cache: hydrating NVDA +5
+        puts a position under the unresolved row's symbol, so the row may now
+        mask it, and the start is refused rather than passed (fail closed)."""
+        node = _node()
+        lookup_miss = _held("IB-CONID-4815747", "3", resolved=False, symbol="NVDA")
+
+        with capture_logs() as logs, pytest.raises(ReconciliationFailedError) as caught:
+            _reconcile(node, _reader(_state(_held(NVDA, "5"), lookup_miss)))
+
+        assert caught.value.reason is ReconciliationFailure.DISCREPANCY_REMAINS
+        assert [row.instrument_id for row in caught.value.discrepancies] == ["IB-CONID-4815747"]
+        assert _events(logs, OK_EVENT) == []
+
+    def test_an_unknown_symbol_fails_closed(self):
+        """D-B: a row that cannot say which holding it is matches any."""
+        node = _node(_Cache(positions=[_Position(NVDA, STRATEGY, "22")]))
+
+        with pytest.raises(ReconciliationFailedError) as caught:
+            _reconcile(node, _reader(_state(_held("IB-CONID-1", "22", resolved=False, symbol=""))))
+
+        assert caught.value.reason is ReconciliationFailure.UNRESOLVABLE_DISCREPANCY
+
+
+class TestAFractionalRemainderIsNamedAndJudgedAtWholeShares:
+    """Story 5.7, AC #4 (PO ruling D2): a broker quantity the instrument's size
+    increment cannot express is judged truncated toward zero to whole shares
+    and its remainder named once at WARNING — never ``UNRESOLVABLE``."""
+
+    def test_a_drip_remainder_beside_the_strategys_shares_is_clean_and_named(self):
+        node = _node(_Cache(positions=[_Position(NVDA, STRATEGY, "22")]))
+
+        with capture_logs() as logs:
+            result = _reconcile(node, _reader(_state(_held(NVDA, "22.5"))))
+
+        (record,) = _events(logs, INEXPRESSIBLE_REMAINDER_EVENT)
+        assert record == {
+            "event": INEXPRESSIBLE_REMAINDER_EVENT,
+            "log_level": "warning",
+            "scope": "startup",
+            "instrument_id": NVDA,
+            "broker_quantity": "22.5",
+            "expressible_quantity": "22",
+            "remainder": "0.5",
+            "size_step": "1",
+        }
+        assert node.kernel.exec_engine.reports == []
+        assert _events(logs, DISCREPANCY_EVENT) == []
+        (ok,) = _events(logs, OK_EVENT)
+        assert ok["inexpressible_remainders"] == {NVDA: "0.5"}
+        assert ok["instruments"] == {NVDA: "22.5"}, "D-D: the broker is reported exact"
+        assert result.broker.positions[0].quantity == Decimal("22.5")
+        assert [r.instrument_id for r in result.inexpressible] == [NVDA]
+
+    def test_a_clean_start_with_nothing_inexpressible_says_so(self):
+        node = _node(_Cache(positions=[_Position(NVDA, STRATEGY, "22")]))
+
+        with capture_logs() as logs:
+            result = _reconcile(node, _reader(_state(_held(NVDA, "22"))))
+
+        assert _events(logs, INEXPRESSIBLE_REMAINDER_EVENT) == []
+        assert _events(logs, OK_EVENT)[0]["inexpressible_remainders"] == {}
+        assert result.inexpressible == ()
+
+    def test_the_frameworks_whole_share_over_import_is_corrected_broker_ward(self):
+        """F3: Nautilus's own pass inside ``node:connect`` imported
+        ``INTERNAL-DIFF +1`` for the 0.5. The phase judges at whole shares and
+        corrects it down — through the framework, never the strategy's lot."""
+        cache = _Cache(
+            positions=[_Position(NVDA, STRATEGY, "22"), _Position(NVDA, "INTERNAL-DIFF", "1")]
+        )
+        node = _node(cache)
+
+        with capture_logs() as logs:
+            result = _reconcile(node, _reader(_state(_held(NVDA, "22.5"))))
+
+        (report,) = node.kernel.exec_engine.reports
+        assert report.signed_decimal_qty == Decimal(22)
+        assert report.quantity.as_decimal() == Decimal(22), "expressed exactly, never rounded"
+        records = [(r["instrument_id"], r["resolution"]) for r in _events(logs, DISCREPANCY_EVENT)]
+        assert records == [(NVDA, "broker")]
+        assert _net(cache, NVDA) == Decimal(22)
+        assert result.reconcile_resolved[0].broker_quantity == Decimal(22)
+        assert len(_events(logs, INEXPRESSIBLE_REMAINDER_EVENT)) == 1
+
+    def test_a_holding_below_one_share_with_nothing_cached_is_clean(self):
+        node = _node()
+
+        with capture_logs() as logs:
+            _reconcile(node, _reader(_state(_held(AAPL, "0.5"))))
+
+        assert node.kernel.exec_engine.reports == []
+        (record,) = _events(logs, INEXPRESSIBLE_REMAINDER_EVENT)
+        assert (record["expressible_quantity"], record["remainder"]) == ("0", "0.5")
+        assert len(_events(logs, OK_EVENT)) == 1
+
+    def test_a_holding_below_one_share_over_imported_is_corrected_flat(self):
+        cache = _Cache(positions=[_Position(AAPL, "INTERNAL-DIFF", "1")])
+        node = _node(cache)
+
+        _reconcile(node, _reader(_state(_held(AAPL, "0.5"))))
+
+        (report,) = node.kernel.exec_engine.reports
+        assert report.signed_decimal_qty == Decimal(0)
+        assert _net(cache, AAPL) == Decimal(0)
+
+    def test_growth_with_a_remainder_is_absorbed_to_the_whole_shares(self):
+        """Story 4.7's coverage rule at the expressible precision: the strategy's
+        own lot stays exactly as it was."""
+        cache = _Cache(positions=[_Position(NVDA, STRATEGY, "22")])
+        node = _node(cache)
+
+        _reconcile(node, _reader(_state(_held(NVDA, "25.5"))))
+
+        (report,) = node.kernel.exec_engine.reports
+        assert report.signed_decimal_qty == Decimal(25)
+        assert _net(cache, NVDA) == Decimal(25)
+        owned = [
+            p.signed_decimal_qty() for p in cache.positions_open() if p.strategy_id == STRATEGY
+        ]
+        assert owned == [Decimal(22)]
+
+    def test_truncation_never_rounds_a_shortfall_into_cover(self):
+        """F1: half-even would read 23.5 as 24 and pass a strategy believing 24.
+        Truncated, the broker holds 23 whole shares — fewer — so it is refused."""
+        node = _node(_Cache(positions=[_Position(NVDA, STRATEGY, "24")]))
+
+        with capture_logs() as logs, pytest.raises(ReconciliationFailedError) as caught:
+            _reconcile(node, _reader(_state(_held(NVDA, "23.5"))))
+
+        assert caught.value.reason is ReconciliationFailure.STRATEGY_POSITION_CONTRADICTED
+        (row,) = caught.value.discrepancies
+        assert row.broker_quantity == Decimal(23)
+        assert len(_events(logs, INEXPRESSIBLE_REMAINDER_EVENT)) == 1, "named before refusing"
+        assert node.kernel.exec_engine.reports == []
+
+    def test_a_short_remainder_is_judged_toward_zero(self):
+        node = _node(_Cache(positions=[_Position(NVDA, STRATEGY, "-22")]))
+
+        with capture_logs() as logs:
+            _reconcile(node, _reader(_state(_held(NVDA, "-22.5"))))
+
+        assert node.kernel.exec_engine.reports == []
+        (record,) = _events(logs, INEXPRESSIBLE_REMAINDER_EVENT)
+        assert (record["expressible_quantity"], record["remainder"]) == ("-22", "-0.5")
+
+    def test_a_snapshot_of_the_whole_shares_is_not_framework_resolved(self):
+        """The snapshot is compared at the same precision, or a pre-pass ``+22``
+        against the exact ``22.5`` would read as a fix the framework made."""
+        node = _node(_Cache(positions=[_Position(NVDA, STRATEGY, "22")]))
+        before = _snapshot(CachedPosition(NVDA, STRATEGY, Decimal(22)))
+
+        with capture_logs() as logs:
+            result = _reconcile(node, _reader(_state(_held(NVDA, "22.5"))), local_before=before)
+
+        assert result.framework_resolved == ()
+        assert _events(logs, DISCREPANCY_EVENT) == []
+
+    def test_an_instrument_the_cache_lacks_keeps_todays_refusal(self):
+        """No increment to judge it by: left exact, and refused as before."""
+        node = _node(_Cache(instruments=(NVDA_EQUITY,)))
+
+        with capture_logs() as logs, pytest.raises(ReconciliationFailedError) as caught:
+            _reconcile(node, _reader(_state(_held(AAPL, "0.5"))))
+
+        assert caught.value.reason is ReconciliationFailure.UNRESOLVABLE_DISCREPANCY
+        assert _events(logs, INEXPRESSIBLE_REMAINDER_EVENT) == []
+
+
+class TestATradedInstrumentCountsAsHeld:
+    """Code review R1 (PO ruling 2026-10-07): the symbols of the instruments
+    the session's strategies trade count as held. A flat strategy that trades
+    NVDA beside an unresolvable NVDA-symbol row would otherwise start and buy
+    on top of a holding it cannot see — pre-5.7 this refused, and still does."""
+
+    def test_a_flat_strategy_beside_a_same_symbol_unresolved_row_refuses_the_start(self):
+        node = _node()
+        lookup_miss = _held("IB-CONID-4815747", "22", resolved=False, symbol="NVDA")
+
+        with capture_logs() as logs, pytest.raises(ReconciliationFailedError) as caught:
+            _reconcile(node, _reader(_state(lookup_miss)), traded=[NVDA])
+
+        assert caught.value.reason is ReconciliationFailure.UNRESOLVABLE_DISCREPANCY
+        assert [row.instrument_id for row in caught.value.discrepancies] == ["IB-CONID-4815747"]
+        assert "an instrument its strategies trade" in str(caught.value)
+        assert node.kernel.exec_engine.reports == []
+        assert _events(logs, OK_EVENT) == []
+
+    def test_without_the_traded_set_the_same_row_would_pass(self):
+        """Non-vacuity: the refusal above is the traded set's doing."""
+        lookup_miss = _held("IB-CONID-4815747", "22", resolved=False, symbol="NVDA")
+
+        result = _reconcile(_node(), _reader(_state(lookup_miss)), traded=[AAPL])
+
+        assert result.discrepancy_count == 0
+
+    def test_a_row_matching_neither_a_position_nor_a_traded_instrument_stays_inert(self):
+        node = _node(_Cache(positions=[_Position(AAPL, STRATEGY, "5")]))
+
+        with capture_logs() as logs:
+            _reconcile(node, _reader(_state(_held(AAPL, "5"), BOND)), traded=[NVDA, AAPL])
+
+        records = [(r["instrument_id"], r["resolution"]) for r in _events(logs, DISCREPANCY_EVENT)]
+        assert records == [("IB-CONID-99", "unresolved")]
+        assert len(_events(logs, OK_EVENT)) == 1
+
+    def test_the_re_verify_counts_the_traded_symbols_too(self):
+        """``_still_to_answer`` judges with the same held set: a correction on
+        another instrument must not let a traded-symbol row slip through."""
+        node = _node(_Cache(positions=[_Position(AAPL, "EXTERNAL", "4")]))
+        lookup_miss = _held("IB-CONID-4815747", "3", resolved=False, symbol="NVDA")
+
+        with pytest.raises(ReconciliationFailedError) as caught:
+            _reconcile(node, _reader(_state(lookup_miss)), traded=[NVDA])
+
+        assert caught.value.reason is ReconciliationFailure.UNRESOLVABLE_DISCREPANCY
+
+
+class TestEachUnresolvableRefusalSaysWhyTruthfully:
+    """Code review P5: the refusal text must be true of the row it names."""
+
+    def test_a_row_with_no_symbol_says_it_cannot_be_told_apart(self):
+        node = _node(_Cache(positions=[_Position(NVDA, STRATEGY, "22")]))
+
+        with pytest.raises(ReconciliationFailedError) as caught:
+            _reconcile(node, _reader(_state(_held("IB-CONID-1", "22", resolved=False, symbol=""))))
+
+        message = str(caught.value)
+        assert "carries no symbol" in message
+        assert "same symbol" not in message
+
+    def test_a_same_symbol_row_names_both_ways_a_symbol_is_held(self):
+        node = _node(_Cache(positions=[_Position(NVDA, STRATEGY, "22")]))
+        lookup_miss = _held("IB-CONID-4815747", "22", resolved=False, symbol="NVDA")
+
+        with pytest.raises(ReconciliationFailedError) as caught:
+            _reconcile(node, _reader(_state(lookup_miss)))
+
+        message = str(caught.value)
+        assert (
+            "under the same symbol as a position this session's cache holds or an instrument "
+            "its strategies trade" in message
+        )
+        assert "carries no symbol" not in message
+
+    def test_both_kinds_together_name_both_reasons(self):
+        node = _node(_Cache(positions=[_Position(NVDA, STRATEGY, "22")]))
+        rows = (
+            _held("IB-CONID-1", "1", resolved=False, symbol=""),
+            _held("IB-CONID-4815747", "22", resolved=False, symbol="NVDA"),
+        )
+
+        with pytest.raises(ReconciliationFailedError) as caught:
+            _reconcile(node, _reader(_state(*rows)))
+
+        assert "carries no symbol" in str(caught.value)
+        assert "same symbol" in str(caught.value)
+
+    def test_the_instrument_not_in_cache_refusal_has_its_own_text(self):
+        """That path is ``_correct``'s, not ``_UNRESOLVED``'s: it never claims a
+        symbol match it did not make."""
+        node = _node(_Cache(positions=[_Position(AAPL, "EXTERNAL", "4")], instruments=()))
+
+        with pytest.raises(ReconciliationFailedError) as caught:
+            _reconcile(node, _reader(_state()))
+
+        assert caught.value.reason is ReconciliationFailure.UNRESOLVABLE_DISCREPANCY
+        assert "unknown to the cache" in str(caught.value)
+        assert "same symbol" not in str(caught.value)
+        assert "carries no symbol" not in str(caught.value)
+
+
+def _lot_instrument(symbol: str, *, size_precision, size_increment="100") -> SimpleNamespace:
+    """An instrument whose size increment is coarser than its precision — an FX
+    or futures lot shape. Only the attributes the step lookup reads."""
+    return SimpleNamespace(
+        id=InstrumentId.from_str(f"{symbol}.NASDAQ"),
+        size_precision=size_precision,
+        size_increment=SimpleNamespace(as_decimal=lambda: Decimal(size_increment)),
+    )
+
+
+class TestTheStepIsTheSizePrecision:
+    """Code review R2 (PO ruling 2026-10-07): ``make_qty`` rounds to
+    ``size_precision``; ``size_increment`` can be coarser (FX, futures, lots),
+    so truncating to it would cut an exactly representable quantity and
+    "correct" the cache below the broker. The step is ``10**-size_precision``."""
+
+    def test_a_coarse_increment_never_cuts_an_exact_quantity(self):
+        lots = _lot_instrument("LOTS", size_precision=0)
+        lots_id = str(lots.id)
+        node = _node(_Cache(positions=[_Position(lots_id, STRATEGY, "150")], instruments=(lots,)))
+
+        with capture_logs() as logs:
+            result = _reconcile(node, _reader(_state(_held(lots_id, "150"))))
+
+        assert node.kernel.exec_engine.reports == [], "150 judged exact, never 100"
+        assert _events(logs, INEXPRESSIBLE_REMAINDER_EVENT) == []
+        assert result.inexpressible == ()
+        assert size_steps(node.cache, _state(_held(lots_id, "150"))) == {lots_id: Decimal(1)}
+
+    def test_a_finer_quantity_is_truncated_to_the_precision_not_the_increment(self):
+        lots = _lot_instrument("LOTS", size_precision=0)
+        lots_id = str(lots.id)
+        node = _node(_Cache(positions=[_Position(lots_id, STRATEGY, "150")], instruments=(lots,)))
+
+        with capture_logs() as logs:
+            _reconcile(node, _reader(_state(_held(lots_id, "150.5"))))
+
+        (record,) = _events(logs, INEXPRESSIBLE_REMAINDER_EVENT)
+        assert (record["expressible_quantity"], record["remainder"], record["size_step"]) == (
+            "150",
+            "0.5",
+            "1",
+        )
+        assert node.kernel.exec_engine.reports == []
+
+    def test_a_whole_share_equity_is_unchanged(self):
+        """Precision 0 is a step of 1 — the same as the equity's increment."""
+        node = _node(_Cache(positions=[_Position(NVDA, STRATEGY, "22")]))
+
+        with capture_logs() as logs:
+            _reconcile(node, _reader(_state(_held(NVDA, "22.5"))))
+
+        (record,) = _events(logs, INEXPRESSIBLE_REMAINDER_EVENT)
+        assert (record["expressible_quantity"], record["remainder"], record["size_step"]) == (
+            "22",
+            "0.5",
+            "1",
+        )
+
+    def test_a_fractional_precision_is_its_own_step(self):
+        fx = _lot_instrument("FRAC", size_precision=2, size_increment="1000")
+
+        steps = size_steps(_Cache(instruments=(fx,)), _state(_held(str(fx.id), "1.005")))
+
+        assert steps == {str(fx.id): Decimal("0.01")}
+
+
+class _BrokenInstrumentCache(_Cache):
+    """Holds a strategy's ``NVDA +22``; the instrument lookup returns
+    ``instrument`` — or raises, when it is ``AttributeError``."""
+
+    def __init__(self, instrument) -> None:
+        super().__init__(positions=[_Position(NVDA, STRATEGY, "22")])
+        self._broken = instrument
+
+    def instrument(self, instrument_id):
+        if self._broken is AttributeError:
+            raise AttributeError("no instruments here")
+        return self._broken
+
+
+class TestAStepLookupThatFailsLeavesTheRowExact:
+    """Code review P3: the step lookup's docstring promises a failing lookup
+    leaves the row exact — an ``AttributeError`` (an instrument lacking the
+    attribute) used to crash the phase instead."""
+
+    @pytest.mark.parametrize(
+        "instrument",
+        [
+            SimpleNamespace(id=NVDA_EQUITY.id),  # no size_precision at all
+            SimpleNamespace(id=NVDA_EQUITY.id, size_precision=None),
+            SimpleNamespace(id=NVDA_EQUITY.id, size_precision=-1),
+            AttributeError,  # the lookup itself raises
+        ],
+        ids=["missing", "none", "negative", "lookup-raises"],
+    )
+    def test_the_row_is_left_exact_and_the_phase_completes(self, instrument):
+        cache = _BrokenInstrumentCache(instrument)
+
+        assert size_steps(cache, _state(_held(NVDA, "22"))) == {}
+        result = _reconcile(_node(cache), _reader(_state(_held(NVDA, "22"))))
+        assert result.inexpressible == ()
 
 
 class TestWhatTheFrameworkFixedIsNotSilent:
@@ -1035,7 +1532,9 @@ class TestNoRecordCarriesTheRawAccount:
 
         with capture_logs() as logs:
             before = capture_local_state(node, _structlog())
-            _reconcile(node, _reader(_cash_state(_usd("6"))), local_before=before)
+            _reconcile(
+                node, _reader(_cash_state(_usd("6"), positions=HALF_SHARE)), local_before=before
+            )
 
         assert before is not None and before.cash == (_usd("5.0"),)
         assert {e["event"] for e in logs} >= set(EMITTED_RECONCILE_EVENTS)
@@ -1046,8 +1545,12 @@ def _dividend_before() -> LocalSnapshot:
     return _snapshot(cash=(_usd("100000.00"),), recorded_at=RECORDED)
 
 
-def _cash_state(*balances: CashBalance) -> BrokerState:
-    return BrokerState(account="***626", positions=(), cash=balances, retrieved_at=AT)
+def _cash_state(*balances: CashBalance, positions: tuple = ()) -> BrokerState:
+    return BrokerState(account="***626", positions=positions, cash=balances, retrieved_at=AT)
+
+
+#: Story 5.7: a DRIP's half share — what every record-name scenario must also name.
+HALF_SHARE = (_held(NVDA, "0.5"),)
 
 
 class TestACashChangeIsNamedAtStartup:
@@ -1216,6 +1719,7 @@ def _drive_every_path() -> set[str]:
             None,
         ),  # a correction
         (_node(_Cache(positions=[_Position(NVDA, STRATEGY, "22")])), _state(), None),  # refused
+        (_node(), _state(*HALF_SHARE), None),  # Story 5.7: an inexpressible remainder, named
     ]
     names: set[str] = set()
     for node, state, before in cases:
@@ -1266,14 +1770,25 @@ class TestEveryEmittedReconcileRecordIsPinned:
     def test_the_names_are_in_the_sanctioned_namespace(self):
         assert all(name.startswith("reconcile.") for name in EMITTED_RECONCILE_EVENTS)
         assert CASH_CHANGED_EVENT == "reconcile.cash_changed"
+        assert INEXPRESSIBLE_REMAINDER_EVENT == "reconcile.inexpressible_remainder"
+
+    def test_the_constant_is_exactly_the_four_names_since_story_5_7(self):
+        """Widened 3 → 4 deliberately (Story 5.7, D-E), with this pin."""
+        assert set(EMITTED_RECONCILE_EVENTS) == {
+            OK_EVENT,
+            DISCREPANCY_EVENT,
+            CASH_CHANGED_EVENT,
+            INEXPRESSIBLE_REMAINDER_EVENT,
+        }
 
     @pytest.mark.parametrize("name", sorted(EMITTED_RECONCILE_EVENTS))
     def test_no_record_carries_a_raw_account(self, name):
         """NFR26, parametrized from the constant: a dropped name would exempt
         its record from this scan, which is why the constant is pinned."""
         node = _node(_Cache(general=_summary(1.0), positions=[_Position(AAPL, "EXTERNAL", "4")]))
+        state = _cash_state(_usd("2"), positions=HALF_SHARE)
         with capture_logs() as logs:
-            _reconcile(node, _reader(_cash_state(_usd("2"))), local_before=_dividend_before())
+            _reconcile(node, _reader(state), local_before=_dividend_before())
 
         records = _events(logs, name)
         assert records, f"{name} was not emitted by the scenario"

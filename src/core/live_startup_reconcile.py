@@ -72,6 +72,24 @@ covering row is not contradicted at all. IBKR holding less, nothing or the
 opposite side still refuses the whole session, and the running session's cycle
 still stops on all of them.
 
+**Holdings the adapter cannot express are named, not refused** (Story 5.7, PO
+ruling D2, "same-symbol rule everywhere, name the rest"). An unresolved
+``IB-CONID-*`` broker row refuses the start only when its symbol is *held* —
+one a cached position is held under (the row that could be masking that
+position's "broker 0"), or one an instrument the session's strategies trade is
+(code review R1, PO ruling 2026-10-07: a flat strategy must not buy on top of a
+holding it cannot see); any other is logged ``resolution="unresolved"`` once
+and left out of the judgement. A broker quantity the instrument's size
+precision cannot express (a DRIP's ``+22.5``) is judged truncated toward zero
+to whole steps of ``10**-size_precision`` — what ``make_qty`` rounds to, never
+the possibly coarser ``size_increment`` (code review R2) — and its remainder
+named once (``reconcile.inexpressible_remainder``) — never rounded, since
+``make_qty`` rounds half-even and would read ``23.5`` as ``24``. Nautilus's own
+pass imports a whole extra share for that half
+(``INTERNAL-DIFF +1``, measured 2026-10-07), which this phase corrects down like
+any other net disagreement. Every record that *reports* the broker keeps its
+exact read; ``live reconcile`` stays exact (FR36).
+
 What this module never does: purge or write the cache directly, call an order
 method, re-invoke ``reconcile_execution_state``, or read ``trading_permitted``.
 Granting trading permission after the phase proves the cache — the first
@@ -83,8 +101,9 @@ running session's cycle.
 
 import json
 import time
-from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
 from datetime import datetime
+from decimal import Decimal
 from enum import StrEnum
 from typing import Any, ClassVar
 
@@ -108,12 +127,17 @@ from src.core.live_broker_state import (
 from src.models.broker_state import BrokerPosition, BrokerState, CashBalance
 from src.models.position_reconciliation import (
     CachedPosition,
+    InexpressibleRemainder,
     LocalSnapshot,
     PositionDiscrepancy,
     StartupReconciliation,
+    at_expressible_precision,
     cash_changes,
     compare_positions,
     count_synthetic,
+    held_symbols,
+    may_mask_a_cached_position,
+    symbol_key,
 )
 
 #: ``read_broker_state``'s shape — the runner's fifth broker-facing seam.
@@ -130,6 +154,11 @@ DISCREPANCY_EVENT = "reconcile.discrepancy"
 #: let the first push overwrite the stored value, so the next start names
 #: nothing — ``live reconcile`` before starting is the reliable view.
 CASH_CHANGED_EVENT = "reconcile.cash_changed"
+#: Story 5.7 (D-E): a broker quantity finer than its instrument's size
+#: precision, named once (WARNING) with both quantities. Not a discrepancy: the
+#: row is clean at the expressible precision, and the record says what that
+#: left out. Shared with the running session's cycle.
+INEXPRESSIBLE_REMAINDER_EVENT = "reconcile.inexpressible_remainder"
 #: A **diagnostic** — the snapshot's own read broke — so it sits outside
 #: :data:`EMITTED_RECONCILE_EVENTS`, the ``order.observer_failed`` precedent.
 SNAPSHOT_FAILED_EVENT = "reconcile.local_snapshot_failed"
@@ -137,8 +166,13 @@ SNAPSHOT_FAILED_EVENT = "reconcile.local_snapshot_failed"
 #: the code, both directions (``TestEveryEmittedReconcileRecordIsPinned``: an
 #: AST scan of every ``_emit`` in this module, and the phase driven through
 #: every path), so a new record name cannot join silently (CLAUDE.md,
-#: "Membership-pinned lists"; PO ruling, Story 4.7).
-EMITTED_RECONCILE_EVENTS: tuple[str, ...] = (OK_EVENT, DISCREPANCY_EVENT, CASH_CHANGED_EVENT)
+#: "Membership-pinned lists"; PO ruling, Story 4.7). Widened 3 → 4 at Story 5.7.
+EMITTED_RECONCILE_EVENTS: tuple[str, ...] = (
+    OK_EVENT,
+    DISCREPANCY_EVENT,
+    CASH_CHANGED_EVENT,
+    INEXPRESSIBLE_REMAINDER_EVENT,
+)
 #: Story 4.3 (D-G): every ``reconcile.ok`` / ``reconcile.discrepancy`` says
 #: which reconciliation wrote it — this module's startup phase, or the running
 #: session's cycle (``live_runtime_reconcile``: ``runtime`` / ``reconnect``).
@@ -163,10 +197,21 @@ BROKER_WARD_SETTINGS: tuple[tuple[str, bool], ...] = (
 INSTRUMENT_FILTER_SETTING = "reconciliation_instrument_ids"
 
 _MISSING = object()
-_UNRESOLVED = (
-    "the broker holds a position its adapter could not resolve to an instrument, so nothing can "
-    "be compared or reconciled against it; retry the start, and if it persists check the "
-    "instrument at the broker"
+#: Code review P5: each refusal of an unresolved row says what is true of it —
+#: a matching symbol (R1: a cached position's or a traded instrument's), or no
+#: symbol at all (D-B). The instrument-not-in-cache refusal is ``_correct``'s own.
+_UNRESOLVED_SAME_SYMBOL = (
+    "the broker holds a position its adapter could not resolve to an instrument, under the same "
+    "symbol as a position this session's cache holds or an instrument its strategies trade, so "
+    "it may be that holding"
+)
+_UNRESOLVED_NO_SYMBOL = (
+    "the broker holds a position its adapter could not resolve to an instrument and that "
+    "carries no symbol, so it cannot be told apart from anything this session holds or trades"
+)
+_UNRESOLVED_REMEDY = (
+    "nothing can be compared or reconciled against it; retry the start, and if it persists "
+    "check the instrument at the broker"
 )
 _REMEDY = (
     "IBKR is authoritative, and reconciliation cannot rewrite a strategy's own position, so no "
@@ -332,6 +377,7 @@ async def reconcile_at_startup(
     local_before: LocalSnapshot | None,
     read_state: BrokerStateReader = read_broker_state,
     clock: Callable[[], float] = time.monotonic,
+    traded_instruments: Collection[str] = (),
 ) -> StartupReconciliation:
     """Prove the cache matches the broker exactly, correcting it broker-ward first.
 
@@ -347,6 +393,8 @@ async def reconcile_at_startup(
         local_before: :func:`capture_local_state`'s snapshot, or ``None``.
         read_state: The broker read — ``read_broker_state`` in production.
         clock: Monotonic seconds, for ``elapsed_ms``.
+        traded_instruments: The instrument ids the session's strategies trade;
+            their symbols count as held for an unresolved row (code review R1).
 
     Returns:
         The :class:`StartupReconciliation` ``_phase_trading`` requires.
@@ -360,22 +408,16 @@ async def reconcile_at_startup(
     broker = await read_state(node, log=log)
     if local_before is not None:
         _log_cash_changes(log, local_before, broker)
-    observed = compare_positions(cached_positions(node.cache), broker)
+    # Story 5.7 (D-D): judged at each instrument's expressible precision,
+    # reported exact — every comparison below is against `judged`.
+    judged, inexpressible = expressible_broker(node.cache, broker)
+    for remainder in inexpressible:
+        log_remainder(log, remainder)
+    cached = cached_positions(node.cache)
+    observed = compare_positions(cached, judged)
     rows = _to_act_on(observed)
-    for row in observed:
-        if row not in rows:
-            # Named from this phase, not only by the resume check that refuses
-            # the strategies on it later (PR #35 code review, D5b ruling).
-            log_discrepancy(log, row, "covered")
-    framework = _framework_resolved(local_before, broker, rows)
-    for row in framework:
-        log_discrepancy(log, row, "framework")
-    # An unresolved broker row is keyed ``IB-CONID-*``, so the cache's row for
-    # the same holding reads "broker 0" and would pass for a contradiction —
-    # whose remedy (abandon the session) is wrong for a transient lookup miss.
-    unresolved = [row for row in rows if not row.broker_resolved]
-    if unresolved:
-        _refuse(log, ReconciliationFailure.UNRESOLVABLE_DISCREPANCY, unresolved, _UNRESOLVED)
+    framework = _name_settled(log, observed, rows, local_before, judged)
+    rows = _set_aside_unresolved(log, rows, held_symbols(cached, traded_instruments))
     contradicted = [
         row for row in rows if row.strategy_contradicted and not row.broker_covers_strategy
     ]
@@ -387,9 +429,9 @@ async def reconcile_at_startup(
             if row not in contradicted:
                 log_discrepancy(log, row, "untouched")
         _refuse(log, ReconciliationFailure.STRATEGY_POSITION_CONTRADICTED, contradicted, _REMEDY)
-    corrected = _correct(node, rows, broker, log)
+    corrected = _correct(node, rows, judged, log)
     cached = cached_positions(node.cache)
-    remaining = _to_act_on(compare_positions(cached, broker))
+    remaining = _still_to_answer(cached, judged, traded_instruments)
     # A correction is recorded as the broker's only once the re-read proves it
     # took: a report the framework accepted without acting on (an instrument
     # filtered out of reconciliation returns `True`) must not read "resolved".
@@ -411,9 +453,121 @@ async def reconcile_at_startup(
         open_orders=len(node.cache.orders_open()),
         synthetic_positions=count_synthetic(cached),
         elapsed_ms=round((clock() - started) * 1000, 3),
+        inexpressible=inexpressible,
     )
     _log_ok(log, result)
     return result
+
+
+def _name_settled(
+    log: Any,
+    observed: Sequence[PositionDiscrepancy],
+    rows: Sequence[PositionDiscrepancy],
+    local_before: LocalSnapshot | None,
+    judged: BrokerState,
+) -> tuple[PositionDiscrepancy, ...]:
+    """Name what this phase will not act on, and return the framework's share.
+
+    A row the covered-excess rule settles is named from this phase, not only by
+    the resume check that refuses the strategies on it later (PR #35 code
+    review, D5b ruling); a disagreement Nautilus's own pass already fixed is
+    named ``framework``. Runs while ``rows`` still holds every unresolved row,
+    so none reads as framework-resolved.
+    """
+    for row in observed:
+        if row not in rows:
+            log_discrepancy(log, row, "covered")
+    framework = _framework_resolved(local_before, judged, rows)
+    for row in framework:
+        log_discrepancy(log, row, "framework")
+    return framework
+
+
+def _set_aside_unresolved(
+    log: Any, rows: Sequence[PositionDiscrepancy], held: Collection[str]
+) -> tuple[PositionDiscrepancy, ...]:
+    """The rows left to judge once unresolved broker rows are answered for (Story 5.7).
+
+    An unresolved row is keyed ``IB-CONID-*``, so the cache's row for the same
+    holding reads "broker 0" and would pass for a contradiction — whose remedy
+    (abandon the session) is wrong for a transient lookup miss. Only a row
+    under a held symbol — a cached position's or a traded instrument's (code
+    review R1) — still refuses the start; any other is named once and left out
+    (PO ruling D2).
+
+    Raises:
+        ReconciliationFailedError: ``UNRESOLVABLE_DISCREPANCY``, naming the
+            masking rows only, with the reason true of them (code review P5).
+    """
+    unresolved = [row for row in rows if not row.broker_resolved]
+    masking = [row for row in unresolved if may_mask_a_cached_position(row, held)]
+    for row in unresolved:
+        if row not in masking:
+            log_discrepancy(log, row, "unresolved")
+    if masking:
+        _refuse(log, ReconciliationFailure.UNRESOLVABLE_DISCREPANCY, masking, _unresolved(masking))
+    return tuple(row for row in rows if row.broker_resolved)
+
+
+def _unresolved(masking: Sequence[PositionDiscrepancy]) -> str:
+    """The refusal's reason for these rows, and only what is true of them (P5)."""
+    named = [bool(symbol_key(row.broker_symbol)) for row in masking]
+    reasons = [_UNRESOLVED_SAME_SYMBOL] if any(named) else []
+    if not all(named):
+        reasons.append(_UNRESOLVED_NO_SYMBOL)
+    return f"{'; and '.join(reasons)}: {_UNRESOLVED_REMEDY}"
+
+
+def _still_to_answer(
+    cached: Sequence[CachedPosition], judged: BrokerState, traded: Collection[str]
+) -> tuple[PositionDiscrepancy, ...]:
+    """The re-verify's rows: what the phase acts on, less the unresolved rows
+    that mask nothing — judged against the corrected cache (and the traded
+    instruments, code review R1), so a correction that put a same-symbol
+    position there makes its row count again (fail closed, Story 5.7)."""
+    held = held_symbols(cached, traded)
+    return tuple(
+        row
+        for row in _to_act_on(compare_positions(cached, judged))
+        if row.broker_resolved or may_mask_a_cached_position(row, held)
+    )
+
+
+def size_steps(cache: Any, broker: BrokerState) -> dict[str, Decimal]:
+    """Each resolved broker instrument's size step — ``10**-size_precision`` of
+    the instrument the cache holds (Story 5.7, D-C as ruled at code review R2).
+
+    The step is the precision, not ``size_increment``: ``make_qty`` rounds to
+    ``size_precision``, and an increment can be coarser (FX, futures, lots), so
+    truncating to it would cut an exactly representable quantity (``150`` with
+    an increment of ``100`` read as ``100``) and correct the cache below the
+    broker. The broker reader's ``get_instrument`` loads every resolved
+    instrument into the cache, so it is normally there. A lookup that fails —
+    raising, or an instrument without a usable ``size_precision`` (code review
+    P3: ``AttributeError`` included) — or an instrument the cache lacks leaves
+    that row exact, judged as before this story.
+    """
+    steps: dict[str, Decimal] = {}
+    for position in broker.positions:
+        if not position.instrument_resolved:
+            continue
+        try:
+            instrument = cache.instrument(InstrumentId.from_str(position.instrument_id))
+            precision = None if instrument is None else instrument.size_precision
+        except (AttributeError, ValueError, TypeError, OverflowError):
+            continue
+        if isinstance(precision, int) and not isinstance(precision, bool) and precision >= 0:
+            steps[position.instrument_id] = Decimal(1).scaleb(-precision)
+    return steps
+
+
+def expressible_broker(
+    cache: Any, broker: BrokerState
+) -> tuple[BrokerState, tuple[InexpressibleRemainder, ...]]:
+    """The broker's state as both phases judge it, and what that left out
+    (Story 5.7, D-D). Shared with the running session's cycle; never used by
+    ``live reconcile``, which stays exact (FR36)."""
+    return at_expressible_precision(broker, size_steps(cache, broker))
 
 
 def _to_act_on(rows: Sequence[PositionDiscrepancy]) -> tuple[PositionDiscrepancy, ...]:
@@ -635,6 +789,25 @@ def log_discrepancy(
     _emit(log, level, DISCREPANCY_EVENT, **fields)
 
 
+def log_remainder(
+    log: Any, remainder: InexpressibleRemainder, *, scope: str = SCOPE_STARTUP
+) -> None:
+    """One ``reconcile.inexpressible_remainder`` (WARNING) naming both quantities
+    (Story 5.7, AC #4). Shared with Story 4.3's runtime cycle, which passes its
+    own ``scope``."""
+    _emit(
+        log,
+        "warning",
+        INEXPRESSIBLE_REMAINDER_EVENT,
+        scope=scope,
+        instrument_id=remainder.instrument_id,
+        broker_quantity=str(remainder.broker_quantity),
+        expressible_quantity=str(remainder.expressible_quantity),
+        remainder=str(remainder.remainder),
+        size_step=str(remainder.size_step),
+    )
+
+
 def _log_ok(log: Any, result: StartupReconciliation) -> None:
     broker = result.broker
     _emit(
@@ -648,8 +821,16 @@ def _log_ok(log: Any, result: StartupReconciliation) -> None:
         open_orders=result.open_orders,
         discrepancies=result.discrepancy_count,
         synthetic_positions=result.synthetic_positions,
+        inexpressible_remainders=inexpressible_remainders(result.inexpressible),
         elapsed_ms=result.elapsed_ms,
     )
+
+
+def inexpressible_remainders(remainders: Iterable[InexpressibleRemainder]) -> dict[str, str]:
+    """``reconcile.ok``'s view of what stands below the expressible precision —
+    ``{}`` when nothing does — so no ``reconcile.ok`` is silent over a gap
+    (Story 5.7, AC #4). Shared with the runtime cycle's record."""
+    return {remainder.instrument_id: str(remainder.remainder) for remainder in remainders}
 
 
 def _emit(log: Any, level: str, event: str, **fields: Any) -> None:

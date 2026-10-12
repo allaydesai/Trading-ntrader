@@ -176,6 +176,18 @@ class SpyRecord:
         if self.rejection_raises is not None:
             raise self.rejection_raises
 
+    def record_trading_withheld(
+        self,
+        *,
+        withheld_from: datetime,
+        withheld_until: datetime | None,
+        reason: str | None,
+        error_type: str,
+        failed_cycles: int,
+    ) -> None:
+        """Story 5.8's fifth port method, kept complete for the same reason."""
+        self.calls.append("record_trading_withheld")
+
 
 async def _never_sleeps(seconds: float) -> None:
     await asyncio.Event().wait()

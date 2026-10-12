@@ -96,6 +96,17 @@ positions_report = engine.trader.generate_positions_report()
 
 **Custom metrics** calculated by `ResultsExtractor` (Nautilus doesn't provide): max drawdown, CAGR, Calmar ratio, max drawdown duration. Starting balance must be passed separately.
 
+**The analyzer is primed by `BacktestEngine.end()` only.** `PortfolioAnalyzer.calculate_statistics(account, positions)` is called in exactly one place in the 1.220 wheel — `BacktestEngine._log_post_run`, with `cache.positions() + cache.position_snapshots()`. Nothing on the live path calls it, so a `TradingNode`'s analyzer is empty: unprimed, the returns statistics read `None` and the PnL statistics a silent `0.0`. `calculate_statistics` reads only `account.starting_balances()` and `account.balances_total()`. For a live host, use `LiveHost.settle` (`src/core/results_extractor.py`, Story 5.1). It primes a copy of the analyzer from the session's own legs and a realized-P&L ledger — never from IB's `AccountState`, whose total is `NetLiquidation`.
+
+**A NETTING cache is not a complete record of closed legs.** Every production backtest venue is HEDGING (one position per round trip), so the backtest path never meets any of this:
+
+- **Re-entry after flat.** The engine calls `cache.snapshot_position()` (a pickled copy with id `{position_id}-{uuid4}`, kept in an in-memory dict), then reopens the same object in place. `positions_closed()` never returns the snapshots.
+- **Flip in one order.** `ExecutionEngine._flip_position` calls `_open_position(instrument, None, …)`, which builds a *new* `Position` and overwrites the closed one in `cache._positions`, with **no snapshot**. The closed leg is gone (`execution/engine.pyx:1440-1442, 1600`; `cache.pyx:2124`). Pinned by `test_canary_a_netting_flip_leaves_no_closed_leg_in_the_cache`.
+- **Redelivered closing fill.** `_open_position` snapshots *before* `position.apply` raises `KeyError` on the duplicate trade id, so the same closed leg is snapshotted twice (`engine.pyx:1444-1450`).
+- **Restart.** Snapshots are never written to the cache database, and a Redis-loaded position replays to its current leg.
+
+So a session's closed legs are complete only in the `trades` table (one row per `PositionClosed`).
+
 ### Venue Configuration
 
 ```python
@@ -352,10 +363,40 @@ The phase's rules:
 - **Anything else is corrected broker-ward** through
   `exec_engine.reconcile_execution_report(PositionStatusReport)`, and must then
   re-compare clean.
+- **A holding the adapter cannot express is named, not refused** (Story 5.7, PO
+  ruling D2, "same-symbol rule everywhere, name the rest"). Two shapes:
+  - **An unresolved contract** (`IB-CONID-*`: a bond, a warrant, a BAG, a
+    delisted symbol) refuses the start (`unresolvable_discrepancy`) only when
+    its symbol is *held*: one a cached position (any owner) is held under —
+    that row could be the holding the cache reads as "broker 0" — or one an
+    instrument the session's strategies trade is (code review R1, PO ruling
+    2026-10-07: a flat strategy must not buy on top of a holding it cannot
+    see). Any other unresolved row is logged `resolution=unresolved` once and
+    left out of the judgement. The match is the D1 normaliser (`BRK B` ≡
+    `BRK-B`), on the symbol before the instrument id's **last** dot
+    (`BRK.B.NYSE` is `BRK.B`). A row with no symbol matches whenever anything is
+    held (fail closed), and its refusal says so rather than claiming a match.
+  - **A broker quantity the instrument's size precision cannot express** (a
+    DRIP's `+22.5` against a whole-share equity) is judged **truncated toward
+    zero** to whole steps of `10**-size_precision`, and the remainder is named
+    once (`reconcile.inexpressible_remainder`, WARNING, both quantities and
+    `size_step`). The step is `size_precision`, never `size_increment`:
+    `make_qty` rounds to the precision, and an increment can be coarser (FX,
+    futures, lots), so truncating to it would cut an exact `150` to `100` (code
+    review R2). It is never
+    rounded: `Instrument.make_qty` rounds half-even, so it reads `23.5` as `24`,
+    a share the account does not hold. Nautilus's own pass inside
+    `node:connect` imports a whole extra share for that half
+    (`INTERNAL-DIFF +1`, measured 2026-10-07; the IB adapter builds its report
+    at the string's precision). The phase corrects that down like any other net
+    disagreement. Records that *report* the broker (`reconcile.ok`'s
+    `instruments`, the resume check's `broker_quantity`) keep its exact read.
+    `reconcile.ok` carries `inexpressible_remainders`. `live reconcile` stays
+    exact: the half share is a discrepancy there, exit `5` (FR36).
 
-The records are `reconcile.discrepancy` (`resolution` is `framework`, `broker`
-or `refused`) and `reconcile.ok`. A refusal is `ReconciliationFailedError`,
-exit 1.
+The records are `reconcile.discrepancy` (`resolution` is `framework`, `broker`,
+`covered`, `unresolved` or `refused`), `reconcile.inexpressible_remainder` and
+`reconcile.ok`. A refusal is `ReconciliationFailedError`, exit 1.
 
 **Operator remedy for a refused start** (`strategy_position_contradicted`):
 create a new session for the strategy. The alternative is clearing the
@@ -408,12 +449,22 @@ startup. So runtime alignment is split three ways:
    through `reconcile_execution_report` (the Story 4.2 path) and logged
    `reconcile.discrepancy scope=runtime resolution=broker`. An instrument the
    cache cannot express is logged `resolution=unresolved` once. A broker row
-   the adapter could not resolve (`IB-CONID-*`) holds back only the cache row
-   with the **same symbol** — the one holding it could be — and only for
+   the adapter could not resolve (`IB-CONID-*`) matters only when its symbol is
+   held — a cached position's or a traded instrument's (Story 5.7; code review
+   R1). Any other is logged `resolution=unresolved` once and never withholds the
+   reconnect grant — from its first sighting, not once debounced (code review
+   P4). One that matches withholds the grant (fail closed) and holds back only the cache
+   row with the **same symbol** — the one holding it could be — and only for
    `HOLD_BACK_CYCLES` (3) consecutive cycles; past that it is a holding the
    adapter will never resolve (`reconcile.hold_back_expired`, once) and the
    held-back row is acted on, so a contradiction underneath it is refused rather
-   than masked for the life of the session (PO ruling, PR #35 D1). A strategy's
+   than masked for the life of the session (PO ruling, PR #35 D1). A broker
+   quantity the instrument's size precision cannot express is judged at whole
+   steps, truncated toward zero, as at startup. Its remainder is named once per
+   standing value per instrument (`reconcile.inexpressible_remainder
+   scope=runtime`) — a strategy's own trade that leaves the same remainder
+   standing (22.5 → 23.5) is not named again (code review P2) — and carried by
+   every `reconcile.ok` while it stands (Story 5.7). A strategy's
    own position the broker no longer covers **stops the session** before
    anything is written (PO ruling 2A, narrowed by Story 4.7's coverage rule) —
    `ReconciliationFailedError` out of the tick, the ordinary teardown,
@@ -424,6 +475,42 @@ startup. So runtime alignment is split three ways:
 TWS trade, a split) is corrected one to two cycles after it happens, not on
 arrival. `reconcile.ok scope=runtime` is logged on the first clean cycle, after
 any problem, and otherwise at most hourly (`cycles` says how many it covers).
+
+**A cycle that keeps failing is acted on** (Story 5.8, PO ruling PR #35 D3:
+"withhold after 3, drift stops"):
+
+- **The broker read keeps failing** (a positions request IBKR does not answer, a
+  timeout, cash not yet reported). The first failure is one
+  `reconcile.cycle_failed` WARNING. The **third consecutive** failed cycle
+  (`WITHHOLD_AFTER_FAILED_CYCLES`) **withdraws trading permission**: the monitor
+  moves `CONNECTED → RECOVERING` (`withhold_for_reconciliation`), every order is
+  withheld (`order.suppressed`), and one `reconcile.cycle_failed` is logged at
+  ERROR (`consecutive=3 action=trading_withheld`), past the hourly throttle.
+  The next clean cycle (a reconnect cycle, every tick) grants permission back
+  through `confirm_state_reestablished`, exactly as after a reconnect:
+  `reconcile.ok scope=reconnect`, then `connection.restored`. While withheld,
+  the halt clock runs as for any outage, so `connection.halted` may appear. A
+  real disconnect while withheld is narrated as its own outage
+  (`connection.lost`), and its downtime, reconnect time and halt clock are
+  measured from the drop. If the session is already `RECOVERING` after a real
+  disconnect, the outage owns that withhold: the third failure withdraws
+  nothing and logs no ERROR. Only the reader's own failure reason is logged
+  or persisted, never a third party's exception text.
+- **Adapter drift** (`BrokerStateAdapterError`, e.g. two IB contracts resolving
+  to one instrument id). It is never a streak: one `reconcile.cycle_failed` at
+  ERROR (`action=session_stopped reason=adapter_incompatible`), then the session
+  stops through the ordinary teardown, exit 1, positions untouched — as at
+  startup.
+- **The withheld period is recorded for the seal.** The tick writes each
+  period (start, end, cause) to `runtime_flags["reconcile_withheld"]` through
+  the record port. That is the one `runtime_flags` key the `-> running` edge
+  carries forward (PO ruling Q1); every other key still clears per run. The
+  runner's teardown writes any period the tick could not, then the stop closes
+  a period it cut short (`ended_by: "session_stopped"`). A restart after
+  a `kill -9` closes the dead process's open period at its last heartbeat
+  (`"process_lost"`). A seal copies the whole history into
+  `session_conditions.reconcile_withheld`, so a comparison can see when a
+  session was not trading and why. Procedure P23 is the operator half.
 
 ### Stranded orders (Story 4.8)
 

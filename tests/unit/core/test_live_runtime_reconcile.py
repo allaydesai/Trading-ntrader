@@ -11,6 +11,7 @@ when something does (Epic 2 retro: a test that cannot fail).
 """
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -20,10 +21,17 @@ from nautilus_trader.model.identifiers import InstrumentId
 from structlog.testing import capture_logs
 
 from src.core.exit_outcome import EXIT_CODES, EXIT_ERROR
-from src.core.live_broker_state import BrokerStateFailure, BrokerStateUnavailableError
+from src.core.live_broker_state import (
+    BrokerStateAdapterError,
+    BrokerStateFailure,
+    BrokerStateUnavailableError,
+)
 from src.core.live_check import classify_failure
 from src.core.live_connection_monitor import ConnectionMonitor, ConnectionState, ConnectionStatus
+from src.core.live_order_path import ORDER_CREATING_METHODS, SUPPRESSED_EVENT, install_order_path
 from src.core.live_runtime_reconcile import (
+    ACTION_SESSION_STOPPED,
+    ACTION_TRADING_WITHHELD,
     CYCLE_FAILED_EVENT,
     DEBOUNCE_SECONDS,
     HOLD_BACK_CYCLES,
@@ -32,11 +40,15 @@ from src.core.live_runtime_reconcile import (
     RUNTIME_RECONCILE_EVERY_TICKS,
     SCOPE_RECONNECT,
     SCOPE_RUNTIME,
+    WITHHOLD_AFTER_FAILED_CYCLES,
     RuntimeReconciler,
+    WithheldPeriod,
+    WithheldPeriods,
     grant_after_reconciliation,
 )
 from src.core.live_startup_reconcile import (
     DISCREPANCY_EVENT,
+    INEXPRESSIBLE_REMAINDER_EVENT,
     OK_EVENT,
     ReconciliationFailedError,
     ReconciliationFailure,
@@ -44,6 +56,7 @@ from src.core.live_startup_reconcile import (
 from src.core.live_stranded_orders import StaleOrderWatch
 from tests.unit.core.test_live_startup_reconcile import (
     AAPL,
+    BOND,
     NVDA,
     NVDA_EQUITY,
     RAW_ACCOUNT,
@@ -51,11 +64,28 @@ from tests.unit.core.test_live_startup_reconcile import (
     _Cache,
     _Engine,
     _held,
+    _net,
     _Position,
     _state,
 )
 
 pytestmark = pytest.mark.unit
+
+#: Story 5.8's acceptance criteria, as ``prd-epic5-scope.md`` words them.
+SOURCE = "_bmad-output/planning-artifacts/prd-epic5-scope.md"
+AC_5_8A = (
+    "three consecutive failed cycles withdraw trading permission through RECOVERING (orders "
+    "withheld, order.suppressed), log one reconcile.cycle_failed at ERROR naming the streak, "
+    "and the next clean cycle re-grants through confirm_state_reestablished as a reconnect does"
+)
+AC_5_8B = (
+    "a BrokerStateAdapterError stops the session with exit 1 on its first occurrence, as "
+    "startup treats adapter drift; the hourly throttle does not apply"
+)
+AC_5_8D = (
+    "the three-cycle threshold is a named constant with a test that fails if a streak of two "
+    "withholds or a streak of three does not"
+)
 
 UP = ConnectionStatus(connected=True, detail="up")
 DOWN = ConnectionStatus(connected=False, detail="down")
@@ -68,6 +98,21 @@ class _Clock:
 
     def __call__(self) -> float:
         return self.now
+
+
+#: The wall instant ``_Clock`` reads 1000.0 at — Story 5.8's persisted stamps.
+WALL_ORIGIN = datetime(2026, 10, 11, 14, 0, tzinfo=UTC)
+
+
+class _WallClock:
+    """Aware UTC wall time that advances with the monotonic ``_Clock``, so a
+    withheld period's stamps are exact."""
+
+    def __init__(self, clock: _Clock) -> None:
+        self._clock = clock
+
+    def __call__(self) -> datetime:
+        return WALL_ORIGIN + timedelta(seconds=self._clock.now - 1000.0)
 
 
 class _RuntimeCache(_Cache):
@@ -113,7 +158,9 @@ class _Connection:
 class _World:
     """One session's worth of doubles, with the monitor already granted."""
 
-    def __init__(self, positions=(), *, state=None, inflight=(), **engine_kwargs) -> None:
+    def __init__(
+        self, positions=(), *, state=None, inflight=(), traded=None, **engine_kwargs
+    ) -> None:
         self.clock = _Clock()
         self.cache = _RuntimeCache(positions, inflight=inflight)
         self.engine = _Engine(self.cache, **engine_kwargs)
@@ -124,6 +171,7 @@ class _World:
         self.monitor.confirm_state_reestablished(UP)
         self.reader = _Reader(state)
         self.connection = _Connection()
+        self.wall = _WallClock(self.clock)
         self.reconciler = RuntimeReconciler(
             node=self.node,
             monitor=self.monitor,
@@ -132,6 +180,9 @@ class _World:
             settings=object(),
             read_state=self.reader,
             clock=self.clock,
+            wall_clock=self.wall,  # Story 5.8: a withheld period's persisted stamps
+            # Code review R1: the session's traded instruments; omitted, the default.
+            **({} if traded is None else {"traded_instruments": traded}),
         )
 
     def tick(self, times: int = 1) -> None:
@@ -500,16 +551,269 @@ class TestUnresolvableRows:
 
         assert world.monitor.state is ConnectionState.CONNECTED
 
-    def test_an_unresolved_broker_row_withholds_the_grant(self):
-        """The sibling: a lookup miss may hide a holding, so it fails closed."""
-        world = _World(state=_state(_held("IB-CONID-4815747", "22", resolved=False)))
+    def test_an_unresolved_broker_row_of_a_held_symbol_withholds_the_grant(self):
+        """The sibling: a lookup miss may hide a holding, so it fails closed.
+        Story 5.7 (AC #3, D-A) narrows it to the row that *could* — one under a
+        symbol a cached position is held under; before 5.7 any unresolved row
+        withheld it, on an empty cache too (that case is now AC #2's)."""
+        world = _World(
+            [_Position(NVDA, STRATEGY, "22")],
+            state=_state(
+                _held(NVDA, "22"), _held("IB-CONID-4815747", "3", resolved=False, symbol="NVDA")
+            ),
+        )
         world.lose_and_recover()
 
-        for _ in range(4):
+        for _ in range(HOLD_BACK_CYCLES + 3):
             world.tick()
 
         assert world.monitor.state is not ConnectionState.CONNECTED
         assert world.monitor.submission_withheld is True
+
+
+class TestAnUnresolvedHoldingOfAnUnrelatedSymbolNeverWithholdsTheGrant:
+    """Story 5.7, AC #2 (PO ruling D2): an ``IB-CONID-*`` row under a symbol no
+    cached position is held under is named once and left out — a recovered
+    disconnect is re-granted beside it, and the running session reports clean."""
+
+    def test_a_recovered_disconnect_is_re_granted_beside_it(self):
+        world = _World([_Position(AAPL, STRATEGY, "5")], state=_state(_held(AAPL, "5"), BOND))
+        world.cycles(2)  # confirmed and named before the loss
+        world.lose_and_recover()
+
+        with capture_logs() as logs:
+            for _ in range(4):
+                world.tick()
+
+        assert world.monitor.state is ConnectionState.CONNECTED
+        assert world.monitor.submission_withheld is False
+        assert [e["scope"] for e in _events(logs, OK_EVENT)] == [SCOPE_RECONNECT]
+
+    def test_a_row_first_seen_after_the_loss_is_re_granted_on_the_first_cycle(self):
+        """Code review P4: an unrelated row is inert from its first sighting —
+        it is never acted on, so it has nothing to debounce. Judging inertness
+        from the *debounced* rows withheld the grant for at least one debounce
+        window (>= 60 s), and a flickering row could withhold it forever (AC #2)."""
+        world = _World(state=_state(BOND))
+        world.lose_and_recover()
+
+        world.tick()
+
+        assert world.monitor.state is ConnectionState.CONNECTED
+        assert world.monitor.submission_withheld is False
+
+    def test_a_flickering_unrelated_row_never_withholds_the_grant(self):
+        """Each sighting is a first sighting to the debounce; inert regardless."""
+        world = _World(state=_state(BOND))
+        world.cycles(1)
+        world.reader.state = _state()
+        world.cycles(1)
+        world.reader.state = _state(BOND)
+        world.lose_and_recover()
+
+        world.tick()
+
+        assert world.monitor.state is ConnectionState.CONNECTED
+        assert world.monitor.submission_withheld is False
+
+    def test_it_is_named_once_and_never_expires_a_hold_back_it_never_held(self):
+        """D-G: D1's counter runs only for rows that could mask a cached position."""
+        world = _World(state=_state(BOND))
+
+        with capture_logs() as logs:
+            world.cycles(HOLD_BACK_CYCLES + 3)
+
+        records = [(r["instrument_id"], r["resolution"]) for r in _events(logs, DISCREPANCY_EVENT)]
+        assert records == [("IB-CONID-99", "unresolved")]
+        assert not _events(logs, HOLD_BACK_EXPIRED_EVENT)
+        assert _events(logs, OK_EVENT), "the running session reports clean beside it"
+        assert world.engine.reports == []
+
+
+class TestATradedInstrumentCountsAsHeldWhileRunning:
+    """Code review R1 (PO ruling 2026-10-07): the reconnect grant and D1's
+    hold-back count the symbols of the instruments the session's strategies
+    trade as held, beside the cached positions' own."""
+
+    LOOKUP_MISS = _held("IB-CONID-4815747", "3", resolved=False, symbol="NVDA")
+
+    def test_a_flat_strategy_beside_a_same_symbol_row_withholds_the_grant(self):
+        world = _World(state=_state(self.LOOKUP_MISS), traded=[NVDA])
+        world.lose_and_recover()
+
+        for _ in range(HOLD_BACK_CYCLES + 3):
+            world.tick()
+
+        assert world.monitor.state is not ConnectionState.CONNECTED
+        assert world.monitor.submission_withheld is True
+
+    def test_another_traded_symbol_does_not_withhold_it(self):
+        """Non-vacuity: the withholding above is the traded set's doing."""
+        world = _World(state=_state(self.LOOKUP_MISS), traded=[AAPL])
+        world.lose_and_recover()
+
+        world.tick()
+
+        assert world.monitor.state is ConnectionState.CONNECTED
+
+    def test_a_row_matching_neither_never_withholds_it(self):
+        world = _World([_Position(AAPL, STRATEGY, "5")], state=_state(_held(AAPL, "5"), BOND))
+        world.reconciler = RuntimeReconciler(
+            node=world.node,
+            monitor=world.monitor,
+            log=_log(),
+            connection_reader=world.connection,
+            settings=object(),
+            read_state=world.reader,
+            clock=world.clock,
+            traded_instruments=[NVDA, AAPL],
+        )
+        world.lose_and_recover()
+
+        world.tick()
+
+        assert world.monitor.state is ConnectionState.CONNECTED
+        assert world.monitor.submission_withheld is False
+
+    def test_d1s_hold_back_counts_a_traded_symbol(self):
+        """D-G feeds the hold-back only rows that may mask; a traded symbol is
+        one, so its bound runs (and is named when it ends)."""
+        world = _World(state=_state(self.LOOKUP_MISS), traded=[NVDA])
+
+        with capture_logs() as logs:
+            world.cycles(HOLD_BACK_CYCLES + 1)
+
+        (expired,) = _events(logs, HOLD_BACK_EXPIRED_EVENT)
+        assert expired["symbol"] == "NVDA"
+
+
+class TestAFractionalRemainderIsNamedOnceWhileRunning:
+    """Story 5.7, AC #4: judged at whole shares, named once at WARNING, and
+    carried by every ``reconcile.ok`` while it stands — never a silent ok."""
+
+    def _world(self, broker: str = "22.5", *positions) -> _World:
+        return _World(
+            list(positions) or [_Position(NVDA, STRATEGY, "22")],
+            state=_state(_held(NVDA, broker)),
+        )
+
+    def test_it_is_clean_named_once_and_carried_by_reconcile_ok(self):
+        world = self._world()
+
+        with capture_logs() as logs:
+            world.cycles(5)
+
+        assert world.engine.reports == []
+        assert _events(logs, DISCREPANCY_EVENT) == []
+        (named,) = _events(logs, INEXPRESSIBLE_REMAINDER_EVENT)
+        assert (named["scope"], named["log_level"]) == (SCOPE_RUNTIME, "warning")
+        assert (named["broker_quantity"], named["expressible_quantity"], named["remainder"]) == (
+            "22.5",
+            "22",
+            "0.5",
+        )
+        (ok,) = _events(logs, OK_EVENT)
+        assert ok["inexpressible_remainders"] == {NVDA: "0.5"}
+        assert ok["instruments"] == {NVDA: "22.5"}, "D-D: the broker is reported exact"
+
+    def test_a_clean_session_with_nothing_inexpressible_says_so(self):
+        world = self._world("22")
+
+        with capture_logs() as logs:
+            world.cycles(2)
+
+        assert _events(logs, OK_EVENT)[0]["inexpressible_remainders"] == {}
+        assert _events(logs, INEXPRESSIBLE_REMAINDER_EVENT) == []
+
+    def test_a_changed_remainder_is_named_again(self):
+        world = self._world()
+        world.cycles(2)
+        world.reader.state = _state(_held(NVDA, "22.7"))
+
+        with capture_logs() as logs:
+            world.cycles(3)
+
+        assert [r["remainder"] for r in _events(logs, INEXPRESSIBLE_REMAINDER_EVENT)] == ["0.7"]
+
+    def test_an_unchanged_remainder_is_not_renamed_when_the_strategy_trades(self):
+        """Code review P2 (P22b's Fail criterion): a strategy buying one share
+        on a DRIP instrument moves the broker 22.5 -> 23.5 and leaves the
+        remainder at 0.5 — the same standing fact, so it is not named again.
+        Keying "already named" on the whole record (both quantities) did."""
+        world = self._world()
+        world.cycles(2)
+        world.cache.positions = [_Position(NVDA, STRATEGY, "23")]
+        world.reader.state = _state(_held(NVDA, "23.5"))
+
+        with capture_logs() as logs:
+            world.cycles(3)
+
+        assert _events(logs, INEXPRESSIBLE_REMAINDER_EVENT) == []
+        assert _events(logs, DISCREPANCY_EVENT) == []
+
+    def test_a_remainder_whose_value_changes_is_named_again(self):
+        world = self._world()
+        world.cycles(2)
+        world.reader.state = _state(_held(NVDA, "22.75"))
+
+        with capture_logs() as logs:
+            world.cycles(3)
+
+        assert [r["remainder"] for r in _events(logs, INEXPRESSIBLE_REMAINDER_EVENT)] == ["0.75"]
+
+    def test_a_cleared_then_returning_remainder_is_named_again(self):
+        world = self._world()
+        world.cycles(1)
+        world.reader.state = _state(_held(NVDA, "22"))
+        world.cycles(1)
+        world.reader.state = _state(_held(NVDA, "22.5"))
+
+        with capture_logs() as logs:
+            world.cycles(2)
+
+        assert len(_events(logs, INEXPRESSIBLE_REMAINDER_EVENT)) == 1
+
+    def test_a_remainder_first_seen_on_a_reconnect_cycle_is_named_and_grants(self):
+        world = self._world("22")
+        world.cycles(1)
+        world.reader.state = _state(_held(NVDA, "22.5"))
+        world.lose_and_recover()
+
+        with capture_logs() as logs:
+            world.tick()
+
+        assert world.monitor.state is ConnectionState.CONNECTED
+        (named,) = _events(logs, INEXPRESSIBLE_REMAINDER_EVENT)
+        assert named["scope"] == SCOPE_RECONNECT
+        (ok,) = _events(logs, OK_EVENT)
+        assert ok["inexpressible_remainders"] == {NVDA: "0.5"}
+
+    def test_the_frameworks_over_import_is_corrected_down_and_verifies_clean(self):
+        """The re-verify judges at the same precision, or it would read the
+        corrected ``22`` against the exact ``22.5`` and stop the session."""
+        world = self._world(
+            "22.5", _Position(NVDA, STRATEGY, "22"), _Position(NVDA, "INTERNAL-DIFF", "1")
+        )
+
+        with capture_logs() as logs:
+            world.cycles(2)
+
+        (report,) = world.engine.reports
+        assert report.signed_decimal_qty == Decimal(22)
+        assert _net(world.cache, NVDA) == Decimal(22)
+        resolutions = [r["resolution"] for r in _events(logs, DISCREPANCY_EVENT)]
+        assert resolutions == ["broker"]
+
+    def test_truncation_never_rounds_a_shortfall_into_cover_and_names_it_first(self):
+        world = self._world("23.5", _Position(NVDA, STRATEGY, "24"))
+
+        with capture_logs() as logs, pytest.raises(ReconciliationFailedError) as caught:
+            world.cycles(2)
+
+        assert caught.value.reason is ReconciliationFailure.STRATEGY_POSITION_CONTRADICTED
+        assert caught.value.discrepancies[0].broker_quantity == Decimal(23)
+        assert len(_events(logs, INEXPRESSIBLE_REMAINDER_EVENT)) == 1
+        assert world.engine.reports == []
 
 
 class TestAFrameworkRefusalStopsTheSession:
@@ -744,7 +1048,14 @@ class TestReconcileOkVolume:
 
 
 class TestAFailedCycleIsContainedAndNotRepeated:
-    def test_a_persistent_read_failure_is_logged_once_then_closed_by_the_next_ok(self):
+    def test_a_persistent_read_failure_warns_once_then_errors_once_at_the_threshold(self):
+        """Changed deliberately by Story 5.8 (AC #1; was
+        ``test_a_persistent_read_failure_is_logged_once_then_closed_by_the_next_ok``).
+        A streak used to be one WARNING and nothing else for as long as it
+        lasted (PR #35 D3). Now its third consecutive failure withholds trading
+        and says so once, at ERROR; the hourly throttle still governs every
+        other record. Recovery is a reconnect cycle's ``reconcile.ok`` and a
+        re-grant."""
         world = _World()
         world.cycles(1)
         world.reader.raises = BrokerStateUnavailableError(
@@ -754,17 +1065,19 @@ class TestAFailedCycleIsContainedAndNotRepeated:
         with capture_logs() as failing:
             world.cycles(10)
 
-        (record,) = _events(failing, CYCLE_FAILED_EVENT)
-        assert (record["reason"], record["consecutive"], record["log_level"]) == (
-            "positions_unanswered",
-            1,
-            "warning",
-        )
+        records = _events(failing, CYCLE_FAILED_EVENT)
+        assert [(r["consecutive"], r["log_level"]) for r in records] == [
+            (1, "warning"),
+            (3, "error"),
+        ]
+        assert all(r["reason"] == "positions_unanswered" for r in records)
+        assert world.monitor.trading_permitted is False
 
         world.reader.raises = None
         with capture_logs() as recovered:
-            world.cycles(1)
-        assert _events(recovered, OK_EVENT)
+            world.tick()
+        assert _events(recovered, OK_EVENT)[0]["scope"] == SCOPE_RECONNECT
+        assert world.monitor.state is ConnectionState.CONNECTED
 
     def test_an_unexpected_exception_never_leaves_the_tick(self):
         world = _World()
@@ -788,6 +1101,473 @@ class TestAFailedCycleIsContainedAndNotRepeated:
         assert logs
         assert all(RAW_ACCOUNT not in repr(record) for record in logs)
         assert RAW_ACCOUNT not in str(caught.value)
+
+
+def _unanswered() -> BrokerStateUnavailableError:
+    return BrokerStateUnavailableError(
+        BrokerStateFailure.POSITIONS_UNANSWERED, "the positions request was not answered"
+    )
+
+
+def _drift() -> BrokerStateAdapterError:
+    return BrokerStateAdapterError(
+        "distinct contracts resolve to one instrument, so positions cannot be told apart: "
+        "{'NVDA.NASDAQ': [4815747, 4815748]}"
+    )
+
+
+def _withheld(world: "_World", streak: int = 3) -> None:
+    """A granted session, then ``streak`` failed runtime cycles."""
+    world.cycles(1)
+    world.reader.raises = _unanswered()
+    world.cycles(streak)
+
+
+class _SpyStrategy(SimpleNamespace):
+    """Every order-creating method a spy, so the order path can wrap it."""
+
+    def __init__(self) -> None:
+        super().__init__(id="SMACrossover-000", calls=[])
+        for name in ORDER_CREATING_METHODS:
+            setattr(self, name, lambda *args, _name=name, **kwargs: self.calls.append(_name))
+
+
+class TestAPersistentFailureWithholdsTrading:
+    """Story 5.8, AC #1 and #4 (PO ruling D3: "withhold after 3")."""
+
+    @pytest.mark.acceptance_criterion("5.8d", AC_5_8D, SOURCE)
+    def test_the_threshold_is_a_named_constant_of_three(self):
+        assert WITHHOLD_AFTER_FAILED_CYCLES == 3
+
+    @pytest.mark.acceptance_criterion("5.8d", AC_5_8D, SOURCE)
+    @pytest.mark.parametrize(
+        "streak", [2, WITHHOLD_AFTER_FAILED_CYCLES - 1], ids=["literal", "constant"]
+    )
+    def test_a_streak_of_two_does_not_withhold(self, streak):
+        """AC #4, one side: fails if two failed cycles ever withhold — against
+        the literal and the constant both (code review P8)."""
+        world = _World()
+
+        _withheld(world, streak=streak)
+
+        assert world.monitor.state is ConnectionState.CONNECTED
+        assert world.monitor.trading_permitted is True
+        assert world.reconciler.withheld.pending() == ()
+
+    @pytest.mark.acceptance_criterion("5.8d", AC_5_8D, SOURCE)
+    @pytest.mark.parametrize(
+        "streak", [3, WITHHOLD_AFTER_FAILED_CYCLES], ids=["literal", "constant"]
+    )
+    def test_a_streak_of_three_withholds(self, streak):
+        """AC #4, the other side: fails if three failed cycles do not."""
+        world = _World()
+
+        _withheld(world, streak=streak)
+
+        assert world.monitor.state is ConnectionState.RECOVERING
+        assert world.monitor.trading_permitted is False
+        assert world.monitor.submission_withheld is True
+
+    @pytest.mark.acceptance_criterion("5.8a", AC_5_8A, SOURCE)
+    def test_the_third_failure_logs_one_error_naming_the_streak(self):
+        world = _World()
+        world.cycles(1)
+        world.reader.raises = _unanswered()
+
+        with capture_logs() as logs:
+            world.cycles(3)
+
+        records = _events(logs, CYCLE_FAILED_EVENT)
+        assert [(r["consecutive"], r["log_level"]) for r in records] == [
+            (1, "warning"),
+            (3, "error"),
+        ]
+        error = records[1]
+        assert error["action"] == ACTION_TRADING_WITHHELD
+        assert (error["scope"], error["reason"], error["error_type"]) == (
+            SCOPE_RUNTIME,
+            "positions_unanswered",
+            "BrokerStateUnavailableError",
+        )
+
+    def test_the_error_ignores_the_hourly_throttle_with_the_clock_held_still(self):
+        """Hazard: today's throttle returns early for any record after the
+        first inside the hour. The threshold record must not."""
+        world = _World()
+        world.reader.raises = _unanswered()
+
+        with capture_logs() as logs:
+            for _ in range(3):
+                asyncio.run(world.reconciler._run(SCOPE_RUNTIME))
+
+        levels = [r["log_level"] for r in _events(logs, CYCLE_FAILED_EVENT)]
+        assert levels == ["warning", "error"]
+        assert world.monitor.state is ConnectionState.RECOVERING
+
+    @pytest.mark.acceptance_criterion("5.8a", AC_5_8A, SOURCE)
+    def test_a_withheld_session_suppresses_every_order(self):
+        """AC #1's "orders withheld, ``order.suppressed``", through the real
+        order path wrapper reading the reconciler's own monitor."""
+        world = _World()
+        strategy = _SpyStrategy()
+        install_order_path(strategy, world.monitor, _log())
+        _withheld(world, streak=3)
+
+        with capture_logs() as logs:
+            strategy.submit_order(SimpleNamespace(client_order_id="O-1"))
+
+        assert strategy.calls == []
+        assert _events(logs, SUPPRESSED_EVENT)
+
+    def test_two_failures_leave_orders_flowing(self):
+        """Sibling: the same spy records when nothing is withheld."""
+        world = _World()
+        strategy = _SpyStrategy()
+        install_order_path(strategy, world.monitor, _log())
+        _withheld(world, streak=2)
+
+        with capture_logs() as logs:
+            strategy.submit_order(SimpleNamespace(client_order_id="O-1"))
+
+        assert strategy.calls == ["submit_order"]
+        assert _events(logs, SUPPRESSED_EVENT) == []
+
+    @pytest.mark.acceptance_criterion("5.8a", AC_5_8A, SOURCE)
+    def test_the_next_clean_cycle_regrants_exactly_as_a_reconnect_does(self):
+        world = _World()
+        _withheld(world)
+        calls = []
+        original = world.monitor.confirm_state_reestablished
+        world.monitor.confirm_state_reestablished = lambda s: calls.append(s) or original(s)
+        world.reader.raises = None
+
+        with capture_logs() as logs:
+            world.tick()  # RECOVERING: a reconnect cycle runs on the very next tick
+
+        assert world.monitor.state is ConnectionState.CONNECTED
+        assert calls == [UP]
+        names = [e["event"] for e in logs if e["event"] in (OK_EVENT, "connection.restored")]
+        assert names == [OK_EVENT, "connection.restored"]
+        assert _events(logs, OK_EVENT)[0]["scope"] == SCOPE_RECONNECT
+
+    def test_a_failing_reconnect_cycle_keeps_it_withheld(self):
+        world = _World()
+        _withheld(world)
+
+        world.tick(4)
+
+        assert world.monitor.trading_permitted is False
+
+    def test_an_in_flight_order_still_withholds_the_regrant(self):
+        inflight = [SimpleNamespace(instrument_id=InstrumentId.from_str(AAPL))]
+        world = _World()
+        _withheld(world)
+        world.cache.inflight = inflight
+        world.reader.raises = None
+
+        world.tick()
+
+        assert world.monitor.state is ConnectionState.RECOVERING
+
+    def test_a_new_streak_withholds_again_at_its_own_third_failure(self):
+        world = _World()
+        _withheld(world)
+        world.reader.raises = None
+        world.tick()
+        assert world.monitor.state is ConnectionState.CONNECTED
+
+        world.reader.raises = _unanswered()
+        world.cycles(2)
+        assert world.monitor.state is ConnectionState.CONNECTED
+        world.cycles(1)
+        assert world.monitor.state is ConnectionState.RECOVERING
+
+    def test_a_streak_after_a_real_disconnect_withdraws_nothing_and_says_nothing_more(self):
+        """D-J, as amended by code review P5: already ``RECOVERING`` after a
+        loss, the withhold is the outage's, not this rule's. The third failure
+        withdraws nothing, so it opens no period and logs no ERROR — an
+        ``action=trading_withheld`` that withheld nothing would mislead every
+        grep for it; the streak's WARNING throttle covers it."""
+        world = _World()
+        world.lose_and_recover()
+        world.reader.raises = _unanswered()
+
+        with capture_logs() as logs:
+            for _ in range(3):
+                world.clock.now += TICK
+                asyncio.run(world.reconciler.on_tick())
+
+        records = _events(logs, CYCLE_FAILED_EVENT)
+        assert [(r["consecutive"], r["log_level"]) for r in records] == [(1, "warning")]
+        assert not [r for r in records if "action" in r]
+        assert world.reconciler.withheld.pending() == ()
+
+    def test_no_withheld_record_carries_the_raw_account_or_exception_text(self):
+        world = _World()
+        world.reader.raises = RuntimeError(f"account {RAW_ACCOUNT} leaked")
+
+        with capture_logs() as logs:
+            world.cycles(3)
+
+        assert _events(logs, CYCLE_FAILED_EVENT)
+        assert all(RAW_ACCOUNT not in repr(record) for record in logs)
+        (period,) = world.reconciler.withheld.pending()
+        assert RAW_ACCOUNT not in repr(period)
+        assert (period.reason, period.error_type) == (None, "RuntimeError")
+
+    def test_only_the_readers_own_reason_is_logged_or_persisted(self):
+        """Code review P4: a third-party exception's free-text ``.reason``
+        (``URLError``'s, say) never reaches a record or the session row —
+        only a ``BrokerStateFailure`` value does."""
+
+        class _Reasoned(Exception):
+            reason = f"connection to {RAW_ACCOUNT}@10.0.0.7 refused"
+
+        world = _World()
+        world.reader.raises = _Reasoned()
+
+        with capture_logs() as logs:
+            world.cycles(3)
+
+        records = _events(logs, CYCLE_FAILED_EVENT)
+        assert records and all(r["reason"] is None for r in records)
+        assert all(RAW_ACCOUNT not in repr(record) for record in logs)
+        (period,) = world.reconciler.withheld.pending()
+        assert (period.reason, period.error_type) == (None, "_Reasoned")
+
+
+class TestAdapterDriftStopsTheSession:
+    """Story 5.8, AC #2 (PO ruling D3: "drift stops")."""
+
+    def test_no_drift_record_carries_the_raw_account(self):
+        """Code review P2 — Task 2.1's "either path": the drift record's
+        ``detail`` is the reader's own text (contracts and raise sites, never
+        the account), from the read and from ``correct()`` alike."""
+        read = _World()
+        read.reader.raises = BrokerStateAdapterError(
+            "reading broker state raised KeyError at execution.py:841 _on_account_summary",
+            error_type="KeyError",
+        )
+        lookup = _World(state=_state(_held(NVDA, "5")))
+        lookup.engine._clients = {}  # `correct()`'s find_ib_exec_client drifts
+
+        with capture_logs() as logs:
+            for world, cycles in ((read, 1), (lookup, 3)):
+                with pytest.raises(BrokerStateAdapterError) as caught:
+                    world.cycles(cycles)
+                assert RAW_ACCOUNT not in str(caught.value)
+
+        stops = [r for r in _events(logs, CYCLE_FAILED_EVENT) if r["action"] == "session_stopped"]
+        assert len(stops) == 2
+        assert stops[0]["error_type"] == "KeyError"
+        assert all(RAW_ACCOUNT not in repr(record) for record in logs)
+
+    @pytest.mark.acceptance_criterion("5.8b", AC_5_8B, SOURCE)
+    def test_drift_on_the_first_cycle_stops_with_exit_1(self):
+        world = _World()
+        world.reader.raises = _drift()
+
+        with capture_logs() as logs, pytest.raises(BrokerStateAdapterError) as caught:
+            world.cycles(1)
+
+        assert caught.value is world.reader.raises
+        assert EXIT_CODES[classify_failure(caught.value)] == EXIT_ERROR == 1
+        (record,) = _events(logs, CYCLE_FAILED_EVENT)
+        assert record["log_level"] == "error"
+        assert record["action"] == ACTION_SESSION_STOPPED
+        assert (record["reason"], record["consecutive"], record["scope"]) == (
+            "adapter_incompatible",
+            1,
+            SCOPE_RUNTIME,
+        )
+        assert "distinct contracts" in record["detail"]
+        assert world.monitor.state is ConnectionState.CONNECTED
+
+    @pytest.mark.acceptance_criterion("5.8b", AC_5_8B, SOURCE)
+    def test_drift_inside_the_hourly_throttle_window_is_still_logged_and_stops(self):
+        world = _World()
+        world.reader.raises = _unanswered()
+        world.cycles(2)  # a streak of two: one WARNING, the second throttled
+
+        world.reader.raises = _drift()
+        with capture_logs() as logs, pytest.raises(BrokerStateAdapterError):
+            world.cycles(1)
+
+        (record,) = _events(logs, CYCLE_FAILED_EVENT)
+        assert (record["log_level"], record["consecutive"], record["action"]) == (
+            "error",
+            3,
+            ACTION_SESSION_STOPPED,
+        )
+        assert world.reconciler.withheld.pending() == ()
+
+    def test_drift_in_a_reconnect_cycle_stops_too(self):
+        world = _World()
+        world.lose_and_recover()
+        world.reader.raises = _drift()
+
+        with capture_logs() as logs, pytest.raises(BrokerStateAdapterError):
+            world.clock.now += TICK
+            asyncio.run(world.reconciler.on_tick())
+
+        (record,) = _events(logs, CYCLE_FAILED_EVENT)
+        assert (record["scope"], record["action"]) == (SCOPE_RECONNECT, ACTION_SESSION_STOPPED)
+
+    def test_drift_while_withheld_stops_the_session(self):
+        world = _World()
+        _withheld(world)
+        world.reader.raises = _drift()
+
+        with pytest.raises(BrokerStateAdapterError):
+            world.tick(2)
+
+    def test_drift_from_the_correction_path_stops(self):
+        """``correct`` finds the IB exec client itself; a node without one is
+        the same drift (``find_ib_exec_client``)."""
+        world = _World(state=_state(_held(NVDA, "5")))
+        world.engine._clients = {}
+
+        with pytest.raises(BrokerStateAdapterError):
+            world.cycles(3)  # first sighting, then confirmed a debounce later
+
+    def test_a_plain_unavailable_error_never_stops(self):
+        """Sibling: the subclass stops, its base does not."""
+        world = _World()
+        world.reader.raises = _unanswered()
+
+        world.cycles(5)
+
+        assert world.monitor.trading_permitted is False
+
+
+class TestTheWithheldPeriodLedger:
+    """Story 5.8 (AC #3, D-E/D-F): what the steady state persists."""
+
+    def test_a_withdrawal_opens_one_period_stamped_by_the_wall_clock(self):
+        world = _World()
+        world.cycles(1)
+        world.reader.raises = _unanswered()
+        world.cycles(2)
+        world.cycles(1)
+        at_withdrawal = world.wall()
+
+        (period,) = world.reconciler.withheld.pending()
+
+        assert period == WithheldPeriod(
+            started_at=at_withdrawal,
+            reason="positions_unanswered",
+            error_type="BrokerStateUnavailableError",
+            failed_cycles=3,
+        )
+        assert period.ended_at is None
+        assert period.started_at.tzinfo is not None
+
+    def test_the_regrant_closes_it(self):
+        world = _World()
+        _withheld(world)
+        world.reader.raises = None
+
+        world.tick()
+        at_grant = world.wall()
+
+        (period,) = world.reconciler.withheld.pending()
+        assert period.ended_at == at_grant
+        assert period.ended_at > period.started_at
+
+    def test_a_refused_grant_does_not_close_it(self):
+        world = _World()
+        _withheld(world)
+        world.reader.raises = None
+        world.connection.status = DOWN  # the grant's own reading drops
+
+        world.clock.now += TICK
+        asyncio.run(world.reconciler.on_tick())
+
+        assert world.monitor.state is not ConnectionState.CONNECTED
+        (period,) = world.reconciler.withheld.pending()
+        assert period.ended_at is None
+
+    def test_a_written_start_is_pending_again_once_it_ends(self):
+        world = _World()
+        _withheld(world)
+        ledger = world.reconciler.withheld
+        (start,) = ledger.pending()
+        ledger.mark_written(start)
+        assert ledger.pending() == ()
+
+        world.reader.raises = None
+        world.tick()
+
+        (end,) = ledger.pending()
+        assert (end.started_at, end.ended_at is not None) == (start.started_at, True)
+
+    def test_marking_a_superseded_version_written_keeps_the_newer_one(self):
+        world = _World()
+        _withheld(world)
+        ledger = world.reconciler.withheld
+        (start,) = ledger.pending()
+        world.reader.raises = None
+        world.tick()
+
+        ledger.mark_written(start)  # the start's write finished after the end landed
+
+        (end,) = ledger.pending()
+        assert end.ended_at is not None
+
+    def test_two_unwritten_periods_are_both_pending_in_order(self):
+        world = _World()
+        _withheld(world)
+        world.reader.raises = None
+        world.tick()
+        world.reader.raises = _unanswered()
+        world.cycles(3)
+
+        first, second = world.reconciler.withheld.pending()
+
+        assert first.ended_at is not None and second.ended_at is None
+        assert first.started_at < second.started_at
+
+    def test_the_port_kwargs_are_stdlib_values_only(self):
+        """AR38: nothing but primitives crosses the record port."""
+        period = WithheldPeriod(
+            started_at=WALL_ORIGIN,
+            reason="timeout",
+            error_type="BrokerStateUnavailableError",
+            failed_cycles=3,
+            ended_at=WALL_ORIGIN + timedelta(minutes=2),
+        )
+
+        assert period.as_port_kwargs() == {
+            "withheld_from": WALL_ORIGIN,
+            "withheld_until": WALL_ORIGIN + timedelta(minutes=2),
+            "reason": "timeout",
+            "error_type": "BrokerStateUnavailableError",
+            "failed_cycles": 3,
+        }
+
+    def test_the_default_wall_clock_is_aware_utc(self):
+        ledger = WithheldPeriods()
+
+        period = ledger.start(reason=None, error_type="KeyError", failed_cycles=3)
+
+        assert period.started_at.tzinfo is not None
+        assert period.started_at.utcoffset() == timedelta(0)
+
+    def test_ending_with_nothing_open_changes_nothing(self):
+        ledger = WithheldPeriods()
+
+        assert ledger.end() is None
+        assert ledger.pending() == ()
+
+    def test_a_wall_clock_stepped_back_never_ends_a_period_before_it_began(self):
+        """Code review P7: an NTP step between the withdrawal and the grant."""
+        stamps = iter([WALL_ORIGIN, WALL_ORIGIN - timedelta(seconds=40)])
+        ledger = WithheldPeriods(lambda: next(stamps))
+        ledger.start(reason=None, error_type="TimeoutError", failed_cycles=3)
+
+        ended = ledger.end()
+
+        assert ended is not None and ended.ended_at == ended.started_at == WALL_ORIGIN
 
 
 class TestTheReconnectReEstablishesStateBeforeTheGrant:
@@ -1024,6 +1804,18 @@ class TestStaleOrdersAreCheckedOnRuntimeCyclesOnly:
         world.cycles(2)
 
         assert spy.calls == [(SCOPE_RUNTIME, frozenset({NVDA, AAPL}))] * 2
+
+    def test_an_instrument_whose_row_is_inert_is_skipped_too(self):
+        """Story 5.7, D-H — the Story 4.8 code review's deferred gap ("AC #5's
+        skip set omits the unresolvable rows", owner: whoever next touches
+        ``_act``'s return value): an instrument the cache does not hold is
+        logged ``unresolved`` and inert from its second cycle, and still skipped."""
+        world = _World(state=_state(_held("MSFT.NASDAQ", "3"), BOND))
+        spy = _watched(world)
+
+        world.cycles(3)
+
+        assert spy.calls == [(SCOPE_RUNTIME, frozenset({"MSFT.NASDAQ", "IB-CONID-99"}))] * 3
 
     def test_a_check_that_raises_never_leaves_the_tick_and_positions_were_handled(self):
         world = _World(state=_state(_held(NVDA, "5")))

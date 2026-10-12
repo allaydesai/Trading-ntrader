@@ -4,11 +4,15 @@ Owns: ``SessionService.transition()`` — the only place in this codebase that
 may assign ``TradingSession.status`` (AR37) — and ``SessionService.resolve()``,
 the name-or-UUID lookup every future command shares (AR36).
 
+Also owns the one write of ``sealed_run_id`` (Story 5.3,
+``record_sealed_run``) — a link written after ``transition()`` has already
+moved the row to ``sealed``, never a second path that moves it.
+
 Does not own: ``SessionSpec`` construction (Story 2.1), the initial ``CREATED``
 row (``live create``, Story 2.2 — creation is not a transition), the heartbeat
 *writer* cadence (Story 2.5, AR32 — this module only reads the heartbeat and
-stamps it once, on entering ``running``), any CLI command, and
-``sealed_run_id`` (Story 5.3).
+stamps it once, on entering ``running``), any CLI command, or computing and
+writing the sealed results record (``session_seal_service``, Story 5.3).
 
 Deliberately framework-free: standard library, this repo's own repository/
 exception/model types, and ``structlog`` — no live-trading engine import at
@@ -31,6 +35,12 @@ from src.db.repositories.trading_session_repository_sync import SyncTradingSessi
 from src.models.session import (  # noqa: F401  # re-export: Story 2.3's tests and callers
     DEFAULT_HEARTBEAT_INTERVAL_SECONDS,  # import it from here
     SessionStatus,
+)
+from src.services.reconcile_withheld import (
+    RECONCILE_WITHHELD_KEY,
+    carried_forward,
+    closed_on_stop,
+    with_period,
 )
 
 logger = structlog.get_logger(__name__)
@@ -130,8 +140,9 @@ _LEGAL_TRANSITIONS: Mapping[SessionStatus, frozenset[SessionStatus]] = {
 
 #: AC #2's "the corresponding timestamp column" — the epic never maps edges to
 #: columns, so this is that map. ``last_bar_at`` is never touched here; it
-#: belongs to Story 2.5's bar path. ``sealed_run_id`` is Story 5.3's, not this
-#: story's, to write.
+#: belongs to Story 2.5's bar path. ``sealed_run_id`` is not a timestamp and is
+#: not written by any transition: :func:`_record_sealed_run` links it after the
+#: ``-> sealed`` edge (Story 5.3).
 _TIMESTAMPS_BY_TARGET: Mapping[SessionStatus, tuple[str, ...]] = {
     SessionStatus.RUNNING: ("last_started_at", "last_heartbeat_at"),
     SessionStatus.STOPPED: ("last_stopped_at",),
@@ -325,9 +336,16 @@ def _apply_transition(
             f"Session {trading_session.name!r} cannot move from {current.value!r} to {to.value!r}."
         )
 
+    # Story 5.8 (D-E 3): read before the stamps below overwrite it — the last
+    # instant a dead predecessor is known to have run.
+    previous_heartbeat = trading_session.last_heartbeat_at
     trading_session.status = to
     for column in _TIMESTAMPS_BY_TARGET.get(to, ()):
         setattr(trading_session, column, now)
+    if to is SessionStatus.STOPPED:
+        # Story 5.8 (D-E 2): a withheld period a stop cut short ends here.
+        # Record-keeping only — nothing on this edge grants or withholds trading.
+        trading_session.runtime_flags = closed_on_stop(trading_session.runtime_flags, now)
     if to is SessionStatus.RUNNING:
         # Story 2.7 (AC #4). Every `-> running` edge starts a new process run,
         # and `runtime_flags` records facts about *one* run. Without this clear,
@@ -336,7 +354,17 @@ def _apply_transition(
         # one. Deliberately only this edge: a stop must leave the failures
         # readable, or an operator investigating why a session stopped trading
         # loses the evidence at the moment they need it.
-        trading_session.runtime_flags = None
+        # Story 5.8 (PO ruling Q1): the one exception is the withheld history,
+        # which a seal must carry for every run — carried, a period a dead
+        # process left open closed at its last heartbeat; every other key clears.
+        carried = carried_forward(
+            trading_session.runtime_flags, last_heartbeat_at=previous_heartbeat
+        )
+        trading_session.runtime_flags = (
+            None
+            if carried is None
+            else {"v": RUNTIME_FLAGS_VERSION, RECONCILE_WITHHELD_KEY: carried}
+        )
         # Story 3.6 (retrospective D1). A fresh claim and a reclaim are both a
         # new process taking the session, so both increment — the same edge
         # the `runtime_flags` clear above already keys on, for the same
@@ -617,6 +645,100 @@ def _record_order_rejections(
     return trading_session
 
 
+def _record_trading_withheld(
+    trading_session: TradingSession,
+    *,
+    owner_epoch: int,
+    withheld_from: datetime,
+    withheld_until: datetime | None,
+    reason: str | None,
+    error_type: str,
+    failed_cycles: int,
+) -> TradingSession:
+    """Write one withheld period into ``runtime_flags`` (Story 5.8, AC #3).
+
+    At module scope beside its two siblings, for their reasons, and the same
+    shape: **never assigns ``status``** (a session withholding trading is
+    still ``running``), the same two guards (the row is ``running``, and this
+    process still owns it), the row loaded ``FOR UPDATE`` by the caller (a
+    read-modify-write of the whole document), and the document **rebuilt and
+    reassigned, never mutated in place**, ``**existing`` first. The period's
+    shape, its upsert-by-start and its bound live in
+    :mod:`src.services.reconcile_withheld`. Unlike its siblings' keys this one
+    is session-lifetime: :func:`_apply_transition` carries it across the
+    ``-> running`` edge (PO ruling Q1). Record-keeping only.
+
+    Raises:
+        InvalidSessionTransition: Either guard refused.
+    """
+    current = _as_status(
+        trading_session.status, f"The stored status of session {trading_session.name!r}"
+    )
+    if current is not SessionStatus.RUNNING:
+        raise InvalidSessionTransition(
+            f"Session {trading_session.name!r} is {current.value!r}, not running, so a withheld "
+            "period cannot be recorded against it — the run it would describe is over."
+        )
+
+    _refuse_unless_owner(trading_session, owner_epoch=owner_epoch)
+
+    existing = trading_session.runtime_flags or {}
+    trading_session.runtime_flags = {
+        **existing,
+        "v": RUNTIME_FLAGS_VERSION,
+        RECONCILE_WITHHELD_KEY: with_period(
+            existing.get(RECONCILE_WITHHELD_KEY),
+            withheld_from=withheld_from,
+            withheld_until=withheld_until,
+            reason=reason,
+            error_type=error_type,
+            failed_cycles=failed_cycles,
+        ),
+    }
+    return trading_session
+
+
+def _record_sealed_run(trading_session: TradingSession, *, sealed_run_id: UUID) -> TradingSession:
+    """Link a sealed session to the run it was sealed into (Story 5.3, D-B).
+
+    At module scope for the same reasons its siblings are: AR37 is enforced
+    per file, and ``SessionService`` is held to the 100-line class limit.
+
+    **Never assigns ``status``.** The PO ruled that a seal moves the session
+    through :meth:`SessionService.transition` and nothing else (AR37), so this
+    write only *follows* that edge, in the same transaction: a row that is not
+    already ``sealed`` is refused, because a run id on a live or stopped row
+    would claim a seal that never happened. It is write-once, like ``spec``:
+    a second link would silently re-point a sealed record at another run.
+
+    Args:
+        trading_session: The row, already loaded ``FOR UPDATE`` by the caller.
+        sealed_run_id: The ``backtest_runs.run_id`` the seal is creating.
+
+    Returns:
+        The same ``TradingSession``, mutated in place.
+
+    Raises:
+        InvalidSessionTransition: The row is not ``sealed``, or already
+            carries a ``sealed_run_id``.
+    """
+    current = _as_status(
+        trading_session.status, f"The stored status of session {trading_session.name!r}"
+    )
+    if current is not SessionStatus.SEALED:
+        raise InvalidSessionTransition(
+            f"Session {trading_session.name!r} is {current.value!r}, not sealed, so no run can "
+            "be recorded as its sealed record — the seal's transition must come first."
+        )
+    if trading_session.sealed_run_id is not None:
+        raise InvalidSessionTransition(
+            f"Session {trading_session.name!r} is already sealed into run "
+            f"{trading_session.sealed_run_id}; a sealed record is never re-pointed."
+        )
+    trading_session.sealed_run_id = sealed_run_id
+    return trading_session
+
+
 class SessionService:
     """The single validated path through which a session's status changes.
 
@@ -753,3 +875,27 @@ class SessionService:
             owner_epoch=owner_epoch,
             **rejections,  # type: ignore[arg-type]
         )
+
+    def record_trading_withheld(
+        self, session_id: UUID, *, owner_epoch: int, **period: object
+    ) -> TradingSession:
+        """Write a withheld period; rules in :func:`_record_trading_withheld`.
+
+        Loads **``FOR UPDATE``**, as its two siblings do.
+        """
+        trading_session = _load_or_raise(self._repository, session_id, for_update=True)
+        return _record_trading_withheld(
+            trading_session,
+            owner_epoch=owner_epoch,
+            **period,  # type: ignore[arg-type]
+        )
+
+    def record_sealed_run(self, session_id: UUID, *, sealed_run_id: UUID) -> TradingSession:
+        """Link the run a ``transition(to=SEALED)`` produced; rules in :func:`_record_sealed_run`.
+
+        Loads **``FOR UPDATE``**: in the seal's own transaction the lock is
+        already held, and ``populate_existing`` hands back the row as the
+        transition left it.
+        """
+        trading_session = _load_or_raise(self._repository, session_id, for_update=True)
+        return _record_sealed_run(trading_session, sealed_run_id=sealed_run_id)

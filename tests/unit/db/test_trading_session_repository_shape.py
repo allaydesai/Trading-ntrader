@@ -28,6 +28,11 @@ from src.db.repositories.trading_session_repository_sync import SyncTradingSessi
 #: liveness write) and `insert_trade_if_absent` (the idempotent trade insert)
 #: — updated deliberately, for both twins (AR9). Neither name starts with a
 #: forbidden mutator prefix, and neither writes `spec`.
+#:
+#: Story 5.3 adds `find_session_trades` (the seal reads a session's rows by DB
+#: id order) and `backfill_trades_run_id` (the seal links those rows to the
+#: run it creates, AR8) — again for both twins, again neither a forbidden
+#: prefix nor a write to `spec`.
 EXPECTED_CAPABILITIES = frozenset(
     {
         "create",
@@ -37,6 +42,8 @@ EXPECTED_CAPABILITIES = frozenset(
         "trade_counts_by_session",
         "stamp_activity_if_owner",
         "insert_trade_if_absent",
+        "find_session_trades",
+        "backfill_trades_run_id",
     }
 )
 

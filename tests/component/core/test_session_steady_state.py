@@ -16,17 +16,22 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
 from src.config import IBKRSettings
+from src.core.live_broker_state import BrokerStateAdapterError
 from src.core.live_connection_monitor import ConnectionMonitor, ConnectionStatus
+from src.core.live_runtime_reconcile import WithheldPeriods
 from src.core.live_session_record import SessionReclaimedError
 from src.core.live_session_steady_state import (
     DEFAULT_NO_BARS_AFTER_SECONDS,
     NO_BARS_EVENT,
+    WITHHELD_RECORD_FAILED_EVENT,
     SessionSteadyState,
     StartupHeartbeat,
+    flush_run_snapshots,
     join_heartbeat,
     release_record,
 )
@@ -63,6 +68,11 @@ class SpyRecord:
         self.rejections: list[dict] = []
         self.rejection_threads: list[str] = []
         self.rejection_raises: BaseException | None = None
+        #: Story 5.8's fifth port method. Same three-list shape and the same
+        #: thread-name assertion.
+        self.withheld: list[dict] = []
+        self.withheld_threads: list[str] = []
+        self.withheld_raises: BaseException | None = None
 
     def record_activity(self, *, at: datetime, bar_seen_at: datetime | None = None) -> None:
         self.activity.append((at, bar_seen_at))
@@ -126,6 +136,30 @@ class SpyRecord:
         self.rejection_threads.append(threading.current_thread().name)
         if self.rejection_raises is not None:
             raise self.rejection_raises
+
+    def record_trading_withheld(
+        self,
+        *,
+        withheld_from: datetime,
+        withheld_until: datetime | None,
+        reason: str | None,
+        error_type: str,
+        failed_cycles: int,
+    ) -> None:
+        """Story 5.8's fifth port method; the thread is recorded for the same
+        reason as its two siblings."""
+        self.withheld_threads.append(threading.current_thread().name)
+        if self.withheld_raises is not None:
+            raise self.withheld_raises
+        self.withheld.append(
+            {
+                "withheld_from": withheld_from,
+                "withheld_until": withheld_until,
+                "reason": reason,
+                "error_type": error_type,
+                "failed_cycles": failed_cycles,
+            }
+        )
 
 
 class CapturingLog:
@@ -526,6 +560,30 @@ class TestTheConnectionMonitorIsFed:
                 isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Attribute)
                 and node.func.attr == "confirm_state_reestablished"
+                for node in ast.walk(tree)
+            ):
+                callers.add(path.relative_to(root.parent).as_posix())
+
+        assert callers == {"src/core/live_runtime_reconcile.py"}
+
+    def test_withhold_for_reconciliation_has_exactly_one_production_caller(self):
+        """Story 5.8 (D-A): the withdrawal's sibling of the pin above. Only the
+        runtime reconciler may withhold trading for a failing read, and only it
+        grants it back — so a withdrawal can never come from anywhere a clean
+        reconciliation cycle cannot answer. Same scan, same breadth."""
+        import ast
+        from pathlib import Path
+
+        import src
+
+        root = Path(src.__file__).parent
+        callers = set()
+        for path in sorted(root.rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            if any(
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "withhold_for_reconciliation"
                 for node in ast.walk(tree)
             ):
                 callers.add(path.relative_to(root.parent).as_posix())
@@ -1429,3 +1487,230 @@ def _dirty_after(state, tally: _FakeTally, *, at_tick: int):
         await inner(seconds)
 
     return _sleeper
+
+
+class _ScriptedReconciler:
+    """A reconciler double whose ``on_tick`` runs a scripted action on given
+    ticks, over a **real** :class:`WithheldPeriods` ledger (Story 5.8)."""
+
+    def __init__(self, script=None) -> None:
+        stamps = (STARTED_AT + timedelta(minutes=n) for n in range(1000))
+        self.withheld = WithheldPeriods(lambda: next(stamps))
+        self.script = dict(script or {})
+        self.ticks = 0
+
+    async def on_tick(self) -> None:
+        self.ticks += 1
+        action = self.script.get(self.ticks)
+        if action is not None:
+            action(self)
+
+
+def _open(reconciler: _ScriptedReconciler) -> None:
+    reconciler.withheld.start(
+        reason="positions_unanswered", error_type="BrokerStateUnavailableError", failed_cycles=3
+    )
+
+
+def _close(reconciler: _ScriptedReconciler) -> None:
+    reconciler.withheld.end()
+
+
+def _drift(reconciler: _ScriptedReconciler) -> None:
+    raise BrokerStateAdapterError("distinct contracts resolve to one instrument")
+
+
+class TestTheTickWritesWithheldPeriods:
+    """Story 5.8 (AC #3, D-F): a withheld period reaches the session row on the
+    tick that opened or closed it — right after ``on_tick``, on this object's
+    own executor — through the record port's fifth method. Story 3.7's
+    dirty-flag shape: nothing queued, a clean ledger costs nothing."""
+
+    async def test_a_period_opened_by_the_tick_is_written_in_the_same_tick(self):
+        clock, record, log = FakeClock(), SpyRecord(), CapturingLog()
+        reconciler = _ScriptedReconciler({1: _open})
+        state = _steady_state(clock, record, log, reconciler=reconciler)
+
+        await _run_ticks(state, 1)
+
+        assert record.withheld == [
+            {
+                "withheld_from": STARTED_AT,
+                "withheld_until": None,
+                "reason": "positions_unanswered",
+                "error_type": "BrokerStateUnavailableError",
+                "failed_cycles": 3,
+            }
+        ]
+        assert reconciler.withheld.pending() == ()
+
+    async def test_a_written_period_is_not_rewritten_and_its_end_is_one_more_write(self):
+        clock, record, log = FakeClock(), SpyRecord(), CapturingLog()
+        reconciler = _ScriptedReconciler({1: _open, 4: _close})
+        state = _steady_state(clock, record, log, reconciler=reconciler)
+
+        await _run_ticks(state, 6)
+
+        assert [(w["withheld_from"], w["withheld_until"]) for w in record.withheld] == [
+            (STARTED_AT, None),
+            (STARTED_AT, STARTED_AT + timedelta(minutes=1)),
+        ]
+
+    async def test_the_write_runs_on_the_objects_own_executor_never_the_loop(self):
+        clock, record, log = FakeClock(), SpyRecord(), CapturingLog()
+        state = _steady_state(clock, record, log, reconciler=_ScriptedReconciler({1: _open}))
+
+        await _run_ticks(state, 1)
+
+        assert record.withheld_threads
+        assert all(
+            name.startswith("session-heartbeat-write") for name in record.withheld_threads
+        ), record.withheld_threads
+
+    async def test_a_clean_ledger_costs_zero_writes(self):
+        """The anti-tautology twin: the same spy, no period, no round trip."""
+        clock, record, log = FakeClock(), SpyRecord(), CapturingLog()
+        state = _steady_state(clock, record, log, reconciler=_ScriptedReconciler())
+
+        await _run_ticks(state, 3)
+
+        assert record.withheld_threads == []
+
+    async def test_a_failed_write_is_logged_and_the_next_tick_retries(self):
+        """AR42: a database hiccup must not kill the session, and the period is
+        left pending rather than lost."""
+        clock, record, log = FakeClock(), SpyRecord(), CapturingLog()
+        attempts = {"n": 0}
+        original = record.record_trading_withheld
+
+        def flaky_once(**kwargs):
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                raise RuntimeError("postgres is down")
+            original(**kwargs)
+
+        record.record_trading_withheld = flaky_once
+        reconciler = _ScriptedReconciler({1: _open})
+        state = _steady_state(clock, record, log, reconciler=reconciler)
+
+        await _run_ticks(state, 2)
+
+        assert attempts["n"] == 2
+        assert ("error", WITHHELD_RECORD_FAILED_EVENT) in [
+            (level, event) for level, event, _ in log.records
+        ]
+        failed = log.events(WITHHELD_RECORD_FAILED_EVENT)[0]
+        assert failed == {"error_type": "RuntimeError"}
+        assert len(record.withheld) == 1
+        assert reconciler.withheld.pending() == ()
+
+    async def test_a_reclaim_on_the_withheld_write_ends_the_loop(self):
+        clock, record, log = FakeClock(), SpyRecord(), CapturingLog()
+        record.withheld_raises = SessionReclaimedError("taken by another process")
+        state = _steady_state(clock, record, log, reconciler=_ScriptedReconciler({1: _open}))
+
+        with pytest.raises(SessionReclaimedError):
+            await _run_ticks(state, 2)
+
+    async def test_drift_leaves_the_loop_unmasked_by_a_failing_period_write(self):
+        """PO condition (2026-10-11): a ``BrokerStateAdapterError`` stops first,
+        with exit 1, and a failure to persist the withheld period never masks
+        it — the period's write fails on every tick, the drift still leaves."""
+        clock, record, log = FakeClock(), SpyRecord(), CapturingLog()
+        record.withheld_raises = RuntimeError("postgres is down")
+        reconciler = _ScriptedReconciler({1: _open, 2: _drift})
+        state = _steady_state(clock, record, log, reconciler=reconciler)
+
+        with pytest.raises(BrokerStateAdapterError):
+            await _run_ticks(state, 3)
+
+        assert reconciler.ticks == 2
+        assert len(reconciler.withheld.pending()) == 1  # still pending, never lost silently
+
+    async def test_a_reconciler_without_a_ledger_still_runs(self):
+        """Story 4.3's duck-typed one-member reconciler keeps working."""
+
+        class _OnTickOnly:
+            def __init__(self) -> None:
+                self.ticks = 0
+
+            async def on_tick(self) -> None:
+                self.ticks += 1
+
+        clock, record, log = FakeClock(), SpyRecord(), CapturingLog()
+        reconciler = _OnTickOnly()
+        state = _steady_state(clock, record, log, reconciler=reconciler)
+
+        await _run_ticks(state, 3)
+
+        assert reconciler.ticks == 3
+        assert record.withheld_threads == []
+
+
+class TestTheTeardownFlushesWhatTheTickCouldNot:
+    """Story 5.8, code review DN1 (PO ruling 1a): the runner's teardown writes
+    any withheld period the tick could not — a failed end-write above all —
+    *before* the ``-> stopped`` edge closes what it finds open, so a re-grant
+    the tick could not record is never sealed as "withheld until the stop".
+    Synchronous, on the caller's thread: the loop has already stopped."""
+
+    @staticmethod
+    def _ledger_with_a_pending_end() -> WithheldPeriods:
+        ledger = _ScriptedReconciler().withheld
+        _open(SimpleNamespace(withheld=ledger))
+        ledger.mark_written(ledger.pending()[0])
+        ledger.end()
+        return ledger
+
+    def test_a_pending_period_is_written_and_acknowledged(self):
+        record, log = SpyRecord(), CapturingLog()
+        ledger = self._ledger_with_a_pending_end()
+
+        problems = flush_run_snapshots(record, None, ledger, log)
+
+        assert problems == []
+        assert [w["withheld_until"] for w in record.withheld] == [STARTED_AT + timedelta(minutes=1)]
+        assert ledger.pending() == ()
+
+    def test_nothing_pending_costs_nothing(self):
+        record, log = SpyRecord(), CapturingLog()
+
+        assert flush_run_snapshots(record, None, _ScriptedReconciler().withheld, log) == []
+        assert flush_run_snapshots(record, None, None, log) == []
+        assert record.withheld_threads == [] and record.rejections == []
+
+    def test_a_failed_write_is_a_shutdown_problem_never_a_raise(self):
+        record, log = SpyRecord(), CapturingLog()
+        record.withheld_raises = RuntimeError("postgres is down")
+
+        problems = flush_run_snapshots(record, None, self._ledger_with_a_pending_end(), log)
+
+        assert problems == ["flush_withheld_periods: RuntimeError"]
+        assert log.level_of(WITHHELD_RECORD_FAILED_EVENT) == "error"
+
+    def test_a_reclaim_is_raised_for_the_runner_to_record(self):
+        record, log = SpyRecord(), CapturingLog()
+        record.withheld_raises = SessionReclaimedError("taken by another process")
+
+        with pytest.raises(SessionReclaimedError):
+            flush_run_snapshots(record, None, self._ledger_with_a_pending_end(), log)
+
+    def test_the_refusal_summary_is_flushed_beside_it(self):
+        """One teardown slot for both run snapshots (the runner's file budget)."""
+        record, log = SpyRecord(), CapturingLog()
+        tally = _FakeTally()
+        tally.refuse()
+
+        problems = flush_run_snapshots(record, tally, self._ledger_with_a_pending_end(), log)
+
+        assert problems == []
+        assert len(record.rejections) == 1 and len(record.withheld) == 1
+
+    def test_the_steady_state_exposes_its_reconcilers_ledger(self):
+        clock, record, log = FakeClock(), SpyRecord(), CapturingLog()
+        reconciler = _ScriptedReconciler()
+
+        state = _steady_state(clock, record, log, reconciler=reconciler)
+
+        assert state.withheld is reconciler.withheld
+        assert _steady_state(clock, record, log).withheld is None
