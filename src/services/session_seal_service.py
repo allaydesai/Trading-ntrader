@@ -206,7 +206,9 @@ def require_sealable_capital(capital: Decimal) -> None:
     """
     try:
         _require_capital(capital)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, ArithmeticError) as exc:
+        # ``ArithmeticError`` too (PR #36 review P2): past 28 digits at cents the
+        # whole-cent ``quantize`` raises ``decimal.InvalidOperation``.
         raise SealRefusedError(f"The starting capital cannot be sealed: {exc}.") from exc
     if capital > LARGEST_CAPITAL:
         raise SealRefusedError(
@@ -233,7 +235,10 @@ def _require_storable(result: BacktestResult) -> None:
         if not math.isfinite(value):
             continue
         precision, scale = column.type.precision or 0, column.type.scale or 0
-        if abs(round(Decimal(str(value)), scale)) >= Decimal(10) ** (precision - scale):
+        magnitude, limit = abs(Decimal(str(value))), Decimal(10) ** (precision - scale)
+        # Bound first (PR #36 review P3): rounding a value past Decimal's 28
+        # digits at this scale raises ``InvalidOperation`` instead of refusing.
+        if magnitude >= limit or round(magnitude, scale) >= limit:
             raise SealRefusedError(
                 f"The session's {column.name} is {value}, more than the record's {column.name} "
                 f"column can hold (Numeric({precision},{scale}): magnitude below "

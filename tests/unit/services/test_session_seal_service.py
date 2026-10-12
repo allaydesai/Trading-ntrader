@@ -37,6 +37,7 @@ from src.db.models.trading_session import TradingSession
 from src.db.repositories.trading_session_repository_sync import SyncTradingSessionRepository
 from src.models.backtest_result import BacktestResult
 from src.models.reconciliation import (
+    ORDERS_NOT_LISTED,
     OpenLeg,
     SessionHoldings,
     SessionView,
@@ -49,6 +50,7 @@ from src.services.reconcile_withheld import RECONCILE_WITHHELD_KEY
 from src.services.seal_open_positions import (
     NONE_OPEN_DISPOSITION,
     NONE_WORKING_DISPOSITION,
+    ORDERS_NOT_LISTED_DISPOSITION,
     OTHER_ACCOUNT_DISPOSITION,
     RECORDED_OPEN_DISPOSITION,
     UNKNOWN_HOLDINGS_DISPOSITION,
@@ -952,6 +954,19 @@ class TestWorkingOrdersAreReported:
         assert "the session's engine cache" in disposition
         assert "check them in TWS" in disposition
 
+    async def test_orders_that_could_not_be_listed_seal_and_never_read_as_one_order(self, harness):
+        """PR #36 review DN1: a failed listing is no count — the report says the
+        orders could not be listed, never "1 order(s) could not be read"."""
+        harness.holdings = _holding(unreadable=(ORDERS_NOT_LISTED,))
+
+        report = await harness.seal()
+
+        assert harness.row.status is SessionStatus.SEALED
+        disposition = report.working_orders_disposition
+        assert disposition == ORDERS_NOT_LISTED_DISPOSITION
+        assert "order(s)" not in disposition
+        assert "check them in TWS" in disposition
+
 
 class TestTheHoldingsAreKnownOrSaidToBeUnknown:
     """Code review P1: an unknown holding never reads as a concrete "none"."""
@@ -1076,8 +1091,16 @@ class TestTheWriteIsTheBacktestPathsOwn:
 
     @pytest.mark.parametrize(
         "field_name, value, bound",
-        [("cagr", 1.75e9, "Numeric(15,6)"), ("expectancy", -2e18, "Numeric(20,2)")],
-        ids=["ratio", "money"],
+        [
+            ("cagr", 1.75e9, "Numeric(15,6)"),
+            ("expectancy", -2e18, "Numeric(20,2)"),
+            # PR #36 review P3: past Decimal's 28 digits at the column's scale —
+            # a CAGR over a few hours — still refused by name, never a raw
+            # ``InvalidOperation``.
+            ("cagr", 1e22, "Numeric(15,6)"),
+            ("calmar_ratio", 1e300, "Numeric(15,6)"),
+        ],
+        ids=["ratio", "money", "ratio_past_decimal_precision", "ratio_near_float_max"],
     )
     async def test_a_metric_its_column_cannot_hold_is_refused_by_name(
         self, harness, field_name, value, bound
@@ -1637,6 +1660,9 @@ class TestARunRowExistsOnlyFromSealOnward:
 POSITION_MUTATORS = frozenset({"apply"})
 #: The seal's read of what the session holds (Story 5.5): on the seal path too.
 SESSION_VIEW_MODULE = "src/core/live_session_view.py"
+#: Story 5.8: ``session_conditions`` calls ``withheld_for_record`` on every
+#: seal, so it is on the seal path too (PR #36 review P6).
+WITHHELD_MODULE = "src/services/reconcile_withheld.py"
 
 
 class TestTheSealReachesNoBroker:
@@ -1649,6 +1675,7 @@ class TestTheSealReachesNoBroker:
         CONDITIONS_MODULE,
         OPEN_POSITIONS_MODULE,
         SESSION_VIEW_MODULE,
+        WITHHELD_MODULE,
     )
     BROKER_IMPORTS = ("ibapi", "nautilus_trader.adapters", "nautilus_trader.live")
 

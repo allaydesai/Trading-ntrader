@@ -187,7 +187,7 @@ class TestTheCommandSurface:
         assert result.exit_code == 2
         harness.seal.assert_not_called()
 
-    @pytest.mark.parametrize("value", ["-1", "0", "-0", "100000.001", "1e15"])
+    @pytest.mark.parametrize("value", ["-1", "0", "-0", "100000.001", "1e15", "1E+26", "9" * 29])
     def test_a_capital_the_record_cannot_carry_is_a_usage_error_before_any_connection(
         self, runner, value
     ):
@@ -266,6 +266,32 @@ class TestComposition:
         assert result.stdout.splitlines()[-len(render_seal_report(report)) :] == (
             render_seal_report(report)
         )
+        assert "live seal failed" not in result.output
+        assert "committed" in result.stderr
+
+    @pytest.mark.parametrize(
+        "close_error",
+        [RuntimeError("connection reset"), KeyboardInterrupt()],
+        ids=["error", "ctrl_c"],
+    )
+    def test_a_session_close_failing_after_the_commit_never_reports_a_failure(
+        self, runner, close_error
+    ):
+        """PR #36 review P1: the report is the seal's from the commit on — a close
+        that fails on the way out of the session, or a Ctrl-C there, is cleanup."""
+        report = _report()
+        with _Harness(report=report) as harness:
+
+            @asynccontextmanager
+            async def get_session():
+                yield harness.db
+                raise close_error
+
+            with patch.object(live_seal, "get_session", get_session):
+                result = runner.invoke(live, ARGV)
+
+        assert result.exit_code == 0, result.output
+        harness.db.commit.assert_awaited_once()
         assert "live seal failed" not in result.output
         assert "committed" in result.stderr
 

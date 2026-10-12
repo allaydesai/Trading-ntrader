@@ -26,7 +26,7 @@ from sqlalchemy import String
 
 from src.db.exceptions import SealRefusedError
 from src.db.models.trade import Trade
-from src.models.reconciliation import OpenLeg, SessionHoldings
+from src.models.reconciliation import ORDERS_NOT_LISTED, OpenLeg, SessionHoldings
 from src.models.trade import TradeCreate
 
 #: Every disposition names its basis — the session's engine cache, read
@@ -67,6 +67,11 @@ WORKING_ORDERS_DISPOSITION = (
 UNREADABLE_ORDERS_DISPOSITION = (
     "could not be read from the session's engine cache; check them in TWS, as any that is "
     "still working is owned by no session"
+)
+#: PR #36 review DN1: the engine cache's orders could not be listed — no count.
+ORDERS_NOT_LISTED_DISPOSITION = (
+    "unknown: the session's orders could not be listed from its engine cache; check them in "
+    "TWS, as any that is still working is owned by no session"
 )
 #: PO ruling R3b with R2a: the orders of a session whose engine cache held nothing.
 UNKNOWN_ORDERS_DISPOSITION = (
@@ -178,6 +183,8 @@ def working_orders_disposition(holdings: SessionHoldings | None) -> str:
     — and of any it held but could not read (code review DN1a)."""
     if holdings is None:
         return UNKNOWN_ORDERS_DISPOSITION
+    if holdings.unreadable_orders == (ORDERS_NOT_LISTED,):
+        return ORDERS_NOT_LISTED_DISPOSITION
     parts = [WORKING_ORDERS_DISPOSITION] if holdings.working_orders else []
     unreadable = len(holdings.unreadable_orders)
     if unreadable:

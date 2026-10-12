@@ -1019,6 +1019,37 @@ class TestWithholdForReconciliation:
         assert monitor.state is ConnectionState.HALTED
 
     @pytest.mark.unit
+    def test_a_real_disconnect_while_a_withhold_stands_halted_is_narrated(self):
+        """PR #36 review DN2 (PO ruling: extend P1 to HALTED). A withhold that
+        outlived the window is ``HALTED`` with the socket up; a drop then is the
+        real outage's start — logged, and measured from the drop — while the
+        halt, already reported, stays as it is and is not reported again."""
+        clock = FakeClock()
+        monitor = _connected(clock, window=60.0)
+        monitor.withhold_for_reconciliation()
+        clock.advance(61.0)
+        monitor.observe(UP)
+        assert monitor.state is ConnectionState.HALTED
+        clock.advance(10.0)
+
+        with capture_logs() as captured:
+            monitor.observe(DOWN)
+            clock.advance(3.0)
+            monitor.observe(DOWN)  # a flap inside the same outage: once only
+
+        assert monitor.state is ConnectionState.HALTED
+        (lost,) = _events(captured, "connection.lost")
+        assert lost["detail"] == DOWN.detail
+        assert monitor.downtime_seconds == 3.0
+        assert _events(captured, "connection.halted") == []
+
+        clock.advance(2.0)
+        monitor.observe(UP)
+        assert monitor.state is ConnectionState.RECOVERING
+        assert monitor.reconnect_seconds == 5.0
+        assert monitor.trading_permitted is False
+
+    @pytest.mark.unit
     def test_an_ordinary_loss_after_a_regranted_withhold_is_unchanged(self):
         """The re-grant clears the mark: a later outage is an ordinary one."""
         clock = FakeClock()

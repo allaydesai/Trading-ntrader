@@ -53,7 +53,7 @@ from src.core.live_session_view import (
 )
 from src.core.live_trader_id import derive_trader_id
 from src.models.broker_state import CashBalance
-from src.models.reconciliation import OpenLeg, ViewPosition, WorkingOrder
+from src.models.reconciliation import ORDERS_NOT_LISTED, OpenLeg, ViewPosition, WorkingOrder
 
 pytestmark = pytest.mark.component
 
@@ -1127,6 +1127,46 @@ class TestTheSessionsWorkingOrdersAreRead:
         assert fields["client_order_ids"] == [broken]
         assert "corrupt" not in repr(log.records) + repr(holdings)
         assert ACCOUNT not in repr(log.records)
+
+    def test_an_order_key_of_an_unexpected_shape_is_named_never_blocking(self):
+        """PR #36 review P4: DN1a reaches the key too — a malformed key is named by
+        the key itself, and the flat session's holdings still read."""
+        accepted = _order(NVDA, OrderSide.BUY, 5, 1, "submitted", "accepted")
+        adapter = FakeAdapter(
+            orders={str(accepted.client_order_id): accepted},
+            general=_summary(USD={"TotalCashValue": 1}),
+            other_keys=("orders:",),
+        )
+
+        holdings = _holdings(adapter)
+
+        assert holdings.unreadable_orders == (f"trader-{TRADER_ID}:orders:",)
+        assert [order.client_order_id for order in holdings.working_orders] == [
+            str(accepted.client_order_id)
+        ]
+
+    def test_orders_that_cannot_be_listed_are_named_never_blocking(self):
+        """PR #36 review DN1 (PO ruling: proceed, name it): DN1a's "never blocks a
+        seal" covers the listing too — the positions were read through the same
+        Redis, and an order changes nothing the record holds."""
+
+        class OrdersUnlisted(FakeAdapter):
+            def keys(self, pattern: str = "*") -> list[str]:
+                if pattern.startswith("orders"):
+                    raise RuntimeError("scan failed")
+                return super().keys(pattern)
+
+        adapter = OrdersUnlisted(
+            positions={"AAPL.NASDAQ-S-001": _position(AAPL, (OrderSide.BUY, 4))},
+            general=_summary(USD={"TotalCashValue": 1}),
+        )
+
+        holdings = _holdings(adapter)
+
+        assert holdings.unreadable_orders == (ORDERS_NOT_LISTED,)
+        assert holdings.working_orders == ()
+        assert [leg.instrument_id for leg in holdings.legs] == ["AAPL.NASDAQ"]
+        assert "scan failed" not in repr(holdings)
 
     def test_an_order_whose_fields_cannot_be_read_is_named_too(self):
         class Drifted:

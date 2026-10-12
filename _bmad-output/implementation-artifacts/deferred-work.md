@@ -4552,3 +4552,76 @@ New, found while verifying:
   server is `America/Toronto`. The web views read through asyncpg and show UTC, so late in the
   evening a record's "Date" in `backtest compare` is a day behind its date on `/backtests`. It
   applies to every record, not just paper ones. **Owner:** Growth UI work.
+
+## Code review of PR #36, Epic 5 integration (2026-10-11)
+
+Scope: production code only (`src/`, 26 files, `015-paper-trading...p3-epic5-base`), against the
+eight Epic 5 story files. Layers: Blind Hunter (14 findings), Edge Case Hunter (4), Acceptance
+Auditor 5.1–5.4 (4) and 5.5–5.8 (2). After dedup and verification: 2 decision-needed, 8 patch,
+1 defer, 13 dismissed (refuted in code, or covered by a recorded PO ruling — D-C, R1a, code
+review P1 of 5.8, the `write_rejection_snapshot` precedent). **Both decisions ruled by the PO
+(Allay) on 2026-10-11, each on the recommended option; all ten items landed in this PR.**
+
+**Decisions (PO)**
+
+- [x] [Review][Decision] DN1 — **RULED (b): proceed, name it** — landed as `ORDERS_NOT_LISTED` /
+  `ORDERS_NOT_LISTED_DISPOSITION`. — Listing the orders still fails the seal closed, `--force` or not.
+  5.5's ruling DN1a says "an unreadable order never blocks a seal… the seal proceeds with or
+  without `--force`"; the dev record's carve-out ("listing the orders at all still fails closed")
+  is the dev's own reading, not the ruling's. A `keys("orders:*")` failure refuses a flat session
+  5.3 could seal. Options: (a) keep fail-closed and amend DN1a's wording; (b) a failed listing
+  becomes `unreadable_orders=["<listing failed>"]` and the seal proceeds.
+  [`src/core/live_session_view.py` `_working_orders`]
+- [x] [Review][Decision] DN2 — **RULED (a): extend P1 to `HALTED`** — landed; `ConnectionMonitor`
+  128 → 134 statements, baselined with its reason. — A socket drop while `HALTED` after a reconciliation withhold is not
+  narrated. 5.8's code-review P1 re-anchors a drop during a withhold, but only from
+  `CONNECTED`/`RECOVERING`. If the withhold outlives the halt window (→ `HALTED`) and the socket
+  then drops, no `connection.lost` is logged, `_withheld_by_reconciliation` stays set, and on
+  reconnect `reconnect_seconds` reads 0.0 (`_reconnected_at` was pinned at the withhold).
+  Options: (a) extend P1 to `HALTED` (log + re-anchor, state stays `HALTED`); (b) accept — the
+  halt was already reported, and record it.
+  [`src/core/live_connection_monitor.py` `_observe_disconnected`]
+
+**Patches**
+
+- [x] [Review][Patch] P1 — `live seal` can report a committed seal as failed: `outcome.report` is
+  set only after `get_session()`'s `__aexit__`; a close error or Ctrl-C between `commit()` and that
+  line prints "live seal failed" and exits non-zero while the session is `sealed`. Set it right
+  after `await db.commit()`. [`src/cli/commands/live_seal.py:140-145`] (blind+edge)
+- [x] [Review][Patch] P2 — `--starting-capital 1E+26` (or any amount past 28 digits at cents)
+  makes `_require_capital`'s `quantize` raise `decimal.InvalidOperation`, which is neither
+  `TypeError` nor `ValueError`: a traceback instead of exit 2. Catch `ArithmeticError` too in
+  `require_sealable_capital`. [`src/services/session_seal_service.py:207-210`] (edge, reproduced)
+- [x] [Review][Patch] P3 — `_require_storable`'s `round(Decimal(str(value)), scale)` raises
+  `InvalidOperation` for a metric ≥ ~1e22 — reachable by a CAGR on a session of a few hours — so
+  the seal refuses with a raw `InvalidOperation` instead of the named column refusal. Compare the
+  magnitude before rounding. [`src/services/session_seal_service.py:236`] (edge, reproduced)
+- [x] [Review][Patch] P4 — One malformed `orders:*` key refuses every seal, `--force` or not:
+  `_key_id` runs outside the per-order `try`, contradicting DN1a. Move it inside and name the raw
+  key in `unreadable_orders`. [`src/core/live_session_view.py` `_working_orders`] (blind+auditor)
+- [x] [Review][Patch] P5 — A `process_lost` end is stamped in the Postgres server's zone
+  (psycopg2 on the claim path returns `timestamptz` in the session zone, `America/Toronto`), so a
+  period reads `start …+00:00`, `end …-04:00`, and the seal `--json` passes it through (AR29: UTC).
+  Same instant, wrong offset; the integration test drives asyncpg, which cannot see it. Normalise
+  with `.astimezone(UTC)` in `_end_for`. [`src/services/reconcile_withheld.py:132`] (auditor)
+- [x] [Review][Patch] P6 — `src/services/reconcile_withheld.py` joined the seal path in 5.8
+  (`session_conditions` calls `withheld_for_record` on every seal) but is not in the seal's
+  no-broker scan `MODULES`. Pure today; add it (5.4 D-F, mutant M10's class of omission).
+  [`tests/unit/services/test_session_seal_service.py:1646-1652`] (auditor)
+- [x] [Review][Patch] P7 — Story 5.1's ACs carry no `acceptance_criterion` markers, so the criteria
+  summary never lists 5.1a–5.1d though tests back each (parity:178, parity:196, unit:554,
+  unit:598). Tag them. [`tests/unit/core/test_results_extractor.py`,
+  `tests/integration/core/test_results_extractor_parity.py`] (auditor)
+- [x] [Review][Patch] P8 — Stale invariant: "Every session row is strategy-owned … rows carry no
+  strategy id" is no longer true after 5.5's forced seal writes reconciliation-owned open legs as
+  null-exit rows. Metrics unaffected (open rows never become legs); fix the comment.
+  [`src/core/session_equity.py:62-64`] (auditor)
+
+**Deferred**
+
+- [x] [Review][Defer] W1 — The sealed record states an open withheld period two ways:
+  `last_run_flags.reconcile_withheld.periods[i].ended_by` is `null` (as stored, 5.4 R2a) while the
+  top-level `reconcile_withheld` copy says `open_at_seal` (5.8's PO condition). Both rulings hold
+  as written; a reader of `last_run_flags` must not treat it as the record's own judgement.
+  [`src/services/session_conditions.py` `build_session_conditions`] — deferred, by design of two
+  rulings; owner: Growth comparison work.

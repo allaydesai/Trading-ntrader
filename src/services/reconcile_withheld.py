@@ -30,7 +30,7 @@ period a dead process left open ends at its last heartbeat, or unknown
 
 import copy
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 #: The ``runtime_flags`` key, and the ``session_conditions`` key a seal records it under.
@@ -55,7 +55,11 @@ def empty_document() -> dict[str, Any]:
 
 
 def _iso(stamp: datetime | None) -> str | None:
-    return None if stamp is None else stamp.isoformat()
+    """UTC, as every stamp in the record is (AR29): a heartbeat read back through
+    psycopg2 arrives in the Postgres server's zone (PR #36 review P5)."""
+    if stamp is None:
+        return None
+    return (stamp.astimezone(UTC) if stamp.tzinfo is not None else stamp).isoformat()
 
 
 def _read(document: Any) -> tuple[int, list[dict[str, Any]]]:
@@ -100,7 +104,7 @@ def with_period(
     """
     count, periods = _read(document)
     entry = {
-        "start": withheld_from.isoformat(),
+        "start": _iso(withheld_from),
         "end": _iso(withheld_until),
         "cause": WITHHELD_CAUSE,
         "reason": reason,
@@ -129,7 +133,7 @@ def _end_for(start: Any, stamp: datetime | None) -> str | None:
     or a heartbeat from before the withdrawal): an end is never invented."""
     if stamp is None or not _at_or_after(stamp, start):
         return None
-    return stamp.isoformat()
+    return _iso(stamp)
 
 
 def _closed(document: Any, stamp: datetime | None, ended_by: str) -> Any:

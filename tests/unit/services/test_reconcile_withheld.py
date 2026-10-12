@@ -7,7 +7,7 @@ shape is written, carried, closed and read for a record.
 
 import copy
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
@@ -248,6 +248,30 @@ class TestCarriedForward:
 
         (period,) = carried["periods"]
         assert (period["end"], period["ended_by"]) == (heartbeat.isoformat(), ENDED_PROCESS_LOST)
+
+    def test_a_heartbeat_read_in_the_servers_zone_is_recorded_in_utc(self):
+        """PR #36 review P5: the claim reads ``last_heartbeat_at`` through psycopg2,
+        which answers in the Postgres server's zone; the record is UTC (AR29), like
+        every other stamp in it."""
+        toronto = timezone(timedelta(hours=-4))
+        heartbeat = (T0 + timedelta(minutes=4)).astimezone(toronto)
+
+        carried = carried_forward(_flags(_period(None)), last_heartbeat_at=heartbeat)
+
+        (period,) = carried["periods"]
+        assert period["end"] == (T0 + timedelta(minutes=4)).isoformat()
+        assert period["end"].endswith("+00:00")
+
+    def test_every_stamp_written_is_utc_whatever_zone_it_arrives_in(self):
+        toronto = timezone(timedelta(hours=-4))
+        start, end = T0.astimezone(toronto), (T0 + timedelta(minutes=9)).astimezone(toronto)
+
+        (period,) = _period(None, start=start, end=end)["periods"]
+
+        assert (period["start"], period["end"]) == (
+            T0.isoformat(),
+            (T0 + timedelta(minutes=9)).isoformat(),
+        )
 
     @pytest.mark.parametrize(
         "heartbeat", [None, T0 - timedelta(seconds=5)], ids=["none", "before_start"]

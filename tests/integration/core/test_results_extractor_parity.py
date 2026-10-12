@@ -34,6 +34,9 @@ from src.core.strategies.sma_momentum import SMAMomentum, SMAMomentumConfig
 
 pytestmark = pytest.mark.integration
 
+#: Story 5.1's acceptance criteria (PR #36 review P7: traced like 5.2–5.4's).
+EPIC5_PRD = "_bmad-output/planning-artifacts/prd-epic5-scope.md"
+
 AAPL = TestInstrumentProvider.equity(symbol="AAPL", venue="NASDAQ")
 BAR_TYPE = BarType.from_str("AAPL.NASDAQ-1-MINUTE-LAST-EXTERNAL")
 VENUE = Venue("NASDAQ")
@@ -175,6 +178,12 @@ def _backtest_path(engine: BacktestEngine) -> tuple[dict, list]:
 class TestTheBacktestPathIsUnchanged:
     """AC #3."""
 
+    @pytest.mark.acceptance_criterion(
+        "5.1c",
+        "every existing backtest test passes unchanged and backtest results are bit-identical "
+        "to before",
+        EPIC5_PRD,
+    )
     def test_the_backtest_path_is_bit_identical_to_the_pre_change_code(self):
         engine = _finished_engine()
         result, curve = _backtest_path(engine)
@@ -193,6 +202,12 @@ class TestOneCalculationPath:
     """AC #8 — a finished backtest engine *is* a host exposing ``portfolio`` and
     ``cache``, so settling it as a live host must change nothing."""
 
+    @pytest.mark.acceptance_criterion(
+        "5.1a",
+        "ResultsExtractor accepts either a BacktestEngine or a live host exposing the same "
+        "portfolio and cache components (FR41)",
+        EPIC5_PRD,
+    )
     def test_the_live_path_and_the_backtest_path_agree_on_one_engine(self):
         engine = _finished_engine()
 

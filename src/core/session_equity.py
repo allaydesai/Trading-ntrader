@@ -59,8 +59,10 @@ BASIS = "per_trade_price_return"
 #: What the series cannot see (D-D; story F9 — reconciliation-owned positions,
 #: including a corporate action reconciliation absorbed, are never trades).
 EXCLUDES = ("open_positions", "reconciliation_owned_activity")
-#: Every session row is strategy-owned (Story 3.6 D-D) and rows carry no
-#: strategy id; any id outside ``RECONCILIATION_STRATEGY_IDS`` keeps the leg.
+#: Every *closed* session row is strategy-owned (Story 3.6 D-D) and rows carry
+#: no strategy id; any id outside ``RECONCILIATION_STRATEGY_IDS`` keeps the leg.
+#: A forced seal's open rows may be reconciliation-owned (Story 5.5), but a row
+#: with no exit never becomes a leg (D-D), so none reaches this id.
 SESSION_STRATEGY_ID = "SESSION"
 
 _SIDE_SIGN = {"BUY": Decimal(1), "SELL": Decimal(-1)}

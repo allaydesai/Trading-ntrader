@@ -107,6 +107,7 @@ from src.core.live_trade_recorder import select_commission, to_price_decimal, un
 from src.core.live_trader_id import derive_trader_id
 from src.models.broker_state import CashBalance
 from src.models.reconciliation import (
+    ORDERS_NOT_LISTED,
     OpenLeg,
     SessionHoldings,
     SessionView,
@@ -483,13 +484,23 @@ def _working_orders(
 ) -> tuple[tuple[WorkingOrder, ...], tuple[str, ...]]:
     """Every order the cache holds working, and every order it holds but could
     not rebuild or read — named, never a refusal and never silently left out
-    (code review DN1a: an order changes nothing the record holds). Listing the
-    orders at all is still the namespace's read, and fails as one."""
-    order_keys = _call(lambda: sorted(set(keys(f"{ORDERS_COLLECTION}:*"))), "listing orders")
+    (code review DN1a: an order changes nothing the record holds). That reaches
+    the listing too (PR #36 review DN1, PO ruling): orders that cannot be listed
+    are named :data:`ORDERS_NOT_LISTED`, and a key of an unexpected shape is
+    named by the key itself (P4) — the positions were already read through the
+    same namespace, so neither ever refuses the read."""
+    try:
+        order_keys = sorted(set(keys(f"{ORDERS_COLLECTION}:*")))
+    except Exception:  # noqa: BLE001 - DN1: a failed listing is named, not raised
+        return (), (ORDERS_NOT_LISTED,)
     working: list[WorkingOrder] = []
     unreadable: list[str] = []
     for key in order_keys:
-        client_order_id = _key_id(key, ORDERS_COLLECTION, "order")
+        try:
+            client_order_id = _key_id(key, ORDERS_COLLECTION, "order")
+        except SessionViewUnavailableError:
+            unreadable.append(str(key) or repr(key))
+            continue
         try:
             converted = _working(load_order(ClientOrderId(client_order_id)))
         except Exception:  # noqa: BLE001 - DN1a: an unreadable order is named, not raised

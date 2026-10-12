@@ -135,7 +135,8 @@ SIZE_BASELINE: dict[str, int] = {
     # Story 4.3, 118 -> 116: `submission_withheld` is now `not trading_permitted` (D-F).
     # Story 5.8, 116 -> 123: `withhold_for_reconciliation`, the reconciler's withdrawal (D-A).
     # Code review P1, 123 -> 128: a real drop during that withhold is its own narrated outage.
-    "src/core/live_connection_monitor.py::ConnectionMonitor": 128,
+    # PR #36 review DN2, 128 -> 134: the same drop while the withhold stands HALTED (PO ruling).
+    "src/core/live_connection_monitor.py::ConnectionMonitor": 134,
     # Story 4.3, 128 -> 129: `open_check_interval_secs` passed explicitly as off (PO ruling 1A).
     # Story 4.5, 129 -> 130: `filter_unclaimed_external_orders` passed explicitly as on (D-A).
     "src/core/live_node_builder.py::build_trading_node_config": 130,

@@ -228,6 +228,11 @@ class WorkingOrder:
             raise ValueError(f"quantity must be positive, got {self.quantity}")
 
 
+#: PR #36 review DN1 (PO ruling): what ``SessionHoldings.unreadable_orders``
+#: holds, alone, when the engine cache's orders could not be listed at all.
+ORDERS_NOT_LISTED = "<orders not listed>"
+
+
 @dataclass(frozen=True, slots=True)
 class SessionHoldings:
     """A session's view plus what stands behind it (Story 5.5).

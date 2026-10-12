@@ -366,6 +366,17 @@ class ConnectionMonitor:
             self._reconnected_at = None
             return
 
+        if self._state is ConnectionState.HALTED and self._withheld_by_reconciliation:
+            # PR #36 review DN2 (PO ruling): a withhold that outlived the window
+            # sits HALTED with the socket up, so a drop here is the real
+            # outage's start — narrated and anchored as P1's is. The halt it
+            # already reported stands, and is not reported again.
+            self._withheld_by_reconciliation = False
+            self._reconnected_at = None
+            self._unavailable_since = self._now()
+            self._log.warning("connection.lost", detail=status.detail, state=self._state.value)
+            return
+
         if self._state in (ConnectionState.CONNECTED, ConnectionState.RECOVERING):
             self._state = ConnectionState.LOST
             self._reconnected_at = None

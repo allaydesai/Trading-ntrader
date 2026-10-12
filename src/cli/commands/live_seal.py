@@ -142,8 +142,10 @@ async def _seal(identifier: str, starting_capital: Decimal, force: bool, outcome
                 with suppress(Exception):  # the original failure is the one to report
                     await db.rollback()
                 raise
-        outcome.report = report
-        _log_sealed(report)
+            # Before leaving the session (PR #36 review P1): a close that fails
+            # on the way out, or a Ctrl-C there, is cleanup after a permanent seal.
+            outcome.report = report
+            _log_sealed(report)
     finally:
         try:
             await dispose_all_connections()

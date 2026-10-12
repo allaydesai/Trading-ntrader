@@ -31,6 +31,9 @@ from src.core.results_extractor import (
 )
 from src.models.backtest_result import BacktestResult
 
+#: Story 5.1's acceptance criteria (PR #36 review P7: traced like 5.2–5.4's).
+EPIC5_PRD = "_bmad-output/planning-artifacts/prd-epic5-scope.md"
+
 
 class TestSafeFloat:
     """Tests for _safe_float helper function."""
@@ -550,6 +553,12 @@ class TestTheDispatchIsConfinedToTwoHelpers:
             "_build_equity_curve_from_positions",
         } <= set(EXTRACTOR_METHODS)
 
+    @pytest.mark.acceptance_criterion(
+        "5.1b",
+        "the metric math is untouched — the change is confined to how the host's portfolio and "
+        "cache are obtained (FR41)",
+        EPIC5_PRD,
+    )
     @pytest.mark.parametrize("method", EXTRACTOR_METHODS)
     def test_no_extractor_method_names_the_live_host(self, method):
         references = _body_references(getattr(ResultsExtractor, method))
@@ -580,6 +589,11 @@ class TestNoParallelResultsVocabulary:
 
         assert type(result) is BacktestResult
 
+    @pytest.mark.acceptance_criterion(
+        "5.1d",
+        "no metrics table, model, or view specific to paper results is added (FR42, AR43)",
+        EPIC5_PRD,
+    )
     def test_the_orm_table_set_is_unchanged(self):
         import src.db.models  # noqa: F401  # registers every model on Base.metadata
         from src.db.base import Base
