@@ -4625,3 +4625,26 @@ review P1 of 5.8, the `write_rejection_snapshot` precedent). **Both decisions ru
   as written; a reader of `last_run_flags` must not treat it as the record's own judgement.
   [`src/services/session_conditions.py` `build_session_conditions`] — deferred, by design of two
   rulings; owner: Growth comparison work.
+
+## Deferred from: Epic 5 live verification, P23 + live seal (2026-10-12)
+
+Found running P23a/P23c and the live seal on `015-paper-trading` (d7c59af). Full transcript
+references are in `docs/qa/phase3-live-verification.md`, P23's 2026-10-12 Result-log row.
+
+- [ ] [Live][Defect] L1 — **After any reconnect the session never receives a bar again.**
+  Nautilus 1.220's IB adapter `_resubscribe_all` raises
+  `TypeError: subscribe_historical_bars() got an unexpected keyword argument 'start'`.
+  `client/market_data.py:456-465` registers the bar subscription's handle with `start=start`,
+  but `subscribe_historical_bars` (`:416`) takes no `start`. Measured live: no bar for 4½ minutes
+  after `connection.restored`. `live status` read `health: idle`, and no record names the lost
+  subscription. Every reconnect path (P4, P18d, P21d, P22d, P23a) leaves a session connected,
+  reconciled and re-granted, but unable to trade. Upstream defect, in the same family as
+  `live_exec_avg_px` (worked around locally, pinned by a canary). Needs a PO decision: a local
+  wrapper fix, a named `bars.resubscribe_failed` record, or both. Owner: unassigned (Phase 3 sign-off).
+- [ ] [Live][Doc] L2 — P23's Command block pipes `live seal --json` straight into `json.load`,
+  but `logging_configured` is printed to stdout first, so the command fails as written. Either
+  route that line to stderr under `--json` or add `grep '^{'` to the procedure.
+- [ ] [Live][Doc] L3 — The procedures' `until grep -q "<key>=<value>"` loops never match the
+  transcript, because the log file carries ANSI colour codes between key and value
+  (`action\x1b[0m=\x1b[35mtrading_withheld`). Strip `\x1b\[[0-9;]*m` before grepping, or write
+  the session log without colour when stdout is not a TTY.
