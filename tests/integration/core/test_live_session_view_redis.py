@@ -48,7 +48,7 @@ from nautilus_trader.model.identifiers import (
     VenueOrderId,
 )
 from nautilus_trader.model.objects import Price, Quantity
-from nautilus_trader.model.orders import MarketOrder
+from nautilus_trader.model.orders import LimitOrder, MarketOrder
 from nautilus_trader.serialization.serializer import MsgSpecSerializer
 from nautilus_trader.test_kit.providers import TestInstrumentProvider
 from nautilus_trader.test_kit.stubs.events import TestEventStubs
@@ -60,11 +60,12 @@ from src.core.live_session_view import (
     ACCOUNT_SUMMARY_KEY_PREFIX,
     SessionViewFailure,
     SessionViewUnavailableError,
+    read_session_holdings,
     read_session_view,
 )
 from src.core.live_trader_id import derive_trader_id
 from src.models.broker_state import CashBalance
-from src.models.reconciliation import ViewPosition
+from src.models.reconciliation import ViewPosition, WorkingOrder
 
 pytestmark = pytest.mark.integration
 
@@ -300,6 +301,29 @@ class _Session:
             )
         )
 
+    def rest(self, instrument, side: OrderSide, qty: int, strategy: str = "S-001") -> str:
+        """A limit order left working at the venue: submitted and accepted, never filled."""
+        self._count += 1
+        order = LimitOrder(
+            trader_id=TraderId(self.trader_id),
+            strategy_id=StrategyId(strategy),
+            instrument_id=instrument.id,
+            client_order_id=ClientOrderId(f"O-{self._count}"),
+            order_side=side,
+            quantity=Quantity.from_int(qty),
+            price=Price.from_str("80.00"),
+            init_id=UUID4(),
+            ts_init=0,
+        )
+        self.cache.add_order(order, None)
+        self.engine.process(TestEventStubs.order_submitted(order, account_id=IB_ACCOUNT))
+        self.engine.process(
+            TestEventStubs.order_accepted(
+                order, account_id=IB_ACCOUNT, venue_order_id=VenueOrderId(f"V-{self._count}")
+            )
+        )
+        return str(order.client_order_id)
+
     def record_cash(self, account: str, usd: float) -> None:
         body = {"USD": {"TotalCashValue": usd, "NetLiquidation": 400000.0}, "": {"X": "Y"}}
         self.cache.add(f"{ACCOUNT_SUMMARY_KEY_PREFIX}{account}", json.dumps(body).encode())
@@ -407,8 +431,118 @@ class TestTheRealRoundTrip:
         assert raised.value.reason is SessionViewFailure.UNREADABLE
 
 
+class TestTheHoldingsRoundTrip:
+    """Story 5.5: the legs and working orders a seal reads, through the real adapter."""
+
+    def test_legs_and_a_working_order_read_back_through_the_real_serializer(self, session):
+        session.fill(NVDA, OrderSide.BUY, 10)
+        session.fill(AAPL, OrderSide.BUY, 7)
+        session.fill(AAPL, OrderSide.SELL, 3)  # partly reduced: 4 remain, peak 7
+        session.fill(AAPL, OrderSide.BUY, 5, strategy="EXTERNAL")
+        resting = session.rest(NVDA, OrderSide.SELL, 10)
+        session.record_cash(ACCOUNT, 10.0)
+        session.flush_writes()
+
+        holdings = read_session_holdings(session.session_id, ACCOUNT, _redis_settings())
+
+        assert holdings.view.positions == (
+            ViewPosition("AAPL.NASDAQ", Decimal("9")),
+            ViewPosition("NVDA.NASDAQ", Decimal("10")),
+        )
+        assert [
+            (leg.position_id, leg.strategy_id, leg.side, leg.quantity, leg.avg_px_open)
+            for leg in holdings.legs
+        ] == [
+            ("AAPL.NASDAQ-EXTERNAL", "EXTERNAL", "BUY", Decimal("5"), Decimal("100.00000000")),
+            ("AAPL.NASDAQ-S-001", "S-001", "BUY", Decimal("4"), Decimal("100.00000000")),
+            ("NVDA.NASDAQ-S-001", "S-001", "BUY", Decimal("10"), Decimal("100.00000000")),
+        ]
+        assert holdings.working_orders == (
+            WorkingOrder(
+                client_order_id=resting,
+                instrument_id="NVDA.NASDAQ",
+                side="SELL",
+                quantity=Decimal("10"),
+                order_type="LIMIT",
+                status="ACCEPTED",
+            ),
+        )
+
+    def test_the_view_inside_is_read_session_views_own(self, session):
+        session.fill(AAPL, OrderSide.BUY, 7)
+        session.record_cash(ACCOUNT, 10.0)
+        session.flush_writes()
+
+        holdings = read_session_holdings(session.session_id, ACCOUNT, _redis_settings())
+
+        assert holdings.view == read_session_view(session.session_id, ACCOUNT, _redis_settings())
+
+
+def _capture_read(session: "_Session", read) -> tuple[list[tuple[str, str, str]], set[str], dict]:
+    """Run ``read`` against the session through a relay while ``MONITOR`` captures,
+    and return every line, the relay's connections, and the namespace afterwards."""
+    relay = _Relay(_redis_settings())
+    monitor = _Resp(_redis_settings())
+    assert monitor.cmd("MONITOR") == "OK"
+    captured = bytearray()
+    stop = threading.Event()
+
+    def pump() -> None:
+        monitor.sock.settimeout(0.2)
+        while not stop.is_set():
+            try:
+                chunk = monitor.sock.recv(65536)
+            except OSError:
+                continue
+            if not chunk:
+                return
+            captured.extend(chunk)
+
+    thread = threading.Thread(target=pump, daemon=True)
+    thread.start()
+    try:
+        read(session.session_id, ACCOUNT, relay.settings())
+        time.sleep(0.3)
+    finally:
+        stop.set()
+        thread.join()
+        monitor.close()
+        relay.close()
+    observer = _Resp(_redis_settings())
+    try:
+        after = _snapshot(observer, session.prefix)
+    finally:
+        observer.close()
+    return _monitor_lines(bytes(captured)), relay.upstream_addrs, after
+
+
 class TestTheReadIsLoadOnly:
     """D-I / FR35: reading a session's namespace writes nothing to it."""
+
+    def test_the_holdings_read_issues_only_reads_and_reaches_the_orders(self, session):
+        """Story 5.5, R3b: ``load_order`` joined the read — it must be inside this
+        proof, not merely allowed by the pinned list."""
+        session.fill(AAPL, OrderSide.BUY, 7)
+        session.rest(AAPL, OrderSide.SELL, 7)
+        session.record_cash(ACCOUNT, 10.0)
+        session.flush_writes()
+        observer = _Resp(_redis_settings())
+        before = _snapshot(observer, session.prefix)
+        observer.close()
+
+        lines, relay_addrs, after = _capture_read(session, read_session_holdings)
+
+        reader_verbs = {verb for addr, verb, _ in lines if addr in relay_addrs}
+        namespace_clients = {addr for addr, _, line in lines if session.trader_id in line}
+        assert any(addr in relay_addrs and ":orders:" in line for addr, _, line in lines), (
+            f"MONITOR did not see the reader's order read: {lines}"
+        )
+        assert namespace_clients <= relay_addrs, "the namespace was touched off-relay"
+        assert reader_verbs <= READ_VERBS | HOUSEKEEPING_VERBS, (
+            f"the reader issued non-read verbs: {reader_verbs - READ_VERBS - HOUSEKEEPING_VERBS}"
+        )
+        assert not {verb for _, verb, _ in lines} & FLUSH_VERBS
+        assert after == before
 
     def test_monitor_sees_no_write_and_the_namespace_is_byte_identical(self, session):
         session.fill(AAPL, OrderSide.BUY, 7)

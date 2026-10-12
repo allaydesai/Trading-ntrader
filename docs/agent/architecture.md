@@ -15,7 +15,8 @@ src/
 │   └── ui/                # HTML routes: backtests, dashboard (Jinja2 + HTMX)
 ├── cli/
 │   ├── main.py            # Click CLI entry point
-│   └── commands/          # backtest, compare, data, history, report, reproduce, run, show, strategy
+│   └── commands/          # backtest, compare, data, history, report, reproduce, run, show, strategy;
+│                          # live (+ live_start/status/reconcile/seal — `ntrader live …`)
 ├── core/                  # → see docs/agent/nautilus.md for engine details
 │   ├── strategy_registry.py   # @register_strategy decorator + StrategyRegistry
 │   ├── strategy_factory.py    # StrategyFactory + StrategyLoader (dynamic import)
@@ -23,6 +24,7 @@ src/
 │   ├── backtest_runner.py     # Legacy: MinimalBacktestRunner, direct params
 │   ├── results_extractor.py  # Nautilus metrics + custom calcs (drawdown, CAGR, Calmar)
 │   ├── mark_to_market.py     # daily equity from fills + bar closes; risk metrics computed from it
+│   ├── session_equity.py     # Sealed paper session: trade rows → the same extractor (Epic 5)
 │   ├── analytics.py / metrics.py / fee_models.py / position_sizing.py / risk_management.py
 │   ├── benchmarks/        # buy_and_hold: backtest-only, NOT in StrategyRegistry (never live)
 │   └── strategies/
@@ -48,6 +50,10 @@ src/
 │   ├── exceptions.py / csv_loader.py / nautilus_converter.py
 │   ├── backtest_persistence.py / backtest_query.py
 │   ├── provenance.py      # git commit/dirty + compute_config_hash, stamped on every run
+│   ├── session_service.py     # The session state machine (AR37) + sealed_run_id link
+│   ├── session_seal_service.py  # `live seal`: stopped session → one paper run row; `--force` records open positions as open trades (Epic 5)
+│   ├── session_conditions.py  # AR7's `session_conditions` keys a seal records (Story 5.4)
+│   ├── seal_open_positions.py  # what a seal does with held positions/orders: dispositions, the open-trade row (Story 5.5)
 │   └── reports/           # CSV, JSON, text exporters
 └── utils/
     ├── logging.py         # structlog config + Nautilus LogGuard

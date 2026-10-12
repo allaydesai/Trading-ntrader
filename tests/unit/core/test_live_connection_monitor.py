@@ -902,6 +902,214 @@ class TestSubmissionWithheld:
             monitor.submission_withheld = False  # type: ignore[misc]
 
 
+class TestWithholdForReconciliation:
+    """Story 5.8 (AC #1, D-A): the runtime reconciler's withdrawal.
+
+    Three consecutive failed cycles move a granted session back to the
+    existing ``RECOVERING`` state with the socket still up; only the
+    reconciler's clean-cycle ``confirm_state_reestablished`` grants again —
+    exactly the reconnect path.
+    """
+
+    @pytest.mark.unit
+    def test_a_granted_session_is_withheld_in_recovering(self):
+        clock = FakeClock()
+        monitor = _connected(clock)
+
+        state = monitor.withhold_for_reconciliation()
+
+        assert state is ConnectionState.RECOVERING
+        assert monitor.state is ConnectionState.RECOVERING
+        assert monitor.trading_permitted is False
+        assert monitor.submission_withheld is True
+
+    @pytest.mark.unit
+    def test_unavailability_is_anchored_and_the_socket_never_left(self):
+        clock = FakeClock()
+        monitor = _connected(clock)
+
+        monitor.withhold_for_reconciliation()
+        clock.advance(25.0)
+
+        assert monitor.downtime_seconds == 25.0
+        assert monitor.reconnect_seconds == 0.0
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize(
+        "state",
+        [
+            ConnectionState.AWAITING_CONNECTION,
+            ConnectionState.RECOVERING,
+            ConnectionState.LOST,
+            ConnectionState.HALTED,
+        ],
+    )
+    def test_from_any_other_state_it_changes_nothing(self, state):
+        clock = FakeClock()
+        monitor = _drive_to(state, clock)
+        before = (monitor.state, monitor.downtime_seconds, monitor.reconnect_seconds)
+
+        returned = monitor.withhold_for_reconciliation()
+
+        assert returned is state
+        assert (monitor.state, monitor.downtime_seconds, monitor.reconnect_seconds) == before
+
+    @pytest.mark.unit
+    def test_a_later_confirmation_grants_and_reports_the_withheld_time(self):
+        clock = FakeClock()
+        monitor = _connected(clock)
+        monitor.withhold_for_reconciliation()
+        clock.advance(30.0)
+        monitor.observe(UP)  # the next tick's reading keeps it RECOVERING
+        assert monitor.state is ConnectionState.RECOVERING
+
+        with capture_logs() as captured:
+            state = monitor.confirm_state_reestablished(UP)
+
+        assert state is ConnectionState.CONNECTED
+        assert monitor.trading_permitted is True
+        (restored,) = _events(captured, "connection.restored")
+        assert restored["downtime_seconds"] == 30.0
+        assert restored["reconnect_seconds"] == 0.0
+        assert monitor.downtime_seconds is None
+
+    @pytest.mark.unit
+    def test_a_real_disconnect_while_withheld_is_a_new_outage_and_is_narrated(self):
+        """Code review P1 (changed deliberately; was ``..._is_a_loss_on_the_same_anchor``,
+        which pinned a silent loss). A socket that drops during a withhold is
+        an outage of its own: logged ``connection.lost``, and measured — the
+        downtime, the reconnect time and the halt clock — from the drop, so
+        NFR4's reconnection time never includes the withheld time before it
+        (that time is the withheld period's, recorded by the reconciler)."""
+        clock = FakeClock()
+        monitor = _connected(clock)
+        monitor.withhold_for_reconciliation()
+        clock.advance(10.0)
+
+        with capture_logs() as captured:
+            monitor.observe(DOWN)
+
+        assert monitor.state is ConnectionState.LOST
+        assert monitor.downtime_seconds == 0.0
+        (lost,) = _events(captured, "connection.lost")
+        assert lost["detail"] == DOWN.detail
+
+        clock.advance(5.0)
+        monitor.observe(UP)
+        assert monitor.reconnect_seconds == 5.0
+
+    @pytest.mark.unit
+    def test_a_real_disconnect_after_a_withheld_halt_can_halt_again(self):
+        """The withhold's halt latched; the real outage's own window re-arms it."""
+        clock = FakeClock()
+        monitor = _connected(clock, window=60.0)
+        monitor.withhold_for_reconciliation()
+        clock.advance(61.0)
+        monitor.observe(UP)  # the withhold outlives the window: halted, once
+        clock.advance(30.0)
+        monitor.observe(UP)  # back to RECOVERING, socket up
+
+        with capture_logs() as captured:
+            monitor.observe(DOWN)
+            clock.advance(61.0)
+            monitor.observe(DOWN)
+
+        assert len(_events(captured, "connection.lost")) == 1
+        assert len(_events(captured, "connection.halted")) == 1
+        assert monitor.state is ConnectionState.HALTED
+
+    @pytest.mark.unit
+    def test_a_real_disconnect_while_a_withhold_stands_halted_is_narrated(self):
+        """PR #36 review DN2 (PO ruling: extend P1 to HALTED). A withhold that
+        outlived the window is ``HALTED`` with the socket up; a drop then is the
+        real outage's start — logged, and measured from the drop — while the
+        halt, already reported, stays as it is and is not reported again."""
+        clock = FakeClock()
+        monitor = _connected(clock, window=60.0)
+        monitor.withhold_for_reconciliation()
+        clock.advance(61.0)
+        monitor.observe(UP)
+        assert monitor.state is ConnectionState.HALTED
+        clock.advance(10.0)
+
+        with capture_logs() as captured:
+            monitor.observe(DOWN)
+            clock.advance(3.0)
+            monitor.observe(DOWN)  # a flap inside the same outage: once only
+
+        assert monitor.state is ConnectionState.HALTED
+        (lost,) = _events(captured, "connection.lost")
+        assert lost["detail"] == DOWN.detail
+        assert monitor.downtime_seconds == 3.0
+        assert _events(captured, "connection.halted") == []
+
+        clock.advance(2.0)
+        monitor.observe(UP)
+        assert monitor.state is ConnectionState.RECOVERING
+        assert monitor.reconnect_seconds == 5.0
+        assert monitor.trading_permitted is False
+
+    @pytest.mark.unit
+    def test_an_ordinary_loss_after_a_regranted_withhold_is_unchanged(self):
+        """The re-grant clears the mark: a later outage is an ordinary one."""
+        clock = FakeClock()
+        monitor = _connected(clock)
+        monitor.withhold_for_reconciliation()
+        monitor.confirm_state_reestablished(UP)
+        clock.advance(100.0)
+
+        with capture_logs() as captured:
+            monitor.observe(DOWN)
+            clock.advance(10.0)
+            monitor.observe(DOWN)
+
+        assert len(_events(captured, "connection.lost")) == 1
+        assert monitor.downtime_seconds == 10.0
+
+    @pytest.mark.unit
+    def test_past_the_window_the_halt_fires_once_and_recovering_returns(self):
+        clock = FakeClock()
+        monitor = _connected(clock, window=60.0)
+        monitor.withhold_for_reconciliation()
+
+        with capture_logs() as captured:
+            clock.advance(61.0)
+            monitor.observe(UP)
+            halted = monitor.state
+            clock.advance(30.0)
+            monitor.observe(UP)
+
+        assert halted is ConnectionState.HALTED
+        assert monitor.state is ConnectionState.RECOVERING
+        assert len(_events(captured, "connection.halted")) == 1
+        assert monitor.trading_permitted is False
+
+    @pytest.mark.unit
+    def test_it_logs_nothing_and_never_raises(self):
+        clock = FakeClock()
+        monitor = _connected(clock)
+
+        with capture_logs() as captured:
+            monitor.withhold_for_reconciliation()
+            monitor.withhold_for_reconciliation()
+
+        assert captured == []
+        assert monitor.state is ConnectionState.RECOVERING
+
+    @pytest.mark.unit
+    def test_a_withheld_session_is_never_granted_by_an_observation_alone(self):
+        clock = FakeClock()
+        monitor = _connected(clock)
+        monitor.withhold_for_reconciliation()
+
+        for _ in range(5):
+            clock.advance(10.0)
+            monitor.observe(UP)
+
+        assert monitor.state is ConnectionState.RECOVERING
+        assert monitor.trading_permitted is False
+
+
 class TestModulePurity:
     """The monitor stays framework-free — that is what keeps it unit-tier."""
 

@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from src.core import live_reconcile
 from src.models.broker_state import BrokerPosition, BrokerState, CashBalance
 from src.models.reconciliation import SessionView, ViewPosition
 from src.services import reconciliation_service
@@ -59,6 +60,62 @@ RECORDED = datetime(2026, 9, 26, 20, 0, 1, 250000, tzinfo=UTC)
 
 def _compare(broker: BrokerState, local: SessionView):
     return compare(broker, local, session_name="swing-1", elapsed_ms=42.0)
+
+
+class TestAFractionalRemainderStaysADiscrepancy:
+    """Story 5.7, AC #5 (FR36): the running session judges a DRIP's ``+22.5``
+    at whole shares and names the remainder; ``live reconcile`` does not — it
+    stays exact, so the half share is a discrepancy line (and exit 5)."""
+
+    def test_a_half_share_beyond_the_sessions_whole_shares_is_a_discrepancy(self):
+        report = _compare(_broker(_bp("NVDA.NASDAQ", "22.5")), _local(("NVDA.NASDAQ", "22")))
+
+        assert report.is_clean is False
+        [line] = report.discrepancies
+        assert (line.local_quantity, line.broker_quantity, line.difference) == (
+            Decimal("22"),
+            Decimal("22.5"),
+            Decimal("0.5"),
+        )
+        # Task 4.1 (code review P6): the exit code the operator sees is 5.
+        assert live_reconcile.exit_code_for(report) == 5
+
+    def test_a_half_share_alone_is_a_discrepancy(self):
+        report = _compare(_broker(_bp("AAPL.NASDAQ", "0.5")), _local())
+
+        [line] = report.discrepancies
+        assert line.difference == Decimal("0.5")
+
+    def test_it_is_rendered_as_a_discrepancy_line(self):
+        report = _compare(_broker(_bp("NVDA.NASDAQ", "22.5")), _local(("NVDA.NASDAQ", "22")))
+
+        lines = render_report(report)
+
+        assert any(
+            line.startswith("position NVDA.NASDAQ session=+22 broker=+22.5")
+            and line.endswith("difference=+0.5 DISCREPANCY")
+            for line in lines
+        )
+        assert lines[-1].startswith("RESULT: discrepancy — positions=1 cash=0")
+
+    def test_the_comparison_never_reaches_the_expressible_precision(self):
+        """Structural, not incidental: the service has no path to the live
+        phases' judgement (Story 5.7, D-D)."""
+        source = Path(reconciliation_service.__file__).read_text(encoding="utf-8")
+        names = {
+            node.id if isinstance(node, ast.Name) else node.attr
+            for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.Name | ast.Attribute)
+        }
+        imported = {
+            alias.name
+            for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.ImportFrom)
+            for alias in node.names
+        }
+
+        forbidden = {"at_expressible_precision", "expressible_quantity", "expressible_broker"}
+        assert not (names | imported) & forbidden
 
 
 class TestPositions:

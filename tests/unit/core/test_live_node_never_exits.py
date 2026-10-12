@@ -104,6 +104,12 @@ NODE_FACING_MODULES = (
     # `ReconciliationFailedError` that the runner's `finally` must receive —
     # raising is fine here, exiting never is. Added in the creating commit.
     "src/core/live_runtime_reconcile.py",
+    # Story 4.8. Called from the runtime reconciler's cycle on every second
+    # heartbeat tick: it asks the node's IB client for its open orders and
+    # hands the exec engine a `CANCELED` report on the node's loop. Every
+    # failure is contained and logged — it never raises, and never exits.
+    # Added in the creating commit.
+    "src/core/live_stranded_orders.py",
     # Story 4.3. Runs inside `node.build()` (the exec-client factory, beside
     # `live_exec_avg_px.py`) and then inside the adapter's position-update task
     # for the whole session. Added in the creating commit.
@@ -136,13 +142,15 @@ NODE_FACING_MODULES = (
 #: exit through the same ``EXIT_CODES``-derived ``SystemExit`` `live_start.py`
 #: does, for the same reason. ``live_reconcile.py`` (Story 4.6) joined at
 #: creation for the same reason again: `reconcile` exits 0/5, or through
-#: ``EXIT_CODES`` on a failure.
+#: ``EXIT_CODES`` on a failure. ``live_seal.py`` (Story 5.3) joined at creation
+#: too: `seal` exits 0, or 1 through ``EXIT_CODES`` on a refusal or failure.
 EXEMPT_MODULES = (
     "src/core/live_session_signals.py",
     "src/cli/commands/live.py",
     "src/cli/commands/live_start.py",
     "src/cli/commands/live_status.py",
     "src/cli/commands/live_reconcile.py",
+    "src/cli/commands/live_seal.py",
 )
 
 

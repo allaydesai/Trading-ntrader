@@ -40,9 +40,12 @@ from src.core.live_runtime_reconcile import (
 )
 from src.core.live_startup_reconcile import (
     DISCREPANCY_EVENT,
+    INEXPRESSIBLE_REMAINDER_EVENT,
+    OK_EVENT,
     ReconciliationFailedError,
     ReconciliationFailure,
 )
+from src.core.live_stranded_orders import CLEARED_EVENT, BrokerOpenOrders
 from tests.component.core.test_live_node_builder import _settings as _ibkr_settings
 from tests.component.core.test_live_startup_reconcile_engine import (
     AAPL,
@@ -232,13 +235,17 @@ class _Clock:
         return self.now
 
 
-def _reconciler(h: _Harness, state) -> tuple[RuntimeReconciler, _Clock]:
+def _reconciler(h: _Harness, state, *listed: str) -> tuple[RuntimeReconciler, _Clock]:
+    """``listed``: the client order ids IBKR lists open (Story 4.8's read)."""
     clock = _Clock()
     monitor = ConnectionMonitor(session_id="s-1", time_source=clock)
     monitor.confirm_state_reestablished(UP)
 
     async def _read(node, *, log):
         return state
+
+    async def _open_orders(node):
+        return BrokerOpenOrders(frozenset(listed), frozenset())
 
     return (
         RuntimeReconciler(
@@ -249,6 +256,7 @@ def _reconciler(h: _Harness, state) -> tuple[RuntimeReconciler, _Clock]:
             settings=object(),
             read_state=_read,
             clock=clock,
+            read_open_orders=_open_orders,
         ),
         clock,
     )
@@ -316,6 +324,107 @@ class TestRuntimeCorrectionsAreBrokerWard:
 
         assert caught.value.reason is ReconciliationFailure.STRATEGY_POSITION_CONTRADICTED
         assert h.open_positions() == {str(STRATEGY): Decimal(22)}
+
+
+class TestAFractionalRemainderWhileRunning:
+    """Story 5.7, AC #4 against the real engine and cache: judged at whole
+    shares, never sent to the engine, named once."""
+
+    @staticmethod
+    def _spy(h: _Harness) -> list:
+        sent: list = []
+        apply = h.engine.reconcile_execution_report
+        h.engine.reconcile_execution_report = lambda report: sent.append(report) or apply(report)
+        return sent
+
+    def test_the_spy_records_a_report_that_is_sent(self, harness):
+        """The sibling that makes ``sent == []`` below able to fail."""
+        h = harness()
+        h.seed(NVDA, 22)
+        reconciler, clock = _reconciler(h, _state((NVDA.id, "23.5", "100")))
+        sent = self._spy(h)
+
+        _cycles(h, reconciler, clock, 2)
+
+        (report,) = sent
+        assert report.quantity.as_decimal() == Decimal(23), "whole shares, truncated"
+
+    def test_a_drip_half_share_beside_the_strategys_shares_writes_nothing(self, harness):
+        h = harness()
+        h.seed(NVDA, 22)
+        reconciler, clock = _reconciler(h, _state((NVDA.id, "22.5", "100")))
+        sent = self._spy(h)
+
+        with capture_logs() as logs:
+            _cycles(h, reconciler, clock, 4)
+
+        assert sent == []
+        assert h.open_positions() == {str(STRATEGY): Decimal(22)}
+        assert not [e for e in logs if e["event"] == DISCREPANCY_EVENT]
+        assert len([e for e in logs if e["event"] == INEXPRESSIBLE_REMAINDER_EVENT]) == 1
+        (ok,) = [e for e in logs if e["event"] == OK_EVENT]
+        assert ok["inexpressible_remainders"] == {str(NVDA.id): "0.5"}
+
+    def test_the_frameworks_over_import_is_corrected_down_and_verifies(self, harness):
+        """F3's leftover at runtime: the correction re-verifies against the
+        whole-share view, not the exact read, so the session keeps running."""
+        h = harness()
+        h.seed(NVDA, 22)
+        h.seed(NVDA, 1, StrategyId("INTERNAL-DIFF"))
+        reconciler, clock = _reconciler(h, _state((NVDA.id, "22.5", "100")))
+
+        _cycles(h, reconciler, clock, 2)
+
+        assert h.net(NVDA) == 22
+        assert h.open_positions() == {str(STRATEGY): Decimal(22)}
+
+
+class TestAStrandedOrderIsClearedByTheRunningSession:
+    """Story 4.8, AC #1 end to end: the runtime cycle, the real engine and cache."""
+
+    def test_an_order_ibkr_no_longer_lists_is_canceled_after_two_cycles(self, harness):
+        h = harness()
+        _working_order(h, AAPL, "O-STRANDED-1")
+        reconciler, clock = _reconciler(h, _state())
+
+        _cycles(h, reconciler, clock, 1)
+        assert h.cache.order(ClientOrderId("O-STRANDED-1")).status_string() == "ACCEPTED"
+        with capture_logs() as logs:
+            _cycles(h, reconciler, clock, 1)
+
+        assert h.cache.order(ClientOrderId("O-STRANDED-1")).status_string() == "CANCELED"
+        assert [e["event"] for e in logs if e["event"] == CLEARED_EVENT] == [CLEARED_EVENT]
+        assert h.cache.positions_open() == []
+
+    def test_an_order_ibkr_still_lists_is_left_open(self, harness):
+        h = harness()
+        _working_order(h, AAPL, "O-LIVE-1")
+        reconciler, clock = _reconciler(h, _state(), "O-LIVE-1")
+
+        _cycles(h, reconciler, clock, 4)
+
+        assert h.cache.order(ClientOrderId("O-LIVE-1")).status_string() == "ACCEPTED"
+
+    def test_filled_while_away_the_position_is_corrected_first_then_the_order_cleared(
+        self, harness
+    ):
+        """Task 1.1's case: IBKR holds the 10 the stranded order bought. The
+        position row is corrected broker-ward (cycle 2) while the order waits
+        (AC #5); the order is first seen absent on the first clean cycle (3)
+        and cleared on the next (4) — ``CANCELED``, never a fabricated fill (D-C)."""
+        h = harness()
+        _working_order(h, AAPL, "O-STRANDED-2")
+        reconciler, clock = _reconciler(h, _state((AAPL.id, "10", "90.00")))
+
+        _cycles(h, reconciler, clock, 3)
+        assert h.cache.order(ClientOrderId("O-STRANDED-2")).status_string() == "ACCEPTED"
+        assert h.open_positions() == {"INTERNAL-DIFF": Decimal(10)}
+        _cycles(h, reconciler, clock, 1)
+
+        order = h.cache.order(ClientOrderId("O-STRANDED-2"))
+        assert order.status_string() == "CANCELED"
+        assert order.filled_qty == Quantity.from_int(0)
+        assert h.open_positions() == {"INTERNAL-DIFF": Decimal(10)}
 
 
 class TestTheOnlyEngineMutationIsTheFrameworksOwnEntryPoint:

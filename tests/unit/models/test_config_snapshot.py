@@ -1,9 +1,13 @@
 """Unit tests for StrategyConfigSnapshot Pydantic model."""
 
+import json
+from unittest.mock import MagicMock
+
 import pytest
 from pydantic import ValidationError
 
 from src.models.config_snapshot import StrategyConfigSnapshot
+from src.services.backtest_persistence import BacktestPersistenceService
 
 
 class TestStrategyConfigSnapshot:
@@ -93,3 +97,73 @@ def test_fill_seed_survives_validation():
     snapshot = StrategyConfigSnapshot(strategy_path="a.b:C", config_path="a.b:D", fill_seed=42)
     assert snapshot.model_dump()["fill_seed"] == 42
     assert StrategyConfigSnapshot(strategy_path="a.b:C", config_path="a.b:D").fill_seed is None
+
+
+#: The two snapshot shapes the backtest paths pass to ``BacktestPersistenceService``
+#: (``backtest_orchestrator.py:522-537``, ``backtest_runner.py:112-125``) — both
+#: carry an ``equity_curve`` the validator has always stripped (Story 5.2 F3).
+ORCHESTRATOR_SNAPSHOT = {
+    "strategy_path": "src.core.strategies.sma_crossover.SMACrossover",
+    "config_path": "config/x.yaml",
+    "version": "1.0",
+    "config": {"fast_period": 10, "nested": {"a": 1.5}},
+    "bar_type": "AAPL.NASDAQ-1-DAY-LAST-EXTERNAL",
+    "equity_curve": [{"time": 1, "value": 2.0}],
+    "config_file_path": "/tmp/x.yaml",
+}
+RUNNER_SNAPSHOT = {
+    "strategy_path": "src.core.strategies.sma_crossover",
+    "config_path": "runtime_config",
+    "version": "1.0",
+    "config": {"fast_period": 10},
+    "equity_curve": [{"time": 1, "value": 2.0}],
+}
+#: ``json.dumps(validated)`` of each, captured from the code at ``cea1daf`` —
+#: before ``session_conditions`` existed (Story 5.2, Task 1.4). Key order included.
+#: Merging 015-paper-trading into the MCP branch (PO ruling, 2026-10-11) appended the
+#: MCP's two backtest fields, ``metrics_basis`` and ``fill_seed``: they belong to
+#: every backtest row; ``session_conditions`` must still never appear in one.
+BEFORE_SESSION_CONDITIONS = {
+    "orchestrator": (
+        '{"strategy_path": "src.core.strategies.sma_crossover.SMACrossover", '
+        '"config_path": "config/x.yaml", "version": "1.0", '
+        '"config": {"fast_period": 10, "nested": {"a": 1.5}}, '
+        '"bar_type": "AAPL.NASDAQ-1-DAY-LAST-EXTERNAL", "metrics_basis": null, "fill_seed": null}'
+    ),
+    "runner": (
+        '{"strategy_path": "src.core.strategies.sma_crossover", '
+        '"config_path": "runtime_config", "version": "1.0", '
+        '"config": {"fast_period": 10}, "bar_type": null, "metrics_basis": null, '
+        '"fill_seed": null}'
+    ),
+}
+
+
+class TestSessionConditions:
+    """Story 5.2, PO ruling R2a: one optional ``session_conditions`` mapping,
+    dropped when empty, so every backtest row stays byte-identical."""
+
+    @staticmethod
+    def _validated(snapshot: dict) -> dict:
+        return BacktestPersistenceService(MagicMock())._validate_config_snapshot(snapshot)
+
+    @pytest.mark.parametrize(
+        ("shape", "snapshot"),
+        [("orchestrator", ORCHESTRATOR_SNAPSHOT), ("runner", RUNNER_SNAPSHOT)],
+    )
+    def test_a_backtest_snapshot_validates_byte_identical_to_before(self, shape, snapshot):
+        assert json.dumps(self._validated(dict(snapshot))) == BEFORE_SESSION_CONDITIONS[shape]
+
+    def test_a_sealed_sessions_conditions_survive_validation_intact(self):
+        conditions = {"equity_series": {"granularity": "closed_trade", "curve": [{"time": 1}]}}
+        validated = self._validated({**RUNNER_SNAPSHOT, "session_conditions": conditions})
+        assert validated["session_conditions"] == conditions
+        assert "equity_curve" not in validated
+
+    @pytest.mark.parametrize("empty", [None, {}])
+    def test_empty_session_conditions_are_dropped(self, empty):
+        snapshot = StrategyConfigSnapshot(
+            strategy_path="a", config_path="b", session_conditions=empty
+        )
+        assert "session_conditions" not in snapshot.model_dump()
+        assert "session_conditions" not in json.loads(snapshot.model_dump_json())

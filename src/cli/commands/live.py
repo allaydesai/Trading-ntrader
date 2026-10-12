@@ -37,6 +37,7 @@ from rich.markup import escape
 from sqlalchemy.exc import SQLAlchemyError
 
 from src.cli.commands.live_reconcile import reconcile
+from src.cli.commands.live_seal import seal
 from src.cli.commands.live_start import (
     build_session_ports,
     claim_session,
@@ -91,6 +92,7 @@ def live() -> None:
 live.add_command(status)
 live.add_command(list_sessions)
 live.add_command(reconcile)
+live.add_command(seal)
 
 
 def _validate_strategy(ctx: click.Context, param: click.Parameter, value: str) -> str:
@@ -378,8 +380,11 @@ def start(session: str, connect_timeout: float) -> None:
     subscribes to live bars. While running, the session re-checks its
     positions against IBKR every minute and corrects a disagreement seen
     twice broker-ward (`reconcile.discrepancy`); a strategy position the broker
-    no longer covers stops the session, positions untouched. After a
-    disconnect, no order is sent until a clean check re-establishes state.
+    no longer covers stops the session, positions untouched. An order the
+    cache still shows open that IBKR no longer lists, checked twice a minute
+    apart, is reconciled CANCELED (`reconcile.stale_order_cleared`) — never
+    an invented fill. After a disconnect, no order is sent until a clean
+    check re-establishes state.
 
     \b
     Exit codes:

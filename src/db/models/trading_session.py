@@ -50,9 +50,11 @@ class TradingSession(Base, TimestampMixin):
         runtime_flags: Facts about *this* process run that outlive it, or None
             (Story 2.7): the strategies contained during the run, and whether
             all of them were. Versioned (``{"v": 1, ...}``) so a later story can
-            add a key without guessing. Written only by
-            ``session_service._record_strategy_failure``; cleared on every
-            ``-> running`` transition.
+            add a key without guessing. Written only by ``session_service``'s
+            ``_record_*`` functions; cleared on every ``-> running`` transition
+            except for ``reconcile_withheld`` (Story 5.8), the session-lifetime
+            history of periods trading was withheld, which that edge carries
+            forward so a seal can record every run's.
         owner_epoch: The fencing token for every write through
             ``SessionRecordPort`` and the trade sink (Story 3.6, retrospective
             D1). Incremented on every ``-> running`` edge (claim *and*
@@ -120,7 +122,8 @@ class TradingSession(Base, TimestampMixin):
     # `session_service._record_strategy_failure`, the only writer.
     #
     # Cleared to NULL on every `-> running` transition, so a failure from a
-    # previous process run is never reported against the current one.
+    # previous process run is never reported against the current one — except
+    # `reconcile_withheld` (Story 5.8, PO ruling Q1), which that edge carries.
     runtime_flags: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
 
     # Story 3.6 (retrospective D1). NOT NULL DEFAULT 0 rather than nullable:

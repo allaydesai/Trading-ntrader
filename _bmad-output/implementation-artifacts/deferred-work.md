@@ -2627,7 +2627,9 @@ at 200s with zero orders), `logs/p10-fresh-leg1-*.log` and `logs/p10-fresh-leg2-
   a profitable SHORT trade's `profit_pct` reads negative. `aggregate_closed_position` reproduces it
   verbatim (Hazard #6) rather than fixing one side alone, which would make the two sides
   incomparable. **Owner: Story 5.6**, the comparison views — both sides must change together, if
-  at all.
+  at all. → **Dispositioned by Story 5.6 (2026-10-11): a disposition, not a fix** — both
+  production formulas pinned equal on a real SHORT (`tests/component/services/
+  test_profit_pct_parity.py`); see "Deferred from: story-5.6".
 - **NETTING `PositionId` reuse and `trade_key`.** Fact 3, measured by this story's Task 1.3: one
   `PositionId` (`{instrument_id}-{strategy_id}`) hosts every successive round trip on an
   instrument+strategy under NETTING, so `TradeBase.trade_id` (`str(position_id)`, kept for backtest
@@ -2734,7 +2736,8 @@ at 200s with zero orders), `logs/p10-fresh-leg1-*.log` and `logs/p10-fresh-leg2-
   results without an epic-level decision) and not urgent within Epic 3 (today's sessions run one
   strategy). Becomes load-bearing once Epic 5 builds the paper-vs-backtest comparison across a
   session that ran more than one strategy. **Owner: Epic 5's comparison stories** — named as
-  unowned-within-Epic-3, not labelled low priority.
+  unowned-within-Epic-3, not labelled low priority. → **Dispositioned by Story 5.6 (2026-10-11):
+  a disposition, not a fix** — see "Deferred from: story-5.6".
 - **`_bmad-output/project-context.md`'s "4 migration versions" is stale**, and has been since
   Phase 2 (the phase now has 17 migrations, single head `85c949ac0374`). Not this story's file to
   correct (Task 2.4) — **owner: whoever next edits that document for an unrelated reason**, named
@@ -3561,20 +3564,26 @@ Story 4.5 (resume a strategy mid-position). Every item routed to 4.5 by Stories 
   *(Superseded in part at the integration merge with Story 4.7, 2026-09-28 — see that section
   below: 4.7's coverage rule made single-side covered growth an ordinary row at runtime too, so the
   pin now covers only the mixed-sides shape.)*
-- **Any unresolvable (`IB-CONID-*`) broker position refuses every start (4.2 review, :3399).** →
+- ~~**Any unresolvable (`IB-CONID-*`) broker position refuses every start (4.2 review, :3399).**~~ →
   **Kept (D-G).** An unresolved row cannot be tied to, or excluded from, any strategy's instrument;
   refusing is the only reading that cannot trade blind. Owner for a narrower rule: unowned, named
-  — whoever first meets an unresolvable holding live.
+  — whoever first meets an unresolvable holding live. — **SUPERSEDED by Story 5.7 (2026-10-07,
+  PO ruling D2 of PR #35):** only a row whose symbol a cached position is held under still refuses;
+  any other is named once and left out.
 - **A holding no strategy owns on a traded instrument (new, D-C, PO ruling B).** The strategy on
   that instrument is refused (`strategy.resume_refused`, contained, siblings start, fail closed if
   none can); the holding is never traded or adjusted. **Consequence:** P18b's hand-bought share, or
   the paper account's old `AAPL +4`, blocks that instrument's strategy until removed by hand in TWS
   (P18's "Know before starting" note records it).
-- **The stranded `ACCEPTED` order and the `p7-position-test` stall (4.3, :3449).** → **Carried
+- ~~**The stranded `ACCEPTED` order and the `p7-position-test` stall (4.3, :3449).**~~ —
+  **Order-record half RESOLVED by Story 4.8 (2026-10-06); stall half still open** — see "Deferred
+  from: story-4.8" below. Original entry: → **Carried
   forward, still conditional:** neither P17b nor P18 has been run, so the live stall has never been
   reproduced. Owner unchanged: the first operator run of P17b/P18/P19b that reproduces it.
-- **An `ACCEPTED` order filled while disconnected, corrected as `INTERNAL-DIFF` (4.3 review,
-  :3492).** → **Next start: governed by D-C** (the unowned `INTERNAL-DIFF` refuses that strategy,
+- ~~**An `ACCEPTED` order filled while disconnected, corrected as `INTERNAL-DIFF` (4.3 review,
+  :3492).**~~ — **Order record RESOLVED by Story 4.8 (2026-10-06), per PO ruling D-C (A)**: the
+  order now clears `CANCELED` mid-run; re-attributing the fill to the strategy stays refused — see
+  "Deferred from: story-4.8" below. Original entry: → **Next start: governed by D-C** (the unowned `INTERNAL-DIFF` refuses that strategy,
   loudly). **Mid-run: not fixed** — re-attributing a synthetic position to a strategy needs cache
   surgery, which Story 4.2's PO ruling rejected. The strategy keeps running flat beside it until
   the next start. **Owner: Epic 4 retrospective.**
@@ -3733,8 +3742,8 @@ it landed.
 | | Ruling | Landed |
 |---|---|---|
 | **D1** | Symbol-scoped **and** bounded hold-back: an unresolved `IB-CONID-*` row holds back only the cache row with the same symbol (`PositionDiscrepancy.broker_symbol` / `symbol_key`, IB's `BRK B` matching Nautilus's `BRK-B`), for at most `HOLD_BACK_CYCLES` (3) consecutive cycles; past that `reconcile.hold_back_expired` is logged once and the row is acted on — a contradiction underneath is refused, fail closed. | This PR (`live_runtime_reconcile._HoldBack`; unit tests for the unrelated-symbol refusal, the bound, the restart and the spelling) |
-| **D2** | Same-symbol rule everywhere, name the rest: an unresolved row matters only to a same-symbol cached row at startup and for the reconnect grant too; a fractional remainder below the size increment is named once and clean at the expressible precision in the session, while `live reconcile` stays exact (exit 5). | **Epic 5, Story 5.7** (`epics.md`, `sprint-status.yaml`) |
-| **D3** | Withhold after 3, drift stops: three consecutive failed cycles move the monitor to `RECOVERING` (orders withheld) with one ERROR, re-granted by the next clean cycle; a `BrokerStateAdapterError` stops the session on first occurrence, as startup treats drift; the withheld period is recorded in `session_conditions`. | **Epic 5, Story 5.8** |
+| **D2** | Same-symbol rule everywhere, name the rest: an unresolved row matters only to a same-symbol cached row at startup and for the reconnect grant too; a fractional remainder below the size increment is named once and clean at the expressible precision in the session, while `live reconcile` stays exact (exit 5). | **Epic 5, Story 5.7** (`epics.md`, `sprint-status.yaml`) — ✅ **landed 2026-10-07** (see "Deferred from: story-5.7" below) |
+| **D3** | Withhold after 3, drift stops: three consecutive failed cycles move the monitor to `RECOVERING` (orders withheld) with one ERROR, re-granted by the next clean cycle; a `BrokerStateAdapterError` stops the session on first occurrence, as startup treats drift; the withheld period is recorded in `session_conditions`. | **Epic 5, Story 5.8** — ✅ **landed 2026-10-11** (see "Deferred from: story-5.8" below) |
 | **D4** | A non-synthetic strategy id the session's spec does not resolve to is unowned: `split_by_owner(..., session_strategy_ids=)` with the ids from `live_session_node.session_strategy_ids`; the strategy that resolves to the new id is refused through the existing `strategy.resume_refused reason=unowned_position` path. `LiveSessionRunner` 416 → 417, disclosed. | This PR |
 | **D5a** | Covered growth resumes beside the excess: when the strategy's own position is non-zero and the unowned part is on the same side, D-C does not refuse — `strategy.resumed_beside_excess` names both, the strategy manages its own lot, the excess stays `INTERNAL-DIFF` and is never traded. Flat-beside-unowned, opposite side and **mixed sides** (`strategies_on_both_sides`) are still refused. Supersedes the two "Owner: the PO" items in the 4.5/4.7 integration-merge section above. Docs: nautilus.md, README, `live start` help, P18/P19c/P20. | This PR |
 | **D5b** | The startup/runtime asymmetry on mixed-sides rows is confirmed (per-strategy containment exists at startup, none at runtime); the visibility gap is closed — the row `_to_act_on` exempts is logged `reconcile.discrepancy resolution=covered` (WARNING) from the reconcile phase. | This PR |
@@ -3759,7 +3768,8 @@ it landed.
   rounds silently to 22, verified against the wheel); and while an unresolved row exists the
   reconnect grant is never issued, so after any disconnect orders are withheld for the rest of the
   session. Needs one ruling covering startup, runtime and reconnect. **Owner: the PO**; suggested
-  routing: Epic 5 planning, beside the `owner_epoch` debt.
+  routing: Epic 5 planning, beside the `owner_epoch` debt. — **RESOLVED by Story 5.7
+  (2026-10-07)**, per the ruling in the table above.
 - **D3 [MEDIUM] A persistent runtime cycle failure is only an hourly warning.**
   `RuntimeReconciler._run` turns every non-`ReconciliationFailedError` — including
   `BrokerStateAdapterError` for the real account condition "two IB contracts resolve to one
@@ -3767,7 +3777,8 @@ it landed.
   reports switched off (4.3, ruling 1A), the session then trades for its whole life with no runtime
   alignment and, after a disconnect, no reconnect grant. `_FailureStreak.count` exists but nothing
   acts on it. Should a streak beyond N withdraw permission or stop the session? **Owner: the PO**;
-  suggested routing: Epic 5 planning.
+  suggested routing: Epic 5 planning. — **RESOLVED by Story 5.8 (2026-10-11)**, per the ruling in
+  the table above.
 - **D4 [MEDIUM] The ownership predicate treats any non-synthetic `strategy_id` as owned.**
   `split_by_owner` and `ResumeCheck.refuse_unowned` refuse only when the synthetic net is non-zero.
   A cached position under an id no spec entry resolves to (e.g. `SMACrossover-000` left by a
@@ -3833,3 +3844,784 @@ it landed.
   the 30 s budget); `SessionView.cash_known` has no caller in `src/`; budget exhaustion in
   `live reconcile` is reported as exit 4 "broker unreachable". **Owner:** whoever next touches
   `live_session_view.py` / `live_reconcile.py`.
+
+## Deferred from: story-4.8 (2026-10-06)
+
+- **The stranded `ACCEPTED` order (carried from 4.2 → 4.3 → 4.5 → the Epic 4 retro).** →
+  **Order-record half FIXED.** `src/core/live_stranded_orders.py`, on every runtime cycle: a
+  cached open order (not in flight, with a venue order id) that IBKR's own `get_open_orders`
+  answer omits on two conclusive reads ≥ 60 s apart is reconciled `CANCELED` through
+  `reconcile_execution_report`. `reconcile.ok`'s `open_orders` count is now true to the broker
+  within about two runtime cycles of the session first seeing the order gone (~2–3 minutes after
+  start for an order cancelled while away; ~4–5 for one filled while away, whose position
+  correction comes first).
+- **The `p7-position-test` stall inside `node:connect`.** → **Still unconfirmed, not fixed.** It
+  happens before any code of ours runs (F13). Story 4.8 Task 1.4 re-ran Story 4.3 Task 1.5's
+  component-tier probe: the native pass returns `True` at once and portfolio initialisation
+  completes, so it is still not reproduced. A namespace poisoned *before* 4.8 heals only once a
+  session runs past the debounce. If restarts into it stall before then, 4.8 does not help it.
+  **Owner unchanged:** the first operator run of P17b/P18/P19b/P21 (P21c) that reproduces it.
+- **"An `ACCEPTED` order filled while disconnected … mid-run: not fixed" (4.3 review → 4.5).** →
+  **Closed per PO ruling D-C (A).** The order clears `CANCELED`, never a fabricated `FILLED`, and
+  `reconcile.stale_order_cleared` says the outcome could not be determined. The holding is carried
+  by the position cycle's `INTERNAL-DIFF`. **Accepted residual:** the strategy still does not learn
+  that its order filled, and the order history reads "cancelled" for a fill. Re-attribution stays
+  refused (Story 4.2's PO ruling). The next start's resume check names the unowned holding.
+- **D-D amended (PO ruling, 2026-10-06, Task 1 gate).** `generate_order_status_reports` returns
+  `[]` on a flat account without asking for open orders, and on a timed-out positions read. It
+  was replaced by a read of the adapter's own `OpenOrders` request future. A canary
+  (`test_generate_order_status_reports_never_asks_a_flat_account_for_orders`) goes red by name if
+  an upgrade changes this. **Residual, accepted:** the read relies on `reqOpenOrders`'s client-id
+  scoping (F18), so an order placed under a different `ibkr_live_client_id` than the one running
+  now is not listed and would be cleared. **Owner:** whoever changes `IBKR_LIVE_CLIENT_ID` for an
+  existing session (do not, with resting orders open). **The Gateway-restart case is not
+  residual (code review ruling D1, 2026-10-06):** whether `reqOpenOrders` still lists an order
+  across a Gateway restart is unmeasured, and P21d is a pass condition before 4.8 is `done`. If
+  P21d fails, the guard is a client id recorded at first start (`Inconclusive` on mismatch).
+- **Inconclusive reads are silent after the first.** `reconcile.stale_order_check_failed` logs
+  once per streak, and a streak that never ends (e.g. an adapter drift that always raises) is not
+  re-logged hourly the way `reconcile.cycle_failed` is. **Owner:** the first operator who sees one
+  in a transcript and wants the reminder.
+
+- **"`LIVE_MODULE_GLOBS` still scans it for every forbidden order method" is false (found by
+  mutation, Story 4.8 Task 6.2).** An unreachable `node.trader.cancel_order(...)` planted in
+  `live_stranded_orders.py` passed every unit and component test (4458). `LIVE_MODULE_GLOBS`
+  drives the dependency-invariance and no-retry scans, not a `FORBIDDEN_ORDER_METHODS` scan, and
+  `_engine_method_calls` follows only the exec engine. 4.8's module now carries its own scan
+  (`TestNoOrderMethodIsCalled`). The same false sentence still stands in
+  `test_live_stop_path_is_inert.py`'s comments for `live_startup_reconcile.py`,
+  `live_runtime_reconcile.py` and `live_session_resume.py`, none of which is scanned for these
+  names. **Owner:** Epic 5 pre-work. The fix is a globbed scan over `src/core/live_*.py` with an
+  explicit, reasoned allowlist for the order path's legitimate `submit_order`.
+
+## Deferred from: code review of 4-8-clear-a-stranded-order-after-a-broker-confirmed-fill-or-cancel (2026-10-06)
+
+- ~~**AC #5's skip set omits the "unresolvable" rows.**~~ `RuntimeReconciler._act` returns
+  `outstanding` without `inert = set(unresolvable)` — the framework-inexpressible rows
+  (`position_report` returned `None`, instrument not in the cache) — so the stale-order check does
+  not skip such an instrument the cycle its row is logged unresolved. No harmful path: the engine
+  refuses the `CANCELED` report for an instrument it cannot look up (`returned_false`,
+  `reconcile.stale_order_clear_failed`). A literal gap in the AC, untested either way.
+  **Owner:** whoever next touches `_act`'s return value. — **RESOLVED by Story 5.7 (2026-10-07,
+  D-H)**, which widened that return: the skip set is now every observed row's instrument (standing
+  or inert) plus the deferred ones, pinned by
+  `test_an_instrument_whose_row_is_inert_is_skipped_too`.
+- **The detached `get_open_orders` task can outlive a session stop.** `broker_open_orders` leaves
+  its `ensure_future(ib_client.get_open_orders(...))` running after the 10 s deadline; the
+  adapter's own `_await_request(request, 30)` keeps it alive up to 30 s, so a stop inside that
+  window closes the loop over a pending task ("Task was destroyed but it is pending"). Teardown
+  noise only; the adapter's own in-flight sweep has the same shape. **Owner:** nobody until a
+  transcript shows it.
+- **The heartbeat tick's worst case is now 60 s between activity stamps, against a 90 s
+  staleness window.** A runtime tick stamps activity, then runs the cycle: the broker-state read
+  (20 s deadline) and the stale-order read (10 s) can both run to their deadlines before the next
+  stamp, 30 s later. Pinned at the defaults
+  (`test_a_runtime_tick_with_both_reads_timing_out_still_stamps_inside_the_staleness_window`:
+  the worst gap must leave one heartbeat interval of margin). Not pinned: a session started with a
+  non-default heartbeat interval, and the DB writes inside the tick. **Owner:** whoever adds a
+  third read to the tick, or makes the interval configurable per session.
+
+## Deferred from: story-5.1 (2026-10-07)
+
+- **The seal's live host cannot come from the session's Redis namespace or a node's cache.** →
+  **Story 5.2 / 5.3.** A NETTING cache loses or duplicates closed legs three ways (the last two
+  found by 5.1's code review, verified in source and by an integration canary):
+  - `Cache.snapshot_position` keeps re-entered legs in an in-memory dict
+    (`cache/cache.pyx:2219-2252`) that is never written to the database, and a Redis-loaded
+    position replays to its current leg (`live_session_view.py:16-19`).
+  - A flip in one order (`SMAMomentum(allow_short=True)`) opens a *new* `Position` over the
+    closed one with no snapshot (`execution/engine.pyx:1440-1442, 1600`; `cache.pyx:2124`).
+    Measured: 32 closed legs, 0 in the cache, and the ledger reads 100000.00 against an account
+    of 112478.00. Pinned by `test_canary_a_netting_flip_leaves_no_closed_leg_in_the_cache`.
+  - A redelivered closing fill is snapshotted before `apply` raises `KeyError`
+    (`engine.pyx:1444-1450`), so one leg counts twice.
+
+  Build the seal's legs from `trades` rows (one per `PositionClosed`, deduplicated by
+  `insert_trade_if_absent`) into a fresh `Cache` and a real `Portfolio`, then `LiveHost.settle`
+  that pair. A real `Portfolio` registers the same 17 statistics a backtest's does
+  (`portfolio/portfolio.pyx:163-179`). Do not read the namespace.
+- **`analyzer.returns()` is per-leg realized return keyed by close time, and an open leg sits at
+  the epoch.** → **Story 5.2.** `add_positions` adds `realized_return` at
+  `unix_nanos_to_dt(ts_closed)`. A still-open position has `ts_closed == 0`, a 1970 entry, and
+  `calculate_statistics`' `self._returns.sort_index()` discards its result, so that entry stays
+  wherever it was inserted. `LiveHost.settle` mirrors the backtest path exactly, for parity. AR35's
+  reconstruction must decide whether its equity series *is* this one; the backtest side cannot
+  change (AR44).
+- **A backtest's stored equity curve ends with a `time: 0` point when a position is open at the
+  end of data.** Pre-existing backtest behaviour, the previous item's consequence:
+  `extract_equity_curve` walks `analyzer.returns()` in insertion order and emits the open leg's
+  epoch entry last. Pinned as-is in `EQUITY_CURVE_BEFORE`
+  (`tests/integration/core/test_results_extractor_parity.py`). Not this story's to change (the
+  backtest path is bit-identical by AC #3). **Owner:** a UI story, if the chart ever shows it.
+- **A settled analyzer's `_positions` carries the source's as well as the legs.** `settle`
+  deep-copies the source analyzer, so its copy keeps whatever `_positions` the source had
+  (`end()`'s, on a backtest). `add_positions` then appends without a reset, and `reset()` does not
+  clear it either. Only `get_performance_stats_general` reads it (`LongRatio`), and the extractor
+  never calls that. Wheel code, recorded rather than worked around. **Owner:** nobody unless a
+  caller of the general statistics appears.
+- **The backtest path would undercount trades on a NETTING venue.** `positions_closed()` does not
+  return snapshotted legs (measured: 16 closed legs, `positions_closed()` = 0). Moot today:
+  every production backtest venue is `OmsType.HEDGING` (`backtest_orchestrator.py:330, 368`,
+  `backtest_runner.py`). Recorded so a future NETTING backtest does not rediscover it; the live
+  path already handles it (`_ClosedLegs`). **Owner:** whoever adds a NETTING backtest venue.
+
+## Deferred from: code review of story-5.1 (2026-10-07)
+
+All three are pre-existing on the backtest path. `LiveHost.settle` reproduces them on purpose:
+AC #3 (backtest bit-identical) and AC #8 (one engine, two paths, identical results) forbid fixing
+one side. Fix both sides together or neither, the way Story 5.6's `profit_pct` item is handled.
+
+- **An open position's return is filed at the epoch, and the 1970 daily resample wrecks Sharpe,
+  volatility and Sortino.** `add_positions` files `realized_return` at
+  `unix_nanos_to_dt(ts_closed)`, and an open position has `ts_closed == 0`. The returns
+  statistics then run `resample("1D").sum()` (`analysis/statistic.py:140`), filling ~20,600
+  zero-return days from 1970 to the session. Measured with four identical closed trades plus one
+  open leg (its only P&L is $1 commission): Sharpe 6.61→0.12, volatility 0.77→0.014, Sortino
+  18.64→0.34. The backtest golden's own Sharpe (0.160) is only computable because of this
+  artifact. It matters most for paper: a session stops with positions open by design (stop ≠
+  flatten), so a sealed session that stopped mid-position reads a near-zero Sharpe.
+  **Owner:** Story 5.5 (open positions at seal) to surface it, then an epic-level decision to fix
+  both sides. → **Dispositioned by Story 5.5 (2026-10-11): surfaced, not fixed** — see "Deferred
+  from: story-5.5".
+- **An open position's entry commission is scored as a losing trade by the analyzer's PnL
+  statistics but not by `losing_trades`.** `AvgLoser`/`MinLoser`/`Expectancy` count every P&L at or
+  below zero (`loser_avg.py:35`, `loser_min.py:35`, `expectancy.py:43`), and an open leg's
+  realized P&L is its commission. Measured on the 5.1 component session plus one reopened leg:
+  `avg_loss` −502.0→−251.5, `min_loser` −502.0→−1.0, `expectancy` 398.0→318.2, win/loss (3, 1)
+  unchanged. The backtest golden's `min_loser: 0.0` is the same artifact.
+  **Owner:** Story 5.5, then the same both-sides decision. → **Dispositioned by Story 5.5
+  (2026-10-11): surfaced, not fixed** — see "Deferred from: story-5.5".
+- **The stored equity curve compounds per-leg price returns on starting capital, so its last point
+  disagrees with `final_balance`.** `extract_equity_curve` is `(1 + returns).cumprod() × starting`
+  over position realized returns, which are price returns that take no account of position size.
+  Backtest golden: last point 177,094.46 against `final_balance` 159,404.73. **Owner:** Story 5.2
+  (AR35 reconstructs the series from the closed-trade P&L sequence, which is dollar-based).
+
+## Deferred from: story-5.7 (2026-10-07)
+
+Story 5.7 landed PR #35's D2 ruling ("same-symbol rule everywhere, name the rest"). What it
+deliberately left, each with an owner:
+
+- **D-A's literal reading of "matches a cached position" (owner: the PO, if a live account ever
+  meets it).** An unresolved `IB-CONID-*` row's symbol is compared with every open cached
+  position's, any owner. So an unresolvable contract that shares a symbol with a position the broker
+  *also* reports resolved still refuses the start and still withholds a reconnect grant. Example: a
+  strategy's NVDA stock beside an unresolvable NVDA-symbol contract. That is the AC's literal rule
+  and the pre-5.7 behaviour for that shape. The narrower reading would match only a cache row that
+  reads "broker 0". IB gives warrants and rights their own symbols (`XYZ WS`, `XYZ RT`) and options
+  resolve, so this is expected to be rare. Pinned by
+  `test_an_unresolved_broker_row_of_a_held_symbol_withholds_the_grant`. — **CLOSED by the code
+  review (PO ruling R3, 2026-10-07): keep the literal reading.** No code change; no longer an open
+  question. The same review widened "held" to the traded instruments' symbols too (R1), so the
+  literal rule now also covers a flat strategy's own symbol.
+- **A correction can make an inert unresolved row count again (fail closed, accepted).** At
+  startup, hydrating a broker-only NVDA position puts NVDA in the cache. An unresolved NVDA-symbol
+  row that matched nothing before the correction then matches, and the re-verify refuses
+  `DISCREPANCY_REMAINS`. The next start refuses `UNRESOLVABLE_DISCREPANCY`, consistently. Pinned by
+  `test_a_correction_that_puts_the_symbol_in_the_cache_makes_the_row_count_again`. Owner: D-A's
+  owner, with the same ruling.
+- **The instrument-not-in-cache path is unchanged.** A *resolved* broker row whose instrument the
+  cache lacks has no size step, so it is judged exact. It is still refused at startup
+  (`UNRESOLVABLE_DISCREPANCY`) and inert at runtime, as before this story. The broker reader's
+  `get_instrument` (W4) normally loads it first. Owner: whoever first meets it live.
+- **"Once per instrument" is once per reconciliation, per standing value (D-F).** The startup phase
+  names a remainder once (`scope=startup`). The running session's cycle names it once more
+  (`scope=runtime` or `reconnect`), then never again while it is unchanged. A changed remainder, or
+  one that clears and returns, is named again. Owner: none, unless an operator finds the second
+  record noisy. — **RULED keep by the code review (PO ruling R4, 2026-10-07).** The review keyed
+  "unchanged" on `(instrument, remainder)` (P2), so a strategy's own trade that leaves the same
+  remainder standing (22.5 → 23.5) is not named again.
+- **Procedure P22 is defined, not run.** It needs a fractional holding or an unresolvable contract
+  that only the operator can arrange by hand in TWS. Owner: the operator's phase-gate run.
+
+## Deferred from: code review of 5-7-name-holdings-the-adapter-cannot-express-instead-of-refusing-or-hiding-them (2026-10-07)
+
+Three-layer review (Blind Hunter / Edge Case Hunter / Acceptance Auditor), triaged and ruled by the
+PO the same day. Rulings R1–R4 and patches P1–P9 landed with the story; these are left, each with
+its reason and owner:
+
+- **W1 — a same-symbol unresolved row keeps withholding the reconnect grant after D1's hold-back
+  expires, for the rest of the session.** The hold-back bounds only which *cache row* is held
+  back; the matching row itself still stands between the cycle and clean, so no
+  `connection.restored` follows a disconnect while it stands. Deliberate: D2's ruling and AC #3
+  say the fail-closed rules apply "unchanged", and since R1 a traded symbol is one too. Owner: the
+  PO, beside Story 5.8 (runtime failure policy).
+- **W2 — an unrelated unresolved row is logged at ERROR while the start proceeds, and
+  `reconcile.ok` reports `discrepancies=0`.** Severity and outcome disagree: `resolution=unresolved`
+  keeps `log_discrepancy`'s ERROR level (shared with the runtime cycle's unresolvable rows), yet the
+  row is inert and not counted. Owner: the PO (whether an inert row should log at WARNING, or be
+  counted in `reconcile.ok`).
+- **W3 — D-H's widened stale-order skip set covers a held-back same-symbol instrument
+  indefinitely,** so a stranded order on it is never cleared while the unresolved row stands.
+  Fail-closed in the right direction (no order state is guessed beside a holding the adapter cannot
+  read) but unbounded. Owner: Story 4.8's follow-up / the PO.
+- **W4 — non-equity symbol matching.** `symbol_key` compares the instrument id's symbol with IB's
+  `contract.symbol`: a future (`ESZ5` vs `ES`), an FX pair (`EUR/USD` vs `EUR`) or an option vs its
+  underlying would not match as intended. Phase 3 trades equities and ETFs only. Owner: whichever
+  story first adds a non-equity instrument.
+- **W5 — `live reconcile` exits 5 forever on a healthy DRIP account,** and nothing marks the line
+  as an inexpressible remainder rather than a real disagreement. By design (FR36 exactness, AC #5),
+  but an operator cannot tell the two apart from the output. Owner: the PO (e.g. an annotation on
+  the line, never a change to the exit code).
+- **W6 — a correction can make an inert row count again and refuse `DISCREPANCY_REMAINS`; every
+  later start then refuses `UNRESOLVABLE_DISCREPANCY`, with no operator remedy text for that
+  shape.** Already recorded in the story's Dev Agent Record (Debug Log, "One defect found while
+  going green") and in "Deferred from: story-5.7" above
+  (`test_a_correction_that_puts_the_symbol_in_the_cache_makes_the_row_count_again`). Owner: the PO,
+  with D-A's ruling (R3).
+- **W7 — a fractional row whose instrument the cache lacks still refuses `UNRESOLVABLE` at
+  startup.** It has no size step to judge it by, so it keeps today's path (the story's scope
+  boundary: "no change to the instrument-not-in-cache path"). The broker reader's `get_instrument`
+  normally loads the instrument first. Owner: whoever first meets it live.
+
+## Deferred from: story-5.2 (2026-10-07)
+
+Story 5.2 reconstructs a sealed session's results from its trade rows
+(`src/core/session_equity.py`), under PO rulings R1b / R2a / R3a / R4a. What it measured and
+deliberately left, each with an owner:
+
+- **(a) No backtest has ever persisted its equity curve.** `BacktestPersistenceService
+  ._validate_config_snapshot` runs the snapshot through `StrategyConfigSnapshot(...).model_dump()`,
+  which ignores unknown keys, so the orchestrator's and the runner's `config_snapshot["equity_curve"]`
+  is dropped and `/equity/{run_id}` always draws its two-point `initial_capital → final_balance`
+  fallback (the Phase 2 archive noted the strip; nobody routed it). 5.2 kept it that way on
+  purpose: `equity_curve` is still not a model field, so backtest rows stay byte-identical
+  (pinned by `tests/unit/models/test_config_snapshot.py::TestSessionConditions` and the
+  integration/db `test_a_backtest_row_is_stored_exactly_as_before`). Keeping it would change every
+  new backtest row and its chart, the stored curve would carry the epoch `time: 0` point when a
+  run ends mid-position (story-5.1 item above), and the config panel prints every top-level key,
+  so the curve would render as one long list. **Owner:** an epic-level both-sides decision.
+- **(b) `_calculate_max_drawdown` never sees the starting capital** (R4a: kept, pinned).
+  `(1 + r).cumprod()` starts after the first trade, so a loss before the first peak is invisible:
+  returns `[−10%, −5%]` read −5% (true −14.5%); `[−10%, +5%]` read 0.0 (true −10%). Same on the
+  backtest and the paper side. Pinned by `tests/unit/core/test_session_equity.py::
+  TestPreExistingDrawdownBehaviour`. A fix (prepend `1.0` to the compounded series) changes every
+  future backtest whose first trade loses, while stored rows keep the old value. **Owner:** an
+  epic-level both-sides decision.
+- **(c) A backtest's max drawdown is size-independent price compounding, not an account
+  drawdown.** It compounds each position's `realized_return` (a price return) as if all capital
+  were in every trade. Measured on one price path at 10% and 2% sizing: −1.59% both times, where
+  the account fell 0.15% / 0.03%; the curve ends at 177,488 while the account ends at 105,948 /
+  101,160. PO ruling R1b keeps the paper side on the same definition, so the comparison is like
+  for like, and records it as `session_conditions.equity_series.basis =
+  "per_trade_price_return"`. Any "account drawdown" metric would have to be added to both sides at
+  once. **Owner:** an epic-level both-sides decision.
+- **(d) → Story 5.4: whether *this* session absorbed reconciliation-owned activity.** 5.2 records
+  the structural limitation: `equity_series.excludes` names `reconciliation_owned_activity`,
+  because `EXTERNAL` / `INTERNAL-DIFF` positions, including a corporate action reconciliation
+  absorbed, are never trades (Story 3.6 D-D). What it cannot record is whether a given session
+  had any. Nothing durable says so: `runtime_flags` carries only `failed_strategies` and
+  `order_rejections`, and the evidence is in the `reconcile.*` logs only. A per-session flag needs
+  a writer. **Owner:** Story 5.4 (its `session_conditions`, beside `open_positions_at_seal` and
+  the split's extra shares).
+- **(e) → Story 5.3: how the seal calls this.** Read the session's `trades` rows (both twins'
+  read path is 5.3's; `EXPECTED_CAPABILITIES` is an exact-set pin) and call
+  `reconstruct_session_results(rows, starting_capital=…, start=<first start>, end=<seal time>)`.
+  Pass the snapshot through `SessionResults.merged_into(snapshot)` before handing it to
+  `save_backtest_results`. Where the starting capital comes from is 5.3/5.4's: no session field
+  holds one today. The `session_conditions` field on `StrategyConfigSnapshot` exists now. 5.4's
+  flat AR7 keys and `schema_version` go into the same mapping, beside `equity_series`.
+- **(f) → Story 5.5: open rows are not in the series.** A row with no exit is left out of the
+  closed-trade sequence. A backtest that ends mid-position keeps its open leg, filing a return at
+  the epoch and scoring the entry commission as a loser (story-5.1 code-review items). Measured on
+  the 5.1 golden run: the paper record differs from the backtest in exactly `sharpe_ratio`,
+  `volatility`, `risk_return_ratio`, `expectancy`, `avg_loss` and `min_loser`. That set is pinned
+  by `tests/integration/core/test_session_equity_parity.py::
+  test_a_run_that_ends_mid_position_differs_only_by_the_open_leg`. `equity_series.excludes` names
+  `open_positions`. **Owner:** Story 5.5 (open positions at seal), then the both-sides decision the
+  5.1 items already name. → **Dispositioned by Story 5.5 (2026-10-11): surfaced, not fixed** — see
+  "Deferred from: story-5.5".
+
+## Deferred from: code review of 5-2-reconstruct-a-sealed-sessions-equity-curve-from-its-trades (2026-10-07)
+
+Three-layer review (Blind Hunter / Edge Case Hunter / Acceptance Auditor). These four are left,
+each with its reason and owner:
+
+- **A `None` `commission_currency` is accepted as USD.** `session_equity._readable` uses the
+  commission currency as a proxy for the P&L currency, because trade rows carry none, and it
+  allows `None`. The recorder writes `None` on every leg no cached position vouched for (a flip,
+  a redelivered fill: `live_trade_recorder.py:268-275`). So an unvouched row on a non-USD
+  instrument would be summed into the USD ledger. Phase 3 trades US equities and ETFs only.
+  **Owner:** the first story to add a non-USD instrument (the 5.7 W4 precedent).
+- **A leg return of −1 or below breaks the compounded series on both sides.** A short whose exit
+  is at least twice its entry returns ≤ −100%. `(1 + r).cumprod()` then goes to zero or below,
+  and every later loss draws as a recovery. Measured: a short 10 → 25, then a long losing 50%:
+  the curve reads `−50000 → −25000` and `max_drawdown` reads `0.0`. When that is the first leg,
+  `_calculate_max_drawdown` computes 0/0 = NaN, and `nan < 0` is False, so it returns `0.0`.
+  5.2's non-finite guard never sees the NaN. This is the extractor's arithmetic, and PO ruling
+  R4a forbids a metric-math change in 5.2. **Owner:** the epic-level both-sides decision already
+  named in "Deferred from: story-5.2" (b)/(c).
+- **Repeated `time` values in the curve.** `extract_equity_curve` truncates each close to whole
+  seconds, but `PortfolioAnalyzer.add_return` sums only *identical* timestamps. Two closes in one
+  second, microseconds apart, give two points with the same `time`. Pre-existing on the backtest
+  path. Harmless while nothing charts `session_conditions.equity_series.curve`; a time-series
+  chart needs strictly increasing times. **Owner:** Story 5.6, or whoever first charts it.
+  → **Dispositioned by Story 5.6 (2026-10-11): still nothing charts it** — the owner stays
+  "whoever first charts it"; see "Deferred from: story-5.6".
+- **5.4's `closed_trade_count` will duplicate `equity_series.closed_trades`.** AR7's flat key and
+  5.2's namespaced count are two sources for one number, and nothing ties them. **Owner:** Story
+  5.4. When it adds the key, pin the two equal: CLAUDE.md, "a duplicated literal needs its own
+  equality pin".
+
+## Deferred from: story-5.3 (2026-10-09)
+
+Story 5.3 seals a stopped session into one `backtest_runs` row (`src/services/session_seal_service.py`,
+`ntrader live seal`), under PO rulings R1a / R2a / R3a / R4a (R4 refined). What it measured and
+deliberately left, each with an owner:
+
+- **(a) `commissions[0]` (story-3.5's item, routed here) — dispositioned: not fixed, on either
+  side (PO-accepted 2026-10-09).** `save_trades_from_positions` still keeps only the first
+  commission entry of a backtest position. No metric reads a commission column: `profit_loss` is
+  net, and a backtest's metrics come from its engine, a paper record's from its rows' `profit_loss`.
+  Paper rows already carry the recorder's settlement-currency `select_commission`. Changing the
+  backtest side would break 5.2's zero-diff persistence and AR12's "verbatim". The only effect is
+  the commission *displayed* on a mixed-currency backtest trade. **Owner:** none, unless a
+  non-USD instrument arrives (the 5.7 W4 / 5.2 code-review precedent).
+- **(b) → Story 5.4: a truncated session seals the same as a complete one (PO-accepted).** No fifth
+  status (needs a migration). The last process run's `runtime_flags` (`failed_strategies`,
+  `all_failed`, `order_rejections`) stay readable on the sealed row; recording them in
+  `session_conditions` is 5.4's, beside 5.8's withheld period.
+- **(c) → Story 5.4: the run's `start_date` is `trading_sessions.created_at` (PO ruling R3a).**
+  Nothing durable records a first start: `last_started_at` is overwritten on every claim,
+  `owner_epoch` counts reclaims too, and `runtime_flags` is cleared every run. `created_at` is never
+  after the first start, so the period can include the create→first-start gap and CAGR reads low,
+  never high. One function owns it (`session_seal_service.period_start`), so 5.4 ("the session's
+  first start") can replace the source.
+- **(d) A future run delete would cascade into a session's trades.** `trades.backtest_run_id` is
+  `ON DELETE CASCADE`. The UI's `DELETE /backtests/{run_id}` is a no-op today
+  (`src/api/ui/backtests.py:728-763`), but whoever implements it would delete a sealed session's
+  trade rows — its system of record — with the run. **Owner:** whoever implements run deletion
+  (refuse `run_type = 'paper'`, or detach first). AR44 forbids touching it here.
+- **(e) → Story 5.5: where `--force` plugs in.** 5.3 refuses any open position (R2a) through the
+  injected `read_open_positions` reader and reports `open_positions: []` with the disposition
+  `none open at seal` (`NONE_OPEN_DISPOSITION`). 5.5's `--force` replaces the refusal in
+  `_refuse_unless_flat`, persists the view's positions as null-exit trades, and sets the
+  disposition wording; `SealReport.open_positions` already carries `ViewPosition`s to the report.
+  → **CLOSED by Story 5.5 (2026-10-11)** — see "Deferred from: story-5.5".
+- **(f) → Story 5.4: `data_source = "ibkr_live"`** (`PAPER_DATA_SOURCE`) is 5.3's placeholder for
+  "identifies the live IBKR source"; 5.4 may refine it.
+- **(g) `run_type` is stamped after the verbatim write.** `create_backtest_run` takes no
+  `run_type`, so the seal sets `run.run_type = "paper"` on the returned row and flushes, in the
+  same transaction. If a later story adds `run_type` to the repository/persistence signature, the
+  stamp should move there and the post-write assignment go. **Owner:** whoever next changes
+  `save_backtest_results`'s signature.
+
+## Deferred from: code review of 5-3-seal-a-stopped-session-into-a-comparable-run-record (2026-10-09)
+
+Three-layer review (Blind Hunter / Edge Case Hunter / Acceptance Auditor). These six are left,
+each with its reason and owner:
+
+- **An open strategy leg netted to zero by an opposite `EXTERNAL` leg reads as flat at seal.**
+  `read_session_view` reports the net per instrument and drops a zero net (Story 4.6, by design),
+  so the seal's R2a check sees `()` and seals. The broker is flat in that state, so nothing is
+  orphaned at IBKR; the strategy's phantom leg is simply not recorded. **Owner:** Story 5.5 (open
+  positions at seal), if it reads per-position legs for its null-exit rows. → **Dispositioned by
+  Story 5.5 (2026-10-11): kept by design (D-C)** — see "Deferred from: story-5.5".
+- **A UUID-shaped session name resolves to another session's id first.** `SessionService.resolve`
+  tries the UUID before the name (AR36), and `live create` accepts a UUID-shaped `--name`. Shared
+  by every `live` command; only `live seal` makes the mistake irreversible. **Owner:**
+  `SessionService.resolve` / `live create`'s name validation.
+- **The linked-backtest check eager-loads every trade of the baseline.** `BacktestRun.trades` is
+  `lazy="selectin"`, so `find_by_run_id` reads them all just to check status and metrics, while
+  the seal holds the session row lock. Both backtest repositories are on 5.3's zero-diff list.
+  **Owner:** whoever adds a metrics-only run lookup.
+- **"Database not configured" is reported by type only.** `failure_message` withholds every
+  unmarked exception's text (NFR26), so `live seal` (like `live status`) prints "RuntimeError was
+  raised…" where `live create` / `live start` print the database error. **Owner:** whoever unifies
+  the `live` commands' database-error rendering.
+- **`live status --json` has the same Rich emoji substitution** 5.3's review fixed in `live seal`:
+  `console.print(..., markup=False)` still turns `:100:` into an emoji, so a session name holding
+  an emoji code breaks `json.loads`. **Owner:** whoever next edits `live_status.py`.
+- **Extreme CAGR/Calmar cannot be stored on either side.** `performance_metrics` holds ratios in
+  `Numeric(15,6)` (< 1e9); a 1-day session at +6% computes CAGR ≈ 1.75e9 (Edge Case Hunter probe).
+  A backtest over a short period hits the same bound. 5.3 makes the seal's refusal name the field
+  and bound; representing such values needs a migration or a both-sides rule. **Owner:** an
+  epic-level both-sides decision.
+- **(DN1a, PO ruling 2026-10-09) A resting order at IBKR is not checked at seal time.** R2a's
+  check reads the session's positions (`read_session_view`), not its orders, and the stop path
+  sends no order method — so a GTC/stop order a stopped session left working is invisible to the
+  seal. If it fills after the seal, the position belongs to no session. Recorded in `live seal
+  --help`, the README and `docs/agent/persistence.md` ("cancel it in TWS before sealing"). No order
+  read was added to `LOAD_METHODS` (exact-pinned). **Owner:** Story 5.5 (open positions — and
+  orders — at seal). → **CLOSED by Story 5.5 (2026-10-11, PO ruling R3b)** — see "Deferred from:
+  story-5.5".
+- **(DN2a, PO ruling 2026-10-09) A session with no engine state can never be sealed yet.** R2a's
+  fail-closed reading refuses an unreadable cache, and `read_session_view` raises
+  `NO_ENGINE_STATE` for an empty namespace: a session whose every start failed before the node was
+  built, or whose Redis was flushed, stays `stopped` and refused. No exception for "no trade rows"
+  or "never started". **Owner:** Story 5.5 — its `--force` is the way out. → **CLOSED by Story 5.5
+  (2026-10-11, PO ruling R2a)** — see "Deferred from: story-5.5".
+
+## Deferred from: story-5.4 (2026-10-11)
+
+Story 5.4 records AR7's `session_conditions` keys on every sealed record
+(`src/services/session_conditions.py`), under PO rulings R1a / R2a / R3a (2026-10-11). What it
+deliberately left, each with an owner:
+
+- **(a) Per-session detection of reconciliation-owned activity — PO ruling R3a: not this
+  story.** 5.2's (d) and 4.7's split items asked whether *this* session absorbed a corporate
+  action or a reconciliation correction (activity outside the trades table the equity curve is
+  built from). 5.4 states it **structurally** on every record:
+  - `price_basis = "ibkr_unadjusted_smart"`, the permanent divergence source;
+  - `equity_series.excludes` already names `reconciliation_owned_activity`.
+
+  Nothing durable records it per session: `runtime_flags` holds no such key, and the evidence
+  sits in `reconcile.*` logs only. The considered alternative was to read the session's engine
+  cache at seal and list every instrument with an `EXTERNAL`/`INTERNAL-DIFF`-owned position, open
+  or closed (`LOAD_METHODS` unchanged, one new `SessionView` field). It was not taken, for three
+  reasons:
+  - it is one-directional: absence is no proof;
+  - whether a 4.5-era restart leaves such positions behind (false positives) is unmeasured;
+  - it would widen the view Story 5.5 extends in parallel.
+
+  **Owner:** an epic-level decision. Either a durable writer on the reconcile path (fenced by
+  `owner_epoch`, surviving the `→ running` clear), or the cache-derived flag after a component
+  measurement of restart behaviour.
+- **(b) The run's `start_date` is the session's creation, not its first start — PO ruling R1a,
+  a disclosed deviation.** Epic AC 5.4 #4 says "first start". Nothing durable records one, and
+  there is no migration this phase. The record says so in `session_conditions.start_date_basis =
+  "session_created_at"`. CAGR can read low by the create→first-start gap, never high. **Owner:**
+  the first phase that may migrate (a write-once `first_started_at`, stamped on the
+  `CREATED → RUNNING` edge).
+- **(c) `last_run_flags` covers the last process run only** (PO ruling R2a). `runtime_flags` is
+  cleared on every `→ running`, so a strategy failure or rejection streak from an earlier run of
+  the same session is not in the record. **Owner:** Story 5.8 (its withheld period has the same
+  shape), or whoever adds a session-lifetime flag history.
+- **(d) → Story 5.6: the detail page's "CLI Command to Replicate" is nonsense for a paper
+  record.** `ConfigurationSnapshot.cli_command` appends every `config_snapshot` key as a flag,
+  so a sealed record shows `ntrader backtest run … --session-conditions {…}`. That is
+  pre-existing behaviour of an AR44 file (`src/api/models/backtest_detail.py:166-183`); the
+  config panel itself renders the conditions correctly (5.4's render test). **Owner:** Story 5.6
+  (view verification), within AR44 — disposition, do not fix. → **Dispositioned by Story 5.6
+  (2026-10-11, PO ruling R1a): a known presentation limit for later UI work** — see "Deferred
+  from: story-5.6".
+
+## Deferred from: code review of 5-4-record-the-conditions-the-session-actually-ran-under (2026-10-11)
+
+Three-layer review (Blind Hunter / Edge Case Hunter / Acceptance Auditor). These two are left,
+each with its reason and owner:
+
+- **W1 — `open_positions_at_seal` cannot say "unknown" or "skipped".** Under Story 5.5's
+  `--force`, a view with `positions_skipped > 0` (positions on another account), or no readable
+  engine state, could only be recorded as `[]` or as a partial list. Both read as flat.
+  Unreachable in 5.4, because R2a refuses first. **Owner:** Story 5.5. Widen
+  `build_session_conditions` by keyword (e.g. `positions_skipped`, or `None` meaning unknown),
+  and record it beside `open_positions_at_seal`. → **CLOSED at the 5-4/5-5 integration merge
+  (2026-10-11)**: `build_session_conditions(open_positions=None)` records `open_positions_at_seal:
+  null` when the seal's holdings are unknown (a forced seal past an empty engine cache); positions
+  on another account stay in the seal report (`positions_on_another_account`), not the conditions.
+- **W2 — `rth_only`, `market_data_tier` and `price_basis` are asserted at seal time, not
+  recorded per run.** They state the policy every Phase-3 build enforces: the node builder
+  refuses non-RTH or non-REALTIME, and a delayed feed stops the session. A future build that
+  relaxed either policy would make a later seal state the new policy for a session run under the
+  old one, with `schema_version` unchanged. **Owner:** whoever relaxes either policy. Record the
+  value per run (e.g. a `runtime_flags` key) before relaxing it.
+
+## Deferred from: story-5.5 (2026-10-11)
+
+Story 5.5 makes open positions at seal the operator's decision (`live seal --force`), under PO
+rulings R1a / R2a / R3b (2026-10-11). How it dispositions the items routed to it, then what it
+found and deliberately left, each with an owner:
+
+- **Closed — story-5.3 (e), where `--force` plugs in.** `_refuse_unless_flat` now runs only
+  without `force`; with it, each open position the session's engine cache holds becomes an open
+  trade with no exit (`open_trade` → `insert_trade_if_absent`), written before the trades are read,
+  so 5.2 leaves it out of the metrics and the existing backfill links it. The disposition comes
+  from one function (`open_positions_disposition`).
+- **Closed — DN2a, a session with no engine state.** `--force` seals past `NO_ENGINE_STATE` (R2a):
+  no open rows, and the report says the holdings are **unknown**, never "none open". An unreadable
+  cache, an unreachable Redis or an unset `TWS_ACCOUNT` still refuses under `--force`.
+- **Closed — DN1a, a resting order at seal (R3b).** The seal now reads the session's own orders
+  from its engine cache (`load_order` joined `LOAD_METHODS`, 4 → 5, with its exact pin and a second
+  Redis `MONITOR` proof) and reports every order `is_open or is_inflight` with its disposition
+  ("left working at IBKR and owned by no session"). Never a refusal (AC 5.5e holds literally) and
+  never a cancel. An order the cache holds but cannot rebuild or read is named
+  (`unreadable_orders`), never a refusal either (code review DN1a, 2026-10-11). What remains is
+  below.
+- **Kept, by design — 5.3 code review, a strategy leg netted to zero by an `EXTERNAL` leg.** 5.5
+  reads per-position legs, but legs of an instrument whose net is zero leave no row and no leg
+  (D-C, pinned by `SessionHoldings`' invariant): the broker is flat there, so nothing "remains at
+  the broker". The strategy's phantom leg stays unrecorded, as 5.3 accepted.
+- **Surfaced, not fixed — story-5.1's two open-leg items and story-5.2 (f).** The forced
+  disposition says the open trades are "outside the record's metrics"; `equity_series.excludes`
+  already names `open_positions`. A backtest that ends mid-position still keeps its open leg in
+  Sharpe/volatility/Sortino (filed at the epoch) and scores its entry commission as a loser.
+  **Owner:** the epic-level both-sides decision those items already name (AR44, FR41).
+
+Found and left:
+
+- **A backtest's partly reduced open position is written as a row 5.2 would refuse.** Measured
+  through `ReportProvider.generate_positions_report` + `save_trades_from_positions`
+  (`tests/component/services/test_open_trade_parity.py`): bought 10, sold 4, still open → the
+  backtest row has `quantity = peak_qty` (10, not the 6 held), `exit_price = avg_px_close`
+  (the reduction's price) with **no** `exit_timestamp`, and a `profit_pct` computed from it.
+  5.2's `_legs_from` refuses exactly that shape ("neither open nor closed"). The seal's open row
+  is the 6 that remain and no exit (R1a). AR12/AR44 forbid touching the backtest path.
+  **Owner:** the same both-sides decision.
+- **Working orders: what the cache cannot see.** The engine cache holds what the session last
+  knew. An order filled or cancelled at IBKR while the session was stopped still reads as working,
+  and an order IBKR holds but the cache lost is invisible. Closing that gap needs a broker read at
+  seal time, which "sealing never touches the broker" forbids. **Owner:** none in Phase 3. Every
+  disposition names the session's engine cache as its basis, and the working-orders disposition,
+  `--help` and the README say what it cannot see (code review P2, 2026-10-11).
+- **→ Story 5.4 (parallel): `open_positions_at_seal` for a forced seal with unknown holdings.**
+  `SealReport.open_positions` is `()` both when nothing was held and when the engine cache held
+  nothing to read. The disposition tells them apart (`UNKNOWN_HOLDINGS_DISPOSITION`), so 5.4's key
+  must read it too, or it would record "none" for a session whose holdings are unknown. The
+  split's extra shares (5.4's own item) are now rows: an `EXTERNAL` / `INTERNAL-DIFF` open leg is
+  recorded beside the strategy's (R1a), its `trade_id` naming the owner (`…-EXTERNAL`).
+  → **CLOSED at the 5-4/5-5 integration merge (2026-10-11):** unknown holdings record
+  `open_positions_at_seal: null` (see 5.4's code-review W1).
+- **Reconciliation-owned open rows now exist in `trades`.** R1a records them; their `trade_id`
+  is the Nautilus position id, which names the owner. No metric reads an open row, so the
+  comparison sample is unchanged, but any future per-strategy attribution of `trades` (story-5.6's
+  missing `strategy_id` item) must account for them. **Owner:** whoever adds strategy attribution.
+  → **Checked by Story 5.6 (2026-10-11):** they render in the existing views as a backtest's open
+  row does and stay out of statistics and the equity curve; the owner is unchanged.
+
+## Deferred from: code review of 5-5-handle-open-positions-at-seal-time-explicitly (2026-10-11)
+
+Three-layer review (Blind Hunter / Edge Case Hunter / Acceptance Auditor), PO rulings DN1a / DN2a /
+DN3a. These five are left or disclosed, each with its reason and owner:
+
+- **An instrument with long and short legs records them gross.** Strategy +10, `EXTERNAL` −10 and
+  a second strategy +3 become three open rows for a net of 3. The rows sum to what the report
+  lists, as R1a requires. Remove the +3 and the +10/−10 pair alone records nothing (D-C: a zero net
+  leaves no row and no leg), so whether a netted pair is recorded depends on a third position.
+  A consequence of R1a + D-C as ruled. **Owner:** the PO, if a live session ever meets it.
+- **A mixed-currency commission's diagnostics are dropped.** The seal's leg conversion discards
+  `select_commission`'s third element, where the recorder logs `trade.commission_mixed_currency`.
+  Phase 3 trades US equities and ETFs only. **Owner:** the first story to add a non-USD instrument
+  (the story-5.2 code-review precedent).
+- **Working orders are not filtered by account.** Positions held for another account than
+  `TWS_ACCOUNT` are counted apart; orders are reported as the session's engine cache holds them,
+  whatever the account. Report-only: nothing acts on them, and the wording names the engine cache
+  as the basis. **Owner:** none unless a `TWS_ACCOUNT` change between run and seal is met.
+- **(DN3a, PO ruling 2026-10-11) A position with a zero entry price cannot be sealed, even with
+  `--force`.** Nautilus reconciliation's MARKET fallback fill is priced 0 when IB reports `avgCost`
+  0 and there is no quote and no current position (`live/execution_engine.py:1631-1633`). The
+  seal's leg conversion refuses `avg_px_open <= 0` (`OpenLeg`), and `trades.entry_price > 0` is a
+  CHECK, so no open row can hold it. The holdings read is then `UNREADABLE` and every seal of that
+  session refuses; `live reconcile` reads the same cache fine. No check is loosened. **Owner:** the
+  PO, if a live session ever meets it.
+- **(P3, disclosed) Realized P&L on a partly reduced, still-open position is outside the forced
+  record's metrics.** The recorder persists `PositionClosed` alone, so a strategy that bought 10
+  and sold 4 writes no row for the 4. Their realized P&L lives only on the position, and from a
+  forced seal only on the open row's `profit_loss`. 5.2 reads closed rows only. A backtest that
+  ends the same way counts it, because its analyzer reads every position. The forced disposition
+  now says so ("they, and any P&L already realized on them, are outside the record's metrics"),
+  and so do the README and `persistence.md`. **Owner:** the epic-level both-sides decision that
+  story-5.1's open-leg items already name.
+
+## Deferred from: story-5.8 (2026-10-11)
+
+Story 5.8 acts on a persistent runtime reconciliation failure (PR #35 D3: "withhold after 3, drift
+stops") and records each withheld period for the seal. The PO ruled Q1 (a): `reconcile_withheld`
+is the one `runtime_flags` key the `-> running` edge carries forward. The PO ruled Q2 (a): no
+`live status` change. How the story dispositions the items routed to it, then what it leaves, each
+with an owner:
+
+- **Closed: PR #35 D3.** Three consecutive failed cycles withdraw trading permission through the
+  monitor's `RECOVERING` (`withhold_for_reconciliation`, one production caller, pinned), with one
+  ERROR `reconcile.cycle_failed action=trading_withheld`. The next clean cycle re-grants through
+  `confirm_state_reestablished`. A `BrokerStateAdapterError` stops the session on its first
+  occurrence (exit 1). Each period reaches the sealed record as `session_conditions.reconcile_withheld`.
+- **Closed for this key only: story-5.4 (c), "`last_run_flags` covers the last process run only".**
+  The withheld history now survives every `-> running` edge. `failed_strategies`, `all_failed` and
+  `order_rejections` still clear per run (Story 2.7 AC #4 unchanged), so those stay last-run-only
+  in the record. **Owner:** whoever adds a session-lifetime history for them; the carry in
+  `session_service._apply_transition` / `reconcile_withheld.carried_forward` is the pattern.
+- **Not touched: story-5.7 W1 (a same-symbol unresolved row withholds the reconnect grant for the
+  rest of the session).** That row is a clean read with a standing row, not a cycle *failure*, so
+  the streak never counts it and this story's rule does not apply. The owner stays the PO.
+- **(Q2 (a), PO ruling) `live status` / `live list` do not show a withheld session as
+  `degraded`.** A session withholding trading for a failing read still reads by its existing
+  health senses. An open period in the current run's `runtime_flags["reconcile_withheld"]` is the
+  signal a future `_is_degraded` sense would read. **Owner:** the PO, if an operator is ever
+  surprised by a `trading` health on a withheld session.
+- **(D-F, narrowed by code review DN1, PO ruling 1a) Only a `kill -9`, or a database that is down
+  through the teardown, can still lose or overstate a withheld period.** The tick writes each period
+  right after the cycle that opened or closed it. The runner's teardown then writes any period the
+  tick could not, before the `-> stopped` edge closes what it finds open (`flush_run_snapshots`,
+  in the existing `_flush_run_snapshots` slot; the runner's size is unchanged). Two cases remain:
+  - **Lost start:** a period whose start never reached Postgres before a `kill -9` is not recorded.
+    The transcript's ERROR record still names it.
+  - **Overstated end:** a period whose *end* never reached Postgres before a `kill -9` is closed by
+    the next start at the dead process's last heartbeat (`process_lost`), later than its real end.
+
+  **Owner:** none, unless a lost or overstated period is ever met.
+- **(D-C, disclosed) A drift stop is as broad as startup's.** `read_broker_state` wraps *any*
+  unexpected exception inside the read as `BrokerStateAdapterError`. So such an exception now
+  stops a running session on its first occurrence, where it used to be one more streak failure.
+  That is the literal ruling and matches startup. **Owner:** the PO, if a transient adapter
+  exception is ever seen stopping a live session (P23b's observational row).
+- **(D-J) A withhold owned by a connection loss is not a recorded period.** When the third
+  failure arrives in a reconnect cycle after a real disconnect, the ERROR is logged, but no period
+  opens: the outage withheld trading first. Connection outages reach no durable record at all
+  (`connection_lost_at` is still a dormant `runtime_flags` reader). **Owner:** an epic-level
+  decision to record outages in `session_conditions` beside withheld periods.
+- **Procedure P23 is defined, not run.** It starts a session and suspends the paper Gateway, which
+  only the operator may do. **Owner:** the operator's phase-gate run.
+
+## Deferred from: code review of 5-8-act-on-a-persistent-runtime-reconciliation-failure (2026-10-11)
+
+- **W1 — A `RECOVERING → LOST → RECOVERING` flap does not reset the reconnect debounce.**
+  `RuntimeReconciler.on_tick` clears `_recovering` only on `CONNECTED`. A real loss *inside* a
+  `RECOVERING` episode therefore keeps the pre-loss debounce, stale-order sightings and
+  `_ok.needed`, so a row first seen before the loss can be acted on after it. This is Story 4.3's
+  behaviour for any reconnect flap, but a reconciliation withhold makes long `RECOVERING` episodes
+  more common. The fix is one `elif state is ConnectionState.LOST: self._recovering = False`;
+  `RuntimeReconciler` is at 99/100 statements, so budget it first. **Owner:** the next story that
+  touches `RuntimeReconciler`.
+- **W2 — A sustained database outage logs one `session.withheld_record_failed` ERROR per tick.**
+  The period stays pending and is retried every tick. This is the same shape as Story 3.7's
+  `session.rejection_record_failed`. **Owner:** whoever throttles the steady state's write-failure
+  records; do both together.
+- **(Code review DN2, PO ruling 2c) A standing same-symbol unresolved row turns a reconciliation
+  withhold into one that lasts until the session stops.**
+  - **While `CONNECTED`.** A runtime cycle with an outstanding `IB-CONID-*` row under a held or
+    traded symbol withdraws nothing, and trading continues.
+  - **After a withhold.** Once three failed reads withhold trading, every reconnect cycle sees that
+    row as outstanding and never grants.
+
+  This is story-5.7 W1's trap ("a same-symbol unresolved row keeps withholding the reconnect
+  grant"), which a disconnect already reached and three failed reads now reach as well. It fails
+  closed, and the withheld period stays open until the stop closes it. **Reason for deferring:**
+  same root cause as 5.7 W1, decided together. **Owner:** the PO, with story-5.7 W1.
+
+## Deferred from: story-5.6 (2026-10-11)
+
+Story 5.6 is verification only. It changed no production code and no AR44 path (PO rulings R1a,
+R2b). The six debt items routed to it are dispositioned below. Items 1–4 and 6 are also marked in
+place; item 5 was handed over in Story 5.2's own Dev Agent Record, not here.
+
+- **(1) The side-unaware `profit_pct` — a disposition, not a fix.** A profitable SHORT gets a
+  negative `profit_pct` from **both** production formulas. This is pinned on one real closed
+  Nautilus `Position` by `tests/component/services/test_profit_pct_parity.py`, which drives
+  `save_trades_from_positions` and `aggregate_closed_position` (added by code review P3: the
+  integration test reads hand-seeded rows, so it proves only that the views show the stored sign).
+  A one-sided fix turns it red, as mutation-checked. Fixing it means changing
+  `backtest_persistence.py`, the recorder and the seal's open row together, and the views stay
+  frozen (AR44). **Owner:** the epic-level both-sides decision.
+- **(2) `trades` has no `strategy_id` — a disposition, not a fix.** It is unreachable for a sealed
+  record: `run_identity` (Story 5.3) refuses a spec with more than one strategy, so a sealed run's
+  rows are one strategy's, plus R1a's reconciliation-owned open rows, whose `trade_id` names the
+  owner. AR43 forbids the column without an epic-level decision. **Owner:** whoever first lets a
+  multi-strategy session seal.
+- **(3) Repeated `time` values in `equity_series.curve`: still uncharted.** The detail page's equity
+  chart is the trades-based `/api/equity-curve/{id}`, and the legacy `/api/equity/{run_id}` reads a
+  top-level `equity_curve` that no record has. **Owner:** whoever first charts the stored series.
+- **(4) "CLI Command to Replicate" is meaningless for a paper record: PO ruling R1a, a known
+  presentation limit.** `ConfigurationSnapshot.cli_command` (an AR44 file) turns every top-level
+  snapshot key into a flag, so a paper record shows `--session-conditions {…}`; a backtest's
+  `--strategy-path`/`--config` flags are just as literal. **Owner:** later UI work (Growth's
+  "Paper" view).
+- **(5) The long "Session Conditions" row (5.2's handed observation): PO ruling R1a, correct
+  rendering.** The row holds the whole document, including about one curve point per closed trade.
+  It is proven to render with status 200, every stored value present and HTML-escaped, and a
+  60-trade case pinned. 5.2's stored document is **not** reopened. The row's length is a known
+  presentation limit. **Owner:** later UI work.
+- **(6) Reconciliation-owned open rows in `trades`: checked.** They come back like a backtest's
+  open row: in the trades list and export with a null exit, one entry marker and no exit marker,
+  and outside statistics and the equity curve. The attribution owner is unchanged.
+
+New, found while verifying:
+
+- **The price chart of a paper record reads FirstRate catalog bars.** `/api/timeseries/run/{run_id}`
+  resolves no named catalog for `data_source = 'ibkr_live'`, so it reads the default
+  `NAUTILUS_PATH` catalog: adjusted FirstRate bars, which may not cover the session's dates. When
+  they do not, it degrades to no candles by design (pinned). When they do, the candles the trade
+  markers sit on are adjusted while the fills are unadjusted IBKR prices: the structural
+  divergence `price_basis` already names. **Owner:** later UI work.
+- **Nothing marks a row as paper in the list.** The detail page shows Data Source `ibkr_live`, and
+  `run_type` is on the row; the list, dashboard and comparison show neither. Accepted for Phase 3
+  (architecture: a costless "Paper" badge is Growth work). **Owner:** Growth.
+- **`FROZEN_VIEWS` will block the first legitimate view change.** By design (R2b); retiring or
+  regenerating it is a recorded PO decision. **Owner:** the first story allowed to change a view.
+
+## Deferred from: code review of 5-6-read-a-paper-session-beside-its-backtest-in-the-existing-views (2026-10-11)
+
+- **W1 — The trades-table route calls itself over HTTP at a hard-coded address.**
+  `GET /backtests/{id}/trades-table` (`src/api/ui/backtests.py:832-844`) opens an
+  `httpx.AsyncClient` to `http://localhost:8000/api/backtests/{id}/trades` instead of calling the
+  query itself, so it breaks whenever the app serves on another host or port, or behind a proxy.
+  Story 5.6's test answers that call in-process (`ASGITransport`). Pre-existing, and the file is
+  frozen by AR44. **Owner:** the first story allowed to change a view.
+- **W2 — CLI and web show one record's timestamps in different zones.** The CLI views (`backtest
+  compare`, `history`, `show`) read through pg8000 and show the Postgres server's zone; the local
+  server is `America/Toronto`. The web views read through asyncpg and show UTC, so late in the
+  evening a record's "Date" in `backtest compare` is a day behind its date on `/backtests`. It
+  applies to every record, not just paper ones. **Owner:** Growth UI work.
+
+## Code review of PR #36, Epic 5 integration (2026-10-11)
+
+Scope: production code only (`src/`, 26 files, `015-paper-trading...p3-epic5-base`), against the
+eight Epic 5 story files. Layers: Blind Hunter (14 findings), Edge Case Hunter (4), Acceptance
+Auditor 5.1–5.4 (4) and 5.5–5.8 (2). After dedup and verification: 2 decision-needed, 8 patch,
+1 defer, 13 dismissed (refuted in code, or covered by a recorded PO ruling — D-C, R1a, code
+review P1 of 5.8, the `write_rejection_snapshot` precedent). **Both decisions ruled by the PO
+(Allay) on 2026-10-11, each on the recommended option; all ten items landed in this PR.**
+
+**Decisions (PO)**
+
+- [x] [Review][Decision] DN1 — **RULED (b): proceed, name it** — landed as `ORDERS_NOT_LISTED` /
+  `ORDERS_NOT_LISTED_DISPOSITION`. — Listing the orders still fails the seal closed, `--force` or not.
+  5.5's ruling DN1a says "an unreadable order never blocks a seal… the seal proceeds with or
+  without `--force`"; the dev record's carve-out ("listing the orders at all still fails closed")
+  is the dev's own reading, not the ruling's. A `keys("orders:*")` failure refuses a flat session
+  5.3 could seal. Options: (a) keep fail-closed and amend DN1a's wording; (b) a failed listing
+  becomes `unreadable_orders=["<listing failed>"]` and the seal proceeds.
+  [`src/core/live_session_view.py` `_working_orders`]
+- [x] [Review][Decision] DN2 — **RULED (a): extend P1 to `HALTED`** — landed; `ConnectionMonitor`
+  128 → 134 statements, baselined with its reason. — A socket drop while `HALTED` after a reconciliation withhold is not
+  narrated. 5.8's code-review P1 re-anchors a drop during a withhold, but only from
+  `CONNECTED`/`RECOVERING`. If the withhold outlives the halt window (→ `HALTED`) and the socket
+  then drops, no `connection.lost` is logged, `_withheld_by_reconciliation` stays set, and on
+  reconnect `reconnect_seconds` reads 0.0 (`_reconnected_at` was pinned at the withhold).
+  Options: (a) extend P1 to `HALTED` (log + re-anchor, state stays `HALTED`); (b) accept — the
+  halt was already reported, and record it.
+  [`src/core/live_connection_monitor.py` `_observe_disconnected`]
+
+**Patches**
+
+- [x] [Review][Patch] P1 — `live seal` can report a committed seal as failed: `outcome.report` is
+  set only after `get_session()`'s `__aexit__`; a close error or Ctrl-C between `commit()` and that
+  line prints "live seal failed" and exits non-zero while the session is `sealed`. Set it right
+  after `await db.commit()`. [`src/cli/commands/live_seal.py:140-145`] (blind+edge)
+- [x] [Review][Patch] P2 — `--starting-capital 1E+26` (or any amount past 28 digits at cents)
+  makes `_require_capital`'s `quantize` raise `decimal.InvalidOperation`, which is neither
+  `TypeError` nor `ValueError`: a traceback instead of exit 2. Catch `ArithmeticError` too in
+  `require_sealable_capital`. [`src/services/session_seal_service.py:207-210`] (edge, reproduced)
+- [x] [Review][Patch] P3 — `_require_storable`'s `round(Decimal(str(value)), scale)` raises
+  `InvalidOperation` for a metric ≥ ~1e22 — reachable by a CAGR on a session of a few hours — so
+  the seal refuses with a raw `InvalidOperation` instead of the named column refusal. Compare the
+  magnitude before rounding. [`src/services/session_seal_service.py:236`] (edge, reproduced)
+- [x] [Review][Patch] P4 — One malformed `orders:*` key refuses every seal, `--force` or not:
+  `_key_id` runs outside the per-order `try`, contradicting DN1a. Move it inside and name the raw
+  key in `unreadable_orders`. [`src/core/live_session_view.py` `_working_orders`] (blind+auditor)
+- [x] [Review][Patch] P5 — A `process_lost` end is stamped in the Postgres server's zone
+  (psycopg2 on the claim path returns `timestamptz` in the session zone, `America/Toronto`), so a
+  period reads `start …+00:00`, `end …-04:00`, and the seal `--json` passes it through (AR29: UTC).
+  Same instant, wrong offset; the integration test drives asyncpg, which cannot see it. Normalise
+  with `.astimezone(UTC)` in `_end_for`. [`src/services/reconcile_withheld.py:132`] (auditor)
+- [x] [Review][Patch] P6 — `src/services/reconcile_withheld.py` joined the seal path in 5.8
+  (`session_conditions` calls `withheld_for_record` on every seal) but is not in the seal's
+  no-broker scan `MODULES`. Pure today; add it (5.4 D-F, mutant M10's class of omission).
+  [`tests/unit/services/test_session_seal_service.py:1646-1652`] (auditor)
+- [x] [Review][Patch] P7 — Story 5.1's ACs carry no `acceptance_criterion` markers, so the criteria
+  summary never lists 5.1a–5.1d though tests back each (parity:178, parity:196, unit:554,
+  unit:598). Tag them. [`tests/unit/core/test_results_extractor.py`,
+  `tests/integration/core/test_results_extractor_parity.py`] (auditor)
+- [x] [Review][Patch] P8 — Stale invariant: "Every session row is strategy-owned … rows carry no
+  strategy id" is no longer true after 5.5's forced seal writes reconciliation-owned open legs as
+  null-exit rows. Metrics unaffected (open rows never become legs); fix the comment.
+  [`src/core/session_equity.py:62-64`] (auditor)
+
+**Deferred**
+
+- [x] [Review][Defer] W1 — The sealed record states an open withheld period two ways:
+  `last_run_flags.reconcile_withheld.periods[i].ended_by` is `null` (as stored, 5.4 R2a) while the
+  top-level `reconcile_withheld` copy says `open_at_seal` (5.8's PO condition). Both rulings hold
+  as written; a reader of `last_run_flags` must not treat it as the record's own judgement.
+  [`src/services/session_conditions.py` `build_session_conditions`] — deferred, by design of two
+  rulings; owner: Growth comparison work.

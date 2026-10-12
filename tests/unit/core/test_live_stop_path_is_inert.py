@@ -104,6 +104,17 @@ STOP_PATH_MODULES = (
 #: stops a session it *raises* and leaves the stop to the runner's ordinary
 #: teardown (PO ruling 2A). Membership would be inert, not protective;
 #: ``LIVE_MODULE_GLOBS`` still scans it for every forbidden order method.
+#: ``src/core/live_stranded_orders.py`` (Story 4.8) is **NOT** on the list, for
+#: ``live_runtime_reconcile.py``'s reason above: it is called only from that
+#: module's runtime cycle, on the tick the teardown cancels first, and nothing
+#: in the stop path calls into it. Its only engine write is
+#: ``reconcile_execution_report`` (a ``CANCELED`` report for a cached order IBKR
+#: no longer lists), never ``cancel_order`` — membership would be inert, not
+#: protective. ``LIVE_MODULE_GLOBS`` does **not** scan it for these names
+#: (measured by mutation, 2026-10-06 — no glob-driven forbidden-method scan
+#: exists): ``TestNoOrderMethodIsCalled`` in
+#: ``tests/unit/core/test_live_stranded_orders.py`` does, with this file's
+#: constant and helper.
 #: ``src/core/live_exec_position_reports.py`` (Story 4.3) is **NOT** on it
 #: either, for ``live_exec_avg_px.py``'s reason below: build-time only (plus an
 #: adapter task that sends nothing), and it calls no order or position method.

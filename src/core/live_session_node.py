@@ -258,6 +258,24 @@ def session_strategy_ids(session_spec: SessionSpec) -> frozenset[str]:
     return frozenset(ids)
 
 
+def session_instrument_ids(session_spec: SessionSpec) -> frozenset[str]:
+    """Every instrument id the spec's strategies trade or subscribe to.
+
+    Story 5.7's code review R1 (PO ruling 2026-10-07): both reconciliations
+    count these symbols as held, beside the cached positions', so a flat
+    strategy is not started — or re-granted after a reconnect — beside an
+    unresolvable broker row of its own symbol. Every bar type, not only
+    ``bar_types[0]``: a wider set only fails closed more often.
+    """
+    from nautilus_trader.model.data import BarType
+
+    return frozenset(
+        str(BarType.from_str(bar_type).instrument_id)
+        for strategy_spec in session_spec.strategies
+        for bar_type in strategy_spec.bar_types
+    )
+
+
 def materialise_strategy(
     strategy_spec: StrategySpec, session_spec: SessionSpec | None = None
 ) -> Any:
