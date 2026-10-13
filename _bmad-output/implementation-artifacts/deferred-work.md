@@ -4673,3 +4673,31 @@ references are in `docs/qa/phase3-live-verification.md`, P23's 2026-10-12 Result
   are judged catch-up: their orders are withheld and a phantom `bars.catch_up` is written. DAY and
   WEEK bars, stamped 00:00 UTC, are always catch-up. Reason for deferring: every Phase 3 session
   and procedure runs 1-minute bars, and R1 ruled 120 s.
+
+## Phase 3 close-out: remaining after sign-off (2026-10-13)
+
+Phase 3 (paper trading) was closed by Allay on 2026-10-13. The PRD's phase-complete criteria are
+met on live evidence (P11 round trip, P15/P16/P17a reconciliation, P19b resume mid-position, live
+seal read in the existing views). What follows was not proven live and does not gate the phase.
+Procedures are in `docs/qa/phase3-live-verification.md`.
+
+- [ ] [Live][Soak] **P6 — unattended full RTH day has never been run.** The PRD's "walk away, come
+  back days later" moment. Needs a start before 09:25 ET; `scripts/diagnostics/run_p6_rth_day.sh`
+  is ready and the bar-feed defect that would have invalidated it is fixed (Story 5.9). Run it as
+  the first post-sign-off operation; also covers surviving the nightly Gateway restart.
+- [ ] [Live][Operator] **P17b** (startup refusal against a real broker discrepancy), **P18**
+  (runtime alignment after a hand-made TWS change), **P20** (corporate action absorbed; reverse
+  split refused). Each needs a manual broker-side change. Covered by unit/component/integration
+  tiers against doubles; no live evidence.
+- [ ] [Live][Operator] **P22** — fractional or unresolvable holding named, not refused. Not
+  arrangeable on the paper account (2026-10-12).
+- [ ] [Live] **P4** — criteria evidenced, but the probe exits 1 on its own assertion. Fix the
+  probe's assertion or record it as a known probe defect.
+- [ ] [Live] **Story 5.9 DN1/P9** — the hook on the IB error callback for re-issued bar requests
+  is not proven live.
+- [ ] [Doc] **L2/L3** (see the Epic 5 live-verification section above) are still open.
+- [ ] [Process] Epic 5 retrospective skipped by PO ruling; Story 5.9 W1–W6 (above) stand as the
+  Epic 5 carry-over. Known unfixed strategy bugs from the PRD (on_stop flattening, cold
+  indicators on some strategies) are not re-verified here.
+- Post-sign-off, not a completion criterion: accumulate sealed sessions for the first
+  backtest-vs-paper distributional comparison (PRD "Programme started").
