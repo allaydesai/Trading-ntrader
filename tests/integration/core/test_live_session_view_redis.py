@@ -151,8 +151,11 @@ class _Resp:
         self.sock.close()
 
 
-#: Each upstream address is printed before a byte is relayed on it, so no
-#: command ``MONITOR`` sees from the relay can precede its address.
+#: Each upstream connection opens with ``ECHO <token>`` before a byte is relayed on it,
+#: so ``MONITOR`` prints the connection's address, as Redis sees it, ahead of any command
+#: the reader sends. The address is read from that line, never from the relay's own socket:
+#: behind a container port mapping (CI's Redis service) Redis sees the proxy's address,
+#: not the relay's.
 _RELAY_SCRIPT = """
 import socket, sys, threading
 
@@ -169,7 +172,11 @@ print(listener.getsockname()[1], flush=True)
 while True:
     client, _ = listener.accept()
     upstream = socket.create_connection((sys.argv[1], int(sys.argv[2])), 5)
-    print("{}:{}".format(*upstream.getsockname()[:2]), flush=True)
+    token = sys.argv[3].encode()
+    upstream.sendall(b"*2\\r\\n$4\\r\\nECHO\\r\\n$%d\\r\\n%s\\r\\n" % (len(token), token))
+    reply = b""
+    while len(reply) < len(token) + len(str(len(token))) + 5:
+        reply += upstream.recv(4096)
     for src, dst in ((client, upstream), (upstream, client)):
         threading.Thread(target=pipe, args=(src, dst), daemon=True).start()
 """
@@ -181,30 +188,45 @@ class _Relay:
     Under ``-n auto`` other workers' fresh adapters connect and write in the same
     ``MONITOR`` window, so "opened in the window" blamed their ``SET``/``MULTI``/``EXEC``
     on the reader. A reader pointed here reaches Redis only through the relay, and each
-    upstream socket's local address is the ``<addr>`` ``MONITOR`` prints for it.
+    connection opens with a marker ``ECHO``, and the ``<addr>`` ``MONITOR`` prints beside
+    it is that connection's.
 
     It is a separate interpreter, not a thread: ``CacheDatabaseAdapter.__init__``
     blocks in Rust holding the GIL, so an in-process relay deadlocks the reader.
     """
 
     def __init__(self, target: RedisSettings) -> None:
+        self.token = f"ntrader-relay-{uuid4().hex}"
         self.proc = subprocess.Popen(
-            [sys.executable, "-c", _RELAY_SCRIPT, target.redis_host, str(target.redis_port)],
+            [
+                sys.executable,
+                "-c",
+                _RELAY_SCRIPT,
+                target.redis_host,
+                str(target.redis_port),
+                self.token,
+            ],
             stdout=subprocess.PIPE,
             text=True,
         )
         assert self.proc.stdout is not None
         self.port = int(self.proc.stdout.readline())
-        self.upstream_addrs: set[str] = set()
 
     def settings(self) -> RedisSettings:
         return RedisSettings(_env_file=None, redis_host="127.0.0.1", redis_port=self.port)
 
     def close(self) -> None:
-        """Stop relaying, and collect the address of every connection it relayed."""
         self.proc.terminate()
-        out, _ = self.proc.communicate(timeout=5)
-        self.upstream_addrs = set(out.split())
+        self.proc.communicate(timeout=5)
+
+    def addrs_in(self, lines: list[tuple[str, str, str]]) -> set[str]:
+        """The address ``MONITOR`` printed for each connection the relay opened."""
+        return {addr for addr, verb, line in lines if verb == "ECHO" and self.token in line}
+
+    def reader_lines(self, lines: list[tuple[str, str, str]]) -> list[tuple[str, str, str]]:
+        """The reader's own lines: the relay's connections, less its marker ``ECHO``."""
+        addrs = self.addrs_in(lines)
+        return [entry for entry in lines if entry[0] in addrs and self.token not in entry[2]]
 
 
 def _snapshot(client: _Resp, prefix: str) -> dict:
@@ -513,7 +535,8 @@ def _capture_read(session: "_Session", read) -> tuple[list[tuple[str, str, str]]
         after = _snapshot(observer, session.prefix)
     finally:
         observer.close()
-    return _monitor_lines(bytes(captured)), relay.upstream_addrs, after
+    lines = _monitor_lines(bytes(captured))
+    return lines, relay.addrs_in(lines), after
 
 
 class TestTheReadIsLoadOnly:
@@ -532,7 +555,7 @@ class TestTheReadIsLoadOnly:
 
         lines, relay_addrs, after = _capture_read(session, read_session_holdings)
 
-        reader_verbs = {verb for addr, verb, _ in lines if addr in relay_addrs}
+        reader_verbs = {verb for addr, verb, _ in lines if addr in relay_addrs and verb != "ECHO"}
         namespace_clients = {addr for addr, _, line in lines if session.trader_id in line}
         assert any(addr in relay_addrs and ":orders:" in line for addr, _, line in lines), (
             f"MONITOR did not see the reader's order read: {lines}"
@@ -582,18 +605,19 @@ class TestTheReadIsLoadOnly:
         after = _snapshot(observer, session.prefix)
         observer.close()
         lines = _monitor_lines(bytes(captured))
+        relay_addrs = relay.addrs_in(lines)
         # The reader's connections, exactly: every one it opened, keyless verbs
         # included, and nothing another worker's adapter wrote in the window.
-        reader_verbs = {verb for addr, verb, _ in lines if addr in relay.upstream_addrs}
+        reader_verbs = {verb for addr, verb, _ in relay.reader_lines(lines)}
         namespace_clients = {addr for addr, _, line in lines if session.trader_id in line}
 
         assert {"SCAN", "LRANGE", "MGET"} <= reader_verbs, f"MONITOR missed the reader: {lines}"
         # Story 4.7, D-C: `load_account` joined the read — it must be inside
         # this proof, not merely allowed by the pinned list.
-        assert any(
-            addr in relay.upstream_addrs and ":accounts:" in line for addr, _, line in lines
-        ), f"MONITOR did not see the reader's account read: {lines}"
-        assert namespace_clients <= relay.upstream_addrs, "the namespace was touched off-relay"
+        assert any(addr in relay_addrs and ":accounts:" in line for addr, _, line in lines), (
+            f"MONITOR did not see the reader's account read: {lines}"
+        )
+        assert namespace_clients <= relay_addrs, "the namespace was touched off-relay"
         assert reader_verbs <= READ_VERBS | HOUSEKEEPING_VERBS, (
             f"the reader issued non-read verbs: {reader_verbs - READ_VERBS - HOUSEKEEPING_VERBS}"
         )

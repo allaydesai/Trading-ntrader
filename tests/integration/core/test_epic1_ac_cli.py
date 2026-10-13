@@ -18,11 +18,14 @@ seams — ``node_factory`` and ``account_verifier`` — are injected with double
 from unittest.mock import patch
 
 import pytest
+import structlog
 from click.testing import CliRunner
 from structlog.testing import capture_logs
 
 import src.cli.commands.live as live_module
 import src.cli.main as cli_main
+import src.core.live_check as live_check_module
+import src.core.live_check_driver as live_check_driver_module
 import src.utils.logging as logging_utils
 from src.cli.commands.live import live
 from src.cli.main import cli
@@ -53,6 +56,19 @@ def _keep_the_shell_out_of_the_settings(monkeypatch):
     for name in ("IBKR_MARKET_DATA_TYPE", "IBKR_USE_RTH", "IBKR_RATE_LIMIT"):
         monkeypatch.delenv(name, raising=False)
         monkeypatch.delenv(name.lower(), raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _loggers_capture_logs_can_reach(monkeypatch):
+    """Give the modules under test loggers not yet bound to a processor chain.
+
+    ``configure_logging`` sets ``cache_logger_on_first_use=True``. Under ``-n auto`` an
+    earlier test in the same worker has already bound each module's logger, and
+    ``capture_logs`` cannot reach a bound logger: the records go to the console and the
+    capture is empty. These tests then fail in a full run and pass alone.
+    """
+    for module in (live_check_module, live_check_driver_module):
+        monkeypatch.setattr(module, "logger", structlog.get_logger(module.__name__))
 
 
 @pytest.fixture

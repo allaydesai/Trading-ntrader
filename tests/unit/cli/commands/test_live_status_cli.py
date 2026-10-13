@@ -38,6 +38,19 @@ _STATUS_SESSION_REPO = "src.cli.commands.live_status.SyncTradingSessionRepositor
 NOW = datetime.now(timezone.utc)
 SESSION_ID = UUID("44444444-4444-4444-4444-444444444444")
 
+
+@pytest.fixture(autouse=True)
+def _pinned_clock():
+    """Every row below is dated from ``NOW``, fixed when this module is imported.
+
+    Left to the real clock, a heartbeat "5 seconds ago" goes stale once a parallel run
+    reaches these tests more than the staleness threshold after collection (CI's
+    combined-coverage job: ~4 minutes), and ``health`` reads ``stale``.
+    """
+    with patch.object(live_status, "_utc_now", return_value=NOW):
+        yield
+
+
 #: The read-only surface `status`/`list` are allowed to touch. Anything else
 #: called on the repository stand-in is a write this story must never make.
 _READ_ONLY_REPO_METHODS = frozenset(

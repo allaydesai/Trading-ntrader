@@ -11,6 +11,7 @@ from src.api.dependencies import (
     get_data_catalog_service,
     get_default_catalog,
     get_dividend_repository,
+    get_instrument_metadata_repository,
     get_metadata_service,
     get_stock_split_repository,
 )
@@ -89,13 +90,29 @@ def mock_split_repo():
 
 
 @pytest.fixture
-def client(mock_metadata_service, mock_catalog_service, mock_dividend_repo, mock_split_repo):
+def mock_instrument_metadata_repo():
+    repo = AsyncMock()
+    repo.get_by_ticker = AsyncMock(return_value=None)
+    return repo
+
+
+@pytest.fixture
+def client(
+    mock_metadata_service,
+    mock_catalog_service,
+    mock_dividend_repo,
+    mock_split_repo,
+    mock_instrument_metadata_repo,
+):
     app.dependency_overrides[get_metadata_service] = lambda: mock_metadata_service
     app.dependency_overrides[get_data_catalog_service] = lambda: mock_catalog_service
     app.dependency_overrides[get_catalog_list] = lambda: ["us_stocks"]
     app.dependency_overrides[get_default_catalog] = lambda: "us_stocks"
     app.dependency_overrides[get_dividend_repository] = lambda: mock_dividend_repo
     app.dependency_overrides[get_stock_split_repository] = lambda: mock_split_repo
+    app.dependency_overrides[get_instrument_metadata_repository] = (
+        lambda: mock_instrument_metadata_repo
+    )
     try:
         yield TestClient(app)
     finally:
@@ -105,6 +122,7 @@ def client(mock_metadata_service, mock_catalog_service, mock_dividend_repo, mock
         app.dependency_overrides.pop(get_default_catalog, None)
         app.dependency_overrides.pop(get_dividend_repository, None)
         app.dependency_overrides.pop(get_stock_split_repository, None)
+        app.dependency_overrides.pop(get_instrument_metadata_repository, None)
 
 
 @pytest.mark.component
