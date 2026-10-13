@@ -22,6 +22,7 @@ from src.config import CatalogSettings, get_settings
 from src.db.base import Base
 from src.db.models.backtest import BacktestRun, PerformanceMetrics, RunEquityCurve
 from src.db.models.research import (
+    ResearchAnalysis,
     ResearchCandidate,
     ResearchStudy,
     ResearchStudyEvent,
@@ -103,6 +104,8 @@ def isolated_results(request, monkeypatch):
             RunEquityCurve.__table__,
             ResearchStudy.__table__,
             ResearchCandidate.__table__,
+            # Before trials: their analysis_pk foreign key resolves here.
+            ResearchAnalysis.__table__,
             ResearchTrial.__table__,
             ResearchStudyEvent.__table__,
         ]

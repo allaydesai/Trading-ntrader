@@ -27,6 +27,12 @@ EXPECTED_CAPABILITIES = frozenset(
         "trials_of_runs",
         "add_candidate",
         "candidates",
+        # Phase 4: analyses (sweeps, Monte Carlo, walk-forward, breadth, cost stress). A row is
+        # inserted pending or completed and completed once; nothing rewrites a result.
+        "add_analysis",
+        "analyses",
+        "trials_of_analysis",
+        "complete_analysis",
     }
 )
 
@@ -56,3 +62,35 @@ def test_immutable_models_refuse_an_orm_update(model):
     from src.db.models.research import _refuse_update
 
     assert event.contains(model, "before_update", _refuse_update)
+
+
+def test_phase_4_trial_roles_and_analysis_vocabulary_are_pinned():
+    """Widened deliberately at phase 4: the DB CHECK constraints mirror these tuples."""
+    from src.db.models.research import (
+        ANALYSIS_KINDS,
+        ANALYSIS_STATUSES,
+        TRIAL_ROLES,
+        ResearchAnalysis,
+        ResearchTrial,
+    )
+
+    assert TRIAL_ROLES == (
+        "in_sample",
+        "benchmark",
+        "out_of_sample",
+        "reproduction",
+        "walk_forward",
+        "breadth",
+        "cost_stress",
+    )
+    assert ANALYSIS_KINDS == (
+        "sweep",
+        "sensitivity",
+        "monte_carlo",
+        "walk_forward",
+        "breadth",
+        "cost_stress",
+    )
+    assert ANALYSIS_STATUSES == ("pending", "completed", "void")
+    assert "analysis_pk" in ResearchTrial.__table__.c
+    assert ResearchAnalysis.__tablename__ == "research_analyses"

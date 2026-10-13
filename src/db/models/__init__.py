@@ -6,6 +6,7 @@ from src.db.models.catalog_instrument import CatalogInstrument
 from src.db.models.catalog_stock_split import CatalogStockSplit
 from src.db.models.instrument_metadata import InstrumentMetadata
 from src.db.models.research import (
+    ResearchAnalysis,
     ResearchCandidate,
     ResearchStudy,
     ResearchStudyEvent,
@@ -21,6 +22,7 @@ __all__ = [
     "CatalogStockSplit",
     "InstrumentMetadata",
     "PerformanceMetrics",
+    "ResearchAnalysis",
     "ResearchCandidate",
     "ResearchStudy",
     "ResearchStudyEvent",

@@ -16,6 +16,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from src.db.models.research import (
+    ResearchAnalysis,
     ResearchCandidate,
     ResearchStudy,
     ResearchStudyEvent,
@@ -147,3 +148,31 @@ class SyncResearchRepository:
         """Every frozen candidate of the study, by version."""
         stmt = select(ResearchCandidate).where(ResearchCandidate.study_pk == study.id)
         return list(self.session.scalars(stmt.order_by(ResearchCandidate.version)))
+
+    def add_analysis(self, analysis: ResearchAnalysis) -> ResearchAnalysis:
+        """Record a robustness analysis (pending, or completed with its result)."""
+        self.session.add(analysis)
+        self.session.flush()
+        return analysis
+
+    def analyses(self, study: ResearchStudy, kind: str | None = None) -> list[ResearchAnalysis]:
+        """The study's analyses, oldest first, optionally of one kind."""
+        stmt = select(ResearchAnalysis).where(ResearchAnalysis.study_pk == study.id)
+        if kind:
+            stmt = stmt.where(ResearchAnalysis.kind == kind)
+        return list(self.session.scalars(stmt.order_by(ResearchAnalysis.id)))
+
+    def trials_of_analysis(self, analysis: ResearchAnalysis) -> list[ResearchTrial]:
+        """The ledger rows submitted for a batch analysis, in submission order."""
+        stmt = select(ResearchTrial).where(ResearchTrial.analysis_pk == analysis.id)
+        return list(self.session.scalars(stmt.order_by(ResearchTrial.id)))
+
+    def complete_analysis(
+        self, analysis: ResearchAnalysis, *, result: dict[str, Any] | None, status: str
+    ) -> None:
+        """Write a pending analysis's result once: ``completed`` with it, or ``void`` without."""
+        if analysis.status != "pending":
+            raise ValueError(f"analysis {analysis.analysis_id} is already {analysis.status}")
+        analysis.result, analysis.status = result, status
+        analysis.completed_at = datetime.now(timezone.utc)
+        self.session.flush()

@@ -25,6 +25,7 @@ dependencies = [
     "python-multipart>=0.0.20",
     "pyyaml>=6.0.2",
     "rich>=14.1.0",
+    "scipy>=1.17.1",
     "sqlalchemy>=2.0.43",
     "structlog>=25.4.0",
     "uvicorn[standard]>=0.38.0",

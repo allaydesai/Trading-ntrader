@@ -40,10 +40,26 @@ from src.db.base import Base, TimestampMixin
 #: Study statuses. ``exploring`` → ``frozen`` → ``tested`` → ``promoted`` forward;
 #: ``rejected`` and ``parked`` are the recorded ways out.
 STUDY_STATUSES = ("exploring", "frozen", "tested", "promoted", "rejected", "parked")
-#: What a trial was for. Only ``in_sample`` counts against the budget.
-TRIAL_ROLES = ("in_sample", "benchmark", "out_of_sample", "reproduction")
+#: What a trial was for. Only ``in_sample`` counts against the budget (sweep members are
+#: in-sample trials). ``walk_forward``, ``breadth`` and ``cost_stress`` arrived with phase 4:
+#: robustness runs of a frozen candidate, never counted, never freezable.
+TRIAL_ROLES = (
+    "in_sample",
+    "benchmark",
+    "out_of_sample",
+    "reproduction",
+    "walk_forward",
+    "breadth",
+    "cost_stress",
+)
 #: ``pending`` until its job ends; then ``completed`` (run saved) or ``void``.
 TRIAL_STATES = ("pending", "completed", "void")
+#: What an analysis is: a batch of runs (sweep, walk_forward, breadth, cost_stress) or a
+#: computation over stored runs (sensitivity, monte_carlo).
+ANALYSIS_KINDS = ("sweep", "sensitivity", "monte_carlo", "walk_forward", "breadth", "cost_stress")
+#: ``pending`` while member runs are outstanding; ``completed`` once its result is written
+#: (exactly once); ``void`` when no member produced a run.
+ANALYSIS_STATUSES = ("pending", "completed", "void")
 
 
 def _in(column: str, values: tuple[str, ...]) -> str:
@@ -132,6 +148,39 @@ class ResearchCandidate(Base):
     __table_args__ = (UniqueConstraint("study_pk", "version", name="uq_candidate_version"),)
 
 
+class ResearchAnalysis(Base, TimestampMixin):
+    """A robustness analysis of a study (phase 4): what was asked and, once, its result.
+
+    A batch analysis (sweep, walk-forward, breadth, cost stress) owns the trials
+    submitted for it through ``ResearchTrial.analysis_pk`` and is ``pending`` until
+    they have all settled; a computed analysis (sensitivity, Monte Carlo) is written
+    ``completed`` at once. A result is never rewritten: a new request is a new row.
+    """
+
+    __tablename__ = "research_analyses"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    analysis_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), unique=True, nullable=False, default=uuid4
+    )
+    study_pk: Mapped[int] = _study_fk()
+    candidate_pk: Mapped[Optional[int]] = mapped_column(
+        BigInteger, ForeignKey("research_candidates.id", ondelete="CASCADE"), nullable=True
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    request: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    result: Mapped[Optional[dict[str, Any]]] = mapped_column(JSONB, nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True))
+
+    __table_args__ = (
+        CheckConstraint(_in("kind", ANALYSIS_KINDS), name="chk_analysis_kind"),
+        CheckConstraint(_in("status", ANALYSIS_STATUSES), name="chk_analysis_status"),
+        Index("idx_research_analyses_study", "study_pk", "id"),
+    )
+
+
 class ResearchTrial(Base, TimestampMixin):
     """One job in a study's ledger, recorded when it is submitted."""
 
@@ -141,6 +190,10 @@ class ResearchTrial(Base, TimestampMixin):
     study_pk: Mapped[int] = _study_fk()
     candidate_pk: Mapped[Optional[int]] = mapped_column(
         BigInteger, ForeignKey("research_candidates.id", ondelete="CASCADE"), nullable=True
+    )
+    #: The batch analysis this trial was submitted for (sweep, walk-forward, breadth, cost stress).
+    analysis_pk: Mapped[Optional[int]] = mapped_column(
+        BigInteger, ForeignKey("research_analyses.id", ondelete="SET NULL"), nullable=True
     )
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     role: Mapped[str] = mapped_column(String(20), nullable=False)
@@ -162,6 +215,7 @@ class ResearchTrial(Base, TimestampMixin):
         CheckConstraint(_in("state", TRIAL_STATES), name="chk_trial_state"),
         Index("idx_research_trials_study", "study_pk", "id"),
         Index("idx_research_trials_run", "run_id"),
+        Index("idx_research_trials_analysis", "analysis_pk"),
     )
 
 
