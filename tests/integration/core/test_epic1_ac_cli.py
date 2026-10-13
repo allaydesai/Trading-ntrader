@@ -26,6 +26,7 @@ import src.cli.commands.live as live_module
 import src.cli.main as cli_main
 import src.core.live_check as live_check_module
 import src.core.live_check_driver as live_check_driver_module
+import src.core.live_check_node as live_check_node_module
 import src.utils.logging as logging_utils
 from src.cli.commands.live import live
 from src.cli.main import cli
@@ -67,7 +68,7 @@ def _loggers_capture_logs_can_reach(monkeypatch):
     ``capture_logs`` cannot reach a bound logger: the records go to the console and the
     capture is empty. These tests then fail in a full run and pass alone.
     """
-    for module in (live_check_module, live_check_driver_module):
+    for module in (live_check_module, live_check_driver_module, live_check_node_module):
         monkeypatch.setattr(module, "logger", structlog.get_logger(module.__name__))
 
 
