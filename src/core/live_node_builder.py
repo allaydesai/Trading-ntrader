@@ -59,6 +59,7 @@ from nautilus_trader.model.data import BarType
 from src.config import IBKRSettings
 from src.core.exit_outcome import LiveCheckOutcome
 from src.core.live_bar_observer import LiveBarObserverConfig
+from src.core.live_bar_resubscribe import install_bar_resubscribe_fix
 from src.core.live_cache import check_redis_reachable
 from src.core.live_exec_avg_px import install_avg_px_serialization_fix
 from src.core.live_exec_position_reports import install_position_report_suppression
@@ -705,4 +706,8 @@ class InteractiveBrokersLiveExecClientFactory(_StockIBExecClientFactory):
         # Story 4.3, D-B (PO ruling 1A): the adapter's own position-update
         # reports are off; runtime positions are `live_runtime_reconcile`'s.
         install_position_report_suppression(client)
+        # Story 5.9, D-A: on the IB client data and exec share, so the bar
+        # resubscribe works after a reconnect. Runs inside `node.build()`,
+        # before any strategy's `subscribe_bars`.
+        install_bar_resubscribe_fix(client._client)
         return client

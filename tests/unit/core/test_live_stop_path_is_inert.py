@@ -124,6 +124,13 @@ STOP_PATH_MODULES = (
 #: every holding untouched by design (PO ruling D-C: B). ``LIVE_MODULE_GLOBS``
 #: still scans it for every forbidden order method.
 
+#: ``src/core/live_bar_resubscribe.py`` and ``src/core/live_catch_up_gate.py``
+#: (Story 5.9) are **NOT** on it. The first is ``live_exec_avg_px.py``'s case
+#: (build-time patch of one adapter method, plus a watch the heartbeat tick
+#: awaits, never the teardown ``finally``); the second is ``live_order_path.py``'s
+#: (it judges order-creating calls, it makes none). Neither calls an order or
+#: position method.
+
 #: ``src/core/live_exec_avg_px.py`` (2026-09-01) is likewise **NOT** on the list,
 #: for a simpler reason: it is build-time only. It runs once inside
 #: ``node.build()``, replaces one adapter-private dict, and is never reached

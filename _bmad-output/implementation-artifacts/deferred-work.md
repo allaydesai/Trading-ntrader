@@ -4625,3 +4625,79 @@ review P1 of 5.8, the `write_rejection_snapshot` precedent). **Both decisions ru
   as written; a reader of `last_run_flags` must not treat it as the record's own judgement.
   [`src/services/session_conditions.py` `build_session_conditions`] — deferred, by design of two
   rulings; owner: Growth comparison work.
+
+## Deferred from: Epic 5 live verification, P23 + live seal (2026-10-12)
+
+Found running P23a/P23c and the live seal on `015-paper-trading` (d7c59af). Full transcript
+references are in `docs/qa/phase3-live-verification.md`, P23's 2026-10-12 Result-log row.
+
+- [x] [Live][Defect] L1 — **Routed to Story 5.9 (2026-10-12; PO rulings: local shim, no trading on catch-up bars; live proof is P24).** **After any reconnect the session never receives a bar again.**
+  Nautilus 1.220's IB adapter `_resubscribe_all` raises
+  `TypeError: subscribe_historical_bars() got an unexpected keyword argument 'start'`.
+  `client/market_data.py:456-465` registers the bar subscription's handle with `start=start`,
+  but `subscribe_historical_bars` (`:416`) takes no `start`. Measured live: no bar for 4½ minutes
+  after `connection.restored`. `live status` read `health: idle`, and no record names the lost
+  subscription. Every reconnect path (P4, P18d, P21d, P22d, P23a) leaves a session connected,
+  reconciled and re-granted, but unable to trade. Upstream defect, in the same family as
+  `live_exec_avg_px` (worked around locally, pinned by a canary). Needs a PO decision: a local
+  wrapper fix, a named `bars.resubscribe_failed` record, or both. Owner: unassigned (Phase 3 sign-off).
+- [ ] [Live][Doc] L2 — P23's Command block pipes `live seal --json` straight into `json.load`,
+  but `logging_configured` is printed to stdout first, so the command fails as written. Either
+  route that line to stderr under `--json` or add `grep '^{'` to the procedure.
+- [ ] [Live][Doc] L3 — The procedures' `until grep -q "<key>=<value>"` loops never match the
+  transcript, because the log file carries ANSI colour codes between key and value
+  (`action\x1b[0m=\x1b[35mtrading_withheld`). Strip `\x1b\[[0-9;]*m` before grepping, or write
+  the session log without colour when stdout is not a TTY.
+
+## Deferred from: code review of 5-9-restore-the-bar-feed-after-a-reconnect (2026-10-13)
+
+- W1: A burst's `bars.catch_up` is never written when no live bar follows it (session stop, RTH
+  close), and two outages with no live bar between them merge into one record. There is no
+  teardown flush, and the runner is at its cap (`src/core/live_catch_up_gate.py:145`).
+- W2: A republished bar (same `ts_event`) is judged but still reaches the strategy's `base(bar)`,
+  so indicators count it twice. The RTH re-delivery predates Story 5.9, and P24's reconnect
+  produced no duplicate (`src/core/live_catch_up_gate.py:137`).
+- W3: The adapter's error-retry (10189/366/102, `client/error.py:151-159`) calls the stored handle
+  mid-session, so it goes through the shim's resubscribe branch. It writes `bars.resubscribed`
+  outside a reconnect, and a failed retry stops the session under R2
+  (`src/core/live_bar_resubscribe.py:139`).
+- W4: On a cold or pre-market start whose first published bar is the previous session's last bar,
+  a phantom `bars.catch_up count=1` is written, because `_last_ts_event` starts empty. The warm-up
+  seam drops that bar for warmed strategies (`src/core/live_catch_up_gate.py:136`).
+- W5: `CatchUpGate.submission_withheld` is a property that logs on read. "One record per withheld
+  order" relies on the order path reading it exactly once, which nothing enforces
+  (`src/core/live_catch_up_gate.py:104`).
+- W6 (from DN2, Allay 2026-10-13): the catch-up gate's fixed 120 s grace is valid for 1-minute
+  bars only. On intervals of 2 minutes or more, bars the adapter's completion timer publishes (the
+  day's last RTH bar, a session's first bar) are handled about one interval past their close. They
+  are judged catch-up: their orders are withheld and a phantom `bars.catch_up` is written. DAY and
+  WEEK bars, stamped 00:00 UTC, are always catch-up. Reason for deferring: every Phase 3 session
+  and procedure runs 1-minute bars, and R1 ruled 120 s.
+
+## Phase 3 close-out: remaining after sign-off (2026-10-13)
+
+Phase 3 (paper trading) was closed by Allay on 2026-10-13. The PRD's phase-complete criteria are
+met on live evidence (P11 round trip, P15/P16/P17a reconciliation, P19b resume mid-position, live
+seal read in the existing views). What follows was not proven live and does not gate the phase.
+Procedures are in `docs/qa/phase3-live-verification.md`.
+
+- [ ] [Live][Soak] **P6 — unattended full RTH day has never been run.** The PRD's "walk away, come
+  back days later" moment. Needs a start before 09:25 ET; `scripts/diagnostics/run_p6_rth_day.sh`
+  is ready and the bar-feed defect that would have invalidated it is fixed (Story 5.9). Run it as
+  the first post-sign-off operation; also covers surviving the nightly Gateway restart.
+- [ ] [Live][Operator] **P17b** (startup refusal against a real broker discrepancy), **P18**
+  (runtime alignment after a hand-made TWS change), **P20** (corporate action absorbed; reverse
+  split refused). Each needs a manual broker-side change. Covered by unit/component/integration
+  tiers against doubles; no live evidence.
+- [ ] [Live][Operator] **P22** — fractional or unresolvable holding named, not refused. Not
+  arrangeable on the paper account (2026-10-12).
+- [ ] [Live] **P4** — criteria evidenced, but the probe exits 1 on its own assertion. Fix the
+  probe's assertion or record it as a known probe defect.
+- [ ] [Live] **Story 5.9 DN1/P9** — the hook on the IB error callback for re-issued bar requests
+  is not proven live.
+- [ ] [Doc] **L2/L3** (see the Epic 5 live-verification section above) are still open.
+- [ ] [Process] Epic 5 retrospective skipped by PO ruling; Story 5.9 W1–W6 (above) stand as the
+  Epic 5 carry-over. Known unfixed strategy bugs from the PRD (on_stop flattening, cold
+  indicators on some strategies) are not re-verified here.
+- Post-sign-off, not a completion criterion: accumulate sealed sessions for the first
+  backtest-vs-paper distributional comparison (PRD "Programme started").

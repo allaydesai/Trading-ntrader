@@ -24,12 +24,13 @@ from structlog.testing import capture_logs
 
 from src.core import live_runtime_reconcile
 from src.core.exit_outcome import EXIT_CODES
+from src.core.live_bar_resubscribe import FAILURES_ATTRIBUTE, BarFeedLostError
 from src.core.live_broker_state import (
     BrokerStateAdapterError,
     BrokerStateFailure,
     BrokerStateUnavailableError,
 )
-from src.core.live_check import classify_failure
+from src.core.live_check import classify_failure, failure_message
 from src.core.live_connection_monitor import ConnectionMonitor, ConnectionState, ConnectionStatus
 from src.core.live_order_path import install_order_path
 from src.core.live_runtime_reconcile import (
@@ -47,7 +48,7 @@ from src.core.live_startup_reconcile import (
     ReconciliationFailure,
 )
 from src.models.broker_state import BrokerPosition, BrokerState, CashBalance
-from tests.component.core.test_live_order_path import CLOSES, _new_strategy, make_bar
+from tests.component.core.test_live_order_path import CLOSES, _new_strategy, make_live_bar
 from tests.component.core.test_session_runner_phases import (
     PAPER_ACCOUNT,
     SpyRecord,
@@ -480,7 +481,7 @@ class TestTheGateWithholdsWhileStateIsNotReEstablished:
 
         with capture_logs() as logs:
             for index, close in enumerate(CLOSES):
-                strategy.handle_bar(make_bar(index, close))
+                strategy.handle_bar(make_live_bar(index, close))
 
         assert list(strategy.cache.orders()) == []
         assert [e for e in logs if e["event"] == "order.suppressed"]
@@ -495,7 +496,7 @@ class TestTheGateWithholdsWhileStateIsNotReEstablished:
         strategy.start()
 
         for index, close in enumerate(CLOSES):
-            strategy.handle_bar(make_bar(index, close))
+            strategy.handle_bar(make_live_bar(index, close))
 
         assert len(list(strategy.cache.orders())) == 1
         strategy.stop()
@@ -524,3 +525,79 @@ class TestARefusedStartupGrantIsNotAPhaseFailure:
 
         assert ("reconcile", "ok") in _pairs(logs)
         assert withheld_at_trading == [True]
+
+
+AC_5_9B = (
+    "a failed bar resubscribe is recorded once as bars.resubscribe_failed with the bar type and "
+    "error type, and the session does not report a healthy, trading state while deaf"
+)
+SOURCE_5_9 = "_bmad-output/planning-artifacts/epics.md"
+
+
+class TestALostBarFeedStopsTheSession:
+    """Story 5.9, AC #2 (PO ruling R2), through ``runner.run()``: a bar
+    subscription the shim could not restore after a reconnect stops the session
+    on the next tick, exit 1, through the ordinary teardown — positions
+    untouched, nothing sent — exactly as adapter drift does (Story 5.8). The
+    watch runs before the reconciler, so no reconnect cycle re-grants trading
+    first."""
+
+    @staticmethod
+    def _run(record, failures, run_seconds=30.0):
+        settings = _settings()
+        node = TestLiveNode(run_seconds=run_seconds)
+        position = _open_position(NVDA, STRATEGY, "22")
+        node.cache.open_positions = [position]
+        exec_client = node.kernel.exec_engine._clients["INTERACTIVE_BROKERS"]
+        exec_client._client = SimpleNamespace(**{FAILURES_ATTRIBUTE: failures})
+        reads = []
+
+        async def _broker(node_arg, *, log):
+            reads.append(node_arg)
+            return _state((NVDA, "22"))
+
+        async def _yield(seconds: float) -> None:
+            await asyncio.sleep(0)
+
+        runner = _runner(
+            node,
+            settings=settings,
+            record=record,
+            broker_state_reader=_broker,
+            connection_reader=lambda s: UP,
+            sleeper=_yield,
+        )
+        return node, position, runner, settings, reads
+
+    @pytest.mark.acceptance_criterion("5.9b", AC_5_9B, SOURCE_5_9)
+    def test_a_failed_resubscribe_stops_the_session_with_exit_1(self, registered_accounts):
+        record = SpyRecord()
+        failures = [("NVDA.NASDAQ-1-MINUTE-LAST-EXTERNAL", "TypeError")]
+        node, position, runner, settings, reads = self._run(record, failures)
+        registered_accounts(settings)
+
+        with capture_logs() as logs:
+            with pytest.raises(BarFeedLostError) as caught:
+                runner.run()
+
+        assert EXIT_CODES[classify_failure(caught.value)] == 1
+        message = failure_message(caught.value)
+        assert "NVDA.NASDAQ-1-MINUTE-LAST-EXTERNAL" in message and "TypeError" in message
+        assert PAPER_ACCOUNT not in message
+        assert ("trading", "ok") in _pairs(logs), "a runtime stop, not a startup refusal"
+        assert len(reads) == 1, "only the startup read: the watch stopped the first tick"
+        assert node.kernel.exec_engine.reconcile_reports == []
+        assert node.cache.open_positions == [position]
+        assert node.disposed is True
+        assert record.calls[-1] == "mark_stopped"
+
+    def test_a_restored_feed_lets_the_reconciler_run(self, registered_accounts):
+        """The sibling: with no failure noted, the tick reaches the reconciler,
+        so the stop above is the watch's doing and not the harness's."""
+        record = SpyRecord()
+        node, _, runner, settings, reads = self._run(record, [], run_seconds=0.3)
+        registered_accounts(settings)
+
+        runner.run()
+
+        assert len(reads) >= 2, "the tick ran the runtime reconciler after startup's read"

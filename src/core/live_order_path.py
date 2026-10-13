@@ -129,6 +129,8 @@ from collections.abc import Callable
 from decimal import Decimal
 from typing import Any, TypedDict
 
+from src.core.live_catch_up_gate import install_catch_up_gate
+
 #: The order/position-*creating* strategy methods this module wraps. A
 #: subset of `tests/unit/core/test_live_stop_path_is_inert.py`'s
 #: `FORBIDDEN_ORDER_METHODS` (production cannot import from `tests/`, so the
@@ -264,14 +266,20 @@ def install_order_path(strategy: Any, monitor: Any, log: Any) -> None:
             imports ``nautilus_trader``, matching ``live_strategy_guard.py``'s
             framework-free discipline.
         monitor: Anything with a ``submission_withheld`` bool property — in
-            production a ``ConnectionMonitor``, in tests a stub.
+            production a ``ConnectionMonitor``, in tests a stub. Since Story
+            5.9 the wrappers consult a :class:`CatchUpGate` over it instead,
+            installed on the strategy's own ``handle_bar``: withheld when the
+            monitor withholds, or when the bar being handled closed during an
+            outage (PO ruling 2026-10-12, "ignore the missed prices for
+            trading").
         log: A structlog logger, ideally already bound to ``session_id``.
     """
     if getattr(strategy, _INSTALLED_MARKER, False):
         return
+    gate = install_catch_up_gate(strategy, monitor, log)
     for method_name in ORDER_CREATING_METHODS:
         base = getattr(strategy, method_name)
-        setattr(strategy, method_name, _wrap(method_name, base, strategy, monitor, log))
+        setattr(strategy, method_name, _wrap(method_name, base, strategy, gate, log))
     setattr(strategy, _INSTALLED_MARKER, True)
 
 

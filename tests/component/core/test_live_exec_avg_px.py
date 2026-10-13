@@ -31,6 +31,7 @@ fill at the broker.
 
 import inspect
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from nautilus_trader.adapters.interactive_brokers.execution import (
@@ -315,6 +316,11 @@ class TestInstall:
                 # which refuses a client missing these two adapter attributes.
                 self._handle_position_update = None
                 self._known_positions: dict = {}
+                # Story 5.9: and the bar-resubscribe patch, on the IB client
+                # the exec client shares with the data client.
+                self._client = SimpleNamespace(
+                    subscribe_historical_bars=None, _handle_subscription_error=None
+                )
 
         built = _Client()
         monkeypatch.setattr(

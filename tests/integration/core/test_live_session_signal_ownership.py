@@ -259,7 +259,11 @@ def _spawn_probe(body: str = _FORCE_EXIT_PROBE) -> tuple[subprocess.Popen, "queu
         for line in proc.stdout:
             lines.put(line)
 
-    threading.Thread(target=_drain, daemon=True).start()
+    drain = threading.Thread(target=_drain, daemon=True)
+    drain.start()
+    # A caller reading `lines` after `proc.wait()` must join this first: the child can
+    # exit before the thread has queued its last line.
+    proc.drain_thread = drain  # type: ignore[attr-defined]
     return proc, lines
 
 
@@ -366,6 +370,7 @@ class TestASignalInTheSynchronousWindow:
                 proc.wait()
 
         assert returncode == 0, f"expected a clean exit, got {returncode}"
+        proc.drain_thread.join(timeout=10)  # type: ignore[attr-defined]
         collected = []
         while not lines.empty():
             collected.append(lines.get_nowait())

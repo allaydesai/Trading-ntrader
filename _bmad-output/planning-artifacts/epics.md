@@ -2036,3 +2036,47 @@ hourly throttle does not apply.
 **When** it is pinned
 **Then** it is a named constant with a test that fails if a streak of two withholds or a streak of
 three does not.
+
+### Story 5.9: Restore the Bar Feed After a Reconnect, and Never Trade on a Catch-Up Bar
+
+*(Added 2026-10-12 from the Epic 5 live verification, finding L1 in `deferred-work.md`. PO rulings,
+Allay 2026-10-12: "fix it ourselves" (a local shim in the `live_exec_avg_px` pattern, with an
+upstream canary), and "ignore the missed prices for trading" (catch-up bars still reach the
+indicators, but no order acts on them).)*
+
+As the operator,
+I want a session that rides out a disconnect to get its bars back and to say so,
+So that a session never sits connected, reconciled and permitted to trade while it can no longer
+hear a price, and never trades on prices that went stale during the outage.
+
+**Acceptance Criteria:**
+
+**Given** the IB adapter's reconnect path (`_resubscribe_all`) re-issues a session's bar subscription
+**When** it does
+**Then** the subscription is restored. Nautilus 1.220's stored handle passes `start=` and omits the
+required `params`, so the adapter's own call raises `TypeError` and the bars never resume. One
+`bars.resubscribed` record names the bar type, and live bars resume.
+
+**Given** the bar resubscribe fails anyway (any exception)
+**When** it is noted
+**Then** one `bars.resubscribe_failed` record names the bar type and error type, and the session does
+not report a healthy, trading state while deaf. An IB refusal of the re-issued request, sent back
+through its error callback, counts as a failure too (code review 2026-10-13, DN1). Whether to stop or withhold is decided in the story
+from measured behaviour, and that decision is disclosed.
+
+**Given** bars that closed before `connection.restored` and arrive after the resubscribe (the
+adapter's catch-up burst: its only guard drops bars older than the last one it saw)
+**When** they reach the strategy
+**Then** the indicators see them, no order acts on them (any order such a bar triggers is withheld
+and named), and the number skipped is recorded once per reconnect for each strategy and bar type
+(code review 2026-10-13, DN3: the gate is per strategy, so each record names its `strategy_id`).
+
+**Given** the upstream defect
+**When** Nautilus is upgraded
+**Then** a canary pinned against the adapter's own source goes red if the stored handle's shape or
+`subscribe_historical_bars`'s signature changes, so the shim becomes deletable by name.
+
+**Given** live procedure P23a (or P4) is re-run
+**When** the Gateway is restored
+**Then** `live_bars.received` resumes after `connection.restored`, and no order fills on a bar that
+closed during the outage.

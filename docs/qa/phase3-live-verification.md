@@ -47,8 +47,10 @@ procedure passed; it is evidence that the tooling exists to run it.
 | | P17 | Startup reconciliation, as above | ⚠️ 2026-09-28: P17a ✅; P17b still ⏳ (operator only) |
 | | P18 | Runtime alignment: a TWS change corrected, a reconnect re-established | ⏳ 2026-09-27 (operator only) |
 | | P20 | Corporate actions absorbed and named; a reverse split refused | ⏳ 2026-09-28 (operator only) |
-| | P22 | Holdings the adapter cannot express (a fractional share, an unresolvable contract) are named, not refused; `live reconcile` stays exact | ⏳ 2026-10-07: defined, not run (operator only) |
-| | P23 | A persistent runtime reconciliation failure withholds trading after three cycles and is re-granted by a clean cycle; drift stops; the withheld period reaches the sealed record | ⏳ 2026-10-11: defined, not run (operator only) |
+| | P22 | Holdings the adapter cannot express (a fractional share, an unresolvable contract) are named, not refused; `live reconcile` stays exact | ⏳ 2026-10-12: not arrangeable (no fractional or unresolvable holding; operator only) |
+| | P23 | A persistent runtime reconciliation failure withholds trading after three cycles and is re-granted by a clean cycle; drift stops; the withheld period reaches the sealed record | ✅ 2026-10-12: P23a + P23c passed. Found live: after any reconnect the IB adapter never resubscribes bars (see Result log; fixed by Story 5.9, proved live by P24) |
+| | P24 | Bars resume after a reconnect; the outage's replayed bars reach the indicators but no order | ✅ 2026-10-13: bars resubscribed and resumed, one `bars.catch_up count=2`, no order on an outage bar, orders flow again after the restore. Criterion 4 accepted by PO ruling: the gate's own record never fired because the monitor already withheld |
+| **Seal & compare** | `live seal` | A real traded session sealed and read in `/backtests` and `backtest compare` | ✅ 2026-10-12: `p12-0921` (1 closed trade; `--force` past `no_engine_state`, holdings unknown) and `p23-1012` (`--force`, one open −22 trade recorded) sealed at `--starting-capital 50000`. Both are listed in `/backtests` and their detail pages return 200 (p12 final balance $49,998.33 = 50,000 − 1.67, P12's P&L). `backtest compare` renders both beside a QQQ backtest; no NVDA backtest exists to pair them with |
 
 **Where the gate stands (2026-09-28, updated at the Epic 4 retrospective).** Connectivity, gate
 refusal and the complete round trip have passed live, with P4 partial. A live E2E pass on
@@ -2813,6 +2815,8 @@ Story 5.7's live row ⚠️.
 | Date | Operator | Result | Notes |
 | ---- | -------- | ------ | ----- |
 | 2026-10-07 | Story 5.7 dev session | ⏳ **Defined, not run** | P22a is read-only but needs a fractional holding the paper account was not known to have. P22b–P22d start a session and need holdings arranged by hand in TWS. The story charter forbids submitting orders and running `live start` against real sessions, so P22 is operator-only. The same logic is proven against broker doubles and a real `LiveExecutionEngine`: see "What it does" above. Numbered P22 while Story 5.8 may also add a procedure in parallel. If both land as P22, renumber at merge (the Story 4.5/4.7 P19/P20 precedent). |
+| 2026-10-12 | Allay (Claude Code session) | ⏳ **Not arrangeable**, by Allay's decision | The paper account holds no fractional share and no contract the IB adapter cannot resolve. Arranging either means a hand-placed TWS order, which Allay chose not to place this session, so P22a–P22d stay ⏳. The logic stays proven against broker doubles and a real `LiveExecutionEngine` (see "What it does" above). **For whoever runs P22d:** P23's 2026-10-12 row found that after any reconnect the IB adapter fails to resubscribe bars (`subscribe_historical_bars() got an unexpected keyword argument 'start'`). P22d's criterion 4 (no `order.suppressed` after `connection.restored`) would then pass vacuously, because no bar means no signal. |
+| 2026-10-13 | Story 5.9 code review | ℹ️ **Note, no run** | The bar resubscribe defect this row's P22d note warns about is fixed by Story 5.9 and proved live by P24 (2026-10-13): bars resume after a reconnect, so P22d's criterion 4 no longer passes vacuously. P24 supersedes the warning above. |
 
 ## Procedure P23: a persistent runtime reconciliation failure withholds trading; drift stops
 
@@ -2965,3 +2969,95 @@ live row ⚠️.
 | Date | Operator | Result | Notes |
 | ---- | -------- | ------ | ----- |
 | 2026-10-11 | Story 5.8 dev session | ⏳ **Defined, not run** | P23a starts a session and suspends the Gateway, and P23c seals a session. The story charter forbids `live start` and `live seal` against real sessions and any touch of the connection-loss diagnostics, so P23 is operator-only. Every AC is proven against broker doubles (unit, component) and AC #3 against Postgres (integration/db): see "What it does" above. |
+| 2026-10-12 | Allay (Claude Code session) | ✅ **pass: P23a criteria 1–3 and 5, P23c criterion 4.** Three findings below; the first is a live defect outside this story | Ran inside RTH (Monday, 14:45–15:01 ET) on `015-paper-trading` (d7c59af) against the bare paper Gateway on `127.0.0.1:4002`, PID 56873, the JVM that listens on 4002. The DB was at `1dca14a21609`, the 016-mcp-server head. Its four migrations past `85c949ac0374` only add nullable columns and new tables, so this branch's code runs against that schema unchanged. **Preflight:** `live check` passed and received 3 AAPL bars with no 162, standing in for the bars probe. **Session:** fresh throwaway `p23-1012` (`4bd7d3f7-0e4b-4589-9fcb-7cb68f7f7432`), `sma_crossover` on NVDA with `fast_period=2 slow_period=3 portfolio_value=50000 position_size_pct=10`, run as `.venv/bin/python -m src.cli.main live start`, so the runner itself was PID 72196 with no `uv` wrapper. **D6 (read first):** zero hits at start. By the end there were two strict hits, both explained: `10182 Failed to request live updates (disconnected)` at 18:56:04Z, when the Gateway's IBKR server link dropped on resume, and `366 No historical data query found for ticker id:10006` at teardown, the bar query that finding ⓵ had already lost. No 162. **Before the freeze:** startup `reconcile.ok` flat. A SELL 22 filled at 18:46:05Z (`commission='1.10 USD'`, short opened), and runtime cycle 1 was clean (`reconcile.ok cycles=1`). **`kill -STOP 56873` at 18:48:01Z. Criterion 1:** `reconcile.cycle_failed consecutive=1 reason=timeout error_type=BrokerStateUnavailableError` came at 18:48:33Z as a warning, with no withhold. Exactly one ERROR followed, `reconcile.cycle_failed action=trading_withheld consecutive=3` at 18:51:13Z. Then `connection.halted downtime_seconds=80.0` at 18:52:33Z, past the 60 s window, and `connection.state_changed ... submission_withheld=True`. There was no `connection.lost` from our monitor while the socket stayed up, so this was the D-J case the procedure wants, not a real disconnect. **Criterion 2:** no `order.submitted` and no `order.suppressed` between the ERROR and `connection.restored`; no bars arrived while frozen, so no strategy signalled. Nothing was cancelled, closed or flattened by the withhold. **Criterion 3:** after `kill -CONT` at 18:56:04Z, `reconcile.ok scope=reconnect` came at 18:56:23.285Z (`instruments={'NVDA.NASDAQ': '-22'} open_orders=0`), then `connection.restored downtime_seconds=310.08` at 18:56:23.286Z, in that order. "Orders flow again after it" could not be observed, because of finding ⓵. **Criterion 5:** zero of this codebase's structured records carry the full account id. **Stop:** one SIGINT at 19:00:41Z gave `session.stopped signal=SIGINT trader_started=True`, exit 0, and `Residual Position(SHORT 22 NVDA.NASDAQ)` as designed. **P23c, criterion 4:** `live seal p23-1012 --starting-capital 50000 --force --json` exited 0 (`run_id=5691f1ed-5a24-47ef-a8e4-9c81c4810fd9`). `session_conditions.reconcile_withheld` = `count: 1` with one period: `start 18:51:13.206769Z`, `end 18:56:23.286121Z`, `cause runtime_reconciliation_failing`, `reason timeout`, `error_type BrokerStateUnavailableError`, `failed_cycles 3`, `ended_by reconciled`. The `last_run_flags` copy is identical. The forced seal recorded the −22 as one open trade with no exit (`open_trades_recorded=1`, `holdings_known=true`). Afterwards, on Allay's instruction, `flatten_position.py` dry-ran (`held=-22 submitted=0`) and then `--confirm` filled BUY 22 at `venue_order_id=120`, leaving the account flat. **Finding ⓵, live defect, upstream (Nautilus 1.220 IB adapter): after any reconnect the bar subscription is never restored, so the session receives no bars again.** `_resubscribe_all` raised `TypeError: subscribe_historical_bars() got an unexpected keyword argument 'start'` at 18:56:09Z. `market_data.py:456-465` registers the subscription handle with `start=start`, but `subscribe_historical_bars` (`:416`) has no `start` parameter. The last bar was 18:48:11Z; none arrived in the 4½ minutes between the reconnect and the stop. `live status` read `health: idle` while the connection read restored. Every reconnect path (P4, P18d, P21d, P22d, P23a) therefore leaves a session connected and reconciled but unable to trade, and nothing names it. Recorded in `deferred-work.md`. **Finding ⓶:** the strategy's closing BUY 22 was submitted at 18:48:31Z, 30 s into the freeze and before any withhold, since two failures do not withhold by design. Nautilus's in-flight check could not reach the frozen Gateway and swept it `order.rejected reconciliation=True reason=UNKNOWN` at 18:48:48Z, then `REJECTED -> CANCELED` at 18:49:08Z. On resume IBKR logged `Pending to create 1 orders: 119 (code: 1104)`, but `open_orders=0` on the reconnect cycle and the flatten's next id (120) show order 119 was never created. Local and broker agreed at −22 throughout. The tally reads that sweep as a refusal (`orders refused: 1 rejected ... swept by reconciliation`), which is accurate. **Finding ⓷:** the Command block's `live seal ... --json \| python -c "json.load(...)"` fails as written, because `logging_configured` is printed to stdout ahead of the JSON (the same trap P13's row notes for `live status --json`). Use `grep '^{'` first. Logs: `logs/p23-1012.log`, `logs/p23-seal-1012.json`, `logs/flatten-nvda-dry-1012.log`, `logs/flatten-nvda-1012.log`. **Operator note:** my wait loop grepped the raw log for `action=trading_withheld`, but the file wraps `key=value` in ANSI colour codes, so it never matched. The Gateway stayed frozen until the 8-minute cap, about 5 minutes longer than needed. Strip `\x1b\[[0-9;]*m` before grepping the transcript, or the procedure's own `until grep -q` loops hang the same way. |
+| 2026-10-13 | Story 5.9 code review | ℹ️ **Note, no run** | Finding ⓵ (no bar resubscribe after a reconnect) is fixed by Story 5.9. P24 (2026-10-13) supersedes criterion 3's unobserved "orders flow again after it": a live bar's BUY 22 was submitted and filled after `connection.restored`. |
+
+## Procedure P24: bars resume after a reconnect, and no order acts on a catch-up bar
+
+**Introduced by**: Story 5.9 — Restore the Bar Feed After a Reconnect, and Never Trade on a
+Catch-Up Bar (Epic 5 live verification, finding L1; PO rulings 2026-10-12)
+**Verifies**:
+- AC #1 live: after the Gateway is restored, `bars.resubscribed` names the bar type and
+  `live_bars.received` resumes. Before Story 5.9 it never did (P23's 2026-10-12 row, finding ⓵).
+- AC #3 live: the bars that closed during the outage reach the strategy, no order acts on one, and
+  one `bars.catch_up` counts them.
+- AC #2 (a failed resubscribe stops the session, exit `1`) is **not** run live. A resubscribe that
+  fails *with* the shim cannot be arranged on demand. It is proven through `runner.run()` against
+  doubles (`TestALostBarFeedStopsTheSession`).
+
+**Tools**: `ntrader live start`, and `kill -STOP` / `kill -CONT` on the **Gateway's own** process,
+as P23a does.
+
+### What it does, and what it does not do
+
+It starts a session, whose strategies may trade on their own signals, and freezes the Gateway for
+about four minutes. This is P23a's method; see that procedure for why the socket stays up. It
+submits no order of its own. **The whole procedure is written for the operator.** Run it on a
+**throwaway** session.
+
+### Preconditions
+
+As P23. In addition:
+- The Gateway's process id must be the JVM that listens on the paper port
+  (`lsof -nP -iTCP:4002 -sTCP:LISTEN`).
+- Strip ANSI colour from the transcript before every `grep`. The session log wraps `key=value` in
+  colour codes, and a raw `grep "action=..."` never matches (`deferred-work.md` L3; P23's operator
+  note).
+
+### Command
+
+```bash
+L=logs/p24-<date>.log
+clean() { sed -E 's/\x1b\[[0-9;]*m//g' "$L"; }
+.venv/bin/python -m src.cli.main live start <session> > "$L" 2>&1 &
+RUNNER_PID=$!            # the runner itself: no `uv run` wrapper (P21's double-SIGINT gotcha)
+until clean | grep -q "session.started" || ! kill -0 "$RUNNER_PID" 2>/dev/null; do sleep 2; done
+clean | grep -c -w -E "162|10182|366"                       # D6's standing rule, first
+sleep 150
+GATEWAY_PID=<the JVM listening on the paper port>
+kill -STOP "$GATEWAY_PID"; date -u +%T                       # note the freeze time
+until clean | grep -q "action=trading_withheld" || ! kill -0 "$RUNNER_PID" 2>/dev/null; do sleep 10; done
+sleep 60                                                     # let the outage span more than the grace
+kill -CONT "$GATEWAY_PID"; date -u +%T
+until clean | grep -q "connection.restored" || ! kill -0 "$RUNNER_PID" 2>/dev/null; do sleep 5; done
+sleep 210                                                    # two bars whose ts_event (the bar's open) is after the restore
+clean | grep -E "bars\.(resubscribed|resubscribe_failed|catch_up|catch_up_order_withheld)|connection\.(restored|lost)|order\.(submitted|suppressed)|live_bars\.received " | cut -c1-220
+kill -INT "$RUNNER_PID"; wait "$RUNNER_PID"; echo "exit=$?"
+```
+
+### Expected output
+
+```
+bars.resubscribed bar_type=NVDA.NASDAQ-1-MINUTE-LAST-EXTERNAL
+reconcile.ok scope=reconnect ...
+connection.restored ...
+bars.catch_up bar_type=... count=<about the outage's minutes, less the last one or two> first_ts_event=... last_ts_event=...
+live_bars.received ... ts_event=<a minute after the restore>
+```
+
+### Pass criteria
+
+1. `bars.resubscribed` appears after the Gateway is resumed, with no `Failed to resubscribe` and no
+   `bars.resubscribe_failed`.
+2. `live_bars.received` resumes: at least two bars whose `ts_event` is after `connection.restored`.
+3. One `bars.catch_up` per strategy and bar type, naming its `strategy_id` (code review DN3,
+   2026-10-13). Its `first_ts_event` is at or after the last bar received
+   before the freeze, and its `count` is the number of outage bars that closed more than 120 s
+   before the replay (R1).
+4. No `order.submitted` has a latency anchor (`bar_close_to_submit_ms`) above 120 000. Any order a
+   catch-up bar triggered is `order.suppressed`, preceded by `bars.catch_up_order_withheld` when the
+   connection monitor was not already withholding (PO ruling 2026-10-13: under P23a's method the
+   burst lands before the grant, so the monitor is the reason and the gate writes no record).
+5. `live start` exits `0` on the SIGINT. Positions at IBKR are unchanged by the procedure itself.
+6. D6, and NFR26 for this codebase's own records (as P23).
+
+**Fail:** no `bars.resubscribed`, no bar after `connection.restored`, a `bars.catch_up` per bar, or
+an order filled on a bar from inside the outage. Record the transcript and leave Story 5.9's live
+row ⚠️.
+
+### Result log
+
+| Date | Operator | Result | Notes |
+| ---- | -------- | ------ | ----- |
+| 2026-10-12 | Story 5.9 dev session | ⏳ **Defined, not run** | Every AC is proven without a broker: the shim and its canaries on a real `InteractiveBrokersClient` with a spy socket (`test_live_bar_resubscribe.py`); the gate in unit tests and on a real `sma_crossover` (`test_live_catch_up_gate.py`, `test_live_order_path.py`); the stop through `runner.run()` (`test_session_runner_runtime_reconcile.py`). |
+| 2026-10-13 | Allay (Claude Code session) | ✅ **pass: all six criteria and AC #5.** Criterion 4 passed by PO ruling (Allay, 2026-10-13): its gate-record half was not exercised live (see below) | Ran inside RTH (Tuesday, 09:59–10:10 ET) on `015-paper-trading` (8c8d5ad) against the bare paper Gateway on `127.0.0.1:4002`, PID 70265, the JVM that listens on 4002. **Preflight:** `live check` passed and received 2 AAPL bars with no 162. **Session:** fresh throwaway `p24-1013` (`a3451bd4-c147-4407-b4ad-cfae81cb7557`), `sma_crossover` on NVDA with `fast_period=2 slow_period=3 portfolio_value=50000 position_size_pct=10`, as P23. Runner PID 83874 (`.venv/bin/python`, no `uv` wrapper). Startup `reconcile.ok` flat. **D6 (read first):** zero hits at start. By the end there were four lines, two events, both explained. `10182 Failed to request live updates (disconnected)` came at 14:06:32Z, on the resume, as in P23. `162 API historical data query cancelled: 10006` came at 14:10:07Z at teardown: the stop cancelled the bar subscription, which was alive again. That is the cancel form of 162, not the competing-login form. P23 logged `366` here instead, because its query had been lost. **Timeline:** bars arrived every minute through `ts_event` 14:01 (IB stamps a minute bar with its **open**, and the gate adds the bar's own timedelta to get its close). Runtime cycle 1 was clean. `kill -STOP` came at 14:01:58Z. `reconcile.cycle_failed consecutive=1` came at 14:02:46Z as a warning, then exactly one ERROR, `action=trading_withheld consecutive=3`, at 14:05:26Z. `kill -CONT` came at 14:06:32Z. At 14:06:37Z the IB client reset its own socket (`Resetting InteractiveBrokersClient`), and `Resubscribing to 3 subscriptions` reused the stored subscription whose handle is the shim's partial. **Criterion 1:** `bars.resubscribed bar_type=NVDA.NASDAQ-1-MINUTE-LAST-EXTERNAL` at 14:06:37.820Z, with zero `Failed to resubscribe`, zero `bars.resubscribe_failed` and no `TypeError`. Finding ⓵ of P23 is fixed live. **Replay:** at 14:06:38Z the bars `ts_event` 14:02, 14:03, 14:04 and 14:05 arrived in one burst, so the feed has no gap from 14:01 to 14:09. The strategy's SMAs saw every one: it signalled BUY, SELL, BUY, SELL. **Criterion 3:** exactly one `bars.catch_up count=2 first_ts_event=14:02:00 last_ts_event=14:03:00`, logged when the 14:04 bar ended the burst. The 14:02 and 14:03 bars closed 218 s and 158 s before handling, past R1's 120 s; the 14:04 and 14:05 bars, 98 s and 38 s, were not. `first_ts_event` is after the last bar before the freeze (14:01). **Criterion 4:** all four signals were `order.suppressed`, and none reached IBKR. **No `bars.catch_up_order_withheld` was written**, because the connection monitor was already withholding: the burst landed 38 s **before** `connection.restored`, while the state was `recovering`/`halted` with `submission_withheld=True`. The gate writes its own record only when it, not the monitor, is the reason (`live_catch_up_gate.py`, `submission_withheld`). So this run never exercised the gate's withhold. P23a's freeze always puts the burst before the grant, because the IB client resubscribes on its own socket reset, which comes before the next runtime cycle. The gate's own path stays proven by its unit and component tests only. The one `order.submitted` in the run has `bar_close_to_submit_ms=5334`, well under 120 000. **Restore:** `reconcile.ok scope=reconnect` came at 14:07:16.799Z (`open_orders=0 positions=0`), then `connection.restored downtime_seconds=110.02`. **Criterion 2:** `live_bars.received` resumed. The 14:06 bar was handled at 14:07:05Z, still withheld, with no signal. Then the 14:07 bar at 14:08:05Z, the 14:08 bar at 14:09:05Z and the 14:09 bar at 14:10:05Z. Two of these, 14:08 and 14:09, have `ts_event` after `connection.restored`. **Orders flow again** (P23's unobservable criterion 3): the 14:08 bar's BUY 22 was `order.submitted` at 14:09:05.336Z, then `order.accepted` and `order.filled` at 226.15 (`commission='1.00 USD'`). It was a live bar, 5.3 s past its close. **Criterion 5:** one SIGINT at 14:10:07Z gave `session.stopped signal=SIGINT trader_started=True`, exit `0`, and `Residual Position(LONG 22 NVDA.NASDAQ)` as designed. The procedure itself moved no position: the +22 is the strategy's own signal on a live bar after the restore. `live reconcile p24-1013` afterwards read clean: NVDA session +22 = broker +22, cash 27,510.5 matches. **Criterion 6:** zero of this codebase's structured records carry the full account id (NFR26). **Operator deviation, disclosed:** the Command's `sleep 150` after `connection.restored` ends at about 14:09:47Z, which would have left only one bar (14:08) whose `ts_event` falls after the restore, because a bar's `ts_event` is its open. I paused the **driver script** (never the session or the Gateway) from 14:07:54Z to 14:10:07Z, so that the 14:09 bar landed before the SIGINT. Suggested fix to the Command: `sleep 210`. **Story 5.9 Dev Notes' named item, "strategy state after a suppressed order":** after four suppressed alternating signals, the strategy's next signal (14:09:05Z) submitted and filled normally. No confusion showed. **PO ruling on criterion 4 (Allay, 2026-10-13): accepted as passed.** The AC is that no order acts on an outage bar, and none did. The `bars.catch_up_order_withheld` record is written only when the gate is the reason, and P23a's method cannot arrange that case. It stays proven by `test_live_catch_up_gate.py` and `test_live_order_path.py`. Criterion 4 should read: "any order a catch-up bar triggered is `order.suppressed`, preceded by `bars.catch_up_order_withheld` when the connection monitor was not already withholding". **Housekeeping, on Allay's instruction:** `flatten_position.py` dry-ran (`held=+22 submitted=0`), then `--confirm` filled SELL 22 at 226.34 (`venue_order_id=122`, `commission=1.10 USD`), leaving the account flat (`remaining=+0`). Logs: `logs/p24-1013.log`, `logs/p24-1013-progress.log`, `logs/flatten-nvda-dry-1013.log`, `logs/flatten-nvda-1013.log`. |

@@ -7,6 +7,8 @@ measured precedent ``test_session_runner_phases.py``'s dispatch-order test
 relies on.
 """
 
+import time
+
 import pytest
 import structlog
 from nautilus_trader.cache.cache import Cache
@@ -146,6 +148,48 @@ def make_bar(index: int, close: str) -> Bar:
     )
 
 
+def make_live_bar(index: int, close: str) -> Bar:
+    """A bar that has just closed, for tests that drive a real strategy on a ``LiveClock``.
+
+    Since Story 5.9 the order path withholds any order raised while handling a
+    bar that closed more than the catch-up grace before the clock reads (PO
+    ruling 2026-10-12). :func:`make_bar`'s bars sit at the Unix epoch, which a
+    ``LiveClock`` correctly reads as 56 years stale, so every order on one would
+    be withheld. The latency tests keep :func:`make_bar`: they never handle a
+    bar through a strategy.
+    """
+    bar = make_bar(index, close)
+    # Closed `BAR_ARRIVAL_AFTER_CLOSE_NS` ago, as a live IB bar is handled. The
+    # bars of one sequence are a nanosecond apart, not an interval: spaced by
+    # minutes, the early ones would sit past the grace (code review P6).
+    ts_event = time.time_ns() - BAR_INTERVAL_NS - BAR_ARRIVAL_AFTER_CLOSE_NS + index
+    return Bar(
+        bar_type=bar.bar_type,
+        open=bar.open,
+        high=bar.high,
+        low=bar.low,
+        close=bar.close,
+        volume=bar.volume,
+        ts_event=ts_event,
+        ts_init=ts_event + BAR_INTERVAL_NS + BAR_ARRIVAL_AFTER_CLOSE_NS,
+    )
+
+
+def test_a_live_bar_has_closed_within_the_grace_when_it_is_made():
+    """Code review P6: a "live" bar must have closed, recently. A future-dated
+    one gives a negative lateness that passes the gate whatever its sign or
+    units, so the tests built on it would prove nothing about the gate."""
+    from src.core.live_catch_up_gate import CATCH_UP_GRACE_SECONDS
+
+    for index in (0, 7):
+        bar = make_live_bar(index, "100.00")
+        lateness = time.time_ns() - (bar.ts_event + BAR_INTERVAL_NS)
+
+        assert 0 < lateness <= CATCH_UP_GRACE_SECONDS * 1_000_000_000
+    first = make_live_bar(0, "100.00")
+    assert make_live_bar(1, "100.00").ts_event > first.ts_event
+
+
 def _new_strategy():
     clock = LiveClock()
     trader_id = TraderId("TESTER-000")
@@ -183,7 +227,7 @@ class TestSuppressionWhenWithheld:
         strategy.start()
 
         for index, close in enumerate(CLOSES):
-            strategy.handle_bar(make_bar(index, close))
+            strategy.handle_bar(make_live_bar(index, close))
 
         assert list(strategy.cache.orders()) == []
         strategy.stop()
@@ -196,7 +240,7 @@ class TestSuppressionWhenWithheld:
 
         with capture_logs() as logs:
             for index, close in enumerate(CLOSES):
-                strategy.handle_bar(make_bar(index, close))
+                strategy.handle_bar(make_live_bar(index, close))
 
         suppressed = [entry for entry in logs if entry["event"] == "order.suppressed"]
         assert len(suppressed) == 1
@@ -227,7 +271,7 @@ class TestSuppressionWhenWithheld:
 
         with capture_logs() as logs:
             for index, close in enumerate(CLOSES):
-                strategy.handle_bar(make_bar(index, close))
+                strategy.handle_bar(make_live_bar(index, close))
 
         suppressed = [entry for entry in logs if entry["event"] == "order.suppressed"]
         assert len(suppressed) == 1
@@ -248,7 +292,7 @@ class TestSuppressionWhenWithheld:
 
         with capture_logs() as logs:
             for index, close in enumerate(CLOSES):
-                strategy.handle_bar(make_bar(index, close))
+                strategy.handle_bar(make_live_bar(index, close))
 
         suppressed = [entry for entry in logs if entry["event"] == "order.suppressed"]
         assert suppressed[0]["strategy_id"] == "SMACrossover-007"
@@ -271,7 +315,7 @@ class TestSuppressionWhenWithheld:
         strategy.start()
         with capture_logs() as logs:
             for index, close in enumerate(CLOSES):
-                strategy.handle_bar(make_bar(index, close))
+                strategy.handle_bar(make_live_bar(index, close))
 
         assert len([e for e in logs if e["event"] == "order.suppressed"]) == 1
         strategy.stop()
@@ -285,7 +329,7 @@ class TestSuppressionWhenWithheld:
         strategy.start()
 
         for index, close in enumerate(CLOSES):
-            strategy.handle_bar(make_bar(index, close))
+            strategy.handle_bar(make_live_bar(index, close))
 
         assert len(list(strategy.cache.orders())) == 1
         strategy.stop()
@@ -344,7 +388,7 @@ class TestTheProbeCanActuallyFail:
         strategy.start()
 
         for index, close in enumerate(CLOSES):
-            strategy.handle_bar(make_bar(index, close))
+            strategy.handle_bar(make_live_bar(index, close))
 
         assert len(list(strategy.cache.orders())) == 1
         strategy.stop()
@@ -1730,3 +1774,38 @@ class TestContainmentLeavesNoPhantomCumQty:
         assert records[0]["cum_qty"] == "30", (
             "the contained failure must not leave a total no record explains"
         )
+
+
+class TestCatchUpBarsReachTheIndicatorsOnly:
+    """Story 5.9, AC #3 (PO ruling 2026-10-12, "ignore the missed prices for
+    trading"): a real ``sma_crossover`` handed a crossover as **catch-up** bars
+    (closed long before the strategy's ``LiveClock`` reads) updates both
+    registered SMAs exactly as a live session would, and places no order. The
+    sibling below hands the same crossover as live bars and does place one, so
+    neither assertion can pass by the harness simply never trading.
+    """
+
+    def test_the_indicators_move_and_no_order_is_placed(self):
+        strategy = _new_strategy()
+        install_order_path(strategy, _StubMonitor(withheld=False), structlog.get_logger("test"))
+        strategy.start()
+
+        for index, close in enumerate(CLOSES):
+            strategy.handle_bar(make_bar(index, close))
+
+        assert strategy.fast_sma.count == len(CLOSES)
+        assert strategy.slow_sma.count == len(CLOSES)
+        assert list(strategy.cache.orders()) == []
+        strategy.stop()
+
+    def test_the_same_crossover_as_live_bars_places_its_order(self):
+        strategy = _new_strategy()
+        install_order_path(strategy, _StubMonitor(withheld=False), structlog.get_logger("test"))
+        strategy.start()
+
+        for index, close in enumerate(CLOSES):
+            strategy.handle_bar(make_live_bar(index, close))
+
+        assert strategy.fast_sma.count == len(CLOSES)
+        assert len(list(strategy.cache.orders())) == 1
+        strategy.stop()
