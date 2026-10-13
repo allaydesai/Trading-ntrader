@@ -72,8 +72,9 @@ def _stand_in() -> SimpleNamespace:
         account_id=AccountId(f"INTERACTIVE_BROKERS-{RAW_ACCOUNT}"),
         _clock=SimpleNamespace(timestamp_ns=lambda: 1),
         _order_avg_prices={},
-        # Story 5.9: the factory also patches the shared IB client's bar resubscribe.
-        _client=SimpleNamespace(subscribe_historical_bars=None),
+        # Story 5.9: the factory also patches the shared IB client's bar resubscribe
+        # and (code review P9) its subscription-error handler.
+        _client=SimpleNamespace(subscribe_historical_bars=None, _handle_subscription_error=None),
         sent=[],
         tasks=[],
     )

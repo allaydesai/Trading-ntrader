@@ -149,7 +149,7 @@ def make_bar(index: int, close: str) -> Bar:
 
 
 def make_live_bar(index: int, close: str) -> Bar:
-    """A bar dated *now*, for tests that drive a real strategy on a ``LiveClock``.
+    """A bar that has just closed, for tests that drive a real strategy on a ``LiveClock``.
 
     Since Story 5.9 the order path withholds any order raised while handling a
     bar that closed more than the catch-up grace before the clock reads (PO
@@ -159,7 +159,10 @@ def make_live_bar(index: int, close: str) -> Bar:
     bar through a strategy.
     """
     bar = make_bar(index, close)
-    offset = time.time_ns()
+    # Closed `BAR_ARRIVAL_AFTER_CLOSE_NS` ago, as a live IB bar is handled. The
+    # bars of one sequence are a nanosecond apart, not an interval: spaced by
+    # minutes, the early ones would sit past the grace (code review P6).
+    ts_event = time.time_ns() - BAR_INTERVAL_NS - BAR_ARRIVAL_AFTER_CLOSE_NS + index
     return Bar(
         bar_type=bar.bar_type,
         open=bar.open,
@@ -167,9 +170,24 @@ def make_live_bar(index: int, close: str) -> Bar:
         low=bar.low,
         close=bar.close,
         volume=bar.volume,
-        ts_event=bar.ts_event + offset,
-        ts_init=bar.ts_init + offset,
+        ts_event=ts_event,
+        ts_init=ts_event + BAR_INTERVAL_NS + BAR_ARRIVAL_AFTER_CLOSE_NS,
     )
+
+
+def test_a_live_bar_has_closed_within_the_grace_when_it_is_made():
+    """Code review P6: a "live" bar must have closed, recently. A future-dated
+    one gives a negative lateness that passes the gate whatever its sign or
+    units, so the tests built on it would prove nothing about the gate."""
+    from src.core.live_catch_up_gate import CATCH_UP_GRACE_SECONDS
+
+    for index in (0, 7):
+        bar = make_live_bar(index, "100.00")
+        lateness = time.time_ns() - (bar.ts_event + BAR_INTERVAL_NS)
+
+        assert 0 < lateness <= CATCH_UP_GRACE_SECONDS * 1_000_000_000
+    first = make_live_bar(0, "100.00")
+    assert make_live_bar(1, "100.00").ts_event > first.ts_event
 
 
 def _new_strategy():

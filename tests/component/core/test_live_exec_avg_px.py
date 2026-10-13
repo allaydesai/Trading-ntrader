@@ -318,7 +318,9 @@ class TestInstall:
                 self._known_positions: dict = {}
                 # Story 5.9: and the bar-resubscribe patch, on the IB client
                 # the exec client shares with the data client.
-                self._client = SimpleNamespace(subscribe_historical_bars=None)
+                self._client = SimpleNamespace(
+                    subscribe_historical_bars=None, _handle_subscription_error=None
+                )
 
         built = _Client()
         monkeypatch.setattr(

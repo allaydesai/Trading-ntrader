@@ -1,6 +1,6 @@
 # Story 5.9: Restore the Bar Feed After a Reconnect, and Never Trade on a Catch-Up Bar
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -211,11 +211,13 @@ Copied from epics.md (Story 5.9) and numbered for traceability.
    record names the bar type, and live bars resume.
 2. **Given** the bar resubscribe fails anyway (any exception), **When** it is noted, **Then** one
    `bars.resubscribe_failed` record names the bar type and error type, and the session does not
-   report a healthy, trading state while deaf (D-D: it stops with exit `1`).
+   report a healthy, trading state while deaf (D-D: it stops with exit `1`). An IB refusal of the
+   re-issued request, sent back through its error callback, counts too (code review DN1).
 3. **Given** bars that closed before `connection.restored` and arrive after the resubscribe (the
    catch-up burst, F7), **When** they reach the strategy, **Then** the indicators see them, no order
    acts on them (any order such a bar triggers is withheld and named), and the number skipped is
-   recorded once per reconnect (D-C, D-E, D-F).
+   recorded once per reconnect for each strategy and bar type (D-C, D-E, D-F; code review DN3:
+   the gate is per strategy, so each record names its `strategy_id`).
 4. **Given** the upstream defect, **When** Nautilus is upgraded, **Then** a canary pinned against
    the adapter's own source goes red if the stored handle's shape or `subscribe_historical_bars`'s
    signature changes, so the shim becomes deletable by name.
@@ -335,6 +337,103 @@ operator.
     - swallow instead of re-raise.
 
     Each mutation must go red.
+
+### Review Findings
+
+Code review 2026-10-13: three parallel layers (Blind Hunter, Edge Case Hunter, Acceptance Auditor)
+over 8c8d5ad, with P24's live log (2026-10-13) as evidence. 39 raw findings: 3 decision-needed (resolved: 2 to patch, 1 to defer), 8 patch, 5 deferred,
+13 dismissed.
+
+All 10 patches were applied test-first on 2026-10-13 (option 0, batch). The gates are green:
+ruff format, `ruff check --no-cache`, mypy, unit 4014, component 2065 passed / 16 skipped,
+integration/core `--forked` 110 passed / 2 skipped, size caps. A mutation sweep of 10 against the
+new logic killed all 10: the per-bar reset, `strategy_id` on each record, the id captured at
+install, the re-issued scope, both warning filters, the 10182 exclusion, delegation, and the
+double-wrap guard. The two exec-factory wiring doubles gained `_handle_subscription_error`.
+**P9 is not proven live:** P24 ran before it, and P23a's method cannot make IB refuse a re-issued
+request. It is proven against a real `InteractiveBrokersClient` driven through `process_error`.
+
+- [x] [Review][Decision] DN1 (resolved 2026-10-13, Allay: hook the error callback; now P9): `bars.resubscribed` means the request was sent, not that bars came
+  back. The shim logs success once `reqHistoricalData` is written to the socket. IB refuses a
+  history request asynchronously, through its error callback (162 pacing, 504 NOT_CONNECTED via
+  `ibapi client.py:3160`, an identical request within 15 s). `client/error.py:151-174` only logs
+  any code other than 10189/366/102 as "Unknown subscription error". In every such case
+  `failures` stays empty, `BarFeedWatch` never raises, and a clean cycle re-grants trading to a
+  deaf session, which is the state R2 forbids. AC #2 ("any exception") is met literally. The
+  `except` branch catches only Python-side raises.
+- [x] [Review][Decision] DN2 (resolved 2026-10-13, Allay: document 1-minute scope, defer; now W6): the fixed 120 s grace assumes ~1-minute bars. The adapter's
+  completion timer publishes a bar at last update + interval + 1 s
+  (`market_data.py:1048-1110`). On a ≥2-minute bar type, the last RTH bar of each day, an
+  illiquid gap, and a session's first published bar are all handled about one interval past their
+  close. They are judged catch-up: their orders are withheld and a phantom `bars.catch_up` is
+  written at the next live bar. DAY and WEEK bars (stamped 00:00 UTC, `market_data.py:1396`) are
+  always catch-up, so every order is withheld; the freshness guard already ends such sessions.
+  R1 ruled 120 s, and every live procedure has used 1-minute bars.
+- [x] [Review][Decision] DN3 (resolved 2026-10-13, Allay: ratify the amendment and bind strategy_id; now P10): the D-E amendment needs ratifying. The gate is per strategy
+  (`install_order_path`, once per strategy), so N strategies on one bar type write N
+  `bars.catch_up` per reconnect. Neither gate record carries `strategy_id`, so they cannot be told
+  apart. AC #3 says "recorded once per reconnect" and P24 criterion 3 says "one per bar type". The
+  amendment also dropped D-E's traded-bar-type filter and edited the order path, which D-E's heading
+  said would not be edited. All three were self-certified at dev.
+- [x] [Review][Patch] P1: a `_note` raise leaves the previous bar's verdict standing (fail-open
+  after a live bar, stuck-withheld after a late one, logged neither way). Clear `_catching_up`
+  before judging, and test it with a late prior bar [src/core/live_catch_up_gate.py:130]
+- [x] [Review][Patch] P2: `test_installing_twice_wraps_once` stays green with the
+  `_STOCK_ATTRIBUTE` guard removed (a double wrap still gives one `bars.resubscribed`). Assert the
+  stored stock method is the original [tests/component/core/test_live_bar_resubscribe.py]
+- [x] [Review][Patch] P3: the "both ways" AST pin keeps only names starting `bars.`, so a record
+  under another namespace escapes the pin and the NFR26 scan (D-F says "every
+  `_emit`/`logger.*` name"). Scan every log call's event name in both modules
+  [tests/component/core/test_live_bar_resubscribe.py]
+- [x] [Review][Patch] P4: the NFR26 scan's docstring says the account is "on hand in each", but only
+  the failure path has `RAW_ACCOUNT` in reach. `bars.resubscribed` and both gate records cannot
+  fail the scan. Correct the claim, since those paths take no account-bearing input
+  [tests/component/core/test_live_bar_resubscribe.py]
+- [x] [Review][Patch] P5: no canary pins IB's `ts_event` as the bar's open, which the gate's
+  `closed_at = ts_event + interval` depends on. P24 measured it live. Pin it in
+  `TestTheAdapterDefect` against the adapter's own conversion
+  [tests/component/core/test_live_bar_resubscribe.py]
+- [x] [Review][Patch] P6: `make_live_bar`'s docstring says the bars are "dated now", but they
+  are future-dated (`ts_event = epoch bar + time.time_ns()`), so lateness is negative in every
+  test that uses them. Anchor the bars to close just before now
+  [tests/component/core/test_live_order_path.py:151]
+- [x] [Review][Patch] P7: nothing pins that the data client uses the IB client the exec factory
+  patched (D-A rests on it). A config drift would silently restore the defect and blind
+  `BarFeedWatch`. Assert `data_client._client is exec_client._client` on a built node
+  [tests/integration/core/test_live_node_lifecycle.py]
+- [x] [Review][Patch] P8: Task 7.2 is only half done. P22's and P23's Result-log entries do not
+  yet note that P24 supersedes "orders flow again after it"; only P23's index row changed
+  [docs/qa/phase3-live-verification.md]
+- [x] [Review][Patch] P9 (from DN1): the shim remembers the req_id of each subscription it
+  re-issues. An adapter error on that req_id with any code the adapter does not retry itself is
+  appended to `FAILURES_ATTRIBUTE` and logged as `bars.resubscribe_failed`, so R2 stops the session
+  [src/core/live_bar_resubscribe.py]
+- [x] [Review][Patch] P10 (from DN3): bind `strategy_id` onto both gate records
+  (`bars.catch_up`, `bars.catch_up_order_withheld`). Reword AC #3's "once per reconnect" and P24
+  criterion 3 to "one per strategy and bar type" [src/core/live_catch_up_gate.py:166]
+- [x] [Review][Defer] W1: a burst's `bars.catch_up` is never written if no live bar follows
+  (session stop, RTH close), and two outages with no live bar between are merged into one record.
+  There is no teardown flush, and the runner is at its cap [src/core/live_catch_up_gate.py:145] —
+  deferred
+- [x] [Review][Defer] W2: a republished bar (same `ts_event`) is judged but still reaches
+  `base(bar)`, so indicators count it twice. The RTH re-delivery predates this story, and P24's
+  reconnect produced no duplicate [src/core/live_catch_up_gate.py:137] — deferred, pre-existing
+- [x] [Review][Defer] W3: the adapter's error-retry (10189/366/102, `client/error.py:151-159`)
+  calls the stored handle mid-session, so it goes through the shim's resubscribe branch. It writes
+  `bars.resubscribed` outside a reconnect, and a failed retry stops the session under R2
+  [src/core/live_bar_resubscribe.py:139] — deferred
+- [x] [Review][Defer] W4: a cold or pre-market start whose first published bar is the previous
+  session's last bar writes a phantom `bars.catch_up count=1` (`_last_ts_event` starts empty). The
+  warm-up seam drops that bar for warmed strategies [src/core/live_catch_up_gate.py:136] —
+  deferred
+- [x] [Review][Defer] W5: `submission_withheld` is a property that logs on read. "One record per
+  withheld order" relies on the order path reading it once, which nothing enforces
+  [src/core/live_catch_up_gate.py:104] — deferred
+- [x] [Review][Defer] W6 (from DN2): the fixed 120 s grace is valid for 1-minute bars only.
+  On intervals of 2 minutes or more, completion-timer-published bars (the day's last RTH bar, a
+  session's first bar) are judged catch-up, and DAY/WEEK bars always are. R1 stands. Note the scope
+  in the module docstring [src/core/live_catch_up_gate.py:134] — deferred. Reason: every Phase 3
+  session and procedure runs 1-minute bars, and R1 ruled 120 s
 
 ## Dev Notes
 
@@ -544,3 +643,7 @@ tick, so the runner tier could not see the ordering).
 - 2026-10-12: Implemented (dev-story): bar-resubscribe shim and watch, catch-up gate,
   `EMITTED_BAR_FEED_EVENTS` and its pins, guard lists, P24 defined. D-E amended (gate on the
   strategy's `handle_bar`). Status → review.
+- 2026-10-13: P24 run live and passed (criterion 4 by PO ruling). Code review: three layers,
+  39 raw findings. DN1-DN3 ruled by Allay: hook the error callback (P9), keep 1-minute scope
+  (W6), ratify D-E as amended and bind `strategy_id` (P10). Patches P1-P10 applied, W1-W6
+  deferred, 13 dismissed. AC #2/#3 and P24 criterion 3 reworded. Status → done.

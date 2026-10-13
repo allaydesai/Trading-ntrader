@@ -169,10 +169,10 @@ make web                                # Web UI (http://127.0.0.1:8000)
     withholds any order raised on a bar handled more than 120 s past its close.
 
   It is pinned against the code both ways in `tests/component/core/test_live_bar_resubscribe.py`
-  (an AST scan of every `bars.*` log call, plus every path driven), and the NFR26 scan is
-  parametrized from it. The gate's `CATCH_UP_GRACE_SECONDS` duplicates
-  `DEFAULT_DELAYED_DATA_GRACE_SECONDS`, so the order path stays framework-free; an equality pin
-  ties the two.
+  (an AST scan of every log call's record name in both modules, any namespace, plus every
+  path driven), and the NFR26 scan is parametrized from it. The gate's `CATCH_UP_GRACE_SECONDS`
+  duplicates `DEFAULT_DELAYED_DATA_GRACE_SECONDS`, so the order path stays framework-free; an
+  equality pin ties the two.
 - **`FROZEN_VIEWS`** (`tests/unit/governance/test_ar44_frozen_views.py`, Story 5.6): Phase 3's
   zero-UI-change criterion (AR44), pinned byte for byte. It holds a SHA-256 for every file under
   `src/api/**` and `templates/**`, plus `src/services/backtest_query.py` and

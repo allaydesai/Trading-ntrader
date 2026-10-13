@@ -810,6 +810,11 @@ connected, reconciled and permitted to trade, and `live status` reads only `idle
   partial pointing at the stock method (measured).
 - A resubscribe it cannot restore stops the session with exit `1` (`BarFeedLostError`, via
   `watched_reconciler` around the runtime reconciler).
+  IB usually refuses a request through its error callback rather than by a raise, so the shim
+  also wraps `_handle_subscription_error`. An error on a re-issued request counts the same way
+  when the adapter does not answer it itself (it retries 10189/366/102 and reconnects on 10182)
+  and it is not a warning (code review P9, 2026-10-13). `bars.resubscribed` therefore means the
+  request was re-issued, not that bars arrived.
 - Canaries: `TestTheAdapterDefect` in `tests/component/core/test_live_bar_resubscribe.py`. When
   they fail on an upgrade, the shim is deletable.
 
@@ -823,5 +828,7 @@ freshness guard can tell one from a live bar.
 - installed by `install_order_path` on the strategy's own `handle_bar`;
 - judges each bar against the wall clock at handling;
 - withholds any order raised on a bar handled more than 120 s past its close.
+- 1-minute bars only (code review W6): on a longer interval, a bar the adapter's completion
+  timer publishes is handled about one interval past its close and is judged catch-up.
 
 The indicators still see the bar (PO ruling 2026-10-12).

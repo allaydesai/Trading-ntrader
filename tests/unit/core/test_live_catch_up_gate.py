@@ -35,7 +35,7 @@ SOURCE = "_bmad-output/planning-artifacts/epics.md"
 AC_5_9C = (
     "bars that closed before connection.restored and arrive after the resubscribe reach the "
     "indicators, no order acts on them (withheld and named), and the number skipped is "
-    "recorded once per reconnect"
+    "recorded once per reconnect for each strategy and bar type"
 )
 
 NS = 1_000_000_000
@@ -196,6 +196,19 @@ class TestWithholding:
 
         assert gate.submission_withheld is False
 
+    def test_a_malformed_bar_after_a_catch_up_bar_is_judged_on_its_own(self):
+        """Code review P1 (2026-10-13): each bar is judged by itself. A bar the
+        gate cannot read must not inherit the previous bar's verdict, which would
+        withhold silently after a catch-up bar and permit silently after a live one."""
+        clock = _Clock(_closes_at(0) + 300 * NS)
+        gate = _gate(_Monitor(), clock)
+        gate.note_bar(_bar(0))
+        assert gate.submission_withheld is True
+
+        gate.note_bar(SimpleNamespace())
+
+        assert gate.submission_withheld is False
+
 
 class TestTheBurstRecord:
     @pytest.mark.acceptance_criterion("5.9c", AC_5_9C, SOURCE)
@@ -349,6 +362,36 @@ class TestThroughTheOrderPath:
         strategy.handle_bar(_bar(0))
 
         assert strategy.handled == [_bar(0)]
+
+    def test_both_records_name_the_strategy_as_it_is_registered(self):
+        """Code review P10 (DN3, Allay 2026-10-13): the gate is per strategy, so
+        its records carry ``strategy_id``. Read per record, never at install:
+        ``Trader.add_strategy`` rewrites the id after ``install_order_path``."""
+        clock = _Clock(_closes_at(0) + 300 * NS)
+        strategy = _SpyStrategy(clock)
+        install_order_path(strategy, _Monitor(), _log())
+        strategy.id = "SMACrossover-007"
+
+        with capture_logs() as logs:
+            strategy.handle_bar(_bar(0))
+            strategy.submit_order(SimpleNamespace(client_order_id="O-1"))
+            clock.now_ns = _closes_at(5) + 5 * NS
+            strategy.handle_bar(_bar(5))
+
+        [withheld] = _events(logs, CATCH_UP_ORDER_WITHHELD_EVENT)
+        [burst] = _events(logs, CATCH_UP_EVENT)
+        assert withheld["strategy_id"] == burst["strategy_id"] == "SMACrossover-007"
+
+    def test_a_gate_without_a_strategy_writes_no_strategy_id(self):
+        clock = _Clock(_closes_at(0) + 300 * NS)
+        gate = _gate(_Monitor(), clock)
+
+        with capture_logs() as logs:
+            gate.note_bar(_bar(0))
+            assert gate.submission_withheld is True
+
+        [record] = _events(logs, CATCH_UP_ORDER_WITHHELD_EVENT)
+        assert "strategy_id" not in record
 
     def test_a_strategy_without_handle_bar_is_judged_by_the_monitor_alone(self):
         strategy = _SpyStrategy(_Clock(T0))

@@ -35,7 +35,10 @@ from structlog.testing import capture_logs
 
 from src.core import live_node_builder
 from src.core.live_bar_resubscribe import (
+    _STOCK_ATTRIBUTE,
+    _STOCK_ERROR_ATTRIBUTE,
     EMITTED_BAR_FEED_EVENTS,
+    ERROR_HANDLER_ATTRIBUTE,
     FAILURES_ATTRIBUTE,
     METHOD_ATTRIBUTE,
     RESUBSCRIBE_FAILED_EVENT,
@@ -109,6 +112,12 @@ class _Client:
 
     def resubscribe_all(self) -> None:
         self.run(self.client._resubscribe_all())
+
+    def ib_error(self, code: int, text: str = "refused") -> None:
+        """IB's error callback for the bar subscription's request, as the
+        adapter's reader dispatches it (``client/error.py``)."""
+        req_id = self.client._subscriptions.get(name=str(BAR_TYPE)).req_id
+        self.run(self.client.process_error(req_id=req_id, error_code=code, error_string=text))
 
     def close(self) -> None:
         self.loop.close()
@@ -194,6 +203,29 @@ class TestTheAdapterDefect:
         assert ts_init == (1_791_830_880 + 60) * 1_000_000_000
         source = inspect.getsource(InteractiveBrokersClient._process_bar_data)
         assert "ts_init = await self._ib_bar_to_ts_init(bar, bar_type)" in source
+
+    def test_a_bar_is_stamped_ts_event_at_its_open(self, ib):
+        """Code review P5: the gate computes a bar's close as ``ts_event +
+        interval``, which holds only while IB's ``ts_event`` is the bar's open
+        (measured live, P24 2026-10-13). An upgrade that stamps the close would
+        give every bar one extra interval of grace, silently."""
+        bar = SimpleNamespace(date="1791830880")
+
+        ts_event = ib.run(ib.client._ib_bar_to_ts_event(bar, BAR_TYPE))
+
+        assert ts_event == 1_791_830_880 * 1_000_000_000
+
+    def test_a_subscription_error_reaches_the_handler_by_instance_lookup(self):
+        """P9's premise: ``process_error`` looks ``_handle_subscription_error``
+        up on the instance, and the adapter retries only these codes itself,
+        logging any other as unknown and leaving the subscription dead."""
+        dispatch = inspect.getsource(InteractiveBrokersClient.process_error)
+        handler = inspect.getsource(InteractiveBrokersClient._handle_subscription_error)
+
+        assert "await self._handle_subscription_error(req_id, error_code, error_string)" in dispatch
+        assert "if error_code in [10189, 366, 102]:" in handler
+        assert "elif error_code == 10182:" in handler
+        assert 'f"Unknown subscription error: {error_code} for req_id {req_id}"' in handler
 
 
 class TestTheShim:
@@ -291,10 +323,89 @@ class TestTheShim:
 
         assert len(ib.requests) == 2
         assert len(_events(logs, RESUBSCRIBED_EVENT)) == 1
+        stock = getattr(ib.client, _STOCK_ATTRIBUTE)
+        assert stock.__func__ is InteractiveBrokersClient.subscribe_historical_bars
+        stock_handler = getattr(ib.client, _STOCK_ERROR_ATTRIBUTE)
+        assert stock_handler.__func__ is InteractiveBrokersClient._handle_subscription_error
 
     def test_a_client_without_the_method_is_loud_at_build_time(self):
         with pytest.raises(AttributeError):
             install_bar_resubscribe_fix(SimpleNamespace())
+
+
+class TestAnIbRefusalOfTheResubscribe:
+    """Code review P9 (DN1, Allay 2026-10-13). IB refuses a history request
+    through its error callback, not by a raise, so ``bars.resubscribed`` (the
+    request was re-issued) can be followed by a refusal the adapter only logs.
+    An error on a re-issued request that the adapter does not answer itself is
+    a lost bar feed (R2)."""
+
+    def _resubscribed(self, ib) -> None:
+        install_bar_resubscribe_fix(ib.client)
+        ib.subscribe()
+        ib.resubscribe_all()
+
+    @pytest.mark.acceptance_criterion("5.9b", AC_5_9B, SOURCE)
+    def test_a_refusal_after_the_resubscribe_is_a_lost_feed(self, ib):
+        self._resubscribed(ib)
+
+        with capture_logs() as logs:
+            ib.ib_error(162, f"Historical Market Data Service error message: {RAW_ACCOUNT}")
+
+        [record] = _events(logs, RESUBSCRIBE_FAILED_EVENT)
+        assert record["bar_type"] == str(BAR_TYPE)
+        assert record["error_type"] == "ib_error"
+        assert record["error_code"] == 162
+        assert record["log_level"] == "error"
+        assert getattr(ib.client, FAILURES_ATTRIBUTE) == [(str(BAR_TYPE), "IB error 162")]
+        _no_account(logs)
+
+    def test_the_watch_stops_on_it(self, ib):
+        self._resubscribed(ib)
+        ib.ib_error(162)
+        inner = _SpyReconciler()
+        watch = BarFeedWatch(inner, _node_with_ib_client(ib.client))
+
+        with pytest.raises(BarFeedLostError) as caught:
+            asyncio.run(watch.on_tick())
+
+        assert inner.ticks == 0
+        assert "IB error 162" in str(caught.value)
+
+    def test_an_error_before_any_reconnect_is_the_adapters_alone(self, ib):
+        install_bar_resubscribe_fix(ib.client)
+        ib.subscribe()
+
+        with capture_logs() as logs:
+            ib.ib_error(162)
+
+        assert getattr(ib.client, FAILURES_ATTRIBUTE) == []
+        assert _events(logs, RESUBSCRIBE_FAILED_EVENT) == []
+
+    @pytest.mark.parametrize("code", [10182, 10167, 2104])
+    def test_a_code_the_adapter_answers_or_a_warning_is_no_failure(self, ib, code):
+        """10182 (disconnected) ends in another reconnect and resubscribe;
+        warnings (``WARNING_CODES``, 2100-2199) refuse nothing."""
+        self._resubscribed(ib)
+
+        ib.ib_error(code)
+
+        assert getattr(ib.client, FAILURES_ATTRIBUTE) == []
+
+    def test_the_adapter_still_handles_the_error_itself(self, ib):
+        """Delegated unchanged: the stock 10182 branch still clears the
+        connected flag, so the adapter's own reconnect logic is untouched."""
+        self._resubscribed(ib)
+        ib.client._is_ib_connected.set()
+
+        ib.ib_error(10182)
+
+        assert not ib.client._is_ib_connected.is_set()
+
+    def test_the_handler_is_the_instance_attribute(self, ib):
+        install_bar_resubscribe_fix(ib.client)
+
+        assert ERROR_HANDLER_ATTRIBUTE in vars(ib.client)
 
 
 class TestTheRecordNames:
@@ -327,13 +438,35 @@ class TestWiring:
         assert built is exec_client
         assert installed == [shared]
 
+    def test_data_and_exec_resolve_to_the_one_client_the_shim_patches(self):
+        """Code review P7: D-A's premise. ``get_cached_ib_client`` keys on
+        ``(host, port, client_id)`` (``factories.py:112-127``), and a dockerized
+        gateway replaces host and port. Were the two configs ever to resolve to
+        different keys, the data client would keep the stock method (the defect
+        back) and ``BarFeedWatch`` would read the exec client's empty failures."""
+        from nautilus_trader.adapters.interactive_brokers.common import IB
+
+        from src.core.live_node_builder import build_trading_node_config
+        from tests.component.core.test_live_node_builder import _settings
+
+        config = build_trading_node_config(_settings(), trader_id="PAPER-a1b2c3d4")
+        data, execution = config.data_clients[IB], config.exec_clients[IB]
+
+        def key(client):
+            return (client.ibg_host, client.ibg_port, client.ibg_client_id)
+
+        assert key(data) == key(execution)
+        assert data.dockerized_gateway is None and execution.dockerized_gateway is None
+
 
 _LOG_METHODS = {"debug", "info", "warning", "error", "exception"}
 
 
 def _record_names_in_code() -> set[str]:
-    """Every ``bars.*`` record name a log call in the two modules passes, read
-    off the AST — catches a name emitted but never added to the tuple."""
+    """Every record name a log call in the two modules passes, read off the AST
+    — catches a name emitted but never added to the tuple. Any namespace, and
+    an ``event=`` keyword too (code review P3): a record outside ``bars.*``
+    must not escape the pin and the NFR26 scan."""
     from src.core import live_bar_resubscribe, live_catch_up_gate
 
     names: set[str] = set()
@@ -344,24 +477,35 @@ def _record_names_in_code() -> set[str]:
                 isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Attribute)
                 and node.func.attr in _LOG_METHODS
-                and node.args
             ):
                 continue
-            first = node.args[0]
-            if isinstance(first, ast.Name):
-                value = getattr(module, first.id, None)
-            elif isinstance(first, ast.Constant):
-                value = first.value
-            else:
-                continue
-            if isinstance(value, str) and value.startswith("bars."):
-                names.add(value)
+            events = [kw.value for kw in node.keywords if kw.arg == "event"]
+            for argument in node.args[:1] + events:
+                names.add(_record_name(module, argument))
     return names
 
 
+def _record_name(module, argument: ast.expr) -> str:
+    """The string a log call's event argument names; loud when it is not one."""
+    if isinstance(argument, ast.Name):
+        value = getattr(module, argument.id, None)
+    elif isinstance(argument, ast.Constant):
+        value = argument.value
+    else:
+        value = None
+    assert isinstance(value, str), f"unreadable record name in {module.__name__}"
+    return value
+
+
 def _drive_every_record() -> list[dict]:
-    """Every path that emits a ``bars.*`` record, with the account on hand in
-    each (an exception message, a bound logger) so the NFR26 scan can fail."""
+    """Every path that emits a pinned record.
+
+    The account is on hand only where a third party could put it there: the
+    raised exception's message and IB's refusal text, both of which the shim
+    must never copy, so the scan can fail for ``bars.resubscribe_failed``. The
+    other three take no account-bearing input at all (a bar type, timestamps, a
+    count); for them the scan is a regression guard, not a probe (code review
+    P4)."""
     import structlog
 
     from src.core.live_catch_up_gate import CatchUpGate
@@ -378,6 +522,7 @@ def _drive_every_record() -> list[dict]:
 
             harness.client._eclient.reqHistoricalData = _refuse
             harness.resubscribe_all()
+            harness.ib_error(162, f"Historical Market Data Service error: {RAW_ACCOUNT}")
 
             now = [0]
             gate = CatchUpGate(

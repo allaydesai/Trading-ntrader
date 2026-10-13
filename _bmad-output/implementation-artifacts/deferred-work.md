@@ -4648,3 +4648,28 @@ references are in `docs/qa/phase3-live-verification.md`, P23's 2026-10-12 Result
   transcript, because the log file carries ANSI colour codes between key and value
   (`action\x1b[0m=\x1b[35mtrading_withheld`). Strip `\x1b\[[0-9;]*m` before grepping, or write
   the session log without colour when stdout is not a TTY.
+
+## Deferred from: code review of 5-9-restore-the-bar-feed-after-a-reconnect (2026-10-13)
+
+- W1: A burst's `bars.catch_up` is never written when no live bar follows it (session stop, RTH
+  close), and two outages with no live bar between them merge into one record. There is no
+  teardown flush, and the runner is at its cap (`src/core/live_catch_up_gate.py:145`).
+- W2: A republished bar (same `ts_event`) is judged but still reaches the strategy's `base(bar)`,
+  so indicators count it twice. The RTH re-delivery predates Story 5.9, and P24's reconnect
+  produced no duplicate (`src/core/live_catch_up_gate.py:137`).
+- W3: The adapter's error-retry (10189/366/102, `client/error.py:151-159`) calls the stored handle
+  mid-session, so it goes through the shim's resubscribe branch. It writes `bars.resubscribed`
+  outside a reconnect, and a failed retry stops the session under R2
+  (`src/core/live_bar_resubscribe.py:139`).
+- W4: On a cold or pre-market start whose first published bar is the previous session's last bar,
+  a phantom `bars.catch_up count=1` is written, because `_last_ts_event` starts empty. The warm-up
+  seam drops that bar for warmed strategies (`src/core/live_catch_up_gate.py:136`).
+- W5: `CatchUpGate.submission_withheld` is a property that logs on read. "One record per withheld
+  order" relies on the order path reading it exactly once, which nothing enforces
+  (`src/core/live_catch_up_gate.py:104`).
+- W6 (from DN2, Allay 2026-10-13): the catch-up gate's fixed 120 s grace is valid for 1-minute
+  bars only. On intervals of 2 minutes or more, bars the adapter's completion timer publishes (the
+  day's last RTH bar, a session's first bar) are handled about one interval past their close. They
+  are judged catch-up: their orders are withheld and a phantom `bars.catch_up` is written. DAY and
+  WEEK bars, stamped 00:00 UTC, are always catch-up. Reason for deferring: every Phase 3 session
+  and procedure runs 1-minute bars, and R1 ruled 120 s.

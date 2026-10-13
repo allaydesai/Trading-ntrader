@@ -2060,14 +2060,16 @@ required `params`, so the adapter's own call raises `TypeError` and the bars nev
 **Given** the bar resubscribe fails anyway (any exception)
 **When** it is noted
 **Then** one `bars.resubscribe_failed` record names the bar type and error type, and the session does
-not report a healthy, trading state while deaf. Whether to stop or withhold is decided in the story
+not report a healthy, trading state while deaf. An IB refusal of the re-issued request, sent back
+through its error callback, counts as a failure too (code review 2026-10-13, DN1). Whether to stop or withhold is decided in the story
 from measured behaviour, and that decision is disclosed.
 
 **Given** bars that closed before `connection.restored` and arrive after the resubscribe (the
 adapter's catch-up burst: its only guard drops bars older than the last one it saw)
 **When** they reach the strategy
 **Then** the indicators see them, no order acts on them (any order such a bar triggers is withheld
-and named), and the number skipped is recorded once per reconnect.
+and named), and the number skipped is recorded once per reconnect for each strategy and bar type
+(code review 2026-10-13, DN3: the gate is per strategy, so each record names its `strategy_id`).
 
 **Given** the upstream defect
 **When** Nautilus is upgraded

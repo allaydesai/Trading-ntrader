@@ -16,7 +16,12 @@ after its period closed is a catch-up bar. PO ruling R1 accepted this as the
 operational form of "closed before ``connection.restored``". It holds whichever
 side of the reconnect grant the burst lands on, which nothing orders (story F9).
 A live IB minute bar is handled about 5 s after its close, a session's first bar
-13-26 s after (measured, story Task 1.3).
+13-26 s after (measured, story Task 1.3). **The grace is valid for 1-minute bars
+only** (code review W6, Allay 2026-10-13): on a 2-minute or longer interval, a bar
+the adapter's completion timer publishes (the day's last RTH bar, a session's first
+bar) is handled about one interval past its close and is judged catch-up, and a
+DAY or WEEK bar, stamped 00:00 UTC, always is. Every Phase 3 session runs 1-minute
+bars.
 
 **Where it sits.** :func:`install_catch_up_gate` wraps the strategy's own
 ``handle_bar``, so the gate notes the exact bar the strategy is about to react
@@ -29,9 +34,12 @@ either.
 **What it records.** :data:`CATCH_UP_ORDER_WITHHELD_EVENT` when the gate, not the
 monitor, is why an order was withheld (the order path's own ``order.suppressed``
 follows it unchanged), and one :data:`CATCH_UP_EVENT` per burst, when the first
-live bar follows it. A republished bar (``ts_event`` not newer than the last seen
-for its bar type, e.g. the adapter's re-delivery of the previous session's last
-bar after every RTH gap) is judged but never counted.
+live bar follows it. There is one gate per strategy (D-E as amended at dev,
+ratified by Allay 2026-10-13), so both records carry the strategy's
+``strategy_id``, read per record like the order path's. A republished bar
+(``ts_event`` not newer than the last seen for its bar type, e.g. the adapter's
+re-delivery of the previous session's last bar after every RTH gap) is judged but
+never counted.
 
 Framework-free, like :mod:`src.core.live_order_path`, which imports it: bars,
 strategies and monitors are duck-typed, and the standard library is the only
@@ -84,6 +92,7 @@ class CatchUpGate:
         clock: Callable[[], int],
         log: Any,
         grace_seconds: float = CATCH_UP_GRACE_SECONDS,
+        strategy_id: Callable[[], Any] = lambda: None,
     ) -> None:
         """Args:
         monitor: Anything with a ``submission_withheld`` bool property.
@@ -91,10 +100,13 @@ class CatchUpGate:
         log: A structlog logger, ideally already bound to ``session_id``.
         grace_seconds: How long past its close a bar may be handled and still
             count as live.
+        strategy_id: Read per record (``None`` writes no field): the id is
+            rewritten by ``Trader.add_strategy`` after the gate is installed.
         """
         self._monitor = monitor
         self._clock = clock
         self._log = log
+        self._strategy_id = strategy_id
         self._grace_ns = int(grace_seconds * _NS)
         self._last_ts_event: dict[str, int] = {}
         self._bursts: dict[str, _Burst] = {}
@@ -114,6 +126,7 @@ class CatchUpGate:
         bar_type, ts_event = self._catching_up
         self._log.warning(
             CATCH_UP_ORDER_WITHHELD_EVENT,
+            **self._identity(),
             bar_type=bar_type,
             ts_event=_iso_utc(ts_event),
             detail=_DETAIL,
@@ -121,7 +134,12 @@ class CatchUpGate:
         return True
 
     def note_bar(self, bar: Any) -> None:
-        """Judge the bar the strategy is about to handle. Never raises."""
+        """Judge the bar the strategy is about to handle. Never raises.
+
+        Each bar is judged by itself: one the gate cannot read is not catch-up,
+        and never inherits the previous bar's verdict (code review P1).
+        """
+        self._catching_up = None
         try:
             self._note(bar)
         except Exception:  # noqa: BLE001 - runs inside the strategy's bar handler
@@ -156,11 +174,16 @@ class CatchUpGate:
             return
         self._log.info(
             CATCH_UP_EVENT,
+            **self._identity(),
             bar_type=key,
             count=burst.count,
             first_ts_event=_iso_utc(burst.first_ts_event),
             last_ts_event=_iso_utc(burst.last_ts_event),
         )
+
+    def _identity(self) -> dict[str, str]:
+        strategy_id = self._strategy_id()
+        return {} if strategy_id is None else {"strategy_id": str(strategy_id)}
 
 
 def install_catch_up_gate(strategy: Any, monitor: Any, log: Any) -> CatchUpGate:
@@ -173,7 +196,12 @@ def install_catch_up_gate(strategy: Any, monitor: Any, log: Any) -> CatchUpGate:
     the strategy at handling time, when it is registered. A strategy without
     ``handle_bar`` (a test stub) gets a gate that only ever defers to ``monitor``.
     """
-    gate = CatchUpGate(monitor, clock=lambda: strategy.clock.timestamp_ns(), log=log)
+    gate = CatchUpGate(
+        monitor,
+        clock=lambda: strategy.clock.timestamp_ns(),
+        log=log,
+        strategy_id=lambda: getattr(strategy, "id", None),
+    )
     base = getattr(strategy, "handle_bar", None)
     if base is None:
         return gate

@@ -36,6 +36,7 @@
 
 generated: 2026-08-03
 last_updated: >-
+  2026-10-13 (STORY 5.9 DONE: 5-9 review -> done. P24 passed live, criterion 4 by PO ruling. Three-layer code review: 39 raw -> 3 decision-needed (Allay: DN1 hook the IB error callback for re-issued bar requests -> P9; DN2 keep 1-minute scope -> W6; DN3 ratify D-E as amended and bind strategy_id -> P10), 10 patches applied test-first, 6 deferred, 13 dismissed. Unit 4014, component 2065/16 skipped, integration/core forked 110/2 skipped; mutation 10/10. P9 not proven live. epic-5 not touched.);
   2026-10-12 (Story 5.9 ready-for-dev -> in-progress -> review: dev-story on 015-paper-trading. New live_bar_resubscribe.py (instance shim on the shared IB client from the exec factory; BarFeedWatch via watched_reconciler stops the session exit 1 on a failed resubscribe, R2) and live_catch_up_gate.py (installed by install_order_path on the strategy handle_bar; > 120 s past close withholds orders, R1). EMITTED_BAR_FEED_EVENTS pinned both ways + NFR26. No size ceiling raised. Unit 4011, component 2053/16 skipped, integration 405/2 skipped forked; mutation 10/10. P24 defined, not run. D-E amended at dev, disclosed.);
   2026-10-12 (Story 5.9 backlog -> ready-for-dev: story file drafted. Disclosed D-A..D-G: shim installed on the shared IB client from the exec factory; catch-up bar = handled > 120 s (delayed-data grace) past its close, gate wraps the monitor for install_order_path; failed resubscribe stops the session (exit 1); EMITTED_BAR_FEED_EVENTS pinned. Two calls flagged for Allay before dev: D-C equivalence to "closed before connection.restored", D-D stop.);
   2026-10-12 (STORY 5.9 ADDED, EPIC 5 REOPENED: epic-5 done -> in-progress; 5-9-restore-the-bar-feed-after-a-reconnect added as backlog from the Epic 5 live verification finding L1 -- after any reconnect the Nautilus 1.220 IB adapter never resubscribes bars (TypeError on its stored handle). PO rulings (Allay): fix locally with an upstream canary; catch-up bars reach indicators but no order acts on them. P23a/P23c and the live seal passed live the same day; P22 not arrangeable.);
@@ -2680,5 +2681,5 @@ development_status:
   5-7-name-holdings-the-adapter-cannot-express-instead-of-refusing-or-hiding-them: done
   5-8-act-on-a-persistent-runtime-reconciliation-failure: done
   # Added 2026-10-12 from the Epic 5 live verification, finding L1 (PO rulings: local shim; no trading on catch-up bars).
-  5-9-restore-the-bar-feed-after-a-reconnect: review
+  5-9-restore-the-bar-feed-after-a-reconnect: done
   epic-5-retrospective: optional
