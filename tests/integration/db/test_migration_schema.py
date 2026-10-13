@@ -121,6 +121,36 @@ def test_catalog_instruments_identity_columns_are_nullable(migrated):
     )
 
 
+def test_owner_epoch_is_not_null_with_a_zero_default(migrated):
+    """Story 3.6 (AC #7): every row, including the two pre-existing ones,
+    must have a comparable epoch the moment this column exists — a NULL
+    would make the first qualified UPDATE's WHERE clause unmatchable.
+    """
+    column = migrated["trading_sessions_columns"]["owner_epoch"]
+    assert column["nullable"] is False
+    # The reflected server_default text varies by dialect wrapping
+    # ("0" vs "'0'::bigint") -- match the whole token, so `10`, `100` or a
+    # `nextval(...)` string fail (review 2026-09-12).
+    import re
+
+    assert column["default"] is not None
+    assert re.fullmatch(r"'?0'?(::bigint)?", str(column["default"]).strip())
+
+
+def test_uq_trades_session_trade_key_is_unique_over_the_right_columns(migrated):
+    """Story 3.6 (AC #7): idempotent trade writes key on this exact triple,
+    in this exact order — no new column, per fact 2 (`trade_id` alone is not
+    unique per round trip under NETTING; `(trade_id, client_order_id)` is).
+    """
+    index = migrated["trade_key_index"]
+    assert [entry["column"] for entry in index] == [
+        "session_id",
+        "trade_id",
+        "client_order_id",
+    ]
+    assert all(entry["unique"] for entry in index)
+
+
 def test_resolution_status_enum_includes_excluded(migrated):
     """The resolution_status enum must carry EXCLUDED for the venue exclusion register.
 

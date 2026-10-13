@@ -12,6 +12,7 @@ dependencies = [
     "greenlet>=3.2.4",
     "httpx>=0.28.1",
     "jinja2>=3.1.6",
+    "msgspec>=0.19.0,<1.0.0",
     "nautilus-trader[ib]>=1.190.0",
     "numpy>=2.3.3",
     "pandas>=2.3.2",
@@ -42,6 +43,7 @@ dev = [
     "pytest-xdist>=3.6.1",
     "pyyaml>=6.0.2",
     "ruff>=0.13.0",
+    "types-python-dateutil>=2.9.0.20260716",
     "types-pyyaml>=6.0.12.20250915",
     "types-setuptools>=80.9.0.20250822",
 ]
@@ -87,6 +89,7 @@ exclude = [
     ".github",
     ".claude",
     ".cursor",
+    ".agents",
     "_bmad",
     "alembic",
     ".git",

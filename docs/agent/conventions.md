@@ -40,10 +40,13 @@ Ruff excludes: `tests_archive`, `_bmad`, `.claude`, `.cursor`, `alembic`, `.git`
 
 ## Code Size Limits
 
-Convention-enforced (not tool-enforced):
-- **Files**: <500 lines
-- **Functions**: <50 lines
-- **Classes**: <100 lines
+Measured on executable statements, not raw lines (Epic 2 retro D4). Enforced by
+`tests/unit/governance/test_size_caps.py` (Epic 4 pre-work): new code must be under the caps; an
+overage in existing code is a baseline entry that may only shrink, disclosed with a one-line reason
+in the same commit that adds it.
+- **Files**: <500 lines (hard cap, 3-entry allowlist for pre-existing overages)
+- **Functions**: <50 lines (ratchet baseline)
+- **Classes**: <100 lines (ratchet baseline)
 - **Line length**: 100 chars (enforced by ruff)
 
 ## Error Handling

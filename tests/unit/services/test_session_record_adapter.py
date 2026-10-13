@@ -1,0 +1,620 @@
+"""Unit tests for ``SqlSessionRecord``, the record port's SQLAlchemy adapter (Story 2.5).
+
+Unit tier and no database: the ``get_sync_session`` factory is injected, so what
+is under test is the *transaction discipline* and the routing, not Postgres.
+Both are load-bearing:
+
+- **one short-lived transaction per call.** Story 2.3's forward constraint,
+  verbatim: *"The runner must let the ``get_sync_session`` block close right
+  after the transition… Keeping it open for the life of the session would hold
+  the row lock for hours and block every ``live status``."*
+- **``mark_stopped`` routes through ``SessionService.transition``**, never
+  assigning ``status`` itself (AR37).
+
+The basename is deliberately not ``test_session_service.py``:
+``tests/unit/services/`` has no ``__init__.py`` and already collides with
+``tests/integration/db/test_session_service.py``.
+"""
+
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
+from unittest.mock import MagicMock
+from uuid import UUID, uuid4
+
+import pytest
+
+from src.core.live_session_record import SessionRecordPort
+from src.db.models.trading_session import TradingSession
+from src.models.session import SessionStatus
+from src.services.session_record import SqlSessionRecord
+
+pytestmark = pytest.mark.unit
+
+SESSION_ID = UUID("22222222-2222-2222-2222-222222222222")
+STARTED_AT = datetime(2026, 8, 19, 12, 0, 0, tzinfo=timezone.utc)
+#: This process's own claimed epoch (Story 3.6, retrospective D1) — replaces
+#: the old ``last_started_at`` clock comparison as the ownership token.
+OWNER_EPOCH = 5
+
+
+class _RecordingFactory:
+    """A ``get_sync_session``-shaped factory that counts enters and exits."""
+
+    def __init__(self) -> None:
+        self.entered = 0
+        self.exited = 0
+        self.sessions: list[MagicMock] = []
+
+    @contextmanager
+    def __call__(self):
+        self.entered += 1
+        session = MagicMock(name=f"sync-session-{self.entered}")
+        self.sessions.append(session)
+        try:
+            yield session
+        finally:
+            self.exited += 1
+
+    @property
+    def balanced(self) -> bool:
+        return self.entered == self.exited
+
+
+def _row(status: SessionStatus = SessionStatus.RUNNING, **overrides) -> TradingSession:
+    fields = {
+        "session_id": SESSION_ID,
+        "name": "alpha-session",
+        "status": status,
+        "spec": {},
+        "last_started_at": STARTED_AT,
+        "owner_epoch": OWNER_EPOCH,
+    }
+    fields.update(overrides)
+    return TradingSession(**fields)
+
+
+@pytest.fixture
+def patched(monkeypatch):
+    """Replace the repository and service the adapter builds per call."""
+    from src.services import session_record as adapter_module
+
+    service = MagicMock()
+    repository = MagicMock()
+    monkeypatch.setattr(adapter_module, "SyncTradingSessionRepository", lambda s: repository)
+    monkeypatch.setattr(adapter_module, "SessionService", MagicMock(return_value=service))
+    return adapter_module, service
+
+
+class TestItSatisfiesThePort:
+    def test_the_adapter_is_a_session_record_port(self):
+        assert isinstance(SqlSessionRecord(SESSION_ID, owner_epoch=OWNER_EPOCH), SessionRecordPort)
+
+
+class TestOneTransactionPerCall:
+    """⚠️ Never a long-lived one — see the module docstring."""
+
+    def test_record_activity_opens_and_closes_exactly_one_session(self, patched):
+        factory = _RecordingFactory()
+        record = SqlSessionRecord(SESSION_ID, owner_epoch=OWNER_EPOCH, session_factory=factory)
+
+        record.record_activity(at=STARTED_AT + timedelta(seconds=30))
+
+        assert (factory.entered, factory.exited) == (1, 1)
+
+    def test_construction_alone_opens_no_session(self, patched):
+        factory = _RecordingFactory()
+
+        SqlSessionRecord(SESSION_ID, owner_epoch=OWNER_EPOCH, session_factory=factory)
+
+        assert factory.entered == 0
+
+    def test_three_calls_open_three_separate_sessions(self, patched):
+        factory = _RecordingFactory()
+        record = SqlSessionRecord(SESSION_ID, owner_epoch=OWNER_EPOCH, session_factory=factory)
+
+        for offset in (30, 60, 90):
+            record.record_activity(at=STARTED_AT + timedelta(seconds=offset))
+
+        assert (factory.entered, factory.exited) == (3, 3)
+        assert len({id(s) for s in factory.sessions}) == 3
+
+    def test_mark_stopped_also_uses_its_own_short_lived_session(self, patched):
+        factory = _RecordingFactory()
+        record = SqlSessionRecord(SESSION_ID, owner_epoch=OWNER_EPOCH, session_factory=factory)
+
+        record.mark_stopped()
+
+        assert (factory.entered, factory.exited) == (1, 1)
+
+    def test_a_raising_call_still_closes_its_session(self, patched):
+        adapter_module, service = patched
+        service.record_activity.side_effect = RuntimeError("db went away")
+        factory = _RecordingFactory()
+        record = SqlSessionRecord(SESSION_ID, owner_epoch=OWNER_EPOCH, session_factory=factory)
+
+        with pytest.raises(RuntimeError):
+            record.record_activity(at=STARTED_AT)
+
+        assert factory.balanced
+
+
+class TestTheCallersInstantIsWhatLands:
+    """The runner's clock must reach the column, not ``datetime.now()``."""
+
+    def test_the_at_argument_is_forwarded_verbatim(self, patched):
+        _, service = patched
+        stamped = STARTED_AT + timedelta(seconds=17, microseconds=42)
+        record = SqlSessionRecord(
+            SESSION_ID, owner_epoch=OWNER_EPOCH, session_factory=_RecordingFactory()
+        )
+
+        record.record_activity(at=stamped)
+
+        assert service.record_activity.call_args.kwargs["at"] == stamped
+
+    def test_the_service_is_built_with_a_time_source_returning_that_same_instant(self, patched):
+        adapter_module, _ = patched
+        stamped = STARTED_AT + timedelta(seconds=17)
+        record = SqlSessionRecord(
+            SESSION_ID, owner_epoch=OWNER_EPOCH, session_factory=_RecordingFactory()
+        )
+
+        record.record_activity(at=stamped)
+
+        time_source = adapter_module.SessionService.call_args.kwargs["time_source"]
+        assert time_source() == stamped
+
+    def test_the_bound_session_id_and_started_at_are_what_reach_the_service(self, patched):
+        _, service = patched
+        record = SqlSessionRecord(
+            SESSION_ID, owner_epoch=OWNER_EPOCH, session_factory=_RecordingFactory()
+        )
+
+        record.record_activity(at=STARTED_AT, bar_seen_at=STARTED_AT)
+
+        call = service.record_activity.call_args
+        assert call.args[0] == SESSION_ID
+        assert call.kwargs["owner_epoch"] == OWNER_EPOCH
+        assert call.kwargs["bar_seen_at"] == STARTED_AT
+
+    def test_no_bar_forwards_none_rather_than_omitting_the_argument(self, patched):
+        _, service = patched
+        record = SqlSessionRecord(
+            SESSION_ID, owner_epoch=OWNER_EPOCH, session_factory=_RecordingFactory()
+        )
+
+        record.record_activity(at=STARTED_AT)
+
+        assert service.record_activity.call_args.kwargs["bar_seen_at"] is None
+
+
+class TestMarkStoppedRoutesThroughTheStateMachine:
+    """AR37: nothing but ``SessionService.transition`` may assign ``status``."""
+
+    def test_it_calls_transition_with_stopped_and_its_own_started_at(self, patched):
+        """The bound ``started_at`` arms the stop-path ownership guard
+        (review fix, 2026-08-21) — without it a dispossessed incumbent's
+        teardown stops the successor's session.
+        """
+        _, service = patched
+        record = SqlSessionRecord(
+            SESSION_ID, owner_epoch=OWNER_EPOCH, session_factory=_RecordingFactory()
+        )
+
+        record.mark_stopped()
+
+        service.transition.assert_called_once_with(
+            SESSION_ID, to=SessionStatus.STOPPED, owner_epoch=OWNER_EPOCH
+        )
+
+    def test_the_adapter_module_never_assigns_a_status_attribute(self):
+        """Structural, not a grep: a docstring mentioning ``status`` is prose."""
+        import ast
+        from pathlib import Path
+
+        from src.services import session_record as adapter_module
+
+        tree = ast.parse(Path(adapter_module.__file__).read_text(encoding="utf-8"))
+        targets = [
+            target
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Assign)
+            for target in node.targets
+        ]
+        assert not [t for t in targets if isinstance(t, ast.Attribute) and t.attr == "status"]
+
+
+class TestItReadsAndWritesARealRowShape:
+    """One test that does not stub the service, so the wiring is proven end to end
+    against the real ``SessionService`` with only the repository faked.
+    """
+
+    def test_a_running_row_is_stamped_via_the_qualified_update(self, monkeypatch):
+        """Story 3.6: the write is the repository's ``stamp_activity_if_owner``,
+        not an ORM mutation — this proves the adapter routes to it with the
+        right arguments, epoch-qualified.
+        """
+        from src.services import session_record as adapter_module
+
+        row = _row()
+        repository = MagicMock()
+        repository.find_by_session_id.return_value = row
+        repository.stamp_activity_if_owner.return_value = 1
+        monkeypatch.setattr(adapter_module, "SyncTradingSessionRepository", lambda s: repository)
+        stamped = STARTED_AT + timedelta(seconds=30)
+        record = SqlSessionRecord(
+            SESSION_ID, owner_epoch=OWNER_EPOCH, session_factory=_RecordingFactory()
+        )
+
+        record.record_activity(at=stamped)
+
+        call = repository.stamp_activity_if_owner.call_args
+        assert call.args[0] == row.id
+        assert call.kwargs["owner_epoch"] == OWNER_EPOCH
+        assert call.kwargs["at"] == stamped
+        assert call.kwargs.get("bar_seen_at") is None
+
+    def test_a_row_reclaimed_by_another_process_refuses(self, monkeypatch):
+        """Translated to the **port's** exception, which the runner can catch
+        without importing ``src.db`` — AR38 forbids it that import.
+        """
+        from src.core.live_session_record import SessionReclaimedError
+        from src.services import session_record as adapter_module
+
+        row = _row()  # RUNNING, but the qualified UPDATE refuses (rowcount 0)
+        repository = MagicMock()
+        repository.find_by_session_id.return_value = row
+        repository.stamp_activity_if_owner.return_value = 0
+        monkeypatch.setattr(adapter_module, "SyncTradingSessionRepository", lambda s: repository)
+        record = SqlSessionRecord(
+            SESSION_ID, owner_epoch=OWNER_EPOCH, session_factory=_RecordingFactory()
+        )
+
+        with pytest.raises(SessionReclaimedError, match="reclaimed"):
+            record.record_activity(at=STARTED_AT + timedelta(seconds=30))
+
+    def test_a_row_that_is_no_longer_running_also_refuses_as_ownership_lost(self, monkeypatch):
+        """The deliberate widening — see ``record_activity``'s docstring."""
+        from src.core.live_session_record import SessionReclaimedError
+        from src.services import session_record as adapter_module
+
+        row = _row(SessionStatus.STOPPED)
+        repository = MagicMock()
+        repository.find_by_session_id.return_value = row
+        repository.stamp_activity_if_owner.return_value = 0
+        monkeypatch.setattr(adapter_module, "SyncTradingSessionRepository", lambda s: repository)
+        record = SqlSessionRecord(
+            SESSION_ID, owner_epoch=OWNER_EPOCH, session_factory=_RecordingFactory()
+        )
+
+        with pytest.raises(SessionReclaimedError, match="not running"):
+            record.record_activity(at=STARTED_AT + timedelta(seconds=30))
+
+    def test_a_missing_row_is_not_translated(self, monkeypatch):
+        """``RecordNotFoundError`` is not an ownership question."""
+        from src.db.exceptions import RecordNotFoundError
+        from src.services import session_record as adapter_module
+
+        repository = MagicMock()
+        repository.find_by_session_id.return_value = None
+        monkeypatch.setattr(adapter_module, "SyncTradingSessionRepository", lambda s: repository)
+        record = SqlSessionRecord(
+            SESSION_ID, owner_epoch=OWNER_EPOCH, session_factory=_RecordingFactory()
+        )
+
+        with pytest.raises(RecordNotFoundError):
+            record.record_activity(at=STARTED_AT)
+
+    def test_mark_stopped_moves_a_running_row_to_stopped(self, monkeypatch):
+        from src.services import session_record as adapter_module
+
+        row = _row()
+        repository = MagicMock()
+        repository.find_by_session_id.return_value = row
+        monkeypatch.setattr(adapter_module, "SyncTradingSessionRepository", lambda s: repository)
+        record = SqlSessionRecord(
+            uuid4(), owner_epoch=OWNER_EPOCH, session_factory=_RecordingFactory()
+        )
+
+        record.mark_stopped()
+
+        assert row.status is SessionStatus.STOPPED
+
+    def test_mark_stopped_on_a_reclaimed_row_refuses_and_leaves_it_running(self, monkeypatch):
+        """The stop-path ownership guard, end to end against the real service
+        (Story 3.6, retrospective D1): a row whose ``owner_epoch`` has moved
+        past this process's own refuses as reclaimed and is not moved.
+        """
+        from src.core.live_session_record import SessionReclaimedError
+        from src.services import session_record as adapter_module
+
+        row = _row(owner_epoch=OWNER_EPOCH + 1)
+        repository = MagicMock()
+        repository.find_by_session_id.return_value = row
+        monkeypatch.setattr(adapter_module, "SyncTradingSessionRepository", lambda s: repository)
+        record = SqlSessionRecord(
+            SESSION_ID, owner_epoch=OWNER_EPOCH, session_factory=_RecordingFactory()
+        )
+
+        with pytest.raises(SessionReclaimedError, match="reclaimed"):
+            record.mark_stopped()
+
+        assert row.status is SessionStatus.RUNNING
+
+    def test_mark_stopped_translates_an_edge_refusal_the_same_way(self, monkeypatch):
+        """A row already out of ``running`` out of band means the same thing —
+        the row is no longer this process's to mark (the deliberate widening,
+        applied to the stop path at the 2026-08-21 review).
+        """
+        from src.core.live_session_record import SessionReclaimedError
+        from src.services import session_record as adapter_module
+
+        row = _row(SessionStatus.STOPPED)
+        repository = MagicMock()
+        repository.find_by_session_id.return_value = row
+        monkeypatch.setattr(adapter_module, "SyncTradingSessionRepository", lambda s: repository)
+        record = SqlSessionRecord(
+            SESSION_ID, owner_epoch=OWNER_EPOCH, session_factory=_RecordingFactory()
+        )
+
+        with pytest.raises(SessionReclaimedError):
+            record.mark_stopped()
+
+
+class TestRecordStrategyFailure:
+    """Story 2.7's third port method, through the same one-transaction adapter."""
+
+    @staticmethod
+    def _fields(**overrides):
+        fields = {
+            "strategy_id": "SMACrossover-000",
+            "spec_strategy_id": "sma_crossover",
+            "error_type": "DivisionByZero",
+            "handler": "handle_bar",
+            "at": STARTED_AT + timedelta(seconds=90),
+            "detail": "[<class 'decimal.DivisionByZero'>]",
+        }
+        fields.update(overrides)
+        return fields
+
+    def test_it_opens_and_closes_exactly_one_session(self, patched):
+        factory = _RecordingFactory()
+        record = SqlSessionRecord(SESSION_ID, owner_epoch=OWNER_EPOCH, session_factory=factory)
+
+        record.record_strategy_failure(**self._fields())
+
+        assert (factory.entered, factory.exited) == (1, 1)
+
+    def test_the_failure_reaches_runtime_flags(self, monkeypatch):
+        from src.services import session_record as adapter_module
+
+        row = _row(SessionStatus.RUNNING)
+        repository = MagicMock()
+        repository.find_by_session_id.return_value = row
+        monkeypatch.setattr(adapter_module, "SyncTradingSessionRepository", lambda s: repository)
+        record = SqlSessionRecord(
+            SESSION_ID, owner_epoch=OWNER_EPOCH, session_factory=_RecordingFactory()
+        )
+
+        record.record_strategy_failure(**self._fields())
+
+        (entry,) = row.runtime_flags["failed_strategies"]
+        assert entry["spec_strategy_id"] == "sma_crossover"
+        assert entry["error_type"] == "DivisionByZero"
+        assert row.status is SessionStatus.RUNNING
+
+    def test_a_reclaimed_row_raises_the_ports_own_error(self, monkeypatch):
+        """The runner may not import ``src.db``, so the database exception is
+        translated at this boundary exactly as its two siblings do.
+        """
+        from src.core.live_session_record import SessionReclaimedError
+        from src.services import session_record as adapter_module
+
+        row = _row(SessionStatus.RUNNING, owner_epoch=OWNER_EPOCH + 1)
+        repository = MagicMock()
+        repository.find_by_session_id.return_value = row
+        monkeypatch.setattr(adapter_module, "SyncTradingSessionRepository", lambda s: repository)
+        record = SqlSessionRecord(
+            SESSION_ID, owner_epoch=OWNER_EPOCH, session_factory=_RecordingFactory()
+        )
+
+        with pytest.raises(SessionReclaimedError, match="reclaimed"):
+            record.record_strategy_failure(**self._fields())
+
+        assert row.runtime_flags is None
+
+    def test_a_row_that_is_no_longer_running_is_translated_the_same_way(self, monkeypatch):
+        from src.core.live_session_record import SessionReclaimedError
+        from src.services import session_record as adapter_module
+
+        row = _row(SessionStatus.STOPPED)
+        repository = MagicMock()
+        repository.find_by_session_id.return_value = row
+        monkeypatch.setattr(adapter_module, "SyncTradingSessionRepository", lambda s: repository)
+        record = SqlSessionRecord(
+            SESSION_ID, owner_epoch=OWNER_EPOCH, session_factory=_RecordingFactory()
+        )
+
+        with pytest.raises(SessionReclaimedError):
+            record.record_strategy_failure(**self._fields())
+
+
+class TestRecordOrderRejections:
+    """Story 3.7's fourth port method, through the same one-transaction adapter.
+
+    Nothing new in the *discipline* — one short-lived transaction, the
+    ``InvalidSessionTransition -> SessionReclaimedError`` translation, no
+    ``status`` assignment. What this class pins is that the fourth method did
+    not get a *different* discipline by accident.
+    """
+
+    @staticmethod
+    def _fields(**overrides):
+        fields = {
+            "rejected": 2,
+            "denied": 0,
+            "consecutive": 2,
+            "first_at": STARTED_AT + timedelta(seconds=60),
+            "last_at": STARTED_AT + timedelta(seconds=150),
+            "last_kind": "rejected",
+            "last_client_order_id": "O-20260922-140905-0a1b2c3d-000-3",
+            "last_instrument_id": "NVDA.NASDAQ",
+            "last_strategy_id": "SMACrossover-000",
+            "last_reason": "Order rejected - reason: insufficient margin",
+            "last_reconciliation": False,
+        }
+        fields.update(overrides)
+        return fields
+
+    def test_it_opens_and_closes_exactly_one_session(self, patched):
+        factory = _RecordingFactory()
+        record = SqlSessionRecord(SESSION_ID, owner_epoch=OWNER_EPOCH, session_factory=factory)
+
+        record.record_order_rejections(**self._fields())
+
+        assert (factory.entered, factory.exited) == (1, 1)
+
+    def test_the_document_reaches_runtime_flags(self, monkeypatch):
+        from src.services import session_record as adapter_module
+
+        row = _row(SessionStatus.RUNNING)
+        repository = MagicMock()
+        repository.find_by_session_id.return_value = row
+        monkeypatch.setattr(adapter_module, "SyncTradingSessionRepository", lambda s: repository)
+        record = SqlSessionRecord(
+            SESSION_ID, owner_epoch=OWNER_EPOCH, session_factory=_RecordingFactory()
+        )
+
+        record.record_order_rejections(**self._fields())
+
+        document = row.runtime_flags["order_rejections"]
+        assert document["rejected"] == 2
+        assert document["consecutive"] == 2
+        assert document["last"]["instrument_id"] == "NVDA.NASDAQ"
+        assert row.status is SessionStatus.RUNNING
+
+    def test_a_reclaimed_row_raises_the_ports_own_error(self, monkeypatch):
+        from src.core.live_session_record import SessionReclaimedError
+        from src.services import session_record as adapter_module
+
+        row = _row(SessionStatus.RUNNING, owner_epoch=OWNER_EPOCH + 1)
+        repository = MagicMock()
+        repository.find_by_session_id.return_value = row
+        monkeypatch.setattr(adapter_module, "SyncTradingSessionRepository", lambda s: repository)
+        record = SqlSessionRecord(
+            SESSION_ID, owner_epoch=OWNER_EPOCH, session_factory=_RecordingFactory()
+        )
+
+        with pytest.raises(SessionReclaimedError, match="reclaimed"):
+            record.record_order_rejections(**self._fields())
+
+        assert row.runtime_flags is None
+
+    def test_a_row_that_is_no_longer_running_is_translated_the_same_way(self, monkeypatch):
+        from src.core.live_session_record import SessionReclaimedError
+        from src.services import session_record as adapter_module
+
+        row = _row(SessionStatus.STOPPED)
+        repository = MagicMock()
+        repository.find_by_session_id.return_value = row
+        monkeypatch.setattr(adapter_module, "SyncTradingSessionRepository", lambda s: repository)
+        record = SqlSessionRecord(
+            SESSION_ID, owner_epoch=OWNER_EPOCH, session_factory=_RecordingFactory()
+        )
+
+        with pytest.raises(SessionReclaimedError):
+            record.record_order_rejections(**self._fields())
+
+    def test_the_adapter_still_satisfies_the_widened_port(self):
+        """The pin that makes Task 2.4(d) load-bearing: the port grew a method,
+        and ``@runtime_checkable`` ``isinstance`` now checks for four names.
+        """
+        assert isinstance(SqlSessionRecord(SESSION_ID, owner_epoch=OWNER_EPOCH), SessionRecordPort)
+
+
+class TestRecordTradingWithheld:
+    """Story 5.8's fifth port method, through the same one-transaction adapter
+    — and, like the fourth, pinned so it did not get a *different* discipline
+    by accident."""
+
+    @staticmethod
+    def _fields(**overrides):
+        fields = {
+            "withheld_from": STARTED_AT + timedelta(minutes=5),
+            "withheld_until": None,
+            "reason": "positions_unanswered",
+            "error_type": "BrokerStateUnavailableError",
+            "failed_cycles": 3,
+        }
+        fields.update(overrides)
+        return fields
+
+    def test_it_opens_and_closes_exactly_one_session(self, patched):
+        factory = _RecordingFactory()
+        record = SqlSessionRecord(SESSION_ID, owner_epoch=OWNER_EPOCH, session_factory=factory)
+
+        record.record_trading_withheld(**self._fields())
+
+        assert (factory.entered, factory.exited) == (1, 1)
+
+    def test_the_bound_session_and_epoch_reach_the_service(self, patched):
+        _, service = patched
+        record = SqlSessionRecord(
+            SESSION_ID, owner_epoch=OWNER_EPOCH, session_factory=_RecordingFactory()
+        )
+
+        record.record_trading_withheld(**self._fields())
+
+        service.record_trading_withheld.assert_called_once_with(
+            SESSION_ID, owner_epoch=OWNER_EPOCH, **self._fields()
+        )
+
+    def test_the_period_reaches_runtime_flags(self, monkeypatch):
+        from src.services import session_record as adapter_module
+
+        row = _row(SessionStatus.RUNNING)
+        repository = MagicMock()
+        repository.find_by_session_id.return_value = row
+        monkeypatch.setattr(adapter_module, "SyncTradingSessionRepository", lambda s: repository)
+        record = SqlSessionRecord(
+            SESSION_ID, owner_epoch=OWNER_EPOCH, session_factory=_RecordingFactory()
+        )
+
+        record.record_trading_withheld(**self._fields())
+
+        (period,) = row.runtime_flags["reconcile_withheld"]["periods"]
+        assert period["start"] == (STARTED_AT + timedelta(minutes=5)).isoformat()
+        assert period["end"] is None
+        assert row.status is SessionStatus.RUNNING
+
+    def test_a_reclaimed_row_raises_the_ports_own_error(self, monkeypatch):
+        from src.core.live_session_record import SessionReclaimedError
+        from src.services import session_record as adapter_module
+
+        row = _row(SessionStatus.RUNNING, owner_epoch=OWNER_EPOCH + 1)
+        repository = MagicMock()
+        repository.find_by_session_id.return_value = row
+        monkeypatch.setattr(adapter_module, "SyncTradingSessionRepository", lambda s: repository)
+        record = SqlSessionRecord(
+            SESSION_ID, owner_epoch=OWNER_EPOCH, session_factory=_RecordingFactory()
+        )
+
+        with pytest.raises(SessionReclaimedError, match="reclaimed"):
+            record.record_trading_withheld(**self._fields())
+
+        assert row.runtime_flags is None
+
+    def test_a_row_that_is_no_longer_running_is_translated_the_same_way(self, monkeypatch):
+        from src.core.live_session_record import SessionReclaimedError
+        from src.services import session_record as adapter_module
+
+        row = _row(SessionStatus.STOPPED)
+        repository = MagicMock()
+        repository.find_by_session_id.return_value = row
+        monkeypatch.setattr(adapter_module, "SyncTradingSessionRepository", lambda s: repository)
+        record = SqlSessionRecord(
+            SESSION_ID, owner_epoch=OWNER_EPOCH, session_factory=_RecordingFactory()
+        )
+
+        with pytest.raises(SessionReclaimedError):
+            record.record_trading_withheld(**self._fields())

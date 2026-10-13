@@ -1,0 +1,312 @@
+"""Nothing on the node-facing path exits the process (Story 2.7, AC #3, AR38).
+
+Unit tier: an ``ast`` walk over source text imports nothing and touches no
+Nautilus, no broker and no event loop. Structural rather than textual on
+purpose — Stories 2.1, 2.3, 2.5 and 2.6 each recorded the same trap, that a
+docstring merely *mentioning* a forbidden name satisfies a substring search
+while no code ever calls it. This module's own docstring says ``os._exit``
+twice, and :class:`TestTheScanIsNotVacuous` proves that does not fire it.
+
+⚠️ **A passing scan here is not, on its own, evidence of anything.** It passed
+green for the whole of Epics 1 and 2 while a raising strategy still killed the
+process at ``os._exit(1)`` — because the call was **Nautilus's**, in
+``live/data_engine.py:347-365``, not ours. AC #3 therefore pairs this scan with
+a **positive** proof that the third-party ``os._exit`` is unreachable for
+strategy code: ``tests/integration/core/test_live_strategy_failure_survives.py``
+runs a real ``LiveDataEngine`` with a raising strategy in a fresh interpreter
+and asserts the return code is ``0``, and the same probe with the guard removed
+exits ``1``. Read the two together; a scan alone would ship a false pass.
+"""
+
+import ast
+from pathlib import Path
+
+import pytest
+
+pytestmark = pytest.mark.unit
+
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
+#: Every way a Python process can be ended from inside, matched on
+#: **identifiers**: ``sys.exit`` and a bare ``exit`` both contribute ``exit``,
+#: ``os._exit`` contributes ``_exit``, ``os.abort`` contributes ``abort``, and
+#: ``raise SystemExit(...)`` contributes ``SystemExit`` whether it is raised
+#: bare or called.
+FORBIDDEN_EXIT_NAMES = frozenset({"exit", "_exit", "abort", "quit", "SystemExit"})
+
+#: The node-facing modules: everything the runner builds, drives or is driven
+#: by, plus the two service-layer modules its record port reaches through. A
+#: failure anywhere here must reach the runner's ``finally`` — which is the
+#: whole point, because that ``finally`` is what moves the session's row to
+#: ``stopped`` instead of stranding it at ``running``.
+NODE_FACING_MODULES = (
+    "src/core/live_session_runner.py",
+    "src/core/live_session_node.py",
+    "src/core/live_session_steady_state.py",
+    "src/core/live_strategy_guard.py",
+    "src/core/live_node_builder.py",
+    "src/core/live_bar_observer.py",
+    "src/core/live_session_phases.py",
+    "src/core/live_session_record.py",
+    "src/core/live_session_controller.py",
+    "src/core/live_account_gate.py",
+    "src/core/live_connection_monitor.py",
+    "src/core/live_connection_probe.py",
+    "src/core/live_cache.py",
+    # Story 3.2. The suppression wrap and order-event observer run inline
+    # inside strategy calls and MessageBus.publish_c respectively — exactly
+    # the shape this list exists to cover.
+    "src/core/live_order_path.py",
+    # 2026-09-01. Runs inside `node.build()` (the exec-client factory wrapper)
+    # and is the last thing between a real fill and the cache write that used
+    # to kill the node. It raises `AttributeError` by design when the upstream
+    # shape moves; raising is fine here, exiting never is.
+    "src/core/live_exec_avg_px.py",
+    # Story 3.5. Runs inline inside `MessageBus.publish_c`, the same shape as
+    # `live_order_path.py` above — a raise here would re-enter Nautilus's own
+    # silent `os._exit(1)`, so this scan must cover it too.
+    "src/core/live_trade_recorder.py",
+    # Story 3.7. The rejection tally is the third subscriber on
+    # `events.order*`, so it runs inline inside `MessageBus.publish_c` — the
+    # same shape as `live_order_path.py` and `live_trade_recorder.py` above.
+    # Added in the commit that created the module, because this list is
+    # hand-maintained and an omission is invisible (CLAUDE.md, Anti-Patterns).
+    "src/core/live_order_rejections.py",
+    # Story 4.4. The warm-up watch's wrapped callback runs inline inside the
+    # history response dispatch (`Actor._finish_response`, on
+    # `LiveDataEngine`'s response queue), where a raise shuts the whole node
+    # down — the same shape as the three above. Added in the creating commit.
+    "src/core/live_session_warmup.py",
+    # Story 4.1. The broker-state reader drives the node's own IB exec client
+    # and adapter (`get_positions`, the instrument provider) on the node's
+    # loop, and Story 4.2 calls it from the runner's `reconcile` phase — a
+    # failure here must surface as `BrokerStateUnavailableError`, never an exit.
+    # Added in the creating commit.
+    "src/core/live_broker_state.py",
+    # Story 4.6. The on-demand reconcile driver builds, runs and tears down its
+    # own read-only node (`ibkr_live_client_id + 1`) and drives the broker
+    # read on it; every failure must surface as a typed exception the CLI maps
+    # to AR28's table — raising is fine here, exiting never is. Added in the
+    # creating commit.
+    "src/core/live_reconcile.py",
+    # Story 4.6. Reached from the driver above, between the broker read and
+    # the node's teardown: an exit here would skip that teardown and strand
+    # the `+ 1` client id on the Gateway. Added in the creating commit.
+    "src/core/live_session_view.py",
+    # Story 4.2. The `reconcile` phase's body: it reads the node's exec engine
+    # and cache and hands the engine broker-ward `PositionStatusReport`s on the
+    # node's loop — every refusal must surface as `ReconciliationFailedError`
+    # (exit 1), never an exit. Added in the creating commit.
+    "src/core/live_startup_reconcile.py",
+    # Story 4.3. The runtime reconciler runs on every heartbeat tick for the
+    # session's whole life, reading the broker and correcting the cache through
+    # the exec engine on the node's loop; its one deliberate way out is a typed
+    # `ReconciliationFailedError` that the runner's `finally` must receive —
+    # raising is fine here, exiting never is. Added in the creating commit.
+    "src/core/live_runtime_reconcile.py",
+    # Story 4.8. Called from the runtime reconciler's cycle on every second
+    # heartbeat tick: it asks the node's IB client for its open orders and
+    # hands the exec engine a `CANCELED` report on the node's loop. Every
+    # failure is contained and logged — it never raises, and never exits.
+    # Added in the creating commit.
+    "src/core/live_stranded_orders.py",
+    # Story 4.3. Runs inside `node.build()` (the exec-client factory, beside
+    # `live_exec_avg_px.py`) and then inside the adapter's position-update task
+    # for the whole session. Added in the creating commit.
+    "src/core/live_exec_position_reports.py",
+    # Story 4.5. Called by the runner inside `node:connect` (before
+    # `run_async()`) and inside `trading`'s per-strategy containment: its
+    # refusals are a typed `ResumeRefusedError` the runner's `finally` (or the
+    # start-failure path) must receive — raising is fine here, exiting never
+    # is. Added in the creating commit.
+    "src/core/live_session_resume.py",
+    # Story 5.9. Installed inside `node.build()` (the exec-client factory,
+    # beside `live_exec_position_reports.py`), then run inside the adapter's
+    # reconnect task for the whole session; its watch is awaited by the
+    # heartbeat tick. A lost bar feed is a typed `BarFeedLostError` the
+    # runner's `finally` must receive — raising is fine, exiting never is.
+    # Added in the creating commit.
+    "src/core/live_bar_resubscribe.py",
+    # Story 5.9. Installed by `live_order_path.install_order_path` on the
+    # strategy's own `handle_bar`, so it runs inside every bar the strategy
+    # handles — the same position as `live_order_path.py` above. It contains
+    # its own failures and never raises. Added in the creating commit.
+    "src/core/live_catch_up_gate.py",
+    "src/services/session_record.py",
+    "src/services/session_service.py",
+)
+
+#: The two documented exemptions, by name and with the reason inline.
+#:
+#: ``src/core/live_session_signals.py`` — Story 2.6's sanctioned
+#: ``os._exit(1)`` on a **second** stop signal. It is a *signal* path, not a
+#: failure path: the operator has asked twice for the process to end, and the
+#: whole point is that it is uncatchable. ``sys.exit(130)`` was considered and
+#: rejected there, because ``live_check_node.shutdown`` catches
+#: ``BaseException`` at every step and would swallow a ``SystemExit`` raised
+#: from a handler that fired inside the teardown.
+#:
+#: ``src/cli/commands/live.py``, ``live_start.py`` and ``live_status.py`` — the
+#: CLI boundary. AR28 gives ``ntrader live`` an exit-code table, and
+#: ``raise SystemExit(code)`` is how a Click command reports one. Ending the
+#: *process* is exactly this layer's job; the rule is that nothing **below**
+#: it may. ``live_status.py`` (Story 2.8) joined at creation: `status`/`list`
+#: exit through the same ``EXIT_CODES``-derived ``SystemExit`` `live_start.py`
+#: does, for the same reason. ``live_reconcile.py`` (Story 4.6) joined at
+#: creation for the same reason again: `reconcile` exits 0/5, or through
+#: ``EXIT_CODES`` on a failure. ``live_seal.py`` (Story 5.3) joined at creation
+#: too: `seal` exits 0, or 1 through ``EXIT_CODES`` on a refusal or failure.
+EXEMPT_MODULES = (
+    "src/core/live_session_signals.py",
+    "src/cli/commands/live.py",
+    "src/cli/commands/live_start.py",
+    "src/cli/commands/live_status.py",
+    "src/cli/commands/live_reconcile.py",
+    "src/cli/commands/live_seal.py",
+)
+
+
+def _source(relative_path: str) -> str:
+    return (PROJECT_ROOT / relative_path).read_text(encoding="utf-8")
+
+
+def _called_names(source: str) -> set[str]:
+    """Every function/attribute name that appears as the callee of a Call node.
+
+    Copied verbatim from ``tests/unit/core/test_live_stop_path_is_inert.py:82-99``
+    so the two scans cannot drift. Covers ``sys.exit(1)``, ``os._exit(1)`` and a
+    bare ``exit()`` alike: an ``ast.Attribute`` callee contributes its ``.attr``,
+    an ``ast.Name`` callee contributes its ``.id``.
+    """
+    tree = ast.parse(source)
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Attribute):
+            names.add(func.attr)
+        elif isinstance(func, ast.Name):
+            names.add(func.id)
+    return names
+
+
+def _raised_names(source: str) -> set[str]:
+    """Every exception name that appears in a ``raise`` statement.
+
+    ``_called_names`` alone would miss a bare ``raise SystemExit`` (no Call node
+    at all) and would catch ``raise SystemExit(3)`` only incidentally, as a
+    call. This scan is what makes the ``SystemExit`` half of
+    :data:`FORBIDDEN_EXIT_NAMES` mean what it says.
+    """
+    tree = ast.parse(source)
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Raise) or node.exc is None:
+            continue
+        raised = node.exc.func if isinstance(node.exc, ast.Call) else node.exc
+        if isinstance(raised, ast.Name):
+            names.add(raised.id)
+        elif isinstance(raised, ast.Attribute):
+            names.add(raised.attr)
+    return names
+
+
+def _exit_hits(source: str) -> set[str]:
+    return (_called_names(source) | _raised_names(source)) & FORBIDDEN_EXIT_NAMES
+
+
+class TestNothingNodeFacingEndsTheProcess:
+    """AC #3 — a failure must reach the runner's ``finally``, not ``os._exit``."""
+
+    @pytest.mark.parametrize("relative_path", NODE_FACING_MODULES)
+    def test_no_module_calls_or_raises_an_exit(self, relative_path):
+        hits = _exit_hits(_source(relative_path))
+
+        assert not hits, (
+            f"{relative_path} ends the process ({sorted(hits)}). Everything on this path must "
+            "raise instead, so the runner's teardown runs and the session's row reaches "
+            "`stopped` rather than being stranded at `running`. If this is deliberate, it needs "
+            "an entry in EXEMPT_MODULES with its reason, not a weakened scan."
+        )
+
+    def test_the_scanned_set_is_not_empty(self):
+        """Mutation #10: pointing the scan at an empty tuple must fail loudly.
+
+        Story 2.3's AR37 guard examined 4 of 192 files and passed a planted
+        probe, which is why every AST scan in this repo carries one of these.
+        """
+        assert len(NODE_FACING_MODULES) >= 10
+
+    @pytest.mark.parametrize("relative_path", NODE_FACING_MODULES)
+    def test_every_scanned_module_exists_and_parses(self, relative_path):
+        """A renamed module would silently drop out of the scan otherwise —
+        exactly how ``live_start.py`` escaped two guards when Story 2.6 split
+        it out of ``live.py``.
+        """
+        assert (PROJECT_ROOT / relative_path).is_file()
+        ast.parse(_source(relative_path))
+
+
+class TestTheExemptionsAreRealAndStillNeeded:
+    """An exemption nobody uses is a hole waiting for the next author."""
+
+    @pytest.mark.parametrize("relative_path", EXEMPT_MODULES)
+    def test_each_exempt_module_genuinely_exits(self, relative_path):
+        """If one stops exiting, delete its exemption rather than leaving a
+        pre-approved gap in the scan.
+        """
+        assert _exit_hits(_source(relative_path))
+
+    def test_no_module_is_both_scanned_and_exempt(self):
+        assert not set(NODE_FACING_MODULES) & set(EXEMPT_MODULES)
+
+    def test_the_signal_modules_exit_is_the_os_level_one(self):
+        """Story 2.6's force exit is ``os._exit``, deliberately — ``sys.exit``
+        raises ``SystemExit``, which ``live_check_node.shutdown``'s
+        ``BaseException`` handlers would swallow if a second signal arrived
+        during teardown.
+        """
+        assert "_exit" in _called_names(_source("src/core/live_session_signals.py"))
+
+
+class TestTheScanIsNotVacuous:
+    """Planted probes for **every** forbidden name, plus a prose negative."""
+
+    @pytest.mark.parametrize(
+        "probe, expected",
+        [
+            ("import sys\nsys.exit(1)", "exit"),
+            ("exit(1)", "exit"),
+            ("import os\nos._exit(1)", "_exit"),
+            ("import os\nos.abort()", "abort"),
+            ("quit()", "quit"),
+            ("raise SystemExit(3)", "SystemExit"),
+            ("raise SystemExit", "SystemExit"),
+            ("raise builtins.SystemExit(3)", "SystemExit"),
+        ],
+    )
+    def test_the_scan_detects_every_forbidden_name_it_claims_to(self, probe, expected):
+        assert expected in _exit_hits(probe)
+
+    def test_the_scan_does_not_fire_on_prose_that_merely_names_one(self):
+        """The reason it is structural. This repo's live modules discuss
+        ``os._exit`` at length — this very file does — and a substring check
+        would fire on all of it.
+        """
+        prose = (
+            '"""Nautilus ends the process at os._exit(1), so sys.exit and\n'
+            'raise SystemExit are both unreachable here."""\n'
+            'x = "the queue loop calls os._exit(1)"  # and quit() and os.abort()\n'
+        )
+
+        assert not _exit_hits(prose)
+
+    def test_the_guards_own_module_docstring_is_a_live_prose_probe(self):
+        """``live_strategy_guard.py`` names ``os._exit(1)`` in its docstring and
+        is in the scanned set, so the prose negative above is not hypothetical.
+        """
+        source = _source("src/core/live_strategy_guard.py")
+
+        assert "os._exit" in source
+        assert not _exit_hits(source)

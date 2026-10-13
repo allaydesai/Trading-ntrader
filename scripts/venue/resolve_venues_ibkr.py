@@ -140,7 +140,9 @@ async def _connect(args) -> IBKRHistoricalClient:
     """
     host = _env_str("IBKR_HOST", "127.0.0.1")
     port = _env_int("IBKR_PORT", 4002)
-    client_id = args.client_id if args.client_id is not None else _env_int("IBKR_CLIENT_ID", 10)
+    # Default matches the historical half of the client-ID reservation (src/config.py);
+    # 10 and 11 are reserved for the live session and on-demand reconcile.
+    client_id = args.client_id if args.client_id is not None else _env_int("IBKR_CLIENT_ID", 1)
     _say(f"Connecting to IBKR at {host}:{port} (client_id={client_id})...")
     client = IBKRHistoricalClient(host=host, port=port, client_id=client_id)
     info = await client.connect(timeout=30, max_id_rotations=5)

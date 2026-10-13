@@ -126,7 +126,11 @@ class DataCatalogService:
             Connection settings are read from environment variables:
             - IBKR_HOST (default: 127.0.0.1)
             - IBKR_PORT (default: 7497, but typically set to 4002 for Gateway paper)
-            - IBKR_CLIENT_ID (default: 10)
+            - IBKR_CLIENT_ID (default: 1 — the historical half of the client-ID
+              reservation. The live session reserves IBKR_LIVE_CLIENT_ID and
+              IBKR_LIVE_CLIENT_ID + 1; see IBKRSettings for the allocation. Note
+              this path reads os.environ directly and so is not covered by that
+              class's validation.)
 
             The .env file should be loaded before this service is initialized.
         """
@@ -135,7 +139,7 @@ class DataCatalogService:
             # Strip whitespace and handle inline comments
             ibkr_host = os.environ.get("IBKR_HOST", "127.0.0.1").split("#")[0].strip()
             ibkr_port_str = os.environ.get("IBKR_PORT", "7497").split("#")[0].strip()
-            ibkr_client_id_str = os.environ.get("IBKR_CLIENT_ID", "10").split("#")[0].strip()
+            ibkr_client_id_str = os.environ.get("IBKR_CLIENT_ID", "1").split("#")[0].strip()
 
             ibkr_port = int(ibkr_port_str)
             ibkr_client_id = int(ibkr_client_id_str)

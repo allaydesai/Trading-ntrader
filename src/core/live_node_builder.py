@@ -1,0 +1,713 @@
+"""TradingNode assembly for IBKR paper trading.
+
+Owns: building a ``TradingNodeConfig`` carrying IB data/exec client configs
+behind the Layer 1 safety gate, constructing the node, and registering the
+Nautilus LogGuard when node construction is the one that claims the C
+logging subsystem.
+
+Also owns the market-data half of that assembly (Story 1.5): the REALTIME
+override, the RTH restriction, the instruments the provider must load, and the
+market-data line budget check. The policy those rest on lives in
+``live_market_data``; this module is where it reaches the client config.
+
+Story 2.4 added the Redis engine cache seam: an optional ``cache`` config
+reaches ``TradingNodeConfig``, and ``build_trading_node`` refuses an
+unreachable Redis *before* constructing a node — that constructor blocks
+forever otherwise. What a cache config contains, and the ``trader_id`` that
+names its key namespace, live in ``src/core/live_cache.py`` and
+``src/core/live_trader_id.py``.
+
+Does not own: the node's lifecycle (build/run/stop/dispose — the runner does,
+AR38), deriving the session's ``trader_id``, indicator warm-up from history
+(Epic 4), reading the client's connection status
+(``src/core/live_connection_probe.py``, extracted from here by Story 2.4), or
+what a connection status *means* — ``src/core/live_connection_monitor.py``
+owns the state machine and the trading-permission flag it derives.
+"""
+
+import asyncio
+from collections.abc import Sequence
+from typing import ClassVar
+
+import structlog
+from nautilus_trader.adapters.interactive_brokers.common import IB
+from nautilus_trader.adapters.interactive_brokers.config import (
+    InteractiveBrokersDataClientConfig,
+    InteractiveBrokersExecClientConfig,
+    InteractiveBrokersInstrumentProviderConfig,
+)
+from nautilus_trader.adapters.interactive_brokers.factories import (
+    InteractiveBrokersLiveDataClientFactory,
+)
+from nautilus_trader.adapters.interactive_brokers.factories import (
+    InteractiveBrokersLiveExecClientFactory as _StockIBExecClientFactory,
+)
+from nautilus_trader.config import (
+    CacheConfig,
+    ImportableActorConfig,
+    ImportableControllerConfig,
+    LiveDataEngineConfig,
+    LiveExecEngineConfig,
+    LiveRiskEngineConfig,
+    LoggingConfig,
+    RoutingConfig,
+    TradingNodeConfig,
+)
+from nautilus_trader.live.node import TradingNode
+from nautilus_trader.model.data import BarType
+
+from src.config import IBKRSettings
+from src.core.exit_outcome import LiveCheckOutcome
+from src.core.live_bar_observer import LiveBarObserverConfig
+from src.core.live_bar_resubscribe import install_bar_resubscribe_fix
+from src.core.live_cache import check_redis_reachable
+from src.core.live_exec_avg_px import install_avg_px_serialization_fix
+from src.core.live_exec_position_reports import install_position_report_suppression
+from src.core.live_gate import GateFlags, GateRefusal, evaluate_gate, mask_account
+from src.core.live_market_data import (
+    LiveMarketDataError,
+    instrument_ids_for,
+    resolve_live_bar_types,
+    resolve_live_market_data_type,
+    resolve_live_use_rth,
+    validate_market_data_line_budget,
+)
+from src.utils.logging import set_nautilus_log_guard
+
+# Dotted paths the Nautilus kernel resolves when it instantiates the observer.
+# Kept as constants so the component tier can assert they still import, rather
+# than discovering a typo when a node is being built against a live gateway.
+BAR_OBSERVER_ACTOR_PATH = "src.core.live_bar_observer:LiveBarObserver"
+BAR_OBSERVER_CONFIG_PATH = "src.core.live_bar_observer:LiveBarObserverConfig"
+
+# `TradingNodeConfig` inherits six timeouts from `NautilusKernelConfig`
+# (`system/config.py:106-132`) and, before Story 2.5, this repo set none of
+# them. The six below are **today's Nautilus defaults, deliberately**: passing
+# them explicitly is a zero-behaviour-change guard against a silent upgrade,
+# exactly as `live_cache`'s three namespace-deciding fields are and as
+# `market_data_type`/`use_regular_trading_hours` already are below.
+# `tests/component/core/test_live_node_builder.py` asserts each by name AND
+# that they still equal Nautilus's own defaults, so an upgrade that moves one
+# becomes a decision rather than a surprise.
+
+#: How long both engines have to report connected inside `start_async`.
+NODE_TIMEOUT_CONNECTION = 60.0
+#: How long Nautilus's own execution reconciliation may take.
+NODE_TIMEOUT_RECONCILIATION = 30.0
+#: In the set for a specific reason: its expiry is a **fail-quiet `return`** at
+#: `kernel.py:1024`, before `trader.start()` is reached — so a session can be
+#: connected, both engines healthy, and never start trading, with nothing
+#: raised. That is the shape Story 2.5's `node:connect` wait exists to catch.
+NODE_TIMEOUT_PORTFOLIO = 10.0
+#: How long a disconnect may take during shutdown.
+NODE_TIMEOUT_DISCONNECTION = 10.0
+#: How long post-stop cleanup may take.
+NODE_TIMEOUT_POST_STOP = 10.0
+#: How long the final shutdown may take.
+NODE_TIMEOUT_SHUTDOWN = 5.0
+
+# Story 2.7 (AC #6). All three live engines default this to `False`, and the
+# `False` branch of `_handle_queue_exception` is a literal `os._exit(1)`
+# (`live/data_engine.py:347-365`; identical at `live/execution_engine.py:380-398`
+# and `live/risk_engine.py:212-230`) — no `except`, no `finally`, no `atexit`, so
+# the runner's teardown never runs and the session's row is stranded at
+# `running`. Measured in a fresh interpreter: rc=1 with ZERO bytes of output, the
+# explanatory ERROR line surviving 4 runs in 20.
+#
+# ⚠️ This flag fixes NEITHER AC #1 NOR AC #2, and must not be read as
+# containment. Measured with `True`: exactly one `ShutdownSystem` is published,
+# which `kernel.py:603-625` turns into `stop_async()` — a graceful stop of the
+# WHOLE node, so the session ends. And with two co-subscribed strategies the
+# sibling still saw `{'A': 3, 'B': 0}`, because `MessageBus.publish_c`'s
+# dispatch abort is upstream of this flag and completely untouched by it. It is
+# defence in depth BEHIND `live_strategy_guard`'s per-strategy containment: what
+# covers the runner's own `note_bar` handler and the `LiveBarObserver`, neither
+# of which the guard wraps.
+#
+# Passed unconditionally for the same reason the timeouts are — a safety
+# property resting on a third-party default is one upgrade from silently
+# changing. `tests/component/core/test_live_node_builder.py` pins both halves:
+# that we set `True`, and that Nautilus still defaults `False`.
+ENGINE_GRACEFUL_SHUTDOWN_ON_EXCEPTION = True
+
+# Story 3.4 (AC #1, AR24). The in-flight sweep is what proves NFR6: it is
+# what queries the venue for a `SUBMITTED`/`PENDING_*` order that has gone
+# quiet — a lost ack, a dropped connection mid-submit — and resolves it
+# LOCALLY (`OrderRejected(reason="UNKNOWN", reconciliation=True)` for
+# `SUBMITTED`, `OrderCanceled(reconciliation=True)` for `PENDING_*`) rather
+# than ever resubmitting. Nothing in `live/execution_engine.py` calls
+# `submit_order` — the only path back to the broker after a signal is a
+# fresh strategy decision. These four fields were previously left to
+# `LiveExecEngineConfig`'s own defaults by omission (nothing in this
+# repository named, tested, or would go red if a future edit disabled them);
+# the values below are today's Nautilus 1.220.0 defaults
+# (`live/config.py:166-187`), passed explicitly for the same
+# "today's-defaults-deliberately" reason the `NODE_TIMEOUT_*` block is:
+# `tests/component/core/test_live_node_builder.py` pins both halves — that we
+# set these values, and that the wheel's own stock defaults still equal them,
+# so an upgrade that moves one becomes a decision rather than a silent drift.
+#
+#
+# Story 4.3 (PO ruling 1A, 2026-09-27): the open-order consistency check
+# (`open_check_interval_secs`) stays OFF — passed explicitly as `None`, the
+# wheel's default. MEASURED against 1.220.0 with a real `LiveExecutionEngine`
+# (Task 1.1b): a cached order the in-flight sweep already cancelled LOCALLY
+# (the IB adapter answers "not found" with a local `Cancelled`,
+# `execution.py:286-296`) that IB still lists open is never corrected —
+# `_reconcile_order_report` generates `OrderAccepted`, the order's `apply`
+# fails with `InvalidStateTrigger` and it stays CANCELED, and the engine
+# publishes the event anyway (`execution/engine.pyx:1165-1178`). So every check
+# republishes an `OrderAccepted` for that order, forever: an `order.accepted`
+# record and a Nautilus warning per check, and a reset of Story 3.7's refusal
+# streak each time. Its only other effect — importing an order the cache never
+# knew — is already covered at startup by the framework's own pass. With the
+# IB adapter the check is not free either: `generate_order_status_reports`
+# ignores `open_only`, calls `get_positions` and fabricates a `FILLED` report
+# per position (`execution.py:374-445`). Runtime alignment is therefore the
+# in-flight sweep above (native, running for the whole session) plus Story
+# 4.3's verified position cycle, whose every correction goes through the
+# framework's own `reconcile_execution_report` (`live_runtime_reconcile.py`).
+# Nothing of ours compensates for the check being off.
+EXEC_ENGINE_RECONCILIATION = True
+EXEC_ENGINE_INFLIGHT_CHECK_INTERVAL_MS = 2_000
+EXEC_ENGINE_INFLIGHT_CHECK_THRESHOLD_MS = 5_000
+EXEC_ENGINE_INFLIGHT_CHECK_RETRIES = 5
+EXEC_ENGINE_OPEN_CHECK_INTERVAL_SECS: float | None = None
+
+# Story 4.5 (D-A): a deliberate departure from Nautilus's default (`False`).
+# The IB adapter FABRICATES one `FILLED` order report per broker position,
+# keyed `client_order_id = instrument id` (`execution.py:374-433`). The cache
+# never knows that order, so under the default the framework imports it as
+# `EXTERNAL` — and its position pass then adds `INTERNAL-DIFF` to undo the
+# double count. Every restart holding a position therefore left the strategy
+# beside `EXTERNAL +N / INTERNAL-DIFF −N` (measured, Story 4.2 Task 1.4A), which
+# both built-in strategies acted on; and a later restart after the position
+# shrank aborted the process on a Rust panic inside the framework's own pass
+# (1.4S). With the filter on, `_generate_order` returns `None` for an unclaimed
+# `EXTERNAL` order (`live/execution_engine.py:1723-1728`), the position pass
+# alone aligns net (as `INTERNAL-DIFF`, which is never filtered), and a restart
+# leaves exactly the strategy's own position. Accepted trade-off: the switch is
+# an engine setting, so it holds for the session's whole life, not only at
+# startup — an order the cache never knew is not imported at startup, nor later
+# when the adapter reports one it cannot match (an order another API client
+# placed; a manual TWS order carries no `orderRef` and never reaches the engine
+# at all, `execution.py:909-912`). Its fills still reach the cache as a net
+# correction, through the startup pass and Story 4.3's runtime cycle. A
+# strategy's own working orders come back from Redis by `client_order_id` and
+# are untouched (AR25). Enforced on the running engine by the `reconcile` phase
+# (`live_startup_reconcile.BROKER_WARD_SETTINGS`).
+EXEC_ENGINE_FILTER_UNCLAIMED_EXTERNAL_ORDERS = True
+
+logger = structlog.get_logger(__name__)
+
+
+class GateRefusedError(Exception):
+    """The safety gate refused the connection; no client config was constructed."""
+
+    exit_outcome: ClassVar[LiveCheckOutcome] = LiveCheckOutcome.GATE_REFUSED
+    operator_safe_message: ClassVar[bool] = True
+
+    def __init__(self, refusal: GateRefusal) -> None:
+        super().__init__(refusal.message)
+        self.refusal = refusal
+
+
+class LiveNodeConfigError(Exception):
+    """Configuration cannot produce a usable node."""
+
+    exit_outcome: ClassVar[LiveCheckOutcome] = LiveCheckOutcome.CONFIG_ERROR
+    operator_safe_message: ClassVar[bool] = True
+
+
+def _validate_trader_id(trader_id: str) -> str:
+    """Reject a ``trader_id`` Nautilus would refuse — before it can abort us.
+
+    ``TradingNodeConfig`` eagerly coerces this to a ``TraderId``, and a value
+    containing no ``-`` **panics in Rust and aborts the process**
+    (``crates/model/src/identifiers/trader_id.rs``). That is not a Python
+    exception: ``except BaseException`` does not stop it, and under pytest it
+    kills the worker rather than failing a test. An empty value takes a
+    different path and raises a bare ``ValueError``, which is neither exception
+    this module documents.
+
+    Epic 2 still owns *deriving* the value (AR10); this only validates one it
+    is handed, exactly as the ``TWS_ACCOUNT`` check does below.
+    """
+    resolved = trader_id.strip()
+    if not resolved:
+        raise LiveNodeConfigError(
+            "Cannot build a TradingNode: trader_id is empty. "
+            "Expected a value of the form '<NAME>-<ID>', e.g. 'PAPER-a1b2c3d4'."
+        )
+    if "-" not in resolved:
+        raise LiveNodeConfigError(
+            f"Cannot build a TradingNode: trader_id {resolved!r} contains no '-'. "
+            "Nautilus requires the form '<NAME>-<ID>', e.g. 'PAPER-a1b2c3d4' — "
+            "and aborts the process rather than raising if given anything else."
+        )
+    return resolved
+
+
+def _resolve_account(settings: IBKRSettings) -> str:
+    """Return the account in the casing IBKR itself reports.
+
+    The gate compares ``account.upper().startswith(...)``
+    (``src/core/live_gate.py:214``), so a lowercase ``du...`` is legitimately
+    permitted. Passing that un-normalised to the exec client would produce
+    ``AccountId("InteractiveBrokers-du4076626")`` and mismatch Story 1.4's
+    Layer 2 verification against what the gateway reports. Normalise the way
+    the gate's own check does.
+    """
+    account = settings.tws_account.strip().upper()
+    if not account:
+        raise LiveNodeConfigError(
+            "Cannot build an IBKR execution client: TWS_ACCOUNT is not set. "
+            "The gate permits an empty account on the paper path, but the "
+            "execution client factory requires one."
+        )
+    return account
+
+
+def _validate_timeouts(settings: IBKRSettings) -> None:
+    """Reject non-positive timeouts, which mean 'expire immediately'.
+
+    Neither field carries a ``ge=`` constraint in ``IBKRSettings``, and both
+    are handed to ``asyncio.wait_for`` inside Nautilus — so ``0`` silently
+    guarantees the session can never connect, surfacing as an opaque timeout
+    rather than a configuration error. This module is their first consumer on
+    a live path.
+    """
+    for name, value in (
+        ("IBKR_CONNECTION_TIMEOUT", settings.ibkr_connection_timeout),
+        ("IBKR_REQUEST_TIMEOUT", settings.ibkr_request_timeout),
+    ):
+        if value <= 0:
+            raise LiveNodeConfigError(
+                f"Cannot build an IBKR client: {name} is {value}, which asyncio "
+                "treats as 'expire immediately'. Set a positive number of seconds."
+            )
+
+
+def build_trading_node_config(
+    settings: IBKRSettings,
+    *,
+    trader_id: str,
+    bar_types: Sequence[str] = (),
+    bar_observer: LiveBarObserverConfig | None = None,
+    cli_flags: GateFlags | None = None,
+    cache: CacheConfig | None = None,
+    logging: LoggingConfig | None = None,
+    controller: ImportableControllerConfig | None = None,
+) -> TradingNodeConfig:
+    """Assemble a TradingNodeConfig for IBKR paper trading.
+
+    Runs the Layer 1 safety gate before constructing any client config —
+    ordering is the contract (AC #2, FR9), not merely the outcome: a refusal
+    raises before ``InteractiveBrokersDataClientConfig`` or
+    ``InteractiveBrokersExecClientConfig`` is ever instantiated. Every later
+    check keeps that property: nothing that can fail runs after a client config
+    exists, so a bad configuration never reaches connecting code.
+
+    Args:
+        settings: Loaded IBKR settings. Injected, never fetched — this module
+            never calls ``get_settings()``.
+        trader_id: Required, no default. Epic 2 owns deriving it from the
+            session; this function does not invent one.
+        bar_types: Bar types the session will subscribe to. Their instruments
+            become the provider's ``load_ids`` — without which the adapter
+            silently never delivers a bar — and their count is checked against
+            the account's market-data line budget (Story 1.5, NFR16/NFR30).
+            Empty is legal: a node with no subscriptions still builds.
+        bar_observer: Observer configuration. When given, it is carried onto the
+            node declaratively as an ``ImportableActorConfig`` so the kernel owns
+            the actor's lifetime.
+        cli_flags: Operator declarations from the command line.
+        cache: Engine-cache configuration from ``live_cache.build_cache_config``.
+            ``None`` (the default) leaves the node's cache in memory, which is
+            what ``ntrader live check`` wants — a broker diagnostic must not
+            require Redis. Building a config never contacts Redis either way;
+            only ``build_trading_node`` does.
+        logging: Nautilus's own logging configuration. ``None`` (the default)
+            inherits the framework's, which is what ``ntrader live check``
+            does; a session passes one explicitly (Story 2.5 AC #9). Note
+            ``LoggingConfig(bypass_logging=True)`` raises
+            ``InvalidConfiguration`` in a LIVE environment
+            (``kernel.py:253-257``) — it is not a way to silence the node.
+        controller: A controller to register on the trader. ``None`` (the
+            default) means ``Trader.add_strategy``/``add_actor`` **silently
+            return** once the trader is running (``trader.py:331-333``,
+            ``:395-397``), so any caller that registers components after
+            ``node.run_async()`` has started must pass one — see
+            ``src/core/live_session_controller.py``.
+
+    Returns:
+        A configured ``TradingNodeConfig`` with one IB data client and one IB
+        exec client, keyed by the adapter's own client key.
+
+    Raises:
+        GateRefusedError: The gate refused the connection.
+        LiveNodeConfigError: The configuration cannot produce a usable node —
+            a malformed ``trader_id``, an empty ``TWS_ACCOUNT``, or a
+            non-positive timeout.
+        LiveMarketDataError: The market-data configuration cannot be honoured —
+            a non-REALTIME type, RTH disabled, an unusable bar type, or more
+            subscriptions than the account has market-data lines.
+    """
+    decision = evaluate_gate(settings, GateFlags() if cli_flags is None else cli_flags)
+    if not decision.permitted:
+        if decision.refusal is None:
+            # Unreachable via evaluate_gate, whose only refusal producer always
+            # populates this. Checked rather than asserted because `python -O`
+            # strips asserts, and losing this one would turn a gate refusal
+            # into an AttributeError on the safety-critical path.
+            raise LiveNodeConfigError(
+                "Safety gate refused the connection but supplied no refusal reason; "
+                "refusing to build a node against an unexplained refusal."
+            )
+        raise GateRefusedError(decision.refusal)
+
+    # Everything that can make the configuration unusable is settled before any
+    # client config exists, so a bad input never reaches a third-party factory
+    # (and, for trader_id, never reaches code that would abort the process).
+    resolved_trader_id = _validate_trader_id(trader_id)
+    account = _resolve_account(settings)
+    _validate_timeouts(settings)
+
+    # Market data resolves before any client config too. Both of these refuse
+    # rather than degrade: a live session that quietly ran on delayed or
+    # extended-hours bars would report prices it never actually traded on.
+    market_data_type = resolve_live_market_data_type(settings)
+    use_regular_trading_hours = resolve_live_use_rth(settings)
+
+    resolved_bar_types = _reconcile_bar_types(bar_types, bar_observer)
+    validate_market_data_line_budget(resolved_bar_types, budget=settings.ibkr_market_data_lines)
+
+    # Declares the intent to trade on this in-process view only. Nothing
+    # enforces against this flag elsewhere: the gate above is the load-bearing
+    # control (NFR27, AR43) — see "The ibkr_read_only truth" in the story.
+    trading_settings = settings.model_copy(update={"ibkr_read_only": False})
+
+    # Both clients deliberately share one id. `get_cached_ib_client` is keyed on
+    # (host, port, client_id) (adapters/interactive_brokers/factories.py:114), so
+    # they share ONE socket rather than colliding on a second API connection.
+    # This is not the collision FR5 forbids — that concerns the historical data
+    # client on `ibkr_client_id`, a different socket entirely.
+    data_client_config = InteractiveBrokersDataClientConfig(
+        ibg_host=trading_settings.ibkr_host,
+        ibg_port=trading_settings.ibkr_port,
+        ibg_client_id=trading_settings.ibkr_live_client_id,
+        connection_timeout=trading_settings.ibkr_connection_timeout,
+        request_timeout=trading_settings.ibkr_request_timeout,
+        # Both passed explicitly even though the adapter's own defaults happen to
+        # agree today. A data-integrity property that depends on a third-party
+        # default is one upgrade away from changing silently, and these two are
+        # the difference between a session trading live RTH bars and one trading
+        # 15-minute-old extended-hours bars while reporting them as live.
+        market_data_type=market_data_type,
+        use_regular_trading_hours=use_regular_trading_hours,
+        # Contracts the session will subscribe to. A missing entry is not an
+        # error at the adapter — `_subscribe_bars` logs "instrument not found"
+        # and returns (data.py:248-254), so the subscription is silently dead.
+        instrument_provider=InteractiveBrokersInstrumentProviderConfig(
+            load_ids=frozenset(instrument_ids_for(resolved_bar_types)),
+        ),
+    )
+    exec_client_config = InteractiveBrokersExecClientConfig(
+        ibg_host=trading_settings.ibkr_host,
+        ibg_port=trading_settings.ibkr_port,
+        ibg_client_id=trading_settings.ibkr_live_client_id,
+        connection_timeout=trading_settings.ibkr_connection_timeout,
+        account_id=account,
+        # The execution client has its OWN instrument provider, and an order
+        # cannot be translated without it: `_transform_order_to_ib_order`
+        # dereferences `self.instrument_provider.find(...).is_inverse` with no
+        # None check (`adapters/interactive_brokers/execution.py:525`), so an
+        # unloaded provider surfaces as an `AttributeError: 'NoneType' object
+        # has no attribute 'is_inverse'` raised inside the adapter's own
+        # `submit_order` — not as a rejection the strategy can observe.
+        #
+        # Epic 1 left this at its default on purpose ("no order path that would
+        # need it", recorded against P3's benign `No loading configured`
+        # warning). That expired the moment Epic 2 started strategies. MEASURED
+        # live 2026-08-28, in the same run in which the routing fix below first
+        # let an order reach the client.
+        #
+        # Same set as the data client's: a session can only trade what it
+        # subscribed to.
+        instrument_provider=InteractiveBrokersInstrumentProviderConfig(
+            load_ids=frozenset(instrument_ids_for(resolved_bar_types)),
+        ),
+        # Without this the session cannot place an order at all. Nautilus makes
+        # a client the engine's default only when its config asks
+        # (`live/node_builder.py:252-254`); the engine's own fallback — adopt
+        # the first client registered — fires only for a client constructed
+        # with `venue=None` (`execution/engine.pyx:421-429`), and the IB
+        # execution client is constructed with `venue=IB_VENUE`
+        # (`adapters/interactive_brokers/execution.py:157`). So by default it is
+        # filed under `_routing_map[INTERACTIVE_BROKERS]` alone, while every
+        # instrument this codebase trades carries the *exchange* as its venue —
+        # `AAPL.NASDAQ`, `NVDA.NASDAQ`. `ExecutionEngine.execute` resolves
+        # `_routing_map.get(NASDAQ, default)` (`engine.pyx:966`), finds nothing
+        # and drops the order.
+        #
+        # MEASURED live 2026-08-28: a real `sma_crossover` signal produced a
+        # real MarketOrder and the engine logged "Cannot execute command: no
+        # execution client configured for NASDAQ". No session had ever traded,
+        # for the whole of Epics 1 and 2. The data client is why that went
+        # unnoticed: it *is* constructed `venue=None` (`data.py:115`), so bars
+        # route by that same fallback. Market data arriving proves nothing
+        # about orders leaving.
+        routing=RoutingConfig(default=True),
+    )
+
+    logger.debug(
+        "live_node.configured",
+        client_id=trading_settings.ibkr_live_client_id,
+        account=mask_account(account),
+        trader_id=resolved_trader_id,
+        bar_types=[str(bar_type) for bar_type in resolved_bar_types],
+    )
+
+    return TradingNodeConfig(
+        trader_id=resolved_trader_id,
+        data_clients={IB: data_client_config},
+        exec_clients={IB: exec_client_config},
+        actors=_actor_configs(bar_observer),
+        # Nautilus reads the Redis key namespace from `trader_id` above, not
+        # from `cache` — `CacheConfig` carries no trader id (kernel.py:303-311).
+        # That is what makes the namespace per-session (AR10).
+        cache=cache,
+        logging=logging,
+        controller=controller,
+        # Story 2.7 (AC #6): graceful shutdown instead of `os._exit(1)` when an
+        # exception reaches a live engine's queue loop. Defence in depth behind
+        # the per-strategy guard — see ENGINE_GRACEFUL_SHUTDOWN_ON_EXCEPTION for
+        # why it is neither containment nor a substitute for it.
+        data_engine=LiveDataEngineConfig(
+            graceful_shutdown_on_exception=ENGINE_GRACEFUL_SHUTDOWN_ON_EXCEPTION
+        ),
+        exec_engine=LiveExecEngineConfig(
+            graceful_shutdown_on_exception=ENGINE_GRACEFUL_SHUTDOWN_ON_EXCEPTION,
+            reconciliation=EXEC_ENGINE_RECONCILIATION,
+            inflight_check_interval_ms=EXEC_ENGINE_INFLIGHT_CHECK_INTERVAL_MS,
+            inflight_check_threshold_ms=EXEC_ENGINE_INFLIGHT_CHECK_THRESHOLD_MS,
+            inflight_check_retries=EXEC_ENGINE_INFLIGHT_CHECK_RETRIES,
+            open_check_interval_secs=EXEC_ENGINE_OPEN_CHECK_INTERVAL_SECS,
+            filter_unclaimed_external_orders=EXEC_ENGINE_FILTER_UNCLAIMED_EXTERNAL_ORDERS,
+        ),
+        risk_engine=LiveRiskEngineConfig(
+            graceful_shutdown_on_exception=ENGINE_GRACEFUL_SHUTDOWN_ON_EXCEPTION
+        ),
+        # Passed unconditionally, including when they equal today's defaults.
+        # See the NODE_TIMEOUT_* constants above for why that is the point.
+        timeout_connection=NODE_TIMEOUT_CONNECTION,
+        timeout_reconciliation=NODE_TIMEOUT_RECONCILIATION,
+        timeout_portfolio=NODE_TIMEOUT_PORTFOLIO,
+        timeout_disconnection=NODE_TIMEOUT_DISCONNECTION,
+        timeout_post_stop=NODE_TIMEOUT_POST_STOP,
+        timeout_shutdown=NODE_TIMEOUT_SHUTDOWN,
+    )
+
+
+def _reconcile_bar_types(
+    bar_types: Sequence[str],
+    bar_observer: LiveBarObserverConfig | None,
+) -> tuple[BarType, ...]:
+    """Return the one subscription set the node and the observer both act on.
+
+    The observer is what actually calls ``subscribe_bars``; ``bar_types`` is what
+    sizes the line-budget check and fills the instrument provider's
+    ``load_ids``. Letting the two disagree produces the worst failure this module
+    can produce: a session that connects, reports healthy, and never receives a
+    bar, because ``_subscribe_bars`` logs ``instrument not found`` and returns
+    for a contract nobody loaded (``data.py:248-254``). It would also let a
+    caller slip past the market-data line budget entirely by naming its
+    subscriptions only on the observer.
+
+    So: an observer with no ``bar_types`` argument supplies the set; both
+    supplied must name the same set; and a disagreement is refused rather than
+    silently resolved in either direction.
+    """
+    if bar_observer is None:
+        return resolve_live_bar_types(bar_types)
+
+    observer_bar_types = resolve_live_bar_types(bar_observer.bar_types)
+    if not bar_types:
+        return observer_bar_types
+
+    resolved = resolve_live_bar_types(bar_types)
+    if {str(bar_type) for bar_type in resolved} != {
+        str(bar_type) for bar_type in observer_bar_types
+    }:
+        raise LiveMarketDataError(
+            "The bar types the node loads instruments for and the bar types the observer "
+            "subscribes to must be the same set. "
+            f"bar_types={sorted(str(bar_type) for bar_type in resolved)}, "
+            f"observer={sorted(str(bar_type) for bar_type in observer_bar_types)}. "
+            "A subscription whose instrument was never loaded is dropped by the IBKR adapter "
+            "with a log line and no error, so the session would run and never see a bar."
+        )
+    return resolved
+
+
+def _actor_configs(bar_observer: LiveBarObserverConfig | None) -> list[ImportableActorConfig]:
+    """Carry the observer onto the node declaratively, or carry nothing.
+
+    Declarative rather than ``node.trader.add_actor()``: the kernel then owns the
+    actor's lifetime alongside every other component, and the whole node config
+    stays serialisable. The dotted paths are resolved by Nautilus at build time,
+    which is why the component tier asserts they still import.
+    """
+    if bar_observer is None:
+        return []
+    return [
+        ImportableActorConfig(
+            actor_path=BAR_OBSERVER_ACTOR_PATH,
+            config_path=BAR_OBSERVER_CONFIG_PATH,
+            config=bar_observer.dict(),
+        )
+    ]
+
+
+def build_trading_node(
+    settings: IBKRSettings,
+    *,
+    trader_id: str,
+    bar_types: Sequence[str] = (),
+    bar_observer: LiveBarObserverConfig | None = None,
+    cli_flags: GateFlags | None = None,
+    cache: CacheConfig | None = None,
+    logging: LoggingConfig | None = None,
+    controller: ImportableControllerConfig | None = None,
+    loop: asyncio.AbstractEventLoop | None = None,
+) -> TradingNode:
+    """Build an unbuilt, unstarted TradingNode configured for IBKR paper trading.
+
+    The gate runs inside ``build_trading_node_config``, so a refusal raises
+    before a node exists. Registers the Nautilus LogGuard as early as the
+    framework allows — immediately after construction, before returning (AC #4,
+    AR20; ``NautilusKernel.__init__`` builds its own components before it
+    returns, so no caller can register earlier than this). Returns the node
+    unbuilt and not running: the runner owns ``build()``/``run()``/``stop()``
+    (AR38).
+
+    Args:
+        settings: Loaded IBKR settings. Injected, never fetched.
+        trader_id: Required, no default. Epic 2 owns deriving it.
+        bar_types: Bar types the session subscribes to; see
+            ``build_trading_node_config``.
+        bar_observer: Observer configuration, attached declaratively.
+        cli_flags: Operator declarations from the command line.
+        cache: Engine-cache configuration from ``live_cache.build_cache_config``.
+            Supplying it is what turns the Redis preflight on: with a cache
+            whose ``database`` is set, this function contacts Redis before
+            constructing anything, and refuses if it cannot. ``None`` (the
+            default) leaves the node's cache in memory and touches no network —
+            which is what ``ntrader live check`` relies on.
+        logging: Nautilus's own logging configuration, passed straight through
+            to ``build_trading_node_config``. See it for the ``bypass_logging``
+            trap.
+        controller: A controller to register on the trader, passed straight
+            through to ``build_trading_node_config``. Required by any caller
+            that registers strategies or actors *after* the node is running —
+            without one those calls silently no-op.
+        loop: The event loop to bind the node to. Passed straight through to
+            ``TradingNode``, which otherwise falls back to
+            ``asyncio.get_event_loop()`` — quietly manufacturing an orphan loop
+            nobody will ever run when called from synchronous code, so that a
+            later ``node.stop()`` drives the wrong loop. Ownership of the loop
+            stays with the caller (AR38); this only makes the binding explicit.
+
+    Raises:
+        GateRefusedError: The gate refused the connection.
+        LiveNodeConfigError: The configuration cannot produce a usable node.
+        LiveMarketDataError: The market-data configuration cannot be honoured.
+        RedisUnreachableError: A ``cache`` with a ``database`` was supplied and
+            its Redis could not be used. Raised only on that path, and only
+            before any node exists. Callers that map exceptions to exit codes
+            must handle it explicitly: ``live_check.classify_failure`` keys on
+            the exception's class *name*, so an unmapped type falls through to a
+            generic error and its message — which names the host, the port, and
+            the remedy — is withheld from the operator.
+    """
+    config = build_trading_node_config(
+        settings,
+        trader_id=trader_id,
+        bar_types=bar_types,
+        bar_observer=bar_observer,
+        cli_flags=cli_flags,
+        cache=cache,
+        logging=logging,
+        controller=controller,
+    )
+
+    # Strictly before TradingNode(...), because that constructor is the thing
+    # that hangs: NautilusKernel builds a CacheDatabaseAdapter eagerly whenever
+    # cache.database is set (kernel.py:300-312), and that adapter blocks forever
+    # against an unreachable Redis — DatabaseConfig(timeout=) does not bound it.
+    # After the gate, so a refused connection still reports as a gate refusal.
+    if cache is not None and cache.database is not None:
+        check_redis_reachable(cache.database.host, cache.database.port)
+
+    node = TradingNode(config=config, loop=loop)
+
+    # When a BacktestEngine already claimed the C logging subsystem in this
+    # process, NautilusKernel returns None here rather than a second guard
+    # (kernel.py:190) — storing None would be meaningless.
+    guard = node.kernel.get_log_guard()
+    if guard is not None:
+        set_nautilus_log_guard(guard)
+
+    node.add_data_client_factory(IB, InteractiveBrokersLiveDataClientFactory)
+    node.add_exec_client_factory(IB, InteractiveBrokersLiveExecClientFactory)
+
+    return node
+
+
+class InteractiveBrokersLiveExecClientFactory(_StockIBExecClientFactory):
+    """The stock IB exec factory, with one upstream defect patched out.
+
+    Measured live 2026-09-01: the adapter puts a raw ``Price`` into the fill
+    event's ``info`` dict, which the Redis cache database cannot serialize, and
+    the resulting raise happens *before* the fill is published — so the order
+    fills at the broker and nothing downstream ever hears about it. The whole
+    diagnosis, and the conditions under which this wrapper can be deleted, are
+    in :mod:`src.core.live_exec_avg_px`.
+
+    Wrapping the factory is the narrowest seam available: Nautilus builds the
+    client here (``live/node_builder.py:249``) and nothing else touches it
+    between construction and the first fill.
+
+    **The class name is load-bearing and must not be "improved".** Nautilus
+    decides whether to call ``cache.set_specific_venue(Venue("INTERACTIVE_BROKERS"))``
+    by comparing ``factory.__name__`` against the literal string
+    ``"InteractiveBrokersLiveExecClientFactory"`` (``live/node_builder.py:265-268``,
+    under its own comment "Temporary handling for setting specific 'venue' for
+    portfolio"). Without that call, ``Cache.account_for_venue`` resolves the
+    *instrument's* venue — ``NASDAQ`` — instead of the account's issuer
+    (``cache.pyx:3704-3705``), finds no account, and ``Portfolio.initialize_positions``
+    breaks with ``initialized = False`` (``portfolio.pyx:347-353``). That is a
+    **one-shot** call, so the flag can never flip later, and
+    ``kernel.start_async`` then returns fail-quiet at ``kernel.py:1024`` — the
+    line immediately before ``self._trader.start()``. The session connects,
+    both engines report healthy, and the trader never starts.
+
+    Measured, not theorised: naming this class ``_AvgPxSafeExecClientFactory``
+    made four consecutive live sessions fail with ``the session did not start
+    within 120s`` on 2026-09-01, and no automated test noticed, because no test
+    tier builds a real ``TradingNode`` *and* inspects the portfolio.
+    ``test_live_exec_avg_px.py`` now pins both the name and Nautilus's branch.
+    """
+
+    @staticmethod
+    def create(**kwargs):  # type: ignore[override]
+        client = _StockIBExecClientFactory.create(**kwargs)
+        install_avg_px_serialization_fix(client)
+        # Story 4.3, D-B (PO ruling 1A): the adapter's own position-update
+        # reports are off; runtime positions are `live_runtime_reconcile`'s.
+        install_position_report_suppression(client)
+        # Story 5.9, D-A: on the IB client data and exec share, so the bar
+        # resubscribe works after a reconnect. Runs inside `node.build()`,
+        # before any strategy's `subscribe_bars`.
+        install_bar_resubscribe_fix(client._client)
+        return client

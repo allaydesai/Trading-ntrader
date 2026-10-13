@@ -10,8 +10,15 @@ from src.config import Settings, get_settings
 
 
 @pytest.mark.unit
-def test_settings_default_values():
+def test_settings_default_values(monkeypatch):
     """Test Settings model with default values (bypassing environment)."""
+    # `_env_file=None` only skips the .env *file* — if something already imported
+    # src.services.data_catalog (its module-level `load_dotenv()`) this process's
+    # os.environ already carries the real .env's values, which Settings still reads.
+    # TRADE_SIZE is the one field whose default now differs from this repo's own
+    # .env value, so it is the one that exposes the leak; delenv makes the claim in
+    # this test's docstring actually true (found via the Epic 4 retro's trade_size fix).
+    monkeypatch.delenv("TRADE_SIZE", raising=False)
     # Create settings without environment file loading
     settings = Settings(_env_file=None)
 
@@ -22,7 +29,10 @@ def test_settings_default_values():
     assert settings.default_balance == Decimal("1000000")
     assert settings.fast_ema_period == 10
     assert settings.slow_ema_period == 20
-    assert settings.trade_size == Decimal("1000000")
+    # 100, not 1,000,000: this is the live default (momentum's on_bar sizes every
+    # entry from it via _settings_map), and 1,000,000 shares reaching a real paper
+    # account is a real-money-scale order, not a safe placeholder (Epic 4 retro).
+    assert settings.trade_size == Decimal("100")
     assert settings.data_directory == Path("data")
     assert settings.mock_data_bars == 1000
     assert settings.log_level == "INFO"

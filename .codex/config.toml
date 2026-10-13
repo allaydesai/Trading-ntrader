@@ -1,0 +1,16 @@
+[mcp_servers.context7]
+url = "https://mcp.context7.com/mcp"
+
+[mcp_servers.playwright]
+command = "npx"
+args = [
+    "@playwright/mcp@latest",
+    "--timeout-action",
+    "60000",
+    "--timeout-navigation",
+    "120000",
+]
+
+[mcp_servers.playwright.env]
+VIEWPORT_WIDTH = "1280"
+VIEWPORT_HEIGHT = "720"

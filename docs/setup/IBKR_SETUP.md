@@ -41,8 +41,10 @@ Ensure your `.env` file has the correct settings:
 # IBKR Connection Settings
 IBKR_HOST=127.0.0.1
 IBKR_PORT=7497              # 7497 for TWS paper trading
-IBKR_CLIENT_ID=10           # Can be any number (1-999)
-TRADING_MODE=paper
+IBKR_CLIENT_ID=1            # Historical fetch. Rotates 1-6 on retry, so keep it 1-4.
+IBKR_LIVE_CLIENT_ID=10      # Live session; also reserves 11 for reconcile.
+TRADING_MODE=paper          # Read under Docker (see note below)
+IBKR_TRADING_MODE=paper     # Read on bare metal (see note below)
 
 # IBKR Credentials
 TWS_USERNAME=your_username
@@ -52,6 +54,67 @@ TWS_ACCOUNT=DU1234567       # Your paper trading account
 # Database
 DATABASE_URL=postgresql://ntrader:ntrader_dev_2025@localhost:5432/trading_ntrader
 ```
+
+> **Two variables, and which one the app reads depends on how you launch it.** Set both to the
+> same value and you can ignore the rest of this note.
+>
+> - **Bare metal** (`uv run python -m src.cli.main`, `make web`): the app reads
+>   **`IBKR_TRADING_MODE`** from `.env` — the `ibkr_trading_mode` field on `IBKRSettings`.
+>   `TRADING_MODE` never reaches the app.
+> - **Docker** (`docker compose up`): the reverse. Compose interpolates the host's
+>   **`TRADING_MODE`** into the app container (`IBKR_TRADING_MODE: ${TRADING_MODE:-paper}`,
+>   `docker-compose.yml:86`), and because that lands in the service's `environment:` block it
+>   **outranks anything in `.env`** — the `ntrader-app` service has no `env_file:` directive and
+>   the image never copies `.env`, so an `IBKR_TRADING_MODE` line in `.env` is inert there.
+>   `TRADING_MODE` is also the ib-gateway container's own variable (`docker-compose.yml:50`), so
+>   under Docker it is the single switch that flips both the gateway and the app.
+>
+> Setting them to *different* values is the trap: `TRADING_MODE=live` with
+> `IBKR_TRADING_MODE=paper` gives you a **live** app under Docker and a **paper** app on bare
+> metal, from the identical file.
+
+### Client ID reservation
+
+IBKR does not multiplex a client ID. A second connection presenting an ID already in use is
+refused with **error 326** while the incumbent is still live on it, and **takes the ID over** when
+the incumbent's socket is stale — a SIGKILL'd run leaves the Gateway holding an ID for tens of
+seconds. Either way something breaks: the import fails, or a live session is knocked off its
+socket mid-position. The IDs are therefore allocated, not picked at random:
+
+| Consumer | Setting | ID | Effective range |
+|---|---|---|---|
+| Historical catalog fetch | `IBKR_CLIENT_ID` | `1` | **1–6** |
+| Live trading session | `IBKR_LIVE_CLIENT_ID` | `10` | 10 |
+| On-demand reconcile | `IBKR_LIVE_CLIENT_ID + 1` | `11` | 11 |
+
+The historical client's range is wider than its configured ID because
+`IBKRHistoricalClient.connect()` rotates through `base .. base + 5` when a connect attempt times
+out. **That rotation is why the gap between 6 and 10 exists.**
+
+#### The rule
+
+> **Keep `IBKR_CLIENT_ID` between `1` and `4`.**
+
+Four, not nine: a base of `5` already rotates onto `10`, and anything from `5` to `11` reaches one
+of the two reserved IDs. `IBKRSettings` enforces this — it rejects any configuration whose
+historical rotation range intersects `IBKR_LIVE_CLIENT_ID` or `IBKR_LIVE_CLIENT_ID + 1`, and the
+error names the safe ceiling for your configuration. The check is symmetric, so lowering
+`IBKR_LIVE_CLIENT_ID` into the historical range is rejected too. If you raise
+`IBKR_LIVE_CLIENT_ID`, the safe ceiling for `IBKR_CLIENT_ID` moves with it — it is always
+`IBKR_LIVE_CLIENT_ID - 6`.
+
+Both settings must also be `>= 1`. Client ID `0` is IBKR's **master client**, which receives order
+status for orders placed by every other client — including ones entered by hand in TWS. Do not use
+it for either consumer. (This is unrelated to the Gateway's own "Master API client ID" setting in
+[Step 1](#step-1-configure-tws--ib-gateway), which stays at `0`.)
+
+#### Upgrading from an earlier setup
+
+Before this reservation existed, this guide told you to set `IBKR_CLIENT_ID=10` and described it as
+"any number (1-999)". That value is now rejected at startup — it *is* the live session's ID — and
+because settings load at import time, every command fails, including `--help`. If you see a
+`ValidationError` mentioning `ibkr_client_id` after pulling, set `IBKR_CLIENT_ID=1` in your `.env`
+and add `IBKR_LIVE_CLIENT_ID=10`. Check `.env.dev` and `.env.qa` too if you keep them.
 
 ## Step 3: Test Connection
 
@@ -133,7 +196,9 @@ Fetch Summary
 ```
 
 **Solutions:**
-1. Change `IBKR_CLIENT_ID` in `.env` to a different number (1-999)
+1. Change `IBKR_CLIENT_ID` in `.env` to another value **between `1` and `4`** (see
+   [Client ID reservation](#client-id-reservation)). Anything from `5` up reaches the live
+   session's reserved IDs once the historical client rotates, and is rejected at startup
 2. Close any other API clients connected to TWS
 3. Restart TWS
 
@@ -147,7 +212,7 @@ Fetch Summary
 **Solutions:**
 1. Verify credentials in `.env` are correct
 2. Ensure you're using paper trading account (DU prefix)
-3. Check TRADING_MODE is set to "paper"
+3. Check `IBKR_TRADING_MODE` is set to "paper" (not `TRADING_MODE` — see Step 2)
 
 ### Market Data Not Available
 

@@ -4,866 +4,2079 @@ stepsCompleted:
   - 'step-02-design-epics'
   - 'step-03-create-stories'
   - 'step-04-final-validation'
+status: 'complete'
+completedAt: '2026-07-26'
+epicCount: 5
+storyCount: 35
 inputDocuments:
   - '_bmad-output/planning-artifacts/prd.md'
   - '_bmad-output/planning-artifacts/architecture.md'
+  - '_bmad-output/project-context.md'
+effort: 'Phase 3 — Paper Trading (Forward-Test & Backtest Comparison)'
 ---
 
 # Trading-ntrader - Epic Breakdown
 
 ## Overview
 
-This document provides the complete epic and story breakdown for **Trading-ntrader — Phase 2: FirstRate ETF Import (FMP Metadata Loader)**, decomposing the requirements from the PRD and Architecture into implementable stories. (No UX Design document exists for this phase — the web work is a light extension of established explorer patterns with no new UI paradigm.)
+This document provides the complete epic and story breakdown for Trading-ntrader Phase 3
+(Paper Trading), decomposing the requirements from the PRD and Architecture into implementable
+stories. No UX Design document exists for this phase by design — **zero UI change is a stated
+success criterion** (sealed sessions render in the existing list/detail/comparison views because
+they are ordinary `backtest_runs` rows).
 
 ## Requirements Inventory
 
 ### Functional Requirements
 
-#### Instrument Metadata Resolution (E1)
+**Live Connectivity & Market Data (E1)**
 
-- **FR1:** System can resolve instrument metadata (venue, currency, asset type, name, sector, country, IPO date) for a given ticker from an external provider (FMP).
-- **FR2:** System can persist resolved metadata so subsequent runs reuse it without re-querying the provider.
-- **FR3:** System can record an explicit `N/A` value for any descriptive metadata field the provider cannot supply, distinguishable from "not yet resolved."
-- **FR4:** System can continue processing remaining tickers when metadata resolution for one ticker fails or returns partial data.
-- **FR5:** System can expose its metadata-resolution capability through a provider-agnostic interface reusable by asset classes beyond ETFs.
-- **FR6:** System can report metadata-resolution outcomes per import (count resolved automatically, count with descriptive gaps, count with unresolved venue).
+FR1: System can connect to Interactive Brokers as a live data source and receive real-time bars for subscribed instruments.
+FR2: System can connect to Interactive Brokers as an execution destination capable of submitting and tracking orders.
+FR3: System can operate on real-time market data rather than delayed data.
+FR4: System can restrict trading activity to regular trading hours, matching the session basis of the backtest data.
+FR5: System can maintain live broker connections without conflicting with a historical-data client operating concurrently.
+FR6: System can detect loss of broker connectivity and refrain from submitting orders while disconnected.
+FR7: System can run a live trading process alongside the existing backtest and data-fetch components without trading-framework initialization conflicts.
 
-#### ETF Data Import (E2)
+**Trading Safety & Account Gating (E1)**
 
-- **FR7:** Operator can trigger an ETF data import for a specified source directory via CLI command.
-- **FR8:** Operator can run a dry-run that scans source archives and reports ticker counts, detected schema, timeframes, date ranges, and estimated disk usage without writing data.
-- **FR9:** System can extract FirstRate ETF ZIP archives prior to parsing.
-- **FR10:** System can parse the FirstRate 6-column headerless bar schema for ETF tickers.
-- **FR11:** System can import all five native ETF timeframes (1min, 5min, 30min, 1hour, 1day).
-- **FR12:** System can convert parsed ETF bars into the existing Nautilus-compatible Parquet catalog structure under the isolated FirstRate catalog path.
-- **FR13:** System can validate OHLC sanity (high ≥ low, volume ≥ 0) during import and flag invalid rows.
-- **FR14:** System can verify import completeness by comparing source row counts against output Parquet row counts per ticker/timeframe.
-- **FR15:** System can validate import accuracy by comparing sample data points (first/last rows) between source and output.
-- **FR16:** System can detect incomplete prior imports via date-range comparison and re-import only incomplete tickers (idempotent re-runs).
-- **FR17:** Operator can select which timeframes to import (one, several, or all).
-- **FR18:** System can produce an import summary report (tickers processed, rows imported, failures with reasons).
-- **FR19:** System can report import progress during execution (current ticker, counts, errors).
+FR8: System can determine whether the configured broker connection targets a paper account or a real-money account.
+FR9: System can refuse to start a session against a real-money account, before establishing any connection and before any order can be submitted.
+FR10: Operator can deliberately authorize real-money trading through an explicit mechanism that cannot be triggered by configuration error alone.
+FR11: System can report a safety refusal distinguishably from other startup failures.
+FR12: System can enable order submission for sessions permitted to trade, while defaulting to non-trading operation.
 
-#### Venue Resolution & Completeness Gate (E3)
+**Session Definition & Lifecycle (E2)**
 
-- **FR20:** System can map ETF tickers to Nautilus-qualified instrument IDs using resolved venue metadata.
-- **FR21:** System can produce an unresolved-venue report listing every ticker lacking a venue, with the reason.
-- **FR22:** Operator can supply manual venue corrections that take precedence over (absent) provider data.
-- **FR23:** System can merge manual venue corrections into the metadata store on re-run/refresh.
-- **FR24:** System can report current venue coverage and identify whether any ticker in the backtestable universe lacks a venue.
-- **FR25:** System can exclude tickers without a resolved venue from the backtestable universe and flag them, without dropping their imported bars.
-- **FR26:** System can refuse to mark the ETF universe complete while any ticker lacks a venue (no inferred/guessed venues).
+FR13: Operator can define a trading session comprising one or more strategy specifications, each with its own parameters and target instruments.
+FR14: System can persist a session's specification immutably at creation, so it cannot change over the session's life.
+FR15: Operator can associate a session with the backtest it is intended to be compared against.
+FR16: Operator can start a session by reference to its identifier, without re-specifying its parameters.
+FR17: Operator can stop a running session without ending it, leaving it resumable.
+FR18: System can stop a session without closing or modifying open positions.
+FR19: System can preserve session identity across any number of stop/start cycles.
+FR20: System can represent session state distinctly across created, running, stopped, and sealed conditions.
+FR21: Operator can list all sessions with their current state and accumulated trade count.
+FR22: Operator can view an individual session's state, trade count, open positions, and last activity.
 
-#### Data Explorer — ETF Support (E4)
+**Order Execution & Trade Capture (E3)**
 
-- **FR27:** Operator can view imported ETF tickers in the catalog browser with available date ranges and timeframes.
-- **FR28:** Operator can search/filter the ETF ticker list by symbol.
-- **FR29:** Operator can load a windowed chart for a selected ETF at any of the five native timeframes (including 30min).
-- **FR30:** Operator can view a selected ETF's metadata (name, venue, sector, etc.), with `N/A` rendered clearly where unavailable.
-- **FR31:** Operator can view basic data statistics for a selected ETF (row count, date range, min/max prices per timeframe).
-- **FR32:** Operator can verify ETF bar and metadata accuracy in the explorer against an external reference.
+FR23: System can submit orders generated by strategy logic to the broker.
+FR24: System can track the full lifecycle of a submitted order — acceptance, partial fill, complete fill, rejection, cancellation, and expiry.
+FR25: System can aggregate multiple partial fills into a single position using volume-weighted prices.
+FR26: System can capture order rejections together with the reason reported by the broker.
+FR27: System can prevent submission of a duplicate order for a request already working at the broker.
+FR28: System can persist each completed trade at the time it closes, rather than deferring persistence to session end.
+FR29: System can record broker-charged commissions on each trade as actually incurred.
+FR30: System can apply whole-share position sizing for equity and ETF instruments.
+FR31: System can continue operating when an order is rejected, without silently ceasing to trade.
 
-#### Backtest Integration & Verification (E5)
+**State Reconciliation & Resume (E4)**
 
-- **FR33:** System can serve imported ETF catalog data to the Nautilus BacktestEngine as a data source.
-- **FR34:** Operator can run a backtest against imported ETF data using an existing strategy.
-- **FR35:** System can apply whole-share (equity-style) position sizing for ETF backtests.
-- **FR36:** Operator can run a backtest spanning multiple ETFs.
-- **FR37:** System can persist ETF backtest results to the results database, viewable in the web UI.
-- **FR38:** Operator can compare ETF backtest results against a reference path to confirm consistency.
+FR32: System can retrieve the broker's authoritative view of positions and cash for the configured account.
+FR33: System can reconcile internal order and position state against the broker's state at session start, before any strategy begins trading.
+FR34: System can maintain alignment between internal state and broker state throughout a running session.
+FR35: System can resolve any conflict between internal state and broker state in favor of the broker.
+FR36: Operator can request an on-demand reconciliation check and receive an explicit report of any discrepancy found.
+FR37: System can restore strategy indicator state from historical data before that strategy begins processing live data.
+FR38: System can resume a strategy mid-position, such that it continues seeking exits and stop levels for positions opened during a prior process run.
+FR39: System can absorb position and cash changes arising from corporate actions via broker-authoritative state.
 
-#### Configuration (cross-cutting)
+**Session Sealing & Comparison (E5)**
 
-- **FR39:** Operator can supply the FMP API key and connection settings via typed environment-based configuration.
-- **FR40:** Operator can configure the source ETF data directory and the isolated FirstRate catalog path via configuration.
+FR40: Operator can seal a stopped session, ending it permanently and producing a results record.
+FR41: System can compute a sealed session's performance metrics using the same calculation path used for backtests.
+FR42: System can persist a sealed session's results in the same form as backtest results, without a parallel results structure.
+FR43: System can record the closed-trade count with a sealed session's results.
+FR44: System can distinguish a paper-trading record from a backtest record.
+FR45: System can record a session's execution conditions with its results — starting capital, trading-hours policy, price-adjustment basis, and market data tier.
+FR46: Operator can view a sealed session in the existing results list, detail, and comparison views alongside backtests.
+FR47: System can handle open positions at seal time explicitly and report their disposition.
+
+**Observability & Diagnostics (cross-cutting)**
+
+FR48: System can report session activity as structured streaming output during execution — bars processed, signals, orders, fills, rejections, and reconnections.
+FR49: Operator can determine why a session stopped trading or terminated.
+FR50: System can isolate a failure in one strategy from other strategies within the same session.
+FR51: Operator can obtain machine-readable output for session status and listing.
+
+**Configuration (cross-cutting)**
+
+FR52: Operator can supply broker connection settings and credentials via typed environment-based configuration, never in the session specification.
+FR53: Operator can configure which instruments and strategy parameters a session trades at creation time.
 
 ### NonFunctional Requirements
 
-#### Performance
+**Performance & Latency**
 
-- **NFR1:** Explorer chart load (single ETF/timeframe) completes in < 2 seconds.
-- **NFR2:** Paginated ticker-list render completes in < 500ms across ~5,000 ETFs.
-- **NFR3:** Ticker search/filter completes in < 300ms (keystroke-responsive).
-- **NFR4:** Catalog metadata read (enumerate tickers/timeframes without loading price data) completes in < 500ms.
-- **NFR5:** Chart scroll/zoom sustains 60fps (native to the charting library's data conflation).
-- **NFR6:** Import throughput has no hard target — one-time/occasional batch; prioritize reliability over speed; process one ticker at a time (bounded memory).
-- **NFR7:** FMP metadata resolution has no hard latency target but is rate-limit-bounded (throttled to provider quota; cached so cost is paid once, not per re-run).
+NFR1: Bar arrival → order submission completes in < 1 second, and both the bar-arrival→submission and the bar-close→submission intervals are observable in logs. *(Amended 2026-09-10, epic-level ruling, option (c) of the 2026-09-01 deferred-work item: the bound is judged on the interval this system controls — from the moment the adapter publishes the bar into the process (`bar.ts_init`) to `OrderSubmitted`. The bar-close→submission interval is logged beside it as the live-vs-backtest divergence window, and is not bounded, because for IB minute bars it is dominated by a structural ~5.5s delivery lag the process cannot shorten. Note this adapter's `bar.ts_event` is the bar's OPEN; the close is `ts_event + interval`.)*
+NFR2: Bar processing produces no accumulating backlog — processing for one bar completes well before the next arrives at the shortest supported timeframe.
+NFR3: A session started 5 minutes before the market open is trading at the open (connect → reconcile → warm indicators → subscribe all complete within that window).
+NFR4: Reconnection after a transient disconnect completes in < 60 seconds.
+NFR5: A reconciliation check completes in < 30 seconds.
 
-#### Reliability
+**Reliability (the dominant category this phase)**
 
-- **NFR8:** Import fault tolerance — any single ticker (bar import *or* metadata resolution) can fail without blocking the rest; failures are logged and surfaced in the summary.
-- **NFR9:** Graceful interruption — interrupted imports leave the catalog consistent; no partially-written Parquet is readable as valid by the backtest engine.
-- **NFR10:** Idempotent recovery — re-running resumes via date-range comparison; the FMP cache prevents redundant re-fetching.
-- **NFR11:** Metadata-store consistency — resolved metadata and manual venue overrides survive restarts and re-runs; the explorer never serves stale metadata after a refresh.
-- **NFR12:** Completeness enforcement — the venue-coverage check is authoritative; the system can always answer "is any ticker missing a venue?" deterministically.
+NFR6: Duplicate orders = **exactly 0**. An invariant, not a target — no reconnect, retry, or resume path may resubmit a working order.
+NFR7: Unattended uptime — a session sustains a full RTH trading day (6.5 hours) without operator intervention.
+NFR8: Zero trade loss on abrupt termination — after `SIGKILL` or power loss, every trade that had closed is present in the database.
+NFR9: Resume correctness — after any restart, internal position state matches the broker's exactly (**0 discrepancy**) before any strategy is permitted to trade.
+NFR10: No blind trading — zero orders submitted while the execution client is disconnected or while reconciliation is incomplete.
+NFR11: Always-valid session state — an interrupted session is always in a state that can be started or sealed; no stuck state exists.
+NFR12: Failure isolation — a failure in one strategy does not terminate the session or affect other strategies within it.
+NFR13: Rejections never silence a session — an order rejection is logged with its venue reason and the session continues operating.
+NFR14: No artificial trades — no stop, restart, disconnect, or reconnect generates an entry or exit the strategy did not request.
 
-#### Integration (FMP — primary new surface)
+**Integration (IBKR — the entire external surface)**
 
-- **NFR13:** Rate-limit compliance — the FMP client throttles to stay within the subscription quota (Starter: 300 calls/min); bulk resolution across ~5,039 tickers never exceeds it.
-- **NFR14:** Caching contract — resolved metadata is persisted and reused; a re-run resolves ≈0 already-cached tickers (near-100% cache hit).
-- **NFR15:** Failure isolation — FMP timeouts, errors, or partial responses degrade to `N/A` (descriptive) or the unresolved-venue queue (venue), and never abort the whole import.
-- **NFR16:** Catalog compatibility — imported ETF Parquet is directly consumable by the Nautilus BacktestEngine with no runtime adapter, following the existing `{INSTRUMENT_ID}/{BAR_TYPE}/*.parquet` convention.
-- **NFR17:** Existing-pattern conformance — CLI commands follow the existing Click structure; explorer routes follow the existing FastAPI/HTMX DI chain and charting stack.
+NFR15: Rate-limit compliance — the existing 45 req/s discipline governs live requests; historical warm-up requests respect IBKR pacing rules.
+NFR16: Market data line budget — a session's instrument count stays within the account's concurrent subscription limit; exceeding it fails at startup with a clear message rather than silently dropping subscriptions.
+NFR17: Client ID isolation — the live session never contends with the historical-data client for a client ID.
+NFR18: Reconciliation is mandatory, not optional — every session start reconciles against the broker; no path starts trading on unverified state.
+NFR19: Gateway restart tolerance — the daily restart/auto-logoff is handled as an expected event, not an error condition.
+NFR20: Safe degradation — when IBKR is unreachable the session halts trading safely and reports it; it never estimates, assumes, or proceeds on stale state.
 
-#### Security
+**Observability**
 
-- **NFR18:** Minimal scope — personal localhost tool; no authentication, authorization, or encryption required on the UI/CLI.
-- **NFR19:** Credential hygiene — FMP API key supplied via typed settings/env var (`FMPSettings`), never hardcoded or committed; `.env` excluded from git (existing convention).
-- **NFR20:** No regulatory burden — KYC/AML, PCI-DSS, GDPR, SOX out of scope (personal tool).
+NFR21: Every order is traceable end to end — submission, acknowledgement, fills, final state, and venue reason on rejection.
+NFR22: Session-scoped correlation — all structured log output carries the session identifier.
+NFR23: Status without log archaeology — current session state, trade count, open positions, and last activity are answerable from a status query alone.
+NFR24: Silence is distinguishable from death — a session running but not trading is reported differently from one that has stopped.
 
-#### Maintainability
+**Security**
 
-- **NFR21:** Conforms to existing standards — Python 3.11+ with type hints, ruff + mypy gates, file/function/class size limits, TDD with the established test pyramid (unit/component/integration `--forked`/e2e), >80% coverage on `src/core` + `src/strategies`.
+NFR25: Credential hygiene — connection settings and credentials exclusively via typed environment configuration; never in a session specification, never committed, never logged.
+NFR26: Account identifiers are never logged in full.
+NFR27: `ibkr_read_only=False` is set only for a session that has passed the paper/live gate — the gate, not `read_only`, is the load-bearing control.
+NFR28: No authentication or authorization on the localhost CLI.
+
+**Capacity (in place of Scalability)**
+
+NFR29: One concurrent session this phase; multi-session is a deliberate non-goal.
+NFR30: Instrument count within one session is bounded by the account's market data lines, not by system design.
+NFR31: No horizontal scaling, no multi-node, no distributed state — Redis serves persistence, not distribution.
+
+**Testability (elevated to an NFR — live trading resists conventional testing)**
+
+NFR32: Automated tests never touch a real broker — session lifecycle, order-state handling, duplicate prevention, and reconciliation logic are tested against broker doubles across the existing unit / component / integration (`--forked`) tiers.
+NFR33: Broker-dependent behavior is verified by operator-run procedures against the real paper account (connectivity, gate refusal, complete round trip, restart resume, reconciliation) — the phase-gate evidence, which cannot live in CI.
+NFR34: The safety gate has an automated test, since it must hold regardless of environment.
+
+**Maintainability**
+
+NFR35: Conforms to existing project standards — Python 3.11+ with type hints, `ruff` + `mypy` gates, file/function/class size limits, TDD with the established test pyramid, >80% coverage on `src/core` + `src/strategies`.
 
 ### Additional Requirements
 
-_Technical requirements and constraints extracted from the Architecture document (10 ADRs + patterns) that shape epic/story implementation._
+_Technical requirements from the Architecture Decision Document that constrain epic and story
+construction. Prefixed AR for traceability._
 
-**Starter Template:** None. This is a **brownfield continuation** of Phase 1 on a mature codebase — no scaffolding starter applies; the architectural foundation is inherited, not generated. **There is therefore no project-initialization story.** The first implementation story is instead `FMPSettings` + `uv add httpx` (promote `httpx` from dev group to runtime dependency, correcting an existing classification gap — already used in `src/api/ui/backtests.py`).
+**Foundation & starter template**
 
-**Data architecture (ADR-1, ADR-2, ADR-3):**
-- New provider-agnostic `instrument_metadata` cache table, keyed by `ticker` (PK), decoupled from any catalog. Columns: `metadata_provider`, `venue` (nullable, Nautilus code), `currency`, `asset_type` (ETF/EQUITY/FUND), `company_name`, `sector`, `industry`, `country`, `ipo_date`, `resolution_status` (enum), `resolved_at`, timestamps. Inherits `Base` + `TimestampMixin`; dual async/sync repositories.
-- Three-state `N/A` representation enforced: (a) resolved value, (b) explicit `N/A` sentinel string (descriptive fields only), (c) DB `NULL` = not yet resolved. **Venue is never `"N/A"`** — it is either a real code or `NULL` + `VENUE_UNRESOLVED`.
-- `resolution_status` Postgres enum with EXACTLY `UNRESOLVED` / `RESOLVED` / `VENUE_UNRESOLVED`; B-tree index powers the O(1) completeness gate.
-- `instrument_metadata` is source of truth for resolved metadata; `catalog_instruments` for bar counts/date ranges. `catalog_instruments` reads venue/descriptive fields from `instrument_metadata` at import time to compute the Nautilus-qualified `nautilus_id` (single writer = import pipeline → no drift).
-- New Alembic migration (#10) for `instrument_metadata` + enum; new migration (#11) for `bar_count_30min` on `catalog_instruments`. (Postgres ENUM type must be created before the column in the migration, and handled on downgrade.)
+AR1: **No starter template applies.** Brownfield Phase 3 in the existing repo on feature branch `015-paper-trading`. **No project-initialization story exists** — the first implementation story builds directly in the existing codebase.
+AR2: Live host API is Nautilus **`TradingNode` + `TradingNodeConfig`** at the installed `nautilus-trader` **1.220.0** (`LiveNode` does not exist at this version). IB live surface confirmed present: `InteractiveBrokersDataClient(Config)`, `InteractiveBrokersExecutionClient`/`InteractiveBrokersExecClientConfig`, `InteractiveBrokersLiveDataClientFactory`, `InteractiveBrokersLiveExecClientFactory`, `InteractiveBrokersInstrumentProviderConfig`, `nautilus_trader.live.reconciliation`.
+AR3: **Zero new dependencies.** Everything required is already in `uv.lock`.
 
-**FMP integration (ADR-4, ADR-5, ADR-6):**
-- `FMPClient` (sync httpx, lazy-init, `FMPSettings`) resolves a ticker with a single `GET /stable/profile?symbol={T}` (one endpoint covers all PRD metadata fields). Base URL `https://financialmodelingprep.com/stable`.
-- Rate-limit throttle reuses the IBKR `RateLimiter` pattern, bounded to the Starter quota (300 calls/min, configurable). Retries with backoff on transient errors. **Must NOT depend on `/stable/profile-bulk`** (often Premium/Ultimate-gated; opportunistic only).
-- Cache-check before fetch: skip the API call if an `instrument_metadata` row exists with `resolution_status=RESOLVED`.
-- Catch specific httpx exceptions (`httpx.TimeoutException`, `httpx.HTTPStatusError`) — never bare `except`. On error → graceful degradation (`NA_SENTINEL` / `VENUE_UNRESOLVED`); never abort the import. `/stable/profile` returns a top-level JSON array; empty `[]` = ticker unknown → descriptive `N/A` + `VENUE_UNRESOLVED`, not an error.
-- Provider-agnostic seam: `InstrumentMetadataService.resolve(ticker) -> InstrumentMetadata` (domain model only). FMP-specific HTTP/mapping/venue-normalization/`N/A` mapping live behind an `FMPMetadataProvider` adapter — no FMP types leak to consumers.
-- `ResolutionSummary` domain object with fixed field names: `resolved`, `descriptive_gaps`, `venue_unresolved` — surfaced in CLI summary + per-import logging.
+**Data architecture (D1, D2)**
 
-**Venue resolution & gate (ADR-6, ADR-7):**
-- Single source of truth `FMP_EXCHANGE_TO_VENUE` dict in `venue_map.py`: confidently-mapped labels (NASDAQ, NYSE, …) → Nautilus venue code. An explicit `AMBIGUOUS_LABELS` set (incl. `AMEX`, which covers the ARCA/BATS/NYSE-American split) and any unmapped/blank label → `None` → `VENUE_UNRESOLVED`. **No guessed default venue.**
-- `venue_overrides.csv` (header exactly `ticker,venue`, path via config, git-tracked) merged in the import-orchestration step (NOT inside `FMPClient`); override takes precedence over absent/ambiguous FMP venue; merge is idempotent (re-merge each run).
-- Completion gate is a deterministic query: **0 rows with `resolution_status=VENUE_UNRESOLVED`** in the backtestable universe. Unresolved tickers keep their bars but are flagged non-backtestable (excluded from qualification).
+AR4: New `trading_sessions` table via a new Alembic migration — `id` BigInteger PK + `session_id` UUID business key (dual-ID pattern), `name` (unique, CLI-addressable), `status` (DB-enforced enum `created|running|stopped|sealed`), `spec` JSONB (immutable after insert), `linked_backtest_run_id` (nullable FK → `backtest_runs.run_id`), `sealed_run_id` (nullable), `last_started_at` / `last_stopped_at` / `sealed_at`, + `TimestampMixin`.
+AR5: **The `backtest_runs` row is created only at seal**, never at session creation — a pre-created row would surface unfinished sessions in existing list views and violate the zero-UI-change criterion. Before seal, `status`/`list` read `trading_sessions` + `trades` directly.
+AR6: `backtest_runs` gains a `run_type` column (`'backtest'` default | `'paper'`) — satisfies FR44 with one column.
+AR7: Execution conditions (FR43/FR45) ride in the existing `config_snapshot` JSONB under a `session_conditions` key — no new columns; displayed free by the existing config-snapshot panel. Schema: `starting_capital`, `rth_only`, `price_basis` (`"firstrate_adjusted"` | `"ibkr_unadjusted_smart"`), `market_data_tier`, `closed_trade_count`, `open_positions_at_seal`, `schema_version: 1`.
+AR8: `trades` gains a nullable `session_id` FK; `backtest_run_id` becomes **nullable** with a CHECK constraint (`backtest_run_id IS NOT NULL OR session_id IS NOT NULL`). Live trades write incrementally against `session_id`; seal backfills `backtest_run_id`, after which existing UI queries see them unchanged.
+AR9: **Dual-repository rule applies** — `TradingSessionRepository` (async) + `TradingSessionRepositorySync` (sync) ship in the same story, even though only the sync path is exercised this phase.
+AR10: Nautilus engine state lives in the provisioned `redis:7-alpine` via `TradingNodeConfig(cache=CacheConfig(database=DatabaseConfig(...)))`. `trader_id` derives deterministically from the session (`PAPER-<short-session-id>`) so the Redis namespace is per-session. Redis holds *cache* state only; IBKR remains ground truth and startup reconciliation overwrites cache on conflict.
+AR11: New `RedisSettings` (host/port/db via env) added to `Settings` — the compose service exists but no typed settings do.
+AR12: The seal path reuses `BacktestPersistenceService` NaN/Infinity validation and `DuplicateRecordError` handling verbatim.
 
-**Import pipeline & catalog (ADR-8, ADR-9):**
-- Per-archive ZIP handling: process one ZIP at a time — extract → parse (reuse `FirstRateCsvParser` unchanged) → write Parquet → verify row count → delete extracted `.txt` before the next archive. Peak disk ≈ one batch; idempotent resume at archive granularity; Phase 1 metadata-gatekeeper keeps partial Parquet invisible on interrupt.
-- New `src/services/firstrate/zip_extractor.py` for per-archive extract→cleanup.
-- 30min added **once** to the central timeframe enum; propagates to bar-type strings, explorer selector, statistics, backtest config. Bar-type string `30-MINUTE-LAST` (word form); FirstRate filename token `_30min_` → `30-MINUTE-LAST` (extend existing maps in `firstrate/dry_run.py` and `firstrate/import_service.py`). ETFs imported at all 5 from the start; **stock 30min backfill deferred + tracked, out of Phase 2 scope.**
+**Safety gate (D3)**
 
-**Backtest integration (ADR-10):**
-- ETF catalog routes through the existing `BacktestOrchestrator` (NOT `MinimalBacktestRunner`); venue-qualified `InstrumentId` is the precondition. Whole-share (equity) sizing reused; leveraged/inverse ETFs settle as ordinary shares. Multi-ETF runs use `BacktestDataConfig`'s `instrument_ids` list. Results persist via the existing DB path. No new engine files.
+AR13: **Layer 1 — pre-connection static gate**, before any socket opens: refuses unless *all* hold — `ibkr_trading_mode == "paper"`, `ibkr_port` ∈ {7497, 4002}, and `TWS_ACCOUNT` (when set) matches the paper prefix (`DU`/`DF`). Failure → structured refusal + dedicated exit code, zero connections attempted.
+AR14: **Layer 2 — post-connection account verification**, before strategies start: the account ID reported by the connected gateway must carry a paper prefix. Mismatch → immediate node shutdown, no strategy start, same refusal exit code.
+AR15: **Deliberate real-money crossing (FR10)** requires BOTH `--real-money` on the CLI AND env `NTRADER_REAL_MONEY_ACCOUNT=<exact account id>` matching the connected account — two independent declarations across two channels. No interactive prompt. Absence of either → refusal. Designed now, exercised in a future phase.
+AR16: The gate is a **pure, unit-testable function** — `evaluate_gate(settings, cli_flags) -> GateDecision` in `src/core/live_gate.py`, plus a thin integration seam.
+AR17: `ibkr_read_only=False` is set only after Layer 1 passes, scoped to the session process. Account IDs are masked to the last 3 characters in logs.
 
-**Naming / package placement (anti-collision rules):**
-- Reusable metadata package lives at `src/services/metadata/` — provider- and asset-class-agnostic; **NOT** under `src/services/firstrate/`.
-- Phase 1 `src/services/firstrate/metadata_service.py::MetadataService` (catalog CRUD) must not be confused with the new `InstrumentMetadataService`. Canonical new names: `InstrumentMetadataService`, `FMPMetadataProvider`, `FMPClient`, `VenueMap` (`venue_map.py`), domain model `InstrumentMetadata` in `src/models/instrument_metadata.py`, `NA_SENTINEL = "N/A"` defined once there.
+**Infrastructure & process (D4, D5)**
 
-**Configuration (ADR / patterns):**
-- `FMPSettings` nested as `Settings.fmp`, mirroring `Settings.ibkr`/`Settings.kraken`. Fields: `fmp_api_key` → `FMP_API_KEY` (required, `repr=False`), `fmp_base_url` → `FMP_BASE_URL`, `fmp_rate_limit` → `FMP_RATE_LIMIT` (default 300/min), `fmp_request_timeout`. Reuse `FirstRateSettings`/`CatalogSettings` for source dir + catalog path.
+AR18: New `ibkr_live_client_id` field on `IBKRSettings` (default `10`; historical keeps `IBKR_CLIENT_ID` default `1`) with a Pydantic model validator rejecting equality.
+AR19: Foreground asyncio process, operator-managed (tmux/screen), **no daemon**. `ntrader live start` → `asyncio.run(session_runner.run(...))` hosting the `TradingNode`. SIGINT/SIGTERM → graceful stop; second signal forces exit.
+AR20: The node's `LogGuard` is registered via the existing `set_nautilus_log_guard()` at the earliest point reachable from calling code. **Amended 2026-08-17 at the Epic 1 retrospective:** the earlier wording ("before any other Nautilus component initializes in-process") described an ordering the Nautilus API does not expose — `NautilusKernel.__init__` unavoidably constructs `MessageBus`, `Cache`, `Portfolio`, and the data/risk/exec engines before any caller regains control to register a guard. Story 1.3's implementation registers at the earliest reachable point, which is what this AR actually requires; the old wording was the defect, not the code (see `deferred-work.md`, "code review of story-1.3").
+AR21: `ibkr_market_data_type=REALTIME` for sessions (explicitly overriding the `DELAYED_FROZEN` fetch default); `ibkr_use_rth=True`; instrument-count vs market-data-line budget checked at startup with a clear failure.
+AR22: No CI/CD changes; no deployment artifacts. Operator-run verification procedures against the paper account are documented in `docs/qa/phase3-live-verification.md` as the phase-gate evidence.
 
-**Constraints carried from Phase 1 (not re-opened):**
-- BacktestEngine single-use; LogGuard never double-initialized; strict engine setup order.
-- Catalog isolation (FirstRate never mixed with IBKR/Kraken); single-adjustment-type (split+dividend); decimal precision preserved; UTC-normalized timestamps.
-- Explorer is read-only — no web write-path for venue overrides (preserves Phase 1 stance).
-- Explorer, supplementary tables (`catalog_dividend`, `catalog_stock_split`), and `country`/`state` columns already exist from Phase 1 — E4 extends, not creates.
+**Order-path integrity (D7)**
 
-**Cache-key design note (flagged, conscious choice):** `instrument_metadata` keyed by `ticker` alone for Phase 2 (clean for ETFs); `(ticker, asset_type)` documented as the escape hatch if cross-asset symbol collisions appear later.
+AR23: Client order IDs come from Nautilus's deterministic generator under the session-stable `trader_id` — uniqueness and determinism inherited, not reinvented. (Depends on AR10 — D2 must land before E3.)
+AR24: **No retry-on-timeout for order placement, anywhere.** On ambiguity the execution layer queries order state; resubmission only after the venue confirms the order is not working. Grep-enforceable: no retry/backoff decorators on the order path.
+AR25: Startup reconciliation loads working orders into the cache before strategies start, so a resumed strategy sees its own open orders.
+AR26: Order events (accepted / partial / filled / rejected / cancelled / expired) are logged with venue reasons as they arrive; rejections never raise into strategy silence.
+
+**CLI contract (D8)**
+
+AR27: New Click group `ntrader live` with `create / start / status / list / reconcile / seal`. `stop` = Ctrl-C / SIGTERM on the foreground process — graceful: cancel subscriptions, stop node, leave positions untouched, mark session `stopped`.
+AR28: **Exit codes:** `0` success · `1` general error · `2` usage error (Click default) · `3` **gate refusal** (scriptably distinct) · `4` broker connectivity failure.
+AR29: `status`/`list` render Rich tables with `--json`: plain objects, snake_case keys, ISO-8601 UTC timestamps, Decimal-as-string for money. `status --json` top-level keys: `session_id`, `name`, `status`, `closed_trade_count`, `open_positions`, `last_activity_at`, `health`.
+
+**Seal policy (D6)**
+
+AR30: `seal` **refuses by default when the session has open positions**, listing them explicitly. `seal --force` seals anyway: open positions persist as **open trades (null exit)** — the shape backtests already use — their disposition is printed in the seal report, and they remain at the broker, explicitly reported as no longer owned by any session.
+AR31: **Sealing never flattens.** Auto-flattening would manufacture artificial exits, violating NFR14.
+
+**Validation addenda (G1–G4 — binding amendments)**
+
+AR32: **(G1)** `trading_sessions` gains `last_heartbeat_at` and `last_bar_at` columns (in the same migration). The runner updates them (~every 30s / on bar) through the same record port it uses for transitions. `status` derives `health`: `stopped` (status ≠ running) · `trading`/`idle` (running + fresh heartbeat, split on `last_bar_at` recency) · `degraded` (running + fresh heartbeat but `connection.lost` flagged) · **`stale`** (status = running, heartbeat old — likely dead process). Health is derived, never stored.
+AR33: **(G2)** `start` on a session whose status is `running` **with a stale heartbeat reclaims it** (logged as `session.reclaimed`); with a fresh heartbeat it refuses. This is the only sanctioned running→running path and lives in `SessionService.transition()`.
+AR34: **(G3)** The `reconcile` command connects read-only with `ibkr_live_client_id + 1`. Documented client-ID reservation: historical = `IBKR_CLIENT_ID`, session = `ibkr_live_client_id`, reconcile = `+1`.
+AR35: **(G4)** Seal reconstructs the equity series from starting capital + the session's closed-trade P&L sequence (stored in the existing `PerformanceMetrics` JSON field); max drawdown / CAGR / Calmar compute from that series exactly as `ResultsExtractor` already does. **Recorded limitation:** trade-granularity (not bar-granularity) drawdown — carried in `session_conditions` so the comparison read stays honest.
+
+**Consistency rules that bind every story**
+
+AR36: **Vocabulary is normative** — *session* (never run/test/experiment), *process run* (never session/instance), *seal* (never close/finalize/complete/end), *stop* (never pause/halt/kill/close), *gate* (never guard/check/validator).
+AR37: **Session lifecycle is one state machine in one place** — transitions validated in `SessionService.transition()`; CLI and runner request transitions, never set `status` directly. Illegal transition → `InvalidSessionTransition` in the `src/db/exceptions.py` family. Grep-enforceable: no direct `status =` assignments outside it.
+AR38: **The runner owns the node; the service owns the record.** `LiveSessionRunner` never imports SQLAlchemy; `SessionService`/repositories never import Nautilus. `live_trade_recorder` is the single sanctioned bridge where Nautilus objects meet the DB.
+AR39: **Startup sequence is explicit, ordered, and logged as phases:** `gate:static → node:build → node:connect → gate:account → reconcile → warmup → subscribe → trading`. Each phase logs `phase=<name> status=started|ok|failed`. Agents must not reorder, merge, or skip phases; a failure in any phase stops the sequence.
+AR40: **Mode-agnostic strategies.** The two sanctioned strategy edits (indicator warm-up in `on_start()`, removing flatten from `on_stop()`) use only mode-agnostic Nautilus APIs (`register_indicator_for_bars`, `request_bars`, `subscribe_bars`). Grep-enforceable: `is_live` count = 0 in `src/core/strategies/`.
+AR41: **Log event naming** — dotted lowercase past-tense, in a sanctioned namespace. **Sanctioned session-scoped namespaces:** `session.*`, `strategy.*`, `gate.*`, `order.*`, `trade.*`, `reconcile.*`, `connection.*`, `warmup.*`. An event in one of these namespaces, named in dotted lowercase past tense, is conformant by construction — a new diagnostic or operational event does **not** require an amendment here. **Normative lifecycle milestones** (each must exist, and must keep its name): `session.created`, `session.started`, `session.stopped`, `session.sealed`, `session.reclaimed`, `gate.refused`, `order.submitted`, `order.accepted`, `order.rejected` (+`venue_reason`), `order.filled` (+`fill_qty`, `cum_qty`), `trade.persisted`, `reconcile.ok`, `reconcile.discrepancy`, `connection.lost`, `connection.restored`, `connection.halted`, `connection.recovery_refused`, `warmup.completed`. Session-scoped records carry the bound `session_id`; order events also carry `client_order_id` and `instrument_id`. **Vocabulary constraint (AR36):** event names are subject to the same normative vocabulary — `strategy.halted` would fail the build; *contained*, *failed* and *degraded* are the sanctioned words. **Command-scoped** events — `gate.static`, and the whole `live_check.*` namespace (Story 1.7's CLI check) — are deliberately separate; this requirement governs session-scoped events only.
+  **Amended 2026-08-17 at the Epic 1 retrospective:** added `connection.halted`/`connection.recovery_refused` (shipped by Story 1.6, following this convention, but missing from the enumeration).
+  **Amended 2026-08-28 at the Epic 2 retrospective — mechanism changed from enumeration to namespace.** The exhaustive list fell behind five times across two epics; a measurement of `src/` at `0602f1f` found 20 session-scoped events and an entire new `strategy.*` namespace absent from it (`session.activity_refused`, `session.all_strategies_failed`, `session.connected`, `session.connection_read_failed`, `session.force_exit`, `session.heartbeat_join_failed`, `session.heartbeat_join_timeout`, `session.heartbeat_write_failed`, `session.instruments`, `session.mark_stopped_failed`, `session.no_bars_observed`, `session.phase`, `session.reclaim_refused`, `session.reclaimed_by_another_process`, `session.release_failed`, `session.shutdown_problems`, `session.stop_callback_failed`, `session.stop_superseded_failure`, `session.strategy_record_failed`, `session.unsubscribe_failed`, plus `strategy.failed`/`strategy.degraded`/`strategy.start_failed` and the session-phase `gate.account`). Enumerating every diagnostic event is a mechanism that has now failed once per epic; enumerating the *namespaces* plus the lifecycle milestones keeps the normative content — a milestone cannot be silently renamed or dropped — without requiring an amendment for each new operational log line. Story 2.7 asked the retrospective to decide namespace-vs-names; this is that decision.
+AR42: **DB write failures during trading never kill the node** — trade-persist errors are logged and retried on the next event (savepoint discipline from the Phase 2 fix).
+AR43: **Anti-patterns to reject in review:** a second results vocabulary (any new metrics table/model for paper); pre-creating `backtest_runs` rows before seal; `close_all_positions()` in any lifecycle hook; retry-on-timeout around order submission; reading `ibkr_read_only` as the safety control.
+AR44: **Explicitly untouched (zero-change success criteria):** `src/api/**`, `templates/**`, `src/services/backtest_query.py`, comparison views, `BacktestOrchestrator`, all import/catalog commands.
 
 ### UX Design Requirements
 
-_Not applicable — no UX Design document exists for Phase 2. The web work is a light extension of established explorer patterns (Jinja2 + HTMX fragments, `NavigationState`, `FilterState`, TradingView charts) with no new UI paradigm. UI-facing requirements are captured under E4 (FR27–FR32) and the `N/A`-rendering / 30min-selector constraints in Additional Requirements._
+**None — deliberately.** No UX Design Specification exists for Phase 3 and none is required.
+The PRD states that the web UI participates only passively: sealed sessions appear in the existing
+list, detail, and comparison views because they are ordinary `backtest_runs` rows. **Zero UI work
+is a success criterion, not an omission** (PRD "CLI + Web App Specific Requirements"; Architecture
+"Frontend Architecture: None this phase"). Live session monitoring is explicitly deferred to Growth,
+where the inherited WCAG AA commitment from `PRODUCT.md` will apply.
+
+The only UI-adjacent obligation is **negative**: E5 must verify sealed sessions render correctly in
+the existing views *without modifying them* (FR46, AR44).
 
 ### FR Coverage Map
 
-- **FR1:** Epic 1 — Resolve instrument metadata for a ticker from FMP
-- **FR2:** Epic 1 — Persist resolved metadata for reuse without re-querying
-- **FR3:** Epic 1 — Explicit `N/A` for descriptive gaps, distinguishable from "not yet resolved"
-- **FR4:** Epic 1 — Per-ticker fault isolation on resolution failure
-- **FR5:** Epic 1 — Provider-agnostic, reusable resolution interface
-- **FR6:** Epic 1 — Per-import resolution outcome reporting (resolved / descriptive-gap / unresolved-venue)
-- **FR7:** Epic 2 — Trigger ETF import for a source directory via CLI
-- **FR8:** Epic 2 — Dry-run scan (ticker counts, schema, timeframes, date ranges, disk estimate)
-- **FR9:** Epic 2 — Extract FirstRate ETF ZIP archives prior to parsing
-- **FR10:** Epic 2 — Parse the 6-column headerless bar schema for ETFs
-- **FR11:** Epic 2 — Import all 5 native timeframes (1min, 5min, 30min, 1hour, 1day)
-- **FR12:** Epic 2 — Convert bars to Nautilus-compatible Parquet under the isolated catalog path
-- **FR13:** Epic 2 — OHLC sanity validation (high ≥ low, volume ≥ 0), flag invalid rows
-- **FR14:** Epic 2 — Row-count parity verification (source vs Parquet) per ticker/timeframe
-- **FR15:** Epic 2 — Sample-point (first/last row) accuracy validation
-- **FR16:** Epic 2 — Idempotent re-runs via date-range comparison
-- **FR17:** Epic 2 — Operator selects which timeframes to import
-- **FR18:** Epic 2 — Import summary report (processed, imported, failures w/ reasons)
-- **FR19:** Epic 2 — Progress reporting during execution
-- **FR20:** Epic 3 — Map ETF tickers to Nautilus-qualified instrument IDs via resolved venue
-- **FR21:** Epic 3 — Unresolved-venue report (ticker + reason)
-- **FR22:** Epic 3 — Manual venue corrections take precedence over absent provider data
-- **FR23:** Epic 3 — Merge manual venue corrections into the metadata store on re-run/refresh
-- **FR24:** Epic 3 — Report venue coverage; identify any backtestable ticker lacking a venue
-- **FR25:** Epic 3 — Exclude+flag unresolved-venue tickers without dropping their bars
-- **FR26:** Epic 3 — Refuse completion while any venue is missing (no inferred venues)
-- **FR27:** Epic 4 — View imported ETF tickers with date ranges and timeframes
-- **FR28:** Epic 4 — Search/filter the ETF ticker list by symbol
-- **FR29:** Epic 4 — Windowed chart at any of the 5 timeframes (incl. 30min)
-- **FR30:** Epic 4 — View ETF metadata with `N/A` rendered clearly where unavailable
-- **FR31:** Epic 4 — View per-timeframe data statistics (row count, date range, min/max prices)
-- **FR32:** Epic 4 — Verify ETF bar + metadata accuracy against an external reference
-- **FR33:** Epic 5 — Serve imported ETF catalog data to the BacktestEngine
-- **FR34:** Epic 5 — Run a backtest against ETF data using an existing strategy
-- **FR35:** Epic 5 — Apply whole-share (equity-style) position sizing for ETFs
-- **FR36:** Epic 5 — Run a backtest spanning multiple ETFs
-- **FR37:** Epic 5 — Persist ETF backtest results to the DB, viewable in the web UI
-- **FR38:** Epic 5 — Compare ETF backtest results against a reference path for consistency
-- **FR39:** Epic 1 — Supply FMP API key + connection settings via typed env config
-- **FR40:** Epic 2 — Configure source ETF directory + isolated catalog path via config
+Every FR maps to exactly one **owning** epic (the epic whose Definition of Done it gates).
+Where a later epic extends the same capability, that is noted as *(extended in EN)* — the FR is
+still complete and verifiable at the end of its owning epic.
+
+| FR | Epic | Coverage |
+|---|---|---|
+| FR1 | Epic 1 | IB live data client receives real-time bars |
+| FR2 | Epic 1 | IB live execution client connected and tracking orders *(exercised in E3)* |
+| FR3 | Epic 1 | `ibkr_market_data_type=REALTIME` overriding the fetch default |
+| FR4 | Epic 1 | `ibkr_use_rth=True` session policy matching backtest bar basis |
+| FR5 | Epic 1 | `ibkr_live_client_id` split from `IBKR_CLIENT_ID`, validator-enforced *(reconcile `+1` in E4)* |
+| FR6 | Epic 1 | Disconnect detection halts submission; `connection.lost` event |
+| FR7 | Epic 1 | `TradingNode` + `LogGuard` coexistence, no double-init |
+| FR8 | Epic 1 | Paper/live account detection (Layer 1 static + Layer 2 post-connect) |
+| FR9 | Epic 1 | Pre-connection refusal — no socket opened, no order path reachable |
+| FR10 | Epic 1 | Deliberate crossing: `--real-money` **and** `NTRADER_REAL_MONEY_ACCOUNT` |
+| FR11 | Epic 1 | Dedicated gate-refusal exit code `3`, distinct from connectivity `4` |
+| FR12 | Epic 1 | `ibkr_read_only=False` set only after the gate passes, scoped to the session process |
+| FR13 | Epic 2 | `SessionSpec` as a **list** of `StrategySpec` (one entry this phase) |
+| FR14 | Epic 2 | `spec` JSONB written once at creation; no update path in either repository |
+| FR15 | Epic 2 | `linked_backtest_run_id` FK captured at creation |
+| FR16 | Epic 2 | `live start <session>` reloads the spec by ID/name — no re-specification |
+| FR17 | Epic 2 | Ctrl-C / SIGTERM → graceful stop, session resumable |
+| FR18 | Epic 2 | Stop performs no position side effects *(strategy `on_stop()` fix lands in E3)* |
+| FR19 | Epic 2 | Session identity survives unlimited stop/start cycles |
+| FR20 | Epic 2 | `created / running / stopped / sealed` enum + `SessionService.transition()` |
+| FR21 | Epic 2 | `live list` — all sessions, state, trade count |
+| FR22 | Epic 2 | `live status` — state, trade count, open positions, last activity, derived health |
+| FR23 | Epic 3 | Strategy `submit_order` reaches IBKR through the live exec client |
+| FR24 | Epic 3 | Full order lifecycle: accepted / partial / filled / rejected / cancelled / expired |
+| FR25 | Epic 3 | Volume-weighted aggregation of partial fills into one position |
+| FR26 | Epic 3 | `order.rejected` carries the venue's reason |
+| FR27 | Epic 3 | Deterministic client order IDs + query-don't-retry; no retry-on-timeout |
+| FR28 | Epic 3 | Incremental persistence on position-closed — never batched to session end |
+| FR29 | Epic 3 | Broker-charged commission recorded per trade as actually incurred |
+| FR30 | Epic 3 | Whole-share equity/ETF sizing preserved; broker may still reject |
+| FR31 | Epic 3 | Rejection does not stop the session; trading continues |
+| FR32 | Epic 4 | Broker positions + cash retrieved for the configured account |
+| FR33 | Epic 4 | Startup reconciliation completes before any strategy trades |
+| FR34 | Epic 4 | Continuous reconciliation keeps runtime state aligned |
+| FR35 | Epic 4 | Conflicts resolve broker-ward; local cache never wins |
+| FR36 | Epic 4 | `live reconcile` on-demand check with explicit discrepancy report |
+| FR37 | Epic 4 | Indicator warm-up from historical bars before live subscription |
+| FR38 | Epic 4 | Mid-position resume — strategy seeks exits for prior-run positions |
+| FR39 | Epic 4 | Corporate actions absorbed via broker-authoritative state |
+| FR40 | Epic 5 | `live seal` — explicit, terminal, requires a stopped session |
+| FR41 | Epic 5 | Metrics computed via the same `ResultsExtractor` path as backtests |
+| FR42 | Epic 5 | Results land in `backtest_runs` + `performance_metrics` + `trades` — no parallel structure |
+| FR43 | Epic 5 | Closed-trade count recorded in `session_conditions` |
+| FR44 | Epic 5 | `backtest_runs.run_type` = `'paper'` |
+| FR45 | Epic 5 | Execution conditions snapshot: capital, RTH, price basis, market data tier |
+| FR46 | Epic 5 | Sealed session renders in existing list / detail / comparison views, unmodified |
+| FR47 | Epic 5 | Open-position policy at seal: refuse by default, `--force` persists as open trades |
+| FR48 | Epic 2 | Structured streaming output with bound `session_id` *(order/fill/rejection events extended in E3, reconnect in E4)* |
+| FR49 | Epic 2 | Derived health incl. `stale`; stop reason legible *(rejection reasons extended in E3)* |
+| FR50 | Epic 2 | Strategy exceptions isolated at the runner boundary |
+| FR51 | Epic 2 | `--json` on `status` and `list` |
+| FR52 | Epic 2 | Credentials only via `IBKRSettings`/env — never in the session spec |
+| FR53 | Epic 2 | Instruments and strategy parameters configured at creation time |
+
+**Coverage check:** 53/53 FRs mapped. Epic 1 → 12 · Epic 2 → 16 · Epic 3 → 9 · Epic 4 → 8 ·
+Epic 5 → 8.
 
 ## Epic List
 
-### Epic 1: Instrument Metadata Resolution (Reusable Foundation)
-The operator can resolve and persistently cache instrument metadata (venue, currency, asset type, name, sector, country, IPO date) for any ticker via a provider-agnostic service backed by FMP — with explicit three-state `N/A` handling, per-ticker fault isolation, and per-run resolution reporting. This is the reusable keystone built first; later asset classes (futures/FX/crypto) inherit it rather than re-solving metadata sourcing.
-**FRs covered:** FR1, FR2, FR3, FR4, FR5, FR6, FR39
+Five epics, adopted from the PRD's proposed breakdown and confirmed against the Architecture's
+Requirements → Structure mapping. Two sequencing principles govern the order and must not be
+rearranged: **riskiest assumption first** (the repo's entire IBKR footprint today is historical
+data — the live adapter is unproven here, so it is exercised in E1 before anything is built on
+it) and **safety before capability** (the gate ships before any code path exists that can submit
+an order, so no window ever exists in which accidental live trading is reachable).
 
-### Epic 2: ETF Data Import Pipeline
-The operator can import the full FirstRate ETF bundle (ZIP archives, 6-column schema, all 5 native timeframes incl. 30min) into the isolated Parquet catalog via CLI — with dry-run, OHLC/row-count/sample-point verification, idempotent date-range re-runs, timeframe selection, and a summary report. Metadata is resolved per ticker during import via Epic 1.
-**FRs covered:** FR7, FR8, FR9, FR10, FR11, FR12, FR13, FR14, FR15, FR16, FR17, FR18, FR19, FR40
+Each epic ends at a state the operator can actually verify, and no epic requires a later epic to
+function. Backtesting remains fully operational throughout — this phase adds a surface, it never
+modifies the backtest path — so work can pause at any epic boundary.
 
-### Epic 3: Venue Resolution & Completeness Gate
-The operator can drive every ETF ticker to a resolved venue — via the curated FMP→Nautilus venue map, an unresolved-venue report, and a `venue_overrides.csv` merge — and the system enforces the hard gate (0 `VENUE_UNRESOLVED`) before the ETF universe is "complete," flagging unresolved tickers non-backtestable without dropping their bars. This is the Phase 2 signature journey.
-**FRs covered:** FR20, FR21, FR22, FR23, FR24, FR25, FR26
+### Epic 1: Live Broker Connection & Real-Money Safety Gate
 
-### Epic 4: Data Explorer — ETF Support
-The operator can browse, search, and chart imported ETFs at all 5 timeframes (incl. 30min) in the explorer, view metadata with clean `N/A` rendering, see per-timeframe statistics, and verify bar + metadata accuracy against an external reference (TradingView).
-**FRs covered:** FR27, FR28, FR29, FR30, FR31, FR32
+The operator can point NTrader at an IBKR **paper** account, connect as both a data source and an
+execution destination, and receive real-time RTH bars — while a real-money account is **refused at
+startup before any socket opens**. Crossing into real money requires two independent, deliberate
+declarations and cannot be reached by a port typo, a stale env var, or a copied command.
 
-### Epic 5: Backtest Integration & Verification
-The operator can run single- and multi-ETF backtests against the FirstRate ETF catalog through the existing `BacktestOrchestrator` with whole-share equity sizing, persist results to the DB (viewable in the web UI), and confirm consistency against a reference path.
-**FRs covered:** FR33, FR34, FR35, FR36, FR37, FR38
+**FRs covered:** FR1, FR2, FR3, FR4, FR5, FR6, FR7, FR8, FR9, FR10, FR11, FR12
 
-### Dependency Chain (forward-only)
-`E1 → E2 → {E3, E4}`; `E5` requires `E1 + E2 + E3`. Each epic is shippable in sequence; the system stays fully functional for Stocks throughout. The system remains pause-and-resume safe at any epic boundary.
+**Standalone deliverable:** connects to IBKR paper, streams real-time bars, and refuses a live
+account with a distinct exit code. **No orders exist yet** — which is the point: the safety control
+ships before the capability it constrains.
 
-## Epic 1: Instrument Metadata Resolution (Reusable Foundation)
+**Retires:** the phase's highest technical unknown (does the Nautilus IB live adapter work for our
+instruments?) and its one irreversible risk (accidental real-money execution). If the adapter has
+gaps, that surfaces in week one rather than month two.
 
-The operator can resolve and persistently cache instrument metadata for any ticker via a provider-agnostic service backed by FMP — with explicit three-state `N/A` handling, per-ticker fault isolation, and per-run resolution reporting. The reusable keystone, built first. (Brownfield: no project-init story; the first story is config + dependency promotion.)
+### Epic 2: Paper Trading Sessions That Outlive the Process
 
-**FRs covered:** FR1, FR2, FR3, FR4, FR5, FR6, FR39
+The operator can define a named session once — strategies, parameters, instruments, and the
+backtest it will be compared against — then start it, watch it stream structured logs while it
+observes live bars, stop it, and start it again under the **same identity**. Sessions are listable
+and inspectable from a second terminal, and a session that has died is distinguishable from one
+that is merely quiet.
 
-### Story 1.1: FMP Configuration & httpx Runtime Dependency
+**FRs covered:** FR13, FR14, FR15, FR16, FR17, FR18, FR19, FR20, FR21, FR22, FR48, FR49, FR50,
+FR51, FR52, FR53
 
-As the system operator,
-I want FMP connection settings supplied via typed environment configuration and `httpx` promoted to a runtime dependency,
-So that the metadata loader can authenticate to FMP without hardcoded credentials and with a properly-classified HTTP client.
+**Standalone deliverable:** a named session runs, observes bars, stops, and restarts under the same
+identity. Still no orders.
 
-**Acceptance Criteria:**
+**Note on the migration:** this epic owns the **structural** Alembic migration for the phase
+(`d08dfbd393f0`, Story 2.2) — `trading_sessions` (incl. the G1 heartbeat columns),
+`backtest_runs.run_type`, `trades.session_id`, and `trades.backtest_run_id` → nullable + CHECK. Two
+of those columns aren't consumed until E3 and E5. Splitting them across three migrations to keep each
+epic "pure" would be worse: three migrations, three chances to get the CHECK constraint's ordering
+wrong, on a table the backtest path actively uses. Deliberate exception to epic-scoped schema change,
+taken from the Architecture's delta tree.
 
-**Given** a `.env` containing `FMP_API_KEY`
-**When** application `Settings` load
-**Then** `Settings.fmp` is an `FMPSettings` instance exposing `fmp_api_key`, `fmp_base_url` (default `https://financialmodelingprep.com/stable`), `fmp_rate_limit` (default `300`, per-minute), and `fmp_request_timeout`
-**And** `FMPSettings` is nested as `Settings.fmp`, mirroring `Settings.ibkr` / `Settings.kraken`.
+> **Corrected 2026-08-28 at the Epic 2 retrospective — this was written as the phase's *single*
+> migration and that is no longer true.** Story 2.7 shipped a second, `b7c419e2a3d8` (nullable
+> `runtime_flags` JSONB), because containment without persistence is a regression. Head is
+> `b7c419e2a3d8`, single. **The "this phase's single migration is spent" argument must not be reused:**
+> it was used three times to defer the owner/epoch fencing column (`deferred-work.md`) and Story 2.7's
+> own migration falsified it. Any later story needing a column argues migration budget on its own
+> merits — a schema change is cheap; an undecided NFR6 hazard is not.
 
-**Given** `FMP_API_KEY` is unset
-**When** `Settings` load
-**Then** a clear Pydantic validation error is raised (the field is required).
+### Epic 3: Live Order Execution & Trade Capture
 
-**Given** the settings object is logged or `repr()`'d
-**When** its representation is produced
-**Then** `fmp_api_key` is not exposed (`repr=False`).
+A strategy signal becomes a real order at IBKR, comes back filled at a price nobody modelled, and
+lands in the database as a trade with the actual entry, actual exit, and actual commission — written
+**the moment it closes**, not at session end. Rejections surface with the venue's reason and the
+session keeps trading. No reconnect, retry, or resume path can ever resubmit a working order.
 
-**Given** `pyproject.toml`
-**When** `uv add httpx` is run
-**Then** `httpx` (>=0.28.1) is recorded as a main runtime dependency (no longer dev-group only)
-**And** `make lint` and `make typecheck` pass.
+**FRs covered:** FR23, FR24, FR25, FR26, FR27, FR28, FR29, FR30, FR31
 
-### Story 1.2: instrument_metadata Cache Table, Domain Model & Repositories
+**Standalone deliverable:** **the first complete round trip** — entry submitted → filled → position
+opened → exit filled → trade persisted with correct P&L, real fills, and real commission.
 
-As the system,
-I want a provider-agnostic metadata cache table with a domain model and dual async/sync repositories,
-So that resolved metadata persists across runs and is readable by both the web (async) and CLI (sync) execution paths.
+**Also lands here:** the strategy lifecycle correction that removes `close_all_positions()` from
+`on_stop()`. It belongs to this epic rather than E2 because until orders exist there is nothing for
+it to flatten — and it must be gone before E4's stop/restart cycle, or every daily stop would
+manufacture a fake round trip.
 
-**Acceptance Criteria:**
+**Depends on E2's `trader_id`:** deterministic client order IDs derive from the session-stable
+`trader_id` established by E2's Redis cache namespace. This is the one hard cross-epic ordering
+constraint in the phase.
 
-**Given** a new Alembic migration (the 10th)
-**When** `alembic upgrade head` runs
-**Then** an `instrument_metadata` table exists with PK `ticker` and columns `metadata_provider`, `venue` (nullable), `currency`, `asset_type`, `company_name`, `sector`, `industry`, `country`, `ipo_date`, `resolution_status`, `resolved_at`, `created_at`, `updated_at`
-**And** a Postgres `resolution_status` enum with EXACTLY `UNRESOLVED` / `RESOLVED` / `VENUE_UNRESOLVED` is created **before** the column that uses it
-**And** a B-tree index exists on `resolution_status` (powers the O(1) completeness gate).
+> **Added 2026-08-28 at the Epic 2 retrospective — read before drafting any Epic 3 story.**
+>
+> **1. The submit path is already fixed, and is proven only as far as submission.** Two defects sat
+> in series on the order path for two epics, each masking the next, and were found on 2026-08-28 by
+> attempting P7 rather than by any test: `InteractiveBrokersExecClientConfig` was built with no
+> `routing=` (so `ExecEngine` refused every `SYMBOL.EXCHANGE` order — *"no execution client configured
+> for NASDAQ"*), and behind it the exec client's `instrument_provider` was never loaded (so the first
+> order to reach the adapter died as `AttributeError` **inside** its own `submit_order`, invisible to
+> the strategy). Both are fixed in `src/core/live_node_builder.py` (`90337eb`) with regression tests
+> that drive Nautilus's real `TradingNodeBuilder`. **Story 3.2 inherits both as landed groundwork and
+> owns their live verification. `ExecClient-INTERACTIVE_BROKERS: Submit MarketOrder(...)` has been
+> observed live; no `OrderFilled`, `PositionOpened` or commission value ever has.** Epic 3 therefore
+> begins with zero live evidence for the second half of a round trip.
+>
+> **2. Story 3.4 has a backwards dependency on Epic 4.** Its AC requires a working order to be loaded
+> into the cache before strategies start (AR25), but Story 2.5 shipped `reconcile` as a declared
+> no-op placeholder and that machinery is Story 4.2's. The phase is documented as strictly linear and
+> forward-only; this is the one edge that is not. Resolve it when 3.4 is drafted — either scope 3.4's
+> AC to what the cache can prove without reconciliation, or accept the ordering exception explicitly.
+>
+> **3. Order and fill events pass through Epic 2's containment wrapper, which must not be removed.**
+> Story 2.7 wraps `handle_event` as well as `handle_bar`, deliberately ahead of need, because
+> `execution/engine.pyx:1170-1187` clears `_pending_position_events` *before* publishing the order
+> event — so a raise in `handle_event` silently loses the `PositionOpened`/`Changed`/`Closed` that
+> would have followed. That is Epic 3's trade recorder's input. Do not "tidy it away" as premature.
+>
+> **4. `**Covers:**` under-declares this epic's own dependencies.** `AR8` and `AR38` (Story 3.6),
+> `AR40` (Story 3.1), and `NFR10` / `NFR24` / `NFR32` are cited by Epic 3 stories but absent from the
+> list below. Corrected in the epic section's `**Covers:**` line.
+>
+> **5. A subscription-killing IB error has no owner in any epic** — three instances now (code 10182
+> twice, code 162 once). The session keeps heartbeating and its row reads healthy while receiving
+> nothing at all, so round-trip verification will be blocked by it intermittently and silently. Grep
+> every live transcript for **162**, **10182** and **366** before recording any result.
 
-**Given** the migration's downgrade
-**When** `alembic downgrade` runs
-**Then** the table and the `resolution_status` enum type are dropped cleanly.
+### Epic 4: Stop, Restart & Resume Mid-Position
 
-**Given** the domain layer
-**When** `InstrumentMetadata` is defined
-**Then** it is a Pydantic model in `src/models/instrument_metadata.py` with `NA_SENTINEL = "N/A"` defined once, plus `ResolutionStatus` and `AssetType` enums and the `ResolutionSummary` object
-**And** the three-state rule is encodable and enforced: a descriptive field is a value or `NA_SENTINEL`; `venue` is a real code or `None` (never `NA_SENTINEL`); an unattempted field is DB `NULL`.
+Swing strategies become viable. The operator stops the process at the end of the day and positions
+stay open at the broker, untouched. Next morning the process starts again and — **before any
+strategy trades** — asks IBKR what is actually there, hydrates from that answer, re-warms indicators
+from historical bars, and only then subscribes to the live stream. The strategy resumes mid-position,
+still hunting the same exit at the same stop level. The interruption leaves no trace in the trade
+record.
 
-**Given** the persistence layer
-**When** async and sync repositories are exercised
-**Then** upsert and get-by-ticker work on both
-**And** the SQLAlchemy model inherits `Base` + `TimestampMixin` (mirroring `catalog_instrument`).
+**FRs covered:** FR32, FR33, FR34, FR35, FR36, FR37, FR38, FR39
 
-### Story 1.3: FMP Client with Rate-Limit Throttle & Graceful Degradation
+**Standalone deliverable:** a session survives a full process stop/restart **while holding an open
+position** and resumes mid-position with warm indicators and broker-confirmed state, with no
+artificial exit generated by the stop. Plus `live reconcile` reporting any discrepancy explicitly.
 
-As the system,
-I want a sync `httpx` FMP client that fetches a ticker profile within the rate limit and degrades gracefully on error,
-So that bulk resolution across ~5,039 tickers never exceeds quota and a provider failure never aborts the import.
+**The phase's truth-test:** this is the external-authority check that Phase 1 got from row-count
+parity and Phase 2 from FMP price validation. Without it, every downstream metric rests on
+self-report.
 
-**Acceptance Criteria:**
+### Epic 5: Seal a Session & Compare It Against Its Backtest
 
-**Given** an `FMPClient` (lazy-init, configured from `FMPSettings`)
-**When** `fetch_profile(ticker)` is called
-**Then** it issues a single `GET /stable/profile?symbol={ticker}` with `apikey` auth.
+The payoff. The operator seals a stopped session — an explicit, terminal act, distinct from stopping
+the process — and it runs through the **same `ResultsExtractor`** a backtest uses, landing as an
+ordinary run record. It then appears in the existing backtest list, selectable alongside the backtest
+it came from, rendering side by side in the existing comparison view: same metric names, same
+formatting, same units, each carrying its trade count so a difference can be read against its noise
+floor.
 
-**Given** the configured rate limit (default 300/min)
-**When** many tickers are resolved in bulk
-**Then** requests are throttled (reusing the existing IBKR `RateLimiter` pattern) and never exceed the quota.
+**FRs covered:** FR40, FR41, FR42, FR43, FR44, FR45, FR46, FR47
 
-**Given** a transient error response
-**When** a request fails
-**Then** the client retries with backoff.
+**Standalone deliverable:** a sealed paper session sits next to its backtest in the same table,
+comparable at a glance, **with zero UI changes** — a success criterion, not an omission.
 
-**Given** an `httpx.TimeoutException` or `httpx.HTTPStatusError`
-**When** it occurs
-**Then** it is caught specifically (never a bare `except`) and surfaced as a degradation signal — never raised in a way that aborts the whole import.
+**Scope discipline:** any new metrics table, model, or view invented for paper results is an FR42
+violation and must be rejected in review. The comparison works because there is only one results
+vocabulary, not two that are kept in sync.
 
-**Given** `/stable/profile` returns an empty top-level array `[]` (ticker unknown to FMP)
-**When** the response is handled
-**Then** it is treated as "no data" (to be mapped downstream to descriptive `N/A` + `VENUE_UNRESOLVED`), not as an error.
+---
 
-**Given** unit tests
-**When** the client is tested
-**Then** `httpx` is mocked and no real network call is made.
+### Dependency Structure
 
-### Story 1.4: FMP Metadata Provider — Field/Asset-Type Mapping, Venue Normalization & N/A Mapping
+```
+Epic 1 (connect + gate)
+   └─▶ Epic 2 (session identity, lifecycle, migration, trader_id)
+          ├─▶ Epic 3 (orders + trade capture)   [needs E2's trader_id — hard constraint]
+          │      └─▶ Epic 4 (reconcile + resume) [needs trades to resume into]
+          │             └─▶ Epic 5 (seal + compare)
+          └─ (E3, E4, E5 all reuse E2's session record and CLI group)
+```
 
-As the system,
-I want an `FMPMetadataProvider` that maps FMP profile JSON to the `InstrumentMetadata` domain model, normalizes the venue, and applies the `N/A` sentinel,
-So that all FMP-specific mapping is contained in one adapter and no FMP types leak to consumers.
+Strictly linear, with one non-obvious edge worth stating explicitly: **E3 cannot start before E2**
+because deterministic client order IDs (the duplicate-prevention invariant, NFR6) depend on the
+session-derived `trader_id` that E2's Redis cache configuration establishes. Everything else follows
+the natural build order.
 
-**Acceptance Criteria:**
+**Phase gate is machinery-complete, not sample-complete.** Sign-off requires ≥1 round trip, 0
+reconciliation discrepancy, ≥1 stop/restart with an open position, and one sealed session rendering
+in the existing views. Accumulating a statistically meaningful trade sample is post-sign-off
+operations — trade arrival is a property of the strategy and the market, not of effort.
 
-**Given** a populated FMP profile JSON
-**When** the provider maps it
-**Then** `companyName`, `sector`, `industry`, `country`, `ipoDate`, and `currency` populate the corresponding domain fields
-**And** any absent/empty descriptive field is set to `NA_SENTINEL`.
+---
 
-**Given** the FMP `isEtf` / `isFund` flags
-**When** asset type is derived
-**Then** `asset_type` is set to the correct `AssetType` (`ETF` / `FUND` / `EQUITY`).
+## Epic 1: Live Broker Connection & Real-Money Safety Gate
 
-**Given** the FMP `exchange` label
-**When** venue normalization runs against `FMP_EXCHANGE_TO_VENUE` in `venue_map.py`
-**Then** a confidently-mapped label (`NASDAQ`, `NYSE`, …) yields the corresponding Nautilus venue code and `resolution_status = RESOLVED`.
+The operator can point NTrader at an IBKR paper account, connect as both a data source and an
+execution destination, and receive real-time RTH bars — while a real-money account is refused at
+startup before any socket opens. Ships the safety control before the capability it constrains.
 
-**Given** a label in `AMBIGUOUS_LABELS` (incl. `AMEX`) or a blank/unmapped label
-**When** venue normalization runs
-**Then** `venue` is `None` and `resolution_status = VENUE_UNRESOLVED` — no guessed default venue is ever assigned.
+**Covers:** FR1–FR12 · NFR15, NFR16, NFR17, NFR19, NFR20, NFR26, NFR27, NFR34 · AR2, AR13–AR22
 
-**Given** unit tests
-**When** the provider and venue map are tested
-**Then** the venue map (label→venue + ambiguous routing) and the provider (JSON→domain + `N/A` mapping) are covered with mocked input.
-
-### Story 1.5: Provider-Agnostic Resolution Service with Cache-Check & Fault Isolation
-
-As the system,
-I want an `InstrumentMetadataService` that resolves a ticker cache-first through a provider-agnostic interface and isolates per-ticker failures,
-So that later asset classes reuse it unchanged and a single ticker failure never blocks the batch.
-
-**Acceptance Criteria:**
-
-**Given** the service interface
-**When** `InstrumentMetadataService.resolve(ticker)` is called
-**Then** it returns an `InstrumentMetadata` domain model only — no FMP types or raw JSON cross the boundary.
-
-**Given** an existing `instrument_metadata` row with `resolution_status = RESOLVED`
-**When** `resolve(ticker)` is called
-**Then** the FMP API is NOT called (cache hit) and metadata is returned from the store.
-
-**Given** no cached row for the ticker
-**When** `resolve(ticker)` is called
-**Then** the `FMPMetadataProvider` is invoked and the result is upserted into `instrument_metadata`.
-
-**Given** the provider raises or degrades for one ticker
-**When** a batch is resolved
-**Then** the degraded result is recorded and resolution of the remaining tickers continues uninterrupted (per-ticker fault isolation).
-
-**Given** a hypothetical second provider
-**When** it is added
-**Then** consumers depend only on the interface + domain model, and the swap touches only `providers/` plus service wiring.
-
-### Story 1.6: Per-Import Resolution Summary Reporting
+### Story 1.1: Refuse a Real-Money Account Before Anything Connects
 
 As the operator,
-I want a per-import resolution summary,
-So that I can see at a glance how many tickers resolved cleanly, had descriptive gaps, or have unresolved venues.
+I want the system to decide whether a connection is permitted purely from configuration, before any
+network activity happens,
+So that a port typo or a stale environment variable can never reach a real-money account.
 
 **Acceptance Criteria:**
 
-**Given** a completed batch resolution
-**When** the summary is produced
-**Then** a `ResolutionSummary` with the fixed fields `resolved`, `descriptive_gaps`, and `venue_unresolved` is returned
-**And** the counts accurately reflect the `resolution_status` of the processed tickers.
+**Given** `evaluate_gate(settings, cli_flags)` in `src/core/live_gate.py`
+**When** it is called with any combination of settings
+**Then** it returns a `GateDecision` without opening a socket, reading a file, or querying a database
+(AR16)
+**And** the module imports nothing from `nautilus_trader`, SQLAlchemy, or any I/O library.
 
-**Given** the summary
-**When** an import completes
-**Then** it is surfaced in the CLI output and emitted via structlog with fields `ticker`, `provider`, `resolution_status`, `error`.
+**Given** settings where `ibkr_trading_mode == "paper"`, `ibkr_port` ∈ {7497, 4002}, and `tws_account`
+is empty or begins with `DU`/`DF`
+**When** the gate is evaluated
+**Then** the decision permits the connection.
 
-## Epic 2: ETF Data Import Pipeline
+**Given** settings failing **any** one of those conditions — mode is `live`, or the port is 7496/4001
+or any unrecognised port, or `tws_account` is set to a non-paper prefix
+**When** the gate is evaluated
+**Then** the decision is a refusal carrying a `GateRefusal` reason naming the specific failing
+condition
+**And** an unrecognised port refuses rather than defaults to permitted (fail-closed).
 
-The operator can import the full FirstRate ETF bundle (ZIP archives, 6-column schema, all 5 native timeframes incl. 30min) into the isolated Parquet catalog via CLI — with dry-run, verification, idempotent re-runs, timeframe selection, and summary reporting. Metadata is resolved per ticker during import via Epic 1.
+**Given** the operator intends real-money trading
+**When** the gate is evaluated with `--real-money` set but `NTRADER_REAL_MONEY_ACCOUNT` unset, or
+with the env var set but the CLI flag absent, or with both present but the env value not matching
+the target account exactly
+**Then** every one of those combinations refuses
+**And** only both-present-and-exactly-matching permits (FR10, AR15)
+**And** no interactive prompt exists on this path — absence of either declaration is refusal, not a
+question.
 
-**FRs covered:** FR7, FR8, FR9, FR10, FR11, FR12, FR13, FR14, FR15, FR16, FR17, FR18, FR19, FR40
+**Given** a refusal is produced
+**When** its message is rendered
+**Then** any account identifier in it is masked to its last 3 characters (NFR26).
 
-### Story 2.1: 30-Minute Timeframe Convention Expansion (4 → 5)
+**Given** the test suite
+**When** `tests/unit/core/test_live_gate.py` runs
+**Then** it covers the full truth table including every refusal path, and requires no broker,
+network, or database (NFR34, NFR32).
 
-As the system,
-I want 30min added once to the central timeframe enum and the catalog schema,
-So that ETFs can be imported, charted, and backtested at all 5 native timeframes without conflating 30min with 5min/1hour.
-
-**Acceptance Criteria:**
-
-**Given** the central timeframe enum
-**When** 30min is added
-**Then** the bar-type string is `30-MINUTE-LAST` (word form, consistent with `1-HOUR-LAST` / `5-MINUTE`) and is defined in exactly one place — no inline string literals elsewhere.
-
-**Given** the FirstRate filename token `_30min_`
-**When** the timeframe maps in `firstrate/dry_run.py` and `firstrate/import_service.py` are extended
-**Then** `_30min_` resolves to `30-MINUTE-LAST`.
-
-**Given** a new Alembic migration (the 11th)
-**When** `alembic upgrade head` runs
-**Then** a `bar_count_30min` column is added to `catalog_instruments`, matching the existing `bar_count_minute` / `bar_count_hourly` / `bar_count_daily` naming.
-
-**Given** the existing Phase 1 stock catalog
-**When** this story completes
-**Then** stock 30min backfill is explicitly NOT performed (deferred + tracked, out of Phase 2 scope) — only the convention/schema is added.
-
-### Story 2.2: Per-Archive ZIP Extraction
-
-As the system,
-I want a per-archive ZIP extraction stage that extracts one archive, hands it to the parser, and cleans up before the next,
-So that peak disk usage stays bounded to one batch and an interrupted import leaves the catalog consistent.
-
-**Acceptance Criteria:**
-
-**Given** a `src/services/firstrate/zip_extractor.py` component
-**When** it processes a set of letter-batched ZIP archives (26 per timeframe)
-**Then** it extracts exactly one archive at a time and deletes the extracted `.txt` files before moving to the next archive.
-
-**Given** an import interrupted mid-archive
-**When** the run halts
-**Then** no partially-written Parquet is left readable as valid (the Phase 1 metadata-gatekeeper keeps partial output invisible to explorer/backtest).
-
-**Given** a re-run after interruption
-**When** extraction resumes
-**Then** it resumes at archive granularity without manual bookkeeping.
-
-**Given** component tests
-**When** the extractor is exercised
-**Then** per-archive extract + cleanup behavior is verified.
-
-### Story 2.3: Dry-Run Scan with FMP-Aware Estimate
+### Story 1.2: Isolate the Live Client ID from the Historical Data Client
 
 As the operator,
-I want a dry-run that scans the ETF source archives and reports what would be imported without writing data,
-So that I can validate the source and estimate disk before committing to a full import.
+I want the live session to use a different IBKR client ID than the catalog fetcher,
+So that I can run a live session while a historical import is in flight without either evicting the
+other.
 
 **Acceptance Criteria:**
 
-**Given** a dry-run command pointed at the ETF source directory
-**When** it runs
-**Then** it reports ticker counts (~5,039), detected 6-column schema, timeframes present, and per-ticker date ranges — and writes no data to the catalog.
+**Given** `IBKRSettings`
+**When** the settings are loaded
+**Then** a new `ibkr_live_client_id` field exists with default `10`, configurable via env, while
+`ibkr_client_id` keeps its default of `1` (FR5, AR18).
 
-**Given** the scan
-**When** disk usage is estimated
-**Then** an estimated disk footprint for the full import is reported.
+**Given** a configuration where `ibkr_live_client_id` equals `ibkr_client_id`
+**When** `IBKRSettings` is instantiated
+**Then** a Pydantic validation error is raised at construction naming both fields
+**And** the error is raised by a model validator, so it fires regardless of which field was
+overridden.
 
-**Given** the dry-run output
-**When** it summarizes metadata work
-**Then** it provides an FMP-aware estimate (e.g., how many tickers would require resolution vs. are already cached).
+**Given** the documented client-ID reservation
+**When** a developer reads the field descriptions
+**Then** they state the allocation: historical = `ibkr_client_id`, live session =
+`ibkr_live_client_id`, on-demand reconcile = `ibkr_live_client_id + 1` (AR34, reserved here and
+consumed in Epic 4).
 
-### Story 2.4: ETF Import — Parse, Convert & Write to Isolated Catalog
+### Story 1.3: Assemble and Start a TradingNode Against IBKR Paper
 
 As the operator,
-I want to trigger an ETF import for a source directory that parses the bars, resolves metadata, and writes Nautilus-compatible Parquet to the isolated catalog at all 5 timeframes,
-So that the ETF bars land in the catalog alongside Stocks.
+I want a Nautilus `TradingNode` configured for IBKR that starts cleanly inside this codebase,
+So that live trading runs on the same framework as backtesting rather than a second execution path.
 
 **Acceptance Criteria:**
 
-**Given** the ETF source directory and isolated catalog path configured via settings (reusing `FirstRateSettings` / `CatalogSettings`)
-**When** the operator runs the ETF import CLI command
-**Then** the pipeline extracts each archive (Story 2.2), parses the 6-column headerless schema with the reused `FirstRateCsvParser`, and writes bars as Parquet under `FIRSTRATE_CATALOG_PATH` following `{INSTRUMENT_ID}/{BAR_TYPE}/*.parquet`.
+**Given** `src/core/live_node_builder.py`
+**When** it builds a node
+**Then** it produces a `TradingNodeConfig` using `InteractiveBrokersDataClientConfig` and
+`InteractiveBrokersExecClientConfig`, registering `InteractiveBrokersLiveDataClientFactory` and
+`InteractiveBrokersLiveExecClientFactory` (FR2, AR2).
 
-**Given** the 5 native timeframes are present in the source
-**When** the import runs with no timeframe restriction
-**Then** all five (1min, 5min, 30min, 1hour, 1day) are imported.
+**Given** the builder is invoked
+**When** it begins assembling client configuration
+**Then** it calls `evaluate_gate()` first and raises without constructing any client config if the
+decision is a refusal — so no connecting code is reachable past a failed gate (FR9).
 
-**Given** the `--timeframe` selection option
-**When** the operator specifies one or several timeframes
-**Then** only the selected timeframes are imported.
+**Given** the gate has permitted the connection
+**When** the node is configured
+**Then** `ibkr_read_only` is set to `False` scoped to this process only, and never read as a safety
+control anywhere (FR12, NFR27, AR17, AR43).
 
-**Given** each parsed ticker
-**When** it is processed
-**Then** `InstrumentMetadataService.resolve(ticker)` (Epic 1) is invoked and the resolved metadata is upserted into `instrument_metadata` (cache-first; no redundant FMP call if already `RESOLVED`).
+**Given** the node initialises Nautilus logging
+**When** it starts
+**Then** its log guard is registered through the existing `set_nautilus_log_guard()` before any
+other Nautilus component initialises in-process (FR7, AR20)
+**And** an integration test under `--forked` starts a node in a process that has already run a
+`BacktestEngine` and observes no C-logging double-init panic.
 
-**Given** the isolated-catalog rule
-**When** ETF Parquet is written
-**Then** it is never mixed with IBKR/Kraken data, and decimal precision + UTC-normalized timestamps are preserved (Phase 1 discipline).
+**Given** the node's client ID
+**When** the data and execution clients connect
+**Then** both use `ibkr_live_client_id`, not `ibkr_client_id` (FR5).
 
-### Story 2.5: Import Verification — OHLC Sanity, Row-Count Parity & Sample-Point
+**Given** the node is stopped
+**When** shutdown completes
+**Then** the process exits without leaking a running event loop or an unclosed connection, and a
+second node can be built in a fresh process without inheriting `BacktestEngine`'s single-use
+constraint.
 
-As the system,
-I want per-ticker/timeframe verification during import,
-So that zero data loss and import accuracy are provable, not assumed.
+**Given** the whole epic
+**When** dependency files are reviewed
+**Then** no new dependency has been added — `pyproject.toml` and `uv.lock` are unchanged, since the
+IB live adapter and Redis cache backend already ship with the installed `nautilus-trader` 1.220.0
+(AR3).
 
-**Acceptance Criteria:**
-
-**Given** bars being imported for a ticker/timeframe
-**When** OHLC sanity is checked
-**Then** rows violating `high ≥ low` or `volume ≥ 0` are flagged.
-
-**Given** a completed ticker/timeframe import
-**When** completeness is verified
-**Then** the source row count is compared against the output Parquet row count and any mismatch is reported.
-
-**Given** a completed ticker/timeframe import
-**When** accuracy is validated
-**Then** sample data points (first and last rows) are compared between source and output.
-
-**Given** any verification failure
-**When** it is detected
-**Then** it is logged and surfaced in the import summary (and does not silently pass).
-
-### Story 2.6: Idempotent Re-runs via Date-Range Comparison
+### Story 1.4: Verify the Connected Account Is a Paper Account Before Trading Starts
 
 As the operator,
-I want re-running the import to skip already-complete tickers and re-import only incomplete ones,
-So that recovery after interruption is cheap, repeatable, and free of duplicate data.
+I want the system to check what account it is *actually* connected to, not just what the config
+claimed,
+So that a real-money account listening on a paper port is still caught.
 
 **Acceptance Criteria:**
 
-**Given** a prior partial import
-**When** the same import command is re-run
-**Then** date-range comparison identifies complete vs. incomplete tickers and re-imports only the incomplete ones (Phase 1 behavior preserved).
+**Given** the node has connected and the gateway has reported its account ID
+**When** the startup sequence reaches the `gate:account` phase
+**Then** the reported account ID must carry a paper prefix (`DU`/`DF`) for the sequence to continue
+(FR8, AR14).
 
-**Given** already-resolved tickers
-**When** the re-run processes them
-**Then** the FMP cache prevents redundant metadata re-fetching (near-100% cache hit).
+**Given** the reported account ID does not carry a paper prefix
+**When** verification runs
+**Then** the node shuts down immediately, no strategy is started, and the same refusal outcome as
+the static gate is produced (FR9).
 
-**Given** a re-run that touches nothing
-**When** all tickers are already complete
-**Then** no Parquet is rewritten and no FMP calls are made.
+**Given** account verification runs
+**When** it logs its result
+**Then** the account identifier appears masked to its last 3 characters (NFR26).
 
-### Story 2.7: Import Summary & Progress Reporting
+**Given** the verification is placed in the startup sequence
+**When** its position is inspected
+**Then** it runs after connection and strictly before any strategy is started (AR39).
+
+### Story 1.5: Receive Real-Time RTH Bars for a Configured Instrument
 
 As the operator,
-I want progress during the import and a summary report at the end,
-So that I can monitor a long batch and review exactly what happened.
+I want live bars arriving on real-time data restricted to regular trading hours,
+So that what the strategy sees live matches the session basis of the bars it was backtested on.
 
 **Acceptance Criteria:**
 
-**Given** an import in progress
-**When** it runs
-**Then** progress is reported (current ticker, running counts, errors) via structured logging.
+**Given** a session-configured node
+**When** market data is requested
+**Then** the market data type is `REALTIME`, explicitly overriding the `DELAYED_FROZEN` default that
+exists for paper data fetching (FR3, AR21)
+**And** a session that cannot obtain real-time data fails loudly rather than silently falling back to
+delayed.
 
-**Given** a completed import
-**When** the summary is produced
-**Then** it reports tickers processed, rows imported, and failures with reasons
-**And** it incorporates the Epic 1 `ResolutionSummary` (resolved / descriptive-gaps / venue-unresolved counts).
+**Given** an instrument subscription
+**When** bars are delivered
+**Then** they are restricted to regular trading hours via `ibkr_use_rth=True` (FR4, AR21).
 
-## Epic 3: Venue Resolution & Completeness Gate
+**Given** a subscribed instrument
+**When** a bar closes at the venue
+**Then** the bar is delivered to the node and logged with its instrument and timestamp (FR1).
 
-The operator can drive every ETF ticker to a resolved venue — via the curated FMP→Nautilus venue map, an unresolved-venue report, and a `venue_overrides.csv` merge — and the system enforces the hard gate (0 `VENUE_UNRESOLVED`) before the ETF universe is "complete," flagging unresolved tickers non-backtestable without dropping their bars.
+**Given** a session whose instrument count exceeds the account's concurrent market-data-line budget
+**When** the session starts
+**Then** it fails at startup with a message naming the limit and the requested count, rather than
+silently dropping subscriptions (NFR16, NFR30).
 
-**FRs covered:** FR20, FR21, FR22, FR23, FR24, FR25, FR26
+**Given** historical or streaming requests are issued
+**When** request volume is measured
+**Then** the existing 45 req/s pacing discipline governs them (NFR15).
 
-### Story 3.1: Ticker → Nautilus-Qualified InstrumentId via Resolved Venue
-
-As the system,
-I want to map an ETF ticker to a Nautilus-qualified `InstrumentId` using its resolved venue, syncing the qualification into `catalog_instruments`,
-So that tickers with a known venue become fully-qualified, backtestable instruments.
-
-**Acceptance Criteria:**
-
-**Given** a ticker with a resolved `venue` in `instrument_metadata`
-**When** `instrument_mapper` computes its identity
-**Then** it produces a Nautilus-qualified `nautilus_id` (e.g. `SPY.ARCA`) sourced from `InstrumentMetadataService`, not from a hardcoded/guessed venue.
-
-**Given** the qualification sync (ADR-3)
-**When** import qualification runs
-**Then** `catalog_instruments` reads venue/descriptive fields from `instrument_metadata` to compute `nautilus_id`, with `instrument_metadata` remaining the single source of truth for resolved metadata and `catalog_instruments` for bar counts/date ranges (single writer = import pipeline).
-
-**Given** a ticker whose venue is unresolved (`VENUE_UNRESOLVED`)
-**When** qualification runs
-**Then** no `nautilus_id` is fabricated for it (it is left unqualified, handled by Story 3.5).
-
-### Story 3.2: Unresolved-Venue Report
+### Story 1.6: Detect Connection Loss and Withhold Trading Permission
 
 As the operator,
-I want a report listing every ticker that lacks a resolved venue with the reason,
-So that I have a concrete, actionable worklist to drive toward 100% venue coverage.
+I want the system to know when the broker connection has dropped and to stop considering itself
+permitted to trade,
+So that no order can ever be sent into a connection that is not there.
 
 **Acceptance Criteria:**
 
-**Given** imported ETFs with some venues unresolved
-**When** the operator runs the `metadata unresolved` CLI subcommand
-**Then** it lists every ticker with `resolution_status = VENUE_UNRESOLVED`, including the reason (e.g., blank FMP label, ambiguous `AMEX`, ticker unknown to FMP).
+**Given** an established broker connection
+**When** the connection drops
+**Then** a `connection.lost` event is logged with the session identifier bound (FR6, AR41)
+**And** the runner's trading-permitted state becomes false.
 
-**Given** the report
-**When** it is produced
-**Then** it is rendered as readable CLI output and is usable as the basis for filling in `venue_overrides.csv`.
+**Given** the connection is re-established
+**When** recovery completes
+**Then** `connection.restored` is logged and trading permission is restored only after state is
+re-established, never on reconnect alone (NFR10).
 
-### Story 3.3: venue_overrides.csv Merge with Precedence
+**Given** a transient disconnect
+**When** reconnection is measured
+**Then** it completes within 60 seconds, and the elapsed time is observable in the logs (NFR4).
+
+**Given** IB Gateway performs its scheduled daily restart
+**When** the session observes the disconnect
+**Then** it is handled as an expected event on the normal reconnect path, not raised as an error
+condition (NFR19).
+
+**Given** the broker is unreachable for longer than the reconnect window
+**When** the session evaluates its state
+**Then** it halts trading and reports it, and never proceeds on stale state (NFR20).
+
+**Note:** the order path that consults this permission flag arrives in Epic 3; this story delivers
+the detection and the flag, verified directly against broker doubles.
+
+### Story 1.7: Check Broker Connectivity and the Gate from the CLI
 
 As the operator,
-I want to supply manual venue corrections in `venue_overrides.csv` that the system merges into the metadata store with precedence,
-So that I can resolve venues FMP couldn't, without a web write-path.
+I want a single command that proves the connection works and the gate holds,
+So that I can verify my setup before there is any session or any order to worry about.
 
 **Acceptance Criteria:**
 
-**Given** a git-tracked `venue_overrides.csv` with header exactly `ticker,venue` (path via config)
-**When** an import or metadata refresh runs
-**Then** the file is loaded and merged into `instrument_metadata` during the import-orchestration step (not inside `FMPClient`).
+**Given** the `ntrader` CLI
+**When** `ntrader live check` is run
+**Then** it evaluates the gate, connects, verifies the account, subscribes to a configured
+instrument, prints the bars it receives, disconnects cleanly, and exits `0` (FR1–FR5).
 
-**Given** a ticker present in both FMP data (absent/ambiguous venue) and the override file
-**When** the merge runs
-**Then** the override venue takes precedence and the row's `resolution_status` becomes `RESOLVED`.
+**Given** a configuration that the gate refuses
+**When** `ntrader live check` is run
+**Then** it prints the specific refusal reason and exits with code **3**, distinct from every other
+failure (FR11, AR28)
+**And** no connection attempt appears in the logs.
 
-**Given** the same override file
-**When** the import is re-run
-**Then** the merge is idempotent (re-merging produces the same result, no duplication or drift).
+**Given** the gate passes but the broker is unreachable
+**When** the command runs
+**Then** it exits with code **4**, so a script can tell "refused to trade a live account" apart from
+"failed to connect" (FR11, AR28).
 
-### Story 3.4: Venue Coverage Report & Completeness Gate
+**Given** the command's output
+**When** it streams
+**Then** it uses structured `structlog` console output consistent with existing CLI commands (FR48).
+
+**Given** the `live` group is registered
+**When** `ntrader live --help` is shown
+**Then** `check` is listed, and the group is wired into `src/cli/main.py` alongside the existing
+command groups.
+
+---
+
+## Epic 2: Paper Trading Sessions That Outlive the Process
+
+The operator can define a named session once, start it, watch it observe live bars, stop it, and
+start it again under the same identity — with sessions listable and inspectable from another
+terminal, and a dead session distinguishable from a quiet one.
+
+**Covers:** FR13–FR22, FR48–FR53 · NFR7, NFR11, NFR12, NFR22, NFR23, NFR24, NFR25, NFR28, NFR29,
+NFR31 · AR4–AR11, AR19, AR27, AR29, AR32, AR33, AR36–AR39, AR41
+
+> **Amended 2026-08-28 at the Epic 2 retrospective — what this epic actually shipped, where it
+> differs from the acceptance criteria below.** Eight amendments were made during implementation and
+> recorded only in the story files. The AC text below is left as written, because each amendment was
+> a reasoned re-reading and rewriting it here would erase *why*; this block is the index. Full
+> reasoning is in each story's Dev Notes and in `epic-2-retro-2026-08-28.md`.
+>
+> | Story / AC | What changed | Status |
+> |---|---|---|
+> | **2.2 AC** (dual repositories) | Ships `TradingSessionRepository` / **`SyncTradingSessionRepository`**, not `TradingSessionRepositorySync` — all five existing sync repositories use the `Sync…` prefix. | Knowingly unmet on the **name**, met on the **substance** |
+> | **2.3 AC #1** (grep for `status =`) | Unsatisfiable as written: `grep -rn "status = " src/` matches 20 pre-existing unrelated lines. Discharged by two scoped greps **plus an AST scan over all of `src/`** with a two-file allowlist and a non-vacuity assertion. | **Instrument changed, property preserved** (and strictly stronger) |
+> | **2.3** | Added an AC not in this document: the **concurrent-reclaim criterion**, because AC #4 and AC #5 are individually correct but jointly a TOCTOU race — demonstrated live, two processes both reclaiming one session. | AC **added** |
+> | **2.6 AC #2** ("no position is closed on the stop path") | Not true end to end, and deliberately **pinned rather than silently satisfied**: `sma_crossover.on_stop()` still calls `close_all_positions()`. Proved by an AST scan over the five stop-path modules; the residual is pinned by a test whose docstring instructs **Story 3.1 to delete both the call and the test**. | Knowingly unmet clause, **handed to Story 3.1** |
+> | **2.6** | Three ACs added: signal ownership in every delivery window, stop-during-startup, bounded teardown + operator-visible failed release. | ACs **added** |
+> | **2.7 AC #1** ("caught at the runner boundary") | Describes a place that **does not exist**: `Actor.handle_bar` re-raises, `MessageBus.publish_c` has no per-handler `try`, and `LiveDataEngine._handle_queue_exception` calls `os._exit(1)` — measured `rc=1` with zero bytes of output. Re-read as *the boundary the runner installs around each strategy*. | **Epic AC overturned and re-read** |
+> | **2.7 AC #2** ("the others continue unaffected") | False under raw Nautilus regardless of where the runner catches, because `publish_c` aborts the subscriber loop — a raiser starves every strategy subscribed *after* it. Strengthened to hold in **both** registration orders; a one-order test passes vacuously. | **Epic AC overturned and strengthened** |
+> | **2.8** | `--json`'s exact seven-key contract upheld over a contradicting Dev Note; a database failure exiting `4` accepted and documented rather than remapped, because `sqlalchemy.exc.TimeoutError` collides **by name** with AR28's socket entry. | Upheld / accepted with disclosure |
+>
+> ⚠️ **Nautilus's own docstring is wrong on the AC #1 point** (`live/config.py:48-50` claims
+> `graceful_shutdown_on_exception` "does not include user actor/strategy exceptions"; the measured
+> traceback disproves it). Do not design against it and do not let a review cite it.
+
+### Story 2.1: Define a Session as a List of Strategy Specifications
 
 As the operator,
-I want a deterministic venue-coverage report and a completion gate,
-So that I can answer "is any ticker missing a venue?" authoritatively and the system refuses to declare the ETF universe complete until coverage is 100%.
+I want a session's definition modelled as a list of strategy specs rather than one strategy plus
+instruments,
+So that running several strategies in one session later is a configuration change, never a refactor.
 
 **Acceptance Criteria:**
 
-**Given** the `metadata coverage` CLI subcommand
-**When** it runs
-**Then** it reports current venue coverage and the exact count of `resolution_status = VENUE_UNRESOLVED` rows in the backtestable universe, backed by the indexed O(1) query.
+**Given** `src/models/session.py`
+**When** the domain model is defined
+**Then** `SessionSpec` holds a **list** of `StrategySpec`, each carrying its own strategy identifier,
+parameters, and target instruments (FR13, AR36)
+**And** a spec with two entries validates successfully even though this phase always supplies one.
 
-**Given** any ticker still has `VENUE_UNRESOLVED`
-**When** the completion gate is evaluated
-**Then** the gate fails (the ETF universe is NOT marked complete) and no venue is inferred or guessed to satisfy it.
+**Given** a `StrategySpec`
+**When** it is constructed
+**Then** its strategy identifier is resolved through the existing `StrategyRegistry`, and an unknown
+strategy fails validation with a message listing the registered names.
 
-**Given** 0 rows with `VENUE_UNRESOLVED`
-**When** the completion gate is evaluated
-**Then** the gate passes (venue coverage = 100%).
+**Given** strategy parameters
+**When** a spec is built
+**Then** they resolve through the existing `StrategyFactory.build_strategy_params()` chain
+(overrides → settings map → Pydantic defaults) and are frozen into the spec (FR53).
 
-### Story 3.5: Exclude & Flag Non-Backtestable Tickers
+**Given** a `SessionSpec`
+**When** its fields are inspected
+**Then** it contains no host, port, username, password, or account identifier — connection settings
+live only in `IBKRSettings`/env (FR52, NFR25).
 
-As the system,
-I want tickers without a resolved venue excluded from the backtestable universe and flagged, while keeping their imported bars,
-So that unresolved tickers never silently enter a backtest and their data isn't lost.
+**Given** a `SessionSpec` instance
+**When** any attempt is made to mutate it
+**Then** the model rejects the mutation (frozen), and the model round-trips losslessly to and from
+JSON for JSONB storage.
 
-**Acceptance Criteria:**
+**Given** `SessionStatus`
+**When** it is defined
+**Then** it is a `StrEnum` with exactly `created`, `running`, `stopped`, `sealed` (FR20, AR36).
 
-**Given** a ticker with `VENUE_UNRESOLVED`
-**When** the backtestable universe is enumerated
-**Then** the ticker is excluded and flagged as non-backtestable.
-
-**Given** that same ticker
-**When** the catalog is inspected
-**Then** its imported Parquet bars are still present (excluded ≠ dropped).
-
-**Given** the ticker later receives a venue (via override merge)
-**When** coverage is re-evaluated
-**Then** it transitions to backtestable without re-importing its bars.
-
-## Epic 4: Data Explorer — ETF Support
-
-The operator can browse, search, and chart imported ETFs at all 5 timeframes (incl. 30min) in the explorer, view metadata with clean `N/A` rendering, see per-timeframe statistics, and verify bar + metadata accuracy against an external reference. Extends the Phase 1 explorer (Jinja2 + HTMX, `NavigationState`, TradingView charts), read-only stance preserved.
-
-**FRs covered:** FR27, FR28, FR29, FR30, FR31, FR32
-
-### Story 4.1: Browse Imported ETF Tickers
+### Story 2.2: Create a Named Session with an Immutable Specification
 
 As the operator,
-I want imported ETF tickers listed in the catalog browser with their available date ranges and timeframes,
-So that I can see which ETFs are in the catalog and what data each has.
+I want to define a session once and have its specification frozen for its entire life,
+So that a typo at a later start can never silently change the strategy mid-forward-test and corrupt
+a multi-week sample.
 
 **Acceptance Criteria:**
 
-**Given** imported ETFs in the catalog
-**When** the operator opens the explorer catalog browser
-**Then** ETF tickers are listed alongside (or filterable from) Stocks, each showing available date range and available timeframes.
+**Given** a new Alembic migration
+**When** it is applied
+**Then** it creates `trading_sessions` with `id` BigInteger PK, `session_id` UUID business key,
+unique `name`, `status` as a DB-enforced enum, `spec` JSONB, nullable `linked_backtest_run_id` FK →
+`backtest_runs.run_id`, nullable `sealed_run_id`, `last_started_at`, `last_stopped_at`, `sealed_at`,
+`last_heartbeat_at`, `last_bar_at`, and `TimestampMixin` columns (AR4, AR32).
 
-**Given** the paginated ticker list across ~5,000 ETFs
-**When** it renders
-**Then** the list render completes in < 500ms (NFR2), reading from the metadata/catalog store without scanning Parquet directories.
+**Given** the same migration
+**When** it is applied
+**Then** it also adds `backtest_runs.run_type` defaulting to `'backtest'`, adds nullable
+`trades.session_id` FK, makes `trades.backtest_run_id` nullable, and adds the CHECK constraint
+`backtest_run_id IS NOT NULL OR session_id IS NOT NULL` (AR6, AR8)
+**And** existing `backtest_runs` and `trades` rows are unaffected, with every existing backtest query
+and view returning identical results after the migration.
 
-### Story 4.2: Search & Filter the ETF Ticker List by Symbol
+**Given** the migration
+**When** `alembic downgrade` is run
+**Then** it reverses cleanly, restoring `trades.backtest_run_id` to NOT NULL.
+
+**Given** `ntrader live create`
+**When** the operator supplies a name, one or more strategy specs, and optionally a backtest run to
+compare against
+**Then** a `trading_sessions` row is written with status `created` and the spec serialised to JSONB,
+and the session ID and name are printed (FR14, FR15).
+
+**Given** a persisted session
+**When** any code path attempts to update its `spec` column
+**Then** no such path exists in either repository — the spec is write-once, the same discipline
+`config_snapshot` already enforces (FR14, AR4).
+
+**Given** the dual-repository rule
+**When** the story is complete
+**Then** both `TradingSessionRepository` (async) and `TradingSessionRepositorySync` (sync) exist with
+matching capabilities, even though only the sync path is exercised this phase (AR9).
+
+**Given** a duplicate session name
+**When** `live create` is run
+**Then** it fails with a clear message rather than creating a second session.
+
+### Story 2.3: Move a Session Between States Through One Guarded Path
 
 As the operator,
-I want to search/filter the ETF ticker list by symbol,
-So that I can quickly find a specific ETF among thousands.
+I want every session state change to go through a single validated transition,
+So that an interrupted session is always in a state I can either start or seal, and never stuck.
 
 **Acceptance Criteria:**
 
-**Given** the ETF ticker list
-**When** the operator types a symbol fragment into the search/filter
-**Then** the list narrows to matching tickers via the existing HTMX `FilterState` pattern.
+**Given** `SessionService.transition()`
+**When** any status change occurs anywhere in the codebase
+**Then** it routes through this single method — a grep finds no direct `status =` assignment outside
+it (FR20, AR37).
 
-**Given** a keystroke in the filter
-**When** results update
-**Then** the search/filter responds in < 300ms (NFR3).
+**Given** the legal transitions `created → running`, `running → stopped`, `stopped → running`,
+`stopped → sealed`
+**When** each is requested
+**Then** it succeeds and the corresponding timestamp column is updated.
 
-### Story 4.3: Chart a Selected ETF at All 5 Timeframes (incl. 30min)
+**Given** an illegal transition such as `created → sealed`, `running → sealed`, or any transition out
+of `sealed`
+**When** it is requested
+**Then** `InvalidSessionTransition` is raised from the `src/db/exceptions.py` family, and the stored
+status is unchanged (AR37)
+**And** `sealed` is terminal with no outbound transitions at all.
+
+**Given** a session whose status is `running` but whose `last_heartbeat_at` is stale
+**When** `start` is requested
+**Then** the session is reclaimed, logged as `session.reclaimed`, and enters `running` — the only
+sanctioned running→running path (AR33, NFR11).
+
+**Given** a session whose status is `running` with a *fresh* heartbeat
+**When** `start` is requested
+**Then** it is refused with a message stating another process appears live (AR33).
+
+**Given** `SessionService`
+**When** its imports are inspected
+**Then** it imports no `nautilus_trader` module (AR38).
+
+**Given** a session referenced by name rather than UUID
+**When** any command resolves it
+**Then** resolution goes through one shared name→UUID helper used by every command (AR36).
+
+### Story 2.4: Give Each Session Its Own Durable Engine Cache
 
 As the operator,
-I want to load a windowed chart for a selected ETF at any of the five native timeframes including 30min,
-So that I can visually inspect its bars at the resolution I need.
+I want a restarted process to rejoin its own engine state and never another session's,
+So that session identity survives restarts and two sessions can never contaminate each other's
+orders and positions.
 
 **Acceptance Criteria:**
 
-**Given** a selected ETF
-**When** the operator picks a timeframe
-**Then** a windowed TradingView chart loads for any of 1min, 5min, 30min, 1hour, 1day, with 30min present in the timeframe selector (sourced from the central enum, Story 2.1).
+**Given** `Settings`
+**When** configuration is loaded
+**Then** a new `RedisSettings` (host, port, db) is available from env, pointing at the provisioned
+`redis:7-alpine` service (AR11).
 
-**Given** a single ETF/timeframe chart request
-**When** it loads
-**Then** it completes in < 2 seconds (NFR1) via windowed Parquet reads, and scroll/zoom sustains 60fps (NFR5).
+**Given** a session
+**When** its Nautilus `trader_id` is derived
+**Then** it is computed deterministically from the session as `PAPER-<short-session-id>`, producing
+the identical value on every process run of that session (AR10)
+**And** two different sessions produce different `trader_id` values.
 
-### Story 4.4: ETF Metadata Panel with N/A-Aware Rendering
+**Given** the node configuration
+**When** it is built
+**Then** it uses `CacheConfig(database=DatabaseConfig(...))` pointed at Redis, namespaced by
+`trader_id` (AR10).
+
+**Given** a session that is stopped and started again
+**When** the node comes up
+**Then** it rejoins its own Redis namespace rather than starting empty (FR19).
+
+**Given** a conflict between cached state and broker state
+**When** the design is inspected
+**Then** Redis is documented and treated as disposable cache — rebuildable from IBKR — with the
+broker authoritative (AR10; enforcement lands in Epic 4).
+
+**Note:** the deterministic `trader_id` established here is what makes Epic 3's client order IDs
+session-stable across restarts. This is the phase's one hard cross-epic ordering constraint (AR23).
+
+### Story 2.5: Start a Session in the Foreground with an Ordered Startup Sequence
 
 As the operator,
-I want a selected ETF's metadata (name, venue, sector, etc.) displayed with `N/A` rendered cleanly where unavailable,
-So that I can trust what I see and tell an honest gap apart from a bug.
+I want `live start` to run the session in my terminal and tell me exactly which startup phase it is
+in,
+So that I can see it come up correctly and diagnose it instantly when it does not.
 
 **Acceptance Criteria:**
 
-**Given** a selected ETF with full metadata
-**When** the metadata panel renders
-**Then** name, venue, sector, country, etc. display correctly.
+**Given** `ntrader live start <session>`
+**When** it is run
+**Then** it loads the session's stored spec by identifier and starts without the operator
+re-specifying any parameter (FR16).
 
-**Given** a selected ETF with descriptive gaps
-**When** the panel renders
-**Then** missing descriptive fields render as a clear `N/A` (via shared `@computed_field` `display_*` props) — never a blank, never ambiguous, and templates never branch on `""`/`None` ad hoc.
+**Given** the session runner starts
+**When** it executes its startup sequence
+**Then** the phases run in exactly this order — `gate:static → node:build → node:connect →
+gate:account → reconcile → warmup → subscribe → trading` — each logging
+`phase=<name> status=started|ok|failed` (AR39)
+**And** a failure in any phase stops the sequence and no later phase runs.
 
-**Given** a ticker whose venue is unresolved
-**When** the panel renders
-**Then** the venue state is shown distinctly from a descriptive `N/A` (venue is never the `N/A` sentinel).
+**Given** the phases not yet implemented in this epic (`reconcile`, `warmup`)
+**When** the sequence runs
+**Then** they are present as explicit no-op placeholders that log their phase, so Epic 4 fills them
+in without reordering the sequence.
 
-### Story 4.5: Per-Timeframe ETF Data Statistics
+**Given** the process is running
+**When** any log record is emitted
+**Then** it carries the bound `session_id`, extending the existing correlation-ID convention (FR48,
+NFR22, AR41).
+
+**Given** a running session
+**When** it operates
+**Then** it updates `last_heartbeat_at` roughly every 30 seconds and `last_bar_at` on each bar,
+through the same record port used for transitions (AR32).
+
+**Given** `LiveSessionRunner`
+**When** its imports are inspected
+**Then** it imports no SQLAlchemy — record access goes through the service/port boundary (AR38).
+
+**Given** a session started and left alone
+**When** it runs through a full RTH day
+**Then** it sustains 6.5 hours without operator intervention and without accumulating a bar-processing
+backlog (NFR7, NFR2).
+
+### Story 2.6: Stop a Session Without Ending It and Without Touching Positions
 
 As the operator,
-I want basic data statistics for a selected ETF per timeframe,
-So that I can sanity-check coverage and price ranges before relying on the data.
+I want Ctrl-C to stop the process and leave everything at the broker exactly as it was,
+So that a swing strategy can run across days instead of being liquidated every evening.
 
 **Acceptance Criteria:**
 
-**Given** a selected ETF
-**When** the operator views its statistics
-**Then** row count, date range, and min/max prices are shown per timeframe (including 30min).
+**Given** a running session
+**When** the operator sends SIGINT or SIGTERM
+**Then** the runner cancels subscriptions, stops the node gracefully, transitions the session to
+`stopped`, and exits `0` (FR17, AR19).
 
-**Given** the statistics request
-**When** catalog metadata is read
-**Then** it completes in < 500ms (NFR4) without loading full price data.
-
-### Story 4.6: Explorer Accuracy Verification vs External Reference
-
-As the operator,
-I want an explicit verification that ETF bars and metadata render correctly against an external reference,
-So that I can trust the ETF catalog end-to-end before backtesting on it.
-
-**Acceptance Criteria:**
-
-**Given** several ETFs across timeframes (e.g., QQQ daily, IWM 30min, a thinly-traded leveraged ETF 1min)
-**When** the operator spot-checks them in the explorer against TradingView (via the `agent-browser` workflow)
-**Then** OHLC bars match the external reference.
-
-**Given** ETFs with full and with sparse metadata
-**When** their panels are checked
-**Then** well-covered ETFs show full name/venue/sector and sparse ones show `N/A` cleanly — no crashes, no blank-vs-`N/A` ambiguity, no mislabeled venue.
-
-**Given** the new 30min timeframe
-**When** it is displayed
-**Then** it renders correctly alongside the other four timeframes
-**And** screenshot evidence is captured for the verification record.
-
-## Epic 5: Backtest Integration & Verification
-
-The operator can run single- and multi-ETF backtests against the FirstRate ETF catalog through the existing `BacktestOrchestrator` with whole-share equity sizing, persist results to the DB (viewable in the web UI), and confirm consistency against a reference path. Reuse-heavy: no new engine files; venue-qualified `InstrumentId` is the precondition.
-
-**FRs covered:** FR33, FR34, FR35, FR36, FR37, FR38
-
-### Story 5.1: Serve ETF Catalog Data to the BacktestEngine
-
-As the system,
-I want imported ETF catalog data served to the Nautilus BacktestEngine as a data source,
-So that ETFs can be backtested directly from the FirstRate catalog with no adapter layer.
-
-**Acceptance Criteria:**
-
-**Given** an ETF with imported Parquet bars and a venue-qualified `InstrumentId`
-**When** a backtest is configured for it
-**Then** the ETF catalog data is routed through the existing `BacktestOrchestrator` path and consumed by the BacktestEngine with no runtime adapter (NFR16).
-
-**Given** an ETF whose venue is unresolved (non-backtestable, Story 3.5)
-**When** it is targeted for a backtest
-**Then** instrument qualification fails fast / it is excluded — an unresolved venue can never silently enter a run.
-
-### Story 5.2: Run a Single-ETF Backtest with Whole-Share Equity Sizing
-
-As the operator,
-I want to run a backtest against an imported ETF using an existing strategy with whole-share position sizing,
-So that ETFs behave as a first-class, equity-style backtest asset.
-
-**Acceptance Criteria:**
-
-**Given** a venue-qualified ETF and an existing strategy
-**When** the operator runs a backtest
-**Then** the run completes against the FirstRate ETF catalog data.
-
-**Given** position sizing for the ETF
-**When** orders are sized
-**Then** whole-share (equity-style) sizing is applied, consistent with Stocks.
-
-**Given** a leveraged or inverse ETF
-**When** it is sized
-**Then** it settles as ordinary shares using the same whole-share sizing (not crypto/FX rules).
-
-### Story 5.3: Run a Multi-ETF Backtest
-
-As the operator,
-I want to run a single backtest spanning multiple ETFs,
-So that I can validate strategies like sector rotation across many instruments at once.
-
-**Acceptance Criteria:**
-
-**Given** several venue-qualified ETFs
-**When** a backtest is configured with multiple instruments
-**Then** the run uses `BacktestDataConfig`'s `instrument_ids` list and completes across all targeted ETFs.
-
-**Given** the multi-ETF run
-**When** it executes
-**Then** each ETF uses correct, independently-qualified venue/sizing (no cross-instrument venue bleed).
-
-### Story 5.4: Persist ETF Backtest Results to the Database
-
-As the operator,
-I want ETF backtest results persisted to the results database,
-So that I can review them in the web UI like any other run.
-
-**Acceptance Criteria:**
-
-**Given** a completed ETF backtest (single or multi)
-**When** it finishes
-**Then** a results record is persisted via the existing DB path.
-
-**Given** the persisted results
-**When** the operator opens the web UI
-**Then** the ETF backtest results are viewable there, consistent with existing run displays.
-
-### Story 5.5: Reference-Consistency Verification
-
-As the operator,
-I want to compare an ETF backtest result against a reference path,
-So that I can confirm the ETF catalog path produces consistent results.
-
-**Acceptance Criteria:**
-
-**Given** an ETF backtest result and a reference path (existing loader / comparison tooling)
-**When** the operator runs the comparison
-**Then** the results are compared and any deviation beyond expected tolerance is reported.
-
-**Given** the comparison passes
+**Given** a graceful stop
 **When** it completes
-**Then** the ETF catalog path is confirmed consistent with the reference, closing the Phase 2 verification loop.
+**Then** no position is closed, cancelled, or modified, and no order is submitted on the stop path
+(FR18, NFR14).
+
+**Given** a stop
+**When** it completes
+**Then** the session is **not** sealed and remains startable — `stop` and `seal` share no code path
+(FR17, AR36).
+
+**Given** a session already stopping
+**When** a second SIGINT arrives
+**Then** the process force-exits (AR19).
+
+**Given** a stopped session
+**When** it is started again
+**Then** it resumes under the same `session_id`, and repeating stop/start any number of times never
+changes that identity (FR19).
+
+**Given** the process is killed with SIGKILL instead
+**When** the session is later inspected
+**Then** its status may still read `running`, and the stale-heartbeat reclaim path from Story 2.3
+returns it to service (NFR11).
+
+### Story 2.7: Keep One Failing Strategy from Taking Down the Session
+
+As the operator,
+I want a strategy that raises to be contained,
+So that one bad strategy cannot end a multi-week forward test that other strategies are still
+contributing to.
+
+**Acceptance Criteria:**
+
+**Given** a strategy raising an exception in a Nautilus event handler
+**When** the exception reaches the runner boundary
+**Then** it is caught there, logged with `strategy_id` and the traceback, and the session continues
+running (FR50, NFR12).
+
+**Given** a session with more than one strategy spec
+**When** one strategy fails
+**Then** the others continue processing bars unaffected.
+
+**Given** any failure path inside the node
+**When** the code is inspected
+**Then** no `sys.exit()` is called from inside it (AR38).
+
+**Given** a strategy that has failed
+**When** the operator queries session status
+**Then** the failure is visible rather than silent (FR49).
+
+### Story 2.8: See What a Session Is Doing Without Reading Logs
+
+As the operator,
+I want status and list commands that tell me whether a session is trading, idle, degraded, or dead,
+So that I can check in after two days away and know immediately whether anything needs my attention.
+
+**Acceptance Criteria:**
+
+**Given** `ntrader live status <session>`
+**When** it is run from a **different process** than the runner
+**Then** it reports state, closed-trade count, open positions, last activity, and derived health —
+answering all of it from the database, with no dependency on the runner's memory (FR22, NFR23, AR32).
+
+**Given** health derivation
+**When** a session's status and heartbeat are evaluated
+**Then** health resolves to `stopped` (status ≠ running), `trading` (running, fresh heartbeat, recent
+bar), `idle` (running, fresh heartbeat, no recent bar), `degraded` (running, fresh heartbeat,
+connection lost), or `stale` (status running, heartbeat old — likely a dead process) (FR49, NFR24,
+AR32)
+**And** health is always derived at query time, never stored.
+
+**Given** a session that is running but has not traded
+**When** status is queried
+**Then** it reports `idle`, distinguishable from a session that has died (NFR24).
+
+**Given** `ntrader live list`
+**When** it is run
+**Then** it renders a Rich table of all sessions with state and accumulated trade count, matching
+existing CLI table conventions (FR21).
+
+**Given** either command with `--json`
+**When** output is produced
+**Then** it emits plain objects with snake_case keys, ISO-8601 UTC timestamps, and money as
+Decimal-strings, with `status --json` carrying `session_id`, `name`, `status`,
+`closed_trade_count`, `open_positions`, `last_activity_at`, `health` (FR51, AR29).
+
+**Given** trade counts before any seal
+**When** they are read
+**Then** they come from `trading_sessions` joined to `trades`, never from `backtest_runs` — no runs
+row exists until seal (AR5).
+
+---
+
+## Epic 3: Live Order Execution & Trade Capture
+
+A strategy signal becomes a real order at IBKR, fills at a price nobody modelled, and lands in the
+database the moment it closes — with real commission, rejections carrying the venue's reason, and no
+path that can ever resubmit a working order.
+
+**Covers:** FR23–FR31 · NFR1, NFR6, NFR8, NFR10, NFR13, NFR14, NFR21, NFR24, NFR32 · AR8, AR23–AR26,
+AR38, AR40, AR41, AR42, AR43
+*(`AR8`/`AR38` added 2026-08-28 — cited by Story 3.6; `AR40` by Story 3.1; `NFR10`/`NFR24`/`NFR32` by
+Stories 3.2/3.7/3.5. They were cited by the stories below and missing from this line.)*
+
+### Story 3.1: Stop Trading Without Manufacturing an Exit
+
+As the operator,
+I want stopping a strategy to leave its positions alone,
+So that my daily restarts do not fabricate round trips that never happened and destroy the swing
+behaviour I am trying to measure.
+
+**Acceptance Criteria:**
+
+**Given** `src/core/strategies/sma_crossover.py`
+**When** `on_stop()` is inspected
+**Then** the `close_all_positions()` call is removed, leaving only subscription teardown
+(`sma_crossover.py:85` today calls it; `sma_momentum.py` has no `on_stop` and needs no change).
+
+**Given** a **backtest** of `sma_crossover` over a fixed period
+**When** it is run before and after this change
+**Then** the difference in results is confined to how a position still open at the end of the data is
+recorded, and no other metric changes — the edit behaves identically in both engines (AR40).
+
+**Given** any strategy lifecycle hook in `src/core/strategies/`, **excluding the `custom/` git
+submodule**
+**When** the tree is grepped
+**Then** `close_all_positions` appears in no lifecycle hook (AR43)
+**And** `is_live` appears zero times anywhere under `src/core/strategies/` (AR40).
+
+> **Amended 2026-08-28 at the Epic 2 retrospective — the original wording could not pass.** Measured:
+> `close_all_positions` is called at `src/core/strategies/sma_crossover.py:85` **and**
+> `src/core/strategies/custom/sma_crossover_long_only.py:86`. `custom/` is a git submodule this repo
+> does not version and which CLAUDE.md forbids core code from importing, so a literal tree-wide grep
+> cannot reach zero without editing another repository. The scope is narrowed to what this repo owns;
+> the property is unchanged. This is the same treatment Story 2.3 gave its own unsatisfiable grep AC —
+> change the instrument, preserve the property, say so. (`is_live` already measures **0** across the
+> whole tree, submodule included, so that half passes today.)
+>
+> **Also required of this story, and not in the ACs above:**
+> - **Delete Story 2.6's pinning test in the same edit** —
+>   `tests/unit/core/test_live_stop_path_is_inert.py::TestTheStopPathSubmitsNothing::`
+>   `test_the_known_limit_is_pinned_sma_crossover_still_flattens_today` (line 186) asserts the flatten
+>   still happens *today*, and its docstring instructs this story to remove both it and the call.
+>   **Its non-vacuity guards are separate tests and must survive** —
+>   `test_the_scan_detects_every_forbidden_name_it_claims_to` (planted probes, all six names) and
+>   `test_the_flatten_scan_is_not_vacuous`. Story 2.6's review split them apart precisely for this
+>   moment: they were previously the *same* assertion as the pin, so deleting the pin would have left
+>   the whole scan unguarded.
+> - **Revisit whether the runner explicitly stops DEGRADED strategies at teardown.**
+>   `Trader.stop_strategy()` and `Trader._stop()` both guard on `is_running`, which means
+>   `state == RUNNING` exactly — measured, a degraded strategy's `on_stop()` never runs. That is
+>   *safer* today because it skips the flatten, and **inverts into a leak the moment this story
+>   removes the flatten** (no `unsubscribe_bars`, no strategy-owned cleanup). Pinned by
+>   `tests/integration/core/test_live_strategy_failure_survives.py::TestADegradedStrategyIsSkippedAtTeardown`.
+> - **Read P6/P7/P8's `on_stop()` flatten warnings in the knowledge that none of them was ever
+>   exercised.** No session had traded before 2026-08-28, so the flatten has never run against a
+>   session-owned position. This story's before/after backtest comparison is the only evidence path
+>   that will exist for the edit.
+
+**Given** a strategy holding an open position
+**When** the strategy is stopped
+**Then** no order of any kind is submitted as a consequence of stopping (NFR14, FR18).
+
+**Note:** this story is first in the epic deliberately. Once orders exist, a lingering flatten in
+`on_stop()` would write fake round trips into the trade record on every daily restart.
+
+### Story 3.2: Submit a Strategy's Orders to the Broker
+
+As the operator,
+I want a crossover signal to become a real order at IBKR through the same strategy code the backtest
+ran,
+So that any difference I later measure cannot be blamed on divergent implementations.
+
+**Acceptance Criteria:**
+
+**Given** a strategy calling `order_factory` and `submit_order` — unchanged from the backtest path
+**When** a signal fires in a live session
+**Then** the order reaches IBKR through the live execution client, with no live-specific strategy
+variant and no second execution path (FR23, AR43).
+
+**Given** an order is submitted
+**When** its client order ID is inspected
+**Then** it comes from Nautilus's deterministic generator operating under the session-stable
+`trader_id` from Story 2.4 — not from a locally invented scheme (FR27, AR23).
+
+**Given** an equity or ETF instrument
+**When** position size is computed
+**Then** the existing whole-share sizing discipline applies unchanged (FR30)
+**And** a size the broker rejects for buying power is handled as a rejection, not as an arithmetic
+guarantee.
+
+**Given** trading permission is false because the execution client is disconnected
+**When** a signal fires
+**Then** no order is submitted, and the suppression is logged (FR6, NFR10).
+
+**Given** a bar closes and a signal fires
+**When** submission latency is measured
+**Then** the bar-close→submission interval is logged, and is under 1 second (NFR1). *(Amended 2026-09-10 with NFR1: both intervals are logged; the bar-arrival→submission one is under 1 second.)*
+
+**Given** an order is submitted
+**When** the event is logged
+**Then** `order.submitted` carries `session_id`, `client_order_id`, and `instrument_id` (AR41).
+
+> **Added 2026-08-28 at the Epic 2 retrospective — this story starts from landed groundwork and owns
+> its live verification.** The two order-path defects described in the Epic 3 list entry above were
+> found and fixed on 2026-08-28 (`90337eb`), *before* this story exists, because they were blocking
+> Procedure P7. This story does not re-fix them; it **proves them**, and it inherits the one open
+> criterion they were blocking.
+>
+> **What is already true and covered by regression tests:** `routing=RoutingConfig(default=True)` on
+> `InteractiveBrokersExecClientConfig`, and the exec client loading the same
+> `InteractiveBrokersInstrumentProviderConfig(load_ids=…)` as the data client. `TestExecutionRouting`
+> drives Nautilus's real `TradingNodeBuilder` with an anti-tautology twin that counts **zero** under
+> the stock `RoutingConfig`; `TestInstrumentLoading` pins the provider.
+>
+> **What is not true yet, and is this story's to establish:** *a fill has never been observed.*
+> `ExecClient-INTERACTIVE_BROKERS: Submit MarketOrder(SELL 22 NVDA.NASDAQ …)` has appeared live; no
+> `OrderSubmitted → OrderAccepted → OrderFilled → PositionOpened` sequence and no real commission
+> value ever has. **Procedure P7's criterion 2 (position-open half) is deferred into this story** —
+> re-run `scripts/diagnostics/run_p7_position.sh` inside RTH and record a **fill**, not a submission.
+>
+> ⚠️ **Before running it: no other IBKR login may be active.** IBKR permits one session per account;
+> an operator signing into the mobile app mid-session evicted the Gateway's market-data entitlement
+> while leaving its API socket up, and four consecutive verification runs took zero bars under error
+> **162** while still connecting, passing both gate layers, logging `Subscribed … bars` and
+> heartbeating normally. No bars → no crossover → no order → no fill, with nothing in the session
+> saying so.
+>
+> **Lesson this story exists downstream of:** *"Market data arrives" is not evidence about orders;
+> only an order reaching the broker is.* The IB **data** client is built `venue=None`, so Nautilus's
+> default-client fallback adopted it; the **exec** client is built `venue=IB_VENUE`, so it never
+> qualified. Working market data actively concealed a dead execution path for two epics.
+
+### Story 3.3: Track Every Order Through Its Full Lifecycle
+
+As the operator,
+I want each order's whole life recorded — including the states a backtest never produces,
+So that the order history is trustworthy evidence rather than an assumption that submission implies
+a fill.
+
+**Acceptance Criteria:**
+
+**Given** a submitted order
+**When** it progresses
+**Then** accepted, partially filled, filled, rejected, cancelled, and expired are each represented
+and logged as they arrive from the venue (FR24, NFR21).
+
+**Given** each order event
+**When** it is logged
+**Then** it uses the dotted past-tense event names — `order.accepted`, `order.filled` with
+`fill_qty` and `cum_qty`, `order.rejected` with `venue_reason` — each carrying `session_id`,
+`client_order_id`, and `instrument_id` (AR41).
+
+**Given** a rejected order
+**When** the rejection arrives
+**Then** the reason reported by IBKR is captured verbatim and logged, never swallowed or replaced by
+a generic message (FR26).
+
+**Given** order events
+**When** they are consumed
+**Then** they arrive through Nautilus's own handlers (`on_order_rejected`, `on_position_closed`, and
+peers) — no polling loop and no parallel event bus exists (AR26).
+
+**Given** any single order
+**When** its history is reconstructed from logs
+**Then** submission, acknowledgement, every fill, and its final state are all traceable end to end
+(NFR21).
+
+### Story 3.4: Never Resubmit an Order That Is Already Working
+
+As the operator,
+I want ambiguity about an order's fate to be resolved by asking the broker, never by sending it
+again,
+So that the one genuinely irreversible failure mode in this system cannot occur.
+
+**Acceptance Criteria:**
+
+**Given** a submission that times out or whose connection drops mid-submit
+**When** the execution layer recovers
+**Then** it queries the order's state at the venue, and only submits if the venue confirms the order
+is not working (FR27, AR24).
+
+**Given** the entire order path
+**When** it is grepped
+**Then** no retry decorator, backoff wrapper, or retry loop exists around `submit_order` (AR24,
+AR43).
+
+**Given** a session that is stopped and restarted while an order is working at the broker
+**When** it resumes
+**Then** the working order is loaded into the cache before strategies start, so the resumed strategy
+sees its own open order rather than placing a second one (FR27, AR25).
+
+**Given** any reconnect, restart, or resume scenario exercised against broker doubles
+**When** submitted orders are counted
+**Then** the count of duplicate orders is **exactly 0** (NFR6)
+**And** this is covered by explicit tests for each of the three paths, not left to careful coding.
+
+> **⚠️ Flagged 2026-08-28 at the Epic 2 retrospective — the third criterion above is a backwards
+> dependency onto Epic 4, and must be resolved before this story is drafted.** It requires the working
+> order to be *"loaded into the cache before strategies start"* (AR25). Story 2.5 shipped `reconcile`
+> and `warmup` as **explicit no-op placeholders** by design, and the machinery that fills the
+> `reconcile` slot is Story 4.2's (*"startup reconciliation is enabled through framework
+> configuration"*). The phase's dependency structure declares itself strictly linear and
+> forward-only; this is the one edge that is not, and it is unacknowledged there.
+>
+> Two ways out, to be decided when 3.4 is drafted rather than discovered mid-implementation:
+> (a) scope this criterion to what Nautilus's own Redis cache restores without a reconciliation pass —
+> Story 2.4 proved a restarted process rejoins its own `trader_id` namespace, so the working order may
+> already be there; or (b) accept the ordering exception explicitly and state that 3.4's third
+> criterion is closed by Story 4.2, keeping the other three criteria in Epic 3.
+>
+> **Related, and also unresolved:** the NFR6 hazard this story exists for is only *detected*, not
+> *prevented*, at the session-record layer. There is still no owner/epoch fencing column on
+> `trading_sessions`, so a reclaimed process keeps trading for up to one heartbeat interval (~30 s) —
+> two live processes on one broker account. It was deferred five times across Epic 2 because no story
+> owned a `SessionRecordPort` write; **Epic 3 does**. See decision D1 in `epic-2-retro-2026-08-28.md`.
+>
+> **Resolved at drafting, 2026-09-10 (SM, story creation; Allay may overturn at review) — option (a),
+> and stronger than the retro assumed.** Measured in the installed 1.220.0 wheel: `NautilusKernel.__init__`
+> runs `exec_engine.load_cache()` (`cache_orders → build_index`, so every `ACCEPTED`/`PARTIALLY_FILLED`
+> order is in `orders_open` before anything starts), and `start_async` calls `_trader.start()` only
+> after connect, Nautilus's own startup reconciliation (`reconciliation=True` by default, which
+> `live_node_builder.py` does not override) and portfolio initialisation. The third criterion is
+> therefore provable with doubles today and is scoped to that: the restore and the visibility inside
+> `on_start`. What reconciliation *does* with a disagreement — broker-wins overwrite, the stale-open-order
+> startup stall measured 2026-09-01, `reconcile.*` records, NFR10's reconciliation gate — stays Story
+> 4.2's, and the dependency structure's "strictly linear" claim stands. The fencing column is **not**
+> this story's: D1 was ruled to Story 3.6 at the Epic 2 retrospective (`deferred-work.md:2083-2100`).
+> Full reasoning and citations: `3-4-never-resubmit-an-order-that-is-already-working.md`, "Why this
+> story is shaped the way it is".
+
+### Story 3.5: Aggregate Partial Fills into One Position
+
+As the operator,
+I want an order filled in pieces to produce one position at a volume-weighted price,
+So that a trade record does not report the first fill's price as though it were the whole entry.
+
+**Acceptance Criteria:**
+
+**Given** an order filled across several partial fills at different prices
+**When** the position is formed
+**Then** the entry price is the volume-weighted average across all fills, not the first fill's price
+(FR25).
+
+**Given** a position exited across several partial fills
+**When** the trade is recorded
+**Then** the exit price is likewise volume-weighted across those fills.
+
+**Given** partial fills
+**When** commission is accumulated
+**Then** the trade's commission is the sum charged across all constituent fills, not a single fill's
+charge (FR29).
+
+**Given** a position closed by exactly one fill on each side
+**When** the trade is recorded
+**Then** volume-weighting reduces to the single price, producing the same result as the simple case.
+
+**Given** the aggregation logic
+**When** it is tested
+**Then** `tests/component/test_live_trade_recorder.py` covers multi-fill entry, multi-fill exit, and
+mixed cases against position-event doubles, with no broker involved (NFR32).
+**Path amended 2026-09-11 (Story 3.5):** built at `tests/component/core/test_live_trade_recorder.py`
+instead — every Epic 1-3 live component suite lives under `tests/component/core/`; this line
+predates that directory. Honoured on substance, not on the literal path.
+
+**Note:** this story introduces `live_trade_recorder` with its **aggregation** logic only, returning
+a domain trade object. Story 3.6 adds the database write path to the same module. Splitting it this
+way keeps the volume-weighting arithmetic unit-testable with no database involved.
+
+### Story 3.6: Persist Each Trade the Moment It Closes
+
+As the operator,
+I want every closed trade written to the database immediately,
+So that a session that dies at 3pm on day nine still has all nine days of trades.
+
+**Acceptance Criteria:**
+
+**Given** a position closes
+**When** the position-closed event fires
+**Then** `live_trade_recorder` writes a `trades` row immediately against the session's `session_id`,
+with `backtest_run_id` left null until seal (FR28, AR8).
+
+**Given** the written trade
+**When** its fields are inspected
+**Then** entry price, exit price, quantity, P&L, holding period, and the **broker-charged**
+commission and currency reflect the actual fills, not modelled values (FR29).
+
+**Given** a running session
+**When** it is killed with SIGKILL
+**Then** every trade that had closed before the kill is present in the database (NFR8), verified by
+killing a running session and comparing.
+
+**Given** a database write failure while trading
+**When** the error occurs
+**Then** it is logged, the node keeps running and keeps trading, and the write is retried on the next
+event — using the savepoint discipline from the Phase 2 fix (AR42).
+
+**Given** `live_trade_recorder`
+**When** its boundaries are inspected
+**Then** it is the single place where Nautilus objects meet the database, converting events to domain
+models at the boundary so repositories never see Nautilus types (AR38).
+
+**Given** a trade is persisted
+**When** the event is logged
+**Then** `trade.persisted` is emitted with the session identifier bound (AR41).
+
+> **Added 2026-08-28 — this story now owns the owner/epoch fencing column (retrospective decision D1,
+> ruled by Allay).** It was deferred **five times** across Epic 2, every time for the same structural
+> reason: the column *"changes the meaning of every write on `SessionRecordPort`, so it belongs to a
+> story that owns that port, not to a bystander"* — and no Epic 2 story did. Story 2.8, the natural
+> candidate, turned out to be the phase's one pure reader. **This story is the first that owns
+> `SessionRecordPort` writes, so the deferral chain ends here.**
+>
+> **The hazard, stated precisely:** a stale heartbeat is not evidence a process is dead (DB failover,
+> GC pause, throttled container). Today a reclaimed incumbent keeps trading and keeps heartbeating
+> until its next tick refuses — **up to one heartbeat interval (~30 s) of two live processes on one
+> broker account**, which is NFR6's catastrophe, *detected* rather than *prevented*. Story 2.5 added
+> detection only: the record port is bound to the `started_at` its own transition stamped, and writes
+> are refused once `last_started_at` moves past it.
+>
+> **Two further Epic 2 findings fold into this one column, and should be closed with it:**
+> an abandoned heartbeat worker can write **after** the row is marked `stopped` if Postgres recovers
+> post-`release_record` (making a dead session look freshly heartbeating to `live status`); and
+> `SessionReclaimedError` cannot be made fatal on the bar path, because a raise out of a wrapped
+> `handle_*` re-enters `MessageBus.publish_c` and dies at `os._exit(1)` with zero output — Story 2.7
+> called that item *"really the fencing-token item wearing a different hat."*
+>
+> **The "this phase's single migration is spent" argument does not apply** and must not be revived:
+> Story 2.7's `b7c419e2a3d8` already falsified it. This is a third migration, argued on its merits.
+> The write itself becomes a `last_started_at`-qualified UPDATE (or an explicit epoch column) rather
+> than a wider join bound.
+
+### Story 3.7: Keep Trading After a Rejection
+
+As the operator,
+I want a rejected order to be loud and non-fatal,
+So that a strategy silently rejected for margin on every order never looks to me like a quiet
+market.
+
+**Acceptance Criteria:**
+
+**Given** an order is rejected by IBKR
+**When** the rejection is handled
+**Then** it is logged with the venue's reason and the session continues operating and remains
+eligible to trade (FR31, NFR13).
+
+**Given** a rejection
+**When** it propagates
+**Then** it never raises into strategy silence and never terminates the node (FR31, AR26).
+
+**Given** repeated rejections
+**When** the operator queries session status
+**Then** the condition is visible without reading logs — a session being rejected on every order is
+distinguishable from one seeing no signals (FR49, NFR24).
+
+**Given** a rejected order
+**When** the trade record is inspected
+**Then** no trade row is created for it — a rejection is not a trade (FR24).
+
+---
+
+## Epic 4: Stop, Restart & Resume Mid-Position
+
+Swing strategies become viable. The operator stops overnight with positions open, restarts in the
+morning, and — before any strategy trades — the system hydrates from IBKR's authoritative view,
+re-warms indicators from history, and only then subscribes to the live stream.
+
+**Covers:** FR32–FR39 · NFR3, NFR5, NFR9, NFR10, NFR14, NFR18 · AR25, AR34, AR39
+
+### Story 4.1: Read the Broker's Authoritative View of Positions and Cash
+
+As the operator,
+I want the system to be able to ask IBKR what it actually holds,
+So that every downstream check has an external authority to compare against rather than trusting
+itself.
+
+**Acceptance Criteria:**
+
+**Given** a connected session
+**When** broker state is requested
+**Then** positions (instrument, quantity, average price) and cash balances are retrieved for the
+configured account (FR32).
+
+**Given** the retrieved state
+**When** it is represented internally
+**Then** it is converted to domain types at the boundary, so nothing downstream depends on Nautilus
+or IBKR types (AR38).
+
+**Given** an account with no positions
+**When** state is retrieved
+**Then** an empty result is returned successfully and is distinguishable from a failed retrieval.
+
+**Given** retrieval fails or times out
+**When** the error surfaces
+**Then** it is reported explicitly and never silently treated as "flat" (NFR20).
+
+**Given** the retrieval
+**When** it is timed
+**Then** it completes within 30 seconds (NFR5).
+
+### Story 4.2: Reconcile Against the Broker Before Any Strategy Trades
+
+As the operator,
+I want startup to hydrate from IBKR's answer rather than from local state,
+So that a resumed session begins from what is actually true at the broker.
+
+**Acceptance Criteria:**
+
+**Given** the startup sequence
+**When** the `reconcile` phase runs
+**Then** it executes after `gate:account` and strictly before `warmup`, `subscribe`, and `trading` —
+no strategy is started until reconciliation has completed (FR33, NFR18, AR39).
+
+**Given** Nautilus's native reconciliation
+**When** the node is configured
+**Then** startup reconciliation is enabled through framework configuration rather than reimplemented,
+and working orders and open positions are loaded into the cache (FR33, AR25).
+
+**Given** a disagreement between cached state and broker state
+**When** reconciliation resolves it
+**Then** the broker's view wins and the cache is overwritten — never the reverse (FR35).
+
+**Given** reconciliation has not completed
+**When** a signal would fire
+**Then** no order is submitted (NFR10).
+
+**Given** reconciliation completes
+**When** state is compared
+**Then** internal position state matches the broker exactly — **0 discrepancy** — before trading is
+permitted (NFR9).
+
+**Given** reconciliation fails
+**When** the phase reports
+**Then** it logs `phase=reconcile status=failed`, the startup sequence stops, and the session does
+not trade (AR39).
+
+### Story 4.3: Keep Runtime State Aligned with the Broker
+
+As the operator,
+I want alignment maintained while the session runs, not just at startup,
+So that a multi-week session does not drift away from reality between restarts.
+
+**Acceptance Criteria:**
+
+**Given** a running session
+**When** continuous reconciliation is configured
+**Then** it runs throughout the session using Nautilus's native machinery (FR34).
+
+**Given** a discrepancy detected at runtime
+**When** it is resolved
+**Then** it resolves broker-ward and is logged as `reconcile.discrepancy` with the specific
+instrument and quantities (FR35, AR41).
+
+**Given** no discrepancy
+**When** a reconciliation cycle completes
+**Then** `reconcile.ok` is logged at a volume that does not drown the trading log.
+
+**Given** a reconnection after a disconnect
+**When** the connection is restored
+**Then** state is re-established before trading permission returns (NFR10).
+
+### Story 4.4: Warm Indicators from History Before the Live Stream Starts
+
+As the operator,
+I want every strategy's indicators primed with historical bars before the first live bar arrives,
+So that a restarted session does not trade on cold indicators or sit silent for a week waiting for
+them to fill.
+
+**Acceptance Criteria:**
+
+**Given** `sma_crossover.py` and `sma_momentum.py` — which today only call `subscribe_bars`
+**When** `on_start()` is rewritten
+**Then** each registers its indicators via `register_indicator_for_bars()` and requests history via
+`request_bars(...)`, with `subscribe_bars` invoked from the history callback so the live stream
+starts only after history has loaded (FR37, AR40).
+
+**Given** the rewritten `on_start()`
+**When** it is inspected
+**Then** it uses only mode-agnostic Nautilus APIs and contains no branch on execution mode — `is_live`
+count remains 0 (AR40, AR43).
+
+**Given** the same strategy in a **backtest**
+**When** it runs before and after this change
+**Then** it behaves identically in both engines, with any difference explained solely by indicators
+being warm at the first traded bar (AR40).
+
+**Given** a started session
+**When** the first live bar arrives
+**Then** every registered indicator already reports initialised, and `warmup.completed` was logged
+before the first bar was processed (FR37, AR41).
+
+**Given** the warm-up requests
+**When** they are issued
+**Then** they respect IBKR historical pacing rules (NFR15).
+
+**Given** a session started 5 minutes before the market open
+**When** the full sequence runs
+**Then** it is subscribed and trading by the open (NFR3).
+
+### Story 4.5: Resume a Strategy Mid-Position
+
+As the operator,
+I want a restarted strategy to know it is already long and to keep hunting the same exit,
+So that a multi-day swing trade survives my daily restarts without leaving a trace in the trade
+record.
+
+**Acceptance Criteria:**
+
+**Given** a session stopped while holding an open position
+**When** the process is restarted
+**Then** the strategy resumes aware of that position and seeks exits and stop levels for it, rather
+than treating the instrument as flat and opening a fresh entry (FR38).
+
+**Given** the resumed position
+**When** its identity is checked
+**Then** it is the same position the broker reports — hydrated from reconciliation, not reconstructed
+from local state (FR35).
+
+**Given** a full stop/restart cycle across an open position
+**When** the trade record is examined afterwards
+**Then** it contains no entry or exit generated by the interruption — the eventual round trip reads
+as one trade (NFR14).
+
+**Given** the restart
+**When** the strategy's first live decision is made
+**Then** it happens only after reconciliation and warm-up have both completed (NFR9, NFR10).
+
+**Given** the resumed session
+**When** its identity is checked
+**Then** the trade closed after the restart belongs to the same `session_id` as trades from before it
+(FR19).
+
+### Story 4.6: Check Positions and Cash Against IBKR on Demand
+
+As the operator,
+I want to run a reconciliation check whenever I want reassurance,
+So that I can confirm the system's picture of reality matches what TWS shows me.
+
+**Acceptance Criteria:**
+
+**Given** `ntrader live reconcile <session>`
+**When** it is run
+**Then** it connects read-only, retrieves broker positions and cash, compares them against the
+session's local view, prints an explicit result, and disconnects (FR36).
+
+**Given** the command runs while a session process holds `ibkr_live_client_id`
+**When** it connects
+**Then** it uses `ibkr_live_client_id + 1`, so it never evicts the running session (FR5, AR34).
+
+**Given** a discrepancy
+**When** it is reported
+**Then** the report names the specific instrument, the expected and actual quantities, and the cash
+difference — no averaging, no "close enough" (FR36).
+
+**Given** any discrepancy
+**When** the command completes
+**Then** it reports and exits — it never auto-resolves by trusting local state (FR35).
+
+**Given** matching state
+**When** the command completes
+**Then** it reports a clean result explicitly and exits `0`.
+
+**Given** the check
+**When** it is timed
+**Then** it completes within 30 seconds (NFR5).
+
+### Story 4.7: Absorb Corporate Actions Through Broker-Authoritative State
+
+As the operator,
+I want a split or dividend during a multi-week session to be picked up and made visible,
+So that a position size changing underneath me is an observation rather than a silent corruption.
+
+**Acceptance Criteria:**
+
+**Given** a corporate action changes a position's size or the account's cash at the broker
+**When** reconciliation next runs
+**Then** the change is absorbed from the broker's view without manual intervention (FR39).
+
+**Given** such a change is absorbed
+**When** it is logged
+**Then** it appears as an explicit reconciliation event naming the instrument and the before/after
+quantities — visible rather than silent (FR36).
+
+**Given** the divergence between adjusted backtest prices and unadjusted live prices
+**When** the phase's documentation is written
+**Then** it is recorded as an expected structural property of the comparison, not a defect to chase
+(carried into `session_conditions` in Epic 5).
+
+**Given** the operator verification procedures
+**When** `docs/qa/phase3-live-verification.md` is written
+**Then** it documents the manual procedures for connectivity, gate refusal, a complete round trip,
+restart resume, and reconciliation — the phase-gate evidence that cannot live in CI (NFR33, AR22).
+
+---
+
+### Story 4.8: Clear a Stranded Order After a Broker-Confirmed Fill or Cancel
+
+> Added post-retro (2026-09-28), not part of the original FR32–FR39 scope. Commissioned by the PO
+> at the Epic 4 retrospective to close "the stranded `ACCEPTED` order and the `p7-position-test`
+> stall" — measured, disclosed and re-routed by Stories 4.2, 4.3 and 4.5 without a fix ever being
+> built. Full story: `4-8-clear-a-stranded-order-after-a-broker-confirmed-fill-or-cancel.md`.
+
+As the operator,
+I want an order the cache still shows open after IBKR has already resolved it — filled or
+cancelled while the session was stopped or disconnected — cleared automatically instead of
+staying `ACCEPTED` forever,
+So that a session's record of its own orders stays true to the broker, and a namespace never
+carries a permanently-stale order into every restart after it.
+
+**Acceptance Criteria:**
+
+**Given** a cached order whose status is `ACCEPTED` (or `PARTIALLY_FILLED`/`TRIGGERED`) with a
+`venue_order_id` set
+**When** the broker's own open-orders response, read defensively, does not list it on two
+consecutive runtime cycles at least 60 s apart
+**Then** the order is reconciled to `CANCELED` through the engine's own reconciliation path, and
+one `reconcile.stale_order_cleared` record is logged naming the instrument, side, quantity and
+`client_order_id` (FR35).
+
+**Given** the broker read fails for any reason
+**When** a runtime cycle runs
+**Then** the cycle is unaffected — no order is cleared, nothing escapes the tick, and the failure
+is logged at most once per streak (NFR20).
+
+**Given** an order was in fact filled while the session was down or disconnected
+**When** it is cleared
+**Then** the record discloses that the true outcome could not be determined here and no fill,
+price or commission is fabricated — the existing position-level reconciliation carries the real
+economic effect (NFR26).
+
+**Given** Story 4.3's PO ruling that the native open-order consistency check stays off
+**When** this story ships
+**Then** that setting is untouched — this story detects and resolves a stranded order with its
+own targeted, defensive broker read, never by re-enabling the native check.
+
+**Given** the historical `p7-position-test` live stall occurred inside Nautilus's own
+`node:connect` sequence, before any of this project's code runs
+**When** this story's design is evaluated
+**Then** it is judged honestly on what it can close — the stranded order *record*, for every
+session from here on — and does not claim to explain or prevent a hang that happens before its
+own code has a chance to run.
+
+---
+
+## Epic 5: Seal a Session & Compare It Against Its Backtest
+
+The payoff. An explicit seal turns a stopped session into an ordinary run record through the same
+`ResultsExtractor` a backtest uses, and it appears beside its backtest in the existing comparison
+view — same names, same units, zero UI changes.
+
+**Covers:** FR40–FR47 · NFR32, NFR35 · AR5, AR7, AR12, AR30, AR31, AR35, AR43, AR44
+
+### Story 5.1: Compute Metrics for a Live Host Through the Existing Extractor
+
+As the operator,
+I want a paper session's metrics computed by the same code that computes a backtest's,
+So that there is no parallel metrics vocabulary to validate or keep in sync.
+
+**Acceptance Criteria:**
+
+**Given** `ResultsExtractor`, which today takes a `BacktestEngine`
+**When** it is widened
+**Then** it accepts either a `BacktestEngine` or a live host exposing the same `portfolio` and
+`cache` components (FR41).
+
+**Given** the widening
+**When** the diff is reviewed
+**Then** the metric math is untouched — the change is confined to how the host's portfolio and cache
+are obtained (FR41).
+
+**Given** the existing backtest path
+**When** the full backtest test suite runs after the change
+**Then** every existing test passes unchanged and backtest results are bit-identical to before.
+
+**Given** any proposal to add a metrics table, model, or view specific to paper results
+**When** it appears in review
+**Then** it is rejected as an FR42 violation (AR43).
+
+### Story 5.2: Reconstruct a Sealed Session's Equity Curve from Its Trades
+
+As the operator,
+I want drawdown and the ratios derived from it computed for a paper session,
+So that the comparison covers the path-dependent metrics too, with its limitation stated rather than
+hidden.
+
+**Acceptance Criteria:**
+
+**Given** a sealed session has no engine history to draw an equity curve from
+**When** seal computes metrics
+**Then** it reconstructs the equity series from starting capital plus the session's closed-trade P&L
+sequence, stored in the existing `PerformanceMetrics` JSON field (AR35).
+
+**Given** that reconstructed series
+**When** max drawdown, CAGR, and Calmar are computed
+**Then** they are computed from it by exactly the same code path `ResultsExtractor` already uses
+(FR41).
+
+**Given** the series is trade-granular rather than bar-granular
+**When** the record is written
+**Then** that limitation is recorded in `session_conditions`, so the drawdown comparison is read
+honestly (AR35).
+
+**Given** a session with zero closed trades
+**When** seal is attempted
+**Then** it behaves predictably — either refusing with a clear message or producing a record whose
+zero-trade state is explicit — rather than emitting NaN or dividing by zero (AR12).
+
+### Story 5.3: Seal a Stopped Session into a Comparable Run Record
+
+As the operator,
+I want an explicit seal that ends the session and produces a results record,
+So that a multi-week forward test becomes one comparable unit at a moment I choose.
+
+**Acceptance Criteria:**
+
+**Given** `ntrader live seal <session>`
+**When** it is run on a **stopped** session
+**Then** it computes metrics, writes one `backtest_runs` row plus its `performance_metrics` row,
+backfills `backtest_run_id` on the session's trades, sets `sealed_run_id` and `sealed_at`, and
+transitions the session to `sealed` (FR40, FR42, AR8).
+
+**Given** a session that is `running`
+**When** seal is attempted
+**Then** it is refused — sealing never happens to a live process out from under itself (FR40, AR37).
+
+**Given** a session that is already `sealed`
+**When** seal is attempted again
+**Then** it is refused, `sealed` being terminal (AR37).
+
+**Given** the created run record
+**When** its `run_type` is read
+**Then** it is `'paper'`, distinguishing it from a backtest with one column (FR44, AR6).
+
+**Given** the seal path
+**When** it writes
+**Then** it reuses `BacktestPersistenceService` NaN/Infinity validation and `DuplicateRecordError`
+handling verbatim (AR12).
+
+**Given** no `backtest_runs` row existed for the session before this moment
+**When** the codebase is inspected
+**Then** no path creates one at session creation or start — the row exists only from seal onward
+(AR5).
+
+**Given** the seal completes
+**When** the report is printed
+**Then** it names the run ID created, closed-trade count, open positions and their disposition, and
+the execution-conditions summary, in both human and `--json` form with identical fields (AR29).
+
+### Story 5.4: Record the Conditions the Session Actually Ran Under
+
+As the operator,
+I want each sealed session to carry the conditions that produced it,
+So that I can read a metric difference against its causes and its sampling noise instead of
+over-interpreting it.
+
+**Acceptance Criteria:**
+
+**Given** a sealed session
+**When** its `config_snapshot` is written
+**Then** it contains a `session_conditions` key holding `starting_capital`, `rth_only`, `price_basis`,
+`market_data_tier`, `closed_trade_count`, `open_positions_at_seal`, and `schema_version: 1` (FR43,
+FR45, AR7).
+
+**Given** `price_basis`
+**When** it is set for a paper session
+**Then** it records `"ibkr_unadjusted_smart"`, distinct from a backtest's
+`"firstrate_adjusted"` — the permanent structural divergence source named up front (FR45).
+
+**Given** the closed-trade count
+**When** it is recorded
+**Then** it travels with the record so a difference can be read against sampling noise (FR43).
+
+**Given** the run row's own columns
+**When** they are populated
+**Then** `initial_capital` matches the session's starting capital, `start_date` is the session's
+first start, `end_date` is the seal time, and `data_source` identifies the live IBKR source.
+
+**Given** starting capital
+**When** the record is written
+**Then** the paper session's own starting balance is stored as-is, with no normalization logic
+anywhere — comparability comes from matching the accounts, not from arithmetic (AR7).
+
+**Given** the new key
+**When** the existing config-snapshot panel renders it
+**Then** it displays without any UI change, because it is ordinary JSONB in an existing column (AR7).
+
+### Story 5.5: Handle Open Positions at Seal Time Explicitly
+
+As the operator,
+I want sealing with open positions to be a decision I make, never something that happens quietly,
+So that I am never surprised by orphaned positions or by exits my strategy did not request.
+
+**Acceptance Criteria:**
+
+**Given** a stopped session with open positions
+**When** `live seal` is run without `--force`
+**Then** it refuses, listing each open position with its instrument and quantity (FR47, AR30).
+
+**Given** the same session
+**When** `live seal --force` is run
+**Then** it seals, and each open position is persisted as an **open trade with a null exit** — the
+same shape backtests already use for positions open at the end of data (FR47, AR30).
+
+**Given** a `--force` seal
+**When** the report is printed
+**Then** it states the disposition explicitly: the positions remain at the broker and are no longer
+owned by any session (FR47, AR30).
+
+**Given** any seal path
+**When** the code is inspected
+**Then** nothing flattens, closes, or modifies a position — sealing never manufactures an exit
+(AR31, NFR14, AR43).
+
+**Given** a stopped session with no open positions
+**When** `live seal` is run
+**Then** it seals without requiring `--force`.
+
+### Story 5.6: Read a Paper Session Beside Its Backtest in the Existing Views
+
+As the operator,
+I want the sealed session to appear among my backtests and compare against the one it came from,
+So that I can finally see how much to discount a backtest — which is the entire point of the phase.
+
+**Acceptance Criteria:**
+
+**Given** a sealed session
+**When** the existing results list is opened
+**Then** the paper record appears alongside backtests, rendering correctly with no template, route,
+or query change (FR46, AR44).
+
+**Given** the sealed record
+**When** its detail view is opened
+**Then** metrics, trades, and the config snapshot — including `session_conditions` — all render
+correctly (FR46).
+
+**Given** the sealed session and the backtest named in its `linked_backtest_run_id`
+**When** both are selected in the existing 2–10 run comparison view
+**Then** they render side by side with the same metric names, formatting, and units (FR46, FR15).
+
+**Given** the phase's zero-UI-change criterion
+**When** the diff for this epic is reviewed
+**Then** `src/api/**`, `templates/**`, `src/services/backtest_query.py`, and the comparison views are
+untouched (AR44)
+**And** any change to them is treated as a success-criterion violation rather than a judgment call.
+
+**Given** the trades backfilled at seal
+**When** existing trade queries run
+**Then** they return the session's trades through `backtest_run_id` exactly as they do for backtests
+(AR8).
+
+### Story 5.7: Name Holdings the Adapter Cannot Express Instead of Refusing or Hiding Them
+
+*(Added 2026-09-30 from PR #35's code review, decision D2 — PO ruling: "same-symbol rule
+everywhere, name the rest". Routed here rather than fixed on the Epic 4 branch because it touches
+startup, runtime, the reconnect grant and the models together. D1's runtime half — the symbol-scoped,
+bounded hold-back — already shipped on PR #35 and is the mechanism this story extends.)*
+
+As the operator,
+I want a holding the IB adapter cannot express — a bond, a warrant, a BAG, a delisted symbol, or a
+fractional share from a DRIP — to be named once and otherwise left out of what reconciliation judges,
+So that a paper account that happens to hold one can still start, run and reconnect, and the one
+disagreement that could mask a strategy's own position is still caught.
+
+**Acceptance Criteria:**
+
+**Given** the broker holds a position the adapter cannot resolve to an instrument (an `IB-CONID-*` row)
+whose symbol matches no cached position
+**When** the session starts
+**Then** the row is logged `reconcile.discrepancy resolution=unresolved` once and the start is **not**
+refused (today it refuses `UNRESOLVABLE_DISCREPANCY` forever with the remedy "retry the start").
+
+**Given** the same row while the session runs
+**When** a disconnect is recovered
+**Then** the row does not withhold the reconnect grant (today `_act` never returns empty while any
+unresolved row exists, so orders are withheld for the rest of the session).
+
+**Given** an unresolved row whose symbol **does** match a cached position
+**When** either phase judges it
+**Then** the existing fail-closed rules apply unchanged: the start is refused; at runtime the same-symbol
+"broker 0" row is held back for `HOLD_BACK_CYCLES` and then acted on (PR #35 D1).
+
+**Given** a broker quantity the instrument's size increment cannot express (`+22.5` against the
+strategy's `+22`, where `Equity.make_qty` rounds silently to 22)
+**When** the session reconciles, at startup or at runtime
+**Then** the remainder is logged once per instrument at WARNING, naming both quantities, and the row is
+clean at the expressible precision — never `UNRESOLVABLE` at startup and never a silent `reconcile.ok`
+over a standing gap at runtime.
+
+**Given** `live reconcile`
+**When** it reads the same account
+**Then** it stays exact (FR36): the fractional remainder is a discrepancy line and exit `5`.
+
+### Story 5.8: Act on a Persistent Runtime Reconciliation Failure
+
+*(Added 2026-09-30 from PR #35's code review, decision D3 — PO ruling: "withhold after 3, drift
+stops". Belongs beside Story 5.4's `session_conditions`, which is where a withheld period should be
+recorded.)*
+
+As the operator,
+I want a session whose runtime reconciliation keeps failing to stop sending orders, and one whose
+adapter has drifted to stop outright,
+So that a session never trades for its whole life with no alignment against IBKR just because the
+broker read keeps failing quietly.
+
+**Acceptance Criteria:**
+
+**Given** `RuntimeReconciler._run` catches a non-`ReconciliationFailedError` on three consecutive cycles
+(`_FailureStreak.count` reaches 3)
+**When** the third failure is noted
+**Then** trading permission is withdrawn through the connection monitor's existing `RECOVERING` state
+(orders withheld, `order.suppressed`), one `reconcile.cycle_failed` is logged at ERROR naming the streak,
+and the next clean cycle re-grants through `confirm_state_reestablished` exactly as a reconnect does.
+
+**Given** the failure is a `BrokerStateAdapterError` (adapter drift — e.g. two IB contracts resolving
+to one instrument id)
+**When** it is first noted
+**Then** the session stops with exit `1` on the first occurrence, as startup treats adapter drift; the
+hourly throttle does not apply.
+
+**Given** a withheld period
+**When** the session is later sealed (Story 5.3)
+**Then** the period is recorded in `session_conditions` (Story 5.4) with its start, end and cause.
+
+**Given** the three-cycle threshold
+**When** it is pinned
+**Then** it is a named constant with a test that fails if a streak of two withholds or a streak of
+three does not.
+
+### Story 5.9: Restore the Bar Feed After a Reconnect, and Never Trade on a Catch-Up Bar
+
+*(Added 2026-10-12 from the Epic 5 live verification, finding L1 in `deferred-work.md`. PO rulings,
+Allay 2026-10-12: "fix it ourselves" (a local shim in the `live_exec_avg_px` pattern, with an
+upstream canary), and "ignore the missed prices for trading" (catch-up bars still reach the
+indicators, but no order acts on them).)*
+
+As the operator,
+I want a session that rides out a disconnect to get its bars back and to say so,
+So that a session never sits connected, reconciled and permitted to trade while it can no longer
+hear a price, and never trades on prices that went stale during the outage.
+
+**Acceptance Criteria:**
+
+**Given** the IB adapter's reconnect path (`_resubscribe_all`) re-issues a session's bar subscription
+**When** it does
+**Then** the subscription is restored. Nautilus 1.220's stored handle passes `start=` and omits the
+required `params`, so the adapter's own call raises `TypeError` and the bars never resume. One
+`bars.resubscribed` record names the bar type, and live bars resume.
+
+**Given** the bar resubscribe fails anyway (any exception)
+**When** it is noted
+**Then** one `bars.resubscribe_failed` record names the bar type and error type, and the session does
+not report a healthy, trading state while deaf. An IB refusal of the re-issued request, sent back
+through its error callback, counts as a failure too (code review 2026-10-13, DN1). Whether to stop or withhold is decided in the story
+from measured behaviour, and that decision is disclosed.
+
+**Given** bars that closed before `connection.restored` and arrive after the resubscribe (the
+adapter's catch-up burst: its only guard drops bars older than the last one it saw)
+**When** they reach the strategy
+**Then** the indicators see them, no order acts on them (any order such a bar triggers is withheld
+and named), and the number skipped is recorded once per reconnect for each strategy and bar type
+(code review 2026-10-13, DN3: the gate is per strategy, so each record names its `strategy_id`).
+
+**Given** the upstream defect
+**When** Nautilus is upgraded
+**Then** a canary pinned against the adapter's own source goes red if the stored handle's shape or
+`subscribe_historical_bars`'s signature changes, so the shim becomes deletable by name.
+
+**Given** live procedure P23a (or P4) is re-run
+**When** the Gateway is restored
+**Then** `live_bars.received` resumes after `connection.restored`, and no order fills on a bar that
+closed during the outage.

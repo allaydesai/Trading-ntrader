@@ -1,6 +1,7 @@
 """Database integration test fixtures."""
 
 import asyncio
+import os
 from contextlib import asynccontextmanager
 
 import pytest
@@ -11,6 +12,22 @@ from sqlalchemy.orm import sessionmaker
 
 from src.config import get_settings
 from src.db.base import Base
+
+
+def _run_isolated(coro):
+    """Run a coroutine on a scratch loop without touching the thread's current loop.
+
+    asyncio.run() calls asyncio.set_event_loop(None) on teardown, which makes a
+    later asyncio.get_event_loop() in the same thread raise RuntimeError instead
+    of lazily creating one. This module runs at collection time in whichever
+    xdist worker imports it (via the pytestmark below), so that teardown was
+    corrupting state for unrelated tests sharing the worker later in the run.
+    """
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
 
 
 def is_postgres_available():
@@ -25,15 +42,21 @@ def is_postgres_available():
                 await conn.execute(text("SELECT 1"))
             await engine.dispose()
 
-        asyncio.run(_check())
+        _run_isolated(_check())
         return True
     except (OperationalError, Exception):
         return False
 
 
-# Skip all database tests if PostgreSQL is not available
+# Skip all database tests if PostgreSQL is not available — but CI provisions
+# Postgres, so a skip there means the gate is decorative, not that Postgres is
+# genuinely absent. Fail loudly instead of silently skipping in that case.
+_PG_AVAILABLE = is_postgres_available()
+if not _PG_AVAILABLE and os.environ.get("CI"):
+    raise RuntimeError("CI provisions Postgres; tests/integration/db must run, not skip")
+
 pytestmark = pytest.mark.skipif(
-    not is_postgres_available(),
+    not _PG_AVAILABLE,
     reason="PostgreSQL is not available (not running or connection refused)",
 )
 
@@ -121,7 +144,7 @@ def test_db_schema(request):
             await conn.execute(text(f"SET search_path TO {schema_name}"))
             await conn.run_sync(Base.metadata.create_all)
 
-    asyncio.run(setup())
+    _run_isolated(setup())
 
     # Session factory that uses the test schema
     @asynccontextmanager
@@ -146,7 +169,7 @@ def test_db_schema(request):
             await conn.execute(text(f"DROP SCHEMA IF EXISTS {schema_name} CASCADE"))
         await cleanup_engine.dispose()
 
-    asyncio.run(cleanup())
+    _run_isolated(cleanup())
 
 
 @pytest.fixture(scope="function")

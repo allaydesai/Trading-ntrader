@@ -352,7 +352,7 @@ class TestIBKRClientProperty:
 
         # Assert
         assert client is mock_ibkr_client
-        mock_ibkr_class.assert_called_once_with(host="127.0.0.1", port=7497, client_id=10)
+        mock_ibkr_class.assert_called_once_with(host="127.0.0.1", port=7497, client_id=1)
 
     @patch("src.services.data_catalog.ParquetDataCatalog")
     @patch.object(DataCatalogService, "_rebuild_availability_cache")

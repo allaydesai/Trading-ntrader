@@ -9,7 +9,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class TradeBase(BaseModel):
@@ -44,16 +44,32 @@ class TradeBase(BaseModel):
 
 
 class TradeCreate(TradeBase):
-    """Model for creating new trades from Nautilus Trader FillReports."""
+    """Model for creating new trades, from a backtest's FillReports or a
+    live session's ``RecordedTrade`` (Story 3.6).
 
-    backtest_run_id: int
+    Widened from ``backtest_run_id: int`` (required): a session-owned trade
+    has no ``backtest_run_id`` until the session is sealed (Epic 5), and a
+    sealed trade holds both (``d08dfbd393f0``'s docstring — "do not tighten
+    to exactly one"). The validator enforces the one property that always
+    holds: at least one owner.
+    """
+
+    backtest_run_id: Optional[int] = None
+    session_id: Optional[int] = None
+
+    @model_validator(mode="after")
+    def _require_an_owner(self) -> "TradeCreate":
+        if self.backtest_run_id is None and self.session_id is None:
+            raise ValueError("TradeCreate requires at least one of backtest_run_id or session_id")
+        return self
 
 
 class Trade(TradeBase):
     """Complete trade model including computed fields."""
 
     id: int
-    backtest_run_id: int
+    backtest_run_id: Optional[int] = None
+    session_id: Optional[int] = None
 
     profit_loss: Optional[Decimal] = None
     profit_pct: Optional[Decimal] = None

@@ -52,6 +52,7 @@ class BacktestRun(Base, TimestampMixin):
         error_message: Error details if status = "failed"
         config_snapshot: Complete strategy configuration (JSONB)
         reproduced_from_run_id: Reference to original run if reproduction
+        run_type: 'backtest' (default) or 'paper' for a sealed session
         created_at: When record was created
         metrics: Associated performance metrics (one-to-one)
 
@@ -116,6 +117,13 @@ class BacktestRun(Base, TimestampMixin):
     data_quality_flag: Mapped[Optional[str]] = mapped_column(
         String(50), nullable=True, default=None
     )
+
+    # Distinguishes a backtest row from a sealed paper-trading session (Epic 5
+    # writes 'paper' rows at seal time; Story 2.2 only adds the column). A plain
+    # String(20), matching the neighbouring execution_status column, not a second
+    # PG enum type — AR6 asks for one column, and every enum type is another
+    # create/drop pair in every migration that follows.
+    run_type: Mapped[str] = mapped_column(String(20), nullable=False, server_default="backtest")
 
     # Relationships
     metrics: Mapped[Optional["PerformanceMetrics"]] = relationship(

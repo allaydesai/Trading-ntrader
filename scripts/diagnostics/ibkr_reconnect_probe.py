@@ -136,7 +136,10 @@ def main() -> int:
             "handshake-time",
         ],
     )
-    parser.add_argument("--client-id", type=int, default=_env_int("IBKR_CLIENT_ID", 10))
+    # Default matches the historical half of the client-ID reservation (src/config.py).
+    # Never default to 10/11 — those belong to the live session and on-demand reconcile,
+    # and this probe deliberately holds its ID without releasing it.
+    parser.add_argument("--client-id", type=int, default=_env_int("IBKR_CLIENT_ID", 1))
     args = parser.parse_args()
 
     t0 = time.monotonic()

@@ -5,6 +5,10 @@ This module defines a hierarchy of exceptions for handling various error
 conditions in backtest persistence and retrieval.
 """
 
+from typing import ClassVar
+
+from src.core.exit_outcome import LiveCheckOutcome
+
 
 class BacktestStorageError(Exception):
     """
@@ -63,10 +67,48 @@ class RecordNotFoundError(BacktestStorageError):
         - No records match query filters
     """
 
-    pass
+    exit_outcome: ClassVar[LiveCheckOutcome] = LiveCheckOutcome.CONFIG_ERROR
+    operator_safe_message: ClassVar[bool] = True
 
 
 class InstrumentMappingError(Exception):
     """Raised when a ticker cannot be mapped to a Nautilus InstrumentId."""
 
     pass
+
+
+class InvalidSessionTransition(BacktestStorageError):
+    """
+    Raised when a trading-session status change cannot proceed.
+
+    Examples:
+        - An illegal edge, such as ``created`` directly to ``sealed``, or any
+          transition attempted out of the terminal ``sealed`` state.
+        - A refused reclaim: a transition to ``running`` requested against a
+          session whose ``last_heartbeat_at`` is still fresh, meaning another
+          process appears to be live on it.
+    """
+
+    exit_outcome: ClassVar[LiveCheckOutcome] = LiveCheckOutcome.CONFIG_ERROR
+    operator_safe_message: ClassVar[bool] = True
+
+
+class SealRefusedError(BacktestStorageError):
+    """
+    Raised when a stopped session cannot be sealed as it stands (Story 5.3).
+
+    The seal runs in one transaction, so a refusal leaves nothing behind once
+    the caller rolls back. Every message is this codebase's own text — an
+    instrument and a quantity, a trade id, a strategy name — never a raw
+    account identifier, so it is shown to the operator verbatim.
+
+    Examples:
+        - The session's engine cache still holds a position, or holds
+          positions for another account, so it is not known to be flat.
+        - A trade row the results reconstruction cannot read honestly.
+        - A spec the run record cannot carry (more than one strategy, an
+          unregistered strategy, symbols longer than the column).
+    """
+
+    exit_outcome: ClassVar[LiveCheckOutcome] = LiveCheckOutcome.CONFIG_ERROR
+    operator_safe_message: ClassVar[bool] = True

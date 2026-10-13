@@ -1,0 +1,626 @@
+"""CLI command group: live paper-trading operations (Stories 1.7, 2.2, 2.5).
+
+Ships `ntrader live check`, `create` and `start`. Epic 2 adds
+`stop`/`status`/`list` and Epic 4/5 add `reconcile`/`seal` to this same group
+(architecture D8); this module deliberately stubs none of them.
+
+Thin by contract: parse options, hand typed settings to the driver, the
+repository or the runner, render the result, exit on its code. Every decision
+for `check` lives in `src/core/live_check.py` and `src/core/live_check_driver.py`;
+for `create`, the spec is built and validated entirely by `src.models.session`
+and persisted through `SyncTradingSessionRepository`; for `start`, the sequence
+is `src/core/live_session_runner.py`'s. This module owns none of that logic —
+only the option surface, the composition, and the exit-code mapping.
+
+**`start` is the composition root.** It is the only place that holds both a
+database session and a `Settings`, and it is where the two are narrowed: the
+runner gets `settings.ibkr` and an already-built `CacheConfig`, never the whole
+object, because AR38 keeps SQLAlchemy out of the runner and the runner has no
+business reaching `settings.redis`.
+
+**No `--real-money` option exists here, and none may be added.** The two-factor
+crossing (`--real-money` *and* `NTRADER_REAL_MONEY_ACCOUNT`) is not something a
+connectivity check has any business declaring; with the flag unavailable, an
+authorization sitting in the environment refuses at Layer 1 with exit code 3,
+which is the correct outcome.
+"""
+
+import asyncio
+from typing import Optional
+from uuid import UUID
+
+import click
+import structlog
+from pydantic import ValidationError
+from rich.console import Console
+from rich.markup import escape
+from sqlalchemy.exc import SQLAlchemyError
+
+from src.cli.commands.live_reconcile import reconcile
+from src.cli.commands.live_seal import seal
+from src.cli.commands.live_start import (
+    build_session_ports,
+    claim_session,
+    exit_with,
+    release_quietly,
+)
+from src.cli.commands.live_status import list_sessions, status
+from src.config import get_settings
+from src.core.live_cache import build_cache_config
+from src.core.live_check import EXIT_ERROR, render_report
+from src.core.live_check_driver import run_live_check
+from src.core.live_order_rejections import render_rejection_summary
+from src.core.live_session_node import DEFAULT_SESSION_CONNECT_TIMEOUT_SECONDS
+from src.core.live_session_runner import LiveSessionRunner
+from src.core.strategy_registry import StrategyRegistry
+from src.db.exceptions import DatabaseConnectionError, DuplicateRecordError
+from src.db.repositories.backtest_repository_sync import SyncBacktestRepository
+from src.db.repositories.trading_session_repository_sync import SyncTradingSessionRepository
+from src.db.session_sync import get_sync_session
+from src.models.session import SessionSpec, StrategySpec
+from src.services.session_record import SqlSessionRecord
+
+console = Console()
+logger = structlog.get_logger(__name__)
+
+#: The instrument a bare `ntrader live check` subscribes to. A module constant
+#: rather than a new setting: an env var would ripple into `.env.example`,
+#: `README.md` and `docs/setup/IBKR_SETUP.md` for a value `--bar-type` already
+#: overrides. Same call Story 1.6 made for its reconnect window.
+DEFAULT_BAR_TYPE = "AAPL.NASDAQ-1-MINUTE-LAST-EXTERNAL"
+
+#: How long to watch for bars once connected. Over one minute, so a 1-minute bar
+#: has time to close inside regular trading hours.
+DEFAULT_OBSERVE_SECONDS = 90.0
+
+#: Longest `--name` `live create` accepts. Must equal `trading_sessions.name`'s
+#: `String(100)`; `test_live_cli.py` asserts the two agree so they cannot drift.
+MAX_SESSION_NAME_LENGTH = 100
+
+#: How long both engines have to report connected. Deliberately not
+#: `IBKR_CONNECTION_TIMEOUT` (300s), which exists for the historical fetch
+#: client: a check exists to answer quickly, and 5 minutes of silence before
+#: "unreachable" is not an answer.
+DEFAULT_CONNECT_TIMEOUT_SECONDS = 60.0
+
+
+@click.group("live")
+def live() -> None:
+    """Live paper-trading commands."""
+
+
+live.add_command(status)
+live.add_command(list_sessions)
+live.add_command(reconcile)
+live.add_command(seal)
+
+
+def _validate_strategy(ctx: click.Context, param: click.Parameter, value: str) -> str:
+    """Resolve `--strategy` through the registry; an unknown name is a usage error.
+
+    Mirrors `backtest.py`'s `validate_strategy` callback shape, so an unknown
+    strategy fails at exit code 2 (Click's own usage-error code) rather than
+    surfacing later as a plain ValueError from `StrategySpec.from_overrides`.
+    """
+    StrategyRegistry.discover()
+    if not StrategyRegistry.exists(value):
+        available = StrategyRegistry.get_names()
+        raise click.BadParameter(
+            f"Unknown strategy '{value}'. Available strategies: {', '.join(available)}"
+        )
+    return value
+
+
+def _validate_name(ctx: click.Context, param: click.Parameter, value: str) -> str:
+    """Reject a blank or over-long `--name` as a usage error, before any DB work.
+
+    `required=True` checks presence only. Two failures it does not catch:
+
+    - A blank or whitespace-only name (a scripted `--name "$VAR"` that expands
+      empty) would persist as the session's permanent handle, which every later
+      `live start/status/seal` has to name on a command line.
+    - A name longer than the column would reach Postgres and come back as
+      `value too long for type character varying(100)` at exit 1, though this
+      command's exit-code table reserves 1 for state conflicts and 2 for misuse.
+
+    The name is deliberately *not* trimmed: a spec frozen for the life of a
+    forward test should store exactly what the operator typed.
+    """
+    if not value.strip():
+        raise click.BadParameter("--name must not be blank or whitespace-only.")
+    if len(value) > MAX_SESSION_NAME_LENGTH:
+        raise click.BadParameter(
+            f"--name is {len(value)} characters; the maximum is {MAX_SESSION_NAME_LENGTH}."
+        )
+    return value
+
+
+def _parse_param(
+    ctx: click.Context, param: click.Parameter, values: tuple[str, ...]
+) -> dict[str, str]:
+    """Parse repeated `--param key=value` options into a dict of raw strings.
+
+    A new convention for this repo — no existing command has `--param`.
+    `str.partition("=")`, not `split("=")`: a value may legitimately contain
+    `=`. Values stay strings; the strategy's own parameter model coerces them.
+    """
+    overrides: dict[str, str] = {}
+    for raw in values:
+        key, separator, value = raw.partition("=")
+        if not separator:
+            raise click.BadParameter(f"--param must be key=value, got {raw!r}")
+        # A blank key is accepted by partition() and would render as nothing in
+        # the unknown-key message below — the operator would be told a
+        # parameter is unknown without being told which.
+        if not key.strip():
+            raise click.BadParameter(f"--param key must not be blank, got {raw!r}")
+        if key in overrides:
+            raise click.BadParameter(f"--param key {key!r} was given more than once")
+        overrides[key] = value
+    return overrides
+
+
+@live.command("check")
+@click.option(
+    "--bar-type",
+    "bar_types",
+    multiple=True,
+    default=(DEFAULT_BAR_TYPE,),
+    show_default=True,
+    help="Bar type to subscribe to; repeat for several.",
+)
+@click.option(
+    "--observe-seconds",
+    type=click.FloatRange(min=0),
+    default=DEFAULT_OBSERVE_SECONDS,
+    show_default=True,
+    help="How long to watch for bars once connected (0 subscribes but observes nothing).",
+)
+@click.option(
+    "--connect-timeout",
+    type=click.FloatRange(min=0, min_open=True),
+    default=DEFAULT_CONNECT_TIMEOUT_SECONDS,
+    show_default=True,
+    help="How long the broker has to report connected before exit code 4.",
+)
+@click.option(
+    "--require-bars",
+    is_flag=True,
+    default=False,
+    help="Fail (exit 1) if no bar closes during the window. Only meaningful inside RTH.",
+)
+def check(
+    bar_types: tuple[str, ...],
+    observe_seconds: float,
+    connect_timeout: float,
+    require_bars: bool,
+) -> None:
+    """Prove the safety gate holds and the broker connection works.
+
+    Evaluates the pre-connection gate, connects to the configured IBKR paper
+    gateway, verifies the account the gateway actually reports, subscribes to the
+    configured instrument, reports the bars it receives, and disconnects.
+
+    \b
+    Exit codes:
+      0  the check completed
+      1  a configuration or runtime failure
+      2  usage error
+      3  the safety gate refused the connection (scriptably distinct)
+      4  the broker was unreachable
+
+    Connection settings come from `IBKRSettings` only — `IBKR_HOST`, `IBKR_PORT`,
+    `IBKR_LIVE_CLIENT_ID`, `IBKR_TRADING_MODE`, `TWS_ACCOUNT` — via `.env` or the
+    environment. There are deliberately no host/port/account flags.
+    """
+    report = run_live_check(
+        get_settings().ibkr,
+        bar_types=list(bar_types),
+        observe_seconds=observe_seconds,
+        connect_timeout=connect_timeout,
+        require_bars=require_bars,
+    )
+    # `markup=False`: parts of this text arrive from third-party exception
+    # strings, and a stray `[...]` would otherwise be eaten as Rich markup —
+    # silently dropping the operator's most important line.
+    console.print(render_report(report), markup=False, highlight=False)
+    raise SystemExit(report.exit_code)
+
+
+@live.command("create")
+@click.option(
+    "--name",
+    required=True,
+    callback=_validate_name,
+    help="Unique handle for this session.",
+)
+@click.option(
+    "--strategy",
+    required=True,
+    callback=_validate_strategy,
+    help="Strategy to run, by its StrategyRegistry name.",
+)
+@click.option(
+    "--bar-type",
+    "bar_types",
+    multiple=True,
+    required=True,
+    help="Bar type this strategy subscribes to; repeat for several.",
+)
+@click.option(
+    "--param",
+    "overrides",
+    multiple=True,
+    callback=_parse_param,
+    help="Strategy parameter override as key=value; repeat for several.",
+)
+@click.option(
+    "--compare-to",
+    type=click.UUID,
+    default=None,
+    help="run_id of the backtest this session is intended to be compared against.",
+)
+def create(
+    name: str,
+    strategy: str,
+    bar_types: tuple[str, ...],
+    overrides: dict[str, str],
+    compare_to: Optional[UUID],
+) -> None:
+    """Define a session once; its specification is frozen for its whole life.
+
+    A typo in `--strategy`, `--bar-type` or `--param` at a later `start` can
+    never silently change what a multi-week forward test is running — the spec
+    is validated and persisted here, in full, and nothing after this command
+    ever updates it.
+
+    \b
+    Exit codes:
+      0  the session was created
+      1  a state conflict or database failure (duplicate name, unknown
+         --compare-to, database unavailable)
+      2  usage error (unknown strategy, malformed --param, unknown parameter
+         key, an unusable bar type, or an invalid parameter value)
+    """
+    definition = StrategyRegistry.get(strategy)  # already validated by the callback
+    if definition.param_model is not None:
+        valid = set(definition.param_model.model_fields)
+        unknown = sorted(set(overrides) - valid)
+        if unknown:
+            # Keys are rendered with !r so a whitespace-padded key cannot look
+            # identical to a valid one in the error message.
+            raise click.UsageError(
+                f"Unknown parameter(s) for {definition.name!r}: "
+                f"{', '.join(repr(key) for key in unknown)}. "
+                f"Valid parameters: {', '.join(sorted(valid))}."
+            )
+
+    try:
+        strategy_spec = StrategySpec.from_overrides(
+            strategy_id=strategy,
+            overrides=overrides,
+            settings=get_settings(),
+            bar_types=bar_types,
+        )
+        spec = SessionSpec(strategies=(strategy_spec,))
+    except ValidationError as e:
+        # pydantic prefixes ValueError-raising validator messages with
+        # "Value error, " — strip that noise (precedent: _backtest_helpers.py).
+        messages = "; ".join(err.get("msg", "") for err in e.errors())
+        messages = messages.replace("Value error, ", "")
+        raise click.UsageError(messages or str(e)) from e
+    except ValueError as e:
+        # from_overrides runs build_strategy_params before pydantic, so
+        # resolution/parameter failures surface as a plain ValueError.
+        raise click.UsageError(str(e)) from e
+
+    try:
+        with get_sync_session() as session:
+            if compare_to is not None:
+                backtest_run = SyncBacktestRepository(session).find_by_run_id(compare_to)
+                if backtest_run is None:
+                    console.print(f"[red]No backtest found with run_id {compare_to}[/red]")
+                    raise SystemExit(EXIT_ERROR)
+
+            try:
+                trading_session = SyncTradingSessionRepository(session).create(
+                    name=name,
+                    spec=spec.to_stored(),
+                    linked_backtest_run_id=compare_to,
+                )
+            except DuplicateRecordError as e:
+                console.print(f"[red]{escape(str(e))}[/red]")
+                raise SystemExit(EXIT_ERROR) from e
+    except (RuntimeError, DatabaseConnectionError, SQLAlchemyError) as e:
+        console.print(f"[red]Database error: {escape(str(e))}[/red]")
+        raise SystemExit(EXIT_ERROR) from e
+
+    logger.info("session.created", session_id=str(trading_session.session_id), name=name)
+    console.print(
+        f"Session created: [bold]{escape(name)}[/bold] (session_id={trading_session.session_id})"
+    )
+
+
+@live.command("start")
+@click.argument("session")
+@click.option(
+    "--connect-timeout",
+    type=click.FloatRange(min=0, min_open=True),
+    default=DEFAULT_SESSION_CONNECT_TIMEOUT_SECONDS,
+    show_default=True,
+    help="How long the session has to connect and start trading before exit code 4.",
+)
+def start(session: str, connect_timeout: float) -> None:
+    """Run a session in the foreground until it stops.
+
+    Loads the session's frozen specification by name or id and starts it — no
+    option here re-specifies a strategy, a bar type or a parameter, because a
+    typo at start time must never silently change what a multi-week forward
+    test is running (FR16, FR14).
+
+    \b
+    Startup runs in this order, each phase logging `phase=<name> status=...`:
+      gate:static -> node:build -> node:connect -> gate:account
+      -> reconcile -> warmup -> subscribe -> trading
+    `reconcile` compares the engine cache against IBKR's own view of the
+    account before any strategy starts: what only the net disagrees on is
+    corrected broker-ward, a strategy position the broker does not cover
+    (fewer shares, none, or the opposite side) refuses the start naming the
+    likely cause, and `ok` means 0 discrepancy remains; only then is trading
+    permitted. A split that grows a strategy's position is absorbed and
+    logged; cash that moved while stopped is logged `reconcile.cash_changed`.
+    A strategy restarted while holding its own position resumes it
+    (`strategy.resumed`) and acts only on its own positions. Shares beyond
+    its own on the same side — a split's, or a manual add — it resumes
+    beside, named once (`strategy.resumed_beside_excess`) and never traded;
+    a holding no strategy of the session owns on an instrument where it is
+    flat, or on the opposite side, means it is not started
+    (`strategy.resume_refused`), and the holding is left alone. Each
+    strategy warms its indicators from history as it starts, before it
+    subscribes to live bars. While running, the session re-checks its
+    positions against IBKR every minute and corrects a disagreement seen
+    twice broker-ward (`reconcile.discrepancy`); a strategy position the broker
+    no longer covers stops the session, positions untouched. An order the
+    cache still shows open that IBKR no longer lists, checked twice a minute
+    apart, is reconciled CANCELED (`reconcile.stale_order_cleared`) — never
+    an invented fill. After a disconnect, no order is sent until a clean
+    check re-establishes state.
+
+    \b
+    Exit codes:
+      0  the session ran and stopped cleanly
+      1  a configuration, state or database failure — including
+         reconciliation refusing to let the session trade, at startup or
+         while it runs
+      2  usage error
+      3  the safety gate refused the connection (scriptably distinct)
+      4  the broker was unreachable, or the trader never started
+
+    Connection settings come from `IBKRSettings` and the engine cache from
+    `RedisSettings` — via `.env` or the environment. There are deliberately no
+    host/port/account flags.
+    """
+    settings = get_settings()
+    try:
+        claimed = claim_session(session)
+    except (RuntimeError, DatabaseConnectionError, SQLAlchemyError) as exc:
+        # Postgres-layer failures carry this codebase's own actionable text
+        # ("Database not configured…", the connection detail) that the AR28
+        # renderer would withhold as third-party — mirror `create` instead
+        # (review fix, 2026-08-21).
+        console.print(f"live start failed: {exc}", markup=False, highlight=False)
+        raise SystemExit(EXIT_ERROR) from exc
+    except (Exception, KeyboardInterrupt, asyncio.CancelledError) as exc:
+        exit_with(exc)
+
+    # Everything after the `→ running` transition is guarded — including the
+    # ports' own construction (review fix, 2026-08-21): reading the spec back
+    # and building the cache config can both fail, and a failure anywhere in
+    # this window must still put the row back to `stopped` (AC #10). The
+    # excepts rebuild the release adapter because its constructor is pure
+    # attribute assignment and cannot itself be mid-failure.
+    try:
+        record, trade_record = build_session_ports(claimed)
+        runner = LiveSessionRunner(
+            settings.ibkr,
+            session_id=claimed.session_id,
+            spec=SessionSpec.from_stored(claimed.spec),
+            record=record,
+            started_at=claimed.started_at,
+            trade_sink=trade_record.persist,
+            cache=build_cache_config(settings.redis),
+            connect_timeout=connect_timeout,
+        )
+    except ValidationError as exc:
+        # The stored spec no longer materialises — e.g. a strategy id that is
+        # no longer registered. The messages are pydantic's, naming the field
+        # and the registered strategies; render them as `create` does rather
+        # than withholding a bare type name (review fix, 2026-08-21).
+        messages = "; ".join(err.get("msg", "") for err in exc.errors())
+        messages = messages.replace("Value error, ", "") or str(exc)
+        release_quietly(SqlSessionRecord(claimed.session_id, owner_epoch=claimed.owner_epoch))
+        console.print(f"live start failed: {messages}", markup=False, highlight=False)
+        raise SystemExit(EXIT_ERROR) from exc
+    except (Exception, KeyboardInterrupt, asyncio.CancelledError) as exc:
+        release_quietly(SqlSessionRecord(claimed.session_id, owner_epoch=claimed.owner_epoch))
+        exit_with(exc)
+
+    try:
+        runner.run()
+    except (Exception, KeyboardInterrupt, asyncio.CancelledError) as exc:
+        # No `release_quietly` here: the runner's own `finally` has already
+        # marked the row stopped, and a second `transition(to=STOPPED)` would
+        # raise `InvalidSessionTransition` from inside the error handler.
+        # Contained failures are printed even on this path (review fix,
+        # 2026-08-23): a run that ended by raising — a reclaim above all — may
+        # be exactly the run whose failures never reached `runtime_flags`, so
+        # this report is the operator's only in-process trace of them.
+        _print_contained_failures(runner)
+        _print_order_rejections(runner)
+        exit_with(exc)
+
+    _print_stop_result(session, runner)
+
+
+def _print_stop_result(session: str, runner: LiveSessionRunner) -> None:
+    """The clean-stop console text (Story 2.6, Task 10 and AC #9).
+
+    Since Story 3.1 the **built-in** strategies leave positions untouched on
+    stop: ``sma_crossover.on_stop()`` no longer submits an exit order (AC
+    #1/#4) — Story 2.6's AC #2 residual, now closed for everything AC #3's
+    lifecycle scan can reach.
+
+    The message stays qualified rather than absolute (review fix,
+    2026-08-29). ``src/core/strategies/custom/`` is an unversioned submodule
+    the scan excludes by design, and ``custom/sma_crossover_long_only.py:86``
+    still flattens in its ``on_stop()`` — it is registered, aliased and
+    selectable through ``--strategy``. An unconditional "no exit order was
+    submitted" would be an affirmative falsehood about broker state for those
+    sessions, which is the same defect this story removed from the old
+    trailer, only inverted.
+
+    And, on a failed final release, the console warning ``release_record``
+    alone (a structlog ``ERROR``) never surfaced to an operator watching the
+    terminal.
+    """
+    suffix = f" ({runner.stop_signal})" if runner.stop_signal else ""
+    console.print(f"Session stopped: [bold]{escape(session)}[/bold]{suffix}", highlight=False)
+    if runner.ownership_lost:
+        # Story 3.6, D-C: a deliberate stop, but neither an operator signal
+        # nor a clean node exit — printing the generic "no stop signal"
+        # warning below would misreport it as an unexplained crash, and
+        # `stop_signal` is deliberately never set for this path (hazard #9).
+        console.print(
+            "⚠️  This session was reclaimed by another process — a trade write's own fence "
+            "detected it no longer owns this session, and the runner stopped itself. Check "
+            "whether another `live start` for this session is now running.",
+            markup=False,
+            highlight=False,
+        )
+    elif not runner.stopped_by_signal:
+        # Review fix, 2026-08-22 (decision D4): `run()` returning is NOT proof
+        # that a signal ended it. `run_async` swallows cancellation, so a node
+        # that died on its own returns cleanly too — and printing the same
+        # reassuring line for both made a crash indistinguishable from a
+        # deliberate Ctrl-C, to an operator and to a supervising script alike.
+        console.print(
+            "⚠️  No stop signal was received — the session ended on its own (the node stopped, "
+            "or its run task completed). This was not an operator-requested stop; check the log "
+            "above for why it ended.",
+            markup=False,
+            highlight=False,
+        )
+    console.print(
+        "Positions were left at the broker by the runner, and the built-in strategies submit "
+        "no exit order when they stop. A strategy from the custom/ set may still flatten its "
+        "own positions on stop — check the broker if you are running one.",
+        markup=False,
+        highlight=False,
+    )
+    if runner.shutdown_problems:
+        # Review fix, 2026-08-22 (decision D4): these were logged at WARNING
+        # and otherwise discarded, so an operator reading the terminal saw an
+        # unqualified "Session stopped" while the node might still hold the
+        # broker socket and the live client id. Exit code stays 0 — AR28's
+        # table has no code for this and Story 1.7 forbids inventing one.
+        console.print(
+            "⚠️  The teardown did not complete cleanly: "
+            f"{'; '.join(runner.shutdown_problems)}. The node may still hold the broker "
+            "connection and its live client id — verify at the broker before starting another "
+            "session on this account.",
+            markup=False,
+            highlight=False,
+        )
+    _print_contained_failures(runner)
+    _print_order_rejections(runner)
+    if runner.record_release_failed:
+        console.print(
+            "⚠️  The session stopped cleanly but its record could not be marked stopped. The "
+            "row still reads `running`; the next `live start` will be refused until its "
+            "heartbeat goes stale (90s).",
+            markup=False,
+            highlight=False,
+        )
+
+
+def _print_order_rejections(runner: LiveSessionRunner) -> None:
+    """Name what the venue (or the risk engine) refused this run (Story 3.7).
+
+    Prints nothing at all on a clean run, which is the common case, and the
+    exit code stays **0** either way — the session ran and it stopped. AR28's
+    table has no code for "the orders were refused", and Story 1.7 recorded
+    that a CLI inventing a code outside its own documented table is worse
+    than one reporting a generic failure.
+
+    **Every** line — header and trailer included — comes from
+    :func:`render_rejection_summary` in the core module, so this helper holds
+    no wording at all. That is this file's "registration lines only"
+    discipline (Story 2.8): ``live.py`` is already over its size cap, and a
+    renderer here would be untestable without a Click runner. AR36's
+    vocabulary and NFR26's redaction are both audited there, and asserted
+    end-to-end here in ``tests/unit/cli/commands/test_live_cli.py``.
+    """
+    for line in render_rejection_summary(runner.order_rejections):
+        console.print(line, markup=False, highlight=False)
+
+
+def _print_contained_failures(runner: LiveSessionRunner) -> None:
+    """Name the strategies that stopped trading during this run (Story 2.7).
+
+    Prints nothing at all on a clean run, which is the common case. Exit code
+    stays **0** either way: the session ran and it stopped. AR28's table has no
+    code for "a strategy failed", and Story 1.7 recorded that a CLI inventing
+    one outside its own documented table is worse than reporting a generic
+    failure.
+
+    ⚠️ AR36's vocabulary: *contained*, *failed*, *degraded* — never *halted*,
+    *killed* or *paused*. ``tests/unit/core/test_live_stop_path_is_inert.py``
+    enforces that word list against the runner and the signal policy, which do
+    not cover this module, so ``test_live_cli.py`` asserts it here directly.
+    """
+    failures = runner.contained_failures
+    if not failures:
+        return
+    plural = "strategy was" if len(failures) == 1 else "strategies were"
+    console.print(
+        f"⚠️  {len(failures)} {plural} contained during this run and stopped trading:",
+        markup=False,
+        highlight=False,
+    )
+    for failure in failures:
+        # The Nautilus id is empty when the strategy never started, so it is
+        # rendered only when there is one rather than as a bare "()".
+        identity = f" ({failure.strategy_id})" if failure.strategy_id else ""
+        console.print(
+            f"      {failure.spec_strategy_id}{identity} — {failure.error_type} in "
+            f"{failure.handler} at {failure.at:%H:%M:%SZ}",
+            markup=False,
+            highlight=False,
+        )
+        # Story 4.5 (code review): a strategy refused at start — a holding it
+        # cannot attribute (D-C), a warm-up that never arrived — is only
+        # actionable with its own remedy. Its detail is the guard's already
+        # redacted first line, capped; a runtime failure's stays in the log.
+        if failure.handler == "start" and failure.detail:
+            console.print(f"        {failure.detail}", markup=False, highlight=False)
+    # Branch on the runner's own fact (review fix, 2026-08-23): the old
+    # unconditional "the other strategies were unaffected" was false in the
+    # most common trigger — a single-strategy session has no other strategies,
+    # and when every strategy failed the claim was an affirmative lie.
+    if runner.all_strategies_failed:
+        console.print(
+            "    Every strategy in this session was contained. The session kept running and "
+            "still holds its broker connection, but it can no longer trade. See "
+            "`strategy.failed` in the log for each traceback, and `runtime_flags` on the "
+            "session's row for the same facts from another process.",
+            markup=False,
+            highlight=False,
+        )
+    else:
+        console.print(
+            "    The session kept running; the strategies not named above were unaffected. See "
+            "`strategy.failed` in the log for the traceback, and `runtime_flags` on the "
+            "session's row for the same facts from another process.",
+            markup=False,
+            highlight=False,
+        )

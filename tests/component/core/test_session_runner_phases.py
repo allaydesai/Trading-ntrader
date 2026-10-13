@@ -1,0 +1,2221 @@
+"""Component tests for ``LiveSessionRunner``'s startup sequence (Story 2.5).
+
+The filename is the one ``architecture.md:549`` fixes for this suite.
+
+Component tier: this module imports ``nautilus_trader.config`` and the runner,
+and drives a ``TestLiveNode`` double. **Nothing here constructs a real
+``TradingNode``** — ``NautilusKernel.__init__`` claims the C logging subsystem
+and this tier runs ``-n auto``, unforked.
+
+What is under test is AR39's *ordering*, and the ordering assertions are on the
+**ordered list** of ``(phase, status)`` pairs. A test asserting "all eight
+phases appear" passes against a runner that emits them in the wrong order, or
+emits them all up front, which is precisely the defect AC #2 exists to prevent.
+
+Two of the eight phases are logged by modules the runner does not own:
+``gate:static``'s terminal record comes from ``live_check.preflight_gate`` and
+**both** of ``gate:account``'s come from
+``live_account_gate.verify_connected_account``. The ordering test therefore uses
+the **real** account verifier against a registered fake gateway, so the record
+list it asserts is the one an operator would actually see. Failure-injection
+tests use stub verifiers, where the phase's own records are not the subject.
+"""
+
+import asyncio
+import dataclasses
+import json
+import signal
+import time
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
+from types import SimpleNamespace
+from uuid import UUID
+
+import pytest
+from nautilus_trader.adapters.interactive_brokers.factories import IB_CLIENTS
+from nautilus_trader.common.component import is_logging_initialized
+from nautilus_trader.config import LoggingConfig
+from nautilus_trader.model.identifiers import InstrumentId
+from nautilus_trader.test_kit.providers import TestInstrumentProvider
+from structlog.testing import capture_logs
+
+from src.config import IBKRSettings
+from src.core import live_bar_resubscribe
+from src.core.exit_outcome import EXIT_CODES
+from src.core.live_account_gate import verify_connected_account
+from src.core.live_broker_state import (
+    BrokerStateAdapterError,
+    BrokerStateFailure,
+    BrokerStateUnavailableError,
+)
+from src.core.live_cache import RedisUnreachableError
+from src.core.live_check import BrokerUnreachableError, InvalidCheckWindowError, classify_failure
+from src.core.live_connection_monitor import ConnectionMonitor, ConnectionState, ConnectionStatus
+from src.core.live_gate import GateDecision, GateMode, GateRefusalReason, build_refusal
+from src.core.live_market_data import LiveMarketDataError
+from src.core.live_node_builder import GateRefusedError, LiveNodeConfigError
+from src.core.live_session_node import (
+    DEFAULT_SESSION_CONNECT_TIMEOUT_SECONDS,
+    SESSION_CONNECTION_ATTEMPTS,
+    SESSION_LOGGING,
+    session_instrument_ids,
+)
+from src.core.live_session_phases import PHASE_SEQUENCE
+from src.core.live_session_runner import LiveSessionRunner
+from src.core.live_startup_reconcile import DISCREPANCY_EVENT as RECONCILE_DISCREPANCY_EVENT
+from src.core.live_startup_reconcile import OK_EVENT as RECONCILE_OK_EVENT
+from src.core.live_startup_reconcile import ReconciliationFailedError, ReconciliationFailure
+from src.core.live_strategy_guard import NoStrategyStartedError
+from src.models.broker_state import BrokerPosition
+from src.models.position_reconciliation import CachedPosition, LocalSnapshot
+from src.models.session import SessionSpec, StrategySpec
+from tests.component.doubles import TestIBAccountsClient, TestLiveNode, flat_broker_state_reader
+
+pytestmark = pytest.mark.component
+
+SESSION_ID = UUID("33333333-3333-3333-3333-333333333333")
+STARTED_AT = datetime(2026, 8, 19, 14, 30, 0, tzinfo=timezone.utc)
+PAPER_ACCOUNT = "DU4076626"
+AAPL_1MIN = "AAPL.NASDAQ-1-MINUTE-LAST-EXTERNAL"
+AAPL_INSTRUMENT = "AAPL.NASDAQ"
+#: A real instrument, for the reconcile cases whose correction reaches the
+#: report builder (Story 4.2): it reads ``id``, ``size_precision``, ``make_qty``.
+AAPL_EQUITY = TestInstrumentProvider.equity(symbol="AAPL", venue="NASDAQ")
+
+
+@pytest.fixture(autouse=True)
+def _assert_c_logging_state_is_unchanged():
+    """Machine-enforce the claim this file's tier placement rests on.
+
+    Copied verbatim from ``tests/component/core/test_live_node_builder.py``.
+    The assertion is on the *delta*, not the absolute state: under ``-n auto``
+    this file shares a worker process with the rest of the component tier, and
+    something else in that tier does initialise C logging. What this file must
+    never do is *change* the state — which is exactly what would happen if a
+    test here ever constructed a real ``TradingNode``.
+    """
+    before = is_logging_initialized()
+    yield
+    assert is_logging_initialized() == before, (
+        "this component test changed the Nautilus C logging state "
+        f"({before} -> {is_logging_initialized()}) — the runner's tests must never construct a "
+        "real TradingNode. Move it to tests/integration/ and run it under --forked."
+    )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_env(monkeypatch):
+    """Keep the shell out of the fields the runner's collaborators read."""
+    for name in (
+        "IBKR_RATE_LIMIT",
+        "IBKR_MARKET_DATA_TYPE",
+        "IBKR_USE_RTH",
+        "IB_MAX_CONNECTION_ATTEMPTS",
+    ):
+        monkeypatch.delenv(name, raising=False)
+        monkeypatch.delenv(name.lower(), raising=False)
+
+
+def _settings(*, mode: str = "paper", port: int = 4002, account: str = PAPER_ACCOUNT):
+    return IBKRSettings(
+        _env_file=None,
+        ibkr_host="127.0.0.1",
+        ibkr_port=port,
+        ibkr_client_id=1,
+        ibkr_live_client_id=10,
+        ibkr_trading_mode=mode,
+        tws_account=account,
+        ntrader_real_money_account="",
+        ibkr_rate_limit=45,
+        ibkr_market_data_lines=100,
+    )
+
+
+def _spec(*bar_types: str) -> SessionSpec:
+    return SessionSpec(
+        strategies=(
+            StrategySpec(
+                strategy_id="sma_crossover",
+                parameters={},
+                bar_types=bar_types or (AAPL_1MIN,),
+            ),
+        )
+    )
+
+
+class FakeClock:
+    """The repo idiom — an injected aware-``datetime`` clock, no ``freezegun``."""
+
+    def __init__(self, start: datetime = STARTED_AT) -> None:
+        self.now = start
+
+    def __call__(self) -> datetime:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now = self.now + timedelta(seconds=seconds)
+
+
+class SpyRecord:
+    """A ``SessionRecordPort`` that records *when* each call happened.
+
+    One spy, not two mocks: AC #10's guarantee is an **order** —
+    ``mark_stopped`` after ``shutdown`` — and two independent mocks cannot
+    express an order between them.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+        self.activity: list[tuple[datetime, datetime | None]] = []
+        self.failures: list[str] = []
+        #: Story 3.7's fourth port method.
+        self.rejections: list[dict] = []
+        self.raises: BaseException | None = None
+
+    def record_activity(self, *, at: datetime, bar_seen_at: datetime | None = None) -> None:
+        self.calls.append("record_activity")
+        self.activity.append((at, bar_seen_at))
+        if self.raises is not None:
+            raise self.raises
+
+    def mark_stopped(self) -> None:
+        self.calls.append("mark_stopped")
+
+    def record_strategy_failure(
+        self,
+        *,
+        strategy_id: str,
+        spec_strategy_id: str,
+        error_type: str,
+        handler: str,
+        at: datetime,
+        detail: str | None = None,
+        all_failed: bool = False,
+    ) -> None:
+        """Story 2.7's third port method. Duck-typed here, but kept complete so
+        the double stays an honest `SessionRecordPort` rather than one that
+        happens to satisfy the calls this file makes today.
+        """
+        self.calls.append("record_strategy_failure")
+        self.failures.append(spec_strategy_id)
+
+    def record_order_rejections(
+        self,
+        *,
+        rejected: int,
+        denied: int,
+        consecutive: int,
+        first_at: datetime,
+        last_at: datetime,
+        last_kind: str,
+        last_client_order_id: str,
+        last_instrument_id: str,
+        last_strategy_id: str,
+        last_reason: str,
+        last_reconciliation: bool,
+    ) -> None:
+        """Story 3.7's fourth port method. Duck-typed here, but kept complete so
+        the double stays an honest ``SessionRecordPort`` rather than one that
+        happens to satisfy the calls this file makes today.
+        """
+        self.calls.append("record_order_rejections")
+        self.rejections.append({"rejected": rejected, "consecutive": consecutive})
+
+    def record_trading_withheld(
+        self,
+        *,
+        withheld_from: datetime,
+        withheld_until: datetime | None,
+        reason: str | None,
+        error_type: str,
+        failed_cycles: int,
+    ) -> None:
+        """Story 5.8's fifth port method, kept complete for the same reason."""
+        self.calls.append("record_trading_withheld")
+
+
+def _permitting_verifier(mode: GateMode = GateMode.PAPER):
+    async def _verify(node, settings, **kwargs) -> GateDecision:
+        return GateDecision(permitted=True, mode=mode)
+
+    return _verify
+
+
+def _refusing_verifier(reason=GateRefusalReason.REPORTED_ACCOUNT_NOT_PAPER):
+    async def _verify(node, settings, **kwargs) -> GateDecision:
+        decision = build_refusal(reason, "reported account is not paper")
+        assert decision.refusal is not None
+        raise GateRefusedError(decision.refusal)
+
+    return _verify
+
+
+@pytest.fixture
+def registered_accounts(monkeypatch):
+    """Put an account-naming client in the adapter's process-global cache."""
+
+    def _register(settings: IBKRSettings, accounts=(PAPER_ACCOUNT,)):
+        key = (settings.ibkr_host, settings.ibkr_port, settings.ibkr_live_client_id)
+        monkeypatch.setitem(IB_CLIENTS, key, TestIBAccountsClient(accounts))
+
+    return _register
+
+
+def _runner(node: TestLiveNode, *, settings=None, record=None, **overrides) -> LiveSessionRunner:
+    """Build a runner whose node factory returns ``node`` and records its kwargs."""
+    node.run_seconds_from_first_strategy = True  # Story 4.2: see the double's docstring
+    factory_calls: list[dict] = []
+
+    def _factory(settings_arg, **kwargs):
+        factory_calls.append({"settings": settings_arg, **kwargs})
+        return node
+
+    options = {
+        "session_id": SESSION_ID,
+        "spec": _spec(),
+        "record": record if record is not None else SpyRecord(),
+        "started_at": STARTED_AT,
+        "connect_timeout": 2.0,
+        "node_factory": _factory,
+        "account_verifier": _permitting_verifier(),
+        "broker_state_reader": flat_broker_state_reader,
+        "client_builder": lambda *a, **k: None,
+        "sleeper": _never_sleeps,
+    }
+    options.update(overrides)
+    runner = LiveSessionRunner(settings if settings is not None else _settings(), **options)
+    runner.factory_calls = factory_calls  # type: ignore[attr-defined]
+    return runner
+
+
+async def _never_sleeps(seconds: float) -> None:
+    """A sleeper that never returns, so the heartbeat never ticks in these tests."""
+    await asyncio.Event().wait()
+
+
+def _pairs(logs) -> list[tuple[str, str]]:
+    return [
+        (entry["phase"], entry["status"])
+        for entry in logs
+        if entry.get("phase") and entry.get("status")
+    ]
+
+
+class TestTheOrderedPhaseSequence:
+    """AC #2 — eight phases, this order, ``started`` then ``ok`` for each."""
+
+    def test_a_clean_start_logs_all_sixteen_records_in_sequence_order(self, registered_accounts):
+        """The real account verifier, so ``gate:account``'s own pair is real."""
+        settings = _settings()
+        registered_accounts(settings)
+        node = TestLiveNode(instrument_ids=[AAPL_INSTRUMENT], run_seconds=0.01)
+        runner = _runner(node, settings=settings, account_verifier=verify_connected_account)
+
+        with capture_logs() as logs:
+            runner.run()
+
+        expected = [(name, status) for name in PHASE_SEQUENCE for status in ("started", "ok")]
+        assert _pairs(logs) == expected
+
+    def test_the_phases_are_separately_named_and_separately_patchable_methods(self):
+        """A contract, not a style choice — the landmine test below needs it."""
+        for name in (
+            "_phase_gate_static",
+            "_phase_node_build",
+            "_phase_node_connect",
+            "_phase_gate_account",
+            "_phase_reconcile",
+            "_phase_warmup",
+            "_phase_subscribe",
+            "_phase_trading",
+        ):
+            assert callable(getattr(LiveSessionRunner, name))
+
+
+class TestAFailureStopsTheSequence:
+    """AC #2's second half: no later phase runs after a failure.
+
+    The landmine technique from ``tests/integration/core/test_epic1_ac_node.py``
+    — monkeypatch the later phases with raisers, then prove the landmines are
+    live by showing a clean run trips them.
+    """
+
+    LATER_PHASES = (
+        "_phase_node_build",
+        "_phase_node_connect",
+        "_phase_gate_account",
+        "_phase_reconcile",
+        "_phase_warmup",
+        "_phase_subscribe",
+        "_phase_trading",
+    )
+
+    @staticmethod
+    def _landmine(*args, **kwargs):
+        raise AssertionError("a later phase ran after a failure")
+
+    def test_a_gate_static_refusal_runs_no_later_phase(self, monkeypatch):
+        for name in self.LATER_PHASES:
+            monkeypatch.setattr(LiveSessionRunner, name, self._landmine)
+        node = TestLiveNode()
+        runner = _runner(node, settings=_settings(mode="live"))
+
+        with capture_logs() as logs:
+            with pytest.raises(GateRefusedError):
+                runner.run()
+
+        assert _pairs(logs) == [("gate:static", "started"), ("gate:static", "failed")]
+
+    def test_the_landmines_are_live(self, monkeypatch, registered_accounts):
+        """Without this, the test above would pass against a runner that never
+        reached any phase at all.
+        """
+        settings = _settings()
+        registered_accounts(settings)
+        for name in self.LATER_PHASES:
+            monkeypatch.setattr(LiveSessionRunner, name, self._landmine)
+        runner = _runner(TestLiveNode(), settings=settings)
+
+        with pytest.raises(AssertionError, match="a later phase ran"):
+            runner.run()
+
+    @pytest.mark.parametrize(
+        "failing_phase",
+        [
+            "_phase_node_build",
+            "_phase_node_connect",
+            # Story 4.2: the phase with a body now — its failure must stop the
+            # sequence exactly as every other phase's does (AC #1, #6).
+            "_phase_reconcile",
+            "_phase_subscribe",
+            "_phase_trading",
+        ],
+    )
+    def test_a_failure_in_any_phase_leaves_every_later_phase_unrun(
+        self, monkeypatch, registered_accounts, failing_phase
+    ):
+        settings = _settings()
+        registered_accounts(settings)
+        index = PHASE_SEQUENCE.index(
+            {
+                "_phase_node_build": "node:build",
+                "_phase_node_connect": "node:connect",
+                "_phase_reconcile": "reconcile",
+                "_phase_subscribe": "subscribe",
+                "_phase_trading": "trading",
+            }[failing_phase]
+        )
+        for name in self.LATER_PHASES[self.LATER_PHASES.index(failing_phase) + 1 :]:
+            monkeypatch.setattr(LiveSessionRunner, name, self._landmine)
+
+        def _boom(self_, *args, **kwargs):
+            raise RuntimeError("phase blew up")
+
+        monkeypatch.setattr(LiveSessionRunner, failing_phase, _boom)
+        # The real verifier (Story 4.2): `gate:account`'s own pair is only
+        # emitted by it, and it is the phase immediately before `reconcile`.
+        runner = _runner(
+            TestLiveNode(), settings=settings, account_verifier=verify_connected_account
+        )
+
+        with capture_logs() as logs:
+            with pytest.raises(RuntimeError, match="phase blew up"):
+                runner.run()
+
+        emitted = {name for name, _ in _pairs(logs)}
+        # The replaced method logs nothing at all — it *is* the phase — so what
+        # this proves is the AC's own words: no later phase runs.
+        for later in PHASE_SEQUENCE[index:]:
+            assert later not in emitted, f"{later} ran after {PHASE_SEQUENCE[index]} failed"
+        # And the phase immediately before it did complete, so the sequence
+        # genuinely reached the failure rather than stopping earlier.
+        assert (PHASE_SEQUENCE[index - 1], "ok") in _pairs(logs)
+
+
+class TestTheEpicFourPhases:
+    """Story 2.5's AC #3, as Epic 4 has filled the two slots.
+
+    Story 4.4 gave ``warmup`` a body, and deliberately one that still makes no
+    call on the node: it only arms the runner's warm-up watch. The warming
+    happens in each strategy's ``on_start`` during ``trading``
+    (``test_session_runner_warmup.py``).
+
+    **Story 4.2 changed this class deliberately** (it was
+    ``TestTheEpicFourPlaceholders``): ``reconcile`` is no longer a placeholder.
+    Its "touches no node" assertion is replaced by an exact read surface — the
+    exec engine's settings and the cache, plus the broker read — and by the
+    proof that a clean cache writes nothing. The placeholder test called the
+    now-async phase without awaiting it, which would have passed vacuously.
+    """
+
+    def test_they_log_started_then_ok(self, registered_accounts):
+        settings = _settings()
+        registered_accounts(settings)
+        node = TestLiveNode(run_seconds=0.01)
+        runner = _runner(node, settings=settings)
+
+        with capture_logs() as logs:
+            runner.run()
+
+        pairs = _pairs(logs)
+        assert ("reconcile", "started") in pairs and ("reconcile", "ok") in pairs
+        assert ("warmup", "started") in pairs and ("warmup", "ok") in pairs
+
+    def test_warmup_makes_no_call_on_the_node(self, registered_accounts):
+        """Every attribute access on the node is recorded (strengthened at the
+        2026-08-21 review), so a warm-up phase that touched *anything* on the
+        node goes red, not only a sampled set of surfaces."""
+        settings = _settings()
+        registered_accounts(settings)
+        node = TestLiveNode(run_seconds=0.01)
+        accesses: list[str] = []
+
+        class _RecordingNode:
+            def __getattr__(self, name):
+                accesses.append(name)
+                return getattr(node, name)
+
+        runner = _runner(node, settings=settings)
+        runner._node = _RecordingNode()  # the state `node:connect` left behind
+
+        _ = runner._node.trader  # prove the spy is live before trusting it
+        assert accesses == ["trader"]
+        accesses.clear()
+
+        runner._phase_warmup()
+
+        assert accesses == []
+
+    def test_reconcile_reads_only_the_engine_and_the_cache_and_writes_nothing_when_clean(
+        self, registered_accounts
+    ):
+        """Story 4.2. The phase touches the node's ``kernel`` (the exec engine's
+        broker-ward settings, D-B) and ``cache`` (open positions and orders),
+        and hands the node to the broker read — never the ``trader``, so no
+        strategy or actor can be registered from here. A clean cache against a
+        flat broker makes no ``reconcile_execution_report`` call at all.
+
+        Story 4.3 (D-F): the phase then grants trading permission through the
+        monitor ``node:connect`` built — a monitor and connection-reader call,
+        still nothing more on the node."""
+        settings = _settings()
+        registered_accounts(settings)
+        node = TestLiveNode(run_seconds=0.01)
+        accesses: list[str] = []
+        read_by: list[object] = []
+
+        class _RecordingNode:
+            def __getattr__(self, name):
+                accesses.append(name)
+                return getattr(node, name)
+
+        async def _reader(node_arg, *, log):
+            read_by.append(node_arg)
+            return await flat_broker_state_reader(node_arg, log=log)
+
+        runner = _runner(
+            node,
+            settings=settings,
+            broker_state_reader=_reader,
+            connection_reader=lambda _settings: ConnectionStatus(connected=True, detail="up"),
+        )
+        runner._node = _RecordingNode()
+        runner._monitor = ConnectionMonitor(
+            session_id=str(SESSION_ID)
+        )  # as `node:connect` leaves it
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(runner._phase_reconcile())
+        finally:
+            loop.close()
+
+        assert set(accesses) == {"kernel", "cache"}
+        assert read_by == [runner._node]
+        assert node.kernel.exec_engine.reconcile_reports == []
+        assert runner._reconciliation is not None
+        assert runner._monitor.state is ConnectionState.CONNECTED
+
+    def test_neither_emits_ar41s_warmup_completed(self, registered_accounts):
+        """Nothing warmed, so claiming it did would be a false record.
+
+        Still true after Story 4.4: this double's ``start_strategy`` never runs
+        ``on_start``, so no history is requested and the runner logs
+        ``warmup.skipped`` — never a ``warmup.completed`` it cannot back.
+        """
+        settings = _settings()
+        registered_accounts(settings)
+        runner = _runner(TestLiveNode(run_seconds=0.01), settings=settings)
+
+        with capture_logs() as logs:
+            runner.run()
+
+        assert not [entry for entry in logs if entry["event"] == "warmup.completed"]
+
+
+def _open_position(instrument_id: str, strategy_id: str, quantity: str) -> SimpleNamespace:
+    """An open cache position as ``live_startup_reconcile.cached_positions`` reads it."""
+    return SimpleNamespace(
+        instrument_id=instrument_id,
+        strategy_id=strategy_id,
+        signed_decimal_qty=lambda: Decimal(quantity),
+    )
+
+
+def _reader_raising(error: BaseException):
+    async def _read(node, *, log):
+        raise error
+
+    return _read
+
+
+def _refusal_case(name: str, node: TestLiveNode) -> None:
+    """Arrange ``node`` so the ``reconcile`` phase refuses for ``name``."""
+    engine, cache = node.kernel.exec_engine, node.cache
+    if name == "disabled":
+        engine.reconciliation = False
+    elif name == "contradicted":
+        cache.open_positions = [_open_position("NVDA.NASDAQ", "SMACrossover-000", "22")]
+    else:
+        cache.open_positions = [_open_position(AAPL_INSTRUMENT, "EXTERNAL", "4")]
+        if name in ("refused", "remains"):
+            cache.instruments_by_id = {InstrumentId.from_str(AAPL_INSTRUMENT): AAPL_EQUITY}
+        engine.reconcile_returns = name != "refused"
+
+
+class TestReconcileBeforeAnyStrategyTrades:
+    """Story 4.2, AC #1, #4, #6 — through ``runner.run()``, not the helper."""
+
+    LATER = ("warmup", "subscribe", "trading")
+
+    def test_it_runs_after_the_account_gate_with_nothing_registered(self, registered_accounts):
+        """AC #1: at the instant the broker is read, ``gate:account`` has
+        passed, no later phase has started, and the trader holds no strategy
+        and no actor — then, and only then, trading goes ahead."""
+        settings = _settings()
+        registered_accounts(settings)
+        node = TestLiveNode(run_seconds=0.01)
+        seen: dict[str, list] = {}
+
+        with capture_logs() as logs:
+
+            async def _reader(node_arg, *, log):
+                seen["pairs"] = _pairs(list(logs))
+                seen["registered"] = [
+                    *node.trader.added_strategies,
+                    *node.trader.started_strategies,
+                    *node.trader.added_actors,
+                ]
+                return await flat_broker_state_reader(node_arg, log=log)
+
+            _runner(
+                node,
+                settings=settings,
+                account_verifier=verify_connected_account,
+                broker_state_reader=_reader,
+            ).run()
+
+        assert seen["pairs"][-1] == ("reconcile", "started")
+        assert ("gate:account", "ok") in seen["pairs"]
+        assert not {name for name, _ in seen["pairs"]} & set(self.LATER)
+        assert seen["registered"] == []
+        assert node.trader.added_strategies, "non-vacuity: trading did register a strategy later"
+        assert [e["event"] for e in logs if e["event"] == RECONCILE_OK_EVENT] == [
+            RECONCILE_OK_EVENT
+        ]
+
+    @pytest.mark.parametrize(
+        ("case", "reason"),
+        [
+            ("disabled", ReconciliationFailure.FRAMEWORK_RECONCILIATION_DISABLED),
+            ("contradicted", ReconciliationFailure.STRATEGY_POSITION_CONTRADICTED),
+            ("unresolvable", ReconciliationFailure.UNRESOLVABLE_DISCREPANCY),
+            ("refused", ReconciliationFailure.RESOLUTION_REFUSED),
+            ("remains", ReconciliationFailure.DISCREPANCY_REMAINS),
+        ],
+    )
+    def test_each_refusal_stops_the_sequence_and_starts_nothing(
+        self, registered_accounts, case, reason
+    ):
+        """AC #6 for every reason the phase itself refuses: ``(reconcile,
+        failed)`` is the last phase record, the typed error propagates with
+        exit 1, no strategy is ever registered, and the row is released."""
+        settings = _settings()
+        registered_accounts(settings)
+        node = TestLiveNode(run_seconds=0.01)
+        _refusal_case(case, node)
+        record = SpyRecord()
+        runner = _runner(node, settings=settings, record=record)
+
+        with capture_logs() as logs:
+            with pytest.raises(ReconciliationFailedError) as caught:
+                runner.run()
+
+        assert caught.value.reason is reason
+        assert _pairs(logs)[-1] == ("reconcile", "failed")
+        assert not {name for name, _ in _pairs(logs)} & set(self.LATER)
+        assert node.trader.added_strategies == [] and node.trader.added_actors == []
+        assert record.calls[-1] == "mark_stopped"
+        assert EXIT_CODES[classify_failure(caught.value)] == 1
+
+    def test_a_broker_that_cannot_be_read_fails_the_phase_with_exit_4(self, registered_accounts):
+        settings = _settings()
+        registered_accounts(settings)
+        node = TestLiveNode(run_seconds=0.01)
+        failure = BrokerStateUnavailableError(BrokerStateFailure.TIMEOUT, "IBKR did not answer")
+        record = SpyRecord()
+        runner = _runner(
+            node, settings=settings, record=record, broker_state_reader=_reader_raising(failure)
+        )
+
+        with capture_logs() as logs:
+            with pytest.raises(BrokerStateUnavailableError) as caught:
+                runner.run()
+
+        assert caught.value is failure
+        assert _pairs(logs)[-1] == ("reconcile", "failed")
+        assert node.trader.added_strategies == []
+        assert record.calls[-1] == "mark_stopped"
+        assert EXIT_CODES[classify_failure(caught.value)] == 4
+
+    def test_an_adapter_that_no_longer_reads_fails_the_phase_with_exit_1(self, registered_accounts):
+        """AC #6, the reader's other failure: ``BrokerStateAdapterError`` is a
+        ``BrokerStateUnavailableError`` subclass, but adapter drift is a code
+        problem, so it must classify as exit 1 — never 4, which would send the
+        operator to restart a healthy Gateway."""
+        settings = _settings()
+        registered_accounts(settings)
+        node = TestLiveNode(run_seconds=0.01)
+        failure = BrokerStateAdapterError("the IB exec client is not registered on this node")
+        record = SpyRecord()
+        runner = _runner(
+            node, settings=settings, record=record, broker_state_reader=_reader_raising(failure)
+        )
+
+        with capture_logs() as logs:
+            with pytest.raises(BrokerStateAdapterError) as caught:
+                runner.run()
+
+        assert caught.value is failure
+        assert _pairs(logs)[-1] == ("reconcile", "failed")
+        assert not {name for name, _ in _pairs(logs)} & set(self.LATER)
+        assert node.trader.added_strategies == [] and node.trader.added_actors == []
+        assert record.calls[-1] == "mark_stopped"
+        assert EXIT_CODES[classify_failure(caught.value)] == 1
+
+    def test_trading_refuses_without_a_reconciliation_result(
+        self, monkeypatch, registered_accounts
+    ):
+        """AC #4 / D-I: a ``reconcile`` that ran but produced nothing — the
+        shape a later edit that no-ops or swallows it would leave — cannot
+        reach a strategy. The latch refuses before materialisation."""
+
+        async def _no_op(self_):
+            return None
+
+        monkeypatch.setattr(LiveSessionRunner, "_phase_reconcile", _no_op)
+        settings = _settings()
+        registered_accounts(settings)
+        node = TestLiveNode(run_seconds=0.01)
+        record = SpyRecord()
+
+        with capture_logs() as logs:
+            with pytest.raises(ReconciliationFailedError) as caught:
+                _runner(node, settings=settings, record=record).run()
+
+        assert caught.value.reason is ReconciliationFailure.NOT_RECONCILED
+        assert _pairs(logs)[-1] == ("trading", "failed")
+        assert node.trader.added_strategies == []
+        assert record.calls[-1] == "mark_stopped"
+        assert EXIT_CODES[classify_failure(caught.value)] == 1
+
+    def test_a_stop_during_the_broker_read_is_a_stop_not_a_failure(self, registered_accounts):
+        """A Ctrl-C stops the node underneath the read, which then fails; the
+        runner's existing demotion reports a stop, exit 0, never a broker
+        fault — and nothing was registered."""
+        settings = _settings()
+        registered_accounts(settings)
+        node = TestLiveNode(run_seconds=5.0)
+        holder: dict[str, LiveSessionRunner] = {}
+
+        async def _reader(node_arg, *, log):
+            holder["runner"]._signals._handle(signal.SIGINT, None)
+            raise BrokerStateUnavailableError(BrokerStateFailure.CONNECTION_LOST, "stopped")
+
+        runner = _runner(node, settings=settings, broker_state_reader=_reader)
+        holder["runner"] = runner
+
+        with capture_logs() as logs:
+            runner.run()
+
+        assert runner.stopped_by_signal
+        assert any(e["event"] == "session.stop_superseded_failure" for e in logs)
+        assert node.trader.added_strategies == []
+
+    def test_the_snapshot_is_taken_before_the_node_runs(self, registered_accounts):
+        """D-F: what the cache held before Nautilus's own pass is what the
+        phase compares against, so a correction made inside ``node:connect``
+        is named rather than silent."""
+        settings = _settings()
+        registered_accounts(settings)
+        node = TestLiveNode(run_seconds=0.01)
+        node.cache.open_positions = [_open_position(AAPL_INSTRUMENT, "EXTERNAL", "4")]
+        original_run = node.run_async
+
+        async def _run_async():
+            node.cache.open_positions = []  # the framework's pass, correcting it
+            await original_run()
+
+        node.run_async = _run_async  # type: ignore[method-assign]
+        runner = _runner(node, settings=settings)
+
+        with capture_logs() as logs:
+            runner.run()
+
+        assert runner._local_state == LocalSnapshot(
+            positions=(
+                CachedPosition(
+                    instrument_id=AAPL_INSTRUMENT, strategy_id="EXTERNAL", quantity=Decimal(4)
+                ),
+            )
+        )
+        # Code review: an empty cash snapshot must be "none recorded", not a
+        # contained failure of the cash read.
+        assert not [e for e in logs if e["event"] == "reconcile.local_snapshot_failed"]
+        framework = [
+            e
+            for e in logs
+            if e["event"] == RECONCILE_DISCREPANCY_EVENT and e["resolution"] == "framework"
+        ]
+        assert [e["instrument_id"] for e in framework] == [AAPL_INSTRUMENT]
+
+    def test_cash_that_moved_while_stopped_is_named_before_the_phase_reports(
+        self, registered_accounts
+    ):
+        """Story 4.7, D-B: the previous run's cash is captured with the
+        positions, before the exec client's first push overwrites the key inside
+        ``node:connect`` (measured 1.3); the phase names the dividend and still
+        reports ``ok`` — the record never blocks it."""
+        settings = _settings()
+        registered_accounts(settings)
+        node = TestLiveNode(run_seconds=0.01)
+        key = f"accountSummary:{PAPER_ACCOUNT}"
+        node.cache.general = {key: json.dumps({"USD": {"TotalCashValue": 99876.55}}).encode()}
+        original_run = node.run_async
+
+        async def _run_async():
+            # The exec client's first push, overwriting the restored summary.
+            node.cache.general[key] = json.dumps({"USD": {"TotalCashValue": 100000}}).encode()
+            await original_run()
+
+        node.run_async = _run_async  # type: ignore[method-assign]
+        runner = _runner(node, settings=settings)
+
+        with capture_logs() as logs:
+            runner.run()
+
+        (record,) = [e for e in logs if e["event"] == "reconcile.cash_changed"]
+        assert (record["before"], record["after"], record["difference"]) == (
+            "99876.55",
+            "100000",
+            "123.45",
+        )
+        names = [e["event"] for e in logs]
+        assert names.index("reconcile.cash_changed") < names.index("reconcile.ok")
+        assert ("reconcile", "ok") in _pairs(logs)
+
+
+class TestNothingIsRegisteredWhenTheAccountGateDecides:
+    """AC #8 — the ordering is a property of the control flow, not of a poll."""
+
+    def test_no_strategy_is_registered_when_the_account_gate_decides(self, registered_accounts):
+        settings = _settings()
+        registered_accounts(settings)
+        node = TestLiveNode(run_seconds=0.01)
+        observed: dict = {}
+
+        async def _verify(node_arg, settings_arg, **kwargs):
+            observed["strategies"] = list(node_arg.trader.strategies())
+            observed["actors"] = list(node_arg.trader.actors())
+            return GateDecision(permitted=True, mode=GateMode.PAPER)
+
+        runner = _runner(node, settings=settings, account_verifier=_verify)
+
+        runner.run()
+
+        assert observed["strategies"] == []
+        assert observed["actors"] == []
+
+    def test_the_real_gate_would_refuse_a_strategy_started_before_it(self, registered_accounts):
+        """The guard is non-vacuous for the first time: Epic 1 configured zero
+        strategies permanently, so this branch was never reachable.
+        """
+        settings = _settings()
+        registered_accounts(settings)
+        node = TestLiveNode(run_seconds=0.01)
+        node.trader.strategy_state_override = {"SMACrossover-000": "RUNNING"}
+        runner = _runner(node, settings=settings, account_verifier=verify_connected_account)
+
+        with pytest.raises(GateRefusedError) as refused:
+            runner.run()
+
+        assert (
+            refused.value.refusal.reason is GateRefusalReason.STRATEGY_STARTED_BEFORE_ACCOUNT_GATE
+        )
+
+    def test_the_node_is_built_with_a_controller(self, registered_accounts):
+        """Without one, ``add_strategy``/``add_actor`` silently return on a
+        running trader and the session trades nothing for a whole day.
+        """
+        from src.core.live_session_controller import build_session_controller_config
+
+        settings = _settings()
+        registered_accounts(settings)
+        runner = _runner(TestLiveNode(run_seconds=0.01), settings=settings)
+
+        runner.run()
+
+        assert runner.factory_calls[0]["controller"] == build_session_controller_config()
+
+    def test_the_node_is_built_with_no_declarative_bar_observer(self, registered_accounts):
+        """The observer is registered at ``subscribe``, after the gate — which
+        is what makes "zero non-controller actors at the gate" true.
+        """
+        settings = _settings()
+        registered_accounts(settings)
+        runner = _runner(TestLiveNode(run_seconds=0.01), settings=settings)
+
+        runner.run()
+
+        assert runner.factory_calls[0]["bar_observer"] is None
+
+    def test_the_runner_tracks_has_started_as_its_own_fact(self, registered_accounts):
+        """Epic 1 retro Action Item #5: ``READY`` is reachable after a reset, so
+        no ``ComponentState`` name can answer "has this trader started?".
+        """
+        settings = _settings()
+        registered_accounts(settings)
+        runner = _runner(TestLiveNode(run_seconds=0.01), settings=settings)
+
+        assert runner.trader_started is False
+        runner.run()
+        assert runner.trader_started is True
+
+    def test_no_component_state_name_appears_in_the_runners_source(self):
+        import inspect
+
+        from src.core import live_session_runner
+
+        source = inspect.getsource(live_session_runner)
+        for state in ("PRE_INITIALIZED", "STARTING", "RUNNING", "RESETTING", "DEGRADED"):
+            assert f'"{state}"' not in source
+
+
+class TestTheConnectWaitIsBounded:
+    """AC #10 — a failure must land inside a bounded wall-clock budget.
+
+    A test asserting only ``pytest.raises(BrokerUnreachableError)`` passes
+    against an implementation that takes four minutes.
+    """
+
+    def test_a_node_that_never_connects_gives_up_inside_the_budget(self, registered_accounts):
+        settings = _settings()
+        registered_accounts(settings)
+        node = TestLiveNode(connects_after=-1)
+        runner = _runner(node, settings=settings, connect_timeout=0.2)
+
+        started = time.monotonic()
+        with pytest.raises(BrokerUnreachableError):
+            runner.run()
+        elapsed = time.monotonic() - started
+
+        assert elapsed < 3.0, f"the connect wait took {elapsed:.1f}s against a 0.2s budget"
+
+    def test_a_slow_build_is_spent_from_the_same_budget(self, registered_accounts):
+        """The deadline is taken **before** ``build()``. An unreachable gateway
+        took **115 seconds** to say so when the two budgets were additive —
+        measured live in Story 1.7.
+        """
+        settings = _settings()
+        registered_accounts(settings)
+        node = TestLiveNode(connects_after=-1, build_delay_seconds=0.4)
+        runner = _runner(node, settings=settings, connect_timeout=0.3)
+
+        started = time.monotonic()
+        with pytest.raises(BrokerUnreachableError):
+            runner.run()
+        elapsed = time.monotonic() - started
+
+        assert elapsed < 2.0, f"build and connect budgets were additive ({elapsed:.1f}s)"
+
+    def test_a_trader_that_never_starts_is_a_connect_failure(self, registered_accounts):
+        """Reconciliation failure and portfolio-init timeout both end
+        ``start_async`` early **without** completing the run task, so the
+        deadline is the only signal — and ``check_connected()`` is already True.
+        """
+        settings = _settings()
+        registered_accounts(settings)
+        node = TestLiveNode(connects_after=0, trader_starts=False)
+        runner = _runner(node, settings=settings, connect_timeout=0.2)
+
+        with pytest.raises(BrokerUnreachableError) as unreachable:
+            runner.run()
+
+        message = str(unreachable.value)
+        assert "reconcil" in message.lower()
+        assert "portfolio" in message.lower()
+
+    def test_the_deadline_message_does_not_blame_the_gateway_alone(self, registered_accounts):
+        """``live_check_node.await_connected``'s *"is IB Gateway or TWS
+        running?"* would send an operator to restart a healthy gateway for a
+        reconciliation problem.
+        """
+        settings = _settings()
+        registered_accounts(settings)
+        runner = _runner(TestLiveNode(connects_after=-1), settings=settings, connect_timeout=0.2)
+
+        with pytest.raises(BrokerUnreachableError) as unreachable:
+            runner.run()
+
+        assert "is IB Gateway or TWS running" not in str(unreachable.value)
+
+    def test_a_node_that_dies_during_connect_is_surfaced(self, registered_accounts):
+        settings = _settings()
+        registered_accounts(settings)
+        node = TestLiveNode(connects_after=-1, run_forever=False)
+        runner = _runner(node, settings=settings, connect_timeout=5.0)
+
+        started = time.monotonic()
+        with pytest.raises(BrokerUnreachableError, match="stopped running"):
+            runner.run()
+
+        assert time.monotonic() - started < 2.0
+
+
+class TestFailuresPropagateAndTheNodeGoesDownFirst:
+    """AC #10 — and ``mark_stopped`` comes **after** teardown, never before."""
+
+    @pytest.mark.parametrize(
+        "exception",
+        [
+            RedisUnreachableError("redis is down"),
+            BrokerUnreachableError("gateway is down"),
+        ],
+    )
+    def test_a_node_factory_failure_propagates_unchanged(self, registered_accounts, exception):
+        settings = _settings()
+        registered_accounts(settings)
+
+        def _factory(*args, **kwargs):
+            raise exception
+
+        runner = _runner(TestLiveNode(), settings=settings, node_factory=_factory)
+
+        with pytest.raises(type(exception)):
+            runner.run()
+
+    def test_a_gate_account_refusal_propagates_and_the_node_is_torn_down(self, registered_accounts):
+        settings = _settings()
+        registered_accounts(settings)
+        node = TestLiveNode()
+        runner = _runner(node, settings=settings, account_verifier=_refusing_verifier())
+
+        with pytest.raises(GateRefusedError):
+            runner.run()
+
+        assert node.disposed is True
+
+    @pytest.mark.parametrize(
+        "exception",
+        [
+            RedisUnreachableError("redis is down"),
+            BrokerUnreachableError("gateway is down"),
+        ],
+    )
+    def test_mark_stopped_is_called_exactly_once_and_after_shutdown(
+        self, registered_accounts, exception
+    ):
+        settings = _settings()
+        registered_accounts(settings)
+        record = SpyRecord()
+        node = TestLiveNode()
+        disposal_marker: list[str] = []
+        original_dispose = node.dispose
+
+        def _dispose():
+            record.calls.append("dispose")
+            disposal_marker.append("dispose")
+            original_dispose()
+
+        node.dispose = _dispose  # type: ignore[method-assign]
+
+        def _verify_raises(*args, **kwargs):
+            raise exception
+
+        runner = _runner(node, settings=settings, record=record, account_verifier=_verify_raises)
+
+        with pytest.raises(type(exception)):
+            runner.run()
+
+        assert record.calls.count("mark_stopped") == 1
+        assert record.calls.index("dispose") < record.calls.index("mark_stopped")
+
+    def test_a_gate_refusal_before_any_node_exists_still_marks_stopped(self):
+        """AC #10: *"leaves the session in a state a later start can accept"* —
+        including when the failure happens before a node was ever built.
+        """
+        record = SpyRecord()
+        runner = _runner(TestLiveNode(), settings=_settings(mode="live"), record=record)
+
+        with pytest.raises(GateRefusedError):
+            runner.run()
+
+        assert record.calls == ["mark_stopped"]
+
+
+class TestNodeConfiguration:
+    """AC #9 and the session's own budgets."""
+
+    def test_the_runner_passes_its_own_logging_config_when_none_is_injected(
+        self, registered_accounts
+    ):
+        settings = _settings()
+        registered_accounts(settings)
+        runner = _runner(TestLiveNode(run_seconds=0.01), settings=settings)
+
+        runner.run()
+
+        assert runner.factory_calls[0]["logging"] is SESSION_LOGGING
+
+    def test_an_injected_logging_config_wins(self, registered_accounts):
+        settings = _settings()
+        registered_accounts(settings)
+        injected = LoggingConfig(log_level="DEBUG")
+        runner = _runner(TestLiveNode(run_seconds=0.01), settings=settings, logging=injected)
+
+        runner.run()
+
+        assert runner.factory_calls[0]["logging"] is injected
+
+    @pytest.mark.parametrize(
+        ("field", "expected"),
+        [
+            ("log_level", "INFO"),
+            ("log_level_file", None),
+            ("log_colors", True),
+            ("use_pyo3", False),
+        ],
+    )
+    def test_the_default_logging_config_is_explicit_field_by_field(self, field, expected):
+        """Without this, AC #9's ``logging`` half has no values to assert and
+        ships as the ``None`` it forbids. ``log_level_file=None`` means **no
+        Nautilus file sink**: this repo's file logging is structlog's
+        (``logs/ntrader.log``), and a second Rust-side writer would duplicate
+        every line.
+        """
+        assert getattr(SESSION_LOGGING, field) == expected
+
+    def test_bypass_logging_stays_false(self):
+        """``kernel.py:253-257`` raises ``InvalidConfiguration`` for ``True`` in
+        a LIVE environment — it is not a way to silence the node.
+        """
+        assert SESSION_LOGGING.bypass_logging is False
+
+    def test_the_session_connect_budget_exceeds_nautilus_own_three_waits(self):
+        """``node:connect`` now waits for a post-condition of all three."""
+        from src.core import live_node_builder
+
+        assert DEFAULT_SESSION_CONNECT_TIMEOUT_SECONDS > (
+            live_node_builder.NODE_TIMEOUT_CONNECTION
+            + live_node_builder.NODE_TIMEOUT_RECONCILIATION
+            + live_node_builder.NODE_TIMEOUT_PORTFOLIO
+        )
+
+    def test_the_session_connect_budget_is_not_the_checks(self):
+        """A node that connects in 40s and reconciles in 25s would be called
+        unreachable on a healthy gateway if the two shared a number.
+        """
+        from src.cli.commands.live import DEFAULT_CONNECT_TIMEOUT_SECONDS
+
+        assert DEFAULT_SESSION_CONNECT_TIMEOUT_SECONDS != DEFAULT_CONNECT_TIMEOUT_SECONDS
+
+    def test_the_session_retry_budget_outlasts_a_gateway_restart(self, registered_accounts):
+        """A *check* deliberately uses one attempt; a 6.5-hour session should
+        not be defeated by a gateway that is mid-restart when it starts.
+        """
+        from src.core.live_check_node import BUILD_CONNECTION_ATTEMPTS
+
+        assert int(SESSION_CONNECTION_ATTEMPTS) > int(BUILD_CONNECTION_ATTEMPTS)
+
+    def test_the_retry_budget_reaches_build_clients(self, registered_accounts):
+        settings = _settings()
+        registered_accounts(settings)
+        seen: list[dict] = []
+        runner = _runner(
+            TestLiveNode(run_seconds=0.01),
+            settings=settings,
+            client_builder=lambda node, s, **kwargs: seen.append(kwargs),
+        )
+
+        runner.run()
+
+        assert seen[0]["max_connection_attempts"] == SESSION_CONNECTION_ATTEMPTS
+
+    def test_the_trader_id_is_derived_from_the_session_id(self, registered_accounts):
+        from src.core.live_trader_id import derive_trader_id
+
+        settings = _settings()
+        registered_accounts(settings)
+        runner = _runner(TestLiveNode(run_seconds=0.01), settings=settings)
+
+        runner.run()
+
+        assert runner.factory_calls[0]["trader_id"] == derive_trader_id(SESSION_ID)
+
+    def test_the_runner_never_declares_cli_flags(self, registered_accounts):
+        """``GateFlags()`` is the gate's safe default; a session declares nothing."""
+        settings = _settings()
+        registered_accounts(settings)
+        runner = _runner(TestLiveNode(run_seconds=0.01), settings=settings)
+
+        runner.run()
+
+        assert "cli_flags" not in runner.factory_calls[0]
+
+
+class TestTheRunnerOwnsItsLoop:
+    """*Judgment call #1*: not ``asyncio.run``. ``TradingNode.dispose()`` calls
+    ``loop.stop()`` whenever it finds the loop running, which is fatal from a
+    coroutine executing on that loop — Story 1.3 lost a live run to exactly that.
+    """
+
+    def test_run_is_synchronous(self):
+        import inspect
+
+        assert not inspect.iscoroutinefunction(LiveSessionRunner.run)
+
+    def test_the_previous_event_loop_is_restored(self, registered_accounts):
+        settings = _settings()
+        registered_accounts(settings)
+        previous = asyncio.new_event_loop()
+        asyncio.set_event_loop(previous)
+        try:
+            _runner(TestLiveNode(run_seconds=0.01), settings=settings).run()
+            assert asyncio.get_event_loop_policy().get_event_loop() is previous
+        finally:
+            asyncio.set_event_loop(None)
+            previous.close()
+
+    def test_the_runners_own_loop_is_closed_afterwards(self, registered_accounts):
+        settings = _settings()
+        registered_accounts(settings)
+        node = TestLiveNode(run_seconds=0.01)
+        runner = _runner(node, settings=settings)
+
+        runner.run()
+
+        assert runner.factory_calls[0]["loop"].is_closed()
+
+    def test_the_module_never_calls_asyncio_run(self):
+        import inspect
+
+        from src.core import live_session_runner
+
+        assert "asyncio.run(" not in inspect.getsource(live_session_runner)
+
+
+class TestSubscribeAndTradingRegisterRealThings:
+    """Task 5 — the two phases that put components on a running trader."""
+
+    def test_subscribe_registers_a_bar_observer_built_from_the_specs_bar_types(
+        self, registered_accounts
+    ):
+        from src.core.live_bar_observer import LiveBarObserver
+
+        settings = _settings()
+        registered_accounts(settings)
+        node = TestLiveNode(run_seconds=0.01)
+        runner = _runner(node, settings=settings)
+
+        runner.run()
+
+        assert len(node.trader.added_actors) == 1
+        observer = node.trader.added_actors[0]
+        assert isinstance(observer, LiveBarObserver)
+        assert node.trader.started_actors == [observer.id]
+
+    def test_the_observer_config_comes_from_build_bar_observer_config(self, registered_accounts):
+        """So the 45 req/s pacing discipline is sourced once (NFR15)."""
+        settings = _settings()
+        registered_accounts(settings)
+        node = TestLiveNode(run_seconds=0.01)
+
+        _runner(node, settings=settings).run()
+
+        observer = node.trader.added_actors[0]
+        assert observer.config.requests_per_second == settings.ibkr_rate_limit
+        assert observer.config.bar_types == (AAPL_1MIN,)
+
+    def test_subscribe_watches_the_bar_topic_on_the_message_bus(self, registered_accounts):
+        """Extended by Story 3.2, Task 5.1: the order path adds its own bar
+        subscription (latency anchoring) and an order-events subscription,
+        both alongside — never instead of — the steady state's original one.
+        Extended again by Story 3.7: the rejection tally is the **third**
+        independent subscriber on ``events.order*``, beside the observer's own
+        handler, so that topic now appears twice. An exact list, so a lost
+        subscription is as visible as a wrong one.
+        """
+        settings = _settings()
+        registered_accounts(settings)
+        node = TestLiveNode(run_seconds=0.01)
+
+        runner = _runner(node, settings=settings)
+        runner.run()
+
+        topics = [topic for topic, _ in node.trader.subscriptions]
+        assert topics == [
+            "data.bars.*",
+            "data.bars.*",
+            "events.order*",
+            "events.order*",
+            "events.position*",
+        ]
+        assert runner._order_observer is not None
+        assert runner._rejection_tally is not None
+        assert runner._trade_recorder is not None
+        handlers = [handler for _, handler in node.trader.subscriptions]
+        assert handlers[0] == runner._steady_state.note_bar
+        assert handlers[1] == runner._order_observer.note_bar
+        assert handlers[2] == runner._order_observer.handle_order_event
+        assert handlers[3] == runner._rejection_tally.handle_order_event
+        assert handlers[4] == runner._trade_recorder.handle_position_event
+
+    def test_note_bar_is_subscribed_before_any_strategy_is_added(self, registered_accounts):
+        """Pre-verified finding #12's ordering, pinned (review fix, 2026-08-23).
+
+        ``last_bar_at`` keeps advancing even when every strategy is dead
+        *because* the runner's ``note_bar`` subscribes at the ``subscribe``
+        phase — before any strategy subscribes at ``trading``, and the bus
+        dispatches equal-priority subscribers in subscription order. The named
+        mutation is moving the ``subscribe`` call into ``_phase_trading`` after
+        ``add_strategy``; this interleaved timeline goes red on exactly that.
+        The bus-side half (dispatch order == subscription order) is pinned
+        against a real ``MessageBus`` in the test below.
+        """
+        settings = _settings()
+        registered_accounts(settings)
+        node = TestLiveNode(run_seconds=0.01)
+        timeline: list[str] = []
+        trader = node.trader
+        original_subscribe, original_add = trader.subscribe, trader.add_strategy
+        trader.subscribe = lambda topic, handler: (
+            timeline.append("subscribe"),
+            original_subscribe(topic, handler),
+        )[-1]
+        trader.add_strategy = lambda strategy: (
+            timeline.append("add_strategy"),
+            original_add(strategy),
+        )[-1]
+
+        _runner(node, settings=settings).run()
+
+        assert "subscribe" in timeline and "add_strategy" in timeline
+        assert timeline.index("subscribe") < timeline.index("add_strategy")
+        # Story 3.2 (extended by Stories 3.5 and 3.7): not just the FIRST
+        # subscribe — every subscribe call the runner makes (steady state's
+        # bar topic, the order path's bar topic, the order path's
+        # events.order* topic, the rejection tally's events.order* topic, and
+        # the trade recorder's events.position* topic) must land before the
+        # first `add_strategy`. A weaker check would miss a bug that put a new
+        # subscription AFTER trading started.
+        first_add_strategy = timeline.index("add_strategy")
+        assert timeline[:first_add_strategy].count("subscribe") == 5, timeline
+
+    def test_a_real_bus_dispatches_equal_priority_subscribers_in_subscription_order(self):
+        """The bus-side half of finding #12, against a real ``MessageBus``:
+        the measured dispatch order is ``['observer', 'note_bar',
+        <strategies in registration order>]`` because ``publish_c`` walks
+        equal-priority subscribers in the order they subscribed. A Nautilus
+        upgrade that changes this silently breaks AC #4's rationale — this is
+        where the repo finds out. (Constructing a ``MessageBus`` does not
+        initialise C logging — the same measured fact
+        ``test_session_runner_strategy_failure.py`` rests on.)
+        """
+        from nautilus_trader.common.component import MessageBus, TestClock
+        from nautilus_trader.model.identifiers import TraderId
+
+        msgbus = MessageBus(trader_id=TraderId("TESTER-000"), clock=TestClock())
+        order: list[str] = []
+        for name in ("observer", "note_bar", "sma_crossover", "momentum"):
+            msgbus.subscribe("data.bars.*", lambda _msg, name=name: order.append(name))
+
+        msgbus.publish("data.bars.AAPL", object())
+
+        assert order == ["observer", "note_bar", "sma_crossover", "momentum"]
+
+    def test_an_unqualified_contract_is_reported_at_warning(self, registered_accounts):
+        """IBKR *skips* a contract it will not qualify; nothing raises."""
+        settings = _settings()
+        registered_accounts(settings)
+        node = TestLiveNode(instrument_ids=[], run_seconds=0.01)
+
+        with capture_logs() as logs:
+            _runner(node, settings=settings).run()
+
+        shortfall = [entry for entry in logs if entry["event"] == "session.instruments"]
+        assert len(shortfall) == 1
+        assert shortfall[0]["log_level"] == "warning"
+        assert shortfall[0]["missing"] == [AAPL_INSTRUMENT]
+
+    def test_a_qualified_contract_produces_no_shortfall_warning(self, registered_accounts):
+        settings = _settings()
+        registered_accounts(settings)
+        node = TestLiveNode(instrument_ids=[AAPL_INSTRUMENT], run_seconds=0.01)
+
+        with capture_logs() as logs:
+            _runner(node, settings=settings).run()
+
+        assert not [entry for entry in logs if entry["event"] == "session.instruments"]
+
+    def test_trading_registers_and_starts_every_strategy_in_spec_order(self, registered_accounts):
+        """Two strategies, deliberately (2026-08-21 review): with one entry the
+        ordering half of this assertion is vacuous — a runner that reversed a
+        multi-strategy list would have passed.
+        """
+        msft_1min = "MSFT.NASDAQ-1-MINUTE-LAST-EXTERNAL"
+        spec = SessionSpec(
+            strategies=(
+                StrategySpec(strategy_id="sma_crossover", parameters={}, bar_types=(AAPL_1MIN,)),
+                StrategySpec(strategy_id="momentum", parameters={}, bar_types=(msft_1min,)),
+            )
+        )
+        settings = _settings()
+        registered_accounts(settings)
+        node = TestLiveNode(run_seconds=0.01)
+
+        _runner(node, settings=settings, spec=spec).run()
+
+        assert [str(s.config.bar_type) for s in node.trader.added_strategies] == [
+            AAPL_1MIN,
+            msft_1min,
+        ]
+        assert node.trader.started_strategies == [s.id for s in node.trader.added_strategies]
+
+    def test_session_started_is_emitted_at_the_trading_phase(self, registered_accounts):
+        """AR41 enumerates ``session.started`` but nothing owned it until now."""
+        settings = _settings()
+        registered_accounts(settings)
+
+        with capture_logs() as logs:
+            _runner(TestLiveNode(run_seconds=0.01), settings=settings).run()
+
+        started = [entry for entry in logs if entry["event"] == "session.started"]
+        assert len(started) == 1
+        assert started[0]["strategies"] == ["sma_crossover"]
+
+
+class TestStrategyMaterialisation:
+    """Task 5's one genuinely unknown shape: ``SMAParameters`` carries neither
+    ``instrument_id`` nor ``bar_type`` while ``SMAConfig`` requires both.
+    """
+
+    def test_a_stored_spec_round_trips_into_a_configured_sma_crossover(self):
+        from nautilus_trader.model.data import BarType
+
+        from src.core.live_session_node import materialise_strategy
+        from src.core.strategies.sma_crossover import SMACrossover
+
+        spec = _spec()
+        stored = spec.to_stored()
+        restored = SessionSpec.from_stored(stored)
+
+        strategy = materialise_strategy(restored.strategies[0])
+
+        assert isinstance(strategy, SMACrossover)
+        assert strategy.config.bar_type == BarType.from_str(AAPL_1MIN)
+        assert str(strategy.config.instrument_id) == AAPL_INSTRUMENT
+
+    def test_the_frozen_parameters_are_used_verbatim_not_rebuilt(self):
+        """FR14/FR53: re-running ``build_strategy_params`` would let today's
+        settings silently change a multi-week forward test.
+        """
+        from src.core.live_session_node import materialise_strategy
+
+        spec = SessionSpec(
+            strategies=(
+                StrategySpec(
+                    strategy_id="sma_crossover",
+                    parameters={"fast_period": 3, "slow_period": 7},
+                    bar_types=(AAPL_1MIN,),
+                ),
+            )
+        )
+
+        strategy = materialise_strategy(spec.strategies[0])
+
+        assert strategy.config.fast_period == 3
+        assert strategy.config.slow_period == 7
+
+    def test_the_runner_never_calls_build_strategy_params(self):
+        """Structural, not a grep. Both modules *explain at length* why they do
+        not call it, so a source-text check would trip on its own prose — the
+        trap Stories 2.1 and 2.3 each recorded hitting.
+        """
+        import ast
+        from pathlib import Path
+
+        from src.core import live_session_node, live_session_runner
+
+        for module in (live_session_runner, live_session_node):
+            tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
+            called = {
+                node.func.attr
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            }
+            assert "build_strategy_params" not in called, module.__name__
+            # Non-vacuity: the scan really does see the calls in this module.
+            assert called, f"the AST scan found no attribute calls in {module.__name__}"
+
+    def test_the_materialisation_guard_can_fail(self):
+        """Proof the AST scan above is not vacuous, on a planted probe."""
+        import ast
+
+        probe = ast.parse("StrategyLoader.build_strategy_params(a, b, c)")
+        called = {
+            node.func.attr
+            for node in ast.walk(probe)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+        }
+
+        assert "build_strategy_params" in called
+
+    def test_a_two_bar_type_strategy_is_refused_at_gate_static(self, registered_accounts):
+        """*Judgment call #4* — before any socket opens, and naming the strategy."""
+
+        settings = _settings()
+        registered_accounts(settings)
+        spec = SessionSpec(
+            strategies=(
+                StrategySpec(
+                    strategy_id="sma_crossover",
+                    parameters={},
+                    bar_types=(AAPL_1MIN, "MSFT.NASDAQ-1-MINUTE-LAST-EXTERNAL"),
+                ),
+            )
+        )
+        node = TestLiveNode()
+        runner = _runner(node, settings=settings, spec=spec)
+
+        with capture_logs() as logs:
+            with pytest.raises(LiveMarketDataError, match="sma_crossover"):
+                runner.run()
+
+        assert _pairs(logs) == [("gate:static", "started"), ("gate:static", "failed")]
+        assert node.built is False
+
+    def test_the_naive_flatten_is_never_written(self):
+        """``spec.subscription_bar_types`` exists so this story would not write
+        the cross-strategy flatten the node builder rejects.
+        """
+        import inspect
+
+        from src.core import live_session_runner
+
+        source = inspect.getsource(live_session_runner)
+        assert "subscription_bar_types" in source
+        assert "for bt in" not in source
+
+
+class TestSessionIdReachesEveryRecord:
+    """AC #4 — and specifically the ``contextvars`` half, which needs a test
+    that can actually fail.
+
+    ⚠️ ``structlog.testing.capture_logs`` **cannot** be used here. It does
+    ``processors.clear(); processors.append(cap)``, which removes
+    ``merge_contextvars`` for the duration — so a test written with it fails
+    even against a perfectly working binding, and the natural "fix" is to
+    delete the binding. ``src/utils/logging.py:50`` installs
+    ``merge_contextvars`` as the first shared processor, so this test installs
+    the same first processor and captures after it.
+    """
+
+    @pytest.fixture
+    def rendered(self, monkeypatch):
+        """Capture through a chain whose first processor is ``merge_contextvars``.
+
+        ``live_check``'s module-level logger is replaced with a **fresh,
+        unbound** one built after the reconfigure. That is not a shortcut past
+        the thing under test — the replacement carries no ``session_id`` of its
+        own, so contextvars is still the only route by which one can appear.
+        It is needed because this repo configures structlog with
+        ``cache_logger_on_first_use=True``: under ``-n auto`` some earlier test
+        in this worker has already bound that proxy against the old processor
+        chain, and reconfiguring afterwards cannot reach it. Standalone the
+        test passed without this; in a full run it silently observed nothing,
+        which is the "test that cannot fail" shape review catches every time.
+        """
+        import structlog
+
+        from src.core import live_check
+
+        entries: list[dict] = []
+
+        def _capture(logger, name, event_dict):
+            entries.append(dict(event_dict))
+            raise structlog.DropEvent
+
+        original = structlog.get_config()
+        structlog.configure(
+            processors=[structlog.contextvars.merge_contextvars, _capture],
+            logger_factory=structlog.ReturnLoggerFactory(),
+            wrapper_class=structlog.make_filtering_bound_logger(0),
+            cache_logger_on_first_use=False,
+        )
+        monkeypatch.setattr(live_check, "logger", structlog.get_logger("src.core.live_check"))
+        try:
+            yield entries
+        finally:
+            structlog.configure(**original)
+
+    def test_a_record_from_a_module_the_runner_never_bound_carries_session_id(
+        self, rendered, registered_accounts
+    ):
+        settings = _settings()
+        registered_accounts(settings)
+
+        _runner(TestLiveNode(run_seconds=0.01), settings=settings).run()
+
+        # `live_check.preflight_gate` emits this; the runner hands that module
+        # no logger of any kind, so only the contextvars binding can put the
+        # session id on it.
+        foreign = [entry for entry in rendered if entry["event"] == "gate.static"]
+        assert foreign, "the static gate emitted nothing to assert against"
+        assert all(entry.get("session_id") == str(SESSION_ID) for entry in foreign)
+
+    def test_the_capture_sees_nothing_without_the_binding(self, rendered, registered_accounts):
+        """Mutation proof, permanent rather than manual: with the binding
+        removed, the very same capture yields a record **without** a
+        ``session_id`` — so the assertion above is not passing on something
+        else's contextvars.
+        """
+        import structlog
+
+        from src.core.live_check import preflight_gate
+
+        settings = _settings()
+        registered_accounts(settings)
+        structlog.contextvars.clear_contextvars()
+
+        preflight_gate(settings, None)
+
+        foreign = [entry for entry in rendered if entry["event"] == "gate.static"]
+        assert foreign
+        assert all("session_id" not in entry for entry in foreign)
+
+    def test_the_binding_is_removed_when_the_runner_returns(self, rendered, registered_accounts):
+        """A leaked binding would stamp every later command with a dead id."""
+        import structlog
+
+        settings = _settings()
+        registered_accounts(settings)
+
+        _runner(TestLiveNode(run_seconds=0.01), settings=settings).run()
+
+        assert "session_id" not in structlog.contextvars.get_contextvars()
+
+    def test_the_binding_is_removed_even_when_the_run_fails(self, rendered):
+        import structlog
+
+        runner = _runner(TestLiveNode(), settings=_settings(mode="live"))
+
+        with pytest.raises(GateRefusedError):
+            runner.run()
+
+        assert "session_id" not in structlog.contextvars.get_contextvars()
+
+
+class TestImportPurity:
+    """AC #6 — ``LiveSessionRunner`` imports no SQLAlchemy, in both forms.
+
+    ⚠️ The polarity is **inverted** from
+    ``test_session_service.py::TestImportPurity``: ``nautilus_trader`` is
+    permitted here and the database is not. And do not copy
+    ``test_live_connection_monitor.py``'s forbidden tuple — it also forbids
+    ``src.services``, which this module could not satisfy… and in fact must not
+    need. The runner takes the *port*, not the adapter; if it ever imports
+    ``src.services.*``, the design has drifted.
+    """
+
+    FORBIDDEN = ("sqlalchemy", "psycopg2", "asyncpg", "pg8000", "src.db", "src.services")
+
+    MODULES = (
+        "src.core.live_session_runner",
+        "src.core.live_session_node",
+        "src.core.live_session_steady_state",
+        # Story 2.7. The guard is `src/core`, is reached from the runner, and
+        # builds the record that crosses into `src/services` — so it is exactly
+        # the shape AR38 governs. Added here in the same commit that created it,
+        # because this list is hand-maintained: Story 2.6's file-size split moved
+        # `live_start.py` out of `live.py` and it silently escaped two guards.
+        "src.core.live_strategy_guard",
+        # Story 2.8. Not reached from the runner at all — the opposite
+        # direction, the CLI's read side — but it lives in the `live_*` family
+        # AR38's discipline covers, and staying provably free of `src.db`/
+        # `src.services` is exactly what lets it be unit-tested with no
+        # database (AC #9).
+        "src.core.live_session_health",
+        # Story 3.2. Reached from the runner (installed on every started
+        # strategy, subscribed in `_phase_subscribe`) and, like the guard,
+        # framework-free by design — no `src.db`/`src.services` to stay clear
+        # of in the first place, but the same hand-maintained-list discipline
+        # applies: add on creation, not on next discovery.
+        "src.core.live_order_path",
+        # 2026-09-01. Imported by `live_node_builder` and executed during
+        # `node.build()`. Same discipline: added on creation, not on next
+        # discovery.
+        "src.core.live_exec_avg_px",
+        # Story 3.5. Subscribed in `_phase_subscribe` beside the order path,
+        # and — the reason it matters for THIS list specifically — it takes a
+        # `sink` callable rather than a `src.services`/`src.db` import, so it
+        # stays inside AR38's discipline the same way the order path and the
+        # strategy guard do. Story 3.6 adds the persistence adapter as an
+        # injected port, not a new import here.
+        "src.core.live_trade_recorder",
+        # Story 3.7. Subscribed in `_phase_subscribe` beside the other two,
+        # and builds the primitives-only snapshot that crosses into
+        # `src/services` through the record port — exactly the shape AR38
+        # governs. Its one non-stdlib import is `live_strategy_guard`'s
+        # redaction pair, which is itself on this list. Added on creation.
+        "src.core.live_order_rejections",
+        # Story 4.4. Constructed in `_phase_warmup` and installed on every
+        # started strategy in `_start_strategy`, beside the guard and the
+        # order path — duck-typed and stdlib-only, with no `src.db`/
+        # `src.services` to stay clear of in the first place. Added on
+        # creation, not on next discovery.
+        "src.core.live_session_warmup",
+        # Story 4.1. Story 4.2 calls it from `_phase_reconcile`, and it builds
+        # the `src.models.broker_state` values a services-layer comparison
+        # (Story 4.6) consumes — AR38's boundary, crossed in domain types, never
+        # through a `src.db`/`src.services` import. Added on creation.
+        "src.core.live_broker_state",
+        # Story 4.6. The on-demand reconcile driver. It needs the comparison
+        # in `src.services.reconciliation_service` and takes it as an injected
+        # `compare` port instead of importing it — the Story 3.5/3.6 `sink`
+        # precedent — so it stays inside this list's rule. Added on creation.
+        "src.core.live_reconcile",
+        # Story 4.6. Reads a session's engine cache through Nautilus's own
+        # adapter and converts it to `src.models.reconciliation` values at the
+        # boundary; no `src.db`/`src.services` import. Added on creation.
+        "src.core.live_session_view",
+        # Story 4.2. The `reconcile` phase's body, imported by the runner: it
+        # compares in `src.models.position_reconciliation` domain values and
+        # corrects through the exec engine — never a `src.db`/`src.services`
+        # import (AR38). Added in the creating commit.
+        "src.core.live_startup_reconcile",
+        # Story 4.3. Constructed by the runner in `_build_steady_state` and
+        # called from `_phase_reconcile` (the startup grant): compares in the
+        # same domain values and corrects through the exec engine — no
+        # `src.db`/`src.services` import (AR38). Added in the creating commit.
+        "src.core.live_runtime_reconcile",
+        # Story 4.8. Imported by `live_runtime_reconcile` and run on its
+        # runtime cycle: reads the cache's orders and IBKR's open orders and
+        # clears through the exec engine — no `src.db`/`src.services` import
+        # (AR38). Added in the creating commit.
+        "src.core.live_stranded_orders",
+        # Story 4.3. Imported by `live_node_builder` and executed during
+        # `node.build()`, beside `live_exec_avg_px`. Added in the creating commit.
+        "src.core.live_exec_position_reports",
+        # Story 4.5. Imported by the runner (`node:connect` and `trading`): it
+        # reads the cache and the reconciliation proof in domain values — no
+        # `src.db`/`src.services` import (AR38). Added in the creating commit.
+        "src.core.live_session_resume",
+        # Story 5.9. Imported by `live_node_builder` (the bar-resubscribe patch,
+        # installed during `node.build()`) and by the runner (the watch around
+        # the runtime reconciler) — no `src.db`/`src.services` import (AR38).
+        # Added in the creating commit.
+        "src.core.live_bar_resubscribe",
+        # Story 5.9. Imported by `live_order_path`; standard library only.
+        # Added in the creating commit.
+        "src.core.live_catch_up_gate",
+    )
+
+    @pytest.mark.parametrize("module_name", MODULES)
+    def test_top_level_imports_contain_no_database_library(self, module_name):
+        import ast
+        import importlib
+        from pathlib import Path
+
+        module = importlib.import_module(module_name)
+        tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
+        imported: list[str] = []
+        for node in tree.body:
+            if isinstance(node, ast.Import):
+                imported.extend(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imported.append(node.module)
+
+        offenders = [name for name in imported if name.startswith(self.FORBIDDEN)]
+        assert offenders == [], f"{module_name} must stay database-free, found: {offenders}"
+
+    def test_importing_the_runner_loads_no_database_library(self):
+        """The AST form alone is blind to *transitive* loading — a ``src.*``
+        import that itself drags SQLAlchemy in passes it and fails the real
+        requirement. Story 2.1's review proved that the hard way.
+        """
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        from src.core import live_session_runner
+
+        code = (
+            "import sys, src.core.live_session_runner;"
+            "print(','.join(sorted(m for m in "
+            "('sqlalchemy', 'psycopg2', 'asyncpg', 'pg8000') if m in sys.modules)))"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=Path(live_session_runner.__file__).parents[2],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+        assert result.stdout.strip() == ""
+
+    def test_the_runner_never_names_a_repository_or_a_session_factory(self):
+        """A structural backstop: the port takes no ``session_id`` for database
+        purposes, so these names have no business appearing at all.
+        """
+        import inspect
+
+        from src.core import live_session_runner
+
+        source = inspect.getsource(live_session_runner)
+        for forbidden in ("get_sync_session", "SyncTradingSessionRepository", "SessionService"):
+            assert forbidden not in source
+
+
+class TestBeingReclaimedOutFromUnderYourself:
+    """Task 6's one exception to AR42 — and its effect on the teardown."""
+
+    def _reclaiming_record(self):
+        from src.core.live_session_record import SessionReclaimedError
+
+        class _Record(SpyRecord):
+            def record_activity(self, *, at, bar_seen_at=None):
+                self.calls.append("record_activity")
+                raise SessionReclaimedError("session 'alpha' was reclaimed by another process")
+
+        return _Record()
+
+    async def _immediate(self, seconds: float) -> None:
+        """A sleeper that returns at once, so the first tick lands immediately."""
+
+    def test_a_reclaim_propagates_out_of_run(self, registered_accounts):
+        from src.core.live_session_record import SessionReclaimedError
+
+        settings = _settings()
+        registered_accounts(settings)
+        runner = _runner(
+            TestLiveNode(),
+            settings=settings,
+            record=self._reclaiming_record(),
+            sleeper=self._immediate,
+        )
+
+        with pytest.raises(SessionReclaimedError):
+            runner.run()
+
+    def test_a_reclaim_leaves_the_successors_row_alone(self, registered_accounts):
+        """``mark_stopped()`` is skipped entirely: the row belongs to the other
+        process now, and moving it to ``stopped`` would kill a live session.
+        """
+        from src.core.live_session_record import SessionReclaimedError
+
+        settings = _settings()
+        registered_accounts(settings)
+        record = self._reclaiming_record()
+        runner = _runner(TestLiveNode(), settings=settings, record=record, sleeper=self._immediate)
+
+        with pytest.raises(SessionReclaimedError):
+            runner.run()
+
+        assert "mark_stopped" not in record.calls
+
+    def test_a_reclaim_still_tears_the_node_down(self, registered_accounts):
+        """Skipping the *record* write must not skip the *node* teardown."""
+        from src.core.live_session_record import SessionReclaimedError
+
+        settings = _settings()
+        registered_accounts(settings)
+        node = TestLiveNode()
+        runner = _runner(
+            node,
+            settings=settings,
+            record=self._reclaiming_record(),
+            sleeper=self._immediate,
+        )
+
+        with pytest.raises(SessionReclaimedError):
+            runner.run()
+
+        assert node.disposed is True
+
+    def test_a_reclaim_is_logged_at_error_by_name(self, registered_accounts):
+        from src.core.live_session_record import SessionReclaimedError
+
+        settings = _settings()
+        registered_accounts(settings)
+        runner = _runner(
+            TestLiveNode(),
+            settings=settings,
+            record=self._reclaiming_record(),
+            sleeper=self._immediate,
+        )
+
+        with capture_logs() as logs:
+            with pytest.raises(SessionReclaimedError):
+                runner.run()
+
+        reclaimed = [
+            entry for entry in logs if entry["event"] == "session.reclaimed_by_another_process"
+        ]
+        assert len(reclaimed) == 1
+        assert reclaimed[0]["log_level"] == "error"
+
+    def test_an_ordinary_write_failure_does_not_stop_the_session(self, registered_accounts):
+        """AR42: a database hiccup must never kill a trading session."""
+        settings = _settings()
+        registered_accounts(settings)
+        record = SpyRecord()
+        record.raises = RuntimeError("connection pool exhausted")
+        node = TestLiveNode(run_seconds=0.05)
+        runner = _runner(node, settings=settings, record=record, sleeper=self._immediate)
+
+        runner.run()
+
+        assert record.calls.count("record_activity") > 1
+        assert record.calls[-1] == "mark_stopped"
+
+
+class TestStoryTwoFiveExceptionNameCoupling:
+    """``live_check.classify_failure`` reads each real class's own
+    ``exit_outcome`` marker (D3) — no name pin needed any more: a rename
+    cannot desynchronise a class attribute from itself. The two behavioural
+    tests below are the contract that must keep passing regardless.
+    """
+
+    @pytest.mark.parametrize(
+        ("klass", "expected_code"),
+        [
+            (RedisUnreachableError, 1),
+            (pytest.importorskip("src.db.exceptions").InvalidSessionTransition, 1),
+            (pytest.importorskip("src.db.exceptions").RecordNotFoundError, 1),
+            (LiveNodeConfigError, 1),
+            (LiveMarketDataError, 1),
+            (InvalidCheckWindowError, 1),
+            (NoStrategyStartedError, 1),
+            (pytest.importorskip("src.core.live_session_record").SessionReclaimedError, 1),
+            (GateRefusedError, 3),
+            (BrokerUnreachableError, 4),
+        ],
+    )
+    def test_the_real_class_maps_to_the_documented_exit_code(self, klass, expected_code):
+        """D3's acceptance criterion: every row of the ruling's table asserted
+        on the **real** class, not a stand-in — the unit-tier suite covers the
+        mechanism with stand-ins; this covers that the actual production
+        classes carry the markers the table promises.
+        """
+        from src.core.live_check import EXIT_CODES, classify_failure
+
+        if klass is GateRefusedError:
+            instance = klass(build_refusal(GateRefusalReason.NON_PAPER_PORT, "no").refusal)
+        else:
+            instance = klass("boom")
+
+        assert EXIT_CODES[classify_failure(instance)] == expected_code
+
+    def test_the_messages_of_the_four_reach_the_operator(self):
+        from src.core.live_check import failure_message
+        from src.core.live_session_record import SessionReclaimedError
+        from src.db.exceptions import InvalidSessionTransition, RecordNotFoundError
+
+        for klass in (
+            RedisUnreachableError,
+            InvalidSessionTransition,
+            RecordNotFoundError,
+            SessionReclaimedError,
+        ):
+            assert failure_message(klass("the actionable detail")) == "the actionable detail"
+
+
+class TestTeardownOrderAtEachFailuresOwnPhase:
+    """Review strengthening (2026-08-21): Task 4 requires each typed failure
+    injected **at its own phase**, with dispose-before-``mark_stopped``
+    asserted on a single spy. The account-verifier seam alone cannot prove the
+    earlier phases' teardown ordering, and ``GateRefusedError`` previously had
+    no order assertion at all.
+    """
+
+    def _spying_node(self, record: SpyRecord, **kwargs) -> TestLiveNode:
+        node = TestLiveNode(**kwargs)
+        original_dispose = node.dispose
+
+        def _dispose():
+            record.calls.append("dispose")
+            original_dispose()
+
+        node.dispose = _dispose  # type: ignore[method-assign]
+        return node
+
+    def test_a_redis_refusal_at_node_build_marks_stopped_exactly_once(self, registered_accounts):
+        """No node exists to dispose when the factory itself refuses — the row
+        release is the whole of the teardown, and it must still happen.
+        """
+        settings = _settings()
+        registered_accounts(settings)
+        record = SpyRecord()
+
+        def _factory(*args, **kwargs):
+            raise RedisUnreachableError("redis is down at 127.0.0.1:6399")
+
+        runner = _runner(TestLiveNode(), settings=settings, record=record, node_factory=_factory)
+
+        with pytest.raises(RedisUnreachableError):
+            runner.run()
+
+        assert record.calls.count("mark_stopped") == 1
+        assert record.calls[-1] == "mark_stopped"
+
+    def test_a_broker_timeout_at_node_connect_tears_down_then_marks_stopped(
+        self, registered_accounts
+    ):
+        """``trader_starts=False`` is the "connected, but the trader never
+        started" shape — the failure genuinely raised at ``node:connect``.
+        """
+        settings = _settings()
+        registered_accounts(settings)
+        record = SpyRecord()
+        node = self._spying_node(record, trader_starts=False)
+        runner = _runner(node, settings=settings, record=record, connect_timeout=0.2)
+
+        with pytest.raises(BrokerUnreachableError):
+            runner.run()
+
+        assert record.calls.count("mark_stopped") == 1
+        assert record.calls.index("dispose") < record.calls.index("mark_stopped")
+
+    def test_a_gate_account_refusal_tears_down_then_marks_stopped(self, registered_accounts):
+        settings = _settings()
+        registered_accounts(settings)
+        record = SpyRecord()
+        node = self._spying_node(record)
+        runner = _runner(
+            node, settings=settings, record=record, account_verifier=_refusing_verifier()
+        )
+
+        with pytest.raises(GateRefusedError):
+            runner.run()
+
+        assert record.calls.count("mark_stopped") == 1
+        assert record.calls.index("dispose") < record.calls.index("mark_stopped")
+
+
+class TestTheStartupHeartbeatCoversThePhases:
+    """Review fix (2026-08-21): the phases outlast the 90s staleness threshold,
+    so a writer keeps the row fresh from before the first phase until the
+    steady loop takes over — see ``StartupHeartbeat`` for the full argument.
+    """
+
+    def test_the_writer_is_running_before_the_node_is_built(self, registered_accounts):
+        """The build is the longest silent window (its synchronous connect
+        attempt alone can spend the whole budget) — the writer must already be
+        alive when it starts.
+        """
+        settings = _settings()
+        registered_accounts(settings)
+        node = TestLiveNode(run_seconds=0.01)
+        alive_at_build: list[bool] = []
+
+        def _factory(settings_arg, **kwargs):
+            writer = runner._startup_heartbeat
+            alive_at_build.append(writer is not None and writer.running)
+            return node
+
+        runner = _runner(node, settings=settings, node_factory=_factory)
+        runner.run()
+
+        assert alive_at_build == [True]
+
+    def test_the_writer_is_stopped_by_the_time_run_returns(self, registered_accounts):
+        settings = _settings()
+        registered_accounts(settings)
+        runner = _runner(TestLiveNode(run_seconds=0.01), settings=settings)
+
+        runner.run()
+
+        assert runner._startup_heartbeat is not None
+        assert not runner._startup_heartbeat.running
+
+    def test_a_reclaim_observed_during_startup_stops_the_start_before_any_strategy(
+        self, registered_accounts, monkeypatch
+    ):
+        """A session taken during the phases must never trade — and the row
+        belongs to the successor, so ``mark_stopped`` must not run either.
+        Deterministic: the writer is stubbed with the state a real one leaves
+        behind after observing the reclaim; ``TestStartupHeartbeat`` (in
+        ``test_session_steady_state.py``) proves the real writer produces it.
+        """
+        from src.core import live_session_runner as runner_module
+        from src.core.live_session_record import SessionReclaimedError
+
+        class _DispossessedWriter:
+            def __init__(self, **kwargs) -> None:
+                self.reclaim = SessionReclaimedError("session 'alpha' was reclaimed")
+                self.running = False
+
+            def start(self) -> None:
+                return None
+
+            def stop(self, **kwargs) -> None:
+                return None
+
+        monkeypatch.setattr(runner_module, "StartupHeartbeat", _DispossessedWriter)
+        settings = _settings()
+        registered_accounts(settings)
+        record = SpyRecord()
+        node = TestLiveNode()
+        runner = _runner(node, settings=settings, record=record)
+
+        with capture_logs() as logs, pytest.raises(SessionReclaimedError):
+            runner.run()
+
+        assert node.trader.added_strategies == []
+        assert node.trader.started_strategies == []
+        assert "mark_stopped" not in record.calls
+        assert node.disposed is True
+        assert ("trading", "failed") in _pairs(logs)
+
+
+class TestASwallowedReclaimStillSkipsTheRelease:
+    """Review fix (2026-08-21): an in-flight write can surface its reclaim only
+    at cancellation time, where ``gather(return_exceptions=True)`` would
+    silently discard it — the join must fold it into the ownership flag before
+    ``_finish_record`` reads it.
+    """
+
+    def test_a_reclaim_completed_but_unretrieved_marks_ownership_lost(self):
+        from src.core.live_session_record import SessionReclaimedError
+
+        record = SpyRecord()
+        runner = _runner(TestLiveNode(), record=record)
+        loop = asyncio.new_event_loop()
+        try:
+
+            async def _reclaims():
+                raise SessionReclaimedError("session 'alpha' was reclaimed")
+
+            task = loop.create_task(_reclaims())
+            loop.run_until_complete(asyncio.sleep(0.01))
+            runner._heartbeat = task
+
+            runner._stop_heartbeat(loop)
+        finally:
+            loop.close()
+
+        assert runner._ownership_lost is True
+
+        runner._finish_record()
+        assert "mark_stopped" not in record.calls
+
+    def test_an_ordinary_heartbeat_failure_does_not_mark_ownership_lost(self):
+        record = SpyRecord()
+        runner = _runner(TestLiveNode(), record=record)
+        loop = asyncio.new_event_loop()
+        try:
+
+            async def _fails():
+                raise RuntimeError("db went away")
+
+            task = loop.create_task(_fails())
+            loop.run_until_complete(asyncio.sleep(0.01))
+            runner._heartbeat = task
+
+            runner._stop_heartbeat(loop)
+        finally:
+            loop.close()
+
+        assert runner._ownership_lost is False
+
+        runner._finish_record()
+        assert record.calls == ["mark_stopped"]
+
+
+class TestTheRunnerHandsReconciliationTheTradedInstruments:
+    """Story 5.7 code review R1 (PO ruling 2026-10-07): both reconciliations
+    count the symbols of the instruments the session's strategies trade as
+    held. The runner is the only place that knows them — the spec's bar types —
+    so the wiring is pinned here, through ``runner.run()``."""
+
+    def test_every_strategys_bar_type_instruments_are_the_traded_set(self):
+        spec = SessionSpec(
+            strategies=(
+                StrategySpec(
+                    strategy_id="sma_crossover",
+                    parameters={},
+                    bar_types=(AAPL_1MIN, "NVDA.NASDAQ-5-MINUTE-LAST-EXTERNAL"),
+                ),
+            )
+        )
+
+        assert session_instrument_ids(spec) == frozenset({AAPL_INSTRUMENT, "NVDA.NASDAQ"})
+
+    def test_a_flat_session_refuses_beside_an_unresolved_row_of_its_traded_symbol(
+        self, registered_accounts
+    ):
+        """The spec trades AAPL; the cache is empty; the broker holds an
+        ``IB-CONID-*`` row under symbol AAPL — the start is refused rather than
+        letting a flat strategy buy beside a holding it cannot see."""
+        settings = _settings()
+        registered_accounts(settings)
+        node = TestLiveNode(run_seconds=0.01)
+        lookup_miss = BrokerPosition(
+            instrument_id="IB-CONID-265598",
+            quantity=Decimal(3),
+            average_price=None,
+            con_id=265598,
+            symbol="AAPL",
+            instrument_resolved=False,
+        )
+
+        async def _reader(node_arg, *, log):
+            flat = await flat_broker_state_reader(node_arg, log=log)
+            return dataclasses.replace(flat, positions=(lookup_miss,))
+
+        with pytest.raises(ReconciliationFailedError) as caught:
+            _runner(node, settings=settings, broker_state_reader=_reader).run()
+
+        assert caught.value.reason is ReconciliationFailure.UNRESOLVABLE_DISCREPANCY
+        assert node.trader.added_strategies == []
+
+    def test_the_running_sessions_reconciler_is_handed_the_traded_instruments(
+        self, monkeypatch, registered_accounts
+    ):
+        settings = _settings()
+        registered_accounts(settings)
+        built: list[dict] = []
+        # Story 5.9: the runner builds it through `watched_reconciler`, which
+        # looks the class up in its own module.
+        real = live_bar_resubscribe.RuntimeReconciler
+
+        def _spy(**kwargs):
+            built.append(kwargs)
+            return real(**kwargs)
+
+        monkeypatch.setattr(live_bar_resubscribe, "RuntimeReconciler", _spy)
+
+        _runner(TestLiveNode(run_seconds=0.01), settings=settings).run()
+
+        (kwargs,) = built
+        assert kwargs["traded_instruments"] == frozenset({AAPL_INSTRUMENT})

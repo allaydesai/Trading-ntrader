@@ -212,3 +212,8 @@ src/core/strategies/custom/*.py
 src/core/strategies/custom/models/
 !src/core/strategies/custom/.gitkeep
 !src/core/strategies/custom/__init__.py
+
+# Agent skill scaffolding: track the skills, never their vendored environments.
+# excalidraw-diagram-skill ships a 130 MB .venv (Playwright driver binaries).
+.agents/**/.venv/
+.agents/**/node_modules/

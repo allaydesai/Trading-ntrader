@@ -350,9 +350,11 @@ completed cycles archived under `archive/<phase>/`).
 | Phase | Effort | Epics | Status |
 |-------|--------|-------|--------|
 | Phase 1 | FirstRate Data import — Stocks (CSV → Parquet catalog, data explorer, backtest integration, supplementary data) | E1 Data Import Pipeline · E2 Data Explorer & Verification · E3 Backtest Integration & Verification · E4 Supplementary Data | Done (2026-06) |
-| Phase 2 | FirstRate Data import — ETFs (FMP-backed metadata loader, ETF catalog) | TBD | Planned |
+| Phase 2 | FirstRate Data import — ETFs (FMP-backed metadata loader, ETF catalog, venue resolution gate, backtest integration) | E1 Instrument Metadata Resolution · E2 ETF Data Import Pipeline · E3 Venue Resolution & Completeness Gate · E4 Data Explorer — ETF Support · E5 Backtest Integration & Verification | Done (2026-07) |
+| Phase 3 | TBD | TBD | Planned |
 
-Phase 1 archive: `_bmad-output/archive/phase-1-stocks/`. Retros and story records:
+Phase 1 archive: `_bmad-output/archive/phase-1-stocks/`. Phase 2 archive:
+`_bmad-output/archive/phase-2-etfs/`. Retros and story records for the active cycle:
 `_bmad-output/implementation-artifacts/`.
 
 ### vNext (Future)

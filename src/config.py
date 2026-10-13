@@ -10,6 +10,12 @@ from ibapi.common import MarketDataTypeEnum  # type: ignore
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings
 
+# How far above its configured base the historical client may rotate when a connect
+# attempt times out. Source of truth is IBKRHistoricalClient.connect(max_id_rotations=5)
+# in src/services/ibkr_client.py; it cannot be imported here (that module imports this
+# one), so the two must be kept in step by hand.
+HISTORICAL_CLIENT_ID_ROTATION_SPAN = 5
+
 
 class IBKRSettings(BaseSettings):
     """Interactive Brokers configuration settings."""
@@ -17,7 +23,28 @@ class IBKRSettings(BaseSettings):
     # Connection settings
     ibkr_host: str = Field(default="127.0.0.1", description="IB Gateway/TWS host address")
     ibkr_port: int = Field(default=7497, description="Connection port (7497=TWS paper)")
-    ibkr_client_id: int = Field(default=1, description="Unique client identifier")
+    ibkr_client_id: int = Field(
+        default=1,
+        ge=1,
+        description=(
+            "Client ID for the historical data client (catalog fetch). Reservation: "
+            "historical = ibkr_client_id, which rotates through ibkr_client_id .. "
+            "ibkr_client_id + 5 on connect retries, so its effective range is 1-6 at the "
+            "default. That whole range must stay clear of ibkr_live_client_id and "
+            "ibkr_live_client_id + 1 — at the default live ID, keep this at 4 or below."
+        ),
+    )
+    ibkr_live_client_id: int = Field(
+        default=10,
+        ge=1,
+        description=(
+            "Client ID for the live trading session's IBKR data + execution clients. "
+            "Reservation: historical fetch = ibkr_client_id (which rotates up to "
+            "ibkr_client_id + 5 on connect retries), live session = ibkr_live_client_id, "
+            "on-demand reconcile = ibkr_live_client_id + 1. Both reserved IDs must sit "
+            "outside the historical client's rotation range."
+        ),
+    )
 
     # Gateway mode
     ibkr_trading_mode: Literal["paper", "live"] = Field(
@@ -29,8 +56,17 @@ class IBKRSettings(BaseSettings):
 
     # Credentials (from environment)
     tws_username: str = Field(default="", description="IBKR username")
-    tws_password: str = Field(default="", description="IBKR password")
-    tws_account: str = Field(default="", description="IBKR account ID")
+    tws_password: str = Field(default="", repr=False, description="IBKR password")
+    tws_account: str = Field(default="", repr=False, description="IBKR account ID")
+    ntrader_real_money_account: str = Field(
+        default="",
+        repr=False,
+        description=(
+            "Exact IBKR account ID the operator has explicitly authorized for real-money "
+            "trading. Empty = paper only. Must be accompanied by the CLI --real-money flag; "
+            "neither declaration alone permits a real-money connection."
+        ),
+    )
 
     # Timeouts
     ibkr_connection_timeout: int = Field(
@@ -47,6 +83,16 @@ class IBKRSettings(BaseSettings):
     ibkr_use_rth: bool = Field(default=True, description="Regular Trading Hours only")
     ibkr_market_data_type: str = Field(
         default="DELAYED_FROZEN", description="Market data type for paper trading"
+    )
+    ibkr_market_data_lines: int = Field(
+        default=100,
+        ge=1,
+        description=(
+            "Concurrent IBKR market-data lines this account allows. Each streaming bar "
+            "subscription a live session opens consumes one line, and IBKR drops the excess "
+            "silently rather than reporting it. 100 is the standard allocation; raise this "
+            "only to a figure the account actually holds (quote booster packs / commission tier)."
+        ),
     )
 
     def get_market_data_type_enum(self) -> MarketDataTypeEnum:
@@ -70,11 +116,48 @@ class IBKRSettings(BaseSettings):
             self.ibkr_market_data_type.upper(), MarketDataTypeEnum.DELAYED_FROZEN
         )
 
+    @model_validator(mode="after")
+    def validate_client_ids_distinct(self) -> "IBKRSettings":
+        """The historical client's rotation range must not touch either reserved live ID.
+
+        A second connection presenting a client ID already in use is refused with
+        error 326 when the incumbent is still live on it, and takes the ID over when
+        the incumbent's socket is stale (a SIGKILL'd run leaves the Gateway holding
+        an ID for tens of seconds). Either outcome breaks a running session or an
+        in-flight import, so the two allocations must not overlap at all (FR5).
+
+        Equality is not sufficient: IBKRHistoricalClient.connect() rotates
+        ibkr_client_id .. ibkr_client_id + 5 on connect timeouts, and the live
+        session reserves both ibkr_live_client_id and ibkr_live_client_id + 1 (for
+        on-demand reconcile). This rejects any intersection of the two.
+        """
+        historical_last = self.ibkr_client_id + HISTORICAL_CLIENT_ID_ROTATION_SPAN
+        reconcile_id = self.ibkr_live_client_id + 1
+
+        if self.ibkr_client_id <= reconcile_id and self.ibkr_live_client_id <= historical_last:
+            safe_ceiling = self.ibkr_live_client_id - HISTORICAL_CLIENT_ID_ROTATION_SPAN - 1
+            remedy = (
+                f"set ibkr_client_id to {safe_ceiling} or below"
+                if safe_ceiling >= 1
+                else f"set ibkr_live_client_id to {historical_last + 1} or above"
+            )
+            raise ValueError(
+                f"ibkr_client_id and ibkr_live_client_id overlap: historical client "
+                f"{self.ibkr_client_id} rotates {self.ibkr_client_id}-{historical_last} on "
+                f"connect retries, which reaches the live session's reserved IDs "
+                f"{self.ibkr_live_client_id} (live) and {reconcile_id} (reconcile). "
+                f"To fix, {remedy}."
+            )
+        return self
+
     model_config = {
         "env_file": ".env",
         "env_file_encoding": "utf-8",
         "case_sensitive": False,
         "extra": "ignore",
+        # pydantic-settings passes the entire environment in as the model input, so
+        # without this a config error renders unrelated secrets into the traceback.
+        "hide_input_in_errors": True,
     }
 
 
@@ -173,6 +256,95 @@ class FirstRateSettings(BaseSettings):
     }
 
 
+class RedisSettings(BaseSettings):
+    """Redis connection settings for the live session's Nautilus engine cache.
+
+    Owns: where a live paper-trading session's ``CacheConfig`` points (AR11).
+    The provisioned service is ``redis:7-alpine`` in ``docker-compose.yml``.
+
+    Does not own: what is stored there, or the key namespace — Nautilus derives
+    that from the session's ``trader_id`` (``src/core/live_trader_id.py``), and
+    ``src/core/live_cache.py`` is what translates these fields into a
+    ``CacheConfig``. Nothing in this module imports Nautilus.
+
+    Redis holds **cache** state only. It is rebuildable from IBKR, and IBKR is
+    authoritative on any conflict — but nothing enforces that yet; startup
+    reconciliation is Epic 4 (FR35, AR25).
+    """
+
+    redis_host: str = Field(
+        default="127.0.0.1",
+        description=(
+            "Redis host for the live session engine cache. Inside a container this must be "
+            "the compose service name ('redis'), not loopback — loopback there is the app "
+            "container itself."
+        ),
+    )
+    redis_port: int = Field(
+        default=6379,
+        ge=1,
+        le=65535,
+        description="Redis port. 0 is excluded: it means 'any free port' to bind, not connect.",
+    )
+    redis_db: int = Field(
+        default=0,
+        description=(
+            "Redis logical database index. Only 0 is accepted — see the validator. Present "
+            "because AR11 names it, not because it can currently be varied."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def validate_host_is_not_blank(self) -> "RedisSettings":
+        """Reject a whitespace-only host, which would connect to nothing.
+
+        ``min_length=1`` counts characters, so ``"   "`` satisfies it and then
+        fails much later inside a socket call with an opaque message.
+        """
+        if not self.redis_host.strip():
+            raise ValueError(
+                "redis_host is blank. Set REDIS_HOST to a hostname or IP address, "
+                "e.g. '127.0.0.1' locally or 'redis' inside docker-compose."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_database_index_is_reachable(self) -> "RedisSettings":
+        """Refuse a database index Nautilus cannot be told about.
+
+        ``nautilus_trader.config.DatabaseConfig`` at 1.220.0 exposes only
+        ``type, host, port, username, password, ssl, timeout`` — there is no
+        database-index field, and the config is msgpack-encoded straight into
+        the Rust ``RedisCacheDatabase``, so there is no side channel either.
+
+        A silently dropped value is the wrong failure mode here. An operator
+        setting ``REDIS_DB=1`` is reaching for isolation, and would get none
+        from it. Sessions *are* isolated — by the ``trader_id`` key namespace,
+        which is what actually delivers that guarantee — so this refusal
+        protects an expectation rather than a live guarantee, and says so.
+        """
+        if self.redis_db != 0:
+            raise ValueError(
+                f"redis_db is {self.redis_db}, but nautilus-trader 1.220.0 cannot be told which "
+                "Redis database to use: DatabaseConfig has no database-index field, so the value "
+                "would be silently ignored rather than isolating anything. Sessions are already "
+                "isolated from each other by the trader_id key namespace. Set REDIS_DB=0, or use "
+                "a separate Redis instance (REDIS_PORT) if you need true separation."
+            )
+        return self
+
+    model_config = {
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "case_sensitive": False,
+        "extra": "ignore",
+        # pydantic-settings passes the entire environment in as the model input, so
+        # without this a config error renders unrelated secrets into the traceback.
+        # Both validators above can fire, so this is reachable here.
+        "hide_input_in_errors": True,
+    }
+
+
 class CatalogSettings(BaseSettings):
     """Catalog configuration settings.
 
@@ -222,8 +394,12 @@ class Settings(BaseSettings):
         default=Decimal("10.0"),
         description="Position size as percentage of portfolio (e.g., 10.0 = 10%)",
     )
+    # 100, not the old 1,000,000: this is the live default a momentum session resolves to when
+    # --param trade_size is not given (via MomentumParameters._settings_map), and 1,000,000
+    # shares reaching a real paper account is a real-money-scale order, not a safe placeholder
+    # (Epic 4 retro, 2026-09-28).
     trade_size: Decimal = Field(
-        default=Decimal("1000000"),
+        default=Decimal("100"),
         description="Default trade size in SHARES (not USD notional)",
     )
 
@@ -278,6 +454,11 @@ class Settings(BaseSettings):
     # Catalog settings
     catalog: CatalogSettings = Field(
         default_factory=CatalogSettings, description="Named catalog settings"
+    )
+
+    # Redis settings (live session engine cache)
+    redis: RedisSettings = Field(
+        default_factory=RedisSettings, description="Redis engine-cache settings"
     )
 
     @property

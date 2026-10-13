@@ -2,672 +2,741 @@
 stepsCompleted: [1, 2, 3, 4, 5, 6, 7, 8]
 lastStep: 8
 status: 'complete'
-completedAt: '2026-06-17'
+completedAt: '2026-07-26'
 inputDocuments:
   - '_bmad-output/planning-artifacts/prd.md'
   - '_bmad-output/project-context.md'
-  - '_bmad-output/archive/phase-1-stocks/architecture.md'
   - 'docs/agent/architecture.md'
+  - 'docs/agent/conventions.md'
   - 'docs/agent/data-pipeline.md'
   - 'docs/agent/nautilus.md'
-  - 'docs/agent/web-ui.md'
   - 'docs/agent/persistence.md'
+  - 'docs/agent/testing.md'
+  - 'docs/agent/web-ui.md'
 workflowType: 'architecture'
 project_name: 'Trading-ntrader'
 user_name: 'Allay'
-date: '2026-06-17'
-effort: 'Phase 2 — FirstRate ETF Import (FMP Metadata Loader)'
+date: '2026-07-26'
 ---
 
 # Architecture Decision Document
 
 _This document builds collaboratively through step-by-step discovery. Sections are appended as we work through each architectural decision together._
 
-**Effort:** Phase 2 — FirstRate ETF Import (FMP Metadata Loader)
-
 ## Project Context Analysis
 
 ### Requirements Overview
 
-**Functional Requirements (40 total, 5 epics):**
-- **E1 — Instrument Metadata Resolution (FR1-FR6):** Provider-agnostic resolution
-  interface (FMP first consumer), persistent cache (no redundant fetches), explicit
-  `N/A` sentinel distinguishable from "not yet resolved", per-ticker fault isolation,
-  per-import resolution reporting (auto-resolved / descriptive-gap / unresolved-venue).
-- **E2 — ETF Data Import (FR7-FR19):** CLI import + dry-run with FMP-aware estimate,
-  ZIP extraction stage, reuse of `FirstRateCsvParser` (6-col headerless), all 5 native
-  timeframes incl. 30min, Parquet write to isolated FirstRate catalog, OHLC sanity,
-  row-count parity verification, sample-point validation, idempotent date-range re-runs,
-  timeframe selection, import summary, progress reporting.
-- **E3 — Venue Resolution & Completeness Gate (FR20-FR26):** Ticker → Nautilus-qualified
-  InstrumentId via resolved venue, unresolved-venue report, `venue_overrides.csv` manual
-  corrections with precedence over absent FMP data, merge-on-rerun, deterministic venue
-  coverage query, exclude+flag unresolved tickers (bars retained), refuse completion while
-  any venue missing (no inferred venues).
-- **E4 — Data Explorer ETF Support (FR27-FR32):** ETF ticker list, search/filter, windowed
-  chart at all 5 timeframes (incl. 30min), metadata panel with `N/A`-aware rendering,
-  per-timeframe statistics, external-reference accuracy verification (TradingView spot-check).
-- **E5 — Backtest Integration & Verification (FR33-FR38):** ETF catalog → BacktestEngine via
-  `BacktestOrchestrator`, run backtest with existing strategy, whole-share equity sizing,
-  multi-ETF runs, results persistence to DB, reference-consistency comparison.
-- **Configuration (FR39-FR40):** `FMPSettings` (API key + connection) via typed env config;
-  source ETF directory + isolated FirstRate catalog path via config.
+**Functional Requirements:**
 
-**Non-Functional Requirements (architectural drivers):**
+53 FRs in 7 clusters, mapping cleanly onto 5 proposed epics (E1–E5). Architecturally they decompose into:
 
-| Category | Requirement | Architectural Impact |
-|---|---|---|
-| Performance | Explorer chart load < 2s | Windowed Parquet reads (Phase 1 pattern preserved) |
-| Performance | Ticker list < 500ms, search < 300ms (~5K ETFs) | Indexed metadata-table queries (existing pattern) |
-| Performance | Catalog metadata read < 500ms | Read from metadata store, no Parquet directory scans |
-| Performance | Import / FMP resolution | No hard target; **rate-limit-bounded**, one-time-then-cached |
-| Reliability | Per-ticker fault tolerance (bar *or* metadata) | Failure isolation extends to the FMP resolution step |
-| Reliability | Graceful interruption | No partial Parquet readable as valid; consistent on interrupt |
-| Reliability | Idempotent recovery + FMP cache | Date-range skip + near-100% cache hit on re-run |
-| Reliability | Metadata-store consistency | Resolved metadata + overrides survive restart; no stale serves |
-| Reliability | Completeness enforcement | Authoritative, deterministic "is any venue missing?" query |
-| Integration | FMP rate-limit compliance | Throttled client; bulk ~5,039 resolution never exceeds quota |
-| Integration | Caching contract | Persisted, reused; re-run resolves ≈0 cached tickers |
-| Integration | Failure isolation | FMP errors → `N/A` / unresolved-queue, never abort import |
-| Integration | Catalog compatibility | ETF Parquet directly consumable, no runtime adapter |
-| Integration | Pattern conformance | Click CLI, FastAPI/HTMX DI chain, existing charting stack |
-| Security | Localhost personal tool | No authn/authz; FMP key via `FMPSettings`, never committed |
-| Maintainability | Project standards | type hints, ruff+mypy, size limits, TDD pyramid, >80% core cov |
+- **Live connectivity (FR1–7):** first use of Nautilus live components (`TradingNode`, IB data + execution
+  clients) in this repo. Must coexist with `IBKRHistoricalClient` (client-ID isolation, LogGuard
+  discipline) and run alongside backtesting without initialization conflicts. REALTIME market data,
+  RTH-only, no blind submission while disconnected.
+- **Safety gate (FR8–12):** paper/live account detection enforced at startup *before any connection*;
+  refusal is a distinct, testable, scriptable outcome (dedicated exit code). The gate — not
+  `ibkr_read_only` — is the load-bearing control, since `read_only` must be False to trade.
+- **Session model (FR13–22):** new domain entity. A session is a *list of strategy specs* (multi-strategy
+  is a config change later, never a refactor), with an immutable spec captured at creation
+  (`config_snapshot` discipline extended), identity spanning unlimited process runs, and a
+  `CREATED → RUNNING ⇄ STOPPED → SEALED` state machine. Stop never flattens; stop never seals.
+- **Execution & capture (FR23–31):** full order lifecycle representation (accepted / partial / filled /
+  rejected / cancelled / expired), volume-weighted aggregation of partial fills, duplicate-submission
+  prevention via deterministic client order IDs + query-don't-retry, rejection capture with venue
+  reason, incremental trade persistence (write-on-close, never batch-at-end).
+- **Reconciliation & resume (FR32–39):** IBKR account state is authoritative; local state is a cache.
+  Startup reconciliation → indicator warm-up from historical bars → only then live subscription.
+  Mid-position resume with warm indicators. Largely Nautilus-native configuration, but verification
+  and sequencing are ours.
+- **Seal & comparison (FR40–47):** seal is an explicit terminal act on a stopped session, producing a
+  run record through the *same* `ResultsExtractor` and results schema as backtests (widened to accept
+  a live host). Paper records distinguishable from backtests; execution conditions and closed-trade
+  count recorded; renders in existing list/detail/compare views with zero UI changes.
+- **Observability & config (FR48–53):** structured streaming logs with session-scoped correlation IDs,
+  status/list with `--json`, failure isolation per strategy, credentials only via `IBKRSettings`/env —
+  never in the session spec.
+
+**Non-Functional Requirements:**
+
+Reliability dominates (inverting Phases 1–2):
+
+- **Invariants, not targets:** duplicate orders = 0; resume-state discrepancy vs broker = 0 before any
+  trading; zero trade loss on SIGKILL; no artificial entries/exits from stop/restart/reconnect; no
+  orders while disconnected or unreconciled; sessions never enter a stuck state.
+- **Performance:** bar-close → order submission < 1s and observable; no bar-processing backlog; a
+  session started 5 minutes before the open trades at the open; reconnect < 60s; reconciliation < 30s.
+- **Integration (IBKR is the entire external surface):** 45 req/s pacing, market-data line budget
+  checked at startup, client-ID isolation, daily gateway restart designed for as a normal event, safe
+  degradation when unreachable.
+- **Testability (elevated to NFR):** automated tests never touch a real broker — broker doubles across
+  unit/component/integration (`--forked`) tiers; broker-dependent behavior verified by operator-run
+  procedures against the paper account; the safety gate has an automated test regardless.
+- **Security:** larger blast radius for existing credentials (orders, not just reads); credentials and
+  full account numbers never logged; no new secrets.
+- **Deliberately omitted:** scalability (one operator, one session) and accessibility (zero UI ships).
 
 **Scale & Complexity:**
-- Primary domain: Data pipeline + CLI (primary), light web (explorer ETF display)
-- Complexity level: High — but localized to net-new surface (FMP loader, venue gate, `N/A` threading)
-- Net-new architectural components: ~3-4 (metadata loader/service, FMP client, ZIP extraction
-  stage, venue-override merge) — everything else extends Phase 1 components
+
+- Primary domain: CLI-owned long-running trading service extending a brownfield Python 3.11 / Nautilus /
+  FastAPI / PostgreSQL+TimescaleDB / Redis system
+- Complexity level: high — stateful, long-lived, irreversible side effects, two new Nautilus surfaces
+  (live data + live execution) introduced at once
+- Estimated architectural components: ~8 net-new (session entity + repository pair, session runner
+  sibling to `BacktestOrchestrator`, live node assembly/config, safety gate, reconciliation verifier,
+  seal service, `ntrader live` CLI group, new Alembic migration) plus 2 targeted modifications
+  (`ResultsExtractor` host widening; strategy lifecycle corrections: `on_stop()` flatten removal,
+  `on_start()` indicator warm-up)
 
 ### Technical Constraints & Dependencies
 
-**Brownfield Inheritance (not re-opened):**
-- Extends Phase 1's `catalog_instruments` table, `instrument_mapper`, `import_service`,
-  `CatalogManager`, `MetadataService`, `import_data.py` CLI, and the explorer — Phase 1
-  explicitly anticipated ETFs gated on "a metadata loader story (e.g., FMP-backed)."
-- `FirstRateCsvParser` reused unchanged for the 6-column ETF schema.
-- Parser registry, idempotent metadata-gatekeeper import, dual async/sync repositories,
-  Pydantic-settings catalog config, structlog progress — all inherited.
-- Catalog isolation (FirstRate never mixed with IBKR/Kraken), single-adjustment-type
-  (split+dividend), decimal precision, UTC-normalized timestamps — all carried.
-
-**New External Dependency — FMP (this phase):**
-- `FMPSettings` (API key, base URL, rate-limit params) nested under `Settings`,
-  mirroring `IBKRSettings`/`KrakenSettings`; never hardcoded.
-- Rate-limit-aware client (mirror existing IBKR `RateLimiter`); HTTP client lazy-init
-  following `DataCatalogService` lazy-init + caching pattern.
-- Persistent metadata cache (correctness + quota cost control); graceful degradation.
-
-**Nautilus / Engine Constraints (carried from Phase 1):**
-- BacktestEngine single-use; LogGuard never double-initialized; strict engine setup order.
-- Parquet follows `{INSTRUMENT_ID}/{BAR_TYPE}/*.parquet`; venue-qualified InstrumentId is
-  the precondition for instrument qualification.
-- `BacktestOrchestrator` (not `MinimalBacktestRunner`) is the integration path.
-
-**Convention Change:**
-- Timeframe enum expands 4→5 (adds 30min), updated centrally; stock 30min backfill
-  deferred + tracked outside Phase 2 scope.
+- **One engine framework (hard constraint):** live = Nautilus `TradingNode` + IB adapters. No second
+  execution path, no live strategy variants, no duplicate metric code. Mode-branching in strategies
+  (`if self.is_live:`) is forbidden; live-specific semantics live in shared infrastructure or a base
+  class. Anything that can't route through Nautilus abstractions is escalated, not worked around.
+- **Version check owed by this workflow:** `TradingNode` vs newer `LiveNode` builder API for the pinned
+  `nautilus-trader >=1.190.0`.
+- **Nautilus process lifecycle:** LogGuard single-init discipline must cover `TradingNode`
+  (`set_nautilus_log_guard()` / `_guard_nautilus_logging()`); `BacktestEngine` single-use and
+  fork-corruption rules must not leak into the long-running process design.
+- **State ownership (PRD-decided):** Redis = Nautilus engine/cache state (`redis:7-alpine` already
+  provisioned); PostgreSQL = session metadata joining the results spine; IBKR = ground truth both defer to.
+- **Existing assets reused unchanged:** `StrategyRegistry`/`StrategyFactory.build_strategy_params()`,
+  `ResultsExtractor` (thin widening only), `backtest_runs`/`performance_metrics`/`trades` schema,
+  comparison UI, `IBKRSettings`, sync CLI repository path, structlog conventions.
+- **Project conventions that bind:** dual async/sync repository rule; TDD with the established pyramid;
+  UV-only; Decimal for money; typed Pydantic settings; size limits; new Alembic migration required
+  (note: the repo has 14 migration versions, not the 4 the PRD/docs cite — that doc note is stale).
+- **Comparison-integrity constants:** starting capital matched ($100k, reset paper account, no
+  normalization); RTH only (`ibkr_use_rth=True`); price provenance divergence (FirstRate adjusted vs
+  IBKR unadjusted SMART) recorded as a session property; real commission replaces `IBKRCommissionModel`.
+- **PRD-flagged open decision owned by architecture:** disposition of open positions at seal time —
+  must be explicit and reported, never silent.
 
 ### Cross-Cutting Concerns Identified
 
-1. **`N/A` sentinel discipline (three-state):** A field is one of *resolved value*,
-   *explicit `N/A`* (FMP had nothing), or *not yet resolved*. Spans metadata loader (writes),
-   instrument mapping, explorer presentation models, and backtest config — every consumer
-   handles `N/A` without error or silent fallback.
-2. **Venue correctness:** The core domain risk. Spans FMP resolution → `venue_overrides.csv`
-   merge → instrument qualification → backtest. A wrong/guessed venue silently corrupts
-   results; the architecture forbids inference and gates completion on 100% coverage.
-3. **Metadata persistence & cache:** One store feeds three readers (explorer display,
-   backtest qualification, idempotent re-run) and is written by the loader. Cache is both a
-   correctness mechanism (survives re-runs) and a cost control (FMP quota).
-4. **Provider-agnostic interface:** The metadata service interface must not leak FMP
-   specifics, so the next asset class supplies tickers rather than re-solving sourcing.
-5. **5-timeframe catalog convention:** 30min added centrally to the timeframe enum; propagates
-   to bar-type strings, explorer selector, statistics, and backtest config.
-
-### Open Architectural Questions (to resolve in later steps)
-
-1. **Metadata store shape:** Extend the existing `catalog_instruments` table with new
-   columns (venue source, currency, asset_type, country, ipo_date, resolution status) vs a
-   dedicated `instrument_metadata` cache table? Trade-off: reuse vs separation of the
-   provider-agnostic cache from catalog identity.
-2. **FMP cache location:** PostgreSQL (existing infra, dual-access) vs on-disk file cache.
-3. **`venue_overrides.csv` merge mechanics:** Where the merge happens (loader vs import
-   orchestration) and how precedence/idempotency is enforced.
-4. **Provider interface boundary:** Shape of the `InstrumentMetadataService` abstraction and
-   where FMP-specific mapping lives.
-5. **ZIP extraction strategy:** Extract-all-then-parse vs extract-per-ticker (bounded disk),
-   and how interruption leaves the catalog consistent.
+1. **Safety gating** — paper/live detection before connection, deliberate real-money crossing
+   mechanism, distinct exit code, automated test. Ships before any order-submitting code exists.
+2. **Idempotency & duplicate prevention** — deterministic client order IDs; on ambiguity, query order
+   state, never retry submission. Spans execution, reconnect, restart, and resume paths.
+3. **Broker-authoritative state** — startup + continuous reconciliation; discrepancies reported, never
+   auto-resolved toward local state; absorbs corporate actions on multi-week sessions.
+4. **Process-lifecycle coexistence** — LogGuard, client-ID allocation vs the historical-data client,
+   graceful Ctrl-C, honest foreground process (no daemon).
+5. **Session-scoped observability** — correlation-ID convention extended to session IDs; every order
+   traceable end-to-end; "running but not trading" distinguishable from "dead."
+6. **Incremental durability** — trades persisted as they close; session state always resumable or
+   sealable after any interruption.
+7. **Mode-agnostic strategy discipline** — strategy changes allowed (warm-up, on_stop fix) but must
+   behave identically in both engines; enforcement is a review/test concern touching every strategy file.
+8. **Dual-repository rule** — session tables need async + sync repositories even though only the CLI
+   writes this phase.
 
 ## Starter Template Evaluation
 
 ### Primary Technology Domain
 
-Data pipeline + CLI (primary) with light FastAPI/HTMX web (explorer). **Brownfield
-extension** of an established backtesting system — no starter template applies.
+Brownfield CLI-owned live-trading service — Phase 3 of an existing system. No starter template
+applies; the existing NTrader codebase is the foundation, and its stack is settled
+(Python 3.11+, nautilus-trader[ib], FastAPI/HTMX, PostgreSQL 16 + TimescaleDB, Redis, SQLAlchemy 2
+async+sync, Click, UV, structlog, pytest tiers).
 
 ### Starter Options Considered
 
-**None.** This is a brownfield continuation of Phase 1, building on a mature codebase
-(13+ shipped feature specs, Phase 1 ETF-anticipating architecture already in place). The
-technology stack, project structure, development patterns, quality gates, and CI are all
-established and documented in `project-context.md` (88 rules) and `docs/agent/*`. Selecting
-a scaffolding starter would conflict with existing conventions. The architectural foundation
-is *inherited*, not generated.
+None — evaluating starters would be architecture theatre for a phase whose hard constraint is
+maximal reuse of the existing system (`StrategyRegistry`, `StrategyFactory`, `ResultsExtractor`,
+results schema, comparison UI, `IBKRSettings`). The relevant "foundation decision" for this phase
+is which Nautilus live API generation to build on, which the PRD explicitly assigned to this
+workflow. Verified against the installed package rather than docs:
 
-### Inherited Technical Foundation (verified current)
+### Foundation: Existing Codebase + Nautilus `TradingNode` (v1.220.0)
 
-| Layer | Technology | Version | Notes |
-|---|---|---|---|
-| Runtime | Python | >=3.11 | type hints, mypy-gated |
-| Trading engine | nautilus-trader[ib] | >=1.190.0 | C/Rust extensions, LogGuard isolation |
-| Web | FastAPI + Jinja2 + HTMX + Tailwind | >=0.121.2 / >=3.1.6 | MPA, TradingView Lightweight Charts |
-| DB | PostgreSQL 16 + TimescaleDB, SQLAlchemy | >=2.0.43 | async (web) + sync (CLI) dual repos |
-| Validation/config | Pydantic + pydantic-settings | >=2.11.9 / >=2.10.1 | nested settings (IBKR/Kraken) |
-| CLI | Click | >=8.2.1 | command groups in `src/cli/commands/` |
-| HTTP client | httpx | 0.28.1 (latest) | already present, **dev-group only** |
-| Package manager | UV | — | `uv add/remove/sync`; never pip/poetry |
-| Quality | ruff, mypy, pytest (forked/xdist/asyncio) | — | TDD, F401/F821 commit gate |
+**Version check (PRD architecture-phase action item — RESOLVED):**
 
-### Net-New Dependency Decision: FMP via `httpx` (no SDK)
+- Pinned: `nautilus-trader[ib]>=1.190.0`; locked and installed: **1.220.0**
+- **`TradingNode` is the live host API at this version.** `LiveNode` does not exist in 1.220.0
+  (`nautilus_trader.live.node` exposes only `TradingNode`); the newer `LiveNode` builder API seen
+  in current Nautilus docs belongs to a later, unpinned generation. Decision: build on
+  `TradingNode` + `TradingNodeConfig`; revisit only on a deliberate Nautilus upgrade.
+- **IB live adapter surface confirmed present in the installed wheel:**
+  - `InteractiveBrokersDataClient` / `InteractiveBrokersDataClientConfig`
+  - `InteractiveBrokersExecutionClient` / `InteractiveBrokersExecClientConfig`
+  - `InteractiveBrokersLiveDataClientFactory` / `InteractiveBrokersLiveExecClientFactory`
+  - `InteractiveBrokersInstrumentProviderConfig`, `DockerizedIBGatewayConfig`
+  - `nautilus_trader.live.reconciliation` module (native reconciliation machinery)
 
-- **Decision:** Implement the FMP client with **`httpx`** (sync, matching the CLI's sync
-  execution path) — no third-party FMP SDK. FMP's REST API is a handful of simple GET
-  endpoints (`/stable/profile`, `/stable/search-exchange-variants`, `/stable/etf-list`);
-  an SDK would add an unvetted dependency for trivial JSON-over-HTTP.
-- **Action required:** Promote `httpx` from the dev group to a **main runtime dependency**:
-  `uv add httpx` (currently `httpx>=0.28.1`, dev-only). It is already used in app code
-  (`src/api/ui/backtests.py`), so this also corrects an existing classification gap.
-- **Rationale:** Mirrors how `IBKRSettings`/`KrakenSettings` wrap their providers; keeps
-  the dependency surface minimal; `httpx` gives sync + async + timeouts + retries hooks.
-- **Verified:** httpx 0.28.1 is the current stable release (no version bump needed).
+**Architectural decisions inherited from the existing codebase (not re-decided):**
 
-**Note:** No project-initialization story is needed (brownfield). The first implementation
-story is instead `FMPSettings` + `uv add httpx`, per the Implementation Patterns section.
+- **Language & runtime:** Python 3.11+, type hints, mypy, ruff (E/F/I, 100 cols), size limits
+- **Persistence:** PostgreSQL 16 + TimescaleDB via SQLAlchemy 2.0 (async asyncpg for web, sync
+  psycopg2 for CLI — dual-repository rule); Alembic migrations; Redis 7 provisioned in
+  docker-compose for Nautilus cache state
+- **CLI:** Click command groups under `ntrader`, Rich tables, `--json` options, structlog output
+- **Testing:** pytest tiers — unit/component parallel, integration `--forked`, e2e sequential;
+  TDD mandatory; broker doubles for all automated tests
+- **Config:** Pydantic BaseSettings from env (`IBKRSettings` reused unchanged); UV-only deps
+- **Infra:** docker-compose already provides `postgres`, `redis`, and `ib-gateway` (paper)
 
-### FMP API Reference (verified current, 2026 "stable" routes)
-
-These facts ground the E1 metadata-loader decisions:
-
-- **Base URL:** `https://financialmodelingprep.com/stable` (legacy `/api/v3/` deprecated).
-  Auth via `apikey` query param or header.
-- **One endpoint resolves every PRD metadata field:** `GET /stable/profile?symbol={T}` →
-  `exchange` (listing label), `exchangeFullName` + exchange short name, `currency`,
-  `isEtf`/`isFund` (asset type), `companyName`, `sector`, `industry`, `country`, `ipoDate`.
-  No multi-endpoint orchestration needed. Null/empty field → `N/A` sentinel; blank
-  `exchange` → unresolved-venue queue.
-- **Venue gotcha (justifies the manual-override mandate):** FMP `exchange` is the
-  *listing-exchange label* ("NASDAQ"/"NYSE"/"AMEX"), NOT the Nautilus venue. SPY's true
-  primary venue is ARCA but FMP often reports AMEX/NYSE. Requires an **FMP-label →
-  Nautilus-venue-code normalization map** before the `venue_overrides.csv` backstop.
-  `GET /stable/search-exchange-variants?symbol={T}` cross-checks listing venues;
-  `GET /stable/etf-list` gives the full ETF universe for validation.
-- **Subscription (operator's actual plan): paid Starter** = 300 calls/min, 20GB/30-day
-  bandwidth, 5yr history, real-time US. ~5,039 per-ticker `profile` calls ≈ 17 min
-  one-time, then cached — within quota with throttling. **Per-ticker `profile` is the
-  baseline design path.** `GET /stable/profile-bulk?part=N` is often Premium/Ultimate-gated;
-  the loader must NOT depend on it (opportunistic only if confirmed on Starter).
+**Note:** No project initialization story exists — the first implementation story builds directly
+in the existing repo on a Phase 3 feature branch (current: `015-paper-trading`).
 
 ## Core Architectural Decisions
 
 ### Decision Priority Analysis
 
-**Critical (block implementation):**
-- `instrument_metadata` reusable cache table (ADR-1)
-- Three-state `N/A` representation (ADR-2)
-- FMP client: sync httpx, single `/stable/profile` call, throttle + graceful degradation (ADR-4)
-- Provider-agnostic `InstrumentMetadataService` interface (ADR-5)
-- Curated FMP→Nautilus venue map + unresolved queue (ADR-6)
-- `venue_overrides.csv` merge + completeness gate (ADR-7)
-- Per-archive ZIP extract→import→cleanup (ADR-8)
-- 30min central timeframe-enum expansion (ADR-9)
+**Critical Decisions (Block Implementation):**
 
-**Important (shape architecture):**
-- `instrument_metadata` → `catalog_instruments` qualification sync (ADR-3)
-- ETF asset-type classification / whole-share sizing reuse (ADR-10)
+1. Live host API: Nautilus `TradingNode` (resolved in Starter Template Evaluation)
+2. Session persistence model: new `trading_sessions` table + dual-FK `trades` linkage (D1)
+3. Safety gate design: two-layer gate with explicit real-money crossing mechanism (D3)
+4. Seal-time open-position policy: refuse-by-default, `--force` seals with open trades (D6)
+5. Client-ID allocation: dedicated `ibkr_live_client_id` setting (D4)
 
-**Deferred (post-MVP):**
-- `/stable/profile-bulk` optimization (Premium/Ultimate-gated; not depended on)
-- Stock 30min backfill (tracked, out of Phase 2 scope)
-- Supplementary data (dividends/splits) tables — display-only later
+**Important Decisions (Shape Architecture):**
+
+6. Session runner as asyncio sibling of `BacktestOrchestrator` (D5)
+7. Redis-backed Nautilus cache keyed by session-derived `trader_id` (D2)
+8. Duplicate prevention: Nautilus reconciliation + query-don't-retry policy (D7)
+9. Exit-code contract with dedicated gate-refusal code (D8)
+
+**Deferred Decisions (Post-MVP, recorded so deferral is deliberate):**
+
+- Web UI live monitoring transport (websockets vs polling) — Growth; first genuine websocket candidate
+- Multi-session concurrency control — one session at a time this phase
+- Divergence tolerance bands / auto-seal — needs real drift data first
+- Real-money risk limits and kill switch — belongs to the phase that crosses the gate
 
 ### Data Architecture
 
-**ADR-1: Dedicated `instrument_metadata` cache table (reusable keystone)**
-- **Decision:** New table, provider-agnostic, keyed by `ticker`. Columns: `ticker` (PK),
-  `metadata_provider` ('FMP'), `venue` (nullable, Nautilus venue code), `currency`,
-  `asset_type` (ETF/EQUITY/...), `company_name`, `sector`, `industry`, `country`,
-  `ipo_date`, `resolution_status` (enum), `resolved_at`, `created_at`/`updated_at`.
-  Decoupled from any catalog — resolves/caches independently of bar import.
-- **Rationale:** Realizes the PRD's "reusable by design" mandate — the cache is the asset;
-  future asset classes (futures/FX/crypto) populate the same table. Survives re-runs;
-  serves Journey 5 (FMP cache = no redundant fetch). Inherits `Base` + `TimestampMixin`;
-  dual async/sync repositories (Phase 1 pattern).
-- **Trade-off accepted:** A join/sync to `catalog_instruments` (ADR-3) vs single-table
-  simplicity. Worth it for the reuse + independent-cache properties.
-- **Migration:** New Alembic version (5th) — `00X_add_instrument_metadata.py`.
-- **Serves:** FR1, FR2, FR5 (provider-agnostic), FR3 (`N/A`), FR20 (mapping), FR24 (coverage).
+**D1 — Session persistence: new `trading_sessions` table; runs row created only at seal.**
 
-**ADR-2: Three-state `N/A` representation**
-- **Decision:** Each metadata field is exactly one of: (a) **resolved value**, (b) **explicit
-  `N/A`** — FMP returned the field empty/null (stored as the literal sentinel string `"N/A"`
-  for descriptive fields), or (c) **not yet resolved** — DB `NULL` (no resolution attempt
-  recorded). Row-level `resolution_status` enum: `UNRESOLVED` / `RESOLVED` /
-  `VENUE_UNRESOLVED`. Venue is never `"N/A"`: it is either a real code or NULL+`VENUE_UNRESOLVED`.
-- **Rationale:** Distinguishability is a hard PRD requirement — `N/A` (honest gap) must differ
-  from "not loaded" and from blank. The status enum makes the venue gate a trivial query.
-- **Serves:** FR3, FR24, FR26; the cross-cutting `N/A` discipline.
+- New table `trading_sessions` (new Alembic migration): `id` BigInteger PK + `session_id` UUID
+  business key (dual-ID pattern, matching `backtest_runs`), `name`, `status`
+  (`created|running|stopped|sealed` — DB-enforced enum), `spec` JSONB (immutable after insert),
+  `linked_backtest_run_id` (nullable FK → `backtest_runs.run_id`), `sealed_run_id` (nullable, set
+  at seal), `last_started_at` / `last_stopped_at` / `sealed_at` timestamps, + `TimestampMixin`.
+- **The `backtest_runs` row is created only at seal** — never at session creation. A pre-created
+  row would surface unfinished sessions in the existing list views and violate "zero UI changes."
+  Before seal, `status`/`list` read from `trading_sessions` + `trades` directly.
+- **`backtest_runs` gains `run_type`** (`'backtest'` default | `'paper'`) — satisfies FR44 with one
+  column. Execution conditions (starting capital, RTH policy, price-adjustment basis, market data
+  tier, closed-trade count — FR43/FR45) ride in the existing `config_snapshot` JSONB under a
+  `session_conditions` key: no new columns, forward-compatible, and displayed for free by the
+  existing config-snapshot panel.
+- **`trades` gains nullable `session_id` FK; `backtest_run_id` becomes nullable**, with CHECK
+  constraint (`backtest_run_id IS NOT NULL OR session_id IS NOT NULL`). Live trades are written
+  incrementally against `session_id` as positions close (FR28); seal backfills `backtest_run_id`
+  on the session's trades, after which existing UI queries see them unchanged. Open positions at
+  a `--force` seal persist as open trades (null exit) — the exact shape backtests already use.
+- **Spec immutability** is enforced the same way `config_snapshot` is: written once at creation,
+  no update path in either repository. Session start re-reads the spec by `session_id` (FR16).
+- **Dual-repository rule honored:** `TradingSessionRepository` (async) + `TradingSessionRepositorySync`
+  (sync). Only the sync path is exercised this phase; async ships for the Growth monitoring UI.
+- **Validation:** the seal path reuses `BacktestPersistenceService` NaN/Infinity validation and
+  `DuplicateRecordError` handling verbatim.
 
-**ADR-3: `instrument_metadata` → `catalog_instruments` qualification sync**
-- **Decision:** `catalog_instruments` (Phase 1 catalog-identity row) reads venue/descriptive
-  fields from `instrument_metadata` at import time to compute the Nautilus-qualified
-  `nautilus_id`. `instrument_metadata` is the source of truth for resolved metadata;
-  `catalog_instruments` remains the source of truth for per-catalog bar counts/date ranges.
-- **Rationale:** Keeps Phase 1's explorer/backtest reads working unchanged while sourcing
-  metadata from the new reusable cache. Single writer (import pipeline) avoids drift.
+**D2 — Nautilus engine state: Redis-backed cache, session-scoped namespace.**
 
-### External Dependency: FMP Integration
+- `TradingNodeConfig(cache=CacheConfig(database=DatabaseConfig(...redis...)))` pointed at the
+  provisioned `redis:7-alpine`.
+- `trader_id` is derived deterministically from the session (`PAPER-<short-session-id>`), so the
+  Redis namespace is per-session: a restarted process rejoins its own cache; two sessions never
+  share order/position state. Redis holds *cache* state only — IBKR remains ground truth and
+  startup reconciliation overwrites cache on conflict (FR35).
+- New `RedisSettings` (host/port/db via env) added to `Settings` — the compose service exists but
+  no typed settings do yet.
 
-**ADR-4: FMP client — sync httpx, one profile call, throttle + graceful degradation**
-- **Decision:** `FMPClient` (sync httpx, lazy-init, `FMPSettings`) resolves a ticker with a
-  single `GET /stable/profile?symbol={T}`. Rate-limit throttle reuses the IBKR `RateLimiter`
-  pattern bounded to the Starter quota (300 calls/min, configurable). Retries with backoff on
-  transient errors (`RateLimitExceeded`-style); on timeout/error/partial → degrade: descriptive
-  fields → `"N/A"`, missing venue → `VENUE_UNRESOLVED`. **Never aborts the whole import.**
-  Cache check (`instrument_metadata` row with `resolution_status=RESOLVED`) precedes any call.
-- **Rationale:** PRD rate-limit + caching + failure-isolation contract; one call covers all
-  fields (verified). Sync matches the CLI execution path.
-- **Trade-off:** `profile-bulk` (faster but tier-gated) deliberately not depended on.
-- **Serves:** FR1, FR2, FR4, FR6, FR39; NFR integration (rate-limit, caching, failure isolation).
+### Authentication & Security
 
-**ADR-5: Provider-agnostic `InstrumentMetadataService` interface**
-- **Decision:** `InstrumentMetadataService` exposes `resolve(ticker) -> InstrumentMetadata`
-  (a clean domain model). The FMP-specific HTTP, field mapping, venue normalization, and `N/A`
-  mapping all live in an `FMPMetadataProvider` adapter behind the interface. Consumers
-  (instrument mapping, explorer, backtest config) depend only on the domain model — no FMP
-  types leak out.
-- **Rationale:** The reuse mandate — next asset class supplies tickers to the same service,
-  swapping/adding a provider without touching consumers.
-- **Serves:** FR5; cross-cutting provider-agnostic concern.
+**D3 — The safety gate: two layers, fail-closed, with a deliberate crossing mechanism.**
 
-### Venue Resolution & Completeness Gate
+- **Layer 1 — pre-connection static gate** (FR9, runs before any socket opens):
+  refuses unless *all* hold: `ibkr_trading_mode == "paper"`, `ibkr_port` ∈ known paper ports
+  {7497 (TWS paper), 4002 (Gateway paper)}, and `TWS_ACCOUNT` (when set) matches the IBKR paper
+  prefix (`DU`/`DF`). Any failure → structured refusal message + dedicated exit code, zero
+  connections attempted.
+- **Layer 2 — post-connection account verification** (before strategies start, before any order
+  path exists): the account ID actually reported by the connected gateway must carry a paper
+  prefix. Mismatch → immediate node shutdown, no strategy start, same refusal exit code. This
+  catches the case the static gate cannot: a live account listening on a paper port.
+- **Deliberate crossing (FR10, designed now, exercised in a future phase):** real-money requires
+  BOTH `--real-money` on the CLI AND env `NTRADER_REAL_MONEY_ACCOUNT=<exact account id>` matching
+  the connected account. Two independent, redundant declarations across two channels — a port
+  typo, stale env var, or copied command can never produce all of them. There is no interactive
+  prompt to automate around; absence of either condition is refusal.
+- **Gate is a pure, unit-testable function** (`evaluate_gate(settings, cli_flags) -> GateDecision`)
+  plus a thin integration seam — the automated test requirement (NFR) falls out naturally.
+- `ibkr_read_only=False` is set *only after* Layer 1 passes, scoped to the session process.
+- Logging: account IDs masked to last 3 characters; credentials never logged (existing rule).
 
-**ADR-6: Curated FMP→Nautilus venue map + unresolved queue (no guessed venues)**
-- **Decision:** A vetted, code-maintained map translates FMP exchange labels to Nautilus venue
-  codes (e.g. `NASDAQ→NASDAQ`, `NYSE→NYSE`, documented ETF corrections). Labels confidently in
-  the map auto-resolve; ambiguous classes (notably FMP `AMEX` covering the ARCA/BATS/NYSE-American
-  split) and blank/missing labels route to the unresolved-venue queue — never guessed.
-- **Rationale:** Venue accuracy is the core domain risk; FMP's listing label ≠ Nautilus venue.
-  Honors PRD "no inferred venues" strictly, accepting more up-front manual review.
-- **Serves:** FR20, FR21, FR25, FR26.
+### API & Communication Patterns
 
-**ADR-7: `venue_overrides.csv` merge + deterministic completeness gate**
-- **Decision:** Import/refresh merges `venue_overrides.csv` (ticker→venue, git-tracked) into
-  `instrument_metadata`, override taking precedence over absent/ambiguous FMP venue;
-  re-merge each run (idempotent). The completion gate is a deterministic query: **0 rows with
-  `resolution_status=VENUE_UNRESOLVED` in the backtestable universe.** Unresolved tickers keep
-  their bars but are flagged non-backtestable (excluded from qualification).
-- **Rationale:** PRD-decided mechanism (Option B); read-only explorer preserved (no web write-path).
-- **Serves:** FR21–FR26; NFR completeness enforcement.
+**D8 — CLI contract (no web API work this phase):**
 
-### Import Pipeline & Catalog
+- New Click group `ntrader live` with `create / start / status / list / reconcile / seal`
+  (PRD command table adopted as-is). `stop` = Ctrl-C / SIGTERM on the foreground process —
+  graceful: cancel subscriptions, stop node, leave positions untouched, mark session `stopped`.
+- **Exit codes:** `0` success · `1` general error · `2` usage error (Click default) ·
+  `3` **gate refusal** (scriptably distinct, FR11) · `4` broker connectivity failure.
+- `status`/`list` render Rich tables with `--json` (FR51), matching existing CLI conventions.
+- Structured `structlog` streaming with `session_id` bound into every log record (FR48),
+  extending the correlation-ID convention.
 
-**ADR-8: Per-archive ZIP extract→import→cleanup**
-- **Decision:** Process one ZIP at a time: extract → parse (reuse `FirstRateCsvParser`) →
-  write Parquet → verify row count → delete extracted `.txt` before the next archive. Peak disk
-  ≈ one batch. Idempotent resume at archive granularity; Phase 1 metadata-gatekeeper keeps any
-  partial Parquet invisible to explorer/backtest on interrupt.
-- **Rationale:** PRD disk-pressure risk (Journey 5); bounded memory + disk; consistent-on-interrupt.
-- **Serves:** FR9, FR16, NFR graceful-interruption/idempotent-recovery.
+**D7 — Order-path integrity policy (cross-cutting, enforced in infrastructure):**
 
-**ADR-9: 30min via central timeframe-enum expansion (4→5)**
-- **Decision:** Add 30min once to the central timeframe enum; it propagates to bar-type strings,
-  explorer selector, statistics, and backtest config. ETFs imported at all 5 from the start;
-  stock 30min backfill deferred + tracked.
-- **Rationale:** Single source of truth prevents 5min/1hour conflation; PRD convention change.
-- **Serves:** FR11, FR17, FR29.
-
-### Backtest Integration
-
-**ADR-10: ETF → BacktestOrchestrator, whole-share equity sizing, multi-ETF via instrument list**
-- **Decision:** ETF catalog routes through the existing `BacktestOrchestrator`; venue-qualified
-  `InstrumentId` is the precondition. Whole-share (equity) sizing reused; leveraged/inverse ETFs
-  settle as ordinary shares. Multi-ETF runs use `BacktestDataConfig`'s `instrument_ids` list
-  (Phase 1-confirmed capability). Results persist via existing DB path.
-- **Rationale:** No new engine decisions; asset_type from FMP (`isEtf`) drives equity sizing.
-- **Serves:** FR33–FR38; NFR catalog compatibility.
+- Client order IDs come from Nautilus's deterministic generator under the session-stable
+  `trader_id` — uniqueness and determinism inherited, not reinvented.
+- **No retry-on-timeout for order placement, anywhere.** On ambiguity (timeout, disconnect
+  mid-submit), the execution layer queries order state; resubmission only after the venue
+  confirms the order is not working.
+- Startup reconciliation loads working orders into the cache before strategies start, so a
+  resumed strategy sees its own open orders (FR27).
+- Order events (accepted / partial / filled / rejected / cancelled / expired) are logged with
+  venue reasons as they arrive; rejections never raise into strategy silence (FR26, FR31).
 
 ### Frontend Architecture
 
-**No new decisions.** Explorer reuses Phase 1 patterns (Jinja2 + HTMX fragments, `NavigationState`,
-`FilterState`, TradingView charts). 30min added to the timeframe selector (ADR-9); metadata panel
-uses `@computed_field` `N/A`-aware display props (ADR-2). Read-only stance preserved (ADR-7).
+None this phase — zero UI change is an E5 success criterion. Sealed sessions render through the
+existing list/detail/comparison views purely because they are ordinary `backtest_runs` rows.
+(Recorded implication: `run_type` gives the UI a costless "Paper" badge later — Growth, not now.)
 
 ### Infrastructure & Deployment
 
-**No new decisions.** Existing Docker + PostgreSQL/TimescaleDB sufficient; no new services. FMP is
-an outbound HTTPS call from the existing CLI/app process.
+**D4 — Client-ID allocation:** new `ibkr_live_client_id` field on the existing `IBKRSettings`
+(default `10`; historical client keeps `IBKR_CLIENT_ID` default `1`), with a Pydantic model
+validator rejecting equality. The two clients can run concurrently (FR5).
+
+**D5 — Process model:** foreground asyncio process, operator-managed (tmux/screen), no daemon.
+`ntrader live start` → `asyncio.run(session_runner.run(...))` hosting the `TradingNode`.
+SIGINT/SIGTERM handlers trigger graceful node stop; a second signal forces exit. `LogGuard`:
+the node's guard is registered via the existing `set_nautilus_log_guard()` before any other
+Nautilus component initializes in-process.
+
+- **Gateway/TWS:** operator-run TWS or IB Gateway (existing `ib-gateway` compose service usable);
+  the daily restart is handled by the IB adapter's reconnect machinery + the design assumption
+  that overnight the process is normally stopped anyway. Reconnect target < 60s (NFR).
+- **Market data:** `ibkr_market_data_type=REALTIME` for sessions (explicitly overriding the
+  `DELAYED_FROZEN` fetch default); `ibkr_use_rth=True`; instrument-count vs market-data-line
+  budget checked at startup with a clear failure (NFR).
+- **No CI/CD changes.** Automated tests never touch a broker (existing tiers + broker doubles);
+  operator-run verification procedures against the paper account are documented as the phase-gate
+  evidence (Testability NFR).
+
+**D6 — Seal-time open positions (PRD-assigned open decision — RESOLVED):**
+
+- `seal` **refuses by default when the session has open positions**, listing them explicitly.
+- `seal --force` seals anyway: open positions persist as **open trades (null exit)** — exactly
+  how backtests already record open positions — their disposition is printed in the seal report,
+  and they remain at the broker, explicitly reported as no longer owned by any session.
+- **Sealing never flattens.** Auto-flattening would manufacture artificial exits, violating the
+  "no artificial trades" invariant; a deliberate manual flatten in TWS before sealing remains
+  available to the operator and produces honest, strategy-external exits visible as such.
+- Satisfies FR47's actual requirement: explicit and reported, never silent.
 
 ### Decision Impact Analysis
 
-**Implementation Sequence:**
-1. `FMPSettings` + `uv add httpx` (promote to runtime dep)
-2. Alembic migration: `instrument_metadata` table (ADR-1) + `resolution_status` enum (ADR-2)
-3. Domain model `InstrumentMetadata` + `InstrumentMetadataService` interface (ADR-5)
-4. `FMPMetadataProvider` adapter: profile call, throttle, venue map, `N/A` mapping (ADR-4, ADR-6)
-5. Dual repositories for `instrument_metadata`; cache-check-before-fetch
-6. Venue override merge + completeness-gate query (ADR-7)
-7. ETF import path: per-archive ZIP handling + metadata resolution per ticker (ADR-8) + 30min enum (ADR-9)
-8. `catalog_instruments` qualification sync (ADR-3)
-9. Explorer 30min + `N/A` rendering; backtest verification (ADR-10)
+**Implementation Sequence (mirrors E1→E5):**
+
+1. D3 gate (pure function + settings) and D4 client-ID split — before any connecting code (E1)
+2. `TradingNode` assembly with IB factories, `LogGuard` registration, REALTIME/RTH config (E1)
+3. D1 session migration + session entity + dual repositories + D2 Redis cache config (E2)
+4. D5 session runner + CLI group + signal handling + D8 exit codes (E2)
+5. D7 order-path policy + incremental trade persistence on position-closed events (E3)
+6. Reconciliation configuration + warm-up sequencing + `reconcile` command (E4)
+7. D6 seal service + `ResultsExtractor` host widening + `run_type` stamping (E5)
 
 **Cross-Component Dependencies:**
-- `instrument_metadata` (ADR-1) is written by the FMP provider (ADR-4/5/6) + override merge (ADR-7),
-  and read by qualification sync (ADR-3), explorer, and backtest.
-- The venue map (ADR-6) + override gate (ADR-7) jointly enforce the 100%-coverage precondition for
-  backtest qualification (ADR-10).
-- 30min enum (ADR-9) is consumed by import (ADR-8), explorer, and backtest config.
+
+- D2's session-derived `trader_id` is what makes D7's deterministic order IDs session-stable
+  across restarts — these two decisions must land together (E2 before E3).
+- D1's runs-row-at-seal-only choice forces `status`/`list` to read `trading_sessions` + `trades`,
+  not `backtest_runs` — the CLI query path (D8) depends on D1's shape.
+- D6 depends on the trade-persist behavior confirmed in Phase 2 (open positions persist with null
+  exit) — seal reuses it rather than adding a parallel path.
+- D3 Layer 2 runs inside D5's startup sequence — gate evaluation is a startup phase, not a
+  one-off check, and its placement (after connect, before strategy start) is testable in the
+  session runner's state machine.
 
 ## Implementation Patterns & Consistency Rules
 
-### Pattern Scope
+_The existing `_bmad-output/project-context.md` (88 rules) governs everything it covers — naming,
+layering, dual repositories, TDD tiers, logging, Decimal money, size limits. The patterns below are
+only the **net-new Phase 3 conflict points** where agents could otherwise diverge._
 
-`project-context.md` (88 rules) and the Phase 1 architecture's pattern section (parser registry,
-file organization, DB/API naming, CLI structure, import error handling, HTMX fragments) remain
-authoritative. This section adds **only the Phase-2 conflict points** where agents could diverge.
+### Naming Patterns
 
-### Naming — New Modules & Classes (avoid Phase 1 collisions)
+**Vocabulary (use these words, never synonyms):**
 
-- **Reusable metadata package lives OUTSIDE firstrate:** `src/services/metadata/` — it is
-  provider- and asset-class-agnostic (the E1 keystone), not FirstRate-specific. Do NOT add it
-  under `src/services/firstrate/`.
-- **Name collision to avoid:** `src/services/firstrate/metadata_service.py` already defines
-  `MetadataService` (Phase 1 `catalog_instruments` CRUD). The new resolution service is
-  **`InstrumentMetadataService`** — distinct name, distinct package. Never reuse "MetadataService".
-- **Canonical names:** `InstrumentMetadataService` (interface/orchestrator), `FMPMetadataProvider`
-  (adapter), `FMPClient` (httpx wrapper), `VenueMap` (`venue_map.py`), domain model
-  `InstrumentMetadata` in `src/models/instrument_metadata.py` (Pydantic, alongside existing
-  `src/models/catalog.py`).
+| Concept | Term | Never |
+|---|---|---|
+| The logical forward test | **session** | run, test, experiment |
+| One process execution | **process run** | session, instance |
+| Ending a session permanently | **seal** | close, finalize, complete, end |
+| Stopping the process | **stop** | pause, halt, kill, close |
+| The paper/live check | **gate** | guard, check, validator |
 
-### Configuration Pattern
+**Database:** table `trading_sessions` (not `sessions` — too generic; not `paper_sessions` — the
+model outlives paper). Columns snake_case per existing convention. Status enum values lowercase:
+`created`, `running`, `stopped`, `sealed`. New FK columns follow `<entity>_id` (`session_id`,
+`linked_backtest_run_id`).
 
-- **`FMPSettings`** nested as **`Settings.fmp`**, mirroring `Settings.ibkr`/`Settings.kraken`.
-- Field/env names (snake_case field → UPPER env, matching `ibkr_*` style):
-  `fmp_api_key` → `FMP_API_KEY` (required, `repr=False`), `fmp_base_url` →
-  `FMP_BASE_URL` (default `https://financialmodelingprep.com/stable`),
-  `fmp_rate_limit` → `FMP_RATE_LIMIT` (default `300`, per-minute), `fmp_request_timeout`.
-- Never hardcoded; `.env` excluded from git (existing convention).
+**Code:** module prefix is `live_` / package `live` (mirrors CLI group `ntrader live`):
+`src/core/live_session_runner.py` → `LiveSessionRunner`; `src/services/session_service.py` →
+`SessionService`; gate in `src/core/live_gate.py` → `evaluate_gate()`, `GateDecision`,
+`GateRefusal`. Domain model `src/models/session.py` → `SessionSpec`, `StrategySpec`,
+`SessionStatus` (StrEnum). CLI file `src/cli/commands/live.py`.
 
-### Database Pattern
+**Session IDs:** UUID business key (`session_id`), Pattern matches `run_id`. Human-readable
+`name` is operator-supplied, unique, and usable as a CLI argument everywhere a session ID is
+(`resolve by name → UUID` in one shared helper).
 
-- **Table `instrument_metadata`** (snake_case plural-noun, like `catalog_instruments`).
-- **PK `ticker`** (provider-agnostic key); all columns snake_case.
-- **`resolution_status`** is a Postgres enum with EXACTLY: `UNRESOLVED`, `RESOLVED`,
-  `VENUE_UNRESOLVED`. B-tree index on `resolution_status` (powers the O(1) completeness gate).
-- **`asset_type`** stored as an enum/string: `ETF`, `EQUITY`, `FUND` (derived from FMP
-  `isEtf`/`isFund`). Inherits `Base` + `TimestampMixin`; dual async (web) + sync (CLI) repos.
-- **30min catalog column:** add `bar_count_30min` to `catalog_instruments`, matching the
-  existing `bar_count_minute`/`bar_count_hourly`/`bar_count_daily` naming.
+### Structure Patterns
 
-### `N/A` Sentinel Pattern (cross-cutting — most divergence-prone)
+- **Session lifecycle is one state machine in one place** — `SessionStatus` transitions validated
+  in `SessionService` (single `transition()` path). CLI commands and the runner request
+  transitions; they never set `status` directly. Illegal transition → domain exception
+  `InvalidSessionTransition` (in `src/db/exceptions.py` family).
+- **The runner owns the node; the service owns the record.** `LiveSessionRunner` builds/starts/
+  stops the `TradingNode` and never touches SQL; `SessionService` owns `trading_sessions` rows and
+  never imports Nautilus. The CLI composes them. (Keeps Nautilus imports out of DB-testable code —
+  same separation `BacktestOrchestrator`/persistence services already use.)
+- **Startup sequence is explicit, ordered, and logged as phases:**
+  `gate:static → node:build → node:connect → gate:account → reconcile → warmup → subscribe → trading`.
+  Each phase logs `phase=<name> status=started|ok|failed`. Agents must not reorder, merge, or skip
+  phases; a failure in any phase stops the sequence.
+- **Strategy changes live in strategy files; live semantics live in infrastructure.** The two
+  sanctioned strategy edits (indicator warm-up in `on_start()`, removing flatten from `on_stop()`)
+  must use only mode-agnostic Nautilus APIs (`register_indicator_for_bars`, `request_bars`,
+  `subscribe_bars`). Anything needing live-only handling goes in the runner or a shared base —
+  never `if self.is_live:` (grep-enforceable: zero matches in `src/core/strategies/`).
+- **Tests:** broker doubles extend `tests/component/doubles/` (e.g. `TestLiveNode`,
+  `TestExecClient`); gate unit tests in `tests/unit/core/test_live_gate.py`; session state machine
+  unit-tested without Nautilus; operator procedures documented in `docs/qa/phase3-live-verification.md`
+  (the phase-gate evidence, mirroring Phase 1/2 QA docs).
 
-- **Single constant:** `NA_SENTINEL = "N/A"` defined once (in `src/models/instrument_metadata.py`).
-  Never write the literal `"N/A"` ad hoc; import the constant.
-- **Three states, enforced:** resolved value · `NA_SENTINEL` (FMP returned empty — descriptive
-  fields only) · DB `NULL` (never attempted). **Venue is never `NA_SENTINEL`** — real code or
-  `NULL` + `VENUE_UNRESOLVED`.
-- **Consumers MUST use shared display helpers** (`@computed_field` `display_*` props on the
-  presentation model) — never branch on blank/`""`/`None` ad hoc in templates or backtest config.
+### Format Patterns
 
-### Venue Resolution Pattern
+- **`--json` output:** plain objects, snake_case keys, ISO-8601 UTC timestamps, Decimal-as-string
+  for money (existing REST convention). `status --json` top-level keys: `session_id`, `name`,
+  `status`, `closed_trade_count`, `open_positions`, `last_activity_at`, `health`.
+- **Health vocabulary (FR49, "silence ≠ death"):** `health` ∈ `trading` (connected, bars flowing),
+  `idle` (connected, no signals — normal), `degraded` (disconnected/reconnecting), `stopped`.
+  Derived, never stored.
+- **Seal report** (human + `--json`): run_id created, closed-trade count, open positions and their
+  disposition, execution-conditions summary. Same fields both formats.
+- **`session_conditions` JSONB schema** (inside `config_snapshot`): `starting_capital`,
+  `rth_only`, `price_basis` (`"firstrate_adjusted"` | `"ibkr_unadjusted_smart"`),
+  `market_data_tier`, `closed_trade_count`, `open_positions_at_seal`. Versioned with a
+  `schema_version: 1` key.
 
-- **One source of truth:** `FMP_EXCHANGE_TO_VENUE` dict in `venue_map.py`. Confidently-mapped
-  labels (`NASDAQ`, `NYSE`, …) → Nautilus venue code. An explicit `AMBIGUOUS_LABELS` set (incl.
-  `AMEX`) and any unmapped/blank label → return `None` → `VENUE_UNRESOLVED`. **No guessed default.**
-- **`venue_overrides.csv`:** header exactly `ticker,venue`; path via config; git-tracked. Merge
-  is idempotent and takes precedence over absent/ambiguous FMP venue. Merge happens in the import
-  orchestration step (not inside `FMPClient`).
+### Communication Patterns
 
-### Timeframe Pattern (30min)
+- **Log event naming:** dotted lowercase past-tense events, session-scoped:
+  `session.created`, `session.started`, `session.stopped`, `session.sealed`, `gate.refused`,
+  `order.submitted`, `order.accepted`, `order.rejected` (with `venue_reason`), `order.filled`
+  (with `fill_qty`, `cum_qty`), `trade.persisted`, `reconcile.ok`, `reconcile.discrepancy`,
+  `connection.lost`, `connection.restored`, `warmup.completed`. Every record carries bound
+  `session_id`; order events also carry `client_order_id` and `instrument_id`.
+- **Nautilus events are consumed via the framework's handlers** (`on_order_rejected`,
+  `on_position_closed`, etc.) — no polling loops, no parallel event bus. Trade persistence hooks
+  the position-closed path.
 
-- **Bar-type string `30-MINUTE-LAST`** — word form, consistent with `1-HOUR-LAST`/`5-MINUTE`.
-- FirstRate filename token `_30min_` → `30-MINUTE-LAST` (extend the existing maps in
-  `firstrate/dry_run.py` and `firstrate/import_service.py`). Added once; no inline string literals.
+### Process Patterns
 
-### FMP Client Error & Reporting Pattern
+- **Error handling:** strategy exceptions are caught at the runner boundary, logged with
+  `strategy_id`, and isolate that strategy (FR50) — never `sys.exit()` from inside the node.
+  Broker unreachable → halt trading, log `connection.lost`, keep process alive for reconnect
+  window; never proceed on stale state.
+- **Order ambiguity:** the ONLY sanctioned recovery is query-order-state; agents must never add
+  retry loops around `submit_order` (grep-enforceable: no retry/backoff decorators on the order
+  path).
+- **DB write failures during trading never kill the node:** trade-persist errors are logged and
+  retried on next event (savepoint discipline from the Phase 2 fix); the session must go on
+  trading even if Postgres hiccups.
+- **Signal handling:** first SIGINT/SIGTERM → graceful stop (unsubscribe, node stop, status →
+  `stopped`); second → force exit. Never flatten, never seal, on any signal path.
 
-- **Cache-check before fetch:** skip the API call if an `instrument_metadata` row exists with
-  `resolution_status=RESOLVED` (quota protection / idempotency).
-- **Catch specific httpx exceptions** (`httpx.TimeoutException`, `httpx.HTTPStatusError`) — never
-  bare `except`. Map to graceful degradation (`NA_SENTINEL` / `VENUE_UNRESOLVED`); never abort
-  the whole import. structlog fields: `ticker`, `provider`, `resolution_status`, `error`.
-- **`ResolutionSummary`** domain object with fixed field names: `resolved`, `descriptive_gaps`,
-  `venue_unresolved` — surfaced in the CLI summary and per-import logging.
+### Enforcement Guidelines
 
-### Enforcement
+**All AI agents MUST:**
 
-- Existing ruff/mypy/pytest gates + F401/F821 commit gate.
-- Alembic migration review for `instrument_metadata` naming + enum.
-- PR checklist: provider behind `InstrumentMetadataService` (no FMP types leaked to consumers),
-  `NA_SENTINEL` imported not literal, venue never guessed, 30min added centrally.
-- `project-context.md` + Phase 1 patterns remain authoritative for everything else.
+- Route every status change through `SessionService.transition()` — grep: no direct
+  `status =` assignments outside it.
+- Keep `src/core/strategies/**` free of live/backtest branching — grep: `is_live` count = 0.
+- Keep Nautilus imports out of `SessionService`/repositories; keep SQLAlchemy out of
+  `LiveSessionRunner`.
+- Add every new DB feature to BOTH repositories (async + sync) in the same story.
+- Write the failing test first (TDD) — gate, state machine, and duplicate-prevention logic are
+  unit/component tier; anything touching a real `TradingNode` is integration (`--forked`) or an
+  operator procedure.
+
+**Anti-patterns (reject in review):**
+
+- A second results vocabulary (any new metrics table/model for paper) — FR42 violation.
+- Pre-creating `backtest_runs` rows before seal.
+- `close_all_positions()` anywhere in a lifecycle hook.
+- Retry-on-timeout around order submission.
+- Reading `ibkr_read_only` as the safety control (the gate is the control).
 
 ## Project Structure & Boundaries
 
-### New Files & Directories (within existing tree)
+### Delta Project Tree (brownfield — NEW and MODIFIED only)
 
 ```
-src/
-├── config.py                                    # MODIFIED: add FMPSettings, nest Settings.fmp
-├── models/
-│   └── instrument_metadata.py                   # NEW: InstrumentMetadata domain model, NA_SENTINEL,
-│                                                 #      ResolutionStatus + AssetType enums, ResolutionSummary
-├── db/
+Trading-ntrader/
+├── alembic/versions/
+│   └── xxxx_add_trading_sessions_and_paper_run_support.py   # NEW — trading_sessions table;
+│                                                            #   backtest_runs.run_type;
+│                                                            #   trades.session_id (nullable FK) +
+│                                                            #   backtest_run_id → nullable + CHECK
+├── src/
+│   ├── config.py                          # MOD — IBKRSettings: +ibkr_live_client_id (validator:
+│   │                                      #   ≠ ibkr_client_id); +RedisSettings on Settings
+│   ├── cli/
+│   │   ├── main.py                        # MOD — register `live` group
+│   │   └── commands/
+│   │       └── live.py                    # NEW — create/start/status/list/reconcile/seal;
+│   │                                      #   exit codes (3 = gate refusal, 4 = connectivity)
+│   ├── core/
+│   │   ├── live_gate.py                   # NEW — evaluate_gate(), GateDecision, GateRefusal;
+│   │   │                                  #   pure function, no I/O
+│   │   ├── live_node_builder.py           # NEW — TradingNodeConfig assembly: IB data/exec client
+│   │   │                                  #   configs, factories, Redis CacheConfig, LogGuard
+│   │   │                                  #   registration, REALTIME + RTH settings
+│   │   ├── live_session_runner.py         # NEW — owns TradingNode lifecycle; startup phase
+│   │   │                                  #   sequence; signal handling; strategy isolation;
+│   │   │                                  #   NO SQLAlchemy imports
+│   │   ├── results_extractor.py           # MOD — widen host: accept BacktestEngine or live
+│   │   │                                  #   (portfolio, cache) pair; metric math untouched
+│   │   └── strategies/
+│   │       ├── sma_crossover.py           # MOD — on_start(): register_indicator_for_bars +
+│   │       │                              #   request_bars(callback=subscribe); on_stop(): remove
+│   │       │                              #   close_all_positions(); mode-agnostic only
+│   │       └── sma_momentum.py            # MOD — same two lifecycle corrections
 │   ├── models/
-│   │   ├── instrument_metadata.py               # NEW: SQLAlchemy model (PK ticker, resolution_status enum)
-│   │   └── catalog_instrument.py                # MODIFIED: add bar_count_30min; venue/asset_type sourced from metadata
-│   └── repositories/
-│       ├── instrument_metadata_repository.py    # NEW: async repo + coverage-gate query
-│       └── instrument_metadata_repository_sync.py # NEW: sync repo (CLI import path)
-├── services/
-│   ├── metadata/                                # NEW PACKAGE: provider-agnostic, reusable (NOT under firstrate)
-│   │   ├── __init__.py
-│   │   ├── instrument_metadata_service.py       # InstrumentMetadataService (orchestrator + interface)
-│   │   ├── fmp_client.py                         # FMPClient: sync httpx + rate-limit throttle
-│   │   ├── venue_map.py                          # FMP_EXCHANGE_TO_VENUE dict + AMBIGUOUS_LABELS set
-│   │   ├── venue_overrides.py                    # venue_overrides.csv load + idempotent merge
-│   │   └── providers/
-│   │       ├── __init__.py
-│   │       └── fmp_provider.py                  # FMPMetadataProvider adapter (FMP→domain, N/A mapping)
-│   └── firstrate/
-│       ├── zip_extractor.py                     # NEW: per-archive extract→cleanup (ADR-8)
-│       ├── import_service.py                    # MODIFIED: ETF path, per-archive ZIP, 30min, metadata resolution + qualification sync
-│       ├── instrument_mapper.py                 # MODIFIED: venue from InstrumentMetadataService → nautilus_id
-│       ├── dry_run.py                           # MODIFIED: _30min_ token, ETF, FMP-aware estimate
-│       └── metadata_service.py                  # MODIFIED: bar_count_30min handling (Phase 1 catalog CRUD)
-├── cli/commands/
-│   ├── import_data.py                           # MODIFIED: ETF asset class, ZIP source dir
-│   ├── import_reporting.py                      # MODIFIED: resolution summary + unresolved-venue report
-│   └── metadata.py                              # NEW: `metadata coverage` / `metadata unresolved` subcommands
-├── api/
-│   ├── rest/explorer.py                         # MODIFIED: 30min bar type, ETF metadata in chart/stats responses
-│   └── ui/explorer.py                           # MODIFIED: 30min selector, N/A-aware metadata panel
-templates/explorer/
-│   ├── chart_panel.html                         # MODIFIED: 30min timeframe button
-│   └── stats_panel.html / supplementary_panel.html # MODIFIED: N/A-aware metadata rendering
-alembic/versions/
-│   ├── XXXX_add_instrument_metadata.py          # NEW (10th migration): table + resolution_status enum
-│   └── YYYY_add_bar_count_30min.py              # NEW: bar_count_30min on catalog_instruments
-pyproject.toml                                    # MODIFIED via `uv add httpx` (dev → runtime dep)
-
-tests/
-├── unit/
-│   ├── services/metadata/
-│   │   ├── test_venue_map.py                    # NEW: label→venue, ambiguous routing
-│   │   ├── test_fmp_provider.py                 # NEW: FMP JSON→domain, N/A mapping (mocked httpx)
-│   │   └── test_instrument_metadata_service.py  # NEW: cache-check-before-fetch, degradation
-│   └── models/test_instrument_metadata.py       # NEW: NA_SENTINEL three-state, ResolutionSummary
-├── component/services/
-│   ├── metadata/test_venue_overrides_merge.py   # NEW: precedence + idempotency
-│   └── firstrate/test_zip_extractor.py          # NEW: per-archive extract/cleanup
-├── integration/services/firstrate/
-│   └── test_etf_import_pipeline.py              # NEW: end-to-end ETF import (--forked)
-├── api/test_explorer_etf.py                     # NEW: 30min + N/A rendering endpoints
-└── ui/test_explorer_etf_ui.py                   # NEW: agent-browser ETF verification
+│   │   └── session.py                     # NEW — SessionSpec, StrategySpec, SessionStatus,
+│   │                                      #   SessionConditions (schema_version=1)
+│   ├── db/
+│   │   ├── exceptions.py                  # MOD — +InvalidSessionTransition
+│   │   ├── models/
+│   │   │   ├── trading_session.py         # NEW — TradingSession ORM (Base + TimestampMixin,
+│   │   │   │                              #   dual-ID: id + session_id UUID)
+│   │   │   ├── backtest.py                # MOD — +run_type column
+│   │   │   └── trade.py                   # MOD — +session_id FK; backtest_run_id nullable
+│   │   └── repositories/
+│   │       ├── trading_session_repository.py        # NEW — async (Growth UI)
+│   │       └── trading_session_repository_sync.py   # NEW — sync (CLI, this phase)
+│   └── services/
+│       ├── session_service.py             # NEW — session CRUD + transition() state machine +
+│       │                                  #   name→UUID resolution; NO Nautilus imports
+│       ├── session_seal_service.py        # NEW — seal: ResultsExtractor → runs row (run_type=
+│       │                                  #   'paper') → backfill trades.backtest_run_id →
+│       │                                  #   session_conditions snapshot; reuses
+│       │                                  #   BacktestPersistenceService validation
+│       ├── live_trade_recorder.py         # SUPERSEDED 2026-09-11 (Story 3.5): built at
+│       │                                  #   src/core/live_trade_recorder.py instead —
+│       │                                  #   every live module Epics 1-3 shipped lives
+│       │                                  #   under src/core/, and src/services/ has no
+│       │                                  #   live_*.py at all. AR38 is kept the way
+│       │                                  #   SessionRecordPort keeps it: a `sink`
+│       │                                  #   callable (a port), not a src.services
+│       │                                  #   import. Story 3.6 injects the persistence
+│       │                                  #   adapter as that sink from the CLI.
+│       └── reconciliation_service.py      # NEW — on-demand positions/cash vs IBKR; explicit
+│                                          #   discrepancy report (never auto-resolve local-ward)
+├── tests/
+│   ├── unit/
+│   │   ├── core/test_live_gate.py         # NEW — gate truth table incl. refusal (the NFR test)
+│   │   ├── services/test_session_service.py  # NEW — state machine, spec immutability
+│   │   └── models/test_session_spec.py    # NEW — spec validation, list-of-strategy-specs shape
+│   ├── component/
+│   │   ├── doubles/                       # MOD — +TestLiveExecClient, +TestPositionEvents
+│   │   ├── test_live_trade_recorder.py    # RELOCATED 2026-09-11 (Story 3.5): built at
+│   │   │                                  #   tests/component/core/test_live_trade_recorder.py
+│   │   │                                  #   instead — every Epic 1-3 live component suite
+│   │   │                                  #   lives under tests/component/core/. Rejection
+│   │   │                                  #   flow is Story 3.7's, not this one's.
+│   │   └── test_session_runner_phases.py  # NEW — startup phase ordering, signal handling
+│   ├── integration/
+│   │   └── test_live_node_lifecycle.py    # NEW — --forked; TradingNode + LogGuard coexistence
+│   └── e2e/
+│       └── test_live_cli.py               # NEW — create→status→list→seal against test DB;
+│                                          #   gate refusal exit code 3
+└── docs/
+    ├── qa/phase3-live-verification.md     # NEW — operator-run procedures (phase-gate evidence)
+    └── agent/                             # MOD (post-implementation) — persistence.md,
+                                           #   architecture.md updated for sessions
 ```
+
+**Explicitly untouched (zero-change success criteria):** `src/api/**`, `templates/**`,
+`src/services/backtest_query.py`, comparison views, `BacktestOrchestrator`, all import/catalog
+commands.
 
 ### Architectural Boundaries
 
-**Provider boundary (the reuse seam):**
-```
-import_service / explorer / backtest config
-  → InstrumentMetadataService.resolve(ticker) -> InstrumentMetadata   (domain model only)
-      → FMPMetadataProvider (adapter)
-          → FMPClient (httpx) → GET /stable/profile
-          → VenueMap (label → Nautilus venue | None)
-```
-No FMP types or raw JSON cross `InstrumentMetadataService`. Swapping/adding a provider touches
-only `providers/` + the service wiring.
+**Component boundaries (import direction is the law):**
 
-**Data boundary:**
 ```
-instrument_metadata (reusable cache, PK ticker)         catalog_instruments (per-catalog identity)
-  written by: FMPMetadataProvider + venue_overrides merge   written by: import_service (qualification sync)
-  read by:    qualification sync, explorer, backtest         read by:    explorer list/stats, chart API, backtest
-```
-`instrument_metadata` is source of truth for resolved metadata; `catalog_instruments` for bar
-counts/date ranges. Single writer per table (import pipeline) → no drift.
-
-**Venue completeness boundary:**
-```
-FMP venue (VenueMap)  ──┐
-venue_overrides.csv   ──┴─merge(precedence: override)→ instrument_metadata.venue + resolution_status
-                                                          │
-                          coverage gate query: COUNT(resolution_status=VENUE_UNRESOLVED) == 0
+cli/commands/live.py
+   ├─▶ services/session_service.py        (record ownership; SQL yes, Nautilus no)
+   ├─▶ core/live_gate.py                  (pure; no I/O, no SQL, no Nautilus)
+   ├─▶ core/live_session_runner.py        (node ownership; Nautilus yes, SQL no)
+   │      └─▶ core/live_node_builder.py ─▶ nautilus_trader.live / adapters.interactive_brokers
+   │      └─▶ services/live_trade_recorder.py   (the ONE bridge: Nautilus events → sync repo)
+   ├─▶ services/reconciliation_service.py
+   └─▶ services/session_seal_service.py ─▶ core/results_extractor.py
 ```
 
-**Import boundary (per-archive, bounded disk):**
-```
-zip_extractor (one ZIP) → FirstRateCsvParser → catalog.write_data() → verify row count
-  → InstrumentMetadataService.resolve() → upsert instrument_metadata
-  → qualification sync → upsert catalog_instruments → delete extracted .txt → next ZIP
-```
+- `live_trade_recorder` is the single sanctioned place where Nautilus objects meet the DB —
+  it converts events to domain models at the boundary; repositories never see Nautilus types.
+- Strategies import nothing new — the entire live surface is invisible to them.
+
+**Data boundaries:** PostgreSQL = session records + trades + sealed results (system of record for
+history) · Redis = Nautilus cache, session-namespaced by `trader_id`, disposable (rebuildable from
+IBKR + reconciliation) · IBKR = ground truth for positions/cash/working orders · Parquet catalog =
+untouched by this phase (backtest-side only).
+
+**External integration points:** IBKR TWS/Gateway socket (data + exec clients, dedicated
+`ibkr_live_client_id`; historical client unaffected on `IBKR_CLIENT_ID`) · Redis 7 (compose
+service) · PostgreSQL (existing).
 
 ### Requirements → Structure Mapping
 
-| Epic | Primary locations |
-|---|---|
-| **E1 Metadata Loader** | `src/services/metadata/**`, `src/models/instrument_metadata.py`, `src/db/models/instrument_metadata.py`, repos, migration |
-| **E2 ETF Import** | `firstrate/zip_extractor.py`, `firstrate/import_service.py`, `firstrate/dry_run.py`, `cli/commands/import_data.py` |
-| **E3 Venue Gate** | `metadata/venue_map.py`, `metadata/venue_overrides.py`, `instrument_metadata_repository.py` (gate query), `cli/commands/metadata.py`, `import_reporting.py` |
-| **E4 Explorer ETF** | `api/rest/explorer.py`, `api/ui/explorer.py`, `templates/explorer/*.html` (all MODIFIED) |
-| **E5 Backtest** | No new files — existing `BacktestOrchestrator` + `firstrate/backtest_loader.py`; venue-qualified InstrumentId precondition |
-| **Config (FR39-40)** | `src/config.py` (`FMPSettings`), `FirstRateSettings`/`CatalogSettings` (reused) |
+| Epic | FRs | Primary locations |
+|---|---|---|
+| E1 Connectivity + Gate | FR1–12 | `live_gate.py`, `live_node_builder.py`, `config.py`, `test_live_gate.py` |
+| E2 Session Model | FR13–22, FR52–53 | migration, `trading_session.py`, both repositories, `session.py`, `session_service.py`, `live.py`, `live_session_runner.py` |
+| E3 Execution + Capture | FR23–31 | `live_trade_recorder.py`, runner order-event handlers, strategy `on_stop()` fix |
+| E4 Reconcile + Resume | FR32–39 | `reconciliation_service.py`, node reconciliation config, strategy `on_start()` warm-up |
+| E5 Seal + Comparison | FR40–47 | `session_seal_service.py`, `results_extractor.py` widening, `run_type` |
+| Cross-cutting | FR48–51 | structlog binding in runner, `status`/`list` in `live.py` |
 
-### Notes
-- Repository dual-pattern: mirror the existing `catalog_instrument_repository` access; add the
-  `_sync` variant for the CLI import path (as with `backtest_repository_sync.py`).
-- Stale `CLAUDE.md` references "4 migrations" — there are **9**; new ones are #10/#11. Worth a
-  doc-sync chore (out of Phase 2 scope).
-- Explorer, supplementary tables (`catalog_dividend`, `catalog_stock_split`), and `country`/`state`
-  columns already exist from Phase 1 — E4 extends, not creates.
+### Data Flow (live path)
+
+```
+IBKR real-time bars ─▶ TradingNode ─▶ Strategy.on_bar() ─▶ submit_order ─▶ IBKR
+                                                                    │ fills/rejections
+        Redis cache ◀── Nautilus Cache/Portfolio ◀──────────────────┘
+                              │ position closed
+                              ▼
+                    live_trade_recorder ─▶ trades (session_id)          [incremental]
+                                                     │ seal
+                                                     ▼
+   ResultsExtractor(live host) ─▶ backtest_runs(run_type='paper') + performance_metrics
+                                                     │
+                                                     ▼
+                              existing list / detail / comparison UI   [unchanged]
+```
+
+### Development Workflow Integration
+
+- Same gates as ever: `make format && make lint && make typecheck`, TDD, pre-commit F401/F821
+  hook, `make test-integration` (`--forked`) for anything touching the node.
+- Local live-dev loop: compose `redis` + `postgres` up; TWS paper or compose `ib-gateway`;
+  `uv run python -m src.cli.main live start <name>` in a terminal (tmux for multi-day).
+- No CI changes; no deployment artifacts — the "deployment" is the operator's terminal.
 
 ## Architecture Validation Results
 
 ### Coherence Validation ✅
 
-**Decision Compatibility:** All 10 Phase-2 ADRs compose without conflict and use only the
-existing stack + one promoted dependency (`httpx`). The reuse seam (ADR-5) cleanly contains the
-FMP dependency (ADR-4, ADR-6); the two-table split (ADR-1/ADR-3) has a single writer per table;
-the venue map + override + gate (ADR-6/7) form one resolution chain feeding backtest qualification
-(ADR-10). No contradictory decisions.
+**Decision Compatibility:** All choices verified against the installed stack, not docs from
+memory: `TradingNode` + IB live factories confirmed present in nautilus-trader 1.220.0; Redis 7
+and TimescaleDB/pg16 already provisioned; Click/Rich/structlog conventions carried over. No
+version conflicts — the phase adds zero new dependencies (Redis client comes with
+nautilus-trader's cache backend; everything else is already in `uv.lock`).
 
-**Pattern Consistency:** Naming avoids the Phase 1 `MetadataService` collision
-(`InstrumentMetadataService` in a separate package); `FMPSettings` mirrors `IBKR/KrakenSettings`;
-DB/enum/timeframe naming follows established conventions. `NA_SENTINEL` + status-enum pattern is
-consistent across all consumers.
+**Pattern Consistency:** The vocabulary table (session/process-run/seal/stop/gate), the
+import-direction law, and the single-transition-path rule all reinforce the same three PRD
+invariants: one engine framework, stop ≠ seal, broker-authoritative state. No pattern contradicts
+a decision; D1's runs-row-at-seal-only is consistently reflected in the CLI query path, the
+anti-patterns list, and the delta tree.
 
-**Structure Alignment:** Every ADR maps to concrete files; boundaries (provider/data/venue/import)
-are explicit; reusable metadata package sits outside `firstrate/` per the reuse mandate.
+**Structure Alignment:** The delta tree respects every existing convention — dual repositories,
+domain vs DB models, services layering, test tiers — and the "explicitly untouched" list encodes
+the zero-UI-change success criterion structurally.
 
 ### Requirements Coverage Validation ✅
 
-**Functional (40/40 mapped):**
-- E1 FR1–6 → ADR-1/2/4/5 + `ResolutionSummary`
-- E2 FR7–19 → `import_data.py`, `dry_run.py`, `zip_extractor` (ADR-8), reused parser/validator,
-  ADR-9 (30min), `import_reporting.py`
-- E3 FR20–26 → ADR-3/6 (mapping), `metadata.py` (reports), ADR-7 (override+merge+gate)
-- E4 FR27–32 → explorer routes/templates (MODIFIED), ADR-9, ADR-2 (`N/A` display), UI verify test
-- E5 FR33–38 → ADR-10 + existing `BacktestOrchestrator`/`backtest_loader`/`compare.py`
-- FR39–40 → `FMPSettings` + reused `FirstRate/CatalogSettings`
+Full FR sweep (all 53): FR1–7 → node builder + client-ID split + REALTIME/RTH config; FR8–12 →
+two-layer gate + crossing mechanism + exit code 3 + gate unit tests; FR13–22 → session
+entity/spec/state machine/CLI; FR23–31 → order-event handlers, VWAP fill aggregation in trade
+recorder, query-don't-retry, rejection logging, existing whole-share sizing untouched; FR32–39 →
+Nautilus reconciliation config + reconciliation service + warm-up-before-subscribe phase order;
+FR40–47 → seal service + extractor widening + `run_type` + `session_conditions` + D6 policy;
+FR48–53 → structlog binding, health vocabulary, `--json`, `IBKRSettings`-only credentials.
 
-**Non-Functional:** Performance targets reuse Phase 1 mechanisms (windowed Parquet reads, indexed
-metadata queries); the completeness gate gets a dedicated `resolution_status` index. Reliability
-(per-ticker isolation extended to FMP, per-archive + metadata-gatekeeper interruption safety,
-idempotent + cached recovery, deterministic gate). Integration (throttle/cache/failure-isolation,
-catalog compatibility, pattern conformance). Security (`fmp_api_key` `repr=False`, `.env` excluded).
+NFR sweep: reliability invariants each map to a named mechanism (duplicate=0 → D7; resume
+discrepancy=0 → reconcile-before-trading phase; zero trade loss → incremental recorder; no blind
+trading → phase sequence + connection.lost halt). Performance targets are observable via phase
+logs. Testability → gate/state-machine/recorder in unit/component tiers, node lifecycle in
+`--forked` integration, operator procedures doc as phase-gate evidence.
 
-### Implementation Readiness Validation ✅
+### Gap Analysis — Issues Found & RESOLVED (normative addenda)
 
-Decisions documented with rationale/trade-offs; patterns specify the divergence-prone points;
-structure names every new/modified file and the test per tier. Versions verified (httpx 0.28.1;
-FMP stable routes confirmed current).
+Four real gaps surfaced during validation. Their resolutions below are **binding amendments** to
+the sections above:
 
-### Gap Analysis Results
+**G1 — `status`/`list` health from a separate process (FR22, FR49, "silence ≠ death").**
+The CLI runs in a different process from the session runner, so health cannot be answered from
+memory. *Resolution:* `trading_sessions` gains `last_heartbeat_at` and `last_bar_at` columns
+(added to the D1 migration). The runner updates them (~every 30s / on bar) through the same
+record port it uses for transitions. `status` derives health: `stopped` (status ≠ running) ·
+`trading`/`idle` (running + fresh heartbeat, split on `last_bar_at` recency) · `degraded`
+(running + heartbeat fresh but `connection.lost` flagged) · **`stale`** (status=running,
+heartbeat old — likely dead process). `stale` is added to the health vocabulary.
 
-**Critical Gaps:** None.
+**G2 — Crash while `running` leaves the session stuck (always-valid-state NFR).**
+SIGKILL never runs the stop transition. *Resolution:* `start` on a session whose status is
+`running` **with a stale heartbeat reclaims it** (logged as `session.reclaimed`); with a fresh
+heartbeat it refuses ("another process appears live"). This is the only sanctioned
+running→running path and lives in `SessionService.transition()` like every other rule.
 
-**Important (non-blocking, resolve during E1):**
-1. **Metadata cache key vs cross-asset ticker collisions.** `instrument_metadata` is keyed by
-   `ticker` alone (ADR-1) — clean for the reuse story and fine for ETFs (their symbols are
-   effectively distinct from the stock universe). But the symbol namespace *can* overlap across
-   asset classes. **Resolution:** key by `ticker` for Phase 2; document `(ticker, asset_type)` as
-   the escape hatch if a real collision appears later. Flagged so it's a conscious choice, not an
-   accident.
+**G3 — `reconcile` command client-ID collision (FR5, FR36).**
+On-demand reconcile may run while a session process holds `ibkr_live_client_id`. *Resolution:*
+the reconcile command connects read-only with `ibkr_live_client_id + 1` (documented reservation:
+historical=`IBKR_CLIENT_ID`, session=`ibkr_live_client_id`, reconcile=`+1`), fetches broker
+positions/cash, compares against the trades-derived local view, reports explicitly, disconnects.
 
-**Minor (implementation notes):**
-2. **FMP `/stable/profile` returns a top-level JSON array.** An empty `[]` = ticker unknown to FMP
-   → must map to descriptive `N/A` + `VENUE_UNRESOLVED`, not an error. Bake into `FMPMetadataProvider`.
-3. **Postgres ENUM via Alembic.** `resolution_status` enum type must be created before the column
-   in the migration (and handled on downgrade). Standard Alembic enum care.
-4. **ETF universe count is advisory.** The FirstRate ZIP set is the authoritative ticker source
-   (~5,039 is approximate); `etf-list` is an optional cross-check, not a gate.
+**G4 — Equity curve source for sealed sessions (metric parity, D6).**
+Backtests build the equity curve from the engine; a sealed session has no engine history.
+*Resolution:* seal reconstructs the equity series from starting capital + the session's closed-
+trade P&L sequence (same units, stored in the existing `PerformanceMetrics` JSON field). Max
+drawdown/CAGR/Calmar compute from that series exactly as `ResultsExtractor` already does.
+*Recorded limitation:* trade-granularity (not bar-granularity) drawdown — carried in
+`session_conditions` so the comparison read stays honest. E5 scope.
 
 ### Architecture Completeness Checklist
 
-- [x] Requirements analyzed; scale/complexity assessed; constraints + cross-cutting concerns mapped
-- [x] 10 ADRs documented; stack specified; integration patterns defined; perf approach stated
-- [x] Naming/structure/format/process patterns established (Phase-2 deltas on 88 + Phase 1 rules)
-- [x] Complete new/modified file tree; boundaries; FR→structure mapping; integration points
+- [x] Project context analyzed (53 FRs, NFR invariants, brownfield constraints)
+- [x] Foundation resolved against installed versions (`TradingNode`, IB factories @ 1.220.0)
+- [x] Critical decisions D1–D8 documented with rationale and epic mapping
+- [x] PRD-assigned open decisions closed (seal-time positions D6; version check)
+- [x] Consistency patterns cover the net-new conflict surface (vocabulary, boundaries, events)
+- [x] Delta project tree complete; untouched surface explicit
+- [x] FR/NFR coverage swept requirement-by-requirement
+- [x] Validation gaps (G1–G4) resolved as binding addenda
 
 ### Architecture Readiness Assessment
 
-**Overall Status:** READY FOR IMPLEMENTATION
+**Overall Status: READY FOR IMPLEMENTATION** · **Confidence: High** — the riskiest unknowns are
+sequenced first (E1), every irreversible failure mode has a named structural control, and the
+reuse boundary is drawn so the phase's core claim (comparability) is enforced by construction.
 
-**Confidence Level:** High — brownfield extension on proven Phase 1 foundations; the only net-new
-surface (FMP loader, venue gate, `N/A` threading, ZIP, 30min) is narrow and well-bounded; FMP API
-verified against current docs; one identified design choice (cache key) consciously flagged.
+**Key strengths:** one-engine constraint made structural, not aspirational; safety gate as a pure
+testable function; session model that makes multi-strategy a config change; append-only reuse of
+the results spine (zero UI work).
 
-**Key Strengths:**
-- Reuse seam isolates the FMP dependency — realizes the "reusable keystone" mandate
-- Venue gate is deterministic and honors "no guessed venues" strictly
-- Bounded-disk per-archive import; idempotent + cached recovery
-- Almost all of E4/E5 is reuse, not new code
-
-**Areas for Future Enhancement:**
-- `profile-bulk` resolution if a higher FMP tier is adopted
-- `(ticker, asset_type)` cache key if cross-asset collisions emerge
-- Generalize the loader to the next asset class (futures/FX/crypto)
-- Stock 30min backfill (tracked, deferred)
+**Areas for future enhancement (deliberately deferred):** Growth monitoring UI transport,
+divergence tolerance bands, real-money gate crossing UX, multi-session concurrency.
 
 ### Implementation Handoff
 
-**AI Agent Guidelines:** Follow the 10 ADRs and Phase-2 patterns exactly; keep FMP types behind
-`InstrumentMetadataService`; import `NA_SENTINEL` (never literal); never guess a venue; add 30min
-centrally; TDD per tier (unit for map/provider/model, component for override-merge/zip, integration
-`--forked` for ETF import, api/ui for explorer).
+**AI Agent Guidelines:** follow this document + `project-context.md`; on conflict, this document
+wins for Phase 3 scope. Escalate (never work around) anything that can't route through Nautilus
+abstractions.
 
-**First Implementation Priority:** `FMPSettings` + `uv add httpx`, then the `instrument_metadata`
-migration (table + `resolution_status` enum), then the domain model + `InstrumentMetadataService`
-interface.
+**First implementation move (E1):** TDD the gate — `tests/unit/core/test_live_gate.py` truth
+table first, then `src/core/live_gate.py`, then `IBKRSettings.ibkr_live_client_id` + validator —
+before any connecting code exists.

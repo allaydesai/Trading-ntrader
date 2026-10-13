@@ -16,6 +16,7 @@ from rich.markup import escape
 from rich.table import Table
 from sqlalchemy.exc import SQLAlchemyError
 
+from src.cli.commands.validate_fmp import validate_fmp
 from src.config import CatalogSettings, get_settings
 from src.db.exceptions import DatabaseConnectionError
 from src.db.repositories.catalog_instrument_repository import (
@@ -37,6 +38,9 @@ _BYTES_PER_GIB = 1024**3
 @click.group()
 def catalog() -> None:
     """Catalog maintenance commands."""
+
+
+catalog.add_command(validate_fmp)
 
 
 def _load_targets(catalog_name: str) -> tuple[dict[str, str], frozenset[str]]:
