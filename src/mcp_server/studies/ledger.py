@@ -27,8 +27,18 @@ COUNTED_ROLES = frozenset({"in_sample"})
 HEADLINE = ("total_return", "sharpe_ratio", "max_drawdown", "profit_factor", "total_trades")
 
 
+def release_stranded(store: JobStore, trial: ResearchTrial, state: str | None) -> bool:
+    """Queue a trial's job if it was left ``reserved``: a ledger row exists only once its
+    transaction committed, so a job still reserved was stranded between that commit and
+    its enqueue (a batch whose server died mid-way). Whoever owns the queue then runs it.
+    """
+    if state != "reserved":
+        return False
+    return store.transition(trial.job_id, {"reserved"}, state="queued") is not None
+
+
 def settle(repo: SyncResearchRepository, store: JobStore, study: ResearchStudy) -> None:
-    """Settle every pending trial whose job has ended."""
+    """Settle every pending trial whose job has ended; queue one left reserved."""
     for trial in repo.trials(study):
         if trial.state != "pending":
             continue
@@ -37,6 +47,7 @@ def settle(repo: SyncResearchRepository, store: JobStore, study: ResearchStudy) 
         except ToolFailure:  # the job lives in another jobs directory: leave it counted
             continue
         state = status.get("state")
+        release_stranded(store, trial, state)
         if state not in TERMINAL_STATES:
             continue
         run_id = status.get("run_id") if state == "succeeded" else None
@@ -110,11 +121,13 @@ def new_trial(
     resolved: dict[str, Any],
     override_reason: str | None = None,
     candidate_pk: int | None = None,
+    analysis_pk: int | None = None,
 ) -> ResearchTrial:
     """A ledger row for a job just reserved from the resolved request summary."""
     return ResearchTrial(
         study_pk=study.id,
         candidate_pk=candidate_pk,
+        analysis_pk=analysis_pk,
         version=study.current_version,
         role=role,
         job_id=job_id,

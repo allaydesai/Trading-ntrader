@@ -10,6 +10,7 @@ from src.mcp_server.context import ServerContext
 from src.mcp_server.errors import ToolFailure
 from src.mcp_server.jobs import service
 from src.mcp_server.jobs.runner import JobRunner
+from src.mcp_server.studies.batch import cancel_batch
 from src.mcp_server.studies.submit import prepare_in_sample, queue_study_job
 from src.mcp_server.tools import build_spec, call
 
@@ -72,9 +73,17 @@ def register(server: MCPServer, ctx: ServerContext) -> None:
         return await call(service.list_jobs, runner(), limit, state)
 
     @server.tool()
-    async def cancel_job(job_id: str) -> dict[str, Any]:
-        """Cancel a queued or running job; a running worker is stopped within 5 seconds."""
+    async def cancel_job(job_id: str | None = None, analysis: str | None = None) -> dict[str, Any]:
+        """Cancel a queued or running job; a running worker is stopped within 5 seconds.
+
+        analysis=<id> cancels every unfinished member of a batch (sweep, breadth,
+        walk-forward) instead.
+        """
         try:
+            if analysis is not None:
+                return {"ok": True, **(await cancel_batch(runner(), analysis))}
+            if job_id is None:
+                raise ToolFailure("invalid_request", "Give job_id or analysis.", fix="Pass one.")
             status = await runner().cancel(job_id)
         except ToolFailure as failure:
             return failure.to_dict()

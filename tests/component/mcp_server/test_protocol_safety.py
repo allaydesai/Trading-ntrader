@@ -48,6 +48,9 @@ PINNED_TOOLS = frozenset(
         "paper_commands",
         "list_sessions",
         "get_session",
+        # phase 4
+        "submit_sweep",
+        "run_sensitivity",
     }
 )
 #: The only tools whose names may say "session": they read, never manage one.

@@ -45,3 +45,47 @@ def test_every_row_has_an_entry_and_only_counted_roles_have_a_trial_number():
     trials = [SimpleNamespace(role=r, counted=r == "in_sample", state="completed") for r in roles]
     trials[3].state = "void"  # a voided trial keeps its number, so later numbers never shift
     assert numbering(trials) == [(1, 1), (2, None), (3, None), (4, 2), (5, None), (6, 3)]
+
+
+class _Store:
+    """A job store with one job in a given state; records transitions."""
+
+    def __init__(self, state):
+        self.state, self.transitions = state, []
+
+    def status(self, job_id):
+        return {"job_id": job_id, "state": self.state}
+
+    def transition(self, job_id, from_states, **fields):
+        self.transitions.append((job_id, set(from_states), fields))
+        if self.state not in from_states:
+            return None
+        self.state = fields["state"]
+        return {"job_id": job_id, **fields}
+
+
+class _Repo:
+    def __init__(self, trials):
+        self._trials, self.settled = trials, []
+
+    def trials(self, _study):
+        return self._trials
+
+    def settle_trial(self, trial, *, state, run_id):
+        trial.state = state
+        self.settled.append((trial.job_id, state, run_id))
+
+
+def test_settle_queues_a_trial_whose_job_was_left_reserved():
+    """A ledger row exists only once its transaction committed: a job still reserved was
+    stranded between that commit and its enqueue, and must not consume budget forever."""
+    from src.mcp_server.studies.ledger import release_stranded, settle
+
+    trial = SimpleNamespace(job_id="j1", state="pending", role="in_sample", version=1)
+    store, repo = _Store("reserved"), _Repo([trial])
+    settle(repo, store, SimpleNamespace(status="exploring"))
+    assert store.state == "queued"
+    assert store.transitions == [("j1", {"reserved"}, {"state": "queued"})]
+    assert trial.state == "pending" and repo.settled == []  # still counted, now running
+    assert release_stranded(store, trial, "queued") is False
+    assert release_stranded(store, trial, "running") is False

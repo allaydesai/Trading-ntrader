@@ -69,6 +69,8 @@ def server_info(ctx: ServerContext, capabilities: list[str]) -> dict[str, Any]:
             "job_timeout_s": s.job_timeout_s,
             "max_compare": s.max_compare,
             "log_tail_lines": s.log_tail_lines,
+            "max_sweep_cells": s.max_sweep_cells,
+            "max_monte_carlo_iterations": s.max_monte_carlo_iterations,
         },
         "vault": _vault(ctx),
         "gates": load_gates(ctx.settings).status(),

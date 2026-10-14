@@ -40,6 +40,10 @@ class McpSettings(BaseSettings):
         default=1000, gt=1, description="Most points get_equity_curve returns"
     )
     max_trades_page: int = Field(default=500, gt=0, description="Most trades get_trades returns")
+    max_sweep_cells: int = Field(default=200, gt=0, description="Most cells one submit_sweep runs")
+    max_monte_carlo_iterations: int = Field(
+        default=50_000, ge=1000, description="Most iterations run_monte_carlo accepts"
+    )
 
     model_config = SettingsConfigDict(
         env_prefix="NTRADER_MCP_",

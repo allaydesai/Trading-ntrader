@@ -10,7 +10,17 @@ from src.mcp_server.context import ServerContext
 from src.mcp_server.jobs import service
 from src.mcp_server.jobs.runner import JobRunner
 from src.mcp_server.jobs.store import JobStore
-from src.mcp_server.tools import analysis, catalogue, info, jobs, paper, research, runs, studies
+from src.mcp_server.tools import (
+    analysis,
+    catalogue,
+    info,
+    jobs,
+    paper,
+    research,
+    robustness,
+    runs,
+    studies,
+)
 
 #: Every tool this server registers. Pinned by test against the live registration
 #: and a literal, so adding or dropping a tool is always a deliberate, visible edit.
@@ -24,6 +34,7 @@ REGISTERED_TOOLS: frozenset[str] = frozenset(
         *research.TOOL_NAMES,
         *analysis.TOOL_NAMES,
         *paper.TOOL_NAMES,
+        *robustness.TOOL_NAMES,
     )
 )
 
@@ -76,4 +87,5 @@ def build_server(ctx: ServerContext | None = None) -> MCPServer:
     research.register(server, ctx)
     analysis.register(server, ctx)
     paper.register(server, ctx)
+    robustness.register(server, ctx)
     return server
