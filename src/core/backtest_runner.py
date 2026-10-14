@@ -17,6 +17,7 @@ from nautilus_trader.model.objects import Money
 from src.config import get_settings
 from src.core.fee_models import IBKRCommissionModel
 from src.core.fill_model import make_fill_model
+from src.core.metrics import net_profit_factor
 from src.core.strategies.sma_crossover import SMAConfig, SMACrossover
 from src.core.strategy_factory import StrategyFactory
 from src.core.strategy_registry import StrategyRegistry
@@ -671,7 +672,7 @@ class MinimalBacktestRunner:
         sharpe_ratio = safe_float(stats_returns.get("Sharpe Ratio (252 days)"))
         sortino_ratio = safe_float(stats_returns.get("Sortino Ratio (252 days)"))
         volatility = safe_float(stats_returns.get("Returns Volatility (252 days)"))
-        profit_factor = safe_float(stats_returns.get("Profit Factor"))
+        profit_factor = net_profit_factor(analyzer.realized_pnls(USD))
         risk_return_ratio = safe_float(stats_returns.get("Risk Return Ratio"))
         avg_return = safe_float(stats_returns.get("Average (Return)"))
         avg_win_return = safe_float(stats_returns.get("Average Win (Return)"))

@@ -50,6 +50,7 @@ from nautilus_trader.model.objects import Currency, Money
 
 from src.config import get_settings
 from src.core.mark_to_market import Fill, RiskMetrics, daily_equity, risk_metrics
+from src.core.metrics import net_profit_factor
 from src.models.backtest_result import BacktestResult
 from src.models.position_reconciliation import SYNTHETIC_STRATEGY_IDS
 
@@ -385,7 +386,7 @@ class ResultsExtractor:
 
         # Extract return-based metrics
         risk = _risk_metrics(mark_to_market_of(self), analyzer, stats_returns)
-        profit_factor = _safe_float(stats_returns.get("Profit Factor"))
+        profit_factor = net_profit_factor(analyzer.realized_pnls(USD))
         risk_return_ratio = _safe_float(stats_returns.get("Risk Return Ratio"))
         avg_return = _safe_float(stats_returns.get("Average (Return)"))
         avg_win_return = _safe_float(stats_returns.get("Average Win (Return)"))

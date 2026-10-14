@@ -86,7 +86,9 @@ and `cost_stress` joined the trial roles (never counted, never freezable).
 
 `src/core/results_extractor.py` — pulls metrics from Nautilus engine:
 
-**Nautilus-provided**: Sharpe, Sortino, volatility, profit_factor, avg_return, total_pnl, expectancy, avg_win/loss, max_winner/loser.
+**Nautilus-provided**: Sharpe, Sortino, volatility, avg_return, total_pnl, expectancy, avg_win/loss, max_winner/loser.
+
+**profit_factor** is `net_profit_factor(analyzer.realized_pnls(USD))` (`src/core/metrics.py`): dollar wins over dollar losses, net of commission. Nautilus's own `Profit Factor` statistic is price-return based and ignores commission and size (found 2026-10-13; the research gates judge on this column).
 
 **Custom-calculated** (Nautilus doesn't provide):
 - Max drawdown (peak-to-trough)

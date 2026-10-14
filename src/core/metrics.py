@@ -15,6 +15,25 @@ from nautilus_trader.analysis.statistics.sortino_ratio import SortinoRatio
 from nautilus_trader.portfolio.portfolio import Portfolio
 
 
+def net_profit_factor(realized_pnls: pd.Series | None) -> float | None:
+    """Dollar wins over dollar losses, net of commission.
+
+    ``realized_pnls`` is the analyzer's series of each closed position's
+    ``realized_pnl`` — which Nautilus starts at minus the fill's commission
+    (``position.pyx``, ``_handle_*_order_fill``). Nautilus's own ``Profit Factor``
+    statistic sums ``realized_return`` instead, a price-only ratio that neither
+    commission nor size can move, so a 2× cost-stress run kept it unchanged
+    (research MCP phase 4 exit check, 2026-10-13). ``None`` when nothing closed
+    or nothing lost: no loss makes the ratio undefined, not infinite.
+    """
+    if realized_pnls is None or realized_pnls.empty:
+        return None
+    losses = float(realized_pnls[realized_pnls < 0].sum())
+    if losses == 0.0:
+        return None
+    return float(realized_pnls[realized_pnls > 0].sum()) / abs(losses)
+
+
 class MaxDrawdown(PortfolioStatistic):
     """Custom maximum drawdown statistic extending Nautilus framework."""
 
