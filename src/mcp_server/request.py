@@ -38,6 +38,9 @@ class BacktestSpec(BaseModel):
     fill_seed: int | None = Field(
         default=None, ge=0, description="Fill-model seed; NTrader's default when unset"
     )
+    cost_multiplier: float = Field(
+        default=1.0, ge=0, description="Commission scale (cost stress); 1 is the broker's schedule"
+    )
 
 
 @dataclass(frozen=True)
@@ -64,6 +67,7 @@ class ResolvedRequest:
                 "params": r.strategy_config,
                 "starting_balance": r.starting_balance,
                 "config_hash": self.config_hash,
+                **({"cost_multiplier": r.cost_multiplier} if r.cost_multiplier != 1 else {}),
             }
         )
 
@@ -113,6 +117,7 @@ def resolve(spec: BacktestSpec, *, default_catalog: str) -> ResolvedRequest:
             data_source="catalog",
             catalog_name=catalog,
             fill_seed=DEFAULT_FILL_SEED if spec.fill_seed is None else spec.fill_seed,
+            cost_multiplier=spec.cost_multiplier,
         )
     except ValidationError as exc:
         raise ToolFailure(

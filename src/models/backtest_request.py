@@ -91,6 +91,10 @@ class BacktestRequest(BaseModel):
     bar_type: str = Field(..., min_length=1, description="Bar type specification")
 
     fill_seed: int = DEFAULT_FILL_SEED
+    # Cost stress (research MCP phase 4): every commission term scaled by this. 1 is the
+    # broker's schedule; 2 is "profitable at twice the costs". Part of the run's identity
+    # only when it is not 1, so every earlier config hash still names the same run.
+    cost_multiplier: float = Field(default=1.0, ge=0, description="Commission scale factor")
 
     # Execution options
     persist: bool = Field(default=True, description="Persist results to database")

@@ -77,7 +77,16 @@ class StrategyConfigSnapshot(BaseModel):
         data = handler(self)
         if not self.session_conditions:
             data.pop("session_conditions", None)
+        if self.cost_multiplier is None:
+            data.pop("cost_multiplier", None)
         return data
+
+    cost_multiplier: float | None = Field(
+        default=None,
+        description="Commission scale factor of a cost-stress run (research MCP phase 4). "
+        "None on every run at the broker's schedule, and omitted from the dump then, so "
+        "ordinary rows stay byte-identical.",
+    )
 
     metrics_basis: str | None = Field(
         default=None,

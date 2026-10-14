@@ -81,6 +81,9 @@ def _run_record_fields(request: BacktestRequest) -> dict[str, Any]:
             "config": _make_json_serializable(request.strategy_config),
             "bar_type": request.bar_type,
             "fill_seed": request.fill_seed,
+            **(
+                {"cost_multiplier": request.cost_multiplier} if request.cost_multiplier != 1 else {}
+            ),
         },
     }
 
@@ -313,12 +316,18 @@ class BacktestOrchestrator:
             result.total_return = (total_final - total_start) / total_start
         return result
 
-    def _make_fee_model(self) -> IBKRCommissionModel:
-        """Construct the shared IBKR commission model from settings."""
+    def _make_fee_model(self, multiplier: float = 1.0) -> IBKRCommissionModel:
+        """The IBKR commission model from settings, every term scaled by ``multiplier``.
+
+        A cost-stress run (research MCP phase 4) scales the per-share rate, the
+        minimum and the cap alike; the fill model is untouched, so this stresses
+        commission, not slippage.
+        """
+        scale = Decimal(str(multiplier))
         return IBKRCommissionModel(
-            commission_per_share=self.settings.commission_per_share,
-            min_per_order=self.settings.commission_min_per_order,
-            max_rate=self.settings.commission_max_rate,
+            commission_per_share=self.settings.commission_per_share * scale,
+            min_per_order=self.settings.commission_min_per_order * scale,
+            max_rate=self.settings.commission_max_rate * scale,
         )
 
     def _setup_engine(
@@ -345,7 +354,7 @@ class BacktestOrchestrator:
 
         # Create fill + commission models (shared construction — see helpers)
         fill_model = make_fill_model(request.fill_seed)
-        fee_model = self._make_fee_model()
+        fee_model = self._make_fee_model(request.cost_multiplier)
 
         self.engine = BacktestEngine(config=config)
 
@@ -391,7 +400,7 @@ class BacktestOrchestrator:
             logging=logging_config,
         )
         fill_model = make_fill_model(request.fill_seed)
-        fee_model = self._make_fee_model()
+        fee_model = self._make_fee_model(request.cost_multiplier)
         engine = BacktestEngine(config=config)
 
         venues_added: set[Venue] = set()

@@ -145,3 +145,19 @@ class TestComputeCandidateHash:
 
     def test_differs_from_the_config_hash(self):
         assert compute_candidate_hash(_request()) != compute_config_hash(_request())
+
+
+class TestCostMultiplier:
+    """Phase 4 cost stress: the multiplier is part of a run's identity only when it is not 1."""
+
+    def test_the_default_multiplier_leaves_every_existing_hash_unchanged(self):
+        assert compute_config_hash(_request(cost_multiplier=1.0)) == compute_config_hash(_request())
+        assert compute_candidate_hash(_request(cost_multiplier=1)) == compute_candidate_hash(
+            _request()
+        )
+
+    def test_a_stressed_run_is_a_different_run(self):
+        assert compute_config_hash(_request(cost_multiplier=2.0)) != compute_config_hash(_request())
+        assert compute_config_hash(_request(cost_multiplier=2.0)) == compute_config_hash(
+            _request(cost_multiplier=2)
+        )

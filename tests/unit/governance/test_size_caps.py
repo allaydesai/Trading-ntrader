@@ -124,7 +124,8 @@ SIZE_BASELINE: dict[str, int] = {
     # (and `_persist_results` dropped under its cap) while adding run provenance.
     # MCP phase 2, 275 -> 277: `reproduced_from_run_id` threaded through `execute`
     # and `_persist_results` so `reproduce_run` uses the orchestrator, not the legacy runner.
-    "src/core/backtest_orchestrator.py::BacktestOrchestrator": 277,
+    # MCP phase 4, 277 -> 278: `_make_fee_model` scales every commission term for cost stress.
+    "src/core/backtest_orchestrator.py::BacktestOrchestrator": 278,
     "src/core/backtest_runner.py::MinimalBacktestRunner": 902,
     "src/core/backtest_runner.py::MinimalBacktestRunner._extract_results": 111,
     "src/core/backtest_runner.py::MinimalBacktestRunner._persist_backtest_results": 100,
@@ -189,7 +190,8 @@ SIZE_BASELINE: dict[str, int] = {
     "src/db/repositories/backtest_repository_sync.py::SyncBacktestRepository": 153,
     "src/db/repositories/catalog_instrument_repository.py::CatalogInstrumentRepository": 102,
     # Phase 2 pre-work, 176 -> 177: `fill_seed` makes the fill model's draws part of the request.
-    "src/models/backtest_request.py::BacktestRequest": 177,
+    # MCP phase 4, 177 -> 178: `cost_multiplier` (cost stress) is part of the request.
+    "src/models/backtest_request.py::BacktestRequest": 178,
     "src/models/price_validation_report.py::evaluate_ticker_deviation": 64,
     # MCP phase 1, 274 -> 276: both save paths take run provenance (S2.3).
     "src/services/backtest_persistence.py::BacktestPersistenceService": 276,

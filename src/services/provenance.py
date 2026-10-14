@@ -47,6 +47,9 @@ def _identity(request: BacktestRequest) -> dict[str, Any]:
         "starting_balance": request.starting_balance,
         "data_source": request.to_persistence_data_source(),
         "fill_seed": request.fill_seed,
+        # Only a stressed run carries it: every hash computed before the field existed,
+        # and every candidate hash, still names the same run.
+        **({"cost_multiplier": request.cost_multiplier} if request.cost_multiplier != 1 else {}),
     }
 
 

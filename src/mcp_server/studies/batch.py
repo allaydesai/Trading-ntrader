@@ -21,6 +21,7 @@ from src.db.session_sync import get_sync_session
 from src.mcp_server.errors import ToolFailure
 from src.mcp_server.jobs.runner import JobRunner
 from src.mcp_server.jobs.store import TERMINAL_STATES, utc_now
+from src.mcp_server.jsonable import to_jsonable
 from src.mcp_server.studies import ledger
 from src.mcp_server.studies.lifecycle import load_study
 from src.mcp_server.studies.submit import LockedCheck, require_status
@@ -89,7 +90,9 @@ def reserve_trials(runner: JobRunner, batch: Batch) -> dict[str, Any]:
             rows = [
                 _record(runner, repo, study, batch, analysis, p, reserved) for p in batch.payloads
             ]
-            analysis.request = {**batch.request, "cells": dict(zip(reserved, batch.cells))}
+            analysis.request = to_jsonable(
+                {**batch.request, "cells": dict(zip(reserved, batch.cells))}
+            )
             if over:
                 details = {"analysis_id": str(analysis.analysis_id), "job_ids": reserved}
                 repo.add_event(study, "over_budget", batch.reason, details)
@@ -112,7 +115,7 @@ def _open_analysis(
             version=study.current_version,
             kind=batch.kind,
             status="pending",
-            request=batch.request,
+            request=to_jsonable(batch.request),
         )
     )
 

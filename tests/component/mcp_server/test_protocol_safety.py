@@ -52,6 +52,8 @@ PINNED_TOOLS = frozenset(
         "submit_sweep",
         "run_sensitivity",
         "run_monte_carlo",
+        "submit_breadth",
+        "submit_cost_stress",
     }
 )
 #: The only tools whose names may say "session": they read, never manage one.

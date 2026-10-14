@@ -105,6 +105,7 @@ def _reproducible_spec(run: Any) -> Any:
         params=snapshot.get("config") or {},
         starting_balance=run.initial_capital,
         fill_seed=snapshot.get("fill_seed"),
+        cost_multiplier=snapshot.get("cost_multiplier") or 1.0,
     )
 
 

@@ -3,17 +3,25 @@
 Stories S3.1, S3.2, S4.1, S4.2, S4.4, S5.3 (phase 4).
 """
 
+from collections.abc import Callable
 from typing import Any
 
 from mcp.server import MCPServer
 
 from src.mcp_server.context import ServerContext
 from src.mcp_server.jobs.runner import JobRunner
-from src.mcp_server.studies import sweeps, variability
+from src.mcp_server.studies import robustness, sweeps, variability
 from src.mcp_server.studies.batch import submit_batch
+from src.mcp_server.studies.gates import load_gates
 from src.mcp_server.tools import call
 
-TOOL_NAMES = ("submit_sweep", "run_sensitivity", "run_monte_carlo")
+TOOL_NAMES = (
+    "submit_sweep",
+    "run_sensitivity",
+    "run_monte_carlo",
+    "submit_breadth",
+    "submit_cost_stress",
+)
 
 
 def register(server: MCPServer, ctx: ServerContext) -> None:
@@ -97,3 +105,53 @@ def register(server: MCPServer, ctx: ServerContext) -> None:
             seed=seed,
             max_iterations=ctx.settings.max_monte_carlo_iterations,
         )
+
+    _register_jobs(server, ctx, runner)
+
+
+def _register_jobs(server: MCPServer, ctx: ServerContext, runner: Callable[[], JobRunner]) -> None:
+    """Robustness runs of a candidate: breadth and cost stress (walk-forward beside them)."""
+
+    @server.tool()
+    async def submit_breadth(
+        study: str,
+        symbols: list[str],
+        window: str = "in_sample",
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Run the same rules on symbols the study did not tune on, one job per symbol
+        (poll get_job). The frozen candidate's parameters once there is one, else params
+        is required. window is in_sample, or out_of_sample after a freeze. Counted as
+        breadth, never as trials; G2's breadth check reads the finished runs' profit
+        factors. Missing data for a symbol refuses the whole batch before anything runs."""
+
+        def prepare() -> dict[str, Any]:
+            batch, warnings = robustness.prepare_breadth(
+                study, symbols=symbols, window=window, params=params
+            )
+            return {"batch": batch, "warnings": warnings}
+
+        prepared = await call(prepare)
+        if not prepared.pop("ok"):
+            return {"ok": False, **prepared}
+        return await submit_batch(runner(), prepared["batch"], prepared["warnings"])
+
+    @server.tool()
+    async def submit_cost_stress(study: str, multiplier: float | None = None) -> dict[str, Any]:
+        """Run the frozen candidate on the in-sample window with every commission term
+        (per-share rate, minimum, cap) scaled by multiplier: G2's cost_stress_multiplier
+        from the vault by default, else 2. The fill model is untouched, so this stresses
+        commission, not slippage. Not counted; the scorecard asks whether the run is still
+        profitable."""
+
+        def prepare() -> dict[str, Any]:
+            gates = load_gates(ctx.settings)
+            batch, warnings = robustness.prepare_cost_stress(
+                study, multiplier=multiplier, gate_multiplier=robustness.cost_multiplier_of(gates)
+            )
+            return {"batch": batch, "warnings": warnings}
+
+        prepared = await call(prepare)
+        if not prepared.pop("ok"):
+            return {"ok": False, **prepared}
+        return await submit_batch(runner(), prepared["batch"], prepared["warnings"])
