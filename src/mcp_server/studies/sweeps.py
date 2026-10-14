@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from src.core.robustness import grid, sensitivity
-from src.db.models.research import ResearchAnalysis, ResearchStudy
+from src.db.models.research import ResearchAnalysis, ResearchCandidate, ResearchStudy
 from src.db.repositories.research_repository import SyncResearchRepository
 from src.db.session_sync import get_sync_session
 from src.mcp_server.errors import ToolFailure
@@ -23,6 +23,7 @@ from src.mcp_server.metrics import METRIC_SPECS
 from src.mcp_server.request import resolve
 from src.mcp_server.studies import ledger
 from src.mcp_server.studies.batch import Batch, find_analysis
+from src.mcp_server.studies.candidates import TESTABLE, _candidate_spec, current_candidate
 from src.mcp_server.studies.lifecycle import load_study
 from src.mcp_server.studies.scorecard import _facts
 from src.mcp_server.studies.spec import ParamRange, outside_space
@@ -65,24 +66,37 @@ def _axes(
         ) from None
 
 
-def _payloads(
-    study: ResearchStudy, cells: list[dict[str, Any]]
-) -> tuple[list[dict], list[dict], list[str]]:
-    """One job payload per distinct cell: the first validates data, the rest only resolve."""
+def _spec(study: ResearchStudy, candidate: ResearchCandidate | None, params: dict[str, Any]):
+    """An in-sample run of ``params``: the frozen candidate's run with them, once there is one."""
     split = Split.of(study)
-    specs = [
-        build_spec(
-            strategy=study.strategy_type,
-            symbol=study.symbols[0],
-            start=split.is_start,
-            end=split.is_end,
-            timeframe=study.timeframe,
-            catalog=study.catalog,
-            params=cell,
-            starting_balance=study.starting_balance,
-        )
-        for cell in cells
-    ]
+    if candidate is not None:
+        return _candidate_spec(candidate, split.is_start, split.is_end, changes=params)
+    return build_spec(
+        strategy=study.strategy_type,
+        symbol=study.symbols[0],
+        start=split.is_start,
+        end=split.is_end,
+        timeframe=study.timeframe,
+        catalog=study.catalog,
+        params=params,
+        starting_balance=study.starting_balance,
+    )
+
+
+def _payloads(
+    study: ResearchStudy,
+    cells: list[dict[str, Any]],
+    *,
+    candidate: ResearchCandidate | None,
+    base: dict[str, Any],
+) -> tuple[list[dict], list[dict], list[str]]:
+    """One job payload per distinct cell: the first validates data, the rest only resolve.
+
+    A cell changes only its axes: every other parameter comes from ``base`` (the
+    ``around`` set) and then the frozen candidate, so the neighbourhood G2 judges
+    differs from the candidate's run on the swept axes alone.
+    """
+    specs = [_spec(study, candidate, {**base, **cell}) for cell in cells]
     first = service.prepare_backtest(specs[0], default_catalog=study.catalog)
     payloads, kept, seen = [], [], set()
     for spec, cell in zip(specs, cells):
@@ -113,7 +127,8 @@ def prepare_sweep(
 ) -> tuple[Batch, list[str]]:
     """A sweep's cells as prepared in-sample jobs, refused before anything is reserved."""
     with get_sync_session() as session:
-        study = load_study(SyncResearchRepository(session), study_key)
+        repo = SyncResearchRepository(session)
+        study = load_study(repo, study_key)
         require_status(study, SWEEP_STATUSES, "sweeps")
         axes = _axes(study, grid_axes, around, around_pct)
         count = grid.size(axes)
@@ -123,10 +138,12 @@ def prepare_sweep(
                 f"The grid has {count} cells; the server runs at most {max_cells} per sweep.",
                 fix="Coarsen the steps or sweep one axis at a time.",
             )
+        candidate = current_candidate(repo, study) if study.status in TESTABLE else None
         cells = grid.expand(axes)
-        payloads, kept, warnings = _payloads(study, cells)
+        payloads, kept, warnings = _payloads(study, cells, candidate=candidate, base=around or {})
         outside = {w for c in kept for w in outside_space(study.param_space, c)}
-        slug, request = study.slug, {"axes": axes, "around": around, "symbol": study.symbols[0]}
+        symbol = payloads[0]["spec"]["symbol"]
+        slug, request = study.slug, {"axes": axes, "around": around, "symbol": symbol}
     for payload, cell in zip(payloads, kept):
         payload["study"] = {"slug": slug, "role": "in_sample", "cell": cell}
     batch = Batch(

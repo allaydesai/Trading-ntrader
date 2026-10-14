@@ -12,7 +12,7 @@ from src.mcp_server.studies.batch import reserve_trials
 from src.mcp_server.studies.submit import prepare_in_sample, reserve_trial
 from src.mcp_server.worker import run_job
 from tests.integration.mcp_server.conftest import requires_e2e_data, requires_postgres
-from tests.integration.mcp_server.study_fixtures import make_ctx, open_study
+from tests.integration.mcp_server.study_fixtures import freeze_fake, make_ctx, open_study
 
 pytestmark = [pytest.mark.integration, requires_postgres]
 
@@ -99,6 +99,18 @@ def test_breadth_needs_untuned_symbols_and_parameters(ctx):
     study = lifecycle.get_study(ctx.runner.store, "sma-aapl")["study"]
     assert study["budget"]["used"] == 0  # breadth is never a trial
     assert [r["symbol"] for r in study["ledger"]] == ["MSFT", "GOOG"]
+
+
+def test_breadth_on_the_holdout_window_contaminates_a_later_version(ctx, monkeypatch):
+    freeze_fake(ctx, monkeypatch, params=PARAMS)
+    batch, _ = robustness.prepare_breadth(
+        "sma-aapl", symbols=["MSFT"], window="out_of_sample", params=None
+    )
+    reserve_trials(ctx.runner, batch)
+    after = candidates.new_candidate_version(
+        ctx.runner.store, "sma-aapl", "widen the stop", "stop at 3 ATR"
+    )
+    assert after["study"]["contaminated"] is True
 
 
 def test_cost_stress_needs_a_frozen_candidate_and_a_multiplier_above_one(ctx):

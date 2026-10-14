@@ -8,14 +8,17 @@ from uuid import uuid4
 
 import pytest
 
+from src.db import session_sync
+from src.db.repositories.research_repository import SyncResearchRepository
 from src.mcp_server.errors import ToolFailure
 from src.mcp_server.jobs.store import TERMINAL_STATES
-from src.mcp_server.studies import candidates, lifecycle, sweeps
+from src.mcp_server.studies import candidates, evidence_robustness, ledger, lifecycle, sweeps
 from src.mcp_server.studies.batch import cancel_batch, reserve_trials
+from src.mcp_server.studies.checks_base import RunFacts
 from src.mcp_server.studies.submit import prepare_in_sample
 from src.mcp_server.worker import run_job
 from tests.integration.mcp_server.conftest import requires_e2e_data, requires_postgres
-from tests.integration.mcp_server.study_fixtures import make_ctx, open_study
+from tests.integration.mcp_server.study_fixtures import freeze_fake, make_ctx, open_study
 
 pytestmark = [pytest.mark.integration, requires_postgres]
 
@@ -159,6 +162,69 @@ def test_a_sweep_is_allowed_after_a_freeze_but_a_single_trial_is_not(ctx, monkey
         )
         == "invalid_study_state"
     )
+
+
+CENTRE = {"fast_period": 5, "slow_period": 20}
+OTHER = {**CENTRE, "position_size_pct": 5.0}  # a parameter the study does not declare
+
+
+def test_around_carries_the_parameters_it_does_not_sweep(ctx):
+    batch, _ = sweeps.prepare_sweep("sma-aapl", **{**SWEEP, "around": OTHER})
+    assert len(batch.payloads) == 9
+    assert all(float(p["spec"]["params"]["position_size_pct"]) == 5.0 for p in batch.payloads)
+
+
+def test_a_sweep_after_a_freeze_changes_only_the_swept_axes_of_the_candidate(ctx, monkeypatch):
+    """The candidate's symbol, fill seed and unswept parameters, not the study's defaults."""
+    freeze_fake(ctx, monkeypatch, params=OTHER, symbol="MSFT", fill_seed=7)
+    for overrides in ({"around": CENTRE}, {"grid_axes": {"fast_period": {"values": [5, 10]}}}):
+        batch, _ = sweeps.prepare_sweep("sma-aapl", **{**SWEEP, **overrides})
+        specs = [p["spec"] for p in batch.payloads]
+        assert {s["symbol"] for s in specs} == {"MSFT"}, overrides
+        assert {s["fill_seed"] for s in specs} == {7}, overrides
+        assert all(float(s["params"]["position_size_pct"]) == 5.0 for s in specs), overrides
+        assert batch.request["symbol"] == "MSFT"
+    assert {s["params"]["slow_period"] for s in specs} == {20}
+
+
+def _neighbourhood(ctx):
+    with session_sync.get_sync_session() as session:  # patched by isolated_results
+        repo = SyncResearchRepository(session)
+        study = lifecycle.load_study(repo, "sma-aapl")
+        ledger.settle(repo, ctx.runner.store, study)
+        candidate = candidates.current_candidate(repo, study)
+        return evidence_robustness.neighbourhood_facts(
+            session,
+            repo,
+            study,
+            candidate,
+            lambda s, run_id: RunFacts(str(run_id), {"sharpe_ratio": 1.0}, git_dirty=False),
+        )
+
+
+def _succeed(ctx, recorded, *, cancel=()) -> None:
+    for job in recorded["jobs"]:
+        state = "cancelled" if job["cell"] in cancel else "succeeded"
+        run_id = None if state == "cancelled" else str(uuid4())
+        ctx.runner.store.update(job["job_id"], state=state, run_id=run_id)
+
+
+def test_the_neighbourhood_is_judged_only_on_runs_of_the_exact_candidate(ctx, monkeypatch):
+    """A sweep on another seed is not the candidate's neighbourhood, and a gap is counted."""
+    early, _ = sweeps.prepare_sweep(
+        "sma-aapl", **{**SWEEP, "around": CENTRE, "over_budget_reason": "test"}
+    )
+    _succeed(ctx, reserve_trials(ctx.runner, early))
+    freeze_fake(ctx, monkeypatch, params=CENTRE, fill_seed=7)
+    assert _neighbourhood(ctx) is None  # every early cell ran on the default seed
+    late, _ = sweeps.prepare_sweep(
+        "sma-aapl", **{**SWEEP, "around": CENTRE, "over_budget_reason": "test"}
+    )
+    recorded = reserve_trials(ctx.runner, late)
+    _succeed(ctx, recorded, cancel=[{"fast_period": 4, "slow_period": 20}])
+    facts = _neighbourhood(ctx)
+    assert facts is not None and facts.sweep == recorded["analysis_id"]
+    assert facts.missing_neighbours == 1 and len(facts.neighbours) == 3
 
 
 class _FakeRun:

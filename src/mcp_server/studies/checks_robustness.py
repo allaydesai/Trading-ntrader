@@ -42,12 +42,19 @@ def neighbourhood_sharpe(ev: Evidence, threshold: Any) -> Row:
         "neighbours": len(facts.neighbours),
         "min_ratio": facts.min_ratio,
         "median_ratio": facts.median_ratio,
+        "missing_neighbours": facts.missing_neighbours,
     }
     wanted = as_number(threshold)
     if wanted is None:
         return _analysis_row(MISSING, value, threshold, ids, "The threshold is not a number.")
     if facts.chosen is None or facts.chosen <= 0:
         return _analysis_row(FAIL, value, threshold, ids, "the candidate's Sharpe is not positive")
+    if facts.missing_neighbours:
+        note = (
+            f"{facts.missing_neighbours} neighbour run(s) did not finish (cancelled, failed or "
+            "still running): submit_sweep(around=<its params>) again"
+        )
+        return _analysis_row(MISSING, value, threshold, ids, note)
     if not facts.neighbours or facts.min_ratio is None:
         return _analysis_row(MISSING, value, threshold, ids, "No finished neighbour run yet.")
     note = "" if facts.min_ratio >= wanted else "a neighbour falls below the plateau bar"
@@ -92,8 +99,20 @@ def breadth(ev: Evidence, threshold: Any) -> Row:
     table = {symbol: _metric(run, "profit_factor") for symbol, run in facts.runs.items()}
     if needed is None:
         return _analysis_row(MISSING, table, threshold, ids, "The gate names no instruments count.")
-    passing = sorted(s for s, pf in table.items() if pf is not None and pf > bar)
-    value = {"profit_factor": table, "passing": passing, "needed": int(needed), "bar": bar}
+    # No losing trade leaves the profit factor undefined, not low: a run that won counts.
+    no_loss = sorted(
+        s
+        for s, pf in table.items()
+        if pf is None and (_metric(facts.runs[s], "winning_trades") or 0) > 0
+    )
+    passing = sorted(s for s, pf in table.items() if (pf is not None and pf > bar) or s in no_loss)
+    value = {
+        "profit_factor": table,
+        "passing": passing,
+        "no_losing_trade": no_loss,
+        "needed": int(needed),
+        "bar": bar,
+    }
     if len(passing) >= needed:
         return _analysis_row(PASS, value, threshold, ids)
     failing = sorted(s for s in table if s not in passing)
@@ -116,10 +135,17 @@ def walk_forward_efficiency(ev: Evidence, threshold: Any) -> Row:
         "windows_used": facts.windows_used,
         "negative_windows": facts.negative_windows,
         "excluded_windows": facts.excluded_windows,
+        "missing_cells": facts.missing_cells,
     }
     wanted = as_number(threshold)
     if wanted is None:
         return _analysis_row(MISSING, value, threshold, ids, "The threshold is not a number.")
+    if facts.missing_cells:
+        note = (
+            f"{facts.missing_cells} grid cell(s) did not finish, so each window chose without "
+            "them: submit_walk_forward again"
+        )
+        return _analysis_row(MISSING, value, threshold, ids, note)
     if facts.efficiency is None:
         note = "no window had a positive in-sample return, so efficiency is undefined"
         return _analysis_row(FAIL, value, threshold, ids, note)

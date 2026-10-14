@@ -86,3 +86,54 @@ def make_ctx(tmp_path: Path, monkeypatch, *, gates: str | None = GATES_BLOCK) ->
 
 def open_study(ctx: ServerContext, **overrides: Any) -> dict[str, Any]:
     return lifecycle.create_study(ctx.settings, build_study_spec(**{**STUDY, **overrides}))
+
+
+class FakeRun:
+    """A stored run as ``freeze_candidate`` reads it, without running a backtest."""
+
+    def __init__(self, run_id: str, *, symbol: str, params: dict[str, Any], fill_seed: int):
+        from uuid import UUID
+
+        self.run_id = UUID(run_id)
+        self.strategy_type = "sma_crossover"
+        self.instrument_symbol = symbol
+        self.config_snapshot = {"config": params, "fill_seed": fill_seed}
+        self.data_source = "catalog:e2e-test"
+        self.initial_capital = 1_000_000
+        self.git_commit = None
+
+
+def freeze_fake(
+    ctx: ServerContext,
+    monkeypatch,
+    *,
+    params: dict[str, Any],
+    symbol: str = "AAPL",
+    fill_seed: int = 42,
+    study: str = "sma-aapl",
+) -> str:
+    """Freeze a candidate from an in-sample trial whose run is a ``FakeRun``."""
+    from uuid import uuid4
+
+    from src.mcp_server.studies import candidates
+    from src.mcp_server.studies.submit import prepare_in_sample, reserve_trial
+
+    job, _ = prepare_in_sample(
+        study,
+        params={k: v for k, v in params.items() if k in ("fast_period", "slow_period")},
+        strategy=None,
+        symbol=None,
+        start=None,
+        end=None,
+        timeframe=None,
+        catalog=None,
+        starting_balance=None,
+        over_budget_reason="fixture",
+    )
+    recorded = reserve_trial(ctx.runner, job)
+    run_id = str(uuid4())
+    ctx.runner.store.update(recorded["job_id"], state="succeeded", run_id=run_id)
+    run = FakeRun(run_id, symbol=symbol, params=params, fill_seed=fill_seed)
+    monkeypatch.setattr(candidates, "load_run", lambda session, rid: run)
+    candidates.freeze_candidate(ctx.runner.store, study, run_id, None)
+    return run_id

@@ -17,7 +17,7 @@ from src.mcp_server.analysis.run_reads import load_run, run_catalog
 from src.mcp_server.errors import ToolFailure
 from src.mcp_server.jobs import service
 from src.mcp_server.strategies import resolve_strategy
-from src.mcp_server.studies.candidates import HOLDOUT_ROLES
+from src.mcp_server.studies.candidates import sees_holdout
 from src.mcp_server.studies.lifecycle import load_study
 from src.mcp_server.studies.split import Split, require_in_sample, require_out_of_sample
 from src.mcp_server.studies.submit import StudyJob, require_status
@@ -116,7 +116,7 @@ def _require_same_code_for_holdout(run: Any) -> None:
         return
     raise ToolFailure(
         "holdout_locked",
-        f"Run {run.run_id} is an out-of-sample run; reproducing it with different code "
+        f"Run {run.run_id} saw the out-of-sample window; reproducing it with different code "
         "would be a second look at the holdout.",
         fix=f"Check out {run.git_commit} with a clean tree, or use run_out_of_sample with "
         "override_reason (it marks the study contaminated).",
@@ -130,10 +130,10 @@ def prepare_reproduction(run_id: str) -> tuple[dict[str, Any], StudyJob | None]:
         spec = _reproducible_spec(run)
         trials = SyncResearchRepository(session).trials_of_runs([run.run_id])
         trial = trials[0] if trials else None
-        if trial is not None and trial.role in HOLDOUT_ROLES:
+        study = session.get(ResearchStudy, trial.study_pk) if trial is not None else None
+        if trial is not None and study is not None and sees_holdout(study, trial):
             _require_same_code_for_holdout(run)
         stored_hash, original = run.config_hash, run.run_id
-        study = session.get(ResearchStudy, trial.study_pk) if trial is not None else None
         slug = study.slug if study is not None else None
     payload = service.prepare_backtest(spec, default_catalog=spec.catalog or "")
     if payload["resolved"]["config_hash"] != stored_hash:

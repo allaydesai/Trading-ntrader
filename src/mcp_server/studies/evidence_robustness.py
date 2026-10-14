@@ -2,7 +2,8 @@
 
 Each piece is None until the analysis or run behind it exists, so every
 robustness check stays ``missing`` with the tool to call. Only analyses of
-the candidate (by candidate, or by its exact parameters) count.
+the candidate (by candidate, by its exact parameters, or a sweep cell that is
+exactly its run) count.
 """
 
 import math
@@ -12,7 +13,7 @@ import numpy as np
 from scipy import stats
 from sqlalchemy.orm import Session
 
-from src.core.robustness import sensitivity
+from src.core.robustness import grid, sensitivity
 from src.core.robustness.bootstrap import TRADING_DAYS
 from src.core.robustness.deflated_sharpe import deflated_sharpe
 from src.db.models.research import ResearchAnalysis, ResearchCandidate, ResearchStudy, ResearchTrial
@@ -20,8 +21,11 @@ from src.db.repositories.equity_curve_repository import SyncEquityCurveRepositor
 from src.db.repositories.research_repository import SyncResearchRepository
 from src.mcp_server.analysis.regimes import daily_returns
 from src.mcp_server.analysis.series import equity_series
+from src.mcp_server.errors import ToolFailure
 from src.mcp_server.jsonable import to_jsonable
+from src.mcp_server.request import resolve
 from src.mcp_server.studies import ledger
+from src.mcp_server.studies.candidates import _candidate_spec
 from src.mcp_server.studies.checks_base import (
     BreadthFacts,
     DeflatedSharpeFacts,
@@ -31,6 +35,7 @@ from src.mcp_server.studies.checks_base import (
     StressFacts,
     WalkForwardFacts,
 )
+from src.mcp_server.studies.split import Split
 
 Facts = Any  # a callable (session, run_id) -> RunFacts | None, scorecard._facts
 
@@ -39,30 +44,40 @@ def _same_params(a: dict[str, Any], b: dict[str, Any]) -> bool:
     return to_jsonable(a) == to_jsonable(b)
 
 
-def _cell_matches(cell: dict[str, Any], params: dict[str, Any]) -> bool:
-    if any(k not in params for k in cell):
-        return False
+def _centre_hash(study: ResearchStudy, candidate) -> str | None:
+    """The config hash of the candidate's own in-sample run: a sweep cell is it only if equal.
+
+    Matching the hash, not the swept parameters, also matches the symbol, fill
+    seed and every unswept parameter; None when the frozen parameters no longer
+    resolve (the drift the out-of-sample run refuses).
+    """
+    split = Split.of(study)
     try:
-        return all(float(cell[k]) == float(params[k]) for k in cell)
-    except (TypeError, ValueError):
-        return all(cell[k] == params[k] for k in cell)
+        spec = _candidate_spec(candidate, split.is_start, split.is_end)
+        return resolve(spec, default_catalog=study.catalog).config_hash
+    except ToolFailure:
+        return None
 
 
 def neighbourhood_facts(
     session: Session, repo: SyncResearchRepository, study: ResearchStudy, candidate, facts: Facts
 ) -> NeighbourhoodFacts | None:
-    """The candidate's cell in the newest sweep that contains it, against its neighbours."""
+    """The candidate's cell in the newest sweep that ran it, against its neighbours."""
+    centre_hash = _centre_hash(study, candidate)
     for sweep in reversed(repo.analyses(study, kind="sweep")):
         cells_by_job = sweep.request.get("cells") or {}
         axes = list(sweep.request.get("axes") or {})
-        if not axes or not cells_by_job:
+        if centre_hash is None or not axes or not cells_by_job:
             continue
         jobs = list(cells_by_job)
         cells = [cells_by_job[j] for j in jobs]
-        centre = next((i for i, c in enumerate(cells) if _cell_matches(c, candidate.params)), None)
+        trials = {t.job_id: t for t in repo.trials_of_analysis(sweep)}
+        centre = next(
+            (i for i, j in enumerate(jobs) if j in trials and trials[j].config_hash == centre_hash),
+            None,
+        )
         if centre is None:
             continue
-        trials = {t.job_id: t for t in repo.trials_of_analysis(sweep)}
         values: dict[int, float | None] = {}
         runs: dict[int, str] = {}
         for i, job_id in enumerate(jobs):
@@ -72,6 +87,11 @@ def neighbourhood_facts(
             if run is not None:
                 runs[i] = run.run_id
         found = sensitivity.neighbourhood(cells, values, axes, centre)
+        unfinished = [
+            j
+            for j in grid.adjacent(cells, axes)[centre]
+            if trials.get(jobs[j]) is None or trials[jobs[j]].state != "completed"
+        ]
         return NeighbourhoodFacts(
             sweep=str(sweep.analysis_id),
             cell_run_id=runs.get(centre),
@@ -79,6 +99,7 @@ def neighbourhood_facts(
             neighbours={runs[j]: v for j, v in found["neighbours"].items() if j in runs},
             min_ratio=found["min_ratio"],
             median_ratio=found["median_ratio"],
+            missing_neighbours=len(unfinished),
         )
     return None
 
@@ -141,6 +162,7 @@ def walk_forward_facts(
             negative_windows=int(result.get("negative_windows") or 0),
             excluded_windows=list(result.get("excluded_windows") or []),
             run_ids=list((result.get("runs") or {}).values()),
+            missing_cells=len(result.get("missing_cells") or []),
         )
     return None
 

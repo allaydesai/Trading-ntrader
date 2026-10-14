@@ -8,7 +8,7 @@ from src.mcp_server.studies.batch import cancel_batch, reserve_trials
 from src.mcp_server.studies.submit import prepare_in_sample, reserve_trial
 from src.mcp_server.worker import run_job
 from tests.integration.mcp_server.conftest import requires_e2e_data, requires_postgres
-from tests.integration.mcp_server.study_fixtures import make_ctx, open_study
+from tests.integration.mcp_server.study_fixtures import freeze_fake, make_ctx, open_study
 
 pytestmark = [pytest.mark.integration, requires_postgres]
 
@@ -144,6 +144,17 @@ async def test_a_cancelled_batch_becomes_a_void_analysis(ctx, monkeypatch):
     )
     assert void["analysis"]["status"] == "void"
     assert len(void["analysis"]["result"]["missing_cells"]) == 2
+
+
+def test_walk_forward_cells_change_only_the_swept_axes_of_the_candidate(ctx, monkeypatch):
+    params = {"fast_period": 5, "slow_period": 30, "position_size_pct": 5.0}
+    freeze_fake(ctx, monkeypatch, params=params, fill_seed=7)
+    batch, _ = walkforward.prepare_walk_forward("sma-aapl", **WF)
+    specs = [p["spec"] for p in batch.payloads]
+    assert [s["params"]["fast_period"] for s in specs] == [5, 10]
+    assert {s["params"]["slow_period"] for s in specs} == {30}
+    assert all(float(s["params"]["position_size_pct"]) == 5.0 for s in specs)
+    assert {s["fill_seed"] for s in specs} == {7}
 
 
 class _FakeRun:

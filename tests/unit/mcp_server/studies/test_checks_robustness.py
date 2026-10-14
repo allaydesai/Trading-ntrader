@@ -48,6 +48,14 @@ def test_neighbourhood_passes_on_a_plateau_and_fails_on_a_spike():
     assert _check("G2", "neighbourhood_sharpe", 0.7, neighbourhood=none)["status"] == "missing"
 
 
+def test_a_neighbour_that_did_not_finish_leaves_the_neighbourhood_missing():
+    """A cancelled or failed neighbour is not evidence of a plateau: G2 waits for it."""
+    facts = _neighbourhood(0.9)
+    gappy = NeighbourhoodFacts(**{**facts.__dict__, "missing_neighbours": 1})
+    row = _check("G2", "neighbourhood_sharpe", 0.7, neighbourhood=gappy)
+    assert row["status"] == "missing" and "1 neighbour" in row["note"]
+
+
 def test_cost_stress_passes_when_still_profitable_at_the_gates_multiplier():
     ok = StressFacts("a1", _run("stress", total_return=0.05), multiplier=2.0)
     assert _check("G2", "cost_stress_multiplier", 2, cost_stress=ok)["status"] == "pass"
@@ -77,6 +85,19 @@ def test_breadth_counts_untuned_symbols_above_the_bar():
     assert _check("G2", "breadth", 2, breadth=facts)["status"] == "pass"  # a bare count
 
 
+def test_breadth_counts_a_symbol_without_a_losing_trade_as_above_the_bar():
+    """No loss leaves the profit factor undefined (None), but the symbol made money."""
+    runs = {
+        "SPY": _run("spy", profit_factor=None, winning_trades=12, losing_trades=0),
+        "IWM": _run("iwm", profit_factor=None, total_trades=0, winning_trades=0),
+    }
+    row = _check("G2", "breadth", {"instruments": 1}, breadth=BreadthFacts(["b1"], runs))
+    assert row["status"] == "pass" and row["value"]["passing"] == ["SPY"]
+    assert row["value"]["no_losing_trade"] == ["SPY"]
+    row = _check("G2", "breadth", {"instruments": 2}, breadth=BreadthFacts(["b1"], runs))
+    assert row["status"] == "fail" and "IWM" in row["note"]
+
+
 def test_walk_forward_efficiency_against_the_bar():
     good = WalkForwardFacts("w1", 0.8, 5, 5, 1, [], ["r1", "r2"])
     row = _check("G3", "walk_forward_efficiency", 0.5, walk_forward=good)
@@ -86,6 +107,13 @@ def test_walk_forward_efficiency_against_the_bar():
     assert row["status"] == "fail" and "excluded" in row["note"]
     undefined = WalkForwardFacts("w1", None, 5, 0, 5, [1, 2, 3, 4, 5], [])
     assert _check("G3", "walk_forward_efficiency", 0.5, walk_forward=undefined)["status"] == "fail"
+
+
+def test_a_walk_forward_with_missing_cells_is_not_judged():
+    """Cells cancelled or failed shrink the grid the windows chose from: G3 waits."""
+    partial = WalkForwardFacts("w1", 0.9, 5, 5, 0, [], ["r1", "r2"], missing_cells=38)
+    row = _check("G3", "walk_forward_efficiency", 0.5, walk_forward=partial)
+    assert row["status"] == "missing" and "38" in row["note"]
 
 
 def test_deflated_sharpe_probability_against_the_bar():

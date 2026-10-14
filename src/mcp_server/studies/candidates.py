@@ -30,7 +30,8 @@ from src.models.backtest_request import DEFAULT_FILL_SEED
 from src.services.provenance import compute_candidate_hash, git_provenance
 
 TESTABLE = frozenset({"frozen", "tested"})
-#: Roles whose runs see the locked window (the walk-forward runs every cell over the span).
+#: Roles whose runs always see the locked window (the walk-forward runs every cell over the
+#: span); a breadth run sees it only when asked for that window, so ``sees_holdout`` decides.
 HOLDOUT_ROLES = frozenset({"out_of_sample", "walk_forward"})
 
 
@@ -46,7 +47,17 @@ def current_candidate(repo: SyncResearchRepository, study: ResearchStudy) -> Res
     )
 
 
-def _candidate_spec(candidate: ResearchCandidate, start, end):
+def sees_holdout(study: Any, trial: Any) -> bool:
+    """Whether a trial ran the study's strategy on the locked window (a benchmark never does)."""
+    if trial.role in HOLDOUT_ROLES:
+        return True
+    return trial.role != "benchmark" and trial.end > study.is_end
+
+
+def _candidate_spec(
+    candidate: ResearchCandidate, start, end, changes: dict[str, Any] | None = None
+):
+    """The frozen candidate on a window; ``changes`` overrides some parameters (a grid cell)."""
     return build_spec(
         strategy=candidate.strategy_type,
         symbol=candidate.symbol,
@@ -54,7 +65,7 @@ def _candidate_spec(candidate: ResearchCandidate, start, end):
         end=end,
         timeframe=candidate.timeframe,
         catalog=candidate.catalog,
-        params=candidate.params,
+        params={**candidate.params, **(changes or {})},
         starting_balance=candidate.starting_balance,
         fill_seed=candidate.fill_seed,
     )
@@ -152,7 +163,7 @@ def new_candidate_version(store: JobStore, key: str, reason: str, change: str) -
         study = load_study(repo, key, for_update=True)
         ledger.settle(repo, store, study)
         require_status(study, TESTABLE, "a new candidate version")
-        seen = any(t.role in HOLDOUT_ROLES and t.state != "void" for t in repo.trials(study))
+        seen = any(sees_holdout(study, t) and t.state != "void" for t in repo.trials(study))
         before = study.current_version
         study.current_version = before + 1
         details = {"version": before + 1, "change": change}

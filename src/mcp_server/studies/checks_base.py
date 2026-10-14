@@ -52,6 +52,8 @@ class NeighbourhoodFacts:
     neighbours: dict[str, float | None]
     min_ratio: float | None
     median_ratio: float | None
+    #: Grid neighbours whose run never finished (cancelled, failed or still running).
+    missing_neighbours: int = 0
 
 
 @dataclass(frozen=True)
@@ -82,6 +84,8 @@ class WalkForwardFacts:
     negative_windows: int
     excluded_windows: list[int]
     run_ids: list[str]
+    #: Grid cells whose run was cancelled, failed or unusable: the windows chose without them.
+    missing_cells: int = 0
 
 
 @dataclass(frozen=True)

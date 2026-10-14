@@ -27,12 +27,11 @@ from src.mcp_server.jobs.store import JobStore
 from src.mcp_server.jsonable import to_jsonable
 from src.mcp_server.request import resolve
 from src.mcp_server.studies.batch import Batch
-from src.mcp_server.studies.candidates import TESTABLE, current_candidate  # noqa: F401
+from src.mcp_server.studies.candidates import TESTABLE, _candidate_spec, current_candidate
 from src.mcp_server.studies.lifecycle import load_study
 from src.mcp_server.studies.split import Split
 from src.mcp_server.studies.submit import require_status
 from src.mcp_server.studies.sweeps import _axes
-from src.mcp_server.tools import build_spec
 
 
 def _windows(study: ResearchStudy, *, is_years: int, oos_years: int, mode: str) -> list:
@@ -112,17 +111,8 @@ def _cell_payloads(
     kept: list[dict[str, Any]] = []
     seen: set[str] = set()
     for cell in cells:
-        spec = build_spec(
-            strategy=study.strategy_type,
-            symbol=candidate.symbol,
-            start=split.is_start,
-            end=split.oos_end,
-            timeframe=study.timeframe,
-            catalog=study.catalog,
-            params=cell,
-            starting_balance=study.starting_balance,
-            fill_seed=candidate.fill_seed,
-        )
+        # The candidate's run with the cell's axes changed, every other parameter kept.
+        spec = _candidate_spec(candidate, split.is_start, split.oos_end, changes=cell)
         resolved = resolve(spec, default_catalog=study.catalog)
         if resolved.config_hash in seen:
             continue
