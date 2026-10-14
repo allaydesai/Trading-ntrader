@@ -386,7 +386,7 @@ class ResultsExtractor:
 
         # Extract return-based metrics
         risk = _risk_metrics(mark_to_market_of(self), analyzer, stats_returns)
-        profit_factor = net_profit_factor(analyzer.realized_pnls(USD))
+        profit_factor = net_profit_factor(analyzer.realized_pnls(USD), closed_positions)
         risk_return_ratio = _safe_float(stats_returns.get("Risk Return Ratio"))
         avg_return = _safe_float(stats_returns.get("Average (Return)"))
         avg_win_return = _safe_float(stats_returns.get("Average Win (Return)"))

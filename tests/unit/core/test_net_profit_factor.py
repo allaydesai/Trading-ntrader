@@ -103,6 +103,29 @@ class TestTheExtractorStoresTheNetFigure:
         assert result.profit_factor == pytest.approx(NET)
         assert (result.winning_trades, result.losing_trades) == (2, 2)
 
+    def test_a_position_still_open_at_the_end_is_not_a_losing_trade(self):
+        """The analyzer holds every position; an open one's realized P&L is its entry fee."""
+        still_open = SimpleNamespace(
+            **{**vars(_leg("-1", 0.0, ts_closed=5)), "is_closed": False, "is_open": True}
+        )
+        legs = (*LEGS, still_open)
+        host = LiveHost(
+            portfolio=_SettledPortfolio(_primed_analyzer(legs)),
+            cache=_ClosedLegs(legs),
+            starting_balance=STARTING,
+            final_balance=Money(STARTING + 799, USD),
+        )
+        result = ResultsExtractor(
+            engine=host, settings=SimpleNamespace(default_balance=1_000_000)
+        ).extract_results()
+
+        assert result.profit_factor == pytest.approx(NET)
+
+    def test_only_the_closed_positions_count(self):
+        pnls = pd.Series({"P-1": 10.0, "P-2": -5.0, "P-open": -1.0})
+        closed = [SimpleNamespace(id=SimpleNamespace(value=v)) for v in ("P-1", "P-2")]
+        assert net_profit_factor(pnls, closed) == pytest.approx(2.0)
+
     @pytest.mark.parametrize(
         "extract",
         [
@@ -114,4 +137,4 @@ class TestTheExtractorStoresTheNetFigure:
     def test_neither_extraction_path_reads_the_price_return_statistic(self, extract):
         source = inspect.getsource(extract)
         assert '"Profit Factor"' not in source
-        assert "net_profit_factor(" in source
+        assert "net_profit_factor(analyzer.realized_pnls(USD), closed_positions)" in source

@@ -672,7 +672,7 @@ class MinimalBacktestRunner:
         sharpe_ratio = safe_float(stats_returns.get("Sharpe Ratio (252 days)"))
         sortino_ratio = safe_float(stats_returns.get("Sortino Ratio (252 days)"))
         volatility = safe_float(stats_returns.get("Returns Volatility (252 days)"))
-        profit_factor = net_profit_factor(analyzer.realized_pnls(USD))
+        profit_factor = net_profit_factor(analyzer.realized_pnls(USD), closed_positions)
         risk_return_ratio = safe_float(stats_returns.get("Risk Return Ratio"))
         avg_return = safe_float(stats_returns.get("Average (Return)"))
         avg_win_return = safe_float(stats_returns.get("Average Win (Return)"))
