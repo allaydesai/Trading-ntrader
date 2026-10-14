@@ -26,7 +26,7 @@ import numpy as np
 MIN_WINDOWS = 20
 BASIS = (
     "Rolling windows over the linked backtest run's own closed trades (one run, "
-    "overlapping windows); Monte Carlo ranges arrive in phase 4."
+    "overlapping windows); the paper band's trade axis is Monte Carlo (mc_band)."
 )
 WEEK = timedelta(days=7)
 

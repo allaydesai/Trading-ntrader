@@ -51,6 +51,7 @@ PINNED_TOOLS = frozenset(
         # phase 4
         "submit_sweep",
         "run_sensitivity",
+        "run_monte_carlo",
     }
 )
 #: The only tools whose names may say "session": they read, never manage one.

@@ -55,8 +55,13 @@ def expectation_band(
 
 
 def _thin(band: dict[str, Any], axis: str) -> bool:
-    """The band has too few windows on one axis (``time_windows`` or ``trade_windows``)."""
-    return int((band.get(axis) or {}).get("count") or 0) < MIN_WINDOWS
+    """The band has too few windows on one axis (``time_windows`` or ``trade_windows``).
+
+    A Monte Carlo trade axis has as many windows as iterations; what limits it is
+    the run's distinct closed trades (``distinct_trades``), so that is what counts there.
+    """
+    found = band.get(axis) or {}
+    return int(found.get("distinct_trades", found.get("count")) or 0) < MIN_WINDOWS
 
 
 def _unjudgeable(report: dict[str, Any]) -> str:

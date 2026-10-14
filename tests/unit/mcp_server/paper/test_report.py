@@ -131,10 +131,12 @@ def _reading_trades(monkeypatch, *, run: int, paper: int):
 
 def test_a_band_is_fitted_to_the_run_only_when_asked(monkeypatch):
     db = _reading_trades(monkeypatch, run=30, paper=0)
+    # Phase 4: the trade axis is Monte Carlo, so count is the iterations and the run's
+    # distinct trades are reported beside it; the fitted n is capped as before.
     fitted = report.band_for_run(db, uuid4(), days=7, n=28, fit=True)["trade_windows"]
-    assert (fitted["n"], fitted["count"]) == (11, 20)
+    assert (fitted["n"], fitted["count"], fitted["distinct_trades"]) == (11, 2000, 30)
     plain = report.band_for_run(db, uuid4(), days=7, n=28)["trade_windows"]
-    assert (plain["n"], plain["count"]) == (28, 3)
+    assert (plain["n"], plain["count"], plain["method"]) == (28, 2000, "monte_carlo")
 
 
 def test_a_session_with_nearly_as_many_trades_as_the_run_is_still_judged(monkeypatch):
@@ -151,6 +153,6 @@ def test_a_session_with_nearly_as_many_trades_as_the_run_is_still_judged(monkeyp
         runtime_flags=None,
     )
     out = report.session_report(db, row, g4={}, now=NOW, recent=0)
-    assert out["band"]["trade_windows"]["count"] == 20
+    assert out["band"]["trade_windows"]["distinct_trades"] == 30
     assert (out["paper"]["trades"], out["paper"]["judged_trades"]) == (25, 11)
     assert out["comparison"]["win_rate"]["position"] != "n/a"

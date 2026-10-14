@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session, noload
 from src.db.models.backtest import BacktestRun
 from src.db.models.trading_session import TradingSession
 from src.mcp_server.errors import ToolFailure
-from src.mcp_server.paper.band import ClosedTrade, build_band, window_size, window_stats
+from src.mcp_server.paper.band import ClosedTrade, window_size, window_stats
 from src.mcp_server.paper.drift import (
     MIN_TRADES_TO_JUDGE,
     SessionHealth,
@@ -26,6 +26,7 @@ from src.mcp_server.paper.drift import (
     compare,
     health_flags,
 )
+from src.mcp_server.paper.mc_band import build_mc_band
 from src.mcp_server.paper.reads import Link, closed_trades, link_of, to_utc, trade_rows
 from src.mcp_server.paper.specs import model_normaliser, spec_differences
 from src.mcp_server.paper.views import DEFINITIONS, link_view, session_view
@@ -63,10 +64,10 @@ def check_horizon(*, weeks: float | None, trades: int | None) -> None:
 def band_for_run(
     session: Session, run_id: UUID | None, *, days: int, n: int, fit: bool = False
 ) -> dict[str, Any]:
-    """The band from a run's closed trades over ``days``-long stretches and ``n``-trade runs.
+    """The band from a run's closed trades: ``days`` stretches, Monte Carlo ``n``-trade windows.
 
-    With ``fit``, ``n`` is capped so the run still gives enough windows to judge;
-    the length used is the band's ``trade_windows.n``.
+    With ``fit``, ``n`` is capped as the rolling band caps it, so the session's judged
+    trades stay a fraction of the run's; the length used is the band's ``trade_windows.n``.
     """
     if run_id is None:
         return dict(NO_LINK_BAND)
@@ -77,7 +78,7 @@ def band_for_run(
     trades = closed_trades(session, run_pk=run.id)
     if fit:
         n = window_size(n, run_trades=len(trades), floor=MIN_TRADES_TO_JUDGE)
-    band = build_band(trades, span_end=to_utc(run.end_date) or run.end_date, days=days, n=n)
+    band = build_mc_band(trades, span_end=to_utc(run.end_date) or run.end_date, days=days, n=n)
     return {"source_run": str(run_id), **band}
 
 

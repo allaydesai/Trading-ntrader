@@ -9,11 +9,11 @@ from mcp.server import MCPServer
 
 from src.mcp_server.context import ServerContext
 from src.mcp_server.jobs.runner import JobRunner
-from src.mcp_server.studies import sweeps
+from src.mcp_server.studies import sweeps, variability
 from src.mcp_server.studies.batch import submit_batch
 from src.mcp_server.tools import call
 
-TOOL_NAMES = ("submit_sweep", "run_sensitivity")
+TOOL_NAMES = ("submit_sweep", "run_sensitivity", "run_monte_carlo")
 
 
 def register(server: MCPServer, ctx: ServerContext) -> None:
@@ -68,3 +68,32 @@ def register(server: MCPServer, ctx: ServerContext) -> None:
         plateau centre), the raw best cell and the gap between them. Cells still running or
         failed are listed as missing. Stored as an analysis of the study."""
         return await call(sweeps.run_sensitivity, runner().store, study, metric=metric, sweep=sweep)
+
+    @server.tool()
+    async def run_monte_carlo(
+        study: str,
+        run_id: str | None = None,
+        iterations: int = 5000,
+        method: str = "both",
+        breach_drawdown: float = 0.2,
+        seed: int = 0,
+    ) -> dict[str, Any]:
+        """Resample a study run's closed trades (bootstrap, reshuffle or both) into the range
+        of paths they could have made: 5th / 50th / 95th percentiles of CAGR, max drawdown
+        (negative; the worst is p5), longest losing streak, time under water and final
+        return, the probability of breaching breach_drawdown, and bootstrap confidence
+        intervals for Sharpe, profit factor and win rate with the sample-size verdict
+        (insufficient below 30 trades) and minimum track record length. run_id defaults
+        to the current candidate's source run, else the newest in-sample run. Trade-level:
+        serial correlation between trades is ignored. Stored as an analysis of the study."""
+        return await call(
+            variability.run_monte_carlo,
+            runner().store,
+            study,
+            run_id=run_id,
+            iterations=iterations,
+            method=method,
+            breach_drawdown=breach_drawdown,
+            seed=seed,
+            max_iterations=ctx.settings.max_monte_carlo_iterations,
+        )

@@ -10,10 +10,11 @@ DEFINITIONS = {
     "trade_return": "Net P&L over entry notional (price x quantity): independent of trade size.",
     "win_rate": "Share of closed trades with P&L above zero (a fraction).",
     "trade_drawdown": "Worst fall of the running sum of trade returns from its peak.",
-    "band": "5th / 50th / 95th percentiles over the compare-to run's rolling windows: trade "
-    "count over stretches as long as the session has run, the rest over runs of as many "
-    "trades as it has closed, capped (trade_windows.n) so the run still gives 20 windows. "
-    "The paper rates and drawdown are then those of its newest judged_trades trades.",
+    "band": "5th / 50th / 95th percentiles over the compare-to run: trade count over every "
+    "stretch as long as the session has run (rolling), the rest over Monte Carlo windows of "
+    "as many trades as it has closed, drawn with replacement from the run's trades, capped "
+    "(trade_windows.n) so the judged trades stay a fraction of the run's. The paper rates "
+    "and drawdown are then those of its newest judged_trades trades.",
     "weeks": "Elapsed since the session was created, stopped time included; a session never "
     "started has run for no time.",
     "runtime_flags": "Rejections and failures cover the session's current run only: NTrader "
