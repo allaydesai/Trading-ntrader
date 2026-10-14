@@ -168,7 +168,7 @@ def prepare_in_sample(
             raise ToolFailure(
                 "study_mismatch",
                 f"{symbol} is not one of the study's symbols ({', '.join(study.symbols)}).",
-                fix="Use a study symbol; breadth on other symbols arrives in phase 4.",
+                fix="Use a study symbol; submit_breadth runs untuned symbols.",
             )
         bare_timeframe = timeframe and timeframe.upper().removesuffix("-LAST")
         _same(bare_timeframe, study.timeframe, "timeframe", study)

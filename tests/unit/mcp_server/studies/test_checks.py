@@ -106,12 +106,27 @@ def test_a_non_positive_in_sample_sharpe_fails_the_ratio():
     )
 
 
-def test_phase_4_checks_are_always_missing():
-    thresholds = {"neighbourhood_sharpe": 0.7, "breadth": {"instruments": 3}}
+def test_robustness_checks_are_missing_until_their_analysis_exists_and_name_the_tool():
+    thresholds = {
+        "neighbourhood_sharpe": 0.7,
+        "breadth": {"instruments": 3},
+        "cost_stress_multiplier": 2,
+        "deflated_sharpe_prob": 0.95,
+        "oos_drawdown_within_mc": True,
+    }
     result = judge("G2", thresholds, _evidence(out_of_sample=_run("oos"), out_of_sample_attempts=1))
-    assert result["checks"]["neighbourhood_sharpe"]["status"] == "missing"
-    assert "phase 4" in result["checks"]["breadth"]["note"]
-    assert judge("G3", {"walk_forward_efficiency": 0.5}, _evidence())["status"] == "missing"
+    for name, tool in [
+        ("neighbourhood_sharpe", "submit_sweep"),
+        ("breadth", "submit_breadth"),
+        ("cost_stress_multiplier", "submit_cost_stress"),
+        ("oos_drawdown_within_mc", "run_monte_carlo"),
+    ]:
+        assert result["checks"][name]["status"] == "missing"
+        assert tool in result["checks"][name]["note"], name
+    assert result["checks"]["deflated_sharpe_prob"]["status"] == "missing"
+    g3 = judge("G3", {"walk_forward_efficiency": 0.5}, _evidence())
+    assert g3["status"] == "missing"
+    assert "submit_walk_forward" in g3["checks"]["walk_forward_efficiency"]["note"]
 
 
 def test_paper_gate_and_unknown_checks_and_absent_thresholds_are_missing():

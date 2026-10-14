@@ -598,11 +598,14 @@ class TestTheAR37StatusAssignmentGuard:
     #: and neither is this story's to change (Pre-verified finding 8).
     #: Research MCP phase 2 adds ``studies/status.py``: the one place a research
     #: study's status changes (``exploring`` … ``promoted``), never a session's.
+    #: Research MCP phase 4 adds the research repository: ``complete_analysis`` moves
+    #: a ``research_analyses`` row from ``pending`` to ``completed`` or ``void``, once.
     UNRELATED_STATUS_MODELS = frozenset(
         {
             "src/models/catalog_metadata.py",
             "src/models/strategy.py",
             "src/mcp_server/studies/status.py",
+            "src/db/repositories/research_repository.py",
         }
     )
 

@@ -2,103 +2,31 @@
 
 Pure. Each check takes the ``Evidence`` and the threshold the vault gave it and
 returns a row with ``pass``, ``fail`` or ``missing``, the number behind it, the
-threshold and the runs it was judged on. A check this server cannot compute yet
-(phase 4) is always ``missing``, never ``pass``. G4 is judged on the paper
-session linked to the candidate's out-of-sample run: ``missing`` until it has
-run long enough, then ``pass`` or ``fail``.
+threshold and the runs it was judged on. A check whose analysis or run does not
+exist yet is ``missing`` with the tool to call, never ``pass``. G4 is judged on
+the paper session linked to the candidate's out-of-sample run: ``missing``
+until it has run long enough, then ``pass`` or ``fail``. The phase-4 robustness
+checks live in ``checks_robustness.py`` and join ``CHECKS`` here.
 """
 
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
 from typing import Any
 
 from src.mcp_server.metrics import INSOLVENT_NOTE, insolvent
-
-PASS, FAIL, MISSING = "pass", "fail", "missing"
-
-
-@dataclass(frozen=True)
-class RunFacts:
-    """What a check needs of one run."""
-
-    run_id: str
-    metrics: dict[str, float | None]
-    git_dirty: bool | None
-
-
-@dataclass(frozen=True)
-class PaperFacts:
-    """What G4 needs of the newest paper session linked to the candidate."""
-
-    session: str
-    weeks: float
-    trades: int
-    #: Both the weeks and the trades the gate asks for have been met.
-    reached: bool
-    #: Win rate, average trade and drawdown against the band: below, inside, above or n/a.
-    positions: dict[str, str]
-    #: Signal, execution and config flags (the strategy-or-regime flag is not one).
-    problems: list[str]
-    #: Other sessions linked to the same candidate, never judged instead of this one.
-    others: list[str] = field(default_factory=list)
-    #: Why the band cannot judge the results (too thin, too few trades); empty when it can.
-    unjudgeable: str = ""
-    #: The session is in a run that began after a stop.
-    restarted: bool = False
-
-
-@dataclass
-class Evidence:
-    """A candidate's evidence, gathered from the study's ledger only."""
-
-    in_sample: RunFacts | None = None
-    in_sample_benchmark: RunFacts | None = None
-    out_of_sample: RunFacts | None = None
-    out_of_sample_benchmark: RunFacts | None = None
-    out_of_sample_attempts: int = 0
-    out_of_sample_overridden: bool = False
-    sub_period_returns: list[float] | None = None
-    trials_used: int = 0
-    candidate_dirty: bool | None = None
-    benchmark_rationale: str | None = None
-    paper: PaperFacts | None = None
-    notes: list[str] = field(default_factory=list)
-
-
-def as_number(value: Any) -> float | None:
-    """A threshold as a number, or None for a blank, a flag or text."""
-    if value is None or isinstance(value, bool):
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-Row = dict[str, Any]
-Check = Callable[[Evidence, Any], Row]
-
-
-def _row(
-    status: str, value: Any, threshold: Any, runs: Sequence[RunFacts | None], note: str = ""
-) -> Row:
-    row: Row = {
-        "status": status,
-        "value": value,
-        "threshold": threshold,
-        "evidence": [r.run_id for r in runs if r is not None],
-    }
-    if note:
-        row["note"] = note
-    return row
-
-
-def _missing(threshold: Any, note: str) -> Row:
-    return _row(MISSING, None, threshold, [], note)
-
-
-def _metric(run: RunFacts | None, name: str) -> float | None:
-    return None if run is None else run.metrics.get(name)
+from src.mcp_server.studies.checks_base import (  # noqa: F401  # re-exported: the public names
+    FAIL,
+    MISSING,
+    PASS,
+    Check,
+    Evidence,
+    PaperFacts,
+    Row,
+    RunFacts,
+    _metric,
+    _missing,
+    _row,
+    as_number,
+)
+from src.mcp_server.studies.checks_robustness import ROBUSTNESS_CHECKS
 
 
 def min_trades(ev: Evidence, threshold: Any) -> Row:
@@ -335,13 +263,6 @@ def paper_clean(ev: Evidence, threshold: Any) -> Row:
     return _paper_row(status, paper.problems, threshold, paper, " ".join(notes))
 
 
-def later_phase(phase: int, what: str) -> Check:
-    def check(_ev: Evidence, threshold: Any) -> Row:
-        return _missing(threshold, f"{what} arrives in phase {phase}.")
-
-    return check
-
-
 CHECKS: dict[str, Check] = {
     "min_trades": min_trades,
     "clean_tree": clean_tree,
@@ -355,10 +276,7 @@ CHECKS: dict[str, Check] = {
     "oos_profit_factor": oos_profit_factor,
     "oos_run_once": oos_run_once,
     "trials_warn_above": trials_warn_above,
-    "neighbourhood_sharpe": later_phase(4, "Parameter sensitivity"),
-    "cost_stress_multiplier": later_phase(4, "Cost stress"),
-    "breadth": later_phase(4, "Breadth on untuned instruments"),
-    "walk_forward_efficiency": later_phase(4, "Walk-forward"),
+    **ROBUSTNESS_CHECKS,
 }
 #: Checks that mean something else inside one gate: G4's min_trades counts paper trades.
 GATE_CHECKS: dict[str, dict[str, Check]] = {

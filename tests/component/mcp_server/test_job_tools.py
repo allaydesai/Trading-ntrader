@@ -169,6 +169,6 @@ async def test_server_info_reports_phase_3_and_where_the_gates_come_from(tmp_pat
     ctx.settings = ctx.settings.model_copy(update={"vault_path": vault})
     async with Client(build_server(ctx)) as client:
         info = await _call(client, "server_info")
-    assert info["phase"] == 3
+    assert info["phase"] == 4
     assert info["gates"]["gate_ids"] == ["G0"] and info["gates"]["problem"] is None
     assert {"get_scorecard", "paper_commands", "get_session"} <= set(info["capabilities"])

@@ -54,6 +54,8 @@ G2:
   oos_sharpe_vs_is: 0.5
   oos_profit_factor: 1.1
   neighbourhood_sharpe: 0.7
+  deflated_sharpe_prob: 0.95
+  oos_drawdown_within_mc: true
 G3:
   walk_forward_efficiency: 0.5
 ```

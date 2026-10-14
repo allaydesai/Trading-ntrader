@@ -173,6 +173,7 @@ class SyncResearchRepository:
         """Write a pending analysis's result once: ``completed`` with it, or ``void`` without."""
         if analysis.status != "pending":
             raise ValueError(f"analysis {analysis.analysis_id} is already {analysis.status}")
-        analysis.result, analysis.status = result, status
+        analysis.result = result
+        analysis.status = status
         analysis.completed_at = datetime.now(timezone.utc)
         self.session.flush()

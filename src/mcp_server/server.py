@@ -52,7 +52,12 @@ export_results(study=...) files the record in the vault. Paper loop, after the
 out-of-sample run: paper_commands gives the live check / create / start commands
 for Allay to run (linked to that run); list_sessions and get_session read a session
 against its expectation band each week, with drift flags and G4 progress;
-export_results(session=...) files the reading. Ad-hoc runs without a study are
+export_results(session=...) files the reading. Robustness, before and after the
+freeze: submit_sweep (a grid or a neighbourhood around a parameter set, counted)
+then run_sensitivity for the plateau map; run_monte_carlo on a run for ranges and
+intervals; once frozen, submit_cost_stress, submit_breadth on untuned symbols and
+submit_walk_forward (sees the holdout); get_analysis reads any of them and the
+scorecard's G2/G3 rows cite them. Ad-hoc runs without a study are
 allowed but never count as evidence. Failures come back as
 {ok: false, error: {code, message, fix}}. This server never trades, never starts,
 stops or creates sessions, and never fetches or imports data.

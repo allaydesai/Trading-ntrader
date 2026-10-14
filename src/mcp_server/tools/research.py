@@ -135,8 +135,9 @@ def _register_holdout(
         until it has run min_weeks and min_trades (both), then failed only by results
         below the band or by signal, execution or config flags. expectation_band is what
         a paper session should produce over band_weeks / band_trades (default: G4's
-        min_weeks and min_trades), from the out-of-sample run's trades. Phase 4 checks (sensitivity,
-        walk-forward, breadth, cost stress) are always missing.
+        min_weeks and min_trades), from the out-of-sample run's trades. Robustness checks
+        (neighbourhood sweep, cost stress, breadth, walk-forward, deflated Sharpe, Monte
+        Carlo drawdown) read the study's analyses and say which tool fills them.
         """
         return await call(
             scorecard.get_scorecard,

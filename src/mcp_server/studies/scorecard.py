@@ -28,7 +28,7 @@ from src.mcp_server.paper.evidence import expectation_band, paper_facts
 from src.mcp_server.paper.reads import oos_runs
 from src.mcp_server.paper.report import check_horizon
 from src.mcp_server.settings import McpSettings
-from src.mcp_server.studies import ledger
+from src.mcp_server.studies import evidence_robustness, ledger
 from src.mcp_server.studies.candidates import current_candidate
 from src.mcp_server.studies.checks import FAIL, MISSING, PASS, Evidence, RunFacts, judge
 from src.mcp_server.studies.gates import Gates, load_gates
@@ -84,8 +84,11 @@ def gather(
     candidate: ResearchCandidate,
     *,
     periods: int = 4,
+    repo: SyncResearchRepository | None = None,
+    study: ResearchStudy | None = None,
 ) -> Evidence:
-    """Everything the checks judge, from the ledger's completed runs."""
+    """Everything the checks judge, from the ledger's completed runs and (with ``repo`` and
+    ``study``) the study's robustness analyses."""
     source = next((t for t in trials if t.run_id == candidate.source_run_id), None)
     attempts = [
         t
@@ -94,8 +97,16 @@ def gather(
     ]
     done = [t for t in attempts if t.state == "completed"]
     oos = done[-1] if done else None
+    in_sample = _facts(session, candidate.source_run_id)
+    robustness = (
+        evidence_robustness.gather(
+            session, repo, study, trials, candidate, in_sample=in_sample, facts=_facts
+        )
+        if repo is not None and study is not None
+        else {}
+    )
     return Evidence(
-        in_sample=_facts(session, candidate.source_run_id),
+        in_sample=in_sample,
         in_sample_benchmark=_facts(session, _benchmark_beside(trials, source)),
         out_of_sample=_facts(session, oos.run_id if oos else None),
         out_of_sample_benchmark=_facts(session, _benchmark_beside(trials, oos)),
@@ -105,6 +116,7 @@ def gather(
         trials_used=ledger.used(trials),
         candidate_dirty=candidate.git_dirty,
         benchmark_rationale=candidate.benchmark_rationale,
+        **robustness,
     )
 
 
@@ -135,6 +147,13 @@ def _evidence_view(evidence: Evidence) -> dict[str, Any]:
         "out_of_sample_benchmark": run_id(evidence.out_of_sample_benchmark),
         "trials_used": evidence.trials_used,
         "paper_session": evidence.paper.session if evidence.paper else None,
+        "analyses": {
+            "sweep": evidence.neighbourhood.sweep if evidence.neighbourhood else None,
+            "cost_stress": evidence.cost_stress.analysis if evidence.cost_stress else None,
+            "breadth": evidence.breadth.analyses if evidence.breadth else [],
+            "walk_forward": evidence.walk_forward.analysis if evidence.walk_forward else None,
+            "monte_carlo": evidence.monte_carlo.analysis if evidence.monte_carlo else None,
+        },
     }
 
 
@@ -176,7 +195,9 @@ def get_scorecard(
         periods = int(
             (gates.thresholds.get("G1", {}).get("positive_sub_periods") or {}).get("of", 4)
         )
-        evidence = gather(session, repo.trials(study), candidate, periods=periods)
+        evidence = gather(
+            session, repo.trials(study), candidate, periods=periods, repo=repo, study=study
+        )
         band = _paper(session, candidate, gates, evidence, (band_weeks, band_trades))
         judged = {
             gate: judge(gate, gates.thresholds.get(gate) if gates.thresholds else None, evidence)
