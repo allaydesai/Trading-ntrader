@@ -615,6 +615,7 @@ class TestNoParallelResultsVocabulary:
 
         # The research MCP's tables (merged in by PO ruling, 2026-10-11) hold backtest
         # research and per-run equity curves — none of them is specific to paper results.
+        # research_analyses (MCP phase 4, 2026-10-13) holds a study's robustness analyses.
         assert set(Base.metadata.tables) == {
             "backtest_runs",
             "catalog_dividends",
@@ -622,6 +623,7 @@ class TestNoParallelResultsVocabulary:
             "catalog_stock_splits",
             "instrument_metadata",
             "performance_metrics",
+            "research_analyses",
             "research_candidates",
             "research_studies",
             "research_study_events",
@@ -633,11 +635,12 @@ class TestNoParallelResultsVocabulary:
 
     def test_there_is_one_migration_head_and_epic_5_added_none(self):
         """Epic 5 added no migration: the single head is the research MCP's, whose
-        chain descends from Epic 4's ``85c949ac0374`` (PO ruling, 2026-10-11)."""
+        chain descends from Epic 4's ``85c949ac0374`` (PO ruling, 2026-10-11). MCP phase 4
+        (2026-10-13) moved the head to ``87090e0d5660`` (research_analyses); still one head."""
         from alembic.config import Config
         from alembic.script import ScriptDirectory
 
         script = ScriptDirectory.from_config(Config(str(REPO_ROOT / "alembic.ini")))
 
-        assert script.get_heads() == ["1dca14a21609"]
+        assert script.get_heads() == ["87090e0d5660"]
         assert "85c949ac0374" in {rev.revision for rev in script.walk_revisions()}

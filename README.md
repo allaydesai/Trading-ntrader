@@ -446,6 +446,22 @@ Add it to Claude Desktop's `claude_desktop_config.json`:
 
 **Tools (phase 3, paper):** `paper_commands`, `list_sessions`, `get_session`.
 
+**Tools (phase 4, robustness):** `submit_sweep`, `run_sensitivity`, `run_monte_carlo`,
+`submit_breadth`, `submit_cost_stress`, `submit_walk_forward`, `get_analysis`
+(`cancel_job(analysis=…)` stops a batch). A sweep runs a grid, or a ±20 % neighbourhood around
+a parameter set, as counted in-sample trials; `run_sensitivity` scores each cell by its grid
+neighbours and recommends the plateau centre over the raw best. `run_monte_carlo` resamples a
+run's closed trades into 5/50/95 percentiles of CAGR, drawdown, losing streak and time under
+water, with bootstrap confidence intervals and the 30-trade verdict. Once a candidate is
+frozen: `submit_cost_stress` reruns it with every commission term scaled, `submit_breadth`
+runs its parameters on untuned symbols, and `submit_walk_forward` runs every grid cell over
+the whole span and slices rolling (or anchored) windows from the stored daily equity, picking
+the best in-sample cell per window (it sees the holdout, so a later candidate version is
+contaminated). Each is stored as an analysis of the study (`get_analysis`, listed by
+`get_study`), and the scorecard's G2/G3 rows — neighbourhood, cost stress, breadth,
+walk-forward efficiency, deflated Sharpe, out-of-sample drawdown within the Monte Carlo band
+— cite them; the expectation band's trade axis is Monte Carlo too.
+
 A quick, unattributed check: `validate_config` → `submit_backtest` for the strategy and
 for `buy_and_hold` on the same window → `get_job` until both finish → `compare_runs` →
 `export_results` (writes `<slug>.json` and `<slug>.trades.csv` to `Lab/results/` in the

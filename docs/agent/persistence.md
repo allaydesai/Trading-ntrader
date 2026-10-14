@@ -65,10 +65,22 @@ async def get_backtest_service(session: DbSession) -> BacktestQueryService:
   put `equity_curve` into `config_snapshot`, but `_validate_config_snapshot` runs the snapshot
   through `StrategyConfigSnapshot(...).model_dump()`, which ignores unknown keys — so the curve
   is dropped, and the equity chart (`/equity/{run_id}`) draws its two-point
-  `initial_capital → final_balance` fallback. Beyond its five base keys (`strategy_path`,
+  `initial_capital → final_balance` fallback. **Since the research MCP (phase 1) the curve is
+  stored in `run_equity_curves`** (one value per UTC day, written by the orchestrator), which the
+  MCP reads; the web chart still draws its fallback. Beyond its five base keys (`strategy_path`,
   `config_path`, `version`, `config`, `bar_type` — the last dumped as `null` when absent), the
-  model keeps exactly one more: `session_conditions` (a sealed paper session's), omitted from
-  the dump when empty so every backtest row is byte-identical to before.
+  model keeps `metrics_basis` and `fill_seed` (nullable, always dumped), `session_conditions`
+  (a sealed paper session's) and `cost_multiplier` (a cost-stress run's, MCP phase 4), the last
+  two omitted from the dump when empty so every ordinary backtest row is byte-identical to before.
+
+## Research Analyses (MCP phase 4)
+
+`research_analyses` (`src/db/models/research.py`, migration `87090e0d5660`): one row per
+robustness analysis of a study — `kind` ∈ sweep, sensitivity, monte_carlo, walk_forward,
+breadth, cost_stress; `request` (what was asked, plus a `job_id → cell` map for batches) and
+`result`, written once (`SyncResearchRepository.complete_analysis`, pending → completed or void).
+A batch's member jobs are `research_trials` rows with `analysis_pk`; `walk_forward`, `breadth`
+and `cost_stress` joined the trial roles (never counted, never freezable).
 
 ## Results Extraction
 
