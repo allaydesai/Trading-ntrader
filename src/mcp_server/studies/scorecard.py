@@ -169,6 +169,9 @@ def get_scorecard(
         repo = SyncResearchRepository(session)
         study = load_study(repo, key, for_update=True)
         ledger.settle(repo, store, study)
+        from src.mcp_server.studies.walkforward import settle_analyses  # lazy: import cycle
+
+        settle_analyses(session, repo, study)
         candidate = candidate_of(repo, study, version)
         periods = int(
             (gates.thresholds.get("G1", {}).get("positive_sub_periods") or {}).get("of", 4)

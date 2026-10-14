@@ -10,7 +10,7 @@ from mcp.server import MCPServer
 
 from src.mcp_server.context import ServerContext
 from src.mcp_server.jobs.runner import JobRunner
-from src.mcp_server.studies import robustness, sweeps, variability
+from src.mcp_server.studies import robustness, sweeps, variability, walkforward
 from src.mcp_server.studies.batch import submit_batch
 from src.mcp_server.studies.gates import load_gates
 from src.mcp_server.tools import call
@@ -21,6 +21,8 @@ TOOL_NAMES = (
     "run_monte_carlo",
     "submit_breadth",
     "submit_cost_stress",
+    "submit_walk_forward",
+    "get_analysis",
 )
 
 
@@ -106,6 +108,18 @@ def register(server: MCPServer, ctx: ServerContext) -> None:
             max_iterations=ctx.settings.max_monte_carlo_iterations,
         )
 
+    @server.tool()
+    async def get_analysis(
+        study: str, analysis_id: str | None = None, kind: str | None = None
+    ) -> dict[str, Any]:
+        """A stored analysis of the study (the newest, or the newest of kind: sweep,
+        sensitivity, monte_carlo, walk_forward, breadth, cost_stress) with its request,
+        status, result and member jobs. A pending walk-forward whose runs have all finished
+        is evaluated here first. get_study lists every analysis id."""
+        return await call(
+            walkforward.get_analysis, runner().store, study, analysis_id=analysis_id, kind=kind
+        )
+
     _register_jobs(server, ctx, runner)
 
 
@@ -148,6 +162,42 @@ def _register_jobs(server: MCPServer, ctx: ServerContext, runner: Callable[[], J
             gates = load_gates(ctx.settings)
             batch, warnings = robustness.prepare_cost_stress(
                 study, multiplier=multiplier, gate_multiplier=robustness.cost_multiplier_of(gates)
+            )
+            return {"batch": batch, "warnings": warnings}
+
+        prepared = await call(prepare)
+        if not prepared.pop("ok"):
+            return {"ok": False, **prepared}
+        return await submit_batch(runner(), prepared["batch"], prepared["warnings"])
+
+    @server.tool()
+    async def submit_walk_forward(
+        study: str,
+        is_years: int = 6,
+        oos_years: int = 2,
+        mode: str = "rolling",
+        select_by: str = "sharpe_ratio",
+        grid: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Walk-forward of the frozen candidate's grid (the study's declared space by
+        default), sliced: every cell runs once over the whole span (in-sample through
+        out-of-sample), then each rolling (or anchored) window picks the best in-sample
+        cell by select_by (sharpe_ratio, annualised_return, max_drawdown) and reads its
+        out-of-sample slice from the stored daily equity. The result appears in
+        get_analysis once every run has finished: per-window table, walk-forward
+        efficiency (mean out-of-sample over in-sample annualised return), negative
+        windows. Needs a frozen candidate and at least two windows; sees the holdout, so a
+        later candidate version is contaminated. Runs are never trials."""
+
+        def prepare() -> dict[str, Any]:
+            batch, warnings = walkforward.prepare_walk_forward(
+                study,
+                is_years=is_years,
+                oos_years=oos_years,
+                mode=mode,
+                select_by=select_by,
+                grid_axes=grid,
+                max_cells=ctx.settings.max_sweep_cells,
             )
             return {"batch": batch, "warnings": warnings}
 

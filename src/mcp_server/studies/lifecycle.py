@@ -159,6 +159,10 @@ def get_study(store: JobStore, key: str) -> dict[str, Any]:
         repo = SyncResearchRepository(session)
         study = load_study(repo, key, for_update=True)
         ledger.settle(repo, store, study)
+        # Lazy: walkforward reads studies through this module (a cycle at import time).
+        from src.mcp_server.studies.walkforward import settle_analyses
+
+        settle_analyses(session, repo, study)
         return {"study": study_view(session, repo, study)}
 
 

@@ -70,6 +70,22 @@ def summary_view(study: ResearchStudy, spent: dict[str, int]) -> dict[str, Any]:
     )
 
 
+def analysis_summaries(repo: SyncResearchRepository, study: ResearchStudy) -> list[dict]:
+    """The study's analyses without their results, oldest first (get_analysis has the rest)."""
+    return [
+        to_jsonable(
+            {
+                "analysis_id": a.analysis_id,
+                "kind": a.kind,
+                "status": a.status,
+                "version": a.version,
+                "created_at": a.created_at,
+            }
+        )
+        for a in repo.analyses(study)
+    ]
+
+
 def study_view(session: Session, repo: SyncResearchRepository, study: ResearchStudy) -> dict:
     """Everything about a study: summary, hypothesis, space, ledger, candidates, events."""
     trials = repo.trials(study)
@@ -86,6 +102,7 @@ def study_view(session: Session, repo: SyncResearchRepository, study: ResearchSt
     )
     view["ledger"] = ledger.ledger_view(session, trials)
     view["candidates"] = [candidate_view(c) for c in repo.candidates(study)]
+    view["analyses"] = analysis_summaries(repo, study)
     view["events"] = [event_view(e) for e in repo.events(study)]
     if study.contaminated:
         view["warnings"] = [

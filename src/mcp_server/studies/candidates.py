@@ -30,6 +30,8 @@ from src.models.backtest_request import DEFAULT_FILL_SEED
 from src.services.provenance import compute_candidate_hash, git_provenance
 
 TESTABLE = frozenset({"frozen", "tested"})
+#: Roles whose runs see the locked window (the walk-forward runs every cell over the span).
+HOLDOUT_ROLES = frozenset({"out_of_sample", "walk_forward"})
 
 
 def current_candidate(repo: SyncResearchRepository, study: ResearchStudy) -> ResearchCandidate:
@@ -150,7 +152,7 @@ def new_candidate_version(store: JobStore, key: str, reason: str, change: str) -
         study = load_study(repo, key, for_update=True)
         ledger.settle(repo, store, study)
         require_status(study, TESTABLE, "a new candidate version")
-        seen = any(t.role == "out_of_sample" and t.state != "void" for t in repo.trials(study))
+        seen = any(t.role in HOLDOUT_ROLES and t.state != "void" for t in repo.trials(study))
         before = study.current_version
         study.current_version = before + 1
         details = {"version": before + 1, "change": change}
