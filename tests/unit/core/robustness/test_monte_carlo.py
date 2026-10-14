@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from src.core.robustness.monte_carlo import Trade, longest_runs, simulate
+from src.core.robustness.monte_carlo import Trade, _days_under_water, longest_runs, simulate
 
 pytestmark = pytest.mark.unit
 
@@ -54,6 +54,22 @@ def test_losing_streak_and_time_under_water_of_a_known_order():
     result = simulate(trades, starting_balance=1000, iterations=5, method="reshuffle", seed=0)
     assert result["longest_losing_streak"]["p50"] <= 2
     assert 0 <= result["time_under_water_days"]["p95"] <= 14
+
+
+@pytest.mark.parametrize(
+    ("under", "days"),
+    [
+        # Under from the first exit (day 1) until the second exit recovers it (day 31).
+        ([True, False, False], 30),
+        # Still under at the last exit: the stretch ends with the data (day 33).
+        ([False, True, True], 2),
+        # Two stretches: the longer one counts.
+        ([True, False, True], 30),
+    ],
+)
+def test_time_under_water_runs_from_the_losing_exit_to_the_recovering_one(under, days):
+    gaps = np.array([[1.0, 30.0, 2.0]])
+    assert _days_under_water(np.array([under]), gaps)[0] == days
 
 
 def test_longest_runs_is_the_longest_true_stretch_per_row():

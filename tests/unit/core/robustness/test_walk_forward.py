@@ -8,6 +8,7 @@ import pytest
 
 from src.core.robustness.walk_forward import (
     Window,
+    _trades_in,
     annualised_return,
     evaluate,
     slice_metrics,
@@ -59,6 +60,23 @@ def test_slice_metrics_bases_on_the_last_point_before_the_window():
     assert sliced["annualised_return"] > 0 and sliced["sharpe_ratio"] is not None
     first = slice_metrics(equity, date(2000, 1, 1), date(2000, 6, 30), initial=1000.0)
     assert first["base"] == 1000.0  # nothing before the window: the run's initial capital
+
+
+def test_a_window_keeps_its_last_day_when_points_are_stamped_at_the_close():
+    """Daily equity is stamped at the day's last bar (about 21:00 UTC), not at midnight."""
+    equity = _equity(date(2000, 1, 3), date(2001, 12, 31), 0.001)
+    equity.index = equity.index + pd.Timedelta(hours=21)
+    sliced = slice_metrics(equity, date(2001, 1, 1), date(2001, 12, 31), initial=1000.0)
+    assert sliced["days"] == len(pd.bdate_range("2001-01-01", "2001-12-31"))
+    assert sliced["end_value"] == pytest.approx(float(equity.iloc[-1]))
+    assert sliced["base"] == pytest.approx(
+        float(equity[: pd.Timestamp("2001-01-01", tz="UTC")].iloc[-1])
+    )
+
+
+def test_trades_on_the_day_after_a_window_are_not_its_trades():
+    stamps = [pd.Timestamp("2001-12-31 15:00", tz="UTC"), pd.Timestamp("2002-01-01", tz="UTC")]
+    assert _trades_in(stamps, date(2001, 1, 1), date(2001, 12, 31)) == 1
 
 
 def test_evaluate_picks_the_best_in_sample_cell_per_window_and_reports_efficiency():

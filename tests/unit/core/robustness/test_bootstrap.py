@@ -28,6 +28,29 @@ def test_profit_factor_without_losses_is_none():
     assert profit_factor(np.array([1.0, 2.0])) is None
 
 
+def test_a_few_losers_still_give_a_profit_factor_interval():
+    """Some resamples draw no loser; that is the best case, not a reason to drop the interval."""
+    pnls = np.array([50.0 + i for i in range(27)] + [-100.0, -120.0, -80.0])
+    returns = np.random.default_rng(0).normal(0.001, 0.01, 100)
+    row = confidence_intervals(daily_returns=returns, trade_pnls=pnls, iterations=2000, seed=1)[
+        "profit_factor"
+    ]
+    assert row["low"] is not None and row["low"] <= row["point"]
+    assert row["high"] is None or row["high"] >= row["point"]
+    assert row["unbounded"] is (row["high"] is None)
+
+
+def test_with_one_loser_the_upper_bound_is_unbounded():
+    """Over a third of resamples miss the single loser: the upper bound is infinite."""
+    pnls = np.array([10.0] * 9 + [-30.0])
+    returns = np.random.default_rng(0).normal(0.001, 0.01, 100)
+    row = confidence_intervals(daily_returns=returns, trade_pnls=pnls, iterations=2000, seed=1)[
+        "profit_factor"
+    ]
+    assert row["point"] == pytest.approx(3.0)
+    assert row["low"] is not None and row["high"] is None and row["unbounded"] is True
+
+
 def test_intervals_contain_the_point_estimates_and_flag_a_small_sample():
     rng = np.random.default_rng(0)
     returns = rng.normal(0.001, 0.01, 300)

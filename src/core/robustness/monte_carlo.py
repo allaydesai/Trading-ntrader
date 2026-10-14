@@ -41,14 +41,20 @@ def longest_runs(mask: np.ndarray) -> np.ndarray:
 
 
 def _days_under_water(under: np.ndarray, gaps: np.ndarray) -> np.ndarray:
-    """The longest stretch of days spent below the running peak, per row."""
-    rows, _ = under.shape
-    padded = np.zeros((rows, under.shape[1] + 2), dtype=np.int8)
+    """The longest stretch of days spent below the running peak, per row.
+
+    Trade ``k`` exits at ``elapsed[k + 1]``. A stretch under water starts at the
+    exit of its first losing trade and ends at the exit of the trade that
+    recovers the peak, or at the last exit when nothing does.
+    """
+    rows, n = under.shape
+    padded = np.zeros((rows, n + 2), dtype=np.int8)
     padded[:, 1:-1] = under
     edges = np.diff(padded, axis=1)
     starts, ends = np.argwhere(edges == 1), np.argwhere(edges == -1)
     elapsed = np.concatenate((np.zeros((rows, 1)), np.cumsum(gaps, axis=1)), axis=1)
-    days = elapsed[ends[:, 0], ends[:, 1]] - elapsed[starts[:, 0], starts[:, 1]]
+    recovered = np.minimum(ends[:, 1] + 1, n)
+    days = elapsed[ends[:, 0], recovered] - elapsed[starts[:, 0], starts[:, 1] + 1]
     longest = np.zeros(rows)
     np.maximum.at(longest, starts[:, 0], days)
     return longest

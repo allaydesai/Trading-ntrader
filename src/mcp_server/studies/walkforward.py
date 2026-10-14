@@ -68,10 +68,11 @@ def prepare_walk_forward(
         candidate = current_candidate(repo, study)
         found = _windows(study, is_years=is_years, oos_years=oos_years, mode=mode)
         axes = _axes(study, grid_axes, None, 0.0)
-        if grid.size(axes) > max_cells:
+        count = grid.size(axes)
+        if count > max_cells:
             raise ToolFailure(
                 "sweep_too_large",
-                f"The grid has {grid.size(axes)} cells; at most {max_cells} run per walk-forward.",
+                f"The grid has {count} cells; at most {max_cells} run per walk-forward.",
                 fix="Coarsen the steps.",
             )
         payloads, kept = _cell_payloads(study, candidate, grid.expand(axes))

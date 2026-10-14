@@ -2,6 +2,7 @@
 
 import pytest
 
+from src.core.robustness import grid
 from src.core.robustness.grid import adjacent, around, axis_values, expand, size
 
 pytestmark = pytest.mark.unit
@@ -22,6 +23,25 @@ def test_integral_ranges_give_ints_so_stored_params_match_hand_runs():
 def test_size_is_the_product_of_axis_lengths_without_expanding():
     axes = {"a": {"values": [1, 2, 3]}, "b": {"min": 1, "max": 1000}}
     assert size(axes) == 3000
+
+
+@pytest.mark.parametrize(
+    "axis",
+    [
+        {"min": 0.1, "max": 0.3, "step": 0.1},
+        {"min": 5, "max": 60, "step": 7},
+        {"min": 1, "max": 1},
+        {"min": 0.05, "max": 0.15, "step": 0.025},
+        {"values": [3, 1, 2]},
+    ],
+)
+def test_size_counts_exactly_the_values_an_axis_expands_to(axis):
+    assert size({"a": axis}) == len(axis_values(axis))
+
+
+def test_size_of_an_over_fine_range_is_counted_not_built(monkeypatch):
+    monkeypatch.setattr(grid, "axis_values", lambda axis: pytest.fail("expanded"))
+    assert size({"period": {"min": 1, "max": 10_000_000, "step": 1}}) == 10_000_000
 
 
 def test_expand_walks_axes_in_declaration_order():

@@ -90,11 +90,16 @@ def _stamp(day: date) -> pd.Timestamp:
     return pd.Timestamp(day, tz="UTC")
 
 
+def _after(day: date) -> pd.Timestamp:
+    """Midnight UTC after ``day``: a window runs to before it, so its last day's close counts."""
+    return _stamp(day) + timedelta(days=1)
+
+
 def slice_metrics(equity: pd.Series, start: date, end: date, *, initial: float) -> dict[str, Any]:
     """A window's metrics from the equity curve, based on the last point before it."""
     before = equity[equity.index < _stamp(start)]
     base = float(before.iloc[-1]) if len(before) else float(initial)
-    window = equity[(equity.index >= _stamp(start)) & (equity.index <= _stamp(end))]
+    window = equity[(equity.index >= _stamp(start)) & (equity.index < _after(end))]
     if window.empty:
         return {"base": base, "end_value": None, "days": 0, "annualised_return": None}
     risk = risk_metrics(window, base)
@@ -116,7 +121,7 @@ def _score(metrics: dict[str, Any], select_by: str) -> float:
 
 
 def _trades_in(stamps: list[pd.Timestamp], start: date, end: date) -> int:
-    return sum(1 for t in stamps if _stamp(start) <= t <= _stamp(end) + timedelta(days=1))
+    return sum(1 for t in stamps if _stamp(start) <= t < _after(end))
 
 
 def _window_row(

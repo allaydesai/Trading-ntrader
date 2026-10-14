@@ -41,9 +41,27 @@ def win_rate(pnls: np.ndarray) -> float | None:
     return float(np.mean(pnls > 0)) if len(pnls) else None
 
 
+def _resampled_profit_factor(pnls: np.ndarray) -> float:
+    """A resample's profit factor: one that drew no loser but won is the best case (infinite)."""
+    value = profit_factor(pnls)
+    if value is not None:
+        return value
+    return math.inf if float(pnls[pnls > 0].sum()) > 0 else math.nan
+
+
 def _interval(
-    data: np.ndarray, statistic: Any, *, iterations: int, seed: int
-) -> dict[str, float | None]:
+    data: np.ndarray,
+    statistic: Any,
+    *,
+    iterations: int,
+    seed: int,
+    resampled: Any = None,
+) -> dict[str, Any]:
+    """The point and its interval; ``resampled`` scores a resample when it can be infinite.
+
+    With ``resampled``, an infinite upper bound is reported as ``high`` None and
+    ``unbounded`` true, so a few losers still give the lower bound that matters.
+    """
     point = statistic(data)
     if point is None or len(data) < 2:
         return {"point": point, "low": None, "high": None}
@@ -52,14 +70,22 @@ def _interval(
         value = statistic(np.asarray(sample))
         return math.nan if value is None else value
 
-    low, high = _bootstrap(data, stat, iterations=iterations, seed=seed)
-    return {"point": round(point, 6), "low": low, "high": high}
+    score = stat if resampled is None else (lambda sample: resampled(np.asarray(sample)))
+    low, high = _bootstrap(data, score, iterations=iterations, seed=seed, open_top=bool(resampled))
+    row: dict[str, Any] = {"point": round(point, 6), "low": low, "high": high}
+    if resampled is not None:
+        row["unbounded"] = low is not None and high is None
+    return row
 
 
 def _bootstrap(
-    data: np.ndarray, stat: Any, *, iterations: int, seed: int
+    data: np.ndarray, stat: Any, *, iterations: int, seed: int, open_top: bool = False
 ) -> tuple[float | None, float | None]:
-    """BCa interval, falling back to percentile when BCa is degenerate (e.g. a constant)."""
+    """BCa interval, falling back to percentile when BCa is degenerate (e.g. a constant).
+
+    ``open_top``: the statistic can be infinite, so a finite lower bound under a
+    non-finite upper one is kept, with the upper bound None.
+    """
     for method in ("BCa", "percentile"):
         try:
             res = stats.bootstrap(
@@ -76,6 +102,8 @@ def _bootstrap(
         low, high = float(res.confidence_interval.low), float(res.confidence_interval.high)
         if math.isfinite(low) and math.isfinite(high):
             return round(low, 6), round(high, 6)
+        if open_top and math.isfinite(low):
+            return round(low, 6), None
     return None, None
 
 
@@ -106,7 +134,13 @@ def confidence_intervals(
     kurt = float(stats.kurtosis(returns, fisher=False)) if len(returns) > 3 else 3.0
     return {
         "sharpe_ratio": _interval(returns, sharpe, iterations=iterations, seed=seed),
-        "profit_factor": _interval(pnls, profit_factor, iterations=iterations, seed=seed),
+        "profit_factor": _interval(
+            pnls,
+            profit_factor,
+            iterations=iterations,
+            seed=seed,
+            resampled=_resampled_profit_factor,
+        ),
         "win_rate": _interval(pnls, win_rate, iterations=iterations, seed=seed),
         "trades": int(len(pnls)),
         "observations": int(len(returns)),

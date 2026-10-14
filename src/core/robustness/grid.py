@@ -19,12 +19,19 @@ def _number(value: float) -> int | float:
     return int(value) if float(value).is_integer() else float(value)
 
 
+def _range(axis: Axis) -> tuple[Decimal, Decimal, Decimal]:
+    return (
+        Decimal(str(axis["min"])),
+        Decimal(str(axis["max"])),
+        Decimal(str(axis.get("step") or 1)),
+    )
+
+
 def axis_values(axis: Axis) -> list[Any]:
     """Every value of one axis, in order."""
     if axis.get("values") is not None:
         return list(axis["values"])
-    low, high = Decimal(str(axis["min"])), Decimal(str(axis["max"]))
-    step = Decimal(str(axis.get("step") or 1))
+    low, high, step = _range(axis)
     values, current = [], low
     while current <= high:
         values.append(_number(float(current)))
@@ -32,9 +39,17 @@ def axis_values(axis: Axis) -> list[Any]:
     return values
 
 
+def axis_length(axis: Axis) -> int:
+    """How many values one axis has, counted, so an over-fine range is refused unbuilt."""
+    if axis.get("values") is not None:
+        return len(axis["values"])
+    low, high, step = _range(axis)
+    return int((high - low) // step) + 1 if high >= low else 0
+
+
 def size(axes: dict[str, Axis]) -> int:
     """How many cells the grid has, without expanding it."""
-    return prod(len(axis_values(axis)) for axis in axes.values()) if axes else 0
+    return prod(axis_length(axis) for axis in axes.values()) if axes else 0
 
 
 def expand(axes: dict[str, Axis]) -> list[dict[str, Any]]:
