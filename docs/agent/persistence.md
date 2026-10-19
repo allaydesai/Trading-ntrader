@@ -77,8 +77,11 @@ async def get_backtest_service(session: DbSession) -> BacktestQueryService:
 
 `research_analyses` (`src/db/models/research.py`, migration `87090e0d5660`): one row per
 robustness analysis of a study — `kind` ∈ sweep, sensitivity, monte_carlo, walk_forward,
-breadth, cost_stress; `request` (what was asked, plus a `job_id → cell` map for batches) and
-`result`, written once (`SyncResearchRepository.complete_analysis`, pending → completed or void).
+breadth, cost_stress, and since MCP phase 5a `portfolio` (migration `72a945ca06f5` widened the
+CHECK; computed from stored curves and inserted already `completed`, its `result` holding
+both combined curves downsampled); `request` (what was asked, plus a `job_id → cell` map for
+batches) and `result`, written once (`SyncResearchRepository.complete_analysis`, pending →
+completed or void).
 A batch's member jobs are `research_trials` rows with `analysis_pk`; `walk_forward`, `breadth`
 and `cost_stress` joined the trial roles (never counted, never freezable).
 

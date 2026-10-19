@@ -56,7 +56,15 @@ TRIAL_ROLES = (
 TRIAL_STATES = ("pending", "completed", "void")
 #: What an analysis is: a batch of runs (sweep, walk_forward, breadth, cost_stress) or a
 #: computation over stored runs (sensitivity, monte_carlo).
-ANALYSIS_KINDS = ("sweep", "sensitivity", "monte_carlo", "walk_forward", "breadth", "cost_stress")
+ANALYSIS_KINDS = (
+    "sweep",
+    "sensitivity",
+    "monte_carlo",
+    "walk_forward",
+    "breadth",
+    "cost_stress",
+    "portfolio",  # phase 5a: computed from stored curves, completed at once
+)
 #: ``pending`` while member runs are outstanding; ``completed`` once its result is written
 #: (exactly once); ``void`` when no member produced a run.
 ANALYSIS_STATUSES = ("pending", "completed", "void")

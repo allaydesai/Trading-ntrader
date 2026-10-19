@@ -90,6 +90,7 @@ def test_phase_4_trial_roles_and_analysis_vocabulary_are_pinned():
         "walk_forward",
         "breadth",
         "cost_stress",
+        "portfolio",
     )
     assert ANALYSIS_STATUSES == ("pending", "completed", "void")
     assert "analysis_pk" in ResearchTrial.__table__.c

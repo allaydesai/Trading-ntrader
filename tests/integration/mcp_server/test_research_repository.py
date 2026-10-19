@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 
 from src.db.models.research import (
     ImmutableRecordError,
+    ResearchAnalysis,
     ResearchCandidate,
     ResearchStudy,
     ResearchTrial,
@@ -139,3 +140,29 @@ def test_one_candidate_per_version(isolated_results):
             study = repo.add_study(_study())
             repo.add_candidate(_candidate(study))
             repo.add_candidate(_candidate(study))
+
+
+def test_a_portfolio_analysis_is_a_completed_row_of_the_study(isolated_results):
+    """Phase 5a: the ``portfolio`` kind passes the CHECK and reads back by kind."""
+    with isolated_results() as session:
+        repo = SyncResearchRepository(session)
+        study = repo.add_study(_study())
+        repo.add_analysis(
+            ResearchAnalysis(
+                study_pk=study.id,
+                version=1,
+                kind="portfolio",
+                status="completed",
+                request={"sleeves": [{"run_id": str(uuid4()), "weight": 1.0}]},
+                result={"delta": {}},
+            )
+        )
+        (found,) = repo.analyses(study, kind="portfolio")
+        assert found.status == "completed" and found.result == {"delta": {}}
+        with pytest.raises(IntegrityError):
+            with session.begin_nested():
+                repo.add_analysis(
+                    ResearchAnalysis(
+                        study_pk=study.id, version=1, kind="basket", status="completed", request={}
+                    )
+                )
