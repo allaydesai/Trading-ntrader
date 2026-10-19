@@ -2,6 +2,7 @@
 
 Pure numpy / pandas / scipy: parameter grids, Monte Carlo over trades,
 bootstrap confidence intervals, the deflated Sharpe ratio, parameter
-sensitivity and sliced walk-forward. No Nautilus, no database: callers pass
-what a stored run holds (closed trades, a daily equity curve, metrics).
+sensitivity and sliced walk-forward; phase 5a adds the constant-mix portfolio
+over several runs' curves. No Nautilus, no database: callers pass what a
+stored run holds (closed trades, a daily equity curve, metrics).
 """
