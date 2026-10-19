@@ -462,6 +462,21 @@ contaminated). Each is stored as an analysis of the study (`get_analysis`, liste
 walk-forward efficiency, deflated Sharpe, out-of-sample drawdown within the Monte Carlo band
 — cite them; the expectation band's trade axis is Monte Carlo too.
 
+**Tools (phase 5a, portfolio from stored runs):** `get_sleeve_correlation`,
+`run_portfolio_backtest`. Both read the stored daily mark-to-market curves of existing runs
+and combine them as a daily constant-mix on the days every curve shares — weights apply to
+returns, not dollars; there is no engine run, no job, no counted trial and no gate.
+`get_sleeve_correlation` takes any runs: Pearson correlation of daily returns, shared
+drawdown days and episodes per pair, each sleeve's and the total's summary, and a regime
+table by year, trend and volatility tercile side by side. `run_portfolio_backtest` judges a
+study's candidate (its newest out-of-sample run by default) inside the held sleeves, with and
+without it: metrics, per-sleeve contribution, the delta per metric, the candidate's
+correlation with the held portfolio, both curves; stored as a `portfolio` analysis of the
+study (`get_analysis(kind="portfolio")`) and exported with it. A run that is not a frozen
+candidate's out-of-sample run is warned about, not refused; before a freeze a study may only
+bring its own in-sample runs. Phase 5b — an engine-backed multi-strategy backtest with shared
+capital and exposure limits, scan-driven universes, a portfolio gate — is not built.
+
 A quick, unattributed check: `validate_config` → `submit_backtest` for the strategy and
 for `buy_and_hold` on the same window → `get_job` until both finish → `compare_runs` →
 `export_results` (writes `<slug>.json` and `<slug>.trades.csv` to `Lab/results/` in the
@@ -532,6 +547,11 @@ Research proper happens in a **study**, one per vault Idea:
    `<slug>.<date>.session.json` and `<slug>.<date>.session.trades.csv`, beside the
    compare-to run (`<slug>.json`, written once). The weekly row in the vault's paper note
    is written by the vault's research skill from that reading, not by the server.
+11. `get_sleeve_correlation` on the candidate's run and the sleeves already held asks whether
+   it adds anything (low correlation, drawdowns that do not coincide, regimes that offset);
+   `run_portfolio_backtest(study=…, sleeves=[{run_id, weight}])` then reports the held
+   portfolio with and without the candidate, from stored curves at constant weights. The
+   numbers are reported, not judged: `System/Gates.md` has no portfolio block yet.
 
 Gate thresholds are read from the vault's `System/Gates.md`, from a fenced block the
 server parses (the prose stays the human copy):

@@ -19,7 +19,8 @@ src/
 │                          # live (+ live_start/status/reconcile/seal — `ntrader live …`)
 ├── core/                  # → see docs/agent/nautilus.md for engine details
 │   ├── robustness/        # pure numpy/scipy: grids, Monte Carlo, bootstrap CIs, deflated Sharpe,
-│   │                      #   sensitivity, sliced walk-forward (research MCP phase 4)
+│   │                      #   sensitivity, sliced walk-forward (research MCP phase 4);
+│   │                      #   portfolio.py: constant-mix of stored curves (phase 5a)
 │   ├── strategy_registry.py   # @register_strategy decorator + StrategyRegistry
 │   ├── strategy_factory.py    # StrategyFactory + StrategyLoader (dynamic import)
 │   ├── backtest_orchestrator.py  # Preferred: takes BacktestRequest, handles persistence
@@ -43,8 +44,11 @@ src/
 │   │                      #   recovery.py: one owning server (flock) + adoption of live workers
 │   ├── studies/           # studies: holdout split, trial ledger, candidates, gates, scorecard;
 │   │                      #   phase 4: batch.py (sweeps/breadth/walk-forward as analyses),
-│   │                      #   variability.py (Monte Carlo), checks_robustness.py (G2/G3 rows)
-│   ├── analysis/          # reads of stored runs: trades, equity, regimes, bar export
+│   │                      #   variability.py (Monte Carlo), checks_robustness.py (G2/G3 rows);
+│   │                      #   phase 5a: portfolio.py (candidate sleeve inside the held portfolio)
+│   ├── analysis/          # reads of stored runs: trades, equity, regimes, bar export;
+│   │                      #   phase 5a: sleeves.py (runs as sleeves, regime table side by side),
+│   │                      #   correlation.py (get_sleeve_correlation)
 │   ├── paper/             # paper loop: commands text, read-only session reads, band, drift
 │   └── worker.py          # child process: load_from_catalog → orchestrator → verify row
 ├── models/                # Domain Pydantic models (request, result, trade, strategy)
