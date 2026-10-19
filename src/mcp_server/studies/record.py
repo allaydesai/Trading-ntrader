@@ -2,8 +2,10 @@
 
 ``<slug>.study.json`` holds the study, its numbered ledger, candidates, every
 recorded decision, the current scorecard and one scorecard per frozen version,
-so the card a decision was made on survives the next version; the runs
-themselves go to the usual ``<slug>.json`` and ``<slug>.trades.csv``.
+so the card a decision was made on survives the next version, and the newest
+portfolio analysis (phase 5a: before/after the candidate sleeve, which no gate
+carries yet); the runs themselves go to the usual ``<slug>.json`` and
+``<slug>.trades.csv``.
 """
 
 import json
@@ -14,7 +16,7 @@ from src.mcp_server.errors import ToolFailure
 from src.mcp_server.export import export_results, export_target, refuse_existing
 from src.mcp_server.jobs.store import JobStore, utc_now
 from src.mcp_server.settings import McpSettings
-from src.mcp_server.studies import lifecycle, scorecard
+from src.mcp_server.studies import lifecycle, scorecard, walkforward
 
 
 def export_study(
@@ -39,6 +41,12 @@ def export_study(
     cards = [
         scorecard.get_scorecard(settings, store, key, c["version"]) for c in study["candidates"]
     ]
+    try:
+        held: dict[str, Any] | None = walkforward.get_analysis(
+            store, key, analysis_id=None, kind="portfolio"
+        )["analysis"]
+    except ToolFailure:
+        held = None
     ids = run_ids or [r["run_id"] for r in study["ledger"] if r["state"] == "completed"]
     out: dict[str, Any] = (
         export_results(settings, ids, slug, folder, overwrite)
@@ -50,7 +58,14 @@ def export_study(
     try:
         tmp.write_text(
             json.dumps(
-                {**record, "study": study, "scorecard": card, "scorecards": cards}, indent=2
+                {
+                    **record,
+                    "study": study,
+                    "scorecard": card,
+                    "scorecards": cards,
+                    "portfolio": held,
+                },
+                indent=2,
             ),
             encoding="utf-8",
         )

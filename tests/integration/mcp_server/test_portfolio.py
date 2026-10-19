@@ -1,9 +1,15 @@
 """Sleeve correlation and the combined portfolio over real stored runs (S9.2–S9.5)."""
 
+import json
+from pathlib import Path
+from uuid import uuid4
+
 import pytest
 
+from src.core.robustness.portfolio import METRIC_KEYS
 from src.mcp_server.analysis import correlation, sleeves
 from src.mcp_server.errors import ToolFailure
+from src.mcp_server.studies import lifecycle, portfolio, record, walkforward
 from src.mcp_server.studies.submit import prepare_in_sample, reserve_trial
 from src.mcp_server.worker import run_job
 from tests.integration.mcp_server.conftest import requires_e2e_data
@@ -119,3 +125,74 @@ async def test_sleeve_correlation_over_two_real_runs(ctx, monkeypatch):
         _code(correlation.get_sleeve_correlation, ctx.runner.store, [a, b], **CORRELATION)
         == "curve_missing"
     )
+
+
+PORTFOLIO = dict(
+    candidate_run_id=None,
+    candidate_weight=None,
+    rebalance="daily",
+    benchmark_symbol=None,
+    drawdown_threshold=0.1,
+    max_sleeves=10,
+    min_days=252,
+)
+
+
+async def test_portfolio_backtest_stores_a_completed_analysis_of_the_study(ctx):
+    store = ctx.runner.store
+    held, candidate = await _in_sample(ctx, "MSFT"), await _in_sample(ctx, "AAPL", fast=10)
+    found = portfolio.run_portfolio_backtest(
+        store, "sma-aapl", sleeves=[{"run_id": held, "weight": 1}], **PORTFOLIO
+    )
+
+    assert found["kind"] == "portfolio" and found["status"] == "completed"
+    assert found["candidate"]["run_id"] == candidate
+    assert found["candidate"]["chosen_by"] == "newest_in_sample"
+    assert found["candidate"]["role"] == "in_sample" and found["candidate"]["weight"] == 0.5
+    assert [s["run_id"] for s in found["sleeves"]] == [held]
+    assert found["weights"] == {"with": {held: 0.5, candidate: 0.5}, "without": {held: 1.0}}
+    with_, without = found["with_candidate"], found["without_candidate"]
+    assert with_["metrics"]["days"] == without["metrics"]["days"] == found["window"]["days"]
+    assert set(METRIC_KEYS) <= set(found["delta"]) and found["delta"]["days"]["delta"] == 0
+    assert set(with_["contribution"]["return"]) == {held, candidate}
+    assert len(with_["curve"]) <= 200 and {"time", "equity", "drawdown"} == set(with_["curve"][0])
+    pair = found["candidate_vs_held"]
+    assert pair["correlation"] is None or -1 <= pair["correlation"] <= 1
+    assert pair["drawdown_overlap"]["a"] == "candidate"
+    years = found["regimes"]["by_year"]
+    assert set(years[0]["return"]) == {held, candidate, "with_candidate", "without_candidate"}
+    assert found["regimes"]["benchmark"] == "AAPL"
+
+    stored = walkforward.get_analysis(store, "sma-aapl", analysis_id=None, kind="portfolio")
+    assert stored["analysis"]["analysis_id"] == found["analysis_id"]
+    assert stored["analysis"]["result"]["delta"] == found["delta"]
+    assert stored["analysis"]["request"]["sleeves"] == [{"run_id": held, "weight": 1.0}]
+    study = lifecycle.get_study(store, "sma-aapl")["study"]
+    assert [a["kind"] for a in study["analyses"]] == ["portfolio"]
+    assert study["status"] == "exploring" and study["budget"]["used"] == 2
+
+    exported = record.export_study(
+        ctx.settings,
+        store,
+        "sma-aapl",
+        run_ids=None,
+        slug="port",
+        folder="Lab/results",
+        overwrite=False,
+    )
+    written = json.loads(Path(exported["files"]["study"]).read_text())
+    assert written["portfolio"]["analysis_id"] == found["analysis_id"]
+
+    dup = dict(PORTFOLIO, candidate_run_id=held)
+    args = (store, "sma-aapl")
+    kw = dict(sleeves=[{"run_id": held, "weight": 1}])
+    assert _code(portfolio.run_portfolio_backtest, *args, **kw, **dup) == "duplicate_sleeve"
+    assert (
+        _code(portfolio.run_portfolio_backtest, *args, sleeves=[], **PORTFOLIO) == "too_few_sleeves"
+    )
+    monthly = dict(PORTFOLIO, rebalance="monthly")
+    assert _code(portfolio.run_portfolio_backtest, *args, **kw, **monthly) == "invalid_request"
+    unknown = dict(PORTFOLIO, candidate_run_id=str(uuid4()))
+    assert _code(portfolio.run_portfolio_backtest, *args, **kw, **unknown) == "not_a_trial"
+    heavy = dict(PORTFOLIO, candidate_weight=1.5)
+    assert _code(portfolio.run_portfolio_backtest, *args, **kw, **heavy) == "invalid_weights"
