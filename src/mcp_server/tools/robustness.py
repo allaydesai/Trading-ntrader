@@ -113,7 +113,7 @@ def register(server: MCPServer, ctx: ServerContext) -> None:
         study: str, analysis_id: str | None = None, kind: str | None = None
     ) -> dict[str, Any]:
         """A stored analysis of the study (the newest, or the newest of kind: sweep,
-        sensitivity, monte_carlo, walk_forward, breadth, cost_stress) with its request,
+        sensitivity, monte_carlo, walk_forward, breadth, cost_stress, portfolio) with its request,
         status, result and member jobs. A pending walk-forward whose runs have all finished
         is evaluated here first. get_study lists every analysis id."""
         return await call(

@@ -56,6 +56,9 @@ PINNED_TOOLS = frozenset(
         "submit_cost_stress",
         "submit_walk_forward",
         "get_analysis",
+        # phase 5a: portfolio from stored runs (no engine run, no gate)
+        "get_sleeve_correlation",
+        "run_portfolio_backtest",
     }
 )
 #: The only tools whose names may say "session": they read, never manage one.

@@ -57,7 +57,7 @@ def server_info(ctx: ServerContext, capabilities: list[str]) -> dict[str, Any]:
     s = ctx.settings
     return {
         "server": "ntrader-research",
-        "phase": 4,
+        "phase": 5,
         "versions": {p: _version(p) for p in ("nautilus_trader", "mcp", "pydantic")},
         "git": {k: v for k, v in asdict(git_provenance()).items() if k != "config_hash"},
         "database": _database(),
@@ -71,6 +71,8 @@ def server_info(ctx: ServerContext, capabilities: list[str]) -> dict[str, Any]:
             "log_tail_lines": s.log_tail_lines,
             "max_sweep_cells": s.max_sweep_cells,
             "max_monte_carlo_iterations": s.max_monte_carlo_iterations,
+            "max_sleeves": s.max_sleeves,
+            "min_portfolio_days": s.min_portfolio_days,
         },
         "vault": _vault(ctx),
         "gates": load_gates(ctx.settings).status(),

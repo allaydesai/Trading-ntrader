@@ -16,6 +16,7 @@ from src.mcp_server.tools import (
     info,
     jobs,
     paper,
+    portfolio,
     research,
     robustness,
     runs,
@@ -34,6 +35,7 @@ REGISTERED_TOOLS: frozenset[str] = frozenset(
         *research.TOOL_NAMES,
         *analysis.TOOL_NAMES,
         *paper.TOOL_NAMES,
+        *portfolio.TOOL_NAMES,
         *robustness.TOOL_NAMES,
     )
 )
@@ -57,8 +59,11 @@ freeze: submit_sweep (a grid or a neighbourhood around a parameter set, counted)
 then run_sensitivity for the plateau map; run_monte_carlo on a run for ranges and
 intervals; once frozen, submit_cost_stress, submit_breadth on untuned symbols and
 submit_walk_forward (sees the holdout); get_analysis reads any of them and the
-scorecard's G2/G3 rows cite them. Ad-hoc runs without a study are
-allowed but never count as evidence. Failures come back as
+scorecard's G2/G3 rows cite them. Portfolio, from stored curves only:
+get_sleeve_correlation across any runs (correlation, drawdown overlap, regimes side by
+side); run_portfolio_backtest judges a study's candidate inside the held sleeves,
+before and after, stored as a 'portfolio' analysis (no engine run, no gate yet).
+Ad-hoc runs without a study are allowed but never count as evidence. Failures come back as
 {ok: false, error: {code, message, fix}}. This server never trades, never starts,
 stops or creates sessions, and never fetches or imports data.
 """
@@ -92,5 +97,6 @@ def build_server(ctx: ServerContext | None = None) -> MCPServer:
     research.register(server, ctx)
     analysis.register(server, ctx)
     paper.register(server, ctx)
+    portfolio.register(server, ctx)
     robustness.register(server, ctx)
     return server

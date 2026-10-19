@@ -61,7 +61,7 @@ async def test_robustness_from_sweep_to_a_judged_scorecard(
     study = {"study": slug}
     async with Client(server_params) as client:
         info = await call(client, "server_info")
-        assert info["phase"] == 4 and ROBUSTNESS_TOOLS <= set(info["capabilities"])
+        assert info["phase"] == 5 and ROBUSTNESS_TOOLS <= set(info["capabilities"])
         assert info["limits"]["max_sweep_cells"] >= 2
 
         opened = await call(

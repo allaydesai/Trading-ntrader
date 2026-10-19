@@ -36,6 +36,10 @@ class McpSettings(BaseSettings):
         default="System/Gates.md", description="Vault-relative file holding the gates block"
     )
     max_bar_rows: int = Field(default=200_000, gt=0, description="Most rows export_bars writes")
+    max_sleeves: int = Field(default=10, gt=1, description="Most runs a portfolio tool combines")
+    min_portfolio_days: int = Field(
+        default=252, gt=0, description="Fewest shared days a portfolio tool accepts"
+    )
     max_equity_points: int = Field(
         default=1000, gt=1, description="Most points get_equity_curve returns"
     )
