@@ -116,10 +116,11 @@ async def test_the_batch_runs_every_cell_over_the_span_and_evaluates_lazily(ctx)
     # The runs saw the holdout: a new version is contaminated, and reproducing one needs
     # the same code.
     wf_run = next(r["run_id"] for r in study["ledger"] if r["role"] == "walk_forward")
-    assert _code(references.prepare_reproduction, wf_run) in (
-        "holdout_locked",
-        "config_changed",
-    ) or references.prepare_reproduction(wf_run)
+    # With the code unchanged since the run, reproducing it is allowed.
+    try:
+        references.prepare_reproduction(wf_run)
+    except ToolFailure as refused:
+        assert refused.code in ("holdout_locked", "config_changed")
     after = candidates.new_candidate_version(
         store, "sma-aapl", "try a time stop", "exit after 5 days"
     )
