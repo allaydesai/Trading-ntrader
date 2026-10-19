@@ -187,15 +187,17 @@ def _store(
     request: dict[str, Any],
     result: dict[str, Any],
 ) -> ResearchAnalysis:
+    now = datetime.now(timezone.utc)  # one stamp: created and completed together
     return repo.add_analysis(
         ResearchAnalysis(
             study_pk=study.id,
             candidate_pk=trial.candidate_pk,
             version=trial.version,
             kind="monte_carlo",
+            created_at=now,
             status="completed",
             request=request,
             result=to_jsonable({**result, "role": trial.role}),
-            completed_at=datetime.now(timezone.utc),
+            completed_at=now,
         )
     )

@@ -33,10 +33,20 @@ DEFINITIONS = {
     "a sleeve whose returns never vary",
     "both_below": "share of shared days on which both sleeves were in a drawdown deeper than "
     "the threshold (drawdowns measured from the window's start)",
-    "jaccard": "shared drawdown days over days on which either sleeve was in one",
+    "jaccard": "shared drawdown days over days on which either sleeve was in one; null when "
+    "neither sleeve ever crossed the threshold, 0 when one did and they never coincided",
     "episodes": "maximal runs of days below the threshold; a_with_b counts a's episodes that "
     "share at least one day with one of b's",
     "total": "daily constant-mix of the sleeves at the given weights (daily rebalancing)",
+    "per_sleeve": "each sleeve measured on the shared days from the first of them, so its "
+    "numbers differ from the stored run's over its whole span",
+    "contribution": "arithmetic: a sleeve's weighted daily returns summed, and its share of "
+    "that sum; the sums add up to the portfolio's summed daily returns, not to its "
+    "compounded total return (the drawdown shares likewise overshoot the compounded "
+    "drawdown)",
+    "quiet_sleeve": "a sleeve whose daily returns vary less than a tenth of the most "
+    "volatile sleeve's; at a meaningful weight it behaves like cash, so a smaller combined "
+    "drawdown is dilution, not diversification",
     "cagr": "calendar days / 365.25, as stored runs compute it",
     "time_under_water_days": "longest stretch in calendar days from a running peak to the day "
     "equity is back at it (or the window's end)",
@@ -89,7 +99,10 @@ def align(
             details={
                 "days": len(frame),
                 "min_days": min_days,
-                "per_sleeve": {s.run_id: sleeve_view(s, days=0, dropped=0) for s in sleeves},
+                "per_sleeve": {
+                    s.run_id: sleeve_view(s, days=len(pf.daily_returns(s.equity)), dropped=0)
+                    for s in sleeves
+                },
             },
         )
     window = {
@@ -99,6 +112,15 @@ def align(
         "min_days": min_days,
     }
     return frame, dropped, window
+
+
+def quiet_warnings(frame: pd.DataFrame) -> list[str]:
+    """One warning per sleeve that barely moves beside the others (see ``quiet_sleeve``)."""
+    return [
+        f"{name}: daily returns vary less than a tenth of the most volatile sleeve's; at this "
+        "weight it behaves like cash (a smaller combined drawdown is dilution, not diversification)"
+        for name in pf.quiet(frame)
+    ]
 
 
 def benchmark_of(
@@ -140,7 +162,7 @@ def get_sleeve_correlation(
     found_catalog, symbol = benchmark_of(sleeves, benchmark_symbol, catalog)
     closes = benchmark_closes(found_catalog, symbol, frame.index[0], frame.index[-1])
     regimes = regime_table(frame, {"total": total}, closes)
-    warnings += [f"regimes: {note}" for note in regimes["notes"]]
+    warnings += quiet_warnings(frame) + [f"regimes: {note}" for note in regimes["notes"]]
     return to_jsonable(
         {
             "sleeves": [

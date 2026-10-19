@@ -165,7 +165,9 @@ async def test_portfolio_backtest_stores_a_completed_analysis_of_the_study(ctx):
 
     stored = walkforward.get_analysis(store, "sma-aapl", analysis_id=None, kind="portfolio")
     assert stored["analysis"]["analysis_id"] == found["analysis_id"]
+    assert stored["analysis"]["completed_at"] == stored["analysis"]["created_at"]
     assert stored["analysis"]["result"]["delta"] == found["delta"]
+    assert "contribution" in found["definitions"] and "quiet_sleeve" in found["definitions"]
     assert stored["analysis"]["request"]["sleeves"] == [{"run_id": held, "weight": 1.0}]
     study = lifecycle.get_study(store, "sma-aapl")["study"]
     assert [a["kind"] for a in study["analyses"]] == ["portfolio"]

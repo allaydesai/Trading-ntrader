@@ -85,6 +85,22 @@ def combine(returns: pd.DataFrame, weights: Mapping[str, float], *, initial: flo
     return pd.Series(float(initial) * path, index=returns.index, name="equity")
 
 
+QUIET_RATIO = 0.1
+
+
+def quiet(returns: pd.DataFrame, *, ratio: float = QUIET_RATIO) -> list[str]:
+    """Sleeves whose daily returns vary less than ``ratio`` of the most volatile one's.
+
+    At a meaningful weight such a sleeve behaves like cash: it dilutes the others' risk
+    and return alike, which is not diversification.
+    """
+    spread = returns.std(ddof=1)
+    loudest = float(spread.max()) if len(spread) else 0.0
+    if not loudest > 0:
+        return []
+    return [str(name) for name, value in spread.items() if value < ratio * loudest]
+
+
 def correlation(returns: pd.DataFrame) -> dict[str, dict[str, float | None]]:
     """Pearson correlation of simple daily returns; a flat sleeve correlates with nothing."""
     matrix = returns.corr()

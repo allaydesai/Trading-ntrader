@@ -205,6 +205,7 @@ def run_sensitivity(store: JobStore, study_key: str, *, metric: str, sweep: str 
         pending = sum(1 for t in trials if t.state == "pending")
         if pending:
             result["note"] = f"{pending} cell(s) are still running: the map is partial."
+        now = datetime.now(timezone.utc)  # one stamp: created and completed together
         stored = repo.add_analysis(
             ResearchAnalysis(
                 study_pk=study.id,
@@ -213,7 +214,8 @@ def run_sensitivity(store: JobStore, study_key: str, *, metric: str, sweep: str 
                 status="completed",
                 request={"sweep": str(source.analysis_id), "metric": metric},
                 result=to_jsonable(result),
-                completed_at=datetime.now(timezone.utc),
+                created_at=now,
+                completed_at=now,
             )
         )
         return to_jsonable(

@@ -19,7 +19,12 @@ from src.core.robustness import portfolio as pf
 from src.db.models.research import ResearchAnalysis, ResearchStudy, ResearchTrial
 from src.db.repositories.research_repository import SyncResearchRepository
 from src.db.session_sync import get_sync_session
-from src.mcp_server.analysis.correlation import DEFINITIONS, align, check_threshold
+from src.mcp_server.analysis.correlation import (
+    DEFINITIONS,
+    align,
+    check_threshold,
+    quiet_warnings,
+)
 from src.mcp_server.analysis.series import downsample, drawdown
 from src.mcp_server.analysis.sleeves import (
     Sleeve,
@@ -194,7 +199,9 @@ def _result(
         "correlation": {"method": "pearson", "matrix": pf.correlation(frame)},
         "regimes": {"benchmark": benchmark, "catalog": study.catalog, **regimes},
         "definitions": {**DEFINITIONS, "basis": pf.BASIS},
-        "warnings": warnings + [f"regimes: {note}" for note in regimes["notes"]],
+        "warnings": warnings
+        + quiet_warnings(frame)
+        + [f"regimes: {note}" for note in regimes["notes"]],
     }
 
 
@@ -205,16 +212,18 @@ def _store(
     request: dict,
     result: dict,
 ) -> ResearchAnalysis:
+    now = datetime.now(timezone.utc)  # one stamp: created and completed together
     return repo.add_analysis(
         ResearchAnalysis(
             study_pk=study.id,
             candidate_pk=trial.candidate_pk,
             version=trial.version,
             kind=KIND,
+            created_at=now,
             status="completed",
             request=to_jsonable(request),
             result=to_jsonable(result),
-            completed_at=datetime.now(timezone.utc),
+            completed_at=now,
         )
     )
 

@@ -17,6 +17,7 @@ from src.core.robustness.portfolio import (
     drawdown_overlap,
     evaluate,
     portfolio_returns,
+    quiet,
     summary,
 )
 
@@ -143,3 +144,11 @@ def test_evaluate_returns_the_normalised_weights_curve_metrics_and_contribution(
     assert found["weights"] == {"a": 0.5, "b": 0.5}
     assert set(found) == {"weights", "equity", "metrics", "contribution"}
     assert len(found["equity"]) == 3 and found["metrics"]["days"] == 3
+
+
+def test_a_sleeve_that_barely_moves_is_quiet():
+    loud = list(np.random.default_rng(1).normal(0, 0.01, 60))
+    frame = _frame(loud, [v / 100 for v in loud], [v / 5 for v in loud])
+    assert quiet(frame) == ["b"]
+    assert quiet(frame, ratio=0.3) == ["b", "c"]
+    assert quiet(_frame([0.0] * 5, [0.0] * 5)) == []
