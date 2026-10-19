@@ -92,6 +92,12 @@ def _split(
     return cells
 
 
+def return_cells(returns: pd.Series, labels: pd.Series, order: list[str]) -> list[dict[str, Any]]:
+    """One cell per label with its days, compounded return and drawdown; no trades (phase 5a)."""
+    keys = ("label", "days", "return", "max_drawdown")
+    return [{k: cell[k] for k in keys} for cell in _split(returns, [], labels, order)]
+
+
 def by_year(returns: pd.Series, trades: list[TradePoint]) -> list[dict[str, Any]]:
     """One cell per calendar year."""
     days = pd.DatetimeIndex(returns.index).union(_days([t.entry for t in trades]))

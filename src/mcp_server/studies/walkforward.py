@@ -16,11 +16,10 @@ from sqlalchemy.orm import Session
 
 from src.core.robustness import grid, walk_forward
 from src.db.models.research import ResearchAnalysis, ResearchStudy, ResearchTrial
-from src.db.repositories.equity_curve_repository import SyncEquityCurveRepository
 from src.db.repositories.research_repository import SyncResearchRepository
 from src.db.session_sync import get_sync_session
 from src.mcp_server.analysis.run_reads import _trade_points, load_run
-from src.mcp_server.analysis.series import equity_series
+from src.mcp_server.analysis.sleeves import usable_curve
 from src.mcp_server.errors import ToolFailure
 from src.mcp_server.jobs import service
 from src.mcp_server.jobs.store import JobStore
@@ -143,12 +142,11 @@ def _member_curves(
         if trial.state != "completed" or trial.run_id is None:
             continue
         run = load_run(session, str(trial.run_id))
-        points = SyncEquityCurveRepository(session).find_points(run.run_id)
-        basis = (run.config_snapshot or {}).get("metrics_basis")
-        if not points or basis != "mark_to_market":
+        equity = usable_curve(session, run)
+        if equity is None:
             unusable.append(trial.job_id)
             continue
-        curves[trial.job_id] = equity_series(points)
+        curves[trial.job_id] = equity
         bases[trial.job_id] = float(run.initial_capital)
         trades[trial.job_id] = [
             pd.Timestamp(p.entry).tz_localize("UTC")
