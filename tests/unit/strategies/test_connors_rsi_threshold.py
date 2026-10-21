@@ -20,8 +20,18 @@ from nautilus_trader.model.enums import OrderSide
 from nautilus_trader.model.objects import Price, Quantity
 from pydantic import ValidationError
 
-from src.core.strategies.custom.larry_connors_RSI_mean_rev import LarryConnorsRSIMeanRev
-from src.core.strategies.custom.models import ConnorsRSIParameters
+# The strategy lives in the ``custom/`` git submodule, which CI does not check out
+# (private repo, SSH URL): skip there rather than fail at collection. Resolving it at
+# runtime also keeps ruff's import sorting the same whether or not the files exist.
+_strategy_module = pytest.importorskip(
+    "src.core.strategies.custom.larry_connors_RSI_mean_rev",
+    reason="the strategies submodule is not checked out",
+)
+_models_module = pytest.importorskip(
+    "src.core.strategies.custom.models", reason="the strategies submodule is not checked out"
+)
+LarryConnorsRSIMeanRev = _strategy_module.LarryConnorsRSIMeanRev
+ConnorsRSIParameters = _models_module.ConnorsRSIParameters
 
 BAR_TYPE = BarType.from_str("QQQ.NASDAQ-1-DAY-LAST-EXTERNAL")
 
