@@ -226,6 +226,7 @@ class TestRowMapping:
         assert row.profit_loss == recorded.profit_loss
         assert row.profit_pct == recorded.profit_pct
         assert row.holding_period_seconds == recorded.holding_period_seconds
+        assert row.strategy_id == recorded.strategy_id
 
     def test_a_none_commission_passes_through_as_none_not_zero(self, patched):
         """3.5's flip resolution: unknown, never free."""

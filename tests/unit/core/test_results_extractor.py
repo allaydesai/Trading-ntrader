@@ -637,11 +637,12 @@ class TestNoParallelResultsVocabulary:
         """Epic 5 added no migration: the single head is the research MCP's, whose
         chain descends from Epic 4's ``85c949ac0374`` (PO ruling, 2026-10-11). MCP phase 4
         (2026-10-13) moved the head to ``87090e0d5660`` (research_analyses); MCP phase 5a
-        (2026-10-19) to ``72a945ca06f5`` (the portfolio analysis kind); still one head."""
+        (2026-10-19) to ``72a945ca06f5`` (the portfolio analysis kind); MCP phase 5b
+        (2026-10-21) to ``dc41856246ad`` (``trades.strategy_id``); still one head."""
         from alembic.config import Config
         from alembic.script import ScriptDirectory
 
         script = ScriptDirectory.from_config(Config(str(REPO_ROOT / "alembic.ini")))
 
-        assert script.get_heads() == ["72a945ca06f5"]
+        assert script.get_heads() == ["dc41856246ad"]
         assert "85c949ac0374" in {rev.revision for rev in script.walk_revisions()}

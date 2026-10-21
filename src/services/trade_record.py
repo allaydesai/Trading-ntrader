@@ -119,6 +119,7 @@ class SqlTradeRecord:
             **recorded.trade.model_dump(),
             session_id=self._session_pk,
             backtest_run_id=None,
+            strategy_id=recorded.strategy_id,
         )
 
         with self._session_factory() as db_session:
@@ -139,6 +140,7 @@ class SqlTradeRecord:
                 trade_id=trade_create.trade_id,
                 venue_order_id=trade_create.venue_order_id,
                 client_order_id=trade_create.client_order_id,
+                strategy_id=trade_create.strategy_id,
                 order_side=trade_create.order_side,
                 quantity=trade_create.quantity,
                 entry_price=trade_create.entry_price,

@@ -109,8 +109,24 @@ class TestTheSealsOpenTradeIsTheBacktests:
 
         assert _columns(_seal_row(position)) == _columns(await _backtest_row(position))
 
+    async def test_both_paths_name_the_owning_strategy(self):
+        """MCP phase 5b: equal-and-None would pass the comparison above, so the value
+        is pinned against the real positions report's ``strategy_id`` column."""
+        position = Position(NVDA, _fill(OrderSide.BUY, 10, "187.37", 1, "1.25 USD"))
+
+        backtest, seal = await _backtest_row(position), _seal_row(position)
+
+        assert backtest.strategy_id == seal.strategy_id == "S-001"
+
     def test_the_comparison_is_not_vacuous(self):
-        assert {"quantity", "entry_price", "exit_price", "order_side", "trade_id"} <= set(COLUMNS)
+        assert {
+            "quantity",
+            "entry_price",
+            "exit_price",
+            "order_side",
+            "trade_id",
+            "strategy_id",
+        } <= set(COLUMNS)
 
 
 class TestAPartlyReducedPositionIsWhereThePathsPart:

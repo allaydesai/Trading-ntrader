@@ -56,6 +56,10 @@ class TradeCreate(TradeBase):
 
     backtest_run_id: Optional[int] = None
     session_id: Optional[int] = None
+    #: MCP phase 5b: the Nautilus strategy that owned the position. On the
+    #: write model only — the read model ``Trade`` backs the frozen trades API
+    #: (AR44), so exposing it there is a view change of its own.
+    strategy_id: Optional[str] = Field(None, max_length=100)
 
     @model_validator(mode="after")
     def _require_an_owner(self) -> "TradeCreate":

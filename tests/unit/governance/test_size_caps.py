@@ -194,9 +194,9 @@ SIZE_BASELINE: dict[str, int] = {
     "src/models/backtest_request.py::BacktestRequest": 178,
     "src/models/price_validation_report.py::evaluate_ticker_deviation": 64,
     # MCP phase 1, 274 -> 276: both save paths take run provenance (S2.3).
-    "src/services/backtest_persistence.py::BacktestPersistenceService": 276,
+    "src/services/backtest_persistence.py::BacktestPersistenceService": 264,
     "src/services/backtest_persistence.py::BacktestPersistenceService._extract_and_validate_metrics": 58,  # noqa: E501
-    "src/services/backtest_persistence.py::BacktestPersistenceService.save_trades_from_positions": 137,  # noqa: E501
+    "src/services/backtest_persistence.py::BacktestPersistenceService.save_trades_from_positions": 125,  # noqa: E501
     # Phase 2 pre-work, 108 -> 110: `get_equity_curve` reads the run's stored curve.
     "src/services/backtest_query.py::BacktestQueryService": 110,
     "src/services/comparison_renderer.py::render_comparison_table": 66,

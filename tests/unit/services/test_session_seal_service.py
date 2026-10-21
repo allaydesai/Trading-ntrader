@@ -730,6 +730,12 @@ class TestOpenPositionsAreTheOperatorsDecision:
 
         assert len(row.trade_id) == length
 
+    def test_an_open_row_names_the_strategy_that_held_it(self):
+        """MCP phase 5b: the leg's owner, for per-sleeve attribution."""
+        row = open_trade(_leg("AAPL.NASDAQ", "10", strategy_id="CRSIMeanReversion-001"), SESSION_PK)
+
+        assert row.strategy_id == "CRSIMeanReversion-001"
+
     @pytest.mark.acceptance_criterion(
         "5.5c",
         "a --force seal's report states the disposition explicitly: the positions remain at "

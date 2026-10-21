@@ -161,7 +161,7 @@ class TestSqlTradeRecordAgainstRealPostgres:
                 "SELECT entry_price, exit_price, quantity, commission_amount, commission_currency, "
                 "fees_amount, profit_loss, profit_pct, holding_period_seconds, venue_order_id, "
                 "client_order_id, order_side, instrument_id, trade_id, backtest_run_id, "
-                "entry_timestamp, exit_timestamp FROM trades WHERE session_id = :sid"
+                "entry_timestamp, exit_timestamp, strategy_id FROM trades WHERE session_id = :sid"
             ),
             {"sid": session.id},
         ).one()
@@ -180,6 +180,7 @@ class TestSqlTradeRecordAgainstRealPostgres:
         assert row.order_side == recorded.trade.order_side
         assert row.instrument_id == recorded.trade.instrument_id
         assert row.trade_id == recorded.trade.trade_id
+        assert row.strategy_id == recorded.strategy_id
         assert row.backtest_run_id is None
         assert row.entry_timestamp.utcoffset() is not None, "must be tz-aware"
         assert row.exit_timestamp.utcoffset() is not None, "must be tz-aware"

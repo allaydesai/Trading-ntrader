@@ -98,9 +98,9 @@ logged.
 ``PositionClosed`` whose ``str(event.strategy_id)`` is ``"EXTERNAL"`` or
 ``"INTERNAL-DIFF"`` (measured, Task 1.1: reconciliation's own stamp,
 ``live/execution_engine.py:1709-1721``) is aggregated and logged exactly as
-any other, then skipped loudly instead of reaching the sink — there is no
-``strategy_id`` column on ``trades``, and a persisted row would silently join
-the strategy's own comparison sample.
+any other, then skipped loudly instead of reaching the sink. ``trades`` has a
+``strategy_id`` column since MCP phase 5b, but no reader filters on it, so a
+persisted row would still silently join the strategy's own comparison sample.
 
 No ``nautilus_trader`` import: every framework object arrives duck-typed as
 ``Any`` and is dispatched by ``type(event).__name__``, the
@@ -434,8 +434,8 @@ class TradeRecorder:
         )
 
         if recorded.strategy_id in RECONCILIATION_STRATEGY_IDS:
-            # D-D: no `strategy_id` column on `trades` -- a persisted row
-            # would silently join the strategy's own comparison sample.
+            # D-D: no reader filters on `trades.strategy_id` -- a persisted
+            # row would silently join the strategy's own comparison sample.
             self._log.warning(
                 PERSIST_SKIPPED_EVENT,
                 reason="reconciliation_owned",

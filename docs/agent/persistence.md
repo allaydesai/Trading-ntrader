@@ -38,6 +38,10 @@ All models inherit `Base` + `TimestampMixin`.
 **Trade** (`src/db/models/trade.py`):
 - Flattened denormalization of closed Nautilus trades (not open positions)
 - Calculated: `profit_loss`, `profit_pct`, `holding_period_seconds`
+- `strategy_id` (nullable, migration `dc41856246ad`, MCP phase 5b) — the Nautilus strategy that
+  owned the position, written by all three writers (backtest positions report, live trade sink,
+  seal's open rows). Rows written earlier have none; nothing backfills it, and the read model
+  `src.models.trade.Trade` (the frozen trades API, AR44) does not expose it
 - Constraints: `positive_quantity`, `positive_entry_price`, `positive_exit_price`
 - Composite index: `(backtest_run_id, entry_timestamp)` for range queries
 - P&L: `(exit_price - entry_price) * quantity - commission - fees`
