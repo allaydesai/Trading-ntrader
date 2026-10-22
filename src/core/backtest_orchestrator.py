@@ -317,18 +317,13 @@ class BacktestOrchestrator:
         return result
 
     def _make_fee_model(self, multiplier: float = 1.0) -> IBKRCommissionModel:
-        """The IBKR commission model from settings, every term scaled by ``multiplier``.
+        """The IBKR commission model from settings, every cost term scaled by ``multiplier``.
 
-        A cost-stress run (research MCP phase 4) scales the per-share rate, the
-        minimum and the cap alike; the fill model is untouched, so this stresses
-        commission, not slippage.
+        A cost-stress run (research MCP phase 4) scales commission and the slippage
+        drag alike; the fill model is untouched, so this stresses modelled costs,
+        not fill behaviour.
         """
-        scale = Decimal(str(multiplier))
-        return IBKRCommissionModel(
-            commission_per_share=self.settings.commission_per_share * scale,
-            min_per_order=self.settings.commission_min_per_order * scale,
-            max_rate=self.settings.commission_max_rate * scale,
-        )
+        return IBKRCommissionModel.from_settings(self.settings, Decimal(str(multiplier)))
 
     def _setup_engine(
         self,
