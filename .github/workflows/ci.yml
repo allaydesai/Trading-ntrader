@@ -10,6 +10,7 @@ jobs:
   unit-tests:
     name: Unit Tests (Fast)
     runs-on: ubuntu-latest
+    timeout-minutes: 30  # a hung test must fail the job, not hold it for hours
 
     strategy:
       matrix:
@@ -59,6 +60,7 @@ jobs:
   component-tests:
     name: Component Tests (Test Doubles)
     runs-on: ubuntu-latest
+    timeout-minutes: 30  # a hung test must fail the job, not hold it for hours
 
     strategy:
       matrix:
@@ -108,6 +110,7 @@ jobs:
   integration-tests:
     name: Integration Tests (Real Nautilus)
     runs-on: ubuntu-latest
+    timeout-minutes: 30  # a hung test must fail the job, not hold it for hours
 
     services:
       postgres:

@@ -30,6 +30,9 @@ logger = structlog.get_logger(__name__)
 #: Finds the persisted run of a job whose worker left no result, or None.
 FindRun = Callable[[str], str | None]
 
+#: Present only where ``/proc`` is mounted (Linux); its parent is ``/proc``.
+_PROC_SELF = Path("/proc/self")
+
 LOST = {
     "code": "server_restarted",
     "message": "The server stopped while this job was running and its worker left no result.",
@@ -105,7 +108,7 @@ class ServerLock:
 def _ps(pid: int) -> tuple[int | None, str] | None:
     try:
         proc = subprocess.run(
-            ["ps", "-o", "ppid=,command=", "-p", str(pid)],
+            ["ps", "-ww", "-o", "ppid=,command=", "-p", str(pid)],
             capture_output=True,
             text=True,
             timeout=5,
@@ -132,15 +135,38 @@ def worker_alive(pid: int, job_id: str) -> bool:
     """True when ``pid`` is running and is the worker of ``job_id``.
 
     The command line is checked, not just the pid: a pid recorded before a
-    restart may since have been reused by an unrelated process.
+    restart may since have been reused by an unrelated process. It has to be
+    the whole command line: a worker's job directory puts the job id some two
+    hundred characters in, and plain ``ps`` cuts the line at whatever width it
+    assumes when it has no terminal, which read every live worker as gone on
+    the CI runners (2026-10-21).
     """
+    command = _command_line(pid)
+    return command is not None and job_id in command
+
+
+def _command_line(pid: int) -> str | None:
+    """The full command line of ``pid``, or None when there is no such process.
+
+    Linux has it verbatim in ``/proc`` (empty for a zombie, which is as good as
+    gone); elsewhere ``ps -ww`` prints it unabridged.
+    """
+    if _PROC_SELF.exists():
+        try:
+            raw = (_PROC_SELF.parent / str(pid) / "cmdline").read_bytes()
+        except OSError:
+            return None
+        return raw.replace(b"\0", b" ").decode(errors="replace")
     try:
         proc = subprocess.run(
-            ["ps", "-o", "command=", "-p", str(pid)], capture_output=True, text=True, timeout=5
+            ["ps", "-ww", "-o", "command=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return False
-    return proc.returncode == 0 and job_id in proc.stdout
+        return None
+    return proc.stdout if proc.returncode == 0 else None
 
 
 def saved_run(find_run: FindRun | None, job_id: str) -> str | None:

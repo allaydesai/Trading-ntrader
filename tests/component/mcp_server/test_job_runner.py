@@ -256,7 +256,11 @@ async def test_adopted_worker_can_be_cancelled(store):
     try:
         runner = _runner(store)
         runner.start()
+        deadline = time.monotonic() + 15
         while runner.queue_state()["running"] != orphan:
+            # Bounded: an orphan the runner wrote off as lost would otherwise hold
+            # the test, and the whole CI job, open for hours (2026-10-21).
+            assert time.monotonic() < deadline, f"never adopted: {store.status(orphan)}"
             await asyncio.sleep(0.05)
         proc_reaper = asyncio.get_running_loop().run_in_executor(None, proc.wait)
         status = await runner.cancel(orphan)
@@ -291,6 +295,25 @@ async def test_lost_job_whose_run_was_saved_is_reported_succeeded(store):
 
 def test_a_reused_pid_is_not_mistaken_for_the_worker():
     assert worker_alive(os.getpid(), "20261003T000000000000-abcdef") is False
+
+
+def test_a_live_worker_is_recognised_by_a_job_id_deep_in_its_command_line(tmp_path):
+    """A worker's job directory puts the job id far down the command line; a check
+    that reads only the first terminal-width of it called live workers dead."""
+    job_id = "20261021T195829000000-abcdef"
+    job_dir = tmp_path.joinpath(*(["a_segment_of_the_path"] * 8), "jobs", job_id)
+    command = [sys.executable, "-c", "import time; time.sleep(30)", str(job_dir)]
+    assert len(" ".join(command)) > 200
+    proc = subprocess.Popen(
+        command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True
+    )
+    try:
+        assert worker_alive(proc.pid, job_id) is True
+        assert worker_alive(proc.pid, "20261021T195829000000-000000") is False
+    finally:
+        proc.kill()
+        proc.wait()
+    assert worker_alive(proc.pid, job_id) is False
 
 
 # --- a saved run is never reported cancelled ---------------------------------------
