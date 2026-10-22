@@ -25,6 +25,11 @@ class StrategyConfigSnapshot(BaseModel):
             detail-page "Back to Explorer" fallback can recover the explorer
             timeframe label. Nullable for back-compat with rows written before
             the field was added.
+        metrics_basis: What drawdown, Sharpe, Sortino and volatility were computed
+            from: ``"mark_to_market"`` (daily equity at bar closes) or ``"realised"``
+            (closed-position returns). Nullable: rows before the field are realised.
+        fill_seed: Seed of the fill model's random draws. Nullable: rows before the
+            field ran unseeded and cannot be reproduced exactly.
 
     Example:
         >>> snapshot = StrategyConfigSnapshot(
@@ -72,7 +77,28 @@ class StrategyConfigSnapshot(BaseModel):
         data = handler(self)
         if not self.session_conditions:
             data.pop("session_conditions", None)
+        if self.cost_multiplier is None:
+            data.pop("cost_multiplier", None)
         return data
+
+    cost_multiplier: float | None = Field(
+        default=None,
+        description="Commission scale factor of a cost-stress run (research MCP phase 4). "
+        "None on every run at the broker's schedule, and omitted from the dump then, so "
+        "ordinary rows stay byte-identical.",
+    )
+
+    metrics_basis: str | None = Field(
+        default=None,
+        description="What risk metrics were computed from: 'mark_to_market' or 'realised'. "
+        "None on rows written before the field existed (realised).",
+    )
+
+    fill_seed: int | None = Field(
+        default=None,
+        description="Seed of the fill model's random draws. None on rows written before "
+        "the field existed (unseeded, not exactly reproducible).",
+    )
 
     model_config = {
         "json_schema_extra": {

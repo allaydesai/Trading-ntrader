@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     ForeignKey,
     Index,
@@ -22,6 +23,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    func,
 )
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
@@ -125,6 +127,15 @@ class BacktestRun(Base, TimestampMixin):
     # create/drop pair in every migration that follows.
     run_type: Mapped[str] = mapped_column(String(20), nullable=False, server_default="backtest")
 
+    # Provenance (research MCP spec, S2.3): which code and which configuration
+    # produced this run. Nullable — rows written before the columns existed, and
+    # runs outside a git checkout, have no value. Stamped by the orchestrator for
+    # every caller (CLI, web UI, MCP worker).
+    git_commit: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    git_dirty: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    strategies_commit: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    config_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+
     # Relationships
     metrics: Mapped[Optional["PerformanceMetrics"]] = relationship(
         "PerformanceMetrics",
@@ -170,6 +181,36 @@ class BacktestRun(Base, TimestampMixin):
             f"strategy={self.strategy_name}, "
             f"status={self.execution_status})>"
         )
+
+
+class RunEquityCurve(Base):
+    """
+    The equity curve of one backtest run.
+
+    Kept out of ``backtest_runs`` on purpose: a curve is thousands of points and
+    the run row is loaded by every list, detail and comparison read. Nothing
+    loads this table unless it asks for the curve.
+
+    Attributes:
+        id: Internal database primary key
+        backtest_run_id: The run the curve belongs to; one curve per run
+        points: ``[{"time": unix_seconds, "value": equity}, ...]`` in time order
+        created_at: When the curve was stored
+    """
+
+    __tablename__ = "run_equity_curves"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    backtest_run_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("backtest_runs.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+    points: Mapped[list[dict[str, float]]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
 
 
 class PerformanceMetrics(Base, TimestampMixin):

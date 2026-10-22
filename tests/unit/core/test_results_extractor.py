@@ -27,6 +27,7 @@ from src.core.results_extractor import (
     _Ledger,
     _safe_float,
     _SettledPortfolio,
+    _side_stat,
     _starting_balance,
 )
 from src.models.backtest_result import BacktestResult
@@ -70,6 +71,20 @@ class TestSafeFloat:
     def test_safe_float_with_invalid_string(self):
         """Test safe_float with invalid string."""
         assert _safe_float("not_a_number") is None
+
+
+class TestSideStat:
+    """A winners-only or losers-only statistic means nothing when that side never traded."""
+
+    def test_no_trades_on_that_side_is_none_not_zero(self):
+        """Nautilus reports 0.0 for 'Avg Loser' with no losers: that reads as a real average."""
+        assert _side_stat({"Avg Loser": 0.0}, "Avg Loser", traded=False) is None
+
+    def test_a_side_that_traded_keeps_its_value(self):
+        assert _side_stat({"Avg Loser": -850.25}, "Avg Loser", traded=True) == -850.25
+
+    def test_a_missing_statistic_is_none(self):
+        assert _side_stat({}, "Avg Loser", traded=True) is None
 
 
 class TestCalculateCagr:
@@ -598,6 +613,9 @@ class TestNoParallelResultsVocabulary:
         import src.db.models  # noqa: F401  # registers every model on Base.metadata
         from src.db.base import Base
 
+        # The research MCP's tables (merged in by PO ruling, 2026-10-11) hold backtest
+        # research and per-run equity curves — none of them is specific to paper results.
+        # research_analyses (MCP phase 4, 2026-10-13) holds a study's robustness analyses.
         assert set(Base.metadata.tables) == {
             "backtest_runs",
             "catalog_dividends",
@@ -605,14 +623,26 @@ class TestNoParallelResultsVocabulary:
             "catalog_stock_splits",
             "instrument_metadata",
             "performance_metrics",
+            "research_analyses",
+            "research_candidates",
+            "research_studies",
+            "research_study_events",
+            "research_trials",
+            "run_equity_curves",
             "trades",
             "trading_sessions",
         }
 
-    def test_there_is_one_migration_head_and_it_is_epic_4s(self):
+    def test_there_is_one_migration_head_and_epic_5_added_none(self):
+        """Epic 5 added no migration: the single head is the research MCP's, whose
+        chain descends from Epic 4's ``85c949ac0374`` (PO ruling, 2026-10-11). MCP phase 4
+        (2026-10-13) moved the head to ``87090e0d5660`` (research_analyses); MCP phase 5a
+        (2026-10-19) to ``72a945ca06f5`` (the portfolio analysis kind); MCP phase 5b
+        (2026-10-21) to ``dc41856246ad`` (``trades.strategy_id``); still one head."""
         from alembic.config import Config
         from alembic.script import ScriptDirectory
 
         script = ScriptDirectory.from_config(Config(str(REPO_ROOT / "alembic.ini")))
 
-        assert script.get_heads() == ["85c949ac0374"]
+        assert script.get_heads() == ["dc41856246ad"]
+        assert "85c949ac0374" in {rev.revision for rev in script.walk_revisions()}

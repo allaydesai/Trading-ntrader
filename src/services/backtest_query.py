@@ -6,7 +6,7 @@ backtest execution records with proper limit enforcement and pagination.
 """
 
 from datetime import datetime
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 from uuid import UUID
 
 import structlog
@@ -20,6 +20,7 @@ from src.api.models.dashboard import DashboardSummary, to_recent_item
 from src.api.models.filter_models import FilterState
 from src.db.models.backtest import BacktestRun
 from src.db.repositories.backtest_repository import BacktestRepository
+from src.db.repositories.equity_curve_repository import EquityCurveRepository
 
 logger = structlog.get_logger(__name__)
 
@@ -68,6 +69,10 @@ class BacktestQueryService:
         """
         logger.debug("Fetching backtest by ID", run_id=str(run_id))
         return await self.repository.find_by_run_id(run_id)
+
+    async def get_equity_curve(self, run_id: UUID) -> list[dict[str, Any]]:
+        """The run's stored equity points; empty for runs saved before curves were stored."""
+        return await EquityCurveRepository(self.repository.session).find_points(run_id) or []
 
     async def get_backtest_by_internal_id(self, internal_id: int) -> Optional[BacktestRun]:
         """

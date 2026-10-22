@@ -294,7 +294,9 @@ class TestTheAnalyzerIsPrimed:
 
     def test_sibling_an_unsettled_live_portfolio_sees_none_of_the_trades(self):
         """Measured: unprimed, the returns statistics are ``None`` and the PnL
-        statistics read a silent ``0.0`` — four trades, invisible."""
+        statistics read a silent ``0.0`` — four trades, invisible. The two loser
+        statistics read ``None`` instead: the NETTING cache's ``positions_closed()``
+        holds no losing leg, so ``_side_stat`` reports that side as never traded."""
         session = _mixed_session()
         session.add_ib_account()
 
@@ -305,7 +307,7 @@ class TestTheAnalyzerIsPrimed:
         returns_based = ("sharpe_ratio", "profit_factor", "max_drawdown")
         pnl_based = ("expectancy", "avg_win", "avg_loss", "max_winner", "max_loser")
         assert [getattr(result, name) for name in returns_based] == [None, None, None]
-        assert [getattr(result, name) for name in pnl_based] == [0.0] * 5
+        assert [getattr(result, name) for name in pnl_based] == [0.0, 0.0, None, 0.0, None]
 
     def test_the_analyzer_reads_only_two_balance_members_from_its_account(self):
         """CANARY (D-C). If Nautilus makes ``calculate_statistics`` read any other

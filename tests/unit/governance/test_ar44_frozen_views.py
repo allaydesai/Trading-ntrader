@@ -56,6 +56,11 @@ _IGNORED_SUFFIXES = (".pyc",)
 
 #: ``{repo-relative path: sha256}`` of the frozen surface, as Epic 5 found it —
 #: 59 files, equal to ``git ls-files`` over the four surfaces when generated.
+#: **Regenerated 2026-10-11 by PO ruling**, merging 015-paper-trading into the MCP
+#: branch (016-mcp-server): the MCP work changed two frozen files before AR44 was
+#: pinned — ``src/api/rest/equity.py`` reads the curve via the new
+#: ``BacktestQueryService.get_equity_curve`` (the ``run_equity_curves`` table). No
+#: paper view changed; a sealed session still gets the 2-point fallback curve.
 FROZEN_VIEWS: dict[str, str] = {
     "src/api/__init__.py": "bd3217228ed0c9f9600496636aa8c83a8401eea63f70bab2ef0019778ccb101e",
     "src/api/chart_bars.py": "1c966577ac331da69ad6e3b5c05857c999facc7c11cab3b2cf1d77c40428cb00",
@@ -110,7 +115,7 @@ FROZEN_VIEWS: dict[str, str] = {
         "2151db82df6c15b6b48ecb1a21d82a817a1546389b4a79ce119d047111588e49"
     ),
     "src/api/rest/__init__.py": "b8006fe2b3ba41a20e50d84a57c07620f9094c33a715bd72ead2d1b3dfd858c0",
-    "src/api/rest/equity.py": "dbc8f17913e16cb4ee361be3cf26f45ec2cec215895765f5acc39489f29213b6",
+    "src/api/rest/equity.py": "0bc035658be969be7aa5608a4b1db68fba2f777ae295389fdeb5669258fd7f54",
     "src/api/rest/explorer.py": "cd6194347d3abf8b97d266312a638ffbee7ddde016e1092e2f2f1eb256577af0",
     "src/api/rest/indicators.py": (
         "8a4537ae2daec2bee204c5f3b4fd9ce3b5f204cf60c440e4f5ade02d0a34dab3"
@@ -197,7 +202,7 @@ FROZEN_VIEWS: dict[str, str] = {
         "354c60d895f95c731f917942bb6c50fe4e8a06067cda11d13571bfba3b784a65"
     ),
     "src/services/backtest_query.py": (
-        "7faab283726f39573124a85d97bf91d91a8855e7238fbc36527c7a95adc7739f"
+        "2d27d4ad648bbb0a8d4dccab913283f0a67c65866308aedbbcc8610022cd0db0"
     ),
     "src/cli/commands/compare.py": (
         "ae73dccbd662c4797a9778f1b2cbf9287fb13556d100af1857438286a9455fea"

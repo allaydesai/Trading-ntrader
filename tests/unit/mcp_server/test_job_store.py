@@ -1,0 +1,122 @@
+"""File-backed job store: one directory per job (S2.1, S2.2)."""
+
+import json
+from pathlib import Path
+
+import pytest
+
+from src.mcp_server.errors import ToolFailure
+from src.mcp_server.jobs.store import JobStore, first_queued
+
+pytestmark = pytest.mark.unit
+
+PAYLOAD = {"kind": "backtest", "spec": {"strategy": "sma_crossover"}, "resolved": {"x": 1}}
+
+
+@pytest.fixture
+def store(tmp_path):
+    return JobStore(tmp_path / "jobs")
+
+
+def test_create_writes_request_and_queued_status(store):
+    job_id = store.create(PAYLOAD)
+    job_dir = store.job_dir(job_id)
+    assert json.loads((job_dir / "request.json").read_text()) == PAYLOAD
+    status = store.status(job_id)
+    assert status["state"] == "queued"
+    assert status["job_id"] == job_id
+    assert status["kind"] == "backtest"
+
+
+def test_ids_are_unique_and_sort_by_creation(store):
+    ids = [store.create(PAYLOAD) for _ in range(5)]
+    assert len(set(ids)) == 5
+    assert [s["job_id"] for s in store.list(limit=10)] == list(reversed(ids))
+
+
+def test_update_merges_fields(store):
+    job_id = store.create(PAYLOAD)
+    store.update(job_id, state="running", pid=123)
+    status = store.status(job_id)
+    assert status["state"] == "running"
+    assert status["pid"] == 123
+    assert status["kind"] == "backtest"
+
+
+def test_list_filters_by_state_and_limits(store):
+    a, b, c = (store.create(PAYLOAD) for _ in range(3))
+    store.update(b, state="succeeded")
+    assert [s["job_id"] for s in store.list(state="queued")] == [c, a]
+    assert len(store.list(limit=1)) == 1
+
+
+@pytest.mark.parametrize("bad", ["../x", "a/b", "", "..", "nope"])
+def test_unknown_or_malformed_ids_are_refused(store, bad):
+    with pytest.raises(ToolFailure) as exc:
+        store.status(bad)
+    assert exc.value.code == "unknown_job"
+
+
+def test_log_tail(store):
+    job_id = store.create(PAYLOAD)
+    store.log_path(job_id).write_text("\n".join(f"line {i}" for i in range(10)) + "\n")
+    assert store.log_tail(job_id, 3) == ["line 7", "line 8", "line 9"]
+
+
+def test_log_tail_without_log(store):
+    assert store.log_tail(store.create(PAYLOAD), 5) == []
+
+
+def test_progress_and_result_are_optional(store):
+    job_id = store.create(PAYLOAD)
+    assert store.progress(job_id) is None
+    assert store.result(job_id) is None
+    store.write_json(job_id, "progress.json", {"phase": "loading_data"})
+    assert store.progress(job_id) == {"phase": "loading_data"}
+
+
+def test_request_round_trips(store):
+    assert store.request(store.create(PAYLOAD)) == PAYLOAD
+
+
+def test_log_tail_of_a_large_log_reads_only_its_end(store, monkeypatch):
+    job_id = store.create(PAYLOAD)
+    lines = [f"line {i} " + "x" * 200 for i in range(5000)]  # about 1 MB
+    store.log_path(job_id).write_text("\n".join(lines) + "\n")
+    monkeypatch.setattr(
+        Path, "read_text", lambda *a, **k: pytest.fail("log_tail must not read the whole log")
+    )
+    assert store.log_tail(job_id, 3) == lines[-3:]
+
+
+def test_log_tail_returns_everything_when_the_log_is_short(store):
+    job_id = store.create(PAYLOAD)
+    store.log_path(job_id).write_text("only\ntwo")
+    assert store.log_tail(job_id, 50) == ["only", "two"]
+
+
+def test_a_reserved_job_is_not_queued_until_released(store):
+    job_id = store.create({"kind": "backtest"}, state="reserved")
+    assert store.status(job_id)["state"] == "reserved"
+    assert first_queued(store)[0] is None
+    assert store.transition(job_id, {"reserved"}, state="queued")["state"] == "queued"
+    assert first_queued(store)[0] == job_id
+
+
+def test_transition_only_moves_a_job_from_the_listed_states(store):
+    job_id = store.create({"kind": "backtest"})
+    store.update(job_id, state="cancelled")
+    assert store.transition(job_id, {"queued"}, state="running") is None
+    assert store.status(job_id)["state"] == "cancelled"
+
+
+def test_first_queued_is_the_oldest_and_the_floor_skips_finished_jobs(store):
+    done, first, second = (store.create({"kind": "backtest"}) for _ in range(3))
+    store.update(done, state="succeeded")
+    found, floor = first_queued(store)
+    assert (found, floor) == (first, first)
+    store.update(first, state="succeeded")
+    assert first_queued(store, floor) == (second, second)
+    store.update(second, state="failed")
+    found, floor = first_queued(store, floor)
+    assert found is None and floor >= second  # nothing left to look at below it

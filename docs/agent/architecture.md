@@ -18,25 +18,46 @@ src/
 │   └── commands/          # backtest, compare, data, history, report, reproduce, run, show, strategy;
 │                          # live (+ live_start/status/reconcile/seal — `ntrader live …`)
 ├── core/                  # → see docs/agent/nautilus.md for engine details
+│   ├── robustness/        # pure numpy/scipy: grids, Monte Carlo, bootstrap CIs, deflated Sharpe,
+│   │                      #   sensitivity, sliced walk-forward (research MCP phase 4);
+│   │                      #   portfolio.py: constant-mix of stored curves (phase 5a)
 │   ├── strategy_registry.py   # @register_strategy decorator + StrategyRegistry
 │   ├── strategy_factory.py    # StrategyFactory + StrategyLoader (dynamic import)
 │   ├── backtest_orchestrator.py  # Preferred: takes BacktestRequest, handles persistence
 │   ├── backtest_runner.py     # Legacy: MinimalBacktestRunner, direct params
 │   ├── results_extractor.py  # Nautilus metrics + custom calcs (drawdown, CAGR, Calmar)
+│   ├── mark_to_market.py     # daily equity from fills + bar closes; risk metrics computed from it
 │   ├── session_equity.py     # Sealed paper session: trade rows → the same extractor (Epic 5)
 │   ├── analytics.py / metrics.py / fee_models.py / position_sizing.py / risk_management.py
+│   ├── benchmarks/        # buy_and_hold: backtest-only, NOT in StrategyRegistry (never live)
 │   └── strategies/
 │       ├── sma_crossover.py / sma_momentum.py  # Built-in strategies
 │       └── custom/            # GIT SUBMODULE (private strategies)
 ├── db/                    # → see docs/agent/persistence.md
 │   ├── session.py / session_sync.py   # Async (web) + sync (CLI) sessions
 │   ├── exceptions.py / models/ / repositories/
+├── mcp_server/            # Research MCP (stdio): python -m src.mcp_server
+│   ├── server.py          # build_server + REGISTERED_TOOLS (pinned by test)
+│   ├── tools/             # thin tool wrappers; failures returned as {code, message, fix}
+│   ├── request.py         # spec → named-catalog BacktestRequest + config hash (one path)
+│   ├── jobs/              # file-backed store + single-worker runner (process per job);
+│   │                      #   recovery.py: one owning server (flock) + adoption of live workers
+│   ├── studies/           # studies: holdout split, trial ledger, candidates, gates, scorecard;
+│   │                      #   phase 4: batch.py (sweeps/breadth/walk-forward as analyses),
+│   │                      #   variability.py (Monte Carlo), checks_robustness.py (G2/G3 rows);
+│   │                      #   phase 5a: portfolio.py (candidate sleeve inside the held portfolio)
+│   ├── analysis/          # reads of stored runs: trades, equity, regimes, bar export;
+│   │                      #   phase 5a: sleeves.py (runs as sleeves, regime table side by side),
+│   │                      #   correlation.py (get_sleeve_correlation)
+│   ├── paper/             # paper loop: commands text, read-only session reads, band, drift
+│   └── worker.py          # child process: load_from_catalog → orchestrator → verify row
 ├── models/                # Domain Pydantic models (request, result, trade, strategy)
 ├── services/              # → see docs/agent/data-pipeline.md
 │   ├── data_catalog.py / data_service.py / data_fetcher.py
 │   ├── ibkr_client.py / kraken_client.py
 │   ├── exceptions.py / csv_loader.py / nautilus_converter.py
 │   ├── backtest_persistence.py / backtest_query.py
+│   ├── provenance.py      # git commit/dirty + compute_config_hash, stamped on every run
 │   ├── session_service.py     # The session state machine (AR37) + sealed_run_id link
 │   ├── session_seal_service.py  # `live seal`: stopped session → one paper run row; `--force` records open positions as open trades (Epic 5)
 │   ├── session_conditions.py  # AR7's `session_conditions` keys a seal records (Story 5.4)

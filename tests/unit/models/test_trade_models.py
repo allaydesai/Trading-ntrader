@@ -151,6 +151,38 @@ class TestTradeCreateValidation:
             )
         assert "exit_price" in str(exc_info.value).lower()
 
+    def test_strategy_id_defaults_to_none(self):
+        """A writer that cannot name the owning strategy records none, never a guess."""
+        trade = TradeCreate(
+            backtest_run_id=1,
+            instrument_id="AAPL",
+            trade_id="trade-123",
+            venue_order_id="order-456",
+            order_side="BUY",
+            quantity=Decimal("100"),
+            entry_price=Decimal("150.00"),
+            entry_timestamp=datetime(2025, 1, 1, 10, 0, 0, tzinfo=timezone.utc),
+        )
+
+        assert trade.strategy_id is None
+
+    def test_strategy_id_is_carried(self):
+        """MCP phase 5b: which strategy owned the trade, for per-sleeve attribution."""
+        trade = TradeCreate(
+            backtest_run_id=1,
+            strategy_id="SMACrossover-000",
+            instrument_id="AAPL",
+            trade_id="trade-123",
+            venue_order_id="order-456",
+            order_side="BUY",
+            quantity=Decimal("100"),
+            entry_price=Decimal("150.00"),
+            entry_timestamp=datetime(2025, 1, 1, 10, 0, 0, tzinfo=timezone.utc),
+        )
+
+        assert trade.strategy_id == "SMACrossover-000"
+        assert trade.model_dump()["strategy_id"] == "SMACrossover-000"
+
 
 class TestCalculateProfitLongPosition:
     """Test profit calculation for long (BUY) positions."""

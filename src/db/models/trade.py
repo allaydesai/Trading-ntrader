@@ -46,6 +46,8 @@ class Trade(Base):
         trade_id: Nautilus Trader trade ID
         venue_order_id: Exchange-assigned order ID
         client_order_id: Client-side order ID (optional)
+        strategy_id: Nautilus strategy ID that owned the position (nullable —
+            rows written before MCP phase 5b have none)
         order_side: Order direction ('BUY' or 'SELL')
         quantity: Number of units traded
         entry_price: Price at which position was opened
@@ -107,6 +109,10 @@ class Trade(Base):
     trade_id: Mapped[str] = mapped_column(String(100), nullable=False)
     venue_order_id: Mapped[str] = mapped_column(String(100), nullable=False)
     client_order_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    # MCP phase 5b: the Nautilus StrategyId that owned the position, so a run
+    # holding more than one strategy can be attributed per sleeve. Nullable:
+    # rows written before it have no recorded owner, and none is invented.
+    strategy_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
 
     # Trade details
     order_side: Mapped[str] = mapped_column(String(10), nullable=False)

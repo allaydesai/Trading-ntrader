@@ -8,7 +8,6 @@ from uuid import UUID, uuid4
 
 import structlog
 from nautilus_trader.backtest.engine import BacktestEngine, BacktestEngineConfig
-from nautilus_trader.backtest.models import FillModel
 from nautilus_trader.model.currencies import USD
 from nautilus_trader.model.data import BarType
 from nautilus_trader.model.enums import AccountType, OmsType
@@ -17,13 +16,16 @@ from nautilus_trader.model.objects import Money
 
 from src.config import get_settings
 from src.core.fee_models import IBKRCommissionModel
+from src.core.fill_model import make_fill_model
+from src.core.metrics import net_profit_factor
 from src.core.strategies.sma_crossover import SMAConfig, SMACrossover
 from src.core.strategy_factory import StrategyFactory
 from src.core.strategy_registry import StrategyRegistry
 from src.db.repositories.backtest_repository import BacktestRepository
 from src.db.session import get_session
+from src.models.backtest_request import DEFAULT_FILL_SEED
 from src.models.backtest_result import BacktestResult
-from src.services.backtest_persistence import BacktestPersistenceService
+from src.services.backtest_persistence import BacktestPersistenceService, store_equity_curve
 from src.services.data_service import DataService
 from src.utils.config_loader import ConfigLoader, StrategyConfigWrapper
 from src.utils.mock_data import create_test_instrument, generate_mock_bars
@@ -116,13 +118,12 @@ class MinimalBacktestRunner:
                 "config": strategy_config,
             }
 
-            # Extract and store equity curve if engine is available
+            # Extract the equity curve if engine is available (stored beside the run below)
+            equity_curve: list[dict[str, Any]] = []
             if self.engine:
                 analyzer = self.engine.portfolio.analyzer
                 starting_balance = float(self.settings.default_balance)
                 equity_curve = self._extract_equity_curve(analyzer, starting_balance)
-                if equity_curve:
-                    config_snapshot["equity_curve"] = equity_curve
 
             async with get_session() as session:
                 repository = BacktestRepository(session)
@@ -142,6 +143,7 @@ class MinimalBacktestRunner:
                     backtest_result=result,
                     reproduced_from_run_id=reproduced_from_run_id,
                 )
+                await store_equity_curve(session, backtest_run.id, equity_curve)
 
                 # Capture individual trades from fills report
                 try:
@@ -368,11 +370,7 @@ class MinimalBacktestRunner:
         self.engine = BacktestEngine(config=config)
 
         # Create fill model for realistic execution simulation
-        fill_model = FillModel(
-            prob_fill_on_limit=0.95,  # 95% fill probability on limit orders
-            prob_fill_on_stop=0.95,  # 95% fill probability on stop orders
-            prob_slippage=0.01,  # 1% slippage probability
-        )
+        fill_model = make_fill_model(DEFAULT_FILL_SEED)
 
         # Create commission model
         fee_model = IBKRCommissionModel(
@@ -526,11 +524,7 @@ class MinimalBacktestRunner:
         self.engine = BacktestEngine(config=config)
 
         # Create fill model for realistic execution simulation
-        fill_model = FillModel(
-            prob_fill_on_limit=0.95,  # 95% fill probability on limit orders
-            prob_fill_on_stop=0.95,  # 95% fill probability on stop orders
-            prob_slippage=0.01,  # 1% slippage probability
-        )
+        fill_model = make_fill_model(DEFAULT_FILL_SEED)
 
         # Create commission model
         fee_model = IBKRCommissionModel(
@@ -678,7 +672,7 @@ class MinimalBacktestRunner:
         sharpe_ratio = safe_float(stats_returns.get("Sharpe Ratio (252 days)"))
         sortino_ratio = safe_float(stats_returns.get("Sortino Ratio (252 days)"))
         volatility = safe_float(stats_returns.get("Returns Volatility (252 days)"))
-        profit_factor = safe_float(stats_returns.get("Profit Factor"))
+        profit_factor = net_profit_factor(analyzer.realized_pnls(USD), closed_positions)
         risk_return_ratio = safe_float(stats_returns.get("Risk Return Ratio"))
         avg_return = safe_float(stats_returns.get("Average (Return)"))
         avg_win_return = safe_float(stats_returns.get("Average Win (Return)"))
@@ -854,11 +848,7 @@ class MinimalBacktestRunner:
         self.engine = BacktestEngine(config=config)
 
         # Create fill model for realistic execution simulation
-        fill_model = FillModel(
-            prob_fill_on_limit=0.95,
-            prob_fill_on_stop=0.95,
-            prob_slippage=0.01,
-        )
+        fill_model = make_fill_model(DEFAULT_FILL_SEED)
 
         # Create commission model
         fee_model = IBKRCommissionModel(
@@ -1250,11 +1240,7 @@ class MinimalBacktestRunner:
         self.engine = BacktestEngine(config=config)
 
         # Create fill model for realistic execution simulation
-        fill_model = FillModel(
-            prob_fill_on_limit=0.95,  # 95% fill probability on limit orders
-            prob_fill_on_stop=0.95,  # 95% fill probability on stop orders
-            prob_slippage=0.01,  # 1% slippage probability
-        )
+        fill_model = make_fill_model(DEFAULT_FILL_SEED)
 
         # Create commission model
         fee_model = IBKRCommissionModel(
@@ -1455,11 +1441,7 @@ class MinimalBacktestRunner:
         self.engine = BacktestEngine(config=config)
 
         # Create fill model for realistic execution simulation
-        fill_model = FillModel(
-            prob_fill_on_limit=0.95,  # 95% fill probability on limit orders
-            prob_fill_on_stop=0.95,  # 95% fill probability on stop orders
-            prob_slippage=0.01,  # 1% slippage probability
-        )
+        fill_model = make_fill_model(DEFAULT_FILL_SEED)
 
         # Create commission model
         fee_model = IBKRCommissionModel(
@@ -1609,11 +1591,7 @@ class MinimalBacktestRunner:
         self.engine = BacktestEngine(config=config)
 
         # Reason: Create fill model for realistic execution simulation
-        fill_model = FillModel(
-            prob_fill_on_limit=0.95,  # 95% fill probability on limit orders
-            prob_fill_on_stop=0.95,  # 95% fill probability on stop orders
-            prob_slippage=0.01,  # 1% slippage probability
-        )
+        fill_model = make_fill_model(DEFAULT_FILL_SEED)
 
         # Reason: Create commission model
         fee_model = IBKRCommissionModel(

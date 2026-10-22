@@ -13,14 +13,35 @@ from uuid import UUID
 
 import pandas as pd
 import structlog
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.exceptions import ValidationError
 from src.db.models.backtest import BacktestRun
 from src.db.repositories.backtest_repository import BacktestRepository
+from src.db.repositories.equity_curve_repository import EquityCurveRepository, EquityPoints
 from src.models.backtest_result import BacktestResult
 from src.models.config_snapshot import StrategyConfigSnapshot
+from src.models.run_provenance import RunProvenance
 
 logger = structlog.get_logger(__name__)
+
+
+async def store_equity_curve(
+    session: AsyncSession, backtest_run_id: int, points: EquityPoints | None
+) -> None:
+    """Store a run's equity curve, best-effort, without endangering the run itself.
+
+    The run and its metrics are the primary record. A failed flush would leave
+    the session unusable and lose them at commit, so the write sits in a
+    savepoint and a failure is logged, not raised.
+    """
+    if not points:
+        return
+    try:
+        async with session.begin_nested():
+            await EquityCurveRepository(session).save(backtest_run_id, points)
+    except Exception as e:
+        logger.warning(f"Failed to store equity curve (run still persisted): {e}", exc_info=True)
 
 
 def _to_utc(value) -> datetime:
@@ -83,6 +104,7 @@ class BacktestPersistenceService:
         config_snapshot: dict,
         backtest_result: BacktestResult,
         reproduced_from_run_id: Optional[UUID] = None,
+        provenance: Optional[RunProvenance] = None,
     ) -> BacktestRun:
         """
         Save successful backtest execution results.
@@ -100,6 +122,7 @@ class BacktestPersistenceService:
             config_snapshot: Strategy configuration
             backtest_result: Backtest execution results
             reproduced_from_run_id: Original run if reproduction
+            provenance: Git commit, dirty state and config hash of the run
 
         Returns:
             Created BacktestRun instance
@@ -133,6 +156,7 @@ class BacktestPersistenceService:
             config_snapshot=validated_config,
             error_message=None,
             reproduced_from_run_id=reproduced_from_run_id,
+            provenance=provenance,
         )
 
         # Extract and validate metrics from backtest result
@@ -164,6 +188,7 @@ class BacktestPersistenceService:
         execution_duration_seconds: Decimal,
         config_snapshot: dict,
         error_message: str,
+        provenance: Optional[RunProvenance] = None,
     ) -> BacktestRun:
         """
         Save failed backtest execution.
@@ -183,6 +208,7 @@ class BacktestPersistenceService:
             execution_duration_seconds: Time taken before failure
             config_snapshot: Strategy configuration
             error_message: Error description
+            provenance: Git commit, dirty state and config hash of the run
 
         Returns:
             Created BacktestRun instance
@@ -211,6 +237,7 @@ class BacktestPersistenceService:
             execution_duration_seconds=execution_duration_seconds,
             config_snapshot=validated_config,
             error_message=error_message,
+            provenance=provenance,
         )
 
         logger.info("Failed backtest saved", run_id=str(run_id))
@@ -514,6 +541,7 @@ class BacktestPersistenceService:
                     venue_order_id=str(row["opening_order_id"]),
                     # str(None) would persist the literal string "None".
                     client_order_id=_optional_str(row.get("closing_order_id")),
+                    strategy_id=_optional_str(row.get("strategy_id")),
                     order_side=str(row["entry"]),  # BUY or SELL
                     quantity=quantity,
                     entry_price=entry_price,
@@ -525,25 +553,13 @@ class BacktestPersistenceService:
                     exit_timestamp=exit_timestamp,
                 )
 
-                # Create database model
+                # Create database model — every TradeCreate field is a column
+                # (the seal's ``open_trade`` precedent).
                 trade_db = TradeDB(
-                    backtest_run_id=trade_data.backtest_run_id,
-                    instrument_id=trade_data.instrument_id,
-                    trade_id=trade_data.trade_id,
-                    venue_order_id=trade_data.venue_order_id,
-                    client_order_id=trade_data.client_order_id,
-                    order_side=trade_data.order_side,
-                    quantity=trade_data.quantity,
-                    entry_price=trade_data.entry_price,
-                    exit_price=trade_data.exit_price,
-                    commission_amount=trade_data.commission_amount,
-                    commission_currency=trade_data.commission_currency,
-                    fees_amount=trade_data.fees_amount,
+                    **trade_data.model_dump(),
                     profit_loss=profit_loss,
                     profit_pct=profit_pct,
                     holding_period_seconds=holding_period_seconds,
-                    entry_timestamp=trade_data.entry_timestamp,
-                    exit_timestamp=trade_data.exit_timestamp,
                 )
 
                 trades_to_save.append(trade_db)

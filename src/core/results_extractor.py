@@ -38,17 +38,28 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any, Protocol
 
+import pandas as pd
 import structlog
 from nautilus_trader.backtest.engine import BacktestEngine
 from nautilus_trader.model.currencies import USD
-from nautilus_trader.model.identifiers import Venue
+from nautilus_trader.model.data import Bar
+from nautilus_trader.model.enums import OrderSide
+from nautilus_trader.model.events import OrderFilled
+from nautilus_trader.model.identifiers import InstrumentId, Venue
 from nautilus_trader.model.objects import Currency, Money
 
 from src.config import get_settings
-from src.core.live_trade_recorder import RECONCILIATION_STRATEGY_IDS
+from src.core.mark_to_market import Fill, RiskMetrics, daily_equity, risk_metrics
+from src.core.metrics import net_profit_factor
 from src.models.backtest_result import BacktestResult
+from src.models.position_reconciliation import SYNTHETIC_STRATEGY_IDS
 
 logger = structlog.get_logger(__name__)
+
+_UNSET: Any = object()
+#: Largest gap, as a fraction of capital, tolerated between the rebuilt equity of
+#: a run that ended flat and the account balance the engine reports.
+_EQUITY_TOLERANCE = 1e-6
 
 
 class ResultsHost(Protocol):
@@ -208,7 +219,7 @@ class LiveHost:
             (
                 copy.deepcopy(position)
                 for position in [*source.cache.positions(), *source.cache.position_snapshots()]
-                if str(position.strategy_id) not in RECONCILIATION_STRATEGY_IDS
+                if str(position.strategy_id) not in SYNTHETIC_STRATEGY_IDS
             ),
             key=_chronological,
         )
@@ -286,6 +297,7 @@ class ResultsExtractor:
         venue: Venue | None = None,
         settings=None,
         starting_balance: float | None = None,
+        bars_by_instrument: dict[InstrumentId, list[Bar]] | None = None,
     ):
         """
         Initialize the results extractor.
@@ -300,11 +312,17 @@ class ResultsExtractor:
                               (defaults to settings.default_balance). A live
                               host carries its own; a different value here
                               raises ``ValueError``.
+            bars_by_instrument: The run's bars. When given, drawdown, Sharpe,
+                              Sortino, volatility and the equity curve are
+                              marked to market at each bar close instead of
+                              being read from realised position returns.
         """
         self.engine = engine
         self.venue = venue if venue else Venue("SIM")
         self.settings = settings if settings else get_settings()
         self._starting_balance = _starting_balance(engine, starting_balance, self.settings)
+        self._bars = bars_by_instrument
+        self._mark_to_market: MarkToMarket | None = _UNSET
 
     def extract_results(
         self,
@@ -367,10 +385,8 @@ class ResultsExtractor:
             stats_pnls = {}
 
         # Extract return-based metrics
-        sharpe_ratio = _safe_float(stats_returns.get("Sharpe Ratio (252 days)"))
-        sortino_ratio = _safe_float(stats_returns.get("Sortino Ratio (252 days)"))
-        volatility = _safe_float(stats_returns.get("Returns Volatility (252 days)"))
-        profit_factor = _safe_float(stats_returns.get("Profit Factor"))
+        risk = _risk_metrics(mark_to_market_of(self), analyzer, stats_returns)
+        profit_factor = net_profit_factor(analyzer.realized_pnls(USD), closed_positions)
         risk_return_ratio = _safe_float(stats_returns.get("Risk Return Ratio"))
         avg_return = _safe_float(stats_returns.get("Average (Return)"))
         avg_win_return = _safe_float(stats_returns.get("Average Win (Return)"))
@@ -380,19 +396,17 @@ class ResultsExtractor:
         total_pnl = _safe_float(stats_pnls.get("PnL (total)"))
         total_pnl_percentage = _safe_float(stats_pnls.get("PnL% (total)"))
         expectancy = _safe_float(stats_pnls.get("Expectancy"))
-        avg_win = _safe_float(stats_pnls.get("Avg Winner"))
-        avg_loss = _safe_float(stats_pnls.get("Avg Loser"))
-        max_winner = _safe_float(stats_pnls.get("Max Winner"))
-        max_loser = _safe_float(stats_pnls.get("Max Loser"))
-        min_winner = _safe_float(stats_pnls.get("Min Winner"))
-        min_loser = _safe_float(stats_pnls.get("Min Loser"))
+        avg_win = _side_stat(stats_pnls, "Avg Winner", traded=largest_win > 0)
+        avg_loss = _side_stat(stats_pnls, "Avg Loser", traded=largest_loss < 0)
+        max_winner = _side_stat(stats_pnls, "Max Winner", traded=largest_win > 0)
+        max_loser = _side_stat(stats_pnls, "Max Loser", traded=largest_loss < 0)
+        min_winner = _side_stat(stats_pnls, "Min Winner", traded=largest_win > 0)
+        min_loser = _side_stat(stats_pnls, "Min Loser", traded=largest_loss < 0)
 
         # Calculate custom metrics
-        max_drawdown = _calculate_max_drawdown(analyzer)
         cagr = None
         if start_date and end_date:
             cagr = _calculate_cagr(starting_balance, final_balance, start_date, end_date)
-        calmar_ratio = _calculate_calmar_ratio(cagr, max_drawdown)
 
         return BacktestResult(
             total_return=total_return,
@@ -402,9 +416,9 @@ class ResultsExtractor:
             largest_win=largest_win,
             largest_loss=largest_loss,
             final_balance=final_balance,
-            sharpe_ratio=sharpe_ratio,
-            sortino_ratio=sortino_ratio,
-            volatility=volatility,
+            sharpe_ratio=risk.sharpe_ratio,
+            sortino_ratio=risk.sortino_ratio,
+            volatility=risk.volatility,
             profit_factor=profit_factor,
             risk_return_ratio=risk_return_ratio,
             avg_return=avg_return,
@@ -419,9 +433,9 @@ class ResultsExtractor:
             max_loser=max_loser,
             min_winner=min_winner,
             min_loser=min_loser,
-            max_drawdown=max_drawdown,
+            max_drawdown=risk.max_drawdown,
             cagr=cagr,
-            calmar_ratio=calmar_ratio,
+            calmar_ratio=_calculate_calmar_ratio(cagr, risk.max_drawdown),
         )
 
     def extract_equity_curve(
@@ -442,29 +456,18 @@ class ResultsExtractor:
         if not self.engine:
             return []
 
-        analyzer = self.engine.portfolio.analyzer
-        starting_balance = self._starting_balance
-
+        marked = mark_to_market_of(self)
+        if marked is not None:
+            return _curve_points(marked.equity)
         try:
-            returns = analyzer.returns()
+            returns = self.engine.portfolio.analyzer.returns()
             if returns is not None and len(returns) > 0:
-                cumulative_returns = (1 + returns).cumprod()
-                equity_values = cumulative_returns * starting_balance
-
-                equity_curve = []
-                for timestamp, value in equity_values.items():
-                    if hasattr(timestamp, "timestamp"):
-                        time_unix = int(timestamp.timestamp())
-                    elif isinstance(timestamp, int):
-                        time_unix = timestamp
-                    else:
-                        continue
-                    equity_curve.append({"time": time_unix, "value": round(float(value), 2)})
-
-                return equity_curve
+                return _curve_points((1 + returns).cumprod() * self._starting_balance)
 
             # Fallback: build from positions
-            return self._build_equity_curve_from_positions(starting_balance, start_date, end_date)
+            return self._build_equity_curve_from_positions(
+                self._starting_balance, start_date, end_date
+            )
 
         except Exception as e:
             logger.warning(f"Could not extract equity curve: {e}")
@@ -520,6 +523,139 @@ class ResultsExtractor:
             )
 
         return equity_points
+
+
+@dataclass(frozen=True)
+class MarkToMarket:
+    """A run's daily mark-to-market equity and the risk metrics computed from it."""
+
+    equity: pd.Series
+    risk: RiskMetrics
+
+
+def _fills(engine: BacktestEngine) -> list[Fill]:
+    """Every fill of the run. Orders are read, not positions: they are never snapshotted away."""
+    fills = []
+    for order in engine.cache.orders():
+        for event in order.events:
+            if not isinstance(event, OrderFilled):
+                continue
+            if event.commission.currency != USD:
+                raise ValueError(f"commission in {event.commission.currency}, not USD")
+            sign = 1.0 if event.order_side == OrderSide.BUY else -1.0
+            instrument = engine.cache.instrument(event.instrument_id)
+            fills.append(
+                Fill(
+                    ts_ns=event.ts_event,
+                    instrument_id=str(event.instrument_id),
+                    signed_qty=sign * event.last_qty.as_double(),
+                    price=event.last_px.as_double(),
+                    commission=event.commission.as_double(),
+                    multiplier=instrument.multiplier.as_double(),
+                )
+            )
+    return fills
+
+
+def _check_against_accounts(
+    engine: BacktestEngine, fills: list[Fill], venues: set[Venue], equity: pd.Series, capital: float
+) -> None:
+    """A run that ended flat must rebuild to exactly the balance the engine reports."""
+    net: dict[str, float] = {}
+    for fill in fills:
+        net[fill.instrument_id] = net.get(fill.instrument_id, 0.0) + fill.signed_qty
+    if any(abs(quantity) > 1e-9 for quantity in net.values()):
+        return  # an open position's gain is in the equity but not in the balance
+    accounts = [engine.cache.account_for_venue(venue) for venue in venues]
+    reported = sum(float(a.balance_total(USD).as_double()) for a in accounts if a is not None)
+    if abs(float(equity.iloc[-1]) - reported) > max(0.01, capital * _EQUITY_TOLERANCE):
+        raise ValueError(f"rebuilt equity {float(equity.iloc[-1]):.2f} != balance {reported:.2f}")
+
+
+def mark_to_market(
+    engine: BacktestEngine,
+    bars_by_instrument: dict[InstrumentId, list[Bar]],
+    starting_balance: float,
+) -> MarkToMarket | None:
+    """Daily mark-to-market equity of a finished run, or None when it cannot be rebuilt.
+
+    ``starting_balance`` is per venue account, as the engine seeds it. Only
+    USD-quoted, non-inverse instruments are supported; anything else, and any
+    run whose rebuilt equity disagrees with the engine's balance, returns None
+    so the caller falls back to realised-return metrics.
+    """
+    try:
+        for instrument_id in bars_by_instrument:
+            instrument = engine.cache.instrument(instrument_id)
+            if instrument.quote_currency != USD or instrument.is_inverse:
+                raise ValueError(f"{instrument_id} is not a USD-quoted linear instrument")
+        venues = {instrument_id.venue for instrument_id in bars_by_instrument}
+        capital = starting_balance * len(venues)
+        fills = _fills(engine)
+        closes = {
+            str(instrument_id): [(bar.ts_event, bar.close.as_double()) for bar in bars]
+            for instrument_id, bars in bars_by_instrument.items()
+        }
+        equity = daily_equity(capital, fills, closes)
+        if equity.empty:
+            return None
+        _check_against_accounts(engine, fills, venues, equity, capital)
+        return MarkToMarket(equity, risk_metrics(equity, capital))
+    except Exception as e:
+        logger.warning("Mark-to-market equity unavailable; using realised returns", reason=str(e))
+        return None
+
+
+def mark_to_market_of(extractor: ResultsExtractor) -> MarkToMarket | None:
+    """The extractor's mark-to-market result, computed once; None without bars."""
+    if extractor._bars is None or not extractor.engine:
+        return None
+    if extractor._mark_to_market is _UNSET:
+        extractor._mark_to_market = mark_to_market(
+            extractor.engine, extractor._bars, extractor._starting_balance
+        )
+    return extractor._mark_to_market
+
+
+def metrics_basis(extractor: ResultsExtractor | None) -> str:
+    """``"mark_to_market"`` or ``"realised"``: what the risk metrics were computed from."""
+    marked = mark_to_market_of(extractor) if extractor is not None else None
+    return "mark_to_market" if marked is not None else "realised"
+
+
+def _risk_metrics(marked: MarkToMarket | None, analyzer, stats_returns: dict) -> RiskMetrics:
+    """Mark-to-market risk metrics, else the analyzer's realised-return ones."""
+    if marked is not None:
+        return marked.risk
+    return RiskMetrics(
+        max_drawdown=_calculate_max_drawdown(analyzer),
+        sharpe_ratio=_safe_float(stats_returns.get("Sharpe Ratio (252 days)")),
+        sortino_ratio=_safe_float(stats_returns.get("Sortino Ratio (252 days)")),
+        volatility=_safe_float(stats_returns.get("Returns Volatility (252 days)")),
+    )
+
+
+def _curve_points(equity: pd.Series) -> list[dict[str, int | float]]:
+    """``[{"time": unix_seconds, "value": equity}, ...]`` for the chart."""
+    points: list[dict[str, int | float]] = []
+    for timestamp, value in equity.items():
+        if hasattr(timestamp, "timestamp"):
+            time_unix = int(timestamp.timestamp())
+        elif isinstance(timestamp, int):
+            time_unix = timestamp
+        else:
+            continue
+        points.append({"time": time_unix, "value": round(float(value), 2)})
+    return points
+
+
+def _side_stat(stats: dict[str, Any], name: str, *, traded: bool) -> float | None:
+    """A winners-only or losers-only statistic; None when that side never traded.
+
+    Nautilus reports 0.0 for e.g. "Avg Loser" when there were no losers, which
+    reads as a real average and wins any "smallest loss" comparison by default.
+    """
+    return _safe_float(stats.get(name)) if traded else None
 
 
 def _safe_float(value) -> float | None:

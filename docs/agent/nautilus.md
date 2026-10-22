@@ -82,7 +82,9 @@ stats_pnls = analyzer.get_performance_stats_pnls(currency=USD)  # PnL metrics
 # Key metric keys
 sharpe = stats_returns.get("Sharpe Ratio (252 days)")
 sortino = stats_returns.get("Sortino Ratio (252 days)")
-profit_factor = stats_returns.get("Profit Factor")
+# NOT stats_returns["Profit Factor"]: that sums price-only realized_return, so commission
+# and size never move it. The stored figure is net: src.core.metrics.net_profit_factor
+profit_factor = net_profit_factor(analyzer.realized_pnls(USD))
 total_pnl = stats_pnls.get("PnL (total)")
 
 # Account balance

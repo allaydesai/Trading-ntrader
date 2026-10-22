@@ -82,6 +82,24 @@ def main() -> int:
                 col["name"]: {"nullable": bool(col["nullable"]), "default": col.get("default")}
                 for col in inspect(engine).get_columns("trading_sessions", schema=schema)
             }
+            inspector = inspect(engine)
+            equity_curve_table = {
+                "columns": {
+                    col["name"]: bool(col["nullable"])
+                    for col in inspector.get_columns("run_equity_curves", schema=schema)
+                },
+                "unique": sorted(
+                    col
+                    for unique in inspector.get_unique_constraints(
+                        "run_equity_curves", schema=schema
+                    )
+                    for col in unique["column_names"]
+                ),
+                "on_delete": [
+                    fk["options"].get("ondelete")
+                    for fk in inspector.get_foreign_keys("run_equity_curves", schema=schema)
+                ],
+            }
             with engine.connect() as conn:
                 enum_values = sorted(conn.execute(_ENUM_QUERY, {"schema": schema}).scalars())
                 trade_key_index = [
@@ -99,6 +117,7 @@ def main() -> int:
                     "resolution_status": enum_values,
                     "trading_sessions_columns": session_columns,
                     "trade_key_index": trade_key_index,
+                    "run_equity_curves": equity_curve_table,
                 }
             )
         )

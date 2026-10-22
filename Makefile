@@ -99,7 +99,7 @@ lint:
 
 typecheck:
 	@echo "🔬 Type checking..."
-	uv run mypy src/core src/services
+	uv run mypy src/core src/services src/mcp_server
 
 install-hooks:
 	@git config core.hooksPath .githooks

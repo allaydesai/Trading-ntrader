@@ -5,6 +5,7 @@ This module provides the data access layer for backtest metadata and performance
 metrics, implementing async database operations with SQLAlchemy.
 """
 
+from dataclasses import asdict
 from datetime import datetime
 from decimal import Decimal
 from typing import List, Optional, Tuple, Union
@@ -18,6 +19,7 @@ from sqlalchemy.orm import joinedload, selectinload
 from src.api.models.filter_models import FilterState, SortColumn, SortOrder
 from src.db.exceptions import DatabaseConnectionError, DuplicateRecordError
 from src.db.models.backtest import BacktestRun, PerformanceMetrics
+from src.models.run_provenance import RunProvenance
 
 
 class BacktestRepository:
@@ -60,6 +62,7 @@ class BacktestRepository:
         config_snapshot: dict,
         error_message: Optional[str] = None,
         reproduced_from_run_id: Optional[UUID] = None,
+        provenance: Optional[RunProvenance] = None,
     ) -> BacktestRun:
         """
         Create a new backtest run record.
@@ -78,6 +81,8 @@ class BacktestRepository:
             config_snapshot: Complete configuration (JSONB)
             error_message: Error details if failed
             reproduced_from_run_id: Original run if reproduction
+            provenance: Git commit, dirty state and config hash (columns stay
+                NULL when omitted)
 
         Returns:
             Created BacktestRun instance with ID assigned
@@ -101,6 +106,7 @@ class BacktestRepository:
                 error_message=error_message,
                 config_snapshot=config_snapshot,
                 reproduced_from_run_id=reproduced_from_run_id,
+                **asdict(provenance or RunProvenance()),
             )
 
             self.session.add(backtest_run)

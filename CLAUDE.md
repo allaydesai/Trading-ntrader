@@ -30,6 +30,7 @@ make typecheck          # mypy src/core src/services
 make install-hooks      # Install git pre-commit hook (run once per clone)
 
 uv run python -m src.cli.main          # CLI entry point
+uv run python -m src.mcp_server        # Research MCP server (stdio; Claude Desktop launches it)
 make web                                # Web UI (http://127.0.0.1:8000)
 ./scripts/build-css.sh                  # Build Tailwind CSS (required first time)
 ```
@@ -58,7 +59,7 @@ make web                                # Web UI (http://127.0.0.1:8000)
 2. **`--forked` tests** — integration tests need `--forked` because Nautilus C/Rust extensions corrupt state across `fork()`. Already configured in `make test-integration`
 3. **Strategies submodule** — `src/core/strategies/custom/` is a git submodule. Update: `git submodule update --remote`
 4. **BacktestEngine is single-use** — cannot be reused after a run; create a new instance each time
-5. **Alembic migrations** — run `alembic upgrade head` before first use. 17 migrations in `alembic/versions/`, single head (`85c949ac0374`)
+5. **Alembic migrations** — run `alembic upgrade head` before first use. 25 migrations in `alembic/versions/`, single head (`dc41856246ad`)
 
 ## Anti-Patterns (things that break)
 

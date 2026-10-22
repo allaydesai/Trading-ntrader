@@ -89,3 +89,44 @@ class TestMakeJsonSerializable:
         """Test that negative Decimal values are converted correctly."""
         result = _make_json_serializable(Decimal("-500.25"))
         assert result == "-500.25"
+
+
+class TestCostStress:
+    """Phase 4 cost stress: the multiplier scales every commission term, and only a stressed
+    run's snapshot carries it."""
+
+    def _request(self, **overrides):
+        from datetime import datetime, timezone
+
+        from src.models.backtest_request import BacktestRequest
+
+        fields = dict(
+            strategy_type="sma_crossover",
+            strategy_path="src.x:Y",
+            strategy_config={"fast_period": 5},
+            symbol="QQQ",
+            instrument_id="QQQ.NAMED_CATALOG",
+            start_date=datetime(2020, 1, 1, tzinfo=timezone.utc),
+            end_date=datetime(2020, 12, 31, tzinfo=timezone.utc),
+            bar_type="1-DAY-LAST",
+            catalog_name="e2e-test",
+        )
+        return BacktestRequest(**{**fields, **overrides})
+
+    def test_the_fee_model_scales_rate_minimum_and_cap_alike(self) -> None:
+        from src.core.backtest_orchestrator import BacktestOrchestrator
+
+        orchestrator = BacktestOrchestrator()
+        plain, doubled = orchestrator._make_fee_model(), orchestrator._make_fee_model(2.0)
+        assert doubled.commission_per_share == plain.commission_per_share * 2
+        assert doubled.min_per_order == plain.min_per_order * 2
+        assert doubled.max_rate == plain.max_rate * 2
+        assert plain.commission_per_share == orchestrator.settings.commission_per_share
+
+    def test_only_a_stressed_run_records_its_multiplier(self) -> None:
+        from src.core.backtest_orchestrator import _run_record_fields
+
+        plain = _run_record_fields(self._request())["config_snapshot"]
+        stressed = _run_record_fields(self._request(cost_multiplier=2.0))["config_snapshot"]
+        assert "cost_multiplier" not in plain
+        assert stressed["cost_multiplier"] == 2.0

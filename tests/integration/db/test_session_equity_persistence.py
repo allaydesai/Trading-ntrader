@@ -147,7 +147,11 @@ class TestTheSeriesAndItsLimitationAreStored:
 
     async def test_a_backtest_row_is_stored_exactly_as_before(self, db_session):
         """PO ruling R2a, at the database: no ``session_conditions`` key appears
-        on a backtest row, and its ``equity_curve`` is dropped as it always was."""
+        on a backtest row, and its ``equity_curve`` is dropped as it always was.
+
+        ``metrics_basis`` and ``fill_seed`` are the research MCP's two backtest
+        fields, null here because this row names neither; they belong to every
+        backtest row (PO ruling 2026-10-11, pinned in ``test_config_snapshot``)."""
         sealed = reconstruct_session_results(ROWS, starting_capital=CAPITAL, start=START, end=END)
         stored = await _stored(
             db_session, await _write(db_session, dict(BACKTEST_SNAPSHOT), sealed.result)
@@ -158,6 +162,8 @@ class TestTheSeriesAndItsLimitationAreStored:
             "version": "1.0",
             "config": {"fast_period": 10},
             "bar_type": "AAPL.NASDAQ-1-DAY-LAST-EXTERNAL",
+            "metrics_basis": None,
+            "fill_seed": None,
         }
 
 

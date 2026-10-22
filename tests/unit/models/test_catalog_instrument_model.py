@@ -125,3 +125,11 @@ class TestCatalogInstrumentModel:
             if col.name.startswith("bar_count_"):
                 assert col.server_default is not None, f"{col.name} missing server_default"
                 assert str(col.server_default.arg) == "0"
+
+    def test_per_timeframe_date_range_start_columns(self):
+        """Each timeframe records its own first bar: the shared start is one value for all."""
+        cols = {c.name: c for c in CatalogInstrument.__table__.columns}
+        for suffix in ("daily", "hourly", "minute", "5min", "30min"):
+            col = cols[f"date_range_start_{suffix}"]
+            assert col.nullable is True
+            assert col.type.timezone is True

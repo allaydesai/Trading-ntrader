@@ -1,0 +1,315 @@
+"""Gate checks judge a candidate's evidence: pass, fail or missing, never a silent pass (S6.1)."""
+
+import pytest
+
+from src.mcp_server.studies.checks import Evidence, PaperFacts, RunFacts, judge
+
+pytestmark = pytest.mark.unit
+
+G1 = {
+    "is_profit_factor": 1.3,
+    "is_expectancy_gt": 0,
+    "beats_benchmark_on_one": ["sharpe_ratio", "calmar_ratio", "max_drawdown"],
+    "positive_sub_periods": {"count": 3, "of": 4},
+}
+
+
+def _run(run_id="is", dirty=False, **metrics) -> RunFacts:
+    base = {
+        "total_trades": 40,
+        "profit_factor": 1.5,
+        "expectancy": 12.0,
+        "sharpe_ratio": 0.8,
+        "calmar_ratio": 0.5,
+        "max_drawdown": -0.2,
+    }
+    return RunFacts(run_id=run_id, metrics={**base, **metrics}, git_dirty=dirty)
+
+
+def _evidence(**overrides) -> Evidence:
+    fields = dict(
+        in_sample=_run(),
+        in_sample_benchmark=_run("bh", sharpe_ratio=0.6, calmar_ratio=0.2, max_drawdown=-0.5),
+        sub_period_returns=[0.1, 0.05, -0.02, 0.2],
+        trials_used=12,
+        benchmark_rationale="a shallower drawdown is the point of a mean-reversion sleeve",
+    )
+    return Evidence(**{**fields, **overrides})
+
+
+def test_a_strong_in_sample_candidate_passes_g1():
+    result = judge("G1", G1, _evidence())
+    assert result["status"] == "pass", result
+    beats = result["checks"]["beats_benchmark_on_one"]
+    assert beats["evidence"] == ["is", "bh"] and "sharpe_ratio" in beats["note"]
+
+
+def test_one_failing_check_fails_the_gate():
+    result = judge("G1", G1, _evidence(sub_period_returns=[0.1, -0.1, -0.2, 0.3]))
+    assert result["status"] == "fail"
+    assert result["checks"]["positive_sub_periods"]["value"] == {"positive": 2, "of": 4}
+
+
+def test_missing_evidence_is_missing_not_pass():
+    result = judge("G1", G1, _evidence(in_sample_benchmark=None))
+    assert result["status"] == "missing"
+    assert result["checks"]["beats_benchmark_on_one"]["status"] == "missing"
+
+
+def test_fail_outranks_missing():
+    ev = _evidence(in_sample_benchmark=None, in_sample=_run(profit_factor=1.0))
+    assert judge("G1", G1, ev)["status"] == "fail"
+
+
+def test_g0_flags_a_small_sample_and_a_dirty_tree():
+    thresholds = {"min_trades": 30, "clean_tree": True, "benchmark_present": True}
+    ev = _evidence(in_sample=_run(total_trades=12, dirty=True))
+    checks = judge("G0", thresholds, ev)["checks"]
+    assert checks["min_trades"]["status"] == "fail"
+    assert "insufficient sample" in checks["min_trades"]["note"]
+    assert checks["clean_tree"]["status"] == "fail"
+    assert checks["benchmark_present"]["status"] == "pass"
+
+
+def test_g0_wants_an_out_of_sample_benchmark_once_there_is_an_oos_run():
+    ev = _evidence(out_of_sample=_run("oos"))
+    check = judge("G0", {"benchmark_present": True}, ev)["checks"]["benchmark_present"]
+    assert check["status"] == "fail" and "out_of_sample" in check["note"]
+
+
+def test_g2_before_the_holdout_run_is_missing():
+    result = judge("G2", {"oos_sharpe_vs_is": 0.5, "oos_profit_factor": 1.1}, _evidence())
+    assert result["status"] == "missing"
+    assert set(result["checks"]) == {"oos_sharpe_vs_is", "oos_profit_factor", "oos_run_once"}
+
+
+def test_g2_judges_the_holdout_run_once():
+    ev = _evidence(out_of_sample=_run("oos", sharpe_ratio=0.5), out_of_sample_attempts=1)
+    result = judge("G2", {"oos_sharpe_vs_is": 0.5, "oos_profit_factor": 1.1}, ev)
+    assert result["status"] == "pass", result
+    assert result["checks"]["oos_sharpe_vs_is"]["value"] == pytest.approx(0.625)
+
+
+def test_an_overridden_holdout_fails_run_once():
+    ev = _evidence(
+        out_of_sample=_run("oos"), out_of_sample_attempts=2, out_of_sample_overridden=True
+    )
+    assert judge("G2", {}, ev)["checks"]["oos_run_once"]["status"] == "fail"
+
+
+def test_a_non_positive_in_sample_sharpe_fails_the_ratio():
+    ev = _evidence(
+        in_sample=_run(sharpe_ratio=-0.1), out_of_sample=_run("oos"), out_of_sample_attempts=1
+    )
+    assert (
+        judge("G2", {"oos_sharpe_vs_is": 0.5}, ev)["checks"]["oos_sharpe_vs_is"]["status"] == "fail"
+    )
+
+
+def test_robustness_checks_are_missing_until_their_analysis_exists_and_name_the_tool():
+    thresholds = {
+        "neighbourhood_sharpe": 0.7,
+        "breadth": {"instruments": 3},
+        "cost_stress_multiplier": 2,
+        "deflated_sharpe_prob": 0.95,
+        "oos_drawdown_within_mc": True,
+    }
+    result = judge("G2", thresholds, _evidence(out_of_sample=_run("oos"), out_of_sample_attempts=1))
+    for name, tool in [
+        ("neighbourhood_sharpe", "submit_sweep"),
+        ("breadth", "submit_breadth"),
+        ("cost_stress_multiplier", "submit_cost_stress"),
+        ("oos_drawdown_within_mc", "run_monte_carlo"),
+    ]:
+        assert result["checks"][name]["status"] == "missing"
+        assert tool in result["checks"][name]["note"], name
+    assert result["checks"]["deflated_sharpe_prob"]["status"] == "missing"
+    g3 = judge("G3", {"walk_forward_efficiency": 0.5}, _evidence())
+    assert g3["status"] == "missing"
+    assert "submit_walk_forward" in g3["checks"]["walk_forward_efficiency"]["note"]
+
+
+def test_paper_gate_and_unknown_checks_and_absent_thresholds_are_missing():
+    assert judge("G4", {"min_weeks": 8}, _evidence())["status"] == "missing"
+    unknown = judge("G1", {"is_sortino": 1.0}, _evidence())["checks"]["is_sortino"]
+    assert unknown["status"] == "missing" and "no check named" in unknown["note"]
+    assert judge("G1", None, _evidence())["status"] == "missing"
+
+
+def test_many_trials_warn_but_do_not_fail():
+    check = judge("G2", {"trials_warn_above": 50}, _evidence(trials_used=60))["checks"][
+        "trials_warn_above"
+    ]
+    assert check["status"] == "pass" and "stronger" in check["note"]
+
+
+def test_a_metric_the_run_lacks_is_missing():
+    ev = _evidence(in_sample=_run(profit_factor=None))
+    assert judge("G1", {"is_profit_factor": 1.3}, ev)["checks"]["is_profit_factor"]["status"] == (
+        "missing"
+    )
+
+
+def test_beating_the_benchmark_needs_the_rationale_recorded_at_freeze():
+    beats = judge("G1", G1, _evidence(benchmark_rationale=None))["checks"]["beats_benchmark_on_one"]
+    assert beats["status"] == "missing"
+    assert "benchmark_rationale" in beats["note"] and "sharpe_ratio" in beats["note"]
+    recorded = judge("G1", G1, _evidence())["checks"]["beats_benchmark_on_one"]
+    assert recorded["value"]["rationale"].startswith("a shallower drawdown")
+
+
+def test_beating_nothing_fails_whatever_the_rationale():
+    weak = _run(sharpe_ratio=0.1, calmar_ratio=0.1, max_drawdown=-0.9)
+    assert (
+        judge("G1", G1, _evidence(in_sample=weak))["checks"]["beats_benchmark_on_one"]["status"]
+        == "fail"
+    )
+
+
+G0 = {"min_trades": 30, "clean_tree": True, "benchmark_present": True}
+
+
+def test_g0_always_checks_that_the_equity_stayed_above_zero():
+    assert judge("G0", G0, _evidence())["checks"]["equity_stays_positive"]["status"] == "pass"
+    broke = _evidence(out_of_sample=_run("oos", max_drawdown=-2.08))
+    result = judge("G0", G0, broke)
+    row = result["checks"]["equity_stays_positive"]
+    assert result["status"] == "fail" and row["status"] == "fail"
+    assert row["value"] == {
+        "is": {"stayed_positive": True, "max_drawdown": -0.2},
+        "oos": {"stayed_positive": False, "max_drawdown": -2.08},
+    }
+    assert "position size" in row["note"]
+
+
+def test_solvency_without_a_drawdown_is_missing():
+    ev = _evidence(in_sample=_run(max_drawdown=None))
+    assert judge("G0", G0, ev)["checks"]["equity_stays_positive"]["status"] == "missing"
+
+
+FLOOR = {"oos_sharpe_vs_is": {"ratio": 0.5, "min_is_sharpe": 0.3}}
+
+
+def test_a_tiny_in_sample_sharpe_cannot_carry_the_ratio():
+    """In-sample 0.13, out-of-sample 0.70: a ratio of 5.4 says nothing, so it fails."""
+    weak = _run(sharpe_ratio=0.13)
+    ev = _evidence(in_sample=weak, out_of_sample=_run("oos", sharpe_ratio=0.7))
+    row = judge("G2", FLOOR, ev)["checks"]["oos_sharpe_vs_is"]
+    assert row["status"] == "fail" and "too small" in row["note"]
+    assert row["value"] == {"oos": 0.7, "is": 0.13}
+
+
+def test_above_the_floor_the_ratio_is_judged_as_before():
+    ev = _evidence(out_of_sample=_run("oos", sharpe_ratio=0.5))
+    row = judge("G2", FLOOR, ev)["checks"]["oos_sharpe_vs_is"]
+    assert row["status"] == "pass" and row["value"] == pytest.approx(0.625)
+    assert row["threshold"] == FLOOR["oos_sharpe_vs_is"]
+
+
+def test_a_floor_without_a_ratio_is_missing_not_pass():
+    ev = _evidence(out_of_sample=_run("oos", sharpe_ratio=0.5))
+    row = judge("G2", {"oos_sharpe_vs_is": {"min_is_sharpe": 0.3}}, ev)["checks"]
+    assert row["oos_sharpe_vs_is"]["status"] == "missing"
+
+
+G4 = {"min_weeks": 8, "min_trades": 20}
+INSIDE = {"win_rate": "inside", "avg_trade_return": "inside", "trade_drawdown": "inside"}
+
+
+def _paper(**overrides) -> PaperFacts:
+    fields = dict(
+        session="crsi-qqq-v1-paper",
+        weeks=9.0,
+        trades=24,
+        reached=True,
+        positions=INSIDE,
+        problems=[],
+        others=[],
+    )
+    return PaperFacts(**{**fields, **overrides})
+
+
+def test_without_a_linked_session_every_paper_check_is_missing():
+    result = judge("G4", G4, _evidence())
+    assert result["status"] == "missing"
+    assert set(result["checks"]) == {"min_weeks", "min_trades", "paper_inside_band", "paper_clean"}
+    assert "paper_commands" in result["checks"]["min_weeks"]["note"]
+
+
+def test_g4_min_trades_counts_paper_trades_and_g0_still_counts_run_trades():
+    early = judge("G4", G4, _evidence(paper=_paper(weeks=3.5, trades=7, reached=False)))
+    assert early["status"] == "missing"
+    assert early["checks"]["min_trades"]["value"] == 7
+    assert "7 of 20" in early["checks"]["min_trades"]["note"]
+    assert "3.5 of 8" in early["checks"]["min_weeks"]["note"]
+    assert "both" in early["checks"]["paper_inside_band"]["note"]
+    g0 = judge("G0", {"min_trades": 30}, _evidence(paper=_paper(trades=1)))
+    assert g0["checks"]["min_trades"]["value"] == {"is": 40}
+
+
+def test_a_session_past_the_horizon_inside_its_band_and_clean_passes():
+    result = judge("G4", G4, _evidence(paper=_paper()))
+    assert result["status"] == "pass"
+    assert result["checks"]["paper_clean"]["evidence"] == ["session:crsi-qqq-v1-paper"]
+
+
+def test_results_outside_the_band_fail_and_problems_fail_clean():
+    outside = _paper(positions={**INSIDE, "win_rate": "below"})
+    result = judge("G4", G4, _evidence(paper=outside))
+    assert result["checks"]["paper_inside_band"]["status"] == "fail"
+    assert "win_rate below" in result["checks"]["paper_inside_band"]["note"]
+    dirty = judge("G4", G4, _evidence(paper=_paper(problems=["order_rejections"])))
+    assert dirty["checks"]["paper_clean"]["status"] == "fail"
+    assert "vault" in dirty["checks"]["paper_clean"]["note"]
+
+
+def test_an_unjudgeable_band_is_missing_and_other_sessions_are_noted():
+    unknown = _paper(positions={**INSIDE, "win_rate": "n/a"})
+    result = judge("G4", G4, _evidence(paper=unknown))
+    assert result["checks"]["paper_inside_band"]["status"] == "missing"
+    noted = judge("G4", G4, _evidence(paper=_paper(others=["crsi-qqq-v1-paper-2"])))
+    assert "crsi-qqq-v1-paper-2" in noted["checks"]["paper_clean"]["note"]
+
+
+def test_a_drawdown_deeper_than_the_band_fails_the_gate():
+    deep = _paper(positions={**INSIDE, "trade_drawdown": "below"})
+    row = judge("G4", G4, _evidence(paper=deep))["checks"]["paper_inside_band"]
+    assert row["status"] == "fail" and "trade_drawdown below" in row["note"]
+
+
+def test_results_better_than_the_band_are_noted_not_failed():
+    better = _paper(positions={**INSIDE, "win_rate": "above", "trade_drawdown": "above"})
+    row = judge("G4", G4, _evidence(paper=better))["checks"]["paper_inside_band"]
+    assert row["status"] == "pass"
+    assert "win_rate above" in row["note"] and "not a failure" in row["note"]
+
+
+def test_a_band_that_cannot_judge_is_missing_with_its_reason_never_a_fail():
+    thin = _paper(
+        positions={**INSIDE, "win_rate": "below"},
+        unjudgeable="Only 30 time windows and 1 trade windows (fewer than 20).",
+    )
+    row = judge("G4", G4, _evidence(paper=thin))["checks"]["paper_inside_band"]
+    assert row["status"] == "missing" and "1 trade windows" in row["note"]
+
+
+@pytest.mark.parametrize("threshold", [None, "8 weeks", True])
+def test_a_threshold_that_is_not_a_number_is_missing_not_a_crash(threshold):
+    result = judge(
+        "G4", {"min_weeks": threshold, "min_trades": threshold}, _evidence(paper=_paper())
+    )
+    for name in ("min_weeks", "min_trades"):
+        assert result["checks"][name]["status"] == "missing"
+        assert "not a number" in result["checks"][name]["note"]
+
+
+def test_the_weeks_row_agrees_with_reached_just_short_of_the_minimum():
+    short = _paper(weeks=7.96, reached=False)
+    row = judge("G4", G4, _evidence(paper=short))["checks"]["min_weeks"]
+    assert row["status"] == "missing" and "7.96 of 8" in row["note"]
+
+
+def test_a_restarted_session_says_so_on_the_weeks_and_clean_rows():
+    checks = judge("G4", G4, _evidence(paper=_paper(restarted=True)))["checks"]
+    assert "stopped counts as elapsed" in checks["min_weeks"]["note"]
+    assert "since its last start" in checks["paper_clean"]["note"]

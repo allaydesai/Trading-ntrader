@@ -130,6 +130,7 @@ def open_trade(leg: OpenLeg, session_pk: int) -> Trade:
             trade_id=leg.position_id,
             venue_order_id=leg.opening_order_id,
             client_order_id=None,
+            strategy_id=leg.strategy_id,
             order_side=leg.side,
             quantity=abs(leg.quantity),
             entry_price=leg.avg_px_open,

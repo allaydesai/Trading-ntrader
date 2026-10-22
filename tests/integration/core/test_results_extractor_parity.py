@@ -65,7 +65,11 @@ BACKTEST_RESULT_BEFORE = {
     "sharpe_ratio": 0.1598475825977981,
     "sortino_ratio": None,
     "volatility": 0.04762842783555194,
-    "profit_factor": 14.537056072088328,
+    # Re-pinned 2026-10-13: profit_factor became dollar wins over dollar losses
+    # (net of commission, ``net_profit_factor``) instead of Nautilus's price-return
+    # statistic, which the research gates could not trust. Every other key is as
+    # captured at 40e8f1c.
+    "profit_factor": 14.539045869552334,
     "risk_return_ratio": 0.8415917592738971,
     "avg_return": 0.0371544366778256,
     "avg_win_return": 0.05803503041092515,

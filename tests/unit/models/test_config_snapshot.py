@@ -83,6 +83,22 @@ class TestStrategyConfigSnapshot:
         assert "config" in snapshot_dict
 
 
+def test_metrics_basis_survives_validation():
+    """The persistence service stores ``model_dump()``: an unknown key would be dropped."""
+    snapshot = StrategyConfigSnapshot(
+        strategy_path="a.b:C", config_path="a.b:D", metrics_basis="mark_to_market"
+    )
+    assert snapshot.model_dump()["metrics_basis"] == "mark_to_market"
+    assert StrategyConfigSnapshot(strategy_path="a.b:C", config_path="a.b:D").metrics_basis is None
+
+
+def test_fill_seed_survives_validation():
+    """A seed that did not survive ``model_dump()`` could not be used to reproduce the run."""
+    snapshot = StrategyConfigSnapshot(strategy_path="a.b:C", config_path="a.b:D", fill_seed=42)
+    assert snapshot.model_dump()["fill_seed"] == 42
+    assert StrategyConfigSnapshot(strategy_path="a.b:C", config_path="a.b:D").fill_seed is None
+
+
 #: The two snapshot shapes the backtest paths pass to ``BacktestPersistenceService``
 #: (``backtest_orchestrator.py:522-537``, ``backtest_runner.py:112-125``) — both
 #: carry an ``equity_curve`` the validator has always stripped (Story 5.2 F3).
@@ -104,17 +120,21 @@ RUNNER_SNAPSHOT = {
 }
 #: ``json.dumps(validated)`` of each, captured from the code at ``cea1daf`` —
 #: before ``session_conditions`` existed (Story 5.2, Task 1.4). Key order included.
+#: Merging 015-paper-trading into the MCP branch (PO ruling, 2026-10-11) appended the
+#: MCP's two backtest fields, ``metrics_basis`` and ``fill_seed``: they belong to
+#: every backtest row; ``session_conditions`` must still never appear in one.
 BEFORE_SESSION_CONDITIONS = {
     "orchestrator": (
         '{"strategy_path": "src.core.strategies.sma_crossover.SMACrossover", '
         '"config_path": "config/x.yaml", "version": "1.0", '
         '"config": {"fast_period": 10, "nested": {"a": 1.5}}, '
-        '"bar_type": "AAPL.NASDAQ-1-DAY-LAST-EXTERNAL"}'
+        '"bar_type": "AAPL.NASDAQ-1-DAY-LAST-EXTERNAL", "metrics_basis": null, "fill_seed": null}'
     ),
     "runner": (
         '{"strategy_path": "src.core.strategies.sma_crossover", '
         '"config_path": "runtime_config", "version": "1.0", '
-        '"config": {"fast_period": 10}, "bar_type": null}'
+        '"config": {"fast_period": 10}, "bar_type": null, "metrics_basis": null, '
+        '"fill_seed": null}'
     ),
 }
 

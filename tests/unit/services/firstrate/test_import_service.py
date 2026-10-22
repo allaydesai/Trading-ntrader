@@ -522,6 +522,32 @@ class TestUpsertMetadata:
         assert existing.bar_count_daily == 3
         mock_metadata_service.upsert_instrument_sync.assert_called_once_with(existing)
 
+    def test_each_timeframe_records_its_own_start_and_the_shared_start_is_the_earliest(
+        self, configured_service, mock_metadata_service, mock_bars
+    ):
+        """The shared start used to be whichever timeframe was imported last."""
+        from datetime import datetime, timezone
+        from types import SimpleNamespace
+
+        from src.services.firstrate.coverage import TIMEFRAME_START_FIELDS
+
+        earlier = datetime(1990, 1, 2, tzinfo=timezone.utc)
+        existing = SimpleNamespace(
+            date_range_start=None,
+            **{name: None for name in TIMEFRAME_START_FIELDS.values()},
+        )
+        existing.date_range_start_daily = earlier
+        mock_metadata_service.get_instrument_sync.return_value = existing
+
+        configured_service._upsert_metadata(
+            ticker="SPY", catalog_name=CATALOG_NAME, bars=mock_bars, timeframe="1-MINUTE-LAST"
+        )
+
+        first_bar = datetime.fromtimestamp(mock_bars[0].ts_init / 1e9, tz=timezone.utc)
+        assert existing.date_range_start_minute == first_bar
+        assert existing.date_range_start_daily == earlier
+        assert existing.date_range_start == earlier
+
     def test_hourly_timeframe_sets_bar_count_hourly(
         self, configured_service, mock_metadata_service, mock_bars
     ):

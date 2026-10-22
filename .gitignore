@@ -181,6 +181,8 @@ cython_debug/
 data/catalog/
 data/catalog/.corrupt/
 data/catalogs/
+# Throwaway probe output (scripts/diagnostics/multi_strategy_spike.py)
+data/spike/
 
 # Playwright MCP test artifacts
 .playwright-mcp/

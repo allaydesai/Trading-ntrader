@@ -81,11 +81,9 @@ async def get_equity(
             detail=f"Backtest run {run_id} not found",
         )
 
-    # Extract equity curve from config_snapshot
-    config = backtest.config_snapshot or {}
-    equity_data = config.get("equity_curve", [])
+    equity_data = await service.get_equity_curve(run_id)
 
-    # If no equity curve in config, generate a simple 2-point curve as fallback
+    # If no curve was stored (runs saved before curves were), fall back to a 2-point curve
     if not equity_data and backtest.metrics:
         # Create start and end points using initial capital and final balance
         start_timestamp = int(backtest.start_date.timestamp())

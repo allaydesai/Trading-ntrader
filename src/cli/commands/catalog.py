@@ -27,6 +27,8 @@ from src.db.repositories.instrument_metadata_repository_sync import (
 )
 from src.db.session_sync import get_sync_session
 from src.models.instrument_metadata import ResolutionStatus
+from src.services.firstrate.catalog_manager import CatalogManager
+from src.services.firstrate.coverage import backfill_catalog, partition_start_reader
 from src.services.firstrate.venue_restamp import execute_plan
 from src.services.firstrate.venue_restamp_plan import RestampPlan, build_restamp_plan
 
@@ -261,3 +263,44 @@ def _progress(done: int, total: int, name: str) -> None:
     """Report every 25 partitions — a silent half-hour looks like a hang."""
     if done % 25 == 0 or done == total:
         console.print(f"  [{done}/{total}] {escape(name)}")
+
+
+@catalog.command("backfill-coverage-starts")
+@click.option("--catalog", "catalog_name", required=True, help="Catalog to backfill.")
+@click.option("--dry-run", is_flag=True, help="Report what would change; write nothing.")
+def backfill_coverage_starts(catalog_name: str, dry_run: bool) -> None:
+    """Record where each timeframe's bars begin, without re-importing.
+
+    Reads every instrument's first-bar time per timeframe from its parquet file
+    names and stores it, then corrects the shared start to the earliest of them.
+    Rows imported after the per-timeframe start columns existed already have them;
+    this is for the rows imported before.
+    """
+    try:
+        base = Path(CatalogSettings().catalog_base_path)
+        parquet = CatalogManager(base).resolve_catalog(catalog_name)
+    except (ValueError, FileNotFoundError) as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    try:
+        with get_sync_session() as session:
+            rows = SyncCatalogInstrumentRepository(session).iter_by_catalog(catalog_name)
+            summary = backfill_catalog(rows, partition_start_reader(parquet))
+            if dry_run:
+                session.rollback()
+            else:
+                session.commit()
+    except (SQLAlchemyError, DatabaseConnectionError) as exc:
+        raise click.ClickException(f"Database error: {exc}") from exc
+
+    verb = "would change" if dry_run else "changed"
+    console.print(
+        f"[green]{summary.rows} instruments in '{escape(catalog_name)}': "
+        f"{summary.changed} {verb}, {summary.unqualified} unqualified (skipped).[/green]"
+    )
+    if summary.missing:
+        sample = ", ".join(f"{ticker} {tf}" for ticker, tf in summary.missing[:10])
+        console.print(
+            f"[yellow]{len(summary.missing)} timeframes count bars but have no partition "
+            f"under the instrument's id (start left unset): {escape(sample)}[/yellow]"
+        )

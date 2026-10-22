@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from src.db.base import Base
 from src.db.repositories.backtest_repository import BacktestRepository
+from src.models.run_provenance import RunProvenance
 
 
 def get_worker_id(request):
@@ -112,6 +113,37 @@ class TestBacktestRepositoryCreate:
         assert result.initial_capital == Decimal("100000.00")
         assert result.execution_status == "success"
         assert result.config_snapshot == config
+
+    @pytest.mark.asyncio
+    async def test_create_backtest_run_records_provenance(self, repository, async_session):
+        """Provenance columns round-trip through Postgres (MCP spec S2.3)."""
+        provenance = RunProvenance(
+            git_commit="a" * 40, git_dirty=True, strategies_commit="b" * 40, config_hash="c" * 64
+        )
+        run_id = uuid4()
+        await repository.create_backtest_run(
+            run_id=run_id,
+            strategy_name="SMA Crossover",
+            strategy_type="sma_crossover",
+            instrument_symbol="QQQ",
+            start_date=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            end_date=datetime(2023, 12, 31, tzinfo=timezone.utc),
+            initial_capital=Decimal("100000.00"),
+            data_source="catalog:e2e-test",
+            execution_status="success",
+            execution_duration_seconds=Decimal("1.0"),
+            config_snapshot={"strategy": "sma_crossover"},
+            provenance=provenance,
+        )
+        await async_session.commit()
+        async_session.expunge_all()
+
+        stored = await repository.find_by_run_id(run_id)
+        assert stored is not None
+        assert stored.git_commit == "a" * 40
+        assert stored.git_dirty is True
+        assert stored.strategies_commit == "b" * 40
+        assert stored.config_hash == "c" * 64
 
     @pytest.mark.asyncio
     async def test_create_performance_metrics(self, repository, async_session):

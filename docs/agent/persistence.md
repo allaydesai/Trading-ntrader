@@ -38,6 +38,10 @@ All models inherit `Base` + `TimestampMixin`.
 **Trade** (`src/db/models/trade.py`):
 - Flattened denormalization of closed Nautilus trades (not open positions)
 - Calculated: `profit_loss`, `profit_pct`, `holding_period_seconds`
+- `strategy_id` (nullable, migration `dc41856246ad`, MCP phase 5b) — the Nautilus strategy that
+  owned the position, written by all three writers (backtest positions report, live trade sink,
+  seal's open rows). Rows written earlier have none; nothing backfills it, and the read model
+  `src.models.trade.Trade` (the frozen trades API, AR44) does not expose it
 - Constraints: `positive_quantity`, `positive_entry_price`, `positive_exit_price`
 - Composite index: `(backtest_run_id, entry_timestamp)` for range queries
 - P&L: `(exit_price - entry_price) * quantity - commission - fees`
@@ -65,16 +69,33 @@ async def get_backtest_service(session: DbSession) -> BacktestQueryService:
   put `equity_curve` into `config_snapshot`, but `_validate_config_snapshot` runs the snapshot
   through `StrategyConfigSnapshot(...).model_dump()`, which ignores unknown keys — so the curve
   is dropped, and the equity chart (`/equity/{run_id}`) draws its two-point
-  `initial_capital → final_balance` fallback. Beyond its five base keys (`strategy_path`,
+  `initial_capital → final_balance` fallback. **Since the research MCP (phase 1) the curve is
+  stored in `run_equity_curves`** (one value per UTC day, written by the orchestrator), which the
+  MCP reads; the web chart still draws its fallback. Beyond its five base keys (`strategy_path`,
   `config_path`, `version`, `config`, `bar_type` — the last dumped as `null` when absent), the
-  model keeps exactly one more: `session_conditions` (a sealed paper session's), omitted from
-  the dump when empty so every backtest row is byte-identical to before.
+  model keeps `metrics_basis` and `fill_seed` (nullable, always dumped), `session_conditions`
+  (a sealed paper session's) and `cost_multiplier` (a cost-stress run's, MCP phase 4), the last
+  two omitted from the dump when empty so every ordinary backtest row is byte-identical to before.
+
+## Research Analyses (MCP phase 4)
+
+`research_analyses` (`src/db/models/research.py`, migration `87090e0d5660`): one row per
+robustness analysis of a study — `kind` ∈ sweep, sensitivity, monte_carlo, walk_forward,
+breadth, cost_stress, and since MCP phase 5a `portfolio` (migration `72a945ca06f5` widened the
+CHECK; computed from stored curves and inserted already `completed`, its `result` holding
+both combined curves downsampled); `request` (what was asked, plus a `job_id → cell` map for
+batches) and `result`, written once (`SyncResearchRepository.complete_analysis`, pending →
+completed or void).
+A batch's member jobs are `research_trials` rows with `analysis_pk`; `walk_forward`, `breadth`
+and `cost_stress` joined the trial roles (never counted, never freezable).
 
 ## Results Extraction
 
 `src/core/results_extractor.py` — pulls metrics from Nautilus engine:
 
-**Nautilus-provided**: Sharpe, Sortino, volatility, profit_factor, avg_return, total_pnl, expectancy, avg_win/loss, max_winner/loser.
+**Nautilus-provided**: Sharpe, Sortino, volatility, avg_return, total_pnl, expectancy, avg_win/loss, max_winner/loser.
+
+**profit_factor** is `net_profit_factor(analyzer.realized_pnls(USD))` (`src/core/metrics.py`): dollar wins over dollar losses, net of commission. Nautilus's own `Profit Factor` statistic is price-return based and ignores commission and size (found 2026-10-13; the research gates judge on this column).
 
 **Custom-calculated** (Nautilus doesn't provide):
 - Max drawdown (peak-to-trough)

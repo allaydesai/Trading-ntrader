@@ -69,6 +69,24 @@ class CatalogInstrument(Base, TimestampMixin):
     date_range_end: Mapped[Optional[datetime]] = mapped_column(
         TIMESTAMP(timezone=True), nullable=True
     )
+    # Per-timeframe first-bar timestamps. The shared date_range_start is one value
+    # for every timeframe (the earliest of these), so it cannot say where a given
+    # timeframe's bars begin — intraday history usually starts later than daily.
+    date_range_start_daily: Mapped[Optional[datetime]] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    date_range_start_hourly: Mapped[Optional[datetime]] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    date_range_start_minute: Mapped[Optional[datetime]] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    date_range_start_5min: Mapped[Optional[datetime]] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    date_range_start_30min: Mapped[Optional[datetime]] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
     # Per-timeframe latest-bar timestamps. Bar counts are already tracked
     # per timeframe; the end-date must be too, or the idempotent re-run
     # classifier compares every timeframe against the finest timeframe's end

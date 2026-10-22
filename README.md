@@ -49,6 +49,19 @@ NTrader is a comprehensive backtesting platform designed for traders, quants, an
 - Dark theme with responsive design
 - HTMX-powered dynamic updates
 
+### Research MCP Server
+- Local stdio [MCP](https://modelcontextprotocol.io) server so Claude can validate, run,
+  compare and file backtests from a chat (spec: `docs/product/NTrader MCP Server — Spec.md`)
+- Every backtest runs in a fresh worker process on the same path as `backtest run --catalog`;
+  no IBKR fetch, no fake instruments: missing data fails fast with the fix
+- Research studies: a locked out-of-sample window, a counted trial budget, frozen candidates
+  tested out-of-sample once, regime splits and a scorecard against the vault's gates
+- Paper loop: the exact `live create` / `live start` commands for a tested candidate, and a
+  read-only weekly check of the session against the band its out-of-sample run sets
+- Every run records its git commit, dirty state and config hash
+- Built-in `buy_and_hold` benchmark for side-by-side comparison
+- Never trades, never starts or stops sessions, never imports data
+
 ## Quick Start
 
 ### Prerequisites
@@ -189,6 +202,7 @@ Exit codes: `0` success · `1` partial (some bar files failed) · `2` fatal (bad
 |---------|-------------|
 | `catalog restamp-venues --catalog <name> --dry-run` | Preview moving a named catalog's bar partitions onto their IBKR-corrected venues (writes a rollback-manifest plan JSON, moves nothing) |
 | `catalog restamp-venues --catalog <name>` | Apply a venue re-stamp plan (partition dirs + parquet footer metadata) |
+| `catalog backfill-coverage-starts --catalog <name> [--dry-run]` | Record where each timeframe's bars begin (read from parquet file names, no re-import) for instruments imported before per-timeframe starts were stored |
 | `catalog validate-fmp` | Spot-check the default named catalog's daily ETF closes against FMP's independent historical prices for 8 liquid ETFs (SPY, QQQ, IWM, GLD, XLF, TLT, VTI, ARKK), last 12 months |
 | `catalog validate-fmp --catalog <name> --tickers SPY,QQQ` | Validate a specific catalog and ticker subset |
 | `catalog validate-fmp --months 6 --mean-tol-pct 0.2 --max-tol-pct 2` | Override the lookback window and deviation tolerances |
@@ -392,13 +406,216 @@ works straight from the nav. To target a different catalog, start from the explo
 (pick a ticker → *Run Backtest*) or pass `?catalog=<name>` in the URL. Selecting a
 non-catalog data source (mock / ibkr / kraken) ignores the catalog field.
 
+### 8. Research with Claude (MCP server)
+
+The research MCP server exposes NTrader to Claude Desktop (or any MCP client) over
+stdio. It must run natively on the Mac, where Postgres and the Parquet catalogs live.
+
+```bash
+# Run it by hand (it waits for an MCP client on stdin)
+uv run python -m src.mcp_server
+
+# Inspect it interactively
+npx @modelcontextprotocol/inspector uv --directory "$PWD" run python -m src.mcp_server
+```
+
+Add it to Claude Desktop's `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "ntrader-research": {
+      "command": "uv",
+      "args": ["--directory", "/Users/<you>/dev/Trading-ntrader", "run", "python", "-m", "src.mcp_server"],
+      "env": {
+        "NTRADER_MCP_VAULT_PATH": "/Users/<you>/Library/Mobile Documents/com~apple~CloudDocs/Trading Research"
+      }
+    }
+  }
+}
+```
+
+**Tools (phase 1):** `server_info`, `list_strategies`, `describe_strategy`, `list_catalogs`,
+`catalog_availability`, `validate_config`, `submit_backtest`, `get_job`, `list_jobs`,
+`cancel_job`, `get_run`, `compare_runs`, `export_results`.
+
+**Tools (phase 2, studies):** `create_study`, `get_study`, `list_studies`, `update_study`,
+`freeze_candidate`, `new_candidate_version`, `submit_benchmark`, `reproduce_run`,
+`run_out_of_sample`, `get_scorecard`, `get_trades`, `get_equity_curve`,
+`get_regime_breakdown`, `export_bars`, `search_runs`.
+
+**Tools (phase 3, paper):** `paper_commands`, `list_sessions`, `get_session`.
+
+**Tools (phase 4, robustness):** `submit_sweep`, `run_sensitivity`, `run_monte_carlo`,
+`submit_breadth`, `submit_cost_stress`, `submit_walk_forward`, `get_analysis`
+(`cancel_job(analysis=…)` stops a batch). A sweep runs a grid, or a ±20 % neighbourhood around
+a parameter set, as counted in-sample trials; `run_sensitivity` scores each cell by its grid
+neighbours and recommends the plateau centre over the raw best. `run_monte_carlo` resamples a
+run's closed trades into 5/50/95 percentiles of CAGR, drawdown, losing streak and time under
+water, with bootstrap confidence intervals and the 30-trade verdict. Once a candidate is
+frozen: `submit_cost_stress` reruns it with every commission term scaled, `submit_breadth`
+runs its parameters on untuned symbols, and `submit_walk_forward` runs every grid cell over
+the whole span and slices rolling (or anchored) windows from the stored daily equity, picking
+the best in-sample cell per window (it sees the holdout, so a later candidate version is
+contaminated). Each is stored as an analysis of the study (`get_analysis`, listed by
+`get_study`), and the scorecard's G2/G3 rows — neighbourhood, cost stress, breadth,
+walk-forward efficiency, deflated Sharpe, out-of-sample drawdown within the Monte Carlo band
+— cite them; the expectation band's trade axis is Monte Carlo too.
+
+**Tools (phase 5a, portfolio from stored runs):** `get_sleeve_correlation`,
+`run_portfolio_backtest`. Both read the stored daily mark-to-market curves of existing runs
+and combine them as a daily constant-mix on the days every curve shares — weights apply to
+returns, not dollars; there is no engine run, no job, no counted trial and no gate.
+`get_sleeve_correlation` takes any runs: Pearson correlation of daily returns, shared
+drawdown days and episodes per pair, each sleeve's and the total's summary, and a regime
+table by year, trend and volatility tercile side by side. `run_portfolio_backtest` judges a
+study's candidate (its newest out-of-sample run by default) inside the held sleeves, with and
+without it: metrics, per-sleeve contribution, the delta per metric, the candidate's
+correlation with the held portfolio, both curves; stored as a `portfolio` analysis of the
+study (`get_analysis(kind="portfolio")`) and exported with it. A run that is not a frozen
+candidate's out-of-sample run is warned about, not refused; before a freeze a study may only
+bring its own in-sample runs. Phase 5b — an engine-backed multi-strategy backtest with shared
+capital and exposure limits, scan-driven universes, a portfolio gate — is not built.
+
+A quick, unattributed check: `validate_config` → `submit_backtest` for the strategy and
+for `buy_and_hold` on the same window → `get_job` until both finish → `compare_runs` →
+`export_results` (writes `<slug>.json` and `<slug>.trades.csv` to `Lab/results/` in the
+vault, in the same format as the vault's queue runner). Runs appear in
+`backtest history` and the web UI like any other run.
+
+Research proper happens in a **study**, one per vault Idea:
+
+1. `create_study` names the strategy, symbols, parameter space, an in-sample and a later
+   out-of-sample window, the gates to pass and a trial budget. The out-of-sample window is
+   locked from then on.
+2. `submit_backtest(study=…)` runs an in-sample trial; it is counted against the budget the
+   moment it is queued (past the budget it needs `over_budget_reason`, which is recorded),
+   and any window reaching past the in-sample end is refused. `submit_benchmark` runs
+   buy-and-hold (or an incumbent) beside it, uncounted. Every ledger row has an `entry`
+   number; only in-sample trials have a `trial` number. `export_bars` writes in-sample bars
+   to the vault for a concept probe, always clamped to the in-sample window (the clamp is
+   recorded on the study). `describe_strategy` and `validate_config` warn when a `.env`
+   setting (such as `TRADE_SIZE`) overrides a parameter's schema default.
+3. `get_regime_breakdown`, `get_equity_curve`, `get_trades` and `compare_runs` read the runs.
+4. `freeze_candidate` freezes the chosen run's parameters, code commit and candidate hash,
+   with an optional `benchmark_rationale`: G1's `beats_benchmark_on_one` stays missing
+   without one.
+   `run_out_of_sample` tests it once on the locked window; a second run needs
+   `override_reason` and marks the study contaminated.
+5. `get_scorecard` judges the candidate against every gate: pass, fail or missing, with the
+   number, threshold and runs behind each check. Checks that need phase 4 (sensitivity,
+   walk-forward, breadth, cost stress) are always missing, never passed. G0 always checks
+   `equity_stays_positive`: a run whose drawdown reaches -100% fails it.
+6. `new_candidate_version` iterates in the same study (contaminated if the holdout was
+   already seen); `update_study` rejects, parks, resumes or promotes, always with a reason.
+   `export_results(study=…)` files `<slug>.study.json` with the ledger, the current
+   scorecard and one scorecard per frozen version.
+7. `paper_commands` gives the commands that start a paper session of the tested candidate:
+   `live check`, `live create` with every parameter the candidate sets passed explicitly (so
+   `.env` cannot change one; a parameter frozen as `None` cannot be passed and is left out
+   with a warning) and `--compare-to` the candidate's out-of-sample run, `live start`. The
+   `script` chains them with `&&`, so a failed `live check` stops it. It is refused until
+   that run exists; failing gates, code changed since freezing, parameters a setting would
+   change, a rejected or parked study and a version that is no longer current come back as
+   warnings. You run the commands; the server never starts, stops or creates a session.
+8. `get_session` (weekly) reads the session, in a read-only transaction, against its
+   **expectation band**: percentiles over the compare-to run's own rolling windows, trade
+   count over stretches as long as the session has run, win rate, average trade and drawdown
+   over runs of as many trades as it has closed. That run length is capped so the
+   out-of-sample run still gives 20 windows; the session's rates are then those of its
+   newest trades of that length. A trade's return is its net P&L over its entry notional,
+   so a session trading another size still compares. Weeks run from the session's creation
+   (the row keeps only its last start), so time spent stopped counts and is warned about.
+   Drift flags name a likely cause from what NTrader stores: signals (trade count outside
+   the band, stale bars, a dead node, a failed strategy), execution (rejections,
+   commission), config (the stored spec differs from the frozen candidate) or
+   strategy/regime. Slippage and fill quality are not measurable: trades store only average
+   fill prices. A lost broker connection is not reported yet: NTrader does not record one.
+   Rejections and failures cover only the session's current run, since NTrader clears them
+   on every start.
+9. `get_scorecard` judges **G4** on the newest linked session that has been started, and
+   carries the band for G4's horizon. G4 is missing until `min_weeks` **and** `min_trades`
+   are both met (8 weeks and 20 trades when the vault sets none). `paper_inside_band` then
+   fails only on the bad side: a win rate, average trade or drawdown *below* the band; a
+   result above it is noted, not failed. A band with fewer than 20 windows judges nothing:
+   the row stays missing and says why. `paper_clean` fails on any signal, execution or
+   config flag, a trade count outside the band in either direction included.
+   The scorecard and `paper_commands` read sessions inside the study's own transaction
+   (they settle the ledger first); only `list_sessions`, `get_session` and the session
+   export run in a transaction Postgres itself refuses to write in.
+10. `export_results(session=…)` files one reading per day, so the weekly checks accumulate:
+   `<slug>.<date>.session.json` and `<slug>.<date>.session.trades.csv`, beside the
+   compare-to run (`<slug>.json`, written once). The weekly row in the vault's paper note
+   is written by the vault's research skill from that reading, not by the server.
+11. `get_sleeve_correlation` on the candidate's run and the sleeves already held asks whether
+   it adds anything (low correlation, drawdowns that do not coincide, regimes that offset);
+   `run_portfolio_backtest(study=…, sleeves=[{run_id, weight}])` then reports the held
+   portfolio with and without the candidate, from stored curves at constant weights. The
+   numbers are reported, not judged: `System/Gates.md` has no portfolio block yet.
+
+Gate thresholds are read from the vault's `System/Gates.md`, from a fenced block the
+server parses (the prose stays the human copy):
+
+````markdown
+```yaml ntrader-gates
+G0:
+  min_trades: 30
+G1:
+  is_profit_factor: 1.3
+```
+````
+
+Known checks: `min_trades`, `clean_tree`, `benchmark_present`, `is_profit_factor`,
+`is_expectancy_gt`, `beats_benchmark_on_one`, `equity_stays_positive`, `positive_sub_periods`,
+`oos_sharpe_vs_is`, `oos_profit_factor`, `trials_warn_above`, G4's `min_weeks` and
+`min_trades` (paper weeks and trades; G4 also always checks `paper_inside_band` and
+`paper_clean`), and the phase-4 placeholders
+`neighbourhood_sharpe`, `cost_stress_multiplier`, `breadth`, `walk_forward_efficiency`.
+`oos_sharpe_vs_is` takes a bare ratio or `{ratio: 0.5, min_is_sharpe: 0.3}`: below the
+floor the in-sample Sharpe is too small for a ratio to mean anything, so the check fails.
+`server_info` reports whether the block was found.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `NTRADER_MCP_VAULT_PATH` | unset (export disabled) | Trading Research vault root |
+| `NTRADER_MCP_EXPORT_FOLDERS` | `["Lab/results"]` | Vault folders export may write to |
+| `NTRADER_MCP_JOBS_DIR` | `~/.ntrader/mcp/jobs` | One directory per job (request, status, log, result) |
+| `NTRADER_MCP_DEFAULT_CATALOG` | `DEFAULT_CATALOG_NAME` | Catalog used when a request names none |
+| `NTRADER_MCP_JOB_TIMEOUT_S` | `3600` | Worker wall-clock limit |
+| `NTRADER_MCP_GATES_FILE` | `System/Gates.md` | Vault file holding the `ntrader-gates` block |
+| `NTRADER_MCP_MAX_BAR_ROWS` | `200000` | Most rows `export_bars` writes |
+| `NTRADER_MCP_MAX_EQUITY_POINTS` | `1000` | Most points `get_equity_curve` returns |
+| `NTRADER_MCP_MAX_TRADES_PAGE` | `500` | Most trades `get_trades` returns per page |
+
+One job runs at a time; `cancel_job` stops a running worker within five seconds. Apply
+migrations first (`alembic upgrade head`): runs store their provenance in new columns, and
+studies live in the `research_*` tables.
+
+- **Every server can submit; one runs the jobs.** The jobs directory is the queue. Claude
+  Desktop starts one server per consumer of the same config entry (the chat and a linked
+  session), so a second server is normal: it submits and cancels jobs like the first. The
+  server holding the lock on the directory runs them one at a time, oldest first; the
+  others take over within a second of it exiting. `server_info`'s `jobs.owner` says whether
+  this server is the one running jobs, and `jobs.owner_process` names the one that is.
+- **A worker outlives its server.** If the client restarts mid-run, the worker carries on;
+  the next server waits for it before starting anything else, then reports its result.
+- **A saved run is never reported cancelled.** If `cancel_job` arrives after the run was
+  written to the database, the job ends `succeeded` with `cancel_requested: true`.
+
+**Risk metrics are marked to market.** For every run made through the orchestrator (CLI
+`backtest run`, web UI and MCP), max drawdown, Sharpe, Sortino, volatility and Calmar are
+computed from daily account equity at bar closes, so a drawdown inside an open trade counts.
+Runs saved before this change used closed-position returns and understate those numbers:
+`get_run` reports `metrics_basis` and warns on such runs, and `compare_runs` warns when
+bases are mixed. Re-run an old run before comparing its risk metrics with a new one.
+
 ## Available Strategies
 
 ### Built-in Example Strategies
 
 | Strategy | Type | Key Parameters | Description |
 |----------|------|----------------|-------------|
-| `sma_crossover` | Trend Following | fast_period, slow_period | Classic moving average crossover |
+| `sma_crossover` | Trend Following | fast_period, slow_period | Moving average crossover; one-sided — trades only the side of its first cross (use `sma_crossover_long_only` for a long-only baseline) |
 | `momentum` | Momentum | fast_period, slow_period | Golden/death cross detection |
 
 ### Adding Custom Strategies
@@ -506,7 +723,9 @@ src/
 ├── api/              # FastAPI web application
 ├── cli/              # Command line interface
 ├── core/             # Core business logic
+│   ├── benchmarks/   # Backtest-only benchmarks (buy_and_hold); not live-selectable
 │   └── strategies/   # Trading strategy implementations
+├── mcp_server/       # Research MCP server (stdio) and its backtest worker
 ├── models/           # Pydantic data models
 ├── services/         # Business services (IBKR, Kraken, analytics)
 ├── db/               # Database models and migrations

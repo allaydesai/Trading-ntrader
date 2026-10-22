@@ -6,7 +6,7 @@ single ticker failure does not abort the batch.
 """
 
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Optional
 
@@ -15,6 +15,12 @@ from nautilus_trader.model.data import Bar, BarType
 
 from src.models.catalog import AssetClass, ImportResult
 from src.services.firstrate.catalog_manager import CatalogManager
+from src.services.firstrate.coverage import (
+    earliest_start,
+    from_ns,
+    start_field_for_timeframe,
+    timeframe_key,
+)
 
 # Reuse the pure filename→timeframe inference from the dry-run scanner so the
 # import filter and the dry-run scan agree on which file belongs to which
@@ -64,24 +70,6 @@ _TIMEFRAME_END_FIELD_MAP = {
 ClassifierDecision = Literal["new", "reimported", "skipped"]
 
 
-def _timeframe_key(timeframe: str) -> str:
-    """Extract ``"{step}-{aggregation}"`` from a full timeframe spec.
-
-    Examples::
-
-        >>> _timeframe_key("1-DAY-LAST")
-        '1-DAY'
-        >>> _timeframe_key("5-MINUTE-LAST")
-        '5-MINUTE'
-        >>> _timeframe_key("noop")
-        'noop'
-    """
-    parts = timeframe.split("-")
-    if len(parts) >= 2:
-        return f"{parts[0]}-{parts[1]}"
-    return timeframe
-
-
 def _bar_count_field_for_timeframe(timeframe: str) -> str:
     """Return the ``CatalogInstrument.bar_count_*`` attribute for a timeframe.
 
@@ -89,7 +77,7 @@ def _bar_count_field_for_timeframe(timeframe: str) -> str:
     Unknown timeframes fall back to ``bar_count_daily`` so the classifier
     behaves the same as the existing metadata-upsert code path.
     """
-    return _TIMEFRAME_FIELD_MAP.get(_timeframe_key(timeframe), "bar_count_daily")
+    return _TIMEFRAME_FIELD_MAP.get(timeframe_key(timeframe), "bar_count_daily")
 
 
 def _date_range_end_field_for_timeframe(timeframe: str) -> str:
@@ -98,7 +86,7 @@ def _date_range_end_field_for_timeframe(timeframe: str) -> str:
     Mirrors :func:`_bar_count_field_for_timeframe`. Unknown timeframes fall back
     to ``date_range_end_daily`` so behaviour matches the bar-count mapping.
     """
-    return _TIMEFRAME_END_FIELD_MAP.get(_timeframe_key(timeframe), "date_range_end_daily")
+    return _TIMEFRAME_END_FIELD_MAP.get(timeframe_key(timeframe), "date_range_end_daily")
 
 
 class ImportService:
@@ -871,11 +859,11 @@ class ImportService:
             )
             return False
 
-        # Convert nanosecond timestamps to datetime
-        existing.date_range_start = datetime.fromtimestamp(
-            bars[0].ts_init / 1_000_000_000, tz=timezone.utc
-        )
-        tf_end = datetime.fromtimestamp(bars[-1].ts_init / 1_000_000_000, tz=timezone.utc)
+        # Stamp this timeframe's own first bar; the shared start is the earliest of
+        # them, not the first bar of whichever timeframe happened to import last.
+        setattr(existing, start_field_for_timeframe(timeframe), from_ns(bars[0].ts_init))
+        existing.date_range_start = earliest_start(existing)
+        tf_end = from_ns(bars[-1].ts_init)
         existing.date_range_end = tf_end
         # Stamp this timeframe's own end so idempotent re-runs compare like for
         # like (see _classify_ticker). The shared date_range_end above stays for
@@ -883,7 +871,7 @@ class ImportService:
         setattr(existing, _date_range_end_field_for_timeframe(timeframe), tf_end)
 
         # Determine bar count field from timeframe
-        field_name = _TIMEFRAME_FIELD_MAP.get(_timeframe_key(timeframe), "bar_count_daily")
+        field_name = _TIMEFRAME_FIELD_MAP.get(timeframe_key(timeframe), "bar_count_daily")
         setattr(existing, field_name, len(bars))
 
         self._metadata_service.upsert_instrument_sync(existing)

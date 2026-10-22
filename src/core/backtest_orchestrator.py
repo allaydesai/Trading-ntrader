@@ -5,6 +5,7 @@ This module provides a single entry point for executing backtests with optional
 persistence, regardless of whether the request comes from CLI arguments or YAML config.
 """
 
+import asyncio
 import time
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -13,7 +14,6 @@ from uuid import UUID, uuid4
 
 import structlog
 from nautilus_trader.backtest.engine import BacktestEngine, BacktestEngineConfig
-from nautilus_trader.backtest.models import FillModel
 from nautilus_trader.common.component import is_logging_initialized
 from nautilus_trader.config import LoggingConfig
 from nautilus_trader.model.currencies import USD
@@ -26,14 +26,17 @@ from nautilus_trader.trading.strategy import Strategy
 
 from src.config import get_settings
 from src.core.fee_models import IBKRCommissionModel
-from src.core.results_extractor import ResultsExtractor
+from src.core.fill_model import make_fill_model
+from src.core.results_extractor import ResultsExtractor, metrics_basis
 from src.core.strategy_factory import StrategyFactory, StrategyLoader
 from src.core.strategy_registry import StrategyRegistry
 from src.db.repositories.backtest_repository import BacktestRepository
 from src.db.session import get_session
 from src.models.backtest_request import BacktestRequest
 from src.models.backtest_result import BacktestResult
-from src.services.backtest_persistence import BacktestPersistenceService
+from src.models.run_provenance import RunProvenance
+from src.services.backtest_persistence import BacktestPersistenceService, store_equity_curve
+from src.services.provenance import run_provenance
 
 logger = structlog.get_logger(__name__)
 
@@ -55,6 +58,34 @@ def _make_json_serializable(obj: Any) -> Any:
     elif isinstance(obj, Decimal):
         return str(obj)
     return obj
+
+
+def _utc(value: datetime) -> datetime:
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def _run_record_fields(request: BacktestRequest) -> dict[str, Any]:
+    """Run-row fields shared by the success and failure persistence paths."""
+    return {
+        "strategy_name": request.strategy_type.replace("_", " ").title(),
+        "strategy_type": request.strategy_type,
+        "instrument_symbol": request.symbol,
+        "start_date": _utc(request.start_date),
+        "end_date": _utc(request.end_date),
+        "initial_capital": request.starting_balance,
+        "data_source": request.to_persistence_data_source(),
+        "config_snapshot": {
+            "strategy_path": request.strategy_path,
+            "config_path": request.config_path,
+            "version": "1.0",
+            "config": _make_json_serializable(request.strategy_config),
+            "bar_type": request.bar_type,
+            "fill_seed": request.fill_seed,
+            **(
+                {"cost_multiplier": request.cost_multiplier} if request.cost_multiplier != 1 else {}
+            ),
+        },
+    }
 
 
 class BacktestOrchestrator:
@@ -83,12 +114,15 @@ class BacktestOrchestrator:
         self._backtest_start_date: datetime | None = None
         self._backtest_end_date: datetime | None = None
         self._starting_balance: float | None = None
+        self._extractor: ResultsExtractor | None = None
 
     async def execute(
         self,
         request: BacktestRequest,
         bars: list[Bar],
         instrument: Instrument,
+        provenance: RunProvenance | None = None,
+        reproduced_from_run_id: UUID | None = None,
     ) -> tuple[BacktestResult, UUID | None]:
         """
         Execute backtest with optional persistence.
@@ -97,6 +131,10 @@ class BacktestOrchestrator:
             request: Unified backtest request containing all parameters
             bars: Pre-loaded Bar objects from catalog
             instrument: Instrument object for the backtest
+            provenance: Git state and config hash to record; computed from the
+                working tree and ``request`` when omitted
+            reproduced_from_run_id: The run this one reproduces, recorded on the
+                persisted run (MCP ``reproduce_run``)
 
         Returns:
             Tuple of (BacktestResult, run_id if persisted else None)
@@ -109,6 +147,9 @@ class BacktestOrchestrator:
 
         if not bars:
             raise ValueError("No bars provided for backtest")
+        if request.persist and provenance is None:
+            # Off the event loop: several git subprocesses, each with a timeout.
+            provenance = await asyncio.to_thread(run_provenance, request)
 
         try:
             # Setup engine
@@ -132,6 +173,7 @@ class BacktestOrchestrator:
             self.engine.run()
 
             # Extract results
+            self._extractor = self._make_extractor({instrument.id: bars})
             result = self._extract_results(self._starting_balance)
 
             # Persist if requested
@@ -142,6 +184,8 @@ class BacktestOrchestrator:
                     request=request,
                     result=result,
                     execution_duration=execution_duration,
+                    provenance=provenance,
+                    reproduced_from_run_id=reproduced_from_run_id,
                 )
                 logger.info(
                     "Backtest completed and persisted",
@@ -160,6 +204,7 @@ class BacktestOrchestrator:
                     request=request,
                     error_message=str(e),
                     execution_duration=execution_duration,
+                    provenance=provenance,
                 )
             raise
 
@@ -228,6 +273,7 @@ class BacktestOrchestrator:
 
         self.engine.run()
 
+        self._extractor = self._make_extractor({i.id: bars for bars, i in instruments_data})
         result = self._extract_results(self._starting_balance)
         result = self._aggregate_multi_venue_balance(result, instruments_data)
         return result, None
@@ -270,20 +316,18 @@ class BacktestOrchestrator:
             result.total_return = (total_final - total_start) / total_start
         return result
 
-    def _make_fill_model(self) -> FillModel:
-        """Construct the shared fill model (identical for single- and multi-instrument runs)."""
-        return FillModel(
-            prob_fill_on_limit=0.95,
-            prob_fill_on_stop=0.95,
-            prob_slippage=0.01,
-        )
+    def _make_fee_model(self, multiplier: float = 1.0) -> IBKRCommissionModel:
+        """The IBKR commission model from settings, every term scaled by ``multiplier``.
 
-    def _make_fee_model(self) -> IBKRCommissionModel:
-        """Construct the shared IBKR commission model from settings."""
+        A cost-stress run (research MCP phase 4) scales the per-share rate, the
+        minimum and the cap alike; the fill model is untouched, so this stresses
+        commission, not slippage.
+        """
+        scale = Decimal(str(multiplier))
         return IBKRCommissionModel(
-            commission_per_share=self.settings.commission_per_share,
-            min_per_order=self.settings.commission_min_per_order,
-            max_rate=self.settings.commission_max_rate,
+            commission_per_share=self.settings.commission_per_share * scale,
+            min_per_order=self.settings.commission_min_per_order * scale,
+            max_rate=self.settings.commission_max_rate * scale,
         )
 
     def _setup_engine(
@@ -309,8 +353,8 @@ class BacktestOrchestrator:
         )
 
         # Create fill + commission models (shared construction — see helpers)
-        fill_model = self._make_fill_model()
-        fee_model = self._make_fee_model()
+        fill_model = make_fill_model(request.fill_seed)
+        fee_model = self._make_fee_model(request.cost_multiplier)
 
         self.engine = BacktestEngine(config=config)
 
@@ -355,8 +399,8 @@ class BacktestOrchestrator:
             trader_id=TraderId("BACKTESTER-001"),
             logging=logging_config,
         )
-        fill_model = self._make_fill_model()
-        fee_model = self._make_fee_model()
+        fill_model = make_fill_model(request.fill_seed)
+        fee_model = self._make_fee_model(request.cost_multiplier)
         engine = BacktestEngine(config=config)
 
         venues_added: set[Venue] = set()
@@ -459,52 +503,30 @@ class BacktestOrchestrator:
             logger.error(f"Failed to create strategy: {e}")
             raise ValueError(f"Failed to create strategy {request.strategy_type}: {e}")
 
-    def _extract_results(self, starting_balance: float) -> BacktestResult:
-        """
-        Extract comprehensive results from the backtest engine.
-
-        Args:
-            starting_balance: The actual starting balance used in the backtest
-
-        Returns:
-            BacktestResult with all available metrics
-        """
-        if not self.engine:
-            return BacktestResult()
-
-        extractor = ResultsExtractor(
+    def _make_extractor(self, bars_by_instrument: dict[Any, list[Bar]]) -> ResultsExtractor:
+        """The run's results extractor; given the bars, it marks risk metrics to market."""
+        return ResultsExtractor(
             engine=self.engine,
             venue=self._venue,
             settings=self.settings,
-            starting_balance=starting_balance,
+            starting_balance=self._starting_balance,
+            bars_by_instrument=bars_by_instrument,
         )
 
-        return extractor.extract_results(
+    def _extract_results(self, starting_balance: float) -> BacktestResult:
+        """Extract comprehensive results from the finished engine run."""
+        if not self.engine or self._extractor is None:
+            return BacktestResult()
+        return self._extractor.extract_results(
             start_date=self._backtest_start_date,
             end_date=self._backtest_end_date,
         )
 
     def _extract_equity_curve(self, starting_balance: float) -> list[dict[str, int | float]]:
-        """
-        Extract equity curve for chart visualization.
-
-        Args:
-            starting_balance: The actual starting balance used in the backtest
-
-        Returns:
-            List of equity points: [{"time": unix_ts, "value": equity}, ...]
-        """
-        if not self.engine:
+        """Equity points for the chart: ``[{"time": unix_ts, "value": equity}, ...]``."""
+        if not self.engine or self._extractor is None:
             return []
-
-        extractor = ResultsExtractor(
-            engine=self.engine,
-            venue=self._venue,
-            settings=self.settings,
-            starting_balance=starting_balance,
-        )
-
-        return extractor.extract_equity_curve(
+        return self._extractor.extract_equity_curve(
             start_date=self._backtest_start_date,
             end_date=self._backtest_end_date,
         )
@@ -515,40 +537,16 @@ class BacktestOrchestrator:
         request: BacktestRequest,
         result: BacktestResult,
         execution_duration: Decimal,
+        provenance: RunProvenance | None = None,
+        reproduced_from_run_id: UUID | None = None,
     ) -> None:
         """Persist successful backtest results to database."""
         try:
-            # Build config snapshot (convert Decimals for JSON serialization)
-            config_snapshot: dict[str, Any] = {
-                "strategy_path": request.strategy_path,
-                "config_path": request.config_path,
-                "version": "1.0",
-                "config": _make_json_serializable(request.strategy_config),
-                "bar_type": request.bar_type,
-            }
-
-            # Add equity curve if available
+            fields = _run_record_fields(request)
             equity_curve = self._extract_equity_curve(float(request.starting_balance))
-            if equity_curve:
-                config_snapshot["equity_curve"] = equity_curve
-
-            # Add config file path if available
+            fields["config_snapshot"]["metrics_basis"] = metrics_basis(self._extractor)
             if request.config_file_path:
-                config_snapshot["config_file_path"] = request.config_file_path
-
-            # Ensure dates are timezone-aware
-            start_tz = (
-                request.start_date
-                if request.start_date.tzinfo
-                else request.start_date.replace(tzinfo=timezone.utc)
-            )
-            end_tz = (
-                request.end_date
-                if request.end_date.tzinfo
-                else request.end_date.replace(tzinfo=timezone.utc)
-            )
-
-            strategy_display_name = request.strategy_type.replace("_", " ").title()
+                fields["config_snapshot"]["config_file_path"] = request.config_file_path
 
             async with get_session() as session:
                 repository = BacktestRepository(session)
@@ -556,17 +554,13 @@ class BacktestOrchestrator:
 
                 backtest_run = await service.save_backtest_results(
                     run_id=run_id,
-                    strategy_name=strategy_display_name,
-                    strategy_type=request.strategy_type,
-                    instrument_symbol=request.symbol,
-                    start_date=start_tz,
-                    end_date=end_tz,
-                    initial_capital=request.starting_balance,
-                    data_source=request.to_persistence_data_source(),
+                    **fields,
                     execution_duration_seconds=execution_duration,
-                    config_snapshot=config_snapshot,
                     backtest_result=result,
+                    reproduced_from_run_id=reproduced_from_run_id,
+                    provenance=provenance,
                 )
+                await store_equity_curve(session, backtest_run.id, equity_curve)
 
                 # Capture trades from positions report. Trade capture is best-effort
                 # — the run and its metrics are the primary record — but the failure
@@ -601,48 +595,21 @@ class BacktestOrchestrator:
         request: BacktestRequest,
         error_message: str,
         execution_duration: Decimal,
+        provenance: RunProvenance | None = None,
     ) -> None:
         """Persist failed backtest to database."""
         try:
             run_id = uuid4()
-
-            config_snapshot: dict[str, Any] = {
-                "strategy_path": request.strategy_path,
-                "config_path": request.config_path,
-                "version": "1.0",
-                "config": _make_json_serializable(request.strategy_config),
-                "bar_type": request.bar_type,
-            }
-
-            start_tz = (
-                request.start_date
-                if request.start_date.tzinfo
-                else request.start_date.replace(tzinfo=timezone.utc)
-            )
-            end_tz = (
-                request.end_date
-                if request.end_date.tzinfo
-                else request.end_date.replace(tzinfo=timezone.utc)
-            )
-
-            strategy_display_name = request.strategy_type.replace("_", " ").title()
-
             async with get_session() as session:
                 repository = BacktestRepository(session)
                 service = BacktestPersistenceService(repository)
 
                 await service.save_failed_backtest(
                     run_id=run_id,
-                    strategy_name=strategy_display_name,
-                    strategy_type=request.strategy_type,
-                    instrument_symbol=request.symbol,
-                    start_date=start_tz,
-                    end_date=end_tz,
-                    initial_capital=request.starting_balance,
-                    data_source=request.to_persistence_data_source(),
+                    **_run_record_fields(request),
                     execution_duration_seconds=execution_duration,
-                    config_snapshot=config_snapshot,
                     error_message=error_message,
+                    provenance=provenance,
                 )
 
                 await session.commit()

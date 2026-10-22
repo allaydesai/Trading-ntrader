@@ -120,17 +120,21 @@ SIZE_BASELINE: dict[str, int] = {
     "src/config.py::IBKRSettings": 101,
     "src/core/analytics.py::PortfolioAnalytics": 150,
     "src/core/analytics.py::PortfolioAnalytics.calculate_performance_attribution": 55,
-    "src/core/backtest_orchestrator.py::BacktestOrchestrator": 325,
-    "src/core/backtest_orchestrator.py::BacktestOrchestrator._persist_results": 57,
-    "src/core/backtest_runner.py::MinimalBacktestRunner": 926,
+    # MCP phase 1, 325 -> 282: persistence record fields extracted to `_run_record_fields`
+    # (and `_persist_results` dropped under its cap) while adding run provenance.
+    # MCP phase 2, 275 -> 277: `reproduced_from_run_id` threaded through `execute`
+    # and `_persist_results` so `reproduce_run` uses the orchestrator, not the legacy runner.
+    # MCP phase 4, 277 -> 278: `_make_fee_model` scales every commission term for cost stress.
+    "src/core/backtest_orchestrator.py::BacktestOrchestrator": 278,
+    "src/core/backtest_runner.py::MinimalBacktestRunner": 902,
     "src/core/backtest_runner.py::MinimalBacktestRunner._extract_results": 111,
     "src/core/backtest_runner.py::MinimalBacktestRunner._persist_backtest_results": 100,
-    "src/core/backtest_runner.py::MinimalBacktestRunner.run_backtest_with_catalog_data": 123,
-    "src/core/backtest_runner.py::MinimalBacktestRunner.run_backtest_with_database": 76,
-    "src/core/backtest_runner.py::MinimalBacktestRunner.run_backtest_with_strategy_type": 74,
-    "src/core/backtest_runner.py::MinimalBacktestRunner.run_from_config_object": 107,
-    "src/core/backtest_runner.py::MinimalBacktestRunner.run_from_config_with_catalog_data": 66,
-    "src/core/backtest_runner.py::MinimalBacktestRunner.run_sma_backtest": 56,
+    "src/core/backtest_runner.py::MinimalBacktestRunner.run_backtest_with_catalog_data": 119,
+    "src/core/backtest_runner.py::MinimalBacktestRunner.run_backtest_with_database": 72,
+    "src/core/backtest_runner.py::MinimalBacktestRunner.run_backtest_with_strategy_type": 70,
+    "src/core/backtest_runner.py::MinimalBacktestRunner.run_from_config_object": 103,
+    "src/core/backtest_runner.py::MinimalBacktestRunner.run_from_config_with_catalog_data": 62,
+    "src/core/backtest_runner.py::MinimalBacktestRunner.run_sma_backtest": 52,
     "src/core/live_bar_observer.py::LiveBarObserver": 120,
     # Story 4.3, 118 -> 116: `submission_withheld` is now `not trading_permitted` (D-F).
     # Story 5.8, 116 -> 123: `withhold_for_reconciliation`, the reconciler's withdrawal (D-A).
@@ -166,8 +170,12 @@ SIZE_BASELINE: dict[str, int] = {
     "src/core/live_trade_recorder.py::TradeRecorder": 164,
     "src/core/metrics.py::PerformanceCalculator": 128,
     "src/core/metrics.py::PerformanceCalculator.calculate_metrics_from_data": 55,
-    "src/core/results_extractor.py::ResultsExtractor": 149,
-    "src/core/results_extractor.py::ResultsExtractor.extract_results": 84,
+    # MCP phase 1 review, 154 -> 145 and 85 -> 81 (shrank): risk metrics and the equity
+    # curve moved to module functions when they became mark-to-market.
+    # Merging 015-paper-trading (Story 5.1 moved the balance reads to `_starting_balance` and
+    # `_final_balance`), 145 -> 140 and 81 -> 80 (shrank).
+    "src/core/results_extractor.py::ResultsExtractor": 140,
+    "src/core/results_extractor.py::ResultsExtractor.extract_results": 80,
     # Story 4.4, 103 -> 110: AR40 warm-up inline in `on_start` + the history
     # callback, deliberately not hidden in a helper so AC #2's inspection reads
     # the three Nautilus calls in the strategy file itself. Story 4.5, 110 -> 106
@@ -177,16 +185,20 @@ SIZE_BASELINE: dict[str, int] = {
     # Story 4.5, 52 -> 51 (shrank): the own-book net replaced three portfolio reads.
     "src/core/strategies/sma_momentum.py::SMAMomentum.on_bar": 51,
     "src/core/strategy_registry.py::StrategyRegistry": 101,
-    "src/db/repositories/backtest_repository.py::BacktestRepository": 236,
+    # MCP phase 1, 236 -> 237: `create_backtest_run` takes run provenance (S2.3).
+    "src/db/repositories/backtest_repository.py::BacktestRepository": 237,
     "src/db/repositories/backtest_repository_sync.py::SyncBacktestRepository": 153,
-    "src/db/repositories/catalog_instrument_repository.py::CatalogInstrumentRepository": 122,
-    "src/db/repositories/catalog_instrument_repository.py::SyncCatalogInstrumentRepository": 107,
-    "src/models/backtest_request.py::BacktestRequest": 176,
+    "src/db/repositories/catalog_instrument_repository.py::CatalogInstrumentRepository": 102,
+    # Phase 2 pre-work, 176 -> 177: `fill_seed` makes the fill model's draws part of the request.
+    # MCP phase 4, 177 -> 178: `cost_multiplier` (cost stress) is part of the request.
+    "src/models/backtest_request.py::BacktestRequest": 178,
     "src/models/price_validation_report.py::evaluate_ticker_deviation": 64,
-    "src/services/backtest_persistence.py::BacktestPersistenceService": 274,
+    # MCP phase 1, 274 -> 276: both save paths take run provenance (S2.3).
+    "src/services/backtest_persistence.py::BacktestPersistenceService": 264,
     "src/services/backtest_persistence.py::BacktestPersistenceService._extract_and_validate_metrics": 58,  # noqa: E501
-    "src/services/backtest_persistence.py::BacktestPersistenceService.save_trades_from_positions": 137,  # noqa: E501
-    "src/services/backtest_query.py::BacktestQueryService": 108,
+    "src/services/backtest_persistence.py::BacktestPersistenceService.save_trades_from_positions": 125,  # noqa: E501
+    # Phase 2 pre-work, 108 -> 110: `get_equity_curve` reads the run's stored curve.
+    "src/services/backtest_query.py::BacktestQueryService": 110,
     "src/services/comparison_renderer.py::render_comparison_table": 66,
     "src/services/csv_loader.py::CSVLoader": 205,
     "src/services/csv_loader.py::CSVLoader.load_file": 65,
@@ -196,7 +208,7 @@ SIZE_BASELINE: dict[str, int] = {
     "src/services/data_catalog.py::DataCatalogService.query_bars": 61,
     "src/services/database_repository.py::DatabaseRepository": 128,
     "src/services/firstrate/backtest_loader.py::load_from_catalog": 70,
-    "src/services/firstrate/import_service.py::ImportService": 373,
+    "src/services/firstrate/import_service.py::ImportService": 372,
     "src/services/firstrate/import_service.py::ImportService._import_ticker": 135,
     "src/services/firstrate/import_service.py::ImportService.import_directory": 59,
     "src/services/firstrate/venue_restamp_plan.py::build_restamp_plan": 71,

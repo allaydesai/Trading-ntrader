@@ -1,5 +1,6 @@
 """Performance calculation service using Nautilus Trader analytics framework."""
 
+from collections.abc import Iterable
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -13,6 +14,35 @@ from nautilus_trader.analysis.statistics.returns_volatility import ReturnsVolati
 from nautilus_trader.analysis.statistics.sharpe_ratio import SharpeRatio
 from nautilus_trader.analysis.statistics.sortino_ratio import SortinoRatio
 from nautilus_trader.portfolio.portfolio import Portfolio
+
+
+def net_profit_factor(
+    realized_pnls: pd.Series | None, closed_positions: Iterable[Any] | None = None
+) -> float | None:
+    """Dollar wins over dollar losses, net of commission.
+
+    ``realized_pnls`` is the analyzer's series of each position's
+    ``realized_pnl`` — which Nautilus starts at minus the fill's commission
+    (``position.pyx``, ``_handle_*_order_fill``). Nautilus's own ``Profit Factor``
+    statistic sums ``realized_return`` instead, a price-only ratio that neither
+    commission nor size can move, so a 2× cost-stress run kept it unchanged
+    (research MCP phase 4 exit check, 2026-10-13). ``None`` when nothing closed
+    or nothing lost: no loss makes the ratio undefined, not infinite.
+
+    The analyzer's series holds every position the engine passed it, open ones
+    too, and an open position's ``realized_pnl`` is minus its entry commission:
+    a loss. ``closed_positions`` keeps only those positions (the series is keyed
+    by position id).
+    """
+    if realized_pnls is not None and closed_positions is not None:
+        closed = [p.id.value for p in closed_positions]
+        realized_pnls = realized_pnls[realized_pnls.index.isin(closed)]
+    if realized_pnls is None or realized_pnls.empty:
+        return None
+    losses = float(realized_pnls[realized_pnls < 0].sum())
+    if losses == 0.0:
+        return None
+    return float(realized_pnls[realized_pnls > 0].sum()) / abs(losses)
 
 
 class MaxDrawdown(PortfolioStatistic):

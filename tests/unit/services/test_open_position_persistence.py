@@ -194,3 +194,24 @@ class TestNaNGuards:
         saved = await _save(service, _positions_frame(row))
 
         assert saved[0].holding_period_seconds == 0
+
+
+@pytest.mark.unit
+class TestStrategyId:
+    """MCP phase 5b: each row names the strategy that owned its position, from the
+    report's own ``strategy_id`` column (``Position.to_dict``)."""
+
+    async def test_each_row_keeps_its_own_strategy(self, service):
+        closed, open_ = _closed_row(), _open_row()
+        closed["strategy_id"] = "SMACrossover-000"
+        open_["strategy_id"] = "CRSIMeanReversion-001"
+        saved = await _save(service, _positions_frame(closed, open_))
+
+        by_id = {t.trade_id: t.strategy_id for t in saved}
+        assert by_id == {"P-1": "SMACrossover-000", "P-2": "CRSIMeanReversion-001"}
+
+    async def test_a_report_without_the_column_records_none(self, service):
+        """Never the literal string "None" (the ``closing_order_id`` precedent)."""
+        saved = await _save(service, _positions_frame(_closed_row()))
+
+        assert saved[0].strategy_id is None
