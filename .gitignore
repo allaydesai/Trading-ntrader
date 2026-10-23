@@ -219,3 +219,6 @@ src/core/strategies/custom/models/
 # excalidraw-diagram-skill ships a 130 MB .venv (Playwright driver binaries).
 .agents/**/.venv/
 .agents/**/node_modules/
+
+# Built from docs/qa/e2e-research-journey-plan.md by scripts/qa/build_journey_page.py
+docs/qa/e2e-research-journey-plan.html

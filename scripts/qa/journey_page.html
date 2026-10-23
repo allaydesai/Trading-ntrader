@@ -1,0 +1,384 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<style>
+/* Layout: NTrader workbench — sticky stage rail on wide screens, one reading column, test cases as flat panels with per-track result controls */
+:root {
+  --bg: #020617; --panel: #0f172a; --raised: #1e293b; --line: #334155; --line-strong: #475569;
+  --ink: #f1f5f9; --ink-2: #cbd5e1; --muted: #94a3b8; --faint: #64748b;
+  --accent: #3b82f6; --accent-deep: #2563eb;
+  --pass: #4ade80; --pass-bg: #14532d; --fail: #f87171; --fail-bg: #7f1d1d;
+  --warn: #fbbf24; --warn-bg: #713f12; --skip: #94a3b8; --skip-bg: #1e293b;
+  --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) {
+  --bg: #f8fafc; --panel: #ffffff; --raised: #f1f5f9; --line: #e2e8f0; --line-strong: #cbd5e1;
+  --ink: #0f172a; --ink-2: #334155; --muted: #475569; --faint: #64748b;
+  --accent: #2563eb; --accent-deep: #1d4ed8;
+  --pass: #15803d; --pass-bg: #dcfce7; --fail: #b91c1c; --fail-bg: #fee2e2;
+  --warn: #a16207; --warn-bg: #fef3c7; --skip: #475569; --skip-bg: #e2e8f0; color-scheme: light; } }
+:root[data-theme="light"] {
+  --bg: #f8fafc; --panel: #ffffff; --raised: #f1f5f9; --line: #e2e8f0; --line-strong: #cbd5e1;
+  --ink: #0f172a; --ink-2: #334155; --muted: #475569; --faint: #64748b;
+  --accent: #2563eb; --accent-deep: #1d4ed8;
+  --pass: #15803d; --pass-bg: #dcfce7; --fail: #b91c1c; --fail-bg: #fee2e2;
+  --warn: #a16207; --warn-bg: #fef3c7; --skip: #475569; --skip-bg: #e2e8f0; color-scheme: light;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font: 14px/1.55 var(--sans); }
+.wrap { max-width: 1180px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 28px 64px; display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 36px; }
+@media (max-width: 860px) { .wrap { grid-template-columns: minmax(0, 1fr); } nav.rail { display: none; } }
+nav.rail { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 20px); align-self: start; display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+nav.rail a { color: var(--muted); text-decoration: none; padding: 4px 8px; border-radius: 4px; display: flex; justify-content: space-between; gap: 8px; }
+nav.rail a:hover, nav.rail a:focus-visible { color: var(--ink); background: var(--raised); outline: none; }
+nav.rail .grp { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); padding: 14px 8px 4px; }
+nav.rail .ct { font-family: var(--mono); font-size: 11px; color: var(--faint); }
+main { min-width: 0; display: flex; flex-direction: column; gap: 44px; }
+header.top { display: flex; flex-direction: column; gap: 10px; }
+.eyebrow { font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); font-family: var(--mono); }
+h1 { font-size: 28px; line-height: 1.2; margin: 0; text-wrap: balance; letter-spacing: -.01em; }
+h2 { font-size: 19px; margin: 0; text-wrap: balance; }
+h3 { font-size: 15px; margin: 0; }
+p { margin: 0; max-width: 70ch; color: var(--ink-2); }
+.lede { font-size: 15px; color: var(--ink-2); }
+section { display: flex; flex-direction: column; gap: 14px; scroll-margin-top: 20px; }
+.sec-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+.sec-head .tag { font-family: var(--mono); font-size: 12px; color: var(--accent); }
+code, .mono { font-family: var(--mono); font-size: 12.5px; }
+code { background: var(--raised); padding: 1px 5px; border-radius: 4px; color: var(--ink); overflow-wrap: anywhere; }
+ul, ol { margin: 0; padding-left: 20px; color: var(--ink-2); display: flex; flex-direction: column; gap: 4px; max-width: 75ch; }
+strong { color: var(--ink); }
+.tbl { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: 11px; letter-spacing: .05em; text-transform: uppercase; color: var(--faint); font-weight: 500; background: var(--raised); white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+td { color: var(--ink-2); }
+td:first-child { color: var(--ink); white-space: nowrap; }
+
+/* progress */
+.progress { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.prog { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+.prog-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.prog-top .big { font-family: var(--mono); font-size: 22px; font-variant-numeric: tabular-nums; }
+.prog-top .of { color: var(--faint); font-size: 13px; }
+.bar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--raised); }
+.bar span { display: block; height: 100%; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; vertical-align: 0; }
+.sync { font-size: 12px; color: var(--faint); }
+.sync.err { color: var(--warn); }
+
+/* tracks */
+.tracks { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+.track { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 8px; }
+.track .k { font-family: var(--mono); font-size: 12px; color: var(--accent); }
+.kv { display: grid; grid-template-columns: 88px minmax(0,1fr); gap: 4px 12px; font-size: 13px; }
+.kv dt { color: var(--faint); } .kv dd { margin: 0; color: var(--ink-2); }
+
+/* cases */
+.cases { display: flex; flex-direction: column; gap: 10px; }
+.case { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; display: grid; grid-template-columns: minmax(0, 1fr) 230px; gap: 16px; border-left: 3px solid var(--line-strong); }
+.case[data-state="pass"] { border-left-color: var(--pass); }
+.case[data-state="fail"] { border-left-color: var(--fail); }
+.case[data-state="blocked"] { border-left-color: var(--warn); }
+@media (max-width: 640px) { .case { grid-template-columns: minmax(0,1fr); } }
+.case-body { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.case-id { font-family: var(--mono); font-size: 12px; color: var(--faint); display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.flag { font-family: var(--sans); font-size: 11px; padding: 1px 6px; border-radius: 4px; background: var(--raised); color: var(--muted); }
+.flag.rth { color: var(--warn); background: var(--warn-bg); }
+.flag.skill { color: var(--accent); }
+.case dl { display: grid; grid-template-columns: 72px minmax(0,1fr); gap: 4px 10px; margin: 4px 0 0; font-size: 13px; }
+.case dt { color: var(--faint); font-size: 12px; padding-top: 1px; }
+.case dd { margin: 0; color: var(--ink-2); }
+.case dd.learn { color: var(--ink); }
+.ctl { display: flex; flex-direction: column; gap: 8px; }
+.ctl-row { display: grid; grid-template-columns: 58px minmax(0,1fr); gap: 8px; align-items: center; }
+.ctl-row label { font-size: 12px; color: var(--faint); }
+select, textarea, input[type="text"] { font: inherit; font-size: 13px; color: var(--ink); background: var(--raised); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; width: 100%; }
+select:focus-visible, textarea:focus-visible, input:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+select[data-v="pass"] { color: var(--pass); } select[data-v="fail"] { color: var(--fail); }
+select[data-v="blocked"] { color: var(--warn); } select[data-v="skipped"], select[data-v="na"] { color: var(--skip); }
+textarea { resize: vertical; min-height: 34px; }
+select:disabled, textarea:disabled, input:disabled, button:disabled { opacity: .55; cursor: not-allowed; }
+.stamp { font-size: 11px; color: var(--faint); min-height: 14px; }
+
+.levels { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.level { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 8px; }
+.level .q { color: var(--ink); font-weight: 600; }
+.level .k { font-family: var(--mono); font-size: 12px; color: var(--accent); }
+.level small { color: var(--faint); font-size: 12px; }
+
+/* findings */
+form.find { display: grid; grid-template-columns: 130px 140px minmax(0,1fr) auto; gap: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+@media (max-width: 720px) { form.find { grid-template-columns: minmax(0,1fr) minmax(0,1fr); } form.find input[name="title"] { grid-column: 1 / -1; } }
+button { font: inherit; font-size: 13px; border: 0; border-radius: 6px; padding: 6px 14px; background: var(--accent-deep); color: #fff; cursor: pointer; }
+button:hover { background: var(--accent); }
+button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--line); padding: 3px 10px; font-size: 12px; }
+button.ghost:hover { color: var(--ink); background: var(--raised); }
+.sev { font-size: 11px; padding: 2px 7px; border-radius: 4px; white-space: nowrap; }
+.sev.Blocker { background: var(--fail-bg); color: var(--fail); }
+.sev.Defect { background: var(--warn-bg); color: var(--warn); }
+.sev.Friction { background: var(--raised); color: var(--accent); }
+.sev.Learning { background: var(--pass-bg); color: var(--pass); }
+.empty { color: var(--faint); font-size: 13px; padding: 14px 12px; }
+.callout { border: 1px solid var(--line); border-radius: 8px; padding: 12px 16px; background: var(--raised); color: var(--ink-2); max-width: 80ch; }
+.qs { display: flex; flex-direction: column; gap: 12px; }
+.qitem { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
+.qitem p { color: var(--ink); }
+@media (prefers-reduced-motion: no-preference) { .case, select { transition: border-color .2s, color .2s; } }
+.prose { display: flex; flex-direction: column; gap: 12px; }
+.prose h3 { margin-top: 6px; }
+.prose ul ul { margin-top: 4px; }
+.stage-intro:empty { display: none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <nav class="rail" aria-label="Sections" id="rail"></nav>
+  <main>
+    <header class="top">
+      <div class="eyebrow">NTrader · QA plan · built from docs/qa/e2e-research-journey-plan.md</div>
+      <h1 id="title"></h1>
+      <div class="sync" id="byline"></div>
+      <div class="sync" id="sync">Loading saved results…</div>
+    </header>
+    <section id="progress">
+      <div class="sec-head"><h2>Progress</h2><span class="sync">Results save as you change them</span></div>
+      <div class="progress" id="prog"></div>
+    </section>
+    <div id="before" class="part"></div>
+    <section id="test-cases">
+      <div class="sec-head"><h2>Test cases</h2></div>
+      <div class="prose" id="cases-intro"></div>
+    </section>
+    <div id="stages" class="part"></div>
+    <section id="findings">
+      <div class="sec-head"><h2>Findings</h2><span class="sync">Blocker: fix now · Defect: backlog · Friction: skill or doc fix · Learning: vault note</span></div>
+      <form class="find" id="find-form" autocomplete="off">
+        <select id="f-sev" name="sev" aria-label="Severity"><option>Blocker</option><option selected>Defect</option><option>Friction</option><option>Learning</option></select>
+        <select id="f-case" name="case" aria-label="Test case"></select>
+        <input id="f-title" name="title" type="text" placeholder="What happened, in one line" aria-label="Finding">
+        <button type="submit">Add finding</button>
+      </form>
+      <div class="tbl"><table>
+        <thead><tr><th>Id</th><th>Severity</th><th>Case</th><th>Finding</th><th>Status</th></tr></thead>
+        <tbody id="find-rows"></tbody>
+      </table></div>
+    </section>
+    <div id="after" class="part"></div>
+    <section id="questions">
+      <div class="sec-head"><h2>Open questions</h2><span class="sync">Need answers before day 1</span></div>
+      <div class="qs" id="qs"></div>
+    </section>
+  </main>
+</div>
+
+<script>
+const PLAN = __PLAN_JSON__;
+const STAGES = PLAN.stages;
+const QUESTIONS = PLAN.questions;
+const STATUSES = [["", "Not run"], ["pass", "Pass"], ["fail", "Fail"], ["blocked", "Blocked"], ["skipped", "Skipped"], ["na", "N/A"]];
+const COLORS = { pass: "var(--pass)", fail: "var(--fail)", blocked: "var(--warn)", skipped: "var(--skip)", na: "var(--faint)" };
+const ALL = STAGES.flatMap(s => s.cases);
+const results = {};   // caseId -> {a:{status,note,at}, b:{...}}
+const answers = {};   // qid -> {text, at}
+let findings = [];
+let canWrite = false;
+
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const when = iso => { if (!iso) return ""; const d = new Date(iso); return isNaN(d) ? "" : d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }); };
+const applies = (c, tr) => !c.track || c.track === tr;
+
+function sectionHTML(s) {
+  return `<section id="${s.id}"><div class="sec-head"><h2>${esc(s.title)}</h2></div><div class="prose">${s.html}</div></section>`;
+}
+function renderShell() {
+  $("#title").textContent = PLAN.title;
+  $("#byline").textContent = PLAN.byline;
+  const before = PLAN.sections.filter(s => s.part === "before"), after = PLAN.sections.filter(s => s.part === "after");
+  $("#before").innerHTML = before.map(sectionHTML).join("");
+  $("#after").innerHTML = after.map(sectionHTML).join("");
+  $("#cases-intro").innerHTML = PLAN.cases_intro;
+  const link = s => `<a href="#${s.id}">${esc(s.title)}</a>`;
+  $("#rail").innerHTML = [`<a href="#progress">Progress</a>`, ...before.map(link),
+    `<div class="grp">Test cases</div>`,
+    ...STAGES.map(s => `<a href="#${s.id}"><span>${s.id} ${esc(s.name)}</span><span class="ct" id="rc-${s.id}">0/${s.cases.length}</span></a>`),
+    `<a href="#findings">Findings <span class="ct" id="rail-find">0</span></a>`,
+    `<div class="grp">Reference</div>`, ...after.map(link), `<a href="#questions">Open questions</a>`].join("");
+  $("#stages").innerHTML = STAGES.map(s => `
+    <section id="${s.id}">
+      <div class="sec-head"><span class="tag">${s.id}</span><h2>${esc(s.name)}</h2></div>
+      <div class="prose stage-intro">${s.intro.trim()}</div>
+      <div class="cases">${s.cases.map(caseHTML).join("")}</div>
+    </section>`).join("");
+  document.querySelectorAll(".prose table").forEach(t => { const w = document.createElement("div"); w.className = "tbl"; t.replaceWith(w); w.appendChild(t); });
+  $("#f-case").innerHTML = `<option value="">General</option>` + ALL.map(c => `<option>${c.id}</option>`).join("");
+  $("#qs").innerHTML = QUESTIONS.map(q => `
+    <div class="qitem"><h3>${esc(q.title)}</h3><p>${q.text}</p>
+      <textarea id="ans-${q.id}" data-q="${q.id}" rows="2" placeholder="Your answer"></textarea>
+      <div class="stamp" id="ans-st-${q.id}"></div></div>`).join("");
+}
+function caseHTML(c) {
+  const note = c.note ? `<span class="flag${c.rth ? " rth" : ""}">${esc(c.note)}</span>` : "";
+  const flags = [note, c.skill ? `<span class="flag skill">skill</span>` : "", c.optional ? `<span class="flag">optional</span>` : ""].join("");
+  const row = tr => applies(c, tr) ? `
+    <div class="ctl-row"><label for="st-${c.id}-${tr}">Track ${tr}</label>
+      <select id="st-${c.id}-${tr}" data-case="${c.id}" data-tr="${tr.toLowerCase()}">${STATUSES.map(([v, l]) => `<option value="${v}">${l}</option>`).join("")}</select></div>` : "";
+  const rows = c.rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd${k === "Learn" ? ' class="learn"' : ""}>${v}</dd>`).join("");
+  return `<article class="case" id="case-${c.id}" data-state="">
+    <div class="case-body">
+      <div class="case-id">${c.id}${flags}</div>
+      <h3>${esc(c.title)}</h3>
+      <dl>${rows}</dl>
+    </div>
+    <div class="ctl">${row("A")}${row("B")}
+      <textarea id="nt-${c.id}" data-case="${c.id}" rows="2" placeholder="Evidence: run id, session, notes"></textarea>
+      <div class="stamp" id="sp-${c.id}"></div>
+    </div></article>`;
+}
+
+function applyResults() {
+  for (const c of ALL) {
+    const r = results[c.id] || {};
+    for (const tr of ["a", "b"]) {
+      const el = document.getElementById(`st-${c.id}-${tr.toUpperCase()}`);
+      if (el && document.activeElement !== el) { el.value = r[tr]?.status || ""; }
+      if (el) el.dataset.v = el.value;
+    }
+    const nt = document.getElementById(`nt-${c.id}`);
+    if (nt && document.activeElement !== nt) nt.value = r.note || "";
+    const sts = ["a", "b"].filter(tr => applies(c, tr.toUpperCase())).map(tr => r[tr]?.status || "");
+    const state = sts.includes("fail") ? "fail" : sts.includes("blocked") ? "blocked" : sts.length && sts.every(s => s === "pass" || s === "skipped" || s === "na") && sts.includes("pass") ? "pass" : "";
+    document.getElementById(`case-${c.id}`).dataset.state = state;
+    document.getElementById(`sp-${c.id}`).textContent = r.at ? `Updated ${when(r.at)}` : "";
+  }
+  renderProgress();
+}
+function renderProgress() {
+  const cards = ["A", "B"].map(tr => {
+    const cs = ALL.filter(c => applies(c, tr));
+    const n = { pass: 0, fail: 0, blocked: 0, skipped: 0, na: 0, "": 0 };
+    cs.forEach(c => n[results[c.id]?.[tr.toLowerCase()]?.status || ""]++);
+    const done = cs.length - n[""];
+    const seg = ["pass", "fail", "blocked", "skipped", "na"].map(k => n[k] ? `<span style="width:${n[k] / cs.length * 100}%;background:${COLORS[k]}"></span>` : "").join("");
+    const lg = STATUSES.map(([k, l]) => `<span><i class="dot" style="background:${k ? COLORS[k] : "var(--raised)"}"></i>${l} ${n[k]}</span>`).join("");
+    return `<div class="prog"><div class="prog-top"><h3>Track ${tr} · ${tr === "A" ? "real research" : "fast loop"}</h3><span><span class="big">${done}</span> <span class="of">/ ${cs.length}</span></span></div><div class="bar" role="img" aria-label="${done} of ${cs.length} run">${seg}</div><div class="legend">${lg}</div></div>`;
+  });
+  const open = findings.filter(f => f.status !== "closed");
+  const blockers = open.filter(f => f.sev === "Blocker").length;
+  cards.push(`<div class="prog"><div class="prog-top"><h3>Findings</h3><span><span class="big">${open.length}</span> <span class="of">open</span></span></div><div class="legend"><span><i class="dot" style="background:var(--fail)"></i>Blockers ${blockers}</span><span>Total ${findings.length}</span></div></div>`);
+  $("#prog").innerHTML = cards.join("");
+  STAGES.forEach(s => {
+    const d = s.cases.filter(c => ["A", "B"].filter(tr => applies(c, tr)).every(tr => results[c.id]?.[tr.toLowerCase()]?.status)).length;
+    const el = document.getElementById(`rc-${s.id}`); if (el) el.textContent = `${d}/${s.cases.length}`;
+  });
+  $("#rail-find").textContent = open.length;
+}
+function renderFindings() {
+  const rows = findings.slice().sort((a, b) => (a.n || 0) - (b.n || 0)).map(f => `<tr>
+    <td class="mono">E2E-${f.n}</td><td><span class="sev ${esc(f.sev)}">${esc(f.sev)}</span></td><td class="mono">${esc(f.case || "General")}</td>
+    <td>${esc(f.title)}<div class="stamp">${when(f.at)}</div></td>
+    <td><button class="ghost" data-fid="${esc(f.id)}" ${canWrite ? "" : "disabled"}>${f.status === "closed" ? "Reopen" : "Close"}</button> ${f.status === "closed" ? '<span class="stamp">closed</span>' : ""}</td></tr>`).join("");
+  $("#find-rows").innerHTML = rows || `<tr><td colspan="5" class="empty">No findings yet. Add one above when a case doesn't go as expected; Note the case and evidence so it can be triaged.</td></tr>`;
+  renderProgress();
+}
+function applyAnswers() {
+  QUESTIONS.forEach(({ id }) => {
+    const ta = document.getElementById(`ans-${id}`);
+    if (ta && document.activeElement !== ta) ta.value = answers[id]?.text || "";
+    document.getElementById(`ans-st-${id}`).textContent = answers[id]?.at ? `Answered ${when(answers[id].at)}` : "";
+  });
+}
+function setSync(msg, err) { const s = $("#sync"); s.textContent = msg; s.classList.toggle("err", !!err); }
+function lockInputs() { document.querySelectorAll("main select, main textarea, main input, #find-form button").forEach(el => el.disabled = true); }
+
+async function save(key, value) {
+  try { await store.set(key, value); setSync(`Saved ${when(new Date().toISOString())}`); }
+  catch (e) {
+    const c = e?.code;
+    if (c === "revoked" || c === "unauthenticated") { canWrite = false; lockInputs(); setSync("Saving stopped: your access to this page changed. Reload to try again.", true); }
+    else if (c === "quota_exceeded") setSync("That note is too long to save. Shorten it and try again.", true);
+    else if (c === "rate_limited") setSync("Saving too fast. Your last change will save if you edit again in a few seconds.", true);
+    else setSync("Couldn't save that change. Try again in a moment.", true);
+  }
+}
+function caseBody(id) { const r = results[id] || {}; return { a: r.a || {}, b: r.b || {}, note: r.note || "", at: new Date().toISOString() }; }
+const saveFindings = () => save("findings", findings.map(({ id, ...f }) => f));
+
+function wire() {
+  document.addEventListener("change", e => {
+    const el = e.target;
+    if (el.matches("select[data-case]") && canWrite) {
+      el.dataset.v = el.value;
+      const id = el.dataset.case, tr = el.dataset.tr;
+      const body = caseBody(id); body[tr] = { status: el.value };
+      results[id] = body; applyResults();
+      save(`r.${id}`, body);
+    }
+  });
+  const timers = {};
+  document.addEventListener("input", e => {
+    const el = e.target;
+    if (!canWrite) return;
+    if (el.matches("textarea[data-case]")) {
+      const id = el.dataset.case;
+      clearTimeout(timers[id]); timers[id] = setTimeout(() => {
+        const body = caseBody(id); body.note = el.value; results[id] = body; applyResults(); save(`r.${id}`, body);
+      }, 900);
+    } else if (el.matches("textarea[data-q]")) {
+      const q = el.dataset.q;
+      clearTimeout(timers[q]); timers[q] = setTimeout(() => {
+        answers[q] = { text: el.value, at: new Date().toISOString() }; applyAnswers(); save(`ans.${q}`, answers[q]);
+      }, 900);
+    }
+  });
+  $("#find-form").addEventListener("submit", e => {
+    e.preventDefault();
+    if (!canWrite) return;
+    const title = $("#f-title").value.trim();
+    if (!title) { $("#f-title").focus(); return; }
+    const n = findings.reduce((m, f) => Math.max(m, f.n || 0), 0) + 1;
+    findings.push({ id: `E2E-${n}`, n, sev: $("#f-sev").value, case: $("#f-case").value, title, status: "open", at: new Date().toISOString() });
+    $("#f-title").value = "";
+    renderFindings(); saveFindings();
+  });
+  $("#find-rows").addEventListener("click", e => {
+    const b = e.target.closest("button[data-fid]"); if (!b || !canWrite) return;
+    const f = findings.find(x => x.id === b.dataset.fid); if (!f) return;
+    f.status = f.status === "closed" ? "open" : "closed";
+    renderFindings(); saveFindings();
+  });
+}
+
+let store = null;
+async function connect() {
+  store = window.superset?.storage;
+  let ok = false;
+  try { ok = !!(store && await store.ready); } catch (_) { ok = false; }
+  if (!ok) { lockInputs(); setSync("Saving isn't available here (signed out or a local preview). You can read the plan; results won't be kept.", true); return; }
+  canWrite = store.writable !== false;
+  try {
+    const [rs, as, fs] = await Promise.all([
+      Promise.all(ALL.map(c => store.get(`r.${c.id}`))),
+      Promise.all(QUESTIONS.map(({ id }) => store.get(`ans.${id}`))),
+      store.get("findings"),
+    ]);
+    ALL.forEach((c, i) => { if (rs[i]) results[c.id] = rs[i]; });
+    QUESTIONS.forEach(({ id }, i) => { if (as[i]) answers[id] = as[i]; });
+    findings = (Array.isArray(fs) ? fs : []).map(f => ({ ...f, id: `E2E-${f.n}` }));
+  } catch (e) { setSync("Couldn't load saved results. Reload to try again.", true); return; }
+  applyResults(); applyAnswers(); renderFindings();
+  if (canWrite) setSync("Results save to this page as you change them."); else { lockInputs(); setSync("You can view results here but not change them."); }
+}
+
+renderShell(); applyResults(); applyAnswers(); renderFindings(); wire(); connect();
+</script>
+</body>
+</html>

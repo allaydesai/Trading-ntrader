@@ -2771,6 +2771,7 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "aiosqlite" },
+    { name = "markdown-it-py" },
     { name = "mypy" },
     { name = "pandas-stubs" },
     { name = "pg8000" },
@@ -2821,6 +2822,7 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "aiosqlite", specifier = ">=0.21.0" },
+    { name = "markdown-it-py", specifier = ">=4.0" },
     { name = "mypy", specifier = ">=1.18.1" },
     { name = "pandas-stubs", specifier = ">=2.3.2.250827" },
     { name = "pg8000", specifier = ">=1.31.5" },

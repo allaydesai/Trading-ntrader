@@ -360,9 +360,13 @@ plan, and needs no step the skill doesn't cover.
 
 ## 8. Recording results and findings
 
-- **Run log:** `docs/qa/e2e-research-journey-log.md` — one row per test case per track: date,
-  result (pass / fail / blocked / skipped), evidence (run id, session name, job id, file path),
-  notes. Created on the first run day.
+- **Where results live:** on the published page, not in this file. Each test case takes a
+  result per track (pass / fail / blocked / skipped / N/A) and an evidence note (run id, session
+  name, job id, file path); findings and answers to the open questions are kept there too. The
+  page stores them by test-case id, and Claude reads them back with `superset pages storage`.
+  This file holds the plan only: edit it here, then rebuild the page with
+  `uv run python -m scripts.qa.build_journey_page --publish`. Never rename a test-case id, or
+  its saved results stay behind under the old id.
 - **Findings:** each non-pass gets an id `E2E-<n>`, a severity, and a home:
   - *Blocker* — stops the happy path. Fix now, test first, small commit; re-run the case.
   - *Defect* — wrong but survivable. Into the active `deferred-work.md` or a backlog item.
