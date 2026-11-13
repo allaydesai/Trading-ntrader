@@ -125,7 +125,7 @@ SIZE_BASELINE: dict[str, int] = {
     # MCP phase 2, 275 -> 277: `reproduced_from_run_id` threaded through `execute`
     # and `_persist_results` so `reproduce_run` uses the orchestrator, not the legacy runner.
     # MCP phase 4, 277 -> 278: `_make_fee_model` scales every commission term for cost stress.
-    "src/core/backtest_orchestrator.py::BacktestOrchestrator": 278,
+    "src/core/backtest_orchestrator.py::BacktestOrchestrator": 273,
     "src/core/backtest_runner.py::MinimalBacktestRunner": 902,
     "src/core/backtest_runner.py::MinimalBacktestRunner._extract_results": 111,
     "src/core/backtest_runner.py::MinimalBacktestRunner._persist_backtest_results": 100,

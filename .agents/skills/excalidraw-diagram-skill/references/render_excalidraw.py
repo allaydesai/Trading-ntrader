@@ -81,10 +81,7 @@ def render(
         from playwright.sync_api import sync_playwright
     except ImportError:
         print("ERROR: playwright not installed.", file=sys.stderr)
-        print(
-            "Run: cd .claude/skills/excalidraw-diagram/references && uv sync && uv run playwright install chromium",
-            file=sys.stderr,
-        )
+        print("Run: cd .claude/skills/excalidraw-diagram/references && uv sync && uv run playwright install chromium", file=sys.stderr)
         sys.exit(1)
 
     # Read and validate
@@ -131,10 +128,7 @@ def render(
         except Exception as e:
             if "Executable doesn't exist" in str(e) or "browserType.launch" in str(e):
                 print("ERROR: Chromium not installed for Playwright.", file=sys.stderr)
-                print(
-                    "Run: cd .claude/skills/excalidraw-diagram/references && uv run playwright install chromium",
-                    file=sys.stderr,
-                )
+                print("Run: cd .claude/skills/excalidraw-diagram/references && uv run playwright install chromium", file=sys.stderr)
                 sys.exit(1)
             raise
 
@@ -154,11 +148,7 @@ def render(
         result = page.evaluate(f"window.renderDiagram({json_str})")
 
         if not result or not result.get("success"):
-            error_msg = (
-                result.get("error", "Unknown render error")
-                if result
-                else "renderDiagram returned null"
-            )
+            error_msg = result.get("error", "Unknown render error") if result else "renderDiagram returned null"
             print(f"ERROR: Render failed: {error_msg}", file=sys.stderr)
             browser.close()
             sys.exit(1)
@@ -182,19 +172,9 @@ def render(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Render Excalidraw JSON to PNG")
     parser.add_argument("input", type=Path, help="Path to .excalidraw JSON file")
-    parser.add_argument(
-        "--output",
-        "-o",
-        type=Path,
-        default=None,
-        help="Output PNG path (default: same name with .png)",
-    )
-    parser.add_argument(
-        "--scale", "-s", type=int, default=2, help="Device scale factor (default: 2)"
-    )
-    parser.add_argument(
-        "--width", "-w", type=int, default=1920, help="Max viewport width (default: 1920)"
-    )
+    parser.add_argument("--output", "-o", type=Path, default=None, help="Output PNG path (default: same name with .png)")
+    parser.add_argument("--scale", "-s", type=int, default=2, help="Device scale factor (default: 2)")
+    parser.add_argument("--width", "-w", type=int, default=1920, help="Max viewport width (default: 1920)")
     args = parser.parse_args()
 
     if not args.input.exists():
