@@ -89,6 +89,27 @@ def build_equity(nautilus_id: str, ticker: str, bars=None):
     )
 
 
+def reconcile_equity_price_precision(instrument, bars):
+    """Return ``instrument`` with its price precision aligned to ``bars``.
+
+    The default (no ``--catalog``) path loads the instrument the importer stored in the
+    catalog, which carries ``price_precision=2``; FirstRate bars carry 4 decimals and the
+    engine rejects the mismatch. When ``instrument`` is an ``Equity`` whose precision differs
+    from the bars', it is rebuilt through :func:`build_equity` so this path and the
+    named-catalog path derive precision identically. Anything else (non-``Equity``
+    instruments, empty bars, an already-matching precision) is returned unchanged.
+    """
+    if not bars or not isinstance(instrument, Equity):
+        return instrument
+    if _infer_price_precision(bars) == instrument.price_precision:
+        return instrument
+    return build_equity(
+        nautilus_id=str(instrument.id),
+        ticker=instrument.id.symbol.value,
+        bars=bars,
+    )
+
+
 async def load_from_catalog(
     *,
     catalog_name: str,

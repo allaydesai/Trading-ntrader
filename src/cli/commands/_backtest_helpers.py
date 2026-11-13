@@ -23,6 +23,7 @@ from src.models.backtest_request import BacktestRequest
 from src.models.backtest_result import BacktestResult
 from src.models.data_load_result import DataLoadResult
 from src.services.data_catalog import DataCatalogService
+from src.services.firstrate.backtest_loader import reconcile_equity_price_precision
 from src.utils.mock_data import generate_mock_data_from_yaml
 
 # Re-export for backwards compatibility — callers that import DataLoadResult
@@ -694,9 +695,13 @@ async def _load_catalog_data(
 
     console.print(f"   Loaded {len(bars):,} bars")
 
+    # The stored/fallback instrument is built at 2dp; FirstRate bars carry 4. Align them the
+    # same way the named-catalog loader does, or the engine rejects the first bar. (Inlined
+    # in the return, not a separate statement: this function is over its size cap and the
+    # baseline in test_size_caps.py may only shrink.)
     return DataLoadResult(
         bars=bars,
-        instrument=instrument,
+        instrument=reconcile_equity_price_precision(instrument, bars),
         data_source_used=data_source_used,
     )
 

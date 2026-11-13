@@ -47,7 +47,7 @@ if echo "$COMMAND" | grep -qE '(^|\s|&&)git\s+commit'; then
   # else the formatter touches belongs to the working tree and is left alone — that
   # is what allows a partial commit (stage a subset, commit, repeat).
   # bash 3.2 on macOS has no associative arrays, hence the temp file.
-  SNAP=$(mktemp -t bashguard) || { echo "PRE-COMMIT: mktemp failed." >&2; exit 2; }
+  SNAP=$(mktemp -t bashguard.XXXXXX) || { echo "PRE-COMMIT: mktemp failed." >&2; exit 2; }
   trap 'rm -f "$SNAP"' EXIT
 
   git diff --cached --name-only --diff-filter=ACMR 2>/dev/null | while IFS= read -r f; do
