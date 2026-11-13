@@ -15,6 +15,9 @@
 
 set -e  # Exit on error
 
+# Linux/glibc >= 2.41 needs this for the nautilus_trader import (see scripts/glibc_env.sh)
+source "$(dirname "${BASH_SOURCE[0]}")/glibc_env.sh"
+
 # Use QA environment configuration
 export ENV=qa
 
