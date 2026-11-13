@@ -16,6 +16,7 @@ from nautilus_trader.model.data import Bar, BarType
 from nautilus_trader.model.instruments import CurrencyPair, Equity
 from nautilus_trader.model.objects import Price, Quantity
 from nautilus_trader.test_kit.providers import TestInstrumentProvider
+from rich.console import Console
 
 from src.services.firstrate.backtest_loader import (
     build_equity,
@@ -95,3 +96,49 @@ class TestReconcileEquityPricePrecision:
 
     def test_none_instrument_is_untouched(self):
         assert reconcile_equity_price_precision(None, _bars("187.1500")) is None
+
+
+@pytest.mark.unit
+class TestDefaultCatalogPathAppliesPrecision:
+    """_load_catalog_data (the no --catalog path) returns an instrument matching its bars."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("bar_price", "expected_precision"),
+        [("187.15", 2), ("187.1500", 4)],
+    )
+    async def test_instrument_precision_follows_bars(self, bar_price, expected_precision):
+        from src.cli.commands._backtest_helpers import _load_catalog_data
+
+        start = datetime(2024, 1, 2, tzinfo=timezone.utc)
+        end = datetime(2024, 6, 28, tzinfo=timezone.utc)
+        bars = _bars(bar_price)
+
+        availability = MagicMock()
+        availability.covers_range.return_value = True
+        availability.file_count = 1
+        availability.total_rows = 3
+
+        async def fetch_or_load(*args, **kwargs):
+            return bars
+
+        service = MagicMock()
+        service.get_availability.return_value = availability
+        service.fetch_or_load = fetch_or_load
+        # The catalog stores the instrument at the importer's default of 2 decimals.
+        service.load_instrument.return_value = TestInstrumentProvider.equity(
+            symbol="AAPL", venue="NASDAQ"
+        )
+
+        result = await _load_catalog_data(
+            instrument_id="AAPL.NASDAQ",
+            bar_type_spec="1-DAY-LAST",
+            start=start,
+            end=end,
+            console=Console(quiet=True),
+            catalog_service=service,
+        )
+
+        assert result.bars == bars
+        assert result.instrument.price_precision == expected_precision
+        assert str(result.instrument.id) == "AAPL.NASDAQ"
