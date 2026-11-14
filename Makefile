@@ -1,10 +1,22 @@
 # Makefile
+# glibc >= 2.41 (e.g. Ubuntu 26.04) refuses to load nautilus_trader's compiled extensions
+# ("cannot enable executable stack as shared object requires: Invalid argument") unless the
+# loader is told to allow it. glibc reads GLIBC_TUNABLES once, at process start, so it is
+# exported here for every recipe below (uv, pytest, uvicorn and anything they spawn).
+# Linux only: macOS has no glibc, and older glibc ignores a tunable it does not know.
+# An execstack value already set in your shell wins; other GLIBC_TUNABLES entries are kept.
+ifeq ($(shell uname -s),Linux)
+ifeq ($(findstring glibc.rtld.execstack,$(GLIBC_TUNABLES)),)
+export GLIBC_TUNABLES := $(if $(GLIBC_TUNABLES),$(GLIBC_TUNABLES):)glibc.rtld.execstack=2
+endif
+endif
+
 .PHONY: help web dev build-css test-unit test-component test-integration test-e2e test-all test-coverage clean format lint typecheck install-hooks
 
 help:
 	@echo "Web UI:"
 	@echo "  make dev               - Build CSS, then launch the web dashboard (first run / after style changes)"
-	@echo "  make web               - Launch the web dashboard (http://127.0.0.1:8000)"
+	@echo "  make web               - Launch the web dashboard (http://127.0.0.1:8000; WEB_PORT=<n> to change)"
 	@echo "  make build-css         - Build Tailwind CSS only"
 	@echo ""
 	@echo "Test Commands:"
@@ -25,9 +37,12 @@ build-css:
 	@echo "🎨 Building Tailwind CSS..."
 	./scripts/build-css.sh
 
+# Override the port if 8000 is taken: make web WEB_PORT=3001
+WEB_PORT ?= 8000
+
 web:
-	@echo "🚀 Launching web dashboard at http://127.0.0.1:8000 ..."
-	uv run uvicorn src.api.web:app --reload --host 127.0.0.1 --port 8000
+	@echo "🚀 Launching web dashboard at http://127.0.0.1:$(WEB_PORT) ..."
+	uv run uvicorn src.api.web:app --reload --host 127.0.0.1 --port $(WEB_PORT)
 
 dev: build-css web
 

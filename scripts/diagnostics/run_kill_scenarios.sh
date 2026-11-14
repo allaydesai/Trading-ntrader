@@ -8,6 +8,8 @@
 set -u
 
 cd "$(dirname "$0")/../.."
+# Linux/glibc >= 2.41 needs this for the nautilus_trader import (see scripts/glibc_env.sh)
+source scripts/glibc_env.sh
 PROBE_CMD="PYTHONPATH=. uv run python scripts/diagnostics/ibkr_reconnect_probe.py"
 
 run_kill_scenario() {

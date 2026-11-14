@@ -23,6 +23,8 @@ MAX_WAIT="${2:-2400}"
 LOG="logs/p7-position-$(date +%Y%m%d-%H%M%S).log"
 
 cd "$(dirname "$0")/../.." || exit 1
+# Linux/glibc >= 2.41 needs this for the nautilus_trader import (see scripts/glibc_env.sh)
+source scripts/glibc_env.sh
 mkdir -p logs
 
 # Last reported account snapshot, which the IB adapter prints on every update.

@@ -92,6 +92,20 @@ cp .env.example .env
 # Edit .env with your database credentials
 ```
 
+A minimal `.env` for backtests against a local catalog needs only these keys
+(placeholders — see [Configuration](#configuration) for the full list):
+
+```bash
+DATABASE_URL=postgresql://<user>:<password>@localhost:5432/<database>
+CATALOG_BASE_PATH=./data/catalogs          # where `import --catalog <name>` writes
+DEFAULT_CATALOG_NAME=<catalog-name>        # catalog the explorer / run form pre-selects
+NAUTILUS_PATH=./data/catalogs/<catalog-name>  # catalog that `data list` and backtests read
+```
+
+> **Linux with a recent glibc (Ubuntu 26.04 / glibc 2.43):** `make` targets and the
+> scripts in `scripts/` handle this for you. If you run `uv run ...` directly and hit an
+> `executable stack` ImportError, see [Troubleshooting](#nautilus_trader-fails-to-import-cannot-enable-executable-stack).
+
 ### Database Setup
 
 ```bash
@@ -167,13 +181,12 @@ Exit codes: `0` success · `1` partial (some bar files failed) · `2` fatal (bad
 | Command | Description |
 |---------|-------------|
 | `data import --csv <file> --symbol <SYM> --venue <VENUE>` | Import a single CSV file to Parquet catalog |
-| `data list` | List all data in the catalog (reads `NAUTILUS_PATH`) |
-| `data list --catalog <name>` | List data in a specific named catalog (overrides `NAUTILUS_PATH`) |
-| `data check --symbol <SYM>` | Check data availability |
-| `data check --symbol <SYM> --catalog <name>` | Check availability in a specific named catalog |
+| `data list` | List all data in the catalog at `NAUTILUS_PATH` (there is no `--catalog` option; to list a named catalog, point `NAUTILUS_PATH` at `<CATALOG_BASE_PATH>/<name>`) |
+| `data list --symbol <SYM> --format table\|json\|csv` | Filter by symbol and/or choose the output format |
+| `data check --symbol <SYM> [--venue <VENUE>] [--bar-type <TYPE>]` | Check data availability (also reads `NAUTILUS_PATH`; venue defaults to `NASDAQ`, bar type to `1-MINUTE-LAST`) |
 | `data check --symbol <SYM> --start <date> --end <date>` | Detect data gaps |
 | `data connect` | Test IBKR connection |
-| `data fetch --instruments <SYM> --start <date> --end <date>` | Fetch data from IBKR |
+| `data fetch --instruments <SYM,SYM> --start <date> --end <date> [--timeframe 1-minute\|5-minute\|1-hour\|daily]` | Fetch data from IBKR |
 
 ### Backtest Commands
 
@@ -182,19 +195,22 @@ Exit codes: `0` success · `1` partial (some bar files failed) · `2` fatal (bad
 | `backtest run --strategy <type> --symbol <SYM> [--data-source <src>] ...` | Run a backtest (sources: catalog, ibkr, kraken, mock) |
 | `backtest run --strategy <type> --symbol <SYM> --catalog <name> ...` | Run against a named FirstRate catalog (resolves the ticker via the import DB; overrides the default `NAUTILUS_PATH`) |
 | `backtest run <config.yaml>` | Run backtest with YAML config |
-| `backtest history` | View recent backtest executions |
-| `backtest history --sort sharpe` | Sort by Sharpe ratio |
+| `backtest run-multi --symbols <A,B> --catalog <name> --start <date> --end <date>` | Run ONE backtest across several ETFs from a named catalog (not persisted yet) |
+| `backtest list` | List available strategies and data |
 | `backtest show <run-id>` | View complete backtest details |
 | `backtest compare <id1> <id2>` | Compare backtests side-by-side |
 | `backtest reproduce <run-id>` | Re-run a previous backtest |
+| `history` | View recent backtest executions (a **top-level** command, not under `backtest`) |
+| `history --sort sharpe` | Sort by Sharpe ratio (`date` · `return` · `sharpe`); also `--limit`, `--strategy`, `--instrument`, `--status` |
 
 ### Report Commands
 
 | Command | Description |
 |---------|-------------|
-| `report list` | List all saved results |
+| `report list` | List all saved results (`--limit`, `--strategy`, `--symbol`) |
 | `report summary <result-id>` | Quick performance summary |
-| `report generate --result-id <id> --format <fmt>` | Generate detailed report |
+| `report generate --result-id <id> --format text\|csv\|json` | Generate detailed report |
+| `report export-all <result-id> [--output-dir <dir>]` | Export the text, CSV and JSON reports at once |
 
 ### Catalog Commands
 
@@ -305,8 +321,9 @@ uv run python -m src.cli.main import \
   --timeframe daily \
   ~/Data/Stocks/Stocks_1day
 
-# 3. Verify — list what's in the named catalog
-uv run python -m src.cli.main data list --catalog firstrate-stocks
+# 3. Verify — list what's in the named catalog (`data list` reads NAUTILUS_PATH,
+#    so point it at the catalog you just imported into)
+NAUTILUS_PATH=./data/catalogs/firstrate-stocks uv run python -m src.cli.main data list
 
 # 4. Run a backtest against the named catalog
 uv run python -m src.cli.main backtest run \
@@ -330,6 +347,9 @@ subset CSV.
 the bars and persisted per ticker. Override with `--dividends-dir` / `--splits-dir`
 if they live elsewhere. Supplementary failures are reported but never fail the import.
 
+> **Note:** `data list` and `data check` have no `--catalog` option; they read the catalog at
+> `NAUTILUS_PATH`. Only `import`, `backtest run`, `backtest run-multi` and `catalog ...` take `--catalog <name>`.
+
 > **Tip:** After changing `NAUTILUS_PATH`, restart the web server — `--reload` does
 > not pick up env changes.
 
@@ -344,7 +364,7 @@ uv run python -m src.cli.main data fetch \
   --instruments AAPL,MSFT \
   --start 2024-01-01 \
   --end 2024-01-31 \
-  --timeframe DAILY
+  --timeframe daily
 ```
 
 For detailed IBKR setup, see [docs/setup/IBKR_SETUP.md](docs/setup/IBKR_SETUP.md).
@@ -372,8 +392,8 @@ uv run python -m src.cli.main backtest run \
 uv run python -m src.cli.main backtest run \
   --strategy momentum --symbol AAPL --start 2024-01-02 --end 2024-01-02
 
-# View history and find best performers
-uv run python -m src.cli.main backtest history --sort sharpe
+# View history and find best performers (`history` is a top-level command)
+uv run python -m src.cli.main history --sort sharpe
 
 # Compare specific runs
 uv run python -m src.cli.main backtest compare <uuid1> <uuid2>
@@ -388,7 +408,9 @@ make dev
 # Subsequent runs (CSS already built): just serve
 make web
 
-# (make web is equivalent to: uv run uvicorn src.api.web:app --reload --host 127.0.0.1 --port 8000)
+# (make web is equivalent to: uv run uvicorn src.api.web:app --reload --host 127.0.0.1 --port 8000
+#  — plus the Linux glibc setting described under Troubleshooting. Use `make web WEB_PORT=3001`
+#  if port 8000 is taken.)
 
 # Open in browser:
 #   http://127.0.0.1:8000              — dashboard / backtest results
@@ -766,11 +788,34 @@ uv run ruff format .
 # Lint code
 uv run ruff check .
 
-# Type checking
-uv run mypy .
+# Type checking (same scope as CI / the commit hook)
+make typecheck
 ```
 
 ## Troubleshooting
+
+### `nautilus_trader` fails to import: "cannot enable executable stack"
+
+On newer Linux (glibc ≥ 2.41, e.g. Ubuntu 26.04 with glibc 2.43) importing the engine fails with:
+
+```
+ImportError: .../nautilus_trader/backtest/engine.cpython-311-x86_64-linux-gnu.so:
+cannot enable executable stack as shared object requires: Invalid argument
+```
+
+The compiled extension asks for an executable stack, which recent glibc refuses by default.
+Tell the loader to allow it with `GLIBC_TUNABLES=glibc.rtld.execstack=2`:
+
+- **`make` targets** (`make test-*`, `make web`, `make dev`, …) and the shell scripts under
+  `scripts/` set it automatically on Linux. Nothing to do.
+- **Running `uv run ...` directly** (CLI, `uvicorn`, `pytest`, the MCP server): export it first,
+  e.g. `export GLIBC_TUNABLES=glibc.rtld.execstack=2`, or prefix a single command with it.
+- **Docker:** the `Dockerfile` sets it in the image environment.
+- **Claude Desktop MCP server on Linux:** add `"GLIBC_TUNABLES": "glibc.rtld.execstack=2"` to the
+  server's `env` block.
+
+glibc reads the variable once, when the process starts, so it cannot be set from inside Python.
+It is not needed on macOS, and glibc older than 2.41 ignores it, so it is safe to set anywhere.
 
 ### Database Connection Errors
 
@@ -788,10 +833,11 @@ PGPASSWORD=ntrader_dev_2025 psql -h localhost -U ntrader -d trading_ntrader -c "
 ### Data Not Found
 
 ```bash
-# Check available data
+# Check available data (reads the catalog at NAUTILUS_PATH)
 uv run python -m src.cli.main data list
 
 # Verify symbol and date range match your imported data
+uv run python -m src.cli.main data check --symbol <SYM> --venue <VENUE>
 ```
 
 ### IBKR Connection Issues

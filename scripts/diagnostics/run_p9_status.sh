@@ -23,6 +23,8 @@ STALE_WAIT="${STALE_WAIT:-95}"
 BAR_WAIT="${BAR_WAIT:-100}"
 
 cd "$(dirname "$0")/../.." || exit 1
+# Linux/glibc >= 2.41 needs this for the nautilus_trader import (see scripts/glibc_env.sh)
+source scripts/glibc_env.sh
 mkdir -p logs
 
 cli() { uv run python -m src.cli.main "$@"; }

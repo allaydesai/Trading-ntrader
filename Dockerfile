@@ -31,6 +31,12 @@ RUN mkdir -p /app/data /app/logs /app/data/catalog
 # Set Python path
 ENV PYTHONPATH=/app
 
+# Newer glibc (>= 2.41, e.g. Debian trixie / Ubuntu 26.04 bases) refuses to load
+# nautilus_trader's extensions without this ("cannot enable executable stack").
+# Older glibc ignores a tunable it does not know, so this is harmless on bookworm.
+# Read by the loader at process start, so it must be in the image environment.
+ENV GLIBC_TUNABLES=glibc.rtld.execstack=2
+
 # Expose ports (optional, for future FastAPI integration)
 EXPOSE 8000
 
