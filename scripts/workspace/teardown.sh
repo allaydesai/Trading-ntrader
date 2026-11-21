@@ -23,8 +23,7 @@ stop_pid() {
 if [[ -s "$PID_FILE" ]]; then
   pid="$(cat "$PID_FILE")"
   # Only kill it if it is still a uvicorn started from this worktree (PIDs get reused).
-  if ps -o command= -p "$pid" 2>/dev/null | grep -q uvicorn \
-     && [[ "$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')" == "$WORKTREE" ]]; then
+  if is_our_server "$pid"; then
     log "stopping web server (pid $pid)"
     stop_pid "$pid"
   fi

@@ -35,6 +35,10 @@ DEFAULT_WEB_PORT=8000   # reserved for the main checkout
 PORT_RANGE_START=8001
 PORT_RANGE_END=8099
 
+# Without lsof, port_in_use would call every port free and teardown could not identify
+# its server, so fail loudly instead of claiming a taken port or orphaning a server.
+command -v lsof >/dev/null 2>&1 || { echo "[workspace] lsof is required; install it and rerun" >&2; exit 1; }
+
 log() { printf '[workspace] %s\n' "$*"; }
 
 is_main_checkout() { [[ "$ROOT" == "$WORKTREE" ]]; }
@@ -60,15 +64,29 @@ claim_port() {
   for f in "$PORT_REGISTRY"/*; do
     [[ -f "$f" && "$(cat "$f")" == "$WORKTREE" ]] && { basename "$f"; return; }
   done
+  local tmp
+  tmp="$(mktemp "$PORT_REGISTRY/../claim.XXXXXX")"   # same filesystem as the registry
+  echo "$WORKTREE" >"$tmp"
   for ((p = PORT_RANGE_START; p <= PORT_RANGE_END; p++)); do
     port_in_use "$p" && continue
-    # noclobber makes the create atomic: two workspaces racing for one port can't both win
-    if (set -o noclobber; echo "$WORKTREE" >"$PORT_REGISTRY/$p") 2>/dev/null; then
-      echo "$p"; return
+    # Publish a fully written claim in one step: write the owner to a temp file, then
+    # hard-link it to the port name. ln fails if the name exists, so two racing workspaces
+    # can't both win, and gc_ports can never see a half-written (empty) claim.
+    if ln "$tmp" "$PORT_REGISTRY/$p" 2>/dev/null; then
+      rm -f "$tmp"; echo "$p"; return
     fi
   done
+  rm -f "$tmp"
   echo "no free port in $PORT_RANGE_START-$PORT_RANGE_END" >&2
   return 1
+}
+
+# True if PID is a uvicorn started from this worktree (guards against PID reuse).
+is_our_server() {
+  local pid="$1"
+  [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null || return 1
+  ps -o command= -p "$pid" 2>/dev/null | grep -q uvicorn || return 1
+  [[ "$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')" == "$WORKTREE" ]]
 }
 
 release_port() {

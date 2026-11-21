@@ -122,7 +122,7 @@ the scripts behave the same under any tool:
 - **T3 Code:** set the project's setup script to `./scripts/workspace/setup.sh` and add a
   run action `./scripts/workspace/run.sh`.
 - **Shared, not per-workspace:** Postgres and Redis, and the database schema. Setup does not run
-  migrations, so run `alembic upgrade head` yourself when a branch needs it.
+  migrations, so run `uv run alembic upgrade head` yourself when a branch needs it.
 
 ### Database Setup
 
