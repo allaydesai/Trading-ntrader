@@ -1,0 +1,78 @@
+name: Nightly
+
+# Slow and advisory checks, kept off the PR critical path. Run them on demand with
+# "Run workflow" (workflow_dispatch) before a release, or after a dependency bump.
+
+on:
+  schedule:
+    - cron: "0 7 * * *" # 07:00 UTC daily
+  workflow_dispatch:
+
+defaults:
+  run:
+    shell: bash # explicit bash adds -o pipefail; the implicit default does not
+
+env:
+  # nautilus_trader's .so files request an executable stack; glibc >= 2.41 refuses
+  # to load them without this (same setting as the Makefile and Dockerfile, #41).
+  GLIBC_TUNABLES: glibc.rtld.execstack=2
+  DATABASE_URL: postgresql://ntrader_dev_2025:ntrader_dev_2025@localhost:5432/trading_ntrader_dev
+
+jobs:
+  python-312:
+    name: Full suite on Python 3.12
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ntrader_dev_2025
+          POSTGRES_PASSWORD: ntrader_dev_2025
+          POSTGRES_DB: trading_ntrader_dev
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+        ports: ["5432:5432"]
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 5s --health-retries 10
+        ports: ["6379:6379"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --frozen --dev
+      - run: uv run alembic upgrade head
+      - run: uv run pytest tests/unit tests/component -n auto -q -ra --tb=short
+      - run: uv run pytest tests/integration -n auto --forked -q -ra --tb=short
+
+  typecheck:
+    name: mypy (advisory)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true # advisory until the mypy backlog is cleared
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.11"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --frozen --dev
+      - run: uv run --with mypy mypy src/core src/services --ignore-missing-imports --show-error-codes
+
+  security:
+    name: Security scan (advisory)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uvx bandit -r src/ -ll
+      - if: ${{ !cancelled() }} # still audit dependencies after a bandit finding
+        run: uvx pip-audit -r <(uv export --frozen --no-hashes --no-emit-project)

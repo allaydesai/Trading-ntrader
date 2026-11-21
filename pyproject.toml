@@ -86,6 +86,11 @@ module = [
 ]
 ignore_missing_imports = true
 
+[tool.coverage.run]
+# pytest-forked children leave via os._exit, which skips coverage's save. Without this,
+# everything the --forked integration tier executes is missing from the report.
+patch = ["_exit"]
+
 [tool.ruff]
 exclude = [
     "tests/old_tests",

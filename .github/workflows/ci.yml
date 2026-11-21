@@ -1,116 +1,81 @@
 name: CI
 
+# Fast lane: runs on every PR and push to main. Target: under 8 minutes wall clock.
+#
+# Each test tier runs once, in parallel, and writes its own coverage data file.
+# The coverage job only *combines* those files; it never re-runs the suite.
+# (The old "Combined Coverage Report" job re-ran all ~7,400 tests without --forked.
+# It took 15 minutes on the critical path and caused the red builds on main.)
+#
+# Slow and advisory checks (Python 3.12, mypy, bandit/safety) live in nightly.yml.
+
 on:
-  push:
-    branches: [main, develop]
   pull_request:
     branches: [main, develop]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "_bmad/**"
+      - "_bmad-output/**"
+      - "archive/**"
+  push:
+    branches: [main, develop]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "_bmad/**"
+      - "_bmad-output/**"
+      - "archive/**"
+  workflow_dispatch:
+
+concurrency:
+  # A new push to the same PR cancels the run that is already in flight.
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash # explicit bash adds -o pipefail; the implicit default does not
+
+env:
+  PYTHON_VERSION: "3.11" # matches .python-version
+  # nautilus_trader's .so files request an executable stack; glibc >= 2.41 refuses
+  # to load them without this (same setting as the Makefile and Dockerfile, #41).
+  GLIBC_TUNABLES: glibc.rtld.execstack=2
+  DATABASE_URL: postgresql://ntrader_dev_2025:ntrader_dev_2025@localhost:5432/trading_ntrader_dev
 
 jobs:
-  unit-tests:
-    name: Unit Tests (Fast)
+  lint:
+    name: Lint (ruff)
     runs-on: ubuntu-latest
-    timeout-minutes: 30  # a hung test must fail the job, not hold it for hours
-
-    strategy:
-      matrix:
-        python-version: ['3.11', '3.12']
-
+    timeout-minutes: 5
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --frozen --dev
+      - name: Ruff format check (locked ruff version, same as local)
+        run: uv run ruff format --check --diff .
+      - name: Ruff lint (includes the F401/F821 import gate)
+        run: uv run ruff check . --output-format=github
 
-      - name: Install UV
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-
-      - name: Cache dependencies
-        uses: actions/cache@v3
-        with:
-          path: ~/.cache/uv
-          key: ${{ runner.os }}-uv-${{ hashFiles('pyproject.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-uv-
-
-      - name: Install dependencies
-        run: |
-          uv sync --dev
-
-      - name: Run unit tests (Pure Python, no Nautilus)
-        run: |
-          uv run pytest tests/unit -v -n auto \
-            --cov=src \
-            --cov-report=xml \
-            --cov-report=term-missing \
-            --tb=short
-
-      - name: Upload unit test coverage
-        if: matrix.python-version == '3.11'
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-unit
-          path: coverage.xml
-
-  component-tests:
-    name: Component Tests (Test Doubles)
+  tests:
+    name: Tests (${{ matrix.tier }})
     runs-on: ubuntu-latest
-    timeout-minutes: 30  # a hung test must fail the job, not hold it for hours
-
+    timeout-minutes: 15 # a hung test fails the job instead of holding it
     strategy:
+      fail-fast: false # one red tier should not hide the others' results
       matrix:
-        python-version: ['3.11', '3.12']
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Install UV
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-
-      - name: Cache dependencies
-        uses: actions/cache@v3
-        with:
-          path: ~/.cache/uv
-          key: ${{ runner.os }}-uv-${{ hashFiles('pyproject.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-uv-
-
-      - name: Install dependencies
-        run: |
-          uv sync --dev
-
-      - name: Run component tests (with test doubles)
-        run: |
-          uv run pytest tests/component -v -n auto \
-            --cov=src \
-            --cov-report=xml \
-            --cov-report=term-missing \
-            --tb=short
-
-      - name: Upload component test coverage
-        if: matrix.python-version == '3.11'
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-component
-          path: coverage.xml
-
-  integration-tests:
-    name: Integration Tests (Real Nautilus)
-    runs-on: ubuntu-latest
-    timeout-minutes: 30  # a hung test must fail the job, not hold it for hours
+        include:
+          - tier: unit
+            args: tests/unit -n auto
+          - tier: component
+            args: tests/component -n auto
+          - tier: integration
+            args: tests/integration -n auto --forked # Nautilus C extensions need --forked
 
     services:
       postgres:
@@ -120,327 +85,72 @@ jobs:
           POSTGRES_PASSWORD: ntrader_dev_2025
           POSTGRES_DB: trading_ntrader_dev
         options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432:5432
-
-      # Without this, tests/integration/core/test_live_cache_namespace.py skips
-      # itself and Story 2.4's AC #4 / FR19 — a restarted session rejoins its own
-      # Redis namespace, and two sessions never see each other's state — is
-      # proven by nothing CI runs. The skip fixture stays for developers who have
-      # no Redis; here the tests must actually execute.
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+        ports: ["5432:5432"]
+      # Required by tests/integration/core/test_live_cache_namespace.py. Without
+      # Redis it skips itself, and Story 2.4's AC #4 / FR19 would go unproven.
       redis:
         image: redis:7-alpine
         options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 6379:6379
-
-    strategy:
-      matrix:
-        python-version: ['3.11', '3.12']
+          --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 5s --health-retries 10
+        ports: ["6379:6379"]
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v6
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
 
-      - name: Install UV
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-
-      - name: Cache dependencies
-        uses: actions/cache@v3
-        with:
-          path: ~/.cache/uv
-          key: ${{ runner.os }}-uv-${{ hashFiles('pyproject.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-uv-
-
-      - name: Install dependencies
-        run: |
-          uv sync --dev
+      - name: Install dependencies (locked)
+        run: uv sync --frozen --dev
 
       - name: Run database migrations
-        env:
-          DATABASE_URL: postgresql://ntrader_dev_2025:ntrader_dev_2025@localhost:5432/trading_ntrader_dev
-        run: |
-          uv run alembic upgrade head
+        if: matrix.tier == 'integration'
+        run: uv run alembic upgrade head
 
-      - name: Run integration tests (subprocess isolated)
+      - name: Run ${{ matrix.tier }} tests
         env:
-          DATABASE_URL: postgresql://ntrader_dev_2025:ntrader_dev_2025@localhost:5432/trading_ntrader_dev
+          COVERAGE_FILE: .coverage.${{ matrix.tier }}
         run: |
-          uv run pytest tests/integration -v -n auto --forked \
-            --cov=src \
-            --cov-report=xml \
-            --cov-report=term-missing \
-            --tb=short
+          uv run pytest ${{ matrix.args }} \
+            --cov=src --cov-report= \
+            -q -ra --tb=short --durations=15
 
-      - name: Upload integration test coverage
-        if: matrix.python-version == '3.11'
+      - name: Upload coverage data
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-integration
-          path: coverage.xml
+          name: coverage-data-${{ matrix.tier }}
+          path: .coverage.${{ matrix.tier }}
+          include-hidden-files: true
+          retention-days: 3
 
-  coverage-report:
-    name: Combined Coverage Report
+  coverage:
+    name: Coverage (combine, ≥64%)
     runs-on: ubuntu-latest
-    needs: [unit-tests, component-tests, integration-tests]
-    if: always()
-
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: ntrader_dev_2025
-          POSTGRES_PASSWORD: ntrader_dev_2025
-          POSTGRES_DB: trading_ntrader_dev
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432:5432
-
-      # This job re-runs tests/integration too, so it needs the same Redis the
-      # integration job does — otherwise the engine-cache tests skip here and
-      # their lines are reported as uncovered rather than as passing.
-      redis:
-        image: redis:7-alpine
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 6379:6379
-
+    needs: tests
+    timeout-minutes: 5
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
         with:
-          python-version: '3.11'
-
-      - name: Install UV
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-
-      - name: Install dependencies
-        run: |
-          uv sync --dev
-
-      - name: Run database migrations
-        env:
-          DATABASE_URL: postgresql://ntrader_dev_2025:ntrader_dev_2025@localhost:5432/trading_ntrader_dev
-        run: |
-          uv run alembic upgrade head
-
-      - name: Download all coverage reports
-        uses: actions/download-artifact@v4
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: actions/download-artifact@v4
         with:
-          pattern: coverage-*
-          path: coverage-reports/
-        continue-on-error: true
-
-      - name: Run all tests with combined coverage
-        env:
-          DATABASE_URL: postgresql://ntrader_dev_2025:ntrader_dev_2025@localhost:5432/trading_ntrader_dev
+          pattern: coverage-data-*
+          path: coverage-data
+          merge-multiple: true
+      - name: Combine and enforce threshold
         run: |
-          uv run pytest tests/ -v -n auto \
-            --cov=src \
-            --cov-report=xml \
-            --cov-report=term-missing \
-            --cov-report=html \
-            --cov-fail-under=64 \
-            --tb=short
-
-      - name: Upload coverage to Codecov
+          uvx coverage combine coverage-data/
+          uvx coverage xml
+          uvx coverage report --fail-under=64 --skip-covered --sort=cover | tail -25
+      - name: Upload to Codecov
         uses: codecov/codecov-action@v4
         with:
           files: ./coverage.xml
-          flags: unittests
-          name: codecov-umbrella
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
-
-      - name: Upload coverage artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-report
-          path: htmlcov/
-
-  lint:
-    name: Code Quality
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install UV
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-
-      - name: Cache dependencies
-        uses: actions/cache@v3
-        with:
-          path: ~/.cache/uv
-          key: ${{ runner.os }}-uv-lint-${{ hashFiles('pyproject.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-uv-lint-
-
-      - name: Install dependencies
-        run: |
-          uv sync --dev
-          uv add --dev mypy
-
-      - name: Run Ruff format check
-        run: |
-          echo "::group::Ruff Format Check"
-          uv run ruff format --check . --diff
-          echo "::endgroup::"
-
-      - name: Run Ruff lint
-        run: |
-          echo "::group::Ruff Lint Check"
-          uv run ruff check . --output-format=github
-          echo "::endgroup::"
-
-      - name: Run type checking
-        run: |
-          echo "::group::MyPy Type Check"
-          uv run mypy src/ --ignore-missing-imports --show-error-codes || true
-          echo "::endgroup::"
-
-  security:
-    name: Security Scan
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install UV
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-
-      - name: Install dependencies
-        run: |
-          uv sync --dev
-          uv add --dev bandit safety
-
-      - name: Run Bandit security scan
-        run: |
-          echo "::group::Bandit Security Scan"
-          uv run bandit -r src/ -f json -o bandit-report.json || true
-          uv run bandit -r src/ -f txt || true
-          echo "::endgroup::"
-
-      - name: Check for known security vulnerabilities
-        run: |
-          echo "::group::Safety Vulnerability Check"
-          uv run safety check --json || true
-          echo "::endgroup::"
-
-      - name: Upload security reports
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: security-reports
-          path: |
-            bandit-report.json
-
-  test-summary:
-    name: Test Results Summary
-    runs-on: ubuntu-latest
-    needs: [unit-tests, component-tests, integration-tests, coverage-report, lint, security]
-    if: always()
-
-    steps:
-      - name: Download coverage report
-        uses: actions/download-artifact@v4
-        with:
-          name: coverage-report
-          path: coverage/
-        continue-on-error: true
-
-      - name: Test Results Summary
-        run: |
-          echo "## 🧪 Test Results Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Test Pyramid (Unit → Component → Integration)" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-          if [[ "${{ needs.unit-tests.result }}" == "success" ]]; then
-            echo "✅ **Unit Tests** (Pure Python, ~0.5s): PASSED" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "❌ **Unit Tests** (Pure Python, ~0.5s): FAILED" >> $GITHUB_STEP_SUMMARY
-          fi
-
-          if [[ "${{ needs.component-tests.result }}" == "success" ]]; then
-            echo "✅ **Component Tests** (Test Doubles, ~0.5s): PASSED" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "❌ **Component Tests** (Test Doubles, ~0.5s): FAILED" >> $GITHUB_STEP_SUMMARY
-          fi
-
-          if [[ "${{ needs.integration-tests.result }}" == "success" ]]; then
-            echo "✅ **Integration Tests** (Real Nautilus, ~5s): PASSED" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "❌ **Integration Tests** (Real Nautilus, ~5s): FAILED" >> $GITHUB_STEP_SUMMARY
-          fi
-
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Code Quality" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-          if [[ "${{ needs.lint.result }}" == "success" ]]; then
-            echo "✅ **Linting & Formatting**: PASSED" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "❌ **Linting & Formatting**: FAILED" >> $GITHUB_STEP_SUMMARY
-          fi
-
-          if [[ "${{ needs.security.result }}" == "success" ]]; then
-            echo "✅ **Security Scan**: PASSED" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "⚠️ **Security Scan**: COMPLETED WITH WARNINGS" >> $GITHUB_STEP_SUMMARY
-          fi
-
-          if [[ "${{ needs.coverage-report.result }}" == "success" ]]; then
-            echo "✅ **Coverage Report**: PASSED (≥64%)" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "❌ **Coverage Report**: FAILED (<64%)" >> $GITHUB_STEP_SUMMARY
-          fi
-
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "📊 **Detailed Coverage Report**: Available in artifacts" >> $GITHUB_STEP_SUMMARY
-          echo "🏗️ **Test Architecture**: Following test pyramid pattern (50% unit, 25% component, 20% integration)" >> $GITHUB_STEP_SUMMARY
