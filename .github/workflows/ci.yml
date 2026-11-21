@@ -15,7 +15,7 @@ on:
     paths-ignore:
       - "**.md"
       - "docs/**"
-      - "_bmad/**"
+      - "openspec/**"
       - "_bmad-output/**"
       - "archive/**"
   push:
@@ -23,7 +23,7 @@ on:
     paths-ignore:
       - "**.md"
       - "docs/**"
-      - "_bmad/**"
+      - "openspec/**"
       - "_bmad-output/**"
       - "archive/**"
   workflow_dispatch:

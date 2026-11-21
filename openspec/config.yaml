@@ -1,0 +1,24 @@
+schema: spec-driven
+
+# When to use OpenSpec here: only for a change that touches 3+ files or crosses an
+# interface (a port/protocol, a DB schema or migration, a CLI flag or exit code, an
+# MCP tool contract, an HTTP route, or a record name another module or test pins).
+# Smaller changes go straight to TDD without a proposal.
+context: |
+  NTrader: Nautilus Trader backtesting + IBKR paper trading. Python 3.12, uv, FastAPI/HTMX,
+  SQLAlchemy async + Alembic, Parquet catalogs.
+  TDD is non-negotiable: every task list starts with the failing test.
+  Size caps (statement lines): files <500, functions <50, classes <100. An overage is a
+  recorded baseline entry in tests/unit/governance/test_size_caps.py, never silent.
+  Live-path changes (src/core/live_*.py, src/cli/commands/live*.py) must name every
+  hand-maintained guard list they touch: see docs/agent/guard-lists.md.
+  Never import src.core.strategies.custom.* from core code (git submodule).
+  Prior planning history (PRDs, architecture, epics, retros) is in _bmad-output/archive/.
+
+rules:
+  proposal:
+    - State what is out of scope
+    - Name every interface crossed and every guard list or pinned constant affected
+  tasks:
+    - Each task starts with the failing test that proves it, and names the test tier
+    - Include a live-verification task when the change touches the live/paper path
