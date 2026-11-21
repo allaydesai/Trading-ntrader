@@ -222,3 +222,10 @@ src/core/strategies/custom/models/
 
 # Built from docs/qa/e2e-research-journey-plan.md by scripts/qa/build_journey_page.py
 docs/qa/e2e-research-journey-plan.html
+
+# Workspace tooling (Superset / T3 Code): per-workspace state and personal overrides
+.workspace/
+.superset/config.local.json
+# setup.sh symlinks these from the main checkout (a trailing-slash pattern misses symlinks)
+/data/catalogs
+/tailwindcss

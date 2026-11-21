@@ -1,0 +1,7 @@
+{
+  "ports": [
+    { "port": 8000, "label": "NTrader web UI (main checkout)" },
+    { "port": 5432, "label": "PostgreSQL (shared)" },
+    { "port": 6379, "label": "Redis (shared)" }
+  ]
+}

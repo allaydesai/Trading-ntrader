@@ -106,6 +106,24 @@ NAUTILUS_PATH=./data/catalogs/<catalog-name>  # catalog that `data list` and bac
 > scripts in `scripts/` handle this for you. If you run `uv run ...` directly and hit an
 > `executable stack` ImportError, see [Troubleshooting](#nautilus_trader-fails-to-import-cannot-enable-executable-stack).
 
+### Parallel Workspaces (Superset / T3 Code / git worktrees)
+
+`scripts/workspace/` prepares any git worktree of this repo. The paths come from git, so
+the scripts behave the same under any tool:
+
+| Script | What it does |
+|---|---|
+| `setup.sh` | Copies `.env`, `.env.dev`, `.env.qa`, `.claude/settings.local.json` from the main checkout (never overwrites). Symlinks `data/catalogs` and `tailwindcss`. Inits the strategies submodule, runs `uv sync --frozen`, sets the git hooks, and claims a web port (8001–8099; 8000 stays with the main checkout). Idempotent. |
+| `run.sh` | Serves the web UI on the claimed port (`WEB_PORT=<n>` overrides it). Refuses to start if the port is busy. |
+| `teardown.sh` | Stops this worktree's server and releases its port (`--stop-only` keeps the port). |
+
+- **Superset:** wired in `.superset/config.json`. Put personal additions in
+  `.superset/config.local.json` (gitignored).
+- **T3 Code:** set the project's setup script to `./scripts/workspace/setup.sh` and add a
+  run action `./scripts/workspace/run.sh`.
+- **Shared, not per-workspace:** Postgres and Redis, and the database schema. Setup does not run
+  migrations, so run `alembic upgrade head` yourself when a branch needs it.
+
 ### Database Setup
 
 ```bash
