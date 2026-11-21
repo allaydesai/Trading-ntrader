@@ -117,7 +117,11 @@ mcp__playwright__browser_evaluate
   function: "() => document.querySelector('button[type=\"submit\"]').click()"
 ```
 
-With Claude in Chrome, run the same expression through `javascript_tool`.
+With Claude in Chrome, `javascript_tool` evaluates the text it is given, so pass a statement
+that runs, not the arrow function (an arrow function would be returned, never called):
+```js
+document.querySelector('button[type="submit"]').click();
+```
 
 ### 2. HTMX swaps invalidate element refs
 
@@ -163,8 +167,15 @@ mcp__playwright__browser_evaluate
     }
 ```
 
-With Claude in Chrome, run the function body through `javascript_tool` (`form_input` has the
-same silent-failure risk on date inputs).
+With Claude in Chrome, pass `javascript_tool` the statements themselves, not the arrow function
+(`form_input` has the same silent-failure risk on date inputs):
+```js
+const input = document.querySelector('#start_date');
+const nativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+nativeSetter.call(input, '2024-01-01');
+input.dispatchEvent(new Event('input', { bubbles: true }));
+input.dispatchEvent(new Event('change', { bubbles: true }));
+```
 
 **Always use this pattern for `#start_date` and `#end_date` fields.**
 
