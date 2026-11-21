@@ -35,6 +35,9 @@ concurrency:
 
 env:
   PYTHON_VERSION: "3.11" # matches .python-version
+  # nautilus_trader's .so files request an executable stack; glibc >= 2.41 refuses
+  # to load them without this (same setting as the Makefile and Dockerfile, #41).
+  GLIBC_TUNABLES: glibc.rtld.execstack=2
   DATABASE_URL: postgresql://ntrader_dev_2025:ntrader_dev_2025@localhost:5432/trading_ntrader_dev
 
 jobs:
