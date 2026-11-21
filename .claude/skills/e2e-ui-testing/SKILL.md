@@ -357,3 +357,15 @@ Detail page → click "Rerun" → verify run form pre-filled
 - **Never click submit directly for HTMX forms** — use JS eval to ensure HTMX intercepts
 - **Never assume a backtest will complete quickly** — use 120s+ timeouts
 - **Never test against production data assumptions** — check what strategies/data are actually available
+
+## agent-browser gotchas (moved from CLAUDE.md, 2026-11-21)
+
+- **Always snapshot before interacting** — `agent-browser snapshot -i` to get element refs (@e1, @e2, ...). Never guess selectors
+- **Re-snapshot after navigation/re-render** — refs become stale after page changes
+- **Wait for async content** — use `agent-browser wait --text "Expected"` before snapshotting dynamic pages
+- **Capture evidence** — `agent-browser screenshot result.png` for pass/fail proof
+- **Date inputs** — `agent-browser fill @ref` silently fails on `<input type="date">` (exposed as 3 spinbuttons). Use `agent-browser eval` with native value setter + event dispatch instead
+- **HTMX form submission** — `agent-browser click @ref` on submit buttons may not trigger HTMX's event chain. Use `agent-browser eval "document.querySelector('button[type=\"submit\"]').click()"` to ensure HTMX intercepts the submit
+- **Timeouts for long requests** — set `AGENT_BROWSER_DEFAULT_TIMEOUT=120000` when clicking actions that trigger slow server responses (e.g., backtest execution)
+- **Playwright MCP timeouts** — configured with `--timeout-action 60000 --timeout-navigation 120000` to handle long-running backtest requests
+- Dev server: `http://127.0.0.1:8000` (FastAPI/HTMX)

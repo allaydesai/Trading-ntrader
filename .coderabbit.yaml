@@ -26,7 +26,6 @@ reviews:
     - "!static/css/output.css"
     - "!htmlcov/**"
     - "!archive/**"
-    - "!_bmad/**" # vendored BMAD method files
     - "!_bmad-output/**" # planning artifacts, not code
     - "!src/core/strategies/custom/**" # git submodule, reviewed in its own repo
 

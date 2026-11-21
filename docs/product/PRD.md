@@ -343,7 +343,8 @@ class SMACrossover(UserStrategy):
 
 ### BMAD Efforts
 
-Larger multi-epic efforts planned and executed via the BMAD method. Per-effort PRDs,
+Larger multi-epic efforts planned and executed via the BMAD method through Phase 3 (BMAD was
+retired 2026-11-21; new work uses Superpowers + OpenSpec, see `CLAUDE.md`). Per-effort PRDs,
 epics, and architecture live under `_bmad-output/` (active cycle in `planning-artifacts/`,
 completed cycles archived under `archive/<phase>/`).
 
