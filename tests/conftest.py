@@ -6,6 +6,9 @@ from pathlib import Path
 
 import pytest
 
+from tests.quarantine import check_quarantine
+from tests.quarantine import register as register_quarantine
+
 #: Name of the marker a test carries to declare which acceptance criterion it
 #: evidences: ``@pytest.mark.acceptance_criterion(id, text, source)``.
 ACCEPTANCE_MARKER = "acceptance_criterion"
@@ -57,17 +60,19 @@ def cleanup():
 
 def pytest_configure(config):
     """Register this suite's markers (``--strict-markers`` is on)."""
-    config.addinivalue_line(
-        "markers",
-        "quarantine(reason): known-flaky; skipped on PRs, still run nightly. "
-        "Fix the test and remove the marker (tests/unit/governance/test_quarantine.py).",
-    )
+    register_quarantine(config)
     config.addinivalue_line(
         "markers",
         "acceptance_criterion(id, text, source): tie this test to one acceptance "
         "criterion from a requirements document, so the run's terminal summary "
         "reports, per criterion, whether a test actually evidenced it.",
     )
+
+
+@pytest.hookimpl(tryfirst=True)  # before -m deselects the entries it would hide
+def pytest_collection_modifyitems(items):
+    """Every quarantined test must say why, and there can only be a few."""
+    check_quarantine(items)
 
 
 @pytest.hookimpl(tryfirst=True)
