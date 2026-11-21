@@ -47,8 +47,35 @@ jobs:
           cache-dependency-glob: uv.lock
       - run: uv sync --frozen --dev
       - run: uv run alembic upgrade head
-      - run: uv run pytest tests/unit tests/component -n auto -q -ra --tb=short
-      - run: uv run pytest tests/integration -n auto --forked -q -ra --tb=short
+      - run: uv run pytest tests/unit tests/component -n auto -m "not quarantine" -q -ra --tb=short
+      - run: uv run pytest tests/integration -n auto --forked -m "not quarantine" -q -ra --tb=short
+
+  quarantine:
+    name: Quarantined tests (advisory)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true # red here means "still flaky", never blocks anything
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.11"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --frozen --dev
+      # Five passes under xdist load: a quarantined test that passes all of them
+      # for a week is a candidate to un-quarantine.
+      - run: |
+          # bash -e would stop at the first red pass; keep going and report at the end.
+          failed=0
+          for i in 1 2 3 4 5; do
+            echo "::group::pass $i"
+            uv run pytest tests -n auto --forked -m quarantine -q -ra --tb=short \
+              -p no:cacheprovider || failed=$((failed + 1))
+            echo "::endgroup::"
+          done
+          echo "quarantined tests failed in $failed of 5 passes" >> "$GITHUB_STEP_SUMMARY"
+          exit $(( failed > 0 ))
 
   typecheck:
     name: mypy (advisory)

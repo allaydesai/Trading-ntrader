@@ -504,6 +504,9 @@ class TestTheCheckIsBounded:
 
         assert time.monotonic() - started < FAST.connect + 0.5
 
+    @pytest.mark.quarantine(
+        reason="2026-11-21: wall-clock budget assertion; failed on two commits under CI load"
+    )
     def test_the_connect_deadline_never_outlives_the_budget(self):
         """Time already spent (a slow state check) shortens the connect window:
         the deadline is the earlier of ``connect`` and what the budget leaves."""
