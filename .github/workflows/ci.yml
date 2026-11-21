@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [main, develop]
 
+# ubuntu-latest is now ubuntu-26.04 (glibc 2.43), which refuses to load nautilus_trader's
+# executable-stack extensions. Steps call `uv run pytest` directly, not via make, so the
+# Makefile's export never applies here. See scripts/glibc_env.sh.
+env:
+  GLIBC_TUNABLES: glibc.rtld.execstack=2
+
 jobs:
   unit-tests:
     name: Unit Tests (Fast)
