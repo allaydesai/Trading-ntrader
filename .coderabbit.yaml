@@ -89,7 +89,10 @@ knowledge_base:
     enabled: true
     filePatterns:
       - "CLAUDE.md"
-      - "_bmad-output/project-context.md"
-      - "docs/governance/development-principles.md"
+      # Object entries: a plain string would scope each doc to its own directory only.
+      - files: "_bmad-output/project-context.md"
+        applyTo: "**"
+      - files: "docs/governance/development-principles.md"
+        applyTo: "**"
   learnings:
     scope: local

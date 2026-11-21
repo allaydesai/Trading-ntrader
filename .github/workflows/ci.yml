@@ -33,6 +33,10 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+defaults:
+  run:
+    shell: bash # explicit bash adds -o pipefail; the implicit default does not
+
 env:
   PYTHON_VERSION: "3.11" # matches .python-version
   # nautilus_trader's .so files request an executable stack; glibc >= 2.41 refuses
