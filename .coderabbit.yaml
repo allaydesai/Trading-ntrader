@@ -1,0 +1,95 @@
+# CodeRabbit config. Reference: https://docs.coderabbit.ai/reference/configuration
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: en-US
+
+reviews:
+  profile: chill # "assertive" is much noisier; start quiet and tighten later
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: true
+  sequence_diagrams: false
+
+  auto_review:
+    enabled: true
+    drafts: false # open PRs as drafts to iterate without reviews
+    base_branches:
+      - "^main$"
+      - "^develop$"
+      - "^\\d{3}-.*$" # long-lived feature branches such as 015-paper-trading
+    ignore_title_keywords: ["WIP", "[skip review]"]
+
+  path_filters:
+    - "!uv.lock"
+    - "!**/*.min.js"
+    - "!static/css/output.css"
+    - "!htmlcov/**"
+    - "!archive/**"
+    - "!_bmad/**" # vendored BMAD method files
+    - "!_bmad-output/**" # planning artifacts, not code
+    - "!src/core/strategies/custom/**" # git submodule, reviewed in its own repo
+
+  path_instructions:
+    - path: "src/**"
+      instructions: |
+        - Size caps on executable statements: files <500, functions <50, classes <100.
+          A deliberate overage needs a baseline entry with a one-line reason in
+          tests/unit/governance/test_size_caps.py in the same PR.
+        - Core code must never import from src.core.strategies.custom.* (a git submodule).
+        - IBKR/Kraken connection details must come from IBKRSettings/KrakenSettings, never literals.
+        - Never instantiate a Nautilus Logger/LiveLogger directly; use set_nautilus_log_guard().
+        - A BacktestEngine instance must never be reused across runs.
+    - path: "src/core/live_*.py"
+      instructions: |
+        Live/paper trading path. If this PR adds, splits or renames a live module, check that
+        the hand-maintained guard lists were updated in the same PR: NODE_FACING_MODULES /
+        EXEMPT_MODULES, STOP_PATH_MODULES, TestImportPurity.MODULES, and
+        _STDLIB_AND_FIRST_PARTY for any new stdlib import (see CLAUDE.md "Anti-Patterns").
+        Any new emitted record name must join its EMITTED_*_EVENTS constant and its pin.
+    - path: "src/cli/commands/live*.py"
+      instructions: Same guard-list rule as src/core/live_*.py.
+    - path: "{src/api/**,templates/**}"
+      instructions: |
+        These files are pinned byte for byte by FROZEN_VIEWS
+        (tests/unit/governance/test_ar44_frozen_views.py). Flag any change here, and flag
+        any regeneration of that manifest that does not cite a recorded PO decision.
+    - path: "tests/**"
+      instructions: |
+        - Check that the tier fits: unit = pure logic, no Nautilus; component = test doubles;
+          integration = real engine, must run under --forked.
+        - Flag tests that cannot fail: assertions that hold whatever the code under test does.
+        - Flag timing-sensitive tests (sleep, wall-clock, signals) that will be flaky under load.
+    - path: "alembic/versions/**"
+      instructions: Check for a single head, a working downgrade, and no data loss on existing rows.
+    - path: ".github/workflows/**"
+      instructions: |
+        Keep the PR pipeline fast (target < 8 min). Do not reintroduce a job that re-runs the
+        whole suite. Integration tests need --forked.
+
+  tools:
+    ruff:
+      enabled: true
+    gitleaks:
+      enabled: true
+    actionlint:
+      enabled: true
+    yamllint:
+      enabled: true
+    markdownlint:
+      enabled: false # _bmad-output docs would drown the review
+    languagetool:
+      enabled: false
+
+chat:
+  auto_reply: true
+
+knowledge_base:
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - "CLAUDE.md"
+      - "_bmad-output/project-context.md"
+      - "docs/governance/development-principles.md"
+  learnings:
+    scope: local
