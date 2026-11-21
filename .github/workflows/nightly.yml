@@ -66,9 +66,16 @@ jobs:
       # Five passes under xdist load: a quarantined test that passes all of them
       # for a week is a candidate to un-quarantine.
       - run: |
+          # bash -e would stop at the first red pass; keep going and report at the end.
+          failed=0
           for i in 1 2 3 4 5; do
-            uv run pytest tests -n auto --forked -m quarantine -q -ra --tb=short -p no:cacheprovider
+            echo "::group::pass $i"
+            uv run pytest tests -n auto --forked -m quarantine -q -ra --tb=short \
+              -p no:cacheprovider || failed=$((failed + 1))
+            echo "::endgroup::"
           done
+          echo "quarantined tests failed in $failed of 5 passes" >> "$GITHUB_STEP_SUMMARY"
+          exit $(( failed > 0 ))
 
   typecheck:
     name: mypy (advisory)

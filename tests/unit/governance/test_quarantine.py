@@ -9,6 +9,7 @@ list is capped so it cannot grow unnoticed.
 
 import ast
 from pathlib import Path
+from typing import TypeGuard
 
 import pytest
 
@@ -18,36 +19,64 @@ TESTS_ROOT = Path(__file__).resolve().parents[2]
 MAX_QUARANTINED = 5
 
 
-def _quarantine_calls() -> list[tuple[str, ast.Call]]:
-    found = []
-    for path in sorted(TESTS_ROOT.rglob("test_*.py")):
-        tree = ast.parse(path.read_text(), filename=str(path))
-        for node in ast.walk(tree):
-            if (
-                isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Attribute)
-                and node.func.attr == "quarantine"
-                and isinstance(node.func.value, ast.Attribute)
-                and node.func.value.attr == "mark"
-            ):
-                found.append((f"{path.relative_to(TESTS_ROOT)}:{node.lineno}", node))
-    return found
+def _is_quarantine_attr(node: ast.AST) -> TypeGuard[ast.Attribute]:
+    """``<anything>.mark.quarantine``: the marker, called or bare."""
+    return (
+        isinstance(node, ast.Attribute)
+        and node.attr == "quarantine"
+        and isinstance(node.value, ast.Attribute)
+        and node.value.attr == "mark"
+    )
 
 
-def _reason(call: ast.Call) -> str:
+def _reason(call: ast.Call | None) -> str:
+    """The ``reason=`` string literal, or "" when it is missing or not a string."""
+    if call is None:
+        return ""
     for keyword in call.keywords:
-        if keyword.arg == "reason" and isinstance(keyword.value, ast.Constant):
-            return str(keyword.value.value).strip()
+        if (
+            keyword.arg == "reason"
+            and isinstance(keyword.value, ast.Constant)
+            and isinstance(keyword.value.value, str)
+        ):
+            return keyword.value.value.strip()
     return ""
 
 
+def scan(source: str) -> list[tuple[int, str]]:
+    """Every quarantine marker in ``source`` as ``(line, reason)``.
+
+    A bare ``@pytest.mark.quarantine`` (no call) still deselects the test, so it
+    counts too, with an empty reason.
+    """
+    tree = ast.parse(source)
+    called = {
+        id(node.func): node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and _is_quarantine_attr(node.func)
+    }
+    return [
+        (node.lineno, _reason(called.get(id(node))))
+        for node in ast.walk(tree)
+        if _is_quarantine_attr(node)
+    ]
+
+
+def _repo_entries() -> list[tuple[str, str]]:
+    entries = []
+    for path in sorted(TESTS_ROOT.rglob("test_*.py")):
+        for line, reason in scan(path.read_text()):
+            entries.append((f"{path.relative_to(TESTS_ROOT)}:{line}", reason))
+    return entries
+
+
 def test_every_quarantine_says_why():
-    missing = [where for where, call in _quarantine_calls() if not _reason(call)]
+    missing = [where for where, reason in _repo_entries() if not reason]
     assert not missing, f"quarantine without a reason= string: {missing}"
 
 
 def test_the_quarantine_list_stays_small():
-    count = len(_quarantine_calls())
+    count = len(_repo_entries())
     assert count <= MAX_QUARANTINED, (
         f"{count} quarantined tests (cap {MAX_QUARANTINED}): fix one before adding another"
     )
@@ -56,3 +85,20 @@ def test_the_quarantine_list_stays_small():
 def test_the_marker_is_registered(pytestconfig: pytest.Config):
     registered = [line.split(":")[0].split("(")[0] for line in pytestconfig.getini("markers")]
     assert "quarantine" in registered
+
+
+class TestTheScanCannotBeSidestepped:
+    def test_a_called_marker_with_a_reason_is_found_once(self):
+        assert scan('@pytest.mark.quarantine(reason="flaky")\ndef test_x(): ...\n') == [
+            (1, "flaky")
+        ]
+
+    def test_a_bare_marker_counts_and_has_no_reason(self):
+        assert scan("@pytest.mark.quarantine\ndef test_x(): ...\n") == [(1, "")]
+
+    def test_a_module_level_pytestmark_counts(self):
+        assert scan("pytestmark = pytest.mark.quarantine\n") == [(1, "")]
+
+    @pytest.mark.parametrize("value", ["None", "True", "0", '"   "', "REASON"])
+    def test_a_reason_that_is_not_a_non_empty_string_literal_is_no_reason(self, value):
+        assert scan(f"@pytest.mark.quarantine(reason={value})\ndef test_x(): ...\n") == [(1, "")]
