@@ -1,0 +1,5 @@
+{
+  "setup": ["./scripts/workspace/setup.sh"],
+  "teardown": ["./scripts/workspace/teardown.sh"],
+  "run": ["./scripts/workspace/run.sh"]
+}
