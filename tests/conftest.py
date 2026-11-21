@@ -56,7 +56,12 @@ def cleanup():
 
 
 def pytest_configure(config):
-    """Register the acceptance-criterion marker (``--strict-markers`` is on)."""
+    """Register this suite's markers (``--strict-markers`` is on)."""
+    config.addinivalue_line(
+        "markers",
+        "quarantine(reason): known-flaky; skipped on PRs, still run nightly. "
+        "Fix the test and remove the marker (tests/unit/governance/test_quarantine.py).",
+    )
     config.addinivalue_line(
         "markers",
         "acceptance_criterion(id, text, source): tie this test to one acceptance "

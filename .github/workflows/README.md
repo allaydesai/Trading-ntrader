@@ -12,6 +12,14 @@
 
 Run nightly by hand before a release or after a dependency bump.
 
+## Flaky tests: quarantine
+
+A known-flaky test gets `@pytest.mark.quarantine(reason="...")`. The PR lane skips it
+(`-m "not quarantine"`), and nightly runs it five times in an advisory job, so you can see
+when it is fixed. `tests/unit/governance/test_quarantine.py` requires a reason on every
+entry and caps the list at 5. Fix one before adding another. To un-quarantine a test,
+fix it, watch it pass nightly, then delete the marker.
+
 ## Code review
 
 PR review is done by CodeRabbit, configured in [`/.coderabbit.yaml`](../../.coderabbit.yaml).

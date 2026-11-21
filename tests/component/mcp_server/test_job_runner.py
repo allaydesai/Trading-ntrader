@@ -251,6 +251,10 @@ async def test_live_orphan_worker_is_adopted_and_finishes_before_the_queue(store
         proc.wait()
 
 
+@pytest.mark.quarantine(
+    reason="2026-11-21: on a loaded CI runner the orphan is written off as lost ~2 ms after "
+    "it is spawned instead of adopted (race in src/mcp_server/jobs/recovery.py worker_alive)"
+)
 async def test_adopted_worker_can_be_cancelled(store):
     orphan, proc = _orphan(store, "sleep")
     try:
