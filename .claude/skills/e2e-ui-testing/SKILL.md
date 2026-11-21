@@ -1,12 +1,12 @@
 ---
 name: e2e-ui-testing
 description: End-to-end UI testing for the NTrader backtesting web application. Use when verifying user workflows through the browser — running backtests, viewing results, navigating pages, checking form validation, or confirming HTMX interactions work correctly. Triggers include "test the UI", "verify the backtest page", "check the form works", "e2e test", or any request to validate web UI behavior in a real browser.
-allowed-tools: Bash(npx agent-browser:*), Bash(agent-browser:*), mcp__playwright__*
+allowed-tools: mcp__playwright__*, mcp__claude-in-chrome__*
 ---
 
 # E2E UI Testing — NTrader Backtesting Application
 
-Test the NTrader web UI end-to-end using **Playwright MCP tools** (primary) and **agent-browser CLI** (alternative). The app is a FastAPI + HTMX + Jinja2 server-rendered application with Tailwind CSS styling.
+Test the NTrader web UI end-to-end using **Playwright MCP tools** (primary) and **Claude in Chrome** (fallback). The app is a FastAPI + HTMX + Jinja2 server-rendered application with Tailwind CSS styling.
 
 ## Quick Reference
 
@@ -56,11 +56,20 @@ Use Playwright MCP tools (`mcp__playwright__*`) for structured interaction:
 - `mcp__playwright__browser_network_requests` — inspect XHR/fetch calls
 - `mcp__playwright__browser_console_messages` — check for JS errors
 
-### agent-browser CLI (alternative, good for chained commands)
-Use when you need command chaining or batch operations:
-```bash
-agent-browser open http://127.0.0.1:8000/backtests/run && agent-browser wait --load networkidle && agent-browser snapshot -i
-```
+### Claude in Chrome (fallback when Playwright MCP is unavailable)
+Use the `claude-in-chrome` skill's tools (`mcp__claude-in-chrome__*`) when the Playwright MCP
+server isn't connected, or when you need the user's real Chrome session. Load them in ONE
+ToolSearch call, start with `tabs_context_mcp`, and work in a new tab (`tabs_create_mcp`):
+- `navigate` — go to a URL
+- `read_page` / `find` — accessibility tree and element refs (the snapshot equivalent)
+- `computer` — click, type, screenshot
+- `form_input` — set form field values
+- `javascript_tool` — run JavaScript in the page (use for every JS pattern below)
+- `read_console_messages` / `read_network_requests` — JS errors and XHR/fetch calls
+
+Every Playwright pitfall below applies unchanged: re-read the page after HTMX swaps, set date
+inputs and submit HTMX forms through JavaScript. Never trigger `alert`/`confirm` dialogs (e.g.
+the Delete button) — they block the extension.
 
 ## Core Testing Workflow
 
@@ -108,10 +117,7 @@ mcp__playwright__browser_evaluate
   function: "() => document.querySelector('button[type=\"submit\"]').click()"
 ```
 
-Or with agent-browser:
-```bash
-agent-browser eval "document.querySelector('button[type=\"submit\"]').click()"
-```
+With Claude in Chrome, run the same expression through `javascript_tool`.
 
 ### 2. HTMX swaps invalidate element refs
 
@@ -157,16 +163,8 @@ mcp__playwright__browser_evaluate
     }
 ```
 
-Or with agent-browser:
-```bash
-agent-browser eval <<'JS'
-const input = document.querySelector('#start_date');
-const nativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-nativeSetter.call(input, '2024-01-01');
-input.dispatchEvent(new Event('input', { bubbles: true }));
-input.dispatchEvent(new Event('change', { bubbles: true }));
-JS
-```
+With Claude in Chrome, run the function body through `javascript_tool` (`form_input` has the
+same silent-failure risk on date inputs).
 
 **Always use this pattern for `#start_date` and `#end_date` fields.**
 
@@ -187,14 +185,13 @@ mcp__playwright__browser_wait_for text="Fast Period"
 
 ## Timeouts for Long Operations
 
-Backtest execution can take 30-120+ seconds. The Playwright MCP is configured with:
+Backtest execution can take 30-120+ seconds. The Playwright MCP is configured with
+`--timeout-action 60000 --timeout-navigation 120000`:
 - Action timeout: 60s
 - Navigation timeout: 120s
 
-For agent-browser, set the timeout environment variable:
-```bash
-AGENT_BROWSER_DEFAULT_TIMEOUT=120000 agent-browser click @submitRef
-```
+With Claude in Chrome there is no action timeout to raise: submit via `javascript_tool`, then
+poll with `find`/`read_page` for the result text instead of blocking on the click.
 
 When waiting for backtest completion, use `wait_for` with expected result text rather than fixed sleeps. Note: `wait_for` only supports `text`, `textGone`, and `time` parameters — there is no `timeout` or `url` parameter:
 ```
@@ -357,15 +354,4 @@ Detail page → click "Rerun" → verify run form pre-filled
 - **Never click submit directly for HTMX forms** — use JS eval to ensure HTMX intercepts
 - **Never assume a backtest will complete quickly** — use 120s+ timeouts
 - **Never test against production data assumptions** — check what strategies/data are actually available
-
-## agent-browser gotchas (moved from CLAUDE.md, 2026-11-21)
-
-- **Always snapshot before interacting** — `agent-browser snapshot -i` to get element refs (@e1, @e2, ...). Never guess selectors
-- **Re-snapshot after navigation/re-render** — refs become stale after page changes
-- **Wait for async content** — use `agent-browser wait --text "Expected"` before snapshotting dynamic pages
-- **Capture evidence** — `agent-browser screenshot result.png` for pass/fail proof
-- **Date inputs** — `agent-browser fill @ref` silently fails on `<input type="date">` (exposed as 3 spinbuttons). Use `agent-browser eval` with native value setter + event dispatch instead
-- **HTMX form submission** — `agent-browser click @ref` on submit buttons may not trigger HTMX's event chain. Use `agent-browser eval "document.querySelector('button[type=\"submit\"]').click()"` to ensure HTMX intercepts the submit
-- **Timeouts for long requests** — set `AGENT_BROWSER_DEFAULT_TIMEOUT=120000` when clicking actions that trigger slow server responses (e.g., backtest execution)
-- **Playwright MCP timeouts** — configured with `--timeout-action 60000 --timeout-navigation 120000` to handle long-running backtest requests
-- Dev server: `http://127.0.0.1:8000` (FastAPI/HTMX)
+- **Never wait on async content by snapshotting blind** — `wait_for` the expected text first

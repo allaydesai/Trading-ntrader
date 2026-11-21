@@ -193,7 +193,7 @@ logs/
 # Scratch / working docs — temporary notes, plans, capability dumps (not tracked)
 docs/scratch/
 
-# Root-level E2E test screenshots (agent-browser / Playwright captures).
+# Root-level E2E test screenshots (Playwright / Claude in Chrome captures).
 # Scoped to repo root so tracked assets under diagrams/ and docs/ are unaffected.
 /*.png
 
