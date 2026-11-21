@@ -74,5 +74,5 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
       - run: uvx bandit -r src/ -ll
-        continue-on-error: true # still run pip-audit below
-      - run: uvx pip-audit -r <(uv export --frozen --no-hashes --no-emit-project)
+      - if: ${{ !cancelled() }} # still audit dependencies after a bandit finding
+        run: uvx pip-audit -r <(uv export --frozen --no-hashes --no-emit-project)
