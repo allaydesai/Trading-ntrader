@@ -39,16 +39,11 @@ defaults:
 
 env:
   PYTHON_VERSION: "3.11" # matches .python-version
-  # nautilus_trader's .so files request an executable stack; glibc >= 2.41 refuses
-  # to load them without this (same setting as the Makefile and Dockerfile, #41).
+  # ubuntu-latest is ubuntu-26.04 (glibc 2.43), which refuses to load nautilus_trader's
+  # executable-stack extensions. Steps call `uv run pytest` directly, not via make, so the
+  # Makefile's export never applies here. See scripts/glibc_env.sh.
   GLIBC_TUNABLES: glibc.rtld.execstack=2
   DATABASE_URL: postgresql://ntrader_dev_2025:ntrader_dev_2025@localhost:5432/trading_ntrader_dev
-
-# ubuntu-latest is now ubuntu-26.04 (glibc 2.43), which refuses to load nautilus_trader's
-# executable-stack extensions. Steps call `uv run pytest` directly, not via make, so the
-# Makefile's export never applies here. See scripts/glibc_env.sh.
-env:
-  GLIBC_TUNABLES: glibc.rtld.execstack=2
 
 jobs:
   lint:
