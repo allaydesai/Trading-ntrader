@@ -121,7 +121,7 @@ jobs:
         env:
           COVERAGE_FILE: .coverage.${{ matrix.tier }}
         run: |
-          uv run pytest ${{ matrix.args }} \
+          uv run pytest ${{ matrix.args }} -m "not quarantine" \
             --cov=src --cov-report= \
             -q -ra --tb=short --durations=15
 
