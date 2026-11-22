@@ -31,8 +31,9 @@ labelled ratio-adjusted, with the ratio-adjustment note.
 ### Requirement: `backtest run --contracts N` trades whole contracts
 `backtest run` SHALL accept `--contracts N` (N >= 1) and trade exactly N contracts per entry
 for a futures instrument. It SHALL be a usage error (exit 2) for N < 1, for a strategy whose
-config has no `contracts` setting, and for a non-futures instrument. Without the flag, sizing
-SHALL be unchanged.
+config has no `contracts` setting, and for a symbol that is not a futures root. A loaded
+instrument that is not futures, or a config-file `contracts` that is not an int >= 1, SHALL
+fail the run before the engine starts. Without the flag, sizing SHALL be unchanged.
 
 #### Scenario: ES with one contract
 - **WHEN** `backtest run --symbol ES --catalog firstrate-futures --timeframe 1-HOUR

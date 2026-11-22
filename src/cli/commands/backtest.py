@@ -129,6 +129,16 @@ def backtest():
     ),
 )
 @click.option(
+    "--contracts",
+    type=click.IntRange(min=1),
+    default=None,
+    help=(
+        "Futures only: trade exactly N whole contracts per entry instead of sizing by "
+        "notional (a small budget floors ES to 0 contracts). For strategies with a "
+        "'contracts' setting (sma_crossover); overrides a config file's 'contracts'."
+    ),
+)
+@click.option(
     "--timeframe",
     "-t",
     default=None,
@@ -164,6 +174,7 @@ def run_backtest(
     fast_period: int | None,
     slow_period: int | None,
     trade_size: int | None,
+    contracts: int | None,
     timeframe: str | None,
     catalog_name: str | None,
     persist: bool,
@@ -188,33 +199,32 @@ def run_backtest(
       backtest run configs/apolo_rsi_amd.yaml --start 2024-06-01
       backtest run --symbol AAPL --start 2024-01-01 --end 2024-12-31
       backtest run --symbol AAPL --start 2024-01-01 --end 2024-12-31 --strategy sma_crossover
+      backtest run --symbol ES --catalog firstrate-futures --timeframe 1-HOUR \\
+        --start 2024-01-01 --end 2024-06-30 --contracts 1
     """
 
     async def run_backtest_async():
         # Reason: Track execution time for performance reporting
         execution_start_time = time.time()
 
-        try:
-            # Resolve request based on mode (config vs CLI)
-            request, resolved_data_source = resolve_backtest_request(
-                config_file=config_file,
-                symbol=symbol,
-                strategy=strategy,
-                start=start,
-                end=end,
-                data_source=data_source,
-                starting_balance=starting_balance,
-                persist=persist,
-                console=console,
-                fast_period=fast_period,
-                slow_period=slow_period,
-                trade_size=trade_size,
-                timeframe=timeframe,
-                catalog_name=catalog_name,
-            )
-        except click.UsageError:
-            # Re-raise UsageError to let Click handle it
-            raise
+        # Resolve request based on mode (config vs CLI); a UsageError reaches Click (exit 2)
+        request, resolved_data_source = resolve_backtest_request(
+            config_file=config_file,
+            symbol=symbol,
+            strategy=strategy,
+            start=start,
+            end=end,
+            data_source=data_source,
+            starting_balance=starting_balance,
+            persist=persist,
+            console=console,
+            fast_period=fast_period,
+            slow_period=slow_period,
+            trade_size=trade_size,
+            timeframe=timeframe,
+            catalog_name=catalog_name,
+            contracts=contracts,
+        )
 
         # Display mode indicator
         if config_file:

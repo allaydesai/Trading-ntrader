@@ -56,10 +56,17 @@ points for futures labels them "ratio-adjusted" and prints one explanation line
   exactly N contracts for a multiplied instrument and raises `ValueError` for a
   multiplier-1 instrument (a backstop: the CLI rejects it first). The `SMACrossover` class
   doesn't grow (baseline 101): the call passes `self.config.contracts`.
-- CLI validation, in order: `click.IntRange(min=1)` (exit 2); the strategy's config class
-  must declare `contracts`, otherwise a usage error naming the strategies that do; after the
-  instrument loads, it must be multiplied (futures), otherwise a usage error. A margin
-  shortfall is left to M3's gate (`OrderDenied`), as for any futures order.
+- CLI validation, in order:
+  - `click.IntRange(min=1)` (exit 2).
+  - The strategy's config class must declare `contracts`, otherwise a usage error (exit 2).
+  - The symbol must be a futures root in `contract_specs.yaml`, otherwise a usage error
+    (exit 2). This runs before any data loads.
+  - After the instrument loads, `execute_backtest` checks `check_contracts_instrument`: the
+    value is an int >= 1 (a config file can hold anything) and the instrument is multiplied.
+    This catches a symbol that only collides with a root (an equity `CL` in another
+    catalog). It fails the run before the engine starts ("Backtest failed: ...", exit 1),
+    because `run_backtest` (size-capped, baseline 173) has no room for another handler.
+  - A margin shortfall is left to M3's gate (`OrderDenied`), as for any futures order.
 - Config files: `contracts:` in the strategy `config:` section reaches `SMAConfig` like any
   other key; `--contracts` overrides it in config mode.
 
