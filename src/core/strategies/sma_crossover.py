@@ -40,6 +40,9 @@ class SMAConfig(StrategyConfig):
     position_size_pct : Decimal, default=10.0
         Position size as percentage of portfolio (e.g., 10.0 = 10%).
         Example: With $1M portfolio and 10%, each trade uses $100K notional.
+    contracts : int, optional
+        Futures only (``backtest run --contracts N``): trade exactly this many whole
+        contracts per entry, ignoring the notional budget. Unset sizes by notional.
     """
 
     instrument_id: InstrumentId
@@ -48,17 +51,29 @@ class SMAConfig(StrategyConfig):
     slow_period: int = 20
     portfolio_value: Decimal = Decimal("1000000")
     position_size_pct: Decimal = Decimal("10.0")
+    contracts: int | None = None
 
 
 def _sized_quantity(
-    position_value: Decimal, price: Decimal, instrument: object | None
+    position_value: Decimal,
+    price: Decimal,
+    instrument: object | None,
+    fixed_contracts: int | None = None,
 ) -> tuple[Quantity | None, Decimal, Decimal]:
     """``(quantity, raw units, multiplier)`` for ``position_value`` of exposure at ``price``.
 
     Shares (multiplier 1) are whole, at least 1; crypto (size precision > 0) is fractional;
     a multiplied contract (futures) floors to whole contracts and is ``None`` below one.
+    ``fixed_contracts`` (futures only) replaces the budget with exactly that many contracts.
+
+    Raises:
+        ValueError: ``fixed_contracts`` for an instrument with no multiplier (not futures).
     """
     multiplier = instrument_multiplier(instrument)
+    if fixed_contracts is not None:
+        if multiplier == 1:
+            raise ValueError("contracts applies to futures instruments only")
+        return Quantity.from_int(fixed_contracts), Decimal(fixed_contracts), multiplier
     raw_qty = units_for_notional(position_value, price, multiplier)
     size_prec = getattr(instrument, "size_precision", 0) if instrument else 0
     if multiplier != 1:
@@ -214,8 +229,8 @@ class SMACrossover(Strategy):
         # Get current price (use close price from bar)
         current_price = Decimal(str(self._current_bar.close))
 
-        instrument = self.cache.instrument(self.instrument_id)
-        quantity, raw_qty, multiplier = _sized_quantity(position_value, current_price, instrument)
+        sizing = (position_value, current_price, self.cache.instrument(self.instrument_id))
+        quantity, raw_qty, multiplier = _sized_quantity(*sizing, self.config.contracts)
         if quantity is None:
             self.log.warning(f"Position sizing: ${position_value:,.0f} is under one contract")
             return None
