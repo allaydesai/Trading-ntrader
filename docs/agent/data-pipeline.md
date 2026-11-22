@@ -76,3 +76,18 @@ Market data stored as Parquet files under Nautilus catalog structure.
 - Returns `(bars: List[Bar], instrument: Instrument)`
 - Handles symbol resolution via DataCatalogService
 - Rich progress bars for long operations; quiet mode for web UI
+
+## Futures instruments (futures M1)
+
+- Contract specs: `src/services/futures/contract_specs.yaml` (hand-curated, `schema_version` +
+  `specs_as_of`, dated approximate margins), validated by `contract_specs.py`
+  (`load_contract_specs()`, `get_contract_spec(root)`; errors are `FuturesSpecError` naming the
+  field path). Roots: ES, NQ (CME), CL (NYMEX), GC (COMEX), ZN (CBOT).
+- `build_futures_contract(spec)` (`src/services/futures/instrument_builder.py`) builds the
+  continuous-series `FuturesContract`: id `{ROOT}.{VENUE}` (`ES.CME`), never-expiring window
+  (activation 1970-01-01, expiration 2100-01-01 UTC), increment `10^-precision` because
+  ratio-adjusted prices are off the tick grid (exchange tick kept in `info["tick_size"]`).
+- `build_instrument(asset_class, nautilus_id, ticker, bars)` in
+  `src/services/firstrate/backtest_loader.py` is the seam the named-catalog loader uses:
+  `FUTURES` rows get a futures contract, every other asset class the unchanged `build_equity`.
+- Design notes: `openspec/changes/add-futures-instrument-model/design.md`.

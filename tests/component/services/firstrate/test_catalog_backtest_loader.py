@@ -265,10 +265,10 @@ class TestLoadFromCatalog:
 class TestEtfRoutingNoAdapter:
     """Story 5.1 AC1/AC3: ETFs are served by the identical Equity path as Stocks.
 
-    The loader never branches on ``asset_class`` — an ETF flows through the same
-    ``build_equity`` synthesis, proving NFR16 "no runtime adapter". The synthesised
-    instrument is equity-shaped (``Equity``, ``lot_size == 1``, USD), the precondition
-    Story 5.2 whole-share sizing depends on.
+    The loader branches on ``asset_class`` only for ``FUTURES`` (futures M1) — an ETF
+    flows through the same ``build_equity`` synthesis, proving NFR16 "no runtime adapter".
+    The synthesised instrument is equity-shaped (``Equity``, ``lot_size == 1``, USD), the
+    precondition Story 5.2 whole-share sizing depends on.
     """
 
     @pytest.mark.asyncio
@@ -699,3 +699,61 @@ class TestLoadManyFromCatalog:
                 catalog_manager=self._multi_catalog_manager(),
                 metadata_service=self._multi_metadata_service({}),
             )
+
+
+@pytest.mark.component
+class TestFuturesRouting:
+    """Futures M1: a FUTURES row is synthesised as a continuous ``FuturesContract``."""
+
+    @staticmethod
+    def _services(row, bars):
+        catalog = MagicMock()
+        catalog.bars.return_value = bars
+        catalog_manager = MagicMock()
+        catalog_manager.resolve_catalog.return_value = catalog
+        metadata_service = MagicMock()
+        metadata_service.get_instrument_sync.return_value = row
+        return catalog, catalog_manager, metadata_service
+
+    async def _load(self, ticker, catalog_manager, metadata_service):
+        from src.services.firstrate.backtest_loader import load_from_catalog
+
+        return await load_from_catalog(
+            catalog_name="firstrate-futures",
+            ticker=ticker,
+            bar_type_spec="1-HOUR-LAST",
+            start=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            end=datetime(2024, 3, 31, tzinfo=timezone.utc),
+            catalog_manager=catalog_manager,
+            metadata_service=metadata_service,
+        )
+
+    @pytest.mark.asyncio
+    async def test_futures_row_builds_futures_contract(self):
+        from nautilus_trader.model.instruments import FuturesContract
+        from nautilus_trader.model.objects import Quantity
+
+        row = _make_instrument_row(ticker="ES", nautilus_id="ES.CME", asset_class="FUTURES")
+        catalog, catalog_manager, metadata_service = self._services(
+            row, [_make_bar_for("ES.CME", precision=2)]
+        )
+
+        result = await self._load("ES", catalog_manager, metadata_service)
+
+        assert catalog.bars.call_args.kwargs["bar_types"] == ["ES.CME-1-HOUR-LAST-EXTERNAL"]
+        instrument = result.instrument
+        assert isinstance(instrument, FuturesContract)
+        assert str(instrument.id) == "ES.CME"
+        assert instrument.multiplier == Quantity.from_int(50)
+        assert instrument.price_precision == 2
+        assert instrument.info["contract_kind"] == "continuous"
+
+    @pytest.mark.asyncio
+    async def test_futures_row_with_unknown_root_fails_fast(self):
+        from src.services.futures.contract_specs import FuturesSpecError
+
+        row = _make_instrument_row(ticker="XX", nautilus_id="XX.CME", asset_class="FUTURES")
+        _, catalog_manager, metadata_service = self._services(row, [_make_bar_for("XX.CME")])
+
+        with pytest.raises(FuturesSpecError, match="Unknown futures root 'XX'"):
+            await self._load("XX", catalog_manager, metadata_service)
