@@ -5,9 +5,14 @@
   as they were before M4 touched them
   (``python -m tests.component.api.test_futures_dashboard --capture-golden``, run once on the
   pre-M4 tree). Don't recapture to make a failure pass: an equity diff is the bug.
+  **One recorded exception:** ``trades_table.html`` was recaptured for the trades-table
+  controls fix (Allay approved 2026-11-22: trades-table controls fix + equity golden
+  update). Its controls now request this partial instead of the JSON API, and it renders
+  its own ``#trades-table-content`` root. The other goldens are unchanged.
 - Futures pages show contracts, multiplier, notional, margin used, return on margin (the
   headline), return on the underlying, points and percentages, and the ratio-adjustment note.
-- The trades table is built in-process (no HTTP hop to a hardcoded port).
+- The trades table is built in-process (no HTTP hop to a hardcoded port), and its page-size,
+  sort and pagination controls request the partial and swap it in place.
 """
 
 from __future__ import annotations
@@ -355,3 +360,105 @@ def _capture_golden() -> None:
 if __name__ == "__main__":
     if "--capture-golden" in sys.argv:
         _capture_golden()
+
+
+def _controls(html: str) -> dict[str, str]:
+    """Every hx-get in the trades fragment, keyed by the control's label."""
+    import html as html_lib
+    import re
+
+    found = {}
+    for tag, label in re.findall(
+        r"(<(?:button|select)\b[^>]*>)(.*?)</(?:button|select)>", html, re.S
+    ):
+        if (url := re.search(r'hx-get="([^"]+)"', tag)) is None:
+            continue
+        key = html_lib.unescape(re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", label)).strip())
+        key = "page-size" if tag.startswith("<select") else re.sub(r" [↑↓]$", "", key)
+        found[key] = html_lib.unescape(url.group(1))
+        assert 'hx-target="#trades-table-content"' in tag, tag
+        assert 'hx-swap="outerHTML"' in tag, tag
+    return found
+
+
+def _paged_client(run, total: int):
+    """A client whose count query reports ``total`` trades (so there are several pages)."""
+    client = _client(run)
+    db = MagicMock()
+    count = MagicMock()
+    count.scalar.return_value = total
+    executed: list[str] = []
+
+    async def execute(statement, *args, **kwargs):
+        executed.append(str(statement))
+        return count if "count(" in str(statement) else _scalars(run.trades)
+
+    db.execute = execute
+
+    async def override_db():
+        yield db
+
+    app.dependency_overrides[get_db] = override_db
+    return client, executed
+
+
+@pytest.mark.parametrize("make_run", [equity_run, futures_run], ids=["equity", "futures"])
+class TestTradesTableControls:
+    """Page size, sort and pagination request the HTML partial and swap it in place."""
+
+    def _fragment(self, make_run, url="/backtests/7/trades-table?page=2&page_size=20"):
+        client, executed = _paged_client(make_run(), total=65)
+        response = client.get(url)
+        assert response.status_code == 200
+        return response.text, client, executed
+
+    def teardown_method(self):
+        app.dependency_overrides.clear()
+
+    def test_the_fragment_root_is_the_swap_target(self, make_run):
+        html, *_ = self._fragment(make_run)
+        assert html.lstrip().startswith("<!-- Trades Table Partial")
+        assert html.count('id="trades-table-content"') == 1
+
+    def test_no_control_requests_the_json_api(self, make_run):
+        html, *_ = self._fragment(make_run)
+        assert "/api/backtests/" not in html
+        assert all(u.startswith("/backtests/7/trades-table?") for u in _controls(html).values())
+
+    def test_page_size_keeps_the_sort_and_restarts_at_page_one(self, make_run):
+        html, *_ = self._fragment(
+            make_run,
+            "/backtests/7/trades-table?page=2&page_size=20&sort_by=profit_loss&sort_order=desc",
+        )
+        url = _controls(html)["page-size"]
+        assert "page=1" in url and "sort_by=profit_loss" in url and "sort_order=desc" in url
+        assert 'name="page_size"' in html
+
+    @pytest.mark.parametrize(
+        ("label", "field"),
+        [
+            ("Entry Date", "entry_timestamp"),
+            ("Exit Date", "exit_timestamp"),
+            ("P&L", "profit_loss"),
+        ],
+    )
+    def test_each_sort_header_toggles_its_field_and_resets_the_page(self, make_run, label, field):
+        html, client, executed = self._fragment(make_run)
+        url = next(u for k, u in _controls(html).items() if k.startswith(label))
+        assert f"sort_by={field}" in url and "page=1" in url
+        expected = "desc" if field == "entry_timestamp" else "asc"  # entry asc is current
+        assert f"sort_order={expected}" in url
+        executed.clear()
+        assert client.get(url).status_code == 200
+        assert f"ORDER BY trades.{field} {expected.upper()}" in executed[-1]
+
+    @pytest.mark.parametrize(
+        ("label", "page"), [("« First", 1), ("‹ Prev", 1), ("Next ›", 3), ("Last »", 4)]
+    )
+    def test_each_page_button_requests_its_page(self, make_run, label, page):
+        html, client, executed = self._fragment(make_run)
+        url = _controls(html)[label]
+        assert f"page={page}&" in url and "page_size=20" in url
+        response = client.get(url)
+        assert response.status_code == 200
+        assert f"Page {page} of 4" in response.text
