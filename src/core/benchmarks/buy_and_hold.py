@@ -27,6 +27,8 @@ from nautilus_trader.model.enums import OrderSide
 from nautilus_trader.trading.strategy import Strategy
 from pydantic import BaseModel, Field
 
+from src.core.position_sizing import instrument_multiplier, units_for_notional
+
 
 class BuyAndHoldConfig(StrategyConfig, kw_only=True, frozen=True):  # type: ignore[misc]
     """Configuration for the buy-and-hold benchmark."""
@@ -90,4 +92,7 @@ class BuyAndHold(Strategy):
         account = self.portfolio.account(self.instrument_id.venue)
         cash = account.balance_total(self.instrument.quote_currency).as_decimal()
         budget = cash * self.config.allocation_pct / Decimal(100)
-        return (budget / price).to_integral_value(rounding=ROUND_FLOOR)
+        # Exposure, not cash: a futures contract costs price x multiplier (ES 50), so
+        # $1M buys 2 ES contracts, not 140. Shares have multiplier 1 (unchanged).
+        units = units_for_notional(budget, price, instrument_multiplier(self.instrument))
+        return units.to_integral_value(rounding=ROUND_FLOOR)
