@@ -1,4 +1,5 @@
 <!-- Trades Table Partial with HTMX Pagination and Sorting -->
+<div id="trades-table-content">
 
 <!-- Table Header Controls -->
 <div class="flex justify-between items-center mb-4">
@@ -13,9 +14,8 @@
         <select id="page-size"
                 name="page_size"
                 class="bg-slate-800 border border-slate-600 rounded-md px-3 py-1 text-sm text-slate-200"
-                hx-get="/api/backtests/7/trades"
+                hx-get="/backtests/7/trades-table?page=1&sort_by=entry_timestamp&sort_order=asc"
                 hx-target="#trades-table-content"
-                hx-include="[name='sort_by'],[name='sort_order']"
                 hx-swap="outerHTML">
             <option value="20" selected>20</option>
             <option value="50" >50</option>
@@ -33,23 +33,19 @@
                 <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">
                     <button type="button"
                         class="flex items-center gap-1 hover:text-white transition-colors uppercase tracking-wider"
-                        hx-get="/api/backtests/7/trades?sort_by=entry_timestamp&sort_order=desc&page=1&page_size=20"
+                        hx-get="/backtests/7/trades-table?sort_by=entry_timestamp&sort_order=desc&page=1&page_size=20"
                         hx-target="#trades-table-content"
                         hx-swap="outerHTML">
-                        Entry Date
-                        
-                            ↑
-                        
+                        Entry Date ↑
                     </button>
                 </th>
                 <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">
                     <button type="button"
                         class="flex items-center gap-1 hover:text-white transition-colors uppercase tracking-wider"
-                        hx-get="/api/backtests/7/trades?sort_by=exit_timestamp&sort_order=asc&page=1&page_size=20"
+                        hx-get="/backtests/7/trades-table?sort_by=exit_timestamp&sort_order=asc&page=1&page_size=20"
                         hx-target="#trades-table-content"
                         hx-swap="outerHTML">
                         Exit Date
-                        
                     </button>
                 </th>
                 <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">Symbol</th>
@@ -60,11 +56,10 @@
                 <th scope="col" class="px-4 py-3 text-right text-xs font-medium text-slate-400 uppercase tracking-wider">
                     <button type="button"
                         class="flex items-center gap-1 hover:text-white transition-colors ml-auto uppercase tracking-wider"
-                        hx-get="/api/backtests/7/trades?sort_by=profit_loss&sort_order=asc&page=1&page_size=20"
+                        hx-get="/backtests/7/trades-table?sort_by=profit_loss&sort_order=asc&page=1&page_size=20"
                         hx-target="#trades-table-content"
                         hx-swap="outerHTML">
                         P&L ($)
-                        
                     </button>
                 </th>
                 <th scope="col" class="px-4 py-3 text-right text-xs font-medium text-slate-400 uppercase tracking-wider">P&L %</th>
@@ -180,4 +175,6 @@
             Last &#xBB;
         </button>
     </div>
+</div>
+
 </div>

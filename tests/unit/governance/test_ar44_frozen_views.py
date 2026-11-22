@@ -72,6 +72,10 @@ _IGNORED_SUFFIXES = (".pyc",)
 #: pins them against goldens captured from the pre-M4 tree. Nothing else was unfrozen.
 #: Refreshed under the same ruling for src/api/rest/trades.py only (code review: the
 #: export keeps a flat trade's zero returns and a trade-less futures run's header).
+#: **Regenerated 2026-11-22 by PO ruling (Allay approved: trades-table controls fix +
+#: equity golden update)** for templates/partials/trades_table.html only: its page-size,
+#: sort and pagination controls request the HTML partial instead of the JSON API, and it
+#: renders its own #trades-table-content root so each swap keeps the target.
 FROZEN_VIEWS: dict[str, str] = {
     "src/api/__init__.py": "bd3217228ed0c9f9600496636aa8c83a8401eea63f70bab2ef0019778ccb101e",
     "src/api/chart_bars.py": "1c966577ac331da69ad6e3b5c05857c999facc7c11cab3b2cf1d77c40428cb00",
@@ -210,7 +214,7 @@ FROZEN_VIEWS: dict[str, str] = {
         "dbc124eb8c2c42947f04708009f2ea971a72e675f2095c1f2c93858a140f44d2"
     ),
     "templates/partials/trades_table.html": (
-        "4473858579df5edc06389036e8cd39dfa61432576e391498bf95f73be6332684"
+        "18e9e4eab7ada9969b3756edd0dd72b4bbce02ded642838a893c013a745b3494"
     ),
     "templates/partials/trading_summary.html": (
         "354c60d895f95c731f917942bb6c50fe4e8a06067cda11d13571bfba3b784a65"
