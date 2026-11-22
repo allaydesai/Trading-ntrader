@@ -1,0 +1,149 @@
+# Hand-curated spot FX pair specs (FX M1).
+#
+# schema_version: the shape of this file; bump it (and the loader) when fields change.
+# specs_as_of:    when the values below were last reviewed.
+#
+# Keys are the FirstRate ticker (EURUSD), which is also base + quote. Instruments are built as
+# Nautilus CurrencyPairs with id {BASE}/{QUOTE}.IDEALPRO (IB_SIMPLIFIED symbology, decision D1).
+#
+# pip_size:        reporting unit (JPY-quoted pairs 0.01, others 0.0001).
+# price_precision: decimals of the data (FirstRate, measured 2026-11-22: 5 for EURUSD/GBPUSD,
+#                  3 for USDJPY). The backtest price increment is 10^-this (the data grid).
+# min_tick:        the IB IDEALPRO tick, kept for live orders only (design section 7).
+# size_increment:  whole base-currency units.
+# min_order_usd:   the IDEALPRO minimum; smaller orders are odd lots (worse fills live).
+# typical_spread_pips: modelled all-in spread, charged as half per side from M4 (D7).
+# margin_pct / maint_margin_pct: % of notional (D8).
+# data:            "firstrate" when bars exist on the VPS, "none" for a fixture-only spec.
+#
+# PROVENANCE. Every value in SOURCED_FIELDS has a `sources` entry: status VERIFIED (checked)
+# or UNVERIFIED (a best-known public figure). ALL IB ECONOMICS BELOW ARE UNVERIFIED: min tick,
+# size increment, IDEALPRO minimum, spread, margins and the commission schedule. Allay
+# confirms them against the IBKR account before M4 merges (tasks.md 4.7) and updates
+# status/source/as_of here. Pip size and the session are market conventions; data precision
+# is measured from the FirstRate files.
+#
+# Decimal values are quoted so YAML never turns them into floats; times are quoted because
+# unquoted "17:00" is a base-60 integer in YAML 1.1.
+schema_version: 1
+specs_as_of: "2026-11-22"
+
+commission:
+  rate_bps: "0.20"
+  min_per_order_usd: "2.00"
+  as_of: "2026-11-22"
+  status: UNVERIFIED
+  source: >-
+    IBKR Pro "Commissions Spot Currencies" public page (lowest-volume tier 0.20 bp x trade
+    value, USD 2.00 minimum per order); not checked against the account's tier.
+
+pairs:
+  EURUSD:
+    base: EUR
+    quote: USD
+    venue: IDEALPRO
+    data: firstrate
+    pip_size: "0.0001"
+    price_precision: 5
+    min_tick: "0.00005"
+    size_increment: "1"
+    min_order_usd: "25000"
+    typical_spread_pips: "0.5"
+    margin_pct: "3.0"
+    maint_margin_pct: "3.0"
+    margin_as_of: "2026-11-22"
+    session: &fx_week
+      tz: America/New_York
+      open: "17:00"
+      close: "17:00"
+      days: Sun-Fri
+    ib: {sec_type: CASH, symbol: EUR, currency: USD, exchange: IDEALPRO, local_symbol: EUR.USD}
+    sources: &majors_sources
+      pip_size: &convention
+        status: VERIFIED
+        source: Market convention (4th decimal; 2nd for JPY-quoted pairs).
+        as_of: "2026-11-22"
+      price_precision:
+        status: VERIFIED
+        source: >-
+          FirstRate FX files under /srv/market-data/raw/fx, widest significant precision across
+          all five timeframes (design.md section 0).
+        as_of: "2026-11-22"
+      min_tick: &ib_public
+        status: UNVERIFIED
+        source: Best-known public IB IDEALPRO figure; not checked against IB contract details.
+        as_of: "2026-11-22"
+      size_increment: *ib_public
+      min_order_usd: *ib_public
+      typical_spread_pips:
+        status: UNVERIFIED
+        source: Modelled all-in IDEALPRO spread for a liquid major (decision D7).
+        as_of: "2026-11-22"
+      margin_pct: &ib_margin
+        status: UNVERIFIED
+        source: Best-known public IB FX margin rate for majors (~3%); not checked for the account.
+        as_of: "2026-11-22"
+      maint_margin_pct: *ib_margin
+      session: *convention
+  GBPUSD:
+    base: GBP
+    quote: USD
+    venue: IDEALPRO
+    data: firstrate
+    pip_size: "0.0001"
+    price_precision: 5
+    min_tick: "0.00005"
+    size_increment: "1"
+    min_order_usd: "25000"
+    typical_spread_pips: "0.8"
+    margin_pct: "3.0"
+    maint_margin_pct: "3.0"
+    margin_as_of: "2026-11-22"
+    session: *fx_week
+    ib: {sec_type: CASH, symbol: GBP, currency: USD, exchange: IDEALPRO, local_symbol: GBP.USD}
+    sources: *majors_sources
+  USDJPY:
+    base: USD
+    quote: JPY
+    venue: IDEALPRO
+    data: firstrate
+    pip_size: "0.01"
+    price_precision: 3
+    min_tick: "0.005"
+    size_increment: "1"
+    min_order_usd: "25000"
+    typical_spread_pips: "0.5"
+    margin_pct: "3.0"
+    maint_margin_pct: "3.0"
+    margin_as_of: "2026-11-22"
+    session: *fx_week
+    ib: {sec_type: CASH, symbol: USD, currency: JPY, exchange: IDEALPRO, local_symbol: USD.JPY}
+    sources: *majors_sources
+  # Data-less cross (decision D15): no bars on the VPS; it exists so the cross-conversion
+  # path (GBP P&L -> USD via GBPUSD) has a real spec in fixture tests.
+  EURGBP:
+    base: EUR
+    quote: GBP
+    venue: IDEALPRO
+    data: none
+    pip_size: "0.0001"
+    price_precision: 5
+    min_tick: "0.00005"
+    size_increment: "1"
+    min_order_usd: "25000"
+    typical_spread_pips: "1.0"
+    margin_pct: "3.0"
+    maint_margin_pct: "3.0"
+    margin_as_of: "2026-11-22"
+    session: *fx_week
+    ib: {sec_type: CASH, symbol: EUR, currency: GBP, exchange: IDEALPRO, local_symbol: EUR.GBP}
+    sources:
+      <<: *majors_sources
+      price_precision:
+        status: UNVERIFIED
+        source: No EURGBP data on the VPS; 5 decimals assumed from the majors' convention.
+        as_of: "2026-11-22"
+      typical_spread_pips:
+        status: UNVERIFIED
+        source: Modelled spread for a less liquid cross (wider than the majors).
+        as_of: "2026-11-22"
