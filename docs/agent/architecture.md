@@ -29,6 +29,7 @@ src/
 │   ├── mark_to_market.py     # daily equity from fills + bar closes; risk metrics computed from it
 │   ├── session_equity.py     # Sealed paper session: trade rows → the same extractor (Epic 5)
 │   ├── analytics.py / metrics.py / fee_models.py / position_sizing.py / risk_management.py
+│   ├── fill_model.py / fill_models.py  # seeded make_fill_model; GapAwareFillModel + next-bar exec
 │   ├── benchmarks/        # buy_and_hold: backtest-only, NOT in StrategyRegistry (never live)
 │   └── strategies/
 │       ├── sma_crossover.py / sma_momentum.py  # Built-in strategies
