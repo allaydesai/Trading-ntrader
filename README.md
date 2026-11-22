@@ -213,6 +213,14 @@ uv run python -m src.cli.main import --format firstrate --catalog firstrate-futu
   --asset-class futures --timeframe daily,hourly /srv/market-data/raw/futures
 ```
 
+**Backtesting futures**: run `backtest run` with `--catalog firstrate-futures` (symbol `ES`,
+`NQ`, `CL`, `GC` or `ZN`). Commission is the spec's per-contract rate per side, margin is the
+spec's dollars per contract and an order over free margin is denied, and `sma_crossover` and
+`buy_and_hold` size in whole contracts by notional (`qty x price x multiplier`), so $100k of
+ES (about $350k a contract) places no order. Use a config file to set `position_size_pct`
+(CLI mode keeps the 10% default). Details, limits and a sizing guide for external
+strategies: `docs/agent/futures-backtesting.md`.
+
 ### Data Commands
 
 | Command | Description |

@@ -31,7 +31,12 @@ futures backtest is still costed and sized like an equity one:
     `instrument_multiplier`;
   - `calculate_risk_based_size` takes an optional `multiplier`;
   - `sma_crossover` and `buy_and_hold` size by notional and use whole contracts.
-- Futures runs add `futures_contracts` and `profit_pct_basis` to `config_snapshot`.
+- Futures runs add `futures_contracts` and `profit_pct_basis` to `config_snapshot`. Both are
+  declared on `StrategyConfigSnapshot`, which persistence uses and which drops undeclared
+  keys; they are omitted from the dump when unset.
+- `SMACrossover` coerces `portfolio_value`/`position_size_pct` to `Decimal`: config-file
+  runs passed YAML floats through and crashed on the first signal (an existing bug the smoke
+  run hit).
 - `contract_specs.yaml` carries a source note and as-of date for each verified or unverified
   value.
 - Docs: `docs/agent/futures-backtesting.md`, which also guides external strategies.
