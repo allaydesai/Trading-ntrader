@@ -50,6 +50,7 @@ def _identity(request: BacktestRequest) -> dict[str, Any]:
         # Only a stressed run carries it: every hash computed before the field existed,
         # and every candidate hash, still names the same run.
         **({"cost_multiplier": request.cost_multiplier} if request.cost_multiplier != 1 else {}),
+        **({"fill_model": request.fill_model} if request.fill_model != "default" else {}),
     }
 
 

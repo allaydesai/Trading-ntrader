@@ -233,6 +233,12 @@ dashboard shows them too: a Futures panel on the run page, a futures trades tabl
 with `RoM` in the run list. Details, limits and a sizing guide
 for external strategies: `docs/agent/futures-backtesting.md`.
 
+**Execution realism (opt-in).** A config file's `backtest:` section can set
+`fill_model: gap_aware` (as `configs/riptide.yaml` does): stops gapped through overnight fill
+at the open, and market-on-open exits execute on the next bar at its open. The env var
+`SLIPPAGE_PER_SHARE` (default `0`) adds a fixed per-share cost to every equity fill; futures
+fills never pay it. Details: `docs/agent/nautilus.md` (Fill and Fee Models).
+
 ### Data Commands
 
 | Command | Description |

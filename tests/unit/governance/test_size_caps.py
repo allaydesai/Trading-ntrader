@@ -123,7 +123,9 @@ SIZE_BASELINE: dict[str, int] = {
     # MCP phase 2, 275 -> 277: `reproduced_from_run_id` threaded through `execute`
     # and `_persist_results` so `reproduce_run` uses the orchestrator, not the legacy runner.
     # MCP phase 4, 277 -> 278: `_make_fee_model` scales every commission term for cost stress.
-    "src/core/backtest_orchestrator.py::BacktestOrchestrator": 277,
+    # Slippage drag, 277 -> 272: `_make_fee_model` delegates to `IBKRCommissionModel.from_settings`.
+    # Riptide, 272 -> 274: `bind_fill_model` registers a gap-aware model (single and multi).
+    "src/core/backtest_orchestrator.py::BacktestOrchestrator": 274,
     "src/core/backtest_runner.py::MinimalBacktestRunner": 891,
     "src/core/backtest_runner.py::MinimalBacktestRunner._extract_results": 111,
     "src/core/backtest_runner.py::MinimalBacktestRunner._persist_backtest_results": 95,
@@ -189,7 +191,8 @@ SIZE_BASELINE: dict[str, int] = {
     "src/db/repositories/catalog_instrument_repository.py::CatalogInstrumentRepository": 102,
     # Phase 2 pre-work, 176 -> 177: `fill_seed` makes the fill model's draws part of the request.
     # MCP phase 4, 177 -> 178: `cost_multiplier` (cost stress) is part of the request.
-    "src/models/backtest_request.py::BacktestRequest": 178,
+    # Riptide, 178 -> 180: `fill_model` (gap-aware opt-in) is a field read from YAML.
+    "src/models/backtest_request.py::BacktestRequest": 180,
     "src/models/price_validation_report.py::evaluate_ticker_deviation": 64,
     # MCP phase 1, 274 -> 276: both save paths take run provenance (S2.3).
     "src/services/backtest_persistence.py::BacktestPersistenceService": 264,

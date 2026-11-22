@@ -15,6 +15,14 @@ onto the instrument (`instrument.info`), and `src/core/futures_costs.py` reads i
 Venue setup lives in `src/core/backtest_venue.py` (`setup_backtest_venues`). A venue with no
 futures contract gets exactly the `add_venue` call it always had.
 
+**Slippage drag is equities only.** `SLIPPAGE_PER_SHARE` (`IBKRCommissionModel`) is a fixed
+cost per filled share. A futures venue charges `FuturesCommissionModel` and keeps the IBKR
+model only as the fallback for non-futures instruments, so a futures fill never pays it and
+futures results do not change when it is set (pinned in
+`tests/component/core/test_futures_costs.py::TestSlippageDrag`). A cent per contract would be
+meaningless next to ES's $12.50 tick; futures slippage, if wanted, belongs in the contract
+spec as ticks per side.
+
 ## Margin
 
 - **Model.** Nautilus 1.220 lets a venue take a custom `MarginModel`. `FuturesMarginModel`

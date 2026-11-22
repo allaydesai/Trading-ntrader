@@ -122,16 +122,28 @@ The venue must match between instrument, bars, and engine setup.
 ### Fill and Fee Models
 
 ```python
-from nautilus_trader.backtest.models import FillModel
 from src.core.fee_models import IBKRCommissionModel
+from src.core.fill_model import make_fill_model
 
-fill_model = FillModel(prob_fill_on_limit=0.95, prob_fill_on_stop=0.95, prob_slippage=0.01)
-fee_model = IBKRCommissionModel(
-    commission_per_share=settings.commission_per_share,
-    min_per_order=settings.commission_min_per_order,
-    max_rate=settings.commission_max_rate,
-)
+fill_model = make_fill_model(request.fill_seed, kind=request.fill_model)  # seeded
+fee_model = IBKRCommissionModel.from_settings(settings)  # commission + SLIPPAGE_PER_SHARE
 ```
+
+`make_fill_model` gives Nautilus' `FillModel(0.95, 0.95, 0.01)`, seeded. A YAML config can
+ask for `backtest.fill_model: gap_aware` (`configs/riptide.yaml` does): `GapAwareFillModel`
+(`src/core/fill_models.py`) with the same probabilities, plus **next-bar execution** at the
+venue. A stop gapped through overnight fills at the bar's open, and a market order tagged
+`MOO_EXIT_TAG` sent on bar T fills on bar T+1 at its open, with T+1's timestamp. A fill model
+alone cannot do that (it only reprices a fill that happens on T; an empty book rejects the
+order), so `backtest_venue.py` adds a 1 ns `LatencyModel` and `NextBarExecutionModule`, which
+releases in-flight commands at the start of each bar, before its prices are matched. The
+orchestrator calls `bind_fill_model(fill_model, engine, bars)`. Caveats: an untagged market
+order on such a venue fills at T's close but is stamped T+1; an MOO exit on the final bar
+does not fill.
+
+`SLIPPAGE_PER_SHARE` (default 0) adds a fixed per-share cost to every equity fill on top of
+the capped commission. It never applies to a futures contract (see
+`docs/agent/futures-backtesting.md`).
 
 ## Strategy Config Pattern
 

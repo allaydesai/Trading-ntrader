@@ -98,6 +98,33 @@ class TestFuturesCommissionModel:
             FuturesCommissionModel({_contract("ES").id: Decimal("-1")})
 
 
+class TestSlippageDrag:
+    """The per-share slippage drag (``SLIPPAGE_PER_SHARE``) is an equities-only cost.
+
+    A futures venue charges the contract's per-contract commission and uses the equity
+    model only as the fallback for non-futures instruments, so a futures fill never pays a
+    per-share drag and M3/M4 futures results do not move when the setting is on.
+    """
+
+    def test_an_equity_fill_pays_commission_plus_the_drag(self, equity):
+        model = IBKRCommissionModel(slippage_per_share=Decimal("0.01"))
+        fee = model.get_commission(None, Quantity.from_int(100), Price.from_str("100.00"), equity)
+        assert fee == Money(Decimal("2.00"), USD)  # $1 minimum + 100 x $0.01
+
+    def test_a_futures_fill_never_pays_the_per_share_drag(self):
+        es = _contract("ES")
+        equity_fee = IBKRCommissionModel(slippage_per_share=Decimal("0.01"))
+        fee_model, _ = venue_cost_models([es], equity_fee)
+        fee = fee_model.get_commission(None, Quantity.from_int(3), Price.from_str("7000.00"), es)
+        assert fee == Money(Decimal("6.75"), USD)  # 3 x 2.25, as with no drag
+
+    def test_an_equity_on_a_futures_venue_still_pays_it(self, equity):
+        equity_fee = IBKRCommissionModel(slippage_per_share=Decimal("0.01"))
+        fee_model, _ = venue_cost_models([_contract("ES")], equity_fee)
+        qty, px = Quantity.from_int(100), Price.from_str("100.00")
+        assert fee_model.get_commission(None, qty, px, equity) == Money(Decimal("2.00"), USD)
+
+
 class TestFuturesMarginModel:
     @pytest.mark.parametrize("price", ["2000.00", "7000.00", "12000.00"])
     def test_initial_margin_is_dollars_per_contract_at_any_price(self, price):

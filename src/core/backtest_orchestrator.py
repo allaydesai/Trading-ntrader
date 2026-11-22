@@ -26,6 +26,7 @@ from src.config import get_settings
 from src.core.backtest_venue import setup_backtest_venues
 from src.core.fee_models import IBKRCommissionModel
 from src.core.fill_model import make_fill_model
+from src.core.fill_models import bind_fill_model
 from src.core.futures_costs import futures_snapshot
 from src.core.results_extractor import ResultsExtractor, metrics_basis
 from src.core.strategy_factory import StrategyFactory, StrategyLoader
@@ -84,6 +85,7 @@ def _run_record_fields(request: BacktestRequest) -> dict[str, Any]:
             **(
                 {"cost_multiplier": request.cost_multiplier} if request.cost_multiplier != 1 else {}
             ),
+            **({"fill_model": request.fill_model} if request.fill_model != "default" else {}),
         },
     }
 
@@ -317,18 +319,13 @@ class BacktestOrchestrator:
         return result
 
     def _make_fee_model(self, multiplier: float = 1.0) -> IBKRCommissionModel:
-        """The IBKR commission model from settings, every term scaled by ``multiplier``.
+        """The IBKR commission model from settings, every cost term scaled by ``multiplier``.
 
-        A cost-stress run (research MCP phase 4) scales the per-share rate, the
-        minimum and the cap alike; the fill model is untouched, so this stresses
-        commission, not slippage.
+        A cost-stress run (research MCP phase 4) scales commission and the slippage
+        drag alike; the fill model is untouched, so this stresses modelled costs,
+        not fill behaviour.
         """
-        scale = Decimal(str(multiplier))
-        return IBKRCommissionModel(
-            commission_per_share=self.settings.commission_per_share * scale,
-            min_per_order=self.settings.commission_min_per_order * scale,
-            max_rate=self.settings.commission_max_rate * scale,
-        )
+        return IBKRCommissionModel.from_settings(self.settings, Decimal(str(multiplier)))
 
     def _setup_engine(
         self,
@@ -353,9 +350,10 @@ class BacktestOrchestrator:
         )
 
         # Create fill + commission models (shared construction — see helpers)
-        fill_model = make_fill_model(request.fill_seed)
+        fill_model = make_fill_model(request.fill_seed, kind=request.fill_model)
 
         self.engine = BacktestEngine(config=config)
+        bind_fill_model(fill_model, self.engine, bars)
 
         # Determine venue from instrument or bars
         if hasattr(instrument, "id") and hasattr(instrument.id, "venue"):
@@ -398,8 +396,9 @@ class BacktestOrchestrator:
             trader_id=TraderId("BACKTESTER-001"),
             logging=logging_config,
         )
-        fill_model = make_fill_model(request.fill_seed)
+        fill_model = make_fill_model(request.fill_seed, kind=request.fill_model)
         engine = BacktestEngine(config=config)
+        bind_fill_model(fill_model, engine, [bar for bars, _ in instruments_data for bar in bars])
 
         by_venue: dict[Venue, list[Instrument]] = {}
         for _bars, instrument in instruments_data:

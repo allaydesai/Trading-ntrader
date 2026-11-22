@@ -300,3 +300,34 @@ class TestBacktestRequestCatalogName:
         kwargs["data_source"] = "firstrate"
         with pytest.raises(ValidationError, match="Invalid data_source"):
             BacktestRequest(**kwargs)
+
+
+class TestBacktestRequestFillModel:
+    """A config opts in to the gap-aware fill model via ``backtest.fill_model``."""
+
+    @staticmethod
+    def _yaml(**backtest) -> dict:
+        return {
+            "strategy_path": "src.core.strategies.custom.riptide:Riptide",
+            "config_path": "src.core.strategies.custom.riptide:RiptideConfig",
+            "config": {
+                "instrument_id": "AAPL.NASDAQ",
+                "bar_type": "AAPL.NASDAQ-1-DAY-LAST-EXTERNAL",
+            },
+            "backtest": {"start_date": "2024-01-01", "end_date": "2024-06-30", **backtest},
+        }
+
+    def test_defaults_to_the_default_model(self):
+        assert BacktestRequest.from_yaml_config(self._yaml()).fill_model == "default"
+
+    def test_a_config_can_ask_for_the_gap_aware_model(self):
+        request = BacktestRequest.from_yaml_config(self._yaml(fill_model="gap_aware"))
+        assert request.fill_model == "gap_aware"
+
+    def test_an_unknown_model_is_rejected(self):
+        with pytest.raises(ValueError, match="fill_model"):
+            BacktestRequest.from_yaml_config(self._yaml(fill_model="optimistic"))
+
+    def test_the_riptide_config_asks_for_the_gap_aware_model(self):
+        request = BacktestRequest.from_yaml_file("configs/riptide.yaml", persist=False)
+        assert request.fill_model == "gap_aware"
