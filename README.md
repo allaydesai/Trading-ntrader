@@ -217,9 +217,19 @@ uv run python -m src.cli.main import --format firstrate --catalog firstrate-futu
 `NQ`, `CL`, `GC` or `ZN`). Commission is the spec's per-contract rate per side, margin is the
 spec's dollars per contract and an order over free margin is denied, and `sma_crossover` and
 `buy_and_hold` size in whole contracts by notional (`qty x price x multiplier`), so $100k of
-ES (about $350k a contract) places no order. Use a config file to set `position_size_pct`
-(CLI mode keeps the 10% default). Details, limits and a sizing guide for external
-strategies: `docs/agent/futures-backtesting.md`.
+ES (about $350k a contract) places no order. To trade a fixed size, pass `--contracts N`
+(futures only; `sma_crossover`, or `contracts:` in a config file's `config:` section):
+
+```bash
+uv run python -m src.cli.main backtest run --symbol ES --catalog firstrate-futures \
+  --timeframe 1-HOUR --start 2024-01-01 --end 2024-06-30 --starting-balance 100000 --contracts 1
+```
+
+`backtest show`, `history`, `report` and the MCP run tools lead futures runs with **return on
+margin** (P&L / peak initial margin), next to the return on the underlying. Dollar P&L of
+older trades is ratio-adjusted, so compare trades by percentage. The web dashboard does not
+show these yet (its views are frozen, `FROZEN_VIEWS`). Details, limits and a sizing guide
+for external strategies: `docs/agent/futures-backtesting.md`.
 
 ### Data Commands
 
@@ -239,6 +249,7 @@ strategies: `docs/agent/futures-backtesting.md`.
 |---------|-------------|
 | `backtest run --strategy <type> --symbol <SYM> [--data-source <src>] ...` | Run a backtest (sources: catalog, ibkr, kraken, mock) |
 | `backtest run --strategy <type> --symbol <SYM> --catalog <name> ...` | Run against a named FirstRate catalog (resolves the ticker via the import DB; overrides the default `NAUTILUS_PATH`) |
+| `backtest run --symbol ES --catalog firstrate-futures --contracts N ...` | Futures: trade exactly N whole contracts per entry (instead of notional sizing) |
 | `backtest run <config.yaml>` | Run backtest with YAML config |
 | `backtest run-multi --symbols <A,B> --catalog <name> --start <date> --end <date>` | Run ONE backtest across several ETFs from a named catalog (not persisted yet) |
 | `backtest list` | List available strategies and data |
