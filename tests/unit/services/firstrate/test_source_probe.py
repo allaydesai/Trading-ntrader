@@ -118,6 +118,18 @@ class TestComputeSourceLastDate:
 
         assert compute_source_last_date(file_path) == datetime(2025, 1, 3, 5, tzinfo=timezone.utc)
 
+    def test_non_padded_stamps_still_count(self, tmp_path: Path) -> None:
+        # strptime accepts "2025-1-3"; the fast path must not discard it.
+        body = "2025-01-02,1,2,1,2,1\n2025-1-3,1,2,1,2,1\n"
+        file_path = _write(tmp_path / "A" / "SPY_full_1day_adjsplitdiv.txt", body)
+
+        assert compute_source_last_date(file_path) == datetime(2025, 1, 3, 5, tzinfo=timezone.utc)
+
+    def test_only_non_padded_stamps(self, tmp_path: Path) -> None:
+        file_path = _write(tmp_path / "A" / "SPY_full_1day_x.txt", "2025-1-3,1,2,1,2,1\n")
+
+        assert compute_source_last_date(file_path) == datetime(2025, 1, 3, 5, tzinfo=timezone.utc)
+
     def test_malformed_date_lines_are_skipped(self, tmp_path: Path) -> None:
         body = "garbage,100.0,101.0,99.0,100.5,1000\n2025-01-02,100.5,102.0,100.0,101.5,1100\n"
         file_path = _write(tmp_path / "A" / "SPY_full_1day_adjsplitdiv.txt", body)

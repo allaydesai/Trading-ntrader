@@ -28,7 +28,7 @@ import pandas as pd
 import structlog
 from nautilus_trader.model.data import Bar, BarType
 from nautilus_trader.model.identifiers import InstrumentId
-from nautilus_trader.model.objects import Price, Quantity
+from nautilus_trader.model.objects import PRICE_MAX, QUANTITY_MAX, Price, Quantity
 
 from src.models.catalog import AssetClass, ValidationResult
 from src.services.firstrate.parsers.base import BaseParser, register_parser
@@ -79,15 +79,23 @@ def _to_utc_ns(ts: pd.Series) -> pd.Series:
 
 
 def _clean(frame: pd.DataFrame, precision: int) -> tuple[pd.DataFrame, pd.Series]:
-    """Coerce + round; return the frame and a mask of rows that make valid bars."""
+    """Coerce + round; return the frame and a mask of rows that make valid bars.
+
+    OHLC ordering is checked on the source values (rounding could hide a ``high < low``);
+    positivity and Nautilus' representable range on the rounded values that are emitted.
+    Rounding is monotonic, so ordered source values stay ordered once rounded.
+    """
+    source = pd.DataFrame({col: pd.to_numeric(frame[col], errors="coerce") for col in _PRICES})
+    o, h, lo, c = (source[col] for col in _PRICES)
     out = pd.DataFrame(index=frame.index)
     out["ts"] = _to_utc_ns(frame["ts"])
     for col in _PRICES:
-        out[col] = pd.to_numeric(frame[col], errors="coerce").round(precision)
+        out[col] = source[col].round(precision)
     out["volume"] = pd.to_numeric(frame["volume"], errors="coerce")
-    o, h, lo, c = (out[col] for col in _PRICES)
-    valid = out.notna().all(axis=1) & (out[_PRICES] > 0).all(axis=1) & (h >= lo)
-    valid &= o.between(lo, h) & c.between(lo, h) & (out["volume"] >= 0)
+    prices = out[_PRICES]
+    valid = out.notna().all(axis=1) & (prices > 0).all(axis=1) & (prices <= PRICE_MAX).all(axis=1)
+    valid &= out["volume"].between(0, QUANTITY_MAX)
+    valid &= (h >= lo) & o.between(lo, h) & c.between(lo, h)
     return out, valid
 
 

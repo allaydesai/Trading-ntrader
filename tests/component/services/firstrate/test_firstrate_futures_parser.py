@@ -195,6 +195,29 @@ class TestValidation:
         assert not validation.valid
         assert validation.errors
 
+    def test_order_is_checked_before_rounding(self, tmp_path):
+        # high < low in the source; at precision 2 all four prices round to 10.00.
+        path = _write(tmp_path, ["2025-06-02 10:00:00,10,9.999,10.001,10,1"])
+        parser = FirstRateFuturesParser()
+        assert parser.parse_file(path, ES_MIN.instrument_id, ES_MIN) == []
+        assert parser.last_validation.invalid_rows == 1
+
+    def test_unrepresentable_values_are_rejected_per_row(self, tmp_path):
+        path = _write(
+            tmp_path,
+            [
+                "2025-06-02 10:00:00,10,11,9,10,1",
+                "2025-06-02 10:01:00,10,11,9,10,1e100",  # beyond QUANTITY_MAX
+                "2025-06-02 10:02:00,1e300,1e300,1e300,1e300,1",  # beyond PRICE_MAX
+                "2025-06-02 10:03:00,10,11,9,10,inf",
+                "2025-06-02 10:04:00,10,11,9,10,2",
+            ],
+        )
+        parser = FirstRateFuturesParser()
+        bars = parser.parse_file(path, ES_MIN.instrument_id, ES_MIN)
+        assert [b.volume.as_double() for b in bars] == [1, 2]
+        assert parser.last_validation.invalid_rows == 3
+
     def test_empty_file(self, tmp_path):
         path = tmp_path / "ES_full_1min_x.txt"
         path.write_text("\n\n")
