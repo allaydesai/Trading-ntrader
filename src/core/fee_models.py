@@ -57,7 +57,10 @@ class IBKRCommissionModel(FeeModel):
                 as a deterministic P&L drag (default: $0.00). This approximates
                 execution slippage as a symmetric cost per filled share rather than
                 directional price impact — a simplification that keeps the venue
-                model minimal; it applies on every fill (entry and exit).
+                model minimal; it applies on every fill (entry and exit). Equities
+                only: a futures venue charges ``FuturesCommissionModel`` instead and
+                uses this model just for non-futures instruments, so futures fills
+                never pay it (see ``src/core/futures_costs.py``).
 
         Raises:
             ValueError: If any parameter is negative

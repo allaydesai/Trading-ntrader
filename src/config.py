@@ -416,7 +416,8 @@ class Settings(BaseSettings):
     )
     slippage_per_share: Decimal = Field(
         default=Decimal("0"),
-        description="Per-share execution slippage as a P&L drag (0 = off; 0.01 = 1 cent)",
+        description="Per-share execution slippage as a P&L drag on equity fills "
+        "(0 = off; 0.01 = 1 cent). Never applied to futures contracts.",
     )
 
     # Data settings
