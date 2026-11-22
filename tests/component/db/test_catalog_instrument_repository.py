@@ -481,6 +481,45 @@ class TestSyncCatalogInstrumentRepository:
         assert result is not None
         assert result.bar_count_30min == 909
 
+    def test_upsert_persists_futures_fields_on_existing(self, sync_session):
+        """Sync upsert update-branch must copy the futures columns (futures M2)."""
+        from datetime import date
+        from decimal import Decimal
+
+        repo = SyncCatalogInstrumentRepository(sync_session)
+        futures = _make_instrument(
+            ticker="ES",
+            nautilus_id="ES.CME",
+            asset_class="FUTURES",
+            catalog_name="firstrate-futures",
+            exchange="CME",
+            name="E-mini S&P 500",
+            **{f"bar_count_{tf}": 0 for tf in ("daily", "hourly", "minute", "5min", "30min")},
+        )
+        repo.upsert(CatalogInstrument(**futures))
+        sync_session.commit()
+
+        repo.upsert(
+            CatalogInstrument(
+                **futures,
+                multiplier=Decimal("50"),
+                tick_size=Decimal("0.25"),
+                currency="USD",
+                contract_kind="specific",
+                expiry=date(2026, 12, 18),
+                roll_rule="firstrate-ratio-adjusted",
+            )
+        )
+        sync_session.commit()
+
+        result = repo.get_by_ticker("firstrate-futures", "ES")
+        assert result.multiplier == Decimal("50")
+        assert result.tick_size == Decimal("0.25")
+        assert result.currency == "USD"
+        assert result.contract_kind == "specific"
+        assert result.expiry == date(2026, 12, 18)
+        assert result.roll_rule == "firstrate-ratio-adjusted"
+
     def test_get_by_ticker(self, sync_session):
         """get_by_ticker returns matching instrument."""
         repo = SyncCatalogInstrumentRepository(sync_session)

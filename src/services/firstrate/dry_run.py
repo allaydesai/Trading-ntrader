@@ -68,6 +68,10 @@ PARQUET_COMPRESSION_RATIO: float = 0.35
 #: (Datetime, Open, High, Low, Close, Volume).
 _EXPECTED_COLUMNS: int = 6
 
+#: Column counts a sampled file may have, per asset class. Futures daily files add a 7th
+#: open-interest column, which the futures parser drops (futures M2).
+_ACCEPTED_COLUMNS: dict[AssetClass, tuple[int, ...]] = {AssetClass.FUTURES: (6, 7)}
+
 #: Marker that separates the ticker from the rest of a FirstRate filename,
 #: e.g. ``AAPL_full_1day_adjsplitdiv.txt``.
 _FIRSTRATE_TICKER_MARKER = "_full_"
@@ -385,7 +389,11 @@ def _derive_date_ranges(files: Iterable[Path]) -> dict[str, TickerDateRange]:
     return ranges
 
 
-def validate_schema_sample(files: list[Path], sample_size: int = 5) -> list[SchemaMismatch]:
+def validate_schema_sample(
+    files: list[Path],
+    sample_size: int = 5,
+    accepted_columns: tuple[int, ...] = (_EXPECTED_COLUMNS,),
+) -> list[SchemaMismatch]:
     """Sample-check that files look like valid FirstRate 6-column CSVs.
 
     Reads only the first non-blank line of up to ``sample_size`` files. Users
@@ -396,10 +404,12 @@ def validate_schema_sample(files: list[Path], sample_size: int = 5) -> list[Sche
         files: Candidate files to sample. Only the first ``sample_size`` are
             inspected.
         sample_size: Maximum number of files to open.
+        accepted_columns: Column counts that pass (``(6,)`` unless the asset class
+            allows more, e.g. ``(6, 7)`` for futures).
 
     Returns:
         A list of :class:`SchemaMismatch` records, one per bad file. Empty if
-        every sampled file's first line has exactly ``6`` comma-separated
+        every sampled file's first line has an accepted number of comma-separated
         columns.
     """
     mismatches: list[SchemaMismatch] = []
@@ -416,7 +426,7 @@ def validate_schema_sample(files: list[Path], sample_size: int = 5) -> list[Sche
             )
             continue
         detected = len(line.split(","))
-        if detected != _EXPECTED_COLUMNS:
+        if detected not in accepted_columns:
             mismatches.append(
                 SchemaMismatch(
                     file_path=file,
@@ -508,8 +518,9 @@ def build_dry_run_report(
     report = _state_to_report(state, source_path, asset_class)
 
     schema_mismatches: list[SchemaMismatch] = list(state.name_mismatches)
+    accepted = _ACCEPTED_COLUMNS.get(asset_class, (_EXPECTED_COLUMNS,))
     for bucket in state.groups.values():
-        schema_mismatches.extend(validate_schema_sample(bucket.files, sample_size))
+        schema_mismatches.extend(validate_schema_sample(bucket.files, sample_size, accepted))
 
     ticker_date_ranges: dict[str, TickerDateRange] = {}
     if include_date_ranges:

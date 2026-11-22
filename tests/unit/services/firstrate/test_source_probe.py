@@ -10,6 +10,7 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -89,6 +90,57 @@ class TestComputeSourceLastDate:
         file_path = _write(tmp_path / "A" / "SPY_full_1day_adjsplitdiv.txt", body)
 
         assert compute_source_last_date(file_path) is None
+
+    def test_seven_column_futures_daily_rows_are_read(self, tmp_path: Path) -> None:
+        # Futures daily files carry a 7th open-interest column (futures M2).
+        body = "2026-04-29,7100,7160,7090,7150,1500,1968\n2026-04-30,7150,7253,7133,7243,1732,0\n"
+        file_path = _write(tmp_path / "ES_full_1day_continuous_ratio_adjusted.txt", body)
+
+        # 2026-04-30 00:00 EDT = 04:00 UTC.
+        assert compute_source_last_date(file_path) == datetime(2026, 4, 30, 4, tzinfo=timezone.utc)
+
+    def test_eight_columns_still_rejected(self, tmp_path: Path) -> None:
+        file_path = _write(tmp_path / "X_full_1day_x.txt", "2026-04-30,1,2,1,2,1,0,9\n")
+
+        assert compute_source_last_date(file_path) is None
+
+    def test_well_shaped_but_invalid_max_falls_back_to_full_parse(self, tmp_path: Path) -> None:
+        # "2025-13-45" sorts after every real date but does not parse.
+        body = "2025-01-02,1,2,1,2,1\n2025-13-45,1,2,1,2,1\n2025-01-03,1,2,1,2,1\n"
+        file_path = _write(tmp_path / "A" / "SPY_full_1day_adjsplitdiv.txt", body)
+
+        assert compute_source_last_date(file_path) == datetime(2025, 1, 3, 5, tzinfo=timezone.utc)
+
+    def test_mixed_daily_and_intraday_stamps(self, tmp_path: Path) -> None:
+        body = (
+            "2025-01-03,1,2,1,2,1\n2025-01-02 23:00:00,1,2,1,2,1\n2025-01-03 00:00:00,1,2,1,2,1\n"
+        )
+        file_path = _write(tmp_path / "A" / "SPY_full_1day_adjsplitdiv.txt", body)
+
+        assert compute_source_last_date(file_path) == datetime(2025, 1, 3, 5, tzinfo=timezone.utc)
+
+    def test_non_padded_stamps_still_count(self, tmp_path: Path) -> None:
+        # strptime accepts "2025-1-3"; the fast path must not discard it.
+        body = "2025-01-02,1,2,1,2,1\n2025-1-3,1,2,1,2,1\n"
+        file_path = _write(tmp_path / "A" / "SPY_full_1day_adjsplitdiv.txt", body)
+
+        assert compute_source_last_date(file_path) == datetime(2025, 1, 3, 5, tzinfo=timezone.utc)
+
+    def test_only_non_padded_stamps(self, tmp_path: Path) -> None:
+        file_path = _write(tmp_path / "A" / "SPY_full_1day_x.txt", "2025-1-3,1,2,1,2,1\n")
+
+        assert compute_source_last_date(file_path) == datetime(2025, 1, 3, 5, tzinfo=timezone.utc)
+
+    def test_non_digit_shaped_stamp_does_not_force_full_parse(self, tmp_path: Path) -> None:
+        from src.services.firstrate import source_probe
+
+        body = "2025-01-02,1,2,1,2,1\n2025-01-0X,1,2,1,2,1\n"
+        file_path = _write(tmp_path / "A" / "SPY_full_1day_adjsplitdiv.txt", body)
+
+        with patch.object(source_probe, "_max_parsed_stamp", side_effect=AssertionError):
+            assert compute_source_last_date(file_path) == datetime(
+                2025, 1, 2, 5, tzinfo=timezone.utc
+            )
 
     def test_malformed_date_lines_are_skipped(self, tmp_path: Path) -> None:
         body = "garbage,100.0,101.0,99.0,100.5,1000\n2025-01-02,100.5,102.0,100.0,101.5,1100\n"

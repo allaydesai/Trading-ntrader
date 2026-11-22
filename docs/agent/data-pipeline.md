@@ -91,3 +91,21 @@ Market data stored as Parquet files under Nautilus catalog structure.
   `src/services/firstrate/backtest_loader.py` is the seam the named-catalog loader uses:
   `FUTURES` rows get a futures contract, every other asset class the unchanged `build_equity`.
 - Design notes: `openspec/changes/add-futures-instrument-model/design.md`.
+
+## Futures import (futures M2)
+
+- `import --format firstrate --catalog firstrate-futures --asset-class futures <dir>` ->
+  `src/cli/commands/import_futures.py`
+  -> `FuturesImportService` (`src/services/firstrate/futures_import_service.py`, a subclass of
+  `ImportService`) -> `FirstRateFuturesParser`
+  (`src/services/firstrate/parsers/firstrate_futures_parser.py`, registered for `FUTURES`).
+- Streams 250k-row pandas chunks, one Parquet part per chunk; verifies from Parquet footer row
+  counts plus sampled bars read back by timestamp (never a full read-back).
+- Prices: one fixed precision per root (`continuous_price_precision` in the spec). Timestamps:
+  same ET->UTC conversion as `FirstRateCsvParser._parse_timestamp`, bars stamped at the open.
+- `catalog_instruments` rows come from the spec (no company profiles). A re-run skips a series
+  only if its recorded end matches the source AND the Parquet footers hold the recorded count.
+- Catalog: `firstrate-futures` (created on first use).
+- The equity parser also pads every price of a file to one precision (the widest in the file):
+  Nautilus' catalog stores a batch at its first bar's precision and would truncate the rest.
+- Design notes: `openspec/changes/add-futures-importer/design.md`.

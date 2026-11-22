@@ -27,14 +27,18 @@ import structlog
 
 logger = structlog.get_logger(__name__)
 
-#: FirstRate files are headerless 6-column CSVs (Datetime, O, H, L, C, Volume).
-_EXPECTED_COLUMNS: int = 6
+#: FirstRate files are headerless 6-column CSVs (Datetime, O, H, L, C, Volume). Futures
+#: daily files add a 7th open-interest column, which the futures parser drops.
+_ACCEPTED_COLUMNS: tuple[int, ...] = (6, 7)
 
 #: Timestamp formats the probe understands, in the same order the parser
 #: tries them. Intraday (``YYYY-MM-DD HH:MM:SS``) first so daily rows do not
 #: accidentally match it via the shorter ``YYYY-MM-DD`` format.
 _INTRADAY_FMT = "%Y-%m-%d %H:%M:%S"
 _DAILY_FMT = "%Y-%m-%d"
+
+#: Separators stripped before the fast path's digit check.
+_SEPARATORS = str.maketrans("", "", "-: ")
 
 #: FirstRate CSV timestamps are local US Eastern Time with DST. Must match
 #: ``FirstRateCsvParser._parse_timestamp`` exactly so the source_probe and
@@ -52,6 +56,14 @@ def compute_source_last_date(file_path: Path) -> datetime | None:
     with ``read_text()`` — intraday minute-bar CSVs can be multi-hundred-MB
     and loading them whole would balloon RSS on batch re-runs.
 
+    ``YYYY-MM-DD[ HH:MM:SS]`` stamps sort lexicographically in wall-clock order,
+    and the ET->UTC conversion never reorders two wall-clock times, so the scan
+    keeps the largest well-shaped stamp string and parses only that one (odd-shaped
+    stamps such as ``2025-1-3`` are parsed individually). Parsing
+    every row cost ~60 s on a 6.4M-row futures file. If the largest string does
+    not parse, a second pass ignores non-digit stamps (``2025-01-0X``); only if that
+    winner fails too (``2025-13-45``) does the probe parse every row.
+
     Args:
         file_path: Path to the source ``.txt`` file.
 
@@ -60,21 +72,8 @@ def compute_source_last_date(file_path: Path) -> datetime | None:
         if the file is missing, unreadable, empty, or contains no row
         whose first column parses as a FirstRate timestamp.
     """
-    max_dt: datetime | None = None
     try:
-        with file_path.open("r", encoding="utf-8", errors="replace") as fh:
-            for raw in fh:
-                stripped = raw.strip()
-                if not stripped:
-                    continue
-                parts = stripped.split(",")
-                if len(parts) != _EXPECTED_COLUMNS:
-                    continue
-                dt = _parse_timestamp(parts[0].strip())
-                if dt is None:
-                    continue
-                if max_dt is None or dt > max_dt:
-                    max_dt = dt
+        return _probe(file_path)
     except FileNotFoundError:
         return None
     except (PermissionError, OSError) as exc:
@@ -85,8 +84,68 @@ def compute_source_last_date(file_path: Path) -> datetime | None:
         )
         return None
 
-    if max_dt is None:
-        return None
+
+def _first_columns(file_path: Path):
+    """Yield the stripped first column of every row with an accepted column count."""
+    with file_path.open("r", encoding="utf-8", errors="replace") as fh:
+        for raw in fh:
+            stripped = raw.strip()
+            if not stripped:
+                continue
+            parts = stripped.split(",")
+            if len(parts) in _ACCEPTED_COLUMNS:
+                yield parts[0].strip()
+
+
+def _separator_shaped(stamp: str) -> bool:
+    """``YYYY-MM-DD`` or ``YYYY-MM-DD HH:MM:SS`` by length and separators."""
+    if len(stamp) not in (10, 19) or stamp[4] != "-" or stamp[7] != "-":
+        return False
+    return len(stamp) == 10 or (stamp[10] == " " and stamp[13] == ":" and stamp[16] == ":")
+
+
+def _latest(file_path: Path, check_digits: bool = False) -> tuple[str | None, datetime | None]:
+    """Largest canonical stamp string, and the latest parsed odd-shaped stamp.
+
+    Canonical stamps are compared as strings; anything else (e.g. ``2025-1-3``, which
+    ``strptime`` accepts) is parsed so it can still win. With ``check_digits`` a stamp must
+    also be all digits to become the best string, so a non-digit one such as ``2025-01-0X``
+    goes to the per-row parse path instead (it only runs when the cheap pass's winner did
+    not parse: the check costs ~4 s on a 6.4M-row file).
+    """
+    best: str | None = None
+    other: datetime | None = None
+    for stamp in _first_columns(file_path):
+        if _separator_shaped(stamp):
+            if best is not None and stamp <= best:
+                continue
+            if not check_digits or stamp.translate(_SEPARATORS).isdigit():
+                best = stamp
+                continue
+        dt = _parse_timestamp(stamp)
+        if dt is not None and (other is None or dt > other):
+            other = dt
+    return best, other
+
+
+def _probe(file_path: Path) -> datetime | None:
+    """Cheap pass; a digit-checked pass if its winner does not parse; full parse last."""
+    for check_digits in (False, True):
+        best, other = _latest(file_path, check_digits)
+        if best is None:
+            return other
+        parsed = _parse_timestamp(best)
+        if parsed is not None:
+            return parsed if other is None else max(parsed, other)
+    return _max_parsed_stamp(file_path)
+
+
+def _max_parsed_stamp(file_path: Path) -> datetime | None:
+    max_dt: datetime | None = None
+    for stamp in _first_columns(file_path):
+        dt = _parse_timestamp(stamp)
+        if dt is not None and (max_dt is None or dt > max_dt):
+            max_dt = dt
     return max_dt
 
 
