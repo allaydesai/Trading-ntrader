@@ -301,3 +301,92 @@ class TestPositionSizeValidation:
                 max_position_size=Decimal("10"),
                 min_position_size=Decimal("20"),
             )
+
+
+@pytest.mark.unit
+class TestContractMultiplierHelpers:
+    """Futures M3 — multiplier-aware notional and contract counts."""
+
+    def test_notional_applies_the_multiplier(self):
+        from src.core.position_sizing import contract_notional
+
+        assert contract_notional(Decimal("1"), Decimal("7000"), Decimal("50")) == Decimal("350000")
+        assert contract_notional(Decimal("10"), Decimal("150")) == Decimal("1500")
+
+    def test_units_for_notional_divides_by_contract_value(self):
+        from src.core.position_sizing import units_for_notional
+
+        units = units_for_notional(Decimal("700000"), Decimal("7000"), Decimal("50"))
+        assert units == Decimal("2")
+        assert units_for_notional(Decimal("1500"), Decimal("150")) == Decimal("10")
+
+    @pytest.mark.parametrize("price,multiplier", [("7000", "0"), ("7000", "-1"), ("-1", "1")])
+    def test_units_for_notional_rejects_bad_inputs(self, price, multiplier):
+        from src.core.position_sizing import units_for_notional
+
+        with pytest.raises(ValueError):
+            units_for_notional(Decimal("1000"), Decimal(price), Decimal(multiplier))
+
+    def test_a_zero_price_keeps_the_plain_division_error(self):
+        """Live failure-guard tests pin a zero-price bar's failure as DivisionByZero."""
+        from decimal import DivisionByZero
+
+        from src.core.position_sizing import units_for_notional
+
+        with pytest.raises(DivisionByZero):
+            units_for_notional(Decimal("1000"), Decimal("0"))
+
+    @pytest.mark.parametrize(
+        "units,expected", [("0.29", 0), ("1", 1), ("2.99", 2), ("0", 0), ("-3", 0)]
+    )
+    def test_whole_contracts_floors_without_a_minimum(self, units, expected):
+        from src.core.position_sizing import whole_contracts
+
+        assert whole_contracts(Decimal(units)) == expected
+
+    def test_instrument_multiplier_reads_quantity_like_objects(self):
+        from types import SimpleNamespace
+
+        from src.core.position_sizing import instrument_multiplier
+
+        quantity_like = SimpleNamespace(as_decimal=lambda: Decimal("50"))
+        assert instrument_multiplier(SimpleNamespace(multiplier=quantity_like)) == Decimal("50")
+        assert instrument_multiplier(SimpleNamespace(multiplier=Decimal("1000"))) == 1000
+        assert instrument_multiplier(SimpleNamespace()) == Decimal("1")
+        assert instrument_multiplier(None) == Decimal("1")
+
+    def test_risk_based_size_counts_dollars_per_point(self):
+        """Risking $2,000 on a 10-point ES stop ($500 per contract) is 4 contracts."""
+        logic = PositionSizingLogic()
+        size = logic.calculate_risk_based_size(
+            Decimal("100000"), Decimal("0.02"), Decimal("7000"), Decimal("6990"), Decimal("50")
+        )
+        assert size == Decimal("4.00")
+
+    def test_risk_based_size_default_multiplier_is_unchanged(self):
+        logic = PositionSizingLogic()
+        size = logic.calculate_risk_based_size(
+            Decimal("10000"), Decimal("0.02"), Decimal("100"), Decimal("95")
+        )
+        assert size == Decimal("40.00")
+
+    def test_risk_based_size_rejects_a_non_positive_multiplier(self):
+        logic = PositionSizingLogic()
+        with pytest.raises(ValueError, match="Multiplier"):
+            logic.calculate_risk_based_size(
+                Decimal("10000"), Decimal("0.02"), Decimal("100"), Decimal("95"), Decimal("0")
+            )
+
+
+@pytest.mark.unit
+def test_risk_based_futures_size_is_never_rounded_up_before_flooring():
+    """3.999 contracts must stay below 4: half-even rounding to 0.01 would make it 4.00."""
+    from src.core.position_sizing import whole_contracts
+
+    logic = PositionSizingLogic()
+    # risk $1,999.50 / (10 points x $50) = 3.999 contracts
+    size = logic.calculate_risk_based_size(
+        Decimal("99975"), Decimal("0.02"), Decimal("7000"), Decimal("6990"), Decimal("50")
+    )
+    assert size == Decimal("3.99")
+    assert whole_contracts(size) == 3

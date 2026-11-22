@@ -18,6 +18,18 @@
 # commission_per_contract_usd is per side, an approximate all-in IB fixed rate (broker +
 # exchange + regulatory fees).
 #
+# SOURCE CHECK (futures M3, 2026-11-21):
+# - ES commission 2.25 VERIFIED against IBKR's own worked example on its futures commissions
+#   page (IBKR fixed 0.85 + CME exchange 1.38 + regulatory 0.02 = 2.25 per side):
+#   https://www.interactivebrokers.com/en/pricing/commissions-futures.php (as of 2026-11-21,
+#   read via a search-engine copy; the page itself returned HTTP 403 to direct fetches).
+#   NQ uses the same CME E-mini exchange fee, so 2.25 is consistent with it.
+# - CL, GC, ZN commissions and ALL margins are UNVERIFIED: the IBKR margin page
+#   (https://www.interactivebrokers.com/en/trading/margin-futures-fops.php) returned 403 and
+#   the CME Group margin pages timed out. Public snapshots of the IBKR margin page disagree
+#   by date (ES overnight initial seen between ~23,400 and ~34,400 USD), so the values below
+#   are kept as hand-entered. Check them against IBKR before relying on margin-limited sizing.
+#
 # Decimal values are quoted so YAML never turns them into floats; times are quoted because
 # unquoted "18:00" is a base-60 integer in YAML 1.1.
 schema_version: 1

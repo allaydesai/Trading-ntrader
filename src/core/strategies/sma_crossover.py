@@ -10,6 +10,12 @@ from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.objects import Quantity
 from nautilus_trader.trading.strategy import Strategy, StrategyConfig
 
+from src.core.position_sizing import (
+    contract_notional,
+    instrument_multiplier,
+    units_for_notional,
+    whole_contracts,
+)
 from src.core.strategy_registry import StrategyRegistry, register_strategy
 from src.core.strategy_warmup import warmup_lookback
 from src.models.strategy import SMAParameters
@@ -44,6 +50,25 @@ class SMAConfig(StrategyConfig):
     position_size_pct: Decimal = Decimal("10.0")
 
 
+def _sized_quantity(
+    position_value: Decimal, price: Decimal, instrument: object | None
+) -> tuple[Quantity | None, Decimal, Decimal]:
+    """``(quantity, raw units, multiplier)`` for ``position_value`` of exposure at ``price``.
+
+    Shares (multiplier 1) are whole, at least 1; crypto (size precision > 0) is fractional;
+    a multiplied contract (futures) floors to whole contracts and is ``None`` below one.
+    """
+    multiplier = instrument_multiplier(instrument)
+    raw_qty = units_for_notional(position_value, price, multiplier)
+    size_prec = getattr(instrument, "size_precision", 0) if instrument else 0
+    if multiplier != 1:
+        contracts = whole_contracts(raw_qty)
+        return (Quantity.from_int(contracts) if contracts else None), raw_qty, multiplier
+    if size_prec > 0:
+        return Quantity.from_str(f"{float(raw_qty):.{size_prec}f}"), raw_qty, multiplier
+    return Quantity.from_int(max(int(raw_qty), 1)), raw_qty, multiplier
+
+
 @register_strategy(
     name="sma_crossover",
     description="Simple Moving Average Crossover (one-sided: trades the side of its first cross)",
@@ -69,8 +94,9 @@ class SMACrossover(Strategy):
         # Strategy configuration
         self.instrument_id = config.instrument_id
         self.bar_type = config.bar_type
-        self.portfolio_value = config.portfolio_value
-        self.position_size_pct = config.position_size_pct
+        # Config files pass YAML floats/strings through uncoerced; sizing needs Decimals.
+        self.portfolio_value = Decimal(str(config.portfolio_value))
+        self.position_size_pct = Decimal(str(config.position_size_pct))
 
         # Initialize indicators
         self.fast_sma = SimpleMovingAverage(period=config.fast_period, price_type=PriceType.LAST)
@@ -154,19 +180,24 @@ class SMACrossover(Strategy):
         self._prev_fast_sma = fast_value
         self._prev_slow_sma = slow_value
 
-    def _calculate_position_size(self) -> Quantity:
+    def _calculate_position_size(self) -> Quantity | None:
         """
         Calculate position size based on portfolio percentage and current price.
 
         Returns
         -------
-        Quantity
-            Number of shares to trade.
+        Quantity | None
+            Shares or contracts to trade; ``None`` when the budget does not cover one
+            contract of a multiplied instrument (futures), so no order is placed.
 
         Notes
         -----
         Position size is calculated as:
-        shares = (portfolio_value * position_size_pct / 100) / current_price
+        units = (portfolio_value * position_size_pct / 100) / (current_price * multiplier)
+
+        The multiplier is 1 for shares, so equities size exactly as before. For futures
+        it is the point value (ES 50): $100K at ES 7000 is 0.29 contracts, which floors to
+        0 rather than rounding up to one $350K contract.
 
         Example:
             Portfolio: $1,000,000
@@ -183,21 +214,13 @@ class SMACrossover(Strategy):
         # Get current price (use close price from bar)
         current_price = Decimal(str(self._current_bar.close))
 
-        # Calculate quantity (fractional for crypto, whole for equities)
-        raw_qty = position_value / current_price
         instrument = self.cache.instrument(self.instrument_id)
-        size_prec = instrument.size_precision if instrument else 0
+        quantity, raw_qty, multiplier = _sized_quantity(position_value, current_price, instrument)
+        if quantity is None:
+            self.log.warning(f"Position sizing: ${position_value:,.0f} is under one contract")
+            return None
 
-        if size_prec > 0:
-            # Crypto: use fractional quantity at instrument precision
-            qty_str = f"{float(raw_qty):.{size_prec}f}"
-            quantity = Quantity.from_str(qty_str)
-        else:
-            # Equities: whole shares
-            shares = max(int(raw_qty), 1)
-            quantity = Quantity.from_int(shares)
-
-        notional = float(raw_qty) * float(current_price)
+        notional = contract_notional(Decimal(str(quantity)), current_price, multiplier)
         self.log.info(
             f"Position sizing: Portfolio=${self.portfolio_value:,.0f}, "
             f"Size%={self.position_size_pct}%, "
@@ -258,10 +281,8 @@ class SMACrossover(Strategy):
 
         # Only open new long position if we don't already have one, and only
         # if we didn't just submit a close above.
-        elif not has_long:
-            # Calculate position size based on current price
-            quantity = self._calculate_position_size()
-
+        # A futures budget below one contract sizes to None: no order.
+        elif not has_long and (quantity := self._calculate_position_size()) is not None:
             order = self.order_factory.market(
                 instrument_id=self.instrument_id,
                 order_side=OrderSide.BUY,
@@ -293,10 +314,8 @@ class SMACrossover(Strategy):
 
         # Only open new short position if we don't already have one, and only
         # if we didn't just submit a close above.
-        elif not has_short:
-            # Calculate position size based on current price
-            quantity = self._calculate_position_size()
-
+        # A futures budget below one contract sizes to None: no order.
+        elif not has_short and (quantity := self._calculate_position_size()) is not None:
             order = self.order_factory.market(
                 instrument_id=self.instrument_id,
                 order_side=OrderSide.SELL,

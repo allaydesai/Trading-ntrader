@@ -1,7 +1,52 @@
 """Pure position sizing logic with no framework dependencies."""
 
-from decimal import Decimal
+from decimal import ROUND_FLOOR, Decimal
 from enum import Enum
+
+ONE = Decimal("1")
+
+
+def contract_notional(quantity: Decimal, price: Decimal, multiplier: Decimal = ONE) -> Decimal:
+    """Dollar exposure of ``quantity`` units: ``quantity x price x multiplier``.
+
+    ``multiplier`` is 1 for shares and the contract's point value for futures (ES 50, CL 1000),
+    so one ES contract at 7000 is $350,000 of exposure, not $7,000.
+    """
+    return quantity * price * multiplier
+
+
+def units_for_notional(notional: Decimal, price: Decimal, multiplier: Decimal = ONE) -> Decimal:
+    """Unrounded units that buy ``notional`` of exposure (``notional / (price x multiplier)``).
+
+    Raises:
+        ValueError: If ``price`` is negative or ``multiplier`` is not positive.
+        decimal.DivisionByZero: If ``price`` is zero. Deliberately the plain division's own
+            error: the live strategy-failure guard tests pin a zero-price bar's failure as
+            ``DivisionByZero`` (``tests/component/core/test_session_runner_strategy_failure.py``).
+    """
+    if price < 0 or multiplier <= 0:
+        raise ValueError("price must not be negative and multiplier must be positive")
+    return notional / (price * multiplier)
+
+
+def whole_contracts(units: Decimal) -> int:
+    """Floor to whole contracts; 0 means the budget does not cover one contract.
+
+    Unlike the equity whole-share rule there is no minimum of 1: rounding $100k of ES
+    exposure up to one $350k contract would more than triple the intended size.
+    """
+    if units <= 0:
+        return 0
+    return int(units.to_integral_value(rounding=ROUND_FLOOR))
+
+
+def instrument_multiplier(instrument: object | None) -> Decimal:
+    """The instrument's contract multiplier as a Decimal; 1 when it has none (or is absent)."""
+    multiplier = getattr(instrument, "multiplier", None)
+    if multiplier is None:
+        return ONE
+    as_decimal = getattr(multiplier, "as_decimal", None)
+    return as_decimal() if callable(as_decimal) else Decimal(str(multiplier))
 
 
 class SizingMethod(str, Enum):
@@ -49,6 +94,7 @@ class PositionSizingLogic:
         risk_percent: Decimal,
         entry_price: Decimal,
         stop_price: Decimal,
+        multiplier: Decimal = ONE,
     ) -> Decimal:
         """
         Calculate position size based on risk percentage.
@@ -61,6 +107,9 @@ class PositionSizingLogic:
             risk_percent: Percentage of account to risk (0.02 = 2%)
             entry_price: Planned entry price
             stop_price: Stop loss price
+            multiplier: Dollars per point per unit (1 for shares; ES 50). The risk of one
+                unit is ``|entry - stop| x multiplier``; floor futures sizes with
+                ``whole_contracts``.
 
         Returns:
             Position size in units
@@ -83,15 +132,19 @@ class PositionSizingLogic:
             raise ValueError("Risk percent must be between 0 and 1")
         if entry_price <= 0 or stop_price <= 0:
             raise ValueError("Prices must be positive")
+        if multiplier <= 0:
+            raise ValueError("Multiplier must be positive")
 
         risk_amount = account_balance * risk_percent
-        price_risk = abs(entry_price - stop_price)
+        price_risk = abs(entry_price - stop_price) * multiplier
 
         if price_risk == 0:
             return Decimal("0")
 
         position_size = risk_amount / price_risk
-        return position_size.quantize(Decimal("0.01"))
+        # Contracts are floored by the caller (whole_contracts): never round them up first.
+        rounding = ROUND_FLOOR if multiplier != ONE else None
+        return position_size.quantize(Decimal("0.01"), rounding=rounding)
 
     def calculate_kelly_size(
         self,

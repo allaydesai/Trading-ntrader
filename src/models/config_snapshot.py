@@ -77,8 +77,9 @@ class StrategyConfigSnapshot(BaseModel):
         data = handler(self)
         if not self.session_conditions:
             data.pop("session_conditions", None)
-        if self.cost_multiplier is None:
-            data.pop("cost_multiplier", None)
+        for optional in ("cost_multiplier", "futures_contracts", "profit_pct_basis"):
+            if getattr(self, optional) is None:
+                data.pop(optional, None)
         return data
 
     cost_multiplier: float | None = Field(
@@ -86,6 +87,18 @@ class StrategyConfigSnapshot(BaseModel):
         description="Commission scale factor of a cost-stress run (research MCP phase 4). "
         "None on every run at the broker's schedule, and omitted from the dump then, so "
         "ordinary rows stay byte-identical.",
+    )
+
+    futures_contracts: dict[str, dict[str, Any]] | None = Field(
+        default=None,
+        description="Futures runs only (M3): per instrument id, the multiplier, dollar "
+        "initial/maintenance margin, per-contract commission and margin as-of the run used. "
+        "Omitted from the dump otherwise, so equity rows stay byte-identical.",
+    )
+    profit_pct_basis: str | None = Field(
+        default=None,
+        description="Futures runs only: what trades.profit_pct is a return on ('underlying' "
+        "= the price move, not margin). Omitted from the dump otherwise.",
     )
 
     metrics_basis: str | None = Field(

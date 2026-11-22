@@ -15,8 +15,10 @@ from nautilus_trader.model.identifiers import TraderId, Venue
 from nautilus_trader.model.objects import Money
 
 from src.config import get_settings
+from src.core.backtest_venue import setup_backtest_venues
 from src.core.fee_models import IBKRCommissionModel
 from src.core.fill_model import make_fill_model
+from src.core.futures_costs import futures_snapshot
 from src.core.metrics import net_profit_factor
 from src.core.strategies.sma_crossover import SMAConfig, SMACrossover
 from src.core.strategy_factory import StrategyFactory
@@ -31,6 +33,20 @@ from src.utils.config_loader import ConfigLoader, StrategyConfigWrapper
 from src.utils.mock_data import create_test_instrument, generate_mock_bars
 
 logger = structlog.get_logger(__name__)
+
+
+def _runtime_config_snapshot(
+    strategy_type: str, strategy_config: dict[str, Any], engine: BacktestEngine | None
+) -> dict[str, Any]:
+    """The run's ``config_snapshot``; a futures run adds ``futures_snapshot``'s keys."""
+    instruments = engine.cache.instruments() if engine else []
+    return {
+        "strategy_path": f"src.core.strategies.{strategy_type}",
+        "config_path": "runtime_config",
+        "version": "1.0",
+        "config": strategy_config,
+        **futures_snapshot(instruments),
+    }
 
 
 class MinimalBacktestRunner:
@@ -110,13 +126,8 @@ class MinimalBacktestRunner:
         try:
             run_id = uuid4()
 
-            # Build config snapshot for JSONB storage
-            config_snapshot: dict[str, Any] = {
-                "strategy_path": f"src.core.strategies.{strategy_type}",
-                "config_path": "runtime_config",
-                "version": "1.0",
-                "config": strategy_config,
-            }
+            # Build config snapshot for JSONB storage (futures runs add their contract terms)
+            config_snapshot = _runtime_config_snapshot(strategy_type, strategy_config, self.engine)
 
             # Extract the equity curve if engine is available (stored beside the run below)
             equity_curve: list[dict[str, Any]] = []
@@ -265,13 +276,8 @@ class MinimalBacktestRunner:
         try:
             run_id = uuid4()
 
-            # Build config snapshot for JSONB storage
-            config_snapshot: dict[str, Any] = {
-                "strategy_path": f"src.core.strategies.{strategy_type}",
-                "config_path": "runtime_config",
-                "version": "1.0",
-                "config": strategy_config,
-            }
+            # Build config snapshot for JSONB storage (futures runs add their contract terms)
+            config_snapshot = _runtime_config_snapshot(strategy_type, strategy_config, self.engine)
 
             async with get_session() as session:
                 repository = BacktestRepository(session)
@@ -1621,13 +1627,13 @@ class MinimalBacktestRunner:
         # Store venue for result extraction
         self._venue = venue
 
-        self.engine.add_venue(
-            venue=venue,
-            oms_type=OmsType.HEDGING,
-            account_type=AccountType.MARGIN,
-            starting_balances=[Money(self.settings.default_balance, USD)],
+        # Cost models chosen by instrument type; futures also get the margin gate
+        setup_backtest_venues(
+            self.engine,
+            {venue: [instrument]},
+            starting_balance=self.settings.default_balance,
             fill_model=fill_model,
-            fee_model=fee_model,
+            equity_fee_model=fee_model,
         )
 
         # Reason: Add instrument (currency is handled by venue setup)

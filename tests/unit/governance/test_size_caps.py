@@ -125,11 +125,11 @@ SIZE_BASELINE: dict[str, int] = {
     # MCP phase 2, 275 -> 277: `reproduced_from_run_id` threaded through `execute`
     # and `_persist_results` so `reproduce_run` uses the orchestrator, not the legacy runner.
     # MCP phase 4, 277 -> 278: `_make_fee_model` scales every commission term for cost stress.
-    "src/core/backtest_orchestrator.py::BacktestOrchestrator": 278,
-    "src/core/backtest_runner.py::MinimalBacktestRunner": 902,
+    "src/core/backtest_orchestrator.py::BacktestOrchestrator": 277,
+    "src/core/backtest_runner.py::MinimalBacktestRunner": 891,
     "src/core/backtest_runner.py::MinimalBacktestRunner._extract_results": 111,
-    "src/core/backtest_runner.py::MinimalBacktestRunner._persist_backtest_results": 100,
-    "src/core/backtest_runner.py::MinimalBacktestRunner.run_backtest_with_catalog_data": 119,
+    "src/core/backtest_runner.py::MinimalBacktestRunner._persist_backtest_results": 95,
+    "src/core/backtest_runner.py::MinimalBacktestRunner.run_backtest_with_catalog_data": 118,
     "src/core/backtest_runner.py::MinimalBacktestRunner.run_backtest_with_database": 72,
     "src/core/backtest_runner.py::MinimalBacktestRunner.run_backtest_with_strategy_type": 70,
     "src/core/backtest_runner.py::MinimalBacktestRunner.run_from_config_object": 103,
@@ -180,7 +180,7 @@ SIZE_BASELINE: dict[str, int] = {
     # callback, deliberately not hidden in a helper so AC #2's inspection reads
     # the three Nautilus calls in the strategy file itself. Story 4.5, 110 -> 106
     # (shrank): the own-book read is `positions_open(...)`, no `is_open` re-checks.
-    "src/core/strategies/sma_crossover.py::SMACrossover": 106,
+    "src/core/strategies/sma_crossover.py::SMACrossover": 101,
     # Story 4.4, 58 -> 52 (shrank): registered SMAs replaced the deque average.
     # Story 4.5, 52 -> 51 (shrank): the own-book net replaced three portfolio reads.
     "src/core/strategies/sma_momentum.py::SMAMomentum.on_bar": 51,
