@@ -55,9 +55,8 @@ class FuturesMarginGate:
         self._cache = cache
         self._msgbus = msgbus
         self._terms = dict(terms)
-        # client order id -> (approved quantity, its modify's ticket); see _unapplied_holds_usd
-        self._holds: dict[ClientOrderId, tuple[Decimal, int]] = {}
-        self._modifies_seen: dict[ClientOrderId, int] = {}
+        # client order id -> its gated modifies still unresolved; see _ModifyLedger
+        self._ledgers: dict[ClientOrderId, _ModifyLedger] = {}
         self.denied_count = 0
 
     def install(self) -> None:
@@ -67,8 +66,27 @@ class FuturesMarginGate:
 
     def execute(self, command) -> None:
         """Refuse an over-margin submit or modify; pass every other command on."""
+        if isinstance(command, ModifyOrder):
+            order = self._cache.order(command.client_order_id)
+            if order is not None and order.instrument_id in self._terms:
+                self.handle_modify(order, command.quantity, lambda: self._risk.execute(command))
+                return
         if not self._refused(command):
             self._risk.execute(command)
+
+    def handle_modify(self, order: Order, new_quantity, forward) -> None:
+        """Check one modify of a futures order, then reject it or record and ``forward`` it."""
+        ledger = self._ledgers.setdefault(order.client_order_id, _ModifyLedger(order))
+        ledger.sync(order)
+        reason = self.modify_denial_reason(order, new_quantity)
+        if reason is not None:
+            self.denied_count += 1
+            self._risk._reject_modify_order(order, reason)
+            ledger.skip_to_end(order)  # the gate's own rejection resolves no pending modify
+            return
+        ledger.forwarded(order, new_quantity)
+        forward()
+        ledger.after_forward(order)
 
     def _refused(self, command) -> bool:
         reason = None
@@ -80,11 +98,6 @@ class FuturesMarginGate:
             reason = self.denial_reason(command.order_list.orders, command.position_id)
             if reason is not None:
                 self._risk._deny_order_list(command.order_list, reason)
-        elif isinstance(command, ModifyOrder):
-            order = self._cache.order(command.client_order_id)
-            reason = self.modify_denial_reason(order, command.quantity) if order else None
-            if reason is not None:
-                self._risk._reject_modify_order(order, reason)
         if reason is not None:
             self.denied_count += 1
         return reason is not None
@@ -125,26 +138,25 @@ class FuturesMarginGate:
 
         Price-only and quantity-reducing modifies always pass; the order's current quantity
         is already reserved (or counted as in flight), so only the increase is checked. Child
-        orders are checked too unless reduce-only. An approved increase is held against free
-        balance until the exchange resolves that modify; a denied one leaves an earlier hold.
+        orders are checked too unless reduce-only. A target no higher than one already held
+        for an unresolved modify of the same order adds nothing and passes.
         """
-        ticket = self._modifies_seen.get(order.client_order_id, 0) + 1
-        self._modifies_seen[order.client_order_id] = ticket
         terms = self._terms.get(order.instrument_id)
         if terms is None or new_quantity is None or order.is_reduce_only:
             return None
-        added = new_quantity.as_decimal() - order.quantity.as_decimal()
-        if added <= 0:
+        current, new = order.quantity.as_decimal(), new_quantity.as_decimal()
+        ledger = self._ledgers.get(order.client_order_id)
+        held_top = ledger.max_target() if ledger else None
+        if new <= current or (held_top is not None and new <= held_top):
             return None
-        required = added * terms.initial_margin_usd
-        # This order's own earlier hold overlaps the new target: check without it.
+        required = (new - current) * terms.initial_margin_usd
+        # This order's own hold is covered by the new target: check without it.
         free = self._free_usd(order.instrument_id, exclude=order.client_order_id)
         if required <= free:
-            self._holds[order.client_order_id] = (new_quantity.as_decimal(), ticket)
             return None
         return (
-            f"{DENIAL_REASON}: modify adds {added} {order.instrument_id} contract(s) needing "
-            f"{required} USD initial margin, free={free} USD"
+            f"{DENIAL_REASON}: modify adds {new - current} {order.instrument_id} contract(s) "
+            f"needing {required} USD initial margin, free={free} USD"
         )
 
     def _free_usd(self, instrument_id: InstrumentId, exclude=None) -> Decimal:
@@ -163,7 +175,7 @@ class FuturesMarginGate:
                 continue
             if not order.is_reduce_only and order.parent_order_id is None:
                 free -= order.leaves_qty.as_decimal() * terms.initial_margin_usd
-        return free - _unapplied_holds_usd(self._cache, self._holds, self._terms, venue, exclude)
+        return free - _held_usd(self._cache, self._ledgers, self._terms, venue, exclude)
 
 
 def _closing_credit(cache, position, submitting: set) -> Decimal:
@@ -182,33 +194,101 @@ def _closing_credit(cache, position, submitting: set) -> Decimal:
     return max(credit, ZERO)
 
 
-def _unapplied_holds_usd(
+class _ModifyLedger:
+    """One order's gated modifies, oldest first, matched against the order's own events.
+
+    Each entry is the target of a quantity-raising modify, or ``None`` for any other modify.
+    The venue resolves an order's modifies in order, so:
+
+    - an ``OrderModifyRejected`` resolves the oldest entry;
+    - an ``OrderUpdated`` that changes the quantity resolves the entry with that target
+      (or, for a reducing modify, the oldest ``None``);
+    - an ``OrderUpdated`` that leaves the quantity unchanged (a price-only modify, or an
+      engine-driven move such as a trailing stop's) never releases a raise: at most it
+      resolves a ``None`` at the head.
+
+    Rejections the gate or risk engine raise at once are matched to their own modify where
+    they happen, not to the queue's head. The hold is margin for
+    ``max(pending targets) - current quantity``, floored at 0.
+    """
+
+    def __init__(self, order: Order) -> None:
+        """Start watching ``order`` from its current events and quantity."""
+        self.pending: list[Decimal | None] = []
+        self._cursor = len(order.events)
+        self._forwarded_at = self._cursor
+        self._quantity = order.quantity.as_decimal()
+
+    def max_target(self) -> Decimal | None:
+        """The highest pending raise target, or ``None`` when no raise is pending."""
+        targets = [t for t in self.pending if t is not None]
+        return max(targets) if targets else None
+
+    def held_contracts(self, order: Order) -> Decimal:
+        """Contracts of pending raises beyond the order's current quantity."""
+        top = self.max_target()
+        return max(top - order.quantity.as_decimal(), ZERO) if top is not None else ZERO
+
+    def forwarded(self, order: Order, new_quantity) -> None:
+        """Record a modify the gate is about to forward."""
+        raises = new_quantity is not None and new_quantity.as_decimal() > self._quantity
+        self.pending.append(new_quantity.as_decimal() if raises else None)
+        self._forwarded_at = len(order.events)
+
+    def after_forward(self, order: Order) -> None:
+        """A rejection raised while forwarding (risk-engine checks) belongs to this modify."""
+        if any(isinstance(e, OrderModifyRejected) for e in order.events[self._forwarded_at :]):
+            self.pending.pop()
+            self._cursor = len(order.events)
+
+    def skip_to_end(self, order: Order) -> None:
+        """Treat every event so far as seen (after the gate's own rejection)."""
+        self._cursor = len(order.events)
+
+    def sync(self, order: Order) -> None:
+        """Resolve pending entries from the order's events since the last sync."""
+        events = order.events
+        for event in events[self._cursor :]:
+            if isinstance(event, OrderModifyRejected):
+                if self.pending:
+                    self.pending.pop(0)
+            elif isinstance(event, OrderUpdated):
+                self._updated(event.quantity.as_decimal())
+        self._cursor = len(events)
+
+    def _updated(self, quantity: Decimal) -> None:
+        if quantity == self._quantity:
+            if self.pending and self.pending[0] is None:
+                self.pending.pop(0)
+            return
+        self._quantity = quantity
+        if quantity in self.pending:
+            self.pending.remove(quantity)
+        elif None in self.pending:
+            self.pending.remove(None)
+
+
+def _held_usd(
     cache,
-    holds: dict,
+    ledgers: dict,
     terms: Mapping[InstrumentId, FuturesTerms],
     venue: Venue,
     exclude: ClientOrderId | None = None,
 ) -> Decimal:
-    """Margin of approved quantity increases the exchange has not resolved yet.
-
-    Every ``ModifyOrder`` passes through the gate and the venue resolves an order's
-    modifies in order, each with one ``OrderUpdated`` or ``OrderModifyRejected``. A hold
-    whose ticket is the n-th modify of its order is therefore released once that order
-    has n resolutions (applied or rejected), or when it closes. ``holds`` is pruned.
-    """
+    """Margin held for unresolved quantity raises on ``venue``; prunes closed orders' ledgers."""
     total = ZERO
-    for client_order_id, (target, ticket) in list(holds.items()):
+    for client_order_id, ledger in list(ledgers.items()):
         order = cache.order(client_order_id)
-        if order is None or order.is_closed or _modify_resolutions(order) >= ticket:
-            del holds[client_order_id]
-        elif order.instrument_id.venue == venue and client_order_id != exclude:
-            added = max(target - order.quantity.as_decimal(), ZERO)
-            total += added * terms[order.instrument_id].initial_margin_usd
+        if order is None or order.is_closed:
+            del ledgers[client_order_id]
+            continue
+        ledger.sync(order)
+        # ClientOrderId's __eq__ raises on None, so test identity first.
+        mine = exclude is not None and client_order_id == exclude
+        if order.instrument_id.venue == venue and not mine:
+            contracts = ledger.held_contracts(order)
+            total += contracts * terms[order.instrument_id].initial_margin_usd
     return total
-
-
-def _modify_resolutions(order: Order) -> int:
-    return sum(isinstance(e, (OrderUpdated, OrderModifyRejected)) for e in order.events)
 
 
 def _new_exposure(order: Order, position, credit: Decimal) -> tuple[Decimal, Decimal]:

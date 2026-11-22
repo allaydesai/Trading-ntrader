@@ -38,10 +38,15 @@ futures contract gets exactly the `add_venue` call it always had.
 - **Modifies.** A `modify_order` that raises a working order's quantity (entry or
   non-reduce-only child) is rejected (`OrderModifyRejected`, same reason prefix) when the
   added contracts' initial margin exceeds free balance. Price-only, quantity-reducing and
-  reduce-only modifies always pass. An approved increase is held against free balance until
-  the venue resolves *that* modify (its own `OrderUpdated` or `OrderModifyRejected`; modifies
-  of one order resolve in order) or the order closes. A later modify of the same order is
-  checked without the earlier hold and replaces it only if approved.
+  reduce-only modifies always pass. While approved raises are unresolved, the gate holds
+  margin for (highest pending target - current quantity), floored at 0, so a later smaller
+  raise never shrinks a larger pending one. A raise is resolved only by an `OrderUpdated`
+  that changes the quantity to its target, or by its own `OrderModifyRejected` (an order's
+  modifies resolve in order; a rejection the gate or risk engine raises at once is matched to
+  its own modify). Updates that leave the quantity unchanged, such as a trailing stop's price
+  moves, never release a hold. The hold also ends when the order closes. A raise no higher
+  than a pending target passes without new margin; a higher one is checked on its own
+  increase.
 - **Free balance** is the venue account's realised cash minus locked margin (initial for
   working orders, maintenance for positions), minus the initial margin of every futures
   order on that venue that is submitted but not yet accepted (each at its own contract's

@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import pytest
 from nautilus_trader.model.currencies import USD
 from nautilus_trader.model.enums import OrderSide, OrderStatus
-from nautilus_trader.model.identifiers import InstrumentId, PositionId
+from nautilus_trader.model.identifiers import ClientOrderId, InstrumentId, PositionId
 
 from src.core.futures_costs import FuturesTerms
 from src.core.futures_margin_gate import DENIAL_REASON, FuturesMarginGate
@@ -47,7 +47,7 @@ def _order(instrument=ES, side=OrderSide.BUY, qty=1, status=OrderStatus.INITIALI
         status=status,
         is_reduce_only=kw.get("reduce_only", False),
         parent_order_id=kw.get("parent"),
-        client_order_id=kw.get("client_order_id", f"O-{next(_IDS)}"),
+        client_order_id=kw.get("client_order_id", ClientOrderId(f"O-{next(_IDS)}")),
         is_open=status in open_states,
         is_inflight=status in {OrderStatus.SUBMITTED, OrderStatus.PENDING_UPDATE},
         is_closed=status in {OrderStatus.FILLED, OrderStatus.CANCELED, OrderStatus.REJECTED},
@@ -84,8 +84,8 @@ class _Cache:
         return self._position
 
 
-def _gate(cache) -> FuturesMarginGate:
-    return FuturesMarginGate(risk_engine=None, cache=cache, msgbus=None, terms=TERMS)
+def _gate(cache, risk=None) -> FuturesMarginGate:
+    return FuturesMarginGate(risk_engine=risk, cache=cache, msgbus=None, terms=TERMS)
 
 
 def _long_es(qty=1):
@@ -200,69 +200,122 @@ class TestModify:
 
 
 def _rejected():
+    from nautilus_trader.core.uuid import UUID4
     from nautilus_trader.model.events import OrderModifyRejected
+    from nautilus_trader.model.identifiers import ClientOrderId, StrategyId, TraderId
 
-    return OrderModifyRejected.__new__(OrderModifyRejected)
+    ids = (TraderId("T-001"), StrategyId("S-001"), ES, ClientOrderId("O-1"))
+    return OrderModifyRejected(*ids, None, None, "rejected", UUID4(), 0, 0)
 
 
-def _updated():
+def _updated(qty):
+    """A real ``OrderUpdated`` carrying ``qty`` (unchanged qty = a price-only update)."""
+    from nautilus_trader.core.uuid import UUID4
     from nautilus_trader.model.events import OrderUpdated
+    from nautilus_trader.model.identifiers import ClientOrderId, StrategyId, TraderId
+    from nautilus_trader.model.objects import Quantity
 
-    return OrderUpdated.__new__(OrderUpdated)
+    ids = (TraderId("T-001"), StrategyId("S-001"), ES, ClientOrderId("O-1"))
+    return OrderUpdated(*ids, None, None, Quantity.from_int(qty), None, None, UUID4(), 0, 0)
 
 
-class TestApprovedIncreases:
-    def _approve(self, free=60_000, working=None):
-        working = working or _order(qty=1, status=OrderStatus.ACCEPTED)
-        cache = _Cache(free=free, orders=[working])
-        gate = _gate(cache)
-        assert gate.modify_denial_reason(working, _qty(2)) is None  # approved: +27,500
-        return gate, cache, working
+class _Risk:
+    """Records the gate's rejections and, like Nautilus, adds the event to the order."""
+
+    def __init__(self):
+        self.rejected: list[str] = []
+
+    def _reject_modify_order(self, order, reason):
+        self.rejected.append(reason)
+        order.events.append(_rejected())
+
+
+class TestModifyHolds:
+    """Approved quantity raises stay reserved until their own modify is resolved."""
+
+    def _setup(self, free=60_000):
+        working = _order(qty=1, status=OrderStatus.ACCEPTED)
+        risk = _Risk()
+        gate = _gate(_Cache(free=free, orders=[working]), risk)
+        return gate, risk, working
+
+    @staticmethod
+    def _modify(gate, working, qty, forward=lambda: None):
+        gate.handle_modify(working, None if qty is None else _qty(qty), forward)
+
+    @staticmethod
+    def _apply(working, qty):
+        working.quantity = _qty(qty)
+        working.events.append(_updated(qty))
 
     def test_an_approved_increase_is_held_until_the_exchange_applies_it(self):
-        gate, _, _ = self._approve()
-        # 60,000 free less the unapplied +1 lot (27,500) leaves 32,500: one more lot fits,
-        # two do not.
-        assert gate.denial_reason([_order(qty=1)], None) is None
+        gate, risk, working = self._setup()
+        self._modify(gate, working, 2)  # +1 lot held (27,500)
+        assert risk.rejected == []
+        assert gate.denial_reason([_order(qty=1)], None) is None  # 32,500 free
         assert gate.denial_reason([_order(qty=2)], None) is not None
 
-    def test_the_hold_ends_once_applied(self):
-        gate, _, working = self._approve()
-        working.quantity = _qty(2)  # the exchange applied it; balance_free now reserves it
-        working.events.append(_updated())
+    def test_the_hold_ends_when_the_update_reaches_its_target(self):
+        gate, _, working = self._setup()
+        self._modify(gate, working, 2)
+        self._apply(working, 2)  # balance_free now reserves the 2 lots itself
         assert gate.denial_reason([_order(qty=2)], None) is None
 
     def test_the_hold_ends_on_its_own_rejection(self):
-        gate, _, working = self._approve()
+        gate, _, working = self._setup()
+        self._modify(gate, working, 2)
         working.events.append(_rejected())
         assert gate.denial_reason([_order(qty=2)], None) is None
 
+    def test_a_price_only_update_keeps_the_hold(self):
+        """An OrderUpdated that leaves quantity unchanged (e.g. a trailing-stop move)."""
+        gate, _, working = self._setup()
+        self._modify(gate, working, 2)
+        working.events.append(_updated(1))
+        assert gate.denial_reason([_order(qty=2)], None) is not None
+
+    def test_a_smaller_second_raise_keeps_the_larger_hold(self):
+        """1 -> 3 approved, then 1 -> 2 approved before either resolves: hold stays +2 lots."""
+        gate, risk, working = self._setup()
+        self._modify(gate, working, 3)  # +2 lots = 55,000
+        self._modify(gate, working, 2)  # adds nothing beyond the pending 3
+        assert risk.rejected == []
+        # 60,000 - 55,000 = 5,000 free: a 1-lot entry (27,500) is still denied.
+        assert gate.denial_reason([_order(qty=1)], None) is not None
+        self._apply(working, 3)  # the 3 lands; the 2 is still pending but below quantity
+        assert gate.denial_reason([_order(qty=1)], None) is None
+
+    def test_a_later_larger_raise_is_checked_on_its_own_increase(self):
+        gate, risk, working = self._setup()
+        self._modify(gate, working, 2)  # +1 held
+        self._modify(gate, working, 3)  # 1 -> 3 needs 55,000 of 60,000 (own hold excluded)
+        assert risk.rejected == []
+        assert gate.denial_reason([_order(qty=1)], None) is not None  # 5,000 free
+
     def test_an_earlier_modifys_rejection_does_not_release_a_later_hold(self):
-        """A price-only modify sent first is resolved first; the increase is still pending."""
-        working = _order(qty=1, status=OrderStatus.ACCEPTED)
-        gate = _gate(_Cache(free=60_000, orders=[working]))
-        assert gate.modify_denial_reason(working, None) is None  # price-only, modify #1
-        assert gate.modify_denial_reason(working, _qty(2)) is None  # increase, modify #2
-        working.events.append(_rejected())  # resolves modify #1 only
+        gate, _, working = self._setup()
+        self._modify(gate, working, None)  # price-only, sent first
+        self._modify(gate, working, 2)  # raise, sent second
+        working.events.append(_rejected())  # the exchange resolves the price-only one
         assert gate.denial_reason([_order(qty=2)], None) is not None
 
     def test_a_denied_later_modify_keeps_the_earlier_hold(self):
-        gate, _, working = self._approve()  # +1 lot held (27,500)
-        assert gate.modify_denial_reason(working, _qty(4)) is not None  # +3 = 82,500 > 60,000
-        # The +1 hold must survive: 60,000 - 27,500 = 32,500 < 2 lots (55,000).
+        gate, risk, working = self._setup()
+        self._modify(gate, working, 2)  # +1 held
+        self._modify(gate, working, 4)  # +3 = 82,500 > 60,000: the gate rejects it
+        assert len(risk.rejected) == 1
+        # The gate's own rejection event must not resolve the pending +1.
         assert gate.denial_reason([_order(qty=2)], None) is not None
         assert gate.denial_reason([_order(qty=1)], None) is None
 
-    def test_an_approved_later_modify_replaces_rather_than_stacks_the_hold(self):
-        gate, _, working = self._approve()  # 1 -> 2 held
-        assert gate.modify_denial_reason(working, _qty(3)) is None  # 1 -> 3: +2 = 55,000
-        # Hold is now 55,000, not 27,500 + 55,000: 5,000 free, so no lot fits.
-        assert gate.denial_reason([_order(qty=1)], None) is not None
-        working.events.extend([_updated(), _updated()])  # both resolved
-        working.quantity = _qty(3)
-        assert gate.denial_reason([_order(qty=1)], None) is None
+    def test_a_rejection_raised_while_forwarding_belongs_to_that_modify(self):
+        """The risk engine may reject at once (bad price): that is this modify, not the head."""
+        gate, _, working = self._setup()
+        self._modify(gate, working, 2, forward=lambda: working.events.append(_rejected()))
+        assert gate.denial_reason([_order(qty=2)], None) is None
 
     def test_the_hold_ends_when_the_order_closes(self):
-        gate, _, working = self._approve()
+        gate, _, working = self._setup()
+        self._modify(gate, working, 2)
         working.is_closed = True
         assert gate.denial_reason([_order(qty=2)], None) is None

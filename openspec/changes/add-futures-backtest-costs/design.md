@@ -49,12 +49,21 @@ at its own contract's rate). `PENDING_UPDATE`/`PENDING_CANCEL` are in flight too
 reserved, so they are not subtracted again. The order is denied when required > free. A
 `ModifyOrder` that raises a working order's quantity (entry, or child unless reduce-only)
 is rejected through `_reject_modify_order` when the added contracts' margin exceeds free;
-price-only and reducing modifies pass. An approved increase is held (subtracted from free)
-with a ticket: its ordinal among that order's modifies, all of which pass through the gate.
-The venue resolves an order's modifies in order, one `OrderUpdated` or `OrderModifyRejected`
-each, so the hold is released once the order has that many resolutions, or when it closes.
-A later modify is checked without the order's own hold and replaces it only if approved
-(review rounds 2 and 3).
+price-only and reducing modifies pass. Every modify of a futures order passes through the
+gate and is recorded in that order's FIFO ledger (`_ModifyLedger`): the target for a raise,
+`None` otherwise. The hold subtracted from free is margin for
+`max(pending targets) - current quantity`, floored at 0, so overlapping raises are never
+summed and a later smaller raise never shrinks a larger one. The ledger reads the order's
+own events: an `OrderModifyRejected` resolves the oldest entry, an `OrderUpdated` that
+changes the quantity resolves the entry with that target (or, for a reducing modify, the
+oldest `None`), and an `OrderUpdated` that leaves the quantity unchanged (price-only
+modifies, trailing-stop moves) at most resolves a `None` at the head, never a raise. A
+rejection raised at once by the gate or by the risk engine while forwarding is matched to its
+own modify, not the head. Nautilus events carry no command id, so the matching is by order,
+not exact. Most mismatches hold too much (a raise can stay held until its order closes). One
+rare sequence releases early: an engine-driven unchanged-quantity update takes the place of a
+pending price-only modify, and that price-only modify is then rejected while a raise is
+queued behind it (review rounds 2 to 4).
 
 **Known limits** (documented):
 - unrealised P&L is not counted;
