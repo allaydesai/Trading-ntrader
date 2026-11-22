@@ -27,8 +27,9 @@ import structlog
 
 logger = structlog.get_logger(__name__)
 
-#: FirstRate files are headerless 6-column CSVs (Datetime, O, H, L, C, Volume).
-_EXPECTED_COLUMNS: int = 6
+#: FirstRate files are headerless 6-column CSVs (Datetime, O, H, L, C, Volume). Futures
+#: daily files add a 7th open-interest column, which the futures parser drops.
+_ACCEPTED_COLUMNS: tuple[int, ...] = (6, 7)
 
 #: Timestamp formats the probe understands, in the same order the parser
 #: tries them. Intraday (``YYYY-MM-DD HH:MM:SS``) first so daily rows do not
@@ -68,7 +69,7 @@ def compute_source_last_date(file_path: Path) -> datetime | None:
                 if not stripped:
                     continue
                 parts = stripped.split(",")
-                if len(parts) != _EXPECTED_COLUMNS:
+                if len(parts) not in _ACCEPTED_COLUMNS:
                     continue
                 dt = _parse_timestamp(parts[0].strip())
                 if dt is None:

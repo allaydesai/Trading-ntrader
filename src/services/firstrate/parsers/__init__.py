@@ -1,8 +1,8 @@
 """FirstRate Data parsers — base framework, registry, and asset-specific parsers.
 
 Importing this package auto-registers all bundled parsers so that
-``get_parser(AssetClass.ETF)`` and ``get_parser(AssetClass.STOCK)``
-work immediately.
+``get_parser(AssetClass.ETF)``, ``get_parser(AssetClass.STOCK)`` and
+``get_parser(AssetClass.FUTURES)`` work immediately.
 """
 
 from src.services.firstrate.parsers.base import (
@@ -14,10 +14,12 @@ from src.services.firstrate.parsers.base import (
 
 # Import parser modules to trigger their @register_parser decorators
 from src.services.firstrate.parsers.firstrate_csv_parser import FirstRateCsvParser
+from src.services.firstrate.parsers.firstrate_futures_parser import FirstRateFuturesParser
 
 __all__ = [
     "BaseParser",
     "FirstRateCsvParser",
+    "FirstRateFuturesParser",
     "RawBarData",
     "get_parser",
     "register_parser",
