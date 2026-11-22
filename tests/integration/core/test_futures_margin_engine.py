@@ -223,3 +223,70 @@ async def test_orchestrator_runs_sma_on_real_es_bars_in_whole_contracts():
         assert result.total_trades >= 1
     finally:
         orchestrator.dispose()
+
+
+class _ModifyConfig(StrategyConfig, frozen=True):
+    bar_type: str
+    limit_price: str
+    raise_to: int
+
+
+class _RaiseWorkingOrder(Strategy):
+    """Rest a 1-lot buy limit below the market on bar 1; try to raise it on bar 2."""
+
+    def __init__(self, config: _ModifyConfig) -> None:
+        super().__init__(config)
+        self._bar = 0
+        self.order = None
+        self.modify_rejections: list[str] = []
+
+    def on_start(self) -> None:
+        self.subscribe_bars(BarType.from_str(self.config.bar_type))
+
+    def on_bar(self, bar: Bar) -> None:
+        self._bar += 1
+        instrument = self.cache.instrument(bar.bar_type.instrument_id)
+        if self._bar == 1:
+            self.order = self.order_factory.limit(
+                instrument.id,
+                OrderSide.BUY,
+                Quantity.from_int(1),
+                instrument.make_price(Decimal(self.config.limit_price)),
+            )
+            self.submit_order(self.order)
+        elif self._bar == 2:
+            self.modify_order(self.order, quantity=Quantity.from_int(self.config.raise_to))
+
+    def on_order_modify_rejected(self, event) -> None:
+        self.modify_rejections.append(event.reason)
+
+
+@pytest.mark.parametrize("raise_to,rejected", [(3, True), (1, False)])
+def test_raising_a_working_order_past_free_margin_is_rejected(raise_to, rejected):
+    es = build_futures_contract(ES)
+    engine = BacktestEngine(BacktestEngineConfig(logging=LoggingConfig(log_level="ERROR")))
+    try:
+        setup_backtest_venues(
+            engine,
+            {es.id.venue: [es]},
+            starting_balance=50_000,
+            fill_model=make_fill_model(42),
+            equity_fee_model=IBKRCommissionModel(),
+        )
+        engine.add_instrument(es)
+        bars = _bars(es, ["6000.00", "6000.00", "6000.00"])
+        engine.add_data(bars)
+        config = _ModifyConfig(
+            bar_type=str(bars[0].bar_type), limit_price="5000.00", raise_to=raise_to
+        )
+        strategy = _RaiseWorkingOrder(config)
+        engine.add_strategy(strategy)
+        engine.run()
+
+        assert bool(strategy.modify_rejections) is rejected
+        if rejected:
+            # 1 working lot reserves 27,500 of 50,000; 2 more need 55,000.
+            assert strategy.modify_rejections[0].startswith(DENIAL_REASON)
+            assert engine.cache.order(strategy.order.client_order_id).quantity == 1
+    finally:
+        engine.dispose()

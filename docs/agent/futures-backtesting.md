@@ -29,12 +29,17 @@ futures contract gets exactly the `add_venue` call it always had.
   the free balance. Strategies see it in `on_order_denied`.
 - **What counts as new exposure.** A reduce-only order (`close_position`,
   `close_all_positions`) needs none. A plain order needs margin on its full quantity, less
-  whatever it closes of the position it targets (`position_id`). The venue is HEDGING, so an
+  whatever it closes of the position it targets (`position_id`). In an order list that
+  credit is spent once across the list, not once per order. The venue is HEDGING, so an
   untargeted opposite order opens a second position and is margined like one. In a bracket,
   only the entry is checked; children have a parent.
-- **Free balance** is realised cash minus locked margin (initial for working orders,
-  maintenance for positions) minus the initial margin of orders already submitted but not
-  yet accepted.
+- **Modifies.** A `modify_order` that raises a working entry's quantity is rejected
+  (`OrderModifyRejected`, same reason prefix) when the added contracts' initial margin
+  exceeds free balance. Price-only and quantity-reducing modifies always pass.
+- **Free balance** is the venue account's realised cash minus locked margin (initial for
+  working orders, maintenance for positions), minus the initial margin of every futures
+  order on that venue that is submitted but not yet accepted (each at its own contract's
+  rate). Orders pending update or cancel are already reserved and are not counted twice.
 - **Limits.** Unrealised P&L is not counted (Nautilus leaves it out of the balance). There
   are no margin calls: maintenance margin is locked, never used to liquidate a losing
   position. Intraday (reduced) margins are not modelled; the spec holds overnight levels.
@@ -97,7 +102,10 @@ contracts = whole_contracts(units)                         # floor; 0 -> skip th
   ```
 
   From it and a trade row: notional = `quantity x entry_price x multiplier`, margin used =
-  `quantity x margin_initial_usd`, return on margin = `profit_loss / margin used`, P&L in
-  points = `profit_loss_before_fees / (quantity x multiplier)`. Equity runs carry neither key.
-- Ratio adjustment scales old dollar P&L. CL in 2008 trades at about 3.7x its real price, so
-  its old dollar P&L is about 3.7x too. Read old futures results in points or percent (M4).
+  `quantity x margin_initial_usd`, return on margin = `profit_loss / margin used`. Equity
+  runs carry neither key.
+- Ratio adjustment scales old prices, so it scales old dollar P&L **and old points** alike.
+  CL in 2008 trades at about 3.7x its real price, so both are about 3.7x too.
+  `profit_loss_before_fees / (quantity x multiplier)` gives *adjusted* points, not points
+  that were really traded. Compare old trades by percentage return; recovering real points
+  needs the adjustment factor or unadjusted prices (M4).
