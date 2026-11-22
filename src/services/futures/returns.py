@@ -66,6 +66,7 @@ class RunSummary:
     contracts: dict[str, ContractTerms]
     closed_trades: int
     max_contracts: Decimal
+    max_notional_usd: Decimal
     peak_margin_usd: Decimal
     net_pnl_usd: Decimal
     return_on_margin_pct: Decimal | None
@@ -182,6 +183,7 @@ def summarise_run(snapshot: Mapping[str, Any] | None, trades: Iterable[Any]) -> 
         contracts=terms,
         closed_trades=len(closed),
         max_contracts=max((f.contracts for _, f in rows), default=Decimal(0)),
+        max_notional_usd=max((f.notional_usd for _, f in rows), default=Decimal(0)),
         peak_margin_usd=peak,
         net_pnl_usd=net,
         return_on_margin_pct=net / peak * _HUNDRED if closed and peak else None,
@@ -209,6 +211,7 @@ def report_fields(summary: RunSummary) -> dict[str, Any]:
         "net_pnl_usd": _fmt(summary.net_pnl_usd, _USD),
         "peak_margin_usd": _fmt(summary.peak_margin_usd, _USD),
         "max_contracts": str(summary.max_contracts.normalize()),
+        "max_notional_usd": _fmt(summary.max_notional_usd, _USD),
         "closed_trades": summary.closed_trades,
         "points_per_contract_adjusted": _fmt(summary.points_per_contract, _USD),
         "pnl_basis": PNL_BASIS,

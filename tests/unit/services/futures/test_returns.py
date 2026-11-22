@@ -128,6 +128,7 @@ class TestRunSummary:
         assert s.net_pnl_usd == Decimal("1486.50")
         assert s.peak_margin_usd == Decimal("55000")
         assert s.max_contracts == Decimal("2")
+        assert s.max_notional_usd == Decimal("500000")
         assert s.return_on_margin_pct.quantize(Decimal("0.0001")) == Decimal("2.7027")
         assert s.return_on_underlying_pct.quantize(Decimal("0.0001")) == Decimal("0.2004")
         assert s.points_per_contract == Decimal("10")
@@ -169,6 +170,7 @@ class TestSerialisation:
         assert fields["return_on_underlying_pct"] == "0.2004"
         assert fields["peak_margin_usd"] == "55000.00"
         assert fields["net_pnl_usd"] == "1486.50"
+        assert fields["max_notional_usd"] == "500000.00"
         assert fields["contracts"]["ES.CME"]["multiplier"] == "50"
         assert fields["pnl_basis"] == "ratio_adjusted"
 
