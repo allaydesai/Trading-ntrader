@@ -48,15 +48,21 @@ classifier. Per root and timeframe:
    `roll_rule = firstrate-ratio-adjusted`. Re-applied on every run so a spec edit reaches
    the row. An unknown root fails that file loudly (`Unknown futures root 'XX'`).
 2. Classify with the inherited classifier (per-timeframe end vs source last date). A skip
-   additionally requires the bar type's Parquet footers to hold exactly the recorded bar
+   additionally requires that no `.import-incomplete` marker sits in the bar type's
+   directory and that its Parquet footers are readable and hold exactly the recorded bar
    count. Equities trust the metadata row alone (ADR-5), but a streamed write that dies after
    the delete would otherwise leave a partial series behind a row that still reads complete.
+   The count alone cannot tell an interrupted rewrite whose parts happen to add up to the old
+   count from a finished one, hence the marker: touched before the delete, removed only after
+   verification and the coverage update. Nautilus only lists `*.parquet`, so it ignores it.
 3. `catalog.delete_data_range(Bar, bar_type)` (whole range: files are removed, not read),
    then one `catalog.write_data(chunk.bars)` per chunk.
 4. Verify without a full read-back: the sum of `num_rows` over the parts' footers must equal
    the rows written, and up to 12 chunk-edge bars (first and last always) are read back with
    `catalog.bars(start=ts, end=ts)` and compared field by field, including precision.
-5. Record per-timeframe start/end/count on the row; `date_range_end` keeps the latest end.
+5. Record per-timeframe start/end/count on the row; `date_range_end` is recomputed as the
+   latest of the per-timeframe ends (so it follows a regressed source too), then the marker
+   is removed.
 
 The CLI commits after every timeframe pass.
 

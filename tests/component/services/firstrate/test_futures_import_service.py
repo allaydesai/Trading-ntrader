@@ -169,6 +169,60 @@ class TestReRun:
         assert len(_read_all(catalog_dir)) == 25
 
 
+class TestInterruptedWrites:
+    def test_interrupted_replacement_with_matching_count_is_reimported(
+        self, source, catalog_dir, metadata, monkeypatch
+    ):
+        from src.services.firstrate import futures_import_service as svc
+
+        _run(_service(catalog_dir, metadata), source)
+        real = svc.verify_series
+
+        def crash(*args, **kwargs):  # parts fully rewritten, process dies before finishing
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(svc, "verify_series", crash)
+        _parts(catalog_dir)[-1].unlink()  # forces a reimport of an otherwise complete series
+        with pytest.raises(KeyboardInterrupt):
+            _run(_service(catalog_dir, metadata), source)
+        monkeypatch.setattr(svc, "verify_series", real)
+        assert sum(pq.read_metadata(p).num_rows for p in _parts(catalog_dir)) == 25
+        [again] = _run(_service(catalog_dir, metadata), source)
+        assert again.outcome == "reimported"
+
+    def test_marker_cleared_after_success(self, source, catalog_dir, metadata):
+        _run(_service(catalog_dir, metadata), source)
+        bar_dir = catalog_dir / CATALOG / "data" / "bar" / ES_1MIN
+        assert not (bar_dir / ".import-incomplete").exists()
+        [again] = _run(_service(catalog_dir, metadata), source)
+        assert again.status == "skipped"
+
+    def test_unreadable_footer_forces_reimport(self, source, catalog_dir, metadata):
+        _run(_service(catalog_dir, metadata), source)
+        _parts(catalog_dir)[0].write_bytes(b"not parquet")
+        [again] = _run(_service(catalog_dir, metadata), source)
+        assert again.status == "success"
+        assert again.outcome == "reimported"
+        assert len(_read_all(catalog_dir)) == 25
+
+
+class TestCoverage:
+    def test_shared_end_follows_a_regressed_source(self, source, catalog_dir, metadata):
+        _run(_service(catalog_dir, metadata), source)
+        path = source / "ES_full_1min_continuous_ratio_adjusted.txt"
+        path.write_text("\n".join(_minute_rows(10)) + "\n")
+        _run(_service(catalog_dir, metadata), source)
+        row = metadata.rows[(CATALOG, "ES")]
+        assert row.date_range_end == row.date_range_end_minute
+        assert row.bar_count_minute == 10
+
+    def test_shared_end_keeps_a_later_timeframe(self, source, catalog_dir, metadata):
+        _run(_service(catalog_dir, metadata), source, "1-DAY-LAST")
+        _run(_service(catalog_dir, metadata), source)
+        row = metadata.rows[(CATALOG, "ES")]
+        assert row.date_range_end == max(row.date_range_end_daily, row.date_range_end_minute)
+
+
 class TestFailures:
     def test_unknown_root_fails_loudly(self, source, catalog_dir, metadata):
         (source / "XX_full_1min_continuous_ratio_adjusted.txt").write_text(

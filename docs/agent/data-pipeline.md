@@ -94,7 +94,8 @@ Market data stored as Parquet files under Nautilus catalog structure.
 
 ## Futures import (futures M2)
 
-- `import --format firstrate --asset-class futures <dir>` -> `src/cli/commands/import_futures.py`
+- `import --format firstrate --catalog firstrate-futures --asset-class futures <dir>` ->
+  `src/cli/commands/import_futures.py`
   -> `FuturesImportService` (`src/services/firstrate/futures_import_service.py`, a subclass of
   `ImportService`) -> `FirstRateFuturesParser`
   (`src/services/firstrate/parsers/firstrate_futures_parser.py`, registered for `FUTURES`).

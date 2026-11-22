@@ -10,6 +10,7 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -129,6 +130,17 @@ class TestComputeSourceLastDate:
         file_path = _write(tmp_path / "A" / "SPY_full_1day_x.txt", "2025-1-3,1,2,1,2,1\n")
 
         assert compute_source_last_date(file_path) == datetime(2025, 1, 3, 5, tzinfo=timezone.utc)
+
+    def test_non_digit_shaped_stamp_does_not_force_full_parse(self, tmp_path: Path) -> None:
+        from src.services.firstrate import source_probe
+
+        body = "2025-01-02,1,2,1,2,1\n2025-01-0X,1,2,1,2,1\n"
+        file_path = _write(tmp_path / "A" / "SPY_full_1day_adjsplitdiv.txt", body)
+
+        with patch.object(source_probe, "_max_parsed_stamp", side_effect=AssertionError):
+            assert compute_source_last_date(file_path) == datetime(
+                2025, 1, 2, 5, tzinfo=timezone.utc
+            )
 
     def test_malformed_date_lines_are_skipped(self, tmp_path: Path) -> None:
         body = "garbage,100.0,101.0,99.0,100.5,1000\n2025-01-02,100.5,102.0,100.0,101.5,1100\n"

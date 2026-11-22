@@ -81,3 +81,7 @@ class TestRunner:
     def test_no_database_is_exit_2(self, tmp_path):
         with patch("src.db.session_sync.get_sync_session_maker", return_value=None):
             assert run_futures_import("firstrate-futures", tmp_path, ALL_FIVE) == 2
+
+    def test_invalid_database_url_is_exit_2(self, tmp_path):
+        with patch("src.db.session_sync.get_sync_session_maker", side_effect=ValueError("bad URL")):
+            assert run_futures_import("firstrate-futures", tmp_path, ALL_FIVE) == 2

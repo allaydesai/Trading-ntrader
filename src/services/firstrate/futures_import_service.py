@@ -32,6 +32,7 @@ from src.db.models.catalog_instrument import CatalogInstrument
 from src.models.catalog import AssetClass, ImportResult
 from src.services.firstrate.coverage import earliest_start, from_ns, start_field_for_timeframe
 from src.services.firstrate.import_service import (
+    _TIMEFRAME_END_FIELD_MAP,
     ClassifierDecision,
     ImportService,
     _bar_count_field_for_timeframe,
@@ -63,6 +64,10 @@ ROLL_RULE = "firstrate-ratio-adjusted"
 DEFAULT_SAMPLE_SIZE = 12
 
 _BAR_COUNT_FIELDS = ("daily", "hourly", "minute", "5min", "30min")
+
+#: Touched in a bar type's directory before its parts are deleted and removed only once the
+#: rewrite is verified and recorded. Nautilus only lists ``*.parquet``, so it is ignored there.
+INCOMPLETE_MARKER = ".import-incomplete"
 
 
 class _SpecIdentity:
@@ -136,6 +141,21 @@ def rows_on_disk(directory: Path) -> int:
     return sum(pq.read_metadata(part).num_rows for part in directory.glob("*.parquet"))
 
 
+def series_complete(directory: Path, recorded: int) -> bool:
+    """True when no rewrite is pending and the readable footers hold ``recorded`` rows.
+
+    A rewrite that died after the delete leaves the marker behind (even if the parts it
+    managed to write happen to add up to the old count); a damaged footer counts as
+    incomplete so the series is rewritten instead of failing on every run.
+    """
+    if (directory / INCOMPLETE_MARKER).exists():
+        return False
+    try:
+        return rows_on_disk(directory) == recorded
+    except (OSError, ValueError):  # pyarrow.ArrowInvalid is a ValueError
+        return False
+
+
 def write_series(
     catalog: ParquetDataCatalog,
     parser: FirstRateFuturesParser,
@@ -143,7 +163,13 @@ def write_series(
     bar_type: BarType,
     precision: int,
 ) -> _SeriesTally:
-    """Replace ``bar_type``'s parts with the file's bars, one Parquet part per chunk."""
+    """Replace ``bar_type``'s parts with the file's bars, one Parquet part per chunk.
+
+    Leaves :data:`INCOMPLETE_MARKER` in place; the caller removes it once verified.
+    """
+    directory = bar_directory(catalog, bar_type)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / INCOMPLETE_MARKER).touch()
     catalog.delete_data_range(data_cls=Bar, identifier=str(bar_type))
     tally = _SeriesTally()
     for chunk in parser.iter_chunks(file_path, bar_type, precision):
@@ -175,9 +201,9 @@ def record_coverage(row: CatalogInstrument, timeframe: str, tally: _SeriesTally)
     assert tally.first_ns is not None and tally.last_ns is not None
     setattr(row, start_field_for_timeframe(timeframe), from_ns(tally.first_ns))
     row.date_range_start = earliest_start(row)
-    end = from_ns(tally.last_ns)
-    row.date_range_end = max(filter(None, [row.date_range_end, end]))
-    setattr(row, _date_range_end_field_for_timeframe(timeframe), end)
+    setattr(row, _date_range_end_field_for_timeframe(timeframe), from_ns(tally.last_ns))
+    ends = [getattr(row, name) for name in _TIMEFRAME_END_FIELD_MAP.values()]
+    row.date_range_end = max(end for end in ends if end is not None)
     setattr(row, _bar_count_field_for_timeframe(timeframe), tally.count)
 
 
@@ -224,12 +250,9 @@ class FuturesImportService(ImportService):
         recorded = getattr(row, _bar_count_field_for_timeframe(timeframe))
         catalog = self._catalog_manager.resolve_catalog(catalog_name)
         bar_type = f"{row.nautilus_id}-{timeframe}-EXTERNAL"
-        on_disk = rows_on_disk(bar_directory(catalog, bar_type))
-        if on_disk == recorded:
+        if series_complete(bar_directory(catalog, bar_type), recorded):
             return "skipped"
-        logger.warning(
-            "futures_parquet_count_drift", ticker=ticker, recorded=recorded, on_disk=on_disk
-        )
+        logger.warning("futures_series_incomplete", ticker=ticker, timeframe=timeframe)
         return "reimported"
 
     def _ensure_row(self, spec: FuturesContractSpec, catalog_name: str) -> None:
@@ -296,6 +319,7 @@ class FuturesImportService(ImportService):
             )
         record_coverage(row, timeframe, tally)
         self._metadata_service.upsert_instrument_sync(row)
+        (bar_directory(catalog, bar_type) / INCOMPLETE_MARKER).unlink(missing_ok=True)
         logger.info(
             "futures_series_imported", ticker=spec.root, timeframe=timeframe, rows=tally.count
         )

@@ -37,6 +37,9 @@ _ACCEPTED_COLUMNS: tuple[int, ...] = (6, 7)
 _INTRADAY_FMT = "%Y-%m-%d %H:%M:%S"
 _DAILY_FMT = "%Y-%m-%d"
 
+#: Separators stripped before the fast path's digit check.
+_SEPARATORS = str.maketrans("", "", "-: ")
+
 #: FirstRate CSV timestamps are local US Eastern Time with DST. Must match
 #: ``FirstRateCsvParser._parse_timestamp`` exactly so the source_probe and
 #: parser agree on what UTC datetime each row represents.
@@ -58,7 +61,8 @@ def compute_source_last_date(file_path: Path) -> datetime | None:
     keeps the largest well-shaped stamp string and parses only that one (odd-shaped
     stamps such as ``2025-1-3`` are parsed individually). Parsing
     every row cost ~60 s on a 6.4M-row futures file. If the largest string does
-    not parse (e.g. ``2025-13-45``), the probe falls back to parsing every row.
+    not parse, a second pass ignores non-digit stamps (``2025-01-0X``); only if that
+    winner fails too (``2025-13-45``) does the probe parse every row.
 
     Args:
         file_path: Path to the source ``.txt`` file.
@@ -69,13 +73,7 @@ def compute_source_last_date(file_path: Path) -> datetime | None:
         whose first column parses as a FirstRate timestamp.
     """
     try:
-        best, other = _latest(file_path)
-        if best is None:
-            return other
-        parsed = _parse_timestamp(best)
-        if parsed is None:
-            return _max_parsed_stamp(file_path)
-        return parsed if other is None else max(parsed, other)
+        return _probe(file_path)
     except FileNotFoundError:
         return None
     except (PermissionError, OSError) as exc:
@@ -99,30 +97,47 @@ def _first_columns(file_path: Path):
                 yield parts[0].strip()
 
 
-def _well_shaped(stamp: str) -> bool:
-    """``YYYY-MM-DD`` or ``YYYY-MM-DD HH:MM:SS`` by shape (digits checked by parsing)."""
+def _separator_shaped(stamp: str) -> bool:
+    """``YYYY-MM-DD`` or ``YYYY-MM-DD HH:MM:SS`` by length and separators."""
     if len(stamp) not in (10, 19) or stamp[4] != "-" or stamp[7] != "-":
         return False
     return len(stamp) == 10 or (stamp[10] == " " and stamp[13] == ":" and stamp[16] == ":")
 
 
-def _latest(file_path: Path) -> tuple[str | None, datetime | None]:
-    """Largest well-shaped stamp string, and the latest parsed odd-shaped stamp.
+def _latest(file_path: Path, check_digits: bool = False) -> tuple[str | None, datetime | None]:
+    """Largest canonical stamp string, and the latest parsed odd-shaped stamp.
 
     Canonical stamps are compared as strings; anything else (e.g. ``2025-1-3``, which
-    ``strptime`` accepts) is parsed so it can still win.
+    ``strptime`` accepts) is parsed so it can still win. With ``check_digits`` a stamp must
+    also be all digits to become the best string, so a non-digit one such as ``2025-01-0X``
+    goes to the per-row parse path instead (it only runs when the cheap pass's winner did
+    not parse: the check costs ~4 s on a 6.4M-row file).
     """
     best: str | None = None
     other: datetime | None = None
     for stamp in _first_columns(file_path):
-        if _well_shaped(stamp):
-            if best is None or stamp > best:
+        if _separator_shaped(stamp):
+            if best is not None and stamp <= best:
+                continue
+            if not check_digits or stamp.translate(_SEPARATORS).isdigit():
                 best = stamp
-            continue
+                continue
         dt = _parse_timestamp(stamp)
         if dt is not None and (other is None or dt > other):
             other = dt
     return best, other
+
+
+def _probe(file_path: Path) -> datetime | None:
+    """Cheap pass; a digit-checked pass if its winner does not parse; full parse last."""
+    for check_digits in (False, True):
+        best, other = _latest(file_path, check_digits)
+        if best is None:
+            return other
+        parsed = _parse_timestamp(best)
+        if parsed is not None:
+            return parsed if other is None else max(parsed, other)
+    return _max_parsed_stamp(file_path)
 
 
 def _max_parsed_stamp(file_path: Path) -> datetime | None:

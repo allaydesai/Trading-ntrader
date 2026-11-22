@@ -43,14 +43,15 @@ def run_futures_import(catalog: str, source_path: Path, timeframes: list[str]) -
     from src.services.firstrate.futures_import_service import FuturesImportService
     from src.services.firstrate.metadata_service import MetadataService
 
-    session_maker = get_sync_session_maker()
-    if session_maker is None:
-        console.print("❌ Database not configured. Check DATABASE_URL in .env", style="red")
-        return 2
-    catalog_base = Path(get_settings().catalog.catalog_base_path)
     all_results: list[ImportResult] = []
-    session = session_maker()
+    session = None
     try:
+        session_maker = get_sync_session_maker()
+        if session_maker is None:
+            console.print("❌ Database not configured. Check DATABASE_URL in .env", style="red")
+            return 2
+        catalog_base = Path(get_settings().catalog.catalog_base_path)
+        session = session_maker()
         ensure_catalog_dir(catalog_base, catalog)
         metadata = MetadataService(sync_repo=SyncCatalogInstrumentRepository(session))
         service = FuturesImportService(CatalogManager(catalog_base), metadata)
@@ -61,11 +62,13 @@ def run_futures_import(catalog: str, source_path: Path, timeframes: list[str]) -
                 _print_progress_line(result, tf)
             session.commit()
             all_results.extend(results)
-    except Exception as e:  # noqa: BLE001 — any fatal error maps to exit code 2
-        session.rollback()
+    except Exception as e:  # noqa: BLE001 — any fatal error (incl. a bad DATABASE_URL) maps to 2
+        if session is not None:
+            session.rollback()
         console.print(f"❌ Fatal error: {e}", style="red")
         return 2
     finally:
-        session.close()
+        if session is not None:
+            session.close()
     _print_summary(all_results)
     return determine_exit_code(all_results)
