@@ -111,6 +111,7 @@ Read the topic doc for your area of work:
 | Nautilus engine, LogGuard, strategies | `docs/agent/nautilus.md` |
 | Data loading, IBKR/Kraken, Parquet | `docs/agent/data-pipeline.md` |
 | Futures margin, commission, sizing, returns | `docs/agent/futures-backtesting.md` |
+| Spot FX pairs, instruments, USD conversion | `docs/agent/fx-backtesting.md` |
 | Web UI, HTMX, templates, charts | `docs/agent/web-ui.md` |
 | Database, repositories, persistence | `docs/agent/persistence.md` |
 | Tests, fixtures, TDD | `docs/agent/testing.md` |

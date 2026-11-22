@@ -12,26 +12,29 @@ Acceptance: `build_instrument("FX", "EUR/USD.IDEALPRO", "EURUSD", bars)` returns
 `CurrencyPair`. Equity and futures dispatch is byte-identical. A forked engine test proves the
 USD-base account plus the rate mechanism convert USDJPY P&L exactly. No migration.
 
-- [ ] 1.1 Unit (failing first): `tests/unit/services/fx/test_pair_specs.py`: the shipped file
+- [x] 1.1 Unit (failing first): `tests/unit/services/fx/test_pair_specs.py`: the shipped file
       loads (EURUSD, GBPUSD, USDJPY, EURGBP); base/quote/pip/precision/IB block per pair;
       unknown key, pip decimals over precision, key != base+quote, IB mismatch, maintenance >
       initial, unknown schema version, unknown pair all raise `FxSpecError` naming the field.
-- [ ] 1.2 `src/services/fx/pair_specs.yaml` (with `source`/`as_of` per value, UNVERIFIED
+- [x] 1.2 `src/services/fx/pair_specs.yaml` (with `source`/`as_of` per value, UNVERIFIED
       flagged) and `pair_specs.py`.
-- [ ] 1.3 Component (failing first): `tests/component/services/fx/test_instrument_builder.py`:
+- [x] 1.3 Component (failing first): `tests/component/services/fx/test_instrument_builder.py`:
       id `EUR/USD.IDEALPRO`, `raw_symbol EUR.USD`, currencies, precision follows bars (5 / 3),
       increments, margin fractions, `info` terms; the id parses with the IB adapter's `RE_CASH`.
-- [ ] 1.4 `build_fx_pair()`.
-- [ ] 1.5 Component (failing first): `test_build_instrument.py`: `FX` gives `CurrencyPair`;
+- [x] 1.4 `build_fx_pair()`.
+- [x] 1.5 Component (failing first): `test_build_instrument.py`: `FX` gives `CurrencyPair`;
       STOCK/ETF/None/FUTURES unchanged; `load_from_catalog` with an FX row.
-- [ ] 1.6 Route `FX` in `build_instrument`.
-- [ ] 1.7 Integration, forked (failing first): `tests/integration/core/test_fx_engine_acceptance.py`:
+- [x] 1.6 Route `FX` in `build_instrument`.
+- [x] 1.7 Integration, forked (failing first): `tests/integration/core/test_fx_engine_acceptance.py`:
       `MARGIN` venue `base_currency=USD` accepts the pairs and `MID` bars; a USDJPY round
       trip without a rate leaves the USD balance unchanged and logs "Cannot calculate
       account state" (pinned); with a prototype `FxRateFeeder` the balance changes by
       `pnl_jpy / rate`; an EURGBP trade with GBPUSD as a conversion-only instrument does
       too. **Gate**: if this fails, apply D4's fallback and re-plan M3 before M2 merges.
-- [ ] 1.8 Docs: `docs/agent/fx-backtesting.md` (skeleton: ids, specs, UNVERIFIED list),
+      **Result (2026-11-22): passed.** USDJPY 100k 150.000 to 151.000 moves the USD balance
+      by exactly USD 662.25; EURGBP via GBPUSD by USD 1,250.00; no rate leaves it frozen.
+      D4 stands, no fallback. The feeder must be added before the strategies.
+- [x] 1.8 Docs: `docs/agent/fx-backtesting.md` (skeleton: ids, specs, UNVERIFIED list),
       index in `architecture.md`.
 
 ## M2. FirstRate FX importer and the `firstrate-fx` catalog
