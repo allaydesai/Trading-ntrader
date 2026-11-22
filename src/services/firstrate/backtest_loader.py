@@ -20,6 +20,8 @@ from src.models.data_load_result import DataLoadResult
 from src.services.exceptions import DataNotFoundError, UnknownCatalogError
 from src.services.firstrate.catalog_manager import CatalogManager
 from src.services.firstrate.metadata_service import MetadataService
+from src.services.futures.contract_specs import get_contract_spec
+from src.services.futures.instrument_builder import build_futures_contract
 from src.services.metadata.backtestable import non_backtestable_reason
 
 logger = structlog.get_logger(__name__)
@@ -86,6 +88,26 @@ def build_equity(nautilus_id: str, ticker: str, bars=None):
         isin=None,
         ts_event=0,
         ts_init=0,
+    )
+
+
+FUTURES_ASSET_CLASS = "FUTURES"
+
+
+def build_instrument(asset_class, nautilus_id: str, ticker: str, bars=None):
+    """Build the Nautilus instrument for a catalog row, keyed on its ``asset_class``.
+
+    ``FUTURES`` builds a continuous-series ``FuturesContract`` from the hand-curated
+    contract spec for ``ticker`` (the futures root, e.g. ``ES``), with precision taken from
+    the bars when given. Every other asset class, including ``None``, goes through
+    :func:`build_equity` unchanged.
+    """
+    if str(asset_class or "").upper() != FUTURES_ASSET_CLASS:
+        return build_equity(nautilus_id=nautilus_id, ticker=ticker, bars=bars)
+    return build_futures_contract(
+        get_contract_spec(ticker),
+        nautilus_id=nautilus_id,
+        price_precision=_infer_price_precision(bars) if bars else None,
     )
 
 
@@ -216,7 +238,7 @@ async def load_from_catalog(
             },
         )
 
-    instrument = build_equity(nautilus_id=nautilus_id, ticker=ticker, bars=bars)
+    instrument = build_instrument(row.asset_class, nautilus_id, ticker, bars)
 
     # Defensive: the venue on the first bar MUST match the synthesised instrument.
     # Silent venue drift leads to Nautilus' "strict order" error at engine setup —

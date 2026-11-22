@@ -46,6 +46,15 @@ All models inherit `Base` + `TimestampMixin`.
 - Composite index: `(backtest_run_id, entry_timestamp)` for range queries
 - P&L: `(exit_price - entry_price) * quantity - commission - fees`
 
+**CatalogInstrument** (`src/db/models/catalog_instrument.py`), futures fields (migration
+`3f56b46c78eb`, futures M1): `multiplier`, `tick_size`, `currency`, `contract_kind`
+(`continuous` | `specific`, CHECK-constrained), `expiry`, `roll_rule`. All nullable, NULL on
+equity rows, not backfilled; the futures importer (M2) fills them from
+`src/services/futures/contract_specs.yaml`. Three component tests build this table in SQLite
+from a hand-written DDL (`test_catalog_instrument_repository.py`,
+`test_qualification_sync_repo.py`, `test_instrument_mapper.py`): a new column must be added
+to all three.
+
 ## Repository Pattern
 
 Async methods, constructor-injected `AsyncSession`.

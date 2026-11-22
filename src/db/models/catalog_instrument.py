@@ -5,9 +5,19 @@ supporting the FirstRate data import pipeline.
 """
 
 from datetime import date, datetime, timezone
+from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import BigInteger, Date, Index, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    Date,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import TIMESTAMP
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -45,6 +55,12 @@ class CatalogInstrument(Base, TimestampMixin):
         bar_count_minute: Number of 1-minute bars imported.
         bar_count_5min: Number of 5-minute bars imported.
         bar_count_30min: Number of 30-minute bars imported.
+        multiplier: Futures contract multiplier (nullable; NULL for equities).
+        tick_size: Exchange minimum price increment (nullable).
+        currency: Quote currency, e.g. "USD" (nullable).
+        contract_kind: "continuous" or "specific" futures contract (nullable).
+        expiry: Expiry date of a specific futures contract (nullable).
+        roll_rule: Roll rule behind a continuous futures series (nullable).
         updated_at: Last update timestamp (auto-set on update).
         created_at: Record creation timestamp (via TimestampMixin).
     """
@@ -122,6 +138,14 @@ class CatalogInstrument(Base, TimestampMixin):
     bar_count_30min: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
     )
+    # Futures fields (futures M1, migration 3f56b46c78eb). NULL for equity rows; the
+    # futures importer (M2) fills them from src/services/futures/contract_specs.yaml.
+    multiplier: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 6), nullable=True)
+    tick_size: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 9), nullable=True)
+    currency: Mapped[Optional[str]] = mapped_column(String(3), nullable=True)
+    contract_kind: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    expiry: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    roll_rule: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     updated_at: Mapped[Optional[datetime]] = mapped_column(
         TIMESTAMP(timezone=True),
         nullable=True,
@@ -139,6 +163,10 @@ class CatalogInstrument(Base, TimestampMixin):
             "catalog_name",
             "ticker",
             name="uq_catalog_instruments_catalog_ticker",
+        ),
+        CheckConstraint(
+            "contract_kind IN ('continuous', 'specific')",
+            name="ck_catalog_instruments_contract_kind",
         ),
     )
 

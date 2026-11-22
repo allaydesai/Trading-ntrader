@@ -1,0 +1,120 @@
+# Hand-curated futures contract specs (futures M1).
+#
+# schema_version: the shape of this file; bump it (and the loader) when fields change.
+# specs_as_of:    when the values below were last reviewed.
+#
+# Venues are named as Interactive Brokers shows them (CME, NYMEX, COMEX, CBOT), not MIC codes.
+# Sessions are US/Eastern wall clock (CME Globex: Sun-Fri 18:00-17:00 with a 17:00-18:00 break).
+#
+# price_precision:            decimals of the exchange tick (live orders, M5).
+# continuous_price_precision: decimals the FirstRate continuous ratio-adjusted series carries
+#                             (measured on the 1-hour and 1-minute files, 2026-11-21). Ratio
+#                             adjustment moves prices off the tick grid, so the continuous
+#                             instrument's price increment is 10^-this, not tick_size.
+#
+# MARGINS ARE APPROXIMATE. They are dollars per contract for an outright speculative position
+# (initial ~110% of maintenance), hand-entered on margin.as_of. Exchange/broker margins change
+# often; use them for backtest sizing only and check the broker before trading.
+# commission_per_contract_usd is per side, an approximate all-in IB fixed rate (broker +
+# exchange + regulatory fees).
+#
+# Decimal values are quoted so YAML never turns them into floats; times are quoted because
+# unquoted "18:00" is a base-60 integer in YAML 1.1.
+schema_version: 1
+specs_as_of: "2026-11-21"
+roots:
+  ES:
+    name: E-mini S&P 500
+    venue: CME
+    asset_class: INDEX
+    underlying: SPX
+    currency: USD
+    multiplier: "50"
+    tick_size: "0.25"
+    price_precision: 2
+    continuous_price_precision: 2
+    session: &globex
+      timezone: America/New_York
+      open: "18:00"
+      close: "17:00"
+      days: Sun-Fri
+      daily_break: "17:00-18:00"
+    margin:
+      initial_usd: "27500"
+      maintenance_usd: "25000"
+      as_of: "2026-11-21"
+      note: Approximate CME outright margin, hand-curated; verify with broker before use.
+    commission_per_contract_usd: "2.25"
+    ib: {sec_type: FUT, symbol: ES, exchange: CME, trading_class: ES, currency: USD, multiplier: "50"}
+  NQ:
+    name: E-mini Nasdaq-100
+    venue: CME
+    asset_class: INDEX
+    underlying: NDX
+    currency: USD
+    multiplier: "20"
+    tick_size: "0.25"
+    price_precision: 2
+    continuous_price_precision: 2
+    session: *globex
+    margin:
+      initial_usd: "39600"
+      maintenance_usd: "36000"
+      as_of: "2026-11-21"
+      note: Approximate CME outright margin, hand-curated; verify with broker before use.
+    commission_per_contract_usd: "2.25"
+    ib: {sec_type: FUT, symbol: NQ, exchange: CME, trading_class: NQ, currency: USD, multiplier: "20"}
+  CL:
+    name: Crude Oil (WTI)
+    venue: NYMEX
+    asset_class: COMMODITY
+    underlying: WTI
+    currency: USD
+    multiplier: "1000"
+    tick_size: "0.01"
+    price_precision: 2
+    continuous_price_precision: 3
+    session: *globex
+    margin:
+      initial_usd: "6600"
+      maintenance_usd: "6000"
+      as_of: "2026-11-21"
+      note: Approximate NYMEX outright margin, hand-curated; verify with broker before use.
+    commission_per_contract_usd: "2.37"
+    ib: {sec_type: FUT, symbol: CL, exchange: NYMEX, trading_class: CL, currency: USD, multiplier: "1000"}
+  GC:
+    name: Gold
+    venue: COMEX
+    asset_class: COMMODITY
+    underlying: XAU
+    currency: USD
+    multiplier: "100"
+    tick_size: "0.1"
+    price_precision: 1
+    continuous_price_precision: 1
+    session: *globex
+    margin:
+      initial_usd: "18700"
+      maintenance_usd: "17000"
+      as_of: "2026-11-21"
+      note: Approximate COMEX outright margin, hand-curated; verify with broker before use.
+    commission_per_contract_usd: "2.42"
+    ib: {sec_type: FUT, symbol: GC, exchange: COMEX, trading_class: GC, currency: USD, multiplier: "100"}
+  ZN:
+    name: 10-Year T-Note
+    venue: CBOT
+    asset_class: DEBT
+    underlying: UST10Y
+    currency: USD
+    multiplier: "1000"
+    tick_size: "0.015625"  # 1/64 of a point (half of 1/32)
+    price_precision: 6
+    continuous_price_precision: 6
+    session: *globex
+    margin:
+      initial_usd: "2310"
+      maintenance_usd: "2100"
+      as_of: "2026-11-21"
+      note: Approximate CBOT outright margin, hand-curated; verify with broker before use.
+    commission_per_contract_usd: "1.67"
+    ib: {sec_type: FUT, symbol: ZN, exchange: CBOT, trading_class: ZN, currency: USD, multiplier: "1000"}
