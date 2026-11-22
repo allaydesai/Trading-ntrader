@@ -76,7 +76,7 @@ with a `MARGIN` venue, `base_currency=USD`:
   (1,000 GBP) converts through GBPUSD, which is loaded as a conversion-only instrument (bars,
   no strategy), to USD 1,250.00.
 
-So decision D4's mechanism works as planned and M3 needs no fallback. Two constraints carry
+So decision D4's mechanism works as planned and M3 needs no fallback. Three constraints carry
 into M3:
 
 1. Nautilus' `Cache.get_xrate` reads only cache quote ticks (or BID+ASK bar pairs), never MID
@@ -84,6 +84,11 @@ into M3:
 2. The feeder must be registered **before** the strategies (`add_actor` before
    `add_strategy`), so on each bar it writes the rate before a strategy submits. In the gate
    test the closing fill used that bar's rate (no lag).
+3. A cross's conversion pair must be added to the engine **before** the traded pair's bars.
+   At equal timestamps the engine dispatches bars in the order the data was added. With
+   GBPUSD added after EURGBP, the EURGBP close converted at the previous bar's GBPUSD rate
+   (USD 1,220 instead of 1,250 on a rate moving 1.22 to 1.25). Both orders are pinned in the
+   gate test. USD-quote and USD-base pairs are their own rate source, so they are unaffected.
 
 ## Planned (M2-M6)
 

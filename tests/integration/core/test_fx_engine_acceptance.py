@@ -209,19 +209,33 @@ def test_usdjpy_with_feeder_converts_pnl_at_the_rate():
         engine.dispose()
 
 
-def test_eurgbp_converts_through_a_conversion_only_gbpusd():
-    series = {
-        "EURGBP": ["0.85000", "0.85000", "0.86000", "0.86000"],
-        "GBPUSD": ["1.25000", "1.25000", "1.25000", "1.25000"],  # no strategy subscribes
-    }
+GBPUSD_CLOSES = ["1.20000", "1.22000", "1.25000", "1.30000"]  # moves every bar
+EURGBP_CLOSES = ["0.85000", "0.85000", "0.86000", "0.86000"]  # closes on the third bar
+
+
+def _eurgbp_usd_change(series: dict[str, list[str]]) -> Decimal:
     engine = _run("EURGBP", series, feed=True)
     try:
         position = _closed_position(engine)
         assert position.realized_pnl == Money(1_000, GBP)  # 100,000 EUR x 0.01000
-        assert engine.cache.get_xrate(IDEALPRO, GBP, USD) == pytest.approx(1.25)
+        assert engine.cache.get_xrate(IDEALPRO, GBP, USD) == pytest.approx(1.30)  # final bar
         assert engine.cache.positions(instrument_id=_pair("GBPUSD").id) == []
-
-        change = _usd_balance(engine) - START_BALANCE
-        assert change == Decimal("1250.00")  # 1,000 GBP x GBPUSD 1.25000
+        return _usd_balance(engine) - START_BALANCE
     finally:
         engine.dispose()
+
+
+def test_eurgbp_converts_through_a_conversion_only_gbpusd():
+    # GBPUSD (no strategy subscribes) is added before EURGBP, so at each timestamp the feeder
+    # has the GBPUSD bar before the strategy acts on EURGBP: the closing fill converts at that
+    # bar's rate, 1.25000, not the last cached 1.30000.
+    change = _eurgbp_usd_change({"GBPUSD": GBPUSD_CLOSES, "EURGBP": EURGBP_CLOSES})
+    assert change == Decimal("1250.00")  # 1,000 GBP x 1.25000
+
+
+def test_eurgbp_conversion_lags_a_bar_when_the_rate_pair_comes_second():
+    # Same bars, traded pair added first: at the closing timestamp the EURGBP bar is
+    # dispatched before the GBPUSD bar, so the fill converts at the previous bar's 1.22000.
+    # M3 must add conversion-only bars ahead of the traded bars (or accept this lag).
+    change = _eurgbp_usd_change({"EURGBP": EURGBP_CLOSES, "GBPUSD": GBPUSD_CLOSES})
+    assert change == Decimal("1220.00")  # 1,000 GBP x 1.22000

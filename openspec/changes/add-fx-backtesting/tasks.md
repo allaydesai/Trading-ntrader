@@ -33,7 +33,8 @@ USD-base account plus the rate mechanism convert USDJPY P&L exactly. No migratio
       too. **Gate**: if this fails, apply D4's fallback and re-plan M3 before M2 merges.
       **Result (2026-11-22): passed.** USDJPY 100k 150.000 to 151.000 moves the USD balance
       by exactly USD 662.25; EURGBP via GBPUSD by USD 1,250.00; no rate leaves it frozen.
-      D4 stands, no fallback. The feeder must be added before the strategies.
+      D4 stands, no fallback. M3 constraints: add the feeder before the strategies, and
+      a cross's conversion bars before the traded bars (else a one-bar rate lag, pinned).
 - [x] 1.8 Docs: `docs/agent/fx-backtesting.md` (skeleton: ids, specs, UNVERIFIED list),
       index in `architecture.md`.
 
