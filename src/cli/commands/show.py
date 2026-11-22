@@ -17,6 +17,7 @@ from rich.text import Text
 
 from src.db.repositories.backtest_repository_sync import SyncBacktestRepository
 from src.db.session_sync import get_sync_session
+from src.services.futures.display import print_futures
 
 console = Console()
 
@@ -110,6 +111,9 @@ def _display_backtest(backtest):
 
     # Execution Metadata
     _display_metadata_table(backtest)
+
+    # Futures runs: return on margin (headline), contract terms, ratio-adjustment note
+    print_futures(console, backtest)
 
     # Configuration Snapshot
     _display_config_snapshot(backtest.config_snapshot)

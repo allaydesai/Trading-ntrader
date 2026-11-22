@@ -12,6 +12,7 @@ from rich.table import Table
 
 from src.db.repositories.backtest_repository_sync import SyncBacktestRepository
 from src.db.session_sync import get_sync_session
+from src.services.futures.display import history_return_cell, run_summary, symbol_cell
 
 console = Console()
 
@@ -215,7 +216,7 @@ def _list_history_sync(
                 status_style = "red"
 
             # Format metrics (handle None values)
-            return_display = f"{float(metrics.total_return):.2%}" if metrics else "N/A"
+            return_display = _return_cell(bt)
             sharpe_display = (
                 f"{float(metrics.sharpe_ratio):.2f}" if metrics and metrics.sharpe_ratio else "N/A"
             )
@@ -236,7 +237,7 @@ def _list_history_sync(
                 str(bt.run_id),
                 bt.created_at.strftime("%Y-%m-%d %H:%M"),
                 bt.strategy_name,
-                bt.instrument_symbol,
+                symbol_cell(bt.instrument_symbol, bt.config_snapshot),
                 f"[{return_style}]{return_display}[/{return_style}]",
                 sharpe_display,
                 f"[{status_style}]{status_display}[/{status_style}]",
@@ -261,6 +262,13 @@ def _list_history_sync(
         console.print(f"❌ Error: {e}", style="red")
         console.print("💡 Check database is running and credentials are correct", style="dim")
         raise
+
+
+def _return_cell(bt) -> str:
+    """Return column: return on margin for a futures run, the account return otherwise."""
+    if futures := run_summary(bt):
+        return history_return_cell(futures)
+    return f"{float(bt.metrics.total_return):.2%}" if bt.metrics else "N/A"
 
 
 def _display_strategy_summary(backtests: list, strategy_name: str):

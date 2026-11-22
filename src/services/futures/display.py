@@ -8,7 +8,24 @@ from collections.abc import Mapping
 from decimal import Decimal
 from typing import Any
 
-from src.services.futures.returns import FUTURES, ContractTerms, RunSummary, asset_class
+from rich.table import Table
+
+from src.services.futures.returns import (
+    FUTURES,
+    RATIO_ADJUSTED_NOTE,
+    ContractTerms,
+    RunSummary,
+    asset_class,
+    report_fields,
+    summarise_run,
+)
+
+TITLE = "Futures (return on margin is the headline)"
+
+
+def run_summary(run: Any) -> RunSummary | None:
+    """:func:`summarise_run` for a ``BacktestRun``-shaped object; ``None`` for equity."""
+    return summarise_run(getattr(run, "config_snapshot", None), getattr(run, "trades", None) or [])
 
 
 def signed_pct(value: Decimal | None) -> str:
@@ -55,3 +72,40 @@ def history_return_cell(summary: RunSummary) -> str:
 def symbol_cell(symbol: str, snapshot: Mapping[str, Any] | None) -> str:
     """The symbol, marked ``(fut)`` for a futures run."""
     return f"{symbol} (fut)" if asset_class(snapshot) == FUTURES else symbol
+
+
+def futures_table(summary: RunSummary) -> Table:
+    """A Rich table of :func:`summary_rows`, captioned with the ratio-adjustment note."""
+    table = Table(title=TITLE, caption=RATIO_ADJUSTED_NOTE, show_header=False)
+    table.add_column("Figure", style="cyan", no_wrap=True)
+    table.add_column("Value", style="white")
+    for label, value in summary_rows(summary):
+        table.add_row(label, value)
+    return table
+
+
+def summary_text(summary: RunSummary) -> str:
+    """Plain-text block for the text report: ``label: value`` lines and the note."""
+    lines = [TITLE, *(f"  {label}: {value}" for label, value in summary_rows(summary))]
+    return "\n".join([*lines, f"  Note: {RATIO_ADJUSTED_NOTE}"])
+
+
+def flat_report_fields(summary: RunSummary) -> dict[str, Any]:
+    """:func:`report_fields` flattened for the metric/value CSV (``futures_`` prefixed)."""
+    fields = report_fields(summary)
+    contracts = fields.pop("contracts")
+    flat: dict[str, Any] = {"asset_class": fields.pop("asset_class")}
+    flat.update({f"futures_{key}": value for key, value in fields.items()})
+    for iid, terms in contracts.items():
+        flat.update({f"futures_{iid}_{key}": value for key, value in terms.items()})
+    return flat
+
+
+def print_futures(console: Any, run: Any) -> bool:
+    """Print a futures run's table (and a blank line); nothing for equity. True if printed."""
+    summary = run_summary(run)
+    if summary is None:
+        return False
+    console.print(futures_table(summary))
+    console.print()
+    return True

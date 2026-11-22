@@ -114,7 +114,6 @@ SIZE_BASELINE: dict[str, int] = {
     "src/cli/commands/history.py::_list_history_sync": 106,
     "src/cli/commands/import_data.py::_print_dry_run_report": 87,
     "src/cli/commands/import_data.py::_run_import": 105,
-    "src/cli/commands/report.py::_generate_json_report": 51,
     "src/cli/commands/reproduce.py::_reproduce_backtest_async": 164,
     "src/cli/commands/show.py::_display_performance_metrics": 64,
     "src/config.py::IBKRSettings": 101,
