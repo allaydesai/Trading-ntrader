@@ -11,7 +11,7 @@ so this parser is registered for every supported asset class.
 
 import calendar
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -27,6 +27,33 @@ logger = structlog.get_logger(__name__)
 
 # FirstRate CSV timestamps are local US Eastern Time with DST.
 _FIRSTRATE_TIMEZONE = ZoneInfo("America/New_York")
+
+#: Nautilus' standard-precision ceiling for prices.
+_MAX_PRICE_PRECISION = 9
+
+
+def _decimals(raw: str) -> int:
+    """Decimal places a price string is written with (``"5918.9"`` -> 1); 0 if unparseable."""
+    try:
+        exponent = Decimal(raw).as_tuple().exponent
+    except InvalidOperation:
+        return 0
+    return max(0, -exponent) if isinstance(exponent, int) else 0
+
+
+def _file_price_precision(rows: list[RawBarData]) -> int:
+    """The one precision every price of a file is emitted at: the widest it carries.
+
+    Nautilus' catalog stores a batch at its first bar's precision, so mixed decimal counts
+    (``5918.9`` then ``5918.99``) would be truncated on read-back (futures M2 regression).
+    """
+    widest = max((_decimals(p) for r in rows for p in (r.open, r.high, r.low, r.close)), default=0)
+    return min(widest, _MAX_PRICE_PRECISION)
+
+
+def _fixed_price(raw: str, precision: int) -> Price:
+    """``raw`` padded (or, past the cap, rounded half-even) to ``precision`` decimals."""
+    return Price.from_str(format(Decimal(raw).quantize(Decimal(1).scaleb(-precision)), "f"))
 
 
 @register_parser(asset_class=AssetClass.ETF)
@@ -86,9 +113,10 @@ class FirstRateCsvParser(BaseParser):
                 errors=validation.errors[:10],
             )
 
+        precision = _file_price_precision([row for _, row in parsed_rows])
         bars: list[Bar] = []
         for line_num, row in parsed_rows:
-            bar = self._row_to_bar(row, bar_type, line_num)
+            bar = self._row_to_bar(row, bar_type, line_num, precision)
             if bar is not None:
                 bars.append(bar)
 
@@ -183,7 +211,9 @@ class FirstRateCsvParser(BaseParser):
         return Quantity.from_str(format(Decimal(raw), "f"))
 
     @staticmethod
-    def _row_to_bar(row: RawBarData, bar_type: BarType, line_num: int) -> Bar | None:
+    def _row_to_bar(
+        row: RawBarData, bar_type: BarType, line_num: int, precision: int
+    ) -> Bar | None:
         """Convert a RawBarData to a Nautilus Bar, or None on failure."""
         try:
             dt = FirstRateCsvParser._parse_timestamp(row.timestamp)
@@ -191,10 +221,10 @@ class FirstRateCsvParser(BaseParser):
 
             return Bar(
                 bar_type=bar_type,
-                open=Price.from_str(row.open),
-                high=Price.from_str(row.high),
-                low=Price.from_str(row.low),
-                close=Price.from_str(row.close),
+                open=_fixed_price(row.open, precision),
+                high=_fixed_price(row.high, precision),
+                low=_fixed_price(row.low, precision),
+                close=_fixed_price(row.close, precision),
                 volume=FirstRateCsvParser._parse_volume(row.volume),
                 ts_event=ts_nanos,
                 ts_init=ts_nanos,
