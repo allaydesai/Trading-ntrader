@@ -13,6 +13,7 @@ from src.db.session_sync import get_sync_session
 from src.mcp_server.errors import ToolFailure
 from src.mcp_server.jsonable import to_jsonable
 from src.mcp_server.metrics import INSOLVENT_NOTE, METRIC_SPECS, insolvent
+from src.services.futures.returns import asset_class, report_fields, summarise_run
 
 
 def parse_run_ids(run_ids: list[str], *, minimum: int, maximum: int) -> list[str]:
@@ -42,6 +43,12 @@ def parse_run_ids(run_ids: list[str], *, minimum: int, maximum: int) -> list[str
 
 
 MARK_TO_MARKET = "mark_to_market"
+FUTURES_NOTE = (
+    "Futures run: the headline is return on margin (futures.return_on_margin_pct, P&L / "
+    "peak initial margin); "
+    "total_return is on the account's cash. Dollar P&L is ratio-adjusted (FirstRate "
+    "continuous), so compare trades by percentage."
+)
 
 
 def _metrics_basis(run: Any) -> str:
@@ -55,8 +62,8 @@ def _metric_values(run: Any) -> dict[str, Any]:
     return {name: getattr(run.metrics, name) for name in METRIC_SPECS}
 
 
-def run_view(run: Any) -> dict[str, Any]:
-    """One run: identity, window, provenance, parameters and metrics with units."""
+def _run_warnings(run: Any, futures: Any) -> list[str]:
+    """What a reader must know before trusting the run's numbers."""
     warnings = []
     if run.git_dirty:
         warnings.append("Run was made from uncommitted code (git_dirty); treat as provisional.")
@@ -69,7 +76,19 @@ def run_view(run: Any) -> dict[str, Any]:
         )
     if insolvent(_metric_values(run).get("max_drawdown")):
         warnings.append(f"Not evidence: {INSOLVENT_NOTE}")
+    if futures is not None:
+        warnings.append(FUTURES_NOTE)
+    return warnings
+
+
+def run_view(run: Any) -> dict[str, Any]:
+    """One run: identity, window, provenance, parameters and metrics with units.
+
+    A futures run adds ``futures`` (return on margin, contract terms; M4) and a warning.
+    """
     snapshot = run.config_snapshot or {}
+    futures = summarise_run(snapshot, getattr(run, "trades", None) or [])
+    warnings = _run_warnings(run, futures)
     metrics = {
         name: {"value": value, "unit": METRIC_SPECS[name].unit}
         for name, value in _metric_values(run).items()
@@ -99,6 +118,8 @@ def run_view(run: Any) -> dict[str, Any]:
             },
             "params": snapshot.get("config", {}),
             "metrics": metrics,
+            "asset_class": asset_class(snapshot),
+            **({"futures": report_fields(futures)} if futures else {}),
             "warnings": warnings,
         }
     )
@@ -137,6 +158,11 @@ def compare_view(runs: list[Any], *, requested: list[str]) -> dict[str, Any]:
     warnings = []
     if len({(r.instrument_symbol, r.start_date, r.end_date) for r in ordered}) > 1:
         warnings.append("Runs cover different symbols or windows; compare with care.")
+    if len({asset_class(r.config_snapshot) for r in ordered}) > 1:
+        warnings.append(
+            "Runs mix asset classes: compare futures by futures.return_on_margin_pct, not "
+            "total_return (which is on the account's cash)."
+        )
     if len({_metrics_basis(r) for r in ordered}) > 1:
         warnings.append(
             "Runs compute risk metrics on different bases (see metrics_basis); drawdown, "
