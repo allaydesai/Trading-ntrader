@@ -77,7 +77,7 @@ class StrategyConfigSnapshot(BaseModel):
         data = handler(self)
         if not self.session_conditions:
             data.pop("session_conditions", None)
-        for optional in ("cost_multiplier", "futures_contracts", "profit_pct_basis"):
+        for optional in ("cost_multiplier", "fill_model", "futures_contracts", "profit_pct_basis"):
             if getattr(self, optional) is None:
                 data.pop(optional, None)
         return data
@@ -87,6 +87,13 @@ class StrategyConfigSnapshot(BaseModel):
         description="Commission scale factor of a cost-stress run (research MCP phase 4). "
         "None on every run at the broker's schedule, and omitted from the dump then, so "
         "ordinary rows stay byte-identical.",
+    )
+
+    fill_model: str | None = Field(
+        default=None,
+        description="Fill model of a run that asked for a non-default one ('gap_aware'). None "
+        "on every default run, and omitted from the dump then, so ordinary rows stay "
+        "byte-identical.",
     )
 
     futures_contracts: dict[str, dict[str, Any]] | None = Field(

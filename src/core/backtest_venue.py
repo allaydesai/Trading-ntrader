@@ -3,8 +3,9 @@
 A venue whose instruments include a futures contract gets the per-contract commission and
 dollar margin models from ``src/core/futures_costs.py``; an equity-only venue gets exactly
 the ``add_venue`` call it always had (the IBKR per-share fee model, Nautilus' default margin
-model). The orchestrator and the legacy runner both call ``setup_backtest_venues``, so the
-choice lives in one place.
+model). A venue whose fill model is gap-aware also gets next-bar execution (a latency model
+and module from ``src/core/fill_models.py``); any other gets none. The orchestrator and the
+legacy runner both call ``setup_backtest_venues``, so the choice lives in one place.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from nautilus_trader.model.identifiers import Venue
 from nautilus_trader.model.instruments import Instrument
 from nautilus_trader.model.objects import Money
 
+from src.core.fill_models import gap_aware_venue_options
 from src.core.futures_costs import venue_cost_models
 from src.core.futures_margin_gate import FuturesMarginGate, install_futures_margin_gate
 
@@ -38,6 +40,7 @@ def add_backtest_venue(
     scale = Decimal(str(cost_multiplier))
     fee_model, margin_model = venue_cost_models(instruments, equity_fee_model, scale)
     extra = {"margin_model": margin_model} if margin_model is not None else {}
+    extra.update(gap_aware_venue_options(fill_model))  # next-bar execution, gap-aware only
     engine.add_venue(
         venue=venue,
         oms_type=OmsType.HEDGING,

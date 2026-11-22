@@ -161,3 +161,20 @@ class TestCostMultiplier:
         assert compute_config_hash(_request(cost_multiplier=2.0)) == compute_config_hash(
             _request(cost_multiplier=2)
         )
+
+
+class TestFillModel:
+    """A non-default fill model is part of a run's identity; the default changes nothing."""
+
+    def test_the_default_model_leaves_every_existing_hash_unchanged(self):
+        assert compute_config_hash(_request(fill_model="default")) == compute_config_hash(
+            _request()
+        )
+        assert compute_candidate_hash(_request(fill_model="default")) == compute_candidate_hash(
+            _request()
+        )
+
+    def test_a_gap_aware_run_is_a_different_run(self):
+        assert compute_config_hash(_request(fill_model="gap_aware")) != compute_config_hash(
+            _request()
+        )

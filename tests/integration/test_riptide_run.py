@@ -22,7 +22,7 @@ from nautilus_trader.model.identifiers import TraderId, Venue
 from nautilus_trader.model.objects import Money, Price, Quantity
 from nautilus_trader.test_kit.providers import TestInstrumentProvider
 
-from src.core.fill_models import GapAwareFillModel
+from src.core.fill_models import GapAwareFillModel, bind_fill_model, gap_aware_venue_options
 
 riptide = pytest.importorskip(
     "src.core.strategies.custom.riptide", reason="private strategies submodule not checked out"
@@ -80,18 +80,18 @@ def _run(
             logging=LoggingConfig(bypass_logging=True),
         )
     )
-    # Mirror production wiring (backtest_orchestrator): gap-aware fills so stops
-    # gapped through overnight fill at the open and MOO-tagged exits fill at the
-    # next bar's open.
+    # Mirror production wiring (backtest_venue + orchestrator): gap-aware fills so stops
+    # gapped through overnight fill at the open, and next-bar execution so MOO-tagged
+    # exits fill on the bar after the signal, at its open.
     fill_model = GapAwareFillModel()
-    fill_model.register_clock(engine.kernel.clock)
-    fill_model.register_bars(bars)
+    bind_fill_model(fill_model, engine, bars)
     engine.add_venue(
         venue=instrument.id.venue,
         oms_type=OmsType.NETTING,
         account_type=AccountType.CASH,
         starting_balances=[Money(1_000_000, USD)],
         fill_model=fill_model,
+        **gap_aware_venue_options(fill_model),
     )
     engine.add_instrument(instrument)
     engine.add_data(bars)
@@ -283,30 +283,138 @@ def test_riptide_stop_gapped_through_fills_at_open():
     engine.dispose()
 
 
+def _sell_fill_and_close(engine: BacktestEngine) -> tuple[float, int, int]:
+    """The exit fill's price and timestamp, and the position's close timestamp (ns)."""
+    fills = engine.trader.generate_order_fills_report()
+    sell = fills[fills["side"] == "SELL"].iloc[0]
+    position = engine.trader.generate_positions_report().iloc[0]
+    return float(sell["avg_px"]), sell["ts_last"].value, position["ts_closed"].value
+
+
 @pytest.mark.integration
 def test_riptide_green_exit_fills_at_next_bar_open():
-    """The green-candle exit fills at the next bar's open (MOO), not the signal close.
+    """The green-candle exit fills on the next bar, at its open (MOO), not the signal close.
 
-    Green candle closes at 119.00; the next bar gaps up to open at 125.00. Per
-    the spec (sell at market open on day T+1) the exit must fill at 125.00.
+    Green candle closes at 119.00 on bar T. T+1 opens at 125.00 and T+2 at 130.00, so a fill
+    one bar late (130.00) is distinguishable from the right one. The fill and the position
+    close must carry T+1's timestamp: #39 repriced to T+1's open but executed on T, closing
+    the position, and crediting its P&L, one bar early.
     """
     instrument = TestInstrumentProvider.equity(symbol="AAPL", venue="NASDAQ")
     bar_type = BarType.from_str(f"{instrument.id}-1-DAY-LAST-EXTERNAL")
 
     rows = _GAP_PREFIX + [
         _GAP_FILL_BAR,
-        (116.0, 119.5, 115.8, 119.0),  # green candle: close 119 > prev close 116
-        (125.0, 126.0, 124.0, 125.5),  # next day gaps up to open 125
-        (125.0, 126.0, 124.0, 125.0),
+        (116.0, 119.5, 115.8, 119.0),  # T: green candle, close 119 > prev close 116
+        (125.0, 126.0, 124.0, 125.5),  # T+1: gaps up to open 125
+        (130.0, 131.0, 129.0, 130.5),  # T+2: a different open, to catch a late fill
     ]
-    engine = _run(_bars_from_ohlc(bar_type, rows), instrument, bar_type)
+    bars = _bars_from_ohlc(bar_type, rows)
+    engine = _run(bars, instrument, bar_type)
 
     fills = engine.trader.generate_order_fills_report()
     assert {"BUY", "SELL"} == set(fills["side"])
     assert float(fills[fills["side"] == "BUY"].iloc[0]["avg_px"]) == pytest.approx(115.64)
-    assert float(fills[fills["side"] == "SELL"].iloc[0]["avg_px"]) == pytest.approx(125.00)
+    price, filled_at, closed_at = _sell_fill_and_close(engine)
+    assert price == pytest.approx(125.00)
+    assert filled_at == bars[-2].ts_event  # T+1, not the signal bar T
+    assert closed_at == bars[-2].ts_event
 
     engine.dispose()
+
+
+@pytest.mark.integration
+def test_riptide_time_stop_fills_on_the_next_bar_at_its_open():
+    """The time stop is an MOO exit too: it fills on the bar after the signal, at its open."""
+    instrument = TestInstrumentProvider.equity(symbol="AAPL", venue="NASDAQ")
+    bar_type = BarType.from_str(f"{instrument.id}-1-DAY-LAST-EXTERNAL")
+
+    # Entry on the fill bar is held day 1; two red days make 3 = max_hold_days -> exit signal.
+    rows = _GAP_PREFIX + [
+        _GAP_FILL_BAR,
+        (116.0, 116.5, 114.5, 115.0),  # day 2, red
+        (115.0, 115.5, 113.5, 114.0),  # day 3, red: time stop signalled (bar T)
+        (114.5, 115.0, 114.0, 114.8),  # T+1 opens at 114.50 (above the ~112.6 ATR stop)
+        (116.0, 116.5, 115.5, 116.2),  # T+2: a different open
+    ]
+    bars = _bars_from_ohlc(bar_type, rows)
+    engine = _run(bars, instrument, bar_type)
+
+    price, filled_at, closed_at = _sell_fill_and_close(engine)
+    assert price == pytest.approx(114.50)
+    assert filled_at == closed_at == bars[-2].ts_event
+
+    engine.dispose()
+
+
+@pytest.mark.integration
+def test_riptide_exit_signalled_on_the_final_bar_does_not_fill():
+    """An MOO exit on the last bar has no next open: it does not fill at the signal close."""
+    instrument = TestInstrumentProvider.equity(symbol="AAPL", venue="NASDAQ")
+    bar_type = BarType.from_str(f"{instrument.id}-1-DAY-LAST-EXTERNAL")
+
+    rows = _GAP_PREFIX + [_GAP_FILL_BAR, (116.0, 119.5, 115.8, 119.0)]  # green on the last bar
+    engine = _run(_bars_from_ohlc(bar_type, rows), instrument, bar_type)
+
+    fills = engine.trader.generate_order_fills_report()
+    assert list(fills["side"]) == ["BUY"]
+    assert len(engine.cache.positions_open()) == 1
+
+    engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_orchestrator_runs_a_gap_aware_request_with_next_bar_exits():
+    """``fill_model="gap_aware"`` (riptide.yaml) wires the model through the orchestrator."""
+    from datetime import datetime, timezone
+
+    from src.core.backtest_orchestrator import BacktestOrchestrator
+    from src.models.backtest_request import BacktestRequest
+
+    instrument = TestInstrumentProvider.equity(symbol="AAPL", venue="NASDAQ")
+    bar_type = BarType.from_str(f"{instrument.id}-1-DAY-LAST-EXTERNAL")
+    rows = _GAP_PREFIX + [
+        _GAP_FILL_BAR,
+        (116.0, 119.5, 115.8, 119.0),
+        (125.0, 126.0, 124.0, 125.5),
+        (130.0, 131.0, 129.0, 130.5),
+    ]
+    bars = _bars_from_ohlc(bar_type, rows)
+    request = BacktestRequest(
+        strategy_type="riptide",
+        strategy_path="src.core.strategies.custom.riptide:Riptide",
+        config_path="src.core.strategies.custom.riptide:RiptideConfig",
+        strategy_config=dict(
+            portfolio_value=1000000,
+            position_size_pct=10.0,
+            sma_trend_period=20,
+            pullback_period=5,
+            limit_offset_pct=2.0,
+            atr_period=5,
+            atr_stop_mult=2.5,
+            max_hold_days=3,
+            adv_period=5,
+            min_adv_dollars=10000000,
+            roc_period=5,
+        ),
+        symbol="AAPL",
+        instrument_id="AAPL.NASDAQ",
+        start_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        end_date=datetime(2024, 2, 29, tzinfo=timezone.utc),
+        bar_type="1-DAY-LAST",
+        persist=False,
+        starting_balance=Decimal("1000000"),
+        fill_model="gap_aware",
+    )
+    orchestrator = BacktestOrchestrator()
+    try:
+        await orchestrator.execute(request, bars, instrument)
+        price, filled_at, closed_at = _sell_fill_and_close(orchestrator.engine)
+        assert price == pytest.approx(125.00)
+        assert filled_at == closed_at == bars[-2].ts_event
+    finally:
+        orchestrator.dispose()
 
 
 @pytest.mark.integration

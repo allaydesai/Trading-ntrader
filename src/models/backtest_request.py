@@ -8,7 +8,7 @@ a backtest, regardless of whether parameters come from CLI arguments or YAML con
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import structlog
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -95,6 +95,9 @@ class BacktestRequest(BaseModel):
     # broker's schedule; 2 is "profitable at twice the costs". Part of the run's identity
     # only when it is not 1, so every earlier config hash still names the same run.
     cost_multiplier: float = Field(default=1.0, ge=0, description="Commission scale factor")
+    # The venue's fill model (a config's ``backtest.fill_model``; gap_aware = next-bar exits).
+    # Like cost_multiplier, part of the run's identity only when it is not the default.
+    fill_model: Literal["default", "gap_aware"] = "default"
 
     # Execution options
     persist: bool = Field(default=True, description="Persist results to database")
@@ -276,6 +279,7 @@ class BacktestRequest(BaseModel):
             config_file_path=config_file_path,
             starting_balance=Decimal(str(initial_capital)),
             data_source=data_source,
+            fill_model=backtest_section.get("fill_model", "default"),
         )
 
     @classmethod

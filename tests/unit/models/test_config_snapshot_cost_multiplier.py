@@ -16,3 +16,12 @@ def test_an_ordinary_snapshot_dumps_no_cost_multiplier_key():
 def test_a_stressed_snapshot_keeps_its_multiplier():
     dumped = StrategyConfigSnapshot(**BASE, cost_multiplier=2.0).model_dump()
     assert dumped["cost_multiplier"] == 2.0
+
+
+def test_an_ordinary_snapshot_dumps_no_fill_model_key():
+    assert "fill_model" not in StrategyConfigSnapshot(**BASE).model_dump()
+
+
+def test_a_gap_aware_snapshot_keeps_its_fill_model():
+    dumped = StrategyConfigSnapshot(**BASE, fill_model="gap_aware").model_dump()
+    assert dumped["fill_model"] == "gap_aware"
