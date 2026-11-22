@@ -83,9 +83,16 @@ realised-only fallback). Equity and futures runs produce byte-identical results 
 - [ ] 3.2 Implement `src/core/fx_rates.py` (`FxRateFeeder`, `conversion_pairs_for`).
 - [ ] 3.3 Integration, forked (failing first): `tests/integration/core/test_fx_conversion_engine.py`:
       the orchestrator sets `base_currency=USD` only for FX venues; USDJPY and EURGBP USD balances
-      exact; a fill without a rate fails the run; the equity venue `add_venue` call is unchanged.
+      exact; a fill without a rate fails the run; the equity venue `add_venue` call is unchanged;
+      with a moving GBPUSD the EURGBP close converts at the fill bar's rate (not the prior bar's).
 - [ ] 3.4 Wire into `backtest_venue.add_backtest_venue` and the loader (conversion-only
-      instruments from the same catalog/timeframe); no orchestrator growth.
+      instruments from the same catalog/timeframe); no orchestrator growth. Two ordering
+      rules found by the M1 gate (`test_fx_engine_acceptance.py` pins both):
+      (a) register the `FxRateFeeder` **before** any strategy (`add_actor` before
+      `add_strategy`), so on each bar the rate is in the cache before a strategy submits;
+      (b) add a cross's rate-source bars (GBPUSD for EURGBP) to the engine **before** the
+      traded pair's bars. At equal timestamps bars dispatch in the order added, so the
+      reverse order converts at the previous bar's rate (USD 1,220 instead of 1,250).
 - [ ] 3.5 Unit (failing first): `backtest_persistence` parses currency, converts with the exit
       rate, raises without one; `mark_to_market` accepts `CurrencyPair` and builds USD
       equity cut at 17:00 ET for FX; `_check_against_accounts` still holds.
