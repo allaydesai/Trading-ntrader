@@ -28,6 +28,14 @@ be denied for margin.
 - **WHEN** the same account buys 1 ES (filled), then submits 1 more
 - **THEN** the second is denied (free = 50,000 - 25,000 maintenance - fees < 27,500)
 
+#### Scenario: raising a working order
+- **WHEN** a $50,000 account rests a 1-lot ES limit and modifies it to 3 lots
+- **THEN** the modify is rejected (`OrderModifyRejected`) and the order stays at 1 lot
+
+#### Scenario: an order list spends the closing credit once
+- **WHEN** a list of two 1-lot sells targets a 1-lot long and free margin is below one lot's
+- **THEN** the list is denied (the second sell would open a short)
+
 #### Scenario: equities unaffected
 - **WHEN** an equity run submits an order far above its cash
 - **THEN** no margin gate is installed and the order fills as before

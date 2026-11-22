@@ -37,12 +37,18 @@ event and the strategy's `on_order_denied` are exactly Nautilus'. The gate is in
 when the run has a futures contract. `BacktestEngine` is single-use, so the gate lives
 exactly as long as the run.
 
-**Rule.** Required = new-exposure contracts x initial margin. New exposure is 0 for
+**Rules** (review round 1 added the list credit, venue-wide pending margin, the
+in-flight state filter and modifies). Required = new-exposure contracts x initial margin. New exposure is 0 for
 reduce-only orders and the full quantity otherwise, less what the order closes of its
 targeted position (`position_id`), since the venue is HEDGING. In a list, only orders without
-a parent are counted. Free = `account.balance_free(USD)` minus the initial margin of orders
-in flight (submitted, not yet accepted, so not yet locked). The order is denied when
-required > free.
+a parent are counted, and the targeted position's closing credit is spent once across the
+list. Free = the venue account's `balance_free(USD)` minus the initial margin of every
+futures order on that venue in state `SUBMITTED` (not yet accepted, so not yet locked; each
+at its own contract's rate). `PENDING_UPDATE`/`PENDING_CANCEL` are in flight too but already
+reserved, so they are not subtracted again. The order is denied when required > free. A
+`ModifyOrder` that raises a working entry's quantity is rejected through
+`_reject_modify_order` when the added contracts' margin exceeds free; price-only and reducing
+modifies pass.
 
 **Known limits** (documented):
 - unrealised P&L is not counted;
