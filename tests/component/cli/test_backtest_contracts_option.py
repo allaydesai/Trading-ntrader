@@ -9,11 +9,8 @@ import pytest
 from click.testing import CliRunner
 from rich.console import Console
 
-from src.cli.commands._backtest_helpers import (
-    apply_contracts,
-    check_contracts_instrument,
-    resolve_backtest_request,
-)
+from src.cli.commands._backtest_helpers import resolve_backtest_request
+from src.cli.commands._strategy_params import apply_contracts, check_contracts_instrument
 from src.cli.commands.backtest import run_backtest
 
 pytestmark = pytest.mark.component
@@ -61,6 +58,19 @@ class TestResolve:
     def test_strategy_without_contracts_is_a_usage_error(self):
         with pytest.raises(click.UsageError, match="sma_momentum"):
             _resolve(strategy="sma_momentum", contracts=1)
+
+    def test_refusal_names_the_strategies_that_support_contracts(self):
+        pytest.importorskip("src.core.strategies.custom.riptide")
+        with pytest.raises(click.UsageError) as excinfo:
+            _resolve(strategy="sma_momentum", contracts=1)
+        supported = str(excinfo.value).split("Strategies with one:", 1)[1]
+        for name in ("sma_crossover", "bollinger_reversal", "riptide"):
+            assert name in supported
+        assert "momentum" not in supported
+
+    def test_riptide_takes_contracts_in_cli_mode(self):
+        pytest.importorskip("src.core.strategies.custom.riptide")
+        assert _resolve(strategy="riptide", contracts=1).strategy_config["contracts"] == 1
 
     def test_config_mode_flag_overrides_yaml(self, tmp_path):
         config = tmp_path / "es.yaml"
@@ -119,6 +129,15 @@ class TestClickOption:
         result = CliRunner().invoke(run_backtest, ["--help"])
         assert "--contracts" in result.output
         assert "futures" in result.output.lower()
+
+    def test_help_text_names_no_strategy(self):
+        """A hard-coded list goes stale (it once named only sma_crossover)."""
+        from src.core.strategy_registry import StrategyRegistry
+
+        option = next(p for p in run_backtest.params if p.name == "contracts")
+        assert "'contracts' setting" in option.help
+        for name in StrategyRegistry.get_names():
+            assert name not in option.help
 
     def test_zero_contracts_exits_2(self):
         result = CliRunner().invoke(
