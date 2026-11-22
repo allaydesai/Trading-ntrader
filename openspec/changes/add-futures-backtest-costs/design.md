@@ -46,24 +46,22 @@ working opposite orders on that position already claim (review round 2), so it i
 once across a list and across separate submits. Free = the venue account's `balance_free(USD)` minus the initial margin of every
 futures order on that venue in state `SUBMITTED` (not yet accepted, so not yet locked; each
 at its own contract's rate). `PENDING_UPDATE`/`PENDING_CANCEL` are in flight too but already
-reserved, so they are not subtracted again. The order is denied when required > free. A
-`ModifyOrder` that raises a working order's quantity (entry, or child unless reduce-only)
-is rejected through `_reject_modify_order` when the added contracts' margin exceeds free;
-price-only and reducing modifies pass. Every modify of a futures order passes through the
-gate and is recorded in that order's FIFO ledger (`_ModifyLedger`): the target for a raise,
-`None` otherwise. The hold subtracted from free is margin for
-`max(pending targets) - current quantity`, floored at 0, so overlapping raises are never
-summed and a later smaller raise never shrinks a larger one. The ledger reads the order's
-own events: an `OrderModifyRejected` resolves the oldest entry, an `OrderUpdated` that
-changes the quantity resolves the entry with that target (or, for a reducing modify, the
-oldest `None`), and an `OrderUpdated` that leaves the quantity unchanged (price-only
-modifies, trailing-stop moves) at most resolves a `None` at the head, never a raise. A
-rejection raised at once by the gate or by the risk engine while forwarding is matched to its
-own modify, not the head. Nautilus events carry no command id, so the matching is by order,
-not exact. Most mismatches hold too much (a raise can stay held until its order closes). One
-rare sequence releases early: an engine-driven unchanged-quantity update takes the place of a
-pending price-only modify, and that price-only modify is then rejected while a raise is
-queued behind it (review rounds 2 to 4).
+reserved, so they are not subtracted again. The order is denied when required > free.
+
+**Modifies** (simplified after review round 4, approved by the PO). A `ModifyOrder` that
+would raise a futures order's quantity is always rejected through `_reject_modify_order`,
+reason `FUTURES_QTY_INCREASE_NOT_SUPPORTED: ... cancel and resubmit instead`, whatever the
+margin. Decreases and price-only modifies are forwarded unchanged. Rounds 2 to 4 tried to
+allow margined increases by holding margin for approved but unapplied raises, matched to the
+order's later `OrderUpdated`/`OrderModifyRejected` events. Nautilus events carry no command
+id, so that matching could only go by arrival order, and each round turned up another
+mismatch: a smaller second raise shrinking a larger hold, trailing-stop updates releasing
+holds, a reentrant rejection being resolved twice (`IndexError`), and pending reductions
+releasing margin early. Refusing increases removes the pending state entirely. The gate
+keeps no per-order bookkeeping, and every check reads only orders' actual current
+quantities and open positions from the cache. A decrease's margin is released only when
+Nautilus applies it, so a pending reduction can never free margin early. Cancel and
+resubmit gives a larger size the same check as any new order.
 
 **Known limits** (documented):
 - unrealised P&L is not counted;

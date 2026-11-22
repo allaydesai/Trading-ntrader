@@ -47,7 +47,9 @@ futures backtest is still costed and sized like an equity one:
   `futures_contracts` (per instrument: multiplier, dollar margins, commission, margin as-of)
   and `profit_pct_basis: "underlying"`. Equity runs are unchanged.
 - **Order events**: futures orders over margin now end `DENIED` with reason prefix
-  `MARGIN_EXCEEDS_FREE_BALANCE`.
+  `MARGIN_EXCEEDS_FREE_BALANCE`. A modify that would raise a futures order's quantity is
+  rejected (`OrderModifyRejected`, reason prefix `FUTURES_QTY_INCREASE_NOT_SUPPORTED`):
+  cancel and resubmit instead.
 - **Sizing**: `SMACrossover._calculate_position_size` may return `None` for a multiplied
   instrument, meaning no order. Equity and crypto results are byte-identical.
 

@@ -4,6 +4,7 @@
   account has free is DENIED; one within it fills; closing is never blocked.
 - Realised P&L is points x multiplier, and commission is the spec's per-contract rate per
   side, so the balance moves by exactly ``points x 50 - commissions`` on ES.
+- A modify may lower or re-price a working futures order but never raise its size.
 - An equity venue gets no gate and its old cost model: the same over-sized order fills.
 - The orchestrator runs ``sma_crossover`` on the trimmed real ES 1-hour fixture in whole
   contracts with per-contract fees.
@@ -30,7 +31,7 @@ from nautilus_trader.trading.strategy import Strategy
 from src.core.backtest_venue import setup_backtest_venues
 from src.core.fee_models import IBKRCommissionModel
 from src.core.fill_model import make_fill_model
-from src.core.futures_margin_gate import DENIAL_REASON
+from src.core.futures_margin_gate import DENIAL_REASON, QTY_INCREASE_REASON
 from src.models.backtest_request import BacktestRequest
 from src.services.firstrate.parsers.firstrate_futures_parser import FirstRateFuturesParser
 from src.services.futures.contract_specs import get_contract_spec
@@ -228,12 +229,13 @@ async def test_orchestrator_runs_sma_on_real_es_bars_in_whole_contracts():
 class _ModifyConfig(StrategyConfig, frozen=True):
     bar_type: str
     limit_price: str
-    raise_to: int
-    buy_on_bar_3: bool = False
+    initial_qty: int
+    new_qty: int | None
+    new_price: str | None = None
 
 
-class _RaiseWorkingOrder(Strategy):
-    """Rest a 1-lot buy limit below the market on bar 1; try to raise it on bar 2."""
+class _ModifyWorkingOrder(Strategy):
+    """Rest a buy limit below the market on bar 1; modify it on bar 2."""
 
     def __init__(self, config: _ModifyConfig) -> None:
         super().__init__(config)
@@ -251,32 +253,41 @@ class _RaiseWorkingOrder(Strategy):
             self.order = self.order_factory.limit(
                 instrument.id,
                 OrderSide.BUY,
-                Quantity.from_int(1),
+                Quantity.from_int(self.config.initial_qty),
                 instrument.make_price(Decimal(self.config.limit_price)),
             )
             self.submit_order(self.order)
         elif self._bar == 2:
-            self.modify_order(self.order, quantity=Quantity.from_int(self.config.raise_to))
-        elif self._bar == 3 and self.config.buy_on_bar_3:
-            buy = self.order_factory.market(instrument.id, OrderSide.BUY, Quantity.from_int(1))
-            self.submit_order(buy)
-
-    def on_order_denied(self, event: OrderDenied) -> None:
-        self.modify_rejections.append(f"denied: {event.reason}")
+            qty = self.config.new_qty
+            price = self.config.new_price
+            self.modify_order(
+                self.order,
+                quantity=None if qty is None else Quantity.from_int(qty),
+                price=None if price is None else instrument.make_price(Decimal(price)),
+            )
 
     def on_order_modify_rejected(self, event) -> None:
         self.modify_rejections.append(event.reason)
 
 
-@pytest.mark.parametrize("raise_to,rejected", [(3, True), (1, False)])
-def test_raising_a_working_order_past_free_margin_is_rejected(raise_to, rejected):
+@pytest.mark.parametrize(
+    "initial_qty,new_qty,new_price,rejected,final_qty,final_price",
+    [
+        (1, 3, None, True, 1, "5000.00"),  # size increase: rejected even with ample margin
+        (2, 1, None, False, 1, "5000.00"),  # decrease: applied
+        (1, None, "5100.00", False, 1, "5100.00"),  # price-only: applied
+    ],
+)
+def test_futures_modifies_may_lower_or_reprice_but_not_raise_size(
+    initial_qty, new_qty, new_price, rejected, final_qty, final_price
+):
     es = build_futures_contract(ES)
     engine = BacktestEngine(BacktestEngineConfig(logging=LoggingConfig(log_level="ERROR")))
     try:
-        setup_backtest_venues(
+        gate = setup_backtest_venues(
             engine,
             {es.id.venue: [es]},
-            starting_balance=50_000,
+            starting_balance=10_000_000,  # margin is never the reason here
             fill_model=make_fill_model(42),
             equity_fee_model=IBKRCommissionModel(),
         )
@@ -284,17 +295,23 @@ def test_raising_a_working_order_past_free_margin_is_rejected(raise_to, rejected
         bars = _bars(es, ["6000.00", "6000.00", "6000.00"])
         engine.add_data(bars)
         config = _ModifyConfig(
-            bar_type=str(bars[0].bar_type), limit_price="5000.00", raise_to=raise_to
+            bar_type=str(bars[0].bar_type),
+            limit_price="5000.00",
+            initial_qty=initial_qty,
+            new_qty=new_qty,
+            new_price=new_price,
         )
-        strategy = _RaiseWorkingOrder(config)
+        strategy = _ModifyWorkingOrder(config)
         engine.add_strategy(strategy)
         engine.run()
 
         assert bool(strategy.modify_rejections) is rejected
         if rejected:
-            # 1 working lot reserves 27,500 of 50,000; 2 more need 55,000.
-            assert strategy.modify_rejections[0].startswith(DENIAL_REASON)
-            assert engine.cache.order(strategy.order.client_order_id).quantity == 1
+            assert strategy.modify_rejections[0].startswith(QTY_INCREASE_REASON)
+            assert gate is not None and gate.denied_count == 1
+        order = engine.cache.order(strategy.order.client_order_id)
+        assert order.quantity == final_qty
+        assert str(order.price) == final_price
     finally:
         engine.dispose()
 
@@ -354,39 +371,5 @@ def test_separate_closing_submits_cannot_reopen_short_unmargined():
         assert len(strategy.denials) == 2
         assert all(reason.startswith(DENIAL_REASON) for reason in strategy.denials)
         assert engine.cache.positions_open() == []  # closed, never flipped short
-    finally:
-        engine.dispose()
-
-
-def test_an_applied_increase_releases_its_hold():
-    """$100K: 1 -> 2 lots approved and applied (55,000 reserved); a 1-lot buy then fits.
-
-    Had the hold survived the exchange's OrderUpdated, free would read 45,000 - 27,500
-    = 17,500 and the buy would be denied.
-    """
-    es = build_futures_contract(ES)
-    engine = BacktestEngine(BacktestEngineConfig(logging=LoggingConfig(log_level="ERROR")))
-    try:
-        gate = setup_backtest_venues(
-            engine,
-            {es.id.venue: [es]},
-            starting_balance=100_000,
-            fill_model=make_fill_model(42),
-            equity_fee_model=IBKRCommissionModel(),
-        )
-        engine.add_instrument(es)
-        bars = _bars(es, ["6000.00"] * 4)
-        engine.add_data(bars)
-        config = _ModifyConfig(
-            bar_type=str(bars[0].bar_type), limit_price="5000.00", raise_to=2, buy_on_bar_3=True
-        )
-        strategy = _RaiseWorkingOrder(config)
-        engine.add_strategy(strategy)
-        engine.run()
-
-        assert strategy.modify_rejections == []
-        assert engine.cache.order(strategy.order.client_order_id).quantity == 2
-        assert gate is not None and gate.denied_count == 0
-        assert len(engine.cache.positions()) == 1  # the bar-3 market buy filled
     finally:
         engine.dispose()

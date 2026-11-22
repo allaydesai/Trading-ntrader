@@ -28,9 +28,14 @@ be denied for margin.
 - **WHEN** the same account buys 1 ES (filled), then submits 1 more
 - **THEN** the second is denied (free = 50,000 - 25,000 maintenance - fees < 27,500)
 
-#### Scenario: raising a working order
-- **WHEN** a $50,000 account rests a 1-lot ES limit and modifies it to 3 lots
-- **THEN** the modify is rejected (`OrderModifyRejected`) and the order stays at 1 lot
+#### Scenario: raising a working order's size
+- **WHEN** an account with ample margin rests a 1-lot ES limit and modifies it to 3 lots
+- **THEN** the modify is rejected (`OrderModifyRejected`, reason prefix
+  `FUTURES_QTY_INCREASE_NOT_SUPPORTED`) and the order stays at 1 lot
+
+#### Scenario: lowering or re-pricing a working order
+- **WHEN** a working ES limit is modified to fewer lots, or to a new price only
+- **THEN** the modify is applied as Nautilus would apply it without the gate
 
 #### Scenario: an order list spends the closing credit once
 - **WHEN** a list of two 1-lot sells targets a 1-lot long and free margin is below one lot's
