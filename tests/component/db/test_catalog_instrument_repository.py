@@ -43,6 +43,12 @@ CREATE TABLE IF NOT EXISTS catalog_instruments (
     bar_count_minute INTEGER NOT NULL DEFAULT 0,
     bar_count_5min INTEGER NOT NULL DEFAULT 0,
     bar_count_30min INTEGER NOT NULL DEFAULT 0,
+    multiplier NUMERIC(18, 6),
+    tick_size NUMERIC(18, 9),
+    currency VARCHAR(3),
+    contract_kind VARCHAR(20),
+    expiry DATE,
+    roll_rule VARCHAR(50),
     updated_at TIMESTAMP,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (catalog_name, ticker)
