@@ -166,6 +166,16 @@ class TestResolveTimeframes:
         assert resolve_timeframes(None, AssetClass.STOCK) == ["1-DAY-LAST"]
 
     @pytest.mark.unit
+    def test_futures_default_is_all_five_native(self):
+        from src.cli.commands.import_data import resolve_timeframes
+        from src.models.catalog import AssetClass
+
+        assert resolve_timeframes(None, AssetClass.FUTURES) == resolve_timeframes(
+            None, AssetClass.ETF
+        )
+        assert resolve_timeframes("hourly", AssetClass.FUTURES) == ["1-HOUR-LAST"]
+
+    @pytest.mark.unit
     def test_explicit_timeframe_wins_for_etf(self):
         from src.cli.commands.import_data import resolve_timeframes
         from src.models.catalog import AssetClass

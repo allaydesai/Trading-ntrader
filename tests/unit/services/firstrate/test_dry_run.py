@@ -377,6 +377,21 @@ class TestBuildDryRunReport:
         assert len(report.schema_mismatches) == 1
         assert report.schema_mismatches[0].detected_columns == 5
 
+    def test_futures_seven_column_daily_is_not_a_mismatch(self, tmp_path):
+        """Futures daily files carry open interest as a 7th column (futures M2)."""
+        _make_file(
+            tmp_path / "ES_full_1day_continuous_ratio_adjusted.txt", "2024-01-02,1,2,1,2,5,9"
+        )
+        _make_file(tmp_path / "ES_full_1min_continuous_ratio_adjusted.txt", _VALID_LINE)
+        report = build_dry_run_report(tmp_path, AssetClass.FUTURES)
+        assert report.schema_mismatches == []
+        assert report.total_file_count == 2
+
+    def test_seven_columns_still_a_mismatch_for_stocks(self, tmp_path):
+        _make_file(tmp_path / "A" / "AAPL_full_1day_adjsplitdiv.txt", "2024-01-02,1,2,1,2,5,9")
+        report = build_dry_run_report(tmp_path, AssetClass.STOCK)
+        assert report.schema_mismatches[0].detected_columns == 7
+
     def test_name_pattern_and_schema_mismatches_both_present(self, tmp_path):
         """Filename-pattern mismatches and schema mismatches coexist."""
         _make_file(tmp_path / "A" / "AAPL.txt", _VALID_LINE)  # no _full_
