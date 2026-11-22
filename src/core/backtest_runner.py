@@ -15,6 +15,7 @@ from nautilus_trader.model.identifiers import TraderId, Venue
 from nautilus_trader.model.objects import Money
 
 from src.config import get_settings
+from src.core.backtest_venue import setup_backtest_venues
 from src.core.fee_models import IBKRCommissionModel
 from src.core.fill_model import make_fill_model
 from src.core.metrics import net_profit_factor
@@ -1621,13 +1622,13 @@ class MinimalBacktestRunner:
         # Store venue for result extraction
         self._venue = venue
 
-        self.engine.add_venue(
-            venue=venue,
-            oms_type=OmsType.HEDGING,
-            account_type=AccountType.MARGIN,
-            starting_balances=[Money(self.settings.default_balance, USD)],
+        # Cost models chosen by instrument type; futures also get the margin gate
+        setup_backtest_venues(
+            self.engine,
+            {venue: [instrument]},
+            starting_balance=self.settings.default_balance,
             fill_model=fill_model,
-            fee_model=fee_model,
+            equity_fee_model=fee_model,
         )
 
         # Reason: Add instrument (currency is handled by venue setup)

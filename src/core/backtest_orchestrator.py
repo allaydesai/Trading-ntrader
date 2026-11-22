@@ -18,15 +18,15 @@ from nautilus_trader.common.component import is_logging_initialized
 from nautilus_trader.config import LoggingConfig
 from nautilus_trader.model.currencies import USD
 from nautilus_trader.model.data import Bar
-from nautilus_trader.model.enums import AccountType, OmsType
 from nautilus_trader.model.identifiers import TraderId, Venue
 from nautilus_trader.model.instruments import Instrument
-from nautilus_trader.model.objects import Money
 from nautilus_trader.trading.strategy import Strategy
 
 from src.config import get_settings
+from src.core.backtest_venue import setup_backtest_venues
 from src.core.fee_models import IBKRCommissionModel
 from src.core.fill_model import make_fill_model
+from src.core.futures_costs import futures_snapshot
 from src.core.results_extractor import ResultsExtractor, metrics_basis
 from src.core.strategy_factory import StrategyFactory, StrategyLoader
 from src.core.strategy_registry import StrategyRegistry
@@ -354,7 +354,6 @@ class BacktestOrchestrator:
 
         # Create fill + commission models (shared construction — see helpers)
         fill_model = make_fill_model(request.fill_seed)
-        fee_model = self._make_fee_model(request.cost_multiplier)
 
         self.engine = BacktestEngine(config=config)
 
@@ -368,14 +367,14 @@ class BacktestOrchestrator:
 
         self._venue = venue
 
-        # Add venue
-        self.engine.add_venue(
-            venue=venue,
-            oms_type=OmsType.HEDGING,
-            account_type=AccountType.MARGIN,
-            starting_balances=[Money(float(request.starting_balance), USD)],
+        # Add venue (cost models chosen by instrument type) and, for futures, the margin gate
+        setup_backtest_venues(
+            self.engine,
+            {venue: [instrument]},
+            starting_balance=float(request.starting_balance),
             fill_model=fill_model,
-            fee_model=fee_model,
+            equity_fee_model=self._make_fee_model(request.cost_multiplier),
+            cost_multiplier=request.cost_multiplier,
         )
 
         # Add instrument and data
@@ -400,22 +399,20 @@ class BacktestOrchestrator:
             logging=logging_config,
         )
         fill_model = make_fill_model(request.fill_seed)
-        fee_model = self._make_fee_model(request.cost_multiplier)
         engine = BacktestEngine(config=config)
 
-        venues_added: set[Venue] = set()
+        by_venue: dict[Venue, list[Instrument]] = {}
+        for _bars, instrument in instruments_data:
+            by_venue.setdefault(instrument.id.venue, []).append(instrument)
+        setup_backtest_venues(
+            engine,
+            by_venue,
+            starting_balance=float(request.starting_balance),
+            fill_model=fill_model,
+            equity_fee_model=self._make_fee_model(request.cost_multiplier),
+            cost_multiplier=request.cost_multiplier,
+        )
         for bars, instrument in instruments_data:
-            venue = instrument.id.venue
-            if venue not in venues_added:
-                engine.add_venue(
-                    venue=venue,
-                    oms_type=OmsType.HEDGING,
-                    account_type=AccountType.MARGIN,
-                    starting_balances=[Money(float(request.starting_balance), USD)],
-                    fill_model=fill_model,
-                    fee_model=fee_model,
-                )
-                venues_added.add(venue)
             engine.add_instrument(instrument)
             engine.add_data(bars)
 
@@ -545,6 +542,8 @@ class BacktestOrchestrator:
             fields = _run_record_fields(request)
             equity_curve = self._extract_equity_curve(float(request.starting_balance))
             fields["config_snapshot"]["metrics_basis"] = metrics_basis(self._extractor)
+            if self.engine:  # futures runs only: the contract terms M4 reports against
+                fields["config_snapshot"].update(futures_snapshot(self.engine.cache.instruments()))
             if request.config_file_path:
                 fields["config_snapshot"]["config_file_path"] = request.config_file_path
 
