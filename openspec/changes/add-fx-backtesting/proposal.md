@@ -74,7 +74,7 @@ separate effort.
   and an `fx` object for FX runs (additive).
 - **Report formats**: CSV/JSON gain FX fields for FX runs only.
 - **Strategy config**: `units: int | None` on FX-capable strategy configs (M5/M6).
-- **No DB migration** (recommended; see decision D11). `3f56b46c78eb` stays the single head.
+- **No DB migration** (approved 2026-11-22; see decision D11). `3f56b46c78eb` stays the single head.
 
 ## Guard lists / pinned constants
 
@@ -102,3 +102,9 @@ separate effort.
 - Non-USD account currencies. The account currency is a parameter but only USD is tested.
 - Intraday margin, margin calls, liquidation (same limits as futures).
 - 4-hour or custom-session bar aggregation.
+
+## Approval
+
+Allay approved all 16 recommended defaults (D1-D16, `design.md` section 13) on 2026-11-22.
+D12 is the recorded PO ruling that allows M5 to regenerate `FROZEN_VIEWS` for exactly the
+files listed in `design.md` section 11.

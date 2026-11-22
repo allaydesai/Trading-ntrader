@@ -450,23 +450,28 @@ to it.
 - `ibkr_venue_provider.sec_type` and `ibkr_data_provider` need `CASH`. That is also the route
   to IB historical FX data.
 
-## 13. Decisions needing approval (Allay)
+## 13. Decisions (approved by Allay on 2026-11-22)
 
-| # | Decision | Recommended default |
-|---|---|---|
-| D1 | Instrument id and symbol input | `EUR/USD.IDEALPRO` (IB-native); catalog `ticker = EURUSD`; CLI accepts both forms |
-| D2 | Bar price type | `MID` (`-MID-EXTERNAL`), matching IB MIDPOINT live bars; the matching engine treats MID like LAST |
-| D3 | What the FirstRate series is | treat as mid; model the full spread as half-spread per side (D7) |
-| D4 | Rate mechanism | USD single-currency FX venues plus the `FxRateFeeder` cache quotes; fallback NTrader-side conversion; never run unconverted |
-| D5 | Daily bar timestamp | session open `D-1 17:00 ET` (bar-open rule); the trade date is the 17:00 NY cutoff |
-| D6 | Commission | IB 0.20 bp x USD trade value, USD 2.00 minimum per order, in USD, scaled by cost stress |
-| D7 | Spread | per-pair `typical_spread_pips` (EURUSD 0.5, GBPUSD 0.8, USDJPY 0.5) charged as a fee drag, with a CLI override |
-| D8 | Margin | % of notional (3% majors), enforced by generalising the futures gate |
-| D9 | Rollover/financing | out of scope; stated on every FX report; `FxCarryModel` later |
-| D10 | Headline metric | account return on USD equity; pips, underlying %, leverage and costs alongside; RoM secondary |
-| D11 | Schema | no migration; FX `profit_loss` stored in USD; terms in `config_snapshot.fx_pairs` |
-| D12 | Dashboard | pre-approve a FROZEN_VIEWS regeneration for the files in section 11 (same set as the futures ruling plus `fx_panel.html`) |
-| D13 | Sizing unit | base-currency units, floored to `size_increment`, no minimum of 1, odd-lot warning; `--units N` |
-| D14 | Session anomalies | keep the Saturday/off-hour bars, warn at import; strategies are not filtered |
-| D15 | Pair universe | EURUSD, GBPUSD, USDJPY (data) plus EURGBP spec (fixture-tested cross) |
-| D16 | OpenSpec layout | one umbrella change, tasks grouped by milestone, each PR ticks its section; archive after M6 |
+Allay approved all 16 recommended defaults below on 2026-11-22. Each row's default is now the
+decision of record. The UNVERIFIED values (commission, margin, spread, min tick, size
+increment, IDEALPRO minimum) are approved as working defaults; task 4.7 still confirms them
+against the account before M4 merges.
+
+| # | Decision | Approved default | Status |
+|---|---|---|---|
+| D1 | Instrument id and symbol input | `EUR/USD.IDEALPRO` (IB-native); catalog `ticker = EURUSD`; CLI accepts both forms | approved by Allay, 2026-11-22 |
+| D2 | Bar price type | `MID` (`-MID-EXTERNAL`), matching IB MIDPOINT live bars; the matching engine treats MID like LAST | approved by Allay, 2026-11-22 |
+| D3 | What the FirstRate series is | treat as mid; model the full spread as half-spread per side (D7) | approved by Allay, 2026-11-22 |
+| D4 | Rate mechanism | USD single-currency FX venues plus the `FxRateFeeder` cache quotes; fallback NTrader-side conversion; never run unconverted | approved by Allay, 2026-11-22 |
+| D5 | Daily bar timestamp | session open `D-1 17:00 ET` (bar-open rule); the trade date is the 17:00 NY cutoff | approved by Allay, 2026-11-22 |
+| D6 | Commission | IB 0.20 bp x USD trade value, USD 2.00 minimum per order, in USD, scaled by cost stress | approved by Allay, 2026-11-22 |
+| D7 | Spread | per-pair `typical_spread_pips` (EURUSD 0.5, GBPUSD 0.8, USDJPY 0.5) charged as a fee drag, with a CLI override | approved by Allay, 2026-11-22 |
+| D8 | Margin | % of notional (3% majors), enforced by generalising the futures gate | approved by Allay, 2026-11-22 |
+| D9 | Rollover/financing | out of scope; stated on every FX report; `FxCarryModel` later | approved by Allay, 2026-11-22 |
+| D10 | Headline metric | account return on USD equity; pips, underlying %, leverage and costs alongside; RoM secondary | approved by Allay, 2026-11-22 |
+| D11 | Schema | no migration; FX `profit_loss` stored in USD; terms in `config_snapshot.fx_pairs` | approved by Allay, 2026-11-22 |
+| D12 | Dashboard | pre-approve a FROZEN_VIEWS regeneration for the files in section 11 (same set as the futures ruling plus `fx_panel.html`) | approved by Allay, 2026-11-22 |
+| D13 | Sizing unit | base-currency units, floored to `size_increment`, no minimum of 1, odd-lot warning; `--units N` | approved by Allay, 2026-11-22 |
+| D14 | Session anomalies | keep the Saturday/off-hour bars, warn at import; strategies are not filtered | approved by Allay, 2026-11-22 |
+| D15 | Pair universe | EURUSD, GBPUSD, USDJPY (data) plus EURGBP spec (fixture-tested cross) | approved by Allay, 2026-11-22 |
+| D16 | OpenSpec layout | one umbrella change, tasks grouped by milestone, each PR ticks its section; archive after M6 | approved by Allay, 2026-11-22 |
