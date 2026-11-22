@@ -55,7 +55,8 @@ def compute_source_last_date(file_path: Path) -> datetime | None:
 
     ``YYYY-MM-DD[ HH:MM:SS]`` stamps sort lexicographically in wall-clock order,
     and the ET->UTC conversion never reorders two wall-clock times, so the scan
-    keeps the largest well-shaped stamp string and parses only that one. Parsing
+    keeps the largest well-shaped stamp string and parses only that one (odd-shaped
+    stamps such as ``2025-1-3`` are parsed individually). Parsing
     every row cost ~60 s on a 6.4M-row futures file. If the largest string does
     not parse (e.g. ``2025-13-45``), the probe falls back to parsing every row.
 
@@ -68,11 +69,13 @@ def compute_source_last_date(file_path: Path) -> datetime | None:
         whose first column parses as a FirstRate timestamp.
     """
     try:
-        best = _max_stamp_text(file_path)
+        best, other = _latest(file_path)
         if best is None:
-            return None
+            return other
         parsed = _parse_timestamp(best)
-        return parsed if parsed is not None else _max_parsed_stamp(file_path)
+        if parsed is None:
+            return _max_parsed_stamp(file_path)
+        return parsed if other is None else max(parsed, other)
     except FileNotFoundError:
         return None
     except (PermissionError, OSError) as exc:
@@ -103,12 +106,23 @@ def _well_shaped(stamp: str) -> bool:
     return len(stamp) == 10 or (stamp[10] == " " and stamp[13] == ":" and stamp[16] == ":")
 
 
-def _max_stamp_text(file_path: Path) -> str | None:
+def _latest(file_path: Path) -> tuple[str | None, datetime | None]:
+    """Largest well-shaped stamp string, and the latest parsed odd-shaped stamp.
+
+    Canonical stamps are compared as strings; anything else (e.g. ``2025-1-3``, which
+    ``strptime`` accepts) is parsed so it can still win.
+    """
     best: str | None = None
+    other: datetime | None = None
     for stamp in _first_columns(file_path):
-        if (best is None or stamp > best) and _well_shaped(stamp):
-            best = stamp
-    return best
+        if _well_shaped(stamp):
+            if best is None or stamp > best:
+                best = stamp
+            continue
+        dt = _parse_timestamp(stamp)
+        if dt is not None and (other is None or dt > other):
+            other = dt
+    return best, other
 
 
 def _max_parsed_stamp(file_path: Path) -> datetime | None:
