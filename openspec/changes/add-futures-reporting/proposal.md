@@ -39,7 +39,7 @@ Approved decisions (Allay):
     underlying, peak margin) after the metrics.
   - `report summary|generate|export-all`: text, CSV and JSON carry the futures fields;
     the JSON adds a `futures` object (run summary) and `trades` with per-trade figures.
-  - `backtest history`: a futures run's symbol reads `ES (fut)` and its Return column shows
+  - `history`: a futures run's symbol reads `ES (fut)` and its Return column shows
     return on margin (`RoM +2.70%`). Equity rows unchanged.
 - MCP (research server):
   - `get_run`/`compare_runs` rows gain `asset_class` and, for futures runs, a `futures`

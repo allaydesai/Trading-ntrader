@@ -169,9 +169,10 @@ Where it shows:
 
 - `backtest show <run_id>`: a "Futures" table after the metadata, with the
   ratio-adjustment note.
-- `history`: `ES (fut)` and `RoM +56.07%` in the Return column. Sorting by return still
-  uses `total_return`.
-- `report summary|generate|export-all`: text gets a section, CSV gets `asset_class` and
+- `history`: `ES (fut)` and `RoM +56.07%` in the Return column. `--sort return` ranks and
+  limits by `total_return` (in SQL), so then the cell leads with it:
+  `15.42% (RoM +56.07%)`.
+- `report summary|generate|export-all`: summary and text lead with the futures section, CSV gets `asset_class` and
   `futures_*` rows, JSON gets `futures` (run fields, the note, per-trade figures).
 - MCP `get_run`/`compare_runs`: `asset_class`, plus `futures` and a warning for futures
   runs; `compare_runs` warns when asset classes mix. `export_results`: `futures` per run,

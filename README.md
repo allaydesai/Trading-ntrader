@@ -225,10 +225,11 @@ uv run python -m src.cli.main backtest run --symbol ES --catalog firstrate-futur
   --timeframe 1-HOUR --start 2024-01-01 --end 2024-06-30 --starting-balance 100000 --contracts 1
 ```
 
-`backtest show`, `history`, `report` and the MCP run tools lead futures runs with **return on
-margin** (P&L / peak initial margin), next to the return on the underlying. Dollar P&L of
-older trades is ratio-adjusted, so compare trades by percentage. The web dashboard does not
-show these yet (its views are frozen, `FROZEN_VIEWS`). Details, limits and a sizing guide
+`backtest show`, `report` and the MCP run tools lead futures runs with **return on margin**
+(P&L / peak initial margin), next to the return on the underlying; `history` shows return on
+margin only (`RoM +x%`; with `--sort return`, the account return it ranks by comes first).
+Dollar P&L of older trades is ratio-adjusted, so compare trades by percentage. The web
+dashboard does not show these yet (its views are frozen, `FROZEN_VIEWS`). Details, limits and a sizing guide
 for external strategies: `docs/agent/futures-backtesting.md`.
 
 ### Data Commands

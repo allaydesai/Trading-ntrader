@@ -163,9 +163,10 @@ class TestReportFiles:
 
 
 class TestHistory:
-    def _history(self, runs):
+    def _history(self, runs, sort="date"):
         repo = MagicMock()
         repo.find_recent.return_value = runs
+        repo.find_top_performers_by_return.return_value = runs
         session = MagicMock()
         session.__enter__.return_value = session
         with (
@@ -173,7 +174,7 @@ class TestHistory:
             patch.object(history, "SyncBacktestRepository", return_value=repo),
             _captured(history) as out,
         ):
-            history._list_history_sync(10, None, None, None, "date", False, False)
+            history._list_history_sync(10, None, None, None, sort, False, False)
         return out.getvalue()
 
     def test_futures_row_shows_return_on_margin(self):
@@ -186,3 +187,30 @@ class TestHistory:
         assert "1.49%" in text
         assert "(fut)" not in text
         assert "RoM" not in text
+
+    def test_sort_by_return_shows_the_ranked_account_return_first(self):
+        """--sort return ranks by account return, so that is the figure the column leads with."""
+        text = self._history([_run(ES_SNAPSHOT)], sort="return")
+        assert "1.49% (RoM +2.70%)" in text
+
+
+class TestFuturesFirst:
+    def test_report_summary_prints_return_on_margin_before_account_return(self):
+        runner_out = io.StringIO()
+        with (
+            patch.object(report, "console", Console(file=runner_out, width=200, no_color=True)),
+            patch.object(report, "get_sync_session") as session,
+            patch.object(report, "SyncBacktestRepository") as repo,
+        ):
+            session.return_value.__enter__.return_value = MagicMock()
+            repo.return_value.find_by_run_id.return_value = _run(ES_SNAPSHOT)
+            report.summary.callback("12345678-1234-5678-1234-567812345678")
+        text = runner_out.getvalue()
+        assert text.index("Return on margin (headline)") < text.index("Total Return")
+
+    def test_text_report_leads_with_the_futures_section(self, tmp_path):
+        path = tmp_path / "r.txt"
+        with _captured(report):
+            report._generate_text_report(_run(ES_SNAPSHOT), str(path))
+        text = path.read_text()
+        assert text.index("Return on margin (headline)") < text.index("Total Return")

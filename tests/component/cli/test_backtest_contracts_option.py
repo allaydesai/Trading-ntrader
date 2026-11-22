@@ -16,7 +16,7 @@ from src.cli.commands._backtest_helpers import (
 )
 from src.cli.commands.backtest import run_backtest
 
-pytestmark = pytest.mark.unit
+pytestmark = pytest.mark.component
 
 START = datetime(2024, 1, 1, tzinfo=timezone.utc)
 END = datetime(2024, 3, 31, tzinfo=timezone.utc)

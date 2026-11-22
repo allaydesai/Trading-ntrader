@@ -112,7 +112,9 @@ def trade_figures(trade: Any, terms: ContractTerms) -> TradeFigures:
     exit_, pnl = _dec(_get(trade, "exit_price")), _dec(_get(trade, "profit_loss"))
     margin = contracts * terms.margin_initial_usd
     points = rou = rom = None
-    if exit_ is not None and pnl is not None:
+    # Closed means flat: Nautilus fills avg_px_close/realized_pnl on every closing fill but
+    # sets ts_closed only when the position reaches zero, so a partial close is still open.
+    if exit_ is not None and pnl is not None and _get(trade, "exit_timestamp") is not None:
         points = (entry - exit_) if _is_short(trade) else (exit_ - entry)
         rou = points / entry * _HUNDRED if entry else None
         rom = pnl / margin * _HUNDRED if margin else None
@@ -129,12 +131,17 @@ def trade_figures(trade: Any, terms: ContractTerms) -> TradeFigures:
 
 
 def _peak_margin(rows: list[tuple[Any, TradeFigures]]) -> Decimal:
-    """Peak concurrent initial margin; exits sort before entries at the same timestamp."""
+    """Peak concurrent initial margin.
+
+    At one timestamp, other trades' exits come before entries (a close-and-reverse is not
+    counted twice), and a trade that opens and closes on that timestamp holds its margin.
+    """
     events = []
     for trade, fig in rows:
-        events.append((_get(trade, "entry_timestamp"), 1, fig.margin_used_usd))
+        entry_ts = _get(trade, "entry_timestamp")
+        events.append((entry_ts, 1, fig.margin_used_usd))
         if (exit_ts := _get(trade, "exit_timestamp")) is not None:
-            events.append((exit_ts, 0, -fig.margin_used_usd))
+            events.append((exit_ts, 2 if exit_ts == entry_ts else 0, -fig.margin_used_usd))
     level = peak = Decimal(0)
     for _, _, delta in sorted(events, key=lambda e: (e[0], e[1])):
         level += delta

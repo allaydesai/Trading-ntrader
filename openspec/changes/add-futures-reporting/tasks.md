@@ -15,7 +15,7 @@
 - [x] 2.1 Unit (failing first): `tests/unit/strategies/test_sma_crossover_position_sizing.py`:
       fixed contracts on ES; fixed contracts on an equity raises; unset is unchanged.
 - [x] 2.2 `SMAConfig.contracts`, `_sized_quantity(fixed_contracts)`.
-- [x] 2.3 Unit (failing first): `tests/unit/cli/test_backtest_contracts_option.py`: the flag
+- [x] 2.3 Unit (failing first): `tests/component/cli/test_backtest_contracts_option.py` (component: imports Nautilus): the flag
       reaches the strategy config (CLI and config mode), `--contracts 0` exits 2, a strategy
       without `contracts` exits 2, an equity symbol exits 2, a loaded non-futures instrument
       or a bad config-file value fails the run, help text.

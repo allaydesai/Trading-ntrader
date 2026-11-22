@@ -190,3 +190,22 @@ class TestSerialisation:
         row = trade_fields(trade_figures(_trade("BUY", "1", "5000", None, None, 0, None), terms))
         assert row["points_adjusted"] is None
         assert row["return_on_margin_pct"] is None
+
+
+class TestReviewEdgeCases:
+    """CodeRabbit round 1 on PR #53."""
+
+    def test_partly_closed_position_without_exit_timestamp_is_still_open(self):
+        """Nautilus sets avg_px_close/realized_pnl per closing fill, ts_closed only at flat."""
+        partial = _trade("BUY", "2", "5000", "5010", "495.50", 1, None)
+        s = summarise_run(ES_SNAPSHOT, [TRADE_A, partial])
+        assert s.closed_trades == 1
+        assert s.net_pnl_usd == Decimal("1991.00")
+        terms = terms_from_snapshot(ES_SNAPSHOT)["ES.CME"]
+        assert trade_figures(partial, terms).return_on_margin_pct is None
+
+    def test_same_timestamp_round_trip_keeps_its_margin(self):
+        instant = _trade("BUY", "1", "5000", "5004", "195.50", 2, 2)
+        s = summarise_run(ES_SNAPSHOT, [instant])
+        assert s.peak_margin_usd == Decimal("27500")
+        assert s.return_on_margin_pct is not None

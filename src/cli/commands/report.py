@@ -51,14 +51,14 @@ def summary(result_id: str):
                 console.print("\n💡 Use 'backtest history' to see available results")
                 return
 
+            # Futures runs lead with return on margin (headline) and contract terms
+            _display_futures(backtest)
+
             # Display summary using Rich formatting
             _display_summary_panel(backtest)
 
             # Display key metrics table
             _display_metrics_table(backtest)
-
-            # Futures runs: return on margin and contract terms
-            _display_futures(backtest)
 
     except Exception as e:
         console.print(f"❌ Error loading result: {e}", style="red bold")
@@ -384,7 +384,7 @@ def _generate_text_report(backtest, output_path=None):
     # Generate report
     report_content = generator.generate_performance_report(metrics_dict)
     if futures := run_summary(backtest):
-        report_content += "\n\n" + summary_text(futures) + "\n"
+        report_content = summary_text(futures) + "\n\n" + report_content
 
     if output_path:
         # Save to file
